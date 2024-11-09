@@ -41,6 +41,11 @@ import seedRoute from "./routes/seed.route.js";
 import vegetableRoute from "./routes/vegetable.route.js";
 import chemicalRoute from "./routes/chemical.route.js";
 
+// dummy route
+server.get("/api/dummyData", (req, res) => {
+  res.json({ msg: "Welcome to nursery app" });
+});
+
 // defining routes
 server.use("/api/v1/farmer", farmerRoute);
 server.use("/api/v1/order", orderRoute);

@@ -46,9 +46,11 @@ const orderSchema = new Schema(
     bankName: {
       type: String,
     },
-    receiptPhoto: [{
-      type: String,
-    }],
+    receiptPhoto: [
+      {
+        type: String,
+      },
+    ],
     paymentStatus: {
       type: String,
       required: true,

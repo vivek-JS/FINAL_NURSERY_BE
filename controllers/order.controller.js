@@ -68,7 +68,7 @@ const updateOrder = updateOne(Order, "Order");
 const addNewPayment = catchAsync(async (req, res, next) => {
   const { id, paymentAmount, receiptPhoto } = req.body;
 
-  const updateObj = { };
+  const updateObj = {};
   if (!updateObj.$push) updateObj.$push = {};
 
   if (paymentAmount !== undefined) {
@@ -96,6 +96,5 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 
   return res.status(200).json(response);
 });
-
 
 export { getCsv, createOrder, updateOrder, addNewPayment, getOrders };

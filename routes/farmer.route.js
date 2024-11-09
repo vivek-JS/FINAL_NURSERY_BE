@@ -20,7 +20,7 @@ const router = express.Router();
 router
   .post(
     "/createFarmer",
-    upload.single('receiptPhoto'),
+    upload.single("receiptPhoto"),
     [
       check("name").notEmpty().withMessage("Please enter valid name"),
       check("village").notEmpty().withMessage("Please enter valid village"),

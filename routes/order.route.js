@@ -27,10 +27,12 @@ router
   )
   .patch(
     "/addNewPayment",
-    upload.single('receiptPhoto'),
+    upload.single("receiptPhoto"),
     [
       check("id").isMongoId().withMessage("Please provide order id"),
-      check("paymentAmount").notEmpty().withMessage("Please provide payment amount")
+      check("paymentAmount")
+        .notEmpty()
+        .withMessage("Please provide payment amount"),
     ],
     checkErrors,
     addNewPayment

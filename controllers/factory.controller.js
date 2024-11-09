@@ -210,7 +210,6 @@ const createCMS = (Model, entity) =>
     next();
   });
 
-
 const isPhoneNumberExists = (Model, modelName) =>
   catchAsync(async (req, _, next) => {
     const { phoneNumber } = req.body;
@@ -233,10 +232,7 @@ const isDisabled = (Model, modelName) =>
     const data = await Model.findOne({ phoneNumber });
 
     if (data.isDisabled) {
-      throw new AppError(
-        `Your access to this app is disabled`,
-        409
-      );
+      throw new AppError(`Your access to this app is disabled`, 409);
     }
     next();
   });
