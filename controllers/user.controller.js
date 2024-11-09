@@ -45,9 +45,9 @@ const generateToken = (id) => {
 };
 
 const login = catchAsync(async (req, res, next) => {
-  const { email, password } = req.body;
+  const { phoneNumber, password } = req.body;
 
-  const user = await User.findOne({ email: email });
+  const user = await User.findOne({ phoneNumber: phoneNumber });
 
   if (!user || !(await bcrypt.compare(password, user.password))) {
     return next(new AppError("Wrong credentails", 400));

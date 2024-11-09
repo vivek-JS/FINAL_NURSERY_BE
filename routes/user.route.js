@@ -16,7 +16,7 @@ router
   .post(
     "/login",
     [
-      check("email", "Please provide valid email").isEmail(),
+      check("phoneNumber", "Please provide valid email").isMobilePhone(),
       check("password", "Please provide valid password").notEmpty(),
     ],
     login
