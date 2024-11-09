@@ -210,6 +210,22 @@ const createCMS = (Model, entity) =>
     next();
   });
 
+
+const isPhoneNumberExists = (Model, modelName) =>
+  catchAsync(async (req, _, next) => {
+    const { phoneNumber } = req.body;
+
+    const isFound = await Model.findOne({ phoneNumber });
+
+    if (isFound) {
+      throw new AppError(
+        `${modelName} with same phone number address already exists`,
+        409
+      );
+    }
+    next();
+  });
+
 export {
   createOne,
   deleteOne,
@@ -220,4 +236,5 @@ export {
   getCMS,
   createCMS,
   updateOneNestedData,
+  isPhoneNumberExists
 };

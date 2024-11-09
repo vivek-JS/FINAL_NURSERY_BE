@@ -2,16 +2,16 @@ import generateResponse from "../utility/responseFormat.js";
 import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import User from "../models/user.model.js";
-import { createOne, updateOne, deleteOne } from "./factory.controller.js";
+import { createOne, updateOne, deleteOne, isPhoneNumberExists } from "./factory.controller.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
-const createUser = createOne(User, "User");
+const createUser = [isPhoneNumberExists(User, "User"), createOne(User, "User")];
 const updateUser = updateOne(User, "User");
 const deleteUser = deleteOne(User, "User");
 
 const encryptPassword = async (req, res, next) => {
-  const password = req.body.password;
+  const password = req.body.password || '12345678';
   req.body.password = await bcrypt.hash(password, 10);
   next();
 };
