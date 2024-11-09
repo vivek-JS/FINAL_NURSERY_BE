@@ -39,8 +39,6 @@ const getCsv = catchAsync(async (req, res, next) => {
   ];
   await Promise.all(
     jsonData.map(async (obj) => {
-      console.log(obj);
-
       csvData.push({
         Sr: srNo + 1,
         "Farmer name": obj.farmer.name,

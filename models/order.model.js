@@ -56,6 +56,9 @@ const orderSchema = new Schema(
       required: true,
     },
     payment: [paymentSchema],
+    notes: {
+      type: String,
+    }
   },
   { timestamps: true }
 );
