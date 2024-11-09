@@ -2,7 +2,7 @@ import generateResponse from "../utility/responseFormat.js";
 import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import User from "../models/user.model.js";
-import { createOne, updateOne, deleteOne, isPhoneNumberExists } from "./factory.controller.js";
+import { createOne, updateOne, deleteOne, isPhoneNumberExists, isDisabled } from "./factory.controller.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
@@ -44,7 +44,7 @@ const generateToken = (id) => {
   return token;
 };
 
-const login = catchAsync(async (req, res, next) => {
+const login = [isDisabled(User, "User"), catchAsync(async (req, res, next) => {
   const { phoneNumber, password } = req.body;
 
   const user = await User.findOne({ phoneNumber: phoneNumber });
@@ -66,6 +66,6 @@ const login = catchAsync(async (req, res, next) => {
     .status(200)
     .cookie("Authorization", token, { httpOnly: true })
     .json({ token: token, response });
-});
+})];
 
 export { createUser, updateUser, deleteUser, findUser, login, encryptPassword };

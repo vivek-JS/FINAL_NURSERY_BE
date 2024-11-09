@@ -26,6 +26,10 @@ const userSchema = new Schema({
     type: String,
     enum: ["ADMIN", "SALES PERSON", "INVENTORY MANAGER"],
   },
+  isDisabled:{
+    type: Boolean,
+    default: false
+  }
 });
 
 const User = model("User", userSchema);

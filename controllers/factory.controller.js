@@ -226,6 +226,21 @@ const isPhoneNumberExists = (Model, modelName) =>
     next();
   });
 
+const isDisabled = (Model, modelName) =>
+  catchAsync(async (req, _, next) => {
+    const { phoneNumber } = req.body;
+
+    const data = await Model.findOne({ phoneNumber });
+
+    if (data.isDisabled) {
+      throw new AppError(
+        `Your access to this app is disabled`,
+        409
+      );
+    }
+    next();
+  });
+
 export {
   createOne,
   deleteOne,
@@ -236,5 +251,6 @@ export {
   getCMS,
   createCMS,
   updateOneNestedData,
-  isPhoneNumberExists
+  isPhoneNumberExists,
+  isDisabled,
 };
