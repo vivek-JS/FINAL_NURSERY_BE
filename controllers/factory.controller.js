@@ -191,12 +191,12 @@ const getCMS = (Model) =>
         type: entity,
       })
         .skip(skip)
-        .limit(10)
+        .limit(100)
         .select("-_id -type -__v");
     } else {
       data = await Model.find({ type: entity })
         .skip(skip)
-        .limit(10)
+        .limit(100)
         .select("-_id -type -__v");
     }
 
