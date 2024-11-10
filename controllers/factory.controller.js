@@ -79,8 +79,6 @@ const updateOneAndPushElement = (Model, modelName) =>
       updateObj.$push = { payment: { paidAmount: paymentAmount } };
     }
 
-    console.log(updateObj);
-
     const doc = await Model.findByIdAndUpdate(id, updateObj, {
       new: true,
       runValidators: true,
@@ -142,13 +140,27 @@ const getAll = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     let filter = {};
 
-    const features = new APIFeatures(Model.find(filter), req.query)
+    let query = Model.find(filter);
+
+    if(modelName === "Order"){
+      query = Model.find(filter).populate({
+        path: 'farmer',
+        select: 'name mobileNumber'
+      });
+    }
+
+    const features = new APIFeatures(query, req.query, modelName)
       .filter()
       .sort()
       .limitFields()
       .paginate();
 
     const doc = await features.query.lean();
+
+    // const features = new APIFeatures(Model, req.query, modelName)
+    //   .filter();
+
+    // const doc = await features.execute();
 
     const transformedDoc = doc.map((item) => {
       const { _id, ...rest } = item;
