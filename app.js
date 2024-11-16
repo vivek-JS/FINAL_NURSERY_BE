@@ -40,6 +40,7 @@ import godownRoute from "./routes/godown.route.js";
 import seedRoute from "./routes/seed.route.js";
 import vegetableRoute from "./routes/vegetable.route.js";
 import chemicalRoute from "./routes/chemical.route.js";
+import distrctRoutes from "./routes/districts.route.js";
 
 // dummy route
 server.get("/api/dummyData", (req, res) => {
@@ -61,6 +62,7 @@ server.use("/api/v1/godown", godownRoute);
 server.use("/api/v1/seed", seedRoute);
 server.use("/api/v1/vegetable", vegetableRoute);
 server.use("/api/v1/chemical", chemicalRoute);
+server.use("/api/v1/location",distrctRoutes)
 
 server.use(errorRouter);
 

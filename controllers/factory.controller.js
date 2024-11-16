@@ -21,6 +21,8 @@ const createOne = (Model, modelName) =>
 const updateOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     // Find by id  and update
+    console.log("Request Body:", req.body);  // Log the body to check the data
+
     const doc = await Model.findByIdAndUpdate(req.body.id, req.body, {
       new: true,
     });
@@ -135,32 +137,57 @@ const getOne = (Model, modelName, popOptions) =>
 
     return res.status(200).json(response);
   });
-
-const getAll = (Model, modelName) =>
+  const getAll = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     let filter = {};
 
-    let query = Model.find(filter);
+    // Only apply population and filtering if we are handling "Order"
+    if (modelName === "Order") {
+      const { search } = req.query;
 
-    if(modelName === "Order"){
-      query = Model.find(filter).populate({
-        path: 'farmer',
-        select: 'name mobileNumber'
+      // Initial query without filtering on populated fields
+      let query = Model.find(filter).populate({
+        path: "farmer",
+        select: "name mobileNumber",
       });
+
+      const doc = await query.lean();
+
+      // Apply regex-based filtering on populated data if search is provided
+      const filteredDoc = search
+        ? doc.filter((order) => {
+            const farmerName = order.farmer?.name || "";
+            const farmerMobile = order.farmer?.mobileNumber || "";
+
+            // Check if search term matches either name or mobile number, case-insensitive
+            const searchRegex = new RegExp(search, "i");
+            return searchRegex.test(farmerName) || searchRegex.test(farmerMobile);
+          })
+        : doc;
+
+      const transformedDoc = filteredDoc.map((item) => {
+        const { _id, ...rest } = item;
+        return { id: _id, _id: _id, ...rest };
+      });
+
+      const response = generateResponse(
+        "Success",
+        `${modelName} found successfully`,
+        transformedDoc,
+        undefined
+      );
+
+      return res.status(200).json(response);
     }
 
-    const features = new APIFeatures(query, req.query, modelName)
+    // For other models, no need for specific population/filtering
+    const features = new APIFeatures(Model.find(filter), req.query, modelName)
       .filter()
       .sort()
       .limitFields()
       .paginate();
 
     const doc = await features.query.lean();
-
-    // const features = new APIFeatures(Model, req.query, modelName)
-    //   .filter();
-
-    // const doc = await features.execute();
 
     const transformedDoc = doc.map((item) => {
       const { _id, ...rest } = item;
@@ -176,6 +203,8 @@ const getAll = (Model, modelName) =>
 
     return res.status(200).json(response);
   });
+
+
 
 const getCMS = (Model) =>
   catchAsync(async (req, res, next) => {

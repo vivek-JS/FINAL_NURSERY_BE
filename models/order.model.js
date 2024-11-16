@@ -6,6 +6,10 @@ const paymentSchema = new Schema(
       type: Number,
       required: true,
     },
+    paymentStatus: {
+      type: Boolean,
+      default: false, // Default to `false` (or set it to `true` if you prefer)
+    },
   },
   { timestamps: true }
 );
@@ -58,7 +62,12 @@ const orderSchema = new Schema(
     payment: [paymentSchema],
     notes: {
       type: String,
-    }
+    },
+    orderStatus: {
+      type: String,
+      enum: ['pending', 'processing', 'completed', 'cancelled'], // Add the possible statuses for the order
+      default: 'pending', // Set the default status
+    },
   },
   { timestamps: true }
 );
