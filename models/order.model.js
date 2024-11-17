@@ -66,7 +66,7 @@ const orderSchema = new Schema(
     orderStatus: {
       type: String,
       enum: ['pending', 'processing', 'completed', 'cancelled'], // Add the possible statuses for the order
-      default: 'pending', // Set the default status
+      default: 'Pending', // Set the default status
     },
   },
   { timestamps: true }

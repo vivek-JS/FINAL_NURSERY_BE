@@ -150,7 +150,7 @@ const getOne = (Model, modelName, popOptions) =>
       // Initial query without filtering on populated fields
       let query = Model.find(filter).populate({
         path: "farmer",
-        select: "name mobileNumber",
+        select: "name mobileNumber village taluka district",
       });
 
       const doc = await query.lean();
