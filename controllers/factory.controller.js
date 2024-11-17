@@ -140,6 +140,8 @@ const getOne = (Model, modelName, popOptions) =>
   const getAll = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     let filter = {};
+    const { sortKey = "createdAt", sortOrder = "desc", search } = req.query;
+    const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
 
     // Only apply population and filtering if we are handling "Order"
     if (modelName === "Order") {
@@ -164,8 +166,12 @@ const getOne = (Model, modelName, popOptions) =>
             return searchRegex.test(farmerName) || searchRegex.test(farmerMobile);
           })
         : doc;
-
-      const transformedDoc = filteredDoc.map((item) => {
+    const sortedDoc = filteredDoc.sort((a, b) => {
+          if (a[sortKey] < b[sortKey]) return -1 * order;
+          if (a[sortKey] > b[sortKey]) return 1 * order;
+          return 0;
+        });
+      const transformedDoc = sortedDoc.map((item) => {
         const { _id, ...rest } = item;
         return { id: _id, _id: _id, ...rest };
       });

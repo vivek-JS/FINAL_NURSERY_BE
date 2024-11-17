@@ -30,7 +30,7 @@ router
       check("type", "Please provide valid type").notEmpty(),
     ],
     checkErrors,
-    encryptPassword,
+    // encryptPassword,
     findUser,
     createUser
   )
