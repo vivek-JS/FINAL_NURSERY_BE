@@ -12,12 +12,19 @@ const findFarmer = catchAsync(async (req, res, next) => {
   const farmer = await Farmer.findOne({ mobileNumber });
 
   if (farmer) {
-    return next(
-      new AppError("Farmer with same mobile number already exists", 409)
-    );
+    // Return the farmer record if found
+    return res.status(200).json({
+      status: "success",
+      message: "Farmer record found",
+      data: farmer,
+    });
   }
 
-  next();
+  // Return a "No record found" message if no farmer is found
+  return res.status(404).json({
+    status: "fail",
+    message: "No record found for the given mobile number",
+  });
 });
 
 const createFarmer = catchAsync(async (req, res, next) => {

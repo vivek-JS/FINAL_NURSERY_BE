@@ -18,6 +18,7 @@ import { upload } from "../middlewares/multer.middleware.js";
 const router = express.Router();
 
 router
+  .get("/getfarmer",findFarmer)
   .post(
     "/createFarmer",
     upload.single("receiptPhoto"),
