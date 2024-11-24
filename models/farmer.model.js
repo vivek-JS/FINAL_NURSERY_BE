@@ -7,17 +7,34 @@ const farmerSchema = new Schema({
   },
   village: {
     type: String,
-    required: [true, "Village name requried"],
+    required: [true, "Village ID requried"],
   },
   
   taluka: {
     type: String,
-    required: [true, "Taluka name requried"],
+    required: [true, "Taluka ID requried"],
   },
   district: {
     type: String,
+    required: [true, "District ID requried"],
+  },
+  stateName: {
+    type: String,
+    required: [true, "State name requried"],
+  },
+  talukaName: {
+    type: String,
+    required: [true, "Taluka name requried"],
+  },
+  districtName: {
+    type: String,
     required: [true, "District name requried"],
   },
+  state: {
+    type: String,
+    required: [true, "State name requried"],
+  },
+  
   mobileNumber: {
     type: Number,
     required: [true, "Mobile number requried"],

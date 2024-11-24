@@ -151,8 +151,11 @@ const getOne = (Model, modelName, popOptions) =>
       let query = Model.find(filter).populate({
         path: "farmer",
         select: "name mobileNumber village taluka district",
+        populate: {
+          path: "district",
+          select: "districts",
+        },
       });
-
       const doc = await query.lean();
 
       // Apply regex-based filtering on populated data if search is provided
