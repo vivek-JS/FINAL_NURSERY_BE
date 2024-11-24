@@ -41,6 +41,8 @@ import seedRoute from "./routes/seed.route.js";
 import vegetableRoute from "./routes/vegetable.route.js";
 import chemicalRoute from "./routes/chemical.route.js";
 import distrctRoutes from "./routes/districts.route.js";
+import slotRouter from "./routes/slots.route.js";
+import plantCmsRouter from "./routes/plantCms.route.js";
 
 // dummy route
 server.get("/api/dummyData", (req, res) => {
@@ -63,6 +65,9 @@ server.use("/api/v1/seed", seedRoute);
 server.use("/api/v1/vegetable", vegetableRoute);
 server.use("/api/v1/chemical", chemicalRoute);
 server.use("/api/v1/location",distrctRoutes)
+server.use("/api/v1",slotRouter)
+server.use("/api/v1/plantcms",plantCmsRouter)
+
 
 server.use(errorRouter);
 
