@@ -34,6 +34,21 @@ const orderSchema = new Schema(
       type: Number,
       required: true,
     },
+    plantName: { // Reference to PlantCms model
+      type: Schema.Types.ObjectId,
+      ref: "PlantCms",
+      required: true,
+    },
+    plantSubtype: { // Reference to a specific subtype in PlantCms
+      type: Schema.Types.ObjectId,
+      ref: "PlantCms.subtypes", // Reference to the subtypes array within the PlantCms model
+      required: true,
+    },
+    bookingSlot: { // Reference to the specific subtypeSlot in PlantSlot
+      type: Schema.Types.ObjectId,
+      ref: "PlantSlot.subtypeSlots", // Reference to the subtypeSlots array in the PlantSlot model
+      required: true,
+    },
     modeOfPayment: {
       type: String,
     },
@@ -65,12 +80,13 @@ const orderSchema = new Schema(
     },
     orderStatus: {
       type: String,
-      enum: ['pending', 'processing', 'completed', 'cancelled'], // Add the possible statuses for the order
-      default: 'Pending', // Set the default status
+      enum: ['pending', 'processing', 'completed', 'cancelled'],
+      default: 'Pending',
     },
   },
   { timestamps: true }
 );
+
 
 const Order = model("Order", orderSchema);
 
