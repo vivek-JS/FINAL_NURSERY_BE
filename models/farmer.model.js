@@ -3,27 +3,24 @@ import mongoose, { Schema, model } from "mongoose";
 const farmerSchema = new Schema({
   name: {
     type: String,
-    required: [true, "Farmer name required"],
+    required: [true, "Farmer name requried"],
   },
   village: {
     type: String,
-    required: [true, "Village name required"],
+    required: [true, "Village name requried"],
   },
-  villageID: {
-    type: Schema.Types.ObjectId, // MongoDB ObjectId
-    required: [true, "Village ID required"],
-  },
+  
   taluka: {
     type: String,
-    required: [true, "Taluka name required"],
+    required: [true, "Taluka name requried"],
   },
   district: {
     type: String,
-    required: [true, "District name required"],
+    required: [true, "District name requried"],
   },
   mobileNumber: {
     type: Number,
-    required: [true, "Mobile number required"],
+    required: [true, "Mobile number requried"],
     unique: true,
   },
 });
