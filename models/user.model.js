@@ -3,21 +3,21 @@ import { Schema, model } from "mongoose";
 const userSchema = new Schema({
   name: {
     type: String,
-    require: true,
+    required: true,
   },
   email: {
     type: String,
-    require: true,
+    required: true,
     unique: true,
   },
   phoneNumber: {
     type: Number,
-    require: true,
+    required: true,
     unique: true,
   },
   password: {
     type: String,
-    require: true,
+    required: true,
   },
   jobTitle: {
     type: String,
@@ -29,6 +29,18 @@ const userSchema = new Schema({
   isDisabled: {
     type: Boolean,
     default: false,
+  },
+  defaultState: {
+    type: String,
+  },
+  defaultDistrict: {
+    type: String,
+  },
+  defaultTaluka: {
+    type: String,
+  },
+  defaultVillage: {
+    type: String,
   },
 });
 
