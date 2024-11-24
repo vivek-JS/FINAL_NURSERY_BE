@@ -2,7 +2,6 @@ import dotenv from "dotenv";
 dotenv.config();
 import mongoose from "mongoose";
 import server from "./app.js";
-import { createSlotsForYear } from "./controllers/slots.controller.js";
 mongoose
   .connect(process.env.MONGO_URL)
   .then(async () => {
@@ -22,12 +21,7 @@ mongoose
     ];
      
     try {
-      // Await the async insertMonthlySlots function
-      //await insertMonthlySlots(2024, plants);
-    //  createSlotsForPlants(2024)
-   //   console.log("Monthly slots inserted successfully");
-      
-      // Now start the server after inserting the data
+
       server.listen(process.env.PORT || 8080, () => {
         console.log(`Server running`);
       });

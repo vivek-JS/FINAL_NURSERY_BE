@@ -3,20 +3,28 @@ import mongoose, { Schema, model } from "mongoose";
 // Define schema for districts
 const districtSchema = new Schema(
   {
-    district: {
+    stateName: {
       type: String,
       required: true,
       unique: true,
     },
-    subDistricts: [
+    districts: [
       {
-        subDistrict: {
+        district: {
           type: String,
           required: true,
         },
-        villages: [
+        subDistricts: [
           {
-            type: String,
+            subDistrict: {
+              type: String,
+              required: true,
+            },
+            villages: [
+              {
+                type: String,
+              },
+            ],
           },
         ],
       },
