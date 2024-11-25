@@ -26,10 +26,7 @@ const orderSchema = new Schema(
       ref: "User",
       required: true,
     },
-    typeOfPlants: {
-      type: String,
-      required: true,
-    },
+
     numberOfPlants: {
       type: Number,
       required: true,

@@ -40,9 +40,6 @@ router
       check("salesPerson")
         .isMongoId()
         .withMessage("Please provide id of sales person"),
-      check("typeOfPlants")
-        .notEmpty()
-        .withMessage("Please provide type of plants"),
       check("numberOfPlants")
         .notEmpty()
         .withMessage("Please provide number of plants"),
