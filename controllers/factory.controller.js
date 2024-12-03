@@ -5,31 +5,38 @@ import APIFeatures from "../utility/apiFeatures.js";
 
 const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
-    if(modelName ==="Order"){
-      const {
-        paidAmount,
-        paymentStatus,
-        paymentDate,
-        bankName,
-        receiptPhoto,modeOfPayment,
-        ...orderData // Other order-related data
-      } = req.body;
-  
-      if (paidAmount && paymentDate && modeOfPayment) {
-        orderData.payment = [
-          {
-            paidAmount,
-            paymentStatus,
-            paymentDate,
-            bankName,
-            receiptPhoto,modeOfPayment,
-          },
-        ];
-      }
-    }
-    const doc = await Model.create(req.body);
-    doc.password = undefined;
+    // Extract `payment` from the request body if the model is "Order"
+    if (modelName === "Order") {
+      const { payment, ...orderData } = req.body; // Separate `payment` from other order data
 
+      if (payment) {
+        // Ensure `payment` is an array and validate its structure
+        const formattedPayments = Array.isArray(payment)
+          ? payment.map((pay) => ({
+              paidAmount: pay.paidAmount,
+              paymentStatus: pay.paymentStatus || false,
+              paymentDate: pay.paymentDate,
+              bankName: pay.bankName,
+              receiptPhoto: pay.receiptPhoto || [],
+              modeOfPayment: pay.modeOfPayment,
+            }))
+          : [];
+
+        // Assign `payment` to `orderData.payment`
+        orderData.payment = formattedPayments;
+      }
+
+      // Merge processed `orderData` back into `req.body`
+      req.body = { ...orderData };
+    }
+
+    // Create the document
+    const doc = await Model.create(req.body);
+
+    // Hide sensitive data if applicable
+    if (doc.password) doc.password = undefined;
+
+    // Generate a response
     const response = generateResponse(
       "Success",
       `${modelName} created successfully`,
@@ -39,6 +46,7 @@ const createOne = (Model, modelName) =>
 
     return res.status(201).json(response);
   });
+
 
 const updateOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {

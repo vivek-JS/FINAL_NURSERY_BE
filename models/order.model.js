@@ -7,13 +7,13 @@ const paymentSchema = new Schema(
       required: true,
     },
     paymentStatus: {
-      type: Boolean,
-      default: false, // Default to `false` (or set it to `true` if you prefer)
+      type: String,
+      enum: ["COLLECTED", "REJECTED", "PENDING"], // Updated to enum with specified statuses
+      default: "PENDING", // Default to `PENDING`
     },
     paymentDate: {
       type: Date,
       required: true,
-
     },
     bankName: {
       type: String,
@@ -26,7 +26,6 @@ const paymentSchema = new Schema(
     modeOfPayment: {
       type: String,
       required: true,
-
     },
   },
   { timestamps: true }
@@ -44,33 +43,32 @@ const orderSchema = new Schema(
       ref: "User",
       required: true,
     },
-
     numberOfPlants: {
       type: Number,
       required: true,
     },
-    plantName: { // Reference to PlantCms model
+    plantName: {
+      // Reference to PlantCms model
       type: Schema.Types.ObjectId,
       ref: "PlantCms",
       required: true,
     },
-    plantSubtype: { // Reference to a specific subtype in PlantCms
+    plantSubtype: {
+      // Reference to a specific subtype in PlantCms
       type: Schema.Types.ObjectId,
       ref: "PlantCms.subtypes", // Reference to the subtypes array within the PlantCms model
       required: true,
     },
-    bookingSlot: { // Reference to the specific subtypeSlot in PlantSlot
+    bookingSlot: {
+      // Reference to the specific subtypeSlot in PlantSlot
       type: Schema.Types.ObjectId,
       ref: "PlantSlot.subtypeSlots", // Reference to the subtypeSlots array in the PlantSlot model
       required: true,
     },
-
     rate: {
       type: Number,
       required: true,
     },
-
-   
     orderPaymentStatus: {
       type: String,
       required: true,
@@ -81,13 +79,12 @@ const orderSchema = new Schema(
     },
     orderStatus: {
       type: String,
-      enum: ['pending', 'processing', 'completed', 'cancelled'],
-      default: 'Pending',
+      enum: ["pending", "processing", "completed", "cancelled"],
+      default: "pending",
     },
   },
   { timestamps: true }
 );
-
 
 const Order = model("Order", orderSchema);
 
