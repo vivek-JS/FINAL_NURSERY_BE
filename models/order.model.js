@@ -10,6 +10,24 @@ const paymentSchema = new Schema(
       type: Boolean,
       default: false, // Default to `false` (or set it to `true` if you prefer)
     },
+    paymentDate: {
+      type: Date,
+      required: true,
+
+    },
+    bankName: {
+      type: String,
+    },
+    receiptPhoto: [
+      {
+        type: String,
+      },
+    ],
+    modeOfPayment: {
+      type: String,
+      required: true,
+
+    },
   },
   { timestamps: true }
 );
@@ -46,28 +64,14 @@ const orderSchema = new Schema(
       ref: "PlantSlot.subtypeSlots", // Reference to the subtypeSlots array in the PlantSlot model
       required: true,
     },
-    modeOfPayment: {
-      type: String,
-    },
+
     rate: {
       type: Number,
       required: true,
     },
-    advance: {
-      type: Number,
-    },
-    dateOfAdvance: {
-      type: Date,
-    },
-    bankName: {
-      type: String,
-    },
-    receiptPhoto: [
-      {
-        type: String,
-      },
-    ],
-    paymentStatus: {
+
+   
+    orderPaymentStatus: {
       type: String,
       required: true,
     },

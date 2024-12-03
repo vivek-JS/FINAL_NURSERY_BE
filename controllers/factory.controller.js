@@ -5,6 +5,28 @@ import APIFeatures from "../utility/apiFeatures.js";
 
 const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
+    if(modelName ==="Order"){
+      const {
+        paidAmount,
+        paymentStatus,
+        paymentDate,
+        bankName,
+        receiptPhoto,modeOfPayment,
+        ...orderData // Other order-related data
+      } = req.body;
+  
+      if (paidAmount && paymentDate && modeOfPayment) {
+        orderData.payment = [
+          {
+            paidAmount,
+            paymentStatus,
+            paymentDate,
+            bankName,
+            receiptPhoto,modeOfPayment,
+          },
+        ];
+      }
+    }
     const doc = await Model.create(req.body);
     doc.password = undefined;
 
@@ -143,24 +165,41 @@ const getOne = (Model, modelName, popOptions) =>
     const { sortKey = "createdAt", sortOrder = "desc", search } = req.query;
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
 
-    // Only apply population and filtering if we are handling "Order"
     if (modelName === "Order") {
-      const { search } = req.query;
+      // Fetch orders with populated fields for farmer and plantName
+      let query = Model.find(filter)
+        .populate({
+          path: "farmer",
+          select: "name mobileNumber village taluka district",
+          populate: {
+            path: "district",
+            select: "districts",
+          },
+        })
+        .populate({
+          path: "plantName",
+          select: "name subtypes", // Fetch `name` and `subtypes` of PlantCms
+        });
 
-      // Initial query without filtering on populated fields
-      let query = Model.find(filter).populate({
-        path: "farmer",
-        select: "name mobileNumber village taluka district",
-        populate: {
-          path: "district",
-          select: "districts",
-        },
-      });
       const doc = await query.lean();
+
+      // Add the plantSubtype name manually
+      const enrichedDoc = doc.map((order) => {
+        const plantName = order.plantName?.name || null;
+        const plantSubtype = order.plantName?.subtypes.find(
+          (subtype) => subtype._id.toString() === order.plantSubtype.toString()
+        )?.name;
+
+        return {
+          ...order,
+          plantName,
+          plantSubtype,
+        };
+      });
 
       // Apply regex-based filtering on populated data if search is provided
       const filteredDoc = search
-        ? doc.filter((order) => {
+        ? enrichedDoc.filter((order) => {
             const farmerName = order.farmer?.name || "";
             const farmerMobile = order.farmer?.mobileNumber || "";
 
@@ -168,12 +207,16 @@ const getOne = (Model, modelName, popOptions) =>
             const searchRegex = new RegExp(search, "i");
             return searchRegex.test(farmerName) || searchRegex.test(farmerMobile);
           })
-        : doc;
-    const sortedDoc = filteredDoc.sort((a, b) => {
-          if (a[sortKey] < b[sortKey]) return -1 * order;
-          if (a[sortKey] > b[sortKey]) return 1 * order;
-          return 0;
-        });
+        : enrichedDoc;
+
+      // Sort results based on the provided key
+      const sortedDoc = filteredDoc.sort((a, b) => {
+        if (a[sortKey] < b[sortKey]) return -1 * order;
+        if (a[sortKey] > b[sortKey]) return 1 * order;
+        return 0;
+      });
+
+      // Transform documents to include both `id` and `_id`
       const transformedDoc = sortedDoc.map((item) => {
         const { _id, ...rest } = item;
         return { id: _id, _id: _id, ...rest };
@@ -212,6 +255,7 @@ const getOne = (Model, modelName, popOptions) =>
 
     return res.status(200).json(response);
   });
+
 
 
 
