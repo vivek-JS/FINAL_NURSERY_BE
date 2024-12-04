@@ -17,14 +17,6 @@ router
   .get("/getOrders", getOrders)
   .patch(
     "/updatePaymentStatus",
-    [
-      check("orderId").isMongoId().withMessage("Please provide order id"),
-      check("paymentId").isMongoId().withMessage("Please provide payment id"),
-      check("paymentStatus")
-        .notEmpty()
-        .withMessage("Please provide payment status"),
-    ],
-    checkErrors,
     updatePaymentStatus
   )
   // .patch(

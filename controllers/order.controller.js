@@ -99,7 +99,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
  const updatePaymentStatus = async (req, res) => {
   try {
     const { orderId, paymentId, paymentStatus } = req.body;
-
+console.log(paymentStatus)
     // Validate input
     if (!orderId || !paymentId || !paymentStatus) {
       return res.status(400).json({ message: "Order ID, Payment ID, and Payment Status are required." });
@@ -107,14 +107,14 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 
     // Find the order by orderId
     const order = await Order.findById(orderId);
-
+console.log(order)
     if (!order) {
       return res.status(404).json({ message: "Order not found." });
     }
 
     // Find the payment in the order's payments array by paymentId
     const payment = order.payment.id(paymentId);
-
+console.log(payment)
     if (!payment) {
       return res.status(404).json({ message: "Payment not found." });
     }
