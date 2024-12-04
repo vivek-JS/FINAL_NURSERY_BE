@@ -95,4 +95,42 @@ const addNewPayment = catchAsync(async (req, res, next) => {
   return res.status(200).json(response);
 });
 
-export { getCsv, createOrder, updateOrder, addNewPayment, getOrders };
+
+ const updatePaymentStatus = async (req, res) => {
+  try {
+    const { orderId, paymentId, paymentStatus } = req.body;
+
+    // Validate input
+    if (!orderId || !paymentId || !paymentStatus) {
+      return res.status(400).json({ message: "Order ID, Payment ID, and Payment Status are required." });
+    }
+
+    // Find the order by orderId
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    // Find the payment in the order's payments array by paymentId
+    const payment = order.payment.id(paymentId);
+
+    if (!payment) {
+      return res.status(404).json({ message: "Payment not found." });
+    }
+
+    // Update the payment status
+    payment.paymentStatus = paymentStatus;
+
+    // Save the order with updated payment status
+    await order.save();
+
+    return res.status(200).json({ message: "Payment status updated successfully.", order });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "An error occurred while updating the payment status.", error });
+  }
+};
+
+
+export { getCsv, createOrder, updateOrder, addNewPayment, getOrders,updatePaymentStatus };

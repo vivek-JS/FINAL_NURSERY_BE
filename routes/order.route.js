@@ -1,9 +1,10 @@
 import express from "express";
-import {
+import  {
   getCsv,
   updateOrder,
   addNewPayment,
   getOrders,
+  updatePaymentStatus,
 } from "../controllers/order.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -17,14 +18,26 @@ router
   .patch(
     "/updatePaymentStatus",
     [
-      check("id").isMongoId().withMessage("Please provide order id"),
+      check("orderId").isMongoId().withMessage("Please provide order id"),
+      check("paymentId").isMongoId().withMessage("Please provide payment id"),
       check("paymentStatus")
         .notEmpty()
         .withMessage("Please provide payment status"),
     ],
     checkErrors,
-    updateOrder
+    updatePaymentStatus
   )
+  // .patch(
+  //   "/updatePaymentStatus",
+  //   [
+  //     check("id").isMongoId().withMessage("Please provide order id"),
+  //     check("paymentStatus")
+  //       .notEmpty()
+  //       .withMessage("Please provide payment status"),
+  //   ],
+  //   checkErrors,
+  //   updateOrder
+  // )
   .patch(
     "/addNewPayment",
     upload.single("receiptPhoto"),
