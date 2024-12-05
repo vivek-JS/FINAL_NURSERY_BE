@@ -2,7 +2,7 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
-
+import mongoose from "mongoose";
 const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     // Extract `payment` from the request body if the model is "Order"
@@ -174,7 +174,7 @@ const getOne = (Model, modelName, popOptions) =>
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
 
     if (modelName === "Order") {
-      // Fetch orders with populated fields for farmer and plantName
+      // Fetch orders with populated fields
       let query = Model.find(filter)
         .populate({
           path: "farmer",
@@ -186,46 +186,69 @@ const getOne = (Model, modelName, popOptions) =>
         })
         .populate({
           path: "plantName",
-          select: "name subtypes", // Fetch `name` and `subtypes` of PlantCms
+          select: "name subtypes",
         });
 
-      const doc = await query.lean();
+      const orders = await query.lean();
 
-      // Add the plantSubtype name manually
-      const enrichedDoc = doc.map((order) => {
+      // Fetch `PlantSlot` details for the `bookingSlot`
+      const plantSlotIds = orders.map((order) => order.bookingSlot);
+      const plantSlots = await mongoose
+        .model("PlantSlot")
+        .find({ "subtypeSlots.slots._id": { $in: plantSlotIds } })
+        .lean();
+
+      // Map bookingSlot details to orders
+      const enrichedOrders = orders.map((order) => {
         const plantName = order.plantName?.name || null;
         const plantSubtype = order.plantName?.subtypes.find(
           (subtype) => subtype._id.toString() === order.plantSubtype.toString()
         )?.name;
+        // Find bookingSlot details
+        let bookingSlotDetails = null;
+        for (const plantSlot of plantSlots) {
+          for (const subtypeSlot of plantSlot.subtypeSlots) {
+            const slot = subtypeSlot.slots.find(
+              (s) => s?._id?.toString() === order?.bookingSlot?.toString()
+            );
+            if (slot) {
+              bookingSlotDetails = {
+                ...slot,
+                subtypeName: subtypeSlot.subtypeId.name, // Include subtype name
+              };
+              break;
+            }
+          }
+          if (bookingSlotDetails) break;
+        }
 
         return {
           ...order,
           plantName,
           plantSubtype,
+          bookingSlot: bookingSlotDetails,
         };
       });
 
       // Apply regex-based filtering on populated data if search is provided
-      const filteredDoc = search
-        ? enrichedDoc.filter((order) => {
+      const filteredOrders = search
+        ? enrichedOrders.filter((order) => {
             const farmerName = order.farmer?.name || "";
             const farmerMobile = order.farmer?.mobileNumber || "";
-
-            // Check if search term matches either name or mobile number, case-insensitive
             const searchRegex = new RegExp(search, "i");
             return searchRegex.test(farmerName) || searchRegex.test(farmerMobile);
           })
-        : enrichedDoc;
+        : enrichedOrders;
 
       // Sort results based on the provided key
-      const sortedDoc = filteredDoc.sort((a, b) => {
+      const sortedOrders = filteredOrders.sort((a, b) => {
         if (a[sortKey] < b[sortKey]) return -1 * order;
         if (a[sortKey] > b[sortKey]) return 1 * order;
         return 0;
       });
 
       // Transform documents to include both `id` and `_id`
-      const transformedDoc = sortedDoc.map((item) => {
+      const transformedOrders = sortedOrders.map((item) => {
         const { _id, ...rest } = item;
         return { id: _id, _id: _id, ...rest };
       });
@@ -233,14 +256,14 @@ const getOne = (Model, modelName, popOptions) =>
       const response = generateResponse(
         "Success",
         `${modelName} found successfully`,
-        transformedDoc,
+        transformedOrders,
         undefined
       );
 
       return res.status(200).json(response);
     }
 
-    // For other models, no need for specific population/filtering
+    // For other models
     const features = new APIFeatures(Model.find(filter), req.query, modelName)
       .filter()
       .sort()
@@ -263,6 +286,7 @@ const getOne = (Model, modelName, popOptions) =>
 
     return res.status(200).json(response);
   });
+
 
 
 
