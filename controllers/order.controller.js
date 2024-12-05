@@ -64,42 +64,56 @@ const getOrders = getAll(Order, "Order");
 const createOrder = createOne(Order, "Order");
 const updateOrder = updateOne(Order, "Order");
 const addNewPayment = catchAsync(async (req, res, next) => {
-  const { id, paymentAmount, receiptPhoto } = req.body;
+  const { orderId } = req.params;  // Extract the orderId from the request parameters
+  const {
+    paidAmount,
+    paymentStatus,
+    paymentDate,
+    bankName,
+    receiptPhoto,
+    modeOfPayment,
+  } = req.body;  // Extract the payment details from the request body
+console.log(req.body)
+  try {
+    // Find the order by its ID
+    const order = await Order.findById(orderId);
 
-  const updateObj = {};
-  if (!updateObj.$push) updateObj.$push = {};
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
 
-  if (paymentAmount !== undefined) {
-    updateObj.$push.payment = { paidAmount: paymentAmount };
+    // Create the payment object using the received data
+    const newPayment = {
+      paidAmount,
+      paymentStatus,
+      paymentDate,
+      bankName,
+      receiptPhoto,
+      modeOfPayment,
+    };
+
+    // Add the new payment to the payment array of the order
+    order.payment.push(newPayment);
+
+    // Save the updated order with the new payment
+    await order.save();
+
+    // Return success response
+    return res.status(200).json({
+      message: "Payment added successfully",
+      updatedOrder: order,
+    });
+  } catch (error) {
+    console.error("Error adding payment:", error);
+    return res.status(500).json({ message: "Server error", error });
   }
-  if (receiptPhoto !== undefined) {
-    updateObj.$push.receiptPhoto = receiptPhoto;
-  }
-
-  const doc = await Order.findByIdAndUpdate(id, updateObj, {
-    new: true,
-    runValidators: true,
-  });
-
-  if (!doc) {
-    return next(new AppError(`No order found with that ID`, 404));
-  }
-
-  const response = generateResponse(
-    "Success",
-    `order updated successfully`,
-    doc,
-    undefined
-  );
-
-  return res.status(200).json(response);
 });
 
 
  const updatePaymentStatus = async (req, res) => {
   try {
     const { orderId, paymentId, paymentStatus } = req.body;
-console.log(paymentStatus)
+console.log(orderId)
     // Validate input
     if (!orderId || !paymentId || !paymentStatus) {
       return res.status(400).json({ message: "Order ID, Payment ID, and Payment Status are required." });

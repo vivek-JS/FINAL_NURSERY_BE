@@ -1,5 +1,5 @@
 import express from "express";
-import  {
+import {
   getCsv,
   updateOrder,
   addNewPayment,
@@ -19,28 +19,9 @@ router
     "/updatePaymentStatus",
     updatePaymentStatus
   )
-  // .patch(
-  //   "/updatePaymentStatus",
-  //   [
-  //     check("id").isMongoId().withMessage("Please provide order id"),
-  //     check("paymentStatus")
-  //       .notEmpty()
-  //       .withMessage("Please provide payment status"),
-  //   ],
-  //   checkErrors,
-  //   updateOrder
-  // )
   .patch(
-    "/addNewPayment",
-    upload.single("receiptPhoto"),
-    [
-      check("id").isMongoId().withMessage("Please provide order id"),
-      check("paymentAmount")
-        .notEmpty()
-        .withMessage("Please provide payment amount"),
-    ],
-    checkErrors,
-    addNewPayment
+    "/payment/:orderId",
+    addNewPayment // Controller function to add payment
   )
   .patch(
     "/updateOrder",
