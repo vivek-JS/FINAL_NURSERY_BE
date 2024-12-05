@@ -7,7 +7,7 @@ const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     // Extract `payment` from the request body if the model is "Order"
     if (modelName === "Order") {
-      const { payment, ...orderData } = req.body; // Separate `payment` from other order data
+      const { payment, bookingSlot, numberOfPlants, ...orderData } = req.body;
 
       if (payment) {
         // Ensure `payment` is an array and validate its structure
@@ -24,6 +24,43 @@ const createOne = (Model, modelName) =>
 
         // Assign `payment` to `orderData.payment`
         orderData.payment = formattedPayments;
+      }
+
+      // Check if bookingSlot and numberOfPlants exist, then update PlantSlot
+      if (modelName === "Order" && bookingSlot && numberOfPlants) {
+        // Retrieve the corresponding PlantSlot and subtypeSlot
+        const plantSlot = await PlantSlot.findOne({
+          "subtypeSlots._id": bookingSlot,
+        });
+
+        if (plantSlot) {
+          const subtypeSlot = plantSlot.subtypeSlots.find(
+            (slot) => slot._id.toString() === bookingSlot
+          );
+
+          if (subtypeSlot) {
+            // Update totalPlants and totalBookedPlants
+            if (subtypeSlot.totalPlants >= numberOfPlants) {
+              subtypeSlot.totalPlants -= numberOfPlants;
+              subtypeSlot.totalBookedPlants += numberOfPlants;
+
+              // Save the updated PlantSlot
+              await plantSlot.save();
+            } else {
+              return res.status(400).json({
+                message: "Not enough plants available in this slot",
+              });
+            }
+          } else {
+            return res.status(400).json({
+              message: "Invalid booking slot",
+            });
+          }
+        } else {
+          return res.status(400).json({
+            message: "PlantSlot not found for the given subtypeSlot",
+          });
+        }
       }
 
       // Merge processed `orderData` back into `req.body`
@@ -46,7 +83,6 @@ const createOne = (Model, modelName) =>
 
     return res.status(201).json(response);
   });
-
 
 const updateOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
@@ -187,6 +223,10 @@ const getOne = (Model, modelName, popOptions) =>
         .populate({
           path: "plantName",
           select: "name subtypes",
+        })
+        .populate({
+          path: "salesPerson",
+          select: "name phoneNumber", // Include salesPerson's name and phoneNumber
         });
 
       const orders = await query.lean();
@@ -202,14 +242,15 @@ const getOne = (Model, modelName, popOptions) =>
       const enrichedOrders = orders.map((order) => {
         const plantName = order.plantName?.name || null;
         const plantSubtype = order.plantName?.subtypes.find(
-          (subtype) => subtype._id.toString() === order.plantSubtype.toString()
+          (subtype) => subtype._id?.toString() === order.plantSubtype?.toString()
         )?.name;
+
         // Find bookingSlot details
         let bookingSlotDetails = null;
         for (const plantSlot of plantSlots) {
           for (const subtypeSlot of plantSlot.subtypeSlots) {
             const slot = subtypeSlot.slots.find(
-              (s) => s?._id?.toString() === order?.bookingSlot?.toString()
+              (s) => s._id?.toString() === order.bookingSlot?.toString()
             );
             if (slot) {
               bookingSlotDetails = {
@@ -227,6 +268,8 @@ const getOne = (Model, modelName, popOptions) =>
           plantName,
           plantSubtype,
           bookingSlot: bookingSlotDetails,
+          salesPersonName: order.salesPerson?.name || null, // Add salesPerson name
+          salesPersonPhoneNumber: order.salesPerson?.phoneNumber || null, // Add salesPerson phoneNumber
         };
       });
 
