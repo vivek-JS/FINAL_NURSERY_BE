@@ -5,6 +5,7 @@ import {
   addNewPayment,
   getOrders,
   updatePaymentStatus,
+  getOrdersBySlot,
 } from "../controllers/order.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -14,6 +15,7 @@ const router = express.Router();
 
 router
   .get("/getCSV", getCsv)
+  .get("/slots", getOrdersBySlot)
   .get("/getOrders", getOrders)
   .patch(
     "/updatePaymentStatus",

@@ -3,77 +3,117 @@ import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
 import mongoose from "mongoose";
+import PlantSlot from "../models/slots.model.js";
+
+const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
+  console.log(`[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}`);
+
+  // Step 1: Fetch the slot
+  const plantSlots = await PlantSlot.find({
+    "subtypeSlots.slots._id": bookingSlot,
+  });
+
+  let slot = null;
+
+  for (const plantSlot of plantSlots) {
+    for (const subtypeSlot of plantSlot.subtypeSlots) {
+      slot = subtypeSlot.slots.find(
+        (s) => s._id?.toString() === bookingSlot.toString()
+      );
+      if (slot) break;
+    }
+    if (slot) break;
+  }
+
+  if (!slot) {
+    console.error("[updateSlot] ERROR: Slot not found");
+    throw new Error("PlantSlot not found for the given bookingSlot");
+  }
+
+  console.log(`[updateSlot] Found Slot - Total Plants: ${slot.totalPlants}, Booked Plants: ${slot.totalBookedPlants}`);
+
+  // Step 2: Update slot details
+  if (action === "subtract") {
+    if (slot.totalPlants < numberOfPlants) {
+      console.error("[updateSlot] ERROR: Insufficient plants in slot");
+      throw new Error("Not enough plants available in the selected slot");
+    }
+    slot.totalPlants -= numberOfPlants;
+    slot.totalBookedPlants += numberOfPlants;
+  } else if (action === "add") {
+    slot.totalPlants += numberOfPlants;
+    slot.totalBookedPlants -= numberOfPlants;
+  }
+
+  console.log(`[updateSlot] Updated Slot - Total Plants: ${slot.totalPlants}, Booked Plants: ${slot.totalBookedPlants}`);
+
+  // Step 3: Persist changes
+  const updateResult = await PlantSlot.updateOne(
+    { "subtypeSlots.slots._id": bookingSlot },
+    {
+      $set: {
+        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants": slot.totalPlants,
+        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": slot.totalBookedPlants,
+      },
+    },
+    {
+      arrayFilters: [
+        { "subtypeSlot.slots._id": bookingSlot }, // Filter for the correct subtypeSlot
+        { "slot._id": bookingSlot }, // Filter for the correct slot
+      ],
+    }
+  );
+
+  console.log(`[updateSlot] Update Result: ${JSON.stringify(updateResult)}`);
+
+  if (updateResult.modifiedCount === 0) {
+    console.error("[updateSlot] ERROR: Failed to update slot");
+    throw new Error("Failed to update the PlantSlot details");
+  }
+
+  console.log("[updateSlot] SUCCESS: Slot updated successfully");
+  return slot; // Return updated slot for reference
+};
+
+
 const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
-    // Extract `payment` from the request body if the model is "Order"
     if (modelName === "Order") {
       const { payment, bookingSlot, numberOfPlants, ...orderData } = req.body;
 
-      if (payment) {
-        // Ensure `payment` is an array and validate its structure
-        const formattedPayments = Array.isArray(payment)
-          ? payment.map((pay) => ({
-              paidAmount: pay.paidAmount,
-              paymentStatus: pay.paymentStatus || false,
-              paymentDate: pay.paymentDate,
-              bankName: pay.bankName,
-              receiptPhoto: pay.receiptPhoto || [],
-              modeOfPayment: pay.modeOfPayment,
-            }))
-          : [];
-
-        // Assign `payment` to `orderData.payment`
-        orderData.payment = formattedPayments;
-      }
-
-      // Check if bookingSlot and numberOfPlants exist, then update PlantSlot
-      if (modelName === "Order" && bookingSlot && numberOfPlants) {
-        // Retrieve the corresponding PlantSlot and subtypeSlot
-        const plantSlot = await PlantSlot.findOne({
-          "subtypeSlots._id": bookingSlot,
+      if (!bookingSlot || !numberOfPlants) {
+        return res.status(400).json({
+          message: "bookingSlot and numberOfPlants are required",
         });
-
-        if (plantSlot) {
-          const subtypeSlot = plantSlot.subtypeSlots.find(
-            (slot) => slot._id.toString() === bookingSlot
-          );
-
-          if (subtypeSlot) {
-            // Update totalPlants and totalBookedPlants
-            if (subtypeSlot.totalPlants >= numberOfPlants) {
-              subtypeSlot.totalPlants -= numberOfPlants;
-              subtypeSlot.totalBookedPlants += numberOfPlants;
-
-              // Save the updated PlantSlot
-              await plantSlot.save();
-            } else {
-              return res.status(400).json({
-                message: "Not enough plants available in this slot",
-              });
-            }
-          } else {
-            return res.status(400).json({
-              message: "Invalid booking slot",
-            });
-          }
-        } else {
-          return res.status(400).json({
-            message: "PlantSlot not found for the given subtypeSlot",
-          });
-        }
       }
 
-      // Merge processed `orderData` back into `req.body`
-      req.body = { ...orderData };
+      // Step 1: Create the Order
+      const order = await Model.create({ ...orderData, bookingSlot, numberOfPlants });
+
+      try {
+        // Step 2: Update the slot
+        await updateSlot(bookingSlot, numberOfPlants, "subtract");
+
+        const response = generateResponse(
+          "Success",
+          `${modelName} created successfully and slot updated`,
+          order,
+          undefined
+        );
+
+        return res.status(201).json(response);
+      } catch (error) {
+        // Rollback Order creation if slot update fails
+        await Model.findByIdAndDelete(order._id);
+        console.error("[createOne] Error updating slot:", error.message);
+        return res.status(400).json({ message: error.message });
+      }
     }
 
-    // Create the document
     const doc = await Model.create(req.body);
 
-    // Hide sensitive data if applicable
     if (doc.password) doc.password = undefined;
 
-    // Generate a response
     const response = generateResponse(
       "Success",
       `${modelName} created successfully`,
@@ -84,10 +124,12 @@ const createOne = (Model, modelName) =>
     return res.status(201).json(response);
   });
 
+
+
+
 const updateOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     // Find by id  and update
-    console.log("Request Body:", req.body);  // Log the body to check the data
 
     const doc = await Model.findByIdAndUpdate(req.body.id, req.body, {
       new: true,

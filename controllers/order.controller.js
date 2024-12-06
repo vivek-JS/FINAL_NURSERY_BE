@@ -9,6 +9,77 @@ import {
 } from "./factory.controller.js";
 import generateResponse from "../utility/responseFormat.js";
 
+const getOrdersBySlot = catchAsync(async (req, res, next) => {
+  const { slotId } = req.params; // Extract the slotId from the request parameters
+
+  try {
+    // Find all orders related to the given slotId
+    const orders = await Order.find({ bookingSlot: slotId })
+      .populate("farmer", "name mobileNumber village taluka district") // Populate farmer details
+      .populate("salesPerson", "name phoneNumber")  // Populate salesperson details
+      .populate("plantName", "name")                // Populate plant name
+      .populate("plantSubtype", "name")             // Populate plant subtype
+      .populate("bookingSlot")                      // Populate the booking slot
+      .exec();
+
+    if (!orders || orders.length === 0) {
+      return res.status(404).json({ message: "No orders found for the specified slot." });
+    }
+
+    // Send all the order details along with populated references as a response
+    return res.status(200).json({
+      message: "Orders fetched successfully.",
+      orders: orders.map((order) => {
+        return {
+          id: order._id,  // Returning the order ID
+          _id: order._id,  // The same as the `id` field in your sample
+          farmer: {
+            _id: order.farmer?._id,
+            name: order.farmer?.name,
+            village: order.farmer?.village,
+            taluka: order.farmer?.taluka,
+            district: order.farmer?.district,
+            mobileNumber: order.farmer?.mobileNumber
+          },
+          salesPerson: {
+            _id: order.salesPerson?._id,
+            name: order.salesPerson?.name,
+            phoneNumber: order.salesPerson?.phoneNumber
+          },
+          numberOfPlants: order?.numberOfPlants,
+          plantName: order?.plantName?.name,
+          plantSubtype: order?.plantSubtype?.name,
+          bookingSlot: {
+            _id: order?.bookingSlot?._id,
+            startDay: order?.bookingSlot?.startDay,
+            endDay: order?.bookingSlot?.endDay,
+            totalPlants: order?.bookingSlot?.totalPlants,
+            totalBookedPlants: order?.bookingSlot?.totalBookedPlants,
+            orders: order?.bookingSlot?.orders,
+            overflow: order?.bookingSlot?.overflow,
+            status: order?.bookingSlot?.status,
+            month: order?.bookingSlot?.month
+          },
+          rate: order?.rate,
+          orderPaymentStatus: order?.orderPaymentStatus,
+          orderStatus: order?.orderStatus,
+          payment: order?.payment,
+          createdAt: order?.createdAt,
+          updatedAt: order?.updatedAt,
+          salesPersonName: order.salesPerson?.name,  // salesPersonName
+          salesPersonPhoneNumber: order.salesPerson?.phoneNumber  // salesPersonPhoneNumber
+        };
+      }),
+    });
+  } catch (error) {
+    console.error("Error fetching orders by slot:", error);
+    return res.status(500).json({ message: "An error occurred while fetching orders.", error });
+  }
+});
+
+
+export { getOrdersBySlot };
+
 const getCsv = catchAsync(async (req, res, next) => {
   // extracting data
   const { startDate, endDate } = req.query;
@@ -41,7 +112,7 @@ const getCsv = catchAsync(async (req, res, next) => {
     jsonData.map(async (obj) => {
       csvData.push({
         Sr: srNo + 1,
-        "Farmer name": obj.farmer.name,
+        "Farmer name": obj.farmer?.name,
         "Mobile number": obj.farmer.mobileNumber,
         "Mode of payment": obj?.modeOfPayment,
         "Total amount": obj?.rate,
@@ -73,7 +144,6 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     receiptPhoto,
     modeOfPayment,
   } = req.body;  // Extract the payment details from the request body
-console.log(req.body)
   try {
     // Find the order by its ID
     const order = await Order.findById(orderId);
@@ -113,7 +183,6 @@ console.log(req.body)
  const updatePaymentStatus = async (req, res) => {
   try {
     const { orderId, paymentId, paymentStatus } = req.body;
-console.log(orderId)
     // Validate input
     if (!orderId || !paymentId || !paymentStatus) {
       return res.status(400).json({ message: "Order ID, Payment ID, and Payment Status are required." });
@@ -121,14 +190,12 @@ console.log(orderId)
 
     // Find the order by orderId
     const order = await Order.findById(orderId);
-console.log(order)
     if (!order) {
       return res.status(404).json({ message: "Order not found." });
     }
 
     // Find the payment in the order's payments array by paymentId
     const payment = order.payment.id(paymentId);
-console.log(payment)
     if (!payment) {
       return res.status(404).json({ message: "Payment not found." });
     }
