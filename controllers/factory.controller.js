@@ -87,11 +87,27 @@ const createOne = (Model, modelName) =>
         });
       }
 
-      // Step 1: Create the Order
-      const order = await Model.create({ ...orderData, bookingSlot, numberOfPlants });
-
       try {
-        // Step 2: Update the slot
+        // Step 1: Generate orderId
+        const currentMonth = new Date().getMonth() + 1; // Get current month (1-based)
+        const monthPrefix = currentMonth.toString().padStart(2, "0"); // Ensure it's 2 digits
+        const lastOrder = await Model.findOne({ orderId: { $regex: `^${monthPrefix}` } })
+          .sort({ orderId: -1 })
+          .select("orderId");
+        const orderIndex = lastOrder
+          ? parseInt(lastOrder.orderId.slice(2)) + 1
+          : 1; // Extract and increment index, or start at 1
+        const orderId = `${monthPrefix}${orderIndex}`;
+
+        // Step 2: Create the Order
+        const order = await Model.create({
+          ...orderData,
+          bookingSlot,
+          numberOfPlants,
+          orderId,
+        });
+
+        // Step 3: Update the slot
         await updateSlot(bookingSlot, numberOfPlants, "subtract");
 
         const response = generateResponse(
@@ -103,13 +119,18 @@ const createOne = (Model, modelName) =>
 
         return res.status(201).json(response);
       } catch (error) {
-        // Rollback Order creation if slot update fails
-        await Model.findByIdAndDelete(order._id);
-        console.error("[createOne] Error updating slot:", error.message);
+        console.error("[createOne] Error:", error.message);
+
+        // If an order was partially created, roll it back
+        if (error.name !== "ValidationError") {
+          await Model.deleteOne({ orderId });
+        }
+
         return res.status(400).json({ message: error.message });
       }
     }
 
+    // Generic case for other models
     const doc = await Model.create(req.body);
 
     if (doc.password) doc.password = undefined;
@@ -123,6 +144,7 @@ const createOne = (Model, modelName) =>
 
     return res.status(201).json(response);
   });
+
 
 
 
@@ -245,127 +267,166 @@ const getOne = (Model, modelName, popOptions) =>
 
     return res.status(200).json(response);
   });
+
   const getAll = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
-    let filter = {};
-    const { sortKey = "createdAt", sortOrder = "desc", search } = req.query;
+    const {
+      sortKey = "createdAt",
+      sortOrder = "desc",
+      search,
+      startDate,
+      endDate,
+      page = 1,
+      limit = 10,
+    } = req.query;
+
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
+    const skip = (page - 1) * limit;
 
-    if (modelName === "Order") {
-      // Fetch orders with populated fields
-      let query = Model.find(filter)
-        .populate({
-          path: "farmer",
-          select: "name mobileNumber village taluka district",
-          populate: {
-            path: "district",
-            select: "districts",
-          },
-        })
-        .populate({
-          path: "plantName",
-          select: "name subtypes",
-        })
-        .populate({
-          path: "salesPerson",
-          select: "name phoneNumber", // Include salesPerson's name and phoneNumber
-        });
+    // Build the aggregation pipeline
+    const pipeline = [];
 
-      const orders = await query.lean();
+    // Date range filtering
+    if (startDate && endDate) {
+      const parseDate = (dateStr, isEnd = false) => {
+        const [day, month, year] = dateStr.split("-");
+        return isEnd
+          ? new Date(`${year}-${month}-${day}T23:59:59.999Z`) // End of the day
+          : new Date(`${year}-${month}-${day}T00:00:00.000Z`); // Start of the day
+      };
+    
+      const start = parseDate(startDate); // Start of the day
+      const end = parseDate(endDate, true); // End of the day
+      pipeline.push({ $match: { createdAt: { $gte: start, $lte: end } } });
+    }
+    
 
-      // Fetch `PlantSlot` details for the `bookingSlot`
-      const plantSlotIds = orders.map((order) => order.bookingSlot);
-      const plantSlots = await mongoose
-        .model("PlantSlot")
-        .find({ "subtypeSlots.slots._id": { $in: plantSlotIds } })
-        .lean();
-
-      // Map bookingSlot details to orders
-      const enrichedOrders = orders.map((order) => {
-        const plantName = order.plantName?.name || null;
-        const plantSubtype = order.plantName?.subtypes.find(
-          (subtype) => subtype._id?.toString() === order.plantSubtype?.toString()
-        )?.name;
-
-        // Find bookingSlot details
-        let bookingSlotDetails = null;
-        for (const plantSlot of plantSlots) {
-          for (const subtypeSlot of plantSlot.subtypeSlots) {
-            const slot = subtypeSlot.slots.find(
-              (s) => s._id?.toString() === order.bookingSlot?.toString()
-            );
-            if (slot) {
-              bookingSlotDetails = {
-                ...slot,
-                subtypeName: subtypeSlot.subtypeId.name, // Include subtype name
-              };
-              break;
-            }
-          }
-          if (bookingSlotDetails) break;
-        }
-
-        return {
-          ...order,
-          plantName,
-          plantSubtype,
-          bookingSlot: bookingSlotDetails,
-          salesPersonName: order.salesPerson?.name || null, // Add salesPerson name
-          salesPersonPhoneNumber: order.salesPerson?.phoneNumber || null, // Add salesPerson phoneNumber
-        };
+    // Search filtering
+    if (search) {
+      const searchRegex = new RegExp(search, "i");
+      pipeline.push({
+        $match: {
+          $or: [
+            { "farmer.name": searchRegex },
+            { "farmer.mobileNumber": searchRegex },
+          ],
+        },
       });
-
-      // Apply regex-based filtering on populated data if search is provided
-      const filteredOrders = search
-        ? enrichedOrders.filter((order) => {
-            const farmerName = order.farmer?.name || "";
-            const farmerMobile = order.farmer?.mobileNumber || "";
-            const searchRegex = new RegExp(search, "i");
-            return searchRegex.test(farmerName) || searchRegex.test(farmerMobile);
-          })
-        : enrichedOrders;
-
-      // Sort results based on the provided key
-      const sortedOrders = filteredOrders.sort((a, b) => {
-        if (a[sortKey] < b[sortKey]) return -1 * order;
-        if (a[sortKey] > b[sortKey]) return 1 * order;
-        return 0;
-      });
-
-      // Transform documents to include both `id` and `_id`
-      const transformedOrders = sortedOrders.map((item) => {
-        const { _id, ...rest } = item;
-        return { id: _id, _id: _id, ...rest };
-      });
-
-      const response = generateResponse(
-        "Success",
-        `${modelName} found successfully`,
-        transformedOrders,
-        undefined
-      );
-
-      return res.status(200).json(response);
     }
 
-    // For other models
-    const features = new APIFeatures(Model.find(filter), req.query, modelName)
-      .filter()
-      .sort()
-      .limitFields()
-      .paginate();
+    // Lookup for related data
+    pipeline.push(
+      {
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      },
+      { $unwind: "$farmer" },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantName",
+          foreignField: "_id",
+          as: "plantName",
+        },
+      },
+      { $unwind: "$plantName" },
+      {
+        $lookup: {
+          from: "users",
+          localField: "salesPerson",
+          foreignField: "_id",
+          as: "salesPerson",
+        },
+      },
+      { $unwind: "$salesPerson" },
+      {
+        $lookup: {
+          from: "plantslots",
+          let: { bookingSlotId: "$bookingSlot" },
+          pipeline: [
+            { $unwind: "$subtypeSlots" },
+            { $unwind: "$subtypeSlots.slots" },
+            {
+              $match: {
+                $expr: { $eq: ["$subtypeSlots.slots._id", "$$bookingSlotId"] },
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                startDay: "$subtypeSlots.slots.startDay",
+                endDay: "$subtypeSlots.slots.endDay",
+                subtypeId: "$subtypeSlots.subtypeId",
+                month: "$subtypeSlots.slots.month",
 
-    const doc = await features.query.lean();
 
-    const transformedDoc = doc.map((item) => {
+              },
+            },
+          ],
+          as: "bookingSlotDetails",
+        },
+      },
+      { $unwind: { path: "$bookingSlotDetails", preserveNullAndEmptyArrays: true } }
+    );
+
+    // Enrich plantSubtype name
+    pipeline.push({
+      $addFields: {
+        plantSubtypeName: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: "$plantName.subtypes",
+                as: "subtype",
+                cond: { $eq: ["$$subtype._id", "$plantSubtype"] },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    });
+
+    // Select required fields
+    pipeline.push({
+      $project: {
+        farmer: { name: 1, mobileNumber: 1, village: 1, taluka: 1, district: 1 },
+        plantName: "$plantName.name",
+        plantSubtype: "$plantSubtypeName.name",
+        bookingSlot: "$bookingSlotDetails",
+        salesPerson: { name: "$salesPerson.name", phoneNumber: "$salesPerson.phoneNumber" },
+        createdAt: 1,
+        orderStatus:1,
+        payment:1,
+        numberOfPlants:1,
+        orderId:1
+
+      },
+    });
+
+    // Sorting
+    pipeline.push({ $sort: { [sortKey]: order } });
+
+    // Pagination
+    pipeline.push({ $skip: skip }, { $limit: parseInt(limit, 10) });
+
+    // Execute the pipeline
+    const results = await Model.aggregate(pipeline);
+
+    // Transform documents for response
+    const transformedResults = results.map((item) => {
       const { _id, ...rest } = item;
-      return { id: _id, _id: _id, ...rest };
+      return { id: _id, _id, ...rest };
     });
 
     const response = generateResponse(
       "Success",
       `${modelName} found successfully`,
-      transformedDoc,
+      transformedResults,
       undefined
     );
 

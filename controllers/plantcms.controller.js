@@ -2,29 +2,55 @@ import Plant from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 
 // Add a new plant with subtypes
+import PlantCms from "../models/plantCms.model.js";
+
 export const addPlant = async (req, res) => {
   const { name, subtypes, addedBy, slotSize } = req.body;
+  console.log(req.body);
 
   try {
     // Check if a plant with the same name already exists
-    const existingPlant = await Plant.findOne({ name });
+    const existingPlant = await PlantCms.findOne({ name });
     if (existingPlant) {
       return res.status(400).json({ message: "Plant name must be unique" });
     }
 
-    const newPlant = new Plant({
+    // Process subtypes to include required fields and validate structure
+    const processedSubtypes = subtypes.map((subtype) => {
+      if (!subtype.name) {
+        throw new Error("Each subtype must have a name.");
+      }
+
+      return {
+        name: subtype.name,
+        description: subtype.description || "",
+        characteristics: subtype.characteristics || {},
+        rates: Array.isArray(subtype.rates) ? subtype.rates : [], // Ensure rates is an array
+      };
+    });
+
+    // Create a new plant document
+    const newPlant = new PlantCms({
       name,
-      subtypes,
+      subtypes: processedSubtypes,
       addedBy,
       slotSize: slotSize || 5, // Default slot size to 5 if not provided
     });
 
     const savedPlant = await newPlant.save();
-    return res.status(201).json({ message: "Plant added successfully", data: savedPlant });
+
+    return res
+      .status(201)
+      .json({ message: "Plant added successfully", data: savedPlant });
   } catch (error) {
-    return res.status(500).json({ message: "Error adding plant", error: error.message });
+    console.error("Error adding plant:", error.message);
+    return res.status(500).json({
+      message: "Error adding plant",
+      error: error.message,
+    });
   }
 };
+
 
 // Update a plant's details, subtypes, or slotSize
 // Update a plant's details, subtypes, or slotSize

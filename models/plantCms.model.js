@@ -6,6 +6,7 @@ const plantSubtypeSchema = new Schema({
   name: { type: String, required: true },
   description: { type: String },
   characteristics: { type: Map, of: String },
+  rates: { type: [Number], default: [] }, // Array of rates for each subtype
 });
 
 const plantSchema = new Schema({

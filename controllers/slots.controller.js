@@ -152,9 +152,14 @@ export const getPlantNames = async (req, res) => {
 };
 
 
+
 export const getSubtypesByPlant = async (req, res) => {
   try {
-    const { plantId, plantName } = req.query;
+    const { plantId, plantName, year } = req.query;
+console.log(year)
+    if (!year) {
+      return res.status(400).json({ message: "Year is required." });
+    }
 
     // Construct the query based on the provided plantId or plantName
     let query = {};
@@ -165,24 +170,51 @@ export const getSubtypesByPlant = async (req, res) => {
     }
 
     // Fetch the plant from the database, including its subtypes
-    const plant = await PlantCms.findOne(query).populate('subtypes');
+    const plant = await PlantCms.findOne(query).populate("subtypes");
 
     if (!plant) {
-      return res.status(404).json({ message: 'Plant not found.' });
+      return res.status(404).json({ message: "Plant not found." });
     }
 
-    // Return the subtypes of the plant
-    res.status(200).json(plant.subtypes);
+    // Fetch the slot summary for the specified year and plant
+    const slotSummary = await PlantSlot.aggregate([
+      { $match: { plantId: plant._id, year: parseInt(year) } }, // Match plant and year
+      { $unwind: "$subtypeSlots" }, // Deconstruct the subtypeSlots array
+      { $unwind: "$subtypeSlots.slots" }, // Deconstruct the nested slots array
+      {
+        $group: {
+          _id: null, // Group all slots together
+          totalPlants: { $sum: "$subtypeSlots.slots.totalPlants" },
+          totalBookedPlants: { $sum: "$subtypeSlots.slots.totalBookedPlants" },
+        },
+      },
+      {
+        $project: {
+          _id: 0, // Exclude the _id field
+          totalPlants: 1,
+          totalBookedPlants: 1,
+        },
+      },
+    ]);
+
+    // Prepare the response
+    const totals = slotSummary.length > 0 ? slotSummary[0] : { totalPlants: 0, totalBookedPlants: 0 };
+
+    res.status(200).json({
+      plant,
+      totals,
+    });
   } catch (error) {
-    console.error('Error fetching plant subtypes:', error);
-    res.status(500).json({ message: 'Internal server error.', error });
+    console.error("Error fetching plant subtypes and slot summary:", error);
+    res.status(500).json({ message: "Internal server error.", error });
   }
 };
+
 export const getSlotsByPlantAndSubtype = async (req, res) => {
   try {
     const { plantId, subtypeId, year, status, page = 1, limit = 10 } = req.query;
 
-    // Build the query to filter by plantId and year
+    // Build the query to filter by plantId, subtypeId, and year
     const query = {};
     if (plantId) query.plantId = plantId;
     if (year) query.year = Number(year);
@@ -191,43 +223,94 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
     const pageNumber = Number(page);
     const pageSize = Number(limit);
 
-    // Construct filter for subtypeId and status within slots
-    const subtypeFilter = { subtypeId };
-
-    // If status is provided, convert it to a boolean and include it in the filter for slots
+    // Filter for subtypeId and status
+    const subtypeFilter = {};
+    if (subtypeId) subtypeFilter["subtypeSlots.subtypeId"] = subtypeId;
     if (status !== undefined) {
-      const statusBoolean = status === 'true'; // Convert to boolean
-      subtypeFilter['slots.startDay'] = 1; // Filtering slots with the status
+      // If status is provided, filter slots by status
+      subtypeFilter["subtypeSlots.slots.status"] = status === "true";
     }
-console.log(subtypeFilter)
-    // Fetch the slots from the database
-    const slots = await PlantSlot.find(query)
-      .populate({
-        path: 'plantId',
-        select: 'name',
-      })
-      .lean()
-      .skip((pageNumber - 1) * pageSize) // Skip for pagination
-      .limit(pageSize) // Limit for pagination
-      .select({
-        subtypeSlots: {
-          $elemMatch: subtypeFilter, // Match by subtypeId and status inside slots
+    console.log('Query:', subtypeFilter); // Log the query used in the aggregation
+
+    // Fetch the month-wise summary and matching slots for the provided subtypeId
+    const [summary, slots] = await Promise.all([
+      PlantSlot.aggregate([
+        { $match: query }, // Match plantId and year
+        
+        { $unwind: "$subtypeSlots" }, // Flatten subtypeSlots array
+        { $match: subtypeFilter }, // Apply the subtypeId and status filters
+        { $unwind: "$subtypeSlots.slots" }, // Flatten slots array
+        {
+          $group: {
+            _id: "$subtypeSlots.slots.month", // Group by month
+            totalPlants: { $sum: "$subtypeSlots.slots.totalPlants" },
+            totalBookedPlants: { $sum: "$subtypeSlots.slots.totalBookedPlants" },
+          },
         },
-      })
-      .exec();
+        {
+          $project: {
+            _id: 0,
+            month: "$_id", // Rename _id to month
+            totalPlants: 1,
+            totalBookedPlants: 1,
+          },
+        },
+        { $sort: { month: 1 } }, // Sort by month
+      ]),
+      PlantSlot.find(query)
+        .populate({
+          path: "plantId",
+          select: "name",
+        })
+        .lean()
+        .skip((pageNumber - 1) * pageSize) // Skip for pagination
+        .limit(pageSize) // Limit for pagination
+        .exec(),
+    ]);
 
-    // Check if slots exist
+    // Check if there are any slots or summary results
     if (!slots.length) {
-      return res.status(404).json({ message: 'No slots found for the given plant, subtype, and status.' });
+      return res
+        .status(404)
+        .json({ message: "No slots found for the given plant, subtype, and year." });
     }
 
-    // Return the fetched slots
-    res.status(200).json(slots);
+    // Define months for the summary
+    const months = [
+      "January", "February", "March", "April", "May", "June", "July", "August", 
+      "September", "October", "November", "December"
+    ];
+
+    // Initialize month-wise summary with default values (0 for both plants)
+    const monthwiseSummary = months.map(month => ({
+      month,
+      totalPlants: 0,
+      totalBookedPlants: 0
+    }));
+
+    // Populate the monthwiseSummary with the actual data from aggregation
+    summary.forEach(item => {
+      const monthIndex = months.indexOf(item.month);
+      if (monthIndex >= 0) {
+        monthwiseSummary[monthIndex] = {
+          month: item.month,
+          totalPlants: item.totalPlants,
+          totalBookedPlants: item.totalBookedPlants,
+        };
+      }
+    });
+
+    console.log('Monthwise Summary:', monthwiseSummary); // Debugging the final summary
+
+    // Return the fetched slots and the month-wise summary
+    res.status(200).json({ monthwiseSummary, slots });
   } catch (error) {
-    console.error('Error fetching slots:', error.message);
-    res.status(500).json({ message: 'Internal server error.', error: error.message });
+    console.error("Error fetching slots:", error.message);
+    res.status(500).json({ message: "Internal server error.", error: error.message });
   }
 };
+
+
 
 
 
