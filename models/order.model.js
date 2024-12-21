@@ -20,7 +20,7 @@ const paymentSchema = new Schema(
     },
     receiptPhoto: [
       {
-        type: String,
+        type: String, // Store URLs (strings) for uploaded files
       },
     ],
     modeOfPayment: {
@@ -30,6 +30,7 @@ const paymentSchema = new Schema(
   },
   { timestamps: true }
 );
+
 
 const orderSchema = new Schema(
   {
@@ -75,6 +76,10 @@ const orderSchema = new Schema(
       type: String,
       required: true,
     },
+    remark: {
+      type: String,
+      required: true,
+  },
     payment: [paymentSchema],
     notes: {
       type: String,

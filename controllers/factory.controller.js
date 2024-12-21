@@ -97,7 +97,7 @@ const createOne = (Model, modelName) =>
         const orderIndex = lastOrder
           ? parseInt(lastOrder.orderId.slice(2)) + 1
           : 1; // Extract and increment index, or start at 1
-        const orderId = `${monthPrefix}${orderIndex}`;
+        const orderId = `${orderIndex}`;
 
         // Step 2: Create the Order
         const order = await Model.create({
@@ -403,7 +403,8 @@ const getOne = (Model, modelName, popOptions) =>
         orderStatus:1,
         payment:1,
         numberOfPlants:1,
-        orderId:1
+        orderId:1,
+        rate:1
 
       },
     });
