@@ -1,14 +1,29 @@
 import { Schema, model } from "mongoose";
+import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 
 // Define the schema for slots
 const slotSchema = new Schema({
   startDay: {
-    type: Number,
+    type: String, // Store date in "dd-mm-yyyy" format
     required: true,
+    validate: {
+      validator: function (value) {
+        // Regular expression to validate "dd-mm-yyyy" format
+        return /^\d{2}-\d{2}-\d{4}$/.test(value) && moment(value, "DD-MM-YYYY", true).isValid();
+      },
+      message: (props) => `${props.value} is not a valid date in the format dd-mm-yyyy`,
+    },
   },
   endDay: {
-    type: Number,
+    type: String, // Store date in "dd-mm-yyyy" format
     required: true,
+    validate: {
+      validator: function (value) {
+        // Regular expression to validate "dd-mm-yyyy" format
+        return /^\d{2}-\d{2}-\d{4}$/.test(value) && moment(value, "DD-MM-YYYY", true).isValid();
+      },
+      message: (props) => `${props.value} is not a valid date in the format dd-mm-yyyy`,
+    },
   },
   totalPlants: {
     type: Number,

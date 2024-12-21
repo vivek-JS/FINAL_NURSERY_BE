@@ -1,45 +1,8 @@
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js"
 // Helper function to generate slots for a year
-export const generateSlotsForYear = (year, slotSize = 5) => {
-  const slots = [];
-  const daysInMonths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  const monthNames = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-  ];
+import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 
-  // Adjust for leap year
-  if ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) {
-    daysInMonths[1] = 29; // February has 29 days
-  }
-
-  // Generate slots for each month
-  daysInMonths.forEach((daysInMonth, monthIndex) => {
-    const monthName = monthNames[monthIndex];
-    let startDay = 1;
-
-    while (startDay <= daysInMonth) {
-      const endDay = Math.min(startDay + slotSize - 1, daysInMonth);
-      slots.push({
-        startDay,
-        endDay,
-        month: monthName, // Add the month name
-        totalPlants: 0,
-        totalBookedPlants: 0,
-        orders: [],
-        overflow: false,
-        status: true,
-      });
-      startDay += slotSize;
-    }
-  });
-
-  return slots;
-};
-
-
-// Function to create slots for all plants and subtypes for a specific year
 export const createSlotsForYear = async (year) => {
   try {
     // Fetch all plants from PlantCms
@@ -63,9 +26,63 @@ export const createSlotsForYear = async (year) => {
 
     console.log(`Slots created successfully for the year ${year} for all plants and subtypes.`);
   } catch (error) {
-    console.error('Error creating slots:', error);
+    console.error("Error creating slots:", error);
   }
 };
+
+export const generateSlotsForYear = (year, slotSize = 5) => {
+  const slots = [];
+  const daysInMonths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const monthNames = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+
+  // Adjust for leap year
+  if ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) {
+    daysInMonths[1] = 29; // February has 29 days
+  }
+
+  // Generate slots for each month
+  daysInMonths.forEach((daysInMonth, monthIndex) => {
+    const monthName = monthNames[monthIndex];
+    let startDay = 1;
+
+    while (startDay <= daysInMonth) {
+      const endDay = Math.min(startDay + slotSize - 1, daysInMonth);
+
+      // Convert startDay and endDay to `dd-mm-yyyy` format
+      const startDate = moment(`${year}-${monthIndex + 1}-${startDay}`, "YYYY-M-D").format("DD-MM-YYYY");
+      const endDate = moment(`${year}-${monthIndex + 1}-${endDay}`, "YYYY-M-D").format("DD-MM-YYYY");
+
+      slots.push({
+        startDay: startDate, // Formatted date
+        endDay: endDate, // Formatted date
+        month: monthName, // Add the month name
+        totalPlants: 0,
+        totalBookedPlants: 0,
+        orders: [],
+        overflow: false,
+        status: true,
+      });
+
+      startDay += slotSize;
+    }
+  });
+
+  return slots;
+};
+
 export const getAllSlots = async (req, res) => {
   try {
     const { plantId, subtypeId, year, page = 1, limit = 10 } = req.query;

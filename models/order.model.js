@@ -27,6 +27,10 @@ const paymentSchema = new Schema(
       type: String,
       required: true,
     },
+    remark: {
+      type: String,
+    //  required: true,
+  }
   },
   { timestamps: true }
 );
@@ -76,10 +80,7 @@ const orderSchema = new Schema(
       type: String,
       required: true,
     },
-    remark: {
-      type: String,
-      required: true,
-  },
+ 
     payment: [paymentSchema],
     notes: {
       type: String,
