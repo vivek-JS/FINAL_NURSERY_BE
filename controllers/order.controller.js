@@ -181,8 +181,12 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 
 
  const updatePaymentStatus = async (req, res) => {
+
   try {
     const { orderId, paymentId, paymentStatus } = req.body;
+    console.log(orderId)
+    console.log(paymentId)
+    console.log(paymentStatus)
     // Validate input
     if (!orderId || !paymentId || !paymentStatus) {
       return res.status(400).json({ message: "Order ID, Payment ID, and Payment Status are required." });
@@ -199,7 +203,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     if (!payment) {
       return res.status(404).json({ message: "Payment not found." });
     }
-
+console.log(payment)
     // Update the payment status
     payment.paymentStatus = paymentStatus;
 

@@ -87,8 +87,12 @@ const orderSchema = new Schema(
     },
     orderStatus: {
       type: String,
-      enum: ["pending", "processing", "completed", "cancelled", "Pending"],
-      default: "pending",
+      enum: ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED", "DISPATCHED",'ACCEPTED','REJECTED'],
+      default: "PENDING",
+    },
+    paymentCompleted: {  // New field
+      type: Boolean,
+      default: false,  // Default to false until explicitly set to true
     },
   },
   { timestamps: true }

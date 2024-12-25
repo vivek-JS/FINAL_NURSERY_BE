@@ -286,45 +286,54 @@ const getOne = (Model, modelName, popOptions) =>
     // Build the aggregation pipeline
     const pipeline = [];
 
-    // Date range filtering
-    if (startDate && endDate) {
+    // Apply Date range filtering only when `search` is NOT present
+    if (!search && startDate && endDate) {
       const parseDate = (dateStr, isEnd = false) => {
         const [day, month, year] = dateStr.split("-");
         return isEnd
-          ? new Date(`${year}-${month}-${day}T23:59:59.999Z`) // End of the day
-          : new Date(`${year}-${month}-${day}T00:00:00.000Z`); // Start of the day
+          ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
+          : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
       };
-    
-      const start = parseDate(startDate); // Start of the day
-      const end = parseDate(endDate, true); // End of the day
+
+      const start = parseDate(startDate);
+      const end = parseDate(endDate, true);
       pipeline.push({ $match: { createdAt: { $gte: start, $lte: end } } });
     }
-    
 
-    // Search filtering
+    // Search filtering by `orderId` or `farmer.name`
     if (search) {
       const searchRegex = new RegExp(search, "i");
       pipeline.push({
-        $match: {
-          $or: [
-            { "farmer.name": searchRegex },
-            { "farmer.mobileNumber": searchRegex },
-          ],
-        },
-      });
-    }
-
-    // Lookup for related data
-    pipeline.push(
-      {
         $lookup: {
           from: "farmers",
           localField: "farmer",
           foreignField: "_id",
           as: "farmer",
         },
-      },
-      { $unwind: "$farmer" },
+      });
+
+      pipeline.push({
+        $match: {
+          $or: [
+            { orderId: search }, // Match orderId
+            { "farmer.name": searchRegex }, // Match farmer name
+          ],
+        },
+      });
+    } else {
+      // Lookup farmer data if search is not present (so farmer data is always included)
+      pipeline.push({
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      });
+    }
+
+    // Lookup related data
+    pipeline.push(
       {
         $lookup: {
           from: "plantcms",
@@ -333,7 +342,6 @@ const getOne = (Model, modelName, popOptions) =>
           as: "plantName",
         },
       },
-      { $unwind: "$plantName" },
       {
         $lookup: {
           from: "users",
@@ -342,7 +350,6 @@ const getOne = (Model, modelName, popOptions) =>
           as: "salesPerson",
         },
       },
-      { $unwind: "$salesPerson" },
       {
         $lookup: {
           from: "plantslots",
@@ -362,25 +369,22 @@ const getOne = (Model, modelName, popOptions) =>
                 endDay: "$subtypeSlots.slots.endDay",
                 subtypeId: "$subtypeSlots.subtypeId",
                 month: "$subtypeSlots.slots.month",
-
-
               },
             },
           ],
           as: "bookingSlotDetails",
         },
-      },
-      { $unwind: { path: "$bookingSlotDetails", preserveNullAndEmptyArrays: true } }
+      }
     );
 
-    // Enrich plantSubtype name
+    // Enrich plantSubtype details (name and ID)
     pipeline.push({
-      $addFields: {
-        plantSubtypeName: {
+      $set: {
+        plantSubtypeDetails: {
           $arrayElemAt: [
             {
               $filter: {
-                input: "$plantName.subtypes",
+                input: { $arrayElemAt: ["$plantName.subtypes", 0] },
                 as: "subtype",
                 cond: { $eq: ["$$subtype._id", "$plantSubtype"] },
               },
@@ -391,29 +395,64 @@ const getOne = (Model, modelName, popOptions) =>
       },
     });
 
-    // Select required fields
-    pipeline.push({
-      $project: {
-        farmer: { name: 1, mobileNumber: 1, village: 1, taluka: 1, district: 1 },
-        plantName: "$plantName.name",
-        plantSubtype: "$plantSubtypeName.name",
-        bookingSlot: "$bookingSlotDetails",
-        salesPerson: { name: "$salesPerson.name", phoneNumber: "$salesPerson.phoneNumber" },
-        createdAt: 1,
-        orderStatus:1,
-        payment:1,
-        numberOfPlants:1,
-        orderId:1,
-        rate:1
-
+    // Select required fields at the end
+    pipeline.push(
+      {
+        $project: {
+          farmer: {
+            $arrayElemAt: [
+              {
+                $map: {
+                  input: "$farmer",
+                  as: "farmerData",
+                  in: {
+                    name: "$$farmerData.name",
+                    mobileNumber: "$$farmerData.mobileNumber",
+                    village: "$$farmerData.village",
+                    taluka: "$$farmerData.taluka",
+                    district: "$$farmerData.district",
+                  },
+                },
+              },
+              0,
+            ],
+          },
+          plantType: {
+            id: { $arrayElemAt: ["$plantName._id", 0] },
+            name: { $arrayElemAt: ["$plantName.name", 0] },
+          },
+          plantSubtype: {
+            id: "$plantSubtypeDetails._id",
+            name: "$plantSubtypeDetails.name",
+          },
+          bookingSlot: "$bookingSlotDetails",
+          salesPerson: {
+            $arrayElemAt: [
+              {
+                $map: {
+                  input: "$salesPerson",
+                  as: "sales",
+                  in: {
+                    name: "$$sales.name",
+                    phoneNumber: "$$sales.phoneNumber",
+                  },
+                },
+              },
+              0,
+            ],
+          },
+          createdAt: 1,
+          orderStatus: 1,
+          payment: 1,
+          numberOfPlants: 1,
+          orderId: 1,
+          rate: 1,
+        },
       },
-    });
-
-    // Sorting
-    pipeline.push({ $sort: { [sortKey]: order } });
-
-    // Pagination
-    pipeline.push({ $skip: skip }, { $limit: parseInt(limit, 10) });
+      { $sort: { [sortKey]: order } },
+      { $skip: skip },
+      { $limit: parseInt(limit, 10) }
+    );
 
     // Execute the pipeline
     const results = await Model.aggregate(pipeline);
@@ -433,6 +472,11 @@ const getOne = (Model, modelName, popOptions) =>
 
     return res.status(200).json(response);
   });
+
+
+
+
+
 
 
 
