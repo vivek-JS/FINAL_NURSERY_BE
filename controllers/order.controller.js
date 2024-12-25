@@ -184,9 +184,6 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 
   try {
     const { orderId, paymentId, paymentStatus } = req.body;
-    console.log(orderId)
-    console.log(paymentId)
-    console.log(paymentStatus)
     // Validate input
     if (!orderId || !paymentId || !paymentStatus) {
       return res.status(400).json({ message: "Order ID, Payment ID, and Payment Status are required." });
