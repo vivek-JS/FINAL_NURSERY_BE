@@ -89,26 +89,26 @@ const createOne = (Model, modelName) =>
 
       try {
         // Step 1: Generate orderId
-        const currentMonth = new Date().getMonth() + 1; // Get current month (1-based)
-        const monthPrefix = currentMonth.toString().padStart(2, "0"); // Ensure it's 2 digits
+
         const lastOrder = await Model.findOne({ orderId: { $regex: `^${monthPrefix}` } })
           .sort({ orderId: -1 })
           .select("orderId");
+        console.log(lastOrder)
         const orderIndex = lastOrder
-          ? parseInt(lastOrder.orderId.slice(2)) + 1
+          ? parseInt(lastOrder.orderId) + 1
           : 1; // Extract and increment index, or start at 1
-        const orderId = `${orderIndex}`;
+        const orderId = orderIndex;
 
-        // Step 2: Create the Order
+        // Step 2: Update the slot first
+        await updateSlot(bookingSlot, numberOfPlants, "subtract");
+
+        // Step 3: Create the Order (only if the slot update is successful)
         const order = await Model.create({
           ...orderData,
           bookingSlot,
           numberOfPlants,
           orderId,
         });
-
-        // Step 3: Update the slot
-        await updateSlot(bookingSlot, numberOfPlants, "subtract");
 
         const response = generateResponse(
           "Success",
@@ -121,11 +121,7 @@ const createOne = (Model, modelName) =>
       } catch (error) {
         console.error("[createOne] Error:", error.message);
 
-        // If an order was partially created, roll it back
-        if (error.name !== "ValidationError") {
-          await Model.deleteOne({ orderId });
-        }
-
+        // No need to roll back the order because it is only created after slot update succeeds
         return res.status(400).json({ message: error.message });
       }
     }
