@@ -8,17 +8,7 @@ mongoose
     console.log(`Connected to database`);
     
     // Define plants and varieties to be inserted
-    const plants = [
-      {
-        name: "Banana",
-        varieties: [
-          { varietyName: "Shrimanti" },
-          { varietyName: "Bug Banana" },
-          { varietyName: "Small Banana" },
-        ],
-      },
-      // Add more plants and varieties as needed
-    ];
+
      
     try {
 

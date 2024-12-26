@@ -21,7 +21,6 @@ router
   .get("/getfarmer/:mobileNumber",findFarmer)
   .post(
     "/createFarmer",
-    upload.single("receiptPhoto"),
     [
       check("name").notEmpty().withMessage("Please enter valid name"),
       check("village").notEmpty().withMessage("Please enter valid village"),
