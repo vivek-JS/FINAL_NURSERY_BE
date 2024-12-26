@@ -79,61 +79,31 @@ const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
 const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     if (modelName === "Order") {
-      // Handle FormData for Order
-      const formData = {};
-      
-      // Convert FormData to object if content-type is multipart/form-data
-      if (req.is('multipart/form-data')) {
-        // Extract fields from FormData
-        const { payment, bookingSlot, numberOfPlants, ...orderData } = req.body;
-        
-        // Handle file uploads if any
-        if (req.files) {
-          // If you have multiple file fields, handle each accordingly
-          if (req.files.paymentProof) {
-            formData.paymentProof = req.files.paymentProof[0].path; // Assuming using multer
-          }
-          // Add other file fields as needed
-        }
+      const { payment, bookingSlot, numberOfPlants, ...orderData } = req.body;
 
-        // Combine form fields with file data
-        Object.assign(formData, orderData);
-        
-        // Add specific Order fields
-        formData.bookingSlot = bookingSlot;
-        formData.numberOfPlants = numberOfPlants;
-      } else {
-        // If not FormData, use regular JSON body
-        const { payment, bookingSlot, numberOfPlants, ...orderData } = req.body;
-        Object.assign(formData, orderData, { bookingSlot, numberOfPlants });
-      }
-
-      // Validate required fields
-      if (!formData.bookingSlot || !formData.numberOfPlants) {
+      if (!bookingSlot || !numberOfPlants) {
         return res.status(400).json({
           message: "bookingSlot and numberOfPlants are required",
         });
       }
 
       try {
-        // Step 1: Generate orderId
-        const monthPrefix = new Date().toISOString().slice(0, 7).replace(/-/g, ''); // YYYYMM
-        const lastOrder = await Model.findOne({ orderId: { $regex: `^${monthPrefix}` } })
-          .sort({ orderId: -1 })
+        // Step 1: Find the highest orderId in the collection
+        const lastOrder = await Model.findOne()
+          .sort({ orderId: -1 })  // Sort in descending order
           .select("orderId");
-        
-        const orderIndex = lastOrder
-          ? parseInt(lastOrder.orderId.slice(6)) + 1 // Extract numeric part after YYYYMM
-          : 1;
-        
-        const orderId = `${monthPrefix}${String(orderIndex).padStart(4, '0')}`; // YYYYMM0001 format
+
+        // If no orders exist, start with 1, otherwise increment the last orderId
+        const orderId = lastOrder ? lastOrder.orderId + 1 : 1;
 
         // Step 2: Update the slot first
-        await updateSlot(formData.bookingSlot, formData.numberOfPlants, "subtract");
+        await updateSlot(bookingSlot, numberOfPlants, "subtract");
 
-        // Step 3: Create the Order
+        // Step 3: Create the Order with the new orderId
         const order = await Model.create({
-          ...formData,
+          ...orderData,
+          bookingSlot,
+          numberOfPlants,
           orderId,
         });
 
@@ -151,19 +121,8 @@ const createOne = (Model, modelName) =>
       }
     }
 
-    // Generic case for other models
-    let dataToCreate = req.body;
-
-    // Handle FormData for other models if needed
-    if (req.is('multipart/form-data')) {
-      dataToCreate = {
-        ...req.body,
-        // Handle file uploads for generic cases
-        ...(req.files && { files: req.files })
-      };
-    }
-
-    const doc = await Model.create(dataToCreate);
+    // Generic case for other models remains unchanged
+    const doc = await Model.create(req.body);
 
     if (doc.password) doc.password = undefined;
 
@@ -176,7 +135,6 @@ const createOne = (Model, modelName) =>
 
     return res.status(201).json(response);
   });
-
 
 
 

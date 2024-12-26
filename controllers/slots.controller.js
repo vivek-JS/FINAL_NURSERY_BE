@@ -317,7 +317,6 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
       }
     });
 
-    console.log('Monthwise Summary:', monthwiseSummary); // Debugging the final summary
 
     // Return the fetched slots and the month-wise summary
     res.status(200).json({ monthwiseSummary, slots });

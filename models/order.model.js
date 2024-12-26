@@ -39,9 +39,9 @@ const paymentSchema = new Schema(
 const orderSchema = new Schema(
   {
     orderId: {
-      type: String, // Change to String
-      unique: true, // Ensure uniqueness
-      sparse: true, // Allow documents without orderId temporarilyet
+      type: Number,
+      unique: true,
+      required: true
     },
     farmer: {
       type: mongoose.Schema.Types.ObjectId,
