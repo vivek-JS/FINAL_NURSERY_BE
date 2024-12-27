@@ -354,6 +354,7 @@ const getOne = (Model, modelName, popOptions) =>
             {
               $project: {
                 _id: 0,
+                slotId: "$subtypeSlots.slots._id", // Include the slot _id
                 startDay: "$subtypeSlots.slots.startDay",
                 endDay: "$subtypeSlots.slots.endDay",
                 subtypeId: "$subtypeSlots.subtypeId",
@@ -364,6 +365,7 @@ const getOne = (Model, modelName, popOptions) =>
           as: "bookingSlotDetails",
         },
       }
+      
     );
 
     // Enrich plantSubtype details (name and ID)
