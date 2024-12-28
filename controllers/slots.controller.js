@@ -294,52 +294,89 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
     const pageSize = Number(limit);
 
     // Subtype and slot status filters
-    const subtypeFilter = {};
-    if (subtypeId) subtypeFilter["subtypeSlots.subtypeId"] = new mongoose.Types.ObjectId(subtypeId);
-    if (status !== undefined) {
-      subtypeFilter["subtypeSlots.slots.status"] = status === "true";
-    }
+    const slotStatusFilter = status !== undefined ? { "slots.status": status === "true" } : {};
 
-    // Aggregation for slots and summary in a single pipeline
     const results = await PlantSlot.aggregate([
       { $match: query }, // Match plantId and year
-      { $unwind: "$subtypeSlots" }, // Flatten subtypeSlots array
-      { $match: subtypeFilter }, // Apply subtypeId and slot status filters
-      { $unwind: "$subtypeSlots.slots" }, // Flatten slots array
+      {
+        $project: {
+          _id: 0,
+          plantId: 1,
+          year: 1,
+          subtypeSlots: {
+            $filter: {
+              input: "$subtypeSlots",
+              as: "subtypeSlot",
+              cond: {
+                $and: [
+                  subtypeId
+                    ? { $eq: ["$$subtypeSlot.subtypeId", new mongoose.Types.ObjectId(subtypeId)] }
+                    : {},
+                  { $ne: ["$$subtypeSlot", null] },
+                ],
+              },
+            },
+          },
+        },
+      },
+      { $unwind: "$subtypeSlots" }, // Flatten filtered subtypeSlots
+      {
+        $project: {
+          plantId: 1,
+          year: 1,
+          subtypeId: "$subtypeSlots.subtypeId",
+          slots: {
+            $filter: {
+              input: "$subtypeSlots.slots",
+              as: "slot",
+              cond: {
+                $and: [
+                  slotStatusFilter["slots.status"]
+                    ? { $eq: ["$$slot.status", slotStatusFilter["slots.status"]] }
+                    : {},
+                  { $ne: ["$$slot", null] },
+                ],
+              },
+            },
+          },
+        },
+      },
+      { $unwind: "$slots" }, // Flatten slots array
       {
         $facet: {
-          // Separate facets for month-wise summary and paginated slots
+          // Month-wise summary
           monthSummary: [
             {
               $group: {
-                _id: "$subtypeSlots.slots.month", // Group by month
-                totalPlants: { $sum: "$subtypeSlots.slots.totalPlants" },
-                totalBookedPlants: { $sum: "$subtypeSlots.slots.totalBookedPlants" },
+                _id: "$slots.month",
+                totalPlants: { $sum: "$slots.totalPlants" },
+                totalBookedPlants: { $sum: "$slots.totalBookedPlants" },
               },
             },
             {
               $project: {
                 _id: 0,
-                month: "$_id", // Rename _id to month
+                month: "$_id",
                 totalPlants: 1,
                 totalBookedPlants: 1,
               },
             },
             { $sort: { month: 1 } }, // Sort by month
           ],
+          // Paginated slots
           paginatedSlots: [
             {
               $group: {
                 _id: {
                   plantId: "$plantId",
                   year: "$year",
-                  subtypeId: "$subtypeSlots.subtypeId",
+                  subtypeId: "$subtypeId",
                 },
-                slots: { $push: "$subtypeSlots.slots" }, // Collect slots in an array
+                slots: { $push: "$slots" }, // Collect slots into an array
               },
             },
             { $skip: (pageNumber - 1) * pageSize }, // Apply pagination
-            { $limit: pageSize }, // Limit results for pagination
+            { $limit: pageSize }, // Limit results
           ],
         },
       },

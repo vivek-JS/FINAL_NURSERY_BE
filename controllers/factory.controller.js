@@ -8,52 +8,23 @@ import PlantSlot from "../models/slots.model.js";
 const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
   console.log(`[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}`);
 
-  // Step 1: Fetch the slot
-  const plantSlots = await PlantSlot.find({
-    "subtypeSlots.slots._id": bookingSlot,
-  });
-
-  let slot = null;
-
-  for (const plantSlot of plantSlots) {
-    for (const subtypeSlot of plantSlot.subtypeSlots) {
-      slot = subtypeSlot.slots.find(
-        (s) => s._id?.toString() === bookingSlot.toString()
-      );
-      if (slot) break;
-    }
-    if (slot) break;
-  }
-
-  if (!slot) {
-    console.error("[updateSlot] ERROR: Slot not found");
-    throw new Error("PlantSlot not found for the given bookingSlot");
-  }
-
-  console.log(`[updateSlot] Found Slot - Total Plants: ${slot.totalPlants}, Booked Plants: ${slot.totalBookedPlants}`);
-
-  // Step 2: Update slot details
+  // Step 1: Build the update operation based on the action
+  const updateOperation = {};
   if (action === "subtract") {
-    if (slot.totalPlants < numberOfPlants) {
-      console.error("[updateSlot] ERROR: Insufficient plants in slot");
-      throw new Error("Not enough plants available in the selected slot");
-    }
-    slot.totalPlants -= numberOfPlants;
-    slot.totalBookedPlants += numberOfPlants;
+    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] = -numberOfPlants; // Decrease totalPlants
+    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"] = numberOfPlants; // Increase totalBookedPlants
   } else if (action === "add") {
-    slot.totalPlants += numberOfPlants;
-    slot.totalBookedPlants -= numberOfPlants;
+    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] = numberOfPlants; // Increase totalPlants
+    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"] = -numberOfPlants; // Decrease totalBookedPlants
   }
 
-  console.log(`[updateSlot] Updated Slot - Total Plants: ${slot.totalPlants}, Booked Plants: ${slot.totalBookedPlants}`);
-
-  // Step 3: Persist changes
+  // Step 2: Perform an atomic update in the database using $inc
   const updateResult = await PlantSlot.updateOne(
     { "subtypeSlots.slots._id": bookingSlot },
     {
-      $set: {
-        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants": slot.totalPlants,
-        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": slot.totalBookedPlants,
+      $inc: {
+        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants": updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"],
+        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"],
       },
     },
     {
@@ -66,14 +37,16 @@ const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
 
   console.log(`[updateSlot] Update Result: ${JSON.stringify(updateResult)}`);
 
-  if (updateResult.modifiedCount === 0) {
-    console.error("[updateSlot] ERROR: Failed to update slot");
+  // Step 3: Check if the update was successful
+  if (updateResult.matchedCount === 0) {
+    console.error("[updateSlot] ERROR: Slot not found or update failed");
     throw new Error("Failed to update the PlantSlot details");
   }
 
   console.log("[updateSlot] SUCCESS: Slot updated successfully");
-  return slot; // Return updated slot for reference
+  return updateResult; // Return the update result for reference
 };
+
 
 
 const createOne = (Model, modelName) =>
@@ -138,28 +111,70 @@ const createOne = (Model, modelName) =>
 
 
 
-const updateOne = (Model, modelName) =>
+  const updateOne = (Model, modelName,allowedFields ) =>
   catchAsync(async (req, res, next) => {
-    // Find by id  and update
+    const { id } = req.body;
 
-    const doc = await Model.findByIdAndUpdate(req.body.id, req.body, {
-      new: true,
-    });
-
-    // If doc not found
-    if (!doc) {
+    // Step 1: Fetch the document
+    const existingDoc = await Model.findById(id);
+    if (!existingDoc) {
       return next(new AppError("No document found with that ID", 404));
     }
 
+    // Step 2: Filter the fields to update
+    const filteredBody = {};
+    Object.keys(req.body).forEach((key) => {
+      if (allowedFields.includes(key)) {
+        filteredBody[key] = req.body[key];
+      }
+    });
+
+    // Step 3: Handle slot updates
+    if (filteredBody.bookingSlot || filteredBody.numberOfPlants) {
+      const { bookingSlot, numberOfPlants } = filteredBody;
+
+      // If the slot has changed
+      if (bookingSlot && bookingSlot.toString() !== existingDoc.bookingSlot.toString()) {
+        // Step 3.1: Reverse the changes in the old slot
+        await updateSlot(existingDoc.bookingSlot, existingDoc.numberOfPlants, "add");
+
+        // Step 3.2: Apply the changes to the new slot
+        await updateSlot(bookingSlot, numberOfPlants, "subtract");
+      } else if (numberOfPlants) {
+        // If only the quantity changes
+        const quantityDifference = numberOfPlants - existingDoc.numberOfPlants;
+
+        if (quantityDifference > 0) {
+          // If the new quantity is greater, subtract the difference from the slot
+          await updateSlot(existingDoc.bookingSlot, quantityDifference, "subtract");
+        } else if (quantityDifference < 0) {
+          // If the new quantity is less, add the difference back to the slot
+          await updateSlot(existingDoc.bookingSlot, Math.abs(quantityDifference), "add");
+        }
+      }
+    }
+
+    // Step 4: Update the document in the database
+    const updatedDoc = await Model.findByIdAndUpdate(id, filteredBody, {
+      new: true,
+      runValidators: true, // Ensure validation rules are respected
+    });
+
+    if (!updatedDoc) {
+      return next(new AppError("Failed to update the document", 500));
+    }
+
+    // Step 5: Send response
     const response = generateResponse(
       "Success",
       `${modelName} updated successfully`,
-      doc,
+      updatedDoc,
       undefined
     );
 
     return res.status(200).json(response);
   });
+
 
 const updateOneNestedData = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
@@ -265,10 +280,11 @@ const getOne = (Model, modelName, popOptions) =>
       search,
       startDate,
       endDate,
+      dispatched=false, // New parameter
       page = 1,
       limit = 10,
     } = req.query;
-
+console.log(dispatched)
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
     const skip = (page - 1) * limit;
 
@@ -276,7 +292,7 @@ const getOne = (Model, modelName, popOptions) =>
     const pipeline = [];
 
     // Apply Date range filtering only when `search` is NOT present
-    if (!search && startDate && endDate) {
+    if (!search && startDate && endDate && dispatched=="false") {
       const parseDate = (dateStr, isEnd = false) => {
         const [day, month, year] = dateStr.split("-");
         return isEnd
@@ -365,9 +381,92 @@ const getOne = (Model, modelName, popOptions) =>
           as: "bookingSlotDetails",
         },
       }
-      
     );
 
+    // Add condition for dispatched = true
+    if (dispatched ==="true"  && startDate && endDate) {
+      console.log("Filtering based on bookingSlotDetails.startDay and bookingSlotDetails.endDay within query date range");
+    
+      // Add Fields to convert dates to Date objects for comparison
+      pipeline.push(
+        {
+          $addFields: {
+            // Convert startDay and endDay to Date objects
+            parsedStartDay: {
+              $toDate: {
+                $dateFromString: {
+                  dateString: { $arrayElemAt: ["$bookingSlotDetails.startDay", 0] },
+                  format: "%d-%m-%Y"
+                }
+              }
+            },
+            parsedEndDay: {
+              $toDate: {
+                $dateFromString: {
+                  dateString: { $arrayElemAt: ["$bookingSlotDetails.endDay", 0] },
+                  format: "%d-%m-%Y"
+                }
+              }
+            },
+            // Convert the query dates to Date objects
+            queryStartDate: {
+              $toDate: {
+                $dateFromString: {
+                  dateString: startDate,
+                  format: "%d-%m-%Y"
+                }
+              }
+            },
+            queryEndDate: {
+              $toDate: {
+                $dateFromString: {
+                  dateString: endDate,
+                  format: "%d-%m-%Y"
+                }
+              }
+            }
+          }
+        }
+      );
+    
+      // Match to check if the range overlaps between parsedStartDay/parsedEndDay and queryStartDate/queryEndDate
+      pipeline.push({
+        $match: {
+          $expr: {
+            $and: [
+              {
+                // Check if the document's start/end day range overlaps with the query range
+                $or: [
+                  {
+                    // Check if parsedStartDay is within the query range
+                    $and: [
+                      { $lte: ["$parsedStartDay", "$queryEndDate"] }, // parsedStartDay <= queryEndDate
+                      { $gte: ["$parsedStartDay", "$queryStartDate"] }  // parsedStartDay >= queryStartDate
+                    ]
+                  },
+                  {
+                    // Check if parsedEndDay is within the query range
+                    $and: [
+                      { $lte: ["$parsedEndDay", "$queryEndDate"] }, // parsedEndDay <= queryEndDate
+                      { $gte: ["$parsedEndDay", "$queryStartDate"] }  // parsedEndDay >= queryStartDate
+                    ]
+                  },
+                  {
+                    // Check if the range between parsedStartDay and parsedEndDay includes the query range
+                    $and: [
+                      { $lte: ["$parsedStartDay", "$queryEndDate"] }, // parsedStartDay <= queryEndDate
+                      { $gte: ["$parsedEndDay", "$queryStartDate"] }  // parsedEndDay >= queryStartDate
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      });
+    }
+    
+    
     // Enrich plantSubtype details (name and ID)
     pipeline.push({
       $set: {
@@ -463,14 +562,6 @@ const getOne = (Model, modelName, popOptions) =>
 
     return res.status(200).json(response);
   });
-
-
-
-
-
-
-
-
 
 
 const getCMS = (Model) =>

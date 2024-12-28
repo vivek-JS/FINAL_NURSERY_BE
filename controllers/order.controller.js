@@ -133,7 +133,13 @@ const getCsv = catchAsync(async (req, res, next) => {
 
 const getOrders = getAll(Order, "Order");
 const createOrder = createOne(Order, "Order");
-const updateOrder = updateOne(Order, "Order");
+const updateOrder = updateOne(Order, "Order",[
+  "bookingSlot",
+  "numberOfPlants",
+  "rate",
+  "orderPaymentStatus",
+  "notes",
+]);
 const addNewPayment = catchAsync(async (req, res, next) => {
   const { orderId } = req.params;  // Extract the orderId from the request parameters
   const {

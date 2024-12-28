@@ -207,7 +207,7 @@ export const getPlants = async (req, res) => {
 
 const updateSlotsForPlant = async (plant) => {
   try {
-    const year = new Date().getFullYear();
+    const year = 2025;
     const { slotSize = 5 } = plant;
 
     // Fetch or create PlantSlot for the plant

@@ -20,7 +20,7 @@ const plantSchema = new Schema({
 // Middleware to create/update slots after plant save
 plantSchema.post("save", async function (doc) {
   try {
-    const year = new Date().getFullYear(); // Current year
+    const year = 2025; // Current year
     const { slotSize = 5 } = doc; // Default to 5 if slotSize is not provided
 
     // Fetch existing slots for this plant and year
