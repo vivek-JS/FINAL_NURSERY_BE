@@ -274,6 +274,46 @@ const getOne = (Model, modelName, popOptions) =>
 
   const getAll = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
+
+    if(modelName !=="Order"){
+      let filter = {};
+
+      let query = Model.find(filter);
+  
+      if(modelName === "Order"){
+        query = Model.find(filter).populate({
+          path: 'farmer',
+          select: 'name mobileNumber'
+        });
+      }
+  
+      const features = new APIFeatures(query, req.query, modelName)
+        .filter()
+        .sort()
+        .limitFields()
+        .paginate();
+  
+      const doc = await features.query.lean();
+  
+      // const features = new APIFeatures(Model, req.query, modelName)
+      //   .filter();
+  
+      // const doc = await features.execute();
+  
+      const transformedDoc = doc.map((item) => {
+        const { _id, ...rest } = item;
+        return { id: _id, _id: _id, ...rest };
+      });
+  
+      const response = generateResponse(
+        "Success",
+        `${modelName} found successfully`,
+        transformedDoc,
+        undefined
+      );
+  
+      return res.status(200).json(response);
+    }
     const {
       sortKey = "createdAt",
       sortOrder = "desc",

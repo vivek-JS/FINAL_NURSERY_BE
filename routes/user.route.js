@@ -27,7 +27,6 @@ router
       check("name", "Please provide valid name").notEmpty(),
       check("email", "Please provide valid email").isEmail(),
       check("phoneNumber", "Please provide valid phoneNumber").notEmpty(),
-      check("type", "Please provide valid type").notEmpty(),
     ],
     checkErrors,
     // encryptPassword,

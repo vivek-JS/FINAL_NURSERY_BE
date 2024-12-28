@@ -17,15 +17,16 @@ const userSchema = new Schema({
   },
   password: {
     type: String,
-    required: true,
+   // required: true,
+   default:'12345678'
+    
   },
   jobTitle: {
     type: String,
+    enum: ["Manager", "HR", "SALES", "OFFICE", "PRIMARY"],
+
   },
-  type: {
-    type: String,
-    enum: ["ADMIN", "SALES PERSON", "INVENTORY MANAGER"],
-  },
+
   isDisabled: {
     type: Boolean,
     default: false,
