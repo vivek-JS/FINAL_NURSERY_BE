@@ -274,65 +274,61 @@ const getOne = (Model, modelName, popOptions) =>
 
   const getAll = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
-
-    if(modelName !=="Order"){
+    if (modelName !== "Order") {
       let filter = {};
 
       let query = Model.find(filter);
-  
-      if(modelName === "Order"){
-        query = Model.find(filter).populate({
-          path: 'farmer',
-          select: 'name mobileNumber'
-        });
-      }
-  
+
       const features = new APIFeatures(query, req.query, modelName)
         .filter()
         .sort()
         .limitFields()
-        .paginate();
-  
+        .paginate();  
+
       const doc = await features.query.lean();
-  
-      // const features = new APIFeatures(Model, req.query, modelName)
-      //   .filter();
-  
-      // const doc = await features.execute();
-  
+
       const transformedDoc = doc.map((item) => {
         const { _id, ...rest } = item;
         return { id: _id, _id: _id, ...rest };
       });
-  
+
       const response = generateResponse(
         "Success",
         `${modelName} found successfully`,
         transformedDoc,
         undefined
       );
-  
+
       return res.status(200).json(response);
     }
+
     const {
       sortKey = "createdAt",
       sortOrder = "desc",
       search,
       startDate,
       endDate,
-      dispatched=false, // New parameter
+      dispatched = false, // New parameter
+      salesPerson, // Added salesPerson parameter
       page = 1,
       limit = 10,
     } = req.query;
-console.log(dispatched)
+
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
     const skip = (page - 1) * limit;
 
     // Build the aggregation pipeline
     const pipeline = [];
 
+    // Apply salesPerson filter if present
+    if (salesPerson) {
+      pipeline.push({
+        $match: { salesPerson: new mongoose.Types.ObjectId(salesPerson) },
+      });
+    }
+
     // Apply Date range filtering only when `search` is NOT present
-    if (!search && startDate && endDate && dispatched=="false") {
+    if (!search && startDate && endDate && dispatched === "false") {
       const parseDate = (dateStr, isEnd = false) => {
         const [day, month, year] = dateStr.split("-");
         return isEnd
@@ -424,89 +420,67 @@ console.log(dispatched)
     );
 
     // Add condition for dispatched = true
-    if (dispatched ==="true"  && startDate && endDate) {
-      console.log("Filtering based on bookingSlotDetails.startDay and bookingSlotDetails.endDay within query date range");
-    
-      // Add Fields to convert dates to Date objects for comparison
+    if (dispatched === "true" && startDate && endDate) {
       pipeline.push(
         {
           $addFields: {
-            // Convert startDay and endDay to Date objects
             parsedStartDay: {
               $toDate: {
                 $dateFromString: {
                   dateString: { $arrayElemAt: ["$bookingSlotDetails.startDay", 0] },
-                  format: "%d-%m-%Y"
-                }
-              }
+                  format: "%d-%m-%Y",
+                },
+              },
             },
             parsedEndDay: {
               $toDate: {
                 $dateFromString: {
                   dateString: { $arrayElemAt: ["$bookingSlotDetails.endDay", 0] },
-                  format: "%d-%m-%Y"
-                }
-              }
+                  format: "%d-%m-%Y",
+                },
+              },
             },
-            // Convert the query dates to Date objects
             queryStartDate: {
               $toDate: {
-                $dateFromString: {
-                  dateString: startDate,
-                  format: "%d-%m-%Y"
-                }
-              }
+                $dateFromString: { dateString: startDate, format: "%d-%m-%Y" },
+              },
             },
             queryEndDate: {
               $toDate: {
-                $dateFromString: {
-                  dateString: endDate,
-                  format: "%d-%m-%Y"
-                }
-              }
-            }
-          }
+                $dateFromString: { dateString: endDate, format: "%d-%m-%Y" },
+              },
+            },
+          },
+        },
+        {
+          $match: {
+            $expr: {
+              $or: [
+                {
+                  $and: [
+                    { $lte: ["$parsedStartDay", "$queryEndDate"] },
+                    { $gte: ["$parsedStartDay", "$queryStartDate"] },
+                  ],
+                },
+                {
+                  $and: [
+                    { $lte: ["$parsedEndDay", "$queryEndDate"] },
+                    { $gte: ["$parsedEndDay", "$queryStartDate"] },
+                  ],
+                },
+                {
+                  $and: [
+                    { $lte: ["$parsedStartDay", "$queryEndDate"] },
+                    { $gte: ["$parsedEndDay", "$queryStartDate"] },
+                  ],
+                },
+              ],
+            },
+          },
         }
       );
-    
-      // Match to check if the range overlaps between parsedStartDay/parsedEndDay and queryStartDate/queryEndDate
-      pipeline.push({
-        $match: {
-          $expr: {
-            $and: [
-              {
-                // Check if the document's start/end day range overlaps with the query range
-                $or: [
-                  {
-                    // Check if parsedStartDay is within the query range
-                    $and: [
-                      { $lte: ["$parsedStartDay", "$queryEndDate"] }, // parsedStartDay <= queryEndDate
-                      { $gte: ["$parsedStartDay", "$queryStartDate"] }  // parsedStartDay >= queryStartDate
-                    ]
-                  },
-                  {
-                    // Check if parsedEndDay is within the query range
-                    $and: [
-                      { $lte: ["$parsedEndDay", "$queryEndDate"] }, // parsedEndDay <= queryEndDate
-                      { $gte: ["$parsedEndDay", "$queryStartDate"] }  // parsedEndDay >= queryStartDate
-                    ]
-                  },
-                  {
-                    // Check if the range between parsedStartDay and parsedEndDay includes the query range
-                    $and: [
-                      { $lte: ["$parsedStartDay", "$queryEndDate"] }, // parsedStartDay <= queryEndDate
-                      { $gte: ["$parsedEndDay", "$queryStartDate"] }  // parsedEndDay >= queryStartDate
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      });
     }
-    
-    
+
     // Enrich plantSubtype details (name and ID)
     pipeline.push({
       $set: {
@@ -604,6 +578,7 @@ console.log(dispatched)
   });
 
 
+
 const getCMS = (Model) =>
   catchAsync(async (req, res, next) => {
     const { name, entity } = req.params;
@@ -669,7 +644,7 @@ const isDisabled = (Model, modelName) =>
     const { phoneNumber } = req.body;
 
     const data = await Model.findOne({ phoneNumber });
-
+console.log(data)
     if (data.isDisabled) {
       throw new AppError(`Your access to this app is disabled`, 409);
     }

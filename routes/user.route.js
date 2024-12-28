@@ -29,7 +29,7 @@ router
       check("phoneNumber", "Please provide valid phoneNumber").notEmpty(),
     ],
     checkErrors,
-    // encryptPassword,
+     encryptPassword,
     findUser,
     createUser
   )
