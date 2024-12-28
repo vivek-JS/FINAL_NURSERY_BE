@@ -663,7 +663,7 @@ const isPhoneNumberExists = (Model, modelName) =>
 const isDisabled = (Model, modelName) =>
   catchAsync(async (req, _, next) => {
     const { phoneNumber } = req.body;
-
+console.log(phoneNumber)
     const data = await Model.findOne({ phoneNumber });
 console.log(data)
     if (data.isDisabled) {

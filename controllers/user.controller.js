@@ -55,13 +55,14 @@ const login = [
   isDisabled(User, "User"),
   catchAsync(async (req, res, next) => {
     const { phoneNumber, password } = req.body;
-
+console.log(password,phoneNumber)
     const user = await User.findOne({ phoneNumber: phoneNumber });
+    console.log(user)
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return next(new AppError("Wrong credentails", 400));
     }
-
+ 
     user.password = undefined;
 
     const token = generateToken(user._id);
