@@ -113,7 +113,28 @@ const createOne = (Model, modelName) =>
 
   const updateOne = (Model, modelName,allowedFields ) =>
   catchAsync(async (req, res, next) => {
+
+    
     const { id } = req.body;
+    if(modelName !== "Order"){
+      const doc = await Model.findByIdAndUpdate(req.body.id, req.body, {
+        new: true,
+      });
+  
+      // If doc not found
+      if (!doc) {
+        return next(new AppError("No document found with that ID", 404));
+      }
+  
+      const response = generateResponse(
+        "Success",
+        `${modelName} updated successfully`,
+        doc,
+        undefined
+      );
+  
+      return res.status(200).json(response);
+    }
 
     // Step 1: Fetch the document
     const existingDoc = await Model.findById(id);
