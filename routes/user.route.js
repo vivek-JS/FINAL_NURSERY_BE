@@ -36,6 +36,7 @@ router
   .patch(
     "/updateUser",
     [check("id", "Please provide valid userId").isMongoId()],
+    encryptPassword,
     checkErrors,
     updateUser
   )

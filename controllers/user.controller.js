@@ -17,6 +17,7 @@ const updateUser = updateOne(User, "User");
 const deleteUser = deleteOne(User, "User");
 
 const encryptPassword = async (req, res, next) => {
+  console.log(req.body.password)
   const password = req.body.password || "12345678";
   req.body.password = await bcrypt.hash(password, 10);
   next();
