@@ -95,6 +95,9 @@ const orderSchema = new Schema(
       type: Boolean,
       default: false,  // Default to false until explicitly set to true
     },
+    farmReadyDate:{
+      type: Date
+    }
   },
   { timestamps: true }
 );
