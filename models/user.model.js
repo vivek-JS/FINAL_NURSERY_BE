@@ -23,7 +23,7 @@ const userSchema = new Schema({
   },
   jobTitle: {
     type: String,
-    enum: ["Manager", "HR", "SALES", "OFFICE", "PRIMARY"],
+    enum: ["Manager", "HR", "SALES", "PRIMARY","OFFEICE_STAFF"],
 
   },
 
