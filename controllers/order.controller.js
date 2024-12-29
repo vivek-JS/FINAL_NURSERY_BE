@@ -140,7 +140,8 @@ const updateOrder = updateOne(Order, "Order",[
   "orderPaymentStatus",
   "notes",
   'farmReadyDate',
-  'orderStatus'
+  'orderStatus',
+  'farmReadyDate'
 ]);
 const addNewPayment = catchAsync(async (req, res, next) => {
   const { orderId } = req.params;  // Extract the orderId from the request parameters
