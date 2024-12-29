@@ -116,6 +116,7 @@ const createOne = (Model, modelName) =>
 
     
     const { id } = req.body;
+    console.log(req.body)
     if(modelName !== "Order"){
       const doc = await Model.findByIdAndUpdate(req.body.id, req.body, {
         new: true,
