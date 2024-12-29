@@ -345,7 +345,8 @@ const getOne = (Model, modelName, popOptions) =>
       dispatched = false, // New parameter
       salesPerson, // Added salesPerson parameter
       page = 1,
-      limit = 10,
+      limit = 100,
+      status
     } = req.query;
 
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
@@ -360,7 +361,16 @@ const getOne = (Model, modelName, popOptions) =>
         $match: { salesPerson: new mongoose.Types.ObjectId(salesPerson) },
       });
     }
-
+    if (status) {
+      // Convert comma-separated string to array and handle single status case
+      const statusArray = status.split(',').map(s => s.trim());
+      pipeline.push({
+        $match: { 
+          orderStatus: { $in: statusArray }
+        }
+      });
+    }
+    
     // Apply Date range filtering only when `search` is NOT present
     if (!search && startDate && endDate && dispatched === "false") {
       const parseDate = (dateStr, isEnd = false) => {
