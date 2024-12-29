@@ -595,6 +595,8 @@ const getOne = (Model, modelName, popOptions) =>
           numberOfPlants: 1,
           orderId: 1,
           rate: 1,
+          farmReadyDate: 1  // Added farmReadyDate field
+
         },
       },
       { $sort: { [sortKey]: order } },
