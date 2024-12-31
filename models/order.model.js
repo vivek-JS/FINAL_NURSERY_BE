@@ -88,7 +88,7 @@ const orderSchema = new Schema(
     },
     orderStatus: {
       type: String,
-      enum: ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED", "DISPATCHED",'ACCEPTED','REJECTED','FARM_READY'],
+      enum: ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED", "DISPATCHED",'ACCEPTED','REJECTED','FARM_READY','DISPATCH_PROCESS'],
       default: "PENDING",
     },
     paymentCompleted: {  // New field

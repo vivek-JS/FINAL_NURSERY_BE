@@ -15,7 +15,33 @@ import jwt from "jsonwebtoken";
 const createUser = [isPhoneNumberExists(User, "User"), createOne(User, "User")];
 const updateUser = updateOne(User, "User");
 const deleteUser = deleteOne(User, "User");
+ const getUsers = async (req, res) => {
+  try {
+    const { jobTitle } = req.query;
+    let query = { isDisabled: false };
 
+    // Add jobTitle to query if provided
+    if (jobTitle) {
+      query.jobTitle = jobTitle;
+    }
+
+    const users = await User.find(query).select('-password');
+
+    return res.status(200).json({
+      success: true,
+      message: "Users fetched successfully",
+      data: users
+    });
+
+  } catch (error) {
+    console.error("Error in getUsers:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching users",
+      error: error.message
+    });
+  }
+};
 const encryptPassword = async (req, res, next) => {
   console.log(req.body.password)
   const password = req.body.password || "12345678";
@@ -24,9 +50,10 @@ const encryptPassword = async (req, res, next) => {
 };
 
 const findUser = catchAsync(async (req, res, next) => {
-  const { email } = req.body;
+  const { phoneNumber } = req.body;
+  console.log(phoneNumber)
 
-  const user = await User.findOne({ email });
+  const user = await User.findOne({ phoneNumber });
 
   if (user) {
     return next(
@@ -79,4 +106,4 @@ console.log(password,phoneNumber)
   }),
 ];
 
-export { createUser, updateUser, deleteUser, findUser, login, encryptPassword };
+export {getUsers, createUser, updateUser, deleteUser, findUser, login, encryptPassword };

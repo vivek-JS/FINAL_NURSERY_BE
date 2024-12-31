@@ -43,6 +43,10 @@ import chemicalRoute from "./routes/chemical.route.js";
 import distrctRoutes from "./routes/districts.route.js";
 import slotRouter from "./routes/slots.route.js";
 import plantCmsRouter from "./routes/plantCms.route.js";
+import vheicleRouter from "./routes/vheicle.route.js"
+import shadeRoter from "./routes/shades.route.js"
+import trayRouter from "./routes/tray.route.js"
+import dispatchRoute from "./routes/dispatched.route.js"
 
 // dummy route
 server.get("/api/dummyData", (req, res) => {
@@ -67,6 +71,10 @@ server.use("/api/v1/chemical", chemicalRoute);
 server.use("/api/v1/location",distrctRoutes)
 server.use("/api/v1",slotRouter)
 server.use("/api/v1/plantcms",plantCmsRouter)
+server.use("/api/v1/shade", shadeRoter);
+server.use("/api/v1/tray", trayRouter);
+server.use("/api/v1/vehicles", vheicleRouter);
+server.use("/api/v1/dispatched", dispatchRoute);
 
 
 server.use(errorRouter);

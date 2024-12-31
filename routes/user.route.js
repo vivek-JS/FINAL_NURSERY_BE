@@ -6,6 +6,7 @@ import {
   findUser,
   login,
   encryptPassword,
+  getUsers,
 } from "../controllers/user.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -25,12 +26,10 @@ router
     "/createUser",
     [
       check("name", "Please provide valid name").notEmpty(),
-      check("email", "Please provide valid email").isEmail(),
       check("phoneNumber", "Please provide valid phoneNumber").notEmpty(),
     ],
     checkErrors,
      encryptPassword,
-    findUser,
     createUser
   )
   .patch(
@@ -45,6 +44,10 @@ router
     [check("id", "Please provide valid userId").isMongoId()],
     checkErrors,
     deleteUser
-  );
+  )
+  .get(
+    "/allusers",
+    getUsers
+  );;
 
 export default router;

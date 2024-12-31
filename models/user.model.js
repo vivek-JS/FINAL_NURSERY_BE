@@ -5,11 +5,7 @@ const userSchema = new Schema({
     type: String,
     required: true,
   },
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-  },
+
   phoneNumber: {
     type: Number,
     required: true,
@@ -23,7 +19,7 @@ const userSchema = new Schema({
   },
   jobTitle: {
     type: String,
-    enum: ["Manager", "HR", "SALES", "PRIMARY","OFFEICE_STAFF"],
+    enum: ["Manager", "HR", "SALES", "PRIMARY","OFFICE_STAFF",'DRIVER'],
 
   },
 
@@ -47,6 +43,9 @@ const userSchema = new Schema({
     type: Boolean,
     default:false
   },
+  birthDate:{
+    type: Date
+  }
 });
 
 const User = model("User", userSchema);
