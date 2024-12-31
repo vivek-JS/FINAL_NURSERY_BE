@@ -8,7 +8,34 @@ import PlantSlot from "../models/slots.model.js";
 const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
   console.log(`[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}`);
 
-  // Step 1: Build the update operation based on the action
+  // Step 1: If subtracting, first check if enough plants are available
+  if (action === "subtract") {
+    const currentSlot = await PlantSlot.findOne(
+      { "subtypeSlots.slots._id": bookingSlot },
+      { "subtypeSlots.$": 1 }
+    );
+
+    if (!currentSlot || !currentSlot.subtypeSlots[0]) {
+      console.error("[updateSlot] ERROR: Slot not found");
+      throw new Error("Slot not found");
+    }
+
+    const targetSlot = currentSlot.subtypeSlots[0].slots.find(
+      slot => slot._id.toString() === bookingSlot.toString()
+    );
+
+    if (!targetSlot) {
+      console.error("[updateSlot] ERROR: Specific slot not found");
+      throw new Error("Specific slot not found");
+    }
+
+    if (targetSlot.totalPlants < numberOfPlants) {
+      console.error(`[updateSlot] ERROR: Not enough plants available. Requested: ${numberOfPlants}, Available: ${targetSlot.totalPlants}`);
+      throw new Error(`Not enough plants available. Only ${targetSlot.totalPlants} plants available.`);
+    }
+  }
+
+  // Step 2: Build the update operation based on the action
   const updateOperation = {};
   if (action === "subtract") {
     updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] = -numberOfPlants; // Decrease totalPlants
@@ -18,7 +45,7 @@ const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
     updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"] = -numberOfPlants; // Decrease totalBookedPlants
   }
 
-  // Step 2: Perform an atomic update in the database using $inc
+  // Step 3: Perform an atomic update in the database using $inc
   const updateResult = await PlantSlot.updateOne(
     { "subtypeSlots.slots._id": bookingSlot },
     {
@@ -37,7 +64,7 @@ const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
 
   console.log(`[updateSlot] Update Result: ${JSON.stringify(updateResult)}`);
 
-  // Step 3: Check if the update was successful
+  // Step 4: Check if the update was successful
   if (updateResult.matchedCount === 0) {
     console.error("[updateSlot] ERROR: Slot not found or update failed");
     throw new Error("Failed to update the PlantSlot details");
@@ -60,43 +87,58 @@ const createOne = (Model, modelName) =>
         });
       }
 
+      // Using session for transaction
+      const session = await mongoose.startSession();
+      session.startTransaction();
+
       try {
-        // Step 1: Find the highest orderId in the collection
+        // Step 1: Find the highest orderId
         const lastOrder = await Model.findOne()
-          .sort({ orderId: -1 })  // Sort in descending order
+          .sort({ orderId: -1 })
           .select("orderId");
 
-        // If no orders exist, start with 1, otherwise increment the last orderId
         const orderId = lastOrder ? lastOrder.orderId + 1 : 1;
 
-        // Step 2: Update the slot first
-        await updateSlot(bookingSlot, numberOfPlants, "subtract");
+        // Step 2: Update the slot
+        try {
+          await updateSlot(bookingSlot, numberOfPlants, "subtract");
+        } catch (slotError) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(400).json({ 
+            message: slotError.message || "Failed to update slot"
+          });
+        }
 
-        // Step 3: Create the Order with the new orderId
-        const order = await Model.create({
+        // Step 3: Create the Order
+        const order = await Model.create([{
           ...orderData,
           bookingSlot,
           numberOfPlants,
           orderId,
-        });
+        }], { session });
+
+        await session.commitTransaction();
+        session.endSession();
 
         const response = generateResponse(
           "Success",
           `${modelName} created successfully and slot updated`,
-          order,
+          order[0],
           undefined
         );
 
         return res.status(201).json(response);
+
       } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
         console.error("[createOne] Error:", error.message);
         return res.status(400).json({ message: error.message });
       }
     }
 
-    // Generic case for other models remains unchanged
     const doc = await Model.create(req.body);
-
     if (doc.password) doc.password = undefined;
 
     const response = generateResponse(
@@ -109,93 +151,135 @@ const createOne = (Model, modelName) =>
     return res.status(201).json(response);
   });
 
-
-
   const { isValidObjectId } = mongoose;
   
- const updateOne = (Model, modelName, allowedFields) =>
-    catchAsync(async (req, res, next) => {
-      const { id } = req.body;
-  
-      // Validate MongoDB ObjectId
-      if (!isValidObjectId(id)) {
-        return next(new AppError('Invalid ID format', 400));
-      }
-  
-      // Handle non-Order models
-      if (modelName !== "Order") {
-        const doc = await Model.findByIdAndUpdate(id, req.body, {
-          new: true,
-          runValidators: true
-        });
-  
-        if (!doc) {
-          return next(new AppError("No document found with that ID", 404));
-        }
-  
-        return res.status(200).json(
-          generateResponse("Success", `${modelName} updated successfully`, doc)
-        );
-      }
-  
-      // Order-specific update logic
-      const existingDoc = await Model.findById(id);
-      if (!existingDoc) {
+  const updateOne = (Model, modelName, allowedFields) =>
+  catchAsync(async (req, res, next) => {
+    const { id } = req.body;
+
+    if (!isValidObjectId(id)) {
+      return next(new AppError('Invalid ID format', 400));
+    }
+
+    if (modelName !== "Order") {
+      const doc = await Model.findByIdAndUpdate(id, req.body, {
+        new: true,
+        runValidators: true
+      });
+
+      if (!doc) {
         return next(new AppError("No document found with that ID", 404));
       }
-  
-      // Filter allowed fields
+
+      return res.status(200).json(
+        generateResponse("Success", `${modelName} updated successfully`, doc)
+      );
+    }
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const existingDoc = await Model.findById(id).session(session);
+      if (!existingDoc) {
+        throw new AppError("No document found with that ID", 404);
+      }
+
       const filteredBody = Object.keys(req.body)
         .filter(key => allowedFields.includes(key))
         .reduce((obj, key) => {
           obj[key] = req.body[key];
           return obj;
         }, {});
-  
-      // Handle booking slot updates
+
       if (filteredBody.bookingSlot || filteredBody.numberOfPlants) {
-        await handleSlotUpdates(existingDoc, filteredBody);
+        try {
+          await handleSlotUpdates(existingDoc, filteredBody);
+        } catch (error) {
+          await session.abortTransaction();
+          session.endSession();
+          return next(error);
+        }
       }
-  
-      // Update document with optimistic concurrency control
+
       const updatedDoc = await Model.findOneAndUpdate(
         { 
           _id: id,
-          __v: existingDoc.__v // Ensure we're updating the version we read
+          __v: existingDoc.__v 
         },
         {
           ...filteredBody,
-          $inc: { __v: 1 } // Increment version number
+          $inc: { __v: 1 }
         },
         {
           new: true,
           runValidators: true,
+          session
         }
       );
-  
+
       if (!updatedDoc) {
-        return next(new AppError("Document was modified by another process. Please try again.", 409));
+        throw new AppError("Document was modified by another process. Please try again.", 409);
       }
-  
+
+      await session.commitTransaction();
+      session.endSession();
+
       return res.status(200).json(
         generateResponse("Success", `${modelName} updated successfully`, updatedDoc)
       );
-    });
+
+    } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(error);
+    }
+  });
   
   // Helper function to handle slot updates
   const handleSlotUpdates = async (existingDoc, filteredBody) => {
     const { bookingSlot, numberOfPlants } = filteredBody;
   
     try {
+      // Check slot availability before any updates
+      const checkSlotAvailability = async (slotId, plantsNeeded) => {
+        const currentSlot = await PlantSlot.findOne(
+          { "subtypeSlots.slots._id": slotId },
+          { "subtypeSlots.$": 1 }
+        );
+  
+        if (!currentSlot?.subtypeSlots?.[0]?.slots) {
+          throw new AppError("Slot not found", 404);
+        }
+  
+        const slot = currentSlot.subtypeSlots[0].slots.find(
+          s => s._id.toString() === slotId.toString()
+        );
+  
+        if (!slot) {
+          throw new AppError("Specific slot not found", 404);
+        }
+  
+        if (slot.totalPlants < plantsNeeded) {
+          throw new AppError(`Not enough plants available in slot. Only ${slot.totalPlants} plants available.`, 400);
+        }
+      };
+  
       if (bookingSlot && bookingSlot.toString() !== existingDoc.bookingSlot.toString()) {
-        // Handle slot change
+        // Check new slot availability before switching
+        await checkSlotAvailability(bookingSlot, numberOfPlants || existingDoc.numberOfPlants);
+        
         await Promise.all([
           updateSlot(existingDoc.bookingSlot, existingDoc.numberOfPlants, "add"),
           updateSlot(bookingSlot, numberOfPlants || existingDoc.numberOfPlants, "subtract")
         ]);
       } else if (numberOfPlants) {
-        // Handle quantity change
         const quantityDifference = numberOfPlants - existingDoc.numberOfPlants;
+        if (quantityDifference > 0) {
+          // Only check availability if increasing quantity
+          await checkSlotAvailability(existingDoc.bookingSlot, quantityDifference);
+        }
+        
         if (quantityDifference !== 0) {
           await updateSlot(
             existingDoc.bookingSlot,
@@ -205,10 +289,9 @@ const createOne = (Model, modelName) =>
         }
       }
     } catch (error) {
-      throw new AppError("Failed to update booking slots", 500);
+      throw new AppError(error.message || "Failed to update booking slots", error.statusCode || 500);
     }
   };
-  
 
 const updateOneNestedData = (Model, modelName) =>
   catchAsync(async (req, res, next) => {

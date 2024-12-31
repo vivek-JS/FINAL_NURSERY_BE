@@ -6,9 +6,12 @@ import Tray from "../models/tray.model.js";
 import mongoose from "mongoose";
 
 const createTray = catchAsync(async (req, res, next) => {
-  const { name, cavity } = req.body;
+  const { name, cavity, numberPerCrate } = req.body;
 
-  // Check if tray with same name already exists
+  if (!Number.isInteger(numberPerCrate) || numberPerCrate < 1) {
+    return next(new AppError("numberPerCrate must be a positive integer", 400));
+  }
+
   const existingTray = await Tray.findOne({ name });
   if (existingTray) {
     return next(new AppError("Tray with this name already exists", 409));
@@ -16,7 +19,8 @@ const createTray = catchAsync(async (req, res, next) => {
 
   const doc = await Tray.create({
     name,
-    cavity
+    cavity,
+    numberPerCrate
   });
 
   const response = generateResponse(
@@ -36,12 +40,13 @@ const getAllTrays = catchAsync(async (req, res, next) => {
     search,
     page = 1,
     limit = 10,
-    status
+    status,
+    minNumberPerCrate,
+    maxNumberPerCrate
   } = req.query;
 
   let query = Tray.find();
 
-  // Apply search filter
   if (search) {
     const searchRegex = new RegExp(search, "i");
     query = query.or([
@@ -49,21 +54,25 @@ const getAllTrays = catchAsync(async (req, res, next) => {
     ]);
   }
 
-  // Apply status filter
   if (status !== undefined) {
     query = query.where('isActive').equals(status === 'true');
   }
 
-  // Apply sorting
+  if (minNumberPerCrate) {
+    query = query.where('numberPerCrate').gte(parseInt(minNumberPerCrate));
+  }
+
+  if (maxNumberPerCrate) {
+    query = query.where('numberPerCrate').lte(parseInt(maxNumberPerCrate));
+  }
+
   const sort = {};
   sort[sortKey] = sortOrder === "desc" ? -1 : 1;
   query = query.sort(sort);
 
-  // Apply pagination
   const skip = (parseInt(page) - 1) * parseInt(limit);
   query = query.skip(skip).limit(parseInt(limit));
 
-  // Execute query
   const [trays, total] = await Promise.all([
     query.exec(),
     Tray.countDocuments(query.getFilter())
@@ -93,19 +102,21 @@ const getAllTrays = catchAsync(async (req, res, next) => {
 });
 
 const updateTray = catchAsync(async (req, res, next) => {
-  const { id } = req.body;
+  const { id, numberPerCrate } = req.body;
 
   if (!mongoose.isValidObjectId(id)) {
     return next(new AppError("Invalid ID format", 400));
   }
 
-  // Check if tray exists
+  if (numberPerCrate !== undefined && (!Number.isInteger(numberPerCrate) || numberPerCrate < 1)) {
+    return next(new AppError("numberPerCrate must be a positive integer", 400));
+  }
+
   const existingTray = await Tray.findById(id);
   if (!existingTray) {
     return next(new AppError("No tray found with that ID", 404));
   }
 
-  // If updating name, check for duplicates
   if (req.body.name && req.body.name !== existingTray.name) {
     const duplicateTray = await Tray.findOne({
       name: req.body.name,
