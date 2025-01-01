@@ -81,10 +81,12 @@ const generateToken = (id) => {
 const login = [
   isDisabled(User, "User"),
   catchAsync(async (req, res, next) => {
-    const { phoneNumber, password } = req.body;
+    const {  password } = req.body;
+let phoneNumber = Number(req.body?.phoneNumber)
 console.log(password,phoneNumber)
+
     const user = await User.findOne({ phoneNumber: phoneNumber });
-    console.log(user)
+    console.log('user',user)
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return next(new AppError("Wrong credentails", 400));
