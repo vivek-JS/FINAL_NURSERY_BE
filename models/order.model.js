@@ -6,12 +6,43 @@ const paymentSchema = new Schema(
       type: Number,
       required: true,
     },
+    paymentStatus: {
+      type: String,
+      enum: ["COLLECTED", "REJECTED", "PENDING"],
+      default: "PENDING",
+    },
+    paymentDate: {
+      type: Date,
+      required: true,
+    },
+    bankName: {
+      type: String,
+    },
+    receiptPhoto: [
+      {
+        type: String, // Store URLs (strings) for uploaded files
+      },
+    ],
+    modeOfPayment: {
+      type: String,
+      required: true,
+    },
+    remark: {
+      type: String,
+    //  required: true,
+  }
   },
   { timestamps: true }
 );
 
+
 const orderSchema = new Schema(
   {
+    orderId: {
+      type: Number,
+      unique: true,
+      required: true
+    },
     farmer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Farmer",
@@ -22,46 +53,77 @@ const orderSchema = new Schema(
       ref: "User",
       required: true,
     },
-    typeOfPlants: {
-      type: String,
-      required: true,
-    },
     numberOfPlants: {
       type: Number,
       required: true,
     },
-    modeOfPayment: {
-      type: String,
+    plantName: {
+      type: Schema.Types.ObjectId,
+      ref: "PlantCms",
+      required: true,
+    },
+    plantSubtype: {
+      type: Schema.Types.ObjectId,
+      ref: "PlantCms.subtypes",
+      required: true,
+    },
+    bookingSlot: {
+      type: Schema.Types.ObjectId,
+      ref: "PlantSlot.subtypeSlots",
+      required: true,
     },
     rate: {
       type: Number,
       required: true,
     },
-    advance: {
-      type: Number,
-    },
-    dateOfAdvance: {
-      type: Date,
-    },
-    bankName: {
+    orderPaymentStatus: {
       type: String,
+      enum: ["PENDING",  "COMPLETED", ],
+      default: "PENDING",
     },
-    receiptPhoto: [
-      {
-        type: String,
-      },
-    ],
-    paymentStatus: {
-      type: String,
-      required: true,
-    },
+ 
     payment: [paymentSchema],
     notes: {
       type: String,
+    },
+    orderStatus: {
+      type: String,
+      enum: ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED", "DISPATCHED",'ACCEPTED','REJECTED','FARM_READY','DISPATCH_PROCESS'],
+      default: "PENDING",
+    },
+    paymentCompleted: {  // New field
+      type: Boolean,
+      default: false,  // Default to false until explicitly set to true
+    },
+    farmReadyDate:{
+      type: Date
     }
   },
   { timestamps: true }
 );
+
+// Indexes
+orderSchema.index({ farmer: 1 });
+orderSchema.index({ salesPerson: 1 });
+orderSchema.index({ plantName: 1 });
+orderSchema.index({ bookingSlot: 1 });
+orderSchema.index({ orderStatus: 1 });
+orderSchema.index({ createdAt: 1 });
+orderSchema.index({ orderPaymentStatus: 1 });
+orderSchema.index({ createdAt: 1, orderStatus: 1 });
+
+// Pre-save middleware to generate unique orderId
+orderSchema.pre("save", async function (next) {
+  if (!this.isNew || this.orderId) return next();
+
+  try {
+    const maxOrder = await this.constructor.findOne().sort({ orderId: -1 }).select("orderId");
+    this.orderId = maxOrder ? maxOrder.orderId + 1 : 1; // Increment the highest orderId or start with 1
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
 
 const Order = model("Order", orderSchema);
 

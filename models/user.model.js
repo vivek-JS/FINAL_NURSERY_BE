@@ -3,33 +3,49 @@ import { Schema, model } from "mongoose";
 const userSchema = new Schema({
   name: {
     type: String,
-    require: true,
+    required: true,
   },
-  email: {
-    type: String,
-    require: true,
-    unique: true,
-  },
+
   phoneNumber: {
     type: Number,
-    require: true,
+    required: true,
     unique: true,
   },
   password: {
     type: String,
-    require: true,
+    required: true,
+   default:'12345678'
+    
   },
   jobTitle: {
     type: String,
+    enum: ["Manager", "HR", "SALES", "PRIMARY","OFFICE_STAFF",'DRIVER'],
+
   },
-  type: {
-    type: String,
-    enum: ["ADMIN", "SALES PERSON", "INVENTORY MANAGER"],
-  },
+
   isDisabled: {
     type: Boolean,
     default: false,
   },
+  defaultState: {
+    type: String,
+  },
+  defaultDistrict: {
+    type: String,
+  },
+  defaultTaluka: {
+    type: String,
+  },
+  defaultVillage: {
+    type: String,
+  },
+  isOnboarded: {
+    type: Boolean,
+    default:false
+  },
+  birthDate:{
+    type: Date
+  }
 });
 
 const User = model("User", userSchema);

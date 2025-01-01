@@ -18,9 +18,9 @@ import { upload } from "../middlewares/multer.middleware.js";
 const router = express.Router();
 
 router
+  .get("/getfarmer/:mobileNumber",findFarmer)
   .post(
     "/createFarmer",
-    upload.single("receiptPhoto"),
     [
       check("name").notEmpty().withMessage("Please enter valid name"),
       check("village").notEmpty().withMessage("Please enter valid village"),
@@ -39,9 +39,6 @@ router
       check("salesPerson")
         .isMongoId()
         .withMessage("Please provide id of sales person"),
-      check("typeOfPlants")
-        .notEmpty()
-        .withMessage("Please provide type of plants"),
       check("numberOfPlants")
         .notEmpty()
         .withMessage("Please provide number of plants"),

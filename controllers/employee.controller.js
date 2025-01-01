@@ -1,4 +1,4 @@
-import Employee from "../models/employee.model.js";
+import Employee from "../models/user.model.js"; //not employee its user
 import {
   createOne,
   updateOne,
