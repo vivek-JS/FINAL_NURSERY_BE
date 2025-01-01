@@ -16,7 +16,6 @@ const pickupDetailSchema = new Schema({
 });
 
 const crateSchema = new Schema({
-
   cavity: {
     type: String,
     required: true
@@ -37,7 +36,8 @@ const crateSchema = new Schema({
     crateCount: Number,
     plantCount: Number
   }]
- });
+});
+
 const plantDetailSchema = new Schema({
   name: {
     type: String,
@@ -119,7 +119,16 @@ const dispatchSchema = new Schema({
   },
   isDeleted: {
     type: Boolean,
-    default: false  // This ensures new documents start as not deleted
+    default: false
+  },
+  returnedPlants: {
+    type: Number,
+    default: 0  // Default to 0 returned plants
+  },
+  transportStatus: {
+    type: String,
+    enum: ["PENDING", "IN_TRANSIT", "DELIVERED", "CANCELLED"],
+    default: "PENDING"
   },
   plantsDetails: {
     type: [plantDetailSchema],

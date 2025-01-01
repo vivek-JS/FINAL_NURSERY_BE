@@ -774,9 +774,9 @@ const isDisabled = (Model, modelName) =>
 console.log(phoneNumber)
     const data = await Model.findOne({ phoneNumber });
 console.log(data)
-    if (data.isDisabled) {
-      throw new AppError(`Your access to this app is disabled`, 409);
-    }
+    // if (data?.isDisabled) {
+    //   throw new AppError(`Your access to this app is disabled`, 409);
+    // }
     next();
   });
 
