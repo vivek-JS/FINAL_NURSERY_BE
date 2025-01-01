@@ -47,6 +47,7 @@ import vheicleRouter from "./routes/vheicle.route.js"
 import shadeRoter from "./routes/shades.route.js"
 import trayRouter from "./routes/tray.route.js"
 import dispatchRoute from "./routes/dispatched.route.js"
+import msgRoute from "./routes/sendmsg.route.js";
 
 // dummy route
 server.get("/api/dummyData", (req, res) => {
@@ -75,7 +76,7 @@ server.use("/api/v1/shade", shadeRoter);
 server.use("/api/v1/tray", trayRouter);
 server.use("/api/v1/vehicles", vheicleRouter);
 server.use("/api/v1/dispatched", dispatchRoute);
-
+server.use("/api/v1/msg", msgRoute)
 
 server.use(errorRouter);
 
