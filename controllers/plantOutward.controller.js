@@ -99,6 +99,115 @@ const addLabEntry = catchAsync(async (req, res, next) => {
       data: outward
     });
    });
+
+
+   
+   const addPrimaryInward = catchAsync(async (req, res, next) => {
+     const { batchId, primaryInwardData } = req.body;
+   
+     // Check if plant outward exists for batch
+     let plantOutward = await PlantOutward.findOne({ batchId });
+   
+     if (!plantOutward) {
+       // Create new plant outward if it doesn't exist
+       plantOutward = new PlantOutward({
+         batchId,
+         primaryInward: [primaryInwardData]
+       });
+     } else {
+       // Add to existing plant outward
+       plantOutward.primaryInward.push(primaryInwardData);
+     }
+   
+     await plantOutward.save();
+   
+     const response = generateResponse(
+       "Success",
+       "Primary inward entry added successfully",
+       plantOutward,
+       undefined
+     );
+   
+     return res.status(200).json(response);
+   });
+   
+   const updatePrimaryInward = catchAsync(async (req, res, next) => {
+     const { batchId, primaryInwardId } = req.params;
+     const updateData = req.body;
+   
+     const doc = await PlantOutward.findOneAndUpdate(
+       {
+         batchId,
+         'primaryInward._id': primaryInwardId
+       },
+       {
+         $set: { 'primaryInward.$': updateData }
+       },
+       {
+         new: true,
+         runValidators: true
+       }
+     );
+   
+     if (!doc) {
+       return next(new AppError("No matching plant outward or primary inward entry found", 404));
+     }
+   
+     const response = generateResponse(
+       "Success",
+       "Primary inward entry updated successfully",
+       doc,
+       undefined
+     );
+   
+     return res.status(200).json(response);
+   });
+   
+   const deletePrimaryInward = catchAsync(async (req, res, next) => {
+     const { batchId, primaryInwardId } = req.params;
+   
+     const doc = await PlantOutward.findOneAndUpdate(
+       { batchId },
+       {
+         $pull: { primaryInward: { _id: primaryInwardId } }
+       },
+       { new: true }
+     );
+   
+     if (!doc) {
+       return next(new AppError("No plant outward found with that batch ID", 404));
+     }
+   
+     const response = generateResponse(
+       "Success",
+       "Primary inward entry deleted successfully",
+       doc,
+       undefined
+     );
+   
+     return res.status(200).json(response);
+   });
+   
+   const getPrimaryInwardByBatchId = catchAsync(async (req, res, next) => {
+     const { batchId } = req.params;
+   
+     const outward = await PlantOutward.findOne({ batchId })
+       .populate('batchId', 'batchNumber dateAdded');
+   
+     if (!outward) {
+       return next(new AppError("No plant outward found for this batch", 404));
+     }
+   
+     return res.status(200).json({
+       status: "Success",
+       message: "Primary inward entries retrieved successfully",
+       data: outward.primaryInward
+     });
+   });
+   
+
+
+   
    
 
    export {
@@ -106,4 +215,8 @@ const addLabEntry = catchAsync(async (req, res, next) => {
     updateLabEntry,
     getPlantOutwardByBatchId,
      getAllPlantOutwards,
+     addPrimaryInward,
+     updatePrimaryInward,
+     deletePrimaryInward,
+     getPrimaryInwardByBatchId
    };
