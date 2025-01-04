@@ -18,7 +18,7 @@ server.use(mongoSanitize());
 server.use(xss());
 server.use(helmet());
 //server.use(IPWhiteListing);
-server.use(parameterWhiteListing);
+//server.use(parameterWhiteListing);
 server.use("/api", limiter);
 
 // importing routes
