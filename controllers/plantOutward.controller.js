@@ -95,11 +95,89 @@ const updateLabEntry = catchAsync(async (req, res, next) => {
 
 // getAllPlantOutwards remains the same as it doesn't deal with the internal structure
 const getAllPlantOutwards = catchAsync(async (req, res, next) => {
-  const query = PlantOutward.find()
+  const {
+    batchId,
+    startDate,
+    endDate,
+    primary,
+    lab,
+    labroot,
+    primaryexpected
+  } = req.query;
+
+  // Initialize query object
+  const queryObj = {};
+
+  // Add batchId filter if provided
+  if (batchId) {
+    queryObj.batchId = batchId;
+  }
+
+  // Handle date range filters based on different conditions
+  if (startDate && endDate) {
+    // Convert dates to ISO format
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999); // Include the entire end date
+
+    if (primary === 'true') {
+      // Search in primaryInward array for primaryInwardDate
+      queryObj['primaryInward'] = {
+        $elemMatch: {
+          primaryInwardDate: {
+            $gte: start,
+            $lte: end
+          }
+        }
+      };
+    } else if (lab === 'true') {
+      // Search in outward array for outwardDate
+      queryObj['outward'] = {
+        $elemMatch: {
+          outwardDate: {
+            $gte: start,
+            $lte: end
+          }
+        }
+      };
+    } else if (labroot === 'true') {
+      // Search in outward array for rootingDate
+      queryObj['outward'] = {
+        $elemMatch: {
+          rootingDate: {
+            $gte: start,
+            $lte: end
+          }
+        }
+      };
+    } else if (primaryexpected === 'true') {
+      // Search in primaryInward array for primaryOutwardExpectedDate
+      queryObj['primaryInward'] = {
+        $elemMatch: {
+          primaryOutwardExpectedDate: {
+            $gte: start,
+            $lte: end
+          }
+        }
+      };
+    }
+  }
+
+  // Build and execute query
+  const query = PlantOutward.find(queryObj)
     .populate('batchId', 'batchNumber dateAdded')
     .sort('-createdAt');
 
   const outwards = await query;
+
+  // If no results found, return empty array with success status
+  if (!outwards.length) {
+    return res.status(200).json({
+      status: "Success",
+      message: "No plant outwards found matching the criteria",
+      data: []
+    });
+  }
 
   return res.status(200).json({
     status: "Success",
@@ -107,7 +185,6 @@ const getAllPlantOutwards = catchAsync(async (req, res, next) => {
     data: outwards
   });
 });
-
 // getPlantOutwardByBatchId remains the same as it doesn't deal with the internal structure
 const getPlantOutwardByBatchId = catchAsync(async (req, res, next) => {
   const { batchId } = req.params;
