@@ -29,10 +29,16 @@ const labSchema = new Schema({
 });
 
 // Primary Inward Schema
+// Primary Inward Schema
 const primaryInwardSchema = new Schema({
   primaryInwardDate: {
     type: Date,
     required: true
+  },
+  primaryOutwardExpectedDate: {   // Added new field
+    type: Date,
+        required: true
+
   },
   numberOfBottles: {
     type: Number,
@@ -238,52 +244,119 @@ plantOutwardSchema.pre('save', function(next) {
 });
 
 // Pre-findOneAndUpdate middleware
+// Pre-findOneAndUpdate middleware
 plantOutwardSchema.pre('findOneAndUpdate', async function(next) {
-  const update = this.getUpdate();
-  const doc = await this.model.findOne(this.getQuery());
-  
-  if (!doc) return next();
+  try {
+    const update = this.getUpdate();
+    const doc = await this.model.findOne(this.getQuery());
+    
+    if (!doc) return next();
 
-  let newOutward = [...(doc.outward || [])];
-  let newPrimaryInward = [...(doc.primaryInward || [])];
+    let newOutward = [...(doc.outward || [])];
+    let newPrimaryInward = [...(doc.primaryInward || [])];
 
-  // Handle outward updates
-  if (update.$push?.outward) {
-    newOutward.push(update.$push.outward);
-  } else if (update.$pull?.outward) {
-    newOutward = newOutward.filter(item => !item._id.equals(update.$pull.outward._id));
-  } else if (update.$set?.outward) {
-    newOutward = update.$set.outward;
-  }
-
-  // Handle primaryInward updates
-  if (update.$push?.primaryInward) {
-    newPrimaryInward.push(update.$push.primaryInward);
-  } else if (update.$set?.['primaryInward.$']) {
-    const primaryInwardId = this.getQuery()['primaryInward._id'];
-    const index = newPrimaryInward.findIndex(item => item._id.equals(primaryInwardId));
-    if (index !== -1) {
-      newPrimaryInward[index] = update.$set['primaryInward.$'];
+    // Handle outward updates
+    if (update.$push?.outward) {
+      newOutward.push(update.$push.outward);
+    } else if (update.$pull?.outward) {
+      newOutward = newOutward.filter(item => !item._id.equals(update.$pull.outward._id));
+    } else if (update.$set?.outward) {
+      newOutward = update.$set.outward;
     }
-  } else if (update.$set?.primaryInward) {
-    newPrimaryInward = update.$set.primaryInward;
-  }
 
-  // Calculate new summary
-  const outwardSummary = calculateOutwardSummary(newOutward);
-  const primaryInwardSummary = calculatePrimaryInwardSummary(newPrimaryInward);
-  const newSummary = combineSummaries(outwardSummary, primaryInwardSummary);
+    // Handle primaryInward updates
+    if (update.$push?.primaryInward) {
+      // If adding new primaryInward entry
+      const batch = await this.model('Batch').findById(doc.batchId);
+      if (!batch) {
+        throw new Error('Associated batch not found');
+      }
 
-  // Set the new summary in the update operation
-  this.setUpdate({
-    ...update,
-    $set: {
-      ...(update.$set || {}),
-      summary: newSummary
+      const newInward = update.$push.primaryInward;
+      const primaryInwardDate = new Date(newInward.primaryInwardDate);
+      newInward.primaryOutwardExpectedDate = new Date(primaryInwardDate.setDate(
+        primaryInwardDate.getDate() + batch.primaryPlantReadyDays
+      ));
+      
+      newPrimaryInward.push(newInward);
+    } else if (update.$pull?.primaryInward) {
+      newPrimaryInward = newPrimaryInward.filter(item => !item._id.equals(update.$pull.primaryInward._id));
+    } else if (update.$set?.['primaryInward.$']) {
+      // If updating existing primaryInward entry
+      const batch = await this.model('Batch').findById(doc.batchId);
+      if (!batch) {
+        throw new Error('Associated batch not found');
+      }
+
+      const updatedInward = update.$set['primaryInward.$'];
+      const primaryInwardDate = new Date(updatedInward.primaryInwardDate);
+      updatedInward.primaryOutwardExpectedDate = new Date(primaryInwardDate.setDate(
+        primaryInwardDate.getDate() + batch.primaryPlantReadyDays
+      ));
+
+      const primaryInwardId = this.getQuery()['primaryInward._id'];
+      const index = newPrimaryInward.findIndex(item => item._id.equals(primaryInwardId));
+      if (index !== -1) {
+        newPrimaryInward[index] = updatedInward;
+      }
+    } else if (update.$set?.primaryInward) {
+      // If replacing entire primaryInward array
+      const batch = await this.model('Batch').findById(doc.batchId);
+      if (!batch) {
+        throw new Error('Associated batch not found');
+      }
+
+      newPrimaryInward = update.$set.primaryInward.map(inward => {
+        const primaryInwardDate = new Date(inward.primaryInwardDate);
+        return {
+          ...inward,
+          primaryOutwardExpectedDate: new Date(primaryInwardDate.setDate(
+            primaryInwardDate.getDate() + batch.primaryPlantReadyDays
+          ))
+        };
+      });
     }
-  });
 
-  next();
+    // Handle bulk updates of primaryInward array elements
+    if (update.$set) {
+      for (const key in update.$set) {
+        if (key.startsWith('primaryInward.') && key.includes('.primaryInwardDate')) {
+          const batch = await this.model('Batch').findById(doc.batchId);
+          if (!batch) {
+            throw new Error('Associated batch not found');
+          }
+
+          const index = parseInt(key.split('.')[1]);
+          if (!isNaN(index) && newPrimaryInward[index]) {
+            const primaryInwardDate = new Date(update.$set[key]);
+            const expectedDateKey = `primaryInward.${index}.primaryOutwardExpectedDate`;
+            update.$set[expectedDateKey] = new Date(primaryInwardDate.setDate(
+              primaryInwardDate.getDate() + batch.primaryPlantReadyDays
+            ));
+          }
+        }
+      }
+    }
+
+    // Calculate new summary
+    const outwardSummary = calculateOutwardSummary(newOutward);
+    const primaryInwardSummary = calculatePrimaryInwardSummary(newPrimaryInward);
+    const newSummary = combineSummaries(outwardSummary, primaryInwardSummary);
+
+    // Set the new summary in the update operation
+    this.setUpdate({
+      ...update,
+      $set: {
+        ...(update.$set || {}),
+        summary: newSummary,
+        ...(update.$set?.primaryInward || update.$push?.primaryInward ? { primaryInward: newPrimaryInward } : {})
+      }
+    });
+
+    next();
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Static method for safe updates with transactions
@@ -312,6 +385,9 @@ plantOutwardSchema.statics.updateWithTransaction = async function(filter, update
     session.endSession();
   }
 };
+
+
+
 
 // Create the model
 const PlantOutward = model("PlantOutward", plantOutwardSchema);
