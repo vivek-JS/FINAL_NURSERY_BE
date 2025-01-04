@@ -30,7 +30,9 @@ plantSchema.post("save", async function (doc) {
     });
 
     const existingSubtypeIds = new Set(
-      existingPlantSlot?.subtypeSlots.map((slot) => slot.subtypeId.toString()) || []
+      existingPlantSlot?.subtypeSlots.map((slot) =>
+        slot.subtypeId.toString()
+      ) || []
     );
 
     // Identify new subtypes that need slot creation

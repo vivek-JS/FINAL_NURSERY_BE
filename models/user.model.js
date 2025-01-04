@@ -14,13 +14,11 @@ const userSchema = new Schema({
   password: {
     type: String,
     required: true,
-   default:'12345678'
-    
+    default: "12345678",
   },
   jobTitle: {
     type: String,
-    enum: ["Manager", "HR", "SALES", "PRIMARY","OFFICE_STAFF",'DRIVER'],
-
+    enum: ["Manager", "HR", "SALES", "PRIMARY", "OFFICE_STAFF", "DRIVER"],
   },
 
   isDisabled: {
@@ -41,11 +39,11 @@ const userSchema = new Schema({
   },
   isOnboarded: {
     type: Boolean,
-    default:false
+    default: false,
   },
-  birthDate:{
-    type: Date
-  }
+  birthDate: {
+    type: Date,
+  },
 });
 
 const User = model("User", userSchema);

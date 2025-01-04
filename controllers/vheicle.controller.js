@@ -31,7 +31,7 @@ const getAllVehicles = catchAsync(async (req, res, next) => {
     search,
     page = 1,
     limit = 10,
-    status
+    status,
   } = req.query;
 
   let query = Vehicle.find();
@@ -39,15 +39,12 @@ const getAllVehicles = catchAsync(async (req, res, next) => {
   // Apply search filter
   if (search) {
     const searchRegex = new RegExp(search, "i");
-    query = query.or([
-      { name: searchRegex },
-      { number: searchRegex }
-    ]);
+    query = query.or([{ name: searchRegex }, { number: searchRegex }]);
   }
 
   // Apply status filter
   if (status !== undefined) {
-    query = query.where('isActive').equals(status === 'true');
+    query = query.where("isActive").equals(status === "true");
   }
 
   // Apply sorting
@@ -62,10 +59,10 @@ const getAllVehicles = catchAsync(async (req, res, next) => {
   // Execute query
   const [vehicles, total] = await Promise.all([
     query.exec(),
-    Vehicle.countDocuments(query.getFilter())
+    Vehicle.countDocuments(query.getFilter()),
   ]);
 
-  const transformedVehicles = vehicles.map(vehicle => {
+  const transformedVehicles = vehicles.map((vehicle) => {
     const { _id, ...rest } = vehicle.toObject();
     return { id: _id, _id, ...rest };
   });
@@ -79,8 +76,8 @@ const getAllVehicles = catchAsync(async (req, res, next) => {
         total,
         page: parseInt(page),
         limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit))
-      }
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     },
     undefined
   );
@@ -106,98 +103,101 @@ const getVehicleById = catchAsync(async (req, res, next) => {
 });
 
 const updateVehicle = catchAsync(async (req, res, next) => {
-    const { id } = req.body;
-    
-    console.log("Received ID:", id); // Debug log
-    console.log("ID type:", typeof id); // Check type of id
+  const { id } = req.body;
 
-    // First check if id exists
-    if (!id) {
-        return next(new AppError("ID is required", 400));
-    }
+  console.log("Received ID:", id); // Debug log
+  console.log("ID type:", typeof id); // Check type of id
 
-    try {
-        // Validate MongoDB ObjectId format
-        if (!mongoose.isValidObjectId(id)) { // Changed from Types.ObjectId.isValid
-            return next(new AppError("Invalid ID format. Please provide a valid ID", 400));
-        }
+  // First check if id exists
+  if (!id) {
+    return next(new AppError("ID is required", 400));
+  }
 
-        // Check if vehicle exists
-        const existingVehicle = await Vehicle.findById(id);
-        if (!existingVehicle) {
-            return next(new AppError("No vehicle found with that ID", 404));
-        }
-
-        // If updating number, check for duplicates
-        if (req.body.number) {
-            const duplicateVehicle = await Vehicle.findOne({
-                number: req.body.number,
-                _id: { $ne: id }
-            });
-            if (duplicateVehicle) {
-                return next(new AppError("Vehicle with this number already exists", 409));
-            }
-        }
-
-        // Update vehicle
-        const doc = await Vehicle.findByIdAndUpdate(
-            id,
-            req.body,
-            {
-                new: true,
-                runValidators: true
-            }
-        );
-
-        const response = generateResponse(
-            "Success",
-            "Vehicle updated successfully",
-            doc,
-            undefined
-        );
-
-        return res.status(200).json(response);
-    } catch (error) {
-        console.error("Error in updateVehicle:", error); // Debug log
-        return next(new AppError(error.message || "Error updating vehicle", 400));
-    }
-});
-  // Add new controller function for toggling active status
-  const toggleVehicleStatus = catchAsync(async (req, res, next) => {
-    const { id, isActive } = req.body;
-  
+  try {
     // Validate MongoDB ObjectId format
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return next(new AppError("Invalid ID format. Please provide a valid ID", 400));
+    if (!mongoose.isValidObjectId(id)) {
+      // Changed from Types.ObjectId.isValid
+      return next(
+        new AppError("Invalid ID format. Please provide a valid ID", 400)
+      );
     }
-  
-    // Check if isActive is provided and is boolean
-    if (typeof isActive !== 'boolean') {
-      return next(new AppError("isActive must be a boolean value", 400));
-    }
-  
-    const doc = await Vehicle.findByIdAndUpdate(
-      id,
-      { isActive },
-      {
-        new: true,
-        runValidators: true
-      }
-    );
-  
-    if (!doc) {
+
+    // Check if vehicle exists
+    const existingVehicle = await Vehicle.findById(id);
+    if (!existingVehicle) {
       return next(new AppError("No vehicle found with that ID", 404));
     }
-  
+
+    // If updating number, check for duplicates
+    if (req.body.number) {
+      const duplicateVehicle = await Vehicle.findOne({
+        number: req.body.number,
+        _id: { $ne: id },
+      });
+      if (duplicateVehicle) {
+        return next(
+          new AppError("Vehicle with this number already exists", 409)
+        );
+      }
+    }
+
+    // Update vehicle
+    const doc = await Vehicle.findByIdAndUpdate(id, req.body, {
+      new: true,
+      runValidators: true,
+    });
+
     const response = generateResponse(
       "Success",
-      `Vehicle ${isActive ? 'activated' : 'deactivated'} successfully`,
+      "Vehicle updated successfully",
       doc,
       undefined
     );
-  
+
     return res.status(200).json(response);
-  });
+  } catch (error) {
+    console.error("Error in updateVehicle:", error); // Debug log
+    return next(new AppError(error.message || "Error updating vehicle", 400));
+  }
+});
+// Add new controller function for toggling active status
+const toggleVehicleStatus = catchAsync(async (req, res, next) => {
+  const { id, isActive } = req.body;
+
+  // Validate MongoDB ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return next(
+      new AppError("Invalid ID format. Please provide a valid ID", 400)
+    );
+  }
+
+  // Check if isActive is provided and is boolean
+  if (typeof isActive !== "boolean") {
+    return next(new AppError("isActive must be a boolean value", 400));
+  }
+
+  const doc = await Vehicle.findByIdAndUpdate(
+    id,
+    { isActive },
+    {
+      new: true,
+      runValidators: true,
+    }
+  );
+
+  if (!doc) {
+    return next(new AppError("No vehicle found with that ID", 404));
+  }
+
+  const response = generateResponse(
+    "Success",
+    `Vehicle ${isActive ? "activated" : "deactivated"} successfully`,
+    doc,
+    undefined
+  );
+
+  return res.status(200).json(response);
+});
 const deleteVehicle = catchAsync(async (req, res, next) => {
   const doc = await Vehicle.findByIdAndUpdate(
     req.body.id,
@@ -257,10 +257,9 @@ const bulkUpdateVehicles = catchAsync(async (req, res, next) => {
 });
 
 const getActiveVehicles = catchAsync(async (req, res, next) => {
-  const vehicles = await Vehicle.find({ isActive: true })
-    .sort({ name: 1 });
+  const vehicles = await Vehicle.find({ isActive: true }).sort({ name: 1 });
 
-  const transformedVehicles = vehicles.map(vehicle => {
+  const transformedVehicles = vehicles.map((vehicle) => {
     const { _id, ...rest } = vehicle.toObject();
     return { id: _id, _id, ...rest };
   });
@@ -282,5 +281,5 @@ export {
   updateVehicle,
   deleteVehicle,
   bulkUpdateVehicles,
-  getActiveVehicles
+  getActiveVehicles,
 };

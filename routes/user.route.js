@@ -29,7 +29,7 @@ router
       check("phoneNumber", "Please provide valid phoneNumber").notEmpty(),
     ],
     checkErrors,
-     encryptPassword,
+    encryptPassword,
     createUser
   )
   .patch(
@@ -45,9 +45,6 @@ router
     checkErrors,
     deleteUser
   )
-  .get(
-    "/allusers",
-    getUsers
-  );;
+  .get("/allusers", getUsers);
 
 export default router;

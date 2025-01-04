@@ -20,7 +20,7 @@ const createTray = catchAsync(async (req, res, next) => {
   const doc = await Tray.create({
     name,
     cavity,
-    numberPerCrate
+    numberPerCrate,
   });
 
   const response = generateResponse(
@@ -42,28 +42,26 @@ const getAllTrays = catchAsync(async (req, res, next) => {
     limit = 10,
     status,
     minNumberPerCrate,
-    maxNumberPerCrate
+    maxNumberPerCrate,
   } = req.query;
 
   let query = Tray.find();
 
   if (search) {
     const searchRegex = new RegExp(search, "i");
-    query = query.or([
-      { name: searchRegex }
-    ]);
+    query = query.or([{ name: searchRegex }]);
   }
 
   if (status !== undefined) {
-    query = query.where('isActive').equals(status === 'true');
+    query = query.where("isActive").equals(status === "true");
   }
 
   if (minNumberPerCrate) {
-    query = query.where('numberPerCrate').gte(parseInt(minNumberPerCrate));
+    query = query.where("numberPerCrate").gte(parseInt(minNumberPerCrate));
   }
 
   if (maxNumberPerCrate) {
-    query = query.where('numberPerCrate').lte(parseInt(maxNumberPerCrate));
+    query = query.where("numberPerCrate").lte(parseInt(maxNumberPerCrate));
   }
 
   const sort = {};
@@ -75,10 +73,10 @@ const getAllTrays = catchAsync(async (req, res, next) => {
 
   const [trays, total] = await Promise.all([
     query.exec(),
-    Tray.countDocuments(query.getFilter())
+    Tray.countDocuments(query.getFilter()),
   ]);
 
-  const transformedTrays = trays.map(tray => {
+  const transformedTrays = trays.map((tray) => {
     const { _id, ...rest } = tray.toObject();
     return { id: _id, _id, ...rest };
   });
@@ -92,8 +90,8 @@ const getAllTrays = catchAsync(async (req, res, next) => {
         total,
         page: parseInt(page),
         limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit))
-      }
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     },
     undefined
   );
@@ -108,7 +106,10 @@ const updateTray = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid ID format", 400));
   }
 
-  if (numberPerCrate !== undefined && (!Number.isInteger(numberPerCrate) || numberPerCrate < 1)) {
+  if (
+    numberPerCrate !== undefined &&
+    (!Number.isInteger(numberPerCrate) || numberPerCrate < 1)
+  ) {
     return next(new AppError("numberPerCrate must be a positive integer", 400));
   }
 
@@ -120,21 +121,17 @@ const updateTray = catchAsync(async (req, res, next) => {
   if (req.body.name && req.body.name !== existingTray.name) {
     const duplicateTray = await Tray.findOne({
       name: req.body.name,
-      _id: { $ne: id }
+      _id: { $ne: id },
     });
     if (duplicateTray) {
       return next(new AppError("Tray with this name already exists", 409));
     }
   }
 
-  const doc = await Tray.findByIdAndUpdate(
-    id,
-    req.body,
-    {
-      new: true,
-      runValidators: true
-    }
-  );
+  const doc = await Tray.findByIdAndUpdate(id, req.body, {
+    new: true,
+    runValidators: true,
+  });
 
   const response = generateResponse(
     "Success",
@@ -153,7 +150,7 @@ const toggleTrayStatus = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid ID format", 400));
   }
 
-  if (typeof isActive !== 'boolean') {
+  if (typeof isActive !== "boolean") {
     return next(new AppError("isActive must be a boolean value", 400));
   }
 
@@ -162,7 +159,7 @@ const toggleTrayStatus = catchAsync(async (req, res, next) => {
     { isActive },
     {
       new: true,
-      runValidators: true
+      runValidators: true,
     }
   );
 
@@ -172,7 +169,7 @@ const toggleTrayStatus = catchAsync(async (req, res, next) => {
 
   const response = generateResponse(
     "Success",
-    `Tray ${isActive ? 'activated' : 'deactivated'} successfully`,
+    `Tray ${isActive ? "activated" : "deactivated"} successfully`,
     doc,
     undefined
   );
@@ -180,9 +177,4 @@ const toggleTrayStatus = catchAsync(async (req, res, next) => {
   return res.status(200).json(response);
 });
 
-export {
-  createTray,
-  getAllTrays,
-  updateTray,
-  toggleTrayStatus
-};
+export { createTray, getAllTrays, updateTray, toggleTrayStatus };

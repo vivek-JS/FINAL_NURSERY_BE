@@ -17,7 +17,7 @@ const createShade = catchAsync(async (req, res, next) => {
 
   const doc = await Shade.create({
     name,
-    number
+    number,
   });
 
   const response = generateResponse(
@@ -38,7 +38,7 @@ const getAllShades = catchAsync(async (req, res, next) => {
     search,
     page = 1,
     limit = 10,
-    status
+    status,
   } = req.query;
 
   let query = Shade.find();
@@ -46,15 +46,12 @@ const getAllShades = catchAsync(async (req, res, next) => {
   // Apply search filter
   if (search) {
     const searchRegex = new RegExp(search, "i");
-    query = query.or([
-      { name: searchRegex },
-      { number: searchRegex }
-    ]);
+    query = query.or([{ name: searchRegex }, { number: searchRegex }]);
   }
 
   // Apply status filter
   if (status !== undefined) {
-    query = query.where('isActive').equals(status === 'true');
+    query = query.where("isActive").equals(status === "true");
   }
 
   // Apply sorting
@@ -69,10 +66,10 @@ const getAllShades = catchAsync(async (req, res, next) => {
   // Execute query
   const [shades, total] = await Promise.all([
     query.exec(),
-    Shade.countDocuments(query.getFilter())
+    Shade.countDocuments(query.getFilter()),
   ]);
 
-  const transformedShades = shades.map(shade => {
+  const transformedShades = shades.map((shade) => {
     const { _id, ...rest } = shade.toObject();
     return { id: _id, _id, ...rest };
   });
@@ -86,8 +83,8 @@ const getAllShades = catchAsync(async (req, res, next) => {
         total,
         page: parseInt(page),
         limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit))
-      }
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     },
     undefined
   );
@@ -121,7 +118,7 @@ const updateShade = catchAsync(async (req, res, next) => {
   if (req.body.number) {
     const duplicateShade = await Shade.findOne({
       number: req.body.number,
-      _id: { $ne: id }
+      _id: { $ne: id },
     });
     if (duplicateShade) {
       return next(new AppError("Shade with this number already exists", 409));
@@ -132,17 +129,15 @@ const updateShade = catchAsync(async (req, res, next) => {
   const updateData = {
     ...(req.body.name && { name: req.body.name }),
     ...(req.body.number && { number: req.body.number }),
-    ...(typeof req.body.isActive !== 'undefined' && { isActive: req.body.isActive })
+    ...(typeof req.body.isActive !== "undefined" && {
+      isActive: req.body.isActive,
+    }),
   };
 
-  const doc = await Shade.findByIdAndUpdate(
-    id,
-    updateData,
-    {
-      new: true,
-      runValidators: true
-    }
-  );
+  const doc = await Shade.findByIdAndUpdate(id, updateData, {
+    new: true,
+    runValidators: true,
+  });
 
   const response = generateResponse(
     "Success",
@@ -161,7 +156,7 @@ const toggleShadeStatus = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid ID format", 400));
   }
 
-  if (typeof isActive !== 'boolean') {
+  if (typeof isActive !== "boolean") {
     return next(new AppError("isActive must be a boolean value", 400));
   }
 
@@ -170,7 +165,7 @@ const toggleShadeStatus = catchAsync(async (req, res, next) => {
     { isActive },
     {
       new: true,
-      runValidators: true
+      runValidators: true,
     }
   );
 
@@ -180,7 +175,7 @@ const toggleShadeStatus = catchAsync(async (req, res, next) => {
 
   const response = generateResponse(
     "Success",
-    `Shade ${isActive ? 'activated' : 'deactivated'} successfully`,
+    `Shade ${isActive ? "activated" : "deactivated"} successfully`,
     doc,
     undefined
   );
@@ -188,9 +183,4 @@ const toggleShadeStatus = catchAsync(async (req, res, next) => {
   return res.status(200).json(response);
 });
 
-export {
-  createShade,
-  getAllShades,
-  updateShade,
-  toggleShadeStatus
-};
+export { createShade, getAllShades, updateShade, toggleShadeStatus };
