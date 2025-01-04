@@ -4,12 +4,14 @@ import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
 import Batch from "../models/batch.model.js";
 import mongoose from "mongoose";
-import PlantOutward from "../models/plantOutward.model.js"; // Add this import
-
-// Update batch.controller.js
+import PlantOutward from "../models/plantOutward.model.js";
 
 const createBatch = catchAsync(async (req, res, next) => {
-    const { batchNumber, dateAdded } = req.body;
+    const { batchNumber, dateAdded, primaryPlantReadyDays, secondaryPlantReadyDays } = req.body;
+   
+    if (!primaryPlantReadyDays || !secondaryPlantReadyDays) {
+      return next(new AppError("Primary and secondary plant ready days are required", 400));
+    }
    
     const existingBatch = await Batch.findOne({ batchNumber });
     if (existingBatch) {
@@ -18,10 +20,11 @@ const createBatch = catchAsync(async (req, res, next) => {
    
     const batch = await Batch.create({
       batchNumber,
-      dateAdded
+      dateAdded,
+      primaryPlantReadyDays,
+      secondaryPlantReadyDays
     });
    
-    // Create plant outward entry with the batch ID
     await PlantOutward.create({
       batchId: batch._id,
       labs: []
@@ -35,67 +38,67 @@ const createBatch = catchAsync(async (req, res, next) => {
     );
    
     return res.status(201).json(response);
-   });
-const getAllBatches = catchAsync(async (req, res, next) => {
- const {
-   sortKey = "createdAt",
-   sortOrder = "desc",
-   search,
-   page = 1,
-   limit = 10,
-   status
- } = req.query;
-
- let query = Batch.find();
-
- if (search) {
-   const searchRegex = new RegExp(search, "i");
-   query = query.or([
-     { batchNumber: searchRegex }
-   ]);
- }
-
- if (status !== undefined) {
-   query = query.where('isActive').equals(status === 'true');
- }
-
- const sort = {};
- sort[sortKey] = sortOrder === "desc" ? -1 : 1;
- query = query.sort(sort);
-
- const skip = (parseInt(page) - 1) * parseInt(limit);
- query = query.skip(skip).limit(parseInt(limit));
-
- const [batches, total] = await Promise.all([
-   query.exec(),
-   Batch.countDocuments(query.getFilter())
- ]);
-
- const transformedBatches = batches.map(batch => {
-   const { _id, ...rest } = batch.toObject();
-   return { id: _id, _id, ...rest };
- });
-
- const response = generateResponse(
-   "Success",
-   "Batches fetched successfully",
-   {
-     data: transformedBatches,
-     pagination: {
-       total,
-       page: parseInt(page),
-       limit: parseInt(limit),
-       pages: Math.ceil(total / parseInt(limit))
-     }
-   },
-   undefined
- );
-
- return res.status(200).json(response);
 });
 
+const getAllBatches = catchAsync(async (req, res, next) => {
+  const {
+    sortKey = "createdAt",
+    sortOrder = "desc",
+    search,
+    page = 1,
+    limit = 10,
+    status
+  } = req.query;
+ 
+  let query = Batch.find();
+ 
+  if (search) {
+    const searchRegex = new RegExp(search, "i");
+    query = query.or([
+      { batchNumber: searchRegex }
+    ]);
+  }
+ 
+  if (status !== undefined) {
+    query = query.where('isActive').equals(status === 'true');
+  }
+ 
+  const sort = {};
+  sort[sortKey] = sortOrder === "desc" ? -1 : 1;
+  query = query.sort(sort);
+ 
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+  query = query.skip(skip).limit(parseInt(limit));
+ 
+  const [batches, total] = await Promise.all([
+    query.exec(),
+    Batch.countDocuments(query.getFilter())
+  ]);
+ 
+  const transformedBatches = batches.map(batch => {
+    const { _id, ...rest } = batch.toObject();
+    return { id: _id, _id, ...rest };
+  });
+ 
+  const response = generateResponse(
+    "Success",
+    "Batches fetched successfully",
+    {
+      data: transformedBatches,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    },
+    undefined
+  );
+ 
+  return res.status(200).json(response);
+ });
 const updateBatch = catchAsync(async (req, res, next) => {
- const { id, batchNumber, dateAdded } = req.body;
+ const { id, batchNumber, dateAdded, primaryPlantReadyDays, secondaryPlantReadyDays } = req.body;
 
  if (!mongoose.isValidObjectId(id)) {
    return next(new AppError("Invalid ID format", 400));
@@ -114,6 +117,14 @@ const updateBatch = catchAsync(async (req, res, next) => {
    if (duplicateBatch) {
      return next(new AppError("Batch number already exists", 409));
    }
+ }
+
+ // Validate plant ready days if they are being updated
+ if (primaryPlantReadyDays !== undefined && primaryPlantReadyDays <= 0) {
+   return next(new AppError("Primary plant ready days must be a positive number", 400));
+ }
+ if (secondaryPlantReadyDays !== undefined && secondaryPlantReadyDays <= 0) {
+   return next(new AppError("Secondary plant ready days must be a positive number", 400));
  }
 
  const doc = await Batch.findByIdAndUpdate(
