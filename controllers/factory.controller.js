@@ -5,7 +5,7 @@ import APIFeatures from "../utility/apiFeatures.js";
 import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
 
-const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
+export const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
   console.log(
     `[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}`
   );
