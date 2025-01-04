@@ -17,10 +17,7 @@ router
   .get("/getCSV", getCsv)
   .get("/slots", getOrdersBySlot)
   .get("/getOrders", getOrders)
-  .patch(
-    "/updatePaymentStatus",
-    updatePaymentStatus
-  )
+  .patch("/updatePaymentStatus", updatePaymentStatus)
   .patch(
     "/payment/:orderId",
     addNewPayment // Controller function to add payment

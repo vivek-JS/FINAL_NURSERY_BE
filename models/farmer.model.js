@@ -9,7 +9,7 @@ const farmerSchema = new Schema({
     type: String,
     required: [true, "Village ID requried"],
   },
-  
+
   taluka: {
     type: String,
     required: [true, "Taluka ID requried"],
@@ -34,7 +34,7 @@ const farmerSchema = new Schema({
     type: String,
     required: [true, "State name requried"],
   },
-  
+
   mobileNumber: {
     type: Number,
     required: [true, "Mobile number requried"],

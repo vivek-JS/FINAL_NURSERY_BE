@@ -4,7 +4,6 @@ import Farmer from "../models/farmer.model.js";
 import fetch from "node-fetch";
 
 const sendMsg = catchAsync(async (req, res, next) => {
-
   const { mobileNumbers, templateName } = req.body;
   const WATI_URL = process.env.SEND_TEMPLATE_MESSAGE_URL;
 
@@ -12,30 +11,32 @@ const sendMsg = catchAsync(async (req, res, next) => {
     const farmer = await Farmer.findOne({ mobileNumber });
 
     const body = {
-      "template_name": `${templateName}`,
-      "broadcast_name": "ss",
-      "parameters": [
+      template_name: `${templateName}`,
+      broadcast_name: "ss",
+      parameters: [
         {
-          "name": "name",
-          "value": `${farmer.name}`
-        }
-      ]
+          name: "name",
+          value: `${farmer.name}`,
+        },
+      ],
     };
 
-    const response = await fetch(`${WATI_URL}?whatsappNumber=91${mobileNumber}`, {
-      method: 'post',
-      body: JSON.stringify(body),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': process.env.WATI_TOKEN
+    const response = await fetch(
+      `${WATI_URL}?whatsappNumber=91${mobileNumber}`,
+      {
+        method: "post",
+        body: JSON.stringify(body),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: process.env.WATI_TOKEN,
+        },
       }
-    });
+    );
 
     // const data = response;
 
     // console.log(data)
-
-  })
+  });
 
   const response = generateResponse(
     "Success",
@@ -44,10 +45,7 @@ const sendMsg = catchAsync(async (req, res, next) => {
     undefined
   );
 
-  return res
-    .status(200)
-    .json(response);
-
+  return res.status(200).json(response);
 });
 
 export { sendMsg };

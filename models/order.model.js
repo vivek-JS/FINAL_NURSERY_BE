@@ -29,19 +29,18 @@ const paymentSchema = new Schema(
     },
     remark: {
       type: String,
-    //  required: true,
-  }
+      //  required: true,
+    },
   },
   { timestamps: true }
 );
-
 
 const orderSchema = new Schema(
   {
     orderId: {
       type: Number,
       unique: true,
-      required: true
+      required: true,
     },
     farmer: {
       type: mongoose.Schema.Types.ObjectId,
@@ -78,26 +77,37 @@ const orderSchema = new Schema(
     },
     orderPaymentStatus: {
       type: String,
-      enum: ["PENDING",  "COMPLETED", ],
+      enum: ["PENDING", "COMPLETED"],
       default: "PENDING",
     },
- 
+
     payment: [paymentSchema],
     notes: {
       type: String,
     },
     orderStatus: {
       type: String,
-      enum: ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED", "DISPATCHED",'ACCEPTED','REJECTED','FARM_READY','DISPATCH_PROCESS'],
+      enum: [
+        "PENDING",
+        "PROCESSING",
+        "COMPLETED",
+        "CANCELLED",
+        "DISPATCHED",
+        "ACCEPTED",
+        "REJECTED",
+        "FARM_READY",
+        "DISPATCH_PROCESS",
+      ],
       default: "PENDING",
     },
-    paymentCompleted: {  // New field
+    paymentCompleted: {
+      // New field
       type: Boolean,
-      default: false,  // Default to false until explicitly set to true
+      default: false, // Default to false until explicitly set to true
     },
-    farmReadyDate:{
-      type: Date
-    }
+    farmReadyDate: {
+      type: Date,
+    },
   },
   { timestamps: true }
 );
@@ -117,7 +127,10 @@ orderSchema.pre("save", async function (next) {
   if (!this.isNew || this.orderId) return next();
 
   try {
-    const maxOrder = await this.constructor.findOne().sort({ orderId: -1 }).select("orderId");
+    const maxOrder = await this.constructor
+      .findOne()
+      .sort({ orderId: -1 })
+      .select("orderId");
     this.orderId = maxOrder ? maxOrder.orderId + 1 : 1; // Increment the highest orderId or start with 1
     next();
   } catch (err) {

@@ -9,9 +9,13 @@ const slotSchema = new Schema({
     validate: {
       validator: function (value) {
         // Regular expression to validate "dd-mm-yyyy" format
-        return /^\d{2}-\d{2}-\d{4}$/.test(value) && moment(value, "DD-MM-YYYY", true).isValid();
+        return (
+          /^\d{2}-\d{2}-\d{4}$/.test(value) &&
+          moment(value, "DD-MM-YYYY", true).isValid()
+        );
       },
-      message: (props) => `${props.value} is not a valid date in the format dd-mm-yyyy`,
+      message: (props) =>
+        `${props.value} is not a valid date in the format dd-mm-yyyy`,
     },
   },
   endDay: {
@@ -20,9 +24,13 @@ const slotSchema = new Schema({
     validate: {
       validator: function (value) {
         // Regular expression to validate "dd-mm-yyyy" format
-        return /^\d{2}-\d{2}-\d{4}$/.test(value) && moment(value, "DD-MM-YYYY", true).isValid();
+        return (
+          /^\d{2}-\d{2}-\d{4}$/.test(value) &&
+          moment(value, "DD-MM-YYYY", true).isValid()
+        );
       },
-      message: (props) => `${props.value} is not a valid date in the format dd-mm-yyyy`,
+      message: (props) =>
+        `${props.value} is not a valid date in the format dd-mm-yyyy`,
     },
   },
   totalPlants: {

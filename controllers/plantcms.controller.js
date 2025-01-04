@@ -51,7 +51,6 @@ export const addPlant = async (req, res) => {
   }
 };
 
-
 // Update a plant's details, subtypes, or slotSize
 // Update a plant's details, subtypes, or slotSize
 export const updatePlant = async (req, res) => {
@@ -78,9 +77,13 @@ export const updatePlant = async (req, res) => {
     // Update slots
     await updateSlotsForPlant(updatedPlant);
 
-    return res.status(200).json({ message: "Plant updated successfully", data: updatedPlant });
+    return res
+      .status(200)
+      .json({ message: "Plant updated successfully", data: updatedPlant });
   } catch (error) {
-    return res.status(500).json({ message: "Error updating plant", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Error updating plant", error: error.message });
   }
 };
 
@@ -100,12 +103,15 @@ export const deletePlant = async (req, res) => {
     await PlantSlot.deleteMany({ plantId });
     console.log(`Deleted slots for plant ID: ${plantId}`);
 
-    return res
-      .status(200)
-      .json({ message: "Plant and related slots deleted successfully", data: deletedPlant });
+    return res.status(200).json({
+      message: "Plant and related slots deleted successfully",
+      data: deletedPlant,
+    });
   } catch (error) {
     console.error("Error deleting plant and related slots:", error);
-    return res.status(500).json({ message: "Error deleting plant", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Error deleting plant", error: error.message });
   }
 };
 // Add a new subtype to an existing plant
@@ -123,9 +129,13 @@ export const addSubtype = async (req, res) => {
     plant.subtypes.push({ name, description, characteristics });
     const updatedPlant = await plant.save();
 
-    return res.status(200).json({ message: "Subtype added successfully", data: updatedPlant });
+    return res
+      .status(200)
+      .json({ message: "Subtype added successfully", data: updatedPlant });
   } catch (error) {
-    return res.status(500).json({ message: "Error adding subtype", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Error adding subtype", error: error.message });
   }
 };
 
@@ -153,9 +163,13 @@ export const updateSubtype = async (req, res) => {
 
     const updatedPlant = await plant.save();
 
-    return res.status(200).json({ message: "Subtype updated successfully", data: updatedPlant });
+    return res
+      .status(200)
+      .json({ message: "Subtype updated successfully", data: updatedPlant });
   } catch (error) {
-    return res.status(500).json({ message: "Error updating subtype", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Error updating subtype", error: error.message });
   }
 };
 
@@ -179,9 +193,13 @@ export const deleteSubtype = async (req, res) => {
     subtype.remove();
     const updatedPlant = await plant.save();
 
-    return res.status(200).json({ message: "Subtype deleted successfully", data: updatedPlant });
+    return res
+      .status(200)
+      .json({ message: "Subtype deleted successfully", data: updatedPlant });
   } catch (error) {
-    return res.status(500).json({ message: "Error deleting subtype", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Error deleting subtype", error: error.message });
   }
 };
 
@@ -198,12 +216,15 @@ export const getPlants = async (req, res) => {
       return res.status(404).json({ message: "No plants found" });
     }
 
-    return res.status(200).json({ message: "Plants retrieved successfully", data: plants });
+    return res
+      .status(200)
+      .json({ message: "Plants retrieved successfully", data: plants });
   } catch (error) {
-    return res.status(500).json({ message: "Error retrieving plants", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Error retrieving plants", error: error.message });
   }
 };
-
 
 const updateSlotsForPlant = async (plant) => {
   try {

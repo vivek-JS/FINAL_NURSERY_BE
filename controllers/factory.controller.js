@@ -6,7 +6,9 @@ import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
 
 const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
-  console.log(`[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}`);
+  console.log(
+    `[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}`
+  );
 
   // Step 1: If subtracting, first check if enough plants are available
   if (action === "subtract") {
@@ -21,7 +23,7 @@ const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
     }
 
     const targetSlot = currentSlot.subtypeSlots[0].slots.find(
-      slot => slot._id.toString() === bookingSlot.toString()
+      (slot) => slot._id.toString() === bookingSlot.toString()
     );
 
     if (!targetSlot) {
@@ -30,19 +32,29 @@ const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
     }
 
     if (targetSlot.totalPlants < numberOfPlants) {
-      console.error(`[updateSlot] ERROR: Not enough plants available. Requested: ${numberOfPlants}, Available: ${targetSlot.totalPlants}`);
-      throw new Error(`Not enough plants available. Only ${targetSlot.totalPlants} plants available.`);
+      console.error(
+        `[updateSlot] ERROR: Not enough plants available. Requested: ${numberOfPlants}, Available: ${targetSlot.totalPlants}`
+      );
+      throw new Error(
+        `Not enough plants available. Only ${targetSlot.totalPlants} plants available.`
+      );
     }
   }
 
   // Step 2: Build the update operation based on the action
   const updateOperation = {};
   if (action === "subtract") {
-    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] = -numberOfPlants; // Decrease totalPlants
-    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"] = numberOfPlants; // Increase totalBookedPlants
+    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] =
+      -numberOfPlants; // Decrease totalPlants
+    updateOperation[
+      "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
+    ] = numberOfPlants; // Increase totalBookedPlants
   } else if (action === "add") {
-    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] = numberOfPlants; // Increase totalPlants
-    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"] = -numberOfPlants; // Decrease totalBookedPlants
+    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] =
+      numberOfPlants; // Increase totalPlants
+    updateOperation[
+      "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
+    ] = -numberOfPlants; // Decrease totalBookedPlants
   }
 
   // Step 3: Perform an atomic update in the database using $inc
@@ -50,8 +62,14 @@ const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
     { "subtypeSlots.slots._id": bookingSlot },
     {
       $inc: {
-        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants": updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"],
-        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"],
+        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants":
+          updateOperation[
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"
+          ],
+        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants":
+          updateOperation[
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
+          ],
       },
     },
     {
@@ -73,8 +91,6 @@ const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
   console.log("[updateSlot] SUCCESS: Slot updated successfully");
   return updateResult; // Return the update result for reference
 };
-
-
 
 const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
@@ -105,18 +121,23 @@ const createOne = (Model, modelName) =>
         } catch (slotError) {
           await session.abortTransaction();
           session.endSession();
-          return res.status(400).json({ 
-            message: slotError.message || "Failed to update slot"
+          return res.status(400).json({
+            message: slotError.message || "Failed to update slot",
           });
         }
 
         // Step 3: Create the Order
-        const order = await Model.create([{
-          ...orderData,
-          bookingSlot,
-          numberOfPlants,
-          orderId,
-        }], { session });
+        const order = await Model.create(
+          [
+            {
+              ...orderData,
+              bookingSlot,
+              numberOfPlants,
+              orderId,
+            },
+          ],
+          { session }
+        );
 
         await session.commitTransaction();
         session.endSession();
@@ -129,7 +150,6 @@ const createOne = (Model, modelName) =>
         );
 
         return res.status(201).json(response);
-
       } catch (error) {
         await session.abortTransaction();
         session.endSession();
@@ -151,29 +171,31 @@ const createOne = (Model, modelName) =>
     return res.status(201).json(response);
   });
 
-  const { isValidObjectId } = mongoose;
-  
-  const updateOne = (Model, modelName, allowedFields) =>
+const { isValidObjectId } = mongoose;
+
+const updateOne = (Model, modelName, allowedFields) =>
   catchAsync(async (req, res, next) => {
     const { id } = req.body;
 
     if (!isValidObjectId(id)) {
-      return next(new AppError('Invalid ID format', 400));
+      return next(new AppError("Invalid ID format", 400));
     }
 
     if (modelName !== "Order") {
       const doc = await Model.findByIdAndUpdate(id, req.body, {
         new: true,
-        runValidators: true
+        runValidators: true,
       });
 
       if (!doc) {
         return next(new AppError("No document found with that ID", 404));
       }
 
-      return res.status(200).json(
-        generateResponse("Success", `${modelName} updated successfully`, doc)
-      );
+      return res
+        .status(200)
+        .json(
+          generateResponse("Success", `${modelName} updated successfully`, doc)
+        );
     }
 
     const session = await mongoose.startSession();
@@ -186,7 +208,7 @@ const createOne = (Model, modelName) =>
       }
 
       const filteredBody = Object.keys(req.body)
-        .filter(key => allowedFields.includes(key))
+        .filter((key) => allowedFields.includes(key))
         .reduce((obj, key) => {
           obj[key] = req.body[key];
           return obj;
@@ -203,95 +225,122 @@ const createOne = (Model, modelName) =>
       }
 
       const updatedDoc = await Model.findOneAndUpdate(
-        { 
+        {
           _id: id,
-          __v: existingDoc.__v 
+          __v: existingDoc.__v,
         },
         {
           ...filteredBody,
-          $inc: { __v: 1 }
+          $inc: { __v: 1 },
         },
         {
           new: true,
           runValidators: true,
-          session
+          session,
         }
       );
 
       if (!updatedDoc) {
-        throw new AppError("Document was modified by another process. Please try again.", 409);
+        throw new AppError(
+          "Document was modified by another process. Please try again.",
+          409
+        );
       }
 
       await session.commitTransaction();
       session.endSession();
 
-      return res.status(200).json(
-        generateResponse("Success", `${modelName} updated successfully`, updatedDoc)
-      );
-
+      return res
+        .status(200)
+        .json(
+          generateResponse(
+            "Success",
+            `${modelName} updated successfully`,
+            updatedDoc
+          )
+        );
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
       return next(error);
     }
   });
-  
-  // Helper function to handle slot updates
-  const handleSlotUpdates = async (existingDoc, filteredBody) => {
-    const { bookingSlot, numberOfPlants } = filteredBody;
-  
-    try {
-      // Check slot availability before any updates
-      const checkSlotAvailability = async (slotId, plantsNeeded) => {
-        const currentSlot = await PlantSlot.findOne(
-          { "subtypeSlots.slots._id": slotId },
-          { "subtypeSlots.$": 1 }
-        );
-  
-        if (!currentSlot?.subtypeSlots?.[0]?.slots) {
-          throw new AppError("Slot not found", 404);
-        }
-  
-        const slot = currentSlot.subtypeSlots[0].slots.find(
-          s => s._id.toString() === slotId.toString()
-        );
-  
-        if (!slot) {
-          throw new AppError("Specific slot not found", 404);
-        }
-  
-        if (slot.totalPlants < plantsNeeded) {
-          throw new AppError(`Not enough plants available in slot. Only ${slot.totalPlants} plants available.`, 400);
-        }
-      };
-  
-      if (bookingSlot && bookingSlot.toString() !== existingDoc.bookingSlot.toString()) {
-        // Check new slot availability before switching
-        await checkSlotAvailability(bookingSlot, numberOfPlants || existingDoc.numberOfPlants);
-        
-        await Promise.all([
-          updateSlot(existingDoc.bookingSlot, existingDoc.numberOfPlants, "add"),
-          updateSlot(bookingSlot, numberOfPlants || existingDoc.numberOfPlants, "subtract")
-        ]);
-      } else if (numberOfPlants) {
-        const quantityDifference = numberOfPlants - existingDoc.numberOfPlants;
-        if (quantityDifference > 0) {
-          // Only check availability if increasing quantity
-          await checkSlotAvailability(existingDoc.bookingSlot, quantityDifference);
-        }
-        
-        if (quantityDifference !== 0) {
-          await updateSlot(
-            existingDoc.bookingSlot,
-            Math.abs(quantityDifference),
-            quantityDifference < 0 ? "add" : "subtract"
-          );
-        }
+
+// Helper function to handle slot updates
+const handleSlotUpdates = async (existingDoc, filteredBody) => {
+  const { bookingSlot, numberOfPlants } = filteredBody;
+
+  try {
+    // Check slot availability before any updates
+    const checkSlotAvailability = async (slotId, plantsNeeded) => {
+      const currentSlot = await PlantSlot.findOne(
+        { "subtypeSlots.slots._id": slotId },
+        { "subtypeSlots.$": 1 }
+      );
+
+      if (!currentSlot?.subtypeSlots?.[0]?.slots) {
+        throw new AppError("Slot not found", 404);
       }
-    } catch (error) {
-      throw new AppError(error.message || "Failed to update booking slots", error.statusCode || 500);
+
+      const slot = currentSlot.subtypeSlots[0].slots.find(
+        (s) => s._id.toString() === slotId.toString()
+      );
+
+      if (!slot) {
+        throw new AppError("Specific slot not found", 404);
+      }
+
+      if (slot.totalPlants < plantsNeeded) {
+        throw new AppError(
+          `Not enough plants available in slot. Only ${slot.totalPlants} plants available.`,
+          400
+        );
+      }
+    };
+
+    if (
+      bookingSlot &&
+      bookingSlot.toString() !== existingDoc.bookingSlot.toString()
+    ) {
+      // Check new slot availability before switching
+      await checkSlotAvailability(
+        bookingSlot,
+        numberOfPlants || existingDoc.numberOfPlants
+      );
+
+      await Promise.all([
+        updateSlot(existingDoc.bookingSlot, existingDoc.numberOfPlants, "add"),
+        updateSlot(
+          bookingSlot,
+          numberOfPlants || existingDoc.numberOfPlants,
+          "subtract"
+        ),
+      ]);
+    } else if (numberOfPlants) {
+      const quantityDifference = numberOfPlants - existingDoc.numberOfPlants;
+      if (quantityDifference > 0) {
+        // Only check availability if increasing quantity
+        await checkSlotAvailability(
+          existingDoc.bookingSlot,
+          quantityDifference
+        );
+      }
+
+      if (quantityDifference !== 0) {
+        await updateSlot(
+          existingDoc.bookingSlot,
+          Math.abs(quantityDifference),
+          quantityDifference < 0 ? "add" : "subtract"
+        );
+      }
     }
-  };
+  } catch (error) {
+    throw new AppError(
+      error.message || "Failed to update booking slots",
+      error.statusCode || 500
+    );
+  }
+};
 
 const updateOneNestedData = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
@@ -389,7 +438,7 @@ const getOne = (Model, modelName, popOptions) =>
     return res.status(200).json(response);
   });
 
-  const getAll = (Model, modelName) =>
+const getAll = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     if (modelName !== "Order") {
       let filter = {};
@@ -400,7 +449,7 @@ const getOne = (Model, modelName, popOptions) =>
         .filter()
         .sort()
         .limitFields()
-        .paginate();  
+        .paginate();
 
       const doc = await features.query.lean();
 
@@ -429,7 +478,7 @@ const getOne = (Model, modelName, popOptions) =>
       salesPerson, // Added salesPerson parameter
       page = 1,
       limit = 100,
-      status
+      status,
     } = req.query;
 
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
@@ -446,14 +495,14 @@ const getOne = (Model, modelName, popOptions) =>
     }
     if (status) {
       // Convert comma-separated string to array and handle single status case
-      const statusArray = status.split(',').map(s => s.trim());
+      const statusArray = status.split(",").map((s) => s.trim());
       pipeline.push({
-        $match: { 
-          orderStatus: { $in: statusArray }
-        }
+        $match: {
+          orderStatus: { $in: statusArray },
+        },
       });
     }
-    
+
     // Apply Date range filtering only when `search` is NOT present
     if (!search && startDate && endDate && dispatched === "false") {
       const parseDate = (dateStr, isEnd = false) => {
@@ -554,7 +603,9 @@ const getOne = (Model, modelName, popOptions) =>
             parsedStartDay: {
               $toDate: {
                 $dateFromString: {
-                  dateString: { $arrayElemAt: ["$bookingSlotDetails.startDay", 0] },
+                  dateString: {
+                    $arrayElemAt: ["$bookingSlotDetails.startDay", 0],
+                  },
                   format: "%d-%m-%Y",
                 },
               },
@@ -562,7 +613,9 @@ const getOne = (Model, modelName, popOptions) =>
             parsedEndDay: {
               $toDate: {
                 $dateFromString: {
-                  dateString: { $arrayElemAt: ["$bookingSlotDetails.endDay", 0] },
+                  dateString: {
+                    $arrayElemAt: ["$bookingSlotDetails.endDay", 0],
+                  },
                   format: "%d-%m-%Y",
                 },
               },
@@ -678,8 +731,7 @@ const getOne = (Model, modelName, popOptions) =>
           numberOfPlants: 1,
           orderId: 1,
           rate: 1,
-          farmReadyDate: 1  // Added farmReadyDate field
-
+          farmReadyDate: 1, // Added farmReadyDate field
         },
       },
       { $sort: { [sortKey]: order } },
@@ -705,8 +757,6 @@ const getOne = (Model, modelName, popOptions) =>
 
     return res.status(200).json(response);
   });
-
-
 
 const getCMS = (Model) =>
   catchAsync(async (req, res, next) => {
@@ -771,9 +821,9 @@ const isPhoneNumberExists = (Model, modelName) =>
 const isDisabled = (Model, modelName) =>
   catchAsync(async (req, _, next) => {
     const { phoneNumber } = req.body;
-console.log(phoneNumber)
+    console.log(phoneNumber);
     const data = await Model.findOne({ phoneNumber });
-console.log(data)
+    console.log(data);
     if (data.isDisabled) {
       throw new AppError(`Your access to this app is disabled`, 409);
     }

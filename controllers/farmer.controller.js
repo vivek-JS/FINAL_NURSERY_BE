@@ -7,7 +7,7 @@ const updateFarmer = updateOne(Farmer, "Farmer");
 const deleteFarmer = deleteOne(Farmer, "Farmer");
 
 const findFarmer = catchAsync(async (req, res, next) => {
-  const {mobileNumber } = req.params;
+  const { mobileNumber } = req.params;
   const farmer = await Farmer.findOne({ mobileNumber });
 
   if (farmer) {

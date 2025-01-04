@@ -1,5 +1,5 @@
 import PlantCms from "../models/plantCms.model.js";
-import PlantSlot from "../models/slots.model.js"
+import PlantSlot from "../models/slots.model.js";
 // Helper function to generate slots for a year
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 
@@ -24,7 +24,9 @@ export const createSlotsForYear = async (year) => {
       await plantSlot.save();
     }
 
-    console.log(`Slots created successfully for the year ${year} for all plants and subtypes.`);
+    console.log(
+      `Slots created successfully for the year ${year} for all plants and subtypes.`
+    );
   } catch (error) {
     console.error("Error creating slots:", error);
   }
@@ -62,8 +64,14 @@ export const generateSlotsForYear = (year, slotSize = 5) => {
       const endDay = Math.min(startDay + slotSize - 1, daysInMonth);
 
       // Convert startDay and endDay to `dd-mm-yyyy` format
-      const startDate = moment(`${year}-${monthIndex + 1}-${startDay}`, "YYYY-M-D").format("DD-MM-YYYY");
-      const endDate = moment(`${year}-${monthIndex + 1}-${endDay}`, "YYYY-M-D").format("DD-MM-YYYY");
+      const startDate = moment(
+        `${year}-${monthIndex + 1}-${startDay}`,
+        "YYYY-M-D"
+      ).format("DD-MM-YYYY");
+      const endDate = moment(
+        `${year}-${monthIndex + 1}-${endDay}`,
+        "YYYY-M-D"
+      ).format("DD-MM-YYYY");
 
       slots.push({
         startDay: startDate, // Formatted date
@@ -94,31 +102,29 @@ export const getAllSlots = async (req, res) => {
     const query = {};
     if (plantId) query.plantId = plantId;
     if (year) query.year = Number(year);
-    if (subtypeId) query['subtypeSlots.subtypeId'] = subtypeId;
+    if (subtypeId) query["subtypeSlots.subtypeId"] = subtypeId;
 
     // Fetch slots with optimized query
     const slots = await PlantSlot.find(query)
       .populate({
-        path: 'plantId',
-        select: 'name', // Populate only the plant name
+        path: "plantId",
+        select: "name", // Populate only the plant name
       })
-      .select('year plantId subtypeSlots') // Fetch only necessary fields
+      .select("year plantId subtypeSlots") // Fetch only necessary fields
       .lean() // Use lean queries for faster performance
       .skip((pageNumber - 1) * pageSize) // Pagination
       .limit(pageSize);
 
     if (!slots.length) {
-      return res.status(404).json({ message: 'No slots found.' });
+      return res.status(404).json({ message: "No slots found." });
     }
 
     res.status(200).json(slots);
   } catch (error) {
-    console.error('Error fetching slots:', error);
-    res.status(500).json({ message: 'Internal server error.', error });
+    console.error("Error fetching slots:", error);
+    res.status(500).json({ message: "Internal server error.", error });
   }
 };
-
-
 
 export const getPlantNames = async (req, res) => {
   try {
@@ -254,7 +260,9 @@ export const getSubtypesByPlant = async (req, res) => {
     ]);
 
     if (stats.length === 0) {
-      return res.status(404).json({ message: "No slots found for the specified plant and year." });
+      return res
+        .status(404)
+        .json({ message: "No slots found for the specified plant and year." });
     }
 
     // Calculate the overall totals for all subtypes
@@ -280,10 +288,16 @@ export const getSubtypesByPlant = async (req, res) => {
   }
 };
 
-
 export const getSlotsByPlantAndSubtype = async (req, res) => {
   try {
-    const { plantId, subtypeId, year, status, page = 1, limit = 10 } = req.query;
+    const {
+      plantId,
+      subtypeId,
+      year,
+      status,
+      page = 1,
+      limit = 10,
+    } = req.query;
 
     // Validate and convert inputs
     const query = {};
@@ -294,7 +308,8 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
     const pageSize = Number(limit);
 
     // Subtype and slot status filters
-    const slotStatusFilter = status !== undefined ? { "slots.status": status === "true" } : {};
+    const slotStatusFilter =
+      status !== undefined ? { "slots.status": status === "true" } : {};
 
     const results = await PlantSlot.aggregate([
       { $match: query }, // Match plantId and year
@@ -310,7 +325,12 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
               cond: {
                 $and: [
                   subtypeId
-                    ? { $eq: ["$$subtypeSlot.subtypeId", new mongoose.Types.ObjectId(subtypeId)] }
+                    ? {
+                        $eq: [
+                          "$$subtypeSlot.subtypeId",
+                          new mongoose.Types.ObjectId(subtypeId),
+                        ],
+                      }
                     : {},
                   { $ne: ["$$subtypeSlot", null] },
                 ],
@@ -332,7 +352,12 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
               cond: {
                 $and: [
                   slotStatusFilter["slots.status"]
-                    ? { $eq: ["$$slot.status", slotStatusFilter["slots.status"]] }
+                    ? {
+                        $eq: [
+                          "$$slot.status",
+                          slotStatusFilter["slots.status"],
+                        ],
+                      }
                     : {},
                   { $ne: ["$$slot", null] },
                 ],
@@ -386,8 +411,18 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
 
     // Define months for the summary
     const months = [
-      "January", "February", "March", "April", "May", "June", "July", "August",
-      "September", "October", "November", "December",
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
     ];
 
     // Build the month-wise summary with default values
@@ -418,23 +453,20 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
     }));
 
     if (!slots.length) {
-      return res.status(404).json({ message: "No slots found for the given plant, subtype, and year." });
+      return res.status(404).json({
+        message: "No slots found for the given plant, subtype, and year.",
+      });
     }
 
     // Return the filtered slots and the month-wise summary
     res.status(200).json({ monthwiseSummary, slots });
   } catch (error) {
     console.error("Error fetching slots:", error.message);
-    res.status(500).json({ message: "Internal server error.", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Internal server error.", error: error.message });
   }
 };
-
-
-
-
-
-
-
 
 export const updateSlotFieldById = async (req, res) => {
   try {
@@ -473,7 +505,8 @@ export const updateSlotFieldById = async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating slot:", error);
-    res.status(500).json({ message: "Internal server error.", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Internal server error.", error: error.message });
   }
 };
-

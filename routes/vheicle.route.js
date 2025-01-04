@@ -6,7 +6,7 @@ import {
   updateVehicle,
   deleteVehicle,
   bulkUpdateVehicles,
-  getActiveVehicles
+  getActiveVehicles,
 } from "../controllers/vheicle.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -27,7 +27,7 @@ router
             throw new Error("Invalid vehicle number format");
           }
           return true;
-        })
+        }),
     ],
     checkErrors,
     createVehicle
@@ -51,20 +51,14 @@ router
   )
   .get(
     "/:id",
-    [
-      check("id")
-        .isMongoId()
-        .withMessage("Invalid vehicle id format")
-    ],
+    [check("id").isMongoId().withMessage("Invalid vehicle id format")],
     checkErrors,
     getVehicleById
   )
   .patch(
     "/update/:id",
     [
-      check("id")
-        .isMongoId()
-        .withMessage("Invalid vehicle id format"),
+      check("id").isMongoId().withMessage("Invalid vehicle id format"),
       check("name")
         .optional()
         .notEmpty()
@@ -82,18 +76,14 @@ router
       check("isActive")
         .optional()
         .isBoolean()
-        .withMessage("isActive must be a boolean value")
+        .withMessage("isActive must be a boolean value"),
     ],
     checkErrors,
     updateVehicle
   )
   .delete(
     "/:id",
-    [
-      check("id")
-        .isMongoId()
-        .withMessage("Invalid vehicle id format")
-    ],
+    [check("id").isMongoId().withMessage("Invalid vehicle id format")],
     checkErrors,
     deleteVehicle
   );

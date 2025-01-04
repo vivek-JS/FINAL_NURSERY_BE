@@ -4,7 +4,7 @@ import {
   updateDispatch,
   getDispatches,
   getDispatch,
-  removeTransport
+  removeTransport,
 } from "../controllers/dispatch.controller.js";
 
 const router = express.Router();

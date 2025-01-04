@@ -5,7 +5,7 @@ import {
   createShade,
   getAllShades,
   updateShade,
-  toggleShadeStatus
+  toggleShadeStatus,
 } from "../controllers/shades.controller.js";
 import mongoose from "mongoose";
 
@@ -16,9 +16,7 @@ router
     "/create",
     [
       check("name").notEmpty().withMessage("Shade name is required"),
-      check("number")
-        .notEmpty()
-        .withMessage("Shade number is required")
+      check("number").notEmpty().withMessage("Shade number is required"),
     ],
     checkErrors,
     createShade
@@ -35,7 +33,7 @@ router
             throw new Error("Invalid ID format");
           }
           return true;
-        })
+        }),
     ],
     checkErrors,
     updateShade
@@ -54,7 +52,7 @@ router
         }),
       check("isActive")
         .isBoolean()
-        .withMessage("isActive must be a boolean value")
+        .withMessage("isActive must be a boolean value"),
     ],
     checkErrors,
     toggleShadeStatus

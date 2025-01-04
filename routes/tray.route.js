@@ -6,7 +6,7 @@ import {
   createTray,
   getAllTrays,
   updateTray,
-  toggleTrayStatus
+  toggleTrayStatus,
 } from "../controllers/tray.controller.js";
 
 const router = express.Router();
@@ -24,9 +24,12 @@ router
     [
       check("name").notEmpty().withMessage("Tray name is required"),
       check("cavity")
-        .notEmpty().withMessage("Cavity is required")
-        .isNumeric().withMessage("Cavity must be a number")
-        .isInt({ min: 1 }).withMessage("Cavity must be at least 1")
+        .notEmpty()
+        .withMessage("Cavity is required")
+        .isNumeric()
+        .withMessage("Cavity must be a number")
+        .isInt({ min: 1 })
+        .withMessage("Cavity must be at least 1"),
     ],
     checkErrors,
     createTray
@@ -36,15 +39,16 @@ router
     "/update",
     [
       check("id")
-        .exists().withMessage("ID is required")
+        .exists()
+        .withMessage("ID is required")
         .custom(validateObjectId),
-      check("name")
-        .optional()
-        .notEmpty().withMessage("Name cannot be empty"),
+      check("name").optional().notEmpty().withMessage("Name cannot be empty"),
       check("cavity")
         .optional()
-        .isNumeric().withMessage("Cavity must be a number")
-        .isInt({ min: 1 }).withMessage("Cavity must be at least 1")
+        .isNumeric()
+        .withMessage("Cavity must be a number")
+        .isInt({ min: 1 })
+        .withMessage("Cavity must be at least 1"),
     ],
     checkErrors,
     updateTray
@@ -53,10 +57,12 @@ router
     "/toggle-status",
     [
       check("id")
-        .exists().withMessage("ID is required")
+        .exists()
+        .withMessage("ID is required")
         .custom(validateObjectId),
       check("isActive")
-        .isBoolean().withMessage("isActive must be a boolean value")
+        .isBoolean()
+        .withMessage("isActive must be a boolean value"),
     ],
     checkErrors,
     toggleTrayStatus

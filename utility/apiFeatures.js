@@ -61,7 +61,6 @@ class APIFeatures {
 
 export default APIFeatures;
 
-
 // class APIFeatures {
 //   constructor(query, queryString, modelName) {
 //     this.query = query;
@@ -76,7 +75,6 @@ export default APIFeatures;
 //     const excludedFields = ["page", "sort", "limit", "fields"];
 //     excludedFields.forEach((el) => delete queryObj[el]);
 
-
 //     if (this.modelName === "Order" && queryObj["farmer.mobileNumber"]) {
 //       this.isAggregation = true;
 //       const mobileNumber = queryObj["farmer.mobileNumber"];
@@ -84,7 +82,7 @@ export default APIFeatures;
 //       // this.pipeline.push(
 //       //   {
 //       //     $lookup: {
-//       //       from: "farmers", 
+//       //       from: "farmers",
 //       //       localField: "farmer",
 //       //       foreignField: "_id",
 //       //       as: "result",
@@ -120,7 +118,6 @@ export default APIFeatures;
 //       //     },
 //       //   }
 //       // );
-
 
 //       delete queryObj["farmer.mobileNumber"];
 //     } else {
