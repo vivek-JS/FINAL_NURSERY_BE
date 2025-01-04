@@ -17,7 +17,7 @@ server.use(cookieParser());
 server.use(mongoSanitize());
 server.use(xss());
 server.use(helmet());
-server.use(IPWhiteListing);
+//server.use(IPWhiteListing);
 server.use(parameterWhiteListing);
 server.use("/api", limiter);
 
