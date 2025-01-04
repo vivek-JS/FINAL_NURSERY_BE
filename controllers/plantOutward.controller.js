@@ -128,6 +128,7 @@ const getPlantOutwardByBatchId = catchAsync(async (req, res, next) => {
    
 const addPrimaryInward = catchAsync(async (req, res, next) => {
   const { batchId, primaryInwardData } = req.body;
+  console.log(primaryInwardData)
 
   // Calculate total quantity before saving
   primaryInwardData.totalQuantity = primaryInwardData.cavity * primaryInwardData.numberOfTrays;
