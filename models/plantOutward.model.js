@@ -1,4 +1,6 @@
 import { Schema, model } from "mongoose";
+import mongoose from 'mongoose';
+import Batch from './batch.model.js';
 
 // Lab Schema for outward entries
 const labSchema = new Schema({
@@ -29,16 +31,13 @@ const labSchema = new Schema({
 });
 
 // Primary Inward Schema
-// Primary Inward Schema
 const primaryInwardSchema = new Schema({
   primaryInwardDate: {
     type: Date,
     required: true
   },
-  primaryOutwardExpectedDate: {   // Added new field
-    type: Date,
-    //    required: true
-
+  primaryOutwardExpectedDate: {
+    type: Date
   },
   numberOfBottles: {
     type: Number,
@@ -76,16 +75,24 @@ const primaryInwardSchema = new Schema({
   }
 });
 
-// Summary Schema
+// Summary Schema updated with available plants
 const summarySchema = new Schema({
   R1: {
     totalBottles: { 
       type: Number, 
       default: 0 
     },
+    availableBottles: {
+      type: Number,
+      default: 0
+    },
     totalPlants: { 
       type: Number, 
       default: 0 
+    },
+    availablePlants: {  // Added new field
+      type: Number,
+      default: 0
     },
     primaryInwardBottles: { 
       type: Number, 
@@ -101,9 +108,17 @@ const summarySchema = new Schema({
       type: Number, 
       default: 0 
     },
+    availableBottles: {
+      type: Number,
+      default: 0
+    },
     totalPlants: { 
       type: Number, 
       default: 0 
+    },
+    availablePlants: {  // Added new field
+      type: Number,
+      default: 0
     },
     primaryInwardBottles: { 
       type: Number, 
@@ -119,9 +134,17 @@ const summarySchema = new Schema({
       type: Number, 
       default: 0 
     },
+    availableBottles: {
+      type: Number,
+      default: 0
+    },
     totalPlants: { 
       type: Number, 
       default: 0 
+    },
+    availablePlants: {  // Added new field
+      type: Number,
+      default: 0
     },
     primaryInwardBottles: { 
       type: Number, 
@@ -137,9 +160,17 @@ const summarySchema = new Schema({
       type: Number, 
       default: 0 
     },
+    availableBottles: {
+      type: Number,
+      default: 0
+    },
     plants: { 
       type: Number, 
       default: 0 
+    },
+    availablePlants: {  // Added new field
+      type: Number,
+      default: 0
     },
     primaryInwardBottles: { 
       type: Number, 
@@ -169,10 +200,10 @@ const plantOutwardSchema = new Schema({
   summary: {
     type: summarySchema,
     default: () => ({
-      R1: { totalBottles: 0, totalPlants: 0, primaryInwardBottles: 0, primaryInwardPlants: 0 },
-      R2: { totalBottles: 0, totalPlants: 0, primaryInwardBottles: 0, primaryInwardPlants: 0 },
-      R3: { totalBottles: 0, totalPlants: 0, primaryInwardBottles: 0, primaryInwardPlants: 0 },
-      total: { bottles: 0, plants: 0, primaryInwardBottles: 0, primaryInwardPlants: 0 }
+      R1: { totalBottles: 0, availableBottles: 0, totalPlants: 0, availablePlants: 0, primaryInwardBottles: 0, primaryInwardPlants: 0 },
+      R2: { totalBottles: 0, availableBottles: 0, totalPlants: 0, availablePlants: 0, primaryInwardBottles: 0, primaryInwardPlants: 0 },
+      R3: { totalBottles: 0, availableBottles: 0, totalPlants: 0, availablePlants: 0, primaryInwardBottles: 0, primaryInwardPlants: 0 },
+      total: { bottles: 0, availableBottles: 0, plants: 0, availablePlants: 0, primaryInwardBottles: 0, primaryInwardPlants: 0 }
     })
   },
   isActive: {
@@ -187,15 +218,21 @@ const plantOutwardSchema = new Schema({
 function calculateOutwardSummary(outwardArray) {
   return outwardArray.reduce((summary, lab) => {
     summary[lab.size].totalBottles += lab.bottles;
+    summary[lab.size].availableBottles += lab.bottles;
     summary[lab.size].totalPlants += lab.plants;
+    summary[lab.size].availablePlants += lab.plants;  // Initialize available plants
+    
     summary.total.bottles += lab.bottles;
+    summary.total.availableBottles += lab.bottles;
     summary.total.plants += lab.plants;
+    summary.total.availablePlants += lab.plants;  // Initialize available plants
+    
     return summary;
   }, {
-    R1: { totalBottles: 0, totalPlants: 0 },
-    R2: { totalBottles: 0, totalPlants: 0 },
-    R3: { totalBottles: 0, totalPlants: 0 },
-    total: { bottles: 0, plants: 0 }
+    R1: { totalBottles: 0, availableBottles: 0, totalPlants: 0, availablePlants: 0 },
+    R2: { totalBottles: 0, availableBottles: 0, totalPlants: 0, availablePlants: 0 },
+    R3: { totalBottles: 0, availableBottles: 0, totalPlants: 0, availablePlants: 0 },
+    total: { bottles: 0, availableBottles: 0, plants: 0, availablePlants: 0 }
   });
 }
 
@@ -203,16 +240,25 @@ function calculateOutwardSummary(outwardArray) {
 function calculatePrimaryInwardSummary(primaryInwardArray) {
   return primaryInwardArray.reduce((summary, item) => {
     const totalPlants = item.cavity * item.numberOfTrays;
+    
+    // Add to primary inward counts
     summary[item.size].primaryInwardBottles += item.numberOfBottles;
     summary[item.size].primaryInwardPlants += totalPlants;
+    summary[item.size].availableBottles -= item.numberOfBottles;
+    summary[item.size].availablePlants -= totalPlants;  // Decrease available plants
+    
+    // Update totals
     summary.total.primaryInwardBottles += item.numberOfBottles;
     summary.total.primaryInwardPlants += totalPlants;
+    summary.total.availableBottles -= item.numberOfBottles;
+    summary.total.availablePlants -= totalPlants;  // Decrease available plants
+    
     return summary;
   }, {
-    R1: { primaryInwardBottles: 0, primaryInwardPlants: 0 },
-    R2: { primaryInwardBottles: 0, primaryInwardPlants: 0 },
-    R3: { primaryInwardBottles: 0, primaryInwardPlants: 0 },
-    total: { primaryInwardBottles: 0, primaryInwardPlants: 0 }
+    R1: { primaryInwardBottles: 0, primaryInwardPlants: 0, availableBottles: 0, availablePlants: 0 },
+    R2: { primaryInwardBottles: 0, primaryInwardPlants: 0, availableBottles: 0, availablePlants: 0 },
+    R3: { primaryInwardBottles: 0, primaryInwardPlants: 0, availableBottles: 0, availablePlants: 0 },
+    total: { primaryInwardBottles: 0, primaryInwardPlants: 0, availableBottles: 0, availablePlants: 0 }
   });
 }
 
@@ -222,11 +268,21 @@ function combineSummaries(outwardSummary, primaryInwardSummary) {
   const combined = {};
   
   sizes.forEach(size => {
+    const totalBottles = outwardSummary[size].totalBottles || 0;
+    const totalPlants = outwardSummary[size].totalPlants || 0;
+    const primaryInwardBottles = primaryInwardSummary[size].primaryInwardBottles || 0;
+    const primaryInwardPlants = primaryInwardSummary[size].primaryInwardPlants || 0;
+    
+    const availableBottles = Math.max(0, totalBottles - primaryInwardBottles);
+    const availablePlants = Math.max(0, totalPlants - primaryInwardPlants);
+    
     combined[size] = {
-      totalBottles: outwardSummary[size].totalBottles || 0,
-      totalPlants: outwardSummary[size].totalPlants || 0,
-      primaryInwardBottles: primaryInwardSummary[size].primaryInwardBottles || 0,
-      primaryInwardPlants: primaryInwardSummary[size].primaryInwardPlants || 0
+      totalBottles: totalBottles,
+      availableBottles: availableBottles,
+      totalPlants: totalPlants,
+      availablePlants: availablePlants,
+      primaryInwardBottles: primaryInwardBottles,
+      primaryInwardPlants: primaryInwardPlants
     };
   });
   
@@ -243,15 +299,6 @@ plantOutwardSchema.pre('save', function(next) {
   next();
 });
 
-// Pre-findOneAndUpdate middleware
-// Pre-findOneAndUpdate middleware
-// Pre-findOneAndUpdate middleware
-import mongoose from 'mongoose';
-import Batch from './batch.model.js';  // Adjust the path according to your file structure
-
-// ... rest of the schema definitions ...
-
-// Pre-findOneAndUpdate middleware
 // Pre-findOneAndUpdate middleware
 plantOutwardSchema.pre('findOneAndUpdate', async function(next) {
   try {
@@ -277,71 +324,57 @@ plantOutwardSchema.pre('findOneAndUpdate', async function(next) {
       newOutward = update.$set.outward;
     }
 
-    // Handle primaryInward updates
+    // Handle primaryInward updates with validation
     if (update.$push?.primaryInward) {
       const newInward = { ...update.$push.primaryInward };
+      const size = newInward.size;
+      const requiredPlants = newInward.cavity * newInward.numberOfTrays;
+      
+      // Calculate current available resources
+      const outwardSummary = calculateOutwardSummary(newOutward);
+      const currentPrimaryInwardSummary = calculatePrimaryInwardSummary(newPrimaryInward);
+      const currentSummary = combineSummaries(outwardSummary, currentPrimaryInwardSummary);
+      
+      // Check if enough resources are available
+      if (newInward.numberOfBottles > currentSummary[size].availableBottles) {
+        throw new Error(`Not enough available bottles of size ${size}. Required: ${newInward.numberOfBottles}, Available: ${currentSummary[size].availableBottles}`);
+      }
+      
+      if (requiredPlants > currentSummary[size].availablePlants) {
+        throw new Error(`Not enough available plants of size ${size}. Required: ${requiredPlants}, Available: ${currentSummary[size].availablePlants}`);
+      }
+
+      // Set expected date
       const primaryInwardDate = new Date(newInward.primaryInwardDate);
       newInward.primaryOutwardExpectedDate = new Date(primaryInwardDate);
       newInward.primaryOutwardExpectedDate.setDate(
         primaryInwardDate.getDate() + batch.primaryPlantReadyDays
       );
       
-      // Instead of modifying newPrimaryInward, we'll keep the $push operation
       update.$push.primaryInward = newInward;
+      newPrimaryInward.push(newInward);
     } else if (update.$pull?.primaryInward) {
-      // Keep the $pull operation as is
       newPrimaryInward = newPrimaryInward.filter(item => !item._id.equals(update.$pull.primaryInward._id));
-    } else if (update.$set?.['primaryInward.$']) {
-      const updatedInward = { ...update.$set['primaryInward.$'] };
-      const primaryInwardDate = new Date(updatedInward.primaryInwardDate);
-      updatedInward.primaryOutwardExpectedDate = new Date(primaryInwardDate);
-      updatedInward.primaryOutwardExpectedDate.setDate(
-        primaryInwardDate.getDate() + batch.primaryPlantReadyDays
-      );
-
-      update.$set['primaryInward.$'] = updatedInward;
     } else if (update.$set?.primaryInward) {
-      // For complete array replacement
       const updatedPrimaryInward = update.$set.primaryInward.map(inward => {
         const primaryInwardDate = new Date(inward.primaryInwardDate);
         const expectedDate = new Date(primaryInwardDate);
         expectedDate.setDate(primaryInwardDate.getDate() + batch.primaryPlantReadyDays);
-        
         return {
           ...inward,
           primaryOutwardExpectedDate: expectedDate
         };
       });
-      
       update.$set.primaryInward = updatedPrimaryInward;
+      newPrimaryInward = updatedPrimaryInward;
     }
 
-    // Handle bulk updates of primaryInward array elements
-    if (update.$set) {
-      for (const key in update.$set) {
-        if (key.startsWith('primaryInward.') && key.includes('.primaryInwardDate')) {
-          const index = parseInt(key.split('.')[1]);
-          if (!isNaN(index)) {
-            const primaryInwardDate = new Date(update.$set[key]);
-            const expectedDate = new Date(primaryInwardDate);
-            expectedDate.setDate(primaryInwardDate.getDate() + batch.primaryPlantReadyDays);
-            
-            const expectedDateKey = `primaryInward.${index}.primaryOutwardExpectedDate`;
-            update.$set[expectedDateKey] = expectedDate;
-          }
-        }
-      }
-    }
-
-    // Calculate new summary using the updated arrays
-    if (update.$push?.primaryInward) {
-      newPrimaryInward.push(update.$push.primaryInward);
-    }
+    // Calculate new summary
     const outwardSummary = calculateOutwardSummary(newOutward);
     const primaryInwardSummary = calculatePrimaryInwardSummary(newPrimaryInward);
     const newSummary = combineSummaries(outwardSummary, primaryInwardSummary);
 
-    // Only update the summary
+    // Update the summary
     this.setUpdate({
       ...update,
       $set: {
@@ -355,6 +388,7 @@ plantOutwardSchema.pre('findOneAndUpdate', async function(next) {
     next(error);
   }
 });
+
 // Static method for safe updates with transactions
 plantOutwardSchema.statics.updateWithTransaction = async function(filter, update, options = {}) {
   const session = await this.db.startSession();
@@ -381,9 +415,6 @@ plantOutwardSchema.statics.updateWithTransaction = async function(filter, update
     session.endSession();
   }
 };
-
-
-
 
 // Create the model
 const PlantOutward = model("PlantOutward", plantOutwardSchema);
