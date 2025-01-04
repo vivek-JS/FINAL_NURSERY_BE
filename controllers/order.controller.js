@@ -5,9 +5,7 @@ import {
   getAll,
   createOne,
   updateOne,
-  updateOneAndPushElement,
 } from "./factory.controller.js";
-import generateResponse from "../utility/responseFormat.js";
 
 const getOrdersBySlot = catchAsync(async (req, res, next) => {
   const { slotId } = req.params; // Extract the slotId from the request parameters

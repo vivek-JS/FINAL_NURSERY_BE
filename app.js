@@ -48,6 +48,7 @@ import backupRoute from "./routes/backup.route.js";
 import batchRoute from "./routes/batch.route.js"
 import plantOutward from "./routes/plantOutward.route.js"
 import PollyHouse from "./routes/pollyhouse.route.js";
+import DelaerRoutes from "./routes/dealer.route.js";
 
 // dummy route
 server.get("/api/dummyData", (req, res) => {
@@ -82,6 +83,7 @@ server.use("/api/v1/msg", msgRoute)
 server.use("/api/v1/batch", batchRoute);
 server.use("/api/v1/laboutward", plantOutward);
 server.use("/api/v1/pollyhouse", PollyHouse);
+server.use("/api/v1/dealer", DelaerRoutes);
 
 
 
