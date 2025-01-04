@@ -5,6 +5,7 @@ import {
   getDispatches,
   getDispatch,
   removeTransport,
+  handleDispatchReturns
 } from "../controllers/dispatch.controller.js";
 
 const router = express.Router();
@@ -23,5 +24,6 @@ router.post("/", createDispatch);
 // PATCH update dispatch
 router.patch("/:id", updateDispatch);
 router.delete("/transport/:transportId", removeTransport);
+router.patch('/complete/:id', handleDispatchReturns);
 
 export default router;

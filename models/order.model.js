@@ -108,6 +108,17 @@ const orderSchema = new Schema(
     farmReadyDate: {
       type: Date,
     },
+    farmReadyDate:{
+      type: Date
+    },
+    returnedPlants: {
+      type: Number,
+      default: 0  // Default to 0 returned plants
+    },
+    returnReason: {
+      type: String,
+      // Only required if there are returned plants
+    },
   },
   { timestamps: true }
 );

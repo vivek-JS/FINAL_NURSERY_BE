@@ -18,7 +18,8 @@ const userSchema = new Schema({
   },
   jobTitle: {
     type: String,
-    enum: ["Manager", "HR", "SALES", "PRIMARY", "OFFICE_STAFF", "DRIVER"],
+    enum: ["Manager", "HR", "SALES", "PRIMARY","OFFICE_STAFF",'DRIVER','LABORATORY_MANAGER'],
+
   },
 
   isDisabled: {
