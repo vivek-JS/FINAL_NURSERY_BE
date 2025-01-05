@@ -510,3 +510,203 @@ export const updateSlotFieldById = async (req, res) => {
       .json({ message: "Internal server error.", error: error.message });
   }
 };
+// Controller function to get plant statistics
+// Controller function to get plant statistics summary
+export const getPlantStats = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    // Validate date format (dd-mm-yyyy)
+    const dateFormatRegex = /^\d{2}-\d{2}-\d{4}$/;
+    if (!dateFormatRegex.test(startDate) || !dateFormatRegex.test(endDate)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date format. Use dd-mm-yyyy",
+      });
+    }
+
+    // Debug log to check the first few documents
+    const sampleDocs = await PlantSlot.find().limit(1).lean();
+    console.log('Sample PlantSlot document:', JSON.stringify(sampleDocs, null, 2));
+
+    const stats = await PlantSlot.aggregate([
+      {
+        $unwind: "$subtypeSlots"
+      },
+      {
+        $unwind: "$subtypeSlots.slots"
+      },
+      {
+        $match: {
+          "subtypeSlots.slots.startDay": { $gte: startDate },
+          "subtypeSlots.slots.endDay": { $lte: endDate }
+        }
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plant"
+        }
+      },
+      {
+        $lookup: {
+          from: "plantsubtypeschemas", // Correct collection name based on schema name
+          localField: "subtypeSlots.subtypeId",
+          foreignField: "_id",
+          as: "subtype"
+        }
+      },
+      {
+        $addFields: {
+          subtypeName: {
+            $ifNull: [
+              { $first: { $arrayElemAt: ["$subtype.name", 0] } },
+              "Unknown Subtype"
+            ]
+          }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            plantId: "$plantId",
+            subtypeId: "$subtypeSlots.subtypeId",
+            month: "$subtypeSlots.slots.month"
+          },
+          plantName: { $first: { $arrayElemAt: ["$plant.name", 0] } },
+          subtypeName: { $first: "$subtypeName" },
+          totalPlants: { $sum: "$subtypeSlots.slots.totalPlants" },
+          totalBookedPlants: { $sum: "$subtypeSlots.slots.totalBookedPlants" }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            plantId: "$_id.plantId",
+            month: "$_id.month"
+          },
+          plantName: { $first: "$plantName" },
+          subtypes: {
+            $push: {
+              name: "$subtypeName",
+              totalPlants: "$totalPlants",
+              totalBookedPlants: "$totalBookedPlants",
+              allPlants: { $add: ["$totalPlants", "$totalBookedPlants"] }
+            }
+          },
+          monthlyTotalPlants: { $sum: "$totalPlants" },
+          monthlyTotalBookedPlants: { $sum: "$totalBookedPlants" }
+        }
+      },
+      {
+        $group: {
+          _id: "$_id.plantId",
+          plantName: { $first: "$plantName" },
+          monthlyData: {
+            $push: {
+              month: "$_id.month",
+              subtypes: "$subtypes",
+              totalPlants: "$monthlyTotalPlants",
+              totalBookedPlants: "$monthlyTotalBookedPlants",
+              allPlants: { $add: ["$monthlyTotalPlants", "$monthlyTotalBookedPlants"] }
+            }
+          },
+          totalPlants: { $sum: "$monthlyTotalPlants" },
+          totalBookedPlants: { $sum: "$monthlyTotalBookedPlants" }
+        }
+      },
+      {
+        $project: {
+          _id: 1,
+          plantName: 1,
+          monthlyData: 1,
+          totalPlants: 1,
+          totalBookedPlants: 1,
+          allPlants: { $add: ["$totalPlants", "$totalBookedPlants"] }
+        }
+      },
+      {
+        $sort: {
+          "plantName": 1
+        }
+      }
+    ]);
+
+    // Calculate grand totals
+    const grandTotals = stats.reduce((acc, plant) => {
+      return {
+        totalPlants: acc.totalPlants + plant.totalPlants,
+        totalBookedPlants: acc.totalBookedPlants + plant.totalBookedPlants,
+        allPlants: acc.allPlants + plant.allPlants
+      };
+    }, { totalPlants: 0, totalBookedPlants: 0, allPlants: 0 });
+
+    // Get unique months across all data for X-axis
+    const allMonths = [...new Set(stats.flatMap(plant => 
+      plant.monthlyData.map(data => data.month)
+    ))].sort((a, b) => {
+      const months = ["January", "February", "March", "April", "May", "June", 
+                     "July", "August", "September", "October", "November", "December"];
+      return months.indexOf(a) - months.indexOf(b);
+    });
+
+    // Format data for charts
+    const chartData = {
+      lineChart: allMonths.map(month => {
+        const monthData = {
+          month,
+          totalPlants: 0,
+          totalBookedPlants: 0,
+          allPlants: 0
+        };
+
+        stats.forEach(plant => {
+          const monthlyData = plant.monthlyData.find(data => data.month === month);
+          if (monthlyData) {
+            monthData.totalPlants += monthlyData.totalPlants;
+            monthData.totalBookedPlants += monthlyData.totalBookedPlants;
+            monthData.allPlants += monthlyData.allPlants;
+          }
+        });
+
+        return monthData;
+      }),
+      barChart: stats.map(plant => ({
+        plantName: plant.plantName,
+        totalPlants: plant.totalPlants,
+        totalBookedPlants: plant.totalBookedPlants,
+        allPlants: plant.allPlants
+      }))
+    };
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        summary: stats,
+        grandTotals,
+        chartData
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in getPlantStats:', error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
+  }
+};
+
+// Example API route setup
+import express from 'express';
+const router = express.Router();
+
+router.get('/plant-stats', getPlantStats);
+
+export default router;
+
+
+// Example API route setup
