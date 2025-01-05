@@ -134,52 +134,73 @@ const updateDispatch = catchAsync(async (req, res, next) => {
 // Get dispatches controller
 const getDispatches = catchAsync(async (req, res, next) => {
   const dispatches = await Dispatch.aggregate([
+    // Filter out deleted documents
+    {
+      $match: { isDeleted: false }
+    },
+    // Initial sort by createdAt
+    {
+      $sort: { createdAt: -1 }
+    },
+    // Convert createdAt to date if not already
+    {
+      $addFields: {
+        createdAt: { $toDate: "$createdAt" }
+      }
+    },
+    // Expand the orderIds array
+    {
+      $unwind: "$orderIds"
+    },
+    // Lookup each order
     {
       $lookup: {
         from: "orders",
         localField: "orderIds",
         foreignField: "_id",
-        as: "orderIds",
-      },
+        as: "orderDetails"
+      }
     },
+    // Unwind the looked up order
     {
-      $unwind: "$orderIds",
+      $unwind: "$orderDetails"
     },
+    // Lookup all related data for the order
     {
       $lookup: {
         from: "farmers",
-        localField: "orderIds.farmer",
+        localField: "orderDetails.farmer",
         foreignField: "_id",
-        as: "orderIds.farmer",
-      },
+        as: "farmerDetails"
+      }
     },
     {
       $lookup: {
         from: "users",
-        localField: "orderIds.salesPerson",
+        localField: "orderDetails.salesPerson",
         foreignField: "_id",
-        as: "orderIds.salesPerson",
-      },
+        as: "salesPersonDetails"
+      }
     },
     {
       $lookup: {
         from: "plantcms",
-        localField: "orderIds.plantName",
+        localField: "orderDetails.plantName",
         foreignField: "_id",
-        as: "orderIds.plantName",
-      },
+        as: "plantDetails"
+      }
     },
     {
       $lookup: {
         from: "plantslots",
-        let: { bookingSlotId: "$orderIds.bookingSlot" },
+        let: { bookingSlotId: "$orderDetails.bookingSlot" },
         pipeline: [
           { $unwind: "$subtypeSlots" },
           { $unwind: "$subtypeSlots.slots" },
           {
             $match: {
-              $expr: { $eq: ["$subtypeSlots.slots._id", "$$bookingSlotId"] },
-            },
+              $expr: { $eq: ["$subtypeSlots.slots._id", "$$bookingSlotId"] }
+            }
           },
           {
             $project: {
@@ -188,13 +209,14 @@ const getDispatches = catchAsync(async (req, res, next) => {
               startDay: "$subtypeSlots.slots.startDay",
               endDay: "$subtypeSlots.slots.endDay",
               subtypeId: "$subtypeSlots.subtypeId",
-              month: "$subtypeSlots.slots.month",
-            },
-          },
+              month: "$subtypeSlots.slots.month"
+            }
+          }
         ],
-        as: "orderIds.bookingSlotDetails",
-      },
+        as: "bookingSlotDetails"
+      }
     },
+    // Group back all the data while preserving original dates
     {
       $group: {
         _id: '$_id',
@@ -205,77 +227,68 @@ const getDispatches = catchAsync(async (req, res, next) => {
         plantsDetails: { $first: '$plantsDetails' },
         returnedPlants: { $first: '$returnedPlants' },
         transportStatus: { $first: '$transportStatus' },
-        createdAt: { 
-          $first: { 
-            $dateToString: { 
-              date: '$createdAt',
-              format: '%Y-%m-%dT%H:%M:%S.%LZ'
-            } 
-          }
-        },
-        updatedAt: { 
-          $first: { 
-            $dateToString: { 
-              date: '$updatedAt',
-              format: '%Y-%m-%dT%H:%M:%S.%LZ'
-            } 
-          }
-        },
+        createdAt: { $first: '$createdAt' }, // Keep as Date object
+        updatedAt: { $first: '$updatedAt' }, // Keep as Date object
         orderIds: { 
           $push: {
-            order: '$orderIds.orderId',
-            quantity: '$orderIds.numberOfPlants',
-            orderDate: {
-              $dateToString: {
-                date: '$orderIds.createdAt',
-                format: '%Y-%m-%dT%H:%M:%S.%LZ'
-              }
-            },
-            rate: '$orderIds.rate',
-            payment: '$orderIds.payment',
-            orderStatus: '$orderIds.orderStatus',
-            returnedPlants: '$orderIds.returnedPlants',
-            returnReason: '$orderIds.returnReason',
+            order: '$orderDetails.orderId',
+            quantity: '$orderDetails.numberOfPlants',
+            orderDate: '$orderDetails.createdAt', // Keep as Date object
+            rate: '$orderDetails.rate',
+            payment: '$orderDetails.payment',
+            orderStatus: '$orderDetails.orderStatus',
+            paymentCompleted: '$orderDetails.paymentCompleted',
+            returnedPlants: '$orderDetails.returnedPlants',
+            returnReason: '$orderDetails.returnReason',
             plantDetails: {
-              name: { $arrayElemAt: ['$orderIds.plantName.name', 0] },
-              variety: { $arrayElemAt: ['$orderIds.plantName.variety', 0] },
-              type: { $arrayElemAt: ['$orderIds.plantName.type', 0] },
-              subtype: { $arrayElemAt: ['$orderIds.plantName.subtype', 0] }
+              name: { $arrayElemAt: ['$plantDetails.name', 0] },
+              variety: { $arrayElemAt: ['$plantDetails.variety', 0] },
+              type: { $arrayElemAt: ['$plantDetails.type', 0] },
+              subtype: { $arrayElemAt: ['$plantDetails.subtype', 0] }
             },
-            farmerName: { $arrayElemAt: ['$orderIds.farmer.name', 0] },
-            contact: { $arrayElemAt: ['$orderIds.farmer.mobileNumber', 0] },
+            farmerName: { $arrayElemAt: ['$farmerDetails.name', 0] },
+            contact: { $arrayElemAt: ['$farmerDetails.mobileNumber', 0] },
             details: {
               farmer: {
-                name: { $arrayElemAt: ['$orderIds.farmer.name', 0] },
-                mobileNumber: { $arrayElemAt: ['$orderIds.farmer.mobileNumber', 0] },
-                village: { $arrayElemAt: ['$orderIds.farmer.village', 0] }
+                name: { $arrayElemAt: ['$farmerDetails.name', 0] },
+                mobileNumber: { $arrayElemAt: ['$farmerDetails.mobileNumber', 0] },
+                village: { $arrayElemAt: ['$farmerDetails.village', 0] }
               },
-              contact: { $arrayElemAt: ['$orderIds.farmer.mobileNumber', 0] },
-              orderNotes: '$orderIds.notes',
-              payment: '$orderIds.payment',
-              orderid: '$orderIds._id',
+              contact: { $arrayElemAt: ['$farmerDetails.mobileNumber', 0] },
+              orderNotes: '$orderDetails.notes',
+              payment: '$orderDetails.payment',
+              orderid: '$orderDetails._id',
               salesPerson: {
-                name: { $arrayElemAt: ['$orderIds.salesPerson.name', 0] },
-                phoneNumber: { $arrayElemAt: ['$orderIds.salesPerson.phoneNumber', 0] }
+                name: { $arrayElemAt: ['$salesPersonDetails.name', 0] },
+                phoneNumber: { $arrayElemAt: ['$salesPersonDetails.phoneNumber', 0] }
               },
               bookingSlot: {
-                startDay: { $arrayElemAt: ['$orderIds.bookingSlotDetails.startDay', 0] },
-                endDay: { $arrayElemAt: ['$orderIds.bookingSlotDetails.endDay', 0] },
-                month: { $arrayElemAt: ['$orderIds.bookingSlotDetails.month', 0] },
-                subtypeId: { $arrayElemAt: ['$orderIds.bookingSlotDetails.subtypeId', 0] },
-                _id: { $arrayElemAt: ['$orderIds.bookingSlotDetails.slotId', 0] }
+                startDay: { $arrayElemAt: ['$bookingSlotDetails.startDay', 0] },
+                endDay: { $arrayElemAt: ['$bookingSlotDetails.endDay', 0] },
+                month: { $arrayElemAt: ['$bookingSlotDetails.month', 0] },
+                subtypeId: { $arrayElemAt: ['$bookingSlotDetails.subtypeId', 0] },
+                _id: { $arrayElemAt: ['$bookingSlotDetails.slotId', 0] }
               }
             }
           }
         }
       }
+    },
+    // Final sort to maintain order after grouping
+    {
+      $sort: { createdAt: -1 }
     }
   ]);
 
+  // Transform the results while maintaining Date objects
   const transformedDispatches = dispatches.map((dispatch) => ({
     ...dispatch,
+    // Format dates for display only at this stage
+    createdAt: dispatch.createdAt.toISOString(),
+    updatedAt: dispatch.updatedAt.toISOString(),
     orderIds: dispatch.orderIds.map(order => ({
       ...order,
+      orderDate: order.orderDate.toISOString(),
       total: `₹ ${order.rate * order.quantity}`,
       "Paid Amt": `₹ ${order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0}`,
       "remaining Amt": `₹ ${(order.rate * order.quantity) - (order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0)}`,
@@ -283,6 +296,13 @@ const getDispatches = catchAsync(async (req, res, next) => {
         `${order.details.bookingSlot.startDay} - ${order.details.bookingSlot.endDay} ${order.details.bookingSlot.month}, ${new Date().getFullYear()}` : ''
     }))
   }));
+
+  // Debug logging
+  console.log("Final sorted dates:", dispatches.map(d => ({
+    id: d._id,
+    createdAt: d.createdAt,
+    name: d.name
+  })));
 
   res
     .status(200)

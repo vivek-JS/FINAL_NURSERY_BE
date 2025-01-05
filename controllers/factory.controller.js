@@ -729,7 +729,9 @@ const getAll = (Model, modelName) =>
           numberOfPlants: 1,
           orderId: 1,
           rate: 1,
-          farmReadyDate: 1, // Added farmReadyDate field
+          farmReadyDate: 1, // Added farmReadyDate field\
+          orderPaymentStatus:1,
+          paymentCompleted:1
         },
       },
       { $sort: { [sortKey]: order } },
