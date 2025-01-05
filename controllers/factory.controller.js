@@ -34,7 +34,7 @@ export const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract
     if (targetSlot.totalPlants < numberOfPlants) {
 
       throw new Error(
-        `Not enough plants available. ${targetSlot.totalPlants <=1000&& `${targetSlot.totalPlants} plants available.`}`
+        `Not enough plants available. ${targetSlot.totalPlants <10000&& `${targetSlot.totalPlants} plants available.`}`
       );
     }
   }

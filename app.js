@@ -19,7 +19,7 @@ server.use(xss());
 server.use(helmet());
 //server.use(IPWhiteListing);
 //server.use(parameterWhiteListing);
-server.use("/api", limiter);
+//server.use("/api", limiter);
 
 // importing routes
 import farmerRoute from "./routes/farmer.route.js";
