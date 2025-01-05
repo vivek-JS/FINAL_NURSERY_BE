@@ -2,6 +2,7 @@ import express from "express";
 import {
   getAllSlots,
   getPlantNames,
+  getPlantStats,
   getSlotsByPlantAndSubtype,
   getSubtypesByPlant,
   updateSlotFieldById,
@@ -13,5 +14,7 @@ slotRouter.get("/slots/get-plants", getPlantNames);
 slotRouter.get("/slots/subtyps", getSubtypesByPlant);
 slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.put("/slots/:slotId", updateSlotFieldById);
+slotRouter.get("/slots/stats", getPlantStats);
+
 
 export default slotRouter;
