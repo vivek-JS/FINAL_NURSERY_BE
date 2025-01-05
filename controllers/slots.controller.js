@@ -180,7 +180,6 @@ export const getPlantNames = async (req, res) => {
 };
 
 import mongoose from "mongoose";
-
 export const getSubtypesByPlant = async (req, res) => {
   try {
     const { plantId, year } = req.query;
@@ -231,7 +230,7 @@ export const getSubtypesByPlant = async (req, res) => {
       },
       {
         $addFields: {
-          subtypeName: {
+          subtypeData: {
             $arrayElemAt: [
               {
                 $filter: {
@@ -249,7 +248,8 @@ export const getSubtypesByPlant = async (req, res) => {
         $project: {
           _id: 0, // Exclude MongoDB default _id
           subtypeId: "$_id", // Include subtypeId
-          subtypeName: "$subtypeName.name", // Extract and include the correct name
+          subtypeName: "$subtypeData.name", // Extract and include the correct name
+          rate: "$subtypeData.rates", // Include the rates array for the subtype
           totalPlants: 1, // Include the sum of totalPlants
           totalBookedPlants: 1, // Include the sum of totalBookedPlants
         },
