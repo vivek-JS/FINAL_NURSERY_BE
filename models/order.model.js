@@ -80,7 +80,6 @@ const orderSchema = new Schema(
       enum: ["PENDING", "COMPLETED"],
       default: "PENDING",
     },
-
     payment: [paymentSchema],
     notes: {
       type: String,
@@ -101,23 +100,18 @@ const orderSchema = new Schema(
       default: "PENDING",
     },
     paymentCompleted: {
-      // New field
       type: Boolean,
-      default: false, // Default to false until explicitly set to true
+      default: false,
     },
     farmReadyDate: {
       type: Date,
     },
-    farmReadyDate:{
-      type: Date
-    },
     returnedPlants: {
       type: Number,
-      default: 0  // Default to 0 returned plants
+      default: 0,
     },
     returnReason: {
       type: String,
-      // Only required if there are returned plants
     },
   },
   { timestamps: true }
@@ -142,12 +136,48 @@ orderSchema.pre("save", async function (next) {
       .findOne()
       .sort({ orderId: -1 })
       .select("orderId");
+    this.orderId = maxOrder ? maxOrder.orderId + 1 : 1;
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// Pre-save middleware to generate unique orderId
+orderSchema.pre("save", async function (next) {
+  if (!this.isNew || this.orderId) return next();
+
+  try {
+    const maxOrder = await this.constructor
+      .findOne()
+      .sort({ orderId: -1 })
+      .select("orderId");
     this.orderId = maxOrder ? maxOrder.orderId + 1 : 1; // Increment the highest orderId or start with 1
     next();
   } catch (err) {
     next(err);
   }
 });
+
+// Pre-save middleware to calculate orderPaymentStatus
+// Pre-save middleware to calculate orderPaymentStatus based on paymentStatus "COLLECTED"
+orderSchema.pre("save", function (next) {
+  // Filter payments with paymentStatus "COLLECTED"
+  const totalCollected = this.payment
+    .filter((p) => p.paymentStatus === "COLLECTED")
+    .reduce((sum, p) => sum + (p.paidAmount || 0), 0);
+
+  const totalAmount = this.rate * this.numberOfPlants;
+
+  // Update orderPaymentStatus and paymentCompleted
+  this.orderPaymentStatus = totalCollected >= totalAmount ? "COMPLETED" : "PENDING";
+  this.paymentCompleted = totalCollected >= totalAmount;
+
+  next();
+});
+
+
 
 const Order = model("Order", orderSchema);
 
