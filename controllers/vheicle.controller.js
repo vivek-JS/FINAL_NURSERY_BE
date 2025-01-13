@@ -105,8 +105,8 @@ const getVehicleById = catchAsync(async (req, res, next) => {
 const updateVehicle = catchAsync(async (req, res, next) => {
   const { id } = req.body;
 
-  console.log("Received ID:", id); // Debug log
-  console.log("ID type:", typeof id); // Check type of id
+  // console.log("Received ID:", id); // Debug log
+  // console.log("ID type:", typeof id); // Check type of id
 
   // First check if id exists
   if (!id) {

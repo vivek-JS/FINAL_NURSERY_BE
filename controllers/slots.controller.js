@@ -24,9 +24,9 @@ export const createSlotsForYear = async (year) => {
       await plantSlot.save();
     }
 
-    console.log(
-      `Slots created successfully for the year ${year} for all plants and subtypes.`
-    );
+    // console.log(
+    //   `Slots created successfully for the year ${year} for all plants and subtypes.`
+    // );
   } catch (error) {
     console.error("Error creating slots:", error);
   }
@@ -527,65 +527,68 @@ export const getPlantStats = async (req, res) => {
 
     // Debug log to check the first few documents
     const sampleDocs = await PlantSlot.find().limit(1).lean();
-    console.log('Sample PlantSlot document:', JSON.stringify(sampleDocs, null, 2));
+    // console.log(
+    //   "Sample PlantSlot document:",
+    //   JSON.stringify(sampleDocs, null, 2)
+    // );
 
     const stats = await PlantSlot.aggregate([
       {
-        $unwind: "$subtypeSlots"
+        $unwind: "$subtypeSlots",
       },
       {
-        $unwind: "$subtypeSlots.slots"
+        $unwind: "$subtypeSlots.slots",
       },
       {
         $match: {
           "subtypeSlots.slots.startDay": { $gte: startDate },
-          "subtypeSlots.slots.endDay": { $lte: endDate }
-        }
+          "subtypeSlots.slots.endDay": { $lte: endDate },
+        },
       },
       {
         $lookup: {
           from: "plantcms",
           localField: "plantId",
           foreignField: "_id",
-          as: "plant"
-        }
+          as: "plant",
+        },
       },
       {
         $lookup: {
           from: "plantsubtypeschemas", // Correct collection name based on schema name
           localField: "subtypeSlots.subtypeId",
           foreignField: "_id",
-          as: "subtype"
-        }
+          as: "subtype",
+        },
       },
       {
         $addFields: {
           subtypeName: {
             $ifNull: [
               { $first: { $arrayElemAt: ["$subtype.name", 0] } },
-              "Unknown Subtype"
-            ]
-          }
-        }
+              "Unknown Subtype",
+            ],
+          },
+        },
       },
       {
         $group: {
           _id: {
             plantId: "$plantId",
             subtypeId: "$subtypeSlots.subtypeId",
-            month: "$subtypeSlots.slots.month"
+            month: "$subtypeSlots.slots.month",
           },
           plantName: { $first: { $arrayElemAt: ["$plant.name", 0] } },
           subtypeName: { $first: "$subtypeName" },
           totalPlants: { $sum: "$subtypeSlots.slots.totalPlants" },
-          totalBookedPlants: { $sum: "$subtypeSlots.slots.totalBookedPlants" }
-        }
+          totalBookedPlants: { $sum: "$subtypeSlots.slots.totalBookedPlants" },
+        },
       },
       {
         $group: {
           _id: {
             plantId: "$_id.plantId",
-            month: "$_id.month"
+            month: "$_id.month",
           },
           plantName: { $first: "$plantName" },
           subtypes: {
@@ -593,12 +596,12 @@ export const getPlantStats = async (req, res) => {
               name: "$subtypeName",
               totalPlants: "$totalPlants",
               totalBookedPlants: "$totalBookedPlants",
-              allPlants: { $add: ["$totalPlants", "$totalBookedPlants"] }
-            }
+              allPlants: { $add: ["$totalPlants", "$totalBookedPlants"] },
+            },
           },
           monthlyTotalPlants: { $sum: "$totalPlants" },
-          monthlyTotalBookedPlants: { $sum: "$totalBookedPlants" }
-        }
+          monthlyTotalBookedPlants: { $sum: "$totalBookedPlants" },
+        },
       },
       {
         $group: {
@@ -610,12 +613,14 @@ export const getPlantStats = async (req, res) => {
               subtypes: "$subtypes",
               totalPlants: "$monthlyTotalPlants",
               totalBookedPlants: "$monthlyTotalBookedPlants",
-              allPlants: { $add: ["$monthlyTotalPlants", "$monthlyTotalBookedPlants"] }
-            }
+              allPlants: {
+                $add: ["$monthlyTotalPlants", "$monthlyTotalBookedPlants"],
+              },
+            },
           },
           totalPlants: { $sum: "$monthlyTotalPlants" },
-          totalBookedPlants: { $sum: "$monthlyTotalBookedPlants" }
-        }
+          totalBookedPlants: { $sum: "$monthlyTotalBookedPlants" },
+        },
       },
       {
         $project: {
@@ -624,46 +629,65 @@ export const getPlantStats = async (req, res) => {
           monthlyData: 1,
           totalPlants: 1,
           totalBookedPlants: 1,
-          allPlants: { $add: ["$totalPlants", "$totalBookedPlants"] }
-        }
+          allPlants: { $add: ["$totalPlants", "$totalBookedPlants"] },
+        },
       },
       {
         $sort: {
-          "plantName": 1
-        }
-      }
+          plantName: 1,
+        },
+      },
     ]);
 
     // Calculate grand totals
-    const grandTotals = stats.reduce((acc, plant) => {
-      return {
-        totalPlants: acc.totalPlants + plant.totalPlants,
-        totalBookedPlants: acc.totalBookedPlants + plant.totalBookedPlants,
-        allPlants: acc.allPlants + plant.allPlants
-      };
-    }, { totalPlants: 0, totalBookedPlants: 0, allPlants: 0 });
+    const grandTotals = stats.reduce(
+      (acc, plant) => {
+        return {
+          totalPlants: acc.totalPlants + plant.totalPlants,
+          totalBookedPlants: acc.totalBookedPlants + plant.totalBookedPlants,
+          allPlants: acc.allPlants + plant.allPlants,
+        };
+      },
+      { totalPlants: 0, totalBookedPlants: 0, allPlants: 0 }
+    );
 
     // Get unique months across all data for X-axis
-    const allMonths = [...new Set(stats.flatMap(plant => 
-      plant.monthlyData.map(data => data.month)
-    ))].sort((a, b) => {
-      const months = ["January", "February", "March", "April", "May", "June", 
-                     "July", "August", "September", "October", "November", "December"];
+    const allMonths = [
+      ...new Set(
+        stats.flatMap((plant) => plant.monthlyData.map((data) => data.month))
+      ),
+    ].sort((a, b) => {
+      const months = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+      ];
       return months.indexOf(a) - months.indexOf(b);
     });
 
     // Format data for charts
     const chartData = {
-      lineChart: allMonths.map(month => {
+      lineChart: allMonths.map((month) => {
         const monthData = {
           month,
           totalPlants: 0,
           totalBookedPlants: 0,
-          allPlants: 0
+          allPlants: 0,
         };
 
-        stats.forEach(plant => {
-          const monthlyData = plant.monthlyData.find(data => data.month === month);
+        stats.forEach((plant) => {
+          const monthlyData = plant.monthlyData.find(
+            (data) => data.month === month
+          );
           if (monthlyData) {
             monthData.totalPlants += monthlyData.totalPlants;
             monthData.totalBookedPlants += monthlyData.totalBookedPlants;
@@ -673,12 +697,12 @@ export const getPlantStats = async (req, res) => {
 
         return monthData;
       }),
-      barChart: stats.map(plant => ({
+      barChart: stats.map((plant) => ({
         plantName: plant.plantName,
         totalPlants: plant.totalPlants,
         totalBookedPlants: plant.totalBookedPlants,
-        allPlants: plant.allPlants
-      }))
+        allPlants: plant.allPlants,
+      })),
     };
 
     return res.status(200).json({
@@ -686,27 +710,25 @@ export const getPlantStats = async (req, res) => {
       data: {
         summary: stats,
         grandTotals,
-        chartData
-      }
+        chartData,
+      },
     });
-
   } catch (error) {
-    console.error('Error in getPlantStats:', error);
+    console.error("Error in getPlantStats:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error",
-      error: error.message
+      error: error.message,
     });
   }
 };
 
 // Example API route setup
-import express from 'express';
+import express from "express";
 const router = express.Router();
 
-router.get('/plant-stats', getPlantStats);
+router.get("/plant-stats", getPlantStats);
 
 export default router;
-
 
 // Example API route setup

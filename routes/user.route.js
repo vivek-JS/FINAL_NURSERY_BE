@@ -7,9 +7,12 @@ import {
   login,
   encryptPassword,
   getUsers,
+  resetPassword,
+  aboutMe,
 } from "../controllers/user.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
+import verifyToken from "../middlewares/verifyToken.middleware.js";
 
 const router = express.Router();
 
@@ -32,6 +35,7 @@ router
     encryptPassword,
     createUser
   )
+  .use(verifyToken)
   .patch(
     "/updateUser",
     [check("id", "Please provide valid userId").isMongoId()],
@@ -45,6 +49,14 @@ router
     checkErrors,
     deleteUser
   )
-  .get("/allusers", getUsers);
+  .get("/allusers", getUsers)
+  .post(
+    "/resetPassword",
+    resetPassword
+  )
+  .get(
+    "/aboutMe",
+    aboutMe
+  );
 
 export default router;

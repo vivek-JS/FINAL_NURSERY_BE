@@ -42,7 +42,8 @@ const dealerOrderSchema = new Schema(
       required: true,
     },
 
-    dealer: {  // Changed from salesPerson to dealer
+    dealer: {
+      // Changed from salesPerson to dealer
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
@@ -61,11 +62,14 @@ const dealerOrderSchema = new Schema(
       ref: "PlantCms.subtypes",
       required: true,
     },
-    bookingSlots: [{  // Changed from single bookingSlot to array of bookingSlots
-      type: Schema.Types.ObjectId,
-      ref: "PlantSlot.subtypeSlots",
-      required: true,
-    }],
+    bookingSlots: [
+      {
+        // Changed from single bookingSlot to array of bookingSlots
+        type: Schema.Types.ObjectId,
+        ref: "PlantSlot.subtypeSlots",
+        required: true,
+      },
+    ],
     rate: {
       type: Number,
       required: true,
@@ -103,7 +107,7 @@ const dealerOrderSchema = new Schema(
     },
     returnedPlants: {
       type: Number,
-      default: 0
+      default: 0,
     },
     returnReason: {
       type: String,
@@ -114,9 +118,9 @@ const dealerOrderSchema = new Schema(
 
 // Indexes
 dealerOrderSchema.index({ farmer: 1 });
-dealerOrderSchema.index({ dealer: 1 });  // Changed from salesPerson to dealer
+dealerOrderSchema.index({ dealer: 1 }); // Changed from salesPerson to dealer
 dealerOrderSchema.index({ plantName: 1 });
-dealerOrderSchema.index({ 'bookingSlots': 1 });  // Updated for array of bookingSlots
+dealerOrderSchema.index({ bookingSlots: 1 }); // Updated for array of bookingSlots
 dealerOrderSchema.index({ orderStatus: 1 });
 dealerOrderSchema.index({ createdAt: 1 });
 dealerOrderSchema.index({ orderPaymentStatus: 1 });

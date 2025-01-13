@@ -7,7 +7,6 @@ import PollyHouse from "../models/pollyhouse.model.js";
 const createPollyHouse = catchAsync(async (req, res, next) => {
   const { name, capacity, location } = req.body;
 
- 
   const existingHouse = await PollyHouse.findOne({ name });
   if (existingHouse) {
     return next(new AppError("PollyHouse with this name already exists", 409));
@@ -16,7 +15,7 @@ const createPollyHouse = catchAsync(async (req, res, next) => {
   const doc = await PollyHouse.create({
     name,
     capacity,
-    location
+    location,
   });
 
   const response = generateResponse(
@@ -38,29 +37,26 @@ const getAllPollyHouses = catchAsync(async (req, res, next) => {
     limit = 10,
     status,
     minCapacity,
-    maxCapacity
+    maxCapacity,
   } = req.query;
 
   let query = PollyHouse.find();
 
   if (search) {
     const searchRegex = new RegExp(search, "i");
-    query = query.or([
-      { name: searchRegex },
-      { location: searchRegex }
-    ]);
+    query = query.or([{ name: searchRegex }, { location: searchRegex }]);
   }
 
   if (status !== undefined) {
-    query = query.where('isActive').equals(status === 'true');
+    query = query.where("isActive").equals(status === "true");
   }
 
   if (minCapacity) {
-    query = query.where('capacity').gte(parseInt(minCapacity));
+    query = query.where("capacity").gte(parseInt(minCapacity));
   }
 
   if (maxCapacity) {
-    query = query.where('capacity').lte(parseInt(maxCapacity));
+    query = query.where("capacity").lte(parseInt(maxCapacity));
   }
 
   const sort = {};
@@ -72,10 +68,10 @@ const getAllPollyHouses = catchAsync(async (req, res, next) => {
 
   const [houses, total] = await Promise.all([
     query.exec(),
-    PollyHouse.countDocuments(query.getFilter())
+    PollyHouse.countDocuments(query.getFilter()),
   ]);
 
-  const transformedHouses = houses.map(house => {
+  const transformedHouses = houses.map((house) => {
     const { _id, ...rest } = house.toObject();
     return { id: _id, _id, ...rest };
   });
@@ -89,8 +85,8 @@ const getAllPollyHouses = catchAsync(async (req, res, next) => {
         total,
         page: parseInt(page),
         limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit))
-      }
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     },
     undefined
   );
@@ -105,8 +101,6 @@ const updatePollyHouse = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid ID format", 400));
   }
 
-
-
   const existingHouse = await PollyHouse.findById(id);
   if (!existingHouse) {
     return next(new AppError("No pollyHouse found with that ID", 404));
@@ -115,21 +109,19 @@ const updatePollyHouse = catchAsync(async (req, res, next) => {
   if (req.body.name && req.body.name !== existingHouse.name) {
     const duplicateHouse = await PollyHouse.findOne({
       name: req.body.name,
-      _id: { $ne: id }
+      _id: { $ne: id },
     });
     if (duplicateHouse) {
-      return next(new AppError("PollyHouse with this name already exists", 409));
+      return next(
+        new AppError("PollyHouse with this name already exists", 409)
+      );
     }
   }
 
-  const doc = await PollyHouse.findByIdAndUpdate(
-    id,
-    req.body,
-    {
-      new: true,
-      runValidators: true
-    }
-  );
+  const doc = await PollyHouse.findByIdAndUpdate(id, req.body, {
+    new: true,
+    runValidators: true,
+  });
 
   const response = generateResponse(
     "Success",
@@ -148,7 +140,7 @@ const togglePollyHouseStatus = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid ID format", 400));
   }
 
-  if (typeof isActive !== 'boolean') {
+  if (typeof isActive !== "boolean") {
     return next(new AppError("isActive must be a boolean value", 400));
   }
 
@@ -157,7 +149,7 @@ const togglePollyHouseStatus = catchAsync(async (req, res, next) => {
     { isActive },
     {
       new: true,
-      runValidators: true
+      runValidators: true,
     }
   );
 
@@ -167,7 +159,7 @@ const togglePollyHouseStatus = catchAsync(async (req, res, next) => {
 
   const response = generateResponse(
     "Success",
-    `PollyHouse ${isActive ? 'activated' : 'deactivated'} successfully`,
+    `PollyHouse ${isActive ? "activated" : "deactivated"} successfully`,
     doc,
     undefined
   );
@@ -179,5 +171,5 @@ export {
   createPollyHouse,
   getAllPollyHouses,
   updatePollyHouse,
-  togglePollyHouseStatus
+  togglePollyHouseStatus,
 };

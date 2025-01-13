@@ -5,10 +5,14 @@ import APIFeatures from "../utility/apiFeatures.js";
 import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
 
-export const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract") => {
-  console.log(
-    `[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}`
-  );
+export const updateSlot = async (
+  bookingSlot,
+  numberOfPlants,
+  action = "subtract"
+) => {
+  // console.log(
+  //   `[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}`
+  // );
 
   // Step 1: If subtracting, first check if enough plants are available
   if (action === "subtract") {
@@ -18,7 +22,7 @@ export const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract
     );
 
     if (!currentSlot || !currentSlot.subtypeSlots[0]) {
-      console.error("[updateSlot] ERROR: Slot not found");
+      // console.error("[updateSlot] ERROR: Slot not found");
       throw new Error("Slot not found");
     }
 
@@ -27,14 +31,13 @@ export const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract
     );
 
     if (!targetSlot) {
-      console.error("[updateSlot] ERROR: Specific slot not found");
+      // console.error("[updateSlot] ERROR: Specific slot not found");
       throw new Error("Specific slot not found");
     }
 
     if (targetSlot.totalPlants < numberOfPlants) {
-
       throw new Error(
-        `Not enough plants available. ${targetSlot.totalPlants <10000&& `${targetSlot.totalPlants} plants available.`}`
+        `Not enough plants available. ${targetSlot.totalPlants < 10000 && `${targetSlot.totalPlants} plants available.`}`
       );
     }
   }
@@ -78,15 +81,15 @@ export const updateSlot = async (bookingSlot, numberOfPlants, action = "subtract
     }
   );
 
-  console.log(`[updateSlot] Update Result: ${JSON.stringify(updateResult)}`);
+  // console.log(`[updateSlot] Update Result: ${JSON.stringify(updateResult)}`);
 
   // Step 4: Check if the update was successful
   if (updateResult.matchedCount === 0) {
-    console.error("[updateSlot] ERROR: Slot not found or update failed");
+    // console.error("[updateSlot] ERROR: Slot not found or update failed");
     throw new Error("Failed to update the PlantSlot details");
   }
 
-  console.log("[updateSlot] SUCCESS: Slot updated successfully");
+  // console.log("[updateSlot] SUCCESS: Slot updated successfully");
   return updateResult; // Return the update result for reference
 };
 
@@ -151,7 +154,7 @@ const createOne = (Model, modelName) =>
       } catch (error) {
         await session.abortTransaction();
         session.endSession();
-        console.error("[createOne] Error:", error.message);
+        // console.error("[createOne] Error:", error.message);
         return res.status(400).json({ message: error.message });
       }
     }
@@ -442,7 +445,6 @@ const getAll = (Model, modelName) =>
       let filter = {};
 
       let query = Model.find(filter);
-
       const features = new APIFeatures(query, req.query, modelName)
         .filter()
         .sort()
@@ -730,8 +732,8 @@ const getAll = (Model, modelName) =>
           orderId: 1,
           rate: 1,
           farmReadyDate: 1, // Added farmReadyDate field\
-          orderPaymentStatus:1,
-          paymentCompleted:1
+          orderPaymentStatus: 1,
+          paymentCompleted: 1,
         },
       },
       { $sort: { [sortKey]: order } },
@@ -821,9 +823,9 @@ const isPhoneNumberExists = (Model, modelName) =>
 const isDisabled = (Model, modelName) =>
   catchAsync(async (req, _, next) => {
     const { phoneNumber } = req.body;
-    console.log(phoneNumber);
+    // console.log(phoneNumber);
     const data = await Model.findOne({ phoneNumber });
-console.log(data)
+    // console.log(data);
     // if (data?.isDisabled) {
     //   throw new AppError(`Your access to this app is disabled`, 409);
     // }
