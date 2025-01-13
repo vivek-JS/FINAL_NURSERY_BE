@@ -96,7 +96,6 @@ const createBackup = catchAsync(async (req, res, next) => {
     // Send the file
     res.download(zipPath, "backup.zip", async (err) => {
       if (err) {
-        console.error(err);
         await fsPromises.rm(backupDir, { recursive: true, force: true });
         return next(err);
       }
@@ -105,7 +104,6 @@ const createBackup = catchAsync(async (req, res, next) => {
       await fsPromises.rm(backupDir, { recursive: true, force: true });
     });
   } catch (err) {
-    console.error(err);
     // Cleanup in case of error
     await fsPromises.rm(backupDir, { recursive: true, force: true });
     return next(err);
@@ -131,9 +129,6 @@ const addBackup = catchAsync(async (req, res, next) => {
     // Ensure uploads directory exists
     await fsPromises.mkdir(uploadsDir, { recursive: true });
     await fsPromises.mkdir(extractDir, { recursive: true });
-
-    console.log("Extracting from:", req.file.path);
-    console.log("Extracting to:", extractDir);
 
     // Extract the uploaded zip file
     await fs
@@ -206,10 +201,10 @@ const addBackup = catchAsync(async (req, res, next) => {
             });
             results.successful.push(collectionName);
           } catch (insertError) {
-            console.error(
-              `Error inserting documents for ${collectionName}:`,
-              insertError
-            );
+            // console.error(
+            //   `Error inserting documents for ${collectionName}:`,
+            //   insertError
+            // );
             results.failed.push({
               collection: collectionName,
               error: insertError.message || "Insert failed",
@@ -219,7 +214,7 @@ const addBackup = catchAsync(async (req, res, next) => {
           results.successful.push(collectionName);
         }
       } catch (fileError) {
-        console.error(`Error processing file ${file}:`, fileError);
+        // console.error(`Error processing file ${file}:`, fileError);
         results.failed.push({
           collection: path.basename(file, ".json"),
           error: fileError.message || "File processing failed",
@@ -251,7 +246,7 @@ const addBackup = catchAsync(async (req, res, next) => {
       },
     });
   } catch (err) {
-    console.error("Import error:", err);
+    // console.error("Import error:", err);
 
     // Cleanup on error
     try {
@@ -262,7 +257,7 @@ const addBackup = catchAsync(async (req, res, next) => {
         await fsPromises.unlink(req.file.path);
       }
     } catch (cleanupError) {
-      console.error("Cleanup error:", cleanupError);
+      // console.error("Cleanup error:", cleanupError);
     }
 
     next(err);

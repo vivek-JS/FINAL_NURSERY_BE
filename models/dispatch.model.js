@@ -32,10 +32,12 @@ const crateSchema = new Schema({
     type: Number,
     required: true,
   },
-  crateDetails: [{
-    crateCount: Number,
-    plantCount: Number
-  }]
+  crateDetails: [
+    {
+      crateCount: Number,
+      plantCount: Number,
+    },
+  ],
 });
 
 const plantDetailSchema = new Schema({

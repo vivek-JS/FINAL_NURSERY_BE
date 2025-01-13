@@ -1,11 +1,7 @@
 import { Parser as CsvParser } from "json2csv";
 import catchAsync from "../utility/catchAsync.js";
 import Order from "../models/order.model.js";
-import {
-  getAll,
-  createOne,
-  updateOne,
-} from "./factory.controller.js";
+import { getAll, createOne, updateOne } from "./factory.controller.js";
 
 const getOrdersBySlot = catchAsync(async (req, res, next) => {
   const { slotId } = req.params; // Extract the slotId from the request parameters
@@ -210,7 +206,6 @@ const updatePaymentStatus = async (req, res) => {
     if (!payment) {
       return res.status(404).json({ message: "Payment not found." });
     }
-    console.log(payment);
     // Update the payment status
     payment.paymentStatus = paymentStatus;
 

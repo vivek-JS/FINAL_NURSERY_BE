@@ -77,9 +77,9 @@ plantSchema.post("save", async function (doc) {
 plantSchema.post("remove", async function (doc) {
   try {
     await PlantSlot.deleteMany({ plantId: doc._id });
-    console.log(`Slots for plant ${doc._id} have been deleted.`);
+    // console.log(`Slots for plant ${doc._id} have been deleted.`);
   } catch (error) {
-    console.error(`Error deleting slots for plant ${doc._id}:`, error);
+    // console.error(`Error deleting slots for plant ${doc._id}:`, error);
   }
 });
 

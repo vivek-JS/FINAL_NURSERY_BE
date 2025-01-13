@@ -136,21 +136,21 @@ const getDispatches = catchAsync(async (req, res, next) => {
   const dispatches = await Dispatch.aggregate([
     // Filter out deleted documents
     {
-      $match: { isDeleted: false }
+      $match: { isDeleted: false },
     },
     // Initial sort by createdAt
     {
-      $sort: { createdAt: -1 }
+      $sort: { createdAt: -1 },
     },
     // Convert createdAt to date if not already
     {
       $addFields: {
-        createdAt: { $toDate: "$createdAt" }
-      }
+        createdAt: { $toDate: "$createdAt" },
+      },
     },
     // Expand the orderIds array
     {
-      $unwind: "$orderIds"
+      $unwind: "$orderIds",
     },
     // Lookup each order
     {
@@ -158,12 +158,12 @@ const getDispatches = catchAsync(async (req, res, next) => {
         from: "orders",
         localField: "orderIds",
         foreignField: "_id",
-        as: "orderDetails"
-      }
+        as: "orderDetails",
+      },
     },
     // Unwind the looked up order
     {
-      $unwind: "$orderDetails"
+      $unwind: "$orderDetails",
     },
     // Lookup all related data for the order
     {
@@ -171,24 +171,24 @@ const getDispatches = catchAsync(async (req, res, next) => {
         from: "farmers",
         localField: "orderDetails.farmer",
         foreignField: "_id",
-        as: "farmerDetails"
-      }
+        as: "farmerDetails",
+      },
     },
     {
       $lookup: {
         from: "users",
         localField: "orderDetails.salesPerson",
         foreignField: "_id",
-        as: "salesPersonDetails"
-      }
+        as: "salesPersonDetails",
+      },
     },
     {
       $lookup: {
         from: "plantcms",
         localField: "orderDetails.plantName",
         foreignField: "_id",
-        as: "plantDetails"
-      }
+        as: "plantDetails",
+      },
     },
     {
       $lookup: {
@@ -199,8 +199,8 @@ const getDispatches = catchAsync(async (req, res, next) => {
           { $unwind: "$subtypeSlots.slots" },
           {
             $match: {
-              $expr: { $eq: ["$subtypeSlots.slots._id", "$$bookingSlotId"] }
-            }
+              $expr: { $eq: ["$subtypeSlots.slots._id", "$$bookingSlotId"] },
+            },
           },
           {
             $project: {
@@ -209,75 +209,81 @@ const getDispatches = catchAsync(async (req, res, next) => {
               startDay: "$subtypeSlots.slots.startDay",
               endDay: "$subtypeSlots.slots.endDay",
               subtypeId: "$subtypeSlots.subtypeId",
-              month: "$subtypeSlots.slots.month"
-            }
-          }
+              month: "$subtypeSlots.slots.month",
+            },
+          },
         ],
-        as: "bookingSlotDetails"
-      }
+        as: "bookingSlotDetails",
+      },
     },
     // Group back all the data while preserving original dates
     {
       $group: {
-        _id: '$_id',
-        name: { $first: '$name' },
-        transportId: { $first: '$transportId' },
-        driverName: { $first: '$driverName' },
-        vehicleName: { $first: '$vehicleName' },
-        plantsDetails: { $first: '$plantsDetails' },
-        returnedPlants: { $first: '$returnedPlants' },
-        transportStatus: { $first: '$transportStatus' },
-        createdAt: { $first: '$createdAt' }, // Keep as Date object
-        updatedAt: { $first: '$updatedAt' }, // Keep as Date object
-        orderIds: { 
+        _id: "$_id",
+        name: { $first: "$name" },
+        transportId: { $first: "$transportId" },
+        driverName: { $first: "$driverName" },
+        vehicleName: { $first: "$vehicleName" },
+        plantsDetails: { $first: "$plantsDetails" },
+        returnedPlants: { $first: "$returnedPlants" },
+        transportStatus: { $first: "$transportStatus" },
+        createdAt: { $first: "$createdAt" }, // Keep as Date object
+        updatedAt: { $first: "$updatedAt" }, // Keep as Date object
+        orderIds: {
           $push: {
-            order: '$orderDetails.orderId',
-            quantity: '$orderDetails.numberOfPlants',
-            orderDate: '$orderDetails.createdAt', // Keep as Date object
-            rate: '$orderDetails.rate',
-            payment: '$orderDetails.payment',
-            orderStatus: '$orderDetails.orderStatus',
-            paymentCompleted: '$orderDetails.paymentCompleted',
-            returnedPlants: '$orderDetails.returnedPlants',
-            returnReason: '$orderDetails.returnReason',
+            order: "$orderDetails.orderId",
+            quantity: "$orderDetails.numberOfPlants",
+            orderDate: "$orderDetails.createdAt", // Keep as Date object
+            rate: "$orderDetails.rate",
+            payment: "$orderDetails.payment",
+            orderStatus: "$orderDetails.orderStatus",
+            paymentCompleted: "$orderDetails.paymentCompleted",
+            returnedPlants: "$orderDetails.returnedPlants",
+            returnReason: "$orderDetails.returnReason",
             plantDetails: {
-              name: { $arrayElemAt: ['$plantDetails.name', 0] },
-              variety: { $arrayElemAt: ['$plantDetails.variety', 0] },
-              type: { $arrayElemAt: ['$plantDetails.type', 0] },
-              subtype: { $arrayElemAt: ['$plantDetails.subtype', 0] }
+              name: { $arrayElemAt: ["$plantDetails.name", 0] },
+              variety: { $arrayElemAt: ["$plantDetails.variety", 0] },
+              type: { $arrayElemAt: ["$plantDetails.type", 0] },
+              subtype: { $arrayElemAt: ["$plantDetails.subtype", 0] },
             },
-            farmerName: { $arrayElemAt: ['$farmerDetails.name', 0] },
-            contact: { $arrayElemAt: ['$farmerDetails.mobileNumber', 0] },
+            farmerName: { $arrayElemAt: ["$farmerDetails.name", 0] },
+            contact: { $arrayElemAt: ["$farmerDetails.mobileNumber", 0] },
             details: {
               farmer: {
-                name: { $arrayElemAt: ['$farmerDetails.name', 0] },
-                mobileNumber: { $arrayElemAt: ['$farmerDetails.mobileNumber', 0] },
-                village: { $arrayElemAt: ['$farmerDetails.village', 0] }
+                name: { $arrayElemAt: ["$farmerDetails.name", 0] },
+                mobileNumber: {
+                  $arrayElemAt: ["$farmerDetails.mobileNumber", 0],
+                },
+                village: { $arrayElemAt: ["$farmerDetails.village", 0] },
               },
-              contact: { $arrayElemAt: ['$farmerDetails.mobileNumber', 0] },
-              orderNotes: '$orderDetails.notes',
-              payment: '$orderDetails.payment',
-              orderid: '$orderDetails._id',
+              contact: { $arrayElemAt: ["$farmerDetails.mobileNumber", 0] },
+              orderNotes: "$orderDetails.notes",
+              payment: "$orderDetails.payment",
+              orderid: "$orderDetails._id",
               salesPerson: {
-                name: { $arrayElemAt: ['$salesPersonDetails.name', 0] },
-                phoneNumber: { $arrayElemAt: ['$salesPersonDetails.phoneNumber', 0] }
+                name: { $arrayElemAt: ["$salesPersonDetails.name", 0] },
+                phoneNumber: {
+                  $arrayElemAt: ["$salesPersonDetails.phoneNumber", 0],
+                },
               },
               bookingSlot: {
-                startDay: { $arrayElemAt: ['$bookingSlotDetails.startDay', 0] },
-                endDay: { $arrayElemAt: ['$bookingSlotDetails.endDay', 0] },
-                month: { $arrayElemAt: ['$bookingSlotDetails.month', 0] },
-                subtypeId: { $arrayElemAt: ['$bookingSlotDetails.subtypeId', 0] },
-                _id: { $arrayElemAt: ['$bookingSlotDetails.slotId', 0] }
-              }
-            }
-          }
-        }
-      }
+                startDay: { $arrayElemAt: ["$bookingSlotDetails.startDay", 0] },
+                endDay: { $arrayElemAt: ["$bookingSlotDetails.endDay", 0] },
+                month: { $arrayElemAt: ["$bookingSlotDetails.month", 0] },
+                subtypeId: {
+                  $arrayElemAt: ["$bookingSlotDetails.subtypeId", 0],
+                },
+                _id: { $arrayElemAt: ["$bookingSlotDetails.slotId", 0] },
+              },
+            },
+          },
+        },
+      },
     },
     // Final sort to maintain order after grouping
     {
-      $sort: { createdAt: -1 }
-    }
+      $sort: { createdAt: -1 },
+    },
   ]);
 
   // Transform the results while maintaining Date objects
@@ -286,23 +292,27 @@ const getDispatches = catchAsync(async (req, res, next) => {
     // Format dates for display only at this stage
     createdAt: dispatch.createdAt.toISOString(),
     updatedAt: dispatch.updatedAt.toISOString(),
-    orderIds: dispatch.orderIds.map(order => ({
+    orderIds: dispatch.orderIds.map((order) => ({
       ...order,
       orderDate: order.orderDate.toISOString(),
       total: `₹ ${order.rate * order.quantity}`,
       "Paid Amt": `₹ ${order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0}`,
-      "remaining Amt": `₹ ${(order.rate * order.quantity) - (order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0)}`,
-      Delivery: order.details.bookingSlot ? 
-        `${order.details.bookingSlot.startDay} - ${order.details.bookingSlot.endDay} ${order.details.bookingSlot.month}, ${new Date().getFullYear()}` : ''
-    }))
+      "remaining Amt": `₹ ${order.rate * order.quantity - (order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0)}`,
+      Delivery: order.details.bookingSlot
+        ? `${order.details.bookingSlot.startDay} - ${order.details.bookingSlot.endDay} ${order.details.bookingSlot.month}, ${new Date().getFullYear()}`
+        : "",
+    })),
   }));
 
   // Debug logging
-  console.log("Final sorted dates:", dispatches.map(d => ({
-    id: d._id,
-    createdAt: d.createdAt,
-    name: d.name
-  })));
+  // console.log(
+  //   "Final sorted dates:",
+  //   dispatches.map((d) => ({
+  //     id: d._id,
+  //     createdAt: d.createdAt,
+  //     name: d.name,
+  //   }))
+  // );
 
   res
     .status(200)
@@ -320,25 +330,25 @@ const getDispatch = catchAsync(async (req, res, next) => {
 
   const dispatch = await Dispatch.findById(id)
     .populate({
-      path: 'orderIds',
+      path: "orderIds",
       populate: [
         {
-          path: 'farmer',
-          select: 'name mobileNumber village'
+          path: "farmer",
+          select: "name mobileNumber village",
         },
         {
-          path: 'salesPerson',
-          select: 'name phoneNumber'
+          path: "salesPerson",
+          select: "name phoneNumber",
         },
         {
-          path: 'plantName',
-          select: 'name variety type subtype'
+          path: "plantName",
+          select: "name variety type subtype",
         },
         {
-          path: 'bookingSlot',
-          select: 'startDay endDay month'
-        }
-      ]
+          path: "bookingSlot",
+          select: "startDay endDay month",
+        },
+      ],
     })
     .lean(); // Using lean() for better performance
 
@@ -355,28 +365,28 @@ const getDispatch = catchAsync(async (req, res, next) => {
     vehicleName: dispatch.vehicleName,
     isDeleted: dispatch.isDeleted || false,
     returnedPlants: dispatch.returnedPlants || 0,
-    transportStatus: dispatch.transportStatus || 'PENDING',
-    plantsDetails: dispatch.plantsDetails.map(plant => ({
+    transportStatus: dispatch.transportStatus || "PENDING",
+    plantsDetails: dispatch.plantsDetails.map((plant) => ({
       name: plant.name,
       id: plant.id,
       plantId: plant.plantId,
       subTypeId: plant.subTypeId,
       quantity: plant.quantity,
       totalPlants: plant.totalPlants,
-      pickupDetails: plant.pickupDetails.map(pickup => ({
+      pickupDetails: plant.pickupDetails.map((pickup) => ({
         shade: pickup.shade,
         shadeName: pickup.shadeName,
-        quantity: pickup.quantity
+        quantity: pickup.quantity,
       })),
-      crates: plant.crates.map(crate => ({
+      crates: plant.crates.map((crate) => ({
         cavity: crate.cavity,
         cavityName: crate.cavityName,
         crateCount: crate.crateCount,
         plantCount: crate.plantCount,
-        crateDetails: crate.crateDetails
-      }))
+        crateDetails: crate.crateDetails,
+      })),
     })),
-    orderIds: dispatch.orderIds.map(order => ({
+    orderIds: dispatch.orderIds.map((order) => ({
       _id: order._id,
       orderId: order.orderId,
       farmer: order.farmer,
@@ -388,10 +398,10 @@ const getDispatch = catchAsync(async (req, res, next) => {
       payment: order.payment,
       orderStatus: order.orderStatus,
       returnedPlants: order.returnedPlants,
-      returnReason: order.returnReason
+      returnReason: order.returnReason,
     })),
     createdAt: dispatch.createdAt,
-    updatedAt: dispatch.updatedAt
+    updatedAt: dispatch.updatedAt,
   };
 
   const response = generateResponse(
@@ -435,14 +445,14 @@ const removeTransport = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error in removeTransport:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Error removing transport",
-      error: error.message,
-    });
+    // console.error("Error in removeTransport:", error);
+    // return res.status(500).json({
+    //   success: false,
+    //   message: "Error removing transport",
+    //   error: error.message,
+    // });
   }
-};  
+};
 const handleDispatchReturns = catchAsync(async (req, res, next) => {
   const { id } = req.params;
   const { orderUpdates } = req.body;
@@ -452,38 +462,40 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
 
   try {
     const dispatch = await Dispatch.findById(id);
-    
+
     if (!dispatch) {
       return next(new AppError("No dispatch found with that ID", 404));
     }
 
     // Calculate total returned plants
-    const totalReturnedPlants = orderUpdates?.reduce((sum, order) => 
-      sum + (Number(order.returnedPlants) || 0), 0
-    ) || 0;
+    const totalReturnedPlants =
+      orderUpdates?.reduce(
+        (sum, order) => sum + (Number(order.returnedPlants) || 0),
+        0
+      ) || 0;
 
     // Update dispatch with returned plants and transport status
     const updatedDispatch = await Dispatch.findByIdAndUpdate(
       id,
       {
         returnedPlants: totalReturnedPlants,
-        transportStatus: "DELIVERED"  // Update transport status to DELIVERED
+        transportStatus: "DELIVERED", // Update transport status to DELIVERED
       },
       { new: true, runValidators: true, session }
     );
 
     // Create map of order updates
-    const orderUpdatesMap = orderUpdates?.reduce((map, update) => {
-      map[update.orderId] = update;
-      return map;
-    }, {}) || {};
+    const orderUpdatesMap =
+      orderUpdates?.reduce((map, update) => {
+        map[update.orderId] = update;
+        return map;
+      }, {}) || {};
 
     // Update all orders and their booking slots
     const orderUpdatePromises = dispatch.orderIds.map(async (orderId) => {
       // First get the order
-      const order = await Order.findById(orderId)
-        .session(session);
-      
+      const order = await Order.findById(orderId).session(session);
+
       if (!order) return null;
 
       // Calculate new numberOfPlants if there are returns
@@ -494,30 +506,32 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       const updatedOrder = await Order.findByIdAndUpdate(
         orderId,
         {
-          ...(orderUpdatesMap[orderId] ? {
-            returnedPlants: orderUpdatesMap[orderId].returnedPlants,
-            returnReason: orderUpdatesMap[orderId].returnReason,
-            numberOfPlants: newNumberOfPlants
-          } : {}),
-          orderStatus: "COMPLETED"
+          ...(orderUpdatesMap[orderId]
+            ? {
+                returnedPlants: orderUpdatesMap[orderId].returnedPlants,
+                returnReason: orderUpdatesMap[orderId].returnReason,
+                numberOfPlants: newNumberOfPlants,
+              }
+            : {}),
+          orderStatus: "COMPLETED",
         },
         { new: true, runValidators: true, session }
       );
 
       // If order has returns, update the slot's totalPlants
       if (returnsForThisOrder > 0) {
-        await mongoose.model('PlantSlot').updateOne(
-          { 
-            'subtypeSlots.slots._id': order.bookingSlot 
-          },
-          { 
-            $inc: { 
-              'subtypeSlots.$[].slots.$[slot].totalPlants': returnsForThisOrder 
-            }
+        await mongoose.model("PlantSlot").updateOne(
+          {
+            "subtypeSlots.slots._id": order.bookingSlot,
           },
           {
-            arrayFilters: [{ 'slot._id': order.bookingSlot }],
-            session
+            $inc: {
+              "subtypeSlots.$[].slots.$[slot].totalPlants": returnsForThisOrder,
+            },
+          },
+          {
+            arrayFilters: [{ "slot._id": order.bookingSlot }],
+            session,
           }
         );
       }
@@ -526,7 +540,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
     });
 
     const updatedOrders = await Promise.all(orderUpdatePromises);
-    
+
     // Check if any order update failed
     if (updatedOrders.includes(null)) {
       await session.abortTransaction();
@@ -540,12 +554,11 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       "Dispatch completed, delivery status updated, and returns processed successfully",
       {
         dispatch: updatedDispatch,
-        updatedOrders
+        updatedOrders,
       }
     );
 
     res.status(200).json(response);
-
   } catch (error) {
     await session.abortTransaction();
     next(error);

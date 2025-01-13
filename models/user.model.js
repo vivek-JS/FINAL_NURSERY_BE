@@ -17,7 +17,17 @@ const userSchema = new Schema({
   },
   jobTitle: {
     type: String,
-    enum: ["Manager", "HR", "SALES", "PRIMARY", "OFFICE_STAFF", 'DRIVER', 'LABORATORY_MANAGER', 'DEALER','OFFICE_ADMIN'],
+    enum: [
+      "Manager",
+      "HR",
+      "SALES",
+      "PRIMARY",
+      "OFFICE_STAFF",
+      "DRIVER",
+      "LABORATORY_MANAGER",
+      "DEALER",
+      "OFFICE_ADMIN",
+    ],
   },
   isDisabled: {
     type: Boolean,
@@ -45,15 +55,15 @@ const userSchema = new Schema({
 });
 
 // Middleware to handle DealerBooking creation for new dealers
-userSchema.post('save', async function(doc) {
+userSchema.post("save", async function (doc) {
   try {
     // Only proceed if the user is a DEALER
-    if (doc.jobTitle === 'DEALER') {
-      const DealerBooking = model('DealerBooking');
-      
+    if (doc.jobTitle === "DEALER") {
+      const DealerBooking = model("DealerBooking");
+
       // Check if a DealerBooking already exists for this dealer
       const existingBooking = await DealerBooking.findOne({ dealer: doc._id });
-      
+
       if (!existingBooking) {
         // Create new DealerBooking record
         await DealerBooking.create({
@@ -65,29 +75,29 @@ userSchema.post('save', async function(doc) {
             totalBooked: 0,
             totalBalance: 0,
             paymentRemaining: 0,
-            totalOrderPayments: 0
-          }
+            totalOrderPayments: 0,
+          },
         });
       }
     }
   } catch (error) {
-    console.error('Error creating DealerBooking:', error);
+    console.error("Error creating DealerBooking:", error);
     // Don't throw error to prevent disrupting the user creation
   }
 });
 
 // Middleware to handle DealerBooking creation when user is updated to DEALER
-userSchema.pre('findOneAndUpdate', async function() {
+userSchema.pre("findOneAndUpdate", async function () {
   const update = this.getUpdate();
-  if (update?.jobTitle === 'DEALER') {
-    const DealerBooking = model('DealerBooking');
-    
+  if (update?.jobTitle === "DEALER") {
+    const DealerBooking = model("DealerBooking");
+
     // Get the user ID from the query
     const userId = this.getQuery()._id;
-    
+
     // Check if a DealerBooking already exists
     const existingBooking = await DealerBooking.findOne({ dealer: userId });
-    
+
     if (!existingBooking) {
       // Create new DealerBooking record
       await DealerBooking.create({
@@ -99,8 +109,8 @@ userSchema.pre('findOneAndUpdate', async function() {
           totalBooked: 0,
           totalBalance: 0,
           paymentRemaining: 0,
-          totalOrderPayments: 0
-        }
+          totalOrderPayments: 0,
+        },
       });
     }
   }

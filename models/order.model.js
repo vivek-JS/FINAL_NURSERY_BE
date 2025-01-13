@@ -143,7 +143,6 @@ orderSchema.pre("save", async function (next) {
   }
 });
 
-
 // Pre-save middleware to generate unique orderId
 orderSchema.pre("save", async function (next) {
   if (!this.isNew || this.orderId) return next();
@@ -171,13 +170,12 @@ orderSchema.pre("save", function (next) {
   const totalAmount = this.rate * this.numberOfPlants;
 
   // Update orderPaymentStatus and paymentCompleted
-  this.orderPaymentStatus = totalCollected >= totalAmount ? "COMPLETED" : "PENDING";
+  this.orderPaymentStatus =
+    totalCollected >= totalAmount ? "COMPLETED" : "PENDING";
   this.paymentCompleted = totalCollected >= totalAmount;
 
   next();
 });
-
-
 
 const Order = model("Order", orderSchema);
 

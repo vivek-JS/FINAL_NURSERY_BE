@@ -96,7 +96,7 @@ const getAllShades = catchAsync(async (req, res, next) => {
 
 const updateShade = catchAsync(async (req, res, next) => {
   const { id } = req.body;
-  console.log("Update request received for id:", id); // Debug log
+  // console.log("Update request received for id:", id); // Debug log
 
   // Check if id exists
   if (!id) {

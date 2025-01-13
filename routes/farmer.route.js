@@ -3,6 +3,8 @@ import {
   updateFarmer,
   deleteFarmer,
   findFarmer,
+  getFarmers,
+  uploadFarmers,
 } from "../controllers/farmer.controller.js";
 import { createOrder } from "../controllers/order.controller.js";
 import express from "express";
@@ -13,12 +15,41 @@ import {
   createTaluka,
   createDistrict,
 } from "../controllers/cms.controller.js";
-import { upload } from "../middlewares/multer.middleware.js";
+import multer from "multer";
+// import { upload } from "../middlewares/multer.middleware.js";
 
 const router = express.Router();
 
+// Configure multer for file upload
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, "./public/uploads/");
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + "-" + file.originalname);
+  },
+});
+
+const upload = multer({
+  storage: storage,
+  fileFilter: function (req, file, cb) {
+    // Accept only excel files
+    if (
+      file.mimetype ===
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      file.mimetype === "application/vnd.ms-excel"
+    ) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only Excel files are allowed!"));
+    }
+  },
+});
+
 router
   .get("/getfarmer/:mobileNumber", findFarmer)
+  .get("/getFarmers", getFarmers)
+  .post("/uploadFarmers", upload.single("data"), uploadFarmers)
   .post(
     "/createFarmer",
     [

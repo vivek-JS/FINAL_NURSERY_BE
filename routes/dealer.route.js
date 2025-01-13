@@ -1,14 +1,14 @@
 import express from "express";
-import { 
-  createDealerOrder, 
+import {
+  createDealerOrder,
   getDealerOrdersByBooking,
-  updateDealerOrderPayment 
+  updateDealerOrderPayment,
 } from "../controllers/dealer.controller.js";
 
 const router = express.Router();
 
 // Create new dealer order
-router.post("/orders",createDealerOrder);
+router.post("/orders", createDealerOrder);
 
 // Get all orders for authenticated dealer
 router.get("/orders", getDealerOrdersByBooking);

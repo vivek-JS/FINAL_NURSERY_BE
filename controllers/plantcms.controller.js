@@ -6,7 +6,6 @@ import PlantCms from "../models/plantCms.model.js";
 
 export const addPlant = async (req, res) => {
   const { name, subtypes, addedBy, slotSize } = req.body;
-  console.log(req.body);
 
   try {
     // Check if a plant with the same name already exists
@@ -101,7 +100,7 @@ export const deletePlant = async (req, res) => {
 
     // Delete related slots
     await PlantSlot.deleteMany({ plantId });
-    console.log(`Deleted slots for plant ID: ${plantId}`);
+    // console.log(`Deleted slots for plant ID: ${plantId}`);
 
     return res.status(200).json({
       message: "Plant and related slots deleted successfully",

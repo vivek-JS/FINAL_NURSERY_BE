@@ -16,5 +16,4 @@ slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.put("/slots/:slotId", updateSlotFieldById);
 slotRouter.get("/slots/stats", getPlantStats);
 
-
 export default slotRouter;

@@ -1,7 +1,8 @@
 class APIFeatures {
-  constructor(query, queryString) {
+  constructor(query, queryString, modelName) {
     this.query = query;
     this.queryString = queryString;
+    this.modelName = modelName;
   }
 
   filter() {
@@ -21,8 +22,8 @@ class APIFeatures {
     let queryStr = JSON.stringify(queryObj);
     queryStr = queryStr.replace(/\b(gte|gt|lte|lt)\b/g, (match) => `$${match}`);
 
-    this.query = this.query.find(JSON.parse(queryStr));
-
+    const parsedQuery = JSON.parse(queryStr);
+    this.query = this.query.find(parsedQuery);
     return this;
   }
 

@@ -1,8 +1,11 @@
 import Farmer from "../models/farmer.model.js";
 import AppError from "../utility/appError.js";
 import catchAsync from "../utility/catchAsync.js";
-import { updateOne, deleteOne } from "./factory.controller.js";
+import { getAll, updateOne, deleteOne } from "./factory.controller.js";
+import XLSX from "xlsx";
+import fs from "fs";
 
+const getFarmers = getAll(Farmer, "Farmer");
 const updateFarmer = updateOne(Farmer, "Farmer");
 const deleteFarmer = deleteOne(Farmer, "Farmer");
 
@@ -37,4 +40,80 @@ const createFarmer = catchAsync(async (req, res, next) => {
   next();
 });
 
-export { createFarmer, updateFarmer, deleteFarmer, findFarmer };
+// Upload excel sheet of farmers and this will add them into database
+const uploadFarmers = catchAsync(async (req, res, next) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded" });
+  }
+
+  // Read the Excel file
+  const workbook = XLSX.readFile(req.file.path);
+  const sheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[sheetName];
+  const data = XLSX.utils.sheet_to_json(worksheet);
+
+  // Validate required fields
+  const requiredFields = [
+    "name",
+    "village",
+    "taluka",
+    "district",
+    "stateName",
+    "talukaName",
+    "districtName",
+    "state",
+    "mobileNumber",
+  ];
+
+  const invalidRows = [];
+  const validData = [];
+
+  // Process each row
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const missingFields = requiredFields.filter((field) => !row[field]);
+
+    if (missingFields.length > 0) {
+      invalidRows.push({
+        row: i + 2, // Adding 2 because Excel rows start from 1 and first row is header
+        missingFields,
+      });
+      continue;
+    }
+
+    // Convert mobile number to number type if it's string
+    if (typeof row.mobileNumber === "string") {
+      row.mobileNumber = parseInt(row.mobileNumber);
+    }
+
+    validData.push(row);
+  }
+
+  if (invalidRows.length > 0) {
+    return res.status(400).json({
+      error: "Invalid data in Excel file",
+      invalidRows,
+    });
+  }
+
+  // Insert valid data into database
+  const result = await Farmer.insertMany(validData, { ordered: false });
+
+  // Clean up - delete the uploaded file
+  fs.unlinkSync(req.file.path);
+
+  return res.status(200).json({
+    status: "success",
+    message: "Data imported successfully",
+    insertedCount: result.length,
+  });
+});
+
+export {
+  createFarmer,
+  updateFarmer,
+  deleteFarmer,
+  findFarmer,
+  getFarmers,
+  uploadFarmers,
+};

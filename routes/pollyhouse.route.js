@@ -6,7 +6,7 @@ import {
   createPollyHouse,
   getAllPollyHouses,
   updatePollyHouse,
-  togglePollyHouseStatus
+  togglePollyHouseStatus,
 } from "../controllers/pollyhouse.controller.js";
 
 const router = express.Router();
@@ -21,10 +21,7 @@ const validateObjectId = (value) => {
 router
   .post(
     "/create",
-    [
-      check("name").notEmpty().withMessage("PollyHouse name is required"),
-
-    ],
+    [check("name").notEmpty().withMessage("PollyHouse name is required")],
     checkErrors,
     createPollyHouse
   )
@@ -33,12 +30,10 @@ router
     "/update",
     [
       check("id")
-        .exists().withMessage("ID is required")
+        .exists()
+        .withMessage("ID is required")
         .custom(validateObjectId),
-      check("name")
-        .optional()
-        .notEmpty().withMessage("Name cannot be empty"),
-     
+      check("name").optional().notEmpty().withMessage("Name cannot be empty"),
     ],
     checkErrors,
     updatePollyHouse
@@ -47,10 +42,12 @@ router
     "/toggle-status",
     [
       check("id")
-        .exists().withMessage("ID is required")
+        .exists()
+        .withMessage("ID is required")
         .custom(validateObjectId),
       check("isActive")
-        .isBoolean().withMessage("isActive must be a boolean value")
+        .isBoolean()
+        .withMessage("isActive must be a boolean value"),
     ],
     checkErrors,
     togglePollyHouseStatus

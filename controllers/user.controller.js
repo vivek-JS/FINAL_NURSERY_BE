@@ -42,15 +42,13 @@ const getUsers = async (req, res) => {
   }
 };
 const encryptPassword = async (req, res, next) => {
-  console.log(req.body.password);
-  const password = req.body.password || "12345678";
+  const password = req.body.password || "12345";
   req.body.password = await bcrypt.hash(password, 10);
   next();
 };
 
 const findUser = catchAsync(async (req, res, next) => {
   const { phoneNumber } = req.body;
-  console.log(phoneNumber);
 
   const user = await User.findOne({ phoneNumber });
 
@@ -63,10 +61,10 @@ const findUser = catchAsync(async (req, res, next) => {
   next();
 });
 
-const generateToken = (id) => {
+const generateToken = (data) => {
   const token = jwt.sign(
     {
-      _id: id,
+      data,
     },
     process.env.PRIVATE_KEY,
     {
@@ -80,12 +78,10 @@ const generateToken = (id) => {
 const login = [
   isDisabled(User, "User"),
   catchAsync(async (req, res, next) => {
-    const {  password } = req.body;
-let phoneNumber = Number(req.body?.phoneNumber)
-console.log(password,phoneNumber)
+    const { password } = req.body;
+    let phoneNumber = Number(req.body?.phoneNumber);
 
     const user = await User.findOne({ phoneNumber: phoneNumber });
-    console.log('user',user)
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return next(new AppError("Wrong credentails", 400));
@@ -93,7 +89,7 @@ console.log(password,phoneNumber)
 
     user.password = undefined;
 
-    const token = generateToken(user._id);
+    const token = generateToken(user);
     const response = generateResponse(
       "Success",
       "Login success",
@@ -107,6 +103,43 @@ console.log(password,phoneNumber)
   }),
 ];
 
+// Controller used to reset password
+const resetPassword = catchAsync(async (req, res, next) => {
+  const { _id } = req.user;
+
+  let password = req.body.password || "12345";
+  password = await bcrypt.hash(password, 10);
+
+  const user = await User.findByIdAndUpdate(_id, { password });
+
+  if (!user) {
+    return next(new AppError("User not found", 404));
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: "User password updated successfully",
+  });
+
+});
+
+// Controller which gives info about themselves
+const aboutMe = catchAsync(async (req, res, next) => {
+  const { _id } = req.user;
+
+  const user = await User.findById(_id);
+
+  if (!user) {
+    return next(new AppError("User not found", 404));
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: "User found successfully",
+    data: user,
+  });
+});
+
 export {
   getUsers,
   createUser,
@@ -115,4 +148,6 @@ export {
   findUser,
   login,
   encryptPassword,
+  resetPassword,
+  aboutMe,
 };
