@@ -120,7 +120,6 @@ const resetPassword = catchAsync(async (req, res, next) => {
     success: true,
     message: "User password updated successfully",
   });
-
 });
 
 // Controller which gives info about themselves

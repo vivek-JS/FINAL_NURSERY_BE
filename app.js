@@ -43,7 +43,7 @@ import vheicleRouter from "./routes/vheicle.route.js";
 import shadeRoter from "./routes/shades.route.js";
 import trayRouter from "./routes/tray.route.js";
 import dispatchRoute from "./routes/dispatched.route.js";
-import msgRoute from "./routes/sendmsg.route.js";
+import msgRoute from "./routes/msg.route.js";
 import backupRoute from "./routes/backup.route.js";
 import batchRoute from "./routes/batch.route.js";
 import plantOutward from "./routes/plantOutward.route.js";
@@ -58,7 +58,7 @@ server.get("/api/dummyData", (req, res) => {
 
 // defining routes
 server.use("/api/v1/user", userRoute);
-server.use(verifyToken)
+server.use(verifyToken);
 server.use("/api/v1/farmer", limiter, farmerRoute);
 server.use("/api/v1/order", orderRoute);
 server.use("/api/v1/cms", cmsRoute);

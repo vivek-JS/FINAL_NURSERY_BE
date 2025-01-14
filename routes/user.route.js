@@ -50,13 +50,7 @@ router
     deleteUser
   )
   .get("/allusers", getUsers)
-  .post(
-    "/resetPassword",
-    resetPassword
-  )
-  .get(
-    "/aboutMe",
-    aboutMe
-  );
+  .post("/resetPassword", resetPassword)
+  .get("/aboutMe", aboutMe);
 
 export default router;
