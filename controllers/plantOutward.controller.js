@@ -477,6 +477,498 @@ const getPrimaryInwardByBatchId = catchAsync(async (req, res, next) => {
   });
 });
 
+const labToPrimaryInward = catchAsync(async (req, res, next) => {
+  const { batchId } = req.params;
+  const {
+    labEntryId,  // Added this as source
+    primaryInwardDate,
+    numberOfBottles,
+    size,
+    cavity,
+    numberOfTrays,
+    pollyhouse,
+    laboursEngaged,
+    remarks
+  } = req.body;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Validate required fields
+    if (!labEntryId || !primaryInwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse) {
+      throw new AppError("Missing required fields", 400);
+    }
+
+    // Find and validate plant outward document
+    const plantOutward = await PlantOutward.findOne({ batchId }).session(session);
+    if (!plantOutward) {
+      throw new AppError("No plant outward found with this batch ID", 404);
+    }
+
+    // Find and validate lab entry
+    const labEntry = plantOutward.outward.id(labEntryId);
+    if (!labEntry) {
+      throw new AppError("Lab entry not found", 404);
+    }
+
+    // Calculate available quantities
+    const calculatedTotalQuantity = cavity * numberOfTrays;
+
+    // Validate transfer using model method
+    try {
+      plantOutward.validateTransfer('outward', labEntryId, calculatedTotalQuantity);
+    } catch (error) {
+      throw new AppError(error.message, 400);
+    }
+
+    // Create transfer history entry for lab
+    const labTransferHistory = {
+      transferDate: primaryInwardDate,
+      bottlesTransferred: numberOfBottles,
+      plantsTransferred: calculatedTotalQuantity,
+      remarks
+    };
+
+    // Create primary inward entry
+    const primaryInwardEntry = {
+      primaryInwardDate,
+      numberOfBottles,
+      size,
+      cavity,
+      numberOfTrays,
+      totalQuantity: calculatedTotalQuantity,
+      availableQuantity: calculatedTotalQuantity,
+      pollyhouse,
+      laboursEngaged,
+      transferStatus: 'available',
+      sourceLabId: labEntryId
+    };
+
+    // Update lab entry's transfer status
+    const newLabStatus = 
+      labEntry.availablePlants - calculatedTotalQuantity === 0 ? 
+      'fully_transferred' : 'partially_transferred';
+
+    const updatedDoc = await PlantOutward.findOneAndUpdate(
+      { batchId, "outward._id": labEntryId },
+      {
+        $push: {
+          primaryInward: primaryInwardEntry,
+          "outward.$.transferHistory": labTransferHistory
+        },
+        $set: {
+          "outward.$.transferStatus": newLabStatus,
+          "outward.$.availablePlants": labEntry.availablePlants - calculatedTotalQuantity,
+          "outward.$.availableBottles": labEntry.availableBottles - numberOfBottles
+        }
+      },
+      { new: true, session, runValidators: true }
+    );
+
+    await session.commitTransaction();
+
+    const response = generateResponse(
+      "Success",
+      "Transfer from lab to primary completed successfully",
+      updatedDoc
+    );
+
+    res.status(200).json(response);
+  } catch (error) {
+    await session.abortTransaction();
+    next(error);
+  } finally {
+    session.endSession();
+  }
+});
+
+const primaryInwardToPrimaryOutward = catchAsync(async (req, res, next) => {
+  const { batchId } = req.params;
+  const {
+    primaryInwardId,  // Added this as source
+    primaryOutwardDate,
+    numberOfBottles,
+    size,
+    cavity,
+    numberOfTrays,
+    pollyhouse,
+    laboursEngaged,
+    remarks
+  } = req.body;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Validate required fields
+    if (!primaryInwardId || !primaryOutwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse) {
+      throw new AppError("Missing required fields", 400);
+    }
+
+    const plantOutward = await PlantOutward.findOne({ batchId }).session(session);
+    if (!plantOutward) {
+      throw new AppError("No plant outward found with this batch ID", 404);
+    }
+
+    // Find and validate primary inward entry
+    const primaryInward = plantOutward.primaryInward.id(primaryInwardId);
+    if (!primaryInward) {
+      throw new AppError("Primary inward entry not found", 404);
+    }
+
+    const calculatedTotalQuantity = cavity * numberOfTrays;
+
+    // Validate transfer
+    try {
+      plantOutward.validateTransfer('primaryInward', primaryInwardId, calculatedTotalQuantity);
+    } catch (error) {
+      throw new AppError(error.message, 400);
+    }
+
+    // Create transfer history for primary inward
+    const transferHistory = {
+      transferDate: primaryOutwardDate,
+      quantityTransferred: calculatedTotalQuantity,
+      remarks
+    };
+
+    // Create primary outward entry
+    const primaryOutwardEntry = {
+      primaryOutwardDate,
+      numberOfBottles,
+      size,
+      cavity,
+      numberOfTrays,
+      totalQuantity: calculatedTotalQuantity,
+      availableQuantity: calculatedTotalQuantity,
+      pollyhouse,
+      laboursEngaged,
+      transferStatus: 'available'
+    };
+
+    const newPrimaryInwardStatus = 
+      primaryInward.availableQuantity - calculatedTotalQuantity === 0 ? 
+      'fully_transferred' : 'partially_transferred';
+
+    const updatedDoc = await PlantOutward.findOneAndUpdate(
+      { batchId, "primaryInward._id": primaryInwardId },
+      {
+        $push: {
+          primaryOutward: primaryOutwardEntry,
+          "primaryInward.$.transferHistory": transferHistory
+        },
+        $set: {
+          "primaryInward.$.transferStatus": newPrimaryInwardStatus,
+          "primaryInward.$.availableQuantity": primaryInward.availableQuantity - calculatedTotalQuantity
+        }
+      },
+      { new: true, session, runValidators: true }
+    );
+
+    await session.commitTransaction();
+
+    const response = generateResponse(
+      "Success",
+      "Transfer from primary inward to outward completed successfully",
+      updatedDoc
+    );
+
+    res.status(200).json(response);
+  } catch (error) {
+    await session.abortTransaction();
+    next(error);
+  } finally {
+    session.endSession();
+  }
+});
+
+const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
+  const { batchId } = req.params;
+  const {
+    primaryOutwardId,  // Added source ID
+    secondaryInwardDate,
+    numberOfBottles,
+    size,
+    cavity,
+    numberOfTrays,
+    pollyhouse,
+    laboursEngaged,
+    remarks
+  } = req.body;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Validate required fields
+    if (!primaryOutwardId || !secondaryInwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse) {
+      throw new AppError("Missing required fields", 400);
+    }
+
+    const plantOutward = await PlantOutward.findOne({ batchId }).session(session);
+    if (!plantOutward) {
+      throw new AppError("No plant outward found with this batch ID", 404);
+    }
+
+    // Find and validate primary outward entry
+    const primaryOutward = plantOutward.primaryOutward.id(primaryOutwardId);
+    if (!primaryOutward) {
+      throw new AppError("Primary outward entry not found", 404);
+    }
+
+    const calculatedTotalQuantity = cavity * numberOfTrays;
+
+    // Validate transfer
+    try {
+      plantOutward.validateTransfer('primaryOutward', primaryOutwardId, calculatedTotalQuantity);
+    } catch (error) {
+      throw new AppError(error.message, 400);
+    }
+
+    // Create transfer history for primary outward
+    const transferHistory = {
+      transferDate: secondaryInwardDate,
+      quantityTransferred: calculatedTotalQuantity,
+      remarks
+    };
+
+    // Create secondary inward entry
+    const secondaryInwardEntry = {
+      secondaryInwardDate,
+      numberOfBottles,
+      size,
+      cavity,
+      numberOfTrays,
+      totalQuantity: calculatedTotalQuantity,
+      availableQuantity: calculatedTotalQuantity,
+      pollyhouse,
+      laboursEngaged,
+      transferStatus: 'available',
+      sourcePrimaryOutwardId: primaryOutwardId
+    };
+
+    const newPrimaryOutwardStatus = 
+      primaryOutward.availableQuantity - calculatedTotalQuantity === 0 ? 
+      'fully_transferred' : 'partially_transferred';
+
+    const updatedDoc = await PlantOutward.findOneAndUpdate(
+      { batchId, "primaryOutward._id": primaryOutwardId },
+      {
+        $push: {
+          secondaryInward: secondaryInwardEntry,
+          "primaryOutward.$.transferHistory": transferHistory
+        },
+        $set: {
+          "primaryOutward.$.transferStatus": newPrimaryOutwardStatus,
+          "primaryOutward.$.availableQuantity": primaryOutward.availableQuantity - calculatedTotalQuantity
+        }
+      },
+      { new: true, session, runValidators: true }
+    );
+
+    await session.commitTransaction();
+
+    const response = generateResponse(
+      "Success",
+      "Transfer from primary outward to secondary inward completed successfully",
+      updatedDoc
+    );
+
+    res.status(200).json(response);
+  } catch (error) {
+    await session.abortTransaction();
+    next(error);
+  } finally {
+    session.endSession();
+  }
+});
+
+const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
+  const { batchId } = req.params;
+  const {
+    secondaryInwardId,  // Added source ID
+    secondaryOutwardDate,
+    numberOfBottles,
+    size,
+    cavity,
+    numberOfTrays,
+    pollyhouse,
+    laboursEngaged,
+    remarks
+  } = req.body;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Validate required fields
+    if (!secondaryInwardId || !secondaryOutwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse) {
+      throw new AppError("Missing required fields", 400);
+    }
+
+    const plantOutward = await PlantOutward.findOne({ batchId }).session(session);
+    if (!plantOutward) {
+      throw new AppError("No plant outward found with this batch ID", 404);
+    }
+
+    // Find and validate secondary inward entry
+    const secondaryInward = plantOutward.secondaryInward.id(secondaryInwardId);
+    if (!secondaryInward) {
+      throw new AppError("Secondary inward entry not found", 404);
+    }
+
+    const calculatedTotalQuantity = cavity * numberOfTrays;
+
+    // Validate transfer
+    try {
+      plantOutward.validateTransfer('secondaryInward', secondaryInwardId, calculatedTotalQuantity);
+    } catch (error) {
+      throw new AppError(error.message, 400);
+    }
+
+    // Create transfer history for secondary inward
+    const transferHistory = {
+      transferDate: secondaryOutwardDate,
+      quantityTransferred: calculatedTotalQuantity,
+      remarks
+    };
+
+    // Create secondary outward entry
+    const secondaryOutwardEntry = {
+      secondaryOutwardDate,
+      numberOfBottles,
+      size,
+      cavity,
+      numberOfTrays,
+      totalQuantity: calculatedTotalQuantity,
+      availableQuantity: calculatedTotalQuantity,
+      pollyhouse,
+      laboursEngaged,
+      transferStatus: 'available',
+      sourceSecondaryInwardId: secondaryInwardId
+    };
+
+    const newSecondaryInwardStatus = 
+      secondaryInward.availableQuantity - calculatedTotalQuantity === 0 ? 
+      'fully_transferred' : 'partially_transferred';
+
+    const updatedDoc = await PlantOutward.findOneAndUpdate(
+      { batchId, "secondaryInward._id": secondaryInwardId },
+      {
+        $push: {
+          secondaryOutward: secondaryOutwardEntry,
+          "secondaryInward.$.transferHistory": transferHistory
+        },
+        $set: {
+          "secondaryInward.$.transferStatus": newSecondaryInwardStatus,
+          "secondaryInward.$.availableQuantity": secondaryInward.availableQuantity - calculatedTotalQuantity
+        }
+      },
+      { new: true, session, runValidators: true }
+    );
+
+    await session.commitTransaction();
+
+    const response = generateResponse(
+      "Success",
+      "Transfer from secondary inward to secondary outward completed successfully",
+      updatedDoc
+    );
+
+    res.status(200).json(response);
+  } catch (error) {
+    await session.abortTransaction();
+    next(error);
+  } finally {
+    session.endSession();
+  }
+});
+
+// Updated getTransferHistory to include all stages
+const getTransferHistory = catchAsync(async (req, res, next) => {
+  const { batchId } = req.params;
+  const { stage, startDate, endDate } = req.query;
+
+  const plantOutward = await PlantOutward.findOne({ batchId });
+  if (!plantOutward) {
+    throw new AppError("No plant outward found with this batch ID", 404);
+  }
+
+  let transfers = [];
+
+  // Get lab to primary transfers
+  if (!stage || stage === "lab") {
+    const labTransfers = plantOutward.outward.flatMap(lab => 
+      lab.transferHistory.map(t => ({
+        ...t.toObject(),
+        fromStage: "lab",
+        toStage: "primary_inward",
+        size: lab.size
+      }))
+    );
+    transfers = [...transfers, ...labTransfers];
+  }
+
+  // Get primary inward to outward transfers
+  if (!stage || stage === "primary_inward") {
+    const primaryInwardTransfers = plantOutward.primaryInward.flatMap(primary => 
+      primary.transferHistory.map(t => ({
+        ...t.toObject(),
+        fromStage: "primary_inward",
+        toStage: "primary_outward",
+        size: primary.size
+      }))
+    );
+    transfers = [...transfers, ...primaryInwardTransfers];
+  }
+
+  // Get primary outward to secondary transfers
+  if (!stage || stage === "primary_outward") {
+    const primaryOutwardTransfers = plantOutward.primaryOutward.flatMap(primary => 
+      primary.transferHistory.map(t => ({
+        ...t.toObject(),
+        fromStage: "primary_outward",
+        toStage: "secondary_inward",
+        size: primary.size
+      }))
+    );
+    transfers = [...transfers, ...primaryOutwardTransfers];
+  }
+
+  // Get secondary inward to outward transfers
+  if (!stage || stage === "secondary_inward") {
+    const secondaryInwardTransfers = plantOutward.secondaryInward.flatMap(secondary => 
+      secondary.transferHistory.map(t => ({
+        ...t.toObject(),
+        fromStage: "secondary_inward",
+        toStage: "secondary_outward",
+        size: secondary.size
+      }))
+    );
+    transfers = [...transfers, ...secondaryInwardTransfers];
+  }
+
+  // Apply date filters if provided
+  if (startDate && endDate) {
+    transfers = transfers.filter(
+      t => t.transferDate >= new Date(startDate) && 
+           t.transferDate <= new Date(endDate)
+    );
+  }
+
+  // Sort by date
+  transfers.sort((a, b) => b.transferDate - a.transferDate);
+
+  const response = generateResponse(
+    "Success",
+    "Transfer history retrieved successfully",
+    transfers
+  );
+
+  res.status(200).json(response);
+});
+
 export {
   addLabEntry,
   updateLabEntry,
@@ -486,4 +978,9 @@ export {
   updatePrimaryInward,
   deletePrimaryInward,
   getPrimaryInwardByBatchId,
+  labToPrimaryInward,
+  primaryInwardToPrimaryOutward,
+  primaryToSecondaryInward,
+  secondaryInwardToSecondaryOutward,
+  getTransferHistory,
 };
