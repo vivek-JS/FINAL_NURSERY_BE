@@ -5,13 +5,13 @@ const broadcastGroupSchema = new Schema(
     name: {
       type: String,
       required: true,
-      trim: true
+      trim: true,
     },
     description: String,
     members: [
       {
         type: Schema.Types.ObjectId,
-        ref: 'Farmer',
+        ref: "Farmer",
         required: true,
       },
     ],

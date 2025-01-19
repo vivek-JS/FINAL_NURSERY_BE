@@ -28,6 +28,28 @@ const labSchema = new Schema({
     type: Date,
     required: true,
   },
+  transferStatus: {
+    type: String,
+    enum: ["available", "partially_transferred", "fully_transferred"],
+    default: "available",
+  },
+  transferHistory: [
+    {
+      transferDate: Date,
+      bottlesTransferred: Number,
+      plantsTransferred: Number,
+      destinationId: Schema.Types.ObjectId,
+      remarks: String,
+    },
+  ],
+  availableBottles: {
+    type: Number,
+    min: 0,
+  },
+  availablePlants: {
+    type: Number,
+    min: 0,
+  },
 });
 
 // Primary Inward Schema
@@ -64,6 +86,10 @@ const primaryInwardSchema = new Schema({
     required: true,
     min: 1,
   },
+  availableQuantity: {
+    type: Number,
+    min: 0,
+  },
   pollyhouse: {
     type: String,
     required: true,
@@ -73,119 +99,225 @@ const primaryInwardSchema = new Schema({
     required: true,
     min: 1,
   },
+  transferStatus: {
+    type: String,
+    enum: ["available", "partially_transferred", "fully_transferred"],
+    default: "available",
+  },
+  transferHistory: [
+    {
+      transferDate: Date,
+      quantityTransferred: Number,
+      destinationId: Schema.Types.ObjectId,
+      remarks: String,
+    },
+  ],
 });
 
-// Summary Schema updated with available plants
+// Primary Outward Schema
+const primaryOutwardSchema = new Schema({
+  primaryOutwardDate: {
+    type: Date,
+    required: true,
+  },
+  numberOfBottles: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  size: {
+    type: String,
+    required: true,
+    enum: ["R1", "R2", "R3"],
+  },
+  cavity: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  numberOfTrays: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  totalQuantity: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  availableQuantity: {
+    type: Number,
+    min: 0,
+  },
+  pollyhouse: {
+    type: String,
+    required: true,
+  },
+  laboursEngaged: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  transferStatus: {
+    type: String,
+    enum: ["available", "partially_transferred", "fully_transferred"],
+    default: "available",
+  },
+  transferHistory: [
+    {
+      transferDate: Date,
+      quantityTransferred: Number,
+      destinationId: Schema.Types.ObjectId,
+      remarks: String,
+    },
+  ],
+});
+
+// Secondary Inward Schema
+const secondaryInwardSchema = new Schema({
+  secondaryInwardDate: {
+    type: Date,
+    required: true,
+  },
+  secondaryOutwardExpectedDate: {
+    type: Date,
+  },
+  numberOfBottles: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  size: {
+    type: String,
+    required: true,
+    enum: ["R1", "R2", "R3"],
+  },
+  cavity: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  numberOfTrays: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  totalQuantity: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  availableQuantity: {
+    type: Number,
+    min: 0,
+  },
+  pollyhouse: {
+    type: String,
+    required: true,
+  },
+  laboursEngaged: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  transferStatus: {
+    type: String,
+    enum: ["available", "partially_transferred", "fully_transferred"],
+    default: "available",
+  },
+  transferHistory: [
+    {
+      transferDate: Date,
+      quantityTransferred: Number,
+      destinationId: Schema.Types.ObjectId,
+      remarks: String,
+    },
+  ],
+});
+
+// Secondary Outward Schema
+const secondaryOutwardSchema = new Schema({
+  secondaryOutwardDate: {
+    type: Date,
+    required: true,
+  },
+  numberOfBottles: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  size: {
+    type: String,
+    required: true,
+    enum: ["R1", "R2", "R3"],
+  },
+  cavity: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  numberOfTrays: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  totalQuantity: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  availableQuantity: {
+    type: Number,
+    min: 0,
+  },
+  pollyhouse: {
+    type: String,
+    required: true,
+  },
+  laboursEngaged: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  transferStatus: {
+    type: String,
+    enum: ["available", "partially_transferred", "fully_transferred"],
+    default: "available",
+  },
+  transferHistory: [
+    {
+      transferDate: Date,
+      quantityTransferred: Number,
+      remarks: String,
+    },
+  ],
+});
+
+// Update summary schema to include all stages
+const stageSummarySchema = new Schema(
+  {
+    totalBottles: { type: Number, default: 0 },
+    availableBottles: { type: Number, default: 0 },
+    totalPlants: { type: Number, default: 0 },
+    availablePlants: { type: Number, default: 0 },
+    primaryInwardBottles: { type: Number, default: 0 },
+    primaryInwardPlants: { type: Number, default: 0 },
+    primaryOutwardBottles: { type: Number, default: 0 },
+    primaryOutwardPlants: { type: Number, default: 0 },
+    secondaryInwardBottles: { type: Number, default: 0 },
+    secondaryInwardPlants: { type: Number, default: 0 },
+    secondaryOutwardBottles: { type: Number, default: 0 },
+    secondaryOutwardPlants: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 const summarySchema = new Schema(
   {
-    R1: {
-      totalBottles: {
-        type: Number,
-        default: 0,
-      },
-      availableBottles: {
-        type: Number,
-        default: 0,
-      },
-      totalPlants: {
-        type: Number,
-        default: 0,
-      },
-      availablePlants: {
-        // Added new field
-        type: Number,
-        default: 0,
-      },
-      primaryInwardBottles: {
-        type: Number,
-        default: 0,
-      },
-      primaryInwardPlants: {
-        type: Number,
-        default: 0,
-      },
-    },
-    R2: {
-      totalBottles: {
-        type: Number,
-        default: 0,
-      },
-      availableBottles: {
-        type: Number,
-        default: 0,
-      },
-      totalPlants: {
-        type: Number,
-        default: 0,
-      },
-      availablePlants: {
-        // Added new field
-        type: Number,
-        default: 0,
-      },
-      primaryInwardBottles: {
-        type: Number,
-        default: 0,
-      },
-      primaryInwardPlants: {
-        type: Number,
-        default: 0,
-      },
-    },
-    R3: {
-      totalBottles: {
-        type: Number,
-        default: 0,
-      },
-      availableBottles: {
-        type: Number,
-        default: 0,
-      },
-      totalPlants: {
-        type: Number,
-        default: 0,
-      },
-      availablePlants: {
-        // Added new field
-        type: Number,
-        default: 0,
-      },
-      primaryInwardBottles: {
-        type: Number,
-        default: 0,
-      },
-      primaryInwardPlants: {
-        type: Number,
-        default: 0,
-      },
-    },
-    total: {
-      bottles: {
-        type: Number,
-        default: 0,
-      },
-      availableBottles: {
-        type: Number,
-        default: 0,
-      },
-      plants: {
-        type: Number,
-        default: 0,
-      },
-      availablePlants: {
-        // Added new field
-        type: Number,
-        default: 0,
-      },
-      primaryInwardBottles: {
-        type: Number,
-        default: 0,
-      },
-      primaryInwardPlants: {
-        type: Number,
-        default: 0,
-      },
-    },
+    R1: { type: stageSummarySchema },
+    R2: { type: stageSummarySchema },
+    R3: { type: stageSummarySchema },
+    total: { type: stageSummarySchema },
   },
   { _id: false }
 );
@@ -203,43 +335,18 @@ const plantOutwardSchema = new Schema(
       required: true,
       default: Date.now,
     },
-    primaryInward: [primaryInwardSchema],
     outward: [labSchema],
+    primaryInward: [primaryInwardSchema],
+    primaryOutward: [primaryOutwardSchema],
+    secondaryInward: [secondaryInwardSchema],
+    secondaryOutward: [secondaryOutwardSchema],
     summary: {
       type: summarySchema,
       default: () => ({
-        R1: {
-          totalBottles: 0,
-          availableBottles: 0,
-          totalPlants: 0,
-          availablePlants: 0,
-          primaryInwardBottles: 0,
-          primaryInwardPlants: 0,
-        },
-        R2: {
-          totalBottles: 0,
-          availableBottles: 0,
-          totalPlants: 0,
-          availablePlants: 0,
-          primaryInwardBottles: 0,
-          primaryInwardPlants: 0,
-        },
-        R3: {
-          totalBottles: 0,
-          availableBottles: 0,
-          totalPlants: 0,
-          availablePlants: 0,
-          primaryInwardBottles: 0,
-          primaryInwardPlants: 0,
-        },
-        total: {
-          bottles: 0,
-          availableBottles: 0,
-          plants: 0,
-          availablePlants: 0,
-          primaryInwardBottles: 0,
-          primaryInwardPlants: 0,
-        },
+        R1: {},
+        R2: {},
+        R3: {},
+        total: {},
       }),
     },
     isActive: {
@@ -341,6 +448,102 @@ function calculatePrimaryInwardSummary(primaryInwardArray) {
   );
 }
 
+function calculateSecondaryInwardSummary(secondaryInwardArray) {
+  return secondaryInwardArray.reduce(
+    (summary, item) => {
+      const totalPlants = item.cavity * item.numberOfTrays;
+
+      // Add to secondary inward counts
+      summary[item.size].secondaryInwardBottles += item.numberOfBottles;
+      summary[item.size].secondaryInwardPlants += totalPlants;
+      summary[item.size].primaryOutwardBottles -= item.numberOfBottles;
+      summary[item.size].primaryOutwardPlants -= totalPlants; // Decrease from primary outward
+
+      // Update totals
+      summary.total.secondaryInwardBottles += item.numberOfBottles;
+      summary.total.secondaryInwardPlants += totalPlants;
+      summary.total.primaryOutwardBottles -= item.numberOfBottles;
+      summary.total.primaryOutwardPlants -= totalPlants;
+
+      return summary;
+    },
+    {
+      R1: {
+        secondaryInwardBottles: 0,
+        secondaryInwardPlants: 0,
+        primaryOutwardBottles: 0,
+        primaryOutwardPlants: 0,
+      },
+      R2: {
+        secondaryInwardBottles: 0,
+        secondaryInwardPlants: 0,
+        primaryOutwardBottles: 0,
+        primaryOutwardPlants: 0,
+      },
+      R3: {
+        secondaryInwardBottles: 0,
+        secondaryInwardPlants: 0,
+        primaryOutwardBottles: 0,
+        primaryOutwardPlants: 0,
+      },
+      total: {
+        secondaryInwardBottles: 0,
+        secondaryInwardPlants: 0,
+        primaryOutwardBottles: 0,
+        primaryOutwardPlants: 0,
+      },
+    }
+  );
+}
+
+function calculateSecondaryOutwardSummary(secondaryOutwardArray) {
+  return secondaryOutwardArray.reduce(
+    (summary, item) => {
+      const totalPlants = item.cavity * item.numberOfTrays;
+
+      // Add to secondary outward counts
+      summary[item.size].secondaryOutwardBottles += item.numberOfBottles;
+      summary[item.size].secondaryOutwardPlants += totalPlants;
+      summary[item.size].secondaryInwardBottles -= item.numberOfBottles;
+      summary[item.size].secondaryInwardPlants -= totalPlants; // Decrease from secondary inward
+
+      // Update totals
+      summary.total.secondaryOutwardBottles += item.numberOfBottles;
+      summary.total.secondaryOutwardPlants += totalPlants;
+      summary.total.secondaryInwardBottles -= item.numberOfBottles;
+      summary.total.secondaryInwardPlants -= totalPlants;
+
+      return summary;
+    },
+    {
+      R1: {
+        secondaryOutwardBottles: 0,
+        secondaryOutwardPlants: 0,
+        secondaryInwardBottles: 0,
+        secondaryInwardPlants: 0,
+      },
+      R2: {
+        secondaryOutwardBottles: 0,
+        secondaryOutwardPlants: 0,
+        secondaryInwardBottles: 0,
+        secondaryInwardPlants: 0,
+      },
+      R3: {
+        secondaryOutwardBottles: 0,
+        secondaryOutwardPlants: 0,
+        secondaryInwardBottles: 0,
+        secondaryInwardPlants: 0,
+      },
+      total: {
+        secondaryOutwardBottles: 0,
+        secondaryOutwardPlants: 0,
+        secondaryInwardBottles: 0,
+        secondaryInwardPlants: 0,
+      },
+    }
+  );
+}
+
 // Helper function to combine summaries
 function combineSummaries(outwardSummary, primaryInwardSummary) {
   const sizes = ["R1", "R2", "R3", "total"];
@@ -370,124 +573,71 @@ function combineSummaries(outwardSummary, primaryInwardSummary) {
   return combined;
 }
 
-// Pre-save middleware
+// Pre-save middleware to calculate availableQuantity
 plantOutwardSchema.pre("save", function (next) {
-  if (this.isModified("outward") || this.isModified("primaryInward")) {
+  if (
+    this.isModified("outward") ||
+    this.isModified("primaryInward") ||
+    this.isModified("primaryOutward") ||
+    this.isModified("secondaryInward") ||
+    this.isModified("secondaryOutward")
+  ) {
+    // Calculate available quantities
+    this.outward.forEach((lab) => {
+      const transferredBottles = lab.transferHistory.reduce(
+        (sum, t) => sum + t.bottlesTransferred,
+        0
+      );
+      const transferredPlants = lab.transferHistory.reduce(
+        (sum, t) => sum + t.plantsTransferred,
+        0
+      );
+      lab.availableBottles = lab.bottles - transferredBottles;
+      lab.availablePlants = lab.plants - transferredPlants;
+    });
+
+    [
+      "primaryInward",
+      "primaryOutward",
+      "secondaryInward",
+      "secondaryOutward",
+    ].forEach((stage) => {
+      this[stage].forEach((entry) => {
+        const transferredQuantity = entry.transferHistory.reduce(
+          (sum, t) => sum + t.quantityTransferred,
+          0
+        );
+        entry.availableQuantity = entry.totalQuantity - transferredQuantity;
+      });
+    });
+
+    // Calculate summaries for all stages
     const outwardSummary = calculateOutwardSummary(this.outward || []);
     const primaryInwardSummary = calculatePrimaryInwardSummary(
       this.primaryInward || []
     );
-    this.summary = combineSummaries(outwardSummary, primaryInwardSummary);
+    const primaryOutwardSummary = calculatePrimaryOutwardSummary(
+      this.primaryOutward || []
+    );
+    const secondaryInwardSummary = calculateSecondaryInwardSummary(
+      this.secondaryInward || []
+    );
+    const secondaryOutwardSummary = calculateSecondaryOutwardSummary(
+      this.secondaryOutward || []
+    );
+
+    this.summary = combineAllStageSummaries(
+      outwardSummary,
+      primaryInwardSummary,
+      primaryOutwardSummary,
+      secondaryInwardSummary,
+      secondaryOutwardSummary
+    );
   }
   next();
 });
 
-// Pre-findOneAndUpdate middleware
-plantOutwardSchema.pre("findOneAndUpdate", async function (next) {
-  try {
-    const update = this.getUpdate();
-    const doc = await this.model.findOne(this.getQuery());
-
-    if (!doc) return next();
-
-    const batch = await Batch.findById(doc.batchId);
-    if (!batch) {
-      throw new Error("Associated batch not found");
-    }
-
-    let newOutward = [...(doc.outward || [])];
-    let newPrimaryInward = [...(doc.primaryInward || [])];
-
-    // Handle outward updates
-    if (update.$push?.outward) {
-      newOutward.push(update.$push.outward);
-    } else if (update.$pull?.outward) {
-      newOutward = newOutward.filter(
-        (item) => !item._id.equals(update.$pull.outward._id)
-      );
-    } else if (update.$set?.outward) {
-      newOutward = update.$set.outward;
-    }
-
-    // Handle primaryInward updates with validation
-    if (update.$push?.primaryInward) {
-      const newInward = { ...update.$push.primaryInward };
-      const size = newInward.size;
-      const requiredPlants = newInward.cavity * newInward.numberOfTrays;
-
-      // Calculate current available resources
-      const outwardSummary = calculateOutwardSummary(newOutward);
-      const currentPrimaryInwardSummary =
-        calculatePrimaryInwardSummary(newPrimaryInward);
-      const currentSummary = combineSummaries(
-        outwardSummary,
-        currentPrimaryInwardSummary
-      );
-
-      // Check if enough resources are available
-      if (newInward.numberOfBottles > currentSummary[size].availableBottles) {
-        throw new Error(
-          `Not enough available bottles of size ${size}. Required: ${newInward.numberOfBottles}, Available: ${currentSummary[size].availableBottles}`
-        );
-      }
-
-      if (requiredPlants > currentSummary[size].availablePlants) {
-        throw new Error(
-          `Not enough available plants of size ${size}. Required: ${requiredPlants}, Available: ${currentSummary[size].availablePlants}`
-        );
-      }
-
-      // Set expected date
-      const primaryInwardDate = new Date(newInward.primaryInwardDate);
-      newInward.primaryOutwardExpectedDate = new Date(primaryInwardDate);
-      newInward.primaryOutwardExpectedDate.setDate(
-        primaryInwardDate.getDate() + batch.primaryPlantReadyDays
-      );
-
-      update.$push.primaryInward = newInward;
-      newPrimaryInward.push(newInward);
-    } else if (update.$pull?.primaryInward) {
-      newPrimaryInward = newPrimaryInward.filter(
-        (item) => !item._id.equals(update.$pull.primaryInward._id)
-      );
-    } else if (update.$set?.primaryInward) {
-      const updatedPrimaryInward = update.$set.primaryInward.map((inward) => {
-        const primaryInwardDate = new Date(inward.primaryInwardDate);
-        const expectedDate = new Date(primaryInwardDate);
-        expectedDate.setDate(
-          primaryInwardDate.getDate() + batch.primaryPlantReadyDays
-        );
-        return {
-          ...inward,
-          primaryOutwardExpectedDate: expectedDate,
-        };
-      });
-      update.$set.primaryInward = updatedPrimaryInward;
-      newPrimaryInward = updatedPrimaryInward;
-    }
-
-    // Calculate new summary
-    const outwardSummary = calculateOutwardSummary(newOutward);
-    const primaryInwardSummary =
-      calculatePrimaryInwardSummary(newPrimaryInward);
-    const newSummary = combineSummaries(outwardSummary, primaryInwardSummary);
-
-    // Update the summary
-    this.setUpdate({
-      ...update,
-      $set: {
-        ...(update.$set || {}),
-        summary: newSummary,
-      },
-    });
-
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Static method for safe updates with transactions
+// Add the transaction support method back
 plantOutwardSchema.statics.updateWithTransaction = async function (
   filter,
   update,
@@ -514,7 +664,31 @@ plantOutwardSchema.statics.updateWithTransaction = async function (
   }
 };
 
-// Create the model
+// Add validateTransfer method
+plantOutwardSchema.methods.validateTransfer = function (
+  fromStage,
+  fromId,
+  quantity
+) {
+  const sourceEntry = this[fromStage].id(fromId);
+  if (!sourceEntry) {
+    throw new Error("Source entry not found");
+  }
+
+  const availableQty =
+    fromStage === "outward"
+      ? sourceEntry.availablePlants
+      : sourceEntry.availableQuantity;
+
+  if (quantity > availableQty) {
+    throw new Error(
+      `Insufficient quantity available. Required: ${quantity}, Available: ${availableQty}`
+    );
+  }
+
+  return true;
+};
+
 const PlantOutward = model("PlantOutward", plantOutwardSchema);
 
 export default PlantOutward;
