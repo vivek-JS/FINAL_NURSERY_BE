@@ -5,6 +5,7 @@ import APIFeatures from "../utility/apiFeatures.js";
 import Tray from "../models/tray.model.js";
 import mongoose from "mongoose";
 import PlantOutward from "../models/plantOutward.model.js";
+
 const addLabEntry = catchAsync(async (req, res, next) => {
   const { batchId, labData } = req.body;
 
@@ -58,6 +59,7 @@ const addLabEntry = catchAsync(async (req, res, next) => {
     );
   }
 });
+
 const updateLabEntry = catchAsync(async (req, res, next) => {
   const { batchId, labId, labData } = req.body; // Removed outwardId as it's no longer needed
 
@@ -183,6 +185,7 @@ const getAllPlantOutwards = catchAsync(async (req, res, next) => {
     data: outwards,
   });
 });
+
 // getPlantOutwardByBatchId remains the same as it doesn't deal with the internal structure
 const getPlantOutwardByBatchId = catchAsync(async (req, res, next) => {
   const { batchId } = req.params;
