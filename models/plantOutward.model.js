@@ -163,6 +163,22 @@ const primaryOutwardSchema = new Schema({
     enum: ["available", "partially_transferred", "fully_transferred"],
     default: "available",
   },
+  qualityOfDispatch:{
+    type: String,
+    required: true,
+  },
+  isReceived:{
+    type: Boolean,
+    default: false,
+  },
+  dateOfPlantation:{
+    type: Date,
+    required: true,
+  },
+  numberOfDaysTaken:{
+    type: Number,
+    required: true,
+  }, 
   transferHistory: [
     {
       transferDate: Date,
@@ -224,6 +240,10 @@ const secondaryInwardSchema = new Schema({
     type: String,
     enum: ["available", "partially_transferred", "fully_transferred"],
     default: "available",
+  },
+  dateOfDispatch: {
+    type: Date,
+    required: true
   },
   transferHistory: [
     {

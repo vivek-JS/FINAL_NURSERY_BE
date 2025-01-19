@@ -594,7 +594,11 @@ const primaryInwardToPrimaryOutward = catchAsync(async (req, res, next) => {
     numberOfTrays,
     pollyhouse,
     laboursEngaged,
-    remarks
+    remarks,
+    qualityOfDispatch,
+    isReceived,
+    dateOfPlantation,
+    numberOfDaysTaken
   } = req.body;
 
   const session = await mongoose.startSession();
@@ -602,7 +606,7 @@ const primaryInwardToPrimaryOutward = catchAsync(async (req, res, next) => {
 
   try {
     // Validate required fields
-    if (!primaryInwardId || !primaryOutwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse) {
+    if (!primaryInwardId || !primaryOutwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse || !laboursEngaged || !remarks || !qualityOfDispatch || !isReceived || !dateOfPlantation || !numberOfDaysTaken) {
       throw new AppError("Missing required fields", 400);
     }
 
@@ -644,7 +648,12 @@ const primaryInwardToPrimaryOutward = catchAsync(async (req, res, next) => {
       availableQuantity: calculatedTotalQuantity,
       pollyhouse,
       laboursEngaged,
-      transferStatus: 'available'
+      transferStatus: 'available',
+      remarks,
+      qualityOfDispatch,
+      isReceived,
+      dateOfPlantation,
+      numberOfDaysTaken
     };
 
     const newPrimaryInwardStatus = 
@@ -694,7 +703,8 @@ const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
     numberOfTrays,
     pollyhouse,
     laboursEngaged,
-    remarks
+    remarks,
+    dateOfDispatch
   } = req.body;
 
   const session = await mongoose.startSession();
@@ -702,7 +712,7 @@ const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
 
   try {
     // Validate required fields
-    if (!primaryOutwardId || !secondaryInwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse) {
+    if (!primaryOutwardId || !secondaryInwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse || !dateOfDispatch) {
       throw new AppError("Missing required fields", 400);
     }
 
@@ -745,7 +755,8 @@ const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
       pollyhouse,
       laboursEngaged,
       transferStatus: 'available',
-      sourcePrimaryOutwardId: primaryOutwardId
+      sourcePrimaryOutwardId: primaryOutwardId,
+      dateOfDispatch
     };
 
     const newPrimaryOutwardStatus = 
@@ -969,6 +980,283 @@ const getTransferHistory = catchAsync(async (req, res, next) => {
   res.status(200).json(response);
 });
 
+const getPrimaryInwards = catchAsync(async (req, res, next) => {
+  const { batchId, startDate, endDate } = req.query;
+
+  // Initialize query object
+  const queryObj = {};
+
+  // Add batchId filter if provided
+  if (batchId) {
+    queryObj.batchId = batchId;
+  }
+
+  // Add date range filter if provided
+  if (startDate && endDate) {
+    queryObj["primaryInward"] = {
+      $elemMatch: {
+        primaryInwardDate: {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate)
+        }
+      }
+    };
+  }
+
+  const plantOutwards = await PlantOutward.find(queryObj)
+    .populate("batchId", "batchNumber dateAdded")
+    .select("primaryInward")
+    .sort("-createdAt");
+
+  // Extract only primaryInward data
+  const primaryInwards = plantOutwards.flatMap(po => po.primaryInward);
+
+  const response = generateResponse(
+    "Success",
+    "Primary inward entries retrieved successfully",
+    primaryInwards,
+    undefined
+  );
+
+  res.status(200).json(response);
+});
+
+const getPrimaryOutwards = catchAsync(async (req, res, next) => {
+  const { batchId, startDate, endDate, isReceived } = req.query;
+
+  // Initialize query object
+  const queryObj = {};
+
+  // Add batchId filter if provided
+  if (batchId) {
+    queryObj.batchId = batchId;
+  }
+
+  // Add date range filter if provided
+  if (startDate && endDate) {
+    queryObj["primaryOutward"] = {
+      $elemMatch: {
+        primaryOutwardDate: {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate)
+        }
+      }
+    };
+  }
+
+  // Add isReceived filter if provided
+  if (isReceived !== undefined) {
+    queryObj["primaryOutward.isReceived"] = isReceived === 'true';
+  }
+
+  const plantOutwards = await PlantOutward.find(queryObj)
+    .populate("batchId", "batchNumber dateAdded")
+    .select("primaryOutward")
+    .sort("-createdAt");
+
+  // Extract only primaryOutward data
+  const primaryOutwards = plantOutwards.flatMap(po => po.primaryOutward);
+
+  const response = generateResponse(
+    "Success",
+    "Primary outward entries retrieved successfully",
+    primaryOutwards,
+    undefined
+  );
+
+  res.status(200).json(response);
+});
+
+const getSecondaryInwards = catchAsync(async (req, res, next) => {
+  const { batchId, startDate, endDate } = req.query;
+
+  // Initialize query object
+  const queryObj = {};
+
+  // Add batchId filter if provided
+  if (batchId) {
+    queryObj.batchId = batchId;
+  }
+
+  // Add date range filter if provided
+  if (startDate && endDate) {
+    queryObj["secondaryInward"] = {
+      $elemMatch: {
+        secondaryInwardDate: {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate)
+        }
+      }
+    };
+  }
+
+  const plantOutwards = await PlantOutward.find(queryObj)
+    .populate("batchId", "batchNumber dateAdded")
+    .select("secondaryInward")
+    .sort("-createdAt");
+
+  // Extract only secondaryInward data
+  const secondaryInwards = plantOutwards.flatMap(po => po.secondaryInward);
+
+  const response = generateResponse(
+    "Success",
+    "Secondary inward entries retrieved successfully",
+    secondaryInwards,
+    undefined
+  );
+
+  res.status(200).json(response);
+});
+
+const getSecondaryOutwards = catchAsync(async (req, res, next) => {
+  const { batchId, startDate, endDate } = req.query;
+
+  // Initialize query object
+  const queryObj = {};
+
+  // Add batchId filter if provided
+  if (batchId) {
+    queryObj.batchId = batchId;
+  }
+
+  // Add date range filter if provided
+  if (startDate && endDate) {
+    queryObj["secondaryOutward"] = {
+      $elemMatch: {
+        secondaryOutwardDate: {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate)
+        }
+      }
+    };
+  }
+
+  const plantOutwards = await PlantOutward.find(queryObj)
+    .populate("batchId", "batchNumber dateAdded")
+    .select("secondaryOutward")
+    .sort("-createdAt");
+
+  // Extract only secondaryOutward data
+  const secondaryOutwards = plantOutwards.flatMap(po => po.secondaryOutward);
+
+  const response = generateResponse(
+    "Success",
+    "Secondary outward entries retrieved successfully",
+    secondaryOutwards,
+    undefined
+  );
+
+  res.status(200).json(response);
+});
+
+const getPrimaryInwardById = catchAsync(async (req, res, next) => {
+  const { batchId, primaryInwardId } = req.params;
+
+  const plantOutward = await PlantOutward.findOne({
+    batchId,
+    "primaryInward._id": primaryInwardId
+  }).populate("batchId", "batchNumber dateAdded");
+
+  if (!plantOutward) {
+    return next(new AppError("No plant outward found with this batch ID", 404));
+  }
+
+  const primaryInward = plantOutward.primaryInward.id(primaryInwardId);
+  if (!primaryInward) {
+    return next(new AppError("Primary inward entry not found", 404));
+  }
+
+  const response = generateResponse(
+    "Success",
+    "Primary inward entry retrieved successfully",
+    primaryInward,
+    undefined
+  );
+
+  res.status(200).json(response);
+});
+
+const getPrimaryOutwardById = catchAsync(async (req, res, next) => {
+  const { batchId, primaryOutwardId } = req.params;
+
+  const plantOutward = await PlantOutward.findOne({
+    batchId,
+    "primaryOutward._id": primaryOutwardId
+  }).populate("batchId", "batchNumber dateAdded");
+
+  if (!plantOutward) {
+    return next(new AppError("No plant outward found with this batch ID", 404));
+  }
+
+  const primaryOutward = plantOutward.primaryOutward.id(primaryOutwardId);
+  if (!primaryOutward) {
+    return next(new AppError("Primary outward entry not found", 404));
+  }
+
+  const response = generateResponse(
+    "Success",
+    "Primary outward entry retrieved successfully",
+    primaryOutward,
+    undefined
+  );
+
+  res.status(200).json(response);
+});
+
+const getSecondaryInwardById = catchAsync(async (req, res, next) => {
+  const { batchId, secondaryInwardId } = req.params;
+
+  const plantOutward = await PlantOutward.findOne({
+    batchId,
+    "secondaryInward._id": secondaryInwardId
+  }).populate("batchId", "batchNumber dateAdded");
+
+  if (!plantOutward) {
+    return next(new AppError("No plant outward found with this batch ID", 404));
+  }
+
+  const secondaryInward = plantOutward.secondaryInward.id(secondaryInwardId);
+  if (!secondaryInward) {
+    return next(new AppError("Secondary inward entry not found", 404));
+  }
+
+  const response = generateResponse(
+    "Success",
+    "Secondary inward entry retrieved successfully",
+    secondaryInward,
+    undefined
+  );
+
+  res.status(200).json(response);
+});
+
+const getSecondaryOutwardById = catchAsync(async (req, res, next) => {
+  const { batchId, secondaryOutwardId } = req.params;
+
+  const plantOutward = await PlantOutward.findOne({
+    batchId,
+    "secondaryOutward._id": secondaryOutwardId
+  }).populate("batchId", "batchNumber dateAdded");
+
+  if (!plantOutward) {
+    return next(new AppError("No plant outward found with this batch ID", 404));
+  }
+
+  const secondaryOutward = plantOutward.secondaryOutward.id(secondaryOutwardId);
+  if (!secondaryOutward) {
+    return next(new AppError("Secondary outward entry not found", 404));
+  }
+
+  const response = generateResponse(
+    "Success",
+    "Secondary outward entry retrieved successfully",
+    secondaryOutward,
+    undefined
+  );
+
+  res.status(200).json(response);
+});
+
 export {
   addLabEntry,
   updateLabEntry,
@@ -983,4 +1271,12 @@ export {
   primaryToSecondaryInward,
   secondaryInwardToSecondaryOutward,
   getTransferHistory,
+  getPrimaryInwards,
+  getPrimaryOutwards,
+  getSecondaryInwards,
+  getSecondaryOutwards,
+  getPrimaryInwardById,
+  getPrimaryOutwardById,
+  getSecondaryInwardById,
+  getSecondaryOutwardById
 };
