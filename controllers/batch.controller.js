@@ -27,10 +27,10 @@ const createBatch = catchAsync(async (req, res, next) => {
 
   const batch = await Batch.create({
     batchNumber,
-    dateAdded,
+    dateAdded, 
     primaryPlantReadyDays,
     secondaryPlantReadyDays,
-  });
+  }); 
 
   await PlantOutward.create({
     batchId: batch._id,
