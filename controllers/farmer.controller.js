@@ -1,9 +1,11 @@
 import Farmer from "../models/farmer.model.js";
+import Order from "../models/order.model.js";
 import AppError from "../utility/appError.js";
 import catchAsync from "../utility/catchAsync.js";
 import { getAll, updateOne, deleteOne } from "./factory.controller.js";
 import XLSX from "xlsx";
 import fs from "fs";
+import generateResponse from "../utility/responseFormat.js";
 
 const getFarmers = getAll(Farmer, "Farmer");
 const updateFarmer = updateOne(Farmer, "Farmer");
@@ -109,6 +111,38 @@ const uploadFarmers = catchAsync(async (req, res, next) => {
   });
 });
 
+// Get orders of particular farmer
+const getFarmerOrder = catchAsync(async(req, res, next) => {
+  const {farmerId, orderId} = req.params;
+
+  const farmer = await Farmer.findById(farmerId);
+
+  if(!farmer){
+    return next(new AppError("Farmer not found", 404));
+  }
+
+  let farmerOrders;
+
+  if(!orderId){
+    farmerOrders = await Order.find({ farmer: farmerId})
+  } else {
+    farmerOrders = await Order.find({ orderId, farmer: farmerId });
+  }
+
+  if (!farmerOrders || farmerOrders.length === 0) {
+    return next(new AppError("Order not found", 404));
+  }
+
+  const response = generateResponse(
+    "Success",
+    `Orders / order found successfully`,
+    farmerOrders,
+    undefined
+  );
+
+  return res.status(200).json(response);
+});
+
 export {
   createFarmer,
   updateFarmer,
@@ -116,4 +150,5 @@ export {
   findFarmer,
   getFarmers,
   uploadFarmers,
+  getFarmerOrder
 };

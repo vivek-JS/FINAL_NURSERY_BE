@@ -5,6 +5,7 @@ import {
   findFarmer,
   getFarmers,
   uploadFarmers,
+  getFarmerOrder
 } from "../controllers/farmer.controller.js";
 import { createOrder } from "../controllers/order.controller.js";
 import express from "express";
@@ -49,6 +50,7 @@ const upload = multer({
 router
   .get("/getfarmer/:mobileNumber", findFarmer)
   .get("/getFarmers", getFarmers)
+  .get("/farmers/:farmerId/orders/:orderId?", getFarmerOrder)
   .post("/uploadFarmers", upload.single("data"), uploadFarmers)
   .post(
     "/createFarmer",
