@@ -37,7 +37,6 @@ router
     // logger,
     createUser
   )
-  .use(verifyToken)
   .patch(
     "/updateUser",
     [check("id", "Please provide valid userId").isMongoId()],

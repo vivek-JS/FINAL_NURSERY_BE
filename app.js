@@ -58,7 +58,7 @@ server.get("/api/dummyData", (req, res) => {
 
 // defining routes
 server.use("/api/v1/user", userRoute);
-server.use(verifyToken);
+//server.use(verifyToken);
 server.use("/api/v1/farmer", limiter, farmerRoute);
 server.use("/api/v1/order", orderRoute);
 server.use("/api/v1/cms", cmsRoute);
