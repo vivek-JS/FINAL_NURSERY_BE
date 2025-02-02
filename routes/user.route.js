@@ -13,6 +13,7 @@ import {
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import verifyToken from "../middlewares/verifyToken.middleware.js";
+import logger from "../middlewares/logger.middleware.js";
 
 const router = express.Router();
 
@@ -33,6 +34,7 @@ router
     ],
     checkErrors,
     encryptPassword,
+    // logger,
     createUser
   )
   .use(verifyToken)
