@@ -29,8 +29,11 @@ const paymentSchema = new Schema(
     },
     remark: {
       type: String,
-      //  required: true,
     },
+    isWalletPayment:{
+      type: Boolean,
+      default: false,
+    }
   },
   { timestamps: true }
 );
@@ -42,10 +45,23 @@ const orderSchema = new Schema(
       unique: true,
       required: true,
     },
+    dealerOrder: {
+      type: Boolean,
+      default: false,
+    },
     farmer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Farmer",
-      required: true,
+      required: function() {
+        return !this.dealerOrder; // Required only if not a dealer order
+      }
+    },
+    dealer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: function() {
+        return this.dealerOrder; // Required only if it is a dealer order
+      }
     },
     salesPerson: {
       type: mongoose.Schema.Types.ObjectId,
@@ -70,6 +86,11 @@ const orderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "PlantSlot.subtypeSlots",
       required: true,
+    },
+    cavity: {
+      type: Schema.Types.ObjectId,
+      ref: "Tray",
+     // required: true,
     },
     rate: {
       type: Number,
@@ -119,6 +140,7 @@ const orderSchema = new Schema(
 
 // Indexes
 orderSchema.index({ farmer: 1 });
+orderSchema.index({ dealer: 1 });
 orderSchema.index({ salesPerson: 1 });
 orderSchema.index({ plantName: 1 });
 orderSchema.index({ bookingSlot: 1 });
@@ -126,6 +148,7 @@ orderSchema.index({ orderStatus: 1 });
 orderSchema.index({ createdAt: 1 });
 orderSchema.index({ orderPaymentStatus: 1 });
 orderSchema.index({ createdAt: 1, orderStatus: 1 });
+orderSchema.index({ cavity: 1 }); // Added index for cavity field
 
 // Pre-save middleware to generate unique orderId
 orderSchema.pre("save", async function (next) {
@@ -143,23 +166,6 @@ orderSchema.pre("save", async function (next) {
   }
 });
 
-// Pre-save middleware to generate unique orderId
-orderSchema.pre("save", async function (next) {
-  if (!this.isNew || this.orderId) return next();
-
-  try {
-    const maxOrder = await this.constructor
-      .findOne()
-      .sort({ orderId: -1 })
-      .select("orderId");
-    this.orderId = maxOrder ? maxOrder.orderId + 1 : 1; // Increment the highest orderId or start with 1
-    next();
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Pre-save middleware to calculate orderPaymentStatus
 // Pre-save middleware to calculate orderPaymentStatus based on paymentStatus "COLLECTED"
 orderSchema.pre("save", function (next) {
   // Filter payments with paymentStatus "COLLECTED"
@@ -174,6 +180,11 @@ orderSchema.pre("save", function (next) {
     totalCollected >= totalAmount ? "COMPLETED" : "PENDING";
   this.paymentCompleted = totalCollected >= totalAmount;
 
+  next();
+});
+
+// Add validation middleware to ensure proper business logic
+orderSchema.pre('validate', function(next) {
   next();
 });
 

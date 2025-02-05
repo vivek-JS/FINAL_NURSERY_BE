@@ -6,6 +6,7 @@ import {
   getOrders,
   updatePaymentStatus,
   getOrdersBySlot,
+  createDealerOrder
 } from "../controllers/order.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -27,6 +28,8 @@ router
     [check("id").isMongoId().withMessage("Please provide order id")],
     checkErrors,
     updateOrder
-  );
+  )
+  .post("/dealer-order", createDealerOrder)
+
 
 export default router;

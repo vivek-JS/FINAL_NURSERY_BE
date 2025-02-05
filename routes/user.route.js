@@ -9,11 +9,14 @@ import {
   getUsers,
   resetPassword,
   aboutMe,
+  getSalespeople,
+  getSalesAnalytics,
 } from "../controllers/user.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import verifyToken from "../middlewares/verifyToken.middleware.js";
 import logger from "../middlewares/logger.middleware.js";
+import { getDealerWalletDetails, getDealerWalletSummary } from "../controllers/walletController.js";
 
 const router = express.Router();
 
@@ -52,6 +55,12 @@ router
   )
   .get("/allusers", getUsers)
   .post("/resetPassword", resetPassword)
-  .get("/aboutMe", aboutMe);
+  .get("/aboutMe", aboutMe)
+  .get("/wallet-details/:dealerId", getDealerWalletDetails)
+  .get("/wallet-details-summary", getDealerWalletSummary)
+  .get('/salespeople', getSalespeople)
+.get('/analytics/sales', getSalesAnalytics);
+
+
 
 export default router;
