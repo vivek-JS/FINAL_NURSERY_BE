@@ -3,7 +3,8 @@
 import mongoose from "mongoose";
 import DealerOrder from "../models/dealerOrder.model.js";
 import DealerBooking from "../models/dealerBooking.model.js";
-import { updateSlot } from "./factory.controller.js";
+import { createOne, updateSlot } from "./factory.controller.js";
+import Order from "../models/order.model.js";
 
 // Helper function to calculate plants per slot
 const calculatePlantsPerSlot = (totalPlants, numberOfSlots) => {
@@ -15,129 +16,7 @@ const calculatePlantsPerSlot = (totalPlants, numberOfSlots) => {
     .map((plants, index) => (index < remainder ? plants + 1 : plants));
 };
 
-export const createDealerOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
 
-  try {
-    const {
-      dealer,
-      farmer,
-      numberOfPlants,
-      plantName,
-      plantSubtype,
-      bookingSlots,
-      rate,
-      payment,
-      notes,
-    } = req.body;
-
-    // Calculate plants per slot
-    const plantsPerSlot = calculatePlantsPerSlot(
-      numberOfPlants,
-      bookingSlots.length
-    );
-
-    // Update all booking slots
-    for (let i = 0; i < bookingSlots.length; i++) {
-      try {
-        await updateSlot(bookingSlots[i], plantsPerSlot[i], "subtract");
-      } catch (error) {
-        throw new Error(
-          `Failed to update slot ${bookingSlots[i]}: ${error.message}`
-        );
-      }
-    }
-
-    // Generate orderId
-    const lastOrder = await DealerOrder.findOne({}, { orderId: 1 })
-      .sort({ orderId: -1 })
-      .limit(1);
-
-    const nextOrderId = lastOrder ? lastOrder.orderId + 1 : 1;
-
-    // Create the dealer order
-    const newDealerOrder = new DealerOrder({
-      orderId: nextOrderId,
-      farmer,
-      dealer,
-      numberOfPlants,
-      plantName,
-      plantSubtype,
-      bookingSlots,
-      rate,
-      notes,
-      payment: payment ? [payment] : [],
-    });
-
-    // Calculate total payment
-    let totalPayment = 0;
-    if (payment && payment.paidAmount) {
-      totalPayment = payment.paidAmount;
-
-      if (totalPayment >= numberOfPlants * rate) {
-        newDealerOrder.orderPaymentStatus = "COMPLETED";
-        newDealerOrder.paymentCompleted = true;
-      }
-    }
-
-    // Save the dealer order
-    const savedOrder = await newDealerOrder.save({ session });
-
-    // Find or create dealer booking
-    let dealerBooking = await DealerBooking.findOne({ dealer });
-
-    if (!dealerBooking) {
-      dealerBooking = new DealerBooking({
-        dealer,
-        orders: [],
-        farmerOrders: [],
-        summary: {
-          totalAvailable: 0,
-          totalBooked: 0,
-          totalBalance: 0,
-          paymentRemaining: 0,
-          totalOrderPayments: 0,
-        },
-      });
-    }
-
-    // Update dealer booking
-    dealerBooking.orders.push(savedOrder._id);
-
-    // Update summary
-    const orderTotal = numberOfPlants * rate;
-    dealerBooking.summary.totalBooked += numberOfPlants;
-    dealerBooking.summary.totalBalance += orderTotal;
-    dealerBooking.summary.totalOrderPayments += totalPayment;
-    dealerBooking.summary.paymentRemaining += orderTotal - totalPayment;
-
-    await dealerBooking.save({ session });
-
-    // Commit transaction
-    await session.commitTransaction();
-
-    res.status(201).json({
-      success: true,
-      message: "Dealer order created successfully",
-      data: {
-        order: savedOrder,
-        booking: dealerBooking,
-      },
-    });
-  } catch (error) {
-    // Rollback transaction on error
-    await session.abortTransaction();
-
-    res.status(500).json({
-      success: false,
-      message: "Error creating dealer order",
-      error: error.message,
-    });
-  } finally {
-    session.endSession();
-  }
-};
 
 // Add this for order cancellation or updates
 export const cancelDealerOrder = async (req, res) => {
@@ -306,3 +185,7 @@ export const updateDealerOrderPayment = async (req, res) => {
     session.endSession();
   }
 };
+
+export const createDealerOrder = () =>{
+  
+}

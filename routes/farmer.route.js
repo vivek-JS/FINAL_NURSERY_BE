@@ -52,6 +52,7 @@ router
   .get("/getFarmers", getFarmers)
   .get("/farmers/:farmerId/orders/:orderId?", getFarmerOrder)
   .post("/uploadFarmers", upload.single("data"), uploadFarmers)
+
   .post(
     "/createFarmer",
     [

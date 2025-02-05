@@ -4,7 +4,59 @@ import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
 import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
+import DealerWallet from "../models/dealerWallet.js";
+import User from "../models/user.model.js";
+const updateDealerWalletBalance = async (dealerId, amount) => {
+  console.log(dealerId)
+  const wallet = await DealerWallet.findOne({ dealer: dealerId });
+  console.log(wallet)
 
+  if (!wallet) {
+    throw new Error('Dealer wallet not found');
+  }
+
+  // Convert both values to numbers for safe calculation
+  const currentBalance = Number(wallet.availableAmount);
+  const updateAmount = Number(amount);
+  
+  if (isNaN(currentBalance) || isNaN(updateAmount)) {
+    throw new Error('Invalid amount values');
+  }
+
+  wallet.availableAmount = currentBalance + updateAmount;
+  await wallet.save();
+  return wallet;
+};
+// Helper function to update dealer wallet entry
+const updateDealerWallet = async (dealerId, plantType, subType, quantity, session) => {
+  let wallet = await DealerWallet.findOne({ dealer: dealerId }).session(session);
+  
+  if (!wallet) {
+    wallet = new DealerWallet({
+      dealer: dealerId,
+      entries: []
+    });
+  }
+
+  const existingEntry = wallet.entries.find(
+    entry => entry.plantType.equals(plantType) && entry.subType.equals(subType)
+  );
+
+  if (existingEntry) {
+    existingEntry.bookedQuantity += quantity;
+  } else {
+    wallet.entries.push({
+      plantType,
+      subType,
+      quantity: 0,
+      bookedQuantity: quantity,
+      remainingQuantity: 0
+    });
+  }
+
+  await wallet.save({ session });
+  return wallet;
+};
 export const updateSlot = async (
   bookingSlot,
   numberOfPlants,
@@ -109,34 +161,99 @@ const createOne = (Model, modelName) =>
       session.startTransaction();
 
       try {
-        // Step 1: Find the highest orderId
-        const lastOrder = await Model.findOne()
-          .sort({ orderId: -1 })
-          .select("orderId");
-
-        const orderId = lastOrder ? lastOrder.orderId + 1 : 1;
-
-        // Step 2: Update the slot
-        try {
-          await updateSlot(bookingSlot, numberOfPlants, "subtract");
-        } catch (slotError) {
+        // Check if salesPerson exists and get their details
+        const salesPerson = await User.findById(orderData.salesPerson).session(session);
+        if (!salesPerson) {
           await session.abortTransaction();
           session.endSession();
           return res.status(400).json({
-            message: slotError.message || "Failed to update slot",
+            message: "Sales person not found"
           });
         }
 
-        // Step 3: Create the Order
-        const order = await Model.create(
-          [
-            {
-              ...orderData,
+        // Get the highest orderId
+        const lastOrder = await Model.findOne()
+          .sort({ orderId: -1 })
+          .select("orderId")
+          .session(session);
+
+        const orderId = lastOrder ? lastOrder.orderId + 1 : 1;
+
+        // Case 1: If it's a dealer's own order (creating stock)
+        if (orderData.dealerOrder) {
+          // Update slot first
+          try {
+            await updateSlot(bookingSlot, numberOfPlants, "subtract", session);
+          } catch (slotError) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({
+              message: slotError.message || "Failed to update slot",
+            });
+          }
+
+          // Add to dealer wallet
+          let wallet = await DealerWallet.findOne({ dealer: orderData.dealer }).session(session);
+          if (!wallet) {
+            wallet = new DealerWallet({
+              dealer: orderData.dealer,
+              entries: []
+            });
+          }
+
+          // Find or create entry for this slot
+          const entry = wallet.entries.find(
+            e => e.plantType?.equals(orderData.plantName) && 
+                 e.subType?.equals(orderData.plantSubtype) && 
+                 e.bookingSlot?.equals(bookingSlot)
+          );
+
+          if (entry) {
+            entry.quantity += numberOfPlants;
+          } else {
+            wallet.entries.push({
+              plantType: orderData.plantName,
+              subType: orderData.plantSubtype,
               bookingSlot,
-              numberOfPlants,
-              orderId,
-            },
-          ],
+              quantity: numberOfPlants,
+              bookedQuantity: 0,
+              remainingQuantity: numberOfPlants
+            });
+          }
+
+          await wallet.save({ session });
+        }
+        // Case 2: If it's a farmer order through a dealer
+        else if (salesPerson.jobTitle === 'DEALER' ) {
+          const allocation = await handleQuantityAllocation(
+            salesPerson._id,
+            orderData.plantName,
+            orderData.plantSubtype,
+            bookingSlot,
+            numberOfPlants,
+            session
+          );
+
+          if (allocation.fromSlot > 0) {
+            await updateSlot(bookingSlot, allocation.fromSlot, "subtract", session);
+          }
+
+          // Set dealer in orderData
+          orderData.dealer = salesPerson._id;
+        }
+        // Case 3: Regular farmer order
+        else {
+          await updateSlot(bookingSlot, numberOfPlants, "subtract", session);
+        }
+
+        // Create the Order
+        const order = await Model.create(
+          [{
+            ...orderData,
+            bookingSlot,
+            numberOfPlants,
+            orderId,
+          }],
           { session }
         );
 
@@ -145,7 +262,7 @@ const createOne = (Model, modelName) =>
 
         const response = generateResponse(
           "Success",
-          `${modelName} created successfully and slot updated`,
+          `${modelName} created successfully`,
           order[0],
           undefined
         );
@@ -154,8 +271,10 @@ const createOne = (Model, modelName) =>
       } catch (error) {
         await session.abortTransaction();
         session.endSession();
-        // console.error("[createOne] Error:", error.message);
-        return res.status(400).json({ message: error.message });
+        return res.status(400).json({ 
+          message: error.message,
+          type: error.name === 'AppError' ? error.type : 'UNKNOWN_ERROR'
+        });
       }
     }
 
@@ -171,7 +290,6 @@ const createOne = (Model, modelName) =>
 
     return res.status(201).json(response);
   });
-
 const { isValidObjectId } = mongoose;
 
 const updateOne = (Model, modelName, allowedFields) =>
@@ -203,7 +321,12 @@ const updateOne = (Model, modelName, allowedFields) =>
     session.startTransaction();
 
     try {
-      const existingDoc = await Model.findById(id).session(session);
+      const existingDoc = await Model.findById(id)
+        .populate('plantName')
+        .populate('plantSubtype')
+        .populate('salesPerson')
+        .session(session);
+
       if (!existingDoc) {
         throw new AppError("No document found with that ID", 404);
       }
@@ -215,6 +338,58 @@ const updateOne = (Model, modelName, allowedFields) =>
           return obj;
         }, {});
 
+      // Handle dealer wallet updates for rejected orders
+      if (!existingDoc.dealerOrder && existingDoc.salesPerson?.jobTitle === 'DEALER' && filteredBody.orderStatus === "REJECTED") {
+        let wallet = await DealerWallet.findOne({ dealer: existingDoc.salesPerson._id }).session(session);
+        
+        if (wallet) {
+          // Find entry for this plant type and subtype combination
+          const entry = wallet.entries.find(
+            e => e.plantType?.equals(existingDoc.plantName._id) && 
+                 e.subType?.equals(existingDoc.plantSubtype._id) &&
+                 e.bookingSlot?.equals(existingDoc.bookingSlot)
+          );
+
+          if (entry) {
+            // Calculate total collected payments
+            const totalCollectedAmount = existingDoc.payment
+              .filter(payment => payment.paymentStatus === "COLLECTED")
+              .reduce((sum, payment) => sum + (Number(payment.paidAmount) || 0), 0);
+
+            if (totalCollectedAmount > 0) {
+              // Reduce booked quantity and add back to quantity
+              if (entry.bookedQuantity >= existingDoc.numberOfPlants) {
+                entry.bookedQuantity -= existingDoc.numberOfPlants;
+              }
+            }
+            await wallet.save({ session });
+          }
+        }
+      }
+
+      // Handle payment updates
+      if (!existingDoc.dealerOrder && existingDoc.salesPerson?.jobTitle === 'DEALER' && filteredBody.payment) {
+        const newPayments = filteredBody.payment;
+        for (const payment of newPayments) {
+          if (payment.paymentStatus === "COLLECTED") {
+            let wallet = await DealerWallet.findOne({ dealer: existingDoc.salesPerson._id }).session(session);
+            if (wallet) {
+              const entry = wallet.entries.find(
+                e => e.plantType?.equals(existingDoc.plantName._id) && 
+                     e.subType?.equals(existingDoc.plantSubtype._id) &&
+                     e.bookingSlot?.equals(existingDoc.bookingSlot)
+              );
+
+              if (entry) {
+                entry.bookedQuantity += existingDoc.numberOfPlants;
+                await wallet.save({ session });
+              }
+            }
+          }
+        }
+      }
+
+      // Handle slot updates
       if (filteredBody.bookingSlot || filteredBody.numberOfPlants) {
         try {
           await handleSlotUpdates(existingDoc, filteredBody);
@@ -266,7 +441,6 @@ const updateOne = (Model, modelName, allowedFields) =>
       return next(error);
     }
   });
-
 // Helper function to handle slot updates
 const handleSlotUpdates = async (existingDoc, filteredBody) => {
   const { bookingSlot, numberOfPlants } = filteredBody;
@@ -569,6 +743,14 @@ const getAll = (Model, modelName) =>
       },
       {
         $lookup: {
+          from: "trays", // Add lookup for cavity/tray
+          localField: "cavity",
+          foreignField: "_id",
+          as: "cavityDetails",
+        },
+      },
+      {
+        $lookup: {
           from: "plantslots",
           let: { bookingSlotId: "$bookingSlot" },
           pipeline: [
@@ -709,6 +891,12 @@ const getAll = (Model, modelName) =>
             id: "$plantSubtypeDetails._id",
             name: "$plantSubtypeDetails.name",
           },
+          cavity: {
+            id: { $arrayElemAt: ["$cavityDetails._id", 0] },
+            name: { $arrayElemAt: ["$cavityDetails.name", 0] },
+            cavity: { $arrayElemAt: ["$cavityDetails.cavity", 0] },
+            numberPerCrate: { $arrayElemAt: ["$cavityDetails.numberPerCrate", 0] }
+          },
           bookingSlot: "$bookingSlotDetails",
           salesPerson: {
             $arrayElemAt: [
@@ -734,6 +922,7 @@ const getAll = (Model, modelName) =>
           farmReadyDate: 1, // Added farmReadyDate field\
           orderPaymentStatus: 1,
           paymentCompleted: 1,
+          dealerOrder:1
         },
       },
       { $sort: { [sortKey]: order } },
@@ -831,6 +1020,55 @@ const isDisabled = (Model, modelName) =>
     // }
     next();
   });
+  const handleQuantityAllocation = async (dealerId, plantType, subType, bookingSlot, requestedQuantity, session) => {
+    let wallet = await DealerWallet.findOne({ dealer: dealerId }).session(session);
+    
+    if (!wallet) {
+      return {
+        fromWallet: 0,
+        fromSlot: requestedQuantity
+      };
+    }
+  
+    // Find exact matching entry
+    const entry = wallet.entries.find(
+      e => e.plantType?.equals(plantType) && 
+           e.subType?.equals(subType) && 
+           e.bookingSlot?.equals(bookingSlot)
+    );
+  
+    if (!entry) {
+      return {
+        fromWallet: 0,
+        fromSlot: requestedQuantity
+      };
+    }
+  
+    const availableInWallet = entry.quantity - entry.bookedQuantity;
+  
+    if (availableInWallet >= requestedQuantity) {
+      entry.bookedQuantity += requestedQuantity;
+      await wallet.save({ session });
+      return {
+        fromWallet: requestedQuantity,
+        fromSlot: 0
+      };
+    } else {
+      const fromWallet = Math.max(0, availableInWallet);
+      const fromSlot = requestedQuantity - fromWallet;
+  
+      if (fromWallet > 0) {
+        entry.bookedQuantity += fromWallet;
+        await wallet.save({ session });
+      }
+  
+      return {
+        fromWallet,
+        fromSlot
+      };
+    }
+  };
+  
 
 export {
   createOne,

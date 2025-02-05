@@ -2,7 +2,24 @@ import { Parser as CsvParser } from "json2csv";
 import catchAsync from "../utility/catchAsync.js";
 import Order from "../models/order.model.js";
 import { getAll, createOne, updateOne } from "./factory.controller.js";
+import DealerWallet from "../models/dealerWallet.js";
 
+const updateDealerWalletBalance = async (dealerId, paymentAmount) => {
+  let wallet = await DealerWallet.findOne({ dealer: dealerId });
+  
+  if (!wallet) {
+    wallet = new DealerWallet({
+      dealer: dealerId,
+      availableAmount: paymentAmount,
+      entries: []
+    });
+  } else {
+    wallet.availableAmount += paymentAmount;
+  }
+
+  await wallet.save({  });
+};
+const createDealerOrder =  createOne(Order, "Order");
 const getOrdersBySlot = catchAsync(async (req, res, next) => {
   const { slotId } = req.params; // Extract the slotId from the request parameters
 
@@ -141,7 +158,7 @@ const updateOrder = updateOne(Order, "Order", [
   "farmReadyDate",
 ]);
 const addNewPayment = catchAsync(async (req, res, next) => {
-  const { orderId } = req.params; // Extract the orderId from the request parameters
+  const { orderId } = req.params;
   const {
     paidAmount,
     paymentStatus,
@@ -149,32 +166,46 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     bankName,
     receiptPhoto,
     modeOfPayment,
-  } = req.body; // Extract the payment details from the request body
-  try {
-    // Find the order by its ID
-    const order = await Order.findById(orderId);
+    isWalletPayment
+  } = req.body;
 
+  try {
+    const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    // Create the payment object using the received data
+    // Convert paidAmount to number
+    const amount = Number(paidAmount);
+    if (isNaN(amount)) {
+      return res.status(400).json({ message: "Invalid payment amount" });
+    }
+
+    // Create the payment object
     const newPayment = {
-      paidAmount,
+      paidAmount: amount, // Store as number
       paymentStatus,
       paymentDate,
       bankName,
       receiptPhoto,
       modeOfPayment,
+      isWalletPayment
     };
 
-    // Add the new payment to the payment array of the order
+    // Add the payment to order
     order.payment.push(newPayment);
 
-    // Save the updated order with the new payment
+    // If it's a wallet payment and status is PENDING, add to dealer's wallet
+    if (isWalletPayment && paymentStatus === "PENDING") {
+      await updateDealerWalletBalance(order.dealer, -amount);
+    }
+    // Regular payment flow
+    else if (order.dealerOrder && order.dealer && paymentStatus === "COLLECTED") {
+      await updateDealerWalletBalance(order.dealer, amount);
+    }
+
     await order.save();
 
-    // Return success response
     return res.status(200).json({
       message: "Payment added successfully",
       updatedOrder: order,
@@ -188,33 +219,63 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 const updatePaymentStatus = async (req, res) => {
   try {
     const { orderId, paymentId, paymentStatus } = req.body;
-    // Validate input
+    
     if (!orderId || !paymentId || !paymentStatus) {
       return res.status(400).json({
         message: "Order ID, Payment ID, and Payment Status are required.",
       });
     }
 
-    // Find the order by orderId
     const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ message: "Order not found." });
     }
 
-    // Find the payment in the order's payments array by paymentId
     const payment = order.payment.id(paymentId);
     if (!payment) {
       return res.status(404).json({ message: "Payment not found." });
     }
-    // Update the payment status
-    payment.paymentStatus = paymentStatus;
 
-    // Save the order with updated payment status
+    // Ensure amount is a number
+    const amount = Number(payment.paidAmount);
+    if (isNaN(amount)) {
+      return res.status(400).json({ message: "Invalid payment amount in record" });
+    }
+
+    // Handle wallet payment status changes
+    if (payment.isWalletPayment) {
+      console.log(payment)
+      console.log(paymentStatus)
+      // If payment is being rejected, subtract from wallet
+      if (payment.paymentStatus === "REJECTED" && paymentStatus === "PENDING") {
+        await updateDealerWalletBalance(order.dealer, amount);
+      }      else if ((payment.paymentStatus === "COLLECTED" ) && paymentStatus === "REJECTED") {
+       await updateDealerWalletBalance(order.dealer, amount);
+      }else if ((payment.paymentStatus === "REJECTED" ) && paymentStatus === "COLLECTED") {
+        await updateDealerWalletBalance(order.dealer, -amount);
+       } else if ((payment.paymentStatus === "COMPLETED" ) && paymentStatus === "REJECTED") {
+        await updateDealerWalletBalance(order.dealer, -amount);
+       }else if ((payment.paymentStatus === "PENDING" ) && paymentStatus === "REJECTED") {
+        await updateDealerWalletBalance(order.dealer, amount);
+       }
+    }
+    // Regular payment flow for non-wallet payments
+    else if (order.dealerOrder && order.dealer) {
+      if (payment.paymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
+        await updateDealerWalletBalance(order.dealer, amount);
+      }
+      else if (payment.paymentStatus === "COLLECTED" && paymentStatus !== "COLLECTED") {
+        await updateDealerWalletBalance(order.dealer, -amount);
+      }
+    }
+
+    payment.paymentStatus = paymentStatus;
     await order.save();
 
-    return res
-      .status(200)
-      .json({ message: "Payment status updated successfully.", order });
+    return res.status(200).json({ 
+      message: "Payment status updated successfully.", 
+      order 
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({
@@ -224,6 +285,7 @@ const updatePaymentStatus = async (req, res) => {
   }
 };
 
+
 export {
   getCsv,
   createOrder,
@@ -231,4 +293,5 @@ export {
   addNewPayment,
   getOrders,
   updatePaymentStatus,
+  createDealerOrder
 };
