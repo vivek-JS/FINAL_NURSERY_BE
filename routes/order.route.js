@@ -6,7 +6,8 @@ import {
   getOrders,
   updatePaymentStatus,
   getOrdersBySlot,
-  createDealerOrder
+  createDealerOrder,
+  addAfterDispatchedOrderIds
 } from "../controllers/order.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -30,6 +31,7 @@ router
     updateOrder
   )
   .post("/dealer-order", createDealerOrder)
+  .patch("/afterOrder",addAfterDispatchedOrderIds)
 
 
 export default router;

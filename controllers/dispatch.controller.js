@@ -5,6 +5,7 @@ import Dispatch from "../models/dispatch.model.js";
 import Order from "../models/order.model.js";
 import mongoose from "mongoose";
 import PlantCms from "../models/plantCms.model.js";
+import Tray from "../models/tray.model.js";
 // Helper to validate quantities
 const validateQuantities = (plantsDetails) => {
   for (const plant of plantsDetails) {
@@ -133,284 +134,442 @@ const updateDispatch = catchAsync(async (req, res, next) => {
 
 // Get dispatches controller
 const getDispatches = catchAsync(async (req, res, next) => {
-  const dispatches = await Dispatch.aggregate([
-    // Filter out deleted documents
-    {
-      $match: { isDeleted: false },
-    },
-    // Initial sort by createdAt
-    {
-      $sort: { createdAt: -1 },
-    },
-    // Convert createdAt to date if not already
-    {
-      $addFields: {
-        createdAt: { $toDate: "$createdAt" },
+  try {
+    // Perform the initial aggregation pipeline
+    const dispatches = await Dispatch.aggregate([
+      // Filter out deleted documents
+      {
+        $match: { isDeleted: false },
       },
-    },
-    // Expand the orderIds array
-    {
-      $unwind: "$orderIds",
-    },
-    // Lookup each order
-    {
-      $lookup: {
-        from: "orders",
-        localField: "orderIds",
-        foreignField: "_id",
-        as: "orderDetails",
+      // Initial sort by createdAt
+      {
+        $sort: { createdAt: -1 },
       },
-    },
-    // Unwind the looked up order
-    {
-      $unwind: "$orderDetails",
-    },
-    // Lookup all related data for the order
-    {
-      $lookup: {
-        from: "farmers",
-        localField: "orderDetails.farmer",
-        foreignField: "_id",
-        as: "farmerDetails",
+      // Convert createdAt to date if not already
+      {
+        $addFields: {
+          createdAt: { $toDate: "$createdAt" },
+        },
       },
-    },
-    {
-      $lookup: {
-        from: "users",
-        localField: "orderDetails.salesPerson",
-        foreignField: "_id",
-        as: "salesPersonDetails",
+      // Expand the orderIds array
+      {
+        $unwind: "$orderIds",
       },
-    },
-    {
-      $lookup: {
-        from: "plantcms",
-        localField: "orderDetails.plantName",
-        foreignField: "_id",
-        as: "plantDetails",
+      // Lookup each order
+      {
+        $lookup: {
+          from: "orders",
+          localField: "orderIds",
+          foreignField: "_id",
+          as: "orderDetails",
+        },
       },
-    },
-    {
-      $lookup: {
-        from: "plantslots",
-        let: { bookingSlotId: "$orderDetails.bookingSlot" },
-        pipeline: [
-          { $unwind: "$subtypeSlots" },
-          { $unwind: "$subtypeSlots.slots" },
-          {
-            $match: {
-              $expr: { $eq: ["$subtypeSlots.slots._id", "$$bookingSlotId"] },
-            },
-          },
-          {
-            $project: {
-              _id: 0,
-              slotId: "$subtypeSlots.slots._id",
-              startDay: "$subtypeSlots.slots.startDay",
-              endDay: "$subtypeSlots.slots.endDay",
-              subtypeId: "$subtypeSlots.subtypeId",
-              month: "$subtypeSlots.slots.month",
-            },
-          },
-        ],
-        as: "bookingSlotDetails",
+      // Unwind the looked up order
+      {
+        $unwind: "$orderDetails",
       },
-    },
-    // Group back all the data while preserving original dates
-    {
-      $group: {
-        _id: "$_id",
-        name: { $first: "$name" },
-        transportId: { $first: "$transportId" },
-        driverName: { $first: "$driverName" },
-        vehicleName: { $first: "$vehicleName" },
-        plantsDetails: { $first: "$plantsDetails" },
-        returnedPlants: { $first: "$returnedPlants" },
-        transportStatus: { $first: "$transportStatus" },
-        createdAt: { $first: "$createdAt" }, // Keep as Date object
-        updatedAt: { $first: "$updatedAt" }, // Keep as Date object
-        orderIds: {
-          $push: {
-            order: "$orderDetails.orderId",
-            quantity: "$orderDetails.numberOfPlants",
-            orderDate: "$orderDetails.createdAt", // Keep as Date object
-            rate: "$orderDetails.rate",
-            payment: "$orderDetails.payment",
-            orderStatus: "$orderDetails.orderStatus",
-            paymentCompleted: "$orderDetails.paymentCompleted",
-            returnedPlants: "$orderDetails.returnedPlants",
-            returnReason: "$orderDetails.returnReason",
-            plantDetails: {
-              name: { $arrayElemAt: ["$plantDetails.name", 0] },
-              variety: { $arrayElemAt: ["$plantDetails.variety", 0] },
-              type: { $arrayElemAt: ["$plantDetails.type", 0] },
-              subtype: { $arrayElemAt: ["$plantDetails.subtype", 0] },
-            },
-            farmerName: { $arrayElemAt: ["$farmerDetails.name", 0] },
-            contact: { $arrayElemAt: ["$farmerDetails.mobileNumber", 0] },
-            details: {
-              farmer: {
-                name: { $arrayElemAt: ["$farmerDetails.name", 0] },
-                mobileNumber: {
-                  $arrayElemAt: ["$farmerDetails.mobileNumber", 0],
-                },
-                village: { $arrayElemAt: ["$farmerDetails.village", 0] },
+      // Lookup all related data for the order
+      {
+        $lookup: {
+          from: "farmers",
+          localField: "orderDetails.farmer",
+          foreignField: "_id",
+          as: "farmerDetails",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "orderDetails.salesPerson",
+          foreignField: "_id",
+          as: "salesPersonDetails",
+        },
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "orderDetails.plantName",
+          foreignField: "_id",
+          as: "plantDetails",
+        },
+      },
+      {
+        $lookup: {
+          from: "plantslots",
+          let: { bookingSlotId: "$orderDetails.bookingSlot" },
+          pipeline: [
+            { $unwind: "$subtypeSlots" },
+            { $unwind: "$subtypeSlots.slots" },
+            {
+              $match: {
+                $expr: { $eq: ["$subtypeSlots.slots._id", "$$bookingSlotId"] },
               },
-              contact: { $arrayElemAt: ["$farmerDetails.mobileNumber", 0] },
-              orderNotes: "$orderDetails.notes",
+            },
+            {
+              $project: {
+                _id: 0,
+                slotId: "$subtypeSlots.slots._id",
+                startDay: "$subtypeSlots.slots.startDay",
+                endDay: "$subtypeSlots.slots.endDay",
+                subtypeId: "$subtypeSlots.subtypeId",
+                month: "$subtypeSlots.slots.month",
+              },
+            },
+          ],
+          as: "bookingSlotDetails",
+        },
+        
+      },
+      // Group back all the data while preserving original dates
+      {
+        $group: {
+          _id: "$_id",
+          name: { $first: "$name" },
+          transportId: { $first: "$transportId" },
+          driverName: { $first: "$driverName" },
+          vehicleName: { $first: "$vehicleName" },
+          plantsDetails: { $first: "$plantsDetails" },
+          returnedPlants: { $first: "$returnedPlants" },
+          transportStatus: { $first: "$transportStatus" },
+          createdAt: { $first: "$createdAt" }, // Keep as Date object
+          updatedAt: { $first: "$updatedAt" }, // Keep as Date object
+          orderIds: {
+            $push: {
+              order: "$orderDetails.orderId",
+              quantity: "$orderDetails.numberOfPlants",
+              orderDate: "$orderDetails.createdAt", // Keep as Date object
+              rate: "$orderDetails.rate",
               payment: "$orderDetails.payment",
-              orderid: "$orderDetails._id",
-              salesPerson: {
-                name: { $arrayElemAt: ["$salesPersonDetails.name", 0] },
-                phoneNumber: {
-                  $arrayElemAt: ["$salesPersonDetails.phoneNumber", 0],
-                },
+              orderStatus: "$orderDetails.orderStatus",
+              paymentCompleted: "$orderDetails.paymentCompleted",
+              returnedPlants: "$orderDetails.returnedPlants",
+              returnReason: "$orderDetails.returnReason",
+              plantDetails: {
+                name: { $arrayElemAt: ["$plantDetails.name", 0] },
+                variety: { $arrayElemAt: ["$plantDetails.variety", 0] },
+                type: { $arrayElemAt: ["$plantDetails.type", 0] },
+                subtype: { $arrayElemAt: ["$plantDetails.subtype", 0] },
               },
-              bookingSlot: {
-                startDay: { $arrayElemAt: ["$bookingSlotDetails.startDay", 0] },
-                endDay: { $arrayElemAt: ["$bookingSlotDetails.endDay", 0] },
-                month: { $arrayElemAt: ["$bookingSlotDetails.month", 0] },
-                subtypeId: {
-                  $arrayElemAt: ["$bookingSlotDetails.subtypeId", 0],
+              farmerName: { $arrayElemAt: ["$farmerDetails.name", 0] },
+              contact: { $arrayElemAt: ["$farmerDetails.mobileNumber", 0] },
+              details: {
+                farmer: {
+                  name: { $arrayElemAt: ["$farmerDetails.name", 0] },
+                  mobileNumber: {
+                    $arrayElemAt: ["$farmerDetails.mobileNumber", 0],
+                  },
+                  village: { $arrayElemAt: ["$farmerDetails.village", 0] },
                 },
-                _id: { $arrayElemAt: ["$bookingSlotDetails.slotId", 0] },
+                contact: { $arrayElemAt: ["$farmerDetails.mobileNumber", 0] },
+                orderNotes: "$orderDetails.notes",
+                payment: "$orderDetails.payment",
+                orderid: "$orderDetails._id",
+                salesPerson: {
+                  name: { $arrayElemAt: ["$salesPersonDetails.name", 0] },
+                  phoneNumber: {
+                    $arrayElemAt: ["$salesPersonDetails.phoneNumber", 0],
+                  },
+                },
+                bookingSlot: {
+                  startDay: { $arrayElemAt: ["$bookingSlotDetails.startDay", 0] },
+                  endDay: { $arrayElemAt: ["$bookingSlotDetails.endDay", 0] },
+                  month: { $arrayElemAt: ["$bookingSlotDetails.month", 0] },
+                  subtypeId: {
+                    $arrayElemAt: ["$bookingSlotDetails.subtypeId", 0],
+                  },
+                  _id: { $arrayElemAt: ["$bookingSlotDetails.slotId", 0] },
+                },
               },
             },
           },
         },
       },
-    },
-    // Final sort to maintain order after grouping
-    {
-      $sort: { createdAt: -1 },
-    },
-  ]);
+      // Final sort to maintain order after grouping
+      {
+        $sort: { createdAt: -1 },
+      },
+    ]);
 
-  // Transform the results while maintaining Date objects
-  const transformedDispatches = dispatches.map((dispatch) => ({
-    ...dispatch,
-    // Format dates for display only at this stage
-    createdAt: dispatch.createdAt.toISOString(),
-    updatedAt: dispatch.updatedAt.toISOString(),
-    orderIds: dispatch.orderIds.map((order) => ({
-      ...order,
-      orderDate: order.orderDate.toISOString(),
-      total: `₹ ${order.rate * order.quantity}`,
-      "Paid Amt": `₹ ${order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0}`,
-      "remaining Amt": `₹ ${order.rate * order.quantity - (order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0)}`,
-      Delivery: order.details.bookingSlot
-        ? `${order.details.bookingSlot.startDay} - ${order.details.bookingSlot.endDay} ${order.details.bookingSlot.month}, ${new Date().getFullYear()}`
-        : "",
-    })),
-  }));
+    // Get all cavity IDs from all dispatches
+    const allCavityIds = [];
+    for (const dispatch of dispatches) {
+      for (const plant of dispatch.plantsDetails || []) {
+        // Get cavity IDs from pickup details
+        if (Array.isArray(plant.pickupDetails)) {
+          plant.pickupDetails.forEach(pickup => {
+            if (pickup.cavity) {
+              allCavityIds.push(pickup.cavity);
+            }
+          });
+        }
+        
+        // Get cavity IDs from crates
+        if (Array.isArray(plant.crates)) {
+          plant.crates.forEach(crate => {
+            if (crate.cavity) {
+              allCavityIds.push(crate.cavity);
+            }
+          });
+        }
+      }
+    }
+    
+    // Get unique cavity IDs
+    const uniqueCavityIds = [...new Set(allCavityIds.map(id => id.toString()))];
+    
+    // Fetch all trays in one go
+    const trays = await Tray.find({ 
+      _id: { $in: uniqueCavityIds.map(id => new mongoose.Types.ObjectId(id)) } 
+    }).lean();
+    
+    // Create a lookup map
+    const trayMap = trays.reduce((map, tray) => {
+      map[tray._id.toString()] = tray;
+      return map;
+    }, {});
 
-  // Debug logging
-  // console.log(
-  //   "Final sorted dates:",
-  //   dispatches.map((d) => ({
-  //     id: d._id,
-  //     createdAt: d.createdAt,
-  //     name: d.name,
-  //   }))
-  // );
+    // Transform dispatches with tray information
+    const transformedDispatches = dispatches.map((dispatch) => {
+      // Process plant details with cavity information
+      const plantDetailsWithCavity = dispatch.plantsDetails.map(plant => {
+        // Calculate cavity count
+        const uniqueCavities = new Set();
+        if (Array.isArray(plant.pickupDetails)) {
+          plant.pickupDetails.forEach(pickup => {
+            if (pickup.cavity) {
+              uniqueCavities.add(pickup.cavity.toString());
+            }
+          });
+        }
+        
+        // Process pickup details
+        const pickupDetailsWithCavity = Array.isArray(plant.pickupDetails) ? 
+          plant.pickupDetails.map(pickup => {
+            const cavityId = pickup.cavity ? pickup.cavity.toString() : null;
+            const tray = cavityId ? trayMap[cavityId] : null;
+            
+            return {
+              ...pickup,
+              cavity: cavityId,
+              cavityName: tray ? tray.name : (pickup.cavityName || ""),
+              numberPerCrate: tray ? tray.numberPerCrate : null,
+              cavitySize: tray ? tray.cavity : null
+            };
+          }) : [];
+        
+        // Process crates
+        const cratesWithCavity = Array.isArray(plant.crates) ?
+          plant.crates.map(crate => {
+            const cavityId = crate.cavity ? crate.cavity.toString() : null;
+            const tray = cavityId ? trayMap[cavityId] : null;
+            
+            return {
+              ...crate,
+              cavity: cavityId,
+              cavityName: tray ? tray.name : (crate.cavityName || ""),
+              numberPerCrate: tray ? tray.numberPerCrate : null,
+              cavitySize: tray ? tray.cavity : null
+            };
+          }) : [];
 
-  res
-    .status(200)
-    .json(
-      generateResponse(
-        "Success",
-        "Dispatches fetched successfully",
-        transformedDispatches
-      )
-    );
+        return {
+          ...plant,
+          cavityCount: uniqueCavities.size,
+          pickupDetails: pickupDetailsWithCavity,
+          crates: cratesWithCavity
+        };
+      });
+
+      return {
+        ...dispatch,
+        plantsDetails: plantDetailsWithCavity,
+        // Format dates for display
+        createdAt: dispatch.createdAt.toISOString(),
+        updatedAt: dispatch.updatedAt.toISOString(),
+        orderIds: dispatch.orderIds.map((order) => ({
+          ...order,
+          orderDate: order.orderDate.toISOString(),
+          total: `₹ ${order.rate * order.quantity}`,
+          "Paid Amt": `₹ ${order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0}`,
+          "remaining Amt": `₹ ${order.rate * order.quantity - (order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0)}`,
+          Delivery: order.details.bookingSlot
+            ? `${order.details.bookingSlot.startDay} - ${order.details.bookingSlot.endDay} ${order.details.bookingSlot.month}, ${new Date().getFullYear()}`
+            : "",
+        })),
+      };
+    });
+
+    res
+      .status(200)
+      .json(
+        generateResponse(
+          "Success",
+          "Dispatches fetched successfully",
+          transformedDispatches
+        )
+      );
+  } catch (error) {
+    console.error("Error in getDispatches:", error);
+    next(error);
+  }
 });
 // Get single dispatch controller
 const getDispatch = catchAsync(async (req, res, next) => {
   const { id } = req.params;
+console.log("hiii")
+  try {
+    const dispatch = await Dispatch.findById(id)
+      .populate({
+        path: "orderIds",
+        populate: [
+          {
+            path: "farmer",
+            select: "name mobileNumber village",
+          },
+          {
+            path: "salesPerson",
+            select: "name phoneNumber",
+          },
+          {
+            path: "plantName",
+            select: "name variety type subtype",
+          },
+          {
+            path: "bookingSlot",
+            select: "startDay endDay month",
+          },
+        ],
+      })
+      .lean(); // Using lean() for better performance
 
-  const dispatch = await Dispatch.findById(id)
-    .populate({
-      path: "orderIds",
-      populate: [
-        {
-          path: "farmer",
-          select: "name mobileNumber village",
-        },
-        {
-          path: "salesPerson",
-          select: "name phoneNumber",
-        },
-        {
-          path: "plantName",
-          select: "name variety type subtype",
-        },
-        {
-          path: "bookingSlot",
-          select: "startDay endDay month",
-        },
-      ],
-    })
-    .lean(); // Using lean() for better performance
+    if (!dispatch) {
+      return next(new AppError("No dispatch found with that ID", 404));
+    }
 
-  if (!dispatch) {
-    return next(new AppError("No dispatch found with that ID", 404));
+    // Separately get all relevant tray data to ensure we have the info
+    const trayIds = [];
+    
+    // Collect all cavity IDs from pickupDetails
+    dispatch.plantsDetails.forEach(plant => {
+      if (Array.isArray(plant.pickupDetails)) {
+        plant.pickupDetails.forEach(pickup => {
+          if (pickup.cavity) {
+            trayIds.push(pickup.cavity);
+          }
+        });
+      }
+      
+      // Collect all cavity IDs from crates
+      if (Array.isArray(plant.crates)) {
+        plant.crates.forEach(crate => {
+          if (crate.cavity) {
+            trayIds.push(crate.cavity);
+          }
+        });
+      }
+    });
+    
+    // Get unique tray IDs
+    const uniqueTrayIds = [...new Set(trayIds.map(id => id.toString()))];
+    
+    // Fetch all relevant trays in one query
+    const trays = await Tray.find({ _id: { $in: uniqueTrayIds } }).lean();
+    
+    // Create a lookup map for easy access
+    const trayMap = trays.reduce((map, tray) => {
+      map[tray._id.toString()] = tray;
+      return map;
+    }, {});
+
+    // Transform the response to ensure all fields are included
+    const transformedDispatch = {
+      _id: dispatch._id,
+      name: dispatch.name,
+      transportId: dispatch.transportId,
+      driverName: dispatch.driverName,
+      vehicleName: dispatch.vehicleName,
+      isDeleted: dispatch.isDeleted || false,
+      returnedPlants: dispatch.returnedPlants || 0,
+      transportStatus: dispatch.transportStatus || "PENDING",
+      plantsDetails: dispatch.plantsDetails.map((plant) => {
+        // Calculate cavity count
+        const uniqueCavities = new Set();
+        if (Array.isArray(plant.pickupDetails)) {
+          plant.pickupDetails.forEach(pickup => {
+            if (pickup.cavity) {
+              uniqueCavities.add(pickup.cavity.toString());
+            }
+          });
+        }
+        
+        return {
+          name: plant.name,
+          id: plant.id,
+          plantId: plant.plantId,
+          subTypeId: plant.subTypeId,
+          quantity: plant.quantity,
+          totalPlants: plant.totalPlants,
+          cavityCount: uniqueCavities.size,
+          pickupDetails: Array.isArray(plant.pickupDetails) ? plant.pickupDetails.map((pickup) => {
+            const cavityId = pickup.cavity ? pickup.cavity.toString() : null;
+            const tray = cavityId ? trayMap[cavityId] : null;
+            console.log("tray",tray)
+            return {
+              shade: pickup.shade,
+              shadeName: pickup.shadeName,
+              quantity: pickup.quantity,
+              cavity: cavityId,
+              cavityName: tray ? tray.name : pickup.cavityName || "",
+              numberPerCrate: tray ? tray.numberPerCrate : null,
+              cavitySize: tray ? tray.cavity : null
+            };
+          }) : [],
+          crates: Array.isArray(plant.crates) ? plant.crates.map((crate) => {
+            const cavityId = crate.cavity ? crate.cavity.toString() : null;
+            const tray = cavityId ? trayMap[cavityId] : null;
+            console.log("tray",tray)
+
+            return {
+              cavity: cavityId,
+              cavityName: tray ? tray.name : crate.cavityName || "",
+              cavitySize: tray ? tray.cavity : null,
+              numberPerCrate: tray ? tray.numberPerCrate : null,
+              crateCount: crate.crateCount,
+              plantCount: crate.plantCount,
+              crateDetails: crate.crateDetails || [],
+            };
+          }) : [],
+        };
+      }),
+      orderIds: dispatch.orderIds.map((order) => ({
+        _id: order._id,
+        orderId: order.orderId,
+        farmer: order.farmer,
+        salesPerson: order.salesPerson,
+        plantName: order.plantName,
+        bookingSlot: order.bookingSlot,
+        numberOfPlants: order.numberOfPlants,
+        rate: order.rate,
+        payment: order.payment,
+        orderStatus: order.orderStatus,
+        returnedPlants: order.returnedPlants,
+        returnReason: order.returnReason,
+      })),
+      createdAt: dispatch.createdAt,
+      updatedAt: dispatch.updatedAt,
+    };
+
+    const response = generateResponse(
+      "Success",
+      "Dispatch fetched successfully",
+      transformedDispatch
+    );
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error("Error in getDispatch:", error);
+    next(error);
   }
-
-  // Transform the response to ensure all fields are included
-  const transformedDispatch = {
-    _id: dispatch._id,
-    name: dispatch.name,
-    transportId: dispatch.transportId,
-    driverName: dispatch.driverName,
-    vehicleName: dispatch.vehicleName,
-    isDeleted: dispatch.isDeleted || false,
-    returnedPlants: dispatch.returnedPlants || 0,
-    transportStatus: dispatch.transportStatus || "PENDING",
-    plantsDetails: dispatch.plantsDetails.map((plant) => ({
-      name: plant.name,
-      id: plant.id,
-      plantId: plant.plantId,
-      subTypeId: plant.subTypeId,
-      quantity: plant.quantity,
-      totalPlants: plant.totalPlants,
-      pickupDetails: plant.pickupDetails.map((pickup) => ({
-        shade: pickup.shade,
-        shadeName: pickup.shadeName,
-        quantity: pickup.quantity,
-      })),
-      crates: plant.crates.map((crate) => ({
-        cavity: crate.cavity,
-        cavityName: crate.cavityName,
-        crateCount: crate.crateCount,
-        plantCount: crate.plantCount,
-        crateDetails: crate.crateDetails,
-      })),
-    })),
-    orderIds: dispatch.orderIds.map((order) => ({
-      _id: order._id,
-      orderId: order.orderId,
-      farmer: order.farmer,
-      salesPerson: order.salesPerson,
-      plantName: order.plantName,
-      bookingSlot: order.bookingSlot,
-      numberOfPlants: order.numberOfPlants,
-      rate: order.rate,
-      payment: order.payment,
-      orderStatus: order.orderStatus,
-      returnedPlants: order.returnedPlants,
-      returnReason: order.returnReason,
-    })),
-    createdAt: dispatch.createdAt,
-    updatedAt: dispatch.updatedAt,
-  };
-
-  const response = generateResponse(
-    "Success",
-    "Dispatch fetched successfully",
-    transformedDispatch
-  );
-
-  res.status(200).json(response);
 });
 
 const removeTransport = async (req, res) => {
