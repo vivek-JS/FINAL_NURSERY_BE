@@ -13,11 +13,22 @@ const pickupDetailSchema = new Schema({
     type: Number,
     required: true,
   },
+  // Added cavity reference to pickupDetails
+  cavity: {
+    type: Schema.Types.ObjectId,
+    ref: "Tray",
+    required: true,
+  },
+  cavityName: {
+    type: String,
+    required: true,
+  }
 });
 
 const crateSchema = new Schema({
   cavity: {
-    type: String,
+    type: Schema.Types.ObjectId,
+    ref: "Tray",
     required: true,
   },
   cavityName: {
@@ -113,6 +124,16 @@ const dispatchSchema = new Schema(
         message: "At least one order ID is required",
       },
       required: true,
+    },
+    // New field added here
+    afterDispatchedOrderIds: {
+      type: [
+        {
+          type: Schema.Types.ObjectId,
+          ref: "Order",
+        },
+      ],
+      default: [], // Default to empty array as it may not be required initially
     },
     driverName: {
       type: String,

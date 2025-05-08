@@ -6,20 +6,20 @@ import DealerWallet from "../models/dealerWallet.js";
 
 const updateDealerWalletBalance = async (dealerId, paymentAmount) => {
   let wallet = await DealerWallet.findOne({ dealer: dealerId });
-  
+
   if (!wallet) {
     wallet = new DealerWallet({
       dealer: dealerId,
       availableAmount: paymentAmount,
-      entries: []
+      entries: [],
     });
   } else {
     wallet.availableAmount += paymentAmount;
   }
 
-  await wallet.save({  });
+  await wallet.save({});
 };
-const createDealerOrder =  createOne(Order, "Order");
+const createDealerOrder = createOne(Order, "Order");
 const getOrdersBySlot = catchAsync(async (req, res, next) => {
   const { slotId } = req.params; // Extract the slotId from the request parameters
 
@@ -156,6 +156,7 @@ const updateOrder = updateOne(Order, "Order", [
   "farmReadyDate",
   "orderStatus",
   "farmReadyDate",
+  "orderRemarks",
 ]);
 const addNewPayment = catchAsync(async (req, res, next) => {
   const { orderId } = req.params;
@@ -166,7 +167,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     bankName,
     receiptPhoto,
     modeOfPayment,
-    isWalletPayment
+    isWalletPayment,
   } = req.body;
 
   try {
@@ -189,7 +190,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       bankName,
       receiptPhoto,
       modeOfPayment,
-      isWalletPayment
+      isWalletPayment,
     };
 
     // Add the payment to order
@@ -200,7 +201,11 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       await updateDealerWalletBalance(order.dealer, -amount);
     }
     // Regular payment flow
-    else if (order.dealerOrder && order.dealer && paymentStatus === "COLLECTED") {
+    else if (
+      order.dealerOrder &&
+      order.dealer &&
+      paymentStatus === "COLLECTED"
+    ) {
       await updateDealerWalletBalance(order.dealer, amount);
     }
 
@@ -219,7 +224,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 const updatePaymentStatus = async (req, res) => {
   try {
     const { orderId, paymentId, paymentStatus } = req.body;
-    
+
     if (!orderId || !paymentId || !paymentStatus) {
       return res.status(400).json({
         message: "Order ID, Payment ID, and Payment Status are required.",
@@ -239,32 +244,51 @@ const updatePaymentStatus = async (req, res) => {
     // Ensure amount is a number
     const amount = Number(payment.paidAmount);
     if (isNaN(amount)) {
-      return res.status(400).json({ message: "Invalid payment amount in record" });
+      return res
+        .status(400)
+        .json({ message: "Invalid payment amount in record" });
     }
 
     // Handle wallet payment status changes
     if (payment.isWalletPayment) {
-      console.log(payment)
-      console.log(paymentStatus)
+      console.log(payment);
+      console.log(paymentStatus);
       // If payment is being rejected, subtract from wallet
       if (payment.paymentStatus === "REJECTED" && paymentStatus === "PENDING") {
         await updateDealerWalletBalance(order.dealer, amount);
-      }      else if ((payment.paymentStatus === "COLLECTED" ) && paymentStatus === "REJECTED") {
-       await updateDealerWalletBalance(order.dealer, amount);
-      }else if ((payment.paymentStatus === "REJECTED" ) && paymentStatus === "COLLECTED") {
-        await updateDealerWalletBalance(order.dealer, -amount);
-       } else if ((payment.paymentStatus === "COMPLETED" ) && paymentStatus === "REJECTED") {
-        await updateDealerWalletBalance(order.dealer, -amount);
-       }else if ((payment.paymentStatus === "PENDING" ) && paymentStatus === "REJECTED") {
+      } else if (
+        payment.paymentStatus === "COLLECTED" &&
+        paymentStatus === "REJECTED"
+      ) {
         await updateDealerWalletBalance(order.dealer, amount);
-       }
+      } else if (
+        payment.paymentStatus === "REJECTED" &&
+        paymentStatus === "COLLECTED"
+      ) {
+        await updateDealerWalletBalance(order.dealer, -amount);
+      } else if (
+        payment.paymentStatus === "COMPLETED" &&
+        paymentStatus === "REJECTED"
+      ) {
+        await updateDealerWalletBalance(order.dealer, -amount);
+      } else if (
+        payment.paymentStatus === "PENDING" &&
+        paymentStatus === "REJECTED"
+      ) {
+        await updateDealerWalletBalance(order.dealer, amount);
+      }
     }
     // Regular payment flow for non-wallet payments
     else if (order.dealerOrder && order.dealer) {
-      if (payment.paymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
+      if (
+        payment.paymentStatus !== "COLLECTED" &&
+        paymentStatus === "COLLECTED"
+      ) {
         await updateDealerWalletBalance(order.dealer, amount);
-      }
-      else if (payment.paymentStatus === "COLLECTED" && paymentStatus !== "COLLECTED") {
+      } else if (
+        payment.paymentStatus === "COLLECTED" &&
+        paymentStatus !== "COLLECTED"
+      ) {
         await updateDealerWalletBalance(order.dealer, -amount);
       }
     }
@@ -272,9 +296,9 @@ const updatePaymentStatus = async (req, res) => {
     payment.paymentStatus = paymentStatus;
     await order.save();
 
-    return res.status(200).json({ 
-      message: "Payment status updated successfully.", 
-      order 
+    return res.status(200).json({
+      message: "Payment status updated successfully.",
+      order,
     });
   } catch (error) {
     console.error(error);
@@ -286,6 +310,53 @@ const updatePaymentStatus = async (req, res) => {
 };
 
 
+const addAfterDispatchedOrderIds = catchAsync(async (req, res, next) => {
+  const { dispatchId } = req.params;
+  const { orderIds } = req.body;
+
+  try {
+    // Find the dispatch by ID
+    const dispatch = await Dispatch.findById(dispatchId);
+    
+    if (!dispatch) {
+      return res.status(404).json({ 
+        status: 'fail', 
+        message: "Dispatch not found" 
+      });
+    }
+    
+    // Initialize afterDispatchedOrderIds array if it doesn't exist
+    if (!dispatch.afterDispatchedOrderIds) {
+      dispatch.afterDispatchedOrderIds = [];
+    }
+    
+    // Add the new order IDs to the afterDispatchedOrderIds array
+    dispatch.afterDispatchedOrderIds = [
+      ...dispatch.afterDispatchedOrderIds,
+      ...orderIds
+    ];
+    
+    // Save the updated dispatch
+    await dispatch.save();
+    
+    return res.status(200).json({
+      status: 'success',
+      message: "After dispatched order IDs added successfully",
+      data: {
+        dispatch
+      }
+    });
+  } catch (error) {
+    console.error("Error adding after dispatched order IDs:", error);
+    return res.status(500).json({ 
+      status: 'error',
+      message: "An error occurred while adding after dispatched order IDs.", 
+      error: error.message 
+    });
+  }
+});
+
+
 export {
   getCsv,
   createOrder,
@@ -293,5 +364,6 @@ export {
   addNewPayment,
   getOrders,
   updatePaymentStatus,
-  createDealerOrder
+  createDealerOrder,
+  addAfterDispatchedOrderIds
 };
