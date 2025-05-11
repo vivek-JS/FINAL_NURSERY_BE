@@ -71,6 +71,10 @@ const slotSchema = new Schema({
       "December",
     ], // Restricting values to valid month names
   },
+  isManual: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 const subtypeSlotSchema = new Schema({

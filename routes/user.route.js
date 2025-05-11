@@ -11,12 +11,18 @@ import {
   aboutMe,
   getSalespeople,
   getSalesAnalytics,
+  getAllDealersWithWalletInfo,
+  getDealerWalletTransactions,
+  getDealerWalletStats,
 } from "../controllers/user.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import verifyToken from "../middlewares/verifyToken.middleware.js";
 import logger from "../middlewares/logger.middleware.js";
-import { getDealerWalletDetails, getDealerWalletSummary } from "../controllers/walletController.js";
+import {
+  getDealerWalletDetails,
+  getDealerWalletSummary,
+} from "../controllers/walletController.js";
 
 const router = express.Router();
 
@@ -58,9 +64,11 @@ router
   .get("/aboutMe", aboutMe)
   .get("/wallet-details/:dealerId", getDealerWalletDetails)
   .get("/wallet-details-summary", getDealerWalletSummary)
-  .get('/salespeople', getSalespeople)
-.get('/analytics/sales', getSalesAnalytics);
-
-
-
+  .get("/salespeople", getSalespeople)
+  .get("/analytics/sales", getSalesAnalytics)
+  .get("/dealers", getAllDealersWithWalletInfo)
+  .get("/dealers/:dealerId", getDealerWalletDetails)
+  .get("/dealers/transactions/:dealerId", getDealerWalletTransactions)
+  .get("/dealerssss/stats", getDealerWalletStats)
+  .get("/dealerssss/stats/:dealerId", getDealerWalletStats);
 export default router;

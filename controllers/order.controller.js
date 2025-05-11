@@ -158,7 +158,24 @@ const updateOrder = updateOne(Order, "Order", [
   "farmReadyDate",
   "orderRemarks",
 ]);
+/**
+ * Add a new payment to an order and update dealer wallet accordingly
+ */
+const validateDealerId = (dealerId) => {
+  if (!dealerId) return null;
+
+  try {
+    return mongoose.Types.ObjectId(dealerId);
+  } catch (err) {
+    console.error("Invalid dealer ID format:", dealerId);
+    return null;
+  }
+};
 const addNewPayment = catchAsync(async (req, res, next) => {
+  console.log("\n========== PAYMENT CONTROLLER DEBUGGING ==========");
+  console.log("Request params:", req.params);
+  console.log("Request body:", req.body);
+
   const { orderId } = req.params;
   const {
     paidAmount,
@@ -171,6 +188,192 @@ const addNewPayment = catchAsync(async (req, res, next) => {
   } = req.body;
 
   try {
+    // Find the order
+    console.log("Finding order with ID:", orderId);
+    const order = await Order.findById(orderId);
+    if (!order) {
+      console.error("Order not found");
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    console.log("Order found:");
+    console.log("- ID:", order._id);
+    console.log("- Dealer:", order.dealer);
+    console.log("- Dealer Type:", typeof order.dealer);
+    console.log("- isDealerOrder:", order.dealerOrder);
+
+    // Check if order has a dealer
+    if (!order.dealer) {
+      console.warn("Order has no dealer associated");
+    }
+
+    // Convert paidAmount to number
+    const amount = Number(paidAmount);
+    if (isNaN(amount)) {
+      console.error("Invalid payment amount");
+      return res.status(400).json({ message: "Invalid payment amount" });
+    }
+
+    console.log("Payment details:");
+    console.log("- Amount:", amount);
+    console.log("- Status:", paymentStatus);
+    console.log("- Is wallet payment:", isWalletPayment ? "Yes" : "No");
+    console.log("- Mode:", modeOfPayment);
+
+    // Create the payment object
+    const newPayment = {
+      paidAmount: amount,
+      paymentStatus,
+      paymentDate,
+      bankName,
+      receiptPhoto,
+      modeOfPayment,
+      isWalletPayment,
+    };
+
+    // Add the payment to order
+    console.log("Adding payment to order");
+    order.payment.push(newPayment);
+
+    // Save the order with the new payment
+    console.log("Saving order...");
+    await order.save();
+    console.log("Order saved successfully");
+
+    // Process wallet transaction if needed
+    let transaction = null;
+    const dealerId = order.dealer;
+
+    if (dealerId) {
+      try {
+        // First, debug the current wallet state
+        console.log("Checking current wallet state for dealer:", dealerId);
+        await DealerWallet.debugWallet(dealerId);
+
+        // Determine transaction type and amount
+        let walletAmount = 0;
+        let description = "";
+
+        // Wallet impact based on payment type and status
+        if (isWalletPayment && paymentStatus === "PENDING") {
+          // Deduct from wallet (negative amount)
+          walletAmount = -amount;
+          description = `Wallet payment for Order #${order._id}`;
+          console.log("This is a wallet payment, deducting amount from wallet");
+        } else if (order.dealerOrder && paymentStatus === "COLLECTED") {
+          // Add to wallet (positive amount)
+          walletAmount = amount;
+          description = `Payment collected for Order #${order._id} via ${modeOfPayment}`;
+          console.log(
+            "This is a collected payment for dealer order, adding to wallet"
+          );
+        } else {
+          console.log("Payment does not meet criteria for wallet transaction");
+        }
+
+        // If there's a wallet impact, record the transaction
+        if (walletAmount !== 0) {
+          console.log(
+            `Recording wallet transaction: amount=${walletAmount}, description="${description}"`
+          );
+
+          const performedBy = req.user?._id || dealerId;
+          console.log("Transaction performed by:", performedBy);
+
+          // Use the addPayment method
+          transaction = await DealerWallet.addPayment(
+            dealerId,
+            walletAmount, // Positive for credit, negative for debit
+            description,
+            performedBy,
+            "ORDER_PAYMENT",
+            order._id
+          );
+
+          // Check transaction result
+          if (transaction) {
+            console.log("Transaction recorded successfully:");
+            console.log("- Type:", transaction.type);
+            console.log("- Amount:", transaction.amount);
+            console.log("- Balance After:", transaction.balanceAfter);
+          } else {
+            console.error(
+              "Failed to record transaction - null result returned"
+            );
+          }
+
+          // Debug wallet state after transaction
+          console.log("Checking wallet state after transaction:");
+          await DealerWallet.debugWallet(dealerId);
+        }
+      } catch (walletError) {
+        // Log the error but don't fail the payment addition
+        console.error("Error updating wallet:", walletError);
+
+        return res.status(200).json({
+          message: "Payment added to order but wallet update failed",
+          error: walletError.message,
+          updatedOrder: order,
+        });
+      }
+    } else {
+      console.log(
+        "No dealer associated with this order, skipping wallet transaction"
+      );
+    }
+
+    // Return success with transaction info if it was created
+    if (transaction) {
+      console.log("Returning success response with transaction");
+      console.log(
+        "========== PAYMENT CONTROLLER DEBUGGING COMPLETE ==========\n"
+      );
+      return res.status(200).json({
+        message: "Payment added successfully and wallet updated",
+        updatedOrder: order,
+        transaction,
+      });
+    }
+
+    // Return success if no wallet transaction was needed
+    console.log("Returning success response without transaction");
+    console.log(
+      "========== PAYMENT CONTROLLER DEBUGGING COMPLETE ==========\n"
+    );
+    return res.status(200).json({
+      message: "Payment added successfully",
+      updatedOrder: order,
+    });
+  } catch (error) {
+    console.error("Error adding payment:", error);
+    console.log(
+      "========== PAYMENT CONTROLLER DEBUGGING COMPLETE ==========\n"
+    );
+    return res.status(500).json({
+      message: "Server error while processing payment",
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+});
+
+/**
+ * Alternative implementation using the simpler addPayment helper method
+ */
+const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
+  const { orderId } = req.params;
+  const {
+    paidAmount,
+    paymentStatus,
+    paymentDate,
+    bankName,
+    receiptPhoto,
+    modeOfPayment,
+    isWalletPayment,
+  } = req.body;
+
+  try {
+    // Find the order
     const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
@@ -184,7 +387,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 
     // Create the payment object
     const newPayment = {
-      paidAmount: amount, // Store as number
+      paidAmount: amount,
       paymentStatus,
       paymentDate,
       bankName,
@@ -195,29 +398,63 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 
     // Add the payment to order
     order.payment.push(newPayment);
-
-    // If it's a wallet payment and status is PENDING, add to dealer's wallet
-    if (isWalletPayment && paymentStatus === "PENDING") {
-      await updateDealerWalletBalance(order.dealer, -amount);
-    }
-    // Regular payment flow
-    else if (
-      order.dealerOrder &&
-      order.dealer &&
-      paymentStatus === "COLLECTED"
-    ) {
-      await updateDealerWalletBalance(order.dealer, amount);
-    }
-
     await order.save();
 
+    // Process wallet transaction if needed
+    if (order.dealer) {
+      let walletAmount = 0;
+      let description = "";
+
+      // Determine the wallet impact
+      if (isWalletPayment && paymentStatus === "PENDING") {
+        // Deduct from wallet (negative amount)
+        walletAmount = -amount;
+        description = `Wallet payment for Order #${order._id}`;
+      } else if (order.dealerOrder && paymentStatus === "COLLECTED") {
+        // Add to wallet (positive amount)
+        walletAmount = amount;
+        description = `Payment collected for Order #${order._id} via ${modeOfPayment}`;
+      }
+
+      // Process the wallet transaction if there is an impact
+      if (walletAmount !== 0) {
+        try {
+          // Use the simpler addPayment method that handles positive/negative amounts
+          const transaction = await DealerWallet.addPayment(
+            order.dealer,
+            walletAmount, // Positive for credit, negative for debit
+            description,
+            req.user._id,
+            "ORDER_PAYMENT",
+            order._id
+          );
+
+          return res.status(200).json({
+            message: "Payment added successfully and wallet updated",
+            updatedOrder: order,
+            transaction,
+          });
+        } catch (walletError) {
+          console.error("Error updating wallet:", walletError);
+          return res.status(200).json({
+            message: "Payment added successfully but wallet update failed",
+            updatedOrder: order,
+            walletError: walletError.message,
+          });
+        }
+      }
+    }
+
+    // Return success if no wallet transaction was needed
     return res.status(200).json({
       message: "Payment added successfully",
       updatedOrder: order,
     });
   } catch (error) {
     console.error("Error adding payment:", error);
-    return res.status(500).json({ message: "Server error", error });
+    return res
+      .status(500)
+      .json({ message: "Server error", error: error.message });
   }
 });
 
@@ -309,7 +546,6 @@ const updatePaymentStatus = async (req, res) => {
   }
 };
 
-
 const addAfterDispatchedOrderIds = catchAsync(async (req, res, next) => {
   const { dispatchId } = req.params;
   const { orderIds } = req.body;
@@ -317,45 +553,44 @@ const addAfterDispatchedOrderIds = catchAsync(async (req, res, next) => {
   try {
     // Find the dispatch by ID
     const dispatch = await Dispatch.findById(dispatchId);
-    
+
     if (!dispatch) {
-      return res.status(404).json({ 
-        status: 'fail', 
-        message: "Dispatch not found" 
+      return res.status(404).json({
+        status: "fail",
+        message: "Dispatch not found",
       });
     }
-    
+
     // Initialize afterDispatchedOrderIds array if it doesn't exist
     if (!dispatch.afterDispatchedOrderIds) {
       dispatch.afterDispatchedOrderIds = [];
     }
-    
+
     // Add the new order IDs to the afterDispatchedOrderIds array
     dispatch.afterDispatchedOrderIds = [
       ...dispatch.afterDispatchedOrderIds,
-      ...orderIds
+      ...orderIds,
     ];
-    
+
     // Save the updated dispatch
     await dispatch.save();
-    
+
     return res.status(200).json({
-      status: 'success',
+      status: "success",
       message: "After dispatched order IDs added successfully",
       data: {
-        dispatch
-      }
+        dispatch,
+      },
     });
   } catch (error) {
     console.error("Error adding after dispatched order IDs:", error);
-    return res.status(500).json({ 
-      status: 'error',
-      message: "An error occurred while adding after dispatched order IDs.", 
-      error: error.message 
+    return res.status(500).json({
+      status: "error",
+      message: "An error occurred while adding after dispatched order IDs.",
+      error: error.message,
     });
   }
 });
-
 
 export {
   getCsv,
@@ -365,5 +600,6 @@ export {
   getOrders,
   updatePaymentStatus,
   createDealerOrder,
-  addAfterDispatchedOrderIds
+  addAfterDispatchedOrderIds,
+  addNewPaymentAlternative,
 };

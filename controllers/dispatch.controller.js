@@ -218,7 +218,6 @@ const getDispatches = catchAsync(async (req, res, next) => {
           ],
           as: "bookingSlotDetails",
         },
-        
       },
       // Group back all the data while preserving original dates
       {
@@ -271,7 +270,9 @@ const getDispatches = catchAsync(async (req, res, next) => {
                   },
                 },
                 bookingSlot: {
-                  startDay: { $arrayElemAt: ["$bookingSlotDetails.startDay", 0] },
+                  startDay: {
+                    $arrayElemAt: ["$bookingSlotDetails.startDay", 0],
+                  },
                   endDay: { $arrayElemAt: ["$bookingSlotDetails.endDay", 0] },
                   month: { $arrayElemAt: ["$bookingSlotDetails.month", 0] },
                   subtypeId: {
@@ -296,16 +297,16 @@ const getDispatches = catchAsync(async (req, res, next) => {
       for (const plant of dispatch.plantsDetails || []) {
         // Get cavity IDs from pickup details
         if (Array.isArray(plant.pickupDetails)) {
-          plant.pickupDetails.forEach(pickup => {
+          plant.pickupDetails.forEach((pickup) => {
             if (pickup.cavity) {
               allCavityIds.push(pickup.cavity);
             }
           });
         }
-        
+
         // Get cavity IDs from crates
         if (Array.isArray(plant.crates)) {
-          plant.crates.forEach(crate => {
+          plant.crates.forEach((crate) => {
             if (crate.cavity) {
               allCavityIds.push(crate.cavity);
             }
@@ -313,15 +314,19 @@ const getDispatches = catchAsync(async (req, res, next) => {
         }
       }
     }
-    
+
     // Get unique cavity IDs
-    const uniqueCavityIds = [...new Set(allCavityIds.map(id => id.toString()))];
-    
+    const uniqueCavityIds = [
+      ...new Set(allCavityIds.map((id) => id.toString())),
+    ];
+
     // Fetch all trays in one go
-    const trays = await Tray.find({ 
-      _id: { $in: uniqueCavityIds.map(id => new mongoose.Types.ObjectId(id)) } 
+    const trays = await Tray.find({
+      _id: {
+        $in: uniqueCavityIds.map((id) => new mongoose.Types.ObjectId(id)),
+      },
     }).lean();
-    
+
     // Create a lookup map
     const trayMap = trays.reduce((map, tray) => {
       map[tray._id.toString()] = tray;
@@ -331,52 +336,54 @@ const getDispatches = catchAsync(async (req, res, next) => {
     // Transform dispatches with tray information
     const transformedDispatches = dispatches.map((dispatch) => {
       // Process plant details with cavity information
-      const plantDetailsWithCavity = dispatch.plantsDetails.map(plant => {
+      const plantDetailsWithCavity = dispatch.plantsDetails.map((plant) => {
         // Calculate cavity count
         const uniqueCavities = new Set();
         if (Array.isArray(plant.pickupDetails)) {
-          plant.pickupDetails.forEach(pickup => {
+          plant.pickupDetails.forEach((pickup) => {
             if (pickup.cavity) {
               uniqueCavities.add(pickup.cavity.toString());
             }
           });
         }
-        
+
         // Process pickup details
-        const pickupDetailsWithCavity = Array.isArray(plant.pickupDetails) ? 
-          plant.pickupDetails.map(pickup => {
-            const cavityId = pickup.cavity ? pickup.cavity.toString() : null;
-            const tray = cavityId ? trayMap[cavityId] : null;
-            
-            return {
-              ...pickup,
-              cavity: cavityId,
-              cavityName: tray ? tray.name : (pickup.cavityName || ""),
-              numberPerCrate: tray ? tray.numberPerCrate : null,
-              cavitySize: tray ? tray.cavity : null
-            };
-          }) : [];
-        
+        const pickupDetailsWithCavity = Array.isArray(plant.pickupDetails)
+          ? plant.pickupDetails.map((pickup) => {
+              const cavityId = pickup.cavity ? pickup.cavity.toString() : null;
+              const tray = cavityId ? trayMap[cavityId] : null;
+
+              return {
+                ...pickup,
+                cavity: cavityId,
+                cavityName: tray ? tray.name : pickup.cavityName || "",
+                numberPerCrate: tray ? tray.numberPerCrate : null,
+                cavitySize: tray ? tray.cavity : null,
+              };
+            })
+          : [];
+
         // Process crates
-        const cratesWithCavity = Array.isArray(plant.crates) ?
-          plant.crates.map(crate => {
-            const cavityId = crate.cavity ? crate.cavity.toString() : null;
-            const tray = cavityId ? trayMap[cavityId] : null;
-            
-            return {
-              ...crate,
-              cavity: cavityId,
-              cavityName: tray ? tray.name : (crate.cavityName || ""),
-              numberPerCrate: tray ? tray.numberPerCrate : null,
-              cavitySize: tray ? tray.cavity : null
-            };
-          }) : [];
+        const cratesWithCavity = Array.isArray(plant.crates)
+          ? plant.crates.map((crate) => {
+              const cavityId = crate.cavity ? crate.cavity.toString() : null;
+              const tray = cavityId ? trayMap[cavityId] : null;
+
+              return {
+                ...crate,
+                cavity: cavityId,
+                cavityName: tray ? tray.name : crate.cavityName || "",
+                numberPerCrate: tray ? tray.numberPerCrate : null,
+                cavitySize: tray ? tray.cavity : null,
+              };
+            })
+          : [];
 
         return {
           ...plant,
           cavityCount: uniqueCavities.size,
           pickupDetails: pickupDetailsWithCavity,
-          crates: cratesWithCavity
+          crates: cratesWithCavity,
         };
       });
 
@@ -390,10 +397,18 @@ const getDispatches = catchAsync(async (req, res, next) => {
           ...order,
           orderDate: order.orderDate.toISOString(),
           total: `₹ ${order.rate * order.quantity}`,
-          "Paid Amt": `₹ ${order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0}`,
-          "remaining Amt": `₹ ${order.rate * order.quantity - (order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0)}`,
+          "Paid Amt": `₹ ${
+            order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0
+          }`,
+          "remaining Amt": `₹ ${
+            order.rate * order.quantity -
+            (order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) ||
+              0)
+          }`,
           Delivery: order.details.bookingSlot
-            ? `${order.details.bookingSlot.startDay} - ${order.details.bookingSlot.endDay} ${order.details.bookingSlot.month}, ${new Date().getFullYear()}`
+            ? `${order.details.bookingSlot.startDay} - ${
+                order.details.bookingSlot.endDay
+              } ${order.details.bookingSlot.month}, ${new Date().getFullYear()}`
             : "",
         })),
       };
@@ -416,7 +431,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
 // Get single dispatch controller
 const getDispatch = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-console.log("hiii")
+  console.log("hiii");
   try {
     const dispatch = await Dispatch.findById(id)
       .populate({
@@ -448,33 +463,33 @@ console.log("hiii")
 
     // Separately get all relevant tray data to ensure we have the info
     const trayIds = [];
-    
+
     // Collect all cavity IDs from pickupDetails
-    dispatch.plantsDetails.forEach(plant => {
+    dispatch.plantsDetails.forEach((plant) => {
       if (Array.isArray(plant.pickupDetails)) {
-        plant.pickupDetails.forEach(pickup => {
+        plant.pickupDetails.forEach((pickup) => {
           if (pickup.cavity) {
             trayIds.push(pickup.cavity);
           }
         });
       }
-      
+
       // Collect all cavity IDs from crates
       if (Array.isArray(plant.crates)) {
-        plant.crates.forEach(crate => {
+        plant.crates.forEach((crate) => {
           if (crate.cavity) {
             trayIds.push(crate.cavity);
           }
         });
       }
     });
-    
+
     // Get unique tray IDs
-    const uniqueTrayIds = [...new Set(trayIds.map(id => id.toString()))];
-    
+    const uniqueTrayIds = [...new Set(trayIds.map((id) => id.toString()))];
+
     // Fetch all relevant trays in one query
     const trays = await Tray.find({ _id: { $in: uniqueTrayIds } }).lean();
-    
+
     // Create a lookup map for easy access
     const trayMap = trays.reduce((map, tray) => {
       map[tray._id.toString()] = tray;
@@ -495,13 +510,13 @@ console.log("hiii")
         // Calculate cavity count
         const uniqueCavities = new Set();
         if (Array.isArray(plant.pickupDetails)) {
-          plant.pickupDetails.forEach(pickup => {
+          plant.pickupDetails.forEach((pickup) => {
             if (pickup.cavity) {
               uniqueCavities.add(pickup.cavity.toString());
             }
           });
         }
-        
+
         return {
           name: plant.name,
           id: plant.id,
@@ -510,35 +525,41 @@ console.log("hiii")
           quantity: plant.quantity,
           totalPlants: plant.totalPlants,
           cavityCount: uniqueCavities.size,
-          pickupDetails: Array.isArray(plant.pickupDetails) ? plant.pickupDetails.map((pickup) => {
-            const cavityId = pickup.cavity ? pickup.cavity.toString() : null;
-            const tray = cavityId ? trayMap[cavityId] : null;
-            console.log("tray",tray)
-            return {
-              shade: pickup.shade,
-              shadeName: pickup.shadeName,
-              quantity: pickup.quantity,
-              cavity: cavityId,
-              cavityName: tray ? tray.name : pickup.cavityName || "",
-              numberPerCrate: tray ? tray.numberPerCrate : null,
-              cavitySize: tray ? tray.cavity : null
-            };
-          }) : [],
-          crates: Array.isArray(plant.crates) ? plant.crates.map((crate) => {
-            const cavityId = crate.cavity ? crate.cavity.toString() : null;
-            const tray = cavityId ? trayMap[cavityId] : null;
-            console.log("tray",tray)
+          pickupDetails: Array.isArray(plant.pickupDetails)
+            ? plant.pickupDetails.map((pickup) => {
+                const cavityId = pickup.cavity
+                  ? pickup.cavity.toString()
+                  : null;
+                const tray = cavityId ? trayMap[cavityId] : null;
+                console.log("tray", tray);
+                return {
+                  shade: pickup.shade,
+                  shadeName: pickup.shadeName,
+                  quantity: pickup.quantity,
+                  cavity: cavityId,
+                  cavityName: tray ? tray.name : pickup.cavityName || "",
+                  numberPerCrate: tray ? tray.numberPerCrate : null,
+                  cavitySize: tray ? tray.cavity : null,
+                };
+              })
+            : [],
+          crates: Array.isArray(plant.crates)
+            ? plant.crates.map((crate) => {
+                const cavityId = crate.cavity ? crate.cavity.toString() : null;
+                const tray = cavityId ? trayMap[cavityId] : null;
+                console.log("tray", tray);
 
-            return {
-              cavity: cavityId,
-              cavityName: tray ? tray.name : crate.cavityName || "",
-              cavitySize: tray ? tray.cavity : null,
-              numberPerCrate: tray ? tray.numberPerCrate : null,
-              crateCount: crate.crateCount,
-              plantCount: crate.plantCount,
-              crateDetails: crate.crateDetails || [],
-            };
-          }) : [],
+                return {
+                  cavity: cavityId,
+                  cavityName: tray ? tray.name : crate.cavityName || "",
+                  cavitySize: tray ? tray.cavity : null,
+                  numberPerCrate: tray ? tray.numberPerCrate : null,
+                  crateCount: crate.crateCount,
+                  plantCount: crate.plantCount,
+                  crateDetails: crate.crateDetails || [],
+                };
+              })
+            : [],
         };
       }),
       orderIds: dispatch.orderIds.map((order) => ({
@@ -657,28 +678,82 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
 
       if (!order) return null;
 
-      // Calculate new numberOfPlants if there are returns
-      const returnsForThisOrder = orderUpdatesMap[orderId]?.returnedPlants || 0;
-      const newNumberOfPlants = order.numberOfPlants - returnsForThisOrder;
+      // Get the update data for this order
+      const orderUpdate = orderUpdatesMap[orderId];
+      if (!orderUpdate) {
+        // If no update data found for this order, return the original order
+        return order;
+      }
+
+      // Get the returns for this order
+      const returnsForThisOrder = Number(orderUpdate.returnedPlants) || 0;
+
+      // Calculate the total returnedPlants (existing + new returns)
+      const totalReturnedPlants = order.returnedPlants + returnsForThisOrder;
+
+      // Calculate the new remainingPlants based on original numberOfPlants and total returns
+      const newRemainingPlants = Math.max(
+        0,
+        order.numberOfPlants - totalReturnedPlants
+      );
+
+      // Prepare update object for the order - initially empty
+      const orderUpdateData = {};
+
+      // Check if action properties exist with updated format from frontend
+      const completeOrder = orderUpdate.actions?.completeOrder === true;
+      const addToInventory = orderUpdate.actions?.addToInventory === true;
+
+      // Update order status based on returns and completeOrder action
+      if (completeOrder) {
+        orderUpdateData.orderStatus = "COMPLETED";
+      } else {
+        // When completeOrder is false and there are returns, set status to PARTIALLY_COMPLETED
+        orderUpdateData.orderStatus = "PARTIALLY_COMPLETED";
+      }
+
+      // Only update return-related fields if there are actual returns
+      if (returnsForThisOrder > 0) {
+        // Add the return data to the update
+        orderUpdateData.returnedPlants = totalReturnedPlants;
+        orderUpdateData.remainingPlants = newRemainingPlants;
+
+        if (orderUpdate.returnReason) {
+          orderUpdateData.returnReason = orderUpdate.returnReason;
+        }
+
+        // Add to return history regardless of whether adding to inventory
+        const returnHistoryEntry = {
+          date: new Date(),
+          quantity: returnsForThisOrder,
+          reason: orderUpdate.returnReason || "Return from dispatch",
+          dispatchId: dispatch._id,
+          processedBy: req.user ? req.user._id : undefined,
+        };
+
+        // Use $push to add to the return history array
+        await Order.findByIdAndUpdate(
+          orderId,
+          { $push: { returnHistory: returnHistoryEntry } },
+          { session }
+        );
+      }
+
+      // Skip update if there's nothing to update (which should never happen now
+      // since we always set an orderStatus)
+      if (Object.keys(orderUpdateData).length === 0) {
+        return order;
+      }
 
       // Update the order
       const updatedOrder = await Order.findByIdAndUpdate(
         orderId,
-        {
-          ...(orderUpdatesMap[orderId]
-            ? {
-                returnedPlants: orderUpdatesMap[orderId].returnedPlants,
-                returnReason: orderUpdatesMap[orderId].returnReason,
-                numberOfPlants: newNumberOfPlants,
-              }
-            : {}),
-          orderStatus: "COMPLETED",
-        },
+        orderUpdateData,
         { new: true, runValidators: true, session }
       );
 
-      // If order has returns, update the slot's totalPlants
-      if (returnsForThisOrder > 0) {
+      // If order has returns AND addToInventory is true, update the slot's totalPlants
+      if (returnsForThisOrder > 0 && addToInventory) {
         await mongoose.model("PlantSlot").updateOne(
           {
             "subtypeSlots.slots._id": order.bookingSlot,

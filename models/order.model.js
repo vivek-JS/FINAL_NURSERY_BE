@@ -51,6 +51,7 @@ const statusChangeSchema = new Schema(
         "REJECTED",
         "FARM_READY",
         "DISPATCH_PROCESS",
+        "PARTIALLY_COMPLETED"
       ],
       required: true,
     },
@@ -66,6 +67,7 @@ const statusChangeSchema = new Schema(
         "REJECTED",
         "FARM_READY",
         "DISPATCH_PROCESS",
+        "PARTIALLY_COMPLETED"
       ],
       required: true,
     },
@@ -82,7 +84,6 @@ const statusChangeSchema = new Schema(
   },
   { timestamps: true }
 );
-
 const paymentSchema = new Schema(
   {
     paidAmount: {
@@ -209,6 +210,7 @@ const orderSchema = new Schema(
         "REJECTED",
         "FARM_READY",
         "DISPATCH_PROCESS",
+        "PARTIALLY_COMPLETED"
       ],
       default: "PENDING",
     },

@@ -723,6 +723,198 @@ export const getPlantStats = async (req, res) => {
   }
 };
 
+
+
+// Function to manually add a slot to a plant subtype
+export const addManualSlot = async (req, res) => {
+  try {
+    const { plantId, subtypeId, startDay, endDay, totalPlants } = req.body;
+    
+    // Validate required fields
+    if (!plantId || !subtypeId || !startDay || !endDay || totalPlants === undefined) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required fields: plantId, subtypeId, startDay, endDay, and totalPlants are required' 
+      });
+    }
+    
+    // Validate date format (dd-mm-yyyy)
+    const dateRegex = /^\d{2}-\d{2}-\d{4}$/;
+    if (!dateRegex.test(startDay) || !dateRegex.test(endDay)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Dates must be in dd-mm-yyyy format' 
+      });
+    }
+    
+    // Validate dates are valid using moment
+    if (!moment(startDay, "DD-MM-YYYY", true).isValid() || 
+        !moment(endDay, "DD-MM-YYYY", true).isValid()) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid date values' 
+      });
+    }
+    
+    // Ensure end date is after or equal to start date
+    const startDate = moment(startDay, "DD-MM-YYYY");
+    const endDate = moment(endDay, "DD-MM-YYYY");
+    
+    if (endDate.isBefore(startDate)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'End date must be after start date' 
+      });
+    }
+    
+    // Get the month name from the start date
+    const month = startDate.format('MMMM');
+    
+    // Get the current year
+    const year = new Date().getFullYear();
+    
+    // Find the plant slot document
+    let plantSlot = await PlantSlot.findOne({ 
+      plantId, 
+      year 
+    });
+    
+    // If no plant slot exists for this plant and year, create one
+    if (!plantSlot) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Plant slot not found for the specified plant and year' 
+      });
+    }
+    
+    // Find the subtype slot
+    const subtypeSlotIndex = plantSlot.subtypeSlots.findIndex(
+      slot => slot.subtypeId.toString() === subtypeId
+    );
+    
+    if (subtypeSlotIndex === -1) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Subtype not found for this plant' 
+      });
+    }
+    
+    // Create the new slot with manual flag
+    const newSlot = {
+      startDay,
+      endDay,
+      totalPlants: totalPlants,
+      totalBookedPlants: 0,
+      orders: [],
+      overflow: false,
+      status: true,
+      month,
+      isManual: true // Flag to identify manually added slots
+    };
+    
+    // Add the slot to the subtype slots array
+    plantSlot.subtypeSlots[subtypeSlotIndex].slots.push(newSlot);
+    
+    // Save the updated plant slot
+    await plantSlot.save();
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Slot added successfully',
+      data: newSlot
+    });
+    
+  } catch (error) {
+    console.error('Error adding manual slot:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+// Function to delete a manually added slot
+// Function to delete a manually added slot
+export const deleteManualSlot = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    
+    if (!slotId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required parameter: slotId'
+      });
+    }
+    
+    // First, find the slot document to check if it's a manual slot
+    // We need to use aggregation to find the exact slot within the nested structure
+    const result = await PlantSlot.aggregate([
+      { $unwind: "$subtypeSlots" },
+      { $unwind: "$subtypeSlots.slots" },
+      { $match: { "subtypeSlots.slots._id": new mongoose.Types.ObjectId(slotId) } },
+      { $project: {
+          isManual: "$subtypeSlots.slots.isManual",
+          totalBookedPlants: "$subtypeSlots.slots.totalBookedPlants",
+          plantId: 1,
+          subtypeSlotId: "$subtypeSlots._id",
+          slot: "$subtypeSlots.slots"
+        }
+      }
+    ]);
+    
+    if (!result || result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Slot not found'
+      });
+    }
+    
+    const slotInfo = result[0];
+    
+    // Check if the slot is manually added
+    if (!slotInfo.isManual) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only manually added slots can be deleted'
+      });
+    }
+    
+    // Check if the slot has booked plants
+    if (slotInfo.totalBookedPlants > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete a slot that has booked plants'
+      });
+    }
+    
+    // Delete the slot
+    const updated = await PlantSlot.updateOne(
+      { "_id": slotInfo._id },
+      { $pull: { "subtypeSlots.$[subtype].slots": { "_id": new mongoose.Types.ObjectId(slotId) } } },
+      { arrayFilters: [{ "subtype._id": slotInfo.subtypeSlotId }] }
+    );
+    
+    if (updated.modifiedCount === 0) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to delete the slot'
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Slot deleted successfully'
+    });
+    
+  } catch (error) {
+    console.error('Error deleting manual slot:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
 // Example API route setup
 import express from "express";
 const router = express.Router();
