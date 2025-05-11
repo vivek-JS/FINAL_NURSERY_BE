@@ -110,6 +110,12 @@ const dispatchSchema = new Schema(
       required: true,
       unique: true,
     },
+    // Added transportStatus field with enum values and default
+    transportStatus: {
+      type: String,
+      enum: ["PENDING", "DELIVERED", "IN_TRANSIT", "CANCELLED"],
+      default: "PENDING",
+    },
     orderIds: {
       type: [
         {
@@ -147,6 +153,11 @@ const dispatchSchema = new Schema(
       type: Boolean,
       default: false, // This ensures new documents start as not deleted
     },
+    // Add returnedPlants field to track total returns for the dispatch
+    returnedPlants: {
+      type: Number,
+      default: 0,
+    },
     plantsDetails: {
       type: [plantDetailSchema],
       validate: {
@@ -162,6 +173,13 @@ const dispatchSchema = new Schema(
     timestamps: true,
   }
 );
+
+// Add index for transportStatus for faster queries
+dispatchSchema.index({ transportStatus: 1 });
+// Add index for transportId for faster lookups
+dispatchSchema.index({ transportId: 1 }, { unique: true });
+// Add compound index for query optimization
+dispatchSchema.index({ transportStatus: 1, createdAt: -1 });
 
 const Dispatch = model("Dispatch", dispatchSchema);
 

@@ -165,6 +165,7 @@ export const updateSlot = async (
   return updateResult; // Return the update result for reference
 };
 
+// Modified createOne function to handle componyQuota flag
 const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     if (modelName === "Order") {
@@ -174,6 +175,7 @@ const createOne = (Model, modelName) =>
         numberOfPlants,
         cavity,
         orderRemarks,
+        componyQuota, // Added this field to destructure from request body
         ...orderData
       } = req.body;
       console.log(req?.body);
@@ -274,6 +276,11 @@ const createOne = (Model, modelName) =>
 
           await wallet.save({ session });
         }
+        // Case 1.5: If it's a dealer order with componyQuota=true (new case)
+        else if (salesPerson.jobTitle === "DEALER" && componyQuota === true) {
+          // Execute this code when DEALER selects company quota option
+          await updateSlot(bookingSlot, numberOfPlants, "subtract", session);
+        }
         // Case 2: If it's a farmer order through a dealer
         else if (salesPerson.jobTitle === "DEALER") {
           const allocation = await handleQuantityAllocation(
@@ -344,6 +351,7 @@ const createOne = (Model, modelName) =>
               returnedPlants: 0, // Initialize with zero returned plants
               returnHistory: [], // Initialize with empty return history
               deliveryChanges: [], // Initialize with empty delivery changes history
+              componyQuota, // Include the componyQuota flag in the order document
             },
           ],
           { session }
@@ -437,7 +445,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           obj[key] = req.body[key];
           return obj;
         }, {});
-      
+
       // Handle special fields updates
 
       // Special handling for orderRemarks - append if it's an array or a string
@@ -621,7 +629,11 @@ const updateOne = (Model, modelName, allowedFields) =>
       if (filteredBody.bookingSlot || filteredBody.numberOfPlants) {
         try {
           // Modified handleSlotUpdates to use the session
-          await handleSlotUpdatesWithSession(existingDoc, filteredBody, session);
+          await handleSlotUpdatesWithSession(
+            existingDoc,
+            filteredBody,
+            session
+          );
         } catch (error) {
           await session.abortTransaction();
           session.endSession();
@@ -672,7 +684,11 @@ const updateOne = (Model, modelName, allowedFields) =>
   });
 
 // Modified helper function that works with a session
-const handleSlotUpdatesWithSession = async (existingDoc, filteredBody, session) => {
+const handleSlotUpdatesWithSession = async (
+  existingDoc,
+  filteredBody,
+  session
+) => {
   const { bookingSlot, numberOfPlants } = filteredBody;
 
   try {
@@ -708,11 +724,19 @@ const handleSlotUpdatesWithSession = async (existingDoc, filteredBody, session) 
       // Build the update operation based on the action
       const updateOperation = {};
       if (action === "subtract") {
-        updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] = -plantsCount;
-        updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"] = plantsCount;
+        updateOperation[
+          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"
+        ] = -plantsCount;
+        updateOperation[
+          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
+        ] = plantsCount;
       } else if (action === "add") {
-        updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] = plantsCount;
-        updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"] = -plantsCount;
+        updateOperation[
+          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"
+        ] = plantsCount;
+        updateOperation[
+          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
+        ] = -plantsCount;
       }
 
       // Perform an atomic update in the database using $inc within the session
@@ -720,10 +744,14 @@ const handleSlotUpdatesWithSession = async (existingDoc, filteredBody, session) 
         { "subtypeSlots.slots._id": slotId },
         {
           $inc: {
-            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants": 
-              updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"],
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants":
+              updateOperation[
+                "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"
+              ],
             "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants":
-              updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"],
+              updateOperation[
+                "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
+              ],
           },
         },
         {
@@ -754,7 +782,11 @@ const handleSlotUpdatesWithSession = async (existingDoc, filteredBody, session) 
 
       // Use Promise.all to perform both operations, but with the session
       await Promise.all([
-        updateSlotWithSession(existingDoc.bookingSlot, existingDoc.numberOfPlants, "add"),
+        updateSlotWithSession(
+          existingDoc.bookingSlot,
+          existingDoc.numberOfPlants,
+          "add"
+        ),
         updateSlotWithSession(
           bookingSlot,
           numberOfPlants || existingDoc.numberOfPlants,
@@ -1051,8 +1083,14 @@ const getAll = (Model, modelName) =>
       }
 
       // Search filtering by `orderId` or `farmer.name`
+      // Search filtering by `orderId`, `farmer.name`, or `farmer.mobileNumber`
+      // Replace this section in your getAll function to enable partial mobile number matching:
+
+      // Search filtering by `orderId`, `farmer.name`, or `farmer.mobileNumber` (including partial matches)
       if (search) {
         const searchRegex = new RegExp(search, "i");
+
+        // First, do the farmer lookup to enable searching through farmer fields
         pipeline.push({
           $lookup: {
             from: "farmers",
@@ -1062,11 +1100,27 @@ const getAll = (Model, modelName) =>
           },
         });
 
+        // For mobile number partial matching, we need to convert numbers to strings
+        // Add a stage to create a string version of the mobile number
+        pipeline.push({
+          $addFields: {
+            "farmer.mobileNumberStr": {
+              $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
+            },
+          },
+        });
+
+        // Try to parse the search for orderId if it's fully numeric
+        const isNumeric = /^\d+$/.test(search);
+        const searchAsNumber = isNumeric ? Number(search) : NaN;
+
+        // Updated match criteria to include partial mobile number matches
         pipeline.push({
           $match: {
             $or: [
-              { orderId: search }, // Match orderId
+              { orderId: isNumeric ? searchAsNumber : search }, // Match orderId as number if numeric
               { "farmer.name": searchRegex }, // Match farmer name
+              { "farmer.mobileNumberStr": searchRegex }, // Match partial mobile number as string
             ],
           },
         });
@@ -1336,8 +1390,8 @@ const getAll = (Model, modelName) =>
                     state: "$$farmerData.state",
                     // Added the name fields
                     stateName: "$$farmerData.stateName",
-                    districtName: "$$farmerData.districtName", 
-                    talukaName: "$$farmerData.talukaName"
+                    districtName: "$$farmerData.districtName",
+                    talukaName: "$$farmerData.talukaName",
                   },
                 },
               },
