@@ -14,10 +14,13 @@ import {
   getAllDealersWithWalletInfo,
   getDealerWalletTransactions,
   getDealerWalletStats,
+  refreshToken,
+  logout,
+  verifyToken,
 } from "../controllers/user.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
-import verifyToken from "../middlewares/verifyToken.middleware.js";
+import { authenticateToken, validateAuthRequest } from "../middlewares/auth.middleware.js";
 import logger from "../middlewares/logger.middleware.js";
 import {
   getDealerWalletDetails,
@@ -30,11 +33,16 @@ router
   .post(
     "/login",
     [
-      check("phoneNumber", "Please provide valid email").isMobilePhone(),
+      check("phoneNumber", "Please provide valid phone number").isMobilePhone(),
       check("password", "Please provide valid password").notEmpty(),
     ],
+    checkErrors,
+    validateAuthRequest,
     login
   )
+  .post("/refresh-token", refreshToken)
+  .post("/logout", authenticateToken, logout)
+  .post("/verify-token", verifyToken)
   .post(
     "/createUser",
     [
@@ -48,6 +56,7 @@ router
   )
   .patch(
     "/updateUser",
+    authenticateToken,
     [check("id", "Please provide valid userId").isMongoId()],
     encryptPassword,
     checkErrors,
@@ -55,13 +64,14 @@ router
   )
   .delete(
     "/deleteUser",
+    authenticateToken,
     [check("id", "Please provide valid userId").isMongoId()],
     checkErrors,
     deleteUser
   )
-  .get("/allusers", getUsers)
-  .post("/resetPassword", resetPassword)
-  .get("/aboutMe", aboutMe)
+  .get("/allusers", authenticateToken, getUsers)
+  .post("/resetPassword", authenticateToken, resetPassword)
+  .get("/aboutMe", authenticateToken, aboutMe)
   .get("/wallet-details/:dealerId", getDealerWalletDetails)
   .get("/wallet-details-summary", getDealerWalletSummary)
   .get("/salespeople", getSalespeople)

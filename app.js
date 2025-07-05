@@ -49,7 +49,7 @@ import batchRoute from "./routes/batch.route.js";
 import plantOutward from "./routes/plantOutward.route.js";
 import PollyHouse from "./routes/pollyhouse.route.js";
 import DelaerRoutes from "./routes/dealer.route.js";
-import verifyToken from "./middlewares/verifyToken.middleware.js";
+import { authenticateToken } from "./middlewares/auth.middleware.js";
 import ExcelRoute from "./routes/excel.route.js";
 
 // dummy route
@@ -59,35 +59,35 @@ server.get("/api/dummyData", (req, res) => {
 
 // defining routes
 server.use("/api/v1/user", userRoute);
-//server.use(verifyToken);
-server.use("/api/v1/farmer", limiter, farmerRoute);
-server.use("/api/v1/order", orderRoute);
-server.use("/api/v1/cms", cmsRoute);
-server.use("/api/v1/employee", employeeRoute);
-server.use("/api/v1/attendance", attendanceRoute);
-server.use("/api/v1/reporting", reportingRoute);
-server.use("/api/v1/lab", labRoute);
-server.use("/api/v1/primaryHardeingRoute", primaryHardeingRoute);
-server.use("/api/v1/secondaryHardeingRoute", secondaryHardeingRoute);
-server.use("/api/v1/godown", godownRoute);
-server.use("/api/v1/seed", seedRoute);
-server.use("/api/v1/vegetable", vegetableRoute);
-server.use("/api/v1/chemical", chemicalRoute);
-server.use("/api/v1/location", distrctRoutes);
-server.use("/api/v1", slotRouter);
-server.use("/api/v1/plantcms", plantCmsRouter);
-server.use("/api/v1/shade", shadeRoter);
-server.use("/api/v1/tray", trayRouter);
-server.use("/api/v1/vehicles", vheicleRouter);
-server.use("/api/v1/dispatched", dispatchRoute);
-server.use("/api/v1/msg", msgRoute);
-server.use("/api/v1/backup", backupRoute);
-server.use("/api/v1/msg", msgRoute);
-server.use("/api/v1/batch", batchRoute);
-server.use("/api/v1/laboutward", plantOutward);
-server.use("/api/v1/pollyhouse", PollyHouse);
-server.use("/api/v1/dealer", DelaerRoutes);
-server.use("/api/v1/excel", ExcelRoute);
+
+// Protected routes - require authentication
+server.use("/api/v1/farmer", limiter, authenticateToken, farmerRoute);
+server.use("/api/v1/order", authenticateToken, orderRoute);
+server.use("/api/v1/cms", authenticateToken, cmsRoute);
+server.use("/api/v1/employee", authenticateToken, employeeRoute);
+server.use("/api/v1/attendance", authenticateToken, attendanceRoute);
+server.use("/api/v1/reporting", authenticateToken, reportingRoute);
+server.use("/api/v1/lab", authenticateToken, labRoute);
+server.use("/api/v1/primaryHardeingRoute", authenticateToken, primaryHardeingRoute);
+server.use("/api/v1/secondaryHardeingRoute", authenticateToken, secondaryHardeingRoute);
+server.use("/api/v1/godown", authenticateToken, godownRoute);
+server.use("/api/v1/seed", authenticateToken, seedRoute);
+server.use("/api/v1/vegetable", authenticateToken, vegetableRoute);
+server.use("/api/v1/chemical", authenticateToken, chemicalRoute);
+server.use("/api/v1/location", authenticateToken, distrctRoutes);
+server.use("/api/v1", authenticateToken, slotRouter);
+server.use("/api/v1/plantcms", authenticateToken, plantCmsRouter);
+server.use("/api/v1/shade", authenticateToken, shadeRoter);
+server.use("/api/v1/tray", authenticateToken, trayRouter);
+server.use("/api/v1/vehicles", authenticateToken, vheicleRouter);
+server.use("/api/v1/dispatched", authenticateToken, dispatchRoute);
+server.use("/api/v1/msg", authenticateToken, msgRoute);
+server.use("/api/v1/backup", authenticateToken, backupRoute);
+server.use("/api/v1/batch", authenticateToken, batchRoute);
+server.use("/api/v1/laboutward", authenticateToken, plantOutward);
+server.use("/api/v1/pollyhouse", authenticateToken, PollyHouse);
+server.use("/api/v1/dealer", authenticateToken, DelaerRoutes);
+server.use("/api/v1/excel", authenticateToken, ExcelRoute);
 
 
 server.use(errorRouter);

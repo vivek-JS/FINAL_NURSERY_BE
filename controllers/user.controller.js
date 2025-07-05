@@ -10,7 +10,13 @@ import {
   isDisabled,
 } from "./factory.controller.js";
 import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
+import { 
+  generateTokenPair, 
+  setTokenCookies, 
+  clearTokenCookies,
+  blacklistToken,
+  extractToken 
+} from "../utility/jwtUtils.js";
 import Order from "../models/order.model.js";
 import DealerWallet from "../models/dealerWallet.js";
 import PlantCms from "../models/plantCms.model.js";
@@ -65,19 +71,7 @@ const findUser = catchAsync(async (req, res, next) => {
   next();
 });
 
-const generateToken = (data) => {
-  const token = jwt.sign(
-    {
-      data,
-    },
-    process.env.PRIVATE_KEY,
-    {
-      expiresIn: process.env.TOKEN_EXPIRY,
-    }
-  );
-
-  return token;
-};
+// Remove the old generateToken function as we're using the new JWT utilities
 
 const login = [
   isDisabled(User, "User"),
@@ -88,22 +82,38 @@ const login = [
     const user = await User.findOne({ phoneNumber: phoneNumber });
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
-      return next(new AppError("Wrong credentails", 400));
+      return next(new AppError("Wrong credentials", 400));
     }
 
-    user.password = undefined;
+    // Remove password from response
+    const userResponse = user.toObject();
+    delete userResponse.password;
 
-    const token = generateToken(user);
+    // Generate token pair
+    const tokenPair = generateTokenPair({
+      _id: user._id,
+      phoneNumber: user.phoneNumber,
+      role: user.role,
+      name: user.name
+    });
+
+    // Set secure cookies
+    setTokenCookies(res, tokenPair.accessToken, tokenPair.refreshToken);
+
     const response = generateResponse(
       "Success",
-      "Login success",
-      user,
+      "Login successful - Token generated successfully",
+      {
+        user: userResponse,
+        accessToken: tokenPair.accessToken,
+        refreshToken: tokenPair.refreshToken,
+        expiresIn: tokenPair.expiresIn,
+        message: "Access token generated and ready for API calls"
+      },
       undefined
     );
-    return res
-      .status(200)
-      .cookie("Authorization", token, { httpOnly: true })
-      .json({ token: token, response });
+
+    return res.status(200).json(response);
   }),
 ];
 
@@ -141,6 +151,90 @@ const aboutMe = catchAsync(async (req, res, next) => {
     message: "User found successfully",
     data: user,
   });
+});
+
+// Refresh token endpoint
+export const refreshToken = catchAsync(async (req, res, next) => {
+  const { refreshToken } = req.body;
+
+  if (!refreshToken) {
+    return next(new AppError("Refresh token is required", 400));
+  }
+
+  try {
+    const { refreshAccessToken } = await import("../utility/jwtUtils.js");
+    const newTokenPair = refreshAccessToken(refreshToken);
+
+    // Set new secure cookies
+    setTokenCookies(res, newTokenPair.accessToken, newTokenPair.refreshToken);
+
+    const response = generateResponse(
+      "Success",
+      "Token refreshed successfully",
+      {
+        accessToken: newTokenPair.accessToken,
+        refreshToken: newTokenPair.refreshToken,
+        expiresIn: newTokenPair.expiresIn
+      },
+      undefined
+    );
+
+    return res.status(200).json(response);
+  } catch (error) {
+    return next(new AppError("Invalid refresh token", 401));
+  }
+});
+
+// Logout endpoint
+export const logout = catchAsync(async (req, res, next) => {
+  const token = extractToken(req);
+  
+  if (token) {
+    blacklistToken(token);
+  }
+
+  // Clear cookies
+  clearTokenCookies(res);
+
+  const response = generateResponse(
+    "Success",
+    "Logged out successfully",
+    null,
+    undefined
+  );
+
+  return res.status(200).json(response);
+});
+
+// Verify token endpoint
+export const verifyToken = catchAsync(async (req, res, next) => {
+  const token = extractToken(req);
+
+  if (!token) {
+    return next(new AppError("Token is required", 400));
+  }
+
+  try {
+    const { verifyAccessToken } = await import("../utility/jwtUtils.js");
+    const decoded = verifyAccessToken(token);
+
+    const user = await User.findById(decoded._id).select('-password');
+    
+    if (!user) {
+      return next(new AppError("User not found", 404));
+    }
+
+    const response = generateResponse(
+      "Success",
+      "Token is valid",
+      { user, token: decoded },
+      undefined
+    );
+
+    return res.status(200).json(response);
+  } catch (error) {
+    return next(new AppError("Invalid token", 401));
+  }
 });
 
 // Get all salespeople list
