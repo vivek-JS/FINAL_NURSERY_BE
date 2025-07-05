@@ -3,3 +3,6 @@ public/images/*
 !public/images/.gitkeep
 public/uploads/*
 !public/uploads/.gitkeep
+# Ignore MongoDB binaries and archives
+mongodb-macos-x86_64-7.0.5/
+mongodb-macos-x86_64-7.0.5.tgz
