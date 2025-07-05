@@ -10,16 +10,55 @@ import IPWhiteListing from "./middlewares/ipWhiteListing.middleware.js";
 import limiter from "./middlewares/rateLimiter.middleware.js";
 import parameterWhiteListing from "./middlewares/parameterWhiteListing.middleware.js";
 
-// middlewares
-server.use(cors());
-server.use(express.json());
+// Security middlewares
+server.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  }
+}));
+
+// CORS configuration
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version'],
+  exposedHeaders: ['X-Total-Count', 'X-Page-Count']
+};
+server.use(cors(corsOptions));
+
+// Body parsing middlewares
+server.use(express.json({ limit: '10mb' }));
+server.use(express.urlencoded({ extended: true, limit: '10mb' }));
 server.use(cookieParser());
+
+// Security middlewares
 server.use(mongoSanitize());
 server.use(xss());
-server.use(helmet());
-//server.use(IPWhiteListing);
-//server.use(parameterWhiteListing);
-//server.use("/api", limiter);
+
+// Rate limiting for all API routes
+server.use("/api", limiter);
+
+// IP whitelisting (uncomment if needed)
+// server.use(IPWhiteListing);
+
+// Parameter whitelisting
+server.use(parameterWhiteListing);
 
 // importing routes
 import farmerRoute from "./routes/farmer.route.js";
@@ -51,6 +90,10 @@ import PollyHouse from "./routes/pollyhouse.route.js";
 import DelaerRoutes from "./routes/dealer.route.js";
 import { authenticateToken } from "./middlewares/auth.middleware.js";
 import ExcelRoute from "./routes/excel.route.js";
+
+// Health check routes (no authentication required)
+import healthRoute from "./routes/health.route.js";
+server.use("/health", healthRoute);
 
 // dummy route
 server.get("/api/dummyData", (req, res) => {
