@@ -2,6 +2,7 @@ import DealerWallet from "../models/dealerWallet.js";
 import Order from "../models/order.model.js";
 import catchAsync from "../utility/catchAsync.js";
 import mongoose from "mongoose";
+import moment from 'moment';
 
 const getDealerWalletDetails = catchAsync(async (req, res) => {
   const { dealerId } = req.params;
@@ -201,9 +202,6 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
     }
   });
 });
-
-
-import moment from 'moment';
 
 const getDealerWalletSummary = async (req, res) => {
   try {

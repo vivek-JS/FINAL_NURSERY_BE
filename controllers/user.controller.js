@@ -57,7 +57,7 @@ const encryptPassword = async (req, res, next) => {
   next();
 };
 
-const findUser = catchAsync(async (req, res, next) => {
+const findUser = async (req, res, next) => {
   const { phoneNumber } = req.body;
 
   const user = await User.findOne({ phoneNumber });
@@ -69,13 +69,12 @@ const findUser = catchAsync(async (req, res, next) => {
   }
 
   next();
-});
+};
 
 // Remove the old generateToken function as we're using the new JWT utilities
 
-const login = [
-  isDisabled(User, "User"),
-  catchAsync(async (req, res, next) => {
+const login = async (req, res, next) => {
+  try {
     const { password } = req.body;
     let phoneNumber = Number(req.body?.phoneNumber);
 
@@ -83,6 +82,11 @@ const login = [
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return next(new AppError("Wrong credentials", 400));
+    }
+
+    // Check if user is disabled
+    if (user.isDisabled) {
+      return next(new AppError("User account is disabled", 403));
     }
 
     // Remove password from response
@@ -97,7 +101,12 @@ const login = [
       name: user.name
     });
 
-    // Set secure cookies
+    // Check if headers have already been sent
+    if (res.headersSent) {
+      return;
+    }
+
+    // Set secure cookies BEFORE sending response
     setTokenCookies(res, tokenPair.accessToken, tokenPair.refreshToken);
 
     const response = generateResponse(
@@ -114,11 +123,13 @@ const login = [
     );
 
     return res.status(200).json(response);
-  }),
-];
+  } catch (error) {
+    return next(error);
+  }
+};
 
 // Controller used to reset password
-const resetPassword = catchAsync(async (req, res, next) => {
+const resetPassword = async (req, res, next) => {
   const { _id } = req.user;
 
   let password = req.body.password || "12345";
@@ -134,10 +145,10 @@ const resetPassword = catchAsync(async (req, res, next) => {
     success: true,
     message: "User password updated successfully",
   });
-});
+};
 
 // Controller which gives info about themselves
-const aboutMe = catchAsync(async (req, res, next) => {
+const aboutMe = async (req, res, next) => {
   const { _id } = req.user;
 
   const user = await User.findById(_id);
@@ -151,10 +162,10 @@ const aboutMe = catchAsync(async (req, res, next) => {
     message: "User found successfully",
     data: user,
   });
-});
+};
 
 // Refresh token endpoint
-export const refreshToken = catchAsync(async (req, res, next) => {
+export const refreshToken = async (req, res, next) => {
   const { refreshToken } = req.body;
 
   if (!refreshToken) {
@@ -183,10 +194,10 @@ export const refreshToken = catchAsync(async (req, res, next) => {
   } catch (error) {
     return next(new AppError("Invalid refresh token", 401));
   }
-});
+};
 
 // Logout endpoint
-export const logout = catchAsync(async (req, res, next) => {
+export const logout = async (req, res, next) => {
   const token = extractToken(req);
   
   if (token) {
@@ -204,10 +215,10 @@ export const logout = catchAsync(async (req, res, next) => {
   );
 
   return res.status(200).json(response);
-});
+};
 
 // Verify token endpoint
-export const verifyToken = catchAsync(async (req, res, next) => {
+export const verifyToken = async (req, res, next) => {
   const token = extractToken(req);
 
   if (!token) {
@@ -235,7 +246,7 @@ export const verifyToken = catchAsync(async (req, res, next) => {
   } catch (error) {
     return next(new AppError("Invalid token", 401));
   }
-});
+};
 
 // Get all salespeople list
 export const getSalespeople = async (req, res) => {
@@ -1246,6 +1257,7 @@ export const getDealerStats = async (req, res) => {
   }
 };
 
+// Export all controller functions as raw async functions (not wrapped in catchAsync)
 export {
   getUsers,
   createUser,

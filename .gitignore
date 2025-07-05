@@ -6,3 +6,7 @@ public/uploads/*
 # Ignore MongoDB binaries and archives
 mongodb-macos-x86_64-7.0.5/
 mongodb-macos-x86_64-7.0.5.tgz
+
+# Ignore Terraform directories
+deployment/aws/terraform/.terraform/
+deployment/aws/terraform/cost-optimized/.terraform/

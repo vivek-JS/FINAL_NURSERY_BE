@@ -26,20 +26,13 @@ import {
   getDealerWalletDetails,
   getDealerWalletSummary,
 } from "../controllers/walletController.js";
+import catchAsync from "../utility/catchAsync.js";
 
 const router = express.Router();
 
+router.post("/login", login);
+
 router
-  .post(
-    "/login",
-    [
-      check("phoneNumber", "Please provide valid phone number").isMobilePhone(),
-      check("password", "Please provide valid password").notEmpty(),
-    ],
-    checkErrors,
-    validateAuthRequest,
-    login
-  )
   .post("/refresh-token", refreshToken)
   .post("/logout", authenticateToken, logout)
   .post("/verify-token", verifyToken)

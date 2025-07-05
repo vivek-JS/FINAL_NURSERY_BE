@@ -28,9 +28,19 @@ const allowedParams = [
   "orderId",
   "date",
   "fromDate",
+  "dispatched",
+  "salesPerson",
+  "monthName",
+  "startDay",
+  "endDay",
 ];
 
-const parameterWhiteListing = catchAsync((req, res, next) => {
+const parameterWhiteListing = (req, res, next) => {
+  // Skip parameter validation for login route
+  if (req.path === '/api/v1/user/login' && req.method === 'POST') {
+    return next();
+  }
+
   const requestParams = { ...req.query, ...req.params };
 
   const invalidParams = Object.keys(requestParams).filter(
@@ -42,6 +52,6 @@ const parameterWhiteListing = catchAsync((req, res, next) => {
   }
 
   next();
-});
+};
 
 export default parameterWhiteListing;

@@ -8,7 +8,7 @@ set -e
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-TERRAFORM_DIR="$SCRIPT_DIR/terraform"
+TERRAFORM_DIR="$SCRIPT_DIR/terraform/cost-optimized"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 ENVIRONMENT="${ENVIRONMENT:-production}"
 DEPLOYMENT_TYPE="${DEPLOYMENT_TYPE:-serverless}"
@@ -45,7 +45,14 @@ check_free_tier_eligibility() {
     ACCOUNT_CREATION_DATE=$(aws iam get-user --query 'User.CreateDate' --output text 2>/dev/null || echo "unknown")
     
     if [ "$ACCOUNT_CREATION_DATE" != "unknown" ]; then
-        CREATION_TIMESTAMP=$(date -d "$ACCOUNT_CREATION_DATE" +%s)
+        # macOS compatible date parsing
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS date command
+            CREATION_TIMESTAMP=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${ACCOUNT_CREATION_DATE%%.*}" +%s 2>/dev/null || date +%s)
+        else
+            # Linux date command
+            CREATION_TIMESTAMP=$(date -d "$ACCOUNT_CREATION_DATE" +%s)
+        fi
         CURRENT_TIMESTAMP=$(date +%s)
         DAYS_SINCE_CREATION=$(( (CURRENT_TIMESTAMP - CREATION_TIMESTAMP) / 86400 ))
         
@@ -146,6 +153,10 @@ setup_terraform_backend() {
         }'
     fi
     
+    # Update Terraform backend configuration
+    log "Updating Terraform backend configuration..."
+    sed -i.bak "s/bucket = \"nursery-terraform-state\"/bucket = \"$BUCKET_NAME\"/" "$TERRAFORM_DIR/main.tf"
+    
     log "Terraform backend configured"
 }
 
@@ -238,20 +249,24 @@ deploy_frontend_to_s3() {
     if [ -d "nursery-mgmt" ]; then
         cd nursery-mgmt
         npm run build
-        
-        # Sync build files to S3
-        aws s3 sync build/ "s3://$FRONTEND_BUCKET" --delete
-        
-        # Invalidate CloudFront cache
-        DISTRIBUTION_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items[?contains(@, '$FRONTEND_BUCKET')]].Id" --output text)
-        if [ "$DISTRIBUTION_ID" != "None" ]; then
-            aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*"
-        fi
-        
-        cd "$PROJECT_ROOT"
+        BUILD_DIR="build"
+    elif [ -d "/Users/VivekP/nursery-mgmt/build" ]; then
+        BUILD_DIR="/Users/VivekP/nursery-mgmt/build"
     else
-        warning "Frontend directory not found, skipping frontend deployment"
+        warning "Frontend build directory not found, skipping frontend deployment"
+        return
     fi
+    
+    # Sync build files to S3
+    aws s3 sync "$BUILD_DIR/" "s3://$FRONTEND_BUCKET" --delete
+    
+    # Invalidate CloudFront cache
+    DISTRIBUTION_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items[?contains(@, '$FRONTEND_BUCKET')]].Id" --output text)
+    if [ "$DISTRIBUTION_ID" != "None" ]; then
+        aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*"
+    fi
+    
+    cd "$PROJECT_ROOT"
     
     log "Frontend deployed to S3 successfully"
 }

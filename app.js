@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 const server = express();
 import cookieParser from "cookie-parser";
-import errorRouter from "./controllers/error.controller.js";
+import errorHandler from "./controllers/error.controller.js";
 import mongoSanitize from "express-mongo-sanitize";
 import { xss } from "express-xss-sanitizer";
 import helmet from "helmet";
@@ -59,6 +59,15 @@ server.use("/api", limiter);
 
 // Parameter whitelisting
 server.use(parameterWhiteListing);
+
+// Simple test endpoint
+server.get("/", (req, res) => {
+  res.json({ 
+    message: "Nursery Management API is running!",
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
 
 // importing routes
 import farmerRoute from "./routes/farmer.route.js";
@@ -133,6 +142,6 @@ server.use("/api/v1/dealer", authenticateToken, DelaerRoutes);
 server.use("/api/v1/excel", authenticateToken, ExcelRoute);
 
 
-server.use(errorRouter);
+server.use(errorHandler);
 
 export default server;

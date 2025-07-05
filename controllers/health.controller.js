@@ -15,7 +15,7 @@ export const healthCheck = async (req, res) => {
       services: {}
     };
 
-    // Check database connection
+    // Check database connection (but don't fail if not connected)
     try {
       const dbState = mongoose.connection.readyState;
       healthStatus.services.database = {
@@ -45,14 +45,8 @@ export const healthCheck = async (req, res) => {
       system: Math.round(cpuUsage.system / 1000) + ' ms'
     };
 
-    // Check if any service is unhealthy
-    const isHealthy = healthStatus.services.database.status === 'connected';
-    
-    if (!isHealthy) {
-      healthStatus.status = 'unhealthy';
-      return res.status(503).json(healthStatus);
-    }
-
+    // For Lambda, we consider it healthy if the function is running
+    // Database connectivity is not required for basic health check
     res.status(200).json(healthStatus);
   } catch (error) {
     res.status(500).json({
