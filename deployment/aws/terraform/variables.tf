@@ -175,4 +175,118 @@ variable "tags" {
     CostCenter  = "IT"
     Environment = "production"
   }
+}
+
+# Cost Optimization Variables
+
+variable "use_free_tier" {
+  description = "Use AWS Free Tier eligible resources"
+  type        = bool
+  default     = true
+}
+
+variable "deployment_type" {
+  description = "Deployment type: serverless or container"
+  type        = string
+  default     = "serverless"
+  
+  validation {
+    condition     = contains(["serverless", "container"], var.deployment_type)
+    error_message = "Deployment type must be either 'serverless' or 'container'."
+  }
+}
+
+variable "lambda_memory_size" {
+  description = "Lambda function memory size in MB"
+  type        = number
+  default     = 512
+}
+
+variable "lambda_timeout" {
+  description = "Lambda function timeout in seconds"
+  type        = number
+  default     = 30
+}
+
+variable "cloudfront_price_class" {
+  description = "CloudFront price class for cost optimization"
+  type        = string
+  default     = "PriceClass_100"
+  
+  validation {
+    condition     = contains(["PriceClass_100", "PriceClass_200", "PriceClass_All"], var.cloudfront_price_class)
+    error_message = "Price class must be one of: PriceClass_100, PriceClass_200, PriceClass_All."
+  }
+}
+
+variable "s3_lifecycle_enabled" {
+  description = "Enable S3 lifecycle policies for cost optimization"
+  type        = bool
+  default     = true
+}
+
+variable "s3_ia_transition_days" {
+  description = "Days before transitioning to IA storage"
+  type        = number
+  default     = 30
+}
+
+variable "s3_glacier_transition_days" {
+  description = "Days before transitioning to Glacier storage"
+  type        = number
+  default     = 90
+}
+
+variable "s3_expiration_days" {
+  description = "Days before deleting objects"
+  type        = number
+  default     = 365
+}
+
+variable "backup_expiration_days" {
+  description = "Days before deleting backup objects"
+  type        = number
+  default     = 90
+}
+
+variable "log_retention_days_cost_optimized" {
+  description = "Log retention days for cost optimization"
+  type        = number
+  default     = 7
+}
+
+variable "monthly_budget" {
+  description = "Monthly budget limit in USD"
+  type        = number
+  default     = 50
+}
+
+variable "alert_email" {
+  description = "Email for budget and cost alerts"
+  type        = string
+  default     = "admin@your-domain.com"
+}
+
+variable "enable_cost_optimization" {
+  description = "Enable cost optimization features"
+  type        = bool
+  default     = true
+}
+
+variable "use_single_az" {
+  description = "Use single availability zone for cost savings"
+  type        = bool
+  default     = false
+}
+
+variable "enable_auto_scaling_cost_optimized" {
+  description = "Enable auto scaling with cost optimization"
+  type        = bool
+  default     = false
+}
+
+variable "max_capacity_cost_optimized" {
+  description = "Maximum capacity for cost-optimized deployment"
+  type        = number
+  default     = 2
 } 
