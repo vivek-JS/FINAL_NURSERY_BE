@@ -10,8 +10,8 @@ mongoose
     // Define plants and varieties to be inserted
 
     try {
-      server.listen(process.env.PORT || 8080, () => {
-        console.log(`Server running`);
+      server.listen(process.env.PORT || 8000, () => {
+        console.log(`Server running on port ${process.env.PORT || 8000}`);
       });
     } catch (error) {
       console.error("Error inserting monthly slots:", error);

@@ -35,45 +35,15 @@ server.use(helmet({
   }
 }));
 
-// CORS configuration
+// CORS configuration - More permissive for development
 const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) {
-      console.log('✅ CORS: Allowing request with no origin');
-      return callback(null, true);
-    }
-    
-    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
-      'http://localhost:3000', 
-      'http://localhost:3001',
-      'https://ram-biotek.onrender.com',
-      'https://nursery-mgmt.onrender.com',
-      'https://nursery-mgmt.vercel.app',
-      'https://nursery-mgmt.netlify.app',
-      'https://nursery-mgmt-frontend.onrender.com',
-      'https://nursery-mgmt-frontend.vercel.app',
-      'https://nursery-mgmt-frontend.netlify.app'
-    ];
-    
-    console.log('🌐 CORS: Request from origin:', origin);
-    console.log('📋 CORS: Allowed origins:', allowedOrigins);
-    
-    // Check if origin is in allowed list
-    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-      console.log('✅ CORS: Origin allowed:', origin);
-      callback(null, true);
-    } else {
-      console.log('🚫 CORS blocked origin:', origin);
-      console.log('💡 Add this origin to ALLOWED_ORIGINS environment variable');
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: true, // Allow all origins for now - you can restrict this later
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version', 'Origin', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version', 'Origin', 'Accept', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'User-Agent', 'Referer'],
   exposedHeaders: ['X-Total-Count', 'X-Page-Count'],
-  optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
+  optionsSuccessStatus: 200, // Some legacy browsers (IE11, various SmartTVs) choke on 204
+  preflightContinue: false
 };
 server.use(cors(corsOptions));
 
@@ -113,6 +83,11 @@ server.get("/cors-test", (req, res) => {
     cors: "enabled",
     allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['default origins']
   });
+});
+
+// Handle CORS preflight for login endpoint specifically
+server.options('/api/v1/user/login', cors(corsOptions), (req, res) => {
+  res.status(200).end();
 });
 
 
