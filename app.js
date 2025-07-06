@@ -47,19 +47,13 @@ const corsOptions = {
     const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
       'http://localhost:3000', 
       'http://localhost:3001',
+      'https://ram-biotek.onrender.com',
       'https://nursery-mgmt.onrender.com',
       'https://nursery-mgmt.vercel.app',
       'https://nursery-mgmt.netlify.app',
       'https://nursery-mgmt-frontend.onrender.com',
       'https://nursery-mgmt-frontend.vercel.app',
-      'https://nursery-mgmt-frontend.netlify.app',
-      // Add more common Render domains
-      'https://nursery-mgmt.onrender.com',
-      'https://nursery-mgmt-1.onrender.com',
-      'https://nursery-mgmt-2.onrender.com',
-      'https://nursery-mgmt-3.onrender.com',
-      'https://nursery-mgmt-4.onrender.com',
-      'https://nursery-mgmt-5.onrender.com'
+      'https://nursery-mgmt-frontend.netlify.app'
     ];
     
     console.log('🌐 CORS: Request from origin:', origin);
@@ -121,13 +115,7 @@ server.get("/cors-test", (req, res) => {
   });
 });
 
-// Temporary CORS bypass for testing (remove in production)
-server.use('/api/v1/user/login', (req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-API-Version, Origin, Accept');
-  next();
-});
+
 
 // importing routes
 import farmerRoute from "./routes/farmer.route.js";
