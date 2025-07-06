@@ -29,4 +29,3 @@ const PORT = process.env.PORT || 8000;
   } catch (error) {
     console.error("Error starting server:", error);
   }
-}
