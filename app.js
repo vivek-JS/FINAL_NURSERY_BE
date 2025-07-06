@@ -39,7 +39,10 @@ server.use(helmet({
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
+    if (!origin) {
+      console.log('✅ CORS: Allowing request with no origin');
+      return callback(null, true);
+    }
     
     const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
       'http://localhost:3000', 
@@ -49,14 +52,26 @@ const corsOptions = {
       'https://nursery-mgmt.netlify.app',
       'https://nursery-mgmt-frontend.onrender.com',
       'https://nursery-mgmt-frontend.vercel.app',
-      'https://nursery-mgmt-frontend.netlify.app'
+      'https://nursery-mgmt-frontend.netlify.app',
+      // Add more common Render domains
+      'https://nursery-mgmt.onrender.com',
+      'https://nursery-mgmt-1.onrender.com',
+      'https://nursery-mgmt-2.onrender.com',
+      'https://nursery-mgmt-3.onrender.com',
+      'https://nursery-mgmt-4.onrender.com',
+      'https://nursery-mgmt-5.onrender.com'
     ];
+    
+    console.log('🌐 CORS: Request from origin:', origin);
+    console.log('📋 CORS: Allowed origins:', allowedOrigins);
     
     // Check if origin is in allowed list
     if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      console.log('✅ CORS: Origin allowed:', origin);
       callback(null, true);
     } else {
       console.log('🚫 CORS blocked origin:', origin);
+      console.log('💡 Add this origin to ALLOWED_ORIGINS environment variable');
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -101,8 +116,17 @@ server.get("/cors-test", (req, res) => {
     message: "CORS is working!",
     origin: req.headers.origin,
     timestamp: new Date().toISOString(),
-    cors: "enabled"
+    cors: "enabled",
+    allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['default origins']
   });
+});
+
+// Temporary CORS bypass for testing (remove in production)
+server.use('/api/v1/user/login', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-API-Version, Origin, Accept');
+  next();
 });
 
 // importing routes
