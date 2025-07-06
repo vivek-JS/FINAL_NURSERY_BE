@@ -1,6 +1,9 @@
 import express from "express";
 import cors from "cors";
 const server = express();
+
+// Trust proxy for cloud deployments (Render, Heroku, etc.)
+server.set('trust proxy', 1);
 import cookieParser from "cookie-parser";
 import errorHandler from "./controllers/error.controller.js";
 import mongoSanitize from "express-mongo-sanitize";

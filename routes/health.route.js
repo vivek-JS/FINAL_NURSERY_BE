@@ -3,7 +3,8 @@ import {
   healthCheck, 
   detailedHealthCheck, 
   readinessCheck, 
-  livenessCheck 
+  livenessCheck,
+  mongoTest
 } from '../controllers/health.controller.js';
 
 const router = express.Router();
@@ -19,5 +20,8 @@ router.get('/ready', readinessCheck);
 
 // Kubernetes liveness probe
 router.get('/live', livenessCheck);
+
+// MongoDB connection test
+router.get('/mongo', mongoTest);
 
 export default router; 

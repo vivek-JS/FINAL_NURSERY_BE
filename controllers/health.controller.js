@@ -279,4 +279,63 @@ export const livenessCheck = async (req, res) => {
       error: error.message
     });
   }
+};
+
+/**
+ * MongoDB connection test endpoint
+ */
+export const mongoTest = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    
+    // Check if mongoose is connected
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'MongoDB not connected',
+        readyState: mongoose.connection.readyState,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Test a simple query
+    try {
+      const result = await mongoose.connection.db.admin().ping();
+      const responseTime = Date.now() - startTime;
+      
+      res.status(200).json({
+        status: 'success',
+        message: 'MongoDB connection test passed',
+        responseTime: `${responseTime}ms`,
+        ping: result,
+        connectionInfo: {
+          host: mongoose.connection.host,
+          port: mongoose.connection.port,
+          name: mongoose.connection.name,
+          readyState: mongoose.connection.readyState
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (pingError) {
+      res.status(500).json({
+        status: 'error',
+        message: 'MongoDB ping failed',
+        error: pingError.message,
+        connectionInfo: {
+          host: mongoose.connection.host,
+          port: mongoose.connection.port,
+          name: mongoose.connection.name,
+          readyState: mongoose.connection.readyState
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'MongoDB test failed',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 }; 
