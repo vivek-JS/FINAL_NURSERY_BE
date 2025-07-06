@@ -21,7 +21,7 @@ connectDB();
 export const handler = serverless(server);
 
 // Traditional server startup (for local development)
-if (process.env.NODE_ENV !== 'production' || process.env.LOCAL_DEV) {
+const PORT = process.env.PORT || 8000;
   try {
     server.listen(process.env.PORT || 8000, () => {
       console.log(`Server running on port ${process.env.PORT || 8000}`);
