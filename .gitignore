@@ -1,0 +1,21 @@
+node_modules/
+public/images/*
+!public/images/.gitkeep
+public/uploads/*
+!public/uploads/.gitkeep
+# Ignore MongoDB binaries and archives
+mongodb-macos-x86_64-7.0.5/
+mongodb-macos-x86_64-7.0.5.tgz
+
+# Ignore Terraform directories
+deployment/aws/terraform/.terraform/
+deployment/aws/terraform/cost-optimized/.terraform/
+
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env.backup
+*.env

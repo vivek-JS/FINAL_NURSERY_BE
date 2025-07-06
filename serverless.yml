@@ -1,0 +1,112 @@
+service: nursery-management-api
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  environment:
+    NODE_ENV: production
+    MONGO_URL: ${env:MONGO_URL, 'mongodb://localhost:27017/nursery'}
+    JWT_SECRET: ${env:JWT_SECRET, 'default-secret-key'}
+    ALLOWED_ORIGINS: ${env:ALLOWED_ORIGINS, 'http://localhost:3000,http://localhost:3001'}
+  memorySize: 1024
+  timeout: 30
+  logRetentionInDays: 14
+  # Enable X-Ray for tracing
+  tracing:
+    lambda: true
+    apiGateway: true
+  # Tags for resource management
+  tags:
+    Project: NurseryManagement
+    Environment: ${self:provider.stage}
+    ManagedBy: Serverless
+
+functions:
+  app:
+    handler: index.handler
+    events:
+      - http: ANY /
+      - http: 'ANY {proxy+}'
+    environment:
+      NODE_ENV: production
+    tags:
+      Environment: ${self:provider.stage}
+      Project: NurseryManagement
+    # Optimize for performance
+    reservedConcurrency: 100
+    # Enable provisioned concurrency for production
+    provisionedConcurrency: 0
+
+plugins:
+  - serverless-offline
+
+package:
+  include:
+    - node_modules/**
+  exclude:
+    - .gitignore
+    - .git/**
+    - README.md
+    - deployment/**
+    - debug-*.js
+    - add-superadmin.js
+    - data.json
+    - response.json
+    - setup-mongodb.md
+    - JWT_SECURITY_IMPLEMENTATION.md
+    - env.production.example
+    - public/uploads/**
+    - public/images/**
+    - .env
+    - .env.local
+    - .env.*.local
+    - "*.log"
+    - .DS_Store
+    - .vscode/**
+
+custom:
+  serverless-offline:
+    httpPort: 8000
+    noPrependStageInUrl: true
+    useChildProcesses: true
+  # Custom variables
+  stage: ${self:provider.stage}
+  region: ${self:provider.region}
+
+# Resources for additional AWS services (optional)
+resources:
+  Resources:
+    # Add CloudWatch alarms for monitoring
+    ApiGateway4XXError:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: ${self:service}-${self:provider.stage}-4XX-errors
+        AlarmDescription: API Gateway 4XX errors
+        MetricName: 4XXError
+        Namespace: AWS/ApiGateway
+        Statistic: Sum
+        Period: 300
+        EvaluationPeriods: 1
+        Threshold: 10
+        ComparisonOperator: GreaterThanThreshold
+        Dimensions:
+          - Name: ApiName
+            Value: ${self:service}-${self:provider.stage}
+    
+    ApiGateway5XXError:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: ${self:service}-${self:provider.stage}-5XX-errors
+        AlarmDescription: API Gateway 5XX errors
+        MetricName: 5XXError
+        Namespace: AWS/ApiGateway
+        Statistic: Sum
+        Period: 300
+        EvaluationPeriods: 1
+        Threshold: 5
+        ComparisonOperator: GreaterThanThreshold
+        Dimensions:
+          - Name: ApiName
+            Value: ${self:service}-${self:provider.stage} 

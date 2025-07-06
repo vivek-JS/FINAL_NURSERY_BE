@@ -1,0 +1,56 @@
+# AWS Deployment Configuration for Nursery Management System
+# Copy this file to terraform.tfvars and update with your values
+
+# AWS Configuration
+aws_region = "us-east-1"
+environment = "production"
+project_name = "nursery-backend"
+
+# Domain Configuration
+domain_name = "your-nursery-domain.com"
+
+# VPC Configuration
+vpc_cidr = "10.0.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24", "10.0.13.0/24"]
+
+# Application Configuration
+app_cpu = 512
+app_memory = 1024
+app_desired_count = 2
+
+# Database Configuration
+docdb_instance_class = "db.t3.medium"
+docdb_instance_count = 1
+
+# Cache Configuration
+redis_node_type = "cache.t3.micro"
+
+# Auto Scaling Configuration
+enable_auto_scaling = true
+min_capacity = 1
+max_capacity = 10
+scale_up_threshold = 70
+scale_down_threshold = 30
+
+# Backup and Monitoring
+backup_retention_days = 30
+enable_monitoring = true
+enable_logging = true
+log_retention_days = 30
+
+# Security Configuration
+enable_waf = true
+enable_cloudtrail = true
+enable_guardduty = true
+enable_config = true
+
+# Tags
+tags = {
+  Owner       = "DevOps Team"
+  CostCenter  = "IT Department"
+  Environment = "production"
+  Project     = "Nursery Management System"
+  ManagedBy   = "Terraform"
+} 
