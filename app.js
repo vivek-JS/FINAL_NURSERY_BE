@@ -21,7 +21,7 @@ server.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'"],
+      connectSrc: ["'self'", "https://final-nursery-be-1.onrender.com", "http://localhost:8000"],
       fontSrc: ["'self'", "data:"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
@@ -37,11 +37,34 @@ server.use(helmet({
 
 // CORS configuration
 const corsOptions = {
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
+      'http://localhost:3000', 
+      'http://localhost:3001',
+      'https://nursery-mgmt.onrender.com',
+      'https://nursery-mgmt.vercel.app',
+      'https://nursery-mgmt.netlify.app',
+      'https://nursery-mgmt-frontend.onrender.com',
+      'https://nursery-mgmt-frontend.vercel.app',
+      'https://nursery-mgmt-frontend.netlify.app'
+    ];
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      console.log('🚫 CORS blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version'],
-  exposedHeaders: ['X-Total-Count', 'X-Page-Count']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version', 'Origin', 'Accept'],
+  exposedHeaders: ['X-Total-Count', 'X-Page-Count'],
+  optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
 };
 server.use(cors(corsOptions));
 
@@ -69,6 +92,16 @@ server.get("/", (req, res) => {
     message: "Nursery Management API is running!",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// CORS test endpoint
+server.get("/cors-test", (req, res) => {
+  res.json({
+    message: "CORS is working!",
+    origin: req.headers.origin,
+    timestamp: new Date().toISOString(),
+    cors: "enabled"
   });
 });
 
