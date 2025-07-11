@@ -1,5 +1,6 @@
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
+import mongoose from "mongoose";
 // Helper function to generate slots for a year
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 
@@ -32,6 +33,48 @@ export const createSlotsForYear = async (year) => {
   }
 };
 
+// Test function to verify slot generation logic
+export const testSlotGeneration = () => {
+  console.log("=== Testing slot generation with slotSize = 7 ===");
+  
+  // Test January (31 days) with 7-day slots
+  const testSlots = generateSlotsForYear(2025, 7);
+  const januarySlots = testSlots.filter(slot => slot.month === "January");
+  
+  console.log(`\nJanuary slots (31 days total):`);
+  januarySlots.forEach((slot, index) => {
+    const start = moment(slot.startDay, "DD-MM-YYYY").date();
+    const end = moment(slot.endDay, "DD-MM-YYYY").date();
+    const days = moment(slot.endDay, "DD-MM-YYYY").diff(moment(slot.startDay, "DD-MM-YYYY"), 'days') + 1;
+    console.log(`  Slot ${index + 1}: Day ${start} to ${end} (${days} days) - ${slot.startDay} to ${slot.endDay}`);
+  });
+  
+  // Test February (28 days in 2025) with 7-day slots
+  const februarySlots = testSlots.filter(slot => slot.month === "February");
+  
+  console.log(`\nFebruary slots (28 days total):`);
+  februarySlots.forEach((slot, index) => {
+    const start = moment(slot.startDay, "DD-MM-YYYY").date();
+    const end = moment(slot.endDay, "DD-MM-YYYY").date();
+    const days = moment(slot.endDay, "DD-MM-YYYY").diff(moment(slot.startDay, "DD-MM-YYYY"), 'days') + 1;
+    console.log(`  Slot ${index + 1}: Day ${start} to ${end} (${days} days) - ${slot.startDay} to ${slot.endDay}`);
+  });
+
+  // Test March (31 days) with 7-day slots
+  const marchSlots = testSlots.filter(slot => slot.month === "March");
+  
+  console.log(`\nMarch slots (31 days total):`);
+  marchSlots.forEach((slot, index) => {
+    const start = moment(slot.startDay, "DD-MM-YYYY").date();
+    const end = moment(slot.endDay, "DD-MM-YYYY").date();
+    const days = moment(slot.endDay, "DD-MM-YYYY").diff(moment(slot.startDay, "DD-MM-YYYY"), 'days') + 1;
+    console.log(`  Slot ${index + 1}: Day ${start} to ${end} (${days} days) - ${slot.startDay} to ${slot.endDay}`);
+  });
+  
+  console.log("=== Test completed ===");
+  return testSlots;
+};
+
 export const generateSlotsForYear = (year, slotSize = 5) => {
   const slots = [];
   const daysInMonths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -59,11 +102,20 @@ export const generateSlotsForYear = (year, slotSize = 5) => {
   daysInMonths.forEach((daysInMonth, monthIndex) => {
     const monthName = monthNames[monthIndex];
     let startDay = 1;
+    const monthSlots = [];
 
+    // Generate slots for this month
     while (startDay <= daysInMonth) {
-      const endDay = Math.min(startDay + slotSize - 1, daysInMonth);
+      let endDay = Math.min(startDay + slotSize - 1, daysInMonth);
+      
+      // Check if this would be the last iteration and if remaining days are small
+      const remainingDaysAfterThisSlot = daysInMonth - endDay;
+      
+      // If remaining days are less than slotSize, extend current slot to end of month
+      if (remainingDaysAfterThisSlot > 0 && remainingDaysAfterThisSlot < slotSize) {
+        endDay = daysInMonth;
+      }
 
-      // Convert startDay and endDay to `dd-mm-yyyy` format
       const startDate = moment(
         `${year}-${monthIndex + 1}-${startDay}`,
         "YYYY-M-D"
@@ -74,17 +126,20 @@ export const generateSlotsForYear = (year, slotSize = 5) => {
       ).format("DD-MM-YYYY");
 
       slots.push({
-        startDay: startDate, // Formatted date
-        endDay: endDate, // Formatted date
-        month: monthName, // Add the month name
+        startDay: startDate,
+        endDay: endDate,
+        month: monthName,
         totalPlants: 0,
         totalBookedPlants: 0,
         orders: [],
+        allowedSalesmen: [], // Array to store salesman IDs who can access this slot
+        restrictToSalesmen: false, // Flag to enable/disable salesman restrictions
         overflow: false,
         status: true,
       });
 
-      startDay += slotSize;
+      // Move to next slot (this will exit if we extended to end of month)
+      startDay = endDay + 1;
     }
   });
 
@@ -179,7 +234,6 @@ export const getPlantNames = async (req, res) => {
   }
 };
 
-import mongoose from "mongoose";
 export const getSubtypesByPlant = async (req, res) => {
   try {
     const { plantId, year } = req.query;
@@ -907,14 +961,83 @@ export const deleteManualSlot = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error deleting manual slot:', error);
+    console.error("Error deleting manual slot:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+// Function to update slot salesmen restrictions
+export const updateSlotSalesmenRestrictions = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    const { restrictToSalesmen, allowedSalesmen } = req.body;
+    
+    if (!slotId) {
+      return res.status(400).json({
+        success: false,
+        message: "Slot ID is required"
+      });
+    }
+    
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(slotId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid slot ID format"
+      });
+    }
+    
+    // Validate allowedSalesmen array if provided
+    if (allowedSalesmen && !Array.isArray(allowedSalesmen)) {
+      return res.status(400).json({
+        success: false,
+        message: "allowedSalesmen must be an array"
+      });
+    }
+    
+    // Convert slotId to ObjectId
+    const slotObjectId = new mongoose.Types.ObjectId(slotId);
+    
+    const updateData = {};
+    if (restrictToSalesmen !== undefined) {
+      updateData["subtypeSlots.$[].slots.$[slotElem].restrictToSalesmen"] = restrictToSalesmen;
+    }
+    if (allowedSalesmen !== undefined) {
+      updateData["subtypeSlots.$[].slots.$[slotElem].allowedSalesmen"] = allowedSalesmen;
+    }
+    
+    const result = await PlantSlot.findOneAndUpdate(
+      { "subtypeSlots.slots._id": slotObjectId },
+      { $set: updateData },
+      {
+        arrayFilters: [{ "slotElem._id": slotObjectId }],
+        new: true,
+        runValidators: true,
+      }
+    );
+    
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "Slot not found"
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: "Slot salesmen restrictions updated successfully",
+      data: result
+    });
+    
+  } catch (error) {
+    console.error("Error updating slot salesmen restrictions:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal server error',
+      message: "Internal server error",
       error: error.message
     });
   }
 };
+
 // Example API route setup
 import express from "express";
 const router = express.Router();

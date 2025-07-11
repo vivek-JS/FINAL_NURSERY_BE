@@ -283,14 +283,21 @@ export const verifyToken = async (req, res, next) => {
 export const getSalespeople = async (req, res) => {
   try {
     const salespeople = await User.find(
-      { role: "SALES" },
-      { name: 1, email: 1, phone: 1 }
+      { jobTitle: "SALES" }, // Changed from role to jobTitle
+      { name: 1, email: 1, phoneNumber: 1, jobTitle: 1 } // Added jobTitle and changed phone to phoneNumber
     ).sort({ name: 1 });
 
-    res.status(200).json(salespeople);
+    res.status(200).json({
+      success: true,
+      data: salespeople
+    });
   } catch (error) {
     console.error("Error in getSalespeople:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ 
+      success: false,
+      message: "Internal server error",
+      error: error.message 
+    });
   }
 };
 

@@ -57,6 +57,17 @@ const slotSchema = new Schema({
     type: [Schema.Types.ObjectId], // Array of references to an Order model
     default: [],
   },
+  // Array to store salesman IDs who can access this slot (empty = all can access)
+  allowedSalesmen: {
+    type: [Schema.Types.ObjectId],
+    ref: "User", // Reference to User model
+    default: [],
+  },
+  // Flag to enable/disable salesman restrictions
+  restrictToSalesmen: {
+    type: Boolean,
+    default: false,
+  },
   overflow: {
     type: Boolean,
     default: false,
