@@ -9,7 +9,7 @@ import mongoSanitize from "express-mongo-sanitize";
 import { xss } from "express-xss-sanitizer";
 import helmet from "helmet";
 import IPWhiteListing from "./middlewares/ipWhiteListing.middleware.js";
-import limiter from "./middlewares/rateLimiter.middleware.js";
+
 import parameterWhiteListing from "./middlewares/parameterWhiteListing.middleware.js";
 
 // Security middlewares
@@ -52,8 +52,12 @@ const corsOptions = {
     const allowedOrigins = [
       'http://localhost:3000', 
       'http://localhost:3001', 
+      'http://localhost:3002', 
+      'http://localhost:3003', 
       'http://127.0.0.1:3000', 
       'http://127.0.0.1:3001',
+      'http://127.0.0.1:3002',
+      'http://127.0.0.1:3003',
       'http://localhost:8000',
       'http://127.0.0.1:8000'
     ];
@@ -82,8 +86,7 @@ server.use(express.urlencoded({ extended: true, limit: '10mb' }));
 server.use(mongoSanitize());
 server.use(xss());
 
-// Rate limiting for all API routes
-server.use("/api", limiter);
+// Rate limiting for all API routes - REMOVED
 
 // IP whitelisting (uncomment if needed)
 // server.use(IPWhiteListing);
@@ -164,6 +167,8 @@ import PollyHouse from "./routes/pollyhouse.route.js";
 import DelaerRoutes from "./routes/dealer.route.js";
 import { authenticateToken } from "./middlewares/auth.middleware.js";
 import ExcelRoute from "./routes/excel.route.js";
+import pricingRoute from "./routes/pricing.route.js";
+import analyticsRoute from "./routes/analytics.route.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -178,7 +183,7 @@ server.get("/api/dummyData", (req, res) => {
 server.use("/api/v1/user", userRoute);
 
 // Protected routes - require authentication
-server.use("/api/v1/farmer", limiter, authenticateToken, farmerRoute);
+server.use("/api/v1/farmer", authenticateToken, farmerRoute);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/cms", authenticateToken, cmsRoute);
 server.use("/api/v1/employee", authenticateToken, employeeRoute);
@@ -205,6 +210,8 @@ server.use("/api/v1/laboutward", authenticateToken, plantOutward);
 server.use("/api/v1/pollyhouse", authenticateToken, PollyHouse);
 server.use("/api/v1/dealer", authenticateToken, DelaerRoutes);
 server.use("/api/v1/excel", authenticateToken, ExcelRoute);
+server.use("/api/v1/pricing", authenticateToken, pricingRoute);
+server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
 
 
 server.use(errorHandler);

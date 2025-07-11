@@ -217,7 +217,7 @@ export const getPlants = async (req, res) => {
 
     return res
       .status(200)
-      .json({ message: "Plants retrieved successfully", data: plants });
+      .json({ success: true, message: "Plants retrieved successfully", data: plants });
   } catch (error) {
     return res
       .status(500)
