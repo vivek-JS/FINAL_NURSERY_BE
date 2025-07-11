@@ -70,14 +70,31 @@ const updateDealerWallet = async (
 export const updateSlot = async (
   bookingSlot,
   numberOfPlants,
-  action = "subtract"
+  action = "subtract",
+  allowOverflowOrSession = false,
+  sessionParam = null
 ) => {
+  // Handle parameter overloading - if 4th param is a session object, treat it as session
+  let allowOverflow = false;
+  let session = null;
+  
+  if (allowOverflowOrSession && typeof allowOverflowOrSession === 'object' && allowOverflowOrSession.startTransaction) {
+    // 4th parameter is a session object
+    session = allowOverflowOrSession;
+    allowOverflow = false;
+  } else if (typeof allowOverflowOrSession === 'boolean') {
+    // 4th parameter is allowOverflow boolean
+    allowOverflow = allowOverflowOrSession;
+    session = sessionParam;
+  }
+
   // console.log(
-  //   `[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}`
+  //   `[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}, AllowOverflow: ${allowOverflow}`
   // );
 
-  // Step 1: If subtracting, first check if enough plants are available
-  if (action === "subtract") {
+  // Step 1: If subtracting, first check if enough plants are available (unless overflow is allowed)
+  if (action === "subtract" && !allowOverflow) {
+    console.log("hii")
     const currentSlot = await PlantSlot.findOne(
       { "subtypeSlots.slots._id": bookingSlot },
       { "subtypeSlots.$": 1 }
@@ -116,21 +133,80 @@ export const updateSlot = async (
 
   // Step 2: Build the update operation based on the action
   const updateOperation = {};
+  const additionalUpdates = {};
+  
   if (action === "subtract") {
     updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] =
-      -numberOfPlants; // Decrease totalPlants
+      -numberOfPlants; // Decrease totalPlants (can go negative if overflow allowed)
     updateOperation[
       "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
     ] = numberOfPlants; // Increase totalBookedPlants
+    
+    // If overflow is allowed, check if this will put the slot into overflow state
+    if (allowOverflow) {
+      const currentSlot = await PlantSlot.findOne(
+        { "subtypeSlots.slots._id": bookingSlot },
+        { "subtypeSlots.$": 1 }
+      );
+      
+      if (currentSlot && currentSlot.subtypeSlots[0]) {
+        const targetSlot = currentSlot.subtypeSlots[0].slots.find(
+          (slot) => slot._id.toString() === bookingSlot.toString()
+        );
+        
+        if (targetSlot) {
+          const newTotalPlants = targetSlot.totalPlants - numberOfPlants;
+          if (newTotalPlants < 0) {
+            additionalUpdates["subtypeSlots.$[subtypeSlot].slots.$[slot].isOverflow"] = true;
+            additionalUpdates["subtypeSlots.$[subtypeSlot].slots.$[slot].overflow"] = true;
+            console.warn(`Excel Import: Allowing overflow booking. Slot has ${targetSlot.totalPlants} plants, booking ${numberOfPlants} plants. Slot period: ${targetSlot.startDay} to ${targetSlot.endDay}`);
+          }
+        }
+      }
+    }
   } else if (action === "add") {
     updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] =
       numberOfPlants; // Increase totalPlants
     updateOperation[
       "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
     ] = -numberOfPlants; // Decrease totalBookedPlants
+    
+    // If overflow is allowed, check if this will bring the slot out of overflow state
+    if (allowOverflow) {
+      const currentSlot = await PlantSlot.findOne(
+        { "subtypeSlots.slots._id": bookingSlot },
+        { "subtypeSlots.$": 1 }
+      );
+      
+      if (currentSlot && currentSlot.subtypeSlots[0]) {
+        const targetSlot = currentSlot.subtypeSlots[0].slots.find(
+          (slot) => slot._id.toString() === bookingSlot.toString()
+        );
+        
+        if (targetSlot) {
+          const newTotalPlants = targetSlot.totalPlants + numberOfPlants;
+          if (newTotalPlants >= 0 && targetSlot.isOverflow) {
+            additionalUpdates["subtypeSlots.$[subtypeSlot].slots.$[slot].isOverflow"] = false;
+            additionalUpdates["subtypeSlots.$[subtypeSlot].slots.$[slot].overflow"] = false;
+          }
+        }
+      }
+    }
   }
 
-  // Step 3: Perform an atomic update in the database using $inc
+  // Step 3: Perform an atomic update in the database using $inc and $set
+  const updateOptions = {
+    arrayFilters: [
+      { "subtypeSlot.slots._id": bookingSlot }, // Filter for the correct subtypeSlot
+      { "slot._id": bookingSlot }, // Filter for the correct slot
+    ],
+  };
+
+  // Add session to options if provided
+  if (session) {
+    updateOptions.session = session;
+  }
+
   const updateResult = await PlantSlot.updateOne(
     { "subtypeSlots.slots._id": bookingSlot },
     {
@@ -144,13 +220,9 @@ export const updateSlot = async (
             "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
           ],
       },
+      ...(Object.keys(additionalUpdates).length > 0 && { $set: additionalUpdates })
     },
-    {
-      arrayFilters: [
-        { "subtypeSlot.slots._id": bookingSlot }, // Filter for the correct subtypeSlot
-        { "slot._id": bookingSlot }, // Filter for the correct slot
-      ],
-    }
+    updateOptions
   );
 
   // console.log(`[updateSlot] Update Result: ${JSON.stringify(updateResult)}`);
@@ -712,6 +784,8 @@ const handleSlotUpdatesWithSession = async (
       }
 
       if (slot.totalPlants < plantsNeeded) {
+        console.log("hii")
+
         throw new AppError(
           `Not enough plants available in slot. Only ${slot.totalPlants} plants available.`,
           400
@@ -843,6 +917,8 @@ const handleSlotUpdates = async (existingDoc, filteredBody) => {
       }
 
       if (slot.totalPlants < plantsNeeded) {
+        console.log("hii")
+
         throw new AppError(
           `Not enough plants available in slot. Only ${slot.totalPlants} plants available.`,
           400

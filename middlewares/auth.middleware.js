@@ -153,9 +153,7 @@ export const logout = async (req, res, next) => {
       blacklistToken(token);
     }
 
-    // Clear cookies
-    res.clearCookie('accessToken');
-    res.clearCookie('refreshToken');
+    // No cookies to clear - using localStorage
 
     return res.status(200).json(
       generateResponse('success', 'Logged out successfully', null, null)

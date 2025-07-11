@@ -4,7 +4,6 @@ const server = express();
 
 // Trust proxy for cloud deployments (Render, Heroku, etc.)
 server.set('trust proxy', 1);
-import cookieParser from "cookie-parser";
 import errorHandler from "./controllers/error.controller.js";
 import mongoSanitize from "express-mongo-sanitize";
 import { xss } from "express-xss-sanitizer";
@@ -15,33 +14,60 @@ import parameterWhiteListing from "./middlewares/parameterWhiteListing.middlewar
 
 // Security middlewares
 server.use(helmet({
-  contentSecurityPolicy: {
+  contentSecurityPolicy: process.env.NODE_ENV === 'production' ? {
     directives: {
       defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "https://final-nursery-be-1.onrender.com", "http://localhost:8000"],
-      fontSrc: ["'self'", "data:"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https:"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      imgSrc: ["'self'", "data:", "https:", "http:"],
+      connectSrc: ["'self'", "https://final-nursery-be-1.onrender.com", "http://localhost:8000", "http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:8000", "ws://localhost:3000", "ws://127.0.0.1:3000"],
+      fontSrc: ["'self'", "data:", "https:"],
       objectSrc: ["'none'"],
-      mediaSrc: ["'self'"],
+      mediaSrc: ["'self'", "https:"],
       frameSrc: ["'none'"],
+      workerSrc: ["'self'", "blob:"],
+      manifestSrc: ["'self'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+      upgradeInsecureRequests: []
     },
-  },
+  } : false, // Disable CSP in development
   hsts: {
     maxAge: 31536000,
     includeSubDomains: true,
     preload: true
-  }
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginOpenerPolicy: false // Disable COOP completely for API
 }));
 
 // CORS configuration - More permissive for development
 const corsOptions = {
-  origin: true, // Allow all origins for now - you can restrict this later
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000', 
+      'http://localhost:3001', 
+      'http://127.0.0.1:3000', 
+      'http://127.0.0.1:3001',
+      'http://localhost:8000',
+      'http://127.0.0.1:8000'
+    ];
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version', 'Origin', 'Accept', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'User-Agent', 'Referer'],
-  exposedHeaders: ['X-Total-Count', 'X-Page-Count'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version', 'Origin', 'Accept', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'User-Agent', 'Referer', 'Cookie'],
+  exposedHeaders: ['X-Total-Count', 'X-Page-Count'], // Removed 'Set-Cookie'
   optionsSuccessStatus: 200, // Some legacy browsers (IE11, various SmartTVs) choke on 204
   preflightContinue: false
 };
@@ -50,7 +76,7 @@ server.use(cors(corsOptions));
 // Body parsing middlewares
 server.use(express.json({ limit: '10mb' }));
 server.use(express.urlencoded({ extended: true, limit: '10mb' }));
-server.use(cookieParser());
+// Removed: server.use(cookieParser());
 
 // Security middlewares
 server.use(mongoSanitize());
@@ -65,12 +91,28 @@ server.use("/api", limiter);
 // Parameter whitelisting
 server.use(parameterWhiteListing);
 
+// Remove problematic headers for better DevTools display
+server.use('/api', (req, res, next) => {
+  res.removeHeader('Cross-Origin-Opener-Policy');
+  res.removeHeader('Cross-Origin-Resource-Policy');
+  next();
+});
+
 // Simple test endpoint
 server.get("/", (req, res) => {
   res.json({ 
     message: "Nursery Management API is running!",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// Browser test endpoint - minimal response
+server.get("/test", (req, res) => {
+  res.json({ 
+    success: true,
+    message: "API accessible from browser",
+    timestamp: new Date().toISOString()
   });
 });
 

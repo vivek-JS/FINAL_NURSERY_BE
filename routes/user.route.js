@@ -5,6 +5,7 @@ import {
   deleteUser,
   findUser,
   login,
+  testLogin,
   encryptPassword,
   getUsers,
   resetPassword,
@@ -31,6 +32,7 @@ import catchAsync from "../utility/catchAsync.js";
 const router = express.Router();
 
 router.post("/login", login);
+router.get("/test-login", testLogin);
 
 router
   .post("/refresh-token", refreshToken)

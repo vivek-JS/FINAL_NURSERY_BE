@@ -12,8 +12,6 @@ import {
 import bcrypt from "bcryptjs";
 import { 
   generateTokenPair, 
-  setTokenCookies, 
-  clearTokenCookies,
   blacklistToken,
   extractToken 
 } from "../utility/jwtUtils.js";
@@ -73,42 +71,78 @@ const findUser = async (req, res, next) => {
 
 // Remove the old generateToken function as we're using the new JWT utilities
 
+// Simple test endpoint without cookies
+export const testLogin = async (req, res) => {
+  try {
+    res.status(200).json({
+      status: "Success",
+      message: "Login test endpoint working",
+      timestamp: new Date().toISOString(),
+      data: {
+        test: true,
+        message: "This endpoint works without cookies"
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "Error",
+      message: error.message
+    });
+  }
+};
+
 const login = async (req, res, next) => {
   try {
+    console.log("Login attempt started");
     const { password } = req.body;
     let phoneNumber = Number(req.body?.phoneNumber);
 
+    // Validate phoneNumber
+    if (!req.body?.phoneNumber || isNaN(phoneNumber)) {
+      console.log("Invalid phone number provided:", req.body?.phoneNumber);
+      return next(new AppError("Valid phone number is required", 400));
+    }
+
+    console.log("Looking for user with phone number:", phoneNumber);
     const user = await User.findOne({ phoneNumber: phoneNumber });
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
+      console.log("Authentication failed - wrong credentials");
       return next(new AppError("Wrong credentials", 400));
     }
 
+    console.log("User authenticated successfully");
+
     // Check if user is disabled
     if (user.isDisabled) {
+      console.log("User is disabled");
       return next(new AppError("User account is disabled", 403));
     }
+
+    console.log("User is not disabled, proceeding with token generation");
 
     // Remove password from response
     const userResponse = user.toObject();
     delete userResponse.password;
 
+    console.log("Generating token pair...");
     // Generate token pair
     const tokenPair = generateTokenPair({
-      _id: user._id,
+      _id: user._id.toString(),
       phoneNumber: user.phoneNumber,
       role: user.role,
       name: user.name
     });
 
+    console.log("Token pair generated successfully");
+
     // Check if headers have already been sent
     if (res.headersSent) {
+      console.log("Headers already sent, returning");
       return;
     }
 
-    // Set secure cookies BEFORE sending response
-    setTokenCookies(res, tokenPair.accessToken, tokenPair.refreshToken);
-
+    console.log("Generating response...");
     const response = generateResponse(
       "Success",
       "Login successful - Token generated successfully",
@@ -122,8 +156,11 @@ const login = async (req, res, next) => {
       undefined
     );
 
+    console.log("Sending response...");
     return res.status(200).json(response);
   } catch (error) {
+    console.error('Login Error Details:', error);
+    console.error('Error Stack:', error.stack);
     return next(error);
   }
 };
@@ -176,9 +213,6 @@ export const refreshToken = async (req, res, next) => {
     const { refreshAccessToken } = await import("../utility/jwtUtils.js");
     const newTokenPair = refreshAccessToken(refreshToken);
 
-    // Set new secure cookies
-    setTokenCookies(res, newTokenPair.accessToken, newTokenPair.refreshToken);
-
     const response = generateResponse(
       "Success",
       "Token refreshed successfully",
@@ -203,9 +237,6 @@ export const logout = async (req, res, next) => {
   if (token) {
     blacklistToken(token);
   }
-
-  // Clear cookies
-  clearTokenCookies(res);
 
   const response = generateResponse(
     "Success",

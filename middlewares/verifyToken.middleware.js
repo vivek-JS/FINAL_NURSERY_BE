@@ -5,11 +5,11 @@ import AppError from "../utility/appError.js";
 
 const verifyToken = async (req, res, next) => {
   try {
-    let token = req.cookies?.accessToken;
+    let token = null;
 
-    // Check Authorization header if token not in cookies
+    // Check Authorization header for token
     const authHeader = req.headers.authorization;
-    if (!token && authHeader) {
+    if (authHeader) {
       // Make sure we handle cases where Bearer might be missing
       token = authHeader.startsWith("Bearer ")
         ? authHeader.replace("Bearer ", "")

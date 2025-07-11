@@ -41,6 +41,18 @@ const slotSchema = new Schema({
     type: Number,
     default: 0,
   },
+  // Virtual field to calculate available plants (can be negative for overflow)
+  availablePlants: {
+    type: Number,
+    default: function() {
+      return this.totalPlants;
+    }
+  },
+  // Flag to indicate if this slot is in overflow state
+  isOverflow: {
+    type: Boolean,
+    default: false,
+  },
   orders: {
     type: [Schema.Types.ObjectId], // Array of references to an Order model
     default: [],

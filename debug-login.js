@@ -15,7 +15,7 @@ async function debugLogin() {
     console.log("JWT_SECRET:", process.env.JWT_SECRET ? "Set" : "Not set");
     console.log("PORT:", process.env.PORT);
 
-    const phoneNumber = 3333444400;
+    const phoneNumber = 7588686452;
     console.log(`\nLooking for user with phone number: ${phoneNumber}`);
 
     const user = await User.findOne({ phoneNumber: phoneNumber });
@@ -29,7 +29,7 @@ async function debugLogin() {
         isDisabled: user.isDisabled
       });
 
-      const password = "432100";
+      const password = "passsword123443";
       console.log(`\nTesting password: ${password}`);
       
       const isPasswordValid = await bcrypt.compare(password, user.password);

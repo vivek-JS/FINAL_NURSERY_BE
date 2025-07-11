@@ -42,6 +42,37 @@ function convertDate(value) {
   return date.isValid() ? date.format("DD-MM-YYYY") : null;
 }
 
+// Helper function to get slot information with overflow status
+export const getSlotInfo = async (slotId) => {
+  const currentSlot = await PlantSlot.findOne(
+    { "subtypeSlots.slots._id": slotId },
+    { "subtypeSlots.$": 1 }
+  );
+
+  if (!currentSlot || !currentSlot.subtypeSlots[0]) {
+    return null;
+  }
+
+  const targetSlot = currentSlot.subtypeSlots[0].slots.find(
+    (slot) => slot._id.toString() === slotId.toString()
+  );
+
+  if (!targetSlot) {
+    return null;
+  }
+
+  return {
+    slotId: targetSlot._id,
+    totalPlants: targetSlot.totalPlants,
+    totalBookedPlants: targetSlot.totalBookedPlants,
+    availablePlants: targetSlot.totalPlants,
+    isOverflow: targetSlot.totalPlants < 0,
+    startDay: targetSlot.startDay,
+    endDay: targetSlot.endDay,
+    month: targetSlot.month,
+  };
+};
+
 export const validateExcelStructure = (buffer) => {
   const workbook = XLSX.read(buffer, {
     type: "buffer",
@@ -191,6 +222,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
       totalProcessed: 0,
       successfulImports: 0,
       failedImports: 0,
+      overflowSlots: 0,
     },
   };
 
@@ -378,8 +410,11 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         await order[0].save({ session });
       }
 
-      // Update slot capacity
-      await updateSlot(slot._id, orderData.numberOfPlants, "subtract");
+      // Update slot capacity with overflow allowed for Excel imports
+      await updateSlot(slot._id, orderData.numberOfPlants, "subtract", true);
+
+      // Get updated slot information
+      const slotInfo = await getSlotInfo(slot._id);
 
       // Commit the transaction
       await session.commitTransaction();
@@ -391,7 +426,14 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         amount: totalAmount,
         advancePaid: advanceAmount,
         balance: balanceAmount,
+        slotInfo: slotInfo,
+        overflowWarning: slotInfo && slotInfo.isOverflow ? `Slot is in overflow state. Available plants: ${slotInfo.availablePlants}` : null,
       });
+
+      // Track overflow slots
+      if (slotInfo && slotInfo.isOverflow) {
+        results.summary.overflowSlots++;
+      }
 
       results.summary.successfulImports++;
     } catch (error) {

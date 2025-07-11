@@ -220,47 +220,10 @@ export const extractToken = (req) => {
     return authHeader.substring(7);
   }
 
-  // Check cookies
-  if (req.cookies?.accessToken) {
-    return req.cookies.accessToken;
-  }
-
   // Check query parameters (for development/testing)
   if (req.query?.token) {
     return req.query.token;
   }
 
   return null;
-};
-
-/**
- * Set token cookies
- * @param {Object} res - Express response object
- * @param {String} accessToken - Access token
- * @param {String} refreshToken - Refresh token
- */
-export const setTokenCookies = (res, accessToken, refreshToken) => {
-  const cookieOptions = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 15 * 60 * 1000 // 15 minutes for access token
-  };
-
-  const refreshCookieOptions = {
-    ...cookieOptions,
-    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days for refresh token
-  };
-
-  res.cookie('accessToken', accessToken, cookieOptions);
-  res.cookie('refreshToken', refreshToken, refreshCookieOptions);
-};
-
-/**
- * Clear token cookies
- * @param {Object} res - Express response object
- */
-export const clearTokenCookies = (res) => {
-  res.clearCookie('accessToken');
-  res.clearCookie('refreshToken');
 }; 
