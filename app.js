@@ -97,6 +97,13 @@ server.use(express.json({ limit: '10mb' }));
 server.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Removed: server.use(cookieParser());
 
+// Set timeout for all requests (10 minutes)
+server.use((req, res, next) => {
+  req.setTimeout(600000); // 10 minutes in milliseconds
+  res.setTimeout(600000); // 10 minutes in milliseconds
+  next();
+});
+
 // Security middlewares
 server.use(mongoSanitize());
 server.use(xss());
