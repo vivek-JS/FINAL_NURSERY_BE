@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "2019a918-70ab-4e75-9392-5c411b1dbec0"
+      }
+    },
+    "android": {
+      "package": "com.vivekcapk.backendstr"
+    }
+  }
+}

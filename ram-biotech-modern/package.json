@@ -1,0 +1,61 @@
+{
+  "name": "ram-biotech-modern",
+  "version": "1.0.0",
+  "description": "Modern React Native app for RAM Biotech nursery management",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start --clear",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "build:android": "eas build --platform android",
+    "build:ios": "eas build --platform ios",
+    "build:all": "eas build --platform all",
+    "submit:android": "eas submit --platform android",
+    "submit:ios": "eas submit --platform ios",
+    "preview": "eas build --platform android --profile preview",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "1.23.1",
+    "axios": "^1.7.2",
+    "expo": "~52.0.11",
+    "expo-constants": "~17.0.2",
+    "expo-device": "~7.0.1",
+    "expo-font": "~13.0.1",
+    "expo-router": "~4.0.5",
+    "expo-status-bar": "~2.0.0",
+    "lucide-react-native": "^0.454.0",
+    "moment": "^2.30.1",
+    "nativewind": "^2.0.11",
+    "react": "18.3.1",
+    "react-native": "0.76.9",
+    "react-native-gesture-handler": "~2.20.2",
+    "react-native-reanimated": "~3.16.1",
+    "react-native-safe-area-context": "4.12.0",
+    "react-native-screens": "~4.4.0",
+    "expo-build-properties": "~0.13.3",
+    "react-native-web": "~0.19.13"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@types/react": "~18.3.5",
+    "@typescript-eslint/eslint-plugin": "^8.7.0",
+    "@typescript-eslint/parser": "^8.7.0",
+    "eslint": "^9.10.0",
+    "eslint-config-expo": "~8.0.1",
+    "tailwindcss": "3.3.2",
+    "typescript": "~5.3.3"
+  },
+  "private": true,
+  "keywords": [
+    "react-native",
+    "expo",
+    "nursery-management",
+    "biotech",
+    "mobile-app"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}

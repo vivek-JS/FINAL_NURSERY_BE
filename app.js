@@ -43,7 +43,7 @@ server.use(helmet({
   crossOriginOpenerPolicy: false // Disable COOP completely for API
 }));
 
-// CORS configuration - More permissive for development
+// CORS configuration - More permissive for development and mobile apps
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
@@ -59,8 +59,19 @@ const corsOptions = {
       'http://127.0.0.1:3002',
       'http://127.0.0.1:3003',
       'http://localhost:8000',
-      'http://127.0.0.1:8000'
+      'http://127.0.0.1:8000',
+      'http://localhost:8081', // Expo development server
+      'http://127.0.0.1:8081', // Expo development server
+      'http://localhost:8082', // Expo web server
+      'http://127.0.0.1:8082', // Expo web server
+      'exp://localhost:8081', // Expo protocol
+      'exp://127.0.0.1:8081'   // Expo protocol
     ];
+    
+    // In development, allow all origins for easier testing
+    if (process.env.NODE_ENV === 'development') {
+      return callback(null, true);
+    }
     
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
@@ -71,8 +82,8 @@ const corsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version', 'Origin', 'Accept', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'User-Agent', 'Referer', 'Cookie'],
-  exposedHeaders: ['X-Total-Count', 'X-Page-Count'], // Removed 'Set-Cookie'
-  optionsSuccessStatus: 200, // Some legacy browsers (IE11, various SmartTVs) choke on 204
+  exposedHeaders: ['X-Total-Count', 'X-Page-Count'],
+  optionsSuccessStatus: 200,
   preflightContinue: false
 };
 server.use(cors(corsOptions));
