@@ -20,7 +20,7 @@ server.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'", "https:"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
       imgSrc: ["'self'", "data:", "https:", "http:"],
-      connectSrc: ["'self'", "https://final-nursery-be-1.onrender.com", "http://localhost:8000", "http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:8000", "ws://localhost:3000", "ws://127.0.0.1:3000"],
+      connectSrc: ["'self'", "https://final-nursery-be-1.onrender.com", "http://localhost:8000", "http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:8000", "ws://localhost:3000", "ws://127.0.0.1:3000", "https://ram-biotek.onrender.com"],
       fontSrc: ["'self'", "data:", "https:"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'", "https:"],
@@ -49,7 +49,9 @@ const corsOptions = {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
-    const allowedOrigins = [
+    // Get allowed origins from environment variable or use fallback
+    const envOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
+    const fallbackOrigins = [
       'http://localhost:3000', 
       'http://localhost:3001', 
       'http://localhost:3002', 
@@ -67,6 +69,8 @@ const corsOptions = {
       'exp://localhost:8081', // Expo protocol
       'exp://127.0.0.1:8081'   // Expo protocol
     ];
+    
+    const allowedOrigins = [...envOrigins, ...fallbackOrigins];
     
     // In development, allow all origins for easier testing
     if (process.env.NODE_ENV === 'development') {
