@@ -824,8 +824,8 @@ export const addManualSlot = async (req, res) => {
     // Get the month name from the start date
     const month = startDate.format('MMMM');
     
-    // Get the current year
-    const year = new Date().getFullYear();
+    // Get the year from the date or use current year
+    const year = startDate ? moment(startDay, "DD-MM-YYYY").year() : new Date().getFullYear();
     
     // Find the plant slot document
     let plantSlot = await PlantSlot.findOne({ 
@@ -1033,6 +1033,119 @@ export const updateSlotSalesmenRestrictions = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Internal server error",
+      error: error.message
+    });
+  }
+};
+
+// Function to create slots for multiple years
+export const createSlotsForMultipleYears = async (req, res) => {
+  try {
+    const { startYear, endYear, plantIds } = req.body;
+    
+    if (!startYear || !endYear) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Start year and end year are required' 
+      });
+    }
+    
+    if (startYear > endYear) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Start year must be less than or equal to end year' 
+      });
+    }
+    
+    const results = [];
+    
+    // Get plants to create slots for
+    const plantsQuery = plantIds && plantIds.length > 0 
+      ? { _id: { $in: plantIds } }
+      : {};
+    
+    const plants = await PlantCms.find(plantsQuery);
+    
+    if (!plants || plants.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'No plants found' 
+      });
+    }
+    
+    // Create slots for each year
+    for (let year = startYear; year <= endYear; year++) {
+      for (const plant of plants) {
+        try {
+          // Check if slots already exist for this plant and year
+          const existingSlots = await PlantSlot.findOne({
+            plantId: plant._id,
+            year: year
+          });
+          
+          if (existingSlots) {
+            results.push({
+              plantId: plant._id,
+              plantName: plant.name,
+              year: year,
+              status: 'already_exists',
+              message: `Slots already exist for ${plant.name} in ${year}`
+            });
+            continue;
+          }
+          
+          // Create new slots for this plant and year
+          const subtypeSlots = plant.subtypes.map((subtype) => ({
+            subtypeId: subtype._id,
+            slots: generateSlotsForYear(year, plant.slotSize || 7),
+          }));
+          
+          const newPlantSlot = new PlantSlot({
+            plantId: plant._id,
+            year: year,
+            subtypeSlots: subtypeSlots,
+          });
+          
+          await newPlantSlot.save();
+          
+          results.push({
+            plantId: plant._id,
+            plantName: plant.name,
+            year: year,
+            status: 'created',
+            slotsCount: subtypeSlots.reduce((total, st) => total + st.slots.length, 0)
+          });
+          
+        } catch (error) {
+          results.push({
+            plantId: plant._id,
+            plantName: plant.name,
+            year: year,
+            status: 'error',
+            error: error.message
+          });
+        }
+      }
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Slot creation process completed',
+      results: results,
+      summary: {
+        totalPlants: plants.length,
+        yearsProcessed: endYear - startYear + 1,
+        created: results.filter(r => r.status === 'created').length,
+        alreadyExists: results.filter(r => r.status === 'already_exists').length,
+        errors: results.filter(r => r.status === 'error').length
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error creating slots for multiple years:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
       error: error.message
     });
   }

@@ -1,9 +1,7 @@
-import Plant from "../models/plantCms.model.js";
+import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 
 // Add a new plant with subtypes
-import PlantCms from "../models/plantCms.model.js";
-
 export const addPlant = async (req, res) => {
   const { name, subtypes, addedBy, slotSize } = req.body;
 
@@ -51,13 +49,12 @@ export const addPlant = async (req, res) => {
 };
 
 // Update a plant's details, subtypes, or slotSize
-// Update a plant's details, subtypes, or slotSize
 export const updatePlant = async (req, res) => {
   const { plantId } = req.params;
   const { name, subtypes, slotSize } = req.body;
 
   try {
-    const plant = await Plant.findById(plantId);
+    const plant = await PlantCms.findById(plantId);
 
     if (!plant) {
       return res.status(404).json({ message: "Plant not found" });
@@ -92,7 +89,7 @@ export const deletePlant = async (req, res) => {
 
   try {
     // Find the plant to delete
-    const deletedPlant = await Plant.findByIdAndDelete(plantId);
+    const deletedPlant = await PlantCms.findByIdAndDelete(plantId);
 
     if (!deletedPlant) {
       return res.status(404).json({ message: "Plant not found" });
@@ -119,7 +116,7 @@ export const addSubtype = async (req, res) => {
   const { name, description, characteristics } = req.body;
 
   try {
-    const plant = await Plant.findById(plantId);
+    const plant = await PlantCms.findById(plantId);
 
     if (!plant) {
       return res.status(404).json({ message: "Plant not found" });
@@ -144,7 +141,7 @@ export const updateSubtype = async (req, res) => {
   const { name, description, characteristics } = req.body;
 
   try {
-    const plant = await Plant.findById(plantId);
+    const plant = await PlantCms.findById(plantId);
 
     if (!plant) {
       return res.status(404).json({ message: "Plant not found" });
@@ -177,7 +174,7 @@ export const deleteSubtype = async (req, res) => {
   const { plantId, subtypeId } = req.params;
 
   try {
-    const plant = await Plant.findById(plantId);
+    const plant = await PlantCms.findById(plantId);
 
     if (!plant) {
       return res.status(404).json({ message: "Plant not found" });
@@ -205,14 +202,13 @@ export const deleteSubtype = async (req, res) => {
 // Get all plants
 export const getPlants = async (req, res) => {
   try {
-    // Fetch all plants and populate their subtypes
-    const plants = await Plant.find()
+    // Fetch all plants with their embedded subtypes
+    const plants = await PlantCms.find()
       .select("name subtypes slotSize addedBy") // Select fields to return
-      .populate("subtypes") // Populate the subtypes field
       .exec();
 
     if (!plants || plants.length === 0) {
-      return res.status(404).json({ message: "No plants found" });
+      return res.status(404).json({ message: "No plant data found." });
     }
 
     return res
@@ -227,7 +223,7 @@ export const getPlants = async (req, res) => {
 
 const updateSlotsForPlant = async (plant) => {
   try {
-    const year = 2025;
+    const year = new Date().getFullYear();
     const { slotSize = 5 } = plant;
 
     // Fetch or create PlantSlot for the plant

@@ -7,6 +7,7 @@ const plantSubtypeSchema = new Schema({
   description: { type: String },
   characteristics: { type: Map, of: String },
   rates: { type: [Number], default: [] }, // Array of rates for each subtype
+  dailyDispatch: { type: Number, default: 0 }, // Daily dispatch capacity for this subtype
 });
 
 const plantSchema = new Schema({
@@ -20,7 +21,7 @@ const plantSchema = new Schema({
 // Middleware to create/update slots after plant save
 plantSchema.post("save", async function (doc) {
   try {
-    const year = 2025; // Current year
+    const year = new Date().getFullYear(); // Current year
     const { slotSize = 5 } = doc; // Default to 5 if slotSize is not provided
 
     // Fetch existing slots for this plant and year

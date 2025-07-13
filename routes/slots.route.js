@@ -10,6 +10,7 @@ import {
   updateSlotFieldById,
   testSlotGeneration,
   updateSlotSalesmenRestrictions,
+  createSlotsForMultipleYears,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -21,6 +22,7 @@ slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.get("/slots/stats", getPlantStats);
 slotRouter.post("/slots/manual", addManualSlot);
 slotRouter.delete("/slots/manual/:slotId", deleteManualSlot);
+slotRouter.post("/slots/create-multiple-years", createSlotsForMultipleYears);
 
 // Salesmen restriction routes - Using completely different path pattern
 slotRouter.put("/salesmen-access/:slotId", updateSlotSalesmenRestrictions);
