@@ -15,6 +15,10 @@ const userSchema = new Schema({
     required: true,
     default: "12345678",
   },
+  isPasswordSet: {
+    type: Boolean,
+    default: false,
+  },
   jobTitle: {
     type: String,
     enum: [

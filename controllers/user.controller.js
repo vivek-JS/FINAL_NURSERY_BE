@@ -151,6 +151,7 @@ const login = async (req, res, next) => {
         accessToken: tokenPair.accessToken,
         refreshToken: tokenPair.refreshToken,
         expiresIn: tokenPair.expiresIn,
+        isPasswordSet: user.isPasswordSet,
         message: "Access token generated and ready for API calls"
       },
       undefined
@@ -165,23 +166,105 @@ const login = async (req, res, next) => {
   }
 };
 
-// Controller used to reset password
-const resetPassword = async (req, res, next) => {
-  const { _id } = req.user;
+// Controller for first-time password change
+const changePassword = async (req, res, next) => {
+  try {
+    const { _id } = req.user;
+    const { newPassword, confirmPassword } = req.body;
 
-  let password = req.body.password || "12345";
-  password = await bcrypt.hash(password, 10);
+    // Validate passwords
+    if (!newPassword || !confirmPassword) {
+      return next(new AppError("New password and confirm password are required", 400));
+    }
 
-  const user = await User.findByIdAndUpdate(_id, { password });
+    if (newPassword !== confirmPassword) {
+      return next(new AppError("Passwords do not match", 400));
+    }
 
-  if (!user) {
-    return next(new AppError("User not found", 404));
+    if (newPassword.length < 8) {
+      return next(new AppError("Password must be at least 8 characters long", 400));
+    }
+
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update user password and set isPasswordSet to true
+    const user = await User.findByIdAndUpdate(
+      _id,
+      { 
+        password: hashedPassword,
+        isPasswordSet: true
+      },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return next(new AppError("User not found", 404));
+    }
+
+    const response = generateResponse(
+      "Success",
+      "Password changed successfully",
+      { user },
+      undefined
+    );
+
+    return res.status(200).json(response);
+  } catch (error) {
+    console.error('Change Password Error:', error);
+    return next(error);
   }
+};
 
-  return res.status(200).json({
-    success: true,
-    message: "User password updated successfully",
-  });
+// Controller for super admin to reset user password
+const resetPasswordForUser = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const { newPassword } = req.body;
+
+    // Check if current user is super admin
+    if (req.user.role !== 'SUPER_ADMIN') {
+      return next(new AppError("Only super admin can reset user passwords", 403));
+    }
+
+    // Validate password
+    if (!newPassword) {
+      return next(new AppError("New password is required", 400));
+    }
+
+    if (newPassword.length < 8) {
+      return next(new AppError("Password must be at least 8 characters long", 400));
+    }
+
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update user password and set isPasswordSet to false (forcing them to change on next login)
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { 
+        password: hashedPassword,
+        isPasswordSet: false
+      },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return next(new AppError("User not found", 404));
+    }
+
+    const response = generateResponse(
+      "Success",
+      "User password reset successfully. User will be prompted to change password on next login.",
+      { user },
+      undefined
+    );
+
+    return res.status(200).json(response);
+  } catch (error) {
+    console.error('Reset Password Error:', error);
+    return next(error);
+  }
 };
 
 // Controller which gives info about themselves
@@ -1304,7 +1387,8 @@ export {
   findUser,
   login,
   encryptPassword,
-  resetPassword,
+  changePassword,
+  resetPasswordForUser,
   aboutMe,
   calculatePerformanceMetrics,
   getDealerWalletDetails,

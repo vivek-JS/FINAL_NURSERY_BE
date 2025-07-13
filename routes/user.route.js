@@ -8,7 +8,8 @@ import {
   testLogin,
   encryptPassword,
   getUsers,
-  resetPassword,
+  changePassword,
+  resetPasswordForUser,
   aboutMe,
   getSalespeople,
   getSalesAnalytics,
@@ -38,6 +39,8 @@ router
   .post("/refresh-token", refreshToken)
   .post("/logout", authenticateToken, logout)
   .post("/verify-token", verifyToken)
+  .post("/change-password", authenticateToken, changePassword)
+  .post("/reset-password/:userId", authenticateToken, resetPasswordForUser)
   .post(
     "/createUser",
     [
@@ -65,7 +68,6 @@ router
     deleteUser
   )
   .get("/allusers", authenticateToken, getUsers)
-  .post("/resetPassword", authenticateToken, resetPassword)
   .get("/aboutMe", authenticateToken, aboutMe)
   .get("/wallet-details/:dealerId", getDealerWalletDetails)
   .get("/wallet-details-summary", getDealerWalletSummary)
