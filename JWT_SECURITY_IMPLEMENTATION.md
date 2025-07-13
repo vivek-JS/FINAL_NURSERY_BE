@@ -7,7 +7,7 @@ This document outlines the comprehensive JWT (JSON Web Token) security implement
 ## 🚀 Features Implemented
 
 ### 1. **Secure JWT Token Management**
-- **Access Tokens**: Short-lived (15 minutes) for API access
+- **Access Tokens**: Short-lived (1 day) for API access
 - **Refresh Tokens**: Long-lived (7 days) for token renewal
 - **Token Blacklisting**: Secure logout functionality
 - **Token Verification**: Comprehensive validation with issuer/audience checks
@@ -58,7 +58,7 @@ Add these to your `.env` file:
 # JWT Configuration
 JWT_SECRET=your-super-secret-jwt-key-here
 REFRESH_TOKEN_SECRET=your-refresh-token-secret
-ACCESS_TOKEN_EXPIRY=15m
+ACCESS_TOKEN_EXPIRY=1d
 REFRESH_TOKEN_EXPIRY=7d
 
 # Security
@@ -76,7 +76,7 @@ The security configuration is centralized in `config/security.js`:
 ```javascript
 export const SECURITY_CONFIG = {
   JWT: {
-    ACCESS_TOKEN_EXPIRY: '15m',
+    ACCESS_TOKEN_EXPIRY: '1d',
     REFRESH_TOKEN_EXPIRY: '7d',
     // ... other JWT settings
   },
@@ -135,7 +135,7 @@ Content-Type: application/json
     },
     "accessToken": "eyJhbGciOiJIUzI1NiIs...",
     "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
-    "expiresIn": "15m"
+    "expiresIn": "1d"
   }
 }
 ```
@@ -170,7 +170,7 @@ Content-Type: application/json
   "data": {
     "accessToken": "new_access_token",
     "refreshToken": "new_refresh_token",
-    "expiresIn": "15m"
+    "expiresIn": "1d"
   }
 }
 ```
@@ -192,7 +192,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 ## 🛡️ Security Features
 
 ### 1. **Token Security**
-- **Short-lived access tokens** (15 minutes)
+- **Short-lived access tokens** (1 day)
 - **Long-lived refresh tokens** (7 days)
 - **Token blacklisting** for secure logout
 - **Issuer and audience validation**

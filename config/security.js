@@ -3,7 +3,7 @@
 export const SECURITY_CONFIG = {
   // JWT Configuration
   JWT: {
-    ACCESS_TOKEN_EXPIRY: process.env.ACCESS_TOKEN_EXPIRY || '15m',
+    ACCESS_TOKEN_EXPIRY: process.env.ACCESS_TOKEN_EXPIRY || '1d',
     REFRESH_TOKEN_EXPIRY: process.env.REFRESH_TOKEN_EXPIRY || '7d',
     JWT_SECRET: process.env.JWT_SECRET || process.env.PRIVATE_KEY,
     REFRESH_TOKEN_SECRET: process.env.REFRESH_TOKEN_SECRET || process.env.PRIVATE_KEY + '_refresh',
@@ -50,7 +50,7 @@ export const SECURITY_CONFIG = {
     HTTP_ONLY: true,
     SECURE: process.env.NODE_ENV === 'production',
     SAME_SITE: 'strict',
-    MAX_AGE: 15 * 60 * 1000 // 15 minutes for access token
+    MAX_AGE: 24 * 60 * 60 * 1000 // 24 hours (1 day) for access token
   },
 
   // Input Validation

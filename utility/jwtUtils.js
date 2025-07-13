@@ -3,7 +3,7 @@ import crypto from 'crypto';
 
 // JWT Configuration - Read environment variables dynamically
 const getJWTConfig = () => ({
-  ACCESS_TOKEN_EXPIRY: process.env.ACCESS_TOKEN_EXPIRY || '15m',
+  ACCESS_TOKEN_EXPIRY: process.env.ACCESS_TOKEN_EXPIRY || '1d',
   REFRESH_TOKEN_EXPIRY: process.env.REFRESH_TOKEN_EXPIRY || '7d',
   JWT_SECRET: process.env.JWT_SECRET || process.env.PRIVATE_KEY,
   REFRESH_TOKEN_SECRET: process.env.REFRESH_TOKEN_SECRET || (process.env.PRIVATE_KEY ? process.env.PRIVATE_KEY + '_refresh' : undefined)
