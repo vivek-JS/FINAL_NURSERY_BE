@@ -42,6 +42,64 @@ function convertDate(value) {
   return date.isValid() ? date.format("DD-MM-YYYY") : null;
 }
 
+// Function to clean and validate mobile numbers
+export const cleanAndValidateMobileNumber = (mobileData) => {
+  let mobileNumbers = mobileData;
+
+  // Handle case where mobileNumbers is already an array
+  if (Array.isArray(mobileNumbers)) {
+    mobileNumbers = mobileNumbers.join(" ");
+  }
+
+  // Convert to string and clean
+  mobileNumbers = (mobileNumbers || "")
+    .toString()
+    .split(/[,\/\s]+/)
+    .map((num) => num.replace(/\s+/g, "").replace(/^-+/, "").replace(/-+$/, "")) // Remove leading and trailing dashes
+    .filter((num) => num && num.length > 0 && num !== "''" && num !== '""'); // Remove empty strings and quoted empty strings
+
+  if (mobileNumbers.length === 0) {
+    return {
+      primaryNumber: null,
+      alternateNumber: null,
+      isInvalid: true,
+      originalValue: mobileData,
+    };
+  }
+
+  let primaryNumber = mobileNumbers[0];
+  let alternateNumber = mobileNumbers.length > 1 ? mobileNumbers[1] : null;
+
+  // Try to combine partial numbers (like "88308 33233")
+  if (
+    primaryNumber &&
+    primaryNumber.length < 10 &&
+    alternateNumber &&
+    alternateNumber.length < 10
+  ) {
+    const combined = primaryNumber + alternateNumber;
+    if (combined.length === 10 && /^\d{10}$/.test(combined)) {
+      primaryNumber = combined;
+      alternateNumber = null;
+    }
+  }
+
+  // Mark 9-digit numbers as invalid (don't auto-fix them)
+  const isPrimaryNineDigit = primaryNumber && primaryNumber.length === 9;
+  const isAlternateNineDigit = alternateNumber && alternateNumber.length === 9;
+
+  // Validate final numbers (mark 9-digit numbers as invalid)
+  const isPrimaryValid = primaryNumber && /^\d{10}$/.test(primaryNumber) && !isPrimaryNineDigit;
+  const isAlternateValid = alternateNumber && /^\d{10}$/.test(alternateNumber) && !isAlternateNineDigit;
+
+  return {
+    primaryNumber: isPrimaryValid ? parseInt(primaryNumber, 10) : null,
+    alternateNumber: isAlternateValid ? parseInt(alternateNumber, 10) : null,
+    isInvalid: !isPrimaryValid || isPrimaryNineDigit,
+    originalValue: mobileData,
+  };
+};
+
 // Helper function to get slot information with overflow status
 export const getSlotInfo = async (slotId) => {
   const currentSlot = await PlantSlot.findOne(
@@ -74,6 +132,8 @@ export const getSlotInfo = async (slotId) => {
 };
 
 export const validateExcelStructure = (buffer) => {
+  console.log("🔍 Starting Excel validation...");
+
   const workbook = XLSX.read(buffer, {
     type: "buffer",
     cellDates: true,
@@ -88,22 +148,28 @@ export const validateExcelStructure = (buffer) => {
 
   console.log("Sample data:", data[0]);
 
+  // Updated required columns based on new structure
   const requiredColumns = [
-    "date",
-    "Booking NO.",
-    "name",
-    "mobileNumber",
-    "village",
-    "talukaName",
-    "districtName",
-    "Advance",
-    "plantName",
-    "plantSubtype",
-    "Media",
-    "numberPlants",
-    "Rate",
-    "slots",
-    "orderBy",
+    "Date", // A
+    "Booking NO.", // B
+    "Name", // C
+    "Mobile No.", // D
+    "Address", // E (using Address instead of Village)
+    "Taluka", // F
+    "District", // G
+    "Advance\r\nAmt.", // J
+    "Crop", // K
+    "Variety", // L
+    "Media", // M
+    "Plant Qty.", // O
+    "Rate", // P
+    "Expected\r\nDel.\r\nDate", // Q
+    "Order\r\nBy", // W
+    "Ad. Amt. Mode", // Y
+    "Bank", // Z
+    "CH No.", // [
+    "Advance\r\nDate", // \
+    "Remark", // _
   ];
 
   const validationResults = {
@@ -133,10 +199,11 @@ export const validateExcelStructure = (buffer) => {
   // Validate each row
   data.forEach((row, index) => {
     const rowNumber = index + 2;
+    console.log(`📋 Processing row ${rowNumber}...`);
     const rowErrors = [];
 
     // Validate dates
-    const dateFields = ["date", "slots", "Advance Date"];
+    const dateFields = ["Date", "Expected\r\nDel.\r\nDate", "Advance\r\nDate"];
     dateFields.forEach((field) => {
       if (row[field]) {
         const convertedDate = convertDate(row[field]);
@@ -150,40 +217,51 @@ export const validateExcelStructure = (buffer) => {
     if (!row["Booking NO."]) {
       rowErrors.push("Booking number is required");
     }
-    // Validate mobile number
-    if (!row.mobileNumber) {
-      rowErrors.push("Mobile number is required");
-    } else {
-      // Clean up and check mobile number format
-      const mobileNumbers = row.mobileNumber
-        .toString()
-        .split(/[,\/\s]+/)
-        .map((num) => num.replace(/\s+/g, ""));
-      console.log(mobileNumbers);
-      if (
-        mobileNumbers.length === 0 ||
-        !mobileNumbers[0] ||
-        !/^\d{10}$/.test(mobileNumbers[0])
-      ) {
-        rowErrors.push("Primary mobile number should be 10 digits");
-      }
 
-      if (mobileNumbers.length > 1 && !/^\d{10}$/.test(mobileNumbers[1])) {
-        rowErrors.push("Secondary mobile number should be 10 digits");
+    // Validate mobile number
+    const mobileValue = row["Mobile No."];
+
+    // Check for empty, null, undefined, or dummy values
+    if (
+      !mobileValue ||
+      mobileValue === "" ||
+      mobileValue === null ||
+      mobileValue === undefined ||
+      mobileValue === "dummy" ||
+      mobileValue === "Dummy" ||
+      mobileValue === "DUMMY" ||
+      mobileValue === "9999999999" ||
+      mobileValue === 9999999999
+    ) {
+      console.log(
+        `❌ Row ${rowNumber}: Missing/empty mobile number: "${mobileValue}" - will use dummy number`
+      );
+    } else {
+      const cleanedNumbers = cleanAndValidateMobileNumber(mobileValue);
+      console.log(`Row ${rowNumber}:`, cleanedNumbers);
+
+      if (cleanedNumbers.isInvalid) {
+        console.log(
+          `❌ Row ${rowNumber}: Invalid mobile number: "${cleanedNumbers.originalValue}" - will use dummy number`
+        );
+      } else {
+        console.log(
+          `✅ Row ${rowNumber}: Valid mobile number: ${cleanedNumbers.primaryNumber}`
+        );
       }
     }
 
     // Validate quantities
     if (
-      !row.numberPlants ||
-      isNaN(row.numberPlants) ||
-      Number(row.numberPlants) <= 0
+      !row["Plant Qty."] ||
+      isNaN(row["Plant Qty."]) ||
+      Number(row["Plant Qty."]) <= 0
     ) {
       rowErrors.push("Invalid plant quantity");
     }
 
     // Validate rate
-    if (!row.Rate || isNaN(row.Rate) || Number(row.Rate) <= 0) {
+    if (!row["Rate"] || isNaN(row["Rate"]) || Number(row["Rate"]) <= 0) {
       rowErrors.push("Invalid rate");
     }
 
@@ -234,64 +312,97 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
     try {
       results.summary.totalProcessed++;
 
-      // Convert dates
+      // Convert dates using new column names
       const processedRow = {
         ...row,
-        date: convertDate(row.date),
-        slots: convertDate(row.slots),
-        "Advance Date": row["Advance Date"]
-          ? convertDate(row["Advance Date"])
+        date: convertDate(row["Date"]),
+        slots: convertDate(row["Expected\r\nDel.\r\nDate"]),
+        "Advance Date": row["Advance\r\nDate"]
+          ? convertDate(row["Advance\r\nDate"])
           : null,
       };
 
       // Check if order already exists
-      const orderNumber = processedRow["Booking NO."].replace("24-25/B", "");
-      const existingOrder = await Order.findOne({
+      const orderNumber = parseInt(processedRow["Booking NO."].replace("24-25/B", ""), 10);
+      console.log(`🔍 Looking for order with orderId: ${orderNumber} (from booking: ${processedRow["Booking NO."]})`);
+      
+      let existingOrder = await Order.findOne({
         orderId: orderNumber,
       }).session(session);
 
+      console.log(`📋 Existing order found: ${existingOrder ? 'YES' : 'NO'}`);
+
       if (existingOrder) {
-        throw new Error(
-          `Order with booking number ${processedRow["Booking NO."]} already exists`
-        );
-      }
-      const mobileString = processedRow.mobileNumber
-        ? processedRow.mobileNumber.toString()
-        : "";
-      const mobileNumbers = mobileString
-        .split(/[,\/\s]+/)
-        .map((num) => num.replace(/\s+/g, ""));
-
-      const primaryNumber = mobileNumbers[0]
-        ? parseInt(mobileNumbers[0], 10)
-        : null;
-      const alternateNumber =
-        mobileNumbers.length > 1 ? parseInt(mobileNumbers[1], 10) : null;
-
-      if (!primaryNumber) {
-        throw new Error("Valid primary mobile number is required");
+        // Update orderBookingDate if present in Excel
+        if (processedRow.date) {
+          existingOrder.orderBookingDate = moment(processedRow.date, "DD-MM-YYYY").toDate();
+          await existingOrder.save({ session });
+        }
+        await session.commitTransaction();
+        results.success.push({
+          bookingNo: processedRow["Booking NO."],
+          updated: true,
+          message: "Order booking date updated",
+        });
+        results.summary.successfulImports++;
+        continue;
       }
 
-      // Create/update farmer
+      const mobileValue = processedRow["Mobile No."];
+
+      // Check for empty, null, undefined, or dummy values
+      const isMissingOrDummy =
+        !mobileValue ||
+        mobileValue === "" ||
+        mobileValue === null ||
+        mobileValue === undefined ||
+        mobileValue === "dummy" ||
+        mobileValue === "Dummy" ||
+        mobileValue === "DUMMY" ||
+        mobileValue === "9999999999" ||
+        mobileValue === 9999999999;
+
+      let cleanedNumbers;
+      if (isMissingOrDummy) {
+        cleanedNumbers = {
+          primaryNumber: null,
+          alternateNumber: null,
+          isInvalid: true,
+          originalValue: mobileValue || "Missing",
+        };
+      } else {
+        cleanedNumbers = cleanAndValidateMobileNumber(mobileValue);
+      }
+
+      // Use dummy number if no valid primary number
+      const primaryNumber = cleanedNumbers.primaryNumber || 9999999999;
+      const alternateNumber = cleanedNumbers.alternateNumber || null;
+      const isInvalidPhone = cleanedNumbers.isInvalid;
+      const originalPhoneNumber = cleanedNumbers.originalValue;
+
+      // Create/update farmer using new column names
       const farmerData = {
-        name: processedRow.name,
-        mobileNumber: primaryNumber, // Use the cleaned primaryNumber
+        name: processedRow["Name"],
+        mobileNumber: primaryNumber,
         alternateNumber: alternateNumber,
-        village: processedRow.village,
-        taluka: processedRow.talukaName,
-        district: processedRow.districtName,
+        village: processedRow["Address"], // Using Address instead of Village
+        taluka: processedRow["Taluka"],
+        district: processedRow["District"],
         state: "Maharashtra",
-        talukaName: processedRow.talukaName,
-        districtName: processedRow.districtName,
+        talukaName: processedRow["Taluka"],
+        districtName: processedRow["District"],
         stateName: "Maharashtra",
+        isInvalidPhone: isInvalidPhone,
+        originalPhoneNumber: originalPhoneNumber,
       };
+
       let farmer = await Farmer.findOne({
         $or: [
           { mobileNumber: primaryNumber },
           { alternateNumber: primaryNumber },
         ],
       }).session(session);
-   
+
       if (!farmer && alternateNumber) {
         farmer = await Farmer.findOne({
           $or: [
@@ -300,6 +411,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           ],
         }).session(session);
       }
+
       if (!farmer) {
         farmer = await Farmer.create([farmerData], { session });
         farmer = farmer[0];
@@ -310,28 +422,31 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           await farmer.save({ session });
         }
       }
-      // Get sales person
+
+      // Get sales person using new column name
       const salesPerson = await User.findOne({
-        name: processedRow.orderBy,
+        name: processedRow["Refrence"],
       }).session(session);
       if (!salesPerson) {
-        throw new Error(`Sales person "${processedRow.orderBy}" not found`);
+        throw new Error(
+          `Sales person "${processedRow["Refrence"]}" not found`
+        );
       }
 
-      // Find plant and variety
+      // Find plant and variety using new column names
       const plant = await PlantCms.findOne({
-        name: processedRow.plantName,
+        name: processedRow["Crop"],
       }).session(session);
       if (!plant) {
-        throw new Error(`Plant type "${processedRow.plantName}" not found`);
+        throw new Error(`Plant type "${processedRow["Crop"]}" not found`);
       }
 
       const subtype = plant.subtypes.find(
-        (st) => st.name === processedRow.plantSubtype
+        (st) => st.name === processedRow["Variety"]
       );
       if (!subtype) {
         throw new Error(
-          `Variety "${processedRow.plantSubtype}" not found for ${processedRow.plantName}`
+          `Variety "${processedRow["Variety"]}" not found for ${processedRow["Crop"]}`
         );
       }
 
@@ -348,48 +463,57 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         session
       );
 
-      // Calculate amounts
+      // Calculate amounts using new column names
       const totalAmount =
-        Number(processedRow.numberPlants) * Number(processedRow.Rate);
-      const advanceAmount = Number(processedRow.Advance) || 0;
+        Number(processedRow["Plant Qty."]) * Number(processedRow["Rate"]);
+      const advanceAmount = Number(processedRow["Advance\r\nAmt."]) || 0;
       const balanceAmount = totalAmount - advanceAmount;
-      let cavityValue = processedRow.Media;
+
+      let cavityValue = processedRow["Media"];
       // Try to find the matching tray by cavity number
       let tray = null;
       if (cavityValue) {
-        // Convert to number if it's a string with a number
-        if (typeof cavityValue === 'string') {
+        // Special handling for "Elli" - treat as "10 cavity"
+        if (typeof cavityValue === "string" && cavityValue.trim().toLowerCase() === "elli") {
+          cavityValue = 10;
+          console.log(`🔄 Converting "Elli" to cavity value: ${cavityValue}`);
+        } else if (typeof cavityValue === "string") {
           cavityValue = parseInt(cavityValue.trim(), 10);
         }
-        
+
         // Find the tray with matching cavity number
         tray = await Tray.findOne({ cavity: cavityValue }).session(session);
-        
+
         if (!tray) {
           console.warn(`Warning: Tray with cavity ${cavityValue} not found`);
           // We'll set cavity to null instead of failing the import
         }
       }
-      // Create order
+
+      // Create order using new column names
       const orderData = {
         orderId: orderNumber,
         farmer: farmer._id,
         salesPerson: salesPerson._id,
-        numberOfPlants: processedRow.numberPlants,
-        rate: processedRow.Rate,
+        numberOfPlants: processedRow["Plant Qty."],
+        rate: processedRow["Rate"],
         plantName: plant._id,
         plantSubtype: subtype._id,
         bookingSlot: slot._id,
-        cavity: tray ? tray._id : null, // Use the tray ID if found, otherwise null
-        orderStatus: processedRow["Del. Y/N"] === "Y" ? "COMPLETED" : "PENDING",
-        notes: processedRow.Remark || "",
+        cavity: tray ? tray._id : null,
+        orderStatus:
+          processedRow["Del.\r\nY/N"] === "Y" ? "COMPLETED" : "ACCEPTED",
+        notes: processedRow["Remark"] || "",
         paymentCompleted: balanceAmount <= 0,
-        orderPaymentStatus: balanceAmount <= 0 ? "COMPLETED" : "PENDING",
+        orderPaymentStatus: balanceAmount <= 0 ? "COMPLETED" : "ACCEPTED",
+        orderBookingDate: processedRow.date
+          ? moment(processedRow.date, "DD-MM-YYYY").toDate()
+          : new Date(),
       };
 
       const order = await Order.create([orderData], { session });
 
-      // Add payment if advance exists
+      // Add payment if advance exists using new column names
       if (advanceAmount > 0) {
         const paymentData = {
           paidAmount: advanceAmount,
@@ -397,9 +521,9 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           paymentDate: processedRow["Advance Date"]
             ? moment(processedRow["Advance Date"], "DD-MM-YYYY").toDate()
             : new Date(),
-          bankName: processedRow.Bank || "",
-          modeOfPayment: processedRow.mode || "CASH",
-          remark: processedRow.Remark || "",
+          bankName: processedRow["Bank"] || "",
+          modeOfPayment: processedRow["Ad. Amt. Mode"] || "CASH",
+          remark: processedRow["Remark"] || "",
         };
 
         if (processedRow["CH No."]) {
@@ -427,7 +551,10 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         advancePaid: advanceAmount,
         balance: balanceAmount,
         slotInfo: slotInfo,
-        overflowWarning: slotInfo && slotInfo.isOverflow ? `Slot is in overflow state. Available plants: ${slotInfo.availablePlants}` : null,
+        overflowWarning:
+          slotInfo && slotInfo.isOverflow
+            ? `Slot is in overflow state. Available plants: ${slotInfo.availablePlants}`
+            : null,
       });
 
       // Track overflow slots
@@ -451,6 +578,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
 
   return results;
 };
+
 async function findDeliverySlot(plantId, subtypeId, deliveryDate, session) {
   try {
     // Ensure deliveryDate is a moment object

@@ -4,6 +4,7 @@ import {
   getDealerOrdersByBooking,
   updateDealerOrderPayment,
 } from "../controllers/dealer.controller.js";
+import { requirePaymentAddAccess } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
 
@@ -13,8 +14,8 @@ router.post("/orders", createDealerOrder);
 // Get all orders for authenticated dealer
 router.get("/orders", getDealerOrdersByBooking);
 
-// Update order payment
-router.post("/orders/:orderId/payment", updateDealerOrderPayment);
+// Update order payment - restricted to accountants, super admins, and office admins
+router.post("/orders/:orderId/payment", requirePaymentAddAccess, updateDealerOrderPayment);
 
 export default router;
 
@@ -25,5 +26,5 @@ app.use('/api/dealer', dealerRoutes);
 This will create the following endpoints:
 POST /api/dealer/orders - Create new order
 GET /api/dealer/orders - Get all orders
-POST /api/dealer/orders/:orderId/payment - Add payment to order
+POST /api/dealer/orders/:orderId/payment - Add payment to order (restricted to accountants, super admins, and office admins)
 */

@@ -41,6 +41,14 @@ const farmerSchema = new Schema({
   alternateNumber: {
     type: Number,
     required: false,
+  },
+  isInvalidPhone: {
+    type: Boolean,
+    default: false,
+  },
+  originalPhoneNumber: {
+    type: String,
+    default: null,
   }
 });
 

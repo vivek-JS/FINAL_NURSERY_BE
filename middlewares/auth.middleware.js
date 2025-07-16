@@ -91,6 +91,29 @@ export const requireDealer = authorizeRoles(['DEALER', 'ADMIN', 'SUPER_ADMIN']);
 export const requireFarmer = authorizeRoles(['FARMER', 'ADMIN', 'SUPER_ADMIN']);
 
 /**
+ * Middleware to check if user is accountant
+ */
+export const requireAccountant = authorizeRoles(['ACCOUNTANT', 'SUPER_ADMIN']);
+
+/**
+ * Middleware to check if user is office admin
+ */
+export const requireOfficeAdmin = authorizeRoles(['OFFICE_ADMIN', 'ADMIN', 'SUPER_ADMIN']);
+
+/**
+ * Middleware to check if user can perform payment operations
+ * Only accountants and super admins can perform payment operations
+ */
+export const requirePaymentAccess = authorizeRoles(['ACCOUNTANT', 'SUPER_ADMIN']);
+
+/**
+ * Middleware to check if user can add payments
+ * Office Admins can add payments (but only with PENDING status - enforced in controller)
+ * Accountants and Super Admins can add payments with any status
+ */
+export const requirePaymentAddAccess = authorizeRoles(['ACCOUNTANT', 'SUPER_ADMIN', 'OFFICE_ADMIN']);
+
+/**
  * Middleware to check if user owns the resource or is admin
  * @param {String} resourceIdField - Field name containing resource ID
  * @param {String} modelName - Model name for error messages

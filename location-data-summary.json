@@ -1,0 +1,254 @@
+[
+  {
+    "name": "Andhra Pradesh",
+    "code": "AP",
+    "districtsCount": 3,
+    "totalTalukas": 7,
+    "totalVillages": 35
+  },
+  {
+    "name": "Arunachal Pradesh",
+    "code": "AR",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Assam",
+    "code": "AS",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Bihar",
+    "code": "BR",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Chhattisgarh",
+    "code": "CG",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Goa",
+    "code": "GA",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Gujarat",
+    "code": "GJ",
+    "districtsCount": 2,
+    "totalTalukas": 4,
+    "totalVillages": 20
+  },
+  {
+    "name": "Haryana",
+    "code": "HR",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Himachal Pradesh",
+    "code": "HP",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Jharkhand",
+    "code": "JH",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Karnataka",
+    "code": "KA",
+    "districtsCount": 2,
+    "totalTalukas": 4,
+    "totalVillages": 20
+  },
+  {
+    "name": "Kerala",
+    "code": "KL",
+    "districtsCount": 2,
+    "totalTalukas": 4,
+    "totalVillages": 20
+  },
+  {
+    "name": "Madhya Pradesh",
+    "code": "MP",
+    "districtsCount": 2,
+    "totalTalukas": 4,
+    "totalVillages": 20
+  },
+  {
+    "name": "Maharashtra",
+    "code": "MH",
+    "districtsCount": 5,
+    "totalTalukas": 11,
+    "totalVillages": 55
+  },
+  {
+    "name": "Manipur",
+    "code": "MN",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Meghalaya",
+    "code": "ML",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Mizoram",
+    "code": "MZ",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Nagaland",
+    "code": "NL",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Odisha",
+    "code": "OR",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Punjab",
+    "code": "PB",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Rajasthan",
+    "code": "RJ",
+    "districtsCount": 2,
+    "totalTalukas": 4,
+    "totalVillages": 20
+  },
+  {
+    "name": "Sikkim",
+    "code": "SK",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Tamil Nadu",
+    "code": "TN",
+    "districtsCount": 2,
+    "totalTalukas": 4,
+    "totalVillages": 20
+  },
+  {
+    "name": "Telangana",
+    "code": "TG",
+    "districtsCount": 2,
+    "totalTalukas": 4,
+    "totalVillages": 20
+  },
+  {
+    "name": "Tripura",
+    "code": "TR",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Uttar Pradesh",
+    "code": "UP",
+    "districtsCount": 2,
+    "totalTalukas": 4,
+    "totalVillages": 20
+  },
+  {
+    "name": "Uttarakhand",
+    "code": "UK",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "West Bengal",
+    "code": "WB",
+    "districtsCount": 2,
+    "totalTalukas": 4,
+    "totalVillages": 20
+  },
+  {
+    "name": "Andaman and Nicobar Islands",
+    "code": "AN",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Chandigarh",
+    "code": "CH",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Dadra and Nagar Haveli and Daman and Diu",
+    "code": "DN",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Delhi",
+    "code": "DL",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Jammu and Kashmir",
+    "code": "JK",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Ladakh",
+    "code": "LA",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Lakshadweep",
+    "code": "LD",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  },
+  {
+    "name": "Puducherry",
+    "code": "PY",
+    "districtsCount": 0,
+    "totalTalukas": 0,
+    "totalVillages": 0
+  }
+]

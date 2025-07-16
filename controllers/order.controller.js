@@ -214,16 +214,42 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       return res.status(400).json({ message: "Invalid payment amount" });
     }
 
+    // Role-based payment status enforcement
+    const userRole = req.user?.role;
+    let finalPaymentStatus = paymentStatus;
+
+    // Office Admin can only add PENDING payments
+    if (userRole === "OFFICE_ADMIN") {
+      if (paymentStatus !== "PENDING") {
+        return res.status(403).json({ 
+          message: "Office Admin can only add payments with PENDING status. Please contact an Accountant to change the status." 
+        });
+      }
+      finalPaymentStatus = "PENDING";
+    }
+    // Accountant and Super Admin can add any status
+    else if (userRole === "ACCOUNTANT" || userRole === "SUPER_ADMIN") {
+      finalPaymentStatus = paymentStatus;
+    }
+    // Other roles cannot add payments (this should be caught by middleware, but double-check)
+    else {
+      return res.status(403).json({ 
+        message: "Insufficient permissions to add payments" 
+      });
+    }
+
     console.log("Payment details:");
     console.log("- Amount:", amount);
-    console.log("- Status:", paymentStatus);
+    console.log("- Original Status:", paymentStatus);
+    console.log("- Final Status:", finalPaymentStatus);
+    console.log("- User Role:", userRole);
     console.log("- Is wallet payment:", isWalletPayment ? "Yes" : "No");
     console.log("- Mode:", modeOfPayment);
 
     // Create the payment object
     const newPayment = {
       paidAmount: amount,
-      paymentStatus,
+      paymentStatus: finalPaymentStatus,
       paymentDate,
       bankName,
       receiptPhoto,
@@ -255,12 +281,12 @@ const addNewPayment = catchAsync(async (req, res, next) => {
         let description = "";
 
         // Wallet impact based on payment type and status
-        if (isWalletPayment && paymentStatus === "PENDING") {
+        if (isWalletPayment && finalPaymentStatus === "PENDING") {
           // Deduct from wallet (negative amount)
           walletAmount = -amount;
           description = `Wallet payment for Order #${order._id}`;
           console.log("This is a wallet payment, deducting amount from wallet");
-        } else if (order.dealerOrder && paymentStatus === "COLLECTED") {
+        } else if (order.dealerOrder && finalPaymentStatus === "COLLECTED") {
           // Add to wallet (positive amount)
           walletAmount = amount;
           description = `Payment collected for Order #${order._id} via ${modeOfPayment}`;

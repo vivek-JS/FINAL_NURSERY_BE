@@ -3,7 +3,7 @@ import PlantSlot from "../models/slots.model.js";
 
 // Add a new plant with subtypes
 export const addPlant = async (req, res) => {
-  const { name, subtypes, addedBy, slotSize } = req.body;
+  const { name, subtypes, addedBy, slotSize, buffer } = req.body;
 
   try {
     // Check if a plant with the same name already exists
@@ -32,6 +32,7 @@ export const addPlant = async (req, res) => {
       subtypes: processedSubtypes,
       addedBy,
       slotSize: slotSize || 5, // Default slot size to 5 if not provided
+      buffer: buffer || 0, // Default buffer to 0 if not provided
     });
 
     const savedPlant = await newPlant.save();
@@ -51,7 +52,7 @@ export const addPlant = async (req, res) => {
 // Update a plant's details, subtypes, or slotSize
 export const updatePlant = async (req, res) => {
   const { plantId } = req.params;
-  const { name, subtypes, slotSize } = req.body;
+  const { name, subtypes, slotSize, buffer } = req.body;
 
   try {
     const plant = await PlantCms.findById(plantId);
@@ -63,6 +64,7 @@ export const updatePlant = async (req, res) => {
     // Update plant fields
     plant.name = name || plant.name;
     plant.slotSize = slotSize || plant.slotSize;
+    plant.buffer = buffer !== undefined ? buffer : plant.buffer;
 
     if (subtypes) {
       plant.subtypes = subtypes; // Replace subtypes if provided
@@ -204,7 +206,7 @@ export const getPlants = async (req, res) => {
   try {
     // Fetch all plants with their embedded subtypes
     const plants = await PlantCms.find()
-      .select("name subtypes slotSize addedBy") // Select fields to return
+      .select("name subtypes slotSize addedBy buffer") // Select fields to return
       .exec();
 
     if (!plants || plants.length === 0) {

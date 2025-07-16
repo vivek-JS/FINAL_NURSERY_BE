@@ -12,6 +12,7 @@ import {
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
+import { requirePaymentAccess, requirePaymentAddAccess } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
 
@@ -19,9 +20,10 @@ router
   .get("/getCSV", getCsv)
   .get("/slots", getOrdersBySlot)
   .get("/getOrders", getOrders)
-  .patch("/updatePaymentStatus", updatePaymentStatus)
+  .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .patch(
     "/payment/:orderId",
+    requirePaymentAddAccess,
     addNewPayment // Controller function to add payment
   )
   .patch(

@@ -41,13 +41,34 @@ const slotSchema = new Schema({
     type: Number,
     default: 0,
   },
-  // Virtual field to calculate available plants (can be negative for overflow)
+  // Buffer-adjusted available plants (stored in database)
   availablePlants: {
     type: Number,
     default: function() {
       return this.totalPlants;
     }
   },
+  buffer: {
+    type: Number,
+    default: 0,
+  }, // Buffer at slot level
+  // Buffer-adjusted fields for cascading buffer system
+  effectiveBuffer: {
+    type: Number,
+    default: 0,
+  }, // Effective buffer percentage after cascading
+  bufferAdjustedCapacity: {
+    type: Number,
+    default: 0,
+  }, // Total capacity after buffer deduction
+  bufferAmount: {
+    type: Number,
+    default: 0,
+  }, // Actual number of plants reserved as buffer
+  originalTotalPlants: {
+    type: Number,
+    default: 0,
+  }, // Original total plants before buffer adjustment
   // Flag to indicate if this slot is in overflow state
   isOverflow: {
     type: Boolean,

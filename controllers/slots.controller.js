@@ -1,8 +1,9 @@
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import mongoose from "mongoose";
-// Helper function to generate slots for a year
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
+import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity } from "../utility/bufferUtils.js";
+import { updateSlotBufferCalculations, updateAllSlotBuffers } from "../utility/slotBufferUpdater.js";
 
 export const createSlotsForYear = async (year) => {
   try {
@@ -131,6 +132,7 @@ export const generateSlotsForYear = (year, slotSize = 5) => {
         month: monthName,
         totalPlants: 0,
         totalBookedPlants: 0,
+        buffer: 0, // Buffer percentage at slot level
         orders: [],
         allowedSalesmen: [], // Array to store salesman IDs who can access this slot
         restrictToSalesmen: false, // Flag to enable/disable salesman restrictions
@@ -463,6 +465,25 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
 
     const { monthSummary, paginatedSlots } = results[0];
 
+    // Fetch plant and subtype information for buffer calculations
+    let plantBuffer = 0;
+    let subtypeBuffer = 0;
+    
+    if (plantId) {
+      const plant = await PlantCms.findById(plantId);
+      if (plant) {
+        plantBuffer = plant.buffer || 0;
+        
+        // Find subtype buffer if subtypeId is provided
+        if (subtypeId) {
+          const subtype = plant.subtypes.find(sub => sub._id.toString() === subtypeId);
+          if (subtype) {
+            subtypeBuffer = subtype.buffer || 0;
+          }
+        }
+      }
+    }
+
     // Define months for the summary
     const months = [
       "January",
@@ -498,12 +519,38 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
       }
     });
 
-    // Format paginatedSlots for the response
+    // Format paginatedSlots for the response and apply buffer calculations
     const slots = paginatedSlots.map((slot) => ({
       plantId: slot._id.plantId,
       year: slot._id.year,
       subtypeId: slot._id.subtypeId,
-      slots: slot.slots,
+      slots: slot.slots.map(slotItem => {
+        // Calculate effective buffer for this slot
+        const effectiveBuffer = calculateEffectiveBuffer(
+          slotItem.buffer || 0,
+          subtypeBuffer,
+          plantBuffer
+        );
+
+        // Calculate buffer-adjusted capacity
+        const bufferAdjusted = calculateBufferAdjustedCapacity(
+          slotItem.totalPlants,
+          slotItem.totalBookedPlants,
+          effectiveBuffer
+        );
+
+        return {
+          ...slotItem,
+          effectiveBuffer,
+          bufferAdjustedCapacity: bufferAdjusted.bufferAdjustedCapacity,
+          availablePlants: bufferAdjusted.availablePlants,
+          bufferAmount: bufferAdjusted.bufferAmount,
+          // Keep original totalPlants for reference
+          originalTotalPlants: slotItem.totalPlants,
+          // Update totalPlants to reflect buffer-adjusted capacity
+          totalPlants: bufferAdjusted.availablePlants
+        };
+      }),
     }));
 
     if (!slots.length) {
@@ -531,7 +578,7 @@ export const updateSlotFieldById = async (req, res) => {
       return res.status(400).json({ message: "No update data provided." });
     }
 
-    // Update the specific field in the slot using array filters
+    // First, update the specific field in the slot using array filters
     const result = await PlantSlot.findOneAndUpdate(
       { "subtypeSlots.slots._id": slotId }, // Find the document containing the slot
       {
@@ -553,15 +600,136 @@ export const updateSlotFieldById = async (req, res) => {
       return res.status(404).json({ message: "Slot not found." });
     }
 
+    // Find the updated slot to get current values
+    const updatedSlot = result.subtypeSlots
+      .flatMap(subtype => subtype.slots)
+      .find(slot => slot._id.toString() === slotId);
+
+    if (!updatedSlot) {
+      return res.status(404).json({ message: "Updated slot not found." });
+    }
+
+    // Update buffer calculations in the database
+    const bufferUpdateResult = await updateSlotBufferCalculations(
+      slotId,
+      updatedSlot.totalPlants,
+      updatedSlot.totalBookedPlants,
+      updatedSlot.buffer
+    );
+
+    if (!bufferUpdateResult.success) {
+      console.error("Warning: Buffer calculations update failed:", bufferUpdateResult.error);
+    }
+
     res.status(200).json({
       message: "Slot updated successfully.",
-      data: result,
+      data: {
+        ...result.toObject(),
+        bufferCalculations: bufferUpdateResult
+      },
     });
   } catch (error) {
     console.error("Error updating slot:", error);
     res
       .status(500)
       .json({ message: "Internal server error.", error: error.message });
+  }
+};
+
+// Function to update slot buffer value specifically
+export const updateSlotBuffer = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    const { buffer } = req.body;
+
+    // Validate buffer value
+    if (buffer === undefined || buffer === null) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Buffer value is required." 
+      });
+    }
+
+    // Validate buffer is a number and within valid range (0-100)
+    const bufferValue = Number(buffer);
+    if (isNaN(bufferValue)) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Buffer must be a valid number." 
+      });
+    }
+
+    if (bufferValue < 0 || bufferValue > 100) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Buffer must be between 0 and 100 percent." 
+      });
+    }
+
+    // Update the buffer field in the slot
+    const result = await PlantSlot.findOneAndUpdate(
+      { "subtypeSlots.slots._id": slotId },
+      {
+        $set: {
+          "subtypeSlots.$[].slots.$[slotElem].buffer": bufferValue
+        }
+      },
+      {
+        arrayFilters: [{ "slotElem._id": slotId }],
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!result) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Slot not found." 
+      });
+    }
+
+    // Find the updated slot to get current values
+    const updatedSlot = result.subtypeSlots
+      .flatMap(subtype => subtype.slots)
+      .find(slot => slot._id.toString() === slotId);
+
+    if (!updatedSlot) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Updated slot not found." 
+      });
+    }
+
+    // Update buffer calculations in the database
+    const bufferUpdateResult = await updateSlotBufferCalculations(
+      slotId,
+      updatedSlot.totalPlants,
+      updatedSlot.totalBookedPlants,
+      bufferValue
+    );
+
+    if (!bufferUpdateResult.success) {
+      console.error("Warning: Buffer calculations update failed:", bufferUpdateResult.error);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Slot buffer updated successfully.",
+      data: {
+        slotId,
+        buffer: bufferValue,
+        slot: updatedSlot,
+        bufferCalculations: bufferUpdateResult
+      }
+    });
+
+  } catch (error) {
+    console.error("Error updating slot buffer:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Internal server error.", 
+      error: error.message 
+    });
   }
 };
 // Controller function to get plant statistics
@@ -782,7 +950,7 @@ export const getPlantStats = async (req, res) => {
 // Function to manually add a slot to a plant subtype
 export const addManualSlot = async (req, res) => {
   try {
-    const { plantId, subtypeId, startDay, endDay, totalPlants } = req.body;
+    const { plantId, subtypeId, startDay, endDay, totalPlants, buffer = 0 } = req.body;
     
     // Validate required fields
     if (!plantId || !subtypeId || !startDay || !endDay || totalPlants === undefined) {
@@ -790,6 +958,24 @@ export const addManualSlot = async (req, res) => {
         success: false, 
         message: 'Missing required fields: plantId, subtypeId, startDay, endDay, and totalPlants are required' 
       });
+    }
+    
+    // Validate buffer value if provided
+    if (buffer !== undefined && buffer !== null) {
+      const bufferValue = Number(buffer);
+      if (isNaN(bufferValue)) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Buffer must be a valid number' 
+        });
+      }
+      
+      if (bufferValue < 0 || bufferValue > 100) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Buffer must be between 0 and 100 percent' 
+        });
+      }
     }
     
     // Validate date format (dd-mm-yyyy)
@@ -859,6 +1045,7 @@ export const addManualSlot = async (req, res) => {
       endDay,
       totalPlants: totalPlants,
       totalBookedPlants: 0,
+      buffer: Number(buffer) || 0, // Use provided buffer or default to 0
       orders: [],
       overflow: false,
       status: true,
@@ -1151,6 +1338,221 @@ export const createSlotsForMultipleYears = async (req, res) => {
   }
 };
 
+// Release plants from buffer to available plants
+export const releaseBufferPlantsController = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    const { plantsToRelease } = req.body;
+
+    if (!plantsToRelease || plantsToRelease <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Number of plants to release must be greater than 0"
+      });
+    }
+
+    // Find the slot
+    const plantSlot = await PlantSlot.findOne({ 'subtypeSlots.slots._id': slotId }).populate('plantId');
+    if (!plantSlot) {
+      return res.status(404).json({
+        success: false,
+        message: "Slot not found"
+      });
+    }
+
+    // Find the specific slot
+    let targetSlot = null;
+    let targetSubtypeSlot = null;
+    
+    for (const subtypeSlot of plantSlot.subtypeSlots) {
+      for (const slot of subtypeSlot.slots) {
+        if (slot._id.toString() === slotId) {
+          targetSlot = slot;
+          targetSubtypeSlot = subtypeSlot;
+          break;
+        }
+      }
+      if (targetSlot) break;
+    }
+
+    if (!targetSlot) {
+      return res.status(404).json({
+        success: false,
+        message: "Target slot not found"
+      });
+    }
+
+    // Release plants from buffer
+    const releaseResult = releaseBufferPlants(targetSlot, plantsToRelease);
+    
+    if (!releaseResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: releaseResult.message
+      });
+    }
+
+    // Update the slot with new buffer values
+    const updateResult = await updateSlotBufferCalculations(
+      slotId,
+      targetSlot.totalPlants,
+      targetSlot.totalBookedPlants,
+      releaseResult.newBufferPercentage
+    );
+
+    if (!updateResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to update slot after buffer release",
+        error: updateResult.error
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: releaseResult.message,
+      data: {
+        slotId,
+        released: releaseResult.released,
+        newBufferAmount: releaseResult.newBufferAmount,
+        newAvailablePlants: releaseResult.newAvailablePlants,
+        newBufferPercentage: releaseResult.newBufferPercentage
+      }
+    });
+
+  } catch (error) {
+    console.error("Error releasing buffer plants:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
+  }
+};
+
+// Add plants directly to capacity (ignoring buffer)
+export const addPlantsToCapacityController = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    const { plantsToAdd } = req.body;
+
+    if (!plantsToAdd || plantsToAdd <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Number of plants to add must be greater than 0"
+      });
+    }
+
+    // Find the slot
+    const plantSlot = await PlantSlot.findOne({ 'subtypeSlots.slots._id': slotId }).populate('plantId');
+    if (!plantSlot) {
+      return res.status(404).json({
+        success: false,
+        message: "Slot not found"
+      });
+    }
+
+    // Find the specific slot
+    let targetSlot = null;
+    let targetSubtypeSlot = null;
+    
+    for (const subtypeSlot of plantSlot.subtypeSlots) {
+      for (const slot of subtypeSlot.slots) {
+        if (slot._id.toString() === slotId) {
+          targetSlot = slot;
+          targetSubtypeSlot = subtypeSlot;
+          break;
+        }
+      }
+      if (targetSlot) break;
+    }
+
+    if (!targetSlot) {
+      return res.status(404).json({
+        success: false,
+        message: "Target slot not found"
+      });
+    }
+
+    // Add plants to capacity
+    const addResult = addPlantsToCapacity(targetSlot, plantsToAdd);
+    
+    if (!addResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: addResult.message
+      });
+    }
+
+    // Update the slot with new total plants
+    const updateResult = await updateSlotBufferCalculations(
+      slotId,
+      addResult.newTotalPlants,
+      targetSlot.totalBookedPlants,
+      targetSlot.buffer
+    );
+
+    if (!updateResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to update slot after adding plants",
+        error: updateResult.error
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: addResult.message,
+      data: {
+        slotId,
+        added: plantsToAdd,
+        newTotalPlants: addResult.newTotalPlants,
+        newBufferAmount: addResult.newBufferAmount,
+        newAvailablePlants: addResult.newAvailablePlants
+      }
+    });
+
+  } catch (error) {
+    console.error("Error adding plants to capacity:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
+  }
+};
+
+// Migration endpoint to update buffer calculations for all slots
+export const migrateBufferCalculations = async (req, res) => {
+  try {
+    console.log('🔄 Starting buffer calculations migration via API...');
+    
+    const result = await updateAllSlotBuffers();
+    
+    if (result.success) {
+      res.status(200).json({
+        success: true,
+        message: 'Buffer calculations migration completed successfully',
+        updatedCount: result.updatedCount
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Buffer calculations migration failed',
+        error: result.error
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Migration error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error during migration',
+      error: error.message
+    });
+  }
+};
+
 // Example API route setup
 import express from "express";
 const router = express.Router();
@@ -1158,5 +1560,3 @@ const router = express.Router();
 router.get("/plant-stats", getPlantStats);
 
 export default router;
-
-// Example API route setup

@@ -8,6 +8,7 @@ const plantSubtypeSchema = new Schema({
   characteristics: { type: Map, of: String },
   rates: { type: [Number], default: [] }, // Array of rates for each subtype
   dailyDispatch: { type: Number, default: 0 }, // Daily dispatch capacity for this subtype
+  buffer: { type: Number, default: 0 }, // Buffer at plant subtype level
 });
 
 const plantSchema = new Schema({
@@ -16,6 +17,7 @@ const plantSchema = new Schema({
   addedBy: { type: Schema.Types.ObjectId, ref: "User" },
   createdAt: { type: Date, default: Date.now },
   slotSize: { type: Number, default: 5, required: true }, // Slot size in days
+  buffer: { type: Number, default: 0 }, // Buffer at plant level
 });
 
 // Middleware to create/update slots after plant save

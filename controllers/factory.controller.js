@@ -1155,7 +1155,7 @@ const getAll = (Model, modelName) =>
 
         const start = parseDate(startDate);
         const end = parseDate(endDate, true);
-        pipeline.push({ $match: { createdAt: { $gte: start, $lte: end } } });
+        pipeline.push({ $match: { orderBookingDate: { $gte: start, $lte: end } } });
       }
 
       // Search filtering by `orderId` or `farmer.name`
@@ -1517,6 +1517,7 @@ const getAll = (Model, modelName) =>
           orderId: 1,
           rate: 1,
           farmReadyDate: 1,
+          orderBookingDate: 1, // Add orderBookingDate to response
           orderPaymentStatus: 1,
           paymentCompleted: 1,
           dealerOrder: 1,

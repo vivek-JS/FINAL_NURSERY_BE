@@ -107,6 +107,26 @@ export const RBAC_CONFIG = {
         'settings:read', 'settings:write'
       ]
     },
+    ACCOUNTANT: {
+      level: 80,
+      permissions: [
+        'order:read', 'order:write',
+        'payment:read', 'payment:write', 'payment:delete',
+        'farmer:read',
+        'dealer:read',
+        'report:read'
+      ]
+    },
+    OFFICE_ADMIN: {
+      level: 75,
+      permissions: [
+        'order:read', 'order:write',
+        'farmer:read', 'farmer:write',
+        'dealer:read', 'dealer:write',
+        'report:read',
+        'settings:read'
+      ]
+    },
     SALES: {
       level: 70,
       permissions: [
@@ -141,6 +161,9 @@ export const RBAC_CONFIG = {
     'order:read': 'Can read orders',
     'order:write': 'Can create and update orders',
     'order:delete': 'Can delete orders',
+    'payment:read': 'Can read payment information',
+    'payment:write': 'Can create and update payments',
+    'payment:delete': 'Can delete payments',
     'farmer:read': 'Can read farmer information',
     'farmer:write': 'Can create and update farmers',
     'farmer:delete': 'Can delete farmers',

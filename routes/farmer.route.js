@@ -5,7 +5,9 @@ import {
   findFarmer,
   getFarmers,
   uploadFarmers,
-  getFarmerOrder
+  getFarmerOrder,
+  getInvalidPhoneFarmers,
+  updateFarmerPhone
 } from "../controllers/farmer.controller.js";
 import { createOrder } from "../controllers/order.controller.js";
 import express from "express";
@@ -52,6 +54,8 @@ router
   .get("/getFarmers", getFarmers)
   .get("/farmers/:farmerId/orders/:orderId?", getFarmerOrder)
   .post("/uploadFarmers", upload.single("data"), uploadFarmers)
+  .get('/invalid-phones', getInvalidPhoneFarmers)
+  .put('/:id/phone', updateFarmerPhone)
 
   .post(
     "/createFarmer",

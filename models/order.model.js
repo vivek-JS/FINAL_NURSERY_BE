@@ -30,7 +30,7 @@ const deliveryChangeSchema = new Schema(
     changedBy: {
       type: Schema.Types.ObjectId,
       ref: "User",
-    //  required: true,
+      //  required: true,
     },
   },
   { timestamps: true }
@@ -51,7 +51,7 @@ const statusChangeSchema = new Schema(
         "REJECTED",
         "FARM_READY",
         "DISPATCH_PROCESS",
-        "PARTIALLY_COMPLETED"
+        "PARTIALLY_COMPLETED",
       ],
       required: true,
     },
@@ -67,7 +67,7 @@ const statusChangeSchema = new Schema(
         "REJECTED",
         "FARM_READY",
         "DISPATCH_PROCESS",
-        "PARTIALLY_COMPLETED"
+        "PARTIALLY_COMPLETED",
       ],
       required: true,
     },
@@ -114,10 +114,10 @@ const paymentSchema = new Schema(
     remark: {
       type: String,
     },
-    isWalletPayment:{
+    isWalletPayment: {
       type: Boolean,
       default: false,
-    }
+    },
   },
   { timestamps: true }
 );
@@ -136,16 +136,16 @@ const orderSchema = new Schema(
     farmer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Farmer",
-      required: function() {
+      required: function () {
         return !this.dealerOrder; // Required only if not a dealer order
-      }
+      },
     },
     dealer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: function() {
+      required: function () {
         return this.dealerOrder; // Required only if it is a dealer order
-      }
+      },
     },
     salesPerson: {
       type: mongoose.Schema.Types.ObjectId,
@@ -159,9 +159,9 @@ const orderSchema = new Schema(
     // Field to track remaining plants (initially equals numberOfPlants)
     remainingPlants: {
       type: Number,
-      default: function() {
+      default: function () {
         return this.numberOfPlants;
-      }
+      },
     },
     plantName: {
       type: Schema.Types.ObjectId,
@@ -181,7 +181,7 @@ const orderSchema = new Schema(
     cavity: {
       type: Schema.Types.ObjectId,
       ref: "Tray",
-     // required: true,
+      // required: true,
     },
     rate: {
       type: Number,
@@ -210,7 +210,7 @@ const orderSchema = new Schema(
         "REJECTED",
         "FARM_READY",
         "DISPATCH_PROCESS",
-        "PARTIALLY_COMPLETED"
+        "PARTIALLY_COMPLETED",
       ],
       default: "PENDING",
     },
@@ -219,6 +219,9 @@ const orderSchema = new Schema(
     paymentCompleted: {
       type: Boolean,
       default: false,
+    },
+    orderBookingDate: {
+      type: Date,
     },
     farmReadyDate: {
       type: Date,
@@ -233,27 +236,29 @@ const orderSchema = new Schema(
     // Field to track delivery changes history
     deliveryChanges: [deliveryChangeSchema],
     // Field to track return history
-    returnHistory: [{
-      date: {
-        type: Date,
-        default: Date.now,
+    returnHistory: [
+      {
+        date: {
+          type: Date,
+          default: Date.now,
+        },
+        quantity: {
+          type: Number,
+          required: true,
+        },
+        reason: {
+          type: String,
+        },
+        dispatchId: {
+          type: Schema.Types.ObjectId,
+          ref: "Dispatch",
+        },
+        processedBy: {
+          type: Schema.Types.ObjectId,
+          ref: "User",
+        },
       },
-      quantity: {
-        type: Number,
-        required: true,
-      },
-      reason: {
-        type: String,
-      },
-      dispatchId: {
-        type: Schema.Types.ObjectId,
-        ref: "Dispatch",
-      },
-      processedBy: {
-        type: Schema.Types.ObjectId,
-        ref: "User",
-      }
-    }],
+    ],
   },
   { timestamps: true }
 );
@@ -308,51 +313,56 @@ orderSchema.pre("save", function (next) {
 // Pre-save middleware to update remainingPlants when returnedPlants changes
 orderSchema.pre("save", function (next) {
   // If returnedPlants has changed
-  if (this.isModified('returnedPlants')) {
+  if (this.isModified("returnedPlants")) {
     // Calculate remaining plants
-    this.remainingPlants = Math.max(0, this.numberOfPlants - this.returnedPlants);
-    
+    this.remainingPlants = Math.max(
+      0,
+      this.numberOfPlants - this.returnedPlants
+    );
+
     // Check if this is a new return (not just a modification of an existing return)
     const returnEntry = this.returnHistory?.find(
-      entry => entry.quantity === this.returnedPlants - (this._oldReturnedPlants || 0)
+      (entry) =>
+        entry.quantity === this.returnedPlants - (this._oldReturnedPlants || 0)
     );
-    
+
     // If no matching entry found and there was an actual return (not just setting to 0)
     if (!returnEntry && this.returnedPlants > (this._oldReturnedPlants || 0)) {
       // Add a new return history entry
       if (!this.returnHistory) {
         this.returnHistory = [];
       }
-      
+
       this.returnHistory.push({
         date: new Date(),
         quantity: this.returnedPlants - (this._oldReturnedPlants || 0),
-        reason: this.returnReason
+        reason: this.returnReason,
       });
     }
-    
+
     // Store the current value for next comparison
     this._oldReturnedPlants = this.returnedPlants;
   }
-  
+
   next();
 });
 
 // Pre-save middleware to track orderStatus changes
 orderSchema.pre("save", function (next) {
   // Check if orderStatus has changed and it's not a new document
-  if (this.isModified('orderStatus') && !this.isNew) {
+  if (this.isModified("orderStatus") && !this.isNew) {
     // Get the previous status (before this update)
-    const previousStatus = this._oldOrderStatus || this.constructor.schema.paths.orderStatus.default;
+    const previousStatus =
+      this._oldOrderStatus || this.constructor.schema.paths.orderStatus.default;
     const newStatus = this.orderStatus;
-    
+
     // Don't create a history entry if status hasn't actually changed
     if (previousStatus !== newStatus) {
       // Initialize statusChanges array if it doesn't exist yet
       if (!this.statusChanges) {
         this.statusChanges = [];
       }
-      
+
       // Add new status change record
       this.statusChanges.push({
         previousStatus: previousStatus,
@@ -361,22 +371,24 @@ orderSchema.pre("save", function (next) {
         // We'll just record the status change with available information
       });
     }
-    
+
     // Store current status for future comparisons
     this._oldOrderStatus = this.orderStatus;
   } else if (this.isNew) {
     // Store initial status for new documents
     this._oldOrderStatus = this.orderStatus;
   }
-  
+
   next();
 });
 
 // Add validation middleware to ensure proper business logic
-orderSchema.pre('validate', function(next) {
+orderSchema.pre("validate", function (next) {
   // Ensure returnedPlants doesn't exceed numberOfPlants
   if (this.returnedPlants > this.numberOfPlants) {
-    const error = new Error('Returned plants cannot exceed the total number of plants in the order');
+    const error = new Error(
+      "Returned plants cannot exceed the total number of plants in the order"
+    );
     return next(error);
   }
   next();

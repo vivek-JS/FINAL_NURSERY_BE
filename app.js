@@ -191,6 +191,8 @@ import { authenticateToken } from "./middlewares/auth.middleware.js";
 import ExcelRoute from "./routes/excel.route.js";
 import pricingRoute from "./routes/pricing.route.js";
 import analyticsRoute from "./routes/analytics.route.js";
+import stateRoute from "./routes/state.route.js";
+import locationRoute from "./routes/location.route.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -218,7 +220,7 @@ server.use("/api/v1/godown", authenticateToken, godownRoute);
 server.use("/api/v1/seed", authenticateToken, seedRoute);
 server.use("/api/v1/vegetable", authenticateToken, vegetableRoute);
 server.use("/api/v1/chemical", authenticateToken, chemicalRoute);
-server.use("/api/v1/location", authenticateToken, distrctRoutes);
+server.use("/api/v1/districts", authenticateToken, distrctRoutes);
 server.use("/api/v1", authenticateToken, slotRouter);
 server.use("/api/v1/plantcms", authenticateToken, plantCmsRouter);
 server.use("/api/v1/shade", authenticateToken, shadeRoter);
@@ -234,6 +236,8 @@ server.use("/api/v1/dealer", authenticateToken, DelaerRoutes);
 server.use("/api/v1/excel", authenticateToken, ExcelRoute);
 server.use("/api/v1/pricing", authenticateToken, pricingRoute);
 server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
+server.use("/api/v1/state", authenticateToken, stateRoute);
+server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 
 
 server.use(errorHandler);

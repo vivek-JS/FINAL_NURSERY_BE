@@ -597,6 +597,756 @@ export const getMonthlyTrends = catchAsync(async (req, res, next) => {
   });
 });
 
+// District-wise Analytics
+export const getDistrictAnalytics = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, stateName } = req.query;
+  
+  const dateFilter = {};
+  if (startDate || endDate) {
+    dateFilter.createdAt = {};
+    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
+    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  }
+
+  // District-wise order analysis
+  const districtOrders = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $lookup: {
+        from: "farmers",
+        localField: "farmer",
+        foreignField: "_id",
+        as: "farmerInfo"
+      }
+    },
+    {
+      $addFields: {
+        district: { $arrayElemAt: ["$farmerInfo.districtName", 0] },
+        state: { $arrayElemAt: ["$farmerInfo.stateName", 0] }
+      }
+    },
+    {
+      $match: {
+        district: { $exists: true, $ne: null },
+        ...(stateName && { state: stateName })
+      }
+    },
+    {
+      $group: {
+        _id: {
+          district: "$district",
+          state: "$state"
+        },
+        totalOrders: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgOrderValue: { $avg: { $multiply: ["$numberOfPlants", "$rate"] } },
+        completedOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "COMPLETED"] }, 1, 0] }
+        },
+        pendingOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "PENDING"] }, 1, 0] }
+        },
+        cancelledOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "CANCELLED"] }, 1, 0] }
+        }
+      }
+    },
+    {
+      $addFields: {
+        completionRate: {
+          $multiply: [
+            { $divide: ["$completedOrders", "$totalOrders"] },
+            100
+          ]
+        }
+      }
+    },
+    { $sort: { totalRevenue: -1 } }
+  ]);
+
+  // Village-wise breakdown for selected district
+  const { district } = req.query;
+  let villageData = [];
+  
+  if (district) {
+    villageData = await Order.aggregate([
+      { $match: dateFilter },
+      {
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmerInfo"
+        }
+      },
+      {
+        $addFields: {
+          village: { $arrayElemAt: ["$farmerInfo.village", 0] },
+          taluka: { $arrayElemAt: ["$farmerInfo.talukaName", 0] },
+          district: { $arrayElemAt: ["$farmerInfo.districtName", 0] }
+        }
+      },
+      {
+        $match: {
+          district: district,
+          village: { $exists: true, $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            village: "$village",
+            taluka: "$taluka"
+          },
+          totalOrders: { $sum: 1 },
+          totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+          totalPlants: { $sum: "$numberOfPlants" },
+          uniqueCustomers: { $addToSet: "$farmer" }
+        }
+      },
+      {
+        $addFields: {
+          uniqueCustomerCount: { $size: "$uniqueCustomers" }
+        }
+      },
+      { $sort: { totalRevenue: -1 } },
+      { $limit: 20 }
+    ]);
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      districtOrders,
+      villageData,
+      summary: {
+        totalDistricts: districtOrders.length,
+        totalRevenue: districtOrders.reduce((sum, d) => sum + d.totalRevenue, 0),
+        totalOrders: districtOrders.reduce((sum, d) => sum + d.totalOrders, 0),
+        avgRevenuePerDistrict: districtOrders.length > 0 ? 
+          districtOrders.reduce((sum, d) => sum + d.totalRevenue, 0) / districtOrders.length : 0
+      }
+    }
+  });
+});
+
+// Slot-wise Analytics
+export const getSlotAnalytics = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, plantId, year } = req.query;
+  
+  const dateFilter = {};
+  if (startDate || endDate) {
+    dateFilter.createdAt = {};
+    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
+    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  }
+
+  // Simplified slot performance analysis
+  const slotPerformance = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: "$bookingSlot",
+        totalOrders: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgOrderValue: { $avg: { $multiply: ["$numberOfPlants", "$rate"] } },
+        completedOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "COMPLETED"] }, 1, 0] }
+        },
+        pendingOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "PENDING"] }, 1, 0] }
+        },
+        cancelledOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "CANCELLED"] }, 1, 0] }
+        }
+      }
+    },
+    {
+      $addFields: {
+        completionRate: {
+          $multiply: [
+            { $divide: ["$completedOrders", "$totalOrders"] },
+            100
+          ]
+        }
+      }
+    },
+    { $sort: { totalRevenue: -1 } }
+  ]);
+
+  // Get slot details for the performance data
+  const slotDetails = await PlantSlot.aggregate([
+    {
+      $unwind: "$subtypeSlots"
+    },
+    {
+      $unwind: "$subtypeSlots.slots"
+    },
+    {
+      $project: {
+        slotId: "$subtypeSlots.slots._id",
+        startDay: "$subtypeSlots.slots.startDay",
+        endDay: "$subtypeSlots.slots.endDay",
+        month: "$subtypeSlots.slots.month",
+        totalPlants: "$subtypeSlots.slots.totalPlants",
+        totalBookedPlants: "$subtypeSlots.slots.totalBookedPlants",
+        availablePlants: "$subtypeSlots.slots.availablePlants",
+        bufferAmount: "$subtypeSlots.slots.bufferAmount"
+      }
+    }
+  ]);
+
+  // Merge slot performance with slot details
+  const enhancedSlotPerformance = slotPerformance.map(performance => {
+    const slotDetail = slotDetails.find(detail => 
+      detail.slotId.toString() === performance._id.toString()
+    );
+    
+    return {
+      ...performance,
+      slotId: performance._id,
+      startDay: slotDetail?.startDay || 'Unknown',
+      endDay: slotDetail?.endDay || 'Unknown',
+      month: slotDetail?.month || 'Unknown',
+      totalCapacity: slotDetail?.totalPlants || 0,
+      bookedCapacity: slotDetail?.totalBookedPlants || 0,
+      availableCapacity: slotDetail?.availablePlants || 0,
+      bufferAmount: slotDetail?.bufferAmount || 0,
+      utilizationRate: slotDetail?.totalPlants ? 
+        ((slotDetail.totalBookedPlants / slotDetail.totalPlants) * 100) : 0
+    };
+  });
+
+  // Monthly slot trends (simplified)
+  const monthlySlotTrends = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $lookup: {
+        from: "plantslots",
+        localField: "bookingSlot",
+        foreignField: "subtypeSlots.slots._id",
+        as: "slotInfo"
+      }
+    },
+    {
+      $addFields: {
+        slotMonth: {
+          $let: {
+            vars: {
+              slotDetails: {
+                $arrayElemAt: [
+                  {
+                    $reduce: {
+                      input: "$slotInfo.subtypeSlots",
+                      initialValue: null,
+                      in: {
+                        $cond: {
+                          if: { $in: ["$bookingSlot", "$$this.slots._id"] },
+                          then: {
+                            $arrayElemAt: [
+                              {
+                                $filter: {
+                                  input: "$$this.slots",
+                                  cond: { $eq: ["$$this._id", "$bookingSlot"] }
+                                }
+                              },
+                              0
+                            ]
+                          },
+                          else: "$$value"
+                        }
+                      }
+                    }
+                  },
+                  0
+                ]
+              }
+            },
+            in: "$$slotDetails.month"
+          }
+        }
+      }
+    },
+    {
+      $group: {
+        _id: "$slotMonth",
+        totalOrders: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgOrderValue: { $avg: { $multiply: ["$numberOfPlants", "$rate"] } }
+      }
+    },
+    { $sort: { "_id": 1 } }
+  ]);
+
+  // Slot capacity analysis
+  const slotCapacity = await PlantSlot.aggregate([
+    ...(plantId ? [{ $match: { plantId: new mongoose.Types.ObjectId(plantId) } }] : []),
+    ...(year ? [{ $match: { year: parseInt(year) } }] : []),
+    {
+      $unwind: "$subtypeSlots"
+    },
+    {
+      $unwind: "$subtypeSlots.slots"
+    },
+    {
+      $group: {
+        _id: {
+          month: "$subtypeSlots.slots.month",
+          slotId: "$subtypeSlots.slots._id"
+        },
+        totalCapacity: { $sum: "$subtypeSlots.slots.totalPlants" },
+        bookedCapacity: { $sum: "$subtypeSlots.slots.totalBookedPlants" },
+        availableCapacity: { $sum: "$subtypeSlots.slots.availablePlants" },
+        bufferAmount: { $sum: "$subtypeSlots.slots.bufferAmount" }
+      }
+    },
+    {
+      $addFields: {
+        utilizationRate: {
+          $multiply: [
+            { $divide: ["$bookedCapacity", "$totalCapacity"] },
+            100
+          ]
+        },
+        bufferRate: {
+          $multiply: [
+            { $divide: ["$bufferAmount", "$totalCapacity"] },
+            100
+          ]
+        }
+      }
+    },
+    {
+      $group: {
+        _id: "$_id.month",
+        totalCapacity: { $sum: "$totalCapacity" },
+        totalBooked: { $sum: "$bookedCapacity" },
+        totalAvailable: { $sum: "$availableCapacity" },
+        totalBuffer: { $sum: "$bufferAmount" },
+        avgUtilization: { $avg: "$utilizationRate" },
+        avgBuffer: { $avg: "$bufferRate" }
+      }
+    },
+    { $sort: { "_id": 1 } }
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      slotPerformance: enhancedSlotPerformance,
+      monthlySlotTrends,
+      slotCapacity,
+      summary: {
+        totalSlots: enhancedSlotPerformance.length,
+        totalRevenue: enhancedSlotPerformance.reduce((sum, s) => sum + s.totalRevenue, 0),
+        avgUtilization: slotCapacity.length > 0 ? 
+          slotCapacity.reduce((sum, s) => sum + s.avgUtilization, 0) / slotCapacity.length : 0,
+        avgBuffer: slotCapacity.length > 0 ? 
+          slotCapacity.reduce((sum, s) => sum + s.avgBuffer, 0) / slotCapacity.length : 0
+      }
+    }
+  });
+});
+
+// Enhanced Customer Analytics with repeated customers and most valued customers
+export const getEnhancedCustomerAnalytics = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, customerType } = req.query;
+  
+  const dateFilter = {};
+  if (startDate || endDate) {
+    dateFilter.createdAt = {};
+    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
+    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  }
+
+  // Customer segmentation with enhanced metrics
+  const customerSegmentation = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: {
+          customerId: { $cond: { if: "$dealerOrder", then: "$dealer", else: "$farmer" } },
+          customerType: { $cond: { if: "$dealerOrder", then: "Dealer", else: "Farmer" } }
+        },
+        totalOrders: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgOrderValue: { $avg: { $multiply: ["$numberOfPlants", "$rate"] } },
+        firstOrder: { $min: "$createdAt" },
+        lastOrder: { $max: "$createdAt" },
+        completedOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "COMPLETED"] }, 1, 0] }
+        },
+        cancelledOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "CANCELLED"] }, 1, 0] }
+        }
+      }
+    },
+    {
+      $addFields: {
+        isReturningCustomer: { $gt: ["$totalOrders", 1] },
+        customerLifetime: {
+          $divide: [
+            { $subtract: ["$lastOrder", "$firstOrder"] },
+            1000 * 60 * 60 * 24
+          ]
+        },
+        completionRate: {
+          $multiply: [
+            { $divide: ["$completedOrders", "$totalOrders"] },
+            100
+          ]
+        },
+        cancellationRate: {
+          $multiply: [
+            { $divide: ["$cancelledOrders", "$totalOrders"] },
+            100
+          ]
+        }
+      }
+    },
+    {
+      $match: {
+        ...(customerType && { "_id.customerType": customerType })
+      }
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "_id.customerId",
+        foreignField: "_id",
+        as: "customerInfo"
+      }
+    },
+    {
+      $lookup: {
+        from: "farmers",
+        localField: "_id.customerId",
+        foreignField: "_id",
+        as: "farmerInfo"
+      }
+    }
+  ]);
+
+  // Most valued customers (by revenue)
+  const mostValuedCustomers = customerSegmentation
+    .sort((a, b) => b.totalRevenue - a.totalRevenue)
+    .slice(0, 10)
+    .map(customer => ({
+      ...customer,
+      name: customer.customerInfo?.[0]?.name || customer.farmerInfo?.[0]?.name || 'Unknown Customer',
+      phone: customer.customerInfo?.[0]?.phoneNumber || customer.farmerInfo?.[0]?.mobileNumber,
+      valueTier: customer.totalRevenue > 100000 ? 'Premium' : 
+                 customer.totalRevenue > 50000 ? 'Gold' : 
+                 customer.totalRevenue > 20000 ? 'Silver' : 'Bronze'
+    }));
+
+  // Repeated customers analysis
+  const repeatedCustomers = customerSegmentation
+    .filter(customer => customer.isReturningCustomer)
+    .sort((a, b) => b.totalOrders - a.totalOrders)
+    .slice(0, 10)
+    .map(customer => ({
+      ...customer,
+      name: customer.customerInfo?.[0]?.name || customer.farmerInfo?.[0]?.name || 'Unknown Customer',
+      phone: customer.customerInfo?.[0]?.phoneNumber || customer.farmerInfo?.[0]?.mobileNumber,
+      loyaltyTier: customer.totalOrders > 10 ? 'VIP' : 
+                   customer.totalOrders > 5 ? 'Regular' : 'Occasional'
+    }));
+
+  // Customer retention analysis
+  const retentionAnalysis = customerSegmentation.reduce((acc, customer) => {
+    if (customer.isReturningCustomer) {
+      acc.returningCustomers++;
+      acc.totalRevenueFromReturning += customer.totalRevenue;
+    } else {
+      acc.newCustomers++;
+      acc.totalRevenueFromNew += customer.totalRevenue;
+    }
+    return acc;
+  }, {
+    returningCustomers: 0,
+    newCustomers: 0,
+    totalRevenueFromReturning: 0,
+    totalRevenueFromNew: 0
+  });
+
+  // Customer value distribution
+  const valueDistribution = customerSegmentation.reduce((acc, customer) => {
+    if (customer.totalRevenue > 100000) acc.premium++;
+    else if (customer.totalRevenue > 50000) acc.gold++;
+    else if (customer.totalRevenue > 20000) acc.silver++;
+    else acc.bronze++;
+    return acc;
+  }, { premium: 0, gold: 0, silver: 0, bronze: 0 });
+
+  // Customer behavior analysis
+  const behaviorAnalysis = customerSegmentation.reduce((acc, customer) => {
+    if (customer.completionRate > 80) acc.highCompletion++;
+    else if (customer.completionRate > 60) acc.mediumCompletion++;
+    else acc.lowCompletion++;
+    
+    if (customer.cancellationRate > 20) acc.highCancellation++;
+    else if (customer.cancellationRate > 10) acc.mediumCancellation++;
+    else acc.lowCancellation++;
+    
+    return acc;
+  }, {
+    highCompletion: 0, mediumCompletion: 0, lowCompletion: 0,
+    highCancellation: 0, mediumCancellation: 0, lowCancellation: 0
+  });
+
+  res.status(200).json({
+    success: true,
+    data: {
+      customerSegmentation,
+      mostValuedCustomers,
+      repeatedCustomers,
+      retentionAnalysis,
+      valueDistribution,
+      behaviorAnalysis,
+      summary: {
+        totalCustomers: customerSegmentation.length,
+        returningCustomers: retentionAnalysis.returningCustomers,
+        newCustomers: retentionAnalysis.newCustomers,
+        retentionRate: customerSegmentation.length > 0 ? 
+          (retentionAnalysis.returningCustomers / customerSegmentation.length * 100).toFixed(1) : 0,
+        avgRevenuePerCustomer: customerSegmentation.length > 0 ?
+          customerSegmentation.reduce((sum, c) => sum + c.totalRevenue, 0) / customerSegmentation.length : 0,
+        avgOrdersPerCustomer: customerSegmentation.length > 0 ?
+          customerSegmentation.reduce((sum, c) => sum + c.totalOrders, 0) / customerSegmentation.length : 0
+      }
+    }
+  });
+});
+
+// Payment Analytics
+export const getPaymentAnalytics = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, customerType } = req.query;
+  
+  const dateFilter = {};
+  if (startDate || endDate) {
+    dateFilter.createdAt = {};
+    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
+    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  }
+
+  // Payment status analysis
+  const paymentStatusAnalysis = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: "$orderPaymentStatus",
+        totalOrders: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgOrderValue: { $avg: { $multiply: ["$numberOfPlants", "$rate"] } }
+      }
+    },
+    {
+      $addFields: {
+        status: "$_id",
+        pendingAmount: {
+          $cond: {
+            if: { $eq: ["$_id", "PENDING"] },
+            then: "$totalRevenue",
+            else: 0
+          }
+        },
+        completedAmount: {
+          $cond: {
+            if: { $eq: ["$_id", "COMPLETED"] },
+            then: "$totalRevenue",
+            else: 0
+          }
+        }
+      }
+    }
+  ]);
+
+  // Total payments made (from payment collection)
+  const totalPaymentsMade = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $unwind: "$payment"
+    },
+    {
+      $match: {
+        "payment.paymentStatus": "COLLECTED"
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalPaymentsMade: { $sum: "$payment.paidAmount" },
+        totalPaymentCount: { $sum: 1 },
+        avgPaymentAmount: { $avg: "$payment.paidAmount" }
+      }
+    }
+  ]);
+
+  // Top payment pending customers (farmers and dealers)
+  const topPaymentPendingCustomers = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $match: {
+        orderPaymentStatus: "PENDING"
+      }
+    },
+    {
+      $group: {
+        _id: {
+          customerId: { $cond: { if: "$dealerOrder", then: "$dealer", else: "$farmer" } },
+          customerType: { $cond: { if: "$dealerOrder", then: "Dealer", else: "Farmer" } }
+        },
+        totalOrders: { $sum: 1 },
+        totalPendingAmount: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgOrderValue: { $avg: { $multiply: ["$numberOfPlants", "$rate"] } },
+        firstOrder: { $min: "$createdAt" },
+        lastOrder: { $max: "$createdAt" }
+      }
+    },
+    {
+      $addFields: {
+        daysSinceLastOrder: {
+          $divide: [
+            { $subtract: [new Date(), "$lastOrder"] },
+            1000 * 60 * 60 * 24
+          ]
+        }
+      }
+    },
+    { $sort: { totalPendingAmount: -1 } },
+    { $limit: 20 },
+    {
+      $lookup: {
+        from: "users",
+        localField: "_id.customerId",
+        foreignField: "_id",
+        as: "customerInfo"
+      }
+    },
+    {
+      $lookup: {
+        from: "farmers",
+        localField: "_id.customerId",
+        foreignField: "_id",
+        as: "farmerInfo"
+      }
+    }
+  ]);
+
+  // Payment trends over time
+  const paymentTrends = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: {
+          year: { $year: "$createdAt" },
+          month: { $month: "$createdAt" }
+        },
+        totalOrders: { $sum: 1 },
+        pendingOrders: {
+          $sum: { $cond: [{ $eq: ["$orderPaymentStatus", "PENDING"] }, 1, 0] }
+        },
+        completedOrders: {
+          $sum: { $cond: [{ $eq: ["$orderPaymentStatus", "COMPLETED"] }, 1, 0] }
+        },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        pendingAmount: {
+          $sum: {
+            $cond: [
+              { $eq: ["$orderPaymentStatus", "PENDING"] },
+              { $multiply: ["$numberOfPlants", "$rate"] },
+              0
+            ]
+          }
+        },
+        completedAmount: {
+          $sum: {
+            $cond: [
+              { $eq: ["$orderPaymentStatus", "COMPLETED"] },
+              { $multiply: ["$numberOfPlants", "$rate"] },
+              0
+            ]
+          }
+        }
+      }
+    },
+    {
+      $addFields: {
+        pendingRate: {
+          $multiply: [
+            { $divide: ["$pendingOrders", "$totalOrders"] },
+            100
+          ]
+        }
+      }
+    },
+    { $sort: { "_id.year": 1, "_id.month": 1 } }
+  ]);
+
+  // Payment method analysis
+  const paymentMethodAnalysis = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $unwind: "$payment"
+    },
+    {
+      $match: {
+        "payment.paymentStatus": "COLLECTED"
+      }
+    },
+    {
+      $group: {
+        _id: "$payment.modeOfPayment",
+        totalAmount: { $sum: "$payment.paidAmount" },
+        totalPayments: { $sum: 1 },
+        avgAmount: { $avg: "$payment.paidAmount" }
+      }
+    },
+    { $sort: { totalAmount: -1 } }
+  ]);
+
+  // Calculate summary metrics
+  const pendingSummary = paymentStatusAnalysis.find(item => item.status === "PENDING") || {};
+  const completedSummary = paymentStatusAnalysis.find(item => item.status === "COMPLETED") || {};
+  const paymentsMade = totalPaymentsMade[0] || {};
+
+  res.status(200).json({
+    success: true,
+    data: {
+      paymentStatusAnalysis,
+      totalPaymentsMade: paymentsMade,
+      topPaymentPendingCustomers: topPaymentPendingCustomers.map(customer => ({
+        ...customer,
+        name: customer.customerInfo?.[0]?.name || customer.farmerInfo?.[0]?.name || 'Unknown Customer',
+        phone: customer.customerInfo?.[0]?.phoneNumber || customer.farmerInfo?.[0]?.mobileNumber,
+        urgencyLevel: customer.daysSinceLastOrder > 30 ? 'High' : 
+                     customer.daysSinceLastOrder > 15 ? 'Medium' : 'Low'
+      })),
+      paymentTrends,
+      paymentMethodAnalysis,
+      summary: {
+        totalPendingAmount: pendingSummary.totalRevenue || 0,
+        totalCompletedAmount: completedSummary.totalRevenue || 0,
+        totalPaymentsMade: paymentsMade.totalPaymentsMade || 0,
+        pendingOrdersCount: pendingSummary.totalOrders || 0,
+        completedOrdersCount: completedSummary.totalOrders || 0,
+        pendingRate: pendingSummary.totalOrders && completedSummary.totalOrders ? 
+          (pendingSummary.totalOrders / (pendingSummary.totalOrders + completedSummary.totalOrders) * 100).toFixed(1) : 0,
+        avgPendingAmount: pendingSummary.totalOrders ? 
+          (pendingSummary.totalRevenue / pendingSummary.totalOrders) : 0,
+        avgPaymentAmount: paymentsMade.avgPaymentAmount || 0
+      }
+    }
+  });
+});
+
 // Helper function to calculate profit analysis
 const calculateProfitAnalysis = async (dateFilter) => {
   const profitData = await Order.aggregate([

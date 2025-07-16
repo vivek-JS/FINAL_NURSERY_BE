@@ -143,6 +143,38 @@ const getFarmerOrder = catchAsync(async(req, res, next) => {
   return res.status(200).json(response);
 });
 
+// Get all farmers with invalid phone numbers
+const getInvalidPhoneFarmers = catchAsync(async (req, res, next) => {
+  try {
+    const farmers = await Farmer.find({ isInvalidPhone: true });
+    res.status(200).json({ status: 'success', data: farmers });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Update farmer phone number and mark as valid
+const updateFarmerPhone = catchAsync(async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { phoneNumber } = req.body;
+    if (!phoneNumber || phoneNumber.length < 10) {
+      return res.status(400).json({ status: 'error', message: 'Valid phone number required' });
+    }
+    const farmer = await Farmer.findById(id);
+    if (!farmer) {
+      return res.status(404).json({ status: 'error', message: 'Farmer not found' });
+    }
+    farmer.phoneNumber = phoneNumber;
+    farmer.isInvalidPhone = false;
+    farmer.originalPhoneNumber = undefined;
+    await farmer.save();
+    res.status(200).json({ status: 'success', data: farmer });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
 export {
   createFarmer,
   updateFarmer,
@@ -150,5 +182,7 @@ export {
   findFarmer,
   getFarmers,
   uploadFarmers,
-  getFarmerOrder
+  getFarmerOrder,
+  getInvalidPhoneFarmers,
+  updateFarmerPhone
 };
