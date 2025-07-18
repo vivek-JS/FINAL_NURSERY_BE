@@ -102,33 +102,8 @@ export const cleanAndValidateMobileNumber = (mobileData) => {
 
 // Helper function to get slot information with overflow status
 export const getSlotInfo = async (slotId) => {
-  const currentSlot = await PlantSlot.findOne(
-    { "subtypeSlots.slots._id": slotId },
-    { "subtypeSlots.$": 1 }
-  );
-
-  if (!currentSlot || !currentSlot.subtypeSlots[0]) {
-    return null;
-  }
-
-  const targetSlot = currentSlot.subtypeSlots[0].slots.find(
-    (slot) => slot._id.toString() === slotId.toString()
-  );
-
-  if (!targetSlot) {
-    return null;
-  }
-
-  return {
-    slotId: targetSlot._id,
-    totalPlants: targetSlot.totalPlants,
-    totalBookedPlants: targetSlot.totalBookedPlants,
-    availablePlants: targetSlot.totalPlants,
-    isOverflow: targetSlot.totalPlants < 0,
-    startDay: targetSlot.startDay,
-    endDay: targetSlot.endDay,
-    month: targetSlot.month,
-  };
+  const { getSlotInfoWithBookedPlants } = await import('../utility/slotBookedPlantsCalculator.js');
+  return await getSlotInfoWithBookedPlants(slotId);
 };
 
 export const validateExcelStructure = (buffer) => {
@@ -234,16 +209,18 @@ export const validateExcelStructure = (buffer) => {
       mobileValue === 9999999999
     ) {
       console.log(
-        `❌ Row ${rowNumber}: Missing/empty mobile number: "${mobileValue}" - will use dummy number`
+        `⚠️  Row ${rowNumber}: Missing/empty mobile number: "${mobileValue}" - will create entry with invalid phone flag`
       );
+      validationResults.warnings.push(`Row ${rowNumber}: Missing mobile number - will be marked as invalid`);
     } else {
       const cleanedNumbers = cleanAndValidateMobileNumber(mobileValue);
       console.log(`Row ${rowNumber}:`, cleanedNumbers);
 
       if (cleanedNumbers.isInvalid) {
         console.log(
-          `❌ Row ${rowNumber}: Invalid mobile number: "${cleanedNumbers.originalValue}" - will use dummy number`
+          `⚠️  Row ${rowNumber}: Invalid mobile number: "${cleanedNumbers.originalValue}" - will create entry with invalid phone flag`
         );
+        validationResults.warnings.push(`Row ${rowNumber}: Invalid mobile number "${cleanedNumbers.originalValue}" - will be marked as invalid`);
       } else {
         console.log(
           `✅ Row ${rowNumber}: Valid mobile number: ${cleanedNumbers.primaryNumber}`
@@ -301,19 +278,25 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
       successfulImports: 0,
       failedImports: 0,
       overflowSlots: 0,
+      invalidPhoneNumbers: 0,
     },
   };
 
-  // Process each row in its own transaction
-  for (const row of data) {
+  // Process each row individually for reliability
+  console.log(`📊 Processing ${data.length} rows individually`);
+
+  for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
+    const row = data[rowIndex];
+    console.log(`🔄 Processing row ${rowIndex + 1}/${data.length}`);
+    
     const session = await mongoose.startSession();
     session.startTransaction();
-
+    
     try {
-      results.summary.totalProcessed++;
+        results.summary.totalProcessed++;
 
-      // Convert dates using new column names
-      const processedRow = {
+        // Convert dates using new column names
+        const processedRow = {
         ...row,
         date: convertDate(row["Date"]),
         slots: convertDate(row["Expected\r\nDel.\r\nDate"]),
@@ -338,7 +321,6 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           existingOrder.orderBookingDate = moment(processedRow.date, "DD-MM-YYYY").toDate();
           await existingOrder.save({ session });
         }
-        await session.commitTransaction();
         results.success.push({
           bookingNo: processedRow["Booking NO."],
           updated: true,
@@ -374,17 +356,17 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         cleanedNumbers = cleanAndValidateMobileNumber(mobileValue);
       }
 
-      // Use dummy number if no valid primary number
-      const primaryNumber = cleanedNumbers.primaryNumber || 9999999999;
-      const alternateNumber = cleanedNumbers.alternateNumber || null;
-      const isInvalidPhone = cleanedNumbers.isInvalid;
+      // Keep original number as-is, don't use dummy numbers
+      const primaryNumber = cleanedNumbers.primaryNumber;
+      const alternateNumber = cleanedNumbers.alternateNumber;
+      const isInvalidPhone = cleanedNumbers.isInvalid || !primaryNumber;
       const originalPhoneNumber = cleanedNumbers.originalValue;
 
       // Create/update farmer using new column names
       const farmerData = {
         name: processedRow["Name"],
-        mobileNumber: primaryNumber,
-        alternateNumber: alternateNumber,
+        mobileNumber: primaryNumber || null, // Keep as null if no valid number
+        alternateNumber: alternateNumber || null,
         village: processedRow["Address"], // Using Address instead of Village
         taluka: processedRow["Taluka"],
         district: processedRow["District"],
@@ -392,17 +374,42 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         talukaName: processedRow["Taluka"],
         districtName: processedRow["District"],
         stateName: "Maharashtra",
-        isInvalidPhone: isInvalidPhone,
+        isInvalidPhone: isInvalidPhone, // Mark as invalid if no valid number
         originalPhoneNumber: originalPhoneNumber,
       };
 
-      let farmer = await Farmer.findOne({
-        $or: [
-          { mobileNumber: primaryNumber },
-          { alternateNumber: primaryNumber },
-        ],
-      }).session(session);
-
+      let farmer = null;
+      
+      // Try to find farmer by phone number if we have valid numbers
+      if (primaryNumber) {
+        // Check for duplicate mobile number first
+        const existingFarmerWithMobile = await Farmer.findOne({
+          mobileNumber: primaryNumber,
+        }).session(session);
+        
+        if (existingFarmerWithMobile) {
+          throw new Error(`Mobile number ${primaryNumber} is already registered to farmer: ${existingFarmerWithMobile.name}`);
+        }
+        
+        // Check for duplicate alternate number
+        const existingFarmerWithAlternate = await Farmer.findOne({
+          alternateNumber: primaryNumber,
+        }).session(session);
+        
+        if (existingFarmerWithAlternate) {
+          throw new Error(`Mobile number ${primaryNumber} is already registered as alternate number to farmer: ${existingFarmerWithAlternate.name}`);
+        }
+        
+        // Now search for existing farmer by phone numbers
+        farmer = await Farmer.findOne({
+          $or: [
+            { mobileNumber: primaryNumber },
+            { alternateNumber: primaryNumber },
+          ],
+        }).session(session);
+      }
+      
+      // If not found and we have alternate number, try that
       if (!farmer && alternateNumber) {
         farmer = await Farmer.findOne({
           $or: [
@@ -411,14 +418,54 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           ],
         }).session(session);
       }
+      
+      // If still not found and we have no valid phone numbers, try to find by name and location
+      if (!farmer && (!primaryNumber || isInvalidPhone)) {
+        farmer = await Farmer.findOne({
+          name: processedRow["Name"],
+          village: processedRow["Address"],
+          taluka: processedRow["Taluka"],
+          district: processedRow["District"]
+        }).session(session);
+      }
 
       if (!farmer) {
-        farmer = await Farmer.create([farmerData], { session });
-        farmer = farmer[0];
+        // For farmers with invalid phone numbers, we need to handle the unique constraint
+        if (isInvalidPhone || !primaryNumber) {
+          // Create farmer with null mobileNumber and mark as invalid
+          const farmerWithInvalidPhone = {
+            ...farmerData,
+            mobileNumber: null,
+            isInvalidPhone: true
+          };
+          farmer = await Farmer.create([farmerWithInvalidPhone], { session });
+          farmer = farmer[0];
+        } else {
+          // Create farmer with valid phone number
+          farmer = await Farmer.create([farmerData], { session });
+          farmer = farmer[0];
+        }
       } else {
-        // If farmer exists but doesn't have alternate number and we have one now, update it
+        // If farmer exists, update phone numbers if we have valid ones
+        let needsUpdate = false;
+        
+        if (primaryNumber && !farmer.mobileNumber) {
+          farmer.mobileNumber = primaryNumber;
+          needsUpdate = true;
+        }
+        
         if (alternateNumber && !farmer.alternateNumber) {
           farmer.alternateNumber = alternateNumber;
+          needsUpdate = true;
+        }
+        
+        // Update invalid phone status if needed
+        if (farmer.isInvalidPhone !== isInvalidPhone) {
+          farmer.isInvalidPhone = isInvalidPhone;
+          needsUpdate = true;
+        }
+        
+        if (needsUpdate) {
           await farmer.save({ session });
         }
       }
@@ -491,6 +538,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
       }
 
       // Create order using new column names
+      // Always set orderStatus to 'ACCEPTED' for Excel uploads, ignore any value from Excel
       const orderData = {
         orderId: orderNumber,
         farmer: farmer._id,
@@ -499,17 +547,20 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         rate: processedRow["Rate"],
         plantName: plant._id,
         plantSubtype: subtype._id,
-        bookingSlot: slot._id,
+        bookingSlot: slot._id, // This should be the slot ObjectId, not an array
         cavity: tray ? tray._id : null,
-        orderStatus:
-          processedRow["Del.\r\nY/N"] === "Y" ? "COMPLETED" : "ACCEPTED",
+        orderStatus: 'ACCEPTED', // <-- Always set to ACCEPTED for Excel uploads
         notes: processedRow["Remark"] || "",
         paymentCompleted: balanceAmount <= 0,
-        orderPaymentStatus: balanceAmount <= 0 ? "COMPLETED" : "ACCEPTED",
+        orderPaymentStatus: balanceAmount <= 0 ? "COMPLETED" : "PENDING",
         orderBookingDate: processedRow.date
           ? moment(processedRow.date, "DD-MM-YYYY").toDate()
           : new Date(),
       };
+
+      // Log the slot details for debugging
+      console.log(`📋 Creating order ${orderNumber} with slot ID: ${slot._id}`);
+      console.log(`📅 Slot period: ${slot.startDay} to ${slot.endDay}`);
 
       const order = await Order.create([orderData], { session });
 
@@ -517,7 +568,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
       if (advanceAmount > 0) {
         const paymentData = {
           paidAmount: advanceAmount,
-          paymentStatus: "COLLECTED",
+          paymentStatus: "COLLECTED", // Always collected for Excel uploads
           paymentDate: processedRow["Advance Date"]
             ? moment(processedRow["Advance Date"], "DD-MM-YYYY").toDate()
             : new Date(),
@@ -534,14 +585,28 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         await order[0].save({ session });
       }
 
-      // Update slot capacity with overflow allowed for Excel imports
-      await updateSlot(slot._id, orderData.numberOfPlants, "subtract", true);
+      // Update slot capacity and add order reference in a single operation to avoid write conflicts
+      await PlantSlot.updateOne(
+        { "subtypeSlots.slots._id": slot._id },
+        { 
+          $push: { 
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": order[0]._id 
+          },
+          $inc: {
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": orderData.numberOfPlants
+          }
+        },
+        {
+          arrayFilters: [
+            { "subtypeSlot.slots._id": slot._id },
+            { "slot._id": slot._id }
+          ],
+          session: session
+        }
+      );
 
       // Get updated slot information
       const slotInfo = await getSlotInfo(slot._id);
-
-      // Commit the transaction
-      await session.commitTransaction();
 
       results.success.push({
         bookingNo: processedRow["Booking NO."],
@@ -551,6 +616,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         advancePaid: advanceAmount,
         balance: balanceAmount,
         slotInfo: slotInfo,
+        phoneStatus: isInvalidPhone ? "Invalid/Missing Phone" : "Valid Phone",
         overflowWarning:
           slotInfo && slotInfo.isOverflow
             ? `Slot is in overflow state. Available plants: ${slotInfo.availablePlants}`
@@ -561,11 +627,22 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
       if (slotInfo && slotInfo.isOverflow) {
         results.summary.overflowSlots++;
       }
+      
+      // Track invalid phone numbers
+      if (isInvalidPhone) {
+        results.summary.invalidPhoneNumbers++;
+      }
 
       results.summary.successfulImports++;
+      
+      // Commit the transaction for this row
+      await session.commitTransaction();
+      console.log(`✅ Row ${rowIndex + 1} completed successfully`);
+      
     } catch (error) {
       await session.abortTransaction();
-      console.error("Error processing row:", error);
+      console.error(`❌ Error processing row ${rowIndex + 1}:`, error);
+      
       results.errors.push({
         bookingNo: row["Booking NO."] || "Unknown",
         error: error.message,
@@ -574,7 +651,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
     } finally {
       session.endSession();
     }
-  }
+  } // End of row loop
 
   return results;
 };
@@ -622,8 +699,7 @@ async function findDeliverySlot(plantId, subtypeId, deliveryDate, session) {
 
       return (
         deliveryMoment.isSameOrAfter(startMoment, "day") &&
-        deliveryMoment.isSameOrBefore(endMoment, "day") &&
-        slot.month === month
+        deliveryMoment.isSameOrBefore(endMoment, "day")
       );
     });
 

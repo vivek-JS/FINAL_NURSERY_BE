@@ -37,6 +37,8 @@ const slotSchema = new Schema({
     type: Number,
     default: 0,
   },
+  // Note: totalBookedPlants is now calculated dynamically from orders
+  // This field is kept for backward compatibility but should not be used
   totalBookedPlants: {
     type: Number,
     default: 0,
@@ -120,6 +122,16 @@ const slotSchema = new Schema({
     default: false,
   },
 });
+
+// Virtual field to calculate totalBookedPlants from orders
+slotSchema.virtual('calculatedTotalBookedPlants').get(function() {
+  // This will be populated when we fetch the slot with orders
+  return 0; // Default value, will be calculated when populated
+});
+
+// Ensure virtual fields are included when converting to JSON
+slotSchema.set('toJSON', { virtuals: true });
+slotSchema.set('toObject', { virtuals: true });
 
 const subtypeSlotSchema = new Schema({
   subtypeId: {

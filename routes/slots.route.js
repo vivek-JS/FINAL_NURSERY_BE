@@ -15,6 +15,8 @@ import {
   migrateBufferCalculations,
   releaseBufferPlantsController,
   addPlantsToCapacityController,
+  createSlotsForSubtype,
+  deleteAllSlots,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -43,6 +45,10 @@ slotRouter.get("/slots/dashBoardStats", getDashboardInsights);
 
 // Migration route for buffer calculations
 slotRouter.post("/slots/migrate-buffers", migrateBufferCalculations);
+
+// Slot management routes
+slotRouter.post("/slots/create-subtype", createSlotsForSubtype);
+slotRouter.delete("/slots/delete-all", deleteAllSlots);
 
 // Test route for slot generation
 slotRouter.get("/slots/test-generation", (req, res) => {

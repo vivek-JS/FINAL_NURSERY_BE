@@ -35,8 +35,8 @@ const farmerSchema = new Schema({
   },
   mobileNumber: {
     type: Number,
-    required: [true, "Mobile number requried"],
-    unique: true,
+    required: false, // Allow null for invalid numbers
+    // Note: Database has sparse unique index - allows multiple nulls, but valid numbers must be unique
   },
   alternateNumber: {
     type: Number,
@@ -51,6 +51,13 @@ const farmerSchema = new Schema({
     default: null,
   }
 });
+
+// Add compound index for faster lookups by name and location
+farmerSchema.index({ name: 1, village: 1, taluka: 1, district: 1 });
+
+// Add index for phone number lookups
+farmerSchema.index({ mobileNumber: 1 });
+farmerSchema.index({ alternateNumber: 1 });
 
 const Farmer = model("Farmer", farmerSchema);
 export default Farmer;

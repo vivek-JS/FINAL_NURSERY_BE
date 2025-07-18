@@ -138,9 +138,7 @@ export const updateSlot = async (
   if (action === "subtract") {
     updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] =
       -numberOfPlants; // Decrease totalPlants (can go negative if overflow allowed)
-    updateOperation[
-      "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
-    ] = numberOfPlants; // Increase totalBookedPlants
+    // Note: totalBookedPlants is now calculated dynamically from orders
     
     // If overflow is allowed, check if this will put the slot into overflow state
     if (allowOverflow) {
@@ -167,9 +165,7 @@ export const updateSlot = async (
   } else if (action === "add") {
     updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] =
       numberOfPlants; // Increase totalPlants
-    updateOperation[
-      "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
-    ] = -numberOfPlants; // Decrease totalBookedPlants
+    // Note: totalBookedPlants is now calculated dynamically from orders
     
     // If overflow is allowed, check if this will bring the slot out of overflow state
     if (allowOverflow) {
@@ -215,10 +211,7 @@ export const updateSlot = async (
           updateOperation[
             "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"
           ],
-        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants":
-          updateOperation[
-            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
-          ],
+        // Note: totalBookedPlants is now calculated dynamically from orders
       },
       ...(Object.keys(additionalUpdates).length > 0 && { $set: additionalUpdates })
     },
@@ -427,6 +420,23 @@ const createOne = (Model, modelName) =>
             },
           ],
           { session }
+        );
+
+        // Add order to slot's orders array
+        await PlantSlot.updateOne(
+          { "subtypeSlots.slots._id": bookingSlot },
+          { 
+            $push: { 
+              "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": order[0]._id 
+            }
+          },
+          {
+            arrayFilters: [
+              { "subtypeSlot.slots._id": bookingSlot },
+              { "slot._id": bookingSlot }
+            ],
+            session: session
+          }
         );
 
         await session.commitTransaction();
@@ -1315,7 +1325,7 @@ const getAll = (Model, modelName) =>
       pipeline.push({
         $lookup: {
           from: "plantslots",
-          let: { bookingSlotId: { $toObjectId: "$bookingSlot" } },
+          let: { bookingSlotId: "$bookingSlot" },
           pipeline: [
             { $unwind: "$subtypeSlots" },
             { $unwind: "$subtypeSlots.slots" },

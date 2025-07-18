@@ -5,6 +5,22 @@ import moment from "moment"; // Optional: Use moment.js or other libraries for d
 import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity } from "../utility/bufferUtils.js";
 import { updateSlotBufferCalculations, updateAllSlotBuffers } from "../utility/slotBufferUpdater.js";
 
+// Helper function to convert month name to number
+const getMonthNumber = (monthName) => {
+  const months = {
+    'January': '01', 'February': '02', 'March': '03', 'April': '04',
+    'May': '05', 'June': '06', 'July': '07', 'August': '08',
+    'September': '09', 'October': '10', 'November': '11', 'December': '12'
+  };
+  return months[monthName] || '01';
+};
+
+// Helper function to get days in month
+const getDaysInMonth = (monthName, year) => {
+  const monthNumber = getMonthNumber(monthName);
+  return moment(`${year}-${monthNumber}`, 'YYYY-MM').daysInMonth();
+};
+
 export const createSlotsForYear = async (year) => {
   try {
     // Fetch all plants from PlantCms
@@ -185,7 +201,22 @@ export const getAllSlots = async (req, res) => {
 
 export const getPlantNames = async (req, res) => {
   try {
+    const { year } = req.query;
+    
+    // First, get all plants from PlantCms
+    const PlantCms = mongoose.model('PlantCms');
+    const allPlants = await PlantCms.find({}).select('_id name subtypes');
+    
+    if (allPlants.length === 0) {
+      return res.status(404).json({ message: "No plants found in database." });
+    }
+
+    // If year is specified, get slot data for that year
+    if (year) {
     const plantDetails = await PlantSlot.aggregate([
+        {
+          $match: { year: parseInt(year) }
+        },
       {
         $lookup: {
           from: "plantcms", // Join with the PlantCms collection
@@ -225,11 +256,34 @@ export const getPlantNames = async (req, res) => {
       },
     ]);
 
-    if (plantDetails.length === 0) {
-      return res.status(404).json({ message: "No plant data found." });
-    }
+      // Create a map of plants with slots
+      const plantsWithSlots = new Map(plantDetails.map(p => [p.plantId.toString(), p]));
+      
+      // Return all plants, with slot data if available
+      const result = allPlants.map(plant => {
+        const plantWithSlots = plantsWithSlots.get(plant._id.toString());
+        return {
+          plantId: plant._id,
+          name: plant.name,
+          totalPlants: plantWithSlots ? plantWithSlots.totalPlants : 0,
+          totalBookedPlants: plantWithSlots ? plantWithSlots.totalBookedPlants : 0,
+          hasSlots: !!plantWithSlots
+        };
+      });
 
-    res.status(200).json(plantDetails);
+      res.status(200).json(result);
+    } else {
+      // If no year specified, return all plants with zero slot data
+      const result = allPlants.map(plant => ({
+        plantId: plant._id,
+        name: plant.name,
+        totalPlants: 0,
+        totalBookedPlants: 0,
+        hasSlots: false
+      }));
+
+      res.status(200).json(result);
+    }
   } catch (error) {
     console.error("Error fetching plant details with summary:", error);
     res.status(500).json({ message: "Internal server error.", error });
@@ -553,14 +607,25 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
       }),
     }));
 
-    if (!slots.length) {
-      return res.status(404).json({
-        message: "No slots found for the given plant, subtype, and year.",
-      });
+    // Populate slots with orders and recalculate totalBookedPlants
+    const slotsWithOrders = await populateSlotsWithOrders(slots);
+
+    // Recalculate month-wise summary with actual orders data
+    for (const slotGroup of slotsWithOrders) {
+      for (const slot of slotGroup.slots) {
+        const monthIndex = months.indexOf(slot.month);
+        if (monthIndex >= 0) {
+          monthwiseSummary[monthIndex].totalBookedPlants = slot.totalBookedPlants;
+        }
+      }
     }
 
-    // Return the filtered slots and the month-wise summary
-    res.status(200).json({ monthwiseSummary, slots });
+    // Return the filtered slots and the month-wise summary (even if empty)
+    res.status(200).json({ 
+      monthwiseSummary, 
+      slots: slotsWithOrders,
+      message: slotsWithOrders.length === 0 ? "No slots found for the given plant, subtype, and year." : null
+    });
   } catch (error) {
     console.error("Error fetching slots:", error.message);
     res
@@ -1550,6 +1615,367 @@ export const migrateBufferCalculations = async (req, res) => {
       message: 'Internal server error during migration',
       error: error.message
     });
+  }
+};
+
+// Create slots for a specific subtype with custom configuration
+export const createSlotsForSubtype = async (req, res) => {
+  try {
+    const { 
+      plantId, 
+      subtypeId, 
+      startYear, 
+      endYear, 
+      slotSize, 
+      totalPlantsPerSlot, 
+      buffer,
+      startMonth,
+      endMonth,
+      startDate,
+      endDate
+    } = req.body;
+
+    if (!plantId || !subtypeId || !slotSize || !totalPlantsPerSlot) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: plantId, subtypeId, slotSize, totalPlantsPerSlot'
+      });
+    }
+
+    // Validate date range - either use startDate/endDate or startMonth/endMonth/startYear/endYear
+    if (!startDate || !endDate) {
+      if (!startMonth || !endMonth || !startYear || !endYear) {
+        return res.status(400).json({
+          success: false,
+          message: 'Either startDate/endDate or startMonth/endMonth/startYear/endYear must be provided'
+        });
+      }
+    }
+
+    // Validate plant exists
+    const plant = await PlantCms.findById(plantId);
+    if (!plant) {
+      return res.status(404).json({
+        success: false,
+        message: 'Plant not found'
+      });
+    }
+
+    // Validate subtype exists
+    const subtype = plant.subtypes.find(st => st._id.toString() === subtypeId);
+    if (!subtype) {
+      return res.status(404).json({
+        success: false,
+        message: 'Subtype not found for this plant'
+      });
+    }
+
+    // Generate slots based on date range (can span multiple years)
+    const results = [];
+    
+    try {
+      let startDateStr, endDateStr;
+      
+      if (startDate && endDate) {
+        // Use provided startDate and endDate
+        startDateStr = startDate;
+        endDateStr = endDate;
+      } else {
+        // Use month/year combination
+        startDateStr = `01-${getMonthNumber(startMonth)}-${startYear}`;
+        endDateStr = `${getDaysInMonth(endMonth, endYear)}-${getMonthNumber(endMonth)}-${endYear}`;
+      }
+
+      // Parse dates and get year range
+      const startMoment = moment(startDateStr, 'DD-MM-YYYY');
+      const endMoment = moment(endDateStr, 'DD-MM-YYYY');
+      const startYear = startMoment.year();
+      const endYear = endMoment.year();
+
+      // Handle multiple years if date range spans across years
+      for (let year = startYear; year <= endYear; year++) {
+        // Check if slots already exist for this plant, subtype, and year
+        const existingSlots = await PlantSlot.findOne({
+          plantId: plantId,
+          year: year,
+          "subtypeSlots.subtypeId": subtypeId
+        });
+
+        // Determine date range for this specific year
+        let yearStartDate, yearEndDate;
+        if (year === startYear && year === endYear) {
+          // Same year - use full range
+          yearStartDate = startDateStr;
+          yearEndDate = endDateStr;
+        } else if (year === startYear) {
+          // First year - from start date to year end
+          yearStartDate = startDateStr;
+          yearEndDate = `31-12-${year}`;
+        } else if (year === endYear) {
+          // Last year - from year start to end date
+          yearStartDate = `01-01-${year}`;
+          yearEndDate = endDateStr;
+        } else {
+          // Middle year - full year
+          yearStartDate = `01-01-${year}`;
+          yearEndDate = `31-12-${year}`;
+        }
+
+        if (existingSlots) {
+          // Update existing slots
+          const subtypeSlotIndex = existingSlots.subtypeSlots.findIndex(
+            ss => ss.subtypeId.toString() === subtypeId
+          );
+
+          if (subtypeSlotIndex !== -1) {
+            // Generate new slots for this subtype and year
+            const newSlots = generateSlotsForDateRange(
+              yearStartDate,
+              yearEndDate,
+              slotSize,
+              totalPlantsPerSlot
+            );
+
+            // Update the slots
+            existingSlots.subtypeSlots[subtypeSlotIndex].slots = newSlots;
+            await existingSlots.save();
+
+            results.push({
+              year: year,
+              status: 'updated',
+              slotsCount: newSlots.length,
+              dateRange: `${yearStartDate} to ${yearEndDate}`
+            });
+          }
+        } else {
+          // Create new slots for this year
+          const newSlots = generateSlotsForDateRange(
+            yearStartDate,
+            yearEndDate,
+            slotSize,
+            totalPlantsPerSlot
+          );
+
+          const newPlantSlot = new PlantSlot({
+            plantId: plantId,
+            year: year,
+            subtypeSlots: [{
+              subtypeId: subtypeId,
+              subtypeName: subtype.name,
+              slots: newSlots
+            }]
+          });
+
+          await newPlantSlot.save();
+
+          results.push({
+            year: year,
+            status: 'created',
+            slotsCount: newSlots.length,
+            dateRange: `${yearStartDate} to ${yearEndDate}`
+          });
+        }
+      }
+    } catch (error) {
+      results.push({
+        year: 'error',
+        status: 'error',
+        error: error.message
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Slots created/updated successfully for subtype',
+      data: {
+        plantId,
+        subtypeId,
+        subtypeName: subtype.name,
+        results
+      }
+    });
+
+  } catch (error) {
+    console.error('Error creating slots for subtype:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Delete all slots for a plant or all plants
+export const deleteAllSlots = async (req, res) => {
+  try {
+    const { plantId } = req.query;
+
+    let deleteQuery = {};
+    if (plantId) {
+      deleteQuery.plantId = plantId;
+    }
+
+    const result = await PlantSlot.deleteMany(deleteQuery);
+
+    res.status(200).json({
+      success: true,
+      message: plantId ? `All slots deleted for plant ${plantId}` : 'All slots deleted',
+      deletedCount: result.deletedCount
+    });
+
+  } catch (error) {
+    console.error('Error deleting slots:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Enhanced slot generator for date ranges
+const generateSlotsForDateRange = (startDate, endDate, slotSize = 7, capacity = 100000) => {
+  const slots = [];
+  let currentDate = moment(startDate, 'DD-MM-YYYY');
+  const endMoment = moment(endDate, 'DD-MM-YYYY');
+
+  while (currentDate.isSameOrBefore(endMoment)) {
+    const slotStart = currentDate.clone();
+    let slotEnd = currentDate.clone().add(slotSize - 1, 'days');
+
+    // If slotEnd goes past the end date, adjust
+    if (slotEnd.isAfter(endMoment)) {
+      slotEnd = endMoment.clone();
+    }
+
+    // If slotEnd goes past month end, adjust to month end
+    const monthEnd = slotStart.clone().endOf('month');
+    if (slotEnd.isAfter(monthEnd)) {
+      slotEnd = monthEnd.clone();
+    }
+
+    slots.push({
+      startDay: slotStart.format('DD-MM-YYYY'),
+      endDay: slotEnd.format('DD-MM-YYYY'),
+      month: slotStart.format('MMMM'),
+      year: slotStart.year(),
+      totalPlants: capacity,
+      totalBookedPlants: 0,
+      buffer: 0,
+      orders: [],
+      allowedSalesmen: [],
+      restrictToSalesmen: false,
+      overflow: false,
+      status: true,
+    });
+
+    currentDate = slotEnd.clone().add(1, 'days');
+  }
+
+  // Merge short last slot of each month with previous slot if needed
+  let i = 1;
+  while (i < slots.length) {
+    const prev = slots[i - 1];
+    const curr = slots[i];
+    // If month changes, check if previous slot is short
+    if (prev.month !== curr.month) {
+      const prevStart = moment(prev.startDay, 'DD-MM-YYYY');
+      const prevEnd = moment(prev.endDay, 'DD-MM-YYYY');
+      const daysInPrevSlot = prevEnd.diff(prevStart, 'days') + 1;
+      if (daysInPrevSlot < slotSize && i - 2 >= 0) {
+        // Merge with the slot before previous
+        slots[i - 2].endDay = prev.endDay;
+        slots[i - 2].month = prev.month;
+        slots.splice(i - 1, 1); // Remove prev
+        i--;
+      }
+    }
+    i++;
+  }
+
+  // Also check the very last slot in the range
+  if (slots.length > 1) {
+    const last = slots[slots.length - 1];
+    const secondLast = slots[slots.length - 2];
+    const lastStart = moment(last.startDay, 'DD-MM-YYYY');
+    const lastEnd = moment(last.endDay, 'DD-MM-YYYY');
+    const daysInLastSlot = lastEnd.diff(lastStart, 'days') + 1;
+    if (daysInLastSlot < slotSize) {
+      secondLast.endDay = last.endDay;
+      secondLast.month = last.month;
+      slots.pop();
+    }
+  }
+
+  return slots;
+};
+
+// Function to calculate totalBookedPlants from orders array
+const calculateTotalBookedPlantsFromOrders = async (slotId) => {
+  try {
+    const Order = mongoose.model('Order');
+    const totalBookedPlants = await Order.aggregate([
+      {
+        $match: {
+          bookingSlot: new mongoose.Types.ObjectId(slotId),
+          orderStatus: { $ne: 'CANCELLED' } // Exclude cancelled orders
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalBookedPlants: { $sum: '$numberOfPlants' }
+        }
+      }
+    ]);
+
+    return totalBookedPlants.length > 0 ? totalBookedPlants[0].totalBookedPlants : 0;
+  } catch (error) {
+    console.error('Error calculating totalBookedPlants from orders:', error);
+    return 0;
+  }
+};
+
+// Function to populate slots with orders and calculate totalBookedPlants
+const populateSlotsWithOrders = async (slots) => {
+  try {
+    const Order = mongoose.model('Order');
+    
+    for (const slotGroup of slots) {
+      for (const slot of slotGroup.slots) {
+        // Get orders for this slot - handle both ObjectId and array formats
+        const orders = await Order.find({
+          $or: [
+            { bookingSlot: slot._id }, // Direct ObjectId reference
+            { "bookingSlot.slotId": slot._id.toString() }, // Array format with slotId
+            { "bookingSlot.startDay": slot.startDay, "bookingSlot.endDay": slot.endDay } // Array format with date matching
+          ],
+          orderStatus: { $ne: 'CANCELLED' }
+        }).select('_id orderId numberOfPlants farmer salesPerson orderStatus');
+
+        // Calculate totalBookedPlants from orders
+        const totalBookedPlants = orders.reduce((sum, order) => sum + order.numberOfPlants, 0);
+        
+        // Update slot with calculated values
+        slot.orders = orders;
+        slot.totalBookedPlants = totalBookedPlants;
+        
+        // Calculate available plants considering buffer
+        const effectiveBuffer = slot.effectiveBuffer || 0;
+        const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
+        const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
+        slot.availablePlants = Math.max(0, bufferAdjustedCapacity - totalBookedPlants);
+        
+        // Set overflow flag
+        slot.isOverflow = slot.availablePlants < 0;
+        slot.overflow = slot.availablePlants < 0;
+      }
+    }
+    
+    return slots;
+  } catch (error) {
+    console.error('Error populating slots with orders:', error);
+    return slots;
   }
 };
 

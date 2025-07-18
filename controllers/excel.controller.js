@@ -2,6 +2,7 @@ import catchAsync from '../utility/catchAsync.js';
 import multer from 'multer';
 import { importOrdersAndFarmers, validateExcelStructure } from './excel.serveces.controller.js';
 import PlantSlot from '../models/slots.model.js';
+import mongoose from 'mongoose';
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
@@ -102,7 +103,10 @@ export const importExcelData = catchAsync(async (req, res) => {
         data: {
           summary: results.summary,
           successfulImports: results.success,
-          failedImports: results.errors
+          failedImports: results.errors,
+          notes: results.summary.invalidPhoneNumbers > 0 
+            ? `${results.summary.invalidPhoneNumbers} entries were created with invalid/missing phone numbers and marked with isInvalidPhone flag`
+            : null
         }
       });
     } catch (error) {
@@ -261,6 +265,124 @@ export const getOverflowSlots = catchAsync(async (req, res) => {
     return res.status(500).json({
       status: 'error',
       message: 'Error retrieving overflow slots',
+      error: error.message
+    });
+  }
+});
+
+// Fix bookingSlot format endpoint
+export const fixBookingSlotFormat = catchAsync(async (req, res) => {
+  try {
+    const Order = mongoose.model('Order');
+    const PlantSlot = mongoose.model('PlantSlot');
+
+    console.log("🔍 Starting bookingSlot format fix...");
+
+    // First, let's check all orders and their bookingSlot types
+    const allOrders = await Order.find({});
+    console.log(`📊 Total orders found: ${allOrders.length}`);
+
+    // Check the types of bookingSlot
+    const bookingSlotTypes = new Map();
+    allOrders.forEach(order => {
+      const type = Array.isArray(order.bookingSlot) ? 'array' : typeof order.bookingSlot;
+      bookingSlotTypes.set(type, (bookingSlotTypes.get(type) || 0) + 1);
+    });
+    console.log("📋 BookingSlot types:", Object.fromEntries(bookingSlotTypes));
+
+    // Find all orders with bookingSlot as an array
+    const ordersWithArrayBookingSlot = allOrders.filter(order => Array.isArray(order.bookingSlot));
+
+    console.log(`📊 Found ${ordersWithArrayBookingSlot.length} orders with array bookingSlot format`);
+
+    let updatedCount = 0;
+    let errorCount = 0;
+    const errors = [];
+
+    for (const order of ordersWithArrayBookingSlot) {
+      try {
+        console.log(`🔧 Processing order ${order.orderId}...`);
+
+        // Extract slot details from the array
+        const slotDetails = order.bookingSlot[0];
+        if (!slotDetails) {
+          throw new Error("No slot details found");
+        }
+
+        const { slotId, startDay, endDay, subtypeId } = slotDetails;
+
+        let correctSlotId = null;
+
+        // If slotId is provided, use it directly
+        if (slotId) {
+          correctSlotId = slotId;
+        } else {
+          // Find the slot by matching the details
+          const plantSlot = await PlantSlot.findOne({
+            "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(subtypeId),
+            "subtypeSlots.slots.startDay": startDay,
+            "subtypeSlots.slots.endDay": endDay
+          });
+
+          if (plantSlot) {
+            for (const subtypeSlot of plantSlot.subtypeSlots) {
+              const matchingSlot = subtypeSlot.slots.find(slot => 
+                slot.startDay === startDay && slot.endDay === endDay
+              );
+              if (matchingSlot) {
+                correctSlotId = matchingSlot._id.toString();
+                break;
+              }
+            }
+          }
+        }
+
+        if (correctSlotId) {
+          // Update the order with the correct slot ID
+          await Order.findByIdAndUpdate(order._id, {
+            bookingSlot: new mongoose.Types.ObjectId(correctSlotId)
+          });
+
+          console.log(`✅ Updated order ${order.orderId} with slot ID: ${correctSlotId}`);
+          updatedCount++;
+        } else {
+          console.log(`⚠️  Could not find correct slot for order ${order.orderId}`);
+          errorCount++;
+          errors.push({
+            orderId: order.orderId,
+            error: "Could not find correct slot ID"
+          });
+        }
+      } catch (error) {
+        console.error(`❌ Error processing order ${order.orderId}:`, error);
+        errorCount++;
+        errors.push({
+          orderId: order.orderId,
+          error: error.message
+        });
+      }
+    }
+
+    const summary = {
+      totalProcessed: ordersWithArrayBookingSlot.length,
+      successfullyUpdated: updatedCount,
+      errors: errorCount,
+      errorDetails: errors
+    };
+
+    console.log("\n📋 Fix Summary:", summary);
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'BookingSlot format fix completed',
+      data: summary
+    });
+
+  } catch (error) {
+    console.error("❌ Fix failed:", error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error fixing bookingSlot format',
       error: error.message
     });
   }

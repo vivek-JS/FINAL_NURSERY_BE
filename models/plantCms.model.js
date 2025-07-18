@@ -20,61 +20,11 @@ const plantSchema = new Schema({
   buffer: { type: Number, default: 0 }, // Buffer at plant level
 });
 
-// Middleware to create/update slots after plant save
-plantSchema.post("save", async function (doc) {
-  try {
-    const year = new Date().getFullYear(); // Current year
-    const { slotSize = 5 } = doc; // Default to 5 if slotSize is not provided
-
-    // Fetch existing slots for this plant and year
-    const existingPlantSlot = await PlantSlot.findOne({
-      plantId: doc._id,
-      year,
-    });
-
-    const existingSubtypeIds = new Set(
-      existingPlantSlot?.subtypeSlots.map((slot) =>
-        slot.subtypeId.toString()
-      ) || []
-    );
-
-    // Identify new subtypes that need slot creation
-    const newSubtypes = doc.subtypes.filter(
-      (subtype) => !existingSubtypeIds.has(subtype._id.toString())
-    );
-
-    // Update or create slots for new subtypes
-    if (newSubtypes.length > 0) {
-      const newSubtypeSlots = newSubtypes.map((subtype) => ({
-        subtypeId: subtype._id,
-        slots: generateSlotsForYear(year, slotSize), // Use updated slot size
-      }));
-
-      if (existingPlantSlot) {
-        existingPlantSlot.subtypeSlots.push(...newSubtypeSlots);
-        await existingPlantSlot.save();
-      } else {
-        const newPlantSlot = new PlantSlot({
-          plantId: doc._id,
-          year,
-          subtypeSlots: newSubtypeSlots,
-        });
-        await newPlantSlot.save();
-      }
-    }
-
-    // Optionally, regenerate slots for existing subtypes if slot size changes
-    if (existingPlantSlot && existingPlantSlot.slotSize !== slotSize) {
-      existingPlantSlot.subtypeSlots.forEach((subtypeSlot) => {
-        subtypeSlot.slots = generateSlotsForYear(year, slotSize);
-      });
-      existingPlantSlot.slotSize = slotSize;
-      await existingPlantSlot.save();
-    }
-  } catch (error) {
-    console.error("Error updating slots after plant save:", error);
-  }
-});
+// Middleware to create/update slots after plant save - DISABLED
+// Slots are now managed manually through the Slot Management interface
+// plantSchema.post("save", async function (doc) {
+//   // Automatic slot creation disabled - use manual slot management instead
+// });
 
 // Middleware to delete slots after plant removal
 plantSchema.post("remove", async function (doc) {
