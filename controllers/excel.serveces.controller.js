@@ -255,11 +255,8 @@ export const validateExcelStructure = (buffer) => {
   return validationResults;
 };
 
-// Optimized Excel import with batch processing and caching
+// Original Excel import function - simple and reliable
 export const importOrdersAndFarmers = async (fileBuffer) => {
-  console.log("🚀 Starting optimized Excel import...");
-  const startTime = Date.now();
-
   const workbook = XLSX.read(fileBuffer, {
     type: "buffer",
     cellDates: true,
@@ -284,330 +281,310 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
     },
   };
 
-  console.log(`📊 Processing ${data.length} rows with optimized batch processing`);
+  // Process each row individually for reliability
+  console.log(`📊 Processing ${data.length} rows individually`);
 
-  // Pre-process all data and build caches
-  const processedData = [];
-  const uniqueSalesPersons = new Set();
-  const uniquePlants = new Set();
-  const uniqueVarieties = new Set();
-  const uniqueTrays = new Set();
-  const uniqueOrderIds = new Set();
-  const uniquePhoneNumbers = new Set();
-
-  // First pass: collect all unique values and pre-process data
-  console.log("🔄 Pre-processing data and building caches...");
-  for (let i = 0; i < data.length; i++) {
-    const row = data[i];
-    const orderNumber = parseInt(row["Booking NO."].replace("24-25/B", ""), 10);
-    
-    processedData.push({
-      ...row,
-      orderNumber,
-      date: convertDate(row["Date"]),
-      slots: convertDate(row["Expected\r\nDel.\r\nDate"]),
-      "Advance Date": row["Advance\r\nDate"] ? convertDate(row["Advance\r\nDate"]) : null,
-    });
-
-    uniqueOrderIds.add(orderNumber);
-    uniqueSalesPersons.add(row["Refrence"]);
-    uniquePlants.add(row["Crop"]);
-    uniqueVarieties.add(row["Variety"]);
-    
-    if (row["Media"]) {
-      uniqueTrays.add(row["Media"]);
-    }
-
-    // Collect valid phone numbers for uniqueness check
-    const mobileValue = row["Mobile No."];
-    if (mobileValue && mobileValue !== "9999999999" && mobileValue !== 9999999999) {
-      const cleanedNumbers = cleanAndValidateMobileNumber(mobileValue);
-      if (cleanedNumbers.primaryNumber) {
-        uniquePhoneNumbers.add(cleanedNumbers.primaryNumber);
-      }
-      if (cleanedNumbers.alternateNumber) {
-        uniquePhoneNumbers.add(cleanedNumbers.alternateNumber);
-      }
-    }
-  }
-
-  // Bulk fetch all required data in parallel
-  console.log("📥 Bulk fetching reference data...");
-  const [
-    existingOrders,
-    existingFarmers,
-    salesPersons,
-    plants,
-    trays
-  ] = await Promise.all([
-    Order.find({ orderId: { $in: Array.from(uniqueOrderIds) } }).lean(),
-    Farmer.find({
-      $or: [
-        { mobileNumber: { $in: Array.from(uniquePhoneNumbers) } },
-        { alternateNumber: { $in: Array.from(uniquePhoneNumbers) } }
-      ]
-    }).lean(),
-    User.find({ name: { $in: Array.from(uniqueSalesPersons) } }).lean(),
-    PlantCms.find({ name: { $in: Array.from(uniquePlants) } }).lean(),
-    Tray.find({ cavity: { $in: Array.from(uniqueTrays).map(t => 
-      typeof t === "string" && t.trim().toLowerCase() === "elli" ? 10 : parseInt(t, 10)
-    )} }).lean()
-  ]);
-
-  // Build lookup maps for O(1) access
-  const orderMap = new Map(existingOrders.map(o => [o.orderId, o]));
-  const farmerPhoneMap = new Map();
-  const salesPersonMap = new Map(salesPersons.map(s => [s.name, s]));
-  const plantMap = new Map(plants.map(p => [p.name, p]));
-  const trayMap = new Map(trays.map(t => [t.cavity, t]));
-
-  // Build farmer phone lookup
-  existingFarmers.forEach(farmer => {
-    if (farmer.mobileNumber) {
-      farmerPhoneMap.set(farmer.mobileNumber, farmer);
-    }
-    if (farmer.alternateNumber) {
-      farmerPhoneMap.set(farmer.alternateNumber, farmer);
-    }
-  });
-
-  // Process in batches for better performance
-  const BATCH_SIZE = 50;
-  const batches = [];
-  for (let i = 0; i < processedData.length; i += BATCH_SIZE) {
-    batches.push(processedData.slice(i, i + BATCH_SIZE));
-  }
-
-  console.log(`📦 Processing ${batches.length} batches of ${BATCH_SIZE} rows each`);
-
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-    const batch = batches[batchIndex];
-    console.log(`🔄 Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} rows)`);
+  for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
+    const row = data[rowIndex];
+    console.log(`🔄 Processing row ${rowIndex + 1}/${data.length}`);
     
     const session = await mongoose.startSession();
     session.startTransaction();
     
     try {
-      const batchResults = await processBatch(
-        batch, 
-        orderMap, 
-        farmerPhoneMap, 
-        salesPersonMap, 
-        plantMap, 
-        trayMap, 
-        session
-      );
-      
-      // Merge batch results
-      results.success.push(...batchResults.success);
-      results.errors.push(...batchResults.errors);
-      results.summary.successfulImports += batchResults.summary.successfulImports;
-      results.summary.failedImports += batchResults.summary.failedImports;
-      results.summary.overflowSlots += batchResults.summary.overflowSlots;
-      results.summary.invalidPhoneNumbers += batchResults.summary.invalidPhoneNumbers;
-      results.summary.totalProcessed += batchResults.summary.totalProcessed;
-      
-      // Only commit if there were successful imports in this batch
-      if (batchResults.summary.successfulImports > 0) {
-        await session.commitTransaction();
-        console.log(`✅ Batch ${batchIndex + 1} completed successfully`);
-      } else {
-        await session.abortTransaction();
-        console.log(`⚠️  Batch ${batchIndex + 1} had no successful imports, transaction aborted`);
-      }
-      
-    } catch (error) {
-      await session.abortTransaction();
-      console.error(`❌ Error processing batch ${batchIndex + 1}:`, error);
-      
-      // Add all rows in this batch as errors
-      batch.forEach(row => {
-        results.errors.push({
-          bookingNo: row["Booking NO."] || "Unknown",
-          error: error.message,
-        });
-        results.summary.failedImports++;
         results.summary.totalProcessed++;
-      });
-    } finally {
-      session.endSession();
-    }
-  }
 
-  const endTime = Date.now();
-  const duration = (endTime - startTime) / 1000;
-  console.log(`🎉 Excel import completed in ${duration.toFixed(2)} seconds`);
-  console.log(`📊 Summary: ${results.summary.successfulImports} successful, ${results.summary.failedImports} failed`);
-
-  return results;
-};
-
-// Process a batch of rows efficiently
-async function processBatch(batch, orderMap, farmerPhoneMap, salesPersonMap, plantMap, trayMap, session) {
-  const batchResults = {
-    success: [],
-    errors: [],
-    summary: {
-      totalProcessed: 0,
-      successfulImports: 0,
-      failedImports: 0,
-      overflowSlots: 0,
-      invalidPhoneNumbers: 0,
-    },
-  };
-
-  // Pre-fetch all required slots for this batch
-  const slotQueries = [];
-  const slotPromises = [];
-  
-  for (let i = 0; i < batch.length; i++) {
-    const row = batch[i];
-    try {
-      const deliveryDate = moment(row.slots, "DD-MM-YYYY");
-      const year = deliveryDate.year();
-      const month = deliveryDate.format("MMMM");
-      
-      // Get plant and subtype from the cached maps
-      const plant = plantMap.get(row["Crop"]);
-      if (!plant) {
-        throw new Error(`Plant type "${row["Crop"]}" not found`);
-      }
-      
-      const subtype = plant.subtypes.find(st => st.name === row["Variety"]);
-      if (!subtype) {
-        throw new Error(`Variety "${row["Variety"]}" not found for ${row["Crop"]}`);
-      }
-      
-      const query = {
-        year,
-        month,
-        deliveryDate: deliveryDate.toDate(),
-        plantId: plant._id,
-        subtypeId: subtype._id
+        // Convert dates using new column names
+        const processedRow = {
+        ...row,
+        date: convertDate(row["Date"]),
+        slots: convertDate(row["Expected\r\nDel.\r\nDate"]),
+        "Advance Date": row["Advance\r\nDate"]
+          ? convertDate(row["Advance\r\nDate"])
+          : null,
       };
-      
-      slotQueries.push(query);
-      slotPromises.push(findDeliverySlotOptimized(query, session));
-    } catch (error) {
-      // Handle individual row errors without failing the entire batch
-      batchResults.errors.push({
-        bookingNo: row["Booking NO."] || "Unknown",
-        error: error.message,
-      });
-      batchResults.summary.failedImports++;
-      batchResults.summary.totalProcessed++;
-      slotPromises.push(Promise.resolve(null)); // Add null slot for failed row
-    }
-  }
-
-  // Bulk fetch slots
-  const slots = await Promise.all(slotPromises);
-
-  // Process each row in the batch
-  for (let i = 0; i < batch.length; i++) {
-    const row = batch[i];
-    const slot = slots[i];
-    
-    try {
-      batchResults.summary.totalProcessed++;
 
       // Check if order already exists
-      if (orderMap.has(row.orderNumber)) {
-        const existingOrder = orderMap.get(row.orderNumber);
-        if (row.date) {
-          await Order.updateOne(
-            { _id: existingOrder._id },
-            { orderBookingDate: moment(row.date, "DD-MM-YYYY").toDate() },
-            { session }
-          );
+      const orderNumber = parseInt(processedRow["Booking NO."].replace("24-25/B", ""), 10);
+      console.log(`🔍 Looking for order with orderId: ${orderNumber} (from booking: ${processedRow["Booking NO."]})`);
+      
+      let existingOrder = await Order.findOne({
+        orderId: orderNumber,
+      }).session(session);
+
+      console.log(`📋 Existing order found: ${existingOrder ? 'YES' : 'NO'}`);
+
+      if (existingOrder) {
+        // Update orderBookingDate if present in Excel
+        if (processedRow.date) {
+          existingOrder.orderBookingDate = moment(processedRow.date, "DD-MM-YYYY").toDate();
+          await existingOrder.save({ session });
         }
-        
-        batchResults.success.push({
-          bookingNo: row["Booking NO."],
+        results.success.push({
+          bookingNo: processedRow["Booking NO."],
           updated: true,
           message: "Order booking date updated",
         });
-        batchResults.summary.successfulImports++;
+        results.summary.successfulImports++;
         continue;
       }
 
-      // Process farmer data
-      const farmerResult = await processFarmerData(row, farmerPhoneMap, session);
-      if (farmerResult.error) {
-        throw new Error(farmerResult.error);
+      const mobileValue = processedRow["Mobile No."];
+
+      // Check for empty, null, undefined, or dummy values
+      const isMissingOrDummy =
+        !mobileValue ||
+        mobileValue === "" ||
+        mobileValue === null ||
+        mobileValue === undefined ||
+        mobileValue === "dummy" ||
+        mobileValue === "Dummy" ||
+        mobileValue === "DUMMY" ||
+        mobileValue === "9999999999" ||
+        mobileValue === 9999999999;
+
+      let cleanedNumbers;
+      if (isMissingOrDummy) {
+        cleanedNumbers = {
+          primaryNumber: null,
+          alternateNumber: null,
+          isInvalid: true,
+          originalValue: mobileValue || "Missing",
+        };
+      } else {
+        cleanedNumbers = cleanAndValidateMobileNumber(mobileValue);
       }
 
-      // Validate sales person
-      const salesPerson = salesPersonMap.get(row["Refrence"]);
+      // Keep original number as-is, don't use dummy numbers
+      const primaryNumber = cleanedNumbers.primaryNumber;
+      const alternateNumber = cleanedNumbers.alternateNumber;
+      const isInvalidPhone = cleanedNumbers.isInvalid || !primaryNumber;
+      const originalPhoneNumber = cleanedNumbers.originalValue;
+
+      // Create/update farmer using new column names
+      const farmerData = {
+        name: processedRow["Name"],
+        mobileNumber: primaryNumber || null, // Keep as null if no valid number
+        alternateNumber: alternateNumber || null,
+        village: processedRow["Address"], // Using Address instead of Village
+        taluka: processedRow["Taluka"],
+        district: processedRow["District"],
+        state: "Maharashtra",
+        talukaName: processedRow["Taluka"],
+        districtName: processedRow["District"],
+        stateName: "Maharashtra",
+        isInvalidPhone: isInvalidPhone, // Mark as invalid if no valid number
+        originalPhoneNumber: originalPhoneNumber,
+      };
+
+      let farmer = null;
+      
+      // Try to find farmer by phone number if we have valid numbers
+      if (primaryNumber) {
+        // Check for duplicate mobile number first
+        const existingFarmerWithMobile = await Farmer.findOne({
+          mobileNumber: primaryNumber,
+        }).session(session);
+        
+        if (existingFarmerWithMobile) {
+          throw new Error(`Mobile number ${primaryNumber} is already registered to farmer: ${existingFarmerWithMobile.name}`);
+        }
+        
+        // Check for duplicate alternate number
+        const existingFarmerWithAlternate = await Farmer.findOne({
+          alternateNumber: primaryNumber,
+        }).session(session);
+        
+        if (existingFarmerWithAlternate) {
+          throw new Error(`Mobile number ${primaryNumber} is already registered as alternate number to farmer: ${existingFarmerWithAlternate.name}`);
+        }
+        
+        // Now search for existing farmer by phone numbers
+        farmer = await Farmer.findOne({
+          $or: [
+            { mobileNumber: primaryNumber },
+            { alternateNumber: primaryNumber },
+          ],
+        }).session(session);
+      }
+      
+      // If not found and we have alternate number, try that
+      if (!farmer && alternateNumber) {
+        farmer = await Farmer.findOne({
+          $or: [
+            { mobileNumber: alternateNumber },
+            { alternateNumber: alternateNumber },
+          ],
+        }).session(session);
+      }
+      
+      // If still not found and we have no valid phone numbers, try to find by name and location
+      if (!farmer && (!primaryNumber || isInvalidPhone)) {
+        farmer = await Farmer.findOne({
+          name: processedRow["Name"],
+          village: processedRow["Address"],
+          taluka: processedRow["Taluka"],
+          district: processedRow["District"]
+        }).session(session);
+      }
+
+      if (!farmer) {
+        // For farmers with invalid phone numbers, we need to handle the unique constraint
+        if (isInvalidPhone || !primaryNumber) {
+          // Create farmer with null mobileNumber and mark as invalid
+          const farmerWithInvalidPhone = {
+            ...farmerData,
+            mobileNumber: null,
+            isInvalidPhone: true
+          };
+          farmer = await Farmer.create([farmerWithInvalidPhone], { session });
+          farmer = farmer[0];
+        } else {
+          // Create farmer with valid phone number
+          farmer = await Farmer.create([farmerData], { session });
+          farmer = farmer[0];
+        }
+      } else {
+        // If farmer exists, update phone numbers if we have valid ones
+        let needsUpdate = false;
+        
+        if (primaryNumber && !farmer.mobileNumber) {
+          farmer.mobileNumber = primaryNumber;
+          needsUpdate = true;
+        }
+        
+        if (alternateNumber && !farmer.alternateNumber) {
+          farmer.alternateNumber = alternateNumber;
+          needsUpdate = true;
+        }
+        
+        // Update invalid phone status if needed
+        if (farmer.isInvalidPhone !== isInvalidPhone) {
+          farmer.isInvalidPhone = isInvalidPhone;
+          needsUpdate = true;
+        }
+        
+        if (needsUpdate) {
+          await farmer.save({ session });
+        }
+      }
+
+      // Get sales person using new column name
+      const salesPerson = await User.findOne({
+        name: processedRow["Refrence"],
+      }).session(session);
       if (!salesPerson) {
-        throw new Error(`Sales person "${row["Refrence"]}" not found`);
+        throw new Error(
+          `Sales person "${processedRow["Refrence"]}" not found`
+        );
       }
 
-      // Get plant and variety from cached maps (already validated during slot query building)
-      const plant = plantMap.get(row["Crop"]);
-      const subtype = plant.subtypes.find(st => st.name === row["Variety"]);
-
-      // Validate slot
-      if (!slot) {
-        throw new Error(`No suitable slot found for delivery date ${row.slots}`);
+      // Find plant and variety using new column names
+      const plant = await PlantCms.findOne({
+        name: processedRow["Crop"],
+      }).session(session);
+      if (!plant) {
+        throw new Error(`Plant type "${processedRow["Crop"]}" not found`);
       }
 
-      // Process tray
+      const subtype = plant.subtypes.find(
+        (st) => st.name === processedRow["Variety"]
+      );
+      if (!subtype) {
+        throw new Error(
+          `Variety "${processedRow["Variety"]}" not found for ${processedRow["Crop"]}`
+        );
+      }
+
+      // Find slot
+      const deliveryDate = moment(processedRow.slots, "DD-MM-YYYY");
+      if (!deliveryDate.isValid()) {
+        throw new Error(`Invalid delivery date format: ${processedRow.slots}`);
+      }
+
+      const slot = await findDeliverySlot(
+        plant._id,
+        subtype._id,
+        deliveryDate.toDate(),
+        session
+      );
+
+      // Calculate amounts using new column names
+      const totalAmount =
+        Number(processedRow["Plant Qty."]) * Number(processedRow["Rate"]);
+      const advanceAmount = Number(processedRow["Advance\r\nAmt."]) || 0;
+      const balanceAmount = totalAmount - advanceAmount;
+
+      let cavityValue = processedRow["Media"];
+      // Try to find the matching tray by cavity number
       let tray = null;
-      if (row["Media"]) {
-        let cavityValue = row["Media"];
+      if (cavityValue) {
+        // Special handling for "Elli" - treat as "10 cavity"
         if (typeof cavityValue === "string" && cavityValue.trim().toLowerCase() === "elli") {
           cavityValue = 10;
+          console.log(`🔄 Converting "Elli" to cavity value: ${cavityValue}`);
         } else if (typeof cavityValue === "string") {
           cavityValue = parseInt(cavityValue.trim(), 10);
         }
-        tray = trayMap.get(cavityValue);
+
+        // Find the tray with matching cavity number
+        tray = await Tray.findOne({ cavity: cavityValue }).session(session);
+
+        if (!tray) {
+          console.warn(`Warning: Tray with cavity ${cavityValue} not found`);
+          // We'll set cavity to null instead of failing the import
+        }
       }
 
-      // Create order
-      const totalAmount = Number(row["Plant Qty."]) * Number(row["Rate"]);
-      const advanceAmount = Number(row["Advance\r\nAmt."]) || 0;
-      const balanceAmount = totalAmount - advanceAmount;
-
+      // Create order using new column names
+      // Always set orderStatus to 'ACCEPTED' for Excel uploads, ignore any value from Excel
       const orderData = {
-        orderId: row.orderNumber,
-        farmer: farmerResult.farmer._id,
+        orderId: orderNumber,
+        farmer: farmer._id,
         salesPerson: salesPerson._id,
-        numberOfPlants: row["Plant Qty."],
-        rate: row["Rate"],
+        numberOfPlants: processedRow["Plant Qty."],
+        rate: processedRow["Rate"],
         plantName: plant._id,
         plantSubtype: subtype._id,
-        bookingSlot: slot._id,
+        bookingSlot: slot._id, // This should be the slot ObjectId, not an array
         cavity: tray ? tray._id : null,
-        orderStatus: 'ACCEPTED',
-        notes: row["Remark"] || "",
+        orderStatus: 'ACCEPTED', // <-- Always set to ACCEPTED for Excel uploads
+        notes: processedRow["Remark"] || "",
         paymentCompleted: balanceAmount <= 0,
         orderPaymentStatus: balanceAmount <= 0 ? "COMPLETED" : "PENDING",
-        orderBookingDate: row.date ? moment(row.date, "DD-MM-YYYY").toDate() : new Date(),
+        orderBookingDate: processedRow.date
+          ? moment(processedRow.date, "DD-MM-YYYY").toDate()
+          : new Date(),
       };
+
+      // Log the slot details for debugging
+      console.log(`📋 Creating order ${orderNumber} with slot ID: ${slot._id}`);
+      console.log(`📅 Slot period: ${slot.startDay} to ${slot.endDay}`);
 
       const order = await Order.create([orderData], { session });
 
-      // Add payment if advance exists
+      // Add payment if advance exists using new column names
       if (advanceAmount > 0) {
         const paymentData = {
           paidAmount: advanceAmount,
-          paymentStatus: "COLLECTED",
-          paymentDate: row["Advance Date"] ? moment(row["Advance Date"], "DD-MM-YYYY").toDate() : new Date(),
-          bankName: row["Bank"] || "",
-          modeOfPayment: row["Ad. Amt. Mode"] || "CASH",
-          remark: row["Remark"] || "",
+          paymentStatus: "COLLECTED", // Always collected for Excel uploads
+          paymentDate: processedRow["Advance Date"]
+            ? moment(processedRow["Advance Date"], "DD-MM-YYYY").toDate()
+            : new Date(),
+          bankName: processedRow["Bank"] || "",
+          modeOfPayment: processedRow["Ad. Amt. Mode"] || "CASH",
+          remark: processedRow["Remark"] || "",
         };
 
-        if (row["CH No."]) {
-          paymentData.remark = `${paymentData.remark} CH.No: ${row["CH No."]}`;
+        if (processedRow["CH No."]) {
+          paymentData.remark = `${paymentData.remark} CH.No: ${processedRow["CH No."]}`;
         }
 
         order[0].payment.push(paymentData);
         await order[0].save({ session });
       }
 
-      // Update slot capacity
+      // Update slot capacity and add order reference in a single operation to avoid write conflicts
       await PlantSlot.updateOne(
         { "subtypeSlots.slots._id": slot._id },
         { 
@@ -627,188 +604,60 @@ async function processBatch(batch, orderMap, farmerPhoneMap, salesPersonMap, pla
         }
       );
 
-      // Get slot info for overflow check
+      // Get updated slot information
       const slotInfo = await getSlotInfo(slot._id);
 
-      batchResults.success.push({
-        bookingNo: row["Booking NO."],
-        farmerName: farmerResult.farmer.name,
+      results.success.push({
+        bookingNo: processedRow["Booking NO."],
+        farmerName: farmer.name,
         orderId: order[0].orderId,
         amount: totalAmount,
         advancePaid: advanceAmount,
         balance: balanceAmount,
         slotInfo: slotInfo,
-        phoneStatus: farmerResult.isInvalidPhone ? "Invalid/Missing Phone" : "Valid Phone",
-        overflowWarning: slotInfo && slotInfo.isOverflow
-          ? `Slot is in overflow state. Available plants: ${slotInfo.availablePlants}`
-          : null,
+        phoneStatus: isInvalidPhone ? "Invalid/Missing Phone" : "Valid Phone",
+        overflowWarning:
+          slotInfo && slotInfo.isOverflow
+            ? `Slot is in overflow state. Available plants: ${slotInfo.availablePlants}`
+            : null,
       });
 
+      // Track overflow slots
       if (slotInfo && slotInfo.isOverflow) {
-        batchResults.summary.overflowSlots++;
+        results.summary.overflowSlots++;
       }
       
-      if (farmerResult.isInvalidPhone) {
-        batchResults.summary.invalidPhoneNumbers++;
+      // Track invalid phone numbers
+      if (isInvalidPhone) {
+        results.summary.invalidPhoneNumbers++;
       }
 
-      batchResults.summary.successfulImports++;
+      results.summary.successfulImports++;
+      
+      // Commit the transaction for this row
+      await session.commitTransaction();
+      console.log(`✅ Row ${rowIndex + 1} completed successfully`);
       
     } catch (error) {
-      console.error(`❌ Error processing row:`, error);
-      batchResults.errors.push({
+      await session.abortTransaction();
+      console.error(`❌ Error processing row ${rowIndex + 1}:`, error);
+      
+      results.errors.push({
         bookingNo: row["Booking NO."] || "Unknown",
         error: error.message,
       });
-      batchResults.summary.failedImports++;
+      results.summary.failedImports++;
+    } finally {
+      session.endSession();
     }
-  }
+  } // End of row loop
 
-  return batchResults;
-}
+  return results;
+};
 
-// Process farmer data efficiently
-async function processFarmerData(row, farmerPhoneMap, session) {
-  const mobileValue = row["Mobile No."];
-  const isMissingOrDummy = !mobileValue || mobileValue === "" || mobileValue === null || 
-    mobileValue === undefined || mobileValue === "dummy" || mobileValue === "Dummy" || 
-    mobileValue === "DUMMY" || mobileValue === "9999999999" || mobileValue === 9999999999;
-
-  let cleanedNumbers;
-  if (isMissingOrDummy) {
-    cleanedNumbers = {
-      primaryNumber: null,
-      alternateNumber: null,
-      isInvalid: true,
-      originalValue: mobileValue || "Missing",
-    };
-  } else {
-    cleanedNumbers = cleanAndValidateMobileNumber(mobileValue);
-  }
-
-  const primaryNumber = cleanedNumbers.primaryNumber;
-  const alternateNumber = cleanedNumbers.alternateNumber;
-  const isInvalidPhone = cleanedNumbers.isInvalid || !primaryNumber;
-  const originalPhoneNumber = cleanedNumbers.originalValue;
-
-  // Check for existing farmer by phone numbers
-  let farmer = null;
-  if (primaryNumber && farmerPhoneMap.has(primaryNumber)) {
-    farmer = farmerPhoneMap.get(primaryNumber);
-  } else if (alternateNumber && farmerPhoneMap.has(alternateNumber)) {
-    farmer = farmerPhoneMap.get(alternateNumber);
-  }
-
-  // If not found by phone, try to find by name and location
-  if (!farmer && (!primaryNumber || isInvalidPhone)) {
-    farmer = await Farmer.findOne({
-      name: row["Name"],
-      village: row["Address"],
-      taluka: row["Taluka"],
-      district: row["District"]
-    }).session(session);
-  }
-
-  if (!farmer) {
-    // Create new farmer
-    const farmerData = {
-      name: row["Name"],
-      mobileNumber: primaryNumber || null,
-      alternateNumber: alternateNumber || null,
-      village: row["Address"],
-      taluka: row["Taluka"],
-      district: row["District"],
-      state: "Maharashtra",
-      talukaName: row["Taluka"],
-      districtName: row["District"],
-      stateName: "Maharashtra",
-      isInvalidPhone: isInvalidPhone,
-      originalPhoneNumber: originalPhoneNumber,
-    };
-
-    farmer = await Farmer.create([farmerData], { session });
-    farmer = farmer[0];
-  } else {
-    // Update existing farmer if needed
-    let needsUpdate = false;
-    
-    if (primaryNumber && !farmer.mobileNumber) {
-      farmer.mobileNumber = primaryNumber;
-      needsUpdate = true;
-    }
-    
-    if (alternateNumber && !farmer.alternateNumber) {
-      farmer.alternateNumber = alternateNumber;
-      needsUpdate = true;
-    }
-    
-    if (farmer.isInvalidPhone !== isInvalidPhone) {
-      farmer.isInvalidPhone = isInvalidPhone;
-      needsUpdate = true;
-    }
-    
-    if (needsUpdate) {
-      await farmer.save({ session });
-    }
-  }
-
-  return { farmer, isInvalidPhone };
-}
-
-// Optimized slot finding with caching
-async function findDeliverySlotOptimized(query, session) {
-  try {
-    const deliveryMoment = moment(query.deliveryDate);
-    if (!deliveryMoment.isValid()) {
-      throw new Error(`Invalid delivery date: ${query.deliveryDate}`);
-    }
-
-    const year = deliveryMoment.year();
-    const month = deliveryMoment.format("MMMM");
-
-    const plantSlot = await PlantSlot.findOne({
-      plantId: query.plantId,
-      year: year,
-    }).session(session);
-
-    if (!plantSlot) {
-      throw new Error(`No slot configuration found for plant in year ${year}`);
-    }
-
-    const subtypeSlot = plantSlot.subtypeSlots.find(
-      (ss) => ss.subtypeId.toString() === query.subtypeId.toString()
-    );
-
-    if (!subtypeSlot) {
-      throw new Error(`No slots found for subtype ${query.subtypeId}`);
-    }
-
-    const targetSlot = subtypeSlot.slots.find((slot) => {
-      const startMoment = moment(slot.startDay, "DD-MM-YYYY");
-      const endMoment = moment(slot.endDay, "DD-MM-YYYY");
-
-      return (
-        deliveryMoment.isSameOrAfter(startMoment, "day") &&
-        deliveryMoment.isSameOrBefore(endMoment, "day")
-      );
-    });
-
-    if (!targetSlot) {
-      throw new Error(
-        `No suitable slot found for delivery date ${deliveryMoment.format("DD-MM-YYYY")} in month ${month}`
-      );
-    }
-
-    return targetSlot;
-  } catch (error) {
-    console.error("Error in findDeliverySlotOptimized:", error);
-    throw error;
-  }
-}
-
-// Legacy function for backward compatibility
 async function findDeliverySlot(plantId, subtypeId, deliveryDate, session) {
   try {
+    // Ensure deliveryDate is a moment object
     const deliveryMoment = moment(deliveryDate);
     if (!deliveryMoment.isValid()) {
       throw new Error(`Invalid delivery date: ${deliveryDate}`);
@@ -855,7 +704,9 @@ async function findDeliverySlot(plantId, subtypeId, deliveryDate, session) {
 
     if (!targetSlot) {
       throw new Error(
-        `No suitable slot found for delivery date ${deliveryMoment.format("DD-MM-YYYY")} in month ${month}`
+        `No suitable slot found for delivery date ${deliveryMoment.format(
+          "DD-MM-YYYY"
+        )} in month ${month}`
       );
     }
 
