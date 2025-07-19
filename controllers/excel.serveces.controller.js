@@ -407,8 +407,14 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
       results.summary.invalidPhoneNumbers += batchResults.summary.invalidPhoneNumbers;
       results.summary.totalProcessed += batchResults.summary.totalProcessed;
       
-      await session.commitTransaction();
-      console.log(`✅ Batch ${batchIndex + 1} completed successfully`);
+      // Only commit if there were successful imports in this batch
+      if (batchResults.summary.successfulImports > 0) {
+        await session.commitTransaction();
+        console.log(`✅ Batch ${batchIndex + 1} completed successfully`);
+      } else {
+        await session.abortTransaction();
+        console.log(`⚠️  Batch ${batchIndex + 1} had no successful imports, transaction aborted`);
+      }
       
     } catch (error) {
       await session.abortTransaction();
@@ -451,33 +457,50 @@ async function processBatch(batch, orderMap, farmerPhoneMap, salesPersonMap, pla
   };
 
   // Pre-fetch all required slots for this batch
-  const slotQueries = batch.map(row => {
-    const deliveryDate = moment(row.slots, "DD-MM-YYYY");
-    const year = deliveryDate.year();
-    const month = deliveryDate.format("MMMM");
-    
-    // Get plant and subtype from the cached maps
-    const plant = plantMap.get(row["Crop"]);
-    if (!plant) {
-      throw new Error(`Plant type "${row["Crop"]}" not found`);
+  const slotQueries = [];
+  const slotPromises = [];
+  
+  for (let i = 0; i < batch.length; i++) {
+    const row = batch[i];
+    try {
+      const deliveryDate = moment(row.slots, "DD-MM-YYYY");
+      const year = deliveryDate.year();
+      const month = deliveryDate.format("MMMM");
+      
+      // Get plant and subtype from the cached maps
+      const plant = plantMap.get(row["Crop"]);
+      if (!plant) {
+        throw new Error(`Plant type "${row["Crop"]}" not found`);
+      }
+      
+      const subtype = plant.subtypes.find(st => st.name === row["Variety"]);
+      if (!subtype) {
+        throw new Error(`Variety "${row["Variety"]}" not found for ${row["Crop"]}`);
+      }
+      
+      const query = {
+        year,
+        month,
+        deliveryDate: deliveryDate.toDate(),
+        plantId: plant._id,
+        subtypeId: subtype._id
+      };
+      
+      slotQueries.push(query);
+      slotPromises.push(findDeliverySlotOptimized(query, session));
+    } catch (error) {
+      // Handle individual row errors without failing the entire batch
+      batchResults.errors.push({
+        bookingNo: row["Booking NO."] || "Unknown",
+        error: error.message,
+      });
+      batchResults.summary.failedImports++;
+      batchResults.summary.totalProcessed++;
+      slotPromises.push(Promise.resolve(null)); // Add null slot for failed row
     }
-    
-    const subtype = plant.subtypes.find(st => st.name === row["Variety"]);
-    if (!subtype) {
-      throw new Error(`Variety "${row["Variety"]}" not found for ${row["Crop"]}`);
-    }
-    
-    return {
-      year,
-      month,
-      deliveryDate: deliveryDate.toDate(),
-      plantId: plant._id,
-      subtypeId: subtype._id
-    };
-  });
+  }
 
   // Bulk fetch slots
-  const slotPromises = slotQueries.map(query => findDeliverySlotOptimized(query, session));
   const slots = await Promise.all(slotPromises);
 
   // Process each row in the batch
