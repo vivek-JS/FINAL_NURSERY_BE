@@ -16,7 +16,6 @@ import {
   releaseBufferPlantsController,
   addPlantsToCapacityController,
   createSlotsForSubtype,
-  deleteAllSlots,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -29,6 +28,7 @@ slotRouter.get("/slots/stats", getPlantStats);
 slotRouter.post("/slots/manual", addManualSlot);
 slotRouter.delete("/slots/manual/:slotId", deleteManualSlot);
 slotRouter.post("/slots/create-multiple-years", createSlotsForMultipleYears);
+slotRouter.post("/slots/create-subtype", createSlotsForSubtype);
 
 // Salesmen restriction routes - Using completely different path pattern
 slotRouter.put("/salesmen-access/:slotId", updateSlotSalesmenRestrictions);
@@ -45,10 +45,6 @@ slotRouter.get("/slots/dashBoardStats", getDashboardInsights);
 
 // Migration route for buffer calculations
 slotRouter.post("/slots/migrate-buffers", migrateBufferCalculations);
-
-// Slot management routes
-slotRouter.post("/slots/create-subtype", createSlotsForSubtype);
-slotRouter.delete("/slots/delete-all", deleteAllSlots);
 
 // Test route for slot generation
 slotRouter.get("/slots/test-generation", (req, res) => {

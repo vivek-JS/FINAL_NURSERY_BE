@@ -7,7 +7,9 @@ import {
   updatePaymentStatus,
   getOrdersBySlot,
   createDealerOrder,
-  addAfterDispatchedOrderIds
+  addAfterDispatchedOrderIds,
+  getOrdersByStatus,
+  getAllPayments
 } from "../controllers/order.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -20,6 +22,8 @@ router
   .get("/getCSV", getCsv)
   .get("/slots", getOrdersBySlot)
   .get("/getOrders", getOrders)
+  .get("/by-status", getOrdersByStatus)
+  .get("/payments", getAllPayments)
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .patch(
     "/payment/:orderId",

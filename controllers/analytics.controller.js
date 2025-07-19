@@ -7,22 +7,23 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import mongoose from "mongoose";
 
-// Dashboard Overview Analytics
+// Dashboard Overview Analytics - Enhanced with order date
 export const getDashboardAnalytics = catchAsync(async (req, res, next) => {
   const { startDate, endDate, timeRange = 'monthly' } = req.query;
   
-  // Calculate date range
+  // Calculate date range using orderBookingDate instead of createdAt
   const dateFilter = {};
-  if (startDate || endDate) {
-    dateFilter.createdAt = {};
-    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
-  } else {
-    // Default to last month
-    const lastMonth = new Date();
-    lastMonth.setMonth(lastMonth.getMonth() - 1);
-    dateFilter.createdAt = { $gte: lastMonth };
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
   }
+  // If no dates provided, show all-time data (no date filter)
 
   // Aggregate orders data with proper status mapping
   const orderStats = await Order.aggregate([
@@ -116,14 +117,14 @@ export const getDashboardAnalytics = catchAsync(async (req, res, next) => {
     }
   ]);
 
-  // Get monthly trends
+  // Get monthly trends based on order booking date
   const monthlyTrends = await Order.aggregate([
     { $match: dateFilter },
     {
       $group: {
         _id: {
-          year: { $year: "$createdAt" },
-          month: { $month: "$createdAt" }
+          year: { $year: "$orderBookingDate" },
+          month: { $month: "$orderBookingDate" }
         },
         totalOrders: { $sum: 1 },
         totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
@@ -179,10 +180,15 @@ export const getProfitLossAnalysis = catchAsync(async (req, res, next) => {
   const { startDate, endDate } = req.query;
   
   const dateFilter = {};
-  if (startDate || endDate) {
-    dateFilter.createdAt = {};
-    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
   }
 
   const profitAnalysis = await calculateProfitAnalysis(dateFilter);
@@ -202,10 +208,15 @@ export const getSalesPerformanceAnalysis = catchAsync(async (req, res, next) => 
   const { startDate, endDate, groupBy = 'month' } = req.query;
   
   const dateFilter = {};
-  if (startDate || endDate) {
-    dateFilter.createdAt = {};
-    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
   }
 
   // Salesmen performance with detailed metrics
@@ -265,10 +276,10 @@ export const getSalesPerformanceAnalysis = catchAsync(async (req, res, next) => 
     {
       $group: {
         _id: {
-          year: { $year: "$createdAt" },
-          month: { $month: "$createdAt" },
-          ...(groupBy === 'week' && { week: { $week: "$createdAt" } }),
-          ...(groupBy === 'day' && { day: { $dayOfMonth: "$createdAt" } })
+          year: { $year: "$orderBookingDate" },
+          month: { $month: "$orderBookingDate" },
+          ...(groupBy === 'week' && { week: { $week: "$orderBookingDate" } }),
+          ...(groupBy === 'day' && { day: { $dayOfMonth: "$orderBookingDate" } })
         },
         totalOrders: { $sum: 1 },
         totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
@@ -301,10 +312,15 @@ export const getPlantPerformanceAnalysis = catchAsync(async (req, res, next) => 
   const { startDate, endDate } = req.query;
   
   const dateFilter = {};
-  if (startDate || endDate) {
-    dateFilter.createdAt = {};
-    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
   }
 
   // Plant performance with profitability
@@ -416,10 +432,15 @@ export const getCustomerAnalytics = catchAsync(async (req, res, next) => {
   const { startDate, endDate } = req.query;
   
   const dateFilter = {};
-  if (startDate || endDate) {
-    dateFilter.createdAt = {};
-    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
   }
 
   // Customer segmentation (farmers vs dealers)
@@ -488,8 +509,8 @@ export const getCustomerAnalytics = catchAsync(async (req, res, next) => {
           customerType: { $cond: { if: "$dealerOrder", then: "Dealer", else: "Farmer" } }
         },
         totalOrders: { $sum: 1 },
-        firstOrder: { $min: "$createdAt" },
-        lastOrder: { $max: "$createdAt" }
+        firstOrder: { $min: "$orderBookingDate" },
+        lastOrder: { $max: "$orderBookingDate" }
       }
     },
     {
@@ -551,12 +572,12 @@ export const getMonthlyTrends = catchAsync(async (req, res, next) => {
   const monthlyData = await Order.aggregate([
     {
       $match: {
-        createdAt: { $gte: startOfYear, $lte: endOfYear }
+        orderBookingDate: { $gte: startOfYear, $lte: endOfYear }
       }
     },
     {
       $group: {
-        _id: { month: { $month: "$createdAt" } },
+        _id: { month: { $month: "$orderBookingDate" } },
         totalOrders: { $sum: 1 },
         totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
         totalPlants: { $sum: "$numberOfPlants" },
@@ -602,10 +623,15 @@ export const getDistrictAnalytics = catchAsync(async (req, res, next) => {
   const { startDate, endDate, stateName } = req.query;
   
   const dateFilter = {};
-  if (startDate || endDate) {
-    dateFilter.createdAt = {};
-    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
   }
 
   // District-wise order analysis
@@ -736,10 +762,15 @@ export const getSlotAnalytics = catchAsync(async (req, res, next) => {
   const { startDate, endDate, plantId, year } = req.query;
   
   const dateFilter = {};
-  if (startDate || endDate) {
-    dateFilter.createdAt = {};
-    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
   }
 
   // Simplified slot performance analysis
@@ -956,10 +987,15 @@ export const getEnhancedCustomerAnalytics = catchAsync(async (req, res, next) =>
   const { startDate, endDate, customerType } = req.query;
   
   const dateFilter = {};
-  if (startDate || endDate) {
-    dateFilter.createdAt = {};
-    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
   }
 
   // Customer segmentation with enhanced metrics
@@ -1128,10 +1164,15 @@ export const getPaymentAnalytics = catchAsync(async (req, res, next) => {
   const { startDate, endDate, customerType } = req.query;
   
   const dateFilter = {};
-  if (startDate || endDate) {
-    dateFilter.createdAt = {};
-    if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-    if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
   }
 
   // Payment status analysis
@@ -1342,6 +1383,455 @@ export const getPaymentAnalytics = catchAsync(async (req, res, next) => {
         avgPendingAmount: pendingSummary.totalOrders ? 
           (pendingSummary.totalRevenue / pendingSummary.totalOrders) : 0,
         avgPaymentAmount: paymentsMade.avgPaymentAmount || 0
+      }
+    }
+  });
+});
+
+// New: Plant Subtype Booking Trends
+export const getPlantSubtypeTrends = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, groupBy = 'month', plantId } = req.query;
+  
+  const dateFilter = {};
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
+  }
+  
+  if (plantId) {
+    dateFilter.plantName = new mongoose.Types.ObjectId(plantId);
+  }
+
+  // Plant subtype booking trends over time
+  const subtypeTrends = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: {
+          plantId: "$plantName",
+          subtypeId: "$plantSubtype",
+          ...(groupBy === 'month' && {
+            year: { $year: "$orderBookingDate" },
+            month: { $month: "$orderBookingDate" }
+          }),
+          ...(groupBy === 'week' && {
+            year: { $year: "$orderBookingDate" },
+            week: { $week: "$orderBookingDate" }
+          }),
+          ...(groupBy === 'day' && {
+            year: { $year: "$orderBookingDate" },
+            month: { $month: "$orderBookingDate" },
+            day: { $dayOfMonth: "$orderBookingDate" }
+          })
+        },
+        totalOrders: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgRate: { $avg: "$rate" }
+      }
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "_id.plantId",
+        foreignField: "_id",
+        as: "plantInfo"
+      }
+    },
+    {
+      $addFields: {
+        subtypeInfo: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: { $arrayElemAt: ["$plantInfo.subtypes", 0] },
+                cond: { $eq: ["$$this._id", "$_id.subtypeId"] }
+              }
+            },
+            0
+          ]
+        }
+      }
+    },
+    { $sort: { "_id.year": 1, "_id.month": 1 } }
+  ]);
+
+  // Top performing subtypes overall
+  const topSubtypes = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: {
+          plantId: "$plantName",
+          subtypeId: "$plantSubtype"
+        },
+        totalOrders: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgRate: { $avg: "$rate" }
+      }
+    },
+    { $sort: { totalRevenue: -1 } },
+    { $limit: 15 },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "_id.plantId",
+        foreignField: "_id",
+        as: "plantInfo"
+      }
+    },
+    {
+      $addFields: {
+        subtypeInfo: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: { $arrayElemAt: ["$plantInfo.subtypes", 0] },
+                cond: { $eq: ["$$this._id", "$_id.subtypeId"] }
+              }
+            },
+            0
+          ]
+        }
+      }
+    }
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      subtypeTrends,
+      topSubtypes: topSubtypes.map(subtype => ({
+        ...subtype,
+        plantName: subtype.plantInfo?.[0]?.name || 'Unknown Plant',
+        subtypeName: subtype.subtypeInfo?.name || 'Unknown Subtype',
+        displayName: `${subtype.plantInfo?.[0]?.name || 'Unknown Plant'} - ${subtype.subtypeInfo?.name || 'Unknown Subtype'}`
+      })),
+      summary: {
+        totalSubtypes: topSubtypes.length,
+        totalRevenue: topSubtypes.reduce((sum, s) => sum + s.totalRevenue, 0),
+        totalOrders: topSubtypes.reduce((sum, s) => sum + s.totalOrders, 0),
+        avgRevenuePerSubtype: topSubtypes.length > 0 ? 
+          topSubtypes.reduce((sum, s) => sum + s.totalRevenue, 0) / topSubtypes.length : 0
+      }
+    }
+  });
+});
+
+// New: Order Status Distribution (Pie Chart Data)
+export const getOrderStatusDistribution = catchAsync(async (req, res, next) => {
+  const { startDate, endDate } = req.query;
+  
+  const dateFilter = {};
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
+  }
+
+  const statusDistribution = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: "$orderStatus",
+        count: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" }
+      }
+    },
+    {
+      $addFields: {
+        status: "$_id",
+        percentage: {
+          $multiply: [
+            { $divide: ["$count", { $sum: "$count" }] },
+            100
+          ]
+        }
+      }
+    },
+    { $sort: { count: -1 } }
+  ]);
+
+  // Payment status distribution
+  const paymentStatusDistribution = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: "$orderPaymentStatus",
+        count: { $sum: 1 },
+        totalAmount: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } }
+      }
+    },
+    {
+      $addFields: {
+        status: "$_id",
+        percentage: {
+          $multiply: [
+            { $divide: ["$count", { $sum: "$count" }] },
+            100
+          ]
+        }
+      }
+    },
+    { $sort: { count: -1 } }
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      orderStatusDistribution,
+      paymentStatusDistribution,
+      summary: {
+        totalOrders: statusDistribution.reduce((sum, s) => sum + s.count, 0),
+        totalRevenue: statusDistribution.reduce((sum, s) => sum + s.totalRevenue, 0),
+        completedOrders: statusDistribution.find(s => s.status === 'COMPLETED')?.count || 0,
+        pendingOrders: statusDistribution.find(s => s.status === 'PENDING')?.count || 0
+      }
+    }
+  });
+});
+
+// New: Customer Type Distribution (Pie Chart Data)
+export const getCustomerTypeDistribution = catchAsync(async (req, res, next) => {
+  const { startDate, endDate } = req.query;
+  
+  const dateFilter = {};
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
+  }
+
+  const customerTypeDistribution = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: "$dealerOrder",
+        count: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgOrderValue: { $avg: { $multiply: ["$numberOfPlants", "$rate"] } }
+      }
+    },
+    {
+      $addFields: {
+        customerType: {
+          $cond: { if: "$_id", then: "Dealer", else: "Farmer" }
+        },
+        percentage: {
+          $multiply: [
+            { $divide: ["$count", { $sum: "$count" }] },
+            100
+          ]
+        }
+      }
+    },
+    { $sort: { count: -1 } }
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      customerTypeDistribution,
+      summary: {
+        totalCustomers: customerTypeDistribution.reduce((sum, c) => sum + c.count, 0),
+        totalRevenue: customerTypeDistribution.reduce((sum, c) => sum + c.totalRevenue, 0),
+        farmers: customerTypeDistribution.find(c => c.customerType === 'Farmer')?.count || 0,
+        dealers: customerTypeDistribution.find(c => c.customerType === 'Dealer')?.count || 0
+      }
+    }
+  });
+});
+
+// New: Revenue Trends by Time Period
+export const getRevenueTrends = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, groupBy = 'month' } = req.query;
+  
+  const dateFilter = {};
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
+  }
+
+  const revenueTrends = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: {
+          ...(groupBy === 'month' && {
+            year: { $year: "$orderBookingDate" },
+            month: { $month: "$orderBookingDate" }
+          }),
+          ...(groupBy === 'week' && {
+            year: { $year: "$orderBookingDate" },
+            week: { $week: "$orderBookingDate" }
+          }),
+          ...(groupBy === 'day' && {
+            year: { $year: "$orderBookingDate" },
+            month: { $month: "$orderBookingDate" },
+            day: { $dayOfMonth: "$orderBookingDate" }
+          })
+        },
+        totalOrders: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgOrderValue: { $avg: { $multiply: ["$numberOfPlants", "$rate"] } },
+        completedOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "COMPLETED"] }, 1, 0] }
+        },
+        pendingOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "PENDING"] }, 1, 0] }
+        }
+      }
+    },
+    {
+      $addFields: {
+        completionRate: {
+          $multiply: [
+            { $divide: ["$completedOrders", "$totalOrders"] },
+            100
+          ]
+        }
+      }
+    },
+    { $sort: { "_id.year": 1, "_id.month": 1 } }
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      revenueTrends,
+      summary: {
+        totalRevenue: revenueTrends.reduce((sum, t) => sum + t.totalRevenue, 0),
+        totalOrders: revenueTrends.reduce((sum, t) => sum + t.totalOrders, 0),
+        avgRevenuePerPeriod: revenueTrends.length > 0 ? 
+          revenueTrends.reduce((sum, t) => sum + t.totalRevenue, 0) / revenueTrends.length : 0,
+        avgCompletionRate: revenueTrends.length > 0 ? 
+          revenueTrends.reduce((sum, t) => sum + t.completionRate, 0) / revenueTrends.length : 0
+      }
+    }
+  });
+});
+
+// New: Plant Performance Comparison (Bar Chart Data)
+export const getPlantPerformanceComparison = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, limit = 10 } = req.query;
+  
+  const dateFilter = {};
+  if (startDate && endDate) {
+    dateFilter.orderBookingDate = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  } else if (startDate) {
+    dateFilter.orderBookingDate = { $gte: new Date(startDate) };
+  } else if (endDate) {
+    dateFilter.orderBookingDate = { $lte: new Date(endDate) };
+  }
+
+  const plantPerformance = await Order.aggregate([
+    { $match: dateFilter },
+    {
+      $group: {
+        _id: {
+          plantId: "$plantName",
+          subtypeId: "$plantSubtype"
+        },
+        totalOrders: { $sum: 1 },
+        totalRevenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+        totalPlants: { $sum: "$numberOfPlants" },
+        avgRate: { $avg: "$rate" },
+        completedOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "COMPLETED"] }, 1, 0] }
+        },
+        cancelledOrders: {
+          $sum: { $cond: [{ $eq: ["$orderStatus", "CANCELLED"] }, 1, 0] }
+        }
+      }
+    },
+    {
+      $addFields: {
+        completionRate: {
+          $multiply: [
+            { $divide: ["$completedOrders", "$totalOrders"] },
+            100
+          ]
+        },
+        cancellationRate: {
+          $multiply: [
+            { $divide: ["$cancelledOrders", "$totalOrders"] },
+            100
+          ]
+        }
+      }
+    },
+    { $sort: { totalRevenue: -1 } },
+    { $limit: parseInt(limit) },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "_id.plantId",
+        foreignField: "_id",
+        as: "plantInfo"
+      }
+    },
+    {
+      $addFields: {
+        subtypeInfo: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: { $arrayElemAt: ["$plantInfo.subtypes", 0] },
+                cond: { $eq: ["$$this._id", "$_id.subtypeId"] }
+              }
+            },
+            0
+          ]
+        }
+      }
+    }
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      plantPerformance: plantPerformance.map(plant => ({
+        ...plant,
+        plantName: plant.plantInfo?.[0]?.name || 'Unknown Plant',
+        subtypeName: plant.subtypeInfo?.name || 'Unknown Subtype',
+        displayName: `${plant.plantInfo?.[0]?.name || 'Unknown Plant'} - ${plant.subtypeInfo?.name || 'Unknown Subtype'}`
+      })),
+      summary: {
+        totalPlants: plantPerformance.length,
+        totalRevenue: plantPerformance.reduce((sum, p) => sum + p.totalRevenue, 0),
+        avgCompletionRate: plantPerformance.length > 0 ? 
+          plantPerformance.reduce((sum, p) => sum + p.completionRate, 0) / plantPerformance.length : 0,
+        avgCancellationRate: plantPerformance.length > 0 ? 
+          plantPerformance.reduce((sum, p) => sum + p.cancellationRate, 0) / plantPerformance.length : 0
       }
     }
   });

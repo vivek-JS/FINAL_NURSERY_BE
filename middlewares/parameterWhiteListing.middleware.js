@@ -13,6 +13,7 @@ const allowedParams = [
   "page",
   "limit",
   "status",
+  "paymentStatus",
   "plantId",
   "subtypeId",
   "year",

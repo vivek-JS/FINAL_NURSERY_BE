@@ -10,6 +10,11 @@ import {
   getSlotAnalytics,
   getEnhancedCustomerAnalytics,
   getPaymentAnalytics,
+  getPlantSubtypeTrends,
+  getOrderStatusDistribution,
+  getCustomerTypeDistribution,
+  getRevenueTrends,
+  getPlantPerformanceComparison,
 } from "../controllers/analytics.controller.js";
 
 const router = express.Router();
@@ -27,5 +32,12 @@ router.get("/district-analytics", getDistrictAnalytics);
 router.get("/slot-analytics", getSlotAnalytics);
 router.get("/enhanced-customer-analytics", getEnhancedCustomerAnalytics);
 router.get("/payment-analytics", getPaymentAnalytics);
+
+// New Visualization Routes
+router.get("/plant-subtype-trends", getPlantSubtypeTrends);
+router.get("/order-status-distribution", getOrderStatusDistribution);
+router.get("/customer-type-distribution", getCustomerTypeDistribution);
+router.get("/revenue-trends", getRevenueTrends);
+router.get("/plant-performance-comparison", getPlantPerformanceComparison);
 
 export default router; 

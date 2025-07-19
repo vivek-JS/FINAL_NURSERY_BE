@@ -136,9 +136,9 @@ export const updateSlot = async (
   const additionalUpdates = {};
   
   if (action === "subtract") {
-    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] =
-      -numberOfPlants; // Decrease totalPlants (can go negative if overflow allowed)
-    // Note: totalBookedPlants is now calculated dynamically from orders
+    // FIXED: Don't modify totalPlants when orders are added
+    // totalPlants represents capacity and should remain constant
+    // totalBookedPlants is calculated dynamically from orders
     
     // If overflow is allowed, check if this will put the slot into overflow state
     if (allowOverflow) {
@@ -153,19 +153,25 @@ export const updateSlot = async (
         );
         
         if (targetSlot) {
-          const newTotalPlants = targetSlot.totalPlants - numberOfPlants;
-          if (newTotalPlants < 0) {
+          // Calculate available plants considering buffer
+          const effectiveBuffer = targetSlot.effectiveBuffer || 0;
+          const bufferAmount = Math.round((targetSlot.totalPlants * effectiveBuffer) / 100);
+          const bufferAdjustedCapacity = targetSlot.totalPlants - bufferAmount;
+          const availablePlants = Math.max(0, bufferAdjustedCapacity - (targetSlot.totalBookedPlants || 0));
+          
+          // Check if this booking will cause overflow
+          if (numberOfPlants > availablePlants) {
             additionalUpdates["subtypeSlots.$[subtypeSlot].slots.$[slot].isOverflow"] = true;
             additionalUpdates["subtypeSlots.$[subtypeSlot].slots.$[slot].overflow"] = true;
-            console.warn(`Excel Import: Allowing overflow booking. Slot has ${targetSlot.totalPlants} plants, booking ${numberOfPlants} plants. Slot period: ${targetSlot.startDay} to ${targetSlot.endDay}`);
+            console.warn(`Excel Import: Allowing overflow booking. Slot has ${targetSlot.totalPlants} plants capacity, ${availablePlants} available, booking ${numberOfPlants} plants. Slot period: ${targetSlot.startDay} to ${targetSlot.endDay}`);
           }
         }
       }
     }
   } else if (action === "add") {
-    updateOperation["subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"] =
-      numberOfPlants; // Increase totalPlants
-    // Note: totalBookedPlants is now calculated dynamically from orders
+    // FIXED: Don't modify totalPlants when orders are cancelled/removed
+    // totalPlants represents capacity and should remain constant
+    // totalBookedPlants is calculated dynamically from orders
     
     // If overflow is allowed, check if this will bring the slot out of overflow state
     if (allowOverflow) {
@@ -180,8 +186,13 @@ export const updateSlot = async (
         );
         
         if (targetSlot) {
-          const newTotalPlants = targetSlot.totalPlants + numberOfPlants;
-          if (newTotalPlants >= 0 && targetSlot.isOverflow) {
+          // Calculate available plants after this addition
+          const effectiveBuffer = targetSlot.effectiveBuffer || 0;
+          const bufferAmount = Math.round((targetSlot.totalPlants * effectiveBuffer) / 100);
+          const bufferAdjustedCapacity = targetSlot.totalPlants - bufferAmount;
+          const newAvailablePlants = Math.max(0, bufferAdjustedCapacity - (targetSlot.totalBookedPlants || 0) + numberOfPlants);
+          
+          if (newAvailablePlants >= 0 && targetSlot.isOverflow) {
             additionalUpdates["subtypeSlots.$[subtypeSlot].slots.$[slot].isOverflow"] = false;
             additionalUpdates["subtypeSlots.$[subtypeSlot].slots.$[slot].overflow"] = false;
           }
@@ -206,13 +217,8 @@ export const updateSlot = async (
   const updateResult = await PlantSlot.updateOne(
     { "subtypeSlots.slots._id": bookingSlot },
     {
-      $inc: {
-        "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants":
-          updateOperation[
-            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"
-          ],
-        // Note: totalBookedPlants is now calculated dynamically from orders
-      },
+      // FIXED: Don't modify totalPlants - it represents capacity and should remain constant
+      // Only update overflow flags if needed
       ...(Object.keys(additionalUpdates).length > 0 && { $set: additionalUpdates })
     },
     updateOptions
@@ -805,53 +811,13 @@ const handleSlotUpdatesWithSession = async (
 
     // Modified updateSlot function that works with a session
     const updateSlotWithSession = async (slotId, plantsCount, action) => {
-      // Build the update operation based on the action
-      const updateOperation = {};
-      if (action === "subtract") {
-        updateOperation[
-          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"
-        ] = -plantsCount;
-        updateOperation[
-          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
-        ] = plantsCount;
-      } else if (action === "add") {
-        updateOperation[
-          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"
-        ] = plantsCount;
-        updateOperation[
-          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
-        ] = -plantsCount;
-      }
-
-      // Perform an atomic update in the database using $inc within the session
-      const updateResult = await PlantSlot.updateOne(
-        { "subtypeSlots.slots._id": slotId },
-        {
-          $inc: {
-            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants":
-              updateOperation[
-                "subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants"
-              ],
-            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants":
-              updateOperation[
-                "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants"
-              ],
-          },
-        },
-        {
-          arrayFilters: [
-            { "subtypeSlot.slots._id": slotId },
-            { "slot._id": slotId },
-          ],
-          session,
-        }
-      );
-
-      if (updateResult.matchedCount === 0) {
-        throw new AppError("Failed to update the PlantSlot details", 500);
-      }
-
-      return updateResult;
+      // FIXED: Don't modify totalPlants - it represents capacity and should remain constant
+      // totalBookedPlants is calculated dynamically from orders, so we don't need to update it here either
+      
+      // Since we're not modifying any slot fields directly, just return success
+      // The slot data will be updated when orders are created/updated and the API recalculates
+      
+      return { matchedCount: 1, modifiedCount: 0 };
     };
 
     if (

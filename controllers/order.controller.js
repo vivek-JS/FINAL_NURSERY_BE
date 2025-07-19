@@ -3,6 +3,10 @@ import catchAsync from "../utility/catchAsync.js";
 import Order from "../models/order.model.js";
 import { getAll, createOne, updateOne } from "./factory.controller.js";
 import DealerWallet from "../models/dealerWallet.js";
+import Dispatch from "../models/dispatch.model.js";
+import AppError from "../utility/appError.js";
+import generateResponse from "../utility/responseFormat.js";
+import mongoose from "mongoose";
 
 const updateDealerWalletBalance = async (dealerId, paymentAmount) => {
   let wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -92,7 +96,7 @@ const getOrdersBySlot = catchAsync(async (req, res, next) => {
   }
 });
 
-export { getOrdersBySlot };
+// export { getOrdersBySlot };
 
 const getCsv = catchAsync(async (req, res, next) => {
   // extracting data
@@ -486,7 +490,16 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
 
 const updatePaymentStatus = async (req, res) => {
   try {
-    const { orderId, paymentId, paymentStatus } = req.body;
+    const { 
+      orderId, 
+      paymentId, 
+      paymentStatus, 
+      paidAmount, 
+      paymentDate, 
+      modeOfPayment, 
+      bankName, 
+      remark 
+    } = req.body;
 
     if (!orderId || !paymentId || !paymentStatus) {
       return res.status(400).json({
@@ -502,6 +515,23 @@ const updatePaymentStatus = async (req, res) => {
     const payment = order.payment.id(paymentId);
     if (!payment) {
       return res.status(404).json({ message: "Payment not found." });
+    }
+
+    // Update payment fields if provided
+    if (paidAmount !== undefined) {
+      payment.paidAmount = Number(paidAmount);
+    }
+    if (paymentDate !== undefined) {
+      payment.paymentDate = new Date(paymentDate);
+    }
+    if (modeOfPayment !== undefined) {
+      payment.modeOfPayment = modeOfPayment;
+    }
+    if (bankName !== undefined) {
+      payment.bankName = bankName;
+    }
+    if (remark !== undefined) {
+      payment.remark = remark;
     }
 
     // Ensure amount is a number
@@ -560,14 +590,16 @@ const updatePaymentStatus = async (req, res) => {
     await order.save();
 
     return res.status(200).json({
+      success: true,
       message: "Payment status updated successfully.",
       order,
     });
   } catch (error) {
     console.error(error);
     return res.status(500).json({
+      success: false,
       message: "An error occurred while updating the payment status.",
-      error,
+      error: error.message,
     });
   }
 };
@@ -618,14 +650,577 @@ const addAfterDispatchedOrderIds = catchAsync(async (req, res, next) => {
   }
 });
 
-export {
-  getCsv,
-  createOrder,
-  updateOrder,
-  addNewPayment,
-  getOrders,
-  updatePaymentStatus,
-  createDealerOrder,
+// Get orders by specific status
+const getOrdersByStatus = catchAsync(async (req, res, next) => {
+  const { status, startDate, endDate, page = 1, limit = 100, search } = req.query;
+  
+  try {
+    const order = -1; // desc order
+    const skip = (page - 1) * limit;
+
+    // Build the aggregation pipeline
+    const pipeline = [];
+
+    // Status filter
+    if (status) {
+      const statusArray = status.split(",").map((s) => s.trim());
+      pipeline.push({
+        $match: {
+          orderStatus: { $in: statusArray },
+        },
+      });
+    }
+
+    // Date range filtering
+    if (startDate && endDate) {
+      const parseDate = (dateStr, isEnd = false) => {
+        const [day, month, year] = dateStr.split("-");
+        return isEnd
+          ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
+          : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+      };
+
+      const start = parseDate(startDate);
+      const end = parseDate(endDate, true);
+      pipeline.push({ $match: { orderBookingDate: { $gte: start, $lte: end } } });
+    }
+
+    // Search filtering
+    if (search) {
+      const searchRegex = new RegExp(search, "i");
+
+      pipeline.push({
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      });
+
+      pipeline.push({
+        $addFields: {
+          "farmer.mobileNumberStr": {
+            $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
+          },
+        },
+      });
+
+      const isNumeric = /^\d+$/.test(search);
+      const searchAsNumber = isNumeric ? Number(search) : NaN;
+
+      pipeline.push({
+        $match: {
+          $or: [
+            { orderId: isNumeric ? searchAsNumber : search },
+            { "farmer.name": searchRegex },
+            { "farmer.mobileNumberStr": searchRegex },
+          ],
+        },
+      });
+    } else {
+      pipeline.push({
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      });
+    }
+
+    // Common lookups
+    pipeline.push(
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantName",
+          foreignField: "_id",
+          as: "plantName",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "salesPerson",
+          foreignField: "_id",
+          as: "salesPerson",
+        },
+      },
+      {
+        $lookup: {
+          from: "trays",
+          localField: "cavity",
+          foreignField: "_id",
+          as: "cavityDetails",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "statusChanges.changedBy",
+          foreignField: "_id",
+          as: "statusChangeUsers",
+        },
+      }
+    );
+
+    // Standard booking slot lookup
+    pipeline.push({
+      $lookup: {
+        from: "plantslots",
+        let: { bookingSlotId: "$bookingSlot" },
+        pipeline: [
+          { $unwind: "$subtypeSlots" },
+          { $unwind: "$subtypeSlots.slots" },
+          {
+            $match: {
+              $expr: {
+                $eq: [
+                  { $toString: "$subtypeSlots.slots._id" },
+                  { $toString: "$$bookingSlotId" },
+                ],
+              },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              slotId: "$subtypeSlots.slots._id",
+              startDay: "$subtypeSlots.slots.startDay",
+              endDay: "$subtypeSlots.slots.endDay",
+              subtypeId: "$subtypeSlots.subtypeId",
+              month: "$subtypeSlots.slots.month",
+            },
+          },
+        ],
+        as: "bookingSlotDetails",
+      },
+    });
+
+    // Enrich plantSubtype details
+    pipeline.push({
+      $set: {
+        plantSubtypeDetails: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: { $arrayElemAt: ["$plantName.subtypes", 0] },
+                as: "subtype",
+                cond: { $eq: ["$$subtype._id", "$plantSubtype"] },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    });
+
+    // Create map of users for status changes
+    pipeline.push({
+      $addFields: {
+        statusChangeUserMap: {
+          $arrayToObject: {
+            $map: {
+              input: "$statusChangeUsers",
+              as: "user",
+              in: [
+                { $toString: "$$user._id" },
+                { name: "$$user.name", phoneNumber: "$$user.phoneNumber" },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    // Project required fields
+    pipeline.push(
+      {
+        $project: {
+          farmer: {
+            $arrayElemAt: [
+              {
+                $map: {
+                  input: "$farmer",
+                  as: "farmerData",
+                  in: {
+                    name: "$$farmerData.name",
+                    mobileNumber: "$$farmerData.mobileNumber",
+                    village: "$$farmerData.village",
+                    taluka: "$$farmerData.taluka",
+                    district: "$$farmerData.district",
+                    state: "$$farmerData.state",
+                    stateName: "$$farmerData.stateName",
+                    districtName: "$$farmerData.districtName",
+                    talukaName: "$$farmerData.talukaName",
+                  },
+                },
+              },
+              0,
+            ],
+          },
+          plantType: {
+            id: { $arrayElemAt: ["$plantName._id", 0] },
+            name: { $arrayElemAt: ["$plantName.name", 0] },
+          },
+          plantSubtype: {
+            id: "$plantSubtypeDetails._id",
+            name: "$plantSubtypeDetails.name",
+          },
+          cavity: {
+            id: { $arrayElemAt: ["$cavityDetails._id", 0] },
+            name: { $arrayElemAt: ["$cavityDetails.name", 0] },
+            cavity: { $arrayElemAt: ["$cavityDetails.cavity", 0] },
+            numberPerCrate: {
+              $arrayElemAt: ["$cavityDetails.numberPerCrate", 0],
+            },
+          },
+          bookingSlot: "$bookingSlotDetails",
+          salesPerson: {
+            $arrayElemAt: [
+              {
+                $map: {
+                  input: "$salesPerson",
+                  as: "sales",
+                  in: {
+                    name: "$$sales.name",
+                    phoneNumber: "$$sales.phoneNumber",
+                  },
+                },
+              },
+              0,
+            ],
+          },
+          createdAt: 1,
+          orderStatus: 1,
+          payment: 1,
+          numberOfPlants: 1,
+          remainingPlants: 1,
+          returnedPlants: 1,
+          returnReason: 1,
+          returnHistory: 1,
+          orderId: 1,
+          rate: 1,
+          farmReadyDate: 1,
+          orderBookingDate: 1,
+          orderPaymentStatus: 1,
+          paymentCompleted: 1,
+          dealerOrder: 1,
+          notes: 1,
+          orderRemarks: 1,
+          statusChanges: {
+            $map: {
+              input: "$statusChanges",
+              as: "change",
+              in: {
+                previousStatus: "$$change.previousStatus",
+                newStatus: "$$change.newStatus",
+                reason: "$$change.reason",
+                notes: "$$change.notes",
+                changedAt: "$$change.createdAt",
+                changedBy: {
+                  $cond: {
+                    if: "$$change.changedBy",
+                    then: {
+                      $let: {
+                        vars: {
+                          userId: { $toString: "$$change.changedBy" },
+                        },
+                        in: {
+                          $ifNull: [
+                            {
+                              $getField: {
+                                field: { $literal: "$$vars.userId" },
+                                input: "$statusChangeUserMap",
+                              },
+                            },
+                            { id: "$$change.changedBy" },
+                          ],
+                        },
+                      },
+                    },
+                    else: null,
+                  },
+                },
+              },
+            },
+          },
+          deliveryChanges: {
+            $map: {
+              input: "$deliveryChanges",
+              as: "change",
+              in: {
+                previousDeliveryDate: "$$change.previousDeliveryDate",
+                newDeliveryDate: "$$change.newDeliveryDate",
+                reasonForChange: "$$change.reasonForChange",
+                changedAt: "$$change.createdAt",
+              },
+            },
+          },
+        },
+      },
+      { $sort: { createdAt: order } },
+      { $skip: skip },
+      { $limit: parseInt(limit, 10) }
+    );
+
+    // Execute the pipeline
+    const results = await Order.aggregate(pipeline);
+
+    // Transform documents for response
+    const transformedResults = results.map((item) => {
+      const { _id, ...rest } = item;
+      return { id: _id, _id, ...rest };
+    });
+
+    const response = generateResponse(
+      "Success",
+      `Orders with status ${status} found successfully`,
+      transformedResults,
+      undefined
+    );
+
+    return res.status(200).json(response);
+  } catch (error) {
+    console.error("Error fetching orders by status:", error);
+    return res.status(500).json({ 
+      message: "An error occurred while fetching orders.", 
+      error: error.message 
+    });
+  }
+});
+
+// Get all payments with date filtering
+const getAllPayments = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, paymentStatus, page = 1, limit = 100, search } = req.query;
+  
+  try {
+    const order = -1; // desc order
+    const skip = (page - 1) * limit;
+
+    // Build the aggregation pipeline
+    const pipeline = [];
+
+    // Unwind payments to work with individual payment records
+    pipeline.push({
+      $unwind: {
+        path: "$payment",
+        preserveNullAndEmptyArrays: false
+      }
+    });
+
+    // Payment status filter
+    if (paymentStatus) {
+      const statusArray = paymentStatus.split(",").map((s) => s.trim());
+      pipeline.push({
+        $match: {
+          "payment.paymentStatus": { $in: statusArray },
+        },
+      });
+    }
+
+    // Date range filtering for payment date
+    if (startDate && endDate) {
+      try {
+        const parseDate = (dateStr, isEnd = false) => {
+          const [day, month, year] = dateStr.split("-");
+          return isEnd
+            ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
+            : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+        };
+
+        const start = parseDate(startDate);
+        const end = parseDate(endDate, true);
+        
+        // Only add date filter if dates are valid
+        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+          pipeline.push({ 
+            $match: { 
+              "payment.paymentDate": { $gte: start, $lte: end } 
+            } 
+          });
+        }
+      } catch (dateError) {
+        console.error("Date parsing error:", dateError);
+        // Continue without date filter if parsing fails
+      }
+    }
+
+    // Search filtering
+    if (search) {
+      const searchRegex = new RegExp(search, "i");
+
+      pipeline.push({
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      });
+
+      pipeline.push({
+        $addFields: {
+          "farmer.mobileNumberStr": {
+            $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
+          },
+        },
+      });
+
+      const isNumeric = /^\d+$/.test(search);
+      const searchAsNumber = isNumeric ? Number(search) : NaN;
+
+      pipeline.push({
+        $match: {
+          $or: [
+            { orderId: isNumeric ? searchAsNumber : search },
+            { "farmer.name": searchRegex },
+            { "farmer.mobileNumberStr": searchRegex },
+          ],
+        },
+      });
+    } else {
+      pipeline.push({
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      });
+    }
+
+    // Common lookups
+    pipeline.push(
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantName",
+          foreignField: "_id",
+          as: "plantName",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "salesPerson",
+          foreignField: "_id",
+          as: "salesPerson",
+        },
+      }
+    );
+
+    // Project payment-focused fields
+    pipeline.push({
+      $project: {
+        orderId: 1,
+        orderStatus: 1,
+        orderPaymentStatus: 1,
+        numberOfPlants: 1,
+        rate: 1,
+        totalOrderAmount: { $multiply: ["$rate", "$numberOfPlants"] },
+        farmer: {
+          $arrayElemAt: [
+            {
+              $map: {
+                input: "$farmer",
+                as: "farmerData",
+                in: {
+                  name: "$$farmerData.name",
+                  mobileNumber: "$$farmerData.mobileNumber",
+                  village: "$$farmerData.village",
+                  taluka: "$$farmerData.taluka",
+                  district: "$$farmerData.district",
+                },
+              },
+            },
+            0,
+          ],
+        },
+        plantType: {
+          id: { $arrayElemAt: ["$plantName._id", 0] },
+          name: { $arrayElemAt: ["$plantName.name", 0] },
+        },
+        salesPerson: {
+          $arrayElemAt: [
+            {
+              $map: {
+                input: "$salesPerson",
+                as: "sales",
+                in: {
+                  name: "$$sales.name",
+                  phoneNumber: "$$sales.phoneNumber",
+                },
+              },
+            },
+            0,
+          ],
+        },
+        payment: 1,
+        orderBookingDate: 1,
+        createdAt: 1,
+        dealerOrder: 1,
+      },
+    });
+
+    // Sort by payment date with fallback to createdAt
+    pipeline.push({ 
+      $sort: { 
+        "payment.paymentDate": order,
+        "createdAt": order 
+      } 
+    });
+    pipeline.push({ $skip: skip });
+    pipeline.push({ $limit: parseInt(limit, 10) });
+
+    // Execute the pipeline with error handling
+    let results;
+    try {
+      results = await Order.aggregate(pipeline);
+    } catch (aggregateError) {
+      console.error("Aggregation error:", aggregateError);
+      return res.status(500).json({ 
+        status: "error",
+        message: "Database query failed", 
+        error: aggregateError.message 
+      });
+    }
+
+    // Transform documents for response
+    const transformedResults = results.map((item) => {
+      const { _id, ...rest } = item;
+      return { id: _id, _id, ...rest };
+    });
+
+    const response = generateResponse(
+      "Success",
+      "Payments found successfully",
+      transformedResults,
+      undefined
+    );
+
+    return res.status(200).json(response);
+  } catch (error) {
+    console.error("Error fetching payments:", error);
+    return res.status(500).json({ 
+      status: "error",
+      message: "An error occurred while fetching payments.", 
+      error: error.message 
+    });
+  }
+});
+
+export { 
+  getOrdersBySlot, 
+  getCsv, 
+  getOrders, 
+  createOrder, 
+  updateOrder, 
+  addNewPayment, 
+  updatePaymentStatus, 
+  createDealerOrder, 
   addAfterDispatchedOrderIds,
-  addNewPaymentAlternative,
+  getOrdersByStatus,
+  getAllPayments
 };

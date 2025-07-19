@@ -599,10 +599,10 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
           bufferAdjustedCapacity: bufferAdjusted.bufferAdjustedCapacity,
           availablePlants: bufferAdjusted.availablePlants,
           bufferAmount: bufferAdjusted.bufferAmount,
-          // Keep original totalPlants for reference
+          // Keep original totalPlants unchanged - this is the actual capacity
           originalTotalPlants: slotItem.totalPlants,
-          // Update totalPlants to reflect buffer-adjusted capacity
-          totalPlants: bufferAdjusted.availablePlants
+          // Keep totalPlants as the original capacity, don't overwrite with buffer-adjusted value
+          totalPlants: slotItem.totalPlants
         };
       }),
     }));
@@ -1965,6 +1965,9 @@ const populateSlotsWithOrders = async (slots) => {
         const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
         const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
         slot.availablePlants = Math.max(0, bufferAdjustedCapacity - totalBookedPlants);
+        
+        // Ensure totalPlants remains as the original capacity
+        // Don't modify totalPlants here - it should always represent the actual slot capacity
         
         // Set overflow flag
         slot.isOverflow = slot.availablePlants < 0;
