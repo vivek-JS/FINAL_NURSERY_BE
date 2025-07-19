@@ -456,12 +456,23 @@ async function processBatch(batch, orderMap, farmerPhoneMap, salesPersonMap, pla
     const year = deliveryDate.year();
     const month = deliveryDate.format("MMMM");
     
+    // Get plant and subtype from the cached maps
+    const plant = plantMap.get(row["Crop"]);
+    if (!plant) {
+      throw new Error(`Plant type "${row["Crop"]}" not found`);
+    }
+    
+    const subtype = plant.subtypes.find(st => st.name === row["Variety"]);
+    if (!subtype) {
+      throw new Error(`Variety "${row["Variety"]}" not found for ${row["Crop"]}`);
+    }
+    
     return {
       year,
       month,
       deliveryDate: deliveryDate.toDate(),
-      plantName: row["Crop"],
-      variety: row["Variety"]
+      plantId: plant._id,
+      subtypeId: subtype._id
     };
   });
 
@@ -509,16 +520,9 @@ async function processBatch(batch, orderMap, farmerPhoneMap, salesPersonMap, pla
         throw new Error(`Sales person "${row["Refrence"]}" not found`);
       }
 
-      // Validate plant and variety
+      // Get plant and variety from cached maps (already validated during slot query building)
       const plant = plantMap.get(row["Crop"]);
-      if (!plant) {
-        throw new Error(`Plant type "${row["Crop"]}" not found`);
-      }
-
       const subtype = plant.subtypes.find(st => st.name === row["Variety"]);
-      if (!subtype) {
-        throw new Error(`Variety "${row["Variety"]}" not found for ${row["Crop"]}`);
-      }
 
       // Validate slot
       if (!slot) {
@@ -740,7 +744,7 @@ async function findDeliverySlotOptimized(query, session) {
     const month = deliveryMoment.format("MMMM");
 
     const plantSlot = await PlantSlot.findOne({
-      plantId: query.plantName,
+      plantId: query.plantId,
       year: year,
     }).session(session);
 
@@ -749,11 +753,11 @@ async function findDeliverySlotOptimized(query, session) {
     }
 
     const subtypeSlot = plantSlot.subtypeSlots.find(
-      (ss) => ss.subtypeId.toString() === query.variety.toString()
+      (ss) => ss.subtypeId.toString() === query.subtypeId.toString()
     );
 
     if (!subtypeSlot) {
-      throw new Error(`No slots found for variety ${query.variety}`);
+      throw new Error(`No slots found for subtype ${query.subtypeId}`);
     }
 
     const targetSlot = subtypeSlot.slots.find((slot) => {
