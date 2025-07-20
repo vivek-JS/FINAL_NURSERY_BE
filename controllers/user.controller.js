@@ -121,6 +121,16 @@ const login = async (req, res, next) => {
 
     console.log("User is not disabled, proceeding with token generation");
 
+    // FORCE PASSWORD RESET FOR ALL USERS EXCEPT SUPER_ADMIN
+    // If user is not Super Admin and password is not set, force password reset
+    let shouldForcePasswordReset = false;
+    if (user.role !== 'SUPER_ADMIN') {
+      if (!user.isPasswordSet) {
+        shouldForcePasswordReset = true;
+        console.log("User needs to set password (isPasswordSet: false)");
+      }
+    }
+
     // Remove password from response
     const userResponse = user.toObject();
     delete userResponse.password;
@@ -145,14 +155,15 @@ const login = async (req, res, next) => {
     console.log("Generating response...");
     const response = generateResponse(
       "Success",
-      "Login successful - Token generated successfully",
+      shouldForcePasswordReset ? "Login successful - Password reset required" : "Login successful - Token generated successfully",
       {
         user: userResponse,
         accessToken: tokenPair.accessToken,
         refreshToken: tokenPair.refreshToken,
         expiresIn: tokenPair.expiresIn,
         isPasswordSet: user.isPasswordSet,
-        message: "Access token generated and ready for API calls"
+        forcePasswordReset: shouldForcePasswordReset,
+        message: shouldForcePasswordReset ? "Password reset required on first login" : "Access token generated and ready for API calls"
       },
       undefined
     );
