@@ -72,9 +72,6 @@ export const updatePlant = async (req, res) => {
 
     const updatedPlant = await plant.save();
 
-    // Update slots
-    await updateSlotsForPlant(updatedPlant);
-
     return res
       .status(200)
       .json({ message: "Plant updated successfully", data: updatedPlant });
@@ -223,45 +220,4 @@ export const getPlants = async (req, res) => {
   }
 };
 
-const updateSlotsForPlant = async (plant) => {
-  try {
-    const year = new Date().getFullYear();
-    const { slotSize = 5 } = plant;
-
-    // Fetch or create PlantSlot for the plant
-    let plantSlot = await PlantSlot.findOne({ plantId: plant._id, year });
-
-    if (!plantSlot) {
-      plantSlot = new PlantSlot({ plantId: plant._id, year, subtypeSlots: [] });
-    }
-
-    const existingSubtypeIds = new Set(
-      plantSlot.subtypeSlots.map((slot) => slot.subtypeId.toString())
-    );
-
-    const newSubtypes = plant.subtypes.filter(
-      (subtype) => !existingSubtypeIds.has(subtype._id.toString())
-    );
-
-    // Add slots for new subtypes
-    if (newSubtypes.length > 0) {
-      const newSubtypeSlots = newSubtypes.map((subtype) => ({
-        subtypeId: subtype._id,
-        slots: generateSlotsForYear(year, slotSize),
-      }));
-      plantSlot.subtypeSlots.push(...newSubtypeSlots);
-    }
-
-    // Optionally regenerate slots for all subtypes if slotSize changes
-    if (plantSlot.slotSize !== slotSize) {
-      plantSlot.subtypeSlots.forEach((subtypeSlot) => {
-        subtypeSlot.slots = generateSlotsForYear(year, slotSize);
-      });
-      plantSlot.slotSize = slotSize;
-    }
-
-    await plantSlot.save();
-  } catch (error) {
-    console.error("Error updating slots:", error);
-  }
-};
+// Auto slot generation removed - slots are now managed through dedicated slot management system
