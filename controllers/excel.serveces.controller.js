@@ -116,10 +116,10 @@ const createSalesPerson = async (name, phoneNumber = null) => {
       return existingUser;
     }
 
-    // Generate a unique phone number if not provided
+    // Handle phone number assignment
     let finalPhoneNumber = phoneNumber;
     if (!finalPhoneNumber) {
-      // Generate a unique phone number starting with 999999
+      // Generate a unique phone number if not provided
       let counter = 1;
       do {
         finalPhoneNumber = 9999990000 + counter;
@@ -128,6 +128,21 @@ const createSalesPerson = async (name, phoneNumber = null) => {
           throw new Error("Unable to generate unique phone number");
         }
       } while (await User.findOne({ phoneNumber: finalPhoneNumber }));
+    } else {
+      // Check if the provided phone number is already in use
+      const existingUserWithPhone = await User.findOne({ phoneNumber: finalPhoneNumber });
+      if (existingUserWithPhone) {
+        // If phone number is already in use, generate a unique one
+        console.log(`⚠️ Phone number ${finalPhoneNumber} already in use, generating unique number for ${name}`);
+        let counter = 1;
+        do {
+          finalPhoneNumber = 9999990000 + counter;
+          counter++;
+          if (counter > 9999) {
+            throw new Error("Unable to generate unique phone number");
+          }
+        } while (await User.findOne({ phoneNumber: finalPhoneNumber }));
+      }
     }
 
     // Generate default password
@@ -555,7 +570,9 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         if (!salesPerson) {
           // Auto-create sales person if not found
           console.log(`🔄 Auto-creating sales person: ${row["Refrence"]}`);
-          salesPerson = await createSalesPerson(row["Refrence"]);
+          // Use the mobile number from Excel for the sales person
+          const salesPersonPhoneNumber = primaryNumber || null;
+          salesPerson = await createSalesPerson(row["Refrence"], salesPersonPhoneNumber);
           
           // Add to cache for future lookups
           salesPersonMap.set(row["Refrence"], salesPerson);
@@ -566,6 +583,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           }
           results.autoCreatedSalesPersons.push({
             name: row["Refrence"],
+            phoneNumber: salesPersonPhoneNumber,
             message: "Auto-created during import"
           });
         }
