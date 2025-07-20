@@ -1132,6 +1132,195 @@ const getDealerWalletTransactions = async (req, res) => {
   }
 };
 
+/**
+ * Export dealer wallet transactions to CSV
+ */
+const exportDealerWalletTransactionsCSV = async (req, res) => {
+  try {
+    console.log('\n========== EXPORT DEALER WALLET TRANSACTIONS CSV ==========');
+    const { dealerId } = req.params;
+    const { type } = req.query;
+    
+    console.log('Request parameters:');
+    console.log('- dealerId:', dealerId);
+    console.log('- type:', type || 'All');
+
+    // Validate dealerId
+    if (!dealerId) {
+      console.log('No dealer ID provided');
+      return res.status(400).json({
+        success: false,
+        message: "Dealer ID is required"
+      });
+    }
+
+    // Find the dealer
+    const dealer = await User.findOne({
+      _id: dealerId,
+      jobTitle: "DEALER",
+      isDisabled: false
+    }).select('name phoneNumber');
+
+    if (!dealer) {
+      console.log('Dealer not found or is disabled');
+      return res.status(404).json({
+        success: false,
+        message: "Dealer not found"
+      });
+    }
+
+    // Find the wallet
+    console.log('Finding wallet for dealer...');
+    const wallet = await DealerWallet.findOne({ dealer: dealerId });
+
+    if (!wallet) {
+      console.log('No wallet found for dealer');
+      return res.status(404).json({
+        success: false,
+        message: "Wallet not found for this dealer"
+      });
+    }
+
+    console.log('Wallet found with ID:', wallet._id);
+    console.log('Total transactions:', wallet.transactions?.length || 0);
+
+    // Filter transactions
+    let filteredTransactions = wallet.transactions || [];
+    
+    // Filter by type if specified
+    if (type && ['CREDIT', 'DEBIT', 'INVENTORY_ADD', 'INVENTORY_BOOK', 'INVENTORY_RELEASE'].includes(type.toUpperCase())) {
+      const typeFilter = type.toUpperCase();
+      console.log('Filtering by type:', typeFilter);
+      filteredTransactions = filteredTransactions.filter(t => t.type === typeFilter);
+      console.log('Transactions after filtering:', filteredTransactions.length);
+    }
+
+    // Sort by createdAt in descending order
+    filteredTransactions.sort((a, b) => {
+      if (!a.createdAt || !b.createdAt) return 0;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
+    // Format transactions for CSV
+    const csvData = filteredTransactions.map((transaction, index) => {
+      // Extract farmer name and village from description for cleaner format
+      let description = transaction.description;
+      
+      // Safety check: ensure description is a string
+      if (typeof description !== 'string') {
+        console.log(`Warning: Non-string description found in transaction ${index + 1}:`, description);
+        if (description && typeof description === 'object') {
+          // If it's an object, try to extract meaningful information
+          if (description.name && description.village) {
+            description = `${description.name} (${description.village})`;
+          } else if (description.name) {
+            description = description.name;
+          } else if (description.village) {
+            description = description.village;
+          } else {
+            description = 'Order';
+          }
+        } else {
+          description = String(description || 'Order');
+        }
+      }
+      
+      // For wallet payment transactions, extract just farmer name and village
+      if (transaction.description.includes('Wallet payment collected for Order #')) {
+        if (transaction.description.includes(' - Dealer Order')) {
+          description = 'Dealer Order';
+        } else if (transaction.description.includes(' - ')) {
+          // Extract just the farmer name and village
+          const farmerInfo = transaction.description.split(' - ')[1];
+          if (farmerInfo && !farmerInfo.includes('Unknown')) {
+            description = farmerInfo; // Just the farmer name and village
+          } else {
+            description = 'Order';
+          }
+        } else {
+          description = 'Order';
+        }
+      } else if (transaction.description.includes('Wallet payment for Order #')) {
+        if (transaction.description.includes(' - Dealer Order')) {
+          description = 'Dealer Order';
+        } else if (transaction.description.includes(' - ')) {
+          const farmerInfo = transaction.description.split(' - ')[1];
+          if (farmerInfo && !farmerInfo.includes('Unknown')) {
+            description = farmerInfo; // Just the farmer name and village
+          } else {
+            description = 'Order';
+          }
+        } else {
+          description = 'Order';
+        }
+      } else if (transaction.description.includes('Payment collected for Order #')) {
+        if (transaction.description.includes(' - Dealer Order')) {
+          description = 'Dealer Order';
+        } else if (transaction.description.includes(' - ')) {
+          const farmerInfo = transaction.description.split(' - ')[1];
+          if (farmerInfo && !farmerInfo.includes('Unknown')) {
+            description = farmerInfo; // Just the farmer name and village
+          } else {
+            description = 'Order';
+          }
+        } else {
+          description = 'Order';
+        }
+      }
+
+      return {
+        'Sr No': index + 1,
+        'Date': new Date(transaction.createdAt).toLocaleDateString('en-IN'),
+        'Type': transaction.type,
+        'Amount': transaction.amount,
+        'Balance Before': transaction.balanceBefore,
+        'Balance After': transaction.balanceAfter,
+        'Description': description,
+        'Status': transaction.status,
+        'Reference': transaction.reference || '',
+        'Created At': new Date(transaction.createdAt).toLocaleString('en-IN')
+      };
+    });
+
+    // Create CSV content
+    const csvHeaders = [
+      'Sr No',
+      'Date', 
+      'Type',
+      'Amount',
+      'Balance Before',
+      'Balance After',
+      'Description',
+      'Status',
+      'Reference',
+      'Created At'
+    ];
+
+    const csvContent = [
+      csvHeaders.join(','),
+      ...csvData.map(row => 
+        csvHeaders.map(header => `"${row[header] || ''}"`).join(',')
+      )
+    ].join('\n');
+
+    // Set response headers for CSV download
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${dealer.name}_wallet_transactions_${new Date().toISOString().split('T')[0]}.csv"`);
+    
+    console.log('Successfully prepared CSV export');
+    console.log('========== EXPORT DEALER WALLET TRANSACTIONS CSV COMPLETE ==========\n');
+    
+    return res.status(200).send(csvContent);
+  } catch (error) {
+    console.error("Error exporting dealer wallet transactions CSV:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error exporting dealer wallet transactions CSV",
+      error: error.message
+    });
+  }
+};
+
 // Updated getDealerInventoryStats function with fixes
 export const getDealerWalletStats = async (req, res) => {
   try {
@@ -1392,5 +1581,6 @@ export {
   aboutMe,
   calculatePerformanceMetrics,
   getDealerWalletDetails,
-  getDealerWalletTransactions
+  getDealerWalletTransactions,
+  exportDealerWalletTransactionsCSV
 };

@@ -375,6 +375,27 @@ const createOne = (Model, modelName) =>
           // Set dealer in orderData
           orderData.dealer = salesPerson._id;
         }
+        // Case 2.5: If dealer is selected but salesPerson is not a dealer (e.g., office staff selects dealer)
+        else if (orderData.dealer && !componyQuota) {
+          // Handle dealer quota allocation for selected dealer
+          const allocation = await handleQuantityAllocation(
+            orderData.dealer,
+            orderData.plantName,
+            orderData.plantSubtype,
+            bookingSlot,
+            numberOfPlants,
+            session
+          );
+
+          if (allocation.fromSlot > 0) {
+            await updateSlot(
+              bookingSlot,
+              allocation.fromSlot,
+              "subtract",
+              session
+            );
+          }
+        }
         // Case 3: Regular farmer order
         else {
           await updateSlot(bookingSlot, numberOfPlants, "subtract", session);
@@ -1079,6 +1100,9 @@ const getAll = (Model, modelName) =>
       endDate,
       dispatched = false, // New parameter
       salesPerson, // Added salesPerson parameter
+      dealer, // Added dealer parameter
+      village, // Added village parameter
+      district, // Added district parameter
       page = 1,
       limit = 100,
       status,
@@ -1110,6 +1134,13 @@ const getAll = (Model, modelName) =>
         });
       }
 
+      // Apply dealer filter if present
+      if (dealer) {
+        pipeline.push({
+          $match: { dealer: new mongoose.Types.ObjectId(dealer) },
+        });
+      }
+
       if (status) {
         // Convert comma-separated string to array and handle single status case
         const statusArray = status.split(",").map((s) => s.trim());
@@ -1133,60 +1164,64 @@ const getAll = (Model, modelName) =>
         const end = parseDate(endDate, true);
         pipeline.push({ $match: { orderBookingDate: { $gte: start, $lte: end } } });
       }
+    }
 
-      // Search filtering by `orderId` or `farmer.name`
-      // Search filtering by `orderId`, `farmer.name`, or `farmer.mobileNumber`
-      // Replace this section in your getAll function to enable partial mobile number matching:
+    // Search filtering
+    if (search) {
+      const searchRegex = new RegExp(search, "i");
 
-      // Search filtering by `orderId`, `farmer.name`, or `farmer.mobileNumber` (including partial matches)
-      if (search) {
-        const searchRegex = new RegExp(search, "i");
+      pipeline.push({
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      });
 
-        // First, do the farmer lookup to enable searching through farmer fields
-        pipeline.push({
-          $lookup: {
-            from: "farmers",
-            localField: "farmer",
-            foreignField: "_id",
-            as: "farmer",
+      pipeline.push({
+        $addFields: {
+          "farmer.mobileNumberStr": {
+            $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
           },
-        });
+        },
+      });
 
-        // For mobile number partial matching, we need to convert numbers to strings
-        // Add a stage to create a string version of the mobile number
-        pipeline.push({
-          $addFields: {
-            "farmer.mobileNumberStr": {
-              $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
-            },
-          },
-        });
+      const isNumeric = /^\d+$/.test(search);
+      const searchAsNumber = isNumeric ? Number(search) : NaN;
 
-        // Try to parse the search for orderId if it's fully numeric
-        const isNumeric = /^\d+$/.test(search);
-        const searchAsNumber = isNumeric ? Number(search) : NaN;
+      pipeline.push({
+        $match: {
+          $or: [
+            { orderId: isNumeric ? searchAsNumber : search },
+            { "farmer.name": searchRegex },
+            { "farmer.mobileNumberStr": searchRegex },
+          ],
+        },
+      });
+    } else {
+      pipeline.push({
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      });
+    }
 
-        // Updated match criteria to include partial mobile number matches
-        pipeline.push({
-          $match: {
-            $or: [
-              { orderId: isNumeric ? searchAsNumber : search }, // Match orderId as number if numeric
-              { "farmer.name": searchRegex }, // Match farmer name
-              { "farmer.mobileNumberStr": searchRegex }, // Match partial mobile number as string
-            ],
-          },
-        });
-      } else {
-        // Lookup farmer data if search is not present (so farmer data is always included)
-        pipeline.push({
-          $lookup: {
-            from: "farmers",
-            localField: "farmer",
-            foreignField: "_id",
-            as: "farmer",
-          },
-        });
+    // Apply village and district filters after farmer lookup
+    if (village || district) {
+      const locationMatch = {};
+      if (village) {
+        locationMatch["farmer.village"] = new RegExp(village, "i");
       }
+      if (district) {
+        locationMatch["farmer.district"] = new RegExp(district, "i");
+      }
+      pipeline.push({
+        $match: locationMatch,
+      });
     }
 
     // Common lookups for both normal queries and slotId queries
@@ -1474,8 +1509,10 @@ const getAll = (Model, modelName) =>
                   input: "$salesPerson",
                   as: "sales",
                   in: {
+                    _id: "$$sales._id",
                     name: "$$sales.name",
                     phoneNumber: "$$sales.phoneNumber",
+                    jobTitle: "$$sales.jobTitle",
                   },
                 },
               },
@@ -1560,6 +1597,15 @@ const getAll = (Model, modelName) =>
     // Execute the pipeline
     const results = await Model.aggregate(pipeline);
 
+    // Calculate total count for pagination (without skip and limit)
+    const countPipeline = pipeline.slice(0, -3); // Remove sort, skip, and limit stages
+    const totalCount = await Model.aggregate([
+      ...countPipeline,
+      { $count: "total" }
+    ]);
+    const total = totalCount.length > 0 ? totalCount[0].total : 0;
+    const totalPages = Math.ceil(total / parseInt(limit, 10));
+
     // Transform documents for response
     const transformedResults = results.map((item) => {
       const { _id, ...rest } = item;
@@ -1569,7 +1615,13 @@ const getAll = (Model, modelName) =>
     const response = generateResponse(
       "Success",
       `${modelName} found successfully`,
-      transformedResults,
+      {
+        data: transformedResults,
+        total: total,
+        totalPages: totalPages,
+        currentPage: parseInt(page, 10),
+        limit: parseInt(limit, 10)
+      },
       undefined
     );
 

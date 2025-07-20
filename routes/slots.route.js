@@ -16,6 +16,7 @@ import {
   releaseBufferPlantsController,
   addPlantsToCapacityController,
   createSlotsForSubtype,
+  getSlotDetailsById,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -25,6 +26,8 @@ slotRouter.get("/slots/get-plants", getPlantNames);
 slotRouter.get("/slots/subtyps", getSubtypesByPlant);
 slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.get("/slots/stats", getPlantStats);
+slotRouter.get("/slots/dashBoardStats", getDashboardInsights);
+slotRouter.get("/slots/:slotId/details", getSlotDetailsById);
 slotRouter.post("/slots/manual", addManualSlot);
 slotRouter.delete("/slots/manual/:slotId", deleteManualSlot);
 slotRouter.post("/slots/create-multiple-years", createSlotsForMultipleYears);
@@ -40,8 +43,6 @@ slotRouter.post("/slots/:slotId/add-capacity", addPlantsToCapacityController);
 
 // General slot update route - MUST be after specific routes
 slotRouter.put("/slots/:slotId", updateSlotFieldById);
-
-slotRouter.get("/slots/dashBoardStats", getDashboardInsights);
 
 // Migration route for buffer calculations
 slotRouter.post("/slots/migrate-buffers", migrateBufferCalculations);

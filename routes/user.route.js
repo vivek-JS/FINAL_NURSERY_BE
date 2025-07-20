@@ -15,6 +15,7 @@ import {
   getSalesAnalytics,
   getAllDealersWithWalletInfo,
   getDealerWalletTransactions,
+  exportDealerWalletTransactionsCSV,
   getDealerWalletStats,
   refreshToken,
   logout,
@@ -76,6 +77,7 @@ router
   .get("/dealers", getAllDealersWithWalletInfo)
   .get("/dealers/:dealerId", getDealerWalletDetails)
   .get("/dealers/transactions/:dealerId", getDealerWalletTransactions)
+  .get("/dealers/transactions/:dealerId/csv", exportDealerWalletTransactionsCSV)
   .get("/dealerssss/stats", getDealerWalletStats)
   .get("/dealerssss/stats/:dealerId", getDealerWalletStats);
 export default router;

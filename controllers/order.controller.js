@@ -7,6 +7,8 @@ import Dispatch from "../models/dispatch.model.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import mongoose from "mongoose";
+import User from "../models/user.model.js";
+import Farmer from "../models/farmer.model.js";
 
 const updateDealerWalletBalance = async (dealerId, paymentAmount) => {
   let wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -192,9 +194,9 @@ const addNewPayment = catchAsync(async (req, res, next) => {
   } = req.body;
 
   try {
-    // Find the order
+    // Find the order and populate farmer details
     console.log("Finding order with ID:", orderId);
-    const order = await Order.findById(orderId);
+    const order = await Order.findById(orderId).populate('farmer', 'name village');
     if (!order) {
       console.error("Order not found");
       return res.status(404).json({ message: "Order not found" });
@@ -204,11 +206,12 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     console.log("- ID:", order._id);
     console.log("- Dealer:", order.dealer);
     console.log("- Dealer Type:", typeof order.dealer);
+    console.log("- Sales Person:", order.salesPerson);
     console.log("- isDealerOrder:", order.dealerOrder);
 
     // Check if order has a dealer
     if (!order.dealer) {
-      console.warn("Order has no dealer associated");
+      console.warn("Order has no dealer field, will check salesPerson");
     }
 
     // Convert paidAmount to number
@@ -261,6 +264,29 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       isWalletPayment,
     };
 
+    // Extract farmer details BEFORE saving (to avoid losing populated data)
+    console.log("DEBUG: Farmer data check BEFORE saving:");
+    console.log("- order.dealerOrder:", order.dealerOrder);
+    console.log("- order.farmer:", order.farmer);
+    console.log("- order.farmer type:", typeof order.farmer);
+    console.log("- order.farmer name:", order.farmer?.name);
+    console.log("- order.farmer village:", order.farmer?.village);
+    
+    let farmerInfo = 'Unknown Customer';
+    if (order.dealerOrder) {
+      // For dealer orders, use dealer info instead of farmer
+      farmerInfo = 'Dealer Order';
+      console.log("DEBUG: Using Dealer Order for description");
+    } else if (order.farmer && typeof order.farmer === 'object' && order.farmer.name) {
+      // For farmer orders, use farmer name and village
+      const farmerName = order.farmer.name || 'Unknown Farmer';
+      const farmerVillage = order.farmer.village || 'Unknown Village';
+      farmerInfo = `${farmerName} (${farmerVillage})`;
+      console.log("DEBUG: Using farmer info:", farmerInfo);
+    } else {
+      console.log("DEBUG: No farmer data found, using Unknown Customer");
+    }
+
     // Add the payment to order
     console.log("Adding payment to order");
     order.payment.push(newPayment);
@@ -272,9 +298,27 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 
     // Process wallet transaction if needed
     let transaction = null;
-    const dealerId = order.dealer;
+    
+    // Get dealer ID from order.dealer or from salesPerson if they are a dealer
+    let dealerId = order.dealer;
+    
+    // If no dealer field, check if salesPerson is a dealer
+    if (!dealerId && order.salesPerson) {
+      try {
+        // Fetch the sales person to check their jobTitle
+        const User = mongoose.model('User');
+        const salesPerson = await User.findById(order.salesPerson);
+        if (salesPerson && salesPerson.jobTitle === 'DEALER') {
+          dealerId = salesPerson._id;
+          console.log("Found dealer from salesPerson:", dealerId);
+        }
+      } catch (error) {
+        console.error("Error fetching sales person:", error);
+      }
+    }
 
     if (dealerId) {
+      console.log("Processing wallet transaction for dealer:", dealerId);
       try {
         // First, debug the current wallet state
         console.log("Checking current wallet state for dealer:", dealerId);
@@ -286,19 +330,40 @@ const addNewPayment = catchAsync(async (req, res, next) => {
 
         // Wallet impact based on payment type and status
         if (isWalletPayment && finalPaymentStatus === "PENDING") {
-          // Deduct from wallet (negative amount)
+          // Deduct from wallet (negative amount) - when dealer pays from wallet
           walletAmount = -amount;
-          description = `Wallet payment for Order #${order._id}`;
+          description = `Wallet payment for Order #${order._id} - ${farmerInfo}`;
           console.log("This is a wallet payment, deducting amount from wallet");
+        } else if (isWalletPayment && finalPaymentStatus === "COLLECTED") {
+          // Deduct from wallet (negative amount) - when dealer pays from wallet and it's collected
+          walletAmount = -amount;
+          description = `Wallet payment collected for Order #${order._id} - ${farmerInfo}`;
+          console.log("This is a collected wallet payment, deducting amount from wallet");
         } else if (order.dealerOrder && finalPaymentStatus === "COLLECTED") {
-          // Add to wallet (positive amount)
+          // Add to wallet (positive amount) - when payment is collected from dealer
           walletAmount = amount;
-          description = `Payment collected for Order #${order._id} via ${modeOfPayment}`;
+          description = `Payment collected for Order #${order._id} via ${modeOfPayment} - ${farmerInfo}`;
           console.log(
             "This is a collected payment for dealer order, adding to wallet"
           );
+        } else if (order.dealerOrder && isWalletPayment && finalPaymentStatus === "COLLECTED") {
+          // Special case: Dealer order with wallet payment marked as collected
+          // This means the dealer is using their wallet balance to pay
+          walletAmount = -amount;
+          description = `Wallet payment collected for Dealer Order #${order._id} - ${farmerInfo}`;
+          console.log("This is a dealer wallet payment being collected");
+        } else if (order.dealerOrder && !isWalletPayment && finalPaymentStatus === "PENDING") {
+          // Dealer order with regular payment marked as pending
+          // This means we're recording a pending payment from dealer
+          walletAmount = 0; // No immediate wallet impact for pending payments
+          description = `Pending payment recorded for Dealer Order #${order._id} - ${farmerInfo}`;
+          console.log("This is a pending payment for dealer order");
         } else {
           console.log("Payment does not meet criteria for wallet transaction");
+          console.log("Debug info:");
+          console.log("- isWalletPayment:", isWalletPayment);
+          console.log("- finalPaymentStatus:", finalPaymentStatus);
+          console.log("- order.dealerOrder:", order.dealerOrder);
         }
 
         // If there's a wallet impact, record the transaction
@@ -348,7 +413,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       }
     } else {
       console.log(
-        "No dealer associated with this order, skipping wallet transaction"
+        "No dealer found (neither order.dealer nor salesPerson as dealer), skipping wallet transaction"
       );
     }
 
@@ -403,11 +468,17 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
   } = req.body;
 
   try {
-    // Find the order
-    const order = await Order.findById(orderId);
+    // Find the order and populate farmer details
+    const order = await Order.findById(orderId).populate('farmer', 'name village');
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
+    
+    console.log("DEBUG: Order after population:");
+    console.log("- order.farmer:", order.farmer);
+    console.log("- order.farmer type:", typeof order.farmer);
+    console.log("- order.farmer name:", order.farmer?.name);
+    console.log("- order.farmer village:", order.farmer?.village);
 
     // Convert paidAmount to number
     const amount = Number(paidAmount);
@@ -435,15 +506,27 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
       let walletAmount = 0;
       let description = "";
 
+      // Get farmer details for description
+      let farmerInfo = 'Unknown Customer';
+      if (order.dealerOrder) {
+        // For dealer orders, use dealer info instead of farmer
+        farmerInfo = 'Dealer Order';
+      } else if (order.farmer) {
+        // For farmer orders, use farmer name and village
+        const farmerName = order.farmer.name || 'Unknown Farmer';
+        const farmerVillage = order.farmer.village || 'Unknown Village';
+        farmerInfo = `${farmerName} (${farmerVillage})`;
+      }
+
       // Determine the wallet impact
       if (isWalletPayment && paymentStatus === "PENDING") {
         // Deduct from wallet (negative amount)
         walletAmount = -amount;
-        description = `Wallet payment for Order #${order._id}`;
+        description = `Wallet payment for Order #${order._id} - ${farmerInfo}`;
       } else if (order.dealerOrder && paymentStatus === "COLLECTED") {
         // Add to wallet (positive amount)
         walletAmount = amount;
-        description = `Payment collected for Order #${order._id} via ${modeOfPayment}`;
+        description = `Payment collected for Order #${order._id} via ${modeOfPayment} - ${farmerInfo}`;
       }
 
       // Process the wallet transaction if there is an impact
@@ -1211,6 +1294,199 @@ const getAllPayments = catchAsync(async (req, res, next) => {
   }
 });
 
+// Get unique villages from orders
+const getUniqueVillages = catchAsync(async (req, res, next) => {
+  try {
+    const villages = await Order.aggregate([
+      {
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      },
+      {
+        $unwind: "$farmer",
+      },
+      {
+        $group: {
+          _id: "$farmer.village",
+        },
+      },
+      {
+        $match: {
+          _id: { $ne: null, $ne: "" },
+        },
+      },
+      {
+        $sort: { _id: 1 },
+      },
+      {
+        $project: {
+          _id: 0,
+          village: "$_id",
+        },
+      },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: villages.map((v) => v.village),
+    });
+  } catch (error) {
+    console.error("Error fetching unique villages:", error);
+    res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching villages.",
+      error: error.message,
+    });
+  }
+});
+
+// Get unique districts from orders
+const getUniqueDistricts = catchAsync(async (req, res, next) => {
+  try {
+    const districts = await Order.aggregate([
+      {
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      },
+      {
+        $unwind: "$farmer",
+      },
+      {
+        $group: {
+          _id: "$farmer.district",
+        },
+      },
+      {
+        $match: {
+          _id: { $ne: null, $ne: "" },
+        },
+      },
+      {
+        $sort: { _id: 1 },
+      },
+      {
+        $project: {
+          _id: 0,
+          district: "$_id",
+        },
+      },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: districts.map((d) => d.district),
+    });
+  } catch (error) {
+    console.error("Error fetching unique districts:", error);
+    res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching districts.",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * Get dealer wallet balance for a specific order
+ * This is useful for frontend to display current wallet balance when adding payments
+ */
+const getDealerWalletBalanceForOrder = catchAsync(async (req, res, next) => {
+  const { orderId } = req.params;
+
+  try {
+    // Find the order
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Order not found" 
+      });
+    }
+
+    // Check if this is a dealer order
+    if (!order.dealerOrder || !order.dealer) {
+      return res.status(400).json({ 
+        success: false,
+        message: "This is not a dealer order" 
+      });
+    }
+
+    // Get dealer information
+    const dealer = await User.findById(order.dealer).select('name phoneNumber');
+    if (!dealer) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Dealer not found" 
+      });
+    }
+
+    // Get wallet information
+    const wallet = await DealerWallet.findOne({ dealer: order.dealer });
+    
+    // Calculate order total
+    const orderTotal = order.numberOfPlants * order.rate;
+    
+    // Calculate total paid amount
+    const totalPaid = order.payment
+      .filter(p => p.paymentStatus === "COLLECTED")
+      .reduce((sum, p) => sum + (p.paidAmount || 0), 0);
+    
+    // Calculate remaining amount
+    const remainingAmount = orderTotal - totalPaid;
+
+    const response = {
+      success: true,
+      message: "Dealer wallet balance retrieved successfully",
+      data: {
+        order: {
+          orderId: order.orderId,
+          orderTotal: orderTotal,
+          totalPaid: totalPaid,
+          remainingAmount: remainingAmount,
+          numberOfPlants: order.numberOfPlants,
+          rate: order.rate
+        },
+        dealer: {
+          _id: dealer._id,
+          name: dealer.name,
+          phoneNumber: dealer.phoneNumber
+        },
+        wallet: wallet ? {
+          _id: wallet._id,
+          availableAmount: wallet.availableAmount || 0,
+          totalQuantity: wallet.entries ? wallet.entries.reduce((sum, entry) => sum + (entry.quantity || 0), 0) : 0,
+          totalBookedQuantity: wallet.entries ? wallet.entries.reduce((sum, entry) => sum + (entry.bookedQuantity || 0), 0) : 0,
+          totalRemainingQuantity: wallet.entries ? wallet.entries.reduce((sum, entry) => sum + (entry.remainingQuantity || 0), 0) : 0,
+          transactionsCount: wallet.transactions ? wallet.transactions.length : 0
+        } : {
+          availableAmount: 0,
+          totalQuantity: 0,
+          totalBookedQuantity: 0,
+          totalRemainingQuantity: 0,
+          transactionsCount: 0
+        }
+      }
+    };
+
+    return res.status(200).json(response);
+  } catch (error) {
+    console.error("Error getting dealer wallet balance for order:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error retrieving dealer wallet balance",
+      error: error.message
+    });
+  }
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -1222,5 +1498,8 @@ export {
   createDealerOrder, 
   addAfterDispatchedOrderIds,
   getOrdersByStatus,
-  getAllPayments
+  getAllPayments,
+  getUniqueVillages,
+  getUniqueDistricts,
+  getDealerWalletBalanceForOrder
 };

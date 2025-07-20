@@ -1592,7 +1592,7 @@ export const getOrderStatusDistribution = catchAsync(async (req, res, next) => {
   res.status(200).json({
     success: true,
     data: {
-      orderStatusDistribution,
+      orderStatusDistribution: statusDistribution,
       paymentStatusDistribution,
       summary: {
         totalOrders: statusDistribution.reduce((sum, s) => sum + s.count, 0),
@@ -1836,6 +1836,8 @@ export const getPlantPerformanceComparison = catchAsync(async (req, res, next) =
     }
   });
 });
+
+
 
 // Helper function to calculate profit analysis
 const calculateProfitAnalysis = async (dateFilter) => {

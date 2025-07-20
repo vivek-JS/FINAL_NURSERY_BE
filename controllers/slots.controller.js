@@ -1982,6 +1982,66 @@ const populateSlotsWithOrders = async (slots) => {
   }
 };
 
+// Get slot details by ID
+export const getSlotDetailsById = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    
+    if (!slotId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Slot ID is required" 
+      });
+    }
+
+    console.log("Getting slot details for slot ID:", slotId);
+
+    // Import the utility function
+    const { getSlotInfoWithBookedPlants } = await import('../utility/slotBookedPlantsCalculator.js');
+    
+    // Get slot details
+    const slotInfo = await getSlotInfoWithBookedPlants(slotId);
+    
+    if (!slotInfo) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Slot not found" 
+      });
+    }
+
+    // Format the response
+    const response = {
+      success: true,
+      data: {
+        slotId: slotInfo.slotId,
+        startDay: slotInfo.startDay,
+        endDay: slotInfo.endDay,
+        month: slotInfo.month,
+        totalPlants: slotInfo.totalPlants,
+        totalBookedPlants: slotInfo.totalBookedPlants,
+        availablePlants: slotInfo.availablePlants,
+        isOverflow: slotInfo.isOverflow,
+        buffer: slotInfo.buffer,
+        effectiveBuffer: slotInfo.effectiveBuffer,
+        bufferAdjustedCapacity: slotInfo.bufferAdjustedCapacity,
+        bufferAmount: slotInfo.bufferAmount,
+        originalTotalPlants: slotInfo.originalTotalPlants
+      }
+    };
+
+    console.log("Slot details response:", response);
+    res.status(200).json(response);
+    
+  } catch (error) {
+    console.error("Error getting slot details:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Internal server error", 
+      error: error.message 
+    });
+  }
+};
+
 // Example API route setup
 import express from "express";
 const router = express.Router();

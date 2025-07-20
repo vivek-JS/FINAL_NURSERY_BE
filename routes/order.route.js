@@ -9,7 +9,10 @@ import {
   createDealerOrder,
   addAfterDispatchedOrderIds,
   getOrdersByStatus,
-  getAllPayments
+  getAllPayments,
+  getUniqueVillages,
+  getUniqueDistricts,
+  getDealerWalletBalanceForOrder
 } from "../controllers/order.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -24,6 +27,9 @@ router
   .get("/getOrders", getOrders)
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)
+  .get("/villages", getUniqueVillages)
+  .get("/districts", getUniqueDistricts)
+  .get("/dealer-wallet/:orderId", getDealerWalletBalanceForOrder)
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .patch(
     "/payment/:orderId",
@@ -38,6 +44,5 @@ router
   )
   .post("/dealer-order", createDealerOrder)
   .patch("/afterOrder",addAfterDispatchedOrderIds)
-
 
 export default router;

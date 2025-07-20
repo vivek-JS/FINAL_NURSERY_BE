@@ -34,6 +34,9 @@ const allowedParams = [
   "monthName",
   "startDay",
   "endDay",
+  "village",
+  "district",
+  "dealer",
 ];
 
 const parameterWhiteListing = (req, res, next) => {
