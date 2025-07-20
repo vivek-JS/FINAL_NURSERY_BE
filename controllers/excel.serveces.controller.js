@@ -2,6 +2,7 @@
 import mongoose from "mongoose";
 import XLSX from "xlsx";
 import moment from "moment";
+import bcrypt from "bcryptjs";
 import Farmer from "../models/farmer.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
@@ -104,6 +105,43 @@ export const cleanAndValidateMobileNumber = (mobileData) => {
 export const getSlotInfo = async (slotId) => {
   const { getSlotInfoWithBookedPlants } = await import('../utility/slotBookedPlantsCalculator.js');
   return await getSlotInfoWithBookedPlants(slotId);
+};
+
+// Helper function to automatically create sales person
+const createSalesPerson = async (name, phoneNumber = null) => {
+  try {
+    // Check if sales person already exists by name
+    const existingUser = await User.findOne({ name: name });
+    if (existingUser) {
+      return existingUser;
+    }
+
+    // Generate default password
+    const DEFAULT_PASSWORD = "12345678";
+    const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, 12);
+
+    // Create new sales person
+    const newSalesPerson = new User({
+      name: name,
+      phoneNumber: phoneNumber || null,
+      password: hashedPassword,
+      role: "SALES",
+      jobTitle: "SALES",
+      isPasswordSet: false, // They need to reset password on first login
+      isDisabled: false,
+      isOnboarded: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    await newSalesPerson.save();
+    console.log(`✅ Auto-created sales person: ${name}${phoneNumber ? ` (${phoneNumber})` : ''}`);
+    
+    return newSalesPerson;
+  } catch (error) {
+    console.error(`❌ Error creating sales person ${name}:`, error);
+    throw new Error(`Failed to create sales person "${name}": ${error.message}`);
+  }
 };
 
 export const validateExcelStructure = (buffer) => {
@@ -275,6 +313,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
   const results = {
     success: [],
     errors: [],
+    autoCreatedSalesPersons: [],
     summary: {
       totalProcessed: 0,
       successfulImports: 0,
@@ -497,10 +536,24 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           }
         }
 
-        // Get sales person
-        const salesPerson = salesPersonMap.get(row["Refrence"]);
+        // Get or create sales person
+        let salesPerson = salesPersonMap.get(row["Refrence"]);
         if (!salesPerson) {
-          throw new Error(`Sales person "${row["Refrence"]}" not found`);
+          // Auto-create sales person if not found
+          console.log(`🔄 Auto-creating sales person: ${row["Refrence"]}`);
+          salesPerson = await createSalesPerson(row["Refrence"]);
+          
+          // Add to cache for future lookups
+          salesPersonMap.set(row["Refrence"], salesPerson);
+          
+          // Add to results for tracking
+          if (!results.autoCreatedSalesPersons) {
+            results.autoCreatedSalesPersons = [];
+          }
+          results.autoCreatedSalesPersons.push({
+            name: row["Refrence"],
+            message: "Auto-created during import"
+          });
         }
 
         // Get plant and variety
@@ -643,6 +696,14 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
   const duration = (endTime - startTime) / 1000;
   console.log(`🎉 Excel import completed in ${duration.toFixed(2)} seconds`);
   console.log(`📊 Summary: ${results.summary.successfulImports} successful, ${results.summary.failedImports} failed`);
+  
+  // Log auto-created sales persons
+  if (results.autoCreatedSalesPersons.length > 0) {
+    console.log(`👥 Auto-created ${results.autoCreatedSalesPersons.length} sales persons:`);
+    results.autoCreatedSalesPersons.forEach(sp => {
+      console.log(`   - ${sp.name}`);
+    });
+  }
 
   return results;
 };
