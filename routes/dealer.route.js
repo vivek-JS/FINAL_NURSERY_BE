@@ -4,18 +4,17 @@ import {
   getDealerOrdersByBooking,
   updateDealerOrderPayment,
 } from "../controllers/dealer.controller.js";
-import { requirePaymentAddAccess } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
 
 // Create new dealer order
 router.post("/orders", createDealerOrder);
 
-// Get all orders for authenticated dealer
-router.get("/orders", getDealerOrdersByBooking);
+// Get dealer orders by booking
+router.get("/orders/:bookingId", getDealerOrdersByBooking);
 
-// Update order payment - restricted to accountants, super admins, and office admins
-router.post("/orders/:orderId/payment", requirePaymentAddAccess, updateDealerOrderPayment);
+// Update order payment - anyone can add payments
+router.post("/orders/:orderId/payment", updateDealerOrderPayment);
 
 export default router;
 

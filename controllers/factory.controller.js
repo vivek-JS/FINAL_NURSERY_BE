@@ -114,20 +114,25 @@ export const updateSlot = async (
       throw new Error("Specific slot not found");
     }
 
-    if (targetSlot.totalPlants < numberOfPlants) {
+    // Calculate available plants considering buffer and already booked plants
+    const effectiveBuffer = targetSlot.effectiveBuffer || targetSlot.buffer || 0;
+    const bufferAmount = Math.round((targetSlot.totalPlants * effectiveBuffer) / 100);
+    const bufferAdjustedCapacity = targetSlot.totalPlants - bufferAmount;
+    const availablePlants = Math.max(0, bufferAdjustedCapacity - (targetSlot.totalBookedPlants || 0));
+    
+    if (numberOfPlants > availablePlants) {
       const slotDateInfo =
         targetSlot.startDay && targetSlot.endDay
           ? `Slot period: ${targetSlot.startDay} to ${targetSlot.endDay}`
           : targetSlot.month
           ? `Slot month: ${targetSlot.month}`
           : "";
-      throw new Error(
-        `Not enough plants available. ${
-          targetSlot.totalPlants < 10000
-            ? `${targetSlot.totalPlants} plants available.`
-            : ""
-        } ${slotDateInfo}`
-      );
+      
+      const errorMessage = availablePlants > 0 
+        ? `Not enough plants available. Only ${availablePlants} plants available. Please book in other slots. ${slotDateInfo}`
+        : `No plants available in this slot. Please book in other slots. ${slotDateInfo}`;
+      
+      throw new Error(errorMessage);
     }
   }
 
@@ -705,6 +710,8 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
+
+
       // Handle payment updates
       if (
         !existingDoc.dealerOrder &&
@@ -820,13 +827,25 @@ const handleSlotUpdatesWithSession = async (
         throw new AppError("Specific slot not found", 404);
       }
 
-      if (slot.totalPlants < plantsNeeded) {
-        console.log("hii")
-
-        throw new AppError(
-          `Not enough plants available in slot. Only ${slot.totalPlants} plants available.`,
-          400
-        );
+      // Calculate available plants considering buffer and already booked plants
+      const effectiveBuffer = slot.effectiveBuffer || slot.buffer || 0;
+      const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
+      const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
+      const availablePlants = Math.max(0, bufferAdjustedCapacity - (slot.totalBookedPlants || 0));
+      
+      if (plantsNeeded > availablePlants) {
+        const slotDateInfo =
+          slot.startDay && slot.endDay
+            ? `Slot period: ${slot.startDay} to ${slot.endDay}`
+            : slot.month
+            ? `Slot month: ${slot.month}`
+            : "";
+        
+        const errorMessage = availablePlants > 0 
+          ? `Not enough plants available in slot. Only ${availablePlants} plants available. Please book in other slots. ${slotDateInfo}`
+          : `No plants available in this slot. Please book in other slots. ${slotDateInfo}`;
+        
+        throw new AppError(errorMessage, 400);
       }
     };
 
@@ -913,13 +932,25 @@ const handleSlotUpdates = async (existingDoc, filteredBody) => {
         throw new AppError("Specific slot not found", 404);
       }
 
-      if (slot.totalPlants < plantsNeeded) {
-        console.log("hii")
-
-        throw new AppError(
-          `Not enough plants available in slot. Only ${slot.totalPlants} plants available.`,
-          400
-        );
+      // Calculate available plants considering buffer and already booked plants
+      const effectiveBuffer = slot.effectiveBuffer || slot.buffer || 0;
+      const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
+      const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
+      const availablePlants = Math.max(0, bufferAdjustedCapacity - (slot.totalBookedPlants || 0));
+      
+      if (plantsNeeded > availablePlants) {
+        const slotDateInfo =
+          slot.startDay && slot.endDay
+            ? `Slot period: ${slot.startDay} to ${slot.endDay}`
+            : slot.month
+            ? `Slot month: ${slot.month}`
+            : "";
+        
+        const errorMessage = availablePlants > 0 
+          ? `Not enough plants available in slot. Only ${availablePlants} plants available. Please book in other slots. ${slotDateInfo}`
+          : `No plants available in this slot. Please book in other slots. ${slotDateInfo}`;
+        
+        throw new AppError(errorMessage, 400);
       }
     };
 
@@ -1440,23 +1471,7 @@ const getAll = (Model, modelName) =>
       },
     });
 
-    // Create map of users for status changes
-    pipeline.push({
-      $addFields: {
-        statusChangeUserMap: {
-          $arrayToObject: {
-            $map: {
-              input: "$statusChangeUsers",
-              as: "user",
-              in: [
-                { $toString: "$$user._id" },
-                { name: "$$user.name", phoneNumber: "$$user.phoneNumber" },
-              ],
-            },
-          },
-        },
-      },
-    });
+
 
     // Select required fields at the end
     pipeline.push(
@@ -1553,20 +1568,37 @@ const getAll = (Model, modelName) =>
                     then: {
                       $let: {
                         vars: {
-                          userId: { $toString: "$$change.changedBy" },
+                          userId: { $toString: "$$change.changedBy" }
                         },
                         in: {
-                          $ifNull: [
-                            {
-                              $getField: {
-                                field: { $literal: "$$vars.userId" },
-                                input: "$statusChangeUserMap",
-                              },
+                          $let: {
+                            vars: {
+                              userData: {
+                                $arrayElemAt: [
+                                  {
+                                    $filter: {
+                                      input: "$statusChangeUsers",
+                                      as: "user",
+                                      cond: { $eq: [{ $toString: "$$user._id" }, "$$userId"] }
+                                    }
+                                  },
+                                  0
+                                ]
+                              }
                             },
-                            { id: "$$change.changedBy" },
-                          ],
-                        },
-                      },
+                            in: {
+                              $ifNull: [
+                                {
+                                  _id: "$$userData._id",
+                                  name: "$$userData.name",
+                                  phoneNumber: "$$userData.phoneNumber"
+                                },
+                                { _id: "$$change.changedBy" }
+                              ]
+                            }
+                          }
+                        }
+                      }
                     },
                     else: null,
                   },

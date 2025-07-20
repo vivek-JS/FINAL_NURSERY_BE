@@ -17,7 +17,7 @@ import {
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
-import { requirePaymentAccess, requirePaymentAddAccess } from "../middlewares/auth.middleware.js";
+import { requirePaymentAccess } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
 
@@ -33,8 +33,7 @@ router
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .patch(
     "/payment/:orderId",
-    requirePaymentAddAccess,
-    addNewPayment // Controller function to add payment
+    addNewPayment // Controller function to add payment - anyone can add
   )
   .patch(
     "/updateOrder",

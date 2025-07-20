@@ -221,33 +221,14 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       return res.status(400).json({ message: "Invalid payment amount" });
     }
 
-    // Role-based payment status enforcement
+    // ENFORCE PENDING STATUS FOR ALL NEW PAYMENTS
+    // Only Accountants and Super Admins can change status later
     const userRole = req.user?.role;
-    let finalPaymentStatus = paymentStatus;
-
-    // Office Admin can only add PENDING payments
-    if (userRole === "OFFICE_ADMIN") {
-      if (paymentStatus !== "PENDING") {
-        return res.status(403).json({ 
-          message: "Office Admin can only add payments with PENDING status. Please contact an Accountant to change the status." 
-        });
-      }
-      finalPaymentStatus = "PENDING";
-    }
-    // Accountant and Super Admin can add any status
-    else if (userRole === "ACCOUNTANT" || userRole === "SUPER_ADMIN") {
-      finalPaymentStatus = paymentStatus;
-    }
-    // Other roles cannot add payments (this should be caught by middleware, but double-check)
-    else {
-      return res.status(403).json({ 
-        message: "Insufficient permissions to add payments" 
-      });
-    }
+    const finalPaymentStatus = "PENDING"; // Always PENDING for new payments
 
     console.log("Payment details:");
     console.log("- Amount:", amount);
-    console.log("- Original Status:", paymentStatus);
+    console.log("- Requested Status:", paymentStatus);
     console.log("- Final Status:", finalPaymentStatus);
     console.log("- User Role:", userRole);
     console.log("- Is wallet payment:", isWalletPayment ? "Yes" : "No");
@@ -590,7 +571,8 @@ const updatePaymentStatus = async (req, res) => {
       });
     }
 
-    const order = await Order.findById(orderId);
+    // Find order by orderId field (numeric) instead of _id (ObjectId)
+    const order = await Order.findOne({ orderId: orderId });
     if (!order) {
       return res.status(404).json({ message: "Order not found." });
     }
@@ -899,23 +881,7 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
       },
     });
 
-    // Create map of users for status changes
-    pipeline.push({
-      $addFields: {
-        statusChangeUserMap: {
-          $arrayToObject: {
-            $map: {
-              input: "$statusChangeUsers",
-              as: "user",
-              in: [
-                { $toString: "$$user._id" },
-                { name: "$$user.name", phoneNumber: "$$user.phoneNumber" },
-              ],
-            },
-          },
-        },
-      },
-    });
+
 
     // Project required fields
     pipeline.push(
@@ -1008,20 +974,37 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
                     then: {
                       $let: {
                         vars: {
-                          userId: { $toString: "$$change.changedBy" },
+                          userId: { $toString: "$$change.changedBy" }
                         },
                         in: {
-                          $ifNull: [
-                            {
-                              $getField: {
-                                field: { $literal: "$$vars.userId" },
-                                input: "$statusChangeUserMap",
-                              },
+                          $let: {
+                            vars: {
+                              userData: {
+                                $arrayElemAt: [
+                                  {
+                                    $filter: {
+                                      input: "$statusChangeUsers",
+                                      as: "user",
+                                      cond: { $eq: [{ $toString: "$$user._id" }, "$$userId"] }
+                                    }
+                                  },
+                                  0
+                                ]
+                              }
                             },
-                            { id: "$$change.changedBy" },
-                          ],
-                        },
-                      },
+                            in: {
+                              $ifNull: [
+                                {
+                                  _id: "$$userData._id",
+                                  name: "$$userData.name",
+                                  phoneNumber: "$$userData.phoneNumber"
+                                },
+                                { _id: "$$change.changedBy" }
+                              ]
+                            }
+                          }
+                        }
+                      }
                     },
                     else: null,
                   },

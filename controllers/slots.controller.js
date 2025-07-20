@@ -1918,7 +1918,7 @@ const calculateTotalBookedPlantsFromOrders = async (slotId) => {
       {
         $match: {
           bookingSlot: new mongoose.Types.ObjectId(slotId),
-          orderStatus: { $ne: 'CANCELLED' } // Exclude cancelled orders
+          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] } // Exclude cancelled and rejected orders
         }
       },
       {
@@ -1944,16 +1944,17 @@ const populateSlotsWithOrders = async (slots) => {
     for (const slotGroup of slots) {
       for (const slot of slotGroup.slots) {
         // Get orders for this slot - handle both ObjectId and array formats
+        // Exclude CANCELLED and REJECTED orders when calculating booked plants
         const orders = await Order.find({
           $or: [
             { bookingSlot: slot._id }, // Direct ObjectId reference
             { "bookingSlot.slotId": slot._id.toString() }, // Array format with slotId
             { "bookingSlot.startDay": slot.startDay, "bookingSlot.endDay": slot.endDay } // Array format with date matching
           ],
-          orderStatus: { $ne: 'CANCELLED' }
+          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] } // Exclude cancelled and rejected orders
         }).select('_id orderId numberOfPlants farmer salesPerson orderStatus');
 
-        // Calculate totalBookedPlants from orders
+        // Calculate totalBookedPlants from active orders only
         const totalBookedPlants = orders.reduce((sum, order) => sum + order.numberOfPlants, 0);
         
         // Update slot with calculated values

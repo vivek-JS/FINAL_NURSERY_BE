@@ -1,4 +1,5 @@
 import Order from '../models/order.model.js';
+import mongoose from 'mongoose';
 
 /**
  * Calculate total booked plants for a specific slot from actual orders
@@ -81,15 +82,15 @@ export const calculateMultipleSlotsBookedPlants = async (slotIds) => {
 };
 
 /**
- * Get slot information with dynamically calculated booked plants
- * @param {string} slotId - The slot ID
- * @returns {Promise<Object>} - Slot info with calculated booked plants
+ * Get detailed slot information including booked plants calculation
+ * @param {string} slotId - The slot ID to get info for
+ * @returns {Promise<Object|null>} - Slot information with calculated values
  */
 export const getSlotInfoWithBookedPlants = async (slotId) => {
   try {
-    // Find the slot
-    const PlantSlot = (await import('../models/slots.model.js')).default;
+    const PlantSlot = mongoose.model('PlantSlot');
     
+    // Find the slot
     const plantSlot = await PlantSlot.findOne(
       { "subtypeSlots.slots._id": slotId },
       { "subtypeSlots.$": 1 }
@@ -99,35 +100,37 @@ export const getSlotInfoWithBookedPlants = async (slotId) => {
       return null;
     }
 
-    const targetSlot = plantSlot.subtypeSlots[0].slots.find(
-      (slot) => slot._id.toString() === slotId.toString()
+    const slot = plantSlot.subtypeSlots[0].slots.find(
+      (s) => s._id.toString() === slotId.toString()
     );
 
-    if (!targetSlot) {
+    if (!slot) {
       return null;
     }
 
-    // Calculate booked plants dynamically
+    // Calculate booked plants from active orders
     const totalBookedPlants = await calculateSlotBookedPlants(slotId);
-    
-    // Calculate available plants
-    const availablePlants = Math.max(0, targetSlot.totalPlants - totalBookedPlants);
-    const isOverflow = totalBookedPlants > targetSlot.totalPlants;
+
+    // Calculate buffer-adjusted values
+    const effectiveBuffer = slot.effectiveBuffer || slot.buffer || 0;
+    const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
+    const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
+    const availablePlants = Math.max(0, bufferAdjustedCapacity - totalBookedPlants);
 
     return {
-      slotId: targetSlot._id,
-      totalPlants: targetSlot.totalPlants,
+      slotId: slot._id,
+      startDay: slot.startDay,
+      endDay: slot.endDay,
+      month: slot.month,
+      totalPlants: slot.totalPlants,
       totalBookedPlants: totalBookedPlants,
       availablePlants: availablePlants,
-      isOverflow: isOverflow,
-      startDay: targetSlot.startDay,
-      endDay: targetSlot.endDay,
-      month: targetSlot.month,
-      buffer: targetSlot.buffer,
-      effectiveBuffer: targetSlot.effectiveBuffer,
-      bufferAdjustedCapacity: targetSlot.bufferAdjustedCapacity,
-      bufferAmount: targetSlot.bufferAmount,
-      originalTotalPlants: targetSlot.originalTotalPlants,
+      isOverflow: availablePlants < 0,
+      buffer: slot.buffer || 0,
+      effectiveBuffer: effectiveBuffer,
+      bufferAdjustedCapacity: bufferAdjustedCapacity,
+      bufferAmount: bufferAmount,
+      originalTotalPlants: slot.originalTotalPlants || slot.totalPlants
     };
   } catch (error) {
     console.error('Error getting slot info with booked plants:', error);
