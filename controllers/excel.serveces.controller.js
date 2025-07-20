@@ -116,6 +116,20 @@ const createSalesPerson = async (name, phoneNumber = null) => {
       return existingUser;
     }
 
+    // Generate a unique phone number if not provided
+    let finalPhoneNumber = phoneNumber;
+    if (!finalPhoneNumber) {
+      // Generate a unique phone number starting with 999999
+      let counter = 1;
+      do {
+        finalPhoneNumber = 9999990000 + counter;
+        counter++;
+        if (counter > 9999) {
+          throw new Error("Unable to generate unique phone number");
+        }
+      } while (await User.findOne({ phoneNumber: finalPhoneNumber }));
+    }
+
     // Generate default password
     const DEFAULT_PASSWORD = "12345678";
     const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, 12);
@@ -123,7 +137,7 @@ const createSalesPerson = async (name, phoneNumber = null) => {
     // Create new sales person
     const newSalesPerson = new User({
       name: name,
-      phoneNumber: phoneNumber || null,
+      phoneNumber: finalPhoneNumber,
       password: hashedPassword,
       role: "SALES",
       jobTitle: "SALES",
@@ -135,7 +149,7 @@ const createSalesPerson = async (name, phoneNumber = null) => {
     });
 
     await newSalesPerson.save();
-    console.log(`✅ Auto-created sales person: ${name}${phoneNumber ? ` (${phoneNumber})` : ''}`);
+    console.log(`✅ Auto-created sales person: ${name} (${finalPhoneNumber})`);
     
     return newSalesPerson;
   } catch (error) {
