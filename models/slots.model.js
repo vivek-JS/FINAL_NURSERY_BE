@@ -5,7 +5,19 @@ import moment from "moment"; // Optional: Use moment.js or other libraries for d
 const slotTrailSchema = new Schema({
   action: {
     type: String,
-    enum: ["ADD", "SUBTRACT", "BUFFER_APPLIED", "BUFFER_RELEASED", "ORDER_CANCELLED", "ORDER_RETURNED"],
+    enum: [
+      "ADD", 
+      "SUBTRACT", 
+      "BUFFER_APPLIED", 
+      "BUFFER_RELEASED", 
+      "ORDER_CANCELLED", 
+      "ORDER_RETURNED",
+      "ADD_WITH_BUFFER",
+      "ADD_WITH_BUFFER_RELEASE",
+      "SUBTRACT_WITH_BUFFER",
+      "SUBTRACT_WITH_BUFFER_RELEASE",
+      "UPDATE"
+    ],
     required: true,
   },
   quantity: {
@@ -189,60 +201,136 @@ slotSchema.pre('save', function(next) {
   if (!this.isNew) {
     const modifiedPaths = this.modifiedPaths();
     
-    // Track changes to key fields
-    if (modifiedPaths.includes('totalPlants')) {
-      const previousTotalPlants = this._original?.totalPlants || 0;
-      const newTotalPlants = this.totalPlants;
-      const difference = newTotalPlants - previousTotalPlants;
+    // Check if both totalPlants and buffer are being modified together
+    const hasTotalPlantsChange = modifiedPaths.includes('totalPlants');
+    const hasBufferChange = modifiedPaths.includes('buffer') || modifiedPaths.includes('effectiveBuffer');
+    
+    // Get current values
+    const currentTotalPlants = this.totalPlants || 0;
+    const currentBuffer = this.buffer || 0;
+    
+    // Try to get previous values from different sources
+    const previousTotalPlants = this._original?.totalPlants || 0;
+    const previousBuffer = this._original?.buffer || 0;
+    
+    // If both are changing, create a combined entry
+    if (hasTotalPlantsChange && hasBufferChange) {
+      const totalPlantsDifference = currentTotalPlants - previousTotalPlants;
+      const bufferDifference = currentBuffer - previousBuffer;
       
-      if (difference !== 0) {
-        const action = difference > 0 ? 'ADD' : 'SUBTRACT';
-        const quantity = Math.abs(difference);
+      if (totalPlantsDifference !== 0 || bufferDifference !== 0) {
+        let action = 'UPDATE';
+        let reason = 'Slot updated';
+        let notes = '';
+        
+        if (totalPlantsDifference > 0 && bufferDifference > 0) {
+          action = 'ADD_WITH_BUFFER';
+          reason = 'Plants added with buffer applied';
+          notes = `Added ${totalPlantsDifference} plants and applied ${bufferDifference}% buffer`;
+        } else if (totalPlantsDifference > 0 && bufferDifference < 0) {
+          action = 'ADD_WITH_BUFFER_RELEASE';
+          reason = 'Plants added with buffer released';
+          notes = `Added ${totalPlantsDifference} plants and released ${Math.abs(bufferDifference)}% buffer`;
+        } else if (totalPlantsDifference < 0 && bufferDifference > 0) {
+          action = 'SUBTRACT_WITH_BUFFER';
+          reason = 'Plants subtracted with buffer applied';
+          notes = `Subtracted ${Math.abs(totalPlantsDifference)} plants and applied ${bufferDifference}% buffer`;
+        } else if (totalPlantsDifference < 0 && bufferDifference < 0) {
+          action = 'SUBTRACT_WITH_BUFFER_RELEASE';
+          reason = 'Plants subtracted with buffer released';
+          notes = `Subtracted ${Math.abs(totalPlantsDifference)} plants and released ${Math.abs(bufferDifference)}% buffer`;
+        } else if (totalPlantsDifference !== 0) {
+          action = totalPlantsDifference > 0 ? 'ADD' : 'SUBTRACT';
+          reason = `Manual ${action.toLowerCase()} of plants`;
+          notes = `Changed from ${previousTotalPlants} to ${currentTotalPlants} plants`;
+        } else if (bufferDifference !== 0) {
+          action = bufferDifference > 0 ? 'BUFFER_APPLIED' : 'BUFFER_RELEASED';
+          reason = `Buffer ${bufferDifference > 0 ? 'applied' : 'released'}`;
+          notes = `Buffer changed from ${previousBuffer}% to ${currentBuffer}%`;
+        }
         
         const trailEntry = {
           action,
-          quantity,
+          quantity: Math.abs(totalPlantsDifference) || Math.abs(bufferDifference),
           previousTotalPlants,
-          newTotalPlants,
+          newTotalPlants: currentTotalPlants,
           previousAvailablePlants: this._original?.availablePlants || 0,
-          newAvailablePlants: this.availablePlants,
-          bufferPercentage: this.effectiveBuffer || this.buffer || 0,
-          bufferAmount: this.bufferAmount || 0,
-          reason: `Manual ${action.toLowerCase()} of plants`,
+          newAvailablePlants: this.availablePlants || 0,
+          bufferPercentage: currentBuffer,
+          bufferAmount: Math.round((currentTotalPlants * currentBuffer) / 100),
+          reason,
           performedBy: this._performedBy || null,
-          notes: `Changed from ${previousTotalPlants} to ${newTotalPlants} plants`
+          notes,
+          totalPlantsChange: totalPlantsDifference,
+          bufferChange: bufferDifference
         };
+        
+        // Initialize slotTrail if it doesn't exist
+        if (!this.slotTrail) {
+          this.slotTrail = [];
+        }
         
         // Add to trail array (newest first)
         this.slotTrail.unshift(trailEntry);
       }
-    }
-    
-    // Track buffer changes
-    if (modifiedPaths.includes('buffer') || modifiedPaths.includes('effectiveBuffer')) {
-      const previousBuffer = this._original?.buffer || 0;
-      const newBuffer = this.buffer;
-      const bufferDifference = newBuffer - previousBuffer;
+    } else {
+      // Handle individual changes
+      if (hasTotalPlantsChange) {
+        const difference = currentTotalPlants - previousTotalPlants;
+        
+        if (difference !== 0) {
+          const action = difference > 0 ? 'ADD' : 'SUBTRACT';
+          const quantity = Math.abs(difference);
+          
+          const trailEntry = {
+            action,
+            quantity,
+            previousTotalPlants,
+            newTotalPlants: currentTotalPlants,
+            previousAvailablePlants: this._original?.availablePlants || 0,
+            newAvailablePlants: this.availablePlants || 0,
+            bufferPercentage: this.effectiveBuffer || this.buffer || 0,
+            bufferAmount: this.bufferAmount || 0,
+            reason: `Manual ${action.toLowerCase()} of plants`,
+            performedBy: this._performedBy || null,
+            notes: `Changed from ${previousTotalPlants} to ${currentTotalPlants} plants`
+          };
+          
+          if (!this.slotTrail) {
+            this.slotTrail = [];
+          }
+          
+          this.slotTrail.unshift(trailEntry);
+        }
+      }
       
-      if (bufferDifference !== 0) {
-        const action = bufferDifference > 0 ? 'BUFFER_APPLIED' : 'BUFFER_RELEASED';
-        const bufferAmount = Math.abs(bufferDifference);
+      if (hasBufferChange) {
+        const bufferDifference = currentBuffer - previousBuffer;
         
-        const trailEntry = {
-          action,
-          quantity: bufferAmount,
-          previousTotalPlants: this.totalPlants,
-          newTotalPlants: this.totalPlants,
-          previousAvailablePlants: this._original?.availablePlants || 0,
-          newAvailablePlants: this.availablePlants,
-          bufferPercentage: newBuffer,
-          bufferAmount: Math.round((this.totalPlants * newBuffer) / 100),
-          reason: `Buffer ${bufferDifference > 0 ? 'applied' : 'released'}`,
-          performedBy: this._performedBy || null,
-          notes: `Buffer changed from ${previousBuffer}% to ${newBuffer}%`
-        };
-        
-        this.slotTrail.unshift(trailEntry);
+        if (bufferDifference !== 0) {
+          const action = bufferDifference > 0 ? 'BUFFER_APPLIED' : 'BUFFER_RELEASED';
+          const bufferAmount = Math.abs(bufferDifference);
+          
+          const trailEntry = {
+            action,
+            quantity: bufferAmount,
+            previousTotalPlants: currentTotalPlants,
+            newTotalPlants: currentTotalPlants,
+            previousAvailablePlants: this._original?.availablePlants || 0,
+            newAvailablePlants: this.availablePlants || 0,
+            bufferPercentage: currentBuffer,
+            bufferAmount: Math.round((currentTotalPlants * currentBuffer) / 100),
+            reason: `Buffer ${bufferDifference > 0 ? 'applied' : 'released'}`,
+            performedBy: this._performedBy || null,
+            notes: `Buffer changed from ${previousBuffer}% to ${currentBuffer}%`
+          };
+          
+          if (!this.slotTrail) {
+            this.slotTrail = [];
+          }
+          
+          this.slotTrail.unshift(trailEntry);
+        }
       }
     }
   }
