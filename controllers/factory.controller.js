@@ -410,7 +410,7 @@ const createOne = (Model, modelName) =>
         const statusChanges = [];
         if (orderData.orderStatus) {
           statusChanges.push({
-            previousStatus: "PENDING", // Default initial status
+            previousStatus: "ACCEPTED", // Default initial status
             newStatus: orderData.orderStatus,
             reason: orderData.statusChangeReason || "Initial order creation",
             changedBy: req.user ? req.user._id : null,
@@ -433,6 +433,21 @@ const createOne = (Model, modelName) =>
         // Initialize remaining plants
         const remainingPlants = numberOfPlants;
 
+        // Process payment data if provided
+        let paymentArray = [];
+        if (payment && Array.isArray(payment) && payment.length > 0) {
+          paymentArray = payment.map(paymentItem => ({
+            paidAmount: Number(paymentItem.paidAmount) || 0,
+            paymentStatus: "PENDING", // Always PENDING for new payments
+            paymentDate: paymentItem.paymentDate || new Date(),
+            bankName: paymentItem.bankName || "",
+            receiptPhoto: paymentItem.receiptPhoto || [],
+            modeOfPayment: paymentItem.modeOfPayment || "",
+            remark: paymentItem.remark || "",
+            isWalletPayment: paymentItem.isWalletPayment || false
+          }));
+        }
+
         // Create the Order with all new fields
         const order = await Model.create(
           [
@@ -449,6 +464,7 @@ const createOne = (Model, modelName) =>
               returnHistory: [], // Initialize with empty return history
               deliveryChanges: [], // Initialize with empty delivery changes history
               componyQuota, // Include the componyQuota flag in the order document
+              payment: paymentArray, // Include payment data if provided
             },
           ],
           { session }
@@ -471,13 +487,78 @@ const createOne = (Model, modelName) =>
           }
         );
 
+        // Process wallet transactions for payments if any
+        let walletTransactions = [];
+        if (paymentArray.length > 0) {
+          // Get dealer ID from order
+          let dealerId = order[0].dealer;
+          
+          // If no dealer field, check if salesPerson is a dealer
+          if (!dealerId && order[0].salesPerson) {
+            try {
+              const salesPerson = await User.findById(order[0].salesPerson).session(session);
+              if (salesPerson && salesPerson.jobTitle === 'DEALER') {
+                dealerId = salesPerson._id;
+              }
+            } catch (error) {
+              console.error("Error fetching sales person:", error);
+            }
+          }
+
+          if (dealerId) {
+            for (const paymentItem of paymentArray) {
+              try {
+                // Determine transaction type and amount
+                let walletAmount = 0;
+                let description = "";
+
+                // Wallet impact based on payment type and status
+                if (paymentItem.isWalletPayment && paymentItem.paymentStatus === "PENDING") {
+                  // Deduct from wallet (negative amount) - when dealer pays from wallet
+                  walletAmount = -paymentItem.paidAmount;
+                  description = `Wallet payment for Order #${order[0]._id}`;
+                } else if (order[0].dealerOrder && paymentItem.paymentStatus === "COLLECTED") {
+                  // Add to wallet (positive amount) - when payment is collected from dealer
+                  walletAmount = paymentItem.paidAmount;
+                  description = `Payment collected for Order #${order[0]._id} via ${paymentItem.modeOfPayment}`;
+                }
+
+                // If there's a wallet impact, record the transaction
+                if (walletAmount !== 0) {
+                  const performedBy = req.user?._id || dealerId;
+                  
+                  const transaction = await DealerWallet.addPayment(
+                    dealerId,
+                    walletAmount,
+                    description,
+                    performedBy,
+                    "ORDER_PAYMENT",
+                    order[0]._id
+                  );
+
+                  if (transaction) {
+                    walletTransactions.push(transaction);
+                  }
+                }
+              } catch (walletError) {
+                console.error("Error processing wallet transaction for payment:", walletError);
+                // Don't fail the order creation, just log the error
+              }
+            }
+          }
+        }
+
         await session.commitTransaction();
         session.endSession();
 
         const response = generateResponse(
           "Success",
-          `${modelName} created successfully`,
-          order[0],
+          `${modelName} created successfully with ${paymentArray.length} payment(s)`,
+          {
+            order: order[0],
+            payments: paymentArray,
+            walletTransactions: walletTransactions
+          },
           undefined
         );
 
@@ -656,6 +737,29 @@ const updateOne = (Model, modelName, allowedFields) =>
           // Remove temporary field
           delete filteredBody.deliveryChangeReason;
         }
+      }
+
+      // Special handling for farmReadyDate - track farm ready date changes
+      if (
+        filteredBody.farmReadyDate &&
+        (!existingDoc.farmReadyDate || 
+         new Date(filteredBody.farmReadyDate).toDateString() !== existingDoc.farmReadyDate.toDateString())
+      ) {
+        const farmReadyDateChange = {
+          previousDate: existingDoc.farmReadyDate || null,
+          newDate: new Date(filteredBody.farmReadyDate),
+          reason: filteredBody.farmReadyDateChangeReason || "Farm ready date updated",
+          changedBy: req.user ? req.user._id : null,
+          notes: filteredBody.farmReadyDateChangeNotes || "",
+        };
+
+        // Use $push to add to existing array
+        if (!filteredBody.$push) filteredBody.$push = {};
+        filteredBody.$push.farmReadyDateChanges = farmReadyDateChange;
+
+        // Remove temporary fields
+        delete filteredBody.farmReadyDateChangeReason;
+        delete filteredBody.farmReadyDateChangeNotes;
       }
 
       // Update remainingPlants field if numberOfPlants is being updated
@@ -1141,6 +1245,8 @@ const getAll = (Model, modelName) =>
       monthName, // For slot date validation
       startDay, // For slot date validation
       endDay, // For slot date validation
+      farmReady, // New parameter to filter orders with farm ready date
+      ready_for_dispatch, // New parameter to filter orders ready for dispatch
     } = req.query;
 
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
@@ -1178,6 +1284,57 @@ const getAll = (Model, modelName) =>
         pipeline.push({
           $match: {
             orderStatus: { $in: statusArray },
+          },
+        });
+      }
+
+      // Apply farm ready filter if present
+      if (farmReady === "true") {
+        const farmReadyMatch = {
+          farmReadyDate: { $exists: true, $ne: null },
+        };
+
+        // Add date range filtering for farmReadyDate if startDate and endDate are provided
+        if (startDate && endDate) {
+          const parseDate = (dateStr, isEnd = false) => {
+            const [day, month, year] = dateStr.split("-");
+            // Use local timezone instead of UTC to avoid timezone issues
+            const date = new Date(`${year}-${month}-${day}`);
+            if (isEnd) {
+              date.setHours(23, 59, 59, 999);
+            } else {
+              date.setHours(0, 0, 0, 0);
+            }
+            return date;
+          };
+
+          const start = parseDate(startDate);
+          const end = parseDate(endDate, true);
+          
+          console.log(`Farm Ready Date Range Filter: ${startDate} to ${endDate}`);
+          console.log(`Parsed dates: ${start.toISOString()} to ${end.toISOString()}`);
+          
+          farmReadyMatch.farmReadyDate = {
+            $exists: true,
+            $ne: null,
+            $gte: start,
+            $lte: end
+          };
+        }
+
+        pipeline.push({
+          $match: farmReadyMatch,
+        });
+      }
+
+      // Apply ready for dispatch filter if present
+      if (ready_for_dispatch === "true") {
+        pipeline.push({
+          $match: {
+            $and: [
+              { orderStatus: "FARM_READY" },
+              { farmReadyDate: { $exists: true, $ne: null } }
+            ]
           },
         });
       }
@@ -1302,6 +1459,15 @@ const getAll = (Model, modelName) =>
           foreignField: "_id",
           as: "statusChangeUsers",
         },
+      },
+      // Additional lookup for user references in farm ready date changes
+      {
+        $lookup: {
+          from: "users",
+          localField: "farmReadyDateChanges.changedBy",
+          foreignField: "_id",
+          as: "farmReadyDateChangeUsers",
+        },
       }
     );
 
@@ -1388,7 +1554,7 @@ const getAll = (Model, modelName) =>
     }
 
     // Add condition for dispatched = true
-    if (dispatched === "true" && startDate && endDate) {
+    if (dispatched === "true" && startDate && endDate && ready_for_dispatch !== "true") {
       pipeline.push(
         {
           $addFields: {
@@ -1551,6 +1717,61 @@ const getAll = (Model, modelName) =>
           dealerOrder: 1,
           notes: 1,
           orderRemarks: 1, // Keep orderRemarks field as array of strings
+          // Added farm ready date change history with user info
+          farmReadyDateChanges: {
+            $map: {
+              input: "$farmReadyDateChanges",
+              as: "change",
+              in: {
+                previousDate: "$$change.previousDate",
+                newDate: "$$change.newDate",
+                reason: "$$change.reason",
+                notes: "$$change.notes",
+                createdAt: "$$change.createdAt",
+                changedBy: {
+                  $cond: {
+                    if: "$$change.changedBy",
+                    then: {
+                      $let: {
+                        vars: {
+                          userId: { $toString: "$$change.changedBy" }
+                        },
+                        in: {
+                          $let: {
+                            vars: {
+                              userData: {
+                                $arrayElemAt: [
+                                  {
+                                    $filter: {
+                                      input: "$farmReadyDateChangeUsers",
+                                      as: "user",
+                                      cond: { $eq: [{ $toString: "$$user._id" }, "$$userId"] }
+                                    }
+                                  },
+                                  0
+                                ]
+                              }
+                            },
+                            in: {
+                              $ifNull: [
+                                {
+                                  _id: "$$userData._id",
+                                  name: "$$userData.name",
+                                  phoneNumber: "$$userData.phoneNumber"
+                                },
+                                { _id: "$$change.changedBy" }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    else: null,
+                  },
+                },
+              },
+            },
+          },
           // Added status change history with user info
           statusChanges: {
             $map: {

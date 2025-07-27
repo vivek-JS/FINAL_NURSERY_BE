@@ -101,54 +101,182 @@ const getOrdersBySlot = catchAsync(async (req, res, next) => {
 // export { getOrdersBySlot };
 
 const getCsv = catchAsync(async (req, res, next) => {
-  // extracting data
-  const { startDate, endDate } = req.query;
+  try {
+    // extracting data
+    const { startDate, endDate, orderStatus, paymentStatus } = req.query;
 
-  let jsonData = await Order.find({
-    createdAt: {
-      $gte: new Date(startDate),
-      $lte: new Date(endDate),
-    },
-  }).populate("farmer");
+    // Build query
+    let query = {};
+    
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      };
+    }
+    
+    if (orderStatus) {
+      query.orderStatus = orderStatus;
+    }
+    
+    if (paymentStatus) {
+      query.orderPaymentStatus = paymentStatus;
+    }
 
-  // if data not found
-  if (!jsonData || jsonData.length === 0) {
-    return next(new AppError("Data not found", 404));
-  }
-  // preparing data
-  let srNo = 0;
-  let csvData = [];
-  let csvFields = [
-    "Sr",
-    "Farmer name",
-    "Mobile number",
-    "Mode of payment",
-    "Total amount",
-    "Advance",
-    "Number of plants",
-    "Type of plants",
+    let jsonData = await Order.find(query)
+      .populate("farmer", "name mobileNumber village taluka district")
+      .populate("salesPerson", "name phoneNumber")
+      .populate("plantName", "name subtypes")
+      .populate("dealer", "name")
+      .sort({ createdAt: -1 });
+
+    // if data not found
+    if (!jsonData || jsonData.length === 0) {
+      return next(new AppError("No orders found for the specified criteria", 404));
+    }
+
+    // preparing data
+    let srNo = 0;
+    let csvData = [];
+      let csvFields = [
+    "Sr No",
+    "Order ID",
+    "Order Date",
+    "Customer Name",
+    "Mobile Number",
+    "Village",
+    "Taluka",
+    "District",
+    "State",
+    "Plant Name",
+    "Plant Subtype",
+    "Number of Plants",
+    "Rate per Plant",
+    "Total Amount",
+    "Order Status",
+    "Payment Status",
+    "Total Paid Amount",
+    "Balance Amount",
+    "Sales Person",
+    "Sales Person Mobile",
+    "Dealer Name",
+    "Booking Slot",
+    "Delivery Period",
+    "Order Type",
+    "Payment Count",
+    "Payment Number",
+    "Payment Amount",
+    "Payment Mode",
+    "Payment Status",
+    "Payment Date",
+    "Bank Name",
+    "Payment Remark",
+    "Remarks"
   ];
-  await Promise.all(
-    jsonData.map(async (obj) => {
-      csvData.push({
-        Sr: srNo + 1,
-        "Farmer name": obj.farmer?.name,
-        "Mobile number": obj.farmer.mobileNumber,
-        "Mode of payment": obj?.modeOfPayment,
-        "Total amount": obj?.rate,
-        Advance: obj?.advance,
-        "Number of plants": obj?.numberOfPlants,
-        "Type of plants": obj?.typeOfPlants,
-      });
-    })
-  );
 
-  // seding response
+    // Process data synchronously to avoid Promise.all issues
+    jsonData.forEach((obj) => {
+      try {
+        // Calculate payment details
+        const totalPaidAmount = obj.payment && obj.payment.length > 0 
+          ? obj.payment.reduce((sum, payment) => sum + (payment.paidAmount || 0), 0)
+          : 0;
+        
+        const totalAmount = (obj.rate || 0) * (obj.numberOfPlants || 0);
+        const balanceAmount = totalAmount - totalPaidAmount;
+        
+        // Enhanced payment details for multiple payments
+        const paymentCount = obj.payment ? obj.payment.length : 0;
+        
+        // Format delivery period - bookingSlot is just an ID, not populated
+        const deliveryPeriod = obj.bookingSlot ? `Slot ID: ${obj.bookingSlot}` : 'N/A';
+
+        // Determine order type
+        const orderType = obj.dealerOrder ? 'Dealer Order' : 'Farmer Order';
+
+        // Base order data
+        const baseOrderData = {
+          "Sr No": ++srNo,
+          "Order ID": obj.orderId || obj._id,
+          "Order Date": obj.createdAt ? new Date(obj.createdAt).toLocaleDateString('en-IN') : 'N/A',
+          "Customer Name": obj.farmer?.name || obj.name || 'N/A',
+          "Mobile Number": obj.farmer?.mobileNumber || obj.mobileNumber || 'N/A',
+          "Village": obj.farmer?.village || obj.village || 'N/A',
+          "Taluka": obj.farmer?.taluka || obj.taluka || 'N/A',
+          "District": obj.farmer?.district || obj.district || 'N/A',
+          "State": obj.farmer?.state || obj.state || 'N/A',
+          "Plant Name": obj.plantName?.name || 'N/A',
+          "Plant Subtype": obj.plantSubtype ? 
+            (obj.plantName?.subtypes?.find(subtype => subtype._id.toString() === obj.plantSubtype.toString())?.name || 'N/A') 
+            : 'N/A',
+          "Number of Plants": obj.numberOfPlants || 0,
+          "Rate per Plant": obj.rate || 0,
+          "Total Amount": totalAmount,
+          "Order Status": obj.orderStatus || 'N/A',
+          "Payment Status": obj.orderPaymentStatus || 'N/A',
+          "Total Paid Amount": totalPaidAmount,
+          "Balance Amount": balanceAmount,
+          "Sales Person": obj.salesPerson?.name || 'N/A',
+          "Sales Person Mobile": obj.salesPerson?.phoneNumber || 'N/A',
+          "Dealer Name": obj.dealer?.name || 'N/A',
+          "Booking Slot": obj.bookingSlot || 'N/A',
+          "Delivery Period": deliveryPeriod,
+          "Order Type": orderType,
+          "Payment Count": paymentCount,
+          "Remarks": obj.orderRemarks && obj.orderRemarks.length > 0 
+            ? obj.orderRemarks.join('; ') 
+            : 'N/A'
+        };
+
+        // Handle multiple payments - create separate rows for each payment
+        if (obj.payment && obj.payment.length > 0) {
+          obj.payment.forEach((payment, paymentIndex) => {
+            const paymentData = {
+              ...baseOrderData,
+              "Payment Number": paymentIndex + 1,
+              "Payment Amount": payment.paidAmount || 0,
+              "Payment Mode": payment.modeOfPayment || 'N/A',
+              "Payment Status": payment.paymentStatus || 'PENDING',
+              "Payment Date": payment.paymentDate ? new Date(payment.paymentDate).toLocaleDateString('en-IN') : 'N/A',
+              "Bank Name": payment.bankName || 'N/A',
+              "Payment Remark": payment.remark || 'N/A'
+            };
+            csvData.push(paymentData);
+          });
+        } else {
+          // No payments - add single row with empty payment fields
+          const noPaymentData = {
+            ...baseOrderData,
+            "Payment Number": 'N/A',
+            "Payment Amount": 0,
+            "Payment Mode": 'N/A',
+            "Payment Status": 'N/A',
+            "Payment Date": 'N/A',
+            "Bank Name": 'N/A',
+            "Payment Remark": 'N/A'
+          };
+          csvData.push(noPaymentData);
+        }
+      } catch (error) {
+        console.error("Error processing order:", obj._id, error);
+        // Continue with next order
+      }
+    });
+
+  // Generate filename with date range
+  const filename = `orders_export_${startDate ? startDate.split('T')[0] : 'all'}_${endDate ? endDate.split('T')[0] : 'data'}.csv`;
+
+  // sending response
   const csvParse = new CsvParser({ fields: csvFields });
   const csvDataParsed = csvParse.parse(csvData);
+  
   res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", "attachment; filename=payments.csv");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.status(200).end(csvDataParsed);
+  } catch (error) {
+    console.error("CSV Export - Error:", error);
+    return next(new AppError("Error generating CSV: " + error.message, 500));
+  }
 });
 
 const getOrders = getAll(Order, "Order");
@@ -163,6 +291,8 @@ const updateOrder = updateOne(Order, "Order", [
   "orderStatus",
   "farmReadyDate",
   "orderRemarks",
+  "farmReadyDateChangeReason",
+  "farmReadyDateChangeNotes",
 ]);
 /**
  * Add a new payment to an order and update dealer wallet accordingly

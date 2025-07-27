@@ -37,6 +37,8 @@ const allowedParams = [
   "village",
   "district",
   "dealer",
+  "farmReady",
+  "ready_for_dispatch",
 ];
 
 const parameterWhiteListing = (req, res, next) => {

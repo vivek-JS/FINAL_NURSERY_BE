@@ -84,6 +84,30 @@ const statusChangeSchema = new Schema(
   },
   { timestamps: true }
 );
+
+// Define a schema for farm ready date change history
+const farmReadyDateChangeSchema = new Schema(
+  {
+    previousDate: {
+      type: Date,
+    },
+    newDate: {
+      type: Date,
+      required: true,
+    },
+    reason: {
+      type: String,
+    },
+    changedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    notes: {
+      type: String,
+    },
+  },
+  { timestamps: true }
+);
 const paymentSchema = new Schema(
   {
     paidAmount: {
@@ -226,6 +250,8 @@ const orderSchema = new Schema(
     farmReadyDate: {
       type: Date,
     },
+    // Field to track farm ready date changes history
+    farmReadyDateChanges: [farmReadyDateChangeSchema],
     returnedPlants: {
       type: Number,
       default: 0,
@@ -381,6 +407,9 @@ orderSchema.pre("save", function (next) {
 
   next();
 });
+
+// Note: Farm ready date changes are tracked in the controller using $push
+// to ensure proper user information and reason tracking
 
 // Add validation middleware to ensure proper business logic
 orderSchema.pre("validate", function (next) {

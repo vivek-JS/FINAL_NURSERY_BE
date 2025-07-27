@@ -1,6 +1,58 @@
 import { Schema, model } from "mongoose";
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 
+// Define a schema for slot trail tracking
+const slotTrailSchema = new Schema({
+  action: {
+    type: String,
+    enum: ["ADD", "SUBTRACT", "BUFFER_APPLIED", "BUFFER_RELEASED", "ORDER_CANCELLED", "ORDER_RETURNED"],
+    required: true,
+  },
+  quantity: {
+    type: Number,
+    required: true,
+  },
+  previousTotalPlants: {
+    type: Number,
+    required: true,
+  },
+  newTotalPlants: {
+    type: Number,
+    required: true,
+  },
+  previousAvailablePlants: {
+    type: Number,
+    required: true,
+  },
+  newAvailablePlants: {
+    type: Number,
+    required: true,
+  },
+  bufferPercentage: {
+    type: Number,
+    default: 0,
+  },
+  bufferAmount: {
+    type: Number,
+    default: 0,
+  },
+  reason: {
+    type: String,
+    required: true,
+  },
+  orderId: {
+    type: Schema.Types.ObjectId,
+    ref: "Order",
+  },
+  performedBy: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+  },
+  notes: {
+    type: String,
+  },
+}, { timestamps: true });
+
 // Define the schema for slots
 const slotSchema = new Schema({
   startDay: {
@@ -121,6 +173,8 @@ const slotSchema = new Schema({
     type: Boolean,
     default: false,
   },
+  // Slot trail tracking
+  slotTrail: [slotTrailSchema],
 });
 
 // Virtual field to calculate totalBookedPlants from orders
@@ -128,6 +182,98 @@ slotSchema.virtual('calculatedTotalBookedPlants').get(function() {
   // This will be populated when we fetch the slot with orders
   return 0; // Default value, will be calculated when populated
 });
+
+// Pre-save middleware to track slot changes
+slotSchema.pre('save', function(next) {
+  // Only track changes if this is an update (not a new document)
+  if (!this.isNew) {
+    const modifiedPaths = this.modifiedPaths();
+    
+    // Track changes to key fields
+    if (modifiedPaths.includes('totalPlants')) {
+      const previousTotalPlants = this._original?.totalPlants || 0;
+      const newTotalPlants = this.totalPlants;
+      const difference = newTotalPlants - previousTotalPlants;
+      
+      if (difference !== 0) {
+        const action = difference > 0 ? 'ADD' : 'SUBTRACT';
+        const quantity = Math.abs(difference);
+        
+        const trailEntry = {
+          action,
+          quantity,
+          previousTotalPlants,
+          newTotalPlants,
+          previousAvailablePlants: this._original?.availablePlants || 0,
+          newAvailablePlants: this.availablePlants,
+          bufferPercentage: this.effectiveBuffer || this.buffer || 0,
+          bufferAmount: this.bufferAmount || 0,
+          reason: `Manual ${action.toLowerCase()} of plants`,
+          performedBy: this._performedBy || null,
+          notes: `Changed from ${previousTotalPlants} to ${newTotalPlants} plants`
+        };
+        
+        // Add to trail array (newest first)
+        this.slotTrail.unshift(trailEntry);
+      }
+    }
+    
+    // Track buffer changes
+    if (modifiedPaths.includes('buffer') || modifiedPaths.includes('effectiveBuffer')) {
+      const previousBuffer = this._original?.buffer || 0;
+      const newBuffer = this.buffer;
+      const bufferDifference = newBuffer - previousBuffer;
+      
+      if (bufferDifference !== 0) {
+        const action = bufferDifference > 0 ? 'BUFFER_APPLIED' : 'BUFFER_RELEASED';
+        const bufferAmount = Math.abs(bufferDifference);
+        
+        const trailEntry = {
+          action,
+          quantity: bufferAmount,
+          previousTotalPlants: this.totalPlants,
+          newTotalPlants: this.totalPlants,
+          previousAvailablePlants: this._original?.availablePlants || 0,
+          newAvailablePlants: this.availablePlants,
+          bufferPercentage: newBuffer,
+          bufferAmount: Math.round((this.totalPlants * newBuffer) / 100),
+          reason: `Buffer ${bufferDifference > 0 ? 'applied' : 'released'}`,
+          performedBy: this._performedBy || null,
+          notes: `Buffer changed from ${previousBuffer}% to ${newBuffer}%`
+        };
+        
+        this.slotTrail.unshift(trailEntry);
+      }
+    }
+  }
+  
+  next();
+});
+
+// Method to track order-related changes
+slotSchema.methods.trackOrderChange = function(action, orderId, quantity, performedBy, reason) {
+  const trailEntry = {
+    action,
+    quantity,
+    previousTotalPlants: this.totalPlants,
+    newTotalPlants: this.totalPlants,
+    previousAvailablePlants: this.availablePlants + (action === 'SUBTRACT' ? quantity : -quantity),
+    newAvailablePlants: this.availablePlants,
+    bufferPercentage: this.effectiveBuffer || this.buffer || 0,
+    bufferAmount: this.bufferAmount || 0,
+    reason,
+    orderId,
+    performedBy,
+    notes: `Order ${action === 'SUBTRACT' ? 'booked' : 'cancelled/returned'} - ${quantity} plants`
+  };
+  
+  this.slotTrail.unshift(trailEntry);
+};
+
+// Method to set performer for tracking
+slotSchema.methods.setPerformer = function(userId) {
+  this._performedBy = userId;
+};
 
 // Ensure virtual fields are included when converting to JSON
 slotSchema.set('toJSON', { virtuals: true });

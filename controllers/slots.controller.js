@@ -638,48 +638,65 @@ export const updateSlotFieldById = async (req, res) => {
   try {
     const { slotId } = req.params; // Slot ID from request params
     const updates = req.body; // Key-value pair for the field to update, e.g., { totalPlants: 50 }
+    const performedBy = req.user?._id; // Get user ID from request
 
     if (!updates || Object.keys(updates).length === 0) {
       return res.status(400).json({ message: "No update data provided." });
     }
 
-    // First, update the specific field in the slot using array filters
-    const result = await PlantSlot.findOneAndUpdate(
-      { "subtypeSlots.slots._id": slotId }, // Find the document containing the slot
-      {
-        $set: Object.fromEntries(
-          Object.entries(updates).map(([key, value]) => [
-            `subtypeSlots.$[].slots.$[slotElem].${key}`,
-            value,
-          ])
-        ),
-      },
-      {
-        arrayFilters: [{ "slotElem._id": slotId }], // Filter for the slot ID
-        new: true, // Return the updated document
-        runValidators: true, // Run schema validators
-      }
-    );
-
-    if (!result) {
+    // Find the document containing the slot
+    const plantSlot = await PlantSlot.findOne({ "subtypeSlots.slots._id": slotId });
+    
+    if (!plantSlot) {
       return res.status(404).json({ message: "Slot not found." });
     }
 
-    // Find the updated slot to get current values
-    const updatedSlot = result.subtypeSlots
-      .flatMap(subtype => subtype.slots)
-      .find(slot => slot._id.toString() === slotId);
-
-    if (!updatedSlot) {
-      return res.status(404).json({ message: "Updated slot not found." });
+    // Find the specific slot and subtype
+    let targetSlot = null;
+    let targetSubtype = null;
+    
+    for (const subtype of plantSlot.subtypeSlots) {
+      const slot = subtype.slots.find(s => s._id.toString() === slotId);
+      if (slot) {
+        targetSlot = slot;
+        targetSubtype = subtype;
+        break;
+      }
     }
+
+    if (!targetSlot) {
+      return res.status(404).json({ message: "Slot not found." });
+    }
+
+    // Store original values for trail tracking
+    const originalValues = {
+      totalPlants: targetSlot.totalPlants,
+      availablePlants: targetSlot.availablePlants,
+      buffer: targetSlot.buffer,
+      effectiveBuffer: targetSlot.effectiveBuffer
+    };
+
+    // Set performer for trail tracking
+    if (performedBy) {
+      targetSlot.setPerformer(performedBy);
+    }
+
+    // Update the slot fields
+    Object.keys(updates).forEach(key => {
+      if (targetSlot[key] !== undefined) {
+        targetSlot[key] = updates[key];
+      }
+    });
+
+    // Save the document to trigger middleware
+    await plantSlot.save();
 
     // Update buffer calculations in the database
     const bufferUpdateResult = await updateSlotBufferCalculations(
       slotId,
-      updatedSlot.totalPlants,
-      updatedSlot.totalBookedPlants,
-      updatedSlot.buffer
+      targetSlot.totalPlants,
+      targetSlot.totalBookedPlants,
+      targetSlot.buffer
     );
 
     if (!bufferUpdateResult.success) {
@@ -689,7 +706,7 @@ export const updateSlotFieldById = async (req, res) => {
     res.status(200).json({
       message: "Slot updated successfully.",
       data: {
-        ...result.toObject(),
+        ...plantSlot.toObject(),
         bufferCalculations: bufferUpdateResult
       },
     });
@@ -706,6 +723,7 @@ export const updateSlotBuffer = async (req, res) => {
   try {
     const { slotId } = req.params;
     const { buffer } = req.body;
+    const performedBy = req.user?._id; // Get user ID from request
 
     // Validate buffer value
     if (buffer === undefined || buffer === null) {
@@ -731,45 +749,50 @@ export const updateSlotBuffer = async (req, res) => {
       });
     }
 
-    // Update the buffer field in the slot
-    const result = await PlantSlot.findOneAndUpdate(
-      { "subtypeSlots.slots._id": slotId },
-      {
-        $set: {
-          "subtypeSlots.$[].slots.$[slotElem].buffer": bufferValue
-        }
-      },
-      {
-        arrayFilters: [{ "slotElem._id": slotId }],
-        new: true,
-        runValidators: true,
-      }
-    );
-
-    if (!result) {
+    // Find the document containing the slot
+    const plantSlot = await PlantSlot.findOne({ "subtypeSlots.slots._id": slotId });
+    
+    if (!plantSlot) {
       return res.status(404).json({ 
         success: false,
         message: "Slot not found." 
       });
     }
 
-    // Find the updated slot to get current values
-    const updatedSlot = result.subtypeSlots
-      .flatMap(subtype => subtype.slots)
-      .find(slot => slot._id.toString() === slotId);
+    // Find the specific slot
+    let targetSlot = null;
+    
+    for (const subtype of plantSlot.subtypeSlots) {
+      const slot = subtype.slots.find(s => s._id.toString() === slotId);
+      if (slot) {
+        targetSlot = slot;
+        break;
+      }
+    }
 
-    if (!updatedSlot) {
+    if (!targetSlot) {
       return res.status(404).json({ 
         success: false,
-        message: "Updated slot not found." 
+        message: "Slot not found." 
       });
     }
+
+    // Set performer for trail tracking
+    if (performedBy) {
+      targetSlot.setPerformer(performedBy);
+    }
+
+    // Update the buffer field
+    targetSlot.buffer = bufferValue;
+
+    // Save the document to trigger middleware
+    await plantSlot.save();
 
     // Update buffer calculations in the database
     const bufferUpdateResult = await updateSlotBufferCalculations(
       slotId,
-      updatedSlot.totalPlants,
-      updatedSlot.totalBookedPlants,
+      targetSlot.totalPlants,
+      targetSlot.totalBookedPlants,
       bufferValue
     );
 
@@ -783,7 +806,7 @@ export const updateSlotBuffer = async (req, res) => {
       data: {
         slotId,
         buffer: bufferValue,
-        slot: updatedSlot,
+        slot: targetSlot,
         bufferCalculations: bufferUpdateResult
       }
     });
@@ -2035,6 +2058,40 @@ export const getSlotDetailsById = async (req, res) => {
     
   } catch (error) {
     console.error("Error getting slot details:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Internal server error", 
+      error: error.message 
+    });
+  }
+};
+
+// Get slot trail history
+export const getSlotTrail = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    
+    if (!slotId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Slot ID is required" 
+      });
+    }
+
+    // Import the utility function
+    const { getSlotTrail } = await import('../utility/slotTrailTracker.js');
+    
+    // Get slot trail
+    const trail = await getSlotTrail(slotId);
+    
+    res.status(200).json({
+      success: true,
+      data: trail,
+      message: trail.length > 0 ? "Slot trail retrieved successfully" : "No trail entries found"
+    });
+    
+  } catch (error) {
+    console.error("Error getting slot trail:", error);
     res.status(500).json({ 
       success: false, 
       message: "Internal server error", 

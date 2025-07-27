@@ -12,6 +12,27 @@ import { createJobTitle } from "../controllers/cms.controller.js";
 
 const router = express.Router();
 
+// Custom middleware to handle both id and _id fields
+const validateEmployeeId = (req, res, next) => {
+  const { id, _id } = req.body;
+  
+  // If _id is provided but id is not, map _id to id
+  if (_id && !id) {
+    req.body.id = _id;
+    delete req.body._id;
+  }
+  
+  // Check if id exists after mapping
+  if (!req.body.id) {
+    return res.status(400).json({
+      status: "fail",
+      message: "Employee Id is required"
+    });
+  }
+  
+  next();
+};
+
 router
   .get("/getEmployees", getEmployees)
   .get("/getEmployee", getEmployee)
@@ -35,8 +56,7 @@ router
   )
   .patch(
     "/updateEmployee",
-    [check("id").notEmpty().withMessage("Employee Id is required")],
-    checkErrors,
+    validateEmployeeId,
     updateEmployee
   )
   .delete(

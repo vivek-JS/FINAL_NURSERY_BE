@@ -17,6 +17,7 @@ import {
   addPlantsToCapacityController,
   createSlotsForSubtype,
   getSlotDetailsById,
+  getSlotTrail,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -64,5 +65,8 @@ slotRouter.get("/slots/test-generation", (req, res) => {
     });
   }
 });
+
+// Get slot trail history
+slotRouter.get("/slot-trail/:slotId", getSlotTrail);
 
 export default slotRouter;
