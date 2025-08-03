@@ -23,7 +23,7 @@ const connectDB = async () => {
 import User from './models/user.model.js';
 
 // Default password for new users
-const DEFAULT_PASSWORD = 'Nursery@2024';
+const DEFAULT_PASSWORD = '12345678';
 
 // Function to hash password
 const hashPassword = async (password) => {
@@ -217,7 +217,7 @@ const onboardSalesFromRefrence = async () => {
     }
 
     if (createdCount > 0) {
-      console.log('\n🔑 Default password for all new users: Nursery@2024');
+      console.log('\n🔑 Default password for all new users: 12345678');
       console.log('📱 Users will see password set popup on first login');
       console.log('🎉 Successfully onboarded sales users from Refrence and adjacent Mobile No!');
     }

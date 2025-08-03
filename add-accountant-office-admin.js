@@ -20,7 +20,7 @@ const connectDB = async () => {
 import User from './models/user.model.js';
 
 // Default password
-const DEFAULT_PASSWORD = 'Nursery@2024';
+const DEFAULT_PASSWORD = '12345678';
 
 // Function to hash password
 const hashPassword = async (password) => {
@@ -58,7 +58,7 @@ const addUsers = async () => {
       await accountant.save();
       console.log('✅ Accountant Vivek added successfully');
       console.log('   Phone: 7588686451');
-      console.log('   Default Password: Nursery@2024');
+      console.log('   Default Password: 12345678');
       console.log('   Role: ACCOUNTANT');
       console.log('   Password Set: false (will show popup on first login)');
     }
@@ -84,13 +84,13 @@ const addUsers = async () => {
       await officeAdmin.save();
       console.log('✅ Office Admin Sunil added successfully');
       console.log('   Phone: 7588686450');
-      console.log('   Default Password: Nursery@2024');
+      console.log('   Default Password: 12345678');
       console.log('   Role: OFFICE_ADMIN');
       console.log('   Password Set: false (will show popup on first login)');
     }
 
     console.log('\n📋 Summary:');
-    console.log('Default password for both users: Nursery@2024');
+    console.log('Default password for both users: 12345678');
     console.log('Both users will see password set popup on first login');
     console.log('Accountant can add/change payment status');
     console.log('Office Admin can only add PENDING payments');

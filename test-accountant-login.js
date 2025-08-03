@@ -17,7 +17,7 @@ async function testAccountantLogin() {
     // Test Accountant Login
     console.log("\n🧪 Testing Accountant Login...");
     const accountantPhone = 7588686451;
-    const accountantPassword = "Nursery@2024";
+    const accountantPassword = "12345678";
 
     console.log(`Looking for accountant with phone number: ${accountantPhone}`);
     const accountant = await User.findOne({ phoneNumber: accountantPhone });
@@ -49,7 +49,7 @@ async function testAccountantLogin() {
     // Test Office Admin Login
     console.log("\n🧪 Testing Office Admin Login...");
     const officeAdminPhone = 7588686450;
-    const officeAdminPassword = "Nursery@2024";
+    const officeAdminPassword = "12345678";
 
     console.log(`Looking for office admin with phone number: ${officeAdminPhone}`);
     const officeAdmin = await User.findOne({ phoneNumber: officeAdminPhone });
@@ -81,7 +81,7 @@ async function testAccountantLogin() {
     console.log("\n📋 Login Test Summary:");
     console.log("Accountant (Vivek):", isAccountantPasswordValid ? "✅ Can login" : "❌ Cannot login");
     console.log("Office Admin (Sunil):", isOfficeAdminPasswordValid ? "✅ Can login" : "❌ Cannot login");
-    console.log("Default password for both: Nursery@2024");
+    console.log("Default password for both: 12345678");
 
   } catch (error) {
     console.error("Error:", error);
