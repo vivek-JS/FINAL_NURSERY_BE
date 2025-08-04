@@ -25,10 +25,16 @@ const paymentSchema = new Schema(
     ],
     modeOfPayment: {
       type: String,
-      required: true,
+      required: function() {
+        return !this.isWalletPayment; // Only required if not a wallet payment
+      },
     },
     remark: {
       type: String,
+    },
+    isWalletPayment: {
+      type: Boolean,
+      default: false,
     },
   },
   { timestamps: true }
