@@ -97,3 +97,32 @@ export const addPlantsToCapacity = (slotData, plantsToAdd) => {
     message: `Added ${plantsToAdd} plants to total capacity`
   };
 }; 
+
+/**
+ * Add plants directly to available plants without changing buffer amount
+ * Buffer percentage will be recalculated based on new total plants
+ */
+export const addPlantsToAvailable = (slotData, plantsToAdd) => {
+  const currentTotalPlants = slotData.totalPlants || 0;
+  const currentBufferAmount = slotData.bufferAmount || 0;
+  const currentAvailablePlants = slotData.availablePlants || 0;
+  const currentBookedPlants = slotData.totalBookedPlants || 0;
+  
+  // Add plants directly to available plants
+  const newAvailablePlants = currentAvailablePlants + plantsToAdd;
+  
+  // Calculate new total plants needed
+  const newTotalPlants = newAvailablePlants + currentBookedPlants + currentBufferAmount;
+  
+  // Calculate new buffer percentage based on the unchanged buffer amount
+  const newBufferPercentage = newTotalPlants > 0 ? (currentBufferAmount / newTotalPlants) * 100 : 0;
+  
+  return {
+    success: true,
+    newTotalPlants,
+    newBufferAmount: currentBufferAmount, // Keep buffer amount unchanged
+    newAvailablePlants,
+    newBufferPercentage,
+    message: `Added ${plantsToAdd} plants to available plants`
+  };
+}; 

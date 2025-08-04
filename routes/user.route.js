@@ -75,9 +75,9 @@ router
   .get("/salespeople", getSalespeople)
   .get("/analytics/sales", getSalesAnalytics)
   .get("/dealers", getAllDealersWithWalletInfo)
-  .get("/dealers/:dealerId", getDealerWalletDetails)
+  .get("/dealers/stats", getDealerWalletStats)
+  .get("/dealers/stats/:dealerId", getDealerWalletStats)
   .get("/dealers/transactions/:dealerId", getDealerWalletTransactions)
   .get("/dealers/transactions/:dealerId/csv", exportDealerWalletTransactionsCSV)
-  .get("/dealerssss/stats", getDealerWalletStats)
-  .get("/dealerssss/stats/:dealerId", getDealerWalletStats);
+  .get("/dealers/:dealerId", getDealerWalletDetails);
 export default router;

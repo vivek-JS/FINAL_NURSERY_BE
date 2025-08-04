@@ -30,6 +30,74 @@ function formatDate(date) {
   return moment(date).format("DD-MM-YYYY");
 }
 
+// Function to map variety names to correct system names
+function mapVarietyName(cropName, varietyName) {
+  const varietyMappings = {
+    "Papaya": {
+      "Taiwan": "Red Lady",
+      "Taiwan Red": "Red Lady",
+      "Taiwan Red Lady": "Red Lady"
+    }
+    // Add more mappings as needed
+    // "CropName": {
+    //   "Excel Variety": "System Variety"
+    // }
+  };
+
+  const cropMappings = varietyMappings[cropName];
+  if (cropMappings && cropMappings[varietyName]) {
+    const mappedName = cropMappings[varietyName];
+    console.log(`🔄 Mapping "${varietyName}" to "${mappedName}" for ${cropName}`);
+    return mappedName;
+  }
+
+  return varietyName;
+}
+
+// Function to parse order ID from various formats
+function parseOrderId(bookingNo) {
+  if (!bookingNo) {
+    throw new Error("Booking number is required");
+  }
+
+  const bookingStr = bookingNo.toString().trim();
+
+  // Handle new format: "2025/2", "2025/10", etc.
+  const newFormatMatch = bookingStr.match(/^(\d{4})\/(\d+)$/);
+  if (newFormatMatch) {
+    const year = newFormatMatch[1];
+    const sequence = newFormatMatch[2];
+    // Create unique order ID by combining year and sequence
+    return parseInt(`${year}${sequence.padStart(3, '0')}`, 10);
+  }
+
+  // Handle old format: "24-25/B123", "24-25/B001", etc.
+  const oldFormatMatch = bookingStr.match(/^(\d{2})-(\d{2})\/B(\d+)$/);
+  if (oldFormatMatch) {
+    const startYear = oldFormatMatch[1];
+    const endYear = oldFormatMatch[2];
+    const sequence = oldFormatMatch[3];
+    // Create unique order ID by combining years and sequence
+    return parseInt(`${startYear}${endYear}${sequence.padStart(3, '0')}`, 10);
+  }
+
+  // Handle simple numeric format: "123", "001", etc.
+  const numericMatch = bookingStr.match(/^(\d+)$/);
+  if (numericMatch) {
+    return parseInt(numericMatch[1], 10);
+  }
+
+  // If no format matches, create a hash-based ID
+  console.log(`⚠️  Unknown booking number format: "${bookingStr}" - creating hash-based ID`);
+  let hash = 0;
+  for (let i = 0; i < bookingStr.length; i++) {
+    const char = bookingStr.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash);
+}
+
 // Function to handle date conversion
 function convertDate(value) {
   if (!value) return null;
@@ -38,8 +106,58 @@ function convertDate(value) {
     return formatDate(parseExcelDate(Number(value)));
   }
 
-  const date = moment(value, ["DD-MM-YYYY", "MM/DD/YYYY", "YYYY-MM-DD"]);
+  const valueStr = value.toString().trim();
 
+  // Handle MM/DD/YYYY format specifically (like "9/21/2024")
+  const mmddyyyyMatch = valueStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mmddyyyyMatch) {
+    const month = parseInt(mmddyyyyMatch[1], 10);
+    const day = parseInt(mmddyyyyMatch[2], 10);
+    const year = parseInt(mmddyyyyMatch[3], 10);
+    
+    // Validate the date
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000 && year <= 2030) {
+      const date = moment(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+      if (date.isValid()) {
+        return date.format("DD-MM-YYYY");
+      }
+    }
+  }
+
+  // Handle DD-MM-YYYY format
+  const ddmmyyyyMatch = valueStr.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (ddmmyyyyMatch) {
+    const day = parseInt(ddmmyyyyMatch[1], 10);
+    const month = parseInt(ddmmyyyyMatch[2], 10);
+    const year = parseInt(ddmmyyyyMatch[3], 10);
+    
+    // Validate the date
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000 && year <= 2030) {
+      const date = moment(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+      if (date.isValid()) {
+        return date.format("DD-MM-YYYY");
+      }
+    }
+  }
+
+  // Handle YYYY-MM-DD format
+  const yyyymmddMatch = valueStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (yyyymmddMatch) {
+    const year = parseInt(yyyymmddMatch[1], 10);
+    const month = parseInt(yyyymmddMatch[2], 10);
+    const day = parseInt(yyyymmddMatch[3], 10);
+    
+    // Validate the date
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000 && year <= 2030) {
+      const date = moment(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+      if (date.isValid()) {
+        return date.format("DD-MM-YYYY");
+      }
+    }
+  }
+
+  // Fallback to moment.js parsing for other formats
+  const date = moment(value, ["DD-MM-YYYY", "MM/DD/YYYY", "YYYY-MM-DD"]);
   return date.isValid() ? date.format("DD-MM-YYYY") : null;
 }
 
@@ -365,7 +483,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
 
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
-    const orderNumber = parseInt(row["Booking NO."].replace("24-25/B", ""), 10);
+    const orderNumber = parseOrderId(row["Booking NO."]);
     
     processedData.push({
       ...row,
@@ -594,9 +712,12 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           throw new Error(`Plant type "${row["Crop"]}" not found`);
         }
 
-        const subtype = plant.subtypes.find(st => st.name === row["Variety"]);
+        // Handle variety mapping for specific cases
+        let varietyName = mapVarietyName(row["Crop"], row["Variety"]);
+
+        const subtype = plant.subtypes.find(st => st.name === varietyName);
         if (!subtype) {
-          throw new Error(`Variety "${row["Variety"]}" not found for ${row["Crop"]}`);
+          throw new Error(`Variety "${varietyName}" not found for ${row["Crop"]} (original: "${row["Variety"]}")`);
         }
 
         // Find slot

@@ -1,8 +1,9 @@
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
+import Order from "../models/order.model.js";
 import mongoose from "mongoose";
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
-import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity } from "../utility/bufferUtils.js";
+import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity, addPlantsToAvailable } from "../utility/bufferUtils.js";
 import { updateSlotBufferCalculations, updateAllSlotBuffers } from "../utility/slotBufferUpdater.js";
 
 // Helper function to convert month name to number
@@ -204,7 +205,6 @@ export const getPlantNames = async (req, res) => {
     const { year } = req.query;
     
     // First, get all plants from PlantCms
-    const PlantCms = mongoose.model('PlantCms');
     const allPlants = await PlantCms.find({}).select('_id name subtypes');
     
     if (allPlants.length === 0) {
@@ -1518,7 +1518,7 @@ export const releaseBufferPlantsController = async (req, res) => {
   }
 };
 
-// Add plants directly to capacity (ignoring buffer)
+// Add plants directly to available plants (reducing buffer)
 export const addPlantsToCapacityController = async (req, res) => {
   try {
     const { slotId } = req.params;
@@ -1562,8 +1562,8 @@ export const addPlantsToCapacityController = async (req, res) => {
       });
     }
 
-    // Add plants to capacity
-    const addResult = addPlantsToCapacity(targetSlot, plantsToAdd);
+    // Add plants directly to available plants (reducing buffer)
+    const addResult = addPlantsToAvailable(targetSlot, plantsToAdd);
     
     if (!addResult.success) {
       return res.status(400).json({
@@ -1572,12 +1572,12 @@ export const addPlantsToCapacityController = async (req, res) => {
       });
     }
 
-    // Update the slot with new total plants
+    // Update the slot with new total plants and recalculated buffer percentage
     const updateResult = await updateSlotBufferCalculations(
       slotId,
       addResult.newTotalPlants,
       targetSlot.totalBookedPlants,
-      targetSlot.buffer
+      addResult.newBufferPercentage
     );
 
     if (!updateResult.success) {
@@ -1601,7 +1601,7 @@ export const addPlantsToCapacityController = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error adding plants to capacity:", error);
+    console.error("Error adding plants to available:", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -1936,12 +1936,20 @@ const generateSlotsForDateRange = (startDate, endDate, slotSize = 7, capacity = 
 // Function to calculate totalBookedPlants from orders array
 const calculateTotalBookedPlantsFromOrders = async (slotId) => {
   try {
-    const Order = mongoose.model('Order');
     const totalBookedPlants = await Order.aggregate([
       {
         $match: {
           bookingSlot: new mongoose.Types.ObjectId(slotId),
-          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] } // Exclude cancelled and rejected orders
+          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] }, // Exclude cancelled and rejected orders
+          // Exclude dealer quota orders - exclude orders where quotaSource is "dealer"
+          $and: [
+            {
+              $or: [
+                { quotaSource: { $ne: "dealer" } }, // quotaSource is not "dealer"
+                { quotaSource: { $exists: false } } // quotaSource field doesn't exist
+              ]
+            }
+          ]
         }
       },
       {
@@ -1962,27 +1970,39 @@ const calculateTotalBookedPlantsFromOrders = async (slotId) => {
 // Function to populate slots with orders and calculate totalBookedPlants
 const populateSlotsWithOrders = async (slots) => {
   try {
-    const Order = mongoose.model('Order');
-    
     for (const slotGroup of slots) {
       for (const slot of slotGroup.slots) {
         // Get orders for this slot - handle both ObjectId and array formats
         // Exclude CANCELLED and REJECTED orders when calculating booked plants
+        // Also exclude dealer quota orders (quotaSource = "dealer")
         const orders = await Order.find({
           $or: [
             { bookingSlot: slot._id }, // Direct ObjectId reference
             { "bookingSlot.slotId": slot._id.toString() }, // Array format with slotId
             { "bookingSlot.startDay": slot.startDay, "bookingSlot.endDay": slot.endDay } // Array format with date matching
           ],
-          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] } // Exclude cancelled and rejected orders
-        }).select('_id orderId numberOfPlants farmer salesPerson orderStatus');
+          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] }, // Exclude cancelled and rejected orders
+          // Exclude dealer quota orders - exclude orders where quotaSource is "dealer"
+          $and: [
+            {
+              $or: [
+                { quotaSource: { $ne: "dealer" } }, // quotaSource is not "dealer"
+                { quotaSource: { $exists: false } } // quotaSource field doesn't exist
+              ]
+            }
+          ]
+        }).select('_id orderId numberOfPlants farmer salesPerson orderStatus dealer quotaSource');
 
-        // Calculate totalBookedPlants from active orders only
+        // Calculate totalBookedPlants from active orders only (excluding dealer quota orders)
         const totalBookedPlants = orders.reduce((sum, order) => sum + order.numberOfPlants, 0);
+        
+        // Get dealer quota information for this slot
+        const dealerQuota = await getDealerQuotaForSlot(slot._id);
         
         // Update slot with calculated values
         slot.orders = orders;
         slot.totalBookedPlants = totalBookedPlants;
+        slot.dealerQuota = dealerQuota; // Add dealer quota information
         
         // Calculate available plants considering buffer
         const effectiveBuffer = slot.effectiveBuffer || 0;
@@ -2003,6 +2023,49 @@ const populateSlotsWithOrders = async (slots) => {
   } catch (error) {
     console.error('Error populating slots with orders:', error);
     return slots;
+  }
+};
+
+// Function to get dealer quota information for a slot
+const getDealerQuotaForSlot = async (slotId) => {
+  try {
+    const dealerQuotaOrders = await Order.aggregate([
+      {
+        $match: {
+          bookingSlot: new mongoose.Types.ObjectId(slotId),
+          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] },
+          quotaSource: "dealer" // Only dealer quota orders
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalDealerQuotaUsed: { $sum: '$numberOfPlants' },
+          dealerOrders: { $push: '$$ROOT' }
+        }
+      }
+    ]);
+
+    if (dealerQuotaOrders.length === 0) {
+      return {
+        totalDealerQuotaUsed: 0,
+        dealerOrders: [],
+        hasDealerQuota: false
+      };
+    }
+
+    return {
+      totalDealerQuotaUsed: dealerQuotaOrders[0].totalDealerQuotaUsed,
+      dealerOrders: dealerQuotaOrders[0].dealerOrders,
+      hasDealerQuota: true
+    };
+  } catch (error) {
+    console.error('Error getting dealer quota for slot:', error);
+    return {
+      totalDealerQuotaUsed: 0,
+      dealerOrders: [],
+      hasDealerQuota: false
+    };
   }
 };
 
@@ -2049,7 +2112,8 @@ export const getSlotDetailsById = async (req, res) => {
         effectiveBuffer: slotInfo.effectiveBuffer,
         bufferAdjustedCapacity: slotInfo.bufferAdjustedCapacity,
         bufferAmount: slotInfo.bufferAmount,
-        originalTotalPlants: slotInfo.originalTotalPlants
+        originalTotalPlants: slotInfo.originalTotalPlants,
+        dealerQuota: await getDealerQuotaForSlot(slotId) // Add dealer quota data
       }
     };
 

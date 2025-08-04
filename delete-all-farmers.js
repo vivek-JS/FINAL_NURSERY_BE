@@ -1,104 +1,83 @@
-import mongoose from "mongoose"
-import dotenv from "dotenv"
-import Farmer from "./models/farmer.model.js"
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
 
 // Load environment variables
-dotenv.config()
+dotenv.config();
 
 // Connect to MongoDB
 const connectDB = async () => {
   try {
-    await mongoose.connect(process.env.MONGO_URL)
-    console.log("✅ Connected to MongoDB")
+    const conn = await mongoose.connect(process.env.MONGO_URL || 'mongodb://localhost:27017/nursery-management');
+    console.log('MongoDB Connected:', conn.connection.host);
   } catch (error) {
-    console.error("❌ MongoDB connection error:", error.message)
-    process.exit(1)
+    console.error('Error connecting to MongoDB:', error);
+    process.exit(1);
   }
-}
+};
 
-// Disconnect from MongoDB
-const disconnectDB = async () => {
-  try {
-    await mongoose.disconnect()
-    console.log("✅ Disconnected from MongoDB")
-  } catch (error) {
-    console.error("❌ Error disconnecting from MongoDB:", error.message)
-  }
-}
+// Import User model
+import User from './models/user.model.js';
 
-// Delete all farmers
+// Function to delete all farmers
 const deleteAllFarmers = async () => {
   try {
-    console.log("🔍 Starting farmer cleanup process...")
+    await connectDB();
+
+    console.log('👥 Starting farmer deletion...');
+    console.log('🗑️ Deleting: All users with FARMER role');
+    console.log('✅ Preserving: SUPER_ADMIN, SALES, DEALER, and other roles');
+
+    // Get all farmers before deletion
+    const farmers = await User.find({ role: 'FARMER' }, 'name phoneNumber role jobTitle');
+    console.log(`\n👨‍🌾 Found ${farmers.length} farmers to delete:`);
     
-    // Get count before deletion
-    const totalFarmers = await Farmer.countDocuments()
+    farmers.forEach(farmer => {
+      console.log(`   - ${farmer.name} (${farmer.phoneNumber}) - ${farmer.role}${farmer.jobTitle ? ` - ${farmer.jobTitle}` : ''}`);
+    });
 
-    console.log("\n📊 Current Farmer Statistics:")
-    console.log(`   Total Farmers: ${totalFarmers}`)
+    // Get count of other users to preserve
+    const otherUsers = await User.countDocuments({ role: { $ne: 'FARMER' } });
+    console.log(`\n✅ ${otherUsers} non-farmer users will be preserved`);
 
-    if (totalFarmers === 0) {
-      console.log("✅ No farmers to delete.")
-      return
-    }
-
-    // Show what will be deleted
-    console.log("\n🗑️  Farmers that will be deleted:")
-    const farmersToDelete = await Farmer.find({})
-      .select("name mobileNumber village taluka district state")
-      .sort({ name: 1 })
-      .limit(20) // Show first 20 for preview
-
-    farmersToDelete.forEach((farmer, index) => {
-      console.log(`   ${index + 1}. ${farmer.name} (${farmer.mobileNumber}) - ${farmer.village}, ${farmer.taluka}, ${farmer.district}`)
-    })
-
-    if (totalFarmers > 20) {
-      console.log(`   ... and ${totalFarmers - 20} more farmers`)
-    }
-
-    // Confirmation prompt
-    console.log("\n⚠️  WARNING: This action cannot be undone!")
-    console.log(`   ${totalFarmers} farmers will be permanently deleted.`)
-    console.log("   Press Ctrl+C to cancel or wait 10 seconds to continue...")
+    // Confirm deletion
+    console.log('\n⚠️  WARNING: This will permanently delete all farmers!');
+    console.log('Press Ctrl+C to cancel, or wait 5 seconds to continue...');
     
-    // Wait 10 seconds for user to cancel
-    await new Promise(resolve => setTimeout(resolve, 10000))
+    // Wait 5 seconds for user to cancel
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
-    // Proceed with deletion
-    console.log("\n🗑️  Starting deletion process...")
-    
-    const deleteResult = await Farmer.deleteMany({})
-    
-    console.log("✅ Deletion completed!")
-    console.log(`   Deleted ${deleteResult.deletedCount} farmers`)
+    // Delete all farmers
+    console.log('\n🗑️ Deleting all farmers...');
+    const deleteResult = await User.deleteMany({ role: 'FARMER' });
+    console.log(`✅ Deleted ${deleteResult.deletedCount} farmers`);
 
-    // Verify results
-    const remainingFarmers = await Farmer.countDocuments()
+    // Verify remaining users
+    const remainingUsers = await User.countDocuments();
+    const remainingFarmers = await User.countDocuments({ role: 'FARMER' });
     
-    console.log("\n📊 Final Farmer Statistics:")
-    console.log(`   Total Farmers Remaining: ${remainingFarmers}`)
+    console.log(`\n✅ Verification:`);
+    console.log(`   - Total users remaining: ${remainingUsers}`);
+    console.log(`   - Farmers remaining: ${remainingFarmers}`);
 
-    console.log("\n✅ Farmer cleanup process completed successfully!")
+    // Show remaining users
+    const remainingUserList = await User.find({}, 'name phoneNumber role jobTitle');
+    console.log('\n👥 Remaining Users:');
+    remainingUserList.forEach(user => {
+      console.log(`   - ${user.name} (${user.phoneNumber}) - ${user.role}${user.jobTitle ? ` - ${user.jobTitle}` : ''}`);
+    });
+
+    console.log('\n🎉 Farmer deletion completed successfully!');
+    console.log('📊 Summary:');
+    console.log(`   - Farmers deleted: ${deleteResult.deletedCount}`);
+    console.log(`   - Users remaining: ${remainingUsers}`);
 
   } catch (error) {
-    console.error("❌ Error during farmer cleanup:", error.message)
-    throw error
-  }
-}
-
-// Main execution
-const main = async () => {
-  try {
-    await connectDB()
-    await deleteAllFarmers()
-  } catch (error) {
-    console.error("❌ Script failed:", error.message)
-    process.exit(1)
+    console.error('❌ Error during farmer deletion:', error);
   } finally {
-    await disconnectDB()
+    mongoose.connection.close();
+    console.log('\n🔌 Database connection closed');
   }
-}
+};
 
 // Run the script
-main() 
+deleteAllFarmers(); 

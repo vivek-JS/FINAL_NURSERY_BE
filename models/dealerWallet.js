@@ -396,6 +396,7 @@ dealerWalletSchema.statics.addTransaction = async function(
       }
     } catch (approach3Error) {
       console.error('APPROACH 3 FAILED:', approach3Error);
+      throw approach3Error; // Re-throw to trigger abort
     }
     
     // Commit transaction
@@ -425,67 +426,201 @@ dealerWalletSchema.statics.addTransaction = async function(
   } catch (error) {
     console.error('CRITICAL ERROR in transaction process:', error);
     console.log('Aborting transaction...');
-    await session.abortTransaction();
-    console.log('Transaction aborted');
+    try {
+      await session.abortTransaction();
+      console.log('Transaction aborted');
+    } catch (abortError) {
+      console.error('Error aborting transaction:', abortError);
+    }
     console.log('========== TRANSACTION DEBUGGING COMPLETE ==========\n');
     throw error;
   } finally {
     console.log('Ending session');
-    session.endSession();
+    try {
+      session.endSession();
+    } catch (endSessionError) {
+      console.error('Error ending session:', endSessionError);
+    }
   }
 };
 
+
+
 /**
- * Debug-enhanced method to add a payment
+ * Add payment transaction to dealer wallet
  */
 dealerWalletSchema.statics.addPayment = async function(
   dealerId,
   amount,
   description,
   performedBy,
-  reference = null,
-  referenceId = null
+  reference = 'ORDER_PAYMENT',
+  referenceId = null,
+  session = null
 ) {
   console.log('\n========== WALLET PAYMENT DEBUGGING ==========');
   console.log('Method called: addPayment');
   console.log('Parameters:');
-  console.log('- dealerId:', dealerId, typeof dealerId);
-  console.log('- amount:', amount, typeof amount);
+  console.log('- dealerId:', dealerId);
+  console.log('- amount:', amount);
   console.log('- description:', description);
   console.log('- performedBy:', performedBy);
   console.log('- reference:', reference);
   console.log('- referenceId:', referenceId);
   
-  // Ensure amount is a number
+  // Validate required parameters
+  if (!dealerId) {
+    console.error('ERROR: dealerId is required');
+    throw new Error('dealerId is required');
+  }
+  if (amount === undefined || amount === null) {
+    console.error('ERROR: amount is required');
+    throw new Error('amount is required');
+  }
+  if (!description) {
+    console.error('ERROR: description is required');
+    throw new Error('description is required');
+  }
+  if (!performedBy) {
+    console.error('ERROR: performedBy is required');
+    throw new Error('performedBy is required');
+  }
+  
+  // Make sure amount is a number
   amount = Number(amount);
   if (isNaN(amount)) {
     console.error('ERROR: amount must be a valid number');
     throw new Error('amount must be a valid number');
   }
   
-  // Determine transaction type based on amount
-  const transactionType = amount >= 0 ? 'CREDIT' : 'DEBIT';
-  const absAmount = Math.abs(amount);
+  console.log('All parameters validated');
   
-  console.log(`Transaction type determined: ${transactionType}, absAmount: ${absAmount}`);
-  console.log('Calling addTransaction method...');
+  // Check if dealerId is already an ObjectId
+  let dealerObjectId;
+  try {
+    if (dealerId instanceof mongoose.Types.ObjectId) {
+      dealerObjectId = dealerId;
+      console.log('dealerId is already an ObjectId instance');
+    } else {
+      dealerObjectId = new mongoose.Types.ObjectId(dealerId.toString());
+      console.log('dealerId converted to ObjectId:', dealerObjectId);
+    }
+  } catch (err) {
+    console.error('ERROR: Failed to convert dealerId to ObjectId:', err.message);
+    throw new Error(`Invalid dealerId format: ${dealerId}`);
+  }
+  
+  // Check if performedBy is already an ObjectId
+  let performedByObjectId;
+  try {
+    if (performedBy instanceof mongoose.Types.ObjectId) {
+      performedByObjectId = performedBy;
+      console.log('performedBy is already an ObjectId instance');
+    } else {
+      performedByObjectId = new mongoose.Types.ObjectId(performedBy.toString());
+      console.log('performedBy converted to ObjectId:', performedByObjectId);
+    }
+  } catch (err) {
+    console.error('ERROR: Failed to convert performedBy to ObjectId:', err.message);
+    throw new Error(`Invalid performedBy format: ${performedBy}`);
+  }
+  
+  // Simplified approach without transactions to avoid conflicts
+  console.log('Using simplified wallet update approach');
   
   try {
-    const result = await this.addTransaction(
-      dealerId,
-      transactionType,
-      absAmount,
+    // First, find the wallet using the dealerObjectId
+    console.log('Searching for wallet with dealer:', dealerObjectId);
+    let wallet = await this.findOne({ dealer: dealerObjectId }).session(session);
+    
+    // Log the found wallet or create a new one
+    if (wallet) {
+      console.log('Existing wallet found:', wallet._id);
+      console.log('Current wallet state:');
+      console.log('- availableAmount:', wallet.availableAmount);
+      console.log('- transactions count:', wallet.transactions ? wallet.transactions.length : 0);
+    } else {
+      console.log('No wallet found, creating new wallet');
+      try {
+        // Create a new wallet
+        const newWallet = new this({
+          dealer: dealerObjectId,
+          availableAmount: 0,
+          entries: [],
+          transactions: []
+        });
+        await newWallet.save({ session });
+        wallet = newWallet;
+        console.log('New wallet created with ID:', wallet._id);
+      } catch (createErr) {
+        console.error('ERROR: Failed to create new wallet:', createErr);
+        throw createErr;
+      }
+    }
+    
+    // Calculate balance changes
+    const balanceBefore = wallet.availableAmount || 0;
+    const balanceAfter = balanceBefore + amount; // amount can be positive or negative
+    
+    console.log('Processing payment transaction:');
+    console.log('- Balance Before:', balanceBefore);
+    console.log('- Amount:', amount);
+    console.log('- Balance After:', balanceAfter);
+    
+    // Create transaction record
+    const transaction = {
+      type: amount >= 0 ? 'CREDIT' : 'DEBIT',
+      amount: Math.abs(amount), // Store absolute value
+      balanceBefore,
+      balanceAfter,
       description,
-      performedBy,
       reference,
-      referenceId
+      referenceId,
+      performedBy: performedByObjectId,
+      status: 'COMPLETED'
+    };
+    
+    console.log('Transaction record created:', transaction);
+    
+    // Update wallet using findOneAndUpdate to avoid conflicts
+    const updateResult = await this.findOneAndUpdate(
+      { _id: wallet._id },
+      { 
+        $set: { availableAmount: balanceAfter },
+        $push: { transactions: transaction }
+      },
+      { 
+        new: true,
+        session: session
+      }
     );
     
-    console.log('addTransaction result:', result ? 'Success' : 'Failed');
-    console.log('========== WALLET PAYMENT DEBUGGING COMPLETE ==========\n');
-    return result;
+    if (updateResult) {
+      console.log('Wallet updated successfully');
+      
+      // Return the transaction details
+      const result = {
+        type: transaction.type,
+        amount: transaction.amount,
+        balanceBefore,
+        balanceAfter,
+        description: transaction.description,
+        reference: transaction.reference,
+        referenceId: transaction.referenceId,
+        performedBy: transaction.performedBy,
+        status: transaction.status,
+        createdAt: new Date()
+      };
+      
+      console.log('Returning transaction result:', result);
+      console.log('========== WALLET PAYMENT DEBUGGING COMPLETE ==========\n');
+      return result;
+    } else {
+      throw new Error('Failed to update wallet');
+    }
+    
   } catch (error) {
-    console.error('Error in addPayment:', error);
+    console.error('ERROR: Failed to add payment:', error);
     console.log('========== WALLET PAYMENT DEBUGGING COMPLETE ==========\n');
     throw error;
   }

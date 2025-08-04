@@ -14,7 +14,16 @@ export const calculateSlotBookedPlants = async (slotId) => {
           bookingSlot: slotId,
           orderStatus: { 
             $nin: ['CANCELLED', 'REJECTED'] // Exclude cancelled/rejected orders
-          }
+          },
+          // Exclude dealer quota orders - exclude orders where quotaSource is "dealer"
+          $and: [
+            {
+              $or: [
+                { quotaSource: { $ne: "dealer" } }, // quotaSource is not "dealer"
+                { quotaSource: { $exists: false } } // quotaSource field doesn't exist
+              ]
+            }
+          ]
         }
       },
       {
@@ -45,7 +54,16 @@ export const calculateMultipleSlotsBookedPlants = async (slotIds) => {
           bookingSlot: { $in: slotIds },
           orderStatus: { 
             $nin: ['CANCELLED', 'REJECTED'] // Exclude cancelled/rejected orders
-          }
+          },
+          // Exclude dealer quota orders - exclude orders where quotaSource is "dealer"
+          $and: [
+            {
+              $or: [
+                { quotaSource: { $ne: "dealer" } }, // quotaSource is not "dealer"
+                { quotaSource: { $exists: false } } // quotaSource field doesn't exist
+              ]
+            }
+          ]
         }
       },
       {

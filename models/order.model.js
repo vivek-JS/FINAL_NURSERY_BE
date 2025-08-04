@@ -176,6 +176,28 @@ const orderSchema = new Schema(
       ref: "User",
       required: true,
     },
+    // Quota management fields for dealer orders
+    quotaUsed: {
+      type: Number,
+      default: 0,
+      // Number of plants used from dealer quota
+    },
+    quotaRestored: {
+      type: Boolean,
+      default: false,
+      // Track if quota was restored when order was rejected
+    },
+    quotaSource: {
+      type: String,
+      enum: ["dealer", "company", "none"],
+      default: "none",
+      // Track where the quota came from
+    },
+    originalQuotaAllocation: {
+      fromWallet: { type: Number, default: 0 },
+      fromSlot: { type: Number, default: 0 },
+      // Store original quota allocation for restoration
+    },
     numberOfPlants: {
       type: Number,
       required: true,

@@ -1335,161 +1335,209 @@ const exportDealerWalletTransactionsCSV = async (req, res) => {
 // Updated getDealerInventoryStats function with fixes
 export const getDealerWalletStats = async (req, res) => {
   try {
-    console.log("Fetching dealer wallet stats...");
+    console.log("Fetching dealer wallet stats from orders...");
     
-    // Pipeline to aggregate stats by plant type and subtype
-    const statsByPlantAndSubtype = await DealerWallet.aggregate([
-      // Unwind the entries array to work with individual entries
-      { $unwind: "$entries" },
+    // Get dealer ID from params if provided
+    const { dealerId } = req.params;
+    
+    // Build match condition for orders
+    const matchCondition = dealerId ? { salesPerson: dealerId } : {};
+    
+    // Get all orders for dealers (bulk orders)
+    const orders = await Order.find({
+      ...matchCondition,
+      dealerOrder: true
+    });
+    
+    // Get plant names manually to avoid schema issues
+    const plantIds = [...new Set(orders.map(order => order.plantName?.toString()).filter(Boolean))];
+    const subTypeIds = [...new Set(orders.map(order => order.plantSubtype?.toString()).filter(Boolean))];
+    
+    const plants = await PlantCms.find({ _id: { $in: plantIds } }).select('name subtypes');
+    const plantMap = new Map();
+    const subTypeMap = new Map();
+    
+    plants.forEach(plant => {
+      plantMap.set(plant._id.toString(), plant.name);
+      if (plant.subtypes) {
+        plant.subtypes.forEach(subtype => {
+          subTypeMap.set(subtype._id.toString(), subtype.name);
+        });
+      }
+    });
+    
+    console.log(`Found ${orders.length} dealer orders`);
+    
+    // Calculate overall stats from orders
+    let totalQuantity = 0;
+    let totalBookedQuantity = 0;
+    let totalRemainingQuantity = 0;
+    const uniqueDealers = new Set();
+    const acceptedOrders = [];
+    const rejectedOrders = [];
+    
+    orders.forEach(order => {
+      uniqueDealers.add(order.salesPerson.toString());
       
-      // Group by plant type and subtype
-      {
-        $group: {
-          _id: {
-            plantType: "$entries.plantType",
-            subType: "$entries.subType"
-          },
-          totalDealers: { $addToSet: "$dealer" }, // Count unique dealers
-          totalQuantity: { $sum: "$entries.quantity" },
-          totalBookedQuantity: { $sum: "$entries.bookedQuantity" },
-          totalRemainingQuantity: { $sum: "$entries.remainingQuantity" },
-          entries: { $push: "$entries" }
+      if (order.orderStatus === 'ACCEPTED') {
+        totalQuantity += order.numberOfPlants || 0;
+        acceptedOrders.push(order);
+      } else if (order.orderStatus === 'REJECTED') {
+        rejectedOrders.push(order);
+      }
+    });
+    
+    // Calculate booked quantity (orders that used dealer quota)
+    const dealerQuotaOrders = await Order.find({
+      ...matchCondition,
+      dealerOrder: true,
+      quotaSource: 'dealer'
+    });
+    
+    totalBookedQuantity = dealerQuotaOrders.reduce((sum, order) => {
+      return sum + (order.quotaUsed || 0);
+    }, 0);
+    
+    totalRemainingQuantity = totalQuantity - totalBookedQuantity;
+    
+    const overallStats = {
+      dealerCount: uniqueDealers.size,
+      totalQuantity,
+      totalBookedQuantity,
+      totalRemainingQuantity,
+      bookingPercentage: totalQuantity > 0 ? (totalBookedQuantity / totalQuantity) * 100 : 0,
+      acceptedOrdersCount: acceptedOrders.length,
+      rejectedOrdersCount: rejectedOrders.length
+    };
+    
+    // Get plant type stats from orders
+    const plantTypeMap = new Map();
+    
+    orders.forEach(order => {
+      if (order.orderStatus === 'ACCEPTED') {
+        const plantTypeId = order.plantName?.toString() || 'unknown';
+        const plantTypeName = plantMap.get(plantTypeId) || `Plant Type ${plantTypeId.slice(-6)}`;
+        
+        if (!plantTypeMap.has(plantTypeId)) {
+          plantTypeMap.set(plantTypeId, {
+            plantTypeId,
+            plantTypeName,
+            dealerCount: new Set(),
+            totalQuantity: 0,
+            totalBookedQuantity: 0,
+            totalRemainingQuantity: 0,
+            acceptedOrders: 0,
+            rejectedOrders: 0,
+            subtypes: new Map() // Track subtypes for this plant type
+          });
         }
-      },
-      
-      // Lookup plant type details
-      {
-        $lookup: {
-          from: "plantcms", // Adjust collection name if different
-          localField: "_id.plantType",
-          foreignField: "_id",
-          as: "plantTypeDetails"
+        
+        const stats = plantTypeMap.get(plantTypeId);
+        stats.dealerCount.add(order.salesPerson.toString());
+        stats.totalQuantity += order.numberOfPlants || 0;
+        stats.acceptedOrders++;
+        
+        // Track subtype information
+        const subTypeId = order.plantSubtype?.toString() || 'unknown';
+        const subTypeName = subTypeMap.get(subTypeId) || `Subtype ${subTypeId.slice(-6)}`;
+        
+        if (!stats.subtypes.has(subTypeId)) {
+          stats.subtypes.set(subTypeId, {
+            subTypeId,
+            subTypeName,
+            totalQuantity: 0,
+            totalBookedQuantity: 0,
+            totalRemainingQuantity: 0
+          });
         }
-      },
-      
-      // Filter to only get the subtype that matches
-      {
-        $addFields: {
-          "plantTypeDetails": { $arrayElemAt: ["$plantTypeDetails", 0] },
-          "subTypeDetails": {
-            $filter: {
-              input: { $arrayElemAt: ["$plantTypeDetails.subtypes", 0] },
-              as: "subtype",
-              cond: { $eq: ["$$subtype._id", "$_id.subType"] }
-            }
-          }
-        }
-      },
-      
-      // Project fields for the final output
-      {
-        $project: {
-          _id: 0,
-          plantTypeId: "$_id.plantType",
-          subTypeId: "$_id.subType",
-          plantTypeName: "$plantTypeDetails.name",
-          subTypeName: { $arrayElemAt: ["$subTypeDetails.name", 0] },
-          dealerCount: { $size: "$totalDealers" },
-          totalQuantity: 1,
-          totalBookedQuantity: 1,
-          totalRemainingQuantity: 1,
-          bookingPercentage: {
-            $multiply: [
-              { $divide: ["$totalBookedQuantity", { $max: ["$totalQuantity", 1] }] },
-              100
-            ]
-          }
-        }
-      },
-      
-      // Sort by plant type name and then subtype name
-      { $sort: { plantTypeName: 1, subTypeName: 1 } }
-    ]);
-
-    // Calculate overall totals
-    const overallStats = await DealerWallet.aggregate([
-      { $unwind: "$entries" },
-      {
-        $group: {
-          _id: null,
-          uniqueDealers: { $addToSet: "$dealer" },
-          totalEntries: { $sum: 1 },
-          totalQuantity: { $sum: "$entries.quantity" },
-          totalBookedQuantity: { $sum: "$entries.bookedQuantity" },
-          totalRemainingQuantity: { $sum: "$entries.remainingQuantity" }
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          dealerCount: { $size: "$uniqueDealers" },
-          entryCount: "$totalEntries",
-          totalQuantity: 1,
-          totalBookedQuantity: 1,
-          totalRemainingQuantity: 1,
-          bookingPercentage: {
-            $multiply: [
-              { $divide: ["$totalBookedQuantity", { $max: ["$totalQuantity", 1] }] },
-              100
-            ]
-          }
+        
+        const subTypeStats = stats.subtypes.get(subTypeId);
+        subTypeStats.totalQuantity += order.numberOfPlants || 0;
+        
+      } else if (order.orderStatus === 'REJECTED') {
+        const plantTypeId = order.plantName?.toString() || 'unknown';
+        if (plantTypeMap.has(plantTypeId)) {
+          plantTypeMap.get(plantTypeId).rejectedOrders++;
         }
       }
-    ]);
+    });
     
-    // Get plant type stats (aggregated at plant type level only)
-    const plantTypeStats = await DealerWallet.aggregate([
-      { $unwind: "$entries" },
-      {
-        $group: {
-          _id: "$entries.plantType",
-          totalDealers: { $addToSet: "$dealer" },
-          totalQuantity: { $sum: "$entries.quantity" },
-          totalBookedQuantity: { $sum: "$entries.bookedQuantity" },
-          totalRemainingQuantity: { $sum: "$entries.remainingQuantity" }
-        }
-      },
-      {
-        $lookup: {
-          from: "plantcms",
-          localField: "_id",
-          foreignField: "_id",
-          as: "plantTypeDetails"
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          plantTypeId: "$_id",
-          plantTypeName: { $arrayElemAt: ["$plantTypeDetails.name", 0] },
-          dealerCount: { $size: "$totalDealers" },
-          totalQuantity: 1,
-          totalBookedQuantity: 1,
-          totalRemainingQuantity: 1,
-          bookingPercentage: {
-            $multiply: [
-              { $divide: ["$totalBookedQuantity", { $max: ["$totalQuantity", 1] }] },
-              100
-            ]
-          }
-        }
-      },
-      { $sort: { plantTypeName: 1 } }
-    ]);
+    // Calculate booked quantities for each plant type
+    for (const [plantTypeId, stats] of plantTypeMap) {
+      const plantTypeOrders = dealerQuotaOrders.filter(order => 
+        order.plantName?.toString() === plantTypeId
+      );
+      
+      stats.totalBookedQuantity = plantTypeOrders.reduce((sum, order) => {
+        return sum + (order.quotaUsed || 0);
+      }, 0);
+      
+      stats.totalRemainingQuantity = stats.totalQuantity - stats.totalBookedQuantity;
+      stats.bookingPercentage = stats.totalQuantity > 0 ? (stats.totalBookedQuantity / stats.totalQuantity) * 100 : 0;
+    }
+    
+    // Convert map to array
+    const plantTypeStats = Array.from(plantTypeMap.values()).map(stats => ({
+      plantTypeId: stats.plantTypeId,
+      plantTypeName: stats.plantTypeName,
+      dealerCount: stats.dealerCount.size,
+      totalQuantity: stats.totalQuantity,
+      totalBookedQuantity: stats.totalBookedQuantity,
+      totalRemainingQuantity: stats.totalRemainingQuantity,
+      bookingPercentage: stats.bookingPercentage,
+      acceptedOrders: stats.acceptedOrders,
+      rejectedOrders: stats.rejectedOrders,
+      subtypes: Array.from(stats.subtypes.values()).map(subTypeStats => ({
+        subTypeId: subTypeStats.subTypeId,
+        subTypeName: subTypeStats.subTypeName,
+        totalQuantity: subTypeStats.totalQuantity,
+        totalBookedQuantity: subTypeStats.totalBookedQuantity,
+        totalRemainingQuantity: subTypeStats.totalRemainingQuantity,
+        bookingPercentage: subTypeStats.totalQuantity > 0 ? (subTypeStats.totalBookedQuantity / subTypeStats.totalQuantity) * 100 : 0
+      }))
+    }));
+    
+    // Sort by plant type name
+    plantTypeStats.sort((a, b) => a.plantTypeName.localeCompare(b.plantTypeName));
+    
+    // Get dealer-specific stats if dealerId is provided
+    let dealerStats = null;
+    if (dealerId) {
+      const dealerOrders = orders.filter(order => order.salesPerson.toString() === dealerId);
+      const acceptedDealerOrders = dealerOrders.filter(order => order.orderStatus === 'ACCEPTED');
+      const rejectedDealerOrders = dealerOrders.filter(order => order.orderStatus === 'REJECTED');
+      
+      const dealerQuotaUsed = dealerQuotaOrders
+        .filter(order => order.salesPerson.toString() === dealerId)
+        .reduce((sum, order) => sum + (order.quotaUsed || 0), 0);
+      
+      const totalDealerQuantity = acceptedDealerOrders.reduce((sum, order) => sum + (order.numberOfPlants || 0), 0);
+      
+      dealerStats = {
+        dealerId: dealerId,
+        totalQuantity: totalDealerQuantity,
+        totalBookedQuantity: dealerQuotaUsed,
+        totalRemainingQuantity: totalDealerQuantity - dealerQuotaUsed,
+        acceptedOrdersCount: acceptedDealerOrders.length,
+        rejectedOrdersCount: rejectedDealerOrders.length,
+                 orders: dealerOrders.map(order => ({
+           orderId: order.orderId,
+           plantType: plantMap.get(order.plantName?.toString()) || order.plantName?.toString() || 'Unknown',
+           subType: subTypeMap.get(order.plantSubtype?.toString()) || order.plantSubtype?.toString() || 'Unknown',
+           quantity: order.numberOfPlants,
+           status: order.orderStatus,
+           quotaUsed: order.quotaUsed || 0,
+           quotaSource: order.quotaSource || 'none'
+         }))
+      };
+    }
 
     // Return all stats
     res.json({
       success: true,
-      overall: overallStats[0] || {
-        dealerCount: 0,
-        entryCount: 0,
-        totalQuantity: 0,
-        totalBookedQuantity: 0,
-        totalRemainingQuantity: 0,
-        bookingPercentage: 0
-      },
+      overall: overallStats,
       byPlantType: plantTypeStats,
-      byPlantAndSubtype: statsByPlantAndSubtype
+      dealerStats: dealerStats
     });
   } catch (error) {
     console.error("Error fetching dealer wallet stats:", error);
@@ -1524,29 +1572,42 @@ export const getDealerStats = async (req, res) => {
       });
     }
     
-    // Calculate summary stats
-    const summary = dealerWallet.getSummary();
+    // Calculate summary stats manually
+    const totalQuantity = dealerWallet.entries.reduce((sum, entry) => sum + (entry.quantity || 0), 0);
+    const totalBookedQuantity = dealerWallet.entries.reduce((sum, entry) => sum + (entry.bookedQuantity || 0), 0);
+    const totalRemainingQuantity = dealerWallet.entries.reduce((sum, entry) => sum + (entry.remainingQuantity || 0), 0);
     
-    // Get recent transactions
-    const recentTransactions = dealerWallet.getRecentTransactions(5);
+    const summary = {
+      totalQuantity,
+      totalBookedQuantity,
+      totalRemainingQuantity,
+      bookingPercentage: totalQuantity > 0 ? (totalBookedQuantity / totalQuantity) * 100 : 0
+    };
+    
+    // Get recent transactions (last 5)
+    const recentTransactions = dealerWallet.transactions
+      ? dealerWallet.transactions
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+          .slice(0, 5)
+      : [];
     
     // Format entries with populated data
     const formattedEntries = dealerWallet.entries.map(entry => {
       return {
         entryId: entry._id,
-        plantTypeId: entry.plantType._id,
-        plantTypeName: entry.plantType.name,
-        subTypeId: entry.subType._id,
-        subTypeName: entry.subType.name,
+        plantTypeId: entry.plantType?._id,
+        plantTypeName: entry.plantType?.name,
+        subTypeId: entry.subType?._id,
+        subTypeName: entry.subType?.name,
         bookingSlot: entry.bookingSlot ? {
           slotId: entry.bookingSlot._id,
           slotName: entry.bookingSlot.slotName,
           startDate: entry.bookingSlot.startDate,
           endDate: entry.bookingSlot.endDate
         } : null,
-        quantity: entry.quantity,
-        bookedQuantity: entry.bookedQuantity,
-        remainingQuantity: entry.remainingQuantity,
+        quantity: entry.quantity || 0,
+        bookedQuantity: entry.bookedQuantity || 0,
+        remainingQuantity: entry.remainingQuantity || 0,
         bookingPercentage: (entry.quantity > 0) 
           ? (entry.bookedQuantity / entry.quantity) * 100 
           : 0

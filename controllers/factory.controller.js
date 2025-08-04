@@ -5,9 +5,10 @@ import APIFeatures from "../utility/apiFeatures.js";
 import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
 import DealerWallet from "../models/dealerWallet.js";
+import { validateDealerQuota, allocateDealerQuota, restoreDealerQuota } from "./quota.controller.js";
 import User from "../models/user.model.js";
 import Tray from "../models/tray.model.js";
-const updateDealerWalletBalance = async (dealerId, amount) => {
+const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
   const wallet = await DealerWallet.findOne({ dealer: dealerId });
   console.log(wallet);
@@ -24,8 +25,19 @@ const updateDealerWalletBalance = async (dealerId, amount) => {
     throw new Error("Invalid amount values");
   }
 
-  wallet.availableAmount = currentBalance + updateAmount;
-  await wallet.save();
+  // Record transaction if amount is not zero
+  if (updateAmount !== 0) {
+    const transaction = await DealerWallet.addPayment(
+      dealerId,
+      updateAmount,
+      description,
+      performedBy || dealerId,
+      "MANUAL_ADJUSTMENT",
+      null
+    );
+    console.log("Transaction recorded:", transaction);
+  }
+
   return wallet;
 };
 // Helper function to update dealer wallet entry
@@ -359,31 +371,82 @@ const createOne = (Model, modelName) =>
         }
         // Case 2: If it's a farmer order through a dealer
         else if (salesPerson.jobTitle === "DEALER") {
-          const allocation = await handleQuantityAllocation(
-            salesPerson._id,
-            orderData.plantName,
-            orderData.plantSubtype,
-            bookingSlot,
-            numberOfPlants,
-            session
-          );
-
-          if (allocation.fromSlot > 0) {
-            await updateSlot(
+          // Check if dealer quota is explicitly selected
+          if (componyQuota === false) {
+            // Dealer quota selected - ONLY use dealer quota, don't touch slot
+            const quotaValidation = await validateDealerQuota(
+              salesPerson._id,
+              orderData.plantName,
+              orderData.plantSubtype,
               bookingSlot,
-              allocation.fromSlot,
-              "subtract",
+              numberOfPlants
+            );
+
+            if (!quotaValidation.isValid) {
+              await session.abortTransaction();
+              session.endSession();
+              return res.status(400).json({
+                message: quotaValidation.message,
+              });
+            }
+
+            // Allocate dealer quota ONLY
+            const quotaAllocation = await allocateDealerQuota(
+              salesPerson._id,
+              orderData.plantName,
+              orderData.plantSubtype,
+              bookingSlot,
+              numberOfPlants,
               session
             );
-          }
 
-          // Set dealer in orderData
-          orderData.dealer = salesPerson._id;
+            // Store quota allocation in order data
+            orderData.quotaUsed = quotaAllocation.fromWallet;
+            orderData.quotaSource = "dealer";
+            orderData.originalQuotaAllocation = quotaAllocation;
+
+            // NO slot update - dealer quota only
+          } else {
+            // Company quota selected (default) - use slot allocation logic
+            const allocation = await handleQuantityAllocation(
+              salesPerson._id,
+              orderData.plantName,
+              orderData.plantSubtype,
+              bookingSlot,
+              numberOfPlants,
+              session
+            );
+
+            if (allocation.fromSlot > 0) {
+              await updateSlot(
+                bookingSlot,
+                allocation.fromSlot,
+                "subtract",
+                session
+              );
+            }
+
+            // Set dealer in orderData
+            orderData.dealer = salesPerson._id;
+          }
         }
         // Case 2.5: If dealer is selected but salesPerson is not a dealer (e.g., office staff selects dealer)
         else if (orderData.dealer && !componyQuota) {
-          // Handle dealer quota allocation for selected dealer
-          const allocation = await handleQuantityAllocation(
+          // Validate dealer quota before creating order
+          const quotaValidation = await validateDealerQuota(
+            orderData.dealer,
+            orderData.plantName,
+            orderData.plantSubtype,
+            bookingSlot,
+            numberOfPlants
+          );
+
+          if (!quotaValidation.isValid) {
+            throw new AppError(quotaValidation.message, 400);
+          }
+
+          // Allocate dealer quota
+          const quotaAllocation = await allocateDealerQuota(
             orderData.dealer,
             orderData.plantName,
             orderData.plantSubtype,
@@ -392,10 +455,16 @@ const createOne = (Model, modelName) =>
             session
           );
 
-          if (allocation.fromSlot > 0) {
+          // Store quota allocation in order data
+          orderData.quotaUsed = quotaAllocation.fromWallet;
+          orderData.quotaSource = "dealer";
+          orderData.originalQuotaAllocation = quotaAllocation;
+
+          // Update slot if needed
+          if (quotaAllocation.fromSlot > 0) {
             await updateSlot(
               bookingSlot,
-              allocation.fromSlot,
+              quotaAllocation.fromSlot,
               "subtract",
               session
             );
@@ -410,7 +479,7 @@ const createOne = (Model, modelName) =>
         const statusChanges = [];
         if (orderData.orderStatus) {
           statusChanges.push({
-            previousStatus: "ACCEPTED", // Default initial status
+            previousStatus: "PENDING", // Use the actual default status
             newStatus: orderData.orderStatus,
             reason: orderData.statusChangeReason || "Initial order creation",
             changedBy: req.user ? req.user._id : null,
@@ -533,7 +602,8 @@ const createOne = (Model, modelName) =>
                     description,
                     performedBy,
                     "ORDER_PAYMENT",
-                    order[0]._id
+                    order[0]._id,
+                    session
                   );
 
                   if (transaction) {
@@ -814,6 +884,25 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
+      // Handle quota restoration for dealer orders when rejected
+      if (
+        existingDoc.dealerOrder &&
+        filteredBody.orderStatus === "REJECTED" &&
+        !existingDoc.quotaRestored
+      ) {
+        try {
+          const quotaRestoration = await restoreDealerQuota(existingDoc._id, session);
+          if (quotaRestoration.success) {
+            console.log(`✅ Quota restored for order ${existingDoc._id}: ${quotaRestoration.message}`);
+          } else {
+            console.log(`⚠️  Quota restoration failed for order ${existingDoc._id}: ${quotaRestoration.message}`);
+          }
+        } catch (error) {
+          console.error(`❌ Error restoring quota for order ${existingDoc._id}:`, error);
+          // Don't throw error here, just log it
+        }
+      }
+
 
 
       // Handle payment updates
@@ -844,6 +933,56 @@ const updateOne = (Model, modelName, allowedFields) =>
           }
         }
       }
+
+      // --- AUTOMATIC DEALER QUOTA UPDATE LOGIC ---
+      // Only for dealer orders
+      if (modelName === "Order" && existingDoc.dealerOrder && filteredBody.orderStatus && filteredBody.orderStatus !== existingDoc.orderStatus) {
+        const dealerId = existingDoc.salesPerson?._id?.toString();
+        if (dealerId) {
+          // Find the dealer wallet
+          let dealerWallet = await DealerWallet.findOne({ dealer: dealerId }).session(session);
+          if (!dealerWallet) {
+            dealerWallet = new DealerWallet({ dealer: dealerId, entries: [] });
+          }
+          // Helper to find matching entry
+          const findEntryIndex = () => dealerWallet.entries.findIndex(e =>
+            e.plantType?.toString() === existingDoc.plantName?._id?.toString() &&
+            e.subType?.toString() === existingDoc.plantSubtype?.toString() &&
+            e.bookingSlot?.toString() === existingDoc.bookingSlot?.toString()
+          );
+          const entryIdx = findEntryIndex();
+          // If changing to ACCEPTED, add quota
+          if (filteredBody.orderStatus === "ACCEPTED") {
+            if (entryIdx === -1) {
+              dealerWallet.entries.push({
+                plantType: existingDoc.plantName?._id,
+                subType: existingDoc.plantSubtype,
+                bookingSlot: existingDoc.bookingSlot,
+                quantity: existingDoc.numberOfPlants,
+                bookedQuantity: 0,
+                remainingQuantity: existingDoc.numberOfPlants
+              });
+            } else {
+              // If entry exists, increase quantity
+              dealerWallet.entries[entryIdx].quantity += existingDoc.numberOfPlants;
+              dealerWallet.entries[entryIdx].remainingQuantity += existingDoc.numberOfPlants;
+            }
+          }
+          // If changing from ACCEPTED to something else, remove quota
+          if (existingDoc.orderStatus === "ACCEPTED" && filteredBody.orderStatus !== "ACCEPTED") {
+            if (entryIdx !== -1) {
+              dealerWallet.entries[entryIdx].quantity -= existingDoc.numberOfPlants;
+              dealerWallet.entries[entryIdx].remainingQuantity -= existingDoc.numberOfPlants;
+              // Remove entry if quantity is zero or less
+              if (dealerWallet.entries[entryIdx].quantity <= 0) {
+                dealerWallet.entries.splice(entryIdx, 1);
+              }
+            }
+          }
+          await dealerWallet.save({ session });
+        }
+      }
+      // --- END DEALER QUOTA LOGIC ---
 
       // Handle slot updates - Modified to work within the transaction
       if (filteredBody.bookingSlot || filteredBody.numberOfPlants) {
@@ -1972,25 +2111,48 @@ const handleQuantityAllocation = async (
   }
 
   // Find exact matching entry
-  const entry = wallet.entries.find(
+  const entryIndex = wallet.entries.findIndex(
     (e) =>
       e.plantType?.equals(plantType) &&
       e.subType?.equals(subType) &&
       e.bookingSlot?.equals(bookingSlot)
   );
 
-  if (!entry) {
+  if (entryIndex === -1) {
     return {
       fromWallet: 0,
       fromSlot: requestedQuantity,
     };
   }
 
+  const entry = wallet.entries[entryIndex];
   const availableInWallet = entry.quantity - entry.bookedQuantity;
 
   if (availableInWallet >= requestedQuantity) {
-    entry.bookedQuantity += requestedQuantity;
-    await wallet.save({ session });
+    // Use atomic update to avoid write conflicts
+    // Also update remainingQuantity since pre-save middleware doesn't run with findOneAndUpdate
+    const result = await DealerWallet.findOneAndUpdate(
+      {
+        _id: wallet._id,
+        [`entries.${entryIndex}.bookedQuantity`]: { $exists: true }
+      },
+      {
+        $inc: {
+          [`entries.${entryIndex}.bookedQuantity`]: requestedQuantity,
+          [`entries.${entryIndex}.remainingQuantity`]: -requestedQuantity
+        }
+      },
+      {
+        session,
+        new: true,
+        runValidators: true
+      }
+    );
+
+    if (!result) {
+      throw new AppError("Failed to update dealer quota", 500);
+    }
+
     return {
       fromWallet: requestedQuantity,
       fromSlot: 0,
@@ -2000,8 +2162,29 @@ const handleQuantityAllocation = async (
     const fromSlot = requestedQuantity - fromWallet;
 
     if (fromWallet > 0) {
-      entry.bookedQuantity += fromWallet;
-      await wallet.save({ session });
+      // Use atomic update to avoid write conflicts
+      // Also update remainingQuantity since pre-save middleware doesn't run with findOneAndUpdate
+      const result = await DealerWallet.findOneAndUpdate(
+        {
+          _id: wallet._id,
+          [`entries.${entryIndex}.bookedQuantity`]: { $exists: true }
+        },
+        {
+          $inc: {
+            [`entries.${entryIndex}.bookedQuantity`]: fromWallet,
+            [`entries.${entryIndex}.remainingQuantity`]: -fromWallet
+          }
+        },
+        {
+          session,
+          new: true,
+          runValidators: true
+        }
+      );
+
+      if (!result) {
+        throw new AppError("Failed to update dealer quota", 500);
+      }
     }
 
     return {
