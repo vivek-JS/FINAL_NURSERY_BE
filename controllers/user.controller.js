@@ -1379,8 +1379,10 @@ export const getDealerWalletStats = async (req, res) => {
     orders.forEach(order => {
       uniqueDealers.add(order.salesPerson.toString());
       
+      // Count total quantity from ALL orders (not just ACCEPTED)
+      totalQuantity += order.numberOfPlants || 0;
+      
       if (order.orderStatus === 'ACCEPTED') {
-        totalQuantity += order.numberOfPlants || 0;
         acceptedOrders.push(order);
       } else if (order.orderStatus === 'REJECTED') {
         rejectedOrders.push(order);
@@ -1388,13 +1390,22 @@ export const getDealerWalletStats = async (req, res) => {
     });
     
     // Calculate booked quantity (orders that used dealer quota)
+    // For dealer orders, we need to check which orders actually used dealer quota
     const dealerQuotaOrders = await Order.find({
       ...matchCondition,
       dealerOrder: true,
       quotaSource: 'dealer'
     });
     
-    totalBookedQuantity = dealerQuotaOrders.reduce((sum, order) => {
+    // Also check orders that have quotaUsed > 0 (actual quota usage)
+    const ordersWithQuotaUsed = await Order.find({
+      ...matchCondition,
+      dealerOrder: true,
+      quotaUsed: { $gt: 0 }
+    });
+    
+    // Use the more accurate calculation - orders that actually used quota
+    totalBookedQuantity = ordersWithQuotaUsed.reduce((sum, order) => {
       return sum + (order.quotaUsed || 0);
     }, 0);
     
@@ -1414,57 +1425,57 @@ export const getDealerWalletStats = async (req, res) => {
     const plantTypeMap = new Map();
     
     orders.forEach(order => {
+      // Count ALL orders for total quantity (not just ACCEPTED)
+      const plantTypeId = order.plantName?.toString() || 'unknown';
+      const plantTypeName = plantMap.get(plantTypeId) || `Plant Type ${plantTypeId.slice(-6)}`;
+      
+      if (!plantTypeMap.has(plantTypeId)) {
+        plantTypeMap.set(plantTypeId, {
+          plantTypeId,
+          plantTypeName,
+          dealerCount: new Set(),
+          totalQuantity: 0,
+          totalBookedQuantity: 0,
+          totalRemainingQuantity: 0,
+          acceptedOrders: 0,
+          rejectedOrders: 0,
+          subtypes: new Map() // Track subtypes for this plant type
+        });
+      }
+      
+      const stats = plantTypeMap.get(plantTypeId);
+      stats.dealerCount.add(order.salesPerson.toString());
+      stats.totalQuantity += order.numberOfPlants || 0;
+      
+      // Track subtype information for ALL orders
+      const subTypeId = order.plantSubtype?.toString() || 'unknown';
+      const subTypeName = subTypeMap.get(subTypeId) || `Subtype ${subTypeId.slice(-6)}`;
+      
+      if (!stats.subtypes.has(subTypeId)) {
+        stats.subtypes.set(subTypeId, {
+          subTypeId,
+          subTypeName,
+          totalQuantity: 0,
+          totalBookedQuantity: 0,
+          totalRemainingQuantity: 0
+        });
+      }
+      
+      const subTypeStats = stats.subtypes.get(subTypeId);
+      subTypeStats.totalQuantity += order.numberOfPlants || 0;
+      
+      // Track order status counts
       if (order.orderStatus === 'ACCEPTED') {
-        const plantTypeId = order.plantName?.toString() || 'unknown';
-        const plantTypeName = plantMap.get(plantTypeId) || `Plant Type ${plantTypeId.slice(-6)}`;
-        
-        if (!plantTypeMap.has(plantTypeId)) {
-          plantTypeMap.set(plantTypeId, {
-            plantTypeId,
-            plantTypeName,
-            dealerCount: new Set(),
-            totalQuantity: 0,
-            totalBookedQuantity: 0,
-            totalRemainingQuantity: 0,
-            acceptedOrders: 0,
-            rejectedOrders: 0,
-            subtypes: new Map() // Track subtypes for this plant type
-          });
-        }
-        
-        const stats = plantTypeMap.get(plantTypeId);
-        stats.dealerCount.add(order.salesPerson.toString());
-        stats.totalQuantity += order.numberOfPlants || 0;
         stats.acceptedOrders++;
-        
-        // Track subtype information
-        const subTypeId = order.plantSubtype?.toString() || 'unknown';
-        const subTypeName = subTypeMap.get(subTypeId) || `Subtype ${subTypeId.slice(-6)}`;
-        
-        if (!stats.subtypes.has(subTypeId)) {
-          stats.subtypes.set(subTypeId, {
-            subTypeId,
-            subTypeName,
-            totalQuantity: 0,
-            totalBookedQuantity: 0,
-            totalRemainingQuantity: 0
-          });
-        }
-        
-        const subTypeStats = stats.subtypes.get(subTypeId);
-        subTypeStats.totalQuantity += order.numberOfPlants || 0;
-        
       } else if (order.orderStatus === 'REJECTED') {
-        const plantTypeId = order.plantName?.toString() || 'unknown';
-        if (plantTypeMap.has(plantTypeId)) {
-          plantTypeMap.get(plantTypeId).rejectedOrders++;
-        }
+        stats.rejectedOrders++;
       }
     });
     
-    // Calculate booked quantities for each plant type
+    // Calculate booked quantities for each plant type and subtype
     for (const [plantTypeId, stats] of plantTypeMap) {
-      const plantTypeOrders = dealerQuotaOrders.filter(order => 
+      // Use ordersWithQuotaUsed for more accurate calculation
+      const plantTypeOrders = ordersWithQuotaUsed.filter(order => 
         order.plantName?.toString() === plantTypeId
       );
       
@@ -1474,6 +1485,19 @@ export const getDealerWalletStats = async (req, res) => {
       
       stats.totalRemainingQuantity = stats.totalQuantity - stats.totalBookedQuantity;
       stats.bookingPercentage = stats.totalQuantity > 0 ? (stats.totalBookedQuantity / stats.totalQuantity) * 100 : 0;
+      
+      // Calculate booked quantities for each subtype
+      for (const [subTypeId, subTypeStats] of stats.subtypes) {
+        const subTypeOrders = plantTypeOrders.filter(order => 
+          order.plantSubtype?.toString() === subTypeId
+        );
+        
+        subTypeStats.totalBookedQuantity = subTypeOrders.reduce((sum, order) => {
+          return sum + (order.quotaUsed || 0);
+        }, 0);
+        
+        subTypeStats.totalRemainingQuantity = subTypeStats.totalQuantity - subTypeStats.totalBookedQuantity;
+      }
     }
     
     // Convert map to array
@@ -1507,11 +1531,12 @@ export const getDealerWalletStats = async (req, res) => {
       const acceptedDealerOrders = dealerOrders.filter(order => order.orderStatus === 'ACCEPTED');
       const rejectedDealerOrders = dealerOrders.filter(order => order.orderStatus === 'REJECTED');
       
-      const dealerQuotaUsed = dealerQuotaOrders
+      const dealerQuotaUsed = ordersWithQuotaUsed
         .filter(order => order.salesPerson.toString() === dealerId)
         .reduce((sum, order) => sum + (order.quotaUsed || 0), 0);
       
-      const totalDealerQuantity = acceptedDealerOrders.reduce((sum, order) => sum + (order.numberOfPlants || 0), 0);
+      // Count total quantity from ALL dealer orders (not just ACCEPTED)
+      const totalDealerQuantity = dealerOrders.reduce((sum, order) => sum + (order.numberOfPlants || 0), 0);
       
       dealerStats = {
         dealerId: dealerId,
@@ -1520,15 +1545,15 @@ export const getDealerWalletStats = async (req, res) => {
         totalRemainingQuantity: totalDealerQuantity - dealerQuotaUsed,
         acceptedOrdersCount: acceptedDealerOrders.length,
         rejectedOrdersCount: rejectedDealerOrders.length,
-                 orders: dealerOrders.map(order => ({
-           orderId: order.orderId,
-           plantType: plantMap.get(order.plantName?.toString()) || order.plantName?.toString() || 'Unknown',
-           subType: subTypeMap.get(order.plantSubtype?.toString()) || order.plantSubtype?.toString() || 'Unknown',
-           quantity: order.numberOfPlants,
-           status: order.orderStatus,
-           quotaUsed: order.quotaUsed || 0,
-           quotaSource: order.quotaSource || 'none'
-         }))
+        orders: dealerOrders.map(order => ({
+          orderId: order.orderId,
+          plantType: plantMap.get(order.plantName?.toString()) || order.plantName?.toString() || 'Unknown',
+          subType: subTypeMap.get(order.plantSubtype?.toString()) || order.plantSubtype?.toString() || 'Unknown',
+          quantity: order.numberOfPlants,
+          status: order.orderStatus,
+          quotaUsed: order.quotaUsed || 0,
+          quotaSource: order.quotaSource || 'none'
+        }))
       };
     }
 

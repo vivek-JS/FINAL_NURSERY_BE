@@ -770,12 +770,12 @@ const updatePaymentStatus = async (req, res) => {
       // - When payment is rejected, credit back to wallet (add money)
       // - When payment is collected, debit from wallet (subtract money)
       
-      if (payment.paymentStatus === "PENDING" && paymentStatus === "REJECTED") {
-        // Payment was rejected, credit back to wallet
-        await updateDealerWalletBalance(order.dealer, amount, `Payment rejected - credited back to wallet for Order #${order._id}`, req.user?._id);
-      } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "REJECTED") {
+      if (payment.paymentStatus === "COLLECTED" && paymentStatus === "REJECTED") {
         // Collected payment was rejected, credit back to wallet
         await updateDealerWalletBalance(order.dealer, amount, `Payment rejected - credited back to wallet for Order #${order._id}`, req.user?._id);
+      } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "PENDING") {
+        // Collected payment is now pending, credit back to wallet
+        await updateDealerWalletBalance(order.dealer, amount, `Payment changed to pending - credited back to wallet for Order #${order._id}`, req.user?._id);
       } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "COLLECTED") {
         // Rejected payment is now collected, debit from wallet
         await updateDealerWalletBalance(order.dealer, -amount, `Payment collected - debited from wallet for Order #${order._id}`, req.user?._id);
@@ -801,6 +801,9 @@ const updatePaymentStatus = async (req, res) => {
       } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "REJECTED") {
         // Collected payment is now rejected, debit from wallet
         await updateDealerWalletBalance(order.dealer, -amount, `Payment rejected for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
+      } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "PENDING") {
+        // Collected payment is now pending, debit from wallet
+        await updateDealerWalletBalance(order.dealer, -amount, `Payment changed to pending for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
       } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "COLLECTED") {
         // Rejected payment is now collected, credit to wallet
         await updateDealerWalletBalance(order.dealer, amount, `Payment collected for bulk order - credited to wallet for Order #${order._id}`, req.user?._id);
