@@ -361,12 +361,16 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       return res.status(400).json({ message: "Invalid payment amount" });
     }
 
-    // Set payment status based on payment type
+    // Set payment status based on payment type and user role
     const userRole = req.user?.role;
     let finalPaymentStatus = "PENDING"; // Default to PENDING for new payments
     
-    // Use the requested payment status if provided, otherwise default to PENDING
-    if (paymentStatus && (paymentStatus === "COLLECTED" || paymentStatus === "PENDING")) {
+    // For OFFICE_ADMIN, always keep payment status as PENDING
+    if (userRole === "OFFICE_ADMIN") {
+      finalPaymentStatus = "PENDING";
+      console.log("OFFICE_ADMIN payment - forcing status to PENDING");
+    } else if (paymentStatus && (paymentStatus === "COLLECTED" || paymentStatus === "PENDING")) {
+      // Use the requested payment status if provided, otherwise default to PENDING
       finalPaymentStatus = paymentStatus;
       console.log("Using requested payment status:", finalPaymentStatus);
     } else {
@@ -745,6 +749,14 @@ const updatePaymentStatus = async (req, res) => {
       return res
         .status(400)
         .json({ message: "Invalid payment amount in record" });
+    }
+
+    // Prevent OFFICE_ADMIN from changing payment status to COLLECTED
+    const userRole = req.user?.role;
+    if (userRole === "OFFICE_ADMIN" && paymentStatus === "COLLECTED") {
+      return res.status(403).json({
+        message: "OFFICE_ADMIN cannot change payment status to COLLECTED. Contact an Accountant or Super Admin.",
+      });
     }
 
     // Handle wallet payment status changes (PRIORITY: Wallet payments take precedence)
