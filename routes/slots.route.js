@@ -18,14 +18,17 @@ import {
   createSlotsForSubtype,
   getSlotDetailsById,
   getSlotTrail,
+  getSimpleSlots,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
+
 // Route to get monthly slots for a specific year
 slotRouter.get("/slots", getAllSlots);
 slotRouter.get("/slots/get-plants", getPlantNames);
 slotRouter.get("/slots/subtyps", getSubtypesByPlant);
 slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
+slotRouter.get("/slots/simple", getSimpleSlots);
 slotRouter.get("/slots/stats", getPlantStats);
 slotRouter.get("/slots/dashBoardStats", getDashboardInsights);
 slotRouter.get("/slots/:slotId/details", getSlotDetailsById);

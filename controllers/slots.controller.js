@@ -1862,6 +1862,42 @@ const generateSlotsForDateRange = (startDate, endDate, slotSize = 7, capacity = 
   let currentDate = moment(startDate, 'DD-MM-YYYY');
   const endMoment = moment(endDate, 'DD-MM-YYYY');
 
+  // First pass: generate all slots to count them
+  const tempSlots = [];
+  let tempDate = currentDate.clone();
+  
+  while (tempDate.isSameOrBefore(endMoment)) {
+    const slotStart = tempDate.clone();
+    let slotEnd = tempDate.clone().add(slotSize - 1, 'days');
+
+    // If slotEnd goes past the end date, adjust
+    if (slotEnd.isAfter(endMoment)) {
+      slotEnd = endMoment.clone();
+    }
+
+    // If slotEnd goes past month end, adjust to month end
+    const monthEnd = slotStart.clone().endOf('month');
+    if (slotEnd.isAfter(monthEnd)) {
+      slotEnd = monthEnd.clone();
+    }
+
+    tempSlots.push({
+      startDay: slotStart.format('DD-MM-YYYY'),
+      endDay: slotEnd.format('DD-MM-YYYY'),
+      month: slotStart.format('MMMM'),
+      year: slotStart.year(),
+    });
+
+    tempDate = slotEnd.clone().add(1, 'days');
+  }
+
+  // Calculate capacity per slot (distribute evenly)
+  const totalSlots = tempSlots.length;
+  const capacityPerSlot = Math.floor(capacity / totalSlots);
+  const remainingCapacity = capacity % totalSlots;
+
+  // Second pass: create actual slots with distributed capacity
+  let slotIndex = 0;
   while (currentDate.isSameOrBefore(endMoment)) {
     const slotStart = currentDate.clone();
     let slotEnd = currentDate.clone().add(slotSize - 1, 'days');
@@ -1877,12 +1913,15 @@ const generateSlotsForDateRange = (startDate, endDate, slotSize = 7, capacity = 
       slotEnd = monthEnd.clone();
     }
 
+    // Distribute remaining capacity to first few slots
+    const slotCapacity = capacityPerSlot + (slotIndex < remainingCapacity ? 1 : 0);
+
     slots.push({
       startDay: slotStart.format('DD-MM-YYYY'),
       endDay: slotEnd.format('DD-MM-YYYY'),
       month: slotStart.format('MMMM'),
       year: slotStart.year(),
-      totalPlants: capacity,
+      totalPlants: slotCapacity,
       totalBookedPlants: 0,
       buffer: 0,
       orders: [],
@@ -1893,6 +1932,7 @@ const generateSlotsForDateRange = (startDate, endDate, slotSize = 7, capacity = 
     });
 
     currentDate = slotEnd.clone().add(1, 'days');
+    slotIndex++;
   }
 
   // Merge short last slot of each month with previous slot if needed
@@ -1909,6 +1949,8 @@ const generateSlotsForDateRange = (startDate, endDate, slotSize = 7, capacity = 
         // Merge with the slot before previous
         slots[i - 2].endDay = prev.endDay;
         slots[i - 2].month = prev.month;
+        // Redistribute capacity when merging slots
+        slots[i - 2].totalPlants += prev.totalPlants;
         slots.splice(i - 1, 1); // Remove prev
         i--;
       }
@@ -1926,6 +1968,8 @@ const generateSlotsForDateRange = (startDate, endDate, slotSize = 7, capacity = 
     if (daysInLastSlot < slotSize) {
       secondLast.endDay = last.endDay;
       secondLast.month = last.month;
+      // Redistribute capacity when merging slots
+      secondLast.totalPlants += last.totalPlants;
       slots.pop();
     }
   }
@@ -2004,11 +2048,13 @@ const populateSlotsWithOrders = async (slots) => {
         slot.totalBookedPlants = totalBookedPlants;
         slot.dealerQuota = dealerQuota; // Add dealer quota information
         
-        // Calculate available plants considering buffer
+        // Calculate available plants as totalPlants - totalBookedPlants
+        slot.availablePlants = Math.max(0, slot.totalPlants - totalBookedPlants);
+        
+        // Calculate buffer-related fields for reference (but don't use for availablePlants)
         const effectiveBuffer = slot.effectiveBuffer || 0;
         const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
         const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
-        slot.availablePlants = Math.max(0, bufferAdjustedCapacity - totalBookedPlants);
         
         // Ensure totalPlants remains as the original capacity
         // Don't modify totalPlants here - it should always represent the actual slot capacity
@@ -2160,6 +2206,134 @@ export const getSlotTrail = async (req, res) => {
       success: false, 
       message: "Internal server error", 
       error: error.message 
+    });
+  }
+};
+
+// New simplified function to get only slot dates
+export const getSimpleSlots = async (req, res) => {
+  try {
+    const { plantId, subtypeId, year } = req.query;
+
+    // Validate required parameters
+    if (!plantId || !subtypeId || !year) {
+      return res.status(400).json({
+        success: false,
+        message: "plantId, subtypeId, and year are required"
+      });
+    }
+
+    // Build query
+    const query = {
+      plantId: new mongoose.Types.ObjectId(plantId),
+      year: Number(year)
+    };
+
+    // Get slots with minimal data, including _id and filtering by availablePlants > 0
+    const results = await PlantSlot.aggregate([
+      { $match: query },
+      {
+        $project: {
+          _id: 0,
+          year: 1,
+          subtypeSlots: {
+            $filter: {
+              input: "$subtypeSlots",
+              as: "subtypeSlot",
+              cond: {
+                $eq: [
+                  "$$subtypeSlot.subtypeId",
+                  new mongoose.Types.ObjectId(subtypeId)
+                ]
+              }
+            }
+          }
+        }
+      },
+      { $unwind: "$subtypeSlots" },
+      {
+        $project: {
+          year: 1,
+          slots: {
+            $filter: {
+              input: "$subtypeSlots.slots",
+              as: "slot",
+              cond: {
+                $gt: ["$$slot.availablePlants", 0] // Only include slots with availablePlants > 0
+              }
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          year: 1,
+          slots: {
+            $map: {
+              input: "$slots",
+              as: "slot",
+              in: {
+                $mergeObjects: [
+                  {
+                    _id: "$$slot._id", // Include the slot ID
+                    startDay: "$$slot.startDay",
+                    endDay: "$$slot.endDay",
+                    month: "$$slot.month"
+                  },
+                  {
+                    $cond: {
+                      if: { $gt: ["$$slot.availablePlants", 0] },
+                      then: { availablePlants: "$$slot.availablePlants" },
+                      else: {}
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          total_available: {
+            $sum: {
+              $map: {
+                input: "$slots",
+                as: "slot",
+                in: "$$slot.availablePlants"
+              }
+            }
+          }
+        }
+      }
+    ]);
+
+    if (results.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          year: Number(year),
+          slots: [],
+          total_available: 0
+        },
+        message: "No slots found for the given parameters"
+      });
+    }
+
+    const response = {
+      year: results[0].year,
+      slots: results[0].slots,
+      total_available: results[0].total_available
+    };
+
+    res.status(200).json({
+      success: true,
+      data: response,
+      message: "Slots retrieved successfully"
+    });
+
+  } catch (error) {
+    console.error("Error fetching simple slots:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
     });
   }
 };

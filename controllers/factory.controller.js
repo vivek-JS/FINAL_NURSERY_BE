@@ -1403,14 +1403,34 @@ const getAll = (Model, modelName) =>
         },
       });
     } else {
-      // Apply salesPerson filter if present
+      // Role-based filtering for non-admin users
+      if (req.user) {
+        const userRole = req.user.role;
+        const userId = req.user._id;
+        
+        // Apply role-based filtering
+        if (userRole === 'SALES') {
+          // SALES users can only see orders assigned to them
+          pipeline.push({
+            $match: { salesPerson: userId }
+          });
+        } else if (userRole === 'DEALER') {
+          // DEALER users can only see orders assigned to them
+          pipeline.push({
+            $match: { dealer: userId }
+          });
+        }
+        // SUPER_ADMIN, ADMIN, OFFICE_ADMIN can see all orders (no filtering)
+      }
+
+      // Apply salesPerson filter if present (for admin users)
       if (salesPerson) {
         pipeline.push({
           $match: { salesPerson: new mongoose.Types.ObjectId(salesPerson) },
         });
       }
 
-      // Apply dealer filter if present
+      // Apply dealer filter if present (for admin users)
       if (dealer) {
         pipeline.push({
           $match: { dealer: new mongoose.Types.ObjectId(dealer) },

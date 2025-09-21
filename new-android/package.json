@@ -1,0 +1,28 @@
+{
+  "name": "new-android",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "build:android": "eas build --platform android --profile preview",
+    "build:android-prod": "eas build --platform android --profile production",
+    "build:configure": "eas build:configure",
+    "preview": "expo start --tunnel",
+    "clear": "expo start --clear",
+    "install:eas": "npm install -g @expo/eas-cli"
+  },
+  "dependencies": {
+    "expo": "~53.0.22",
+    "expo-status-bar": "~2.2.3",
+    "react": "19.0.0",
+    "react-native": "0.79.6",
+    "react-native-safe-area-context": "^5.6.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "private": true
+} 

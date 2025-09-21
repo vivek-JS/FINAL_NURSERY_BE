@@ -129,11 +129,13 @@ export const getSlotInfoWithBookedPlants = async (slotId) => {
     // Calculate booked plants from active orders
     const totalBookedPlants = await calculateSlotBookedPlants(slotId);
 
-    // Calculate buffer-adjusted values
+    // Calculate available plants as totalPlants - totalBookedPlants
+    const availablePlants = Math.max(0, slot.totalPlants - totalBookedPlants);
+    
+    // Calculate buffer-adjusted values for reference
     const effectiveBuffer = slot.effectiveBuffer || slot.buffer || 0;
     const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
     const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
-    const availablePlants = Math.max(0, bufferAdjustedCapacity - totalBookedPlants);
 
     return {
       slotId: slot._id,
