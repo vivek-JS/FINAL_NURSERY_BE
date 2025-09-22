@@ -2259,7 +2259,10 @@ export const getSimpleSlots = async (req, res) => {
               input: "$subtypeSlots.slots",
               as: "slot",
               cond: {
-                $gt: ["$$slot.availablePlants", 0] // Only include slots with availablePlants > 0
+                $and: [
+                  { $eq: ["$$slot.status", true] }, // Only include slots with status: true
+                  { $gt: ["$$slot.availablePlants", 0] } // Also ensure availablePlants > 0
+                ]
               }
             }
           }
@@ -2310,7 +2313,8 @@ export const getSimpleSlots = async (req, res) => {
         data: {
           year: Number(year),
           slots: [],
-          total_available: 0
+          total_available: 0,
+          key: "slots_data" // Added the requested key
         },
         message: "No slots found for the given parameters"
       });
@@ -2319,7 +2323,8 @@ export const getSimpleSlots = async (req, res) => {
     const response = {
       year: results[0].year,
       slots: results[0].slots,
-      total_available: results[0].total_available
+      total_available: results[0].total_available,
+      key: "slots_data" // Added the requested key
     };
 
     res.status(200).json({

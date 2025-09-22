@@ -32,11 +32,12 @@ const userSchema = new Schema({
       "DEALER",
       "OFFICE_ADMIN",
       "ACCOUNTANT",
+      "DISPATCH_MANAGER",
     ],
   },
   role: {
     type: String,
-    enum: ["SUPER_ADMIN", "ADMIN", "SALES", "DEALER", "FARMER", "ACCOUNTANT", "OFFICE_ADMIN"],
+    enum: ["SUPER_ADMIN", "ADMIN", "SALES", "DEALER", "FARMER", "ACCOUNTANT", "OFFICE_ADMIN", "DISPATCH_MANAGER"],
     default: "FARMER"
   },
   isDisabled: {

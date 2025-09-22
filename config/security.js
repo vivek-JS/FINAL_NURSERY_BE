@@ -127,6 +127,16 @@ export const RBAC_CONFIG = {
         'settings:read'
       ]
     },
+    DISPATCH_MANAGER: {
+      level: 72,
+      permissions: [
+        'order:read',
+        'farmer:read',
+        'dealer:read',
+        'dispatch:read', 'dispatch:write',
+        'report:read'
+      ]
+    },
     SALES: {
       level: 70,
       permissions: [

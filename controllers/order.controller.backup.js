@@ -1633,31 +1633,6 @@ const getDealerWalletBalanceForOrder = catchAsync(async (req, res, next) => {
 const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
-    
-    // Validate date parameters
-    if (!startDate || !endDate) {
-      return res.status(400).json({
-        success: false,
-        message: "Start date and end date are required",
-        data: null
-      });
-    }
-
-    // Parse dates
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    
-    // Validate date format
-    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid date format. Please use YYYY-MM-DD format",
-        data: null
-      });
-    }
-
-    // Set end date to end of day
-    end.setHours(23, 59, 59, 999);
 
     // Find orders with slots that fall within the date range
     const orders = await Order.aggregate([
@@ -1684,7 +1659,6 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
       {
         $match: {
           "slotData.subtypeSlots._id": new mongoose.Types.ObjectId(req.params.slotId || "000000000000000000000000"),
-          orderStatus: { $nin: ['CANCELLED', 'REJECTED', 'DISPATCHED'] },
           $or: [
             // Check if slot start date falls within range
             {
@@ -1837,11 +1811,18 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
         }
       },
       {
-        $lookup: {
-          from: "plantcms",
-          localField: "plantSubtype",
-          foreignField: "subtypes._id",
-          as: "subtypeData"
+        $addFields: {
+          subtypeData: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: "$plantData.subtypes",
+                  cond: { $eq: ["$$this._id", "$plantSubtype"] }
+                }
+              },
+              0
+            ]
+          }
         }
       },
       {
@@ -1863,9 +1844,14 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
         }
       },
       {
-        $unwind: {
-          path: "$subtypeData",
-          preserveNullAndEmptyArrays: true
+        $addFields: {
+          subtypeData: {
+            $cond: {
+              if: { $ne: ["$subtypeData", null] },
+              then: "$subtypeData",
+              else: { name: "Unknown", _id: null }
+            }
+          }
         }
       },
       {
@@ -1911,9 +1897,7 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
 
     // If no orders found, try alternative approach with date string matching
     if (orders.length === 0) {
-      const alternativeOrders = await Order.find({
-        orderStatus: { $nin: ['CANCELLED', 'REJECTED', 'DISPATCHED'] }
-      })
+      const alternativeOrders = await Order.find({})
       .populate('farmer', 'name mobileNumber village taluka district state')
       .populate('salesPerson', 'name phoneNumber')
       .populate('plantName', 'name')

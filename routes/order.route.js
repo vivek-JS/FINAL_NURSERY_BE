@@ -12,7 +12,8 @@ import {
   getAllPayments,
   getUniqueVillages,
   getUniqueDistricts,
-  getDealerWalletBalanceForOrder
+  getDealerWalletBalanceForOrder,
+  getOrdersToBeDispatched
 } from "../controllers/order.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -30,6 +31,7 @@ router
   .get("/villages", getUniqueVillages)
   .get("/districts", getUniqueDistricts)
   .get("/dealer-wallet/:orderId", getDealerWalletBalanceForOrder)
+  .get("/to-be-dispatched", getOrdersToBeDispatched)
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .patch(
     "/payment/:orderId",
