@@ -195,6 +195,15 @@ import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
 
+// Inventory Management Routes
+import productRoute from "./routes/product.route.js";
+import supplierRoute from "./routes/supplier.route.js";
+import measurementUnitRoute from "./routes/measurementUnit.route.js";
+import purchaseOrderRoute from "./routes/purchaseOrder.route.js";
+import grnRoute from "./routes/grn.route.js";
+import inventoryOutwardRoute from "./routes/inventoryOutward.route.js";
+import inventoryTransactionRoute from "./routes/inventoryTransaction.route.js";
+
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
 server.use("/health", healthRoute);
@@ -240,6 +249,15 @@ server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
 server.use("/api/v1/state", authenticateToken, stateRoute);
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/notifications", notificationRoute); // Notification routes (has built-in auth)
+
+// Inventory Management Routes (all require authentication)
+server.use("/api/v1/inventory/products", authenticateToken, productRoute);
+server.use("/api/v1/inventory/suppliers", authenticateToken, supplierRoute);
+server.use("/api/v1/inventory/units", authenticateToken, measurementUnitRoute);
+server.use("/api/v1/inventory/purchase-orders", authenticateToken, purchaseOrderRoute);
+server.use("/api/v1/inventory/grn", authenticateToken, grnRoute);
+server.use("/api/v1/inventory/outward", authenticateToken, inventoryOutwardRoute);
+server.use("/api/v1/inventory/transactions", authenticateToken, inventoryTransactionRoute);
 
 
 server.use(errorHandler);
