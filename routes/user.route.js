@@ -10,6 +10,8 @@ import {
   getUsers,
   changePassword,
   resetPasswordForUser,
+  resetAllDealerPasswords,
+  resetAllDispatchManagerPasswords,
   aboutMe,
   getSalespeople,
   getSalesAnalytics,
@@ -30,6 +32,7 @@ import {
   getDealerWalletSummary,
 } from "../controllers/walletController.js";
 import catchAsync from "../utility/catchAsync.js";
+import { savePushToken } from "../controllers/notification.controller.js";
 
 const router = express.Router();
 
@@ -42,6 +45,8 @@ router
   .post("/verify-token", verifyToken)
   .post("/change-password", authenticateToken, changePassword)
   .post("/reset-password/:userId", authenticateToken, resetPasswordForUser)
+  .post("/reset-all-dealer-passwords", authenticateToken, resetAllDealerPasswords)
+  .post("/reset-all-dispatch-manager-passwords", authenticateToken, resetAllDispatchManagerPasswords)
   .post(
     "/createUser",
     [
@@ -79,5 +84,6 @@ router
   .get("/dealers/stats/:dealerId", getDealerWalletStats)
   .get("/dealers/transactions/:dealerId", getDealerWalletTransactions)
   .get("/dealers/transactions/:dealerId/csv", exportDealerWalletTransactionsCSV)
-  .get("/dealers/:dealerId", getDealerWalletDetails);
+  .get("/dealers/:dealerId", getDealerWalletDetails)
+  .post("/push-token", authenticateToken, savePushToken);
 export default router;

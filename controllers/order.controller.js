@@ -9,6 +9,12 @@ import generateResponse from "../utility/responseFormat.js";
 import mongoose from "mongoose";
 import User from "../models/user.model.js";
 import Farmer from "../models/farmer.model.js";
+import {
+  sendPaymentAcceptedNotification,
+  sendPaymentRejectedNotification,
+  sendPaymentCollectedNotification,
+  sendPaymentPendingNotification,
+} from "../utility/pushNotification.js";
 
 const updateDealerWalletBalance = async (dealerId, paymentAmount, description = "Wallet balance adjustment", performedBy = null) => {
   let wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -40,14 +46,97 @@ const getOrdersBySlot = catchAsync(async (req, res, next) => {
   const { slotId } = req.params; // Extract the slotId from the request parameters
 
   try {
-    // Find all orders related to the given slotId
-    const orders = await Order.find({ bookingSlot: slotId })
-      .populate("farmer", "name mobileNumber village taluka district") // Populate farmer details
-      .populate("salesPerson", "name phoneNumber") // Populate salesperson details
-      .populate("plantName", "name") // Populate plant name
-      .populate("plantSubtype", "name") // Populate plant subtype
-      .populate("bookingSlot") // Populate the booking slot
-      .exec();
+    // Use aggregation to properly handle subdocument references
+    const orders = await Order.aggregate([
+      {
+        $match: { bookingSlot: new mongoose.Types.ObjectId(slotId) }
+      },
+      {
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer"
+        }
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "salesPerson",
+          foreignField: "_id",
+          as: "salesPerson"
+        }
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantName",
+          foreignField: "_id",
+          as: "plantName"
+        }
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantSubtype",
+          foreignField: "subtypes._id",
+          as: "plantSubtypeData"
+        }
+      },
+      {
+        $lookup: {
+          from: "plantslots",
+          localField: "bookingSlot",
+          foreignField: "subtypeSlots._id",
+          as: "slotData"
+        }
+      },
+      {
+        $unwind: { path: "$farmer", preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: "$salesPerson", preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: "$plantName", preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: "$plantSubtypeData", preserveNullAndEmptyArrays: true }
+      },
+      {
+        $unwind: { path: "$slotData", preserveNullAndEmptyArrays: true }
+      },
+      {
+        $addFields: {
+          // Extract the matching subtype from the plantSubtypeData
+          plantSubtype: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantSubtypeData.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$plantSubtype"] }
+                }
+              },
+              0
+            ]
+          },
+          // Extract the matching slot from slotData
+          bookingSlotData: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$slotData.subtypeSlots", []] },
+                  as: "slot",
+                  cond: { $eq: ["$$slot._id", "$bookingSlot"] }
+                }
+              },
+              0
+            ]
+          }
+        }
+      }
+    ]);
 
     if (!orders || orders.length === 0) {
       return res
@@ -95,8 +184,11 @@ const getOrdersBySlot = catchAsync(async (req, res, next) => {
           payment: order?.payment,
           createdAt: order?.createdAt,
           updatedAt: order?.updatedAt,
+          orderBookingDate: order?.orderBookingDate, // Order booking date
+          deliveryDate: order?.deliveryDate, // Specific delivery date
           salesPersonName: order.salesPerson?.name, // salesPersonName
           salesPersonPhoneNumber: order.salesPerson?.phoneNumber, // salesPersonPhoneNumber
+          orderFor: order?.orderFor, // Add orderFor field
         };
       }),
     });
@@ -181,7 +273,10 @@ const getCsv = catchAsync(async (req, res, next) => {
     "Payment Date",
     "Bank Name",
     "Payment Remark",
-    "Remarks"
+    "Remarks",
+    "Order For Name",
+    "Order For Mobile",
+    "Order For Address"
   ];
 
     // Process data synchronously to avoid Promise.all issues
@@ -235,7 +330,10 @@ const getCsv = catchAsync(async (req, res, next) => {
           "Payment Count": paymentCount,
           "Remarks": obj.orderRemarks && obj.orderRemarks.length > 0 
             ? obj.orderRemarks.join('; ') 
-            : 'N/A'
+            : 'N/A',
+          "Order For Name": obj.orderFor?.name || 'N/A',
+          "Order For Mobile": obj.orderFor?.mobileNumber || 'N/A',
+          "Order For Address": obj.orderFor?.address || 'N/A'
         };
 
         // Handle multiple payments - create separate rows for each payment
@@ -294,15 +392,16 @@ const createOrder = createOne(Order, "Order");
 const updateOrder = updateOne(Order, "Order", [
   "bookingSlot",
   "numberOfPlants",
+  "quantity", // Alias for numberOfPlants
   "rate",
   "orderPaymentStatus",
   "notes",
   "farmReadyDate",
   "orderStatus",
-  "farmReadyDate",
   "orderRemarks",
   "farmReadyDateChangeReason",
   "farmReadyDateChangeNotes",
+  "deliveryDate", // Specific delivery date
 ]);
 /**
  * Add a new payment to an order and update dealer wallet accordingly
@@ -813,6 +912,55 @@ const updatePaymentStatus = async (req, res) => {
     payment.paymentStatus = paymentStatus;
     await order.save();
 
+    // Send push notification based on payment status change
+    try {
+      let userToNotify = null;
+      
+      // Determine who to notify based on order type
+      if (order.dealer) {
+        // For dealer orders, notify the dealer
+        userToNotify = await User.findById(order.dealer);
+        console.log(`📱 Dealer order detected. Dealer ID: ${order.dealer}`);
+      } else if (order.salesPerson) {
+        // For farmer orders, notify the sales person
+        userToNotify = await User.findById(order.salesPerson);
+        console.log(`📱 Farmer order detected. Sales Person ID: ${order.salesPerson}`);
+      }
+
+      console.log(`📱 User to notify:`, {
+        name: userToNotify?.name,
+        phone: userToNotify?.phoneNumber,
+        hasPushToken: !!userToNotify?.expoPushToken,
+        pushToken: userToNotify?.expoPushToken ? `${userToNotify.expoPushToken.substring(0, 30)}...` : 'NONE'
+      });
+
+      if (userToNotify && userToNotify.expoPushToken) {
+        const orderId = order.orderId || order._id;
+        const pushToken = userToNotify.expoPushToken;
+
+        console.log(`📤 Sending ${paymentStatus} notification for Order #${orderId}, Amount: ₹${amount}`);
+
+        // Send notification based on new payment status
+        if (paymentStatus === 'COLLECTED') {
+          const result = await sendPaymentCollectedNotification(pushToken, orderId, amount);
+          console.log(`✅ Payment collected notification sent for Order #${orderId}`, result);
+        } else if (paymentStatus === 'REJECTED') {
+          const result = await sendPaymentRejectedNotification(pushToken, orderId, amount, remark || '');
+          console.log(`❌ Payment rejected notification sent for Order #${orderId}`, result);
+        } else if (paymentStatus === 'PENDING') {
+          const result = await sendPaymentPendingNotification(pushToken, orderId, amount);
+          console.log(`⏳ Payment pending notification sent for Order #${orderId}`, result);
+        }
+      } else {
+        console.log('⚠️ No push token found for user, skipping notification');
+        console.log('   User needs to open the mobile app to register for notifications');
+      }
+    } catch (notificationError) {
+      // Don't fail the request if notification fails
+      console.error('❌ Error sending push notification:', notificationError);
+      console.error('   Stack:', notificationError.stack);
+    }
+
     return res.status(200).json({
       success: true,
       message: "Payment status updated successfully.",
@@ -986,6 +1134,22 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
           foreignField: "_id",
           as: "statusChangeUsers",
         },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "dispatchHistory.processedBy",
+          foreignField: "_id",
+          as: "dispatchHistoryUsers",
+        },
+      },
+      {
+        $lookup: {
+          from: "dispatches",
+          localField: "dispatchHistory.dispatchId",
+          foreignField: "_id",
+          as: "dispatchHistoryDispatches",
+        },
       }
     );
 
@@ -1108,6 +1272,7 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
           returnedPlants: 1,
           returnReason: 1,
           returnHistory: 1,
+          dispatchHistory: 1,
           orderId: 1,
           rate: 1,
           farmReadyDate: 1,
@@ -1183,6 +1348,80 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
               },
             },
           },
+          dispatchHistory: {
+            $map: {
+              input: { $ifNull: ["$dispatchHistory", []] },
+              as: "dispatchEntry",
+              in: {
+                date: "$$dispatchEntry.date",
+                quantity: "$$dispatchEntry.quantity",
+                remainingAfterDispatch: "$$dispatchEntry.remainingAfterDispatch",
+                dispatchId: "$$dispatchEntry.dispatchId",
+                dispatch: {
+                  $let: {
+                    vars: {
+                      dispatchIdStr: { $toString: "$$dispatchEntry.dispatchId" }
+                    },
+                    in: {
+                      $arrayElemAt: [
+                        {
+                          $filter: {
+                            input: "$dispatchHistoryDispatches",
+                            as: "dispatch",
+                            cond: { $eq: [{ $toString: "$$dispatch._id" }, "$$dispatchIdStr"] }
+                          }
+                        },
+                        0
+                      ]
+                    }
+                  }
+                },
+                processedBy: {
+                  $cond: {
+                    if: "$$dispatchEntry.processedBy",
+                    then: {
+                      $let: {
+                        vars: {
+                          userId: { $toString: "$$dispatchEntry.processedBy" }
+                        },
+                        in: {
+                          $let: {
+                            vars: {
+                              userData: {
+                                $arrayElemAt: [
+                                  {
+                                    $filter: {
+                                      input: "$dispatchHistoryUsers",
+                                      as: "user",
+                                      cond: { $eq: [{ $toString: "$$user._id" }, "$$userId"] }
+                                    }
+                                  },
+                                  0
+                                ]
+                              }
+                            },
+                            in: {
+                              $ifNull: [
+                                {
+                                  _id: "$$userData._id",
+                                  name: "$$userData.name",
+                                  phoneNumber: "$$userData.phoneNumber"
+                                },
+                                { _id: "$$dispatchEntry.processedBy" }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    else: null,
+                  },
+                },
+              },
+            },
+          },
+          // Add orderFor field if present
+          orderFor: 1,
         },
       },
       { $sort: { createdAt: order } },
@@ -1629,7 +1868,7 @@ const getDealerWalletBalanceForOrder = catchAsync(async (req, res, next) => {
   }
 });
 
-// Get orders to be dispatched based on date range
+// Get orders to be dispatched based on delivery date range
 const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
@@ -1645,7 +1884,10 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
 
     // Parse dates
     const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0); // Set to start of day
+    
     const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999); // Set to end of day
     
     // Validate date format
     if (isNaN(start.getTime()) || isNaN(end.getTime())) {
@@ -1656,11 +1898,17 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
       });
     }
 
-    // Set end date to end of day
-    end.setHours(23, 59, 59, 999);
-
-    // Find orders with slots that fall within the date range
+    // Find orders with delivery date within the date range
     const orders = await Order.aggregate([
+      {
+        $match: {
+          deliveryDate: {
+            $gte: start,
+            $lte: end
+          }
+          // Removed status filter - now shows all statuses
+        }
+      },
       {
         $lookup: {
           from: "plantslots",
@@ -1679,137 +1927,6 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
         $unwind: {
           path: "$slotData.subtypeSlots",
           preserveNullAndEmptyArrays: true
-        }
-      },
-      {
-        $match: {
-          "slotData.subtypeSlots._id": new mongoose.Types.ObjectId(req.params.slotId || "000000000000000000000000"),
-          orderStatus: { $nin: ['CANCELLED', 'REJECTED', 'DISPATCHED'] },
-          $or: [
-            // Check if slot start date falls within range
-            {
-              $expr: {
-                $and: [
-                  {
-                    $gte: [
-                      {
-                        $dateFromString: {
-                          dateString: {
-                            $concat: [
-                              "$slotData.subtypeSlots.startDay",
-                              "-",
-                              { $toString: new Date().getFullYear() }
-                            ]
-                          },
-                          format: "%d-%m-%Y"
-                        }
-                      },
-                      start
-                    ]
-                  },
-                  {
-                    $lte: [
-                      {
-                        $dateFromString: {
-                          dateString: {
-                            $concat: [
-                              "$slotData.subtypeSlots.startDay",
-                              "-",
-                              { $toString: new Date().getFullYear() }
-                            ]
-                          },
-                          format: "%d-%m-%Y"
-                        }
-                      },
-                      end
-                    ]
-                  }
-                ]
-              }
-            },
-            // Check if slot end date falls within range
-            {
-              $expr: {
-                $and: [
-                  {
-                    $gte: [
-                      {
-                        $dateFromString: {
-                          dateString: {
-                            $concat: [
-                              "$slotData.subtypeSlots.endDay",
-                              "-",
-                              { $toString: new Date().getFullYear() }
-                            ]
-                          },
-                          format: "%d-%m-%Y"
-                        }
-                      },
-                      start
-                    ]
-                  },
-                  {
-                    $lte: [
-                      {
-                        $dateFromString: {
-                          dateString: {
-                            $concat: [
-                              "$slotData.subtypeSlots.endDay",
-                              "-",
-                              { $toString: new Date().getFullYear() }
-                            ]
-                          },
-                          format: "%d-%m-%Y"
-                        }
-                      },
-                      end
-                    ]
-                  }
-                ]
-              }
-            },
-            // Check if date range overlaps with slot range
-            {
-              $expr: {
-                $and: [
-                  {
-                    $lte: [
-                      {
-                        $dateFromString: {
-                          dateString: {
-                            $concat: [
-                              "$slotData.subtypeSlots.startDay",
-                              "-",
-                              { $toString: new Date().getFullYear() }
-                            ]
-                          },
-                          format: "%d-%m-%Y"
-                        }
-                      },
-                      end
-                    ]
-                  },
-                  {
-                    $gte: [
-                      {
-                        $dateFromString: {
-                          dateString: {
-                            $concat: [
-                              "$slotData.subtypeSlots.endDay",
-                              "-",
-                              { $toString: new Date().getFullYear() }
-                            ]
-                          },
-                          format: "%d-%m-%Y"
-                        }
-                      },
-                      start
-                    ]
-                  }
-                ]
-              }
-            }
-          ]
         }
       },
       {
@@ -1873,9 +1990,12 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
           _id: 1,
           orderId: 1,
           numberOfPlants: 1,
+          remainingPlants: 1,
           rate: 1,
           orderStatus: 1,
           orderPaymentStatus: 1,
+          deliveryDate: 1,
+          farmReadyDate: 1,
           createdAt: 1,
           updatedAt: 1,
           farmer: {
@@ -1908,96 +2028,6 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
         $sort: { createdAt: -1 }
       }
     ]);
-
-    // If no orders found, try alternative approach with date string matching
-    if (orders.length === 0) {
-      const alternativeOrders = await Order.find({
-        orderStatus: { $nin: ['CANCELLED', 'REJECTED', 'DISPATCHED'] }
-      })
-      .populate('farmer', 'name mobileNumber village taluka district state')
-      .populate('salesPerson', 'name phoneNumber')
-      .populate('plantName', 'name')
-      .populate('plantSubtype', 'name')
-      .populate({
-        path: 'bookingSlot',
-        populate: {
-          path: 'subtypeSlots',
-          match: {
-            $or: [
-              {
-                startDay: {
-                  $gte: startDate.split('-')[2] + '-' + startDate.split('-')[1] + '-' + startDate.split('-')[0].slice(2)
-                }
-              },
-              {
-                endDay: {
-                  $lte: endDate.split('-')[2] + '-' + endDate.split('-')[1] + '-' + endDate.split('-')[0].slice(2)
-                }
-              }
-            ]
-          }
-        }
-      })
-      .lean();
-
-      // Filter orders where slot date range overlaps with requested date range
-      const filteredOrders = alternativeOrders.filter(order => {
-        if (!order.bookingSlot || !order.bookingSlot.subtypeSlots) return false;
-        
-        const slot = order.bookingSlot.subtypeSlots;
-        const slotStartDate = new Date(`${slot.startDay}-${new Date().getFullYear()}`);
-        const slotEndDate = new Date(`${slot.endDay}-${new Date().getFullYear()}`);
-        
-        // Check if slot date range overlaps with requested date range
-        return (slotStartDate <= end && slotEndDate >= start);
-      });
-
-      return res.status(200).json({
-        success: true,
-        message: "Orders to be dispatched retrieved successfully",
-        data: {
-          orders: filteredOrders.map(order => ({
-            _id: order._id,
-            orderId: order.orderId,
-            numberOfPlants: order.numberOfPlants,
-            rate: order.rate,
-            orderStatus: order.orderStatus,
-            orderPaymentStatus: order.orderPaymentStatus,
-            createdAt: order.createdAt,
-            updatedAt: order.updatedAt,
-            farmer: {
-              _id: order.farmer?._id,
-              name: order.farmer?.name,
-              mobileNumber: order.farmer?.mobileNumber,
-              village: order.farmer?.village,
-              taluka: order.farmer?.taluka,
-              district: order.farmer?.district,
-              state: order.farmer?.state
-            },
-            salesPerson: {
-              _id: order.salesPerson?._id,
-              name: order.salesPerson?.name,
-              phoneNumber: order.salesPerson?.phoneNumber
-            },
-            plantName: order.plantName?.name,
-            plantSubtype: order.plantSubtype?.name,
-            slotInfo: {
-              startDay: order.bookingSlot?.subtypeSlots?.startDay,
-              endDay: order.bookingSlot?.subtypeSlots?.endDay,
-              month: order.bookingSlot?.subtypeSlots?.month,
-              totalPlants: order.bookingSlot?.subtypeSlots?.totalPlants,
-              totalBookedPlants: order.bookingSlot?.subtypeSlots?.totalBookedPlants
-            },
-            totalAmount: (order.numberOfPlants || 0) * (order.rate || 0)
-          })),
-          totalCount: filteredOrders.length,
-          dateRange: {
-            startDate,
-            endDate
-          }
-        }
-      });
-    }
 
     return res.status(200).json({
       success: true,

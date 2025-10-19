@@ -8,6 +8,12 @@ import DealerWallet from "../models/dealerWallet.js";
 import { validateDealerQuota, allocateDealerQuota, restoreDealerQuota } from "./quota.controller.js";
 import User from "../models/user.model.js";
 import Tray from "../models/tray.model.js";
+import Farmer from "../models/farmer.model.js";
+import {
+  sendOrderAcceptedNotification,
+  sendOrderRejectedNotification,
+  sendOrderDispatchedNotification,
+} from "../utility/pushNotification.js";
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
   const wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -266,7 +272,9 @@ const createOne = (Model, modelName) =>
         componyQuota, // Added this field to destructure from request body
         ...orderData
       } = req.body;
-      console.log(req?.body);
+      console.log('📦 Request Body:', req?.body);
+      console.log('📊 Order Status from request:', req.body?.orderStatus);
+      console.log('📋 OrderData after destructuring:', orderData);
 
       if (!bookingSlot || !numberOfPlants) {
         return res.status(400).json({
@@ -517,27 +525,34 @@ const createOne = (Model, modelName) =>
           }));
         }
 
+        // Prepare order document - explicitly preserve orderStatus
+        const orderDocument = {
+          ...orderData,
+          bookingSlot,
+          numberOfPlants,
+          remainingPlants, // Initialize with same as numberOfPlants
+          orderId,
+          cavity: trayId, // Use the looked up tray ID
+          statusChanges, // Include initial status change if applicable
+          orderRemarks: processedRemarks, // Include remarks if provided
+          returnedPlants: 0, // Initialize with zero returned plants
+          returnHistory: [], // Initialize with empty return history
+          deliveryChanges: [], // Initialize with empty delivery changes history
+          componyQuota, // Include the componyQuota flag in the order document
+          payment: paymentArray, // Include payment data if provided
+          // Include orderFor field if provided
+          orderFor: req.body.orderFor || undefined,
+        };
+        
+        // Explicitly set orderStatus if provided in request (don't let model default override it)
+        if (req.body.orderStatus) {
+          orderDocument.orderStatus = req.body.orderStatus;
+        }
+        
+        console.log('🎯 Final order document orderStatus:', orderDocument.orderStatus);
+        
         // Create the Order with all new fields
-        const order = await Model.create(
-          [
-            {
-              ...orderData,
-              bookingSlot,
-              numberOfPlants,
-              remainingPlants, // Initialize with same as numberOfPlants
-              orderId,
-              cavity: trayId, // Use the looked up tray ID
-              statusChanges, // Include initial status change if applicable
-              orderRemarks: processedRemarks, // Include remarks if provided
-              returnedPlants: 0, // Initialize with zero returned plants
-              returnHistory: [], // Initialize with empty return history
-              deliveryChanges: [], // Initialize with empty delivery changes history
-              componyQuota, // Include the componyQuota flag in the order document
-              payment: paymentArray, // Include payment data if provided
-            },
-          ],
-          { session }
-        );
+        const order = await Model.create([orderDocument], { session });
 
         // Add order to slot's orders array
         await PlantSlot.updateOne(
@@ -555,6 +570,82 @@ const createOne = (Model, modelName) =>
             session: session
           }
         );
+
+        // Create farmer from orderFor if name and mobileNumber are present
+        console.log("🔍 Checking orderFor data:", {
+          hasOrderFor: !!req.body.orderFor,
+          hasName: req.body.orderFor?.name,
+          hasMobile: req.body.orderFor?.mobileNumber,
+          orderForData: req.body.orderFor
+        });
+        
+        if (req.body.orderFor && req.body.orderFor.name && req.body.orderFor.mobileNumber) {
+          try {
+            console.log("✅ OrderFor validation passed - Creating farmer from orderFor data:", req.body.orderFor);
+            
+            // Check if farmer already exists with this mobile number
+            let orderForFarmer = await Farmer.findOne({ 
+              mobileNumber: req.body.orderFor.mobileNumber 
+            }).session(session);
+            
+            console.log("🔍 Existing farmer check result:", orderForFarmer ? "FOUND" : "NOT FOUND");
+            
+            if (!orderForFarmer) {
+              // Create new farmer with orderFor data
+              // For required location fields, use the address or default values
+              const address = req.body.orderFor.address || "To be updated";
+              
+              const farmerData = {
+                name: req.body.orderFor.name,
+                mobileNumber: req.body.orderFor.mobileNumber,
+                // Required fields - use address or defaults
+                village: address,
+                taluka: "To be updated",
+                district: "To be updated",
+                state: "To be updated",
+                stateName: "To be updated",
+                talukaName: "To be updated",
+                districtName: "To be updated",
+              };
+              
+              console.log("📝 Creating new farmer with data:", farmerData);
+              
+              // Create the farmer
+              const newFarmer = await Farmer.create([farmerData], { session });
+              orderForFarmer = newFarmer[0];
+              
+              console.log("✅ Successfully created new farmer from orderFor! ID:", orderForFarmer._id, "Name:", orderForFarmer.name);
+            } else {
+              console.log("ℹ️ Farmer already exists with mobile number:", req.body.orderFor.mobileNumber, "- Skipping creation");
+            }
+          } catch (error) {
+            console.error("❌ Error creating farmer from orderFor:", error.message);
+            console.error("Full error:", error);
+            // Don't fail the order creation if farmer creation fails
+          }
+        } else {
+          console.log("⚠️ OrderFor validation failed - farmer will NOT be created");
+        }
+
+        // Update referral with order ID if this farmer was referred
+        if (orderData.farmer && req.body.referredBy) {
+          try {
+            await Farmer.updateOne(
+              { 
+                _id: req.body.referredBy,
+                "referredTo.farmerId": orderData.farmer,
+                "referredTo.orderId": null
+              },
+              {
+                $set: { "referredTo.$.orderId": order[0]._id }
+              },
+              { session }
+            );
+          } catch (error) {
+            console.error("Error updating referral with order ID:", error);
+            // Don't fail the order creation if referral update fails
+          }
+        }
 
         // Process wallet transactions for payments if any
         let walletTransactions = [];
@@ -711,6 +802,13 @@ const updateOne = (Model, modelName, allowedFields) =>
           return obj;
         }, {});
 
+      console.log("=== UPDATE ORDER DEBUG ===");
+      console.log("Received body:", req.body);
+      console.log("Filtered body:", filteredBody);
+      console.log("deliveryDate in request:", req.body.deliveryDate);
+      console.log("deliveryDate in filtered body:", filteredBody.deliveryDate);
+      console.log("Allowed fields:", allowedFields);
+
       // Handle special fields updates
 
       // Special handling for orderRemarks - append if it's an array or a string
@@ -750,6 +848,49 @@ const updateOne = (Model, modelName, allowedFields) =>
           // Remove temporary fields
           delete filteredBody.statusChangeReason;
           delete filteredBody.statusChangeNotes;
+        }
+
+        // Send push notification for order status change
+        const newStatus = filteredBody.orderStatus;
+        console.log(`📱 Order status changing from ${existingDoc.orderStatus} to ${newStatus}`);
+        
+        // Determine who to notify based on order type
+        let userToNotify = null;
+        if (existingDoc.dealer) {
+          userToNotify = await User.findById(existingDoc.dealer).session(session);
+          console.log(`📱 Dealer order - notify dealer: ${userToNotify?.name}`);
+        } else if (existingDoc.salesPerson) {
+          userToNotify = await User.findById(existingDoc.salesPerson).session(session);
+          console.log(`📱 Farmer order - notify sales person: ${userToNotify?.name}`);
+        }
+
+        if (userToNotify && userToNotify.expoPushToken) {
+          // Send notification asynchronously (don't wait for it)
+          (async () => {
+            try {
+              const orderId = existingDoc.orderId || existingDoc._id;
+              const orderDetails = {
+                plantName: existingDoc.plantName?.name || 'plants',
+                quantity: existingDoc.numberOfPlants,
+              };
+
+              if (newStatus === 'ACCEPTED' || newStatus === 'CONFIRMED') {
+                await sendOrderAcceptedNotification(userToNotify.expoPushToken, orderId, orderDetails);
+                console.log(`✅ Order accepted notification sent for Order #${orderId}`);
+              } else if (newStatus === 'REJECTED' || newStatus === 'CANCELLED') {
+                const reason = filteredBody.statusChangeReason || statusChange.reason || '';
+                await sendOrderRejectedNotification(userToNotify.expoPushToken, orderId, reason);
+                console.log(`❌ Order rejected notification sent for Order #${orderId}`);
+              } else if (newStatus === 'DISPATCHED') {
+                await sendOrderDispatchedNotification(userToNotify.expoPushToken, orderId, {});
+                console.log(`🚚 Order dispatched notification sent for Order #${orderId}`);
+              }
+            } catch (notificationError) {
+              console.error('❌ Error sending order status notification:', notificationError);
+            }
+          })();
+        } else {
+          console.log('⚠️ No push token found for user, skipping order status notification');
         }
       }
 
@@ -830,6 +971,56 @@ const updateOne = (Model, modelName, allowedFields) =>
         // Remove temporary fields
         delete filteredBody.farmReadyDateChangeReason;
         delete filteredBody.farmReadyDateChangeNotes;
+      }
+
+      // Track general order field edits (rate, numberOfPlants, deliveryDate)
+      const editHistoryEntries = [];
+      
+      // Track rate changes
+      if (filteredBody.rate && filteredBody.rate !== existingDoc.rate) {
+        editHistoryEntries.push({
+          field: "rate",
+          previousValue: existingDoc.rate,
+          newValue: filteredBody.rate,
+          changedBy: req.user ? req.user._id : null,
+          notes: `Rate changed from ₹${existingDoc.rate} to ₹${filteredBody.rate}`,
+        });
+      }
+
+      // Track quantity changes (check both numberOfPlants and quantity)
+      const newQuantity = filteredBody.numberOfPlants || filteredBody.quantity;
+      if (newQuantity && newQuantity !== existingDoc.numberOfPlants) {
+        editHistoryEntries.push({
+          field: "numberOfPlants",
+          previousValue: existingDoc.numberOfPlants,
+          newValue: newQuantity,
+          changedBy: req.user ? req.user._id : null,
+          notes: `Quantity changed from ${existingDoc.numberOfPlants} to ${newQuantity} plants`,
+        });
+      }
+
+      // Track deliveryDate changes (specific delivery date)
+      if (filteredBody.deliveryDate) {
+        const oldDate = existingDoc.deliveryDate ? new Date(existingDoc.deliveryDate) : null;
+        const newDate = new Date(filteredBody.deliveryDate);
+        
+        if (!oldDate || oldDate.toISOString() !== newDate.toISOString()) {
+          editHistoryEntries.push({
+            field: "deliveryDate",
+            previousValue: oldDate,
+            newValue: newDate,
+            changedBy: req.user ? req.user._id : null,
+            notes: `Delivery date changed from ${oldDate ? oldDate.toLocaleDateString('en-IN') : 'Not set'} to ${newDate.toLocaleDateString('en-IN')}`,
+          });
+        }
+      }
+
+      // Add all edit history entries
+      if (editHistoryEntries.length > 0) {
+        if (!filteredBody.$push) filteredBody.$push = {};
+        if (!filteredBody.$push.orderEditHistory) {
+          filteredBody.$push.orderEditHistory = { $each: editHistoryEntries };
+        }
       }
 
       // Update remainingPlants field if numberOfPlants is being updated
@@ -1003,6 +1194,10 @@ const updateOne = (Model, modelName, allowedFields) =>
       // Update document with filtered body and any accumulated $push operations
       const updateOperation = { ...filteredBody, $inc: { __v: 1 } };
 
+      console.log("=== FINAL UPDATE OPERATION ===");
+      console.log("Update operation:", JSON.stringify(updateOperation, null, 2));
+      console.log("deliveryDate in update operation:", updateOperation.deliveryDate);
+
       const updatedDoc = await Model.findOneAndUpdate(
         {
           _id: id,
@@ -1022,6 +1217,12 @@ const updateOne = (Model, modelName, allowedFields) =>
           409
         );
       }
+
+      console.log("=== UPDATED DOCUMENT ===");
+      console.log("Updated deliveryDate:", updatedDoc.deliveryDate);
+      console.log("Updated bookingSlot:", updatedDoc.bookingSlot);
+      console.log("Updated rate:", updatedDoc.rate);
+      console.log("Updated numberOfPlants:", updatedDoc.numberOfPlants);
 
       await session.commitTransaction();
       session.endSession();
@@ -1343,27 +1544,54 @@ const getAll = (Model, modelName) =>
       let filter = {};
 
       let query = Model.find(filter);
-      const features = new APIFeatures(query, req.query, modelName)
-        .filter()
-        .sort()
-        .limitFields()
-        .paginate();
+      
+      // For Farmer model, skip pagination to get all farmers
+      if (modelName === "Farmer") {
+        const features = new APIFeatures(query, req.query, modelName)
+          .filter()
+          .sort()
+          .limitFields();
+        // No pagination for Farmer model
+        
+        const doc = await features.query.lean();
 
-      const doc = await features.query.lean();
+        const transformedDoc = doc.map((item) => {
+          const { _id, ...rest } = item;
+          return { id: _id, _id: _id, ...rest };
+        });
 
-      const transformedDoc = doc.map((item) => {
-        const { _id, ...rest } = item;
-        return { id: _id, _id: _id, ...rest };
-      });
+        const response = generateResponse(
+          "Success",
+          `${modelName} found successfully`,
+          transformedDoc,
+          undefined
+        );
 
-      const response = generateResponse(
-        "Success",
-        `${modelName} found successfully`,
-        transformedDoc,
-        undefined
-      );
+        return res.status(200).json(response);
+      } else {
+        // For other models, keep pagination
+        const features = new APIFeatures(query, req.query, modelName)
+          .filter()
+          .sort()
+          .limitFields()
+          .paginate();
 
-      return res.status(200).json(response);
+        const doc = await features.query.lean();
+
+        const transformedDoc = doc.map((item) => {
+          const { _id, ...rest } = item;
+          return { id: _id, _id: _id, ...rest };
+        });
+
+        const response = generateResponse(
+          "Success",
+          `${modelName} found successfully`,
+          transformedDoc,
+          undefined
+        );
+
+        return res.status(200).json(response);
+      }
     }
 
     const {
@@ -1386,6 +1614,7 @@ const getAll = (Model, modelName) =>
       endDay, // For slot date validation
       farmReady, // New parameter to filter orders with farm ready date
       ready_for_dispatch, // New parameter to filter orders ready for dispatch
+      orderIds, // NEW: Filter by specific order IDs
     } = req.query;
 
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
@@ -1393,6 +1622,16 @@ const getAll = (Model, modelName) =>
 
     // Build the aggregation pipeline
     const pipeline = [];
+
+    // Filter by specific order IDs if provided
+    if (orderIds) {
+      const orderIdArray = orderIds.split(',').map(id => new mongoose.Types.ObjectId(id.trim()));
+      pipeline.push({
+        $match: {
+          _id: { $in: orderIdArray },
+        },
+      });
+    }
 
     // Special case for slotId filtering
     if (slotId) {
@@ -1626,6 +1865,33 @@ const getAll = (Model, modelName) =>
           localField: "farmReadyDateChanges.changedBy",
           foreignField: "_id",
           as: "farmReadyDateChangeUsers",
+        },
+      },
+      // Additional lookup for user references in order edit history
+      {
+        $lookup: {
+          from: "users",
+          localField: "orderEditHistory.changedBy",
+          foreignField: "_id",
+          as: "orderEditHistoryUsers",
+        },
+      },
+      // Additional lookup for user references in dispatch history
+      {
+        $lookup: {
+          from: "users",
+          localField: "dispatchHistory.processedBy",
+          foreignField: "_id",
+          as: "dispatchHistoryUsers",
+        },
+      },
+      // Additional lookup for dispatch references in dispatch history
+      {
+        $lookup: {
+          from: "dispatches",
+          localField: "dispatchHistory.dispatchId",
+          foreignField: "_id",
+          as: "dispatchHistoryDispatches",
         },
       }
     );
@@ -1871,6 +2137,7 @@ const getAll = (Model, modelName) =>
           rate: 1,
           farmReadyDate: 1,
           orderBookingDate: 1, // Add orderBookingDate to response
+          deliveryDate: 1, // Add deliveryDate (specific delivery date) to response
           orderPaymentStatus: 1,
           paymentCompleted: 1,
           dealerOrder: 1,
@@ -1999,6 +2266,148 @@ const getAll = (Model, modelName) =>
               },
             },
           },
+          // Added order edit history with user info
+          orderEditHistory: {
+            $map: {
+              input: { $ifNull: ["$orderEditHistory", []] },
+              as: "edit",
+              in: {
+                field: "$$edit.field",
+                previousValue: "$$edit.previousValue",
+                newValue: "$$edit.newValue",
+                notes: "$$edit.notes",
+                createdAt: "$$edit.createdAt",
+                changedBy: {
+                  $cond: {
+                    if: "$$edit.changedBy",
+                    then: {
+                      $let: {
+                        vars: {
+                          userId: { $toString: "$$edit.changedBy" }
+                        },
+                        in: {
+                          $let: {
+                            vars: {
+                              userData: {
+                                $arrayElemAt: [
+                                  {
+                                    $filter: {
+                                      input: "$orderEditHistoryUsers",
+                                      as: "user",
+                                      cond: { $eq: [{ $toString: "$$user._id" }, "$$userId"] }
+                                    }
+                                  },
+                                  0
+                                ]
+                              }
+                            },
+                            in: {
+                              $ifNull: [
+                                {
+                                  _id: "$$userData._id",
+                                  name: "$$userData.name",
+                                  phoneNumber: "$$userData.phoneNumber"
+                                },
+                                { _id: "$$edit.changedBy" }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    else: null,
+                  },
+                },
+              },
+            },
+          },
+          // Added dispatch history with user and dispatch info
+          dispatchHistory: {
+            $map: {
+              input: { $ifNull: ["$dispatchHistory", []] },
+              as: "dispatchEntry",
+              in: {
+                date: "$$dispatchEntry.date",
+                quantity: "$$dispatchEntry.quantity",
+                remainingAfterDispatch: "$$dispatchEntry.remainingAfterDispatch",
+                dispatchId: "$$dispatchEntry.dispatchId",
+                dispatch: {
+                  $let: {
+                    vars: {
+                      dispatchIdStr: { $toString: "$$dispatchEntry.dispatchId" }
+                    },
+                    in: {
+                      $arrayElemAt: [
+                        {
+                          $map: {
+                            input: {
+                              $filter: {
+                                input: "$dispatchHistoryDispatches",
+                                as: "dispatch",
+                                cond: { $eq: [{ $toString: "$$dispatch._id" }, "$$dispatchIdStr"] }
+                              }
+                            },
+                            as: "d",
+                            in: {
+                              _id: "$$d._id",
+                              transportId: "$$d.transportId",
+                              driverName: "$$d.driverName",
+                              vehicleName: "$$d.vehicleName",
+                              createdAt: "$$d.createdAt",
+                            }
+                          }
+                        },
+                        0
+                      ]
+                    }
+                  }
+                },
+                processedBy: {
+                  $cond: {
+                    if: "$$dispatchEntry.processedBy",
+                    then: {
+                      $let: {
+                        vars: {
+                          userId: { $toString: "$$dispatchEntry.processedBy" }
+                        },
+                        in: {
+                          $let: {
+                            vars: {
+                              userData: {
+                                $arrayElemAt: [
+                                  {
+                                    $filter: {
+                                      input: "$dispatchHistoryUsers",
+                                      as: "user",
+                                      cond: { $eq: [{ $toString: "$$user._id" }, "$$userId"] }
+                                    }
+                                  },
+                                  0
+                                ]
+                              }
+                            },
+                            in: {
+                              $ifNull: [
+                                {
+                                  _id: "$$userData._id",
+                                  name: "$$userData.name",
+                                  phoneNumber: "$$userData.phoneNumber"
+                                },
+                                { _id: "$$dispatchEntry.processedBy" }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    else: null,
+                  },
+                },
+              },
+            },
+          },
+          // Add orderFor field if present
+          orderFor: 1,
         },
       },
       { $sort: { [sortKey]: order } },

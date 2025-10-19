@@ -1379,35 +1379,17 @@ export const getDealerWalletStats = async (req, res) => {
     orders.forEach(order => {
       uniqueDealers.add(order.salesPerson.toString());
       
-      // Count total quantity from ALL orders (not just ACCEPTED)
-      totalQuantity += order.numberOfPlants || 0;
-      
+      // For dealer orders:
+      // - totalQuantity = sum of numberOfPlants from ACCEPTED orders only
+      // - totalBookedQuantity = sum of quotaUsed (actual quota allocated)
       if (order.orderStatus === 'ACCEPTED') {
         acceptedOrders.push(order);
+        totalQuantity += order.numberOfPlants || 0;
+        totalBookedQuantity += order.quotaUsed || 0;
       } else if (order.orderStatus === 'REJECTED') {
         rejectedOrders.push(order);
       }
     });
-    
-    // Calculate booked quantity (orders that used dealer quota)
-    // For dealer orders, we need to check which orders actually used dealer quota
-    const dealerQuotaOrders = await Order.find({
-      ...matchCondition,
-      dealerOrder: true,
-      quotaSource: 'dealer'
-    });
-    
-    // Also check orders that have quotaUsed > 0 (actual quota usage)
-    const ordersWithQuotaUsed = await Order.find({
-      ...matchCondition,
-      dealerOrder: true,
-      quotaUsed: { $gt: 0 }
-    });
-    
-    // Use the more accurate calculation - orders that actually used quota
-    totalBookedQuantity = ordersWithQuotaUsed.reduce((sum, order) => {
-      return sum + (order.quotaUsed || 0);
-    }, 0);
     
     totalRemainingQuantity = totalQuantity - totalBookedQuantity;
     
@@ -1425,7 +1407,7 @@ export const getDealerWalletStats = async (req, res) => {
     const plantTypeMap = new Map();
     
     orders.forEach(order => {
-      // Count ALL orders for total quantity (not just ACCEPTED)
+      // Only count ACCEPTED orders for total quantity
       const plantTypeId = order.plantName?.toString() || 'unknown';
       const plantTypeName = plantMap.get(plantTypeId) || `Plant Type ${plantTypeId.slice(-6)}`;
       
@@ -1445,9 +1427,8 @@ export const getDealerWalletStats = async (req, res) => {
       
       const stats = plantTypeMap.get(plantTypeId);
       stats.dealerCount.add(order.salesPerson.toString());
-      stats.totalQuantity += order.numberOfPlants || 0;
       
-      // Track subtype information for ALL orders
+      // Track subtype information
       const subTypeId = order.plantSubtype?.toString() || 'unknown';
       const subTypeName = subTypeMap.get(subTypeId) || `Subtype ${subTypeId.slice(-6)}`;
       
@@ -1462,41 +1443,28 @@ export const getDealerWalletStats = async (req, res) => {
       }
       
       const subTypeStats = stats.subtypes.get(subTypeId);
-      subTypeStats.totalQuantity += order.numberOfPlants || 0;
       
-      // Track order status counts
+      // Track order status counts and quantities
       if (order.orderStatus === 'ACCEPTED') {
         stats.acceptedOrders++;
+        stats.totalQuantity += order.numberOfPlants || 0;
+        stats.totalBookedQuantity += order.quotaUsed || 0;
+        subTypeStats.totalQuantity += order.numberOfPlants || 0;
+        subTypeStats.totalBookedQuantity += order.quotaUsed || 0;
       } else if (order.orderStatus === 'REJECTED') {
         stats.rejectedOrders++;
       }
     });
     
-    // Calculate booked quantities for each plant type and subtype
+    // Calculate remaining quantities and percentages for each plant type and subtype
     for (const [plantTypeId, stats] of plantTypeMap) {
-      // Use ordersWithQuotaUsed for more accurate calculation
-      const plantTypeOrders = ordersWithQuotaUsed.filter(order => 
-        order.plantName?.toString() === plantTypeId
-      );
-      
-      stats.totalBookedQuantity = plantTypeOrders.reduce((sum, order) => {
-        return sum + (order.quotaUsed || 0);
-      }, 0);
-      
       stats.totalRemainingQuantity = stats.totalQuantity - stats.totalBookedQuantity;
       stats.bookingPercentage = stats.totalQuantity > 0 ? (stats.totalBookedQuantity / stats.totalQuantity) * 100 : 0;
       
-      // Calculate booked quantities for each subtype
+      // Calculate remaining quantities and percentages for each subtype
       for (const [subTypeId, subTypeStats] of stats.subtypes) {
-        const subTypeOrders = plantTypeOrders.filter(order => 
-          order.plantSubtype?.toString() === subTypeId
-        );
-        
-        subTypeStats.totalBookedQuantity = subTypeOrders.reduce((sum, order) => {
-          return sum + (order.quotaUsed || 0);
-        }, 0);
-        
         subTypeStats.totalRemainingQuantity = subTypeStats.totalQuantity - subTypeStats.totalBookedQuantity;
+        subTypeStats.bookingPercentage = subTypeStats.totalQuantity > 0 ? (subTypeStats.totalBookedQuantity / subTypeStats.totalQuantity) * 100 : 0;
       }
     }
     
@@ -1531,18 +1499,19 @@ export const getDealerWalletStats = async (req, res) => {
       const acceptedDealerOrders = dealerOrders.filter(order => order.orderStatus === 'ACCEPTED');
       const rejectedDealerOrders = dealerOrders.filter(order => order.orderStatus === 'REJECTED');
       
-      const dealerQuotaUsed = ordersWithQuotaUsed
-        .filter(order => order.salesPerson.toString() === dealerId)
-        .reduce((sum, order) => sum + (order.quotaUsed || 0), 0);
+      // Calculate booked quantity from quotaUsed in ACCEPTED orders
+      const dealerBookedQuantity = acceptedDealerOrders.reduce((sum, order) => {
+        return sum + (order.quotaUsed || 0);
+      }, 0);
       
-      // Count total quantity from ALL dealer orders (not just ACCEPTED)
-      const totalDealerQuantity = dealerOrders.reduce((sum, order) => sum + (order.numberOfPlants || 0), 0);
+      // Count total quantity from ACCEPTED dealer orders only
+      const totalDealerQuantity = acceptedDealerOrders.reduce((sum, order) => sum + (order.numberOfPlants || 0), 0);
       
       dealerStats = {
         dealerId: dealerId,
         totalQuantity: totalDealerQuantity,
-        totalBookedQuantity: dealerQuotaUsed,
-        totalRemainingQuantity: totalDealerQuantity - dealerQuotaUsed,
+        totalBookedQuantity: dealerBookedQuantity,
+        totalRemainingQuantity: totalDealerQuantity - dealerBookedQuantity,
         acceptedOrdersCount: acceptedDealerOrders.length,
         rejectedOrdersCount: rejectedDealerOrders.length,
         orders: dealerOrders.map(order => ({
@@ -1584,11 +1553,20 @@ export const getDealerStats = async (req, res) => {
       });
     }
     
-    // Find the dealer's wallet
-    const dealerWallet = await DealerWallet.findOne({ dealer: dealerId })
-      .populate('entries.plantType', 'name')
-      .populate('entries.subType', 'name')
-      .populate('entries.bookingSlot', 'slotName startDate endDate');
+    // Find the dealer's wallet using aggregation to handle subdocument references
+    const walletData = await DealerWallet.aggregate([
+      { $match: { dealer: new mongoose.Types.ObjectId(dealerId) } },
+      {
+        $lookup: {
+          from: 'plantcms',
+          localField: 'entries.plantType',
+          foreignField: '_id',
+          as: 'plantTypes'
+        }
+      }
+    ]);
+    
+    const dealerWallet = walletData[0];
     
     if (!dealerWallet) {
       return res.status(404).json({
@@ -1664,6 +1642,144 @@ export const getDealerStats = async (req, res) => {
   }
 };
 
+// Controller to reset all dealer passwords to 1234
+const resetAllDealerPasswords = async (req, res, next) => {
+  try {
+    // Check if current user is super admin or admin
+    if (!req.user || (req.user.role !== "SUPER_ADMIN" && req.user.role !== "ADMIN")) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Super Admin or Admin can reset dealer passwords"
+      });
+    }
+
+    // Default password for dealers
+    const DEFAULT_PASSWORD = "1234";
+    
+    // Hash the default password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, salt);
+
+    // Find all dealers (active and not disabled)
+    const dealers = await User.find({
+      $or: [
+        { role: 'DEALER' },
+        { jobTitle: 'DEALER' }
+      ],
+      isDisabled: { $ne: true }
+    });
+
+    if (dealers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No active dealers found"
+      });
+    }
+
+    // Update all dealer passwords
+    const updatePromises = dealers.map(dealer => 
+      User.findByIdAndUpdate(
+        dealer._id,
+        {
+          password: hashedPassword,
+          isPasswordSet: false // Force password change on next login
+        },
+        { new: true }
+      )
+    );
+
+    await Promise.all(updatePromises);
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully reset passwords for ${dealers.length} dealer(s) to 1234`,
+      count: dealers.length,
+      dealers: dealers.map(d => ({
+        id: d._id,
+        name: d.name,
+        phoneNumber: d.phoneNumber
+      }))
+    });
+
+  } catch (error) {
+    console.error("Error resetting dealer passwords:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to reset dealer passwords",
+      error: error.message
+    });
+  }
+};
+
+// Controller to reset all dispatch manager passwords to 1234
+const resetAllDispatchManagerPasswords = async (req, res, next) => {
+  try {
+    // Check if current user is super admin or admin
+    if (!req.user || (req.user.role !== "SUPER_ADMIN" && req.user.role !== "ADMIN")) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Super Admin or Admin can reset dispatch manager passwords"
+      });
+    }
+
+    // Default password for dispatch managers
+    const DEFAULT_PASSWORD = "1234";
+    
+    // Hash the default password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, salt);
+
+    // Find all dispatch managers (active and not disabled)
+    const dispatchManagers = await User.find({
+      $or: [
+        { role: 'DISPATCH_MANAGER' },
+        { jobTitle: 'DISPATCH_MANAGER' }
+      ],
+      isDisabled: { $ne: true }
+    });
+
+    if (dispatchManagers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No active dispatch managers found"
+      });
+    }
+
+    // Update all dispatch manager passwords
+    const updatePromises = dispatchManagers.map(manager => 
+      User.findByIdAndUpdate(
+        manager._id,
+        {
+          password: hashedPassword,
+          isPasswordSet: false // Force password change on next login
+        },
+        { new: true }
+      )
+    );
+
+    await Promise.all(updatePromises);
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully reset passwords for ${dispatchManagers.length} dispatch manager(s) to 1234`,
+      count: dispatchManagers.length,
+      dispatchManagers: dispatchManagers.map(m => ({
+        id: m._id,
+        name: m.name,
+        phoneNumber: m.phoneNumber
+      }))
+    });
+
+  } catch (error) {
+    console.error("Error resetting dispatch manager passwords:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to reset dispatch manager passwords",
+      error: error.message
+    });
+  }
+};
+
 // Export all controller functions as raw async functions (not wrapped in catchAsync)
 export {
   getUsers,
@@ -1675,6 +1791,8 @@ export {
   encryptPassword,
   changePassword,
   resetPasswordForUser,
+  resetAllDealerPasswords,
+  resetAllDispatchManagerPasswords,
   aboutMe,
   calculatePerformanceMetrics,
   getDealerWalletDetails,

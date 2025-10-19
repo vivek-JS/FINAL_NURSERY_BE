@@ -75,11 +75,70 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
     const dispatch = await Dispatch.create([dispatchRequest], { session });
 
-    await Order.updateMany(
-      { _id: { $in: dispatchRequest.orderIds }, orderStatus: "FARM_READY" },
-      { $set: { orderStatus: "DISPATCH_PROCESS" } },
-      { session }
-    );
+    // Handle partial/split dispatches if orderDispatchDetails is provided
+    if (dispatchRequest.orderDispatchDetails && dispatchRequest.orderDispatchDetails.length > 0) {
+      // Update each order individually with dispatch details
+      for (const orderDispatch of dispatchRequest.orderDispatchDetails) {
+        const order = await Order.findById(orderDispatch.orderId).session(session);
+        
+        if (!order) {
+          throw new AppError(`Order not found: ${orderDispatch.orderId}`, 404);
+        }
+
+        // Validate dispatch quantity
+        const currentRemaining = order.remainingPlants || order.numberOfPlants;
+        if (orderDispatch.dispatchQuantity > currentRemaining) {
+          throw new AppError(
+            `Dispatch quantity (${orderDispatch.dispatchQuantity}) exceeds remaining plants (${currentRemaining}) for order ${order.orderId}`,
+            400
+          );
+        }
+
+        // Update remainingPlants
+        const newRemainingPlants = currentRemaining - orderDispatch.dispatchQuantity;
+        
+        // Determine new status based on remaining plants
+        let newStatus = order.orderStatus;
+        if (newRemainingPlants === 0) {
+          // Fully dispatched
+          newStatus = "DISPATCHED";
+        } else if (newRemainingPlants < currentRemaining) {
+          // Partially dispatched
+          newStatus = "DISPATCH_PROCESS";
+        }
+
+        // Add dispatch history entry
+        const dispatchHistoryEntry = {
+          date: new Date(),
+          quantity: orderDispatch.dispatchQuantity,
+          dispatchId: dispatch[0]._id,
+          remainingAfterDispatch: newRemainingPlants,
+          processedBy: req.user ? req.user._id : null,
+        };
+
+        // Update the order
+        await Order.findByIdAndUpdate(
+          orderDispatch.orderId,
+          {
+            $set: {
+              remainingPlants: newRemainingPlants,
+              orderStatus: newStatus,
+            },
+            $push: {
+              dispatchHistory: dispatchHistoryEntry,
+            },
+          },
+          { session, new: true }
+        );
+      }
+    } else {
+      // Legacy behavior: update all orders to DISPATCH_PROCESS
+      await Order.updateMany(
+        { _id: { $in: dispatchRequest.orderIds }, orderStatus: "FARM_READY" },
+        { $set: { orderStatus: "DISPATCH_PROCESS" } },
+        { session }
+      );
+    }
 
     await session.commitTransaction();
 
@@ -228,15 +287,18 @@ const getDispatches = catchAsync(async (req, res, next) => {
           driverName: { $first: "$driverName" },
           vehicleName: { $first: "$vehicleName" },
           plantsDetails: { $first: "$plantsDetails" },
+          orderDispatchDetails: { $first: "$orderDispatchDetails" },
           returnedPlants: { $first: "$returnedPlants" },
           transportStatus: { $first: "$transportStatus" },
           createdAt: { $first: "$createdAt" }, // Keep as Date object
           updatedAt: { $first: "$updatedAt" }, // Keep as Date object
           orderIds: {
             $push: {
+              _id: "$orderDetails._id",
               order: "$orderDetails.orderId",
               quantity: "$orderDetails.numberOfPlants",
-              orderDate: "$orderDetails.createdAt", // Keep as Date object
+              remainingPlants: "$orderDetails.remainingPlants",
+              deliveryDate: "$orderDetails.deliveryDate", // Delivery date from order
               rate: "$orderDetails.rate",
               payment: "$orderDetails.payment",
               orderStatus: "$orderDetails.orderStatus",
@@ -390,12 +452,13 @@ const getDispatches = catchAsync(async (req, res, next) => {
       return {
         ...dispatch,
         plantsDetails: plantDetailsWithCavity,
+        orderDispatchDetails: dispatch.orderDispatchDetails || [], // Include dispatch details
         // Format dates for display
         createdAt: dispatch.createdAt.toISOString(),
         updatedAt: dispatch.updatedAt.toISOString(),
         orderIds: dispatch.orderIds.map((order) => ({
           ...order,
-          orderDate: order.orderDate.toISOString(),
+          deliveryDate: order.deliveryDate?.toISOString(),
           total: `₹ ${order.rate * order.quantity}`,
           "Paid Amt": `₹ ${
             order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0
@@ -506,6 +569,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
       isDeleted: dispatch.isDeleted || false,
       returnedPlants: dispatch.returnedPlants || 0,
       transportStatus: dispatch.transportStatus || "PENDING",
+      orderDispatchDetails: dispatch.orderDispatchDetails || [], // Include dispatch details
       plantsDetails: dispatch.plantsDetails.map((plant) => {
         // Calculate cavity count
         const uniqueCavities = new Set();
@@ -570,6 +634,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
         plantName: order.plantName,
         bookingSlot: order.bookingSlot,
         numberOfPlants: order.numberOfPlants,
+        remainingPlants: order.remainingPlants || order.numberOfPlants, // Include remainingPlants
         rate: order.rate,
         payment: order.payment,
         orderStatus: order.orderStatus,

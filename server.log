@@ -1,0 +1,38 @@
+
+> backend-str@1.0.0 start
+> node index.js
+
+Connected to database
+Server timeouts configured: 10 minutes
+Server running on port 8000
+Cascading API (districts): 359ms for state: Maharashtra
+Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
+Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
+Cascading API (districts): 0ms for state: Maharashtra
+Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
+Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
+Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
+Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
+Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
+Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
+Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
+Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
+Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
+Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
+Login attempt started
+Looking for user with phone number: 7218186452
+User authenticated successfully
+User is not disabled, proceeding with token generation
+User needs to set password (isPasswordSet: false)
+Generating token pair...
+JWT_CONFIG.JWT_SECRET: 19013f155518f38d19772bffaed50e31fb65388cb65e165d47fafad7600f194b
+JWT_CONFIG.ACCESS_TOKEN_EXPIRY: 1d
+Payload: {
+  _id: '687d108c8ed1347144624aec',
+  phoneNumber: 7218186452,
+  role: 'SALES',
+  name: 'Deepak Patil'
+}
+Token pair generated successfully
+Generating response...
+Sending response...

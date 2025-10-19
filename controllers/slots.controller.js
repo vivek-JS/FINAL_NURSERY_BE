@@ -615,7 +615,8 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
       for (const slot of slotGroup.slots) {
         const monthIndex = months.indexOf(slot.month);
         if (monthIndex >= 0) {
-          monthwiseSummary[monthIndex].totalBookedPlants = slot.totalBookedPlants;
+          monthwiseSummary[monthIndex].totalPlants += slot.totalPlants;
+          monthwiseSummary[monthIndex].totalBookedPlants += slot.totalBookedPlants;
         }
       }
     }
@@ -1470,6 +1471,15 @@ export const releaseBufferPlantsController = async (req, res) => {
       });
     }
 
+    // Log current state before release
+    console.log('🔍 Before Release:', {
+      slotId,
+      totalPlants: targetSlot.totalPlants,
+      availablePlants: targetSlot.availablePlants,
+      bufferAmount: targetSlot.bufferAmount,
+      bufferPercentage: targetSlot.buffer
+    });
+
     // Release plants from buffer
     const releaseResult = releaseBufferPlants(targetSlot, plantsToRelease);
     
@@ -1480,19 +1490,48 @@ export const releaseBufferPlantsController = async (req, res) => {
       });
     }
 
-    // Update the slot with new buffer values
-    const updateResult = await updateSlotBufferCalculations(
-      slotId,
-      targetSlot.totalPlants,
-      targetSlot.totalBookedPlants,
-      releaseResult.newBufferPercentage
+    console.log('📊 After Release Calculation:', {
+      released: releaseResult.released,
+      newBufferAmount: releaseResult.newBufferAmount,
+      newAvailablePlants: releaseResult.newAvailablePlants,
+      newBufferPercentage: releaseResult.newBufferPercentage
+    });
+
+    // Directly update the slot with the calculated values
+    // Do NOT use updateSlotBufferCalculations as it recalculates from scratch
+    // Calculate bufferAdjustedCapacity: totalPlants - bufferAmount
+    const newBufferAdjustedCapacity = targetSlot.totalPlants - releaseResult.newBufferAmount;
+    
+    const updateResult = await PlantSlot.updateOne(
+      { _id: plantSlot._id },
+      {
+        $set: {
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAmount': releaseResult.newBufferAmount,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].availablePlants': releaseResult.newAvailablePlants,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].buffer': releaseResult.newBufferPercentage,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].effectiveBuffer': releaseResult.newBufferPercentage,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAdjustedCapacity': newBufferAdjustedCapacity
+        }
+      },
+      {
+        arrayFilters: [
+          { 'subtypeElem.subtypeId': targetSubtypeSlot.subtypeId },
+          { 'slotElem._id': slotId }
+        ]
+      }
     );
 
-    if (!updateResult.success) {
+    console.log('✅ Database Update Result:', {
+      matched: updateResult.matchedCount,
+      modified: updateResult.modifiedCount,
+      acknowledged: updateResult.acknowledged
+    });
+
+    if (!updateResult.modifiedCount) {
+      console.error('❌ Update failed - no documents modified');
       return res.status(500).json({
         success: false,
-        message: "Failed to update slot after buffer release",
-        error: updateResult.error
+        message: "Failed to update slot after buffer release"
       });
     }
 
@@ -1572,19 +1611,35 @@ export const addPlantsToCapacityController = async (req, res) => {
       });
     }
 
-    // Update the slot with new total plants and recalculated buffer percentage
-    const updateResult = await updateSlotBufferCalculations(
-      slotId,
-      addResult.newTotalPlants,
-      targetSlot.totalBookedPlants,
-      addResult.newBufferPercentage
+    // Directly update the slot with the calculated values
+    // Do NOT use updateSlotBufferCalculations as it recalculates from scratch
+    // Calculate bufferAdjustedCapacity: totalPlants - bufferAmount
+    const newBufferAdjustedCapacity = addResult.newTotalPlants - addResult.newBufferAmount;
+    
+    const updateResult = await PlantSlot.updateOne(
+      { _id: plantSlot._id },
+      {
+        $set: {
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].totalPlants': addResult.newTotalPlants,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAmount': addResult.newBufferAmount,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].availablePlants': addResult.newAvailablePlants,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].buffer': addResult.newBufferPercentage,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].effectiveBuffer': addResult.newBufferPercentage,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAdjustedCapacity': newBufferAdjustedCapacity
+        }
+      },
+      {
+        arrayFilters: [
+          { 'subtypeElem.subtypeId': targetSubtypeSlot.subtypeId },
+          { 'slotElem._id': slotId }
+        ]
+      }
     );
 
-    if (!updateResult.success) {
+    if (!updateResult.modifiedCount) {
       return res.status(500).json({
         success: false,
-        message: "Failed to update slot after adding plants",
-        error: updateResult.error
+        message: "Failed to update slot after adding plants"
       });
     }
 

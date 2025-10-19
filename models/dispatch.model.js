@@ -141,6 +141,31 @@ const dispatchSchema = new Schema(
       ],
       default: [], // Default to empty array as it may not be required initially
     },
+    // Field to track partial/split dispatch quantities per order
+    orderDispatchDetails: {
+      type: [
+        {
+          orderId: {
+            type: Schema.Types.ObjectId,
+            ref: "Order",
+            required: true,
+          },
+          dispatchQuantity: {
+            type: Number,
+            required: true,
+          },
+          remainingAfterDispatch: {
+            type: Number,
+            required: true,
+          },
+          isPartialDispatch: {
+            type: Boolean,
+            default: false,
+          },
+        },
+      ],
+      default: [], // Optional for backward compatibility
+    },
     driverName: {
       type: String,
       required: true,
@@ -176,8 +201,7 @@ const dispatchSchema = new Schema(
 
 // Add index for transportStatus for faster queries
 dispatchSchema.index({ transportStatus: 1 });
-// Add index for transportId for faster lookups
-dispatchSchema.index({ transportId: 1 }, { unique: true });
+// Note: transportId already has unique index from field definition
 // Add compound index for query optimization
 dispatchSchema.index({ transportStatus: 1, createdAt: -1 });
 

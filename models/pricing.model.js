@@ -8,7 +8,8 @@ const pricingSchema = new Schema({
   },
   subtypeId: {
     type: Schema.Types.ObjectId,
-    ref: "PlantCms.subtypes",
+    // Note: This references a subdocument within PlantCms, cannot use .populate()
+    // Use aggregation or manual lookup instead
     required: true,
   },
   plantName: {

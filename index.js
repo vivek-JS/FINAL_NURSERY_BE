@@ -10,8 +10,11 @@ mongoose
     // Define plants and varieties to be inserted
 
     try {
-      const httpServer = server.listen(process.env.PORT || 8000, () => {
+      const httpServer = server.listen(process.env.PORT || 8000, '0.0.0.0', () => {
         console.log(`Server running on port ${process.env.PORT || 8000}`);
+        console.log(`Server accessible at:`);
+        console.log(`  - http://localhost:8000 (from this machine)`);
+        console.log(`  - http://10.0.2.2:8000 (from Android emulator)`);
       });
       
       // Set server timeout (10 minutes)

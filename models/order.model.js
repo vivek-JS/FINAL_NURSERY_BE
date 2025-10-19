@@ -17,11 +17,13 @@ const deliveryChangeSchema = new Schema(
     },
     previousSlot: {
       type: Schema.Types.ObjectId,
-      ref: "PlantSlot.subtypeSlots",
+      // Note: This references a subdocument within PlantSlot, cannot use .populate()
+      // Use aggregation or manual lookup instead
     },
     newSlot: {
       type: Schema.Types.ObjectId,
-      ref: "PlantSlot.subtypeSlots",
+      // Note: This references a subdocument within PlantSlot, cannot use .populate()
+      // Use aggregation or manual lookup instead
     },
     reasonForChange: {
       type: String,
@@ -108,6 +110,35 @@ const farmReadyDateChangeSchema = new Schema(
   },
   { timestamps: true }
 );
+
+// Define a schema for general order edit history
+const orderEditHistorySchema = new Schema(
+  {
+    field: {
+      type: String,
+      required: true,
+      // Field that was changed (e.g., 'rate', 'numberOfPlants', 'deliveryDate')
+    },
+    previousValue: {
+      type: Schema.Types.Mixed,
+      // Store the old value (can be any type)
+    },
+    newValue: {
+      type: Schema.Types.Mixed,
+      required: true,
+      // Store the new value (can be any type)
+    },
+    changedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    notes: {
+      type: String,
+    },
+  },
+  { timestamps: true }
+);
+
 const paymentSchema = new Schema(
   {
     paidAmount: {
@@ -218,12 +249,14 @@ const orderSchema = new Schema(
     },
     plantSubtype: {
       type: Schema.Types.ObjectId,
-      ref: "PlantCms.subtypes",
+      // Note: This references a subdocument within PlantCms, cannot use .populate()
+      // Use aggregation or manual lookup instead
       required: true,
     },
     bookingSlot: {
       type: Schema.Types.ObjectId,
-      ref: "PlantSlot.subtypeSlots",
+      // Note: This references a subdocument within PlantSlot, cannot use .populate()
+      // Use aggregation or manual lookup instead
       required: true,
     },
     cavity: {
@@ -271,6 +304,11 @@ const orderSchema = new Schema(
     orderBookingDate: {
       type: Date,
     },
+    deliveryDate: {
+      type: Date,
+      required: true,
+      // The specific date selected by user for plant delivery
+    },
     farmReadyDate: {
       type: Date,
     },
@@ -285,6 +323,8 @@ const orderSchema = new Schema(
     },
     // Field to track delivery changes history
     deliveryChanges: [deliveryChangeSchema],
+    // Field to track general order edits (rate, quantity, deliveryDate, etc.)
+    orderEditHistory: [orderEditHistorySchema],
     // Field to track return history
     returnHistory: [
       {
@@ -309,6 +349,43 @@ const orderSchema = new Schema(
         },
       },
     ],
+    // Field to track dispatch history for partial/split orders
+    dispatchHistory: [
+      {
+        date: {
+          type: Date,
+          default: Date.now,
+        },
+        quantity: {
+          type: Number,
+          required: true,
+        },
+        dispatchId: {
+          type: Schema.Types.ObjectId,
+          ref: "Dispatch",
+        },
+        remainingAfterDispatch: {
+          type: Number,
+          required: true,
+        },
+        processedBy: {
+          type: Schema.Types.ObjectId,
+          ref: "User",
+        },
+      },
+    ],
+    // Order for field - optional field with address and mobile number
+    orderFor: {
+      name: {
+        type: String,
+      },
+      address: {
+        type: String,
+      },
+      mobileNumber: {
+        type: Number,
+      },
+    },
   },
   { timestamps: true }
 );

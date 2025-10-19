@@ -38,6 +38,32 @@ const createFarmer = catchAsync(async (req, res, next) => {
     farmer = await new Farmer(req.body).save();
   }
 
+  // Handle referral logic if referredBy is provided
+  if (req.body.referredBy) {
+    try {
+      // Find the referring farmer
+      const referringFarmer = await Farmer.findById(req.body.referredBy);
+      
+      if (referringFarmer) {
+        // Add this farmer to the referring farmer's referredTo array
+        await Farmer.findByIdAndUpdate(
+          req.body.referredBy,
+          {
+            $push: {
+              referredTo: {
+                farmerId: farmer._id,
+                orderId: null // Will be updated when order is created
+              }
+            }
+          }
+        );
+      }
+    } catch (error) {
+      console.error("Error handling referral:", error);
+      // Don't fail the farmer creation if referral fails
+    }
+  }
+
   req.body.farmer = farmer._id;
   next();
 });

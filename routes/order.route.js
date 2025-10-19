@@ -18,7 +18,9 @@ import {
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
-import { requirePaymentAccess } from "../middlewares/auth.middleware.js";
+import { requirePaymentAccess, authenticateToken } from "../middlewares/auth.middleware.js";
+import { sendPaymentCollectedNotification } from "../utility/pushNotification.js";
+import catchAsync from "../utility/catchAsync.js";
 
 const router = express.Router();
 
@@ -43,6 +45,35 @@ router
     checkErrors,
     updateOrder
   )
+  .post("/test-notification", authenticateToken, catchAsync(async (req, res) => {
+    // Test endpoint to send a notification to current user
+    const User = (await import("../models/user.model.js")).default;
+    const user = await User.findById(req.user._id);
+    
+    if (!user.expoPushToken) {
+      return res.status(400).json({
+        success: false,
+        message: "You don't have a push token. Open the mobile app first to register."
+      });
+    }
+
+    const result = await sendPaymentCollectedNotification(
+      user.expoPushToken,
+      "TEST-123",
+      5000
+    );
+
+    res.json({
+      success: true,
+      message: "Test notification sent!",
+      result,
+      userInfo: {
+        name: user.name,
+        phone: user.phoneNumber,
+        hasPushToken: !!user.expoPushToken
+      }
+    });
+  }))
   .post("/dealer-order", createDealerOrder)
   .patch("/afterOrder",addAfterDispatchedOrderIds)
 

@@ -63,6 +63,10 @@ const userSchema = new Schema({
   birthDate: {
     type: Date,
   },
+  expoPushToken: {
+    type: String,
+    default: null,
+  },
 });
 
 // Middleware to handle DealerBooking creation for new dealers

@@ -65,14 +65,16 @@ const dealerOrderSchema = new Schema(
     },
     plantSubtype: {
       type: Schema.Types.ObjectId,
-      ref: "PlantCms.subtypes",
+      // Note: This references a subdocument within PlantCms, cannot use .populate()
+      // Use aggregation or manual lookup instead
       required: true,
     },
     bookingSlots: [
       {
         // Changed from single bookingSlot to array of bookingSlots
         type: Schema.Types.ObjectId,
-        ref: "PlantSlot.subtypeSlots",
+        // Note: This references a subdocument within PlantSlot, cannot use .populate()
+        // Use aggregation or manual lookup instead
         required: true,
       },
     ],

@@ -193,6 +193,7 @@ import pricingRoute from "./routes/pricing.route.js";
 import analyticsRoute from "./routes/analytics.route.js";
 import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
+import notificationRoute from "./routes/notification.route.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -238,6 +239,7 @@ server.use("/api/v1/pricing", authenticateToken, pricingRoute);
 server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
 server.use("/api/v1/state", authenticateToken, stateRoute);
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
+server.use("/api/v1/notifications", notificationRoute); // Notification routes (has built-in auth)
 
 
 server.use(errorHandler);

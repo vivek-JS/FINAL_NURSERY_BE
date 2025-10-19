@@ -31,12 +31,13 @@ export const calculateAvailablePlants = (totalPlants, bufferPercentage) => {
  * Calculate buffer-adjusted capacity for display
  */
 export const calculateBufferAdjustedCapacity = (totalPlants, totalBookedPlants, bufferPercentage) => {
-  const bufferAdjustedCapacity = calculateAvailablePlants(totalPlants, bufferPercentage);
+  const bufferAmount = (totalPlants * bufferPercentage) / 100;
+  const bufferAdjustedCapacity = totalPlants - bufferAmount;
   return {
-    availablePlants: Math.max(0, totalPlants - totalBookedPlants), // Simple calculation: total - booked
+    availablePlants: Math.max(0, totalPlants - totalBookedPlants - bufferAmount), // Total - Booked - Buffer
     totalCapacity: totalPlants,
     bufferAdjustedCapacity: bufferAdjustedCapacity,
-    bufferAmount: (totalPlants * bufferPercentage) / 100
+    bufferAmount: bufferAmount
   };
 };
 

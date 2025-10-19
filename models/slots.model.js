@@ -370,7 +370,8 @@ slotSchema.set('toObject', { virtuals: true });
 const subtypeSlotSchema = new Schema({
   subtypeId: {
     type: Schema.Types.ObjectId,
-    ref: "PlantCms.subtypes", // Reference to the subtype of the PlantCms model
+    // Note: This references a subdocument within PlantCms, cannot use .populate()
+    // Use aggregation or manual lookup instead
     required: true,
   },
   slots: {

@@ -27,6 +27,7 @@ const allowedParams = [
   "mobileNumber",
   "slotId",
   "orderId",
+  "orderIds",
   "date",
   "fromDate",
   "dispatched",

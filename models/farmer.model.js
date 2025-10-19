@@ -49,7 +49,25 @@ const farmerSchema = new Schema({
   originalPhoneNumber: {
     type: String,
     default: null,
-  }
+  },
+  // Array field to store all farmers referred by this farmer
+  referredTo: [
+    {
+      farmerId: {
+        type: Schema.Types.ObjectId,
+        ref: "Farmer",
+        required: true,
+      },
+      referredAt: {
+        type: Date,
+        default: Date.now,
+      },
+      orderId: {
+        type: Schema.Types.ObjectId,
+        ref: "Order",
+      },
+    },
+  ],
 });
 
 // Add compound index for faster lookups by name and location
