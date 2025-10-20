@@ -3,7 +3,7 @@ import PlantSlot from "../models/slots.model.js";
 
 // Add a new plant with subtypes
 export const addPlant = async (req, res) => {
-  const { name, subtypes, addedBy, slotSize, buffer } = req.body;
+  const { name, subtypes, addedBy, slotSize, buffer, sowingAllowed } = req.body;
 
   try {
     // Check if a plant with the same name already exists
@@ -23,6 +23,8 @@ export const addPlant = async (req, res) => {
         description: subtype.description || "",
         characteristics: subtype.characteristics || {},
         rates: Array.isArray(subtype.rates) ? subtype.rates : [], // Ensure rates is an array
+        buffer: subtype.buffer || 0,
+        plantReadyDays: subtype.plantReadyDays || 0, // Plant ready days for sowing
       };
     });
 
@@ -33,6 +35,7 @@ export const addPlant = async (req, res) => {
       addedBy,
       slotSize: slotSize || 5, // Default slot size to 5 if not provided
       buffer: buffer || 0, // Default buffer to 0 if not provided
+      sowingAllowed: sowingAllowed || false, // Default sowing allowed to false
     });
 
     const savedPlant = await newPlant.save();
@@ -52,7 +55,7 @@ export const addPlant = async (req, res) => {
 // Update a plant's details, subtypes, or slotSize
 export const updatePlant = async (req, res) => {
   const { plantId } = req.params;
-  const { name, subtypes, slotSize, buffer } = req.body;
+  const { name, subtypes, slotSize, buffer, sowingAllowed } = req.body;
 
   try {
     const plant = await PlantCms.findById(plantId);
@@ -65,6 +68,7 @@ export const updatePlant = async (req, res) => {
     plant.name = name || plant.name;
     plant.slotSize = slotSize || plant.slotSize;
     plant.buffer = buffer !== undefined ? buffer : plant.buffer;
+    plant.sowingAllowed = sowingAllowed !== undefined ? sowingAllowed : plant.sowingAllowed;
 
     if (subtypes) {
       plant.subtypes = subtypes; // Replace subtypes if provided
@@ -201,18 +205,44 @@ export const deleteSubtype = async (req, res) => {
 // Get all plants
 export const getPlants = async (req, res) => {
   try {
-    // Fetch all plants with their embedded subtypes
+    // Fetch all plants with their embedded subtypes (including plantReadyDays)
     const plants = await PlantCms.find()
-      .select("name subtypes slotSize addedBy buffer") // Select fields to return
+      .select("name subtypes slotSize addedBy buffer sowingAllowed createdAt") // Select fields to return
+      .lean() // Convert to plain JavaScript object for better performance
       .exec();
 
     if (!plants || plants.length === 0) {
       return res.status(404).json({ message: "No plant data found." });
     }
 
+    // Ensure all subtype fields are included (plantReadyDays, buffer, etc.) with default values
+    const plantsWithCompleteData = plants.map(plant => ({
+      _id: plant._id,
+      name: plant.name,
+      slotSize: plant.slotSize,
+      buffer: plant.buffer || 0,
+      sowingAllowed: plant.sowingAllowed || false, // Explicitly include with default
+      createdAt: plant.createdAt,
+      addedBy: plant.addedBy,
+      subtypes: plant.subtypes.map(subtype => ({
+        _id: subtype._id,
+        name: subtype.name,
+        description: subtype.description || "",
+        characteristics: subtype.characteristics || {},
+        rates: subtype.rates || [],
+        dailyDispatch: subtype.dailyDispatch || 0,
+        buffer: subtype.buffer || 0,
+        plantReadyDays: subtype.plantReadyDays || 0, // Explicitly include plantReadyDays with default
+      }))
+    }));
+
     return res
       .status(200)
-      .json({ success: true, message: "Plants retrieved successfully", data: plants });
+      .json({ 
+        success: true, 
+        message: "Plants retrieved successfully", 
+        data: plantsWithCompleteData 
+      });
   } catch (error) {
     return res
       .status(500)

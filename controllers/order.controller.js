@@ -1986,6 +1986,22 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
         }
       },
       {
+        $addFields: {
+          matchedSubtype: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$subtypeData.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$plantSubtype"] }
+                }
+              },
+              0
+            ]
+          }
+        }
+      },
+      {
         $project: {
           _id: 1,
           orderId: 1,
@@ -2013,7 +2029,16 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
             phoneNumber: "$salesPersonData.phoneNumber"
           },
           plantName: "$plantData.name",
-          plantSubtype: "$subtypeData.name",
+          plantType: {
+            _id: "$plantData._id",
+            id: "$plantData._id",
+            name: "$plantData.name"
+          },
+          plantSubtype: {
+            _id: "$matchedSubtype._id",
+            id: "$matchedSubtype._id", 
+            name: "$matchedSubtype.name"
+          },
           slotInfo: {
             startDay: "$slotData.subtypeSlots.startDay",
             endDay: "$slotData.subtypeSlots.endDay",

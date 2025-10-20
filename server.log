@@ -2,23 +2,65 @@
 > backend-str@1.0.0 start
 > node index.js
 
+(node:2068) [MONGOOSE] Warning: Duplicate schema index on {"dealer":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:2068) [MONGOOSE] Warning: Duplicate schema index on {"batchNumber":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
+(node:2068) [MONGOOSE] Warning: Duplicate schema index on {"code":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
+(node:2068) [MONGOOSE] Warning: Duplicate schema index on {"transactionNumber":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
+(node:2068) [MONGOOSE] Warning: Duplicate schema index on {"code":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
+(node:2068) [MONGOOSE] Warning: Duplicate schema index on {"name":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
+(node:2068) [MONGOOSE] Warning: Duplicate schema index on {"poNumber":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
+(node:2068) [MONGOOSE] Warning: Duplicate schema index on {"grnNumber":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
+(node:2068) [MONGOOSE] Warning: Duplicate schema index on {"outwardNumber":1} found. This is often due to declaring an index using both "index: true" and "schema.index()". Please remove the duplicate index definition.
 Connected to database
 Server timeouts configured: 10 minutes
 Server running on port 8000
-Cascading API (districts): 359ms for state: Maharashtra
-Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
-Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
-Cascading API (districts): 0ms for state: Maharashtra
-Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
-Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
-Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
-Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
-Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
-Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
-Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
-Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
-Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
-Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
+Server accessible at:
+  - http://localhost:8000 (from this machine)
+  - http://10.0.2.2:8000 (from Android emulator)
+Error creating sowing: Error: Sowing validation failed: createdBy: Cast to ObjectId failed for value "Super Admin" (type string) at path "createdBy" because of "BSONError"
+    at ValidationError.inspect (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/error/validation.js:52:26)
+    at formatValue (node:internal/util/inspect:887:19)
+    at inspect (node:internal/util/inspect:409:10)
+    at formatWithOptionsInternal (node:internal/util/inspect:2441:40)
+    at formatWithOptions (node:internal/util/inspect:2303:10)
+    at console.value (node:internal/console/constructor:345:14)
+    at console.error (node:internal/console/constructor:412:61)
+    at createSowing (file:///Users/VivekP/Movies/ram/FINAL_NURSERY_BE/controllers/sowing.controller.js:76:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+  errors: {
+    createdBy: CastError: Cast to ObjectId failed for value "Super Admin" (type string) at path "createdBy" because of "BSONError"
+        at SchemaObjectId.cast (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/schema/objectId.js:251:11)
+        at SchemaType.applySetters (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/schemaType.js:1255:12)
+        at model.$set (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/document.js:1438:22)
+        at model.$set (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/document.js:1132:16)
+        at model.Document (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/document.js:178:12)
+        at model.Model (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/model.js:127:12)
+        at new model (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/model.js:4836:15)
+        at createSowing (file:///Users/VivekP/Movies/ram/FINAL_NURSERY_BE/controllers/sowing.controller.js:52:20)
+        at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+      stringValue: '"Super Admin"',
+      messageFormat: undefined,
+      kind: 'ObjectId',
+      value: 'Super Admin',
+      path: 'createdBy',
+      reason: BSONError: input must be a 24 character hex string, 12 byte Uint8Array, or an integer
+          at new ObjectId (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/bson/lib/bson.cjs:2538:23)
+          at castObjectId (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/cast/objectid.js:25:12)
+          at SchemaObjectId.cast (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/schema/objectId.js:249:12)
+          at SchemaType.applySetters (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/schemaType.js:1255:12)
+          at model.$set (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/document.js:1438:22)
+          at model.$set (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/document.js:1132:16)
+          at model.Document (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/document.js:178:12)
+          at model.Model (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/model.js:127:12)
+          at new model (/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/node_modules/mongoose/lib/model.js:4836:15)
+          at createSowing (file:///Users/VivekP/Movies/ram/FINAL_NURSERY_BE/controllers/sowing.controller.js:52:20)
+          at process.processTicksAndRejections (node:internal/process/task_queues:105:5),
+      valueType: 'string'
+    }
+  },
+  _message: 'Sowing validation failed'
+}
 Login attempt started
 Looking for user with phone number: 7218186452
 User authenticated successfully
@@ -36,3 +78,66 @@ Payload: {
 Token pair generated successfully
 Generating response...
 Sending response...
+Cascading API (districts): 734ms for state: Maharashtra
+Cascading API (talukas): 0ms for state: Maharashtra, district: Ahmadnagar
+Cascading API (villages): 0ms for state: Maharashtra, district: Ahmadnagar, taluka: Akola
+📦 Request Body: {
+  name: 'Kiran chaudhari',
+  village: 'Anchalwadi',
+  taluka: 'Bhatkuli',
+  state: 'Maharashtra',
+  district: 'Amravati',
+  stateName: 'Maharashtra',
+  districtName: 'Amravati',
+  talukaName: 'Bhatkuli',
+  mobileNumber: '9823832132',
+  typeOfPlants: '',
+  numberOfPlants: 200,
+  rate: 100,
+  paymentStatus: 'not paid',
+  salesPerson: '687d107e8ed13471446242df',
+  orderStatus: 'ACCEPTED',
+  plantName: '68f50352d5cb357f63110c68',
+  plantSubtype: '68f50352d5cb357f63110c69',
+  bookingSlot: '68f50379d5cb357f63110db2',
+  orderDate: '2025-10-31T18:30:00.000Z',
+  deliveryDate: '2025-10-31T18:30:00.000Z',
+  orderPaymentStatus: 'PENDING',
+  cavity: 10,
+  orderBookingDate: '2025-10-19T19:47:24.193Z',
+  farmer: new ObjectId('68f4049f09ccfbfa4bd1e243')
+}
+📊 Order Status from request: ACCEPTED
+📋 OrderData after destructuring: {
+  name: 'Kiran chaudhari',
+  village: 'Anchalwadi',
+  taluka: 'Bhatkuli',
+  state: 'Maharashtra',
+  district: 'Amravati',
+  stateName: 'Maharashtra',
+  districtName: 'Amravati',
+  talukaName: 'Bhatkuli',
+  mobileNumber: '9823832132',
+  typeOfPlants: '',
+  rate: 100,
+  paymentStatus: 'not paid',
+  salesPerson: '687d107e8ed13471446242df',
+  orderStatus: 'ACCEPTED',
+  plantName: '68f50352d5cb357f63110c68',
+  plantSubtype: '68f50352d5cb357f63110c69',
+  orderDate: '2025-10-31T18:30:00.000Z',
+  deliveryDate: '2025-10-31T18:30:00.000Z',
+  orderPaymentStatus: 'PENDING',
+  orderBookingDate: '2025-10-19T19:47:24.193Z',
+  farmer: new ObjectId('68f4049f09ccfbfa4bd1e243')
+}
+hii
+[updateSlot] Sowing allowed - skipping availability check
+🎯 Final order document orderStatus: ACCEPTED
+🔍 Checking orderFor data: {
+  hasOrderFor: false,
+  hasName: undefined,
+  hasMobile: undefined,
+  orderForData: undefined
+}
+⚠️ OrderFor validation failed - farmer will NOT be created

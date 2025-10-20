@@ -194,6 +194,7 @@ import analyticsRoute from "./routes/analytics.route.js";
 import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
+import sowingRoute from "./routes/sowing.route.js";
 
 // Inventory Management Routes
 import productRoute from "./routes/product.route.js";
@@ -249,6 +250,7 @@ server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
 server.use("/api/v1/state", authenticateToken, stateRoute);
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/notifications", notificationRoute); // Notification routes (has built-in auth)
+server.use("/api/v1/sowing", authenticateToken, sowingRoute); // Sowing management routes
 
 // Inventory Management Routes (all require authentication)
 server.use("/api/v1/inventory/products", authenticateToken, productRoute);

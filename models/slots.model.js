@@ -185,6 +185,51 @@ const slotSchema = new Schema({
     type: Boolean,
     default: false,
   },
+  // Sowing management fields
+  plantsSowed: {
+    type: Number,
+    default: 0,
+  }, // Total number of plants sowed (office + primary)
+  officeSowed: {
+    type: Number,
+    default: 0,
+  }, // Number of plants sowed at office location
+  primarySowed: {
+    type: Number,
+    default: 0,
+  }, // Number of plants sowed at primary location
+  sowingDate: {
+    type: String, // Store date in "dd-mm-yyyy" format
+    validate: {
+      validator: function (value) {
+        if (!value) return true; // Allow empty value
+        return (
+          /^\d{2}-\d{2}-\d{4}$/.test(value) &&
+          moment(value, "DD-MM-YYYY", true).isValid()
+        );
+      },
+      message: (props) =>
+        `${props.value} is not a valid date in the format dd-mm-yyyy`,
+    },
+  }, // Date when plants were sowed
+  plantReadyDate: {
+    type: String, // Store date in "dd-mm-yyyy" format (calculated from sowingDate + plantReadyDays)
+    validate: {
+      validator: function (value) {
+        if (!value) return true; // Allow empty value
+        return (
+          /^\d{2}-\d{2}-\d{4}$/.test(value) &&
+          moment(value, "DD-MM-YYYY", true).isValid()
+        );
+      },
+      message: (props) =>
+        `${props.value} is not a valid date in the format dd-mm-yyyy`,
+    },
+  }, // Date when plants will be ready
+  reminderBeforePlantReadyDays: {
+    type: Number,
+    default: 0,
+  }, // Days before plant ready date to send reminder
   // Slot trail tracking
   slotTrail: [slotTrailSchema],
 });

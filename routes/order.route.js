@@ -15,6 +15,11 @@ import {
   getDealerWalletBalanceForOrder,
   getOrdersToBeDispatched
 } from "../controllers/order.controller.js";
+import {
+  getOrderDispatchDetails,
+  getOrdersByDispatch,
+  getDispatchSummary
+} from "../controllers/orderDispatchDetails.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
@@ -34,6 +39,9 @@ router
   .get("/districts", getUniqueDistricts)
   .get("/dealer-wallet/:orderId", getDealerWalletBalanceForOrder)
   .get("/to-be-dispatched", getOrdersToBeDispatched)
+  .get("/dispatch-details/:orderId", getOrderDispatchDetails)
+  .get("/by-dispatch/:transportId", getOrdersByDispatch)
+  .get("/dispatch-summary", getDispatchSummary)
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .patch(
     "/payment/:orderId",

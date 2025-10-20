@@ -8,6 +8,7 @@ const plantSubtypeSchema = new Schema({
   rates: { type: [Number], default: [] }, // Array of rates for each subtype
   dailyDispatch: { type: Number, default: 0 }, // Daily dispatch capacity for this subtype
   buffer: { type: Number, default: 0 }, // Buffer at plant subtype level
+  plantReadyDays: { type: Number, default: 0 }, // Number of days for plant to be ready from sowing
 });
 
 const plantSchema = new Schema({
@@ -17,6 +18,7 @@ const plantSchema = new Schema({
   createdAt: { type: Date, default: Date.now },
   slotSize: { type: Number, default: 5, required: true }, // Slot size in days
   buffer: { type: Number, default: 0 }, // Buffer at plant level
+  sowingAllowed: { type: Boolean, default: false }, // Whether sowing is allowed for this plant
 });
 
 // Auto slot generation removed - slots are now managed through dedicated slot management system

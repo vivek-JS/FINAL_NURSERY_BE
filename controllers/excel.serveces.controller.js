@@ -787,17 +787,36 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           await order.save();
         }
 
+        // Fetch slot with plant info to check if sowing is allowed
+        const slotWithPlant = await PlantSlot.findOne(
+          { "subtypeSlots.slots._id": slot._id },
+          { "subtypeSlots.$": 1 }
+        ).populate("plantId", "sowingAllowed");
+
+        const isSowingAllowed = slotWithPlant?.plantId?.sowingAllowed || false;
+
         // Update slot capacity
+        let excelUpdateOperation = {
+          $push: { 
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": order._id 
+          },
+          $inc: {
+            // Always increment totalBookedPlants
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": orderData.numberOfPlants
+          }
+        };
+
+        // For regular plants (non-sowing-allowed), also decrement availablePlants
+        if (!isSowingAllowed) {
+          excelUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = -orderData.numberOfPlants;
+          console.log(`📊 Excel Import (Regular plant): Updating slot - totalBookedPlants +${orderData.numberOfPlants}, availablePlants -${orderData.numberOfPlants}`);
+        } else {
+          console.log(`📊 Excel Import (Sowing-allowed plant): Updating slot - ONLY totalBookedPlants +${orderData.numberOfPlants} (availablePlants unchanged)`);
+        }
+
         await PlantSlot.updateOne(
           { "subtypeSlots.slots._id": slot._id },
-          { 
-            $push: { 
-              "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": order._id 
-            },
-            $inc: {
-              "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": orderData.numberOfPlants
-            }
-          },
+          excelUpdateOperation,
           {
             arrayFilters: [
               { "subtypeSlot.slots._id": slot._id },

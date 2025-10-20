@@ -32,9 +32,18 @@ const sendErrorProd = (err, req, res) => {
     });
   }
   console.error("ERROR 💥", err);
+  console.error("Error stack:", err.stack);
+  console.error("Error name:", err.name);
+  console.error("Error message:", err.message);
+  
+  // Return more detailed error in development/debugging
   return res.status(500).json({
     status: "error",
-    message: "Something went very wrong!",
+    message: err.message || "Something went very wrong!",
+    ...(process.env.NODE_ENV === 'development' && { 
+      error: err,
+      stack: err.stack 
+    })
   });
 };
 

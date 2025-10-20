@@ -52,6 +52,7 @@ const statusChangeSchema = new Schema(
         "ACCEPTED",
         "REJECTED",
         "FARM_READY",
+        "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",
         "PARTIALLY_COMPLETED",
       ],
@@ -68,6 +69,7 @@ const statusChangeSchema = new Schema(
         "ACCEPTED",
         "REJECTED",
         "FARM_READY",
+        "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",
         "PARTIALLY_COMPLETED",
       ],
@@ -231,6 +233,11 @@ const orderSchema = new Schema(
       fromSlot: { type: Number, default: 0 },
       // Store original quota allocation for restoration
     },
+    walletEntryId: {
+      type: Schema.Types.ObjectId,
+      // Reference to the DealerWallet entry this order uses
+      // Used to link orders to specific quota allocations
+    },
     numberOfPlants: {
       type: Number,
       required: true,
@@ -290,6 +297,7 @@ const orderSchema = new Schema(
         "ACCEPTED",
         "REJECTED",
         "FARM_READY",
+        "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",
         "PARTIALLY_COMPLETED",
       ],
@@ -522,6 +530,63 @@ orderSchema.pre("validate", function (next) {
     return next(error);
   }
   next();
+});
+
+// Track original values when document is loaded from database
+orderSchema.post("init", function() {
+  this._originalOrderStatus = this.orderStatus;
+});
+
+// Pre-save: Check if status changed and store the change
+orderSchema.pre("save", function (next) {
+  if (!this.isNew && this.isModified("orderStatus")) {
+    this._statusChanged = {
+      oldStatus: this._originalOrderStatus || "UNKNOWN",
+      newStatus: this.orderStatus,
+    };
+  }
+  next();
+});
+
+// Post-save: Send notification after status change is committed
+orderSchema.post("save", async function (doc) {
+  if (doc._statusChanged) {
+    // Use setImmediate to avoid blocking the response
+    setImmediate(async () => {
+      try {
+        // Dynamically import to avoid circular dependency
+        const { sendStatusChangeNotification } = await import("../utility/orderNotificationHelper.js");
+        await sendStatusChangeNotification(doc, doc._statusChanged.oldStatus, doc._statusChanged.newStatus);
+      } catch (error) {
+        console.error("❌ Error sending status change notification:", error);
+        // Don't fail the save if notification fails
+      }
+    });
+  }
+});
+
+// Also handle findOneAndUpdate which is used by the controller
+orderSchema.post("findOneAndUpdate", async function(doc) {
+  if (doc) {
+    // Get the update operation
+    const update = this.getUpdate();
+    const newStatus = update.$set?.orderStatus || update.orderStatus;
+    
+    if (newStatus && doc.orderStatus !== newStatus) {
+      setImmediate(async () => {
+        try {
+          const { sendStatusChangeNotification } = await import("../utility/orderNotificationHelper.js");
+          // Reload the document to get the updated status
+          const updatedDoc = await doc.constructor.findById(doc._id);
+          if (updatedDoc) {
+            await sendStatusChangeNotification(updatedDoc, doc.orderStatus, newStatus);
+          }
+        } catch (error) {
+          console.error("❌ Error sending status change notification:", error);
+        }
+      });
+    }
+  }
 });
 
 const Order = model("Order", orderSchema);

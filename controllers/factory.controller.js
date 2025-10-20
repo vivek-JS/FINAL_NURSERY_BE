@@ -13,6 +13,7 @@ import {
   sendOrderAcceptedNotification,
   sendOrderRejectedNotification,
   sendOrderDispatchedNotification,
+  sendOrderStatusNotification,
 } from "../utility/pushNotification.js";
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
@@ -110,47 +111,55 @@ export const updateSlot = async (
   //   `[updateSlot] START - Action: ${action}, Slot: ${bookingSlot}, Plants: ${numberOfPlants}, AllowOverflow: ${allowOverflow}`
   // );
 
-  // Step 1: If subtracting, first check if enough plants are available (unless overflow is allowed)
+  // Step 1: If subtracting, first check if enough plants are available (unless overflow is allowed OR sowing is allowed)
   if (action === "subtract" && !allowOverflow) {
     console.log("hii")
     const currentSlot = await PlantSlot.findOne(
       { "subtypeSlots.slots._id": bookingSlot },
       { "subtypeSlots.$": 1 }
-    );
+    ).populate("plantId", "sowingAllowed");
 
     if (!currentSlot || !currentSlot.subtypeSlots[0]) {
       // console.error("[updateSlot] ERROR: Slot not found");
       throw new Error("Slot not found");
     }
 
-    const targetSlot = currentSlot.subtypeSlots[0].slots.find(
-      (slot) => slot._id.toString() === bookingSlot.toString()
-    );
-
-    if (!targetSlot) {
-      // console.error("[updateSlot] ERROR: Specific slot not found");
-      throw new Error("Specific slot not found");
-    }
-
-    // Calculate available plants considering buffer and already booked plants
-    const effectiveBuffer = targetSlot.effectiveBuffer || targetSlot.buffer || 0;
-    const bufferAmount = Math.round((targetSlot.totalPlants * effectiveBuffer) / 100);
-    const bufferAdjustedCapacity = targetSlot.totalPlants - bufferAmount;
-    const availablePlants = Math.max(0, bufferAdjustedCapacity - (targetSlot.totalBookedPlants || 0));
+    // Check if sowing is allowed for this plant - if yes, skip availability restrictions
+    const isSowingAllowed = currentSlot.plantId?.sowingAllowed || false;
     
-    if (numberOfPlants > availablePlants) {
-      const slotDateInfo =
-        targetSlot.startDay && targetSlot.endDay
-          ? `Slot period: ${targetSlot.startDay} to ${targetSlot.endDay}`
-          : targetSlot.month
-          ? `Slot month: ${targetSlot.month}`
-          : "";
+    if (!isSowingAllowed) {
+      // Only check availability if sowing is NOT allowed
+      const targetSlot = currentSlot.subtypeSlots[0].slots.find(
+        (slot) => slot._id.toString() === bookingSlot.toString()
+      );
+
+      if (!targetSlot) {
+        // console.error("[updateSlot] ERROR: Specific slot not found");
+        throw new Error("Specific slot not found");
+      }
+
+      // Calculate available plants considering buffer and already booked plants
+      const effectiveBuffer = targetSlot.effectiveBuffer || targetSlot.buffer || 0;
+      const bufferAmount = Math.round((targetSlot.totalPlants * effectiveBuffer) / 100);
+      const bufferAdjustedCapacity = targetSlot.totalPlants - bufferAmount;
+      const availablePlants = Math.max(0, bufferAdjustedCapacity - (targetSlot.totalBookedPlants || 0));
       
-      const errorMessage = availablePlants > 0 
-        ? `Not enough plants available. Only ${availablePlants} plants available. Please book in other slots. ${slotDateInfo}`
-        : `No plants available in this slot. Please book in other slots. ${slotDateInfo}`;
-      
-      throw new Error(errorMessage);
+      if (numberOfPlants > availablePlants) {
+        const slotDateInfo =
+          targetSlot.startDay && targetSlot.endDay
+            ? `Slot period: ${targetSlot.startDay} to ${targetSlot.endDay}`
+            : targetSlot.month
+            ? `Slot month: ${targetSlot.month}`
+            : "";
+        
+        const errorMessage = availablePlants > 0 
+          ? `Not enough plants available. Only ${availablePlants} plants available. Please book in other slots. ${slotDateInfo}`
+          : `No plants available in this slot. Please book in other slots. ${slotDateInfo}`;
+        
+        throw new Error(errorMessage);
+      }
+    } else {
+      console.log("[updateSlot] Sowing allowed - skipping availability check");
     }
   }
 
@@ -467,6 +476,14 @@ const createOne = (Model, modelName) =>
           orderData.quotaUsed = quotaAllocation.fromWallet;
           orderData.quotaSource = "dealer";
           orderData.originalQuotaAllocation = quotaAllocation;
+          orderData.walletEntryId = quotaAllocation.walletEntryId; // Link to wallet entry
+          
+          console.log('💾 Saving order with quota data:', {
+            quotaUsed: orderData.quotaUsed,
+            quotaSource: orderData.quotaSource,
+            walletEntryId: orderData.walletEntryId?.toString(),
+            dealer: orderData.dealer?.toString()
+          });
 
           // Update slot if needed
           if (quotaAllocation.fromSlot > 0) {
@@ -554,14 +571,36 @@ const createOne = (Model, modelName) =>
         // Create the Order with all new fields
         const order = await Model.create([orderDocument], { session });
 
-        // Add order to slot's orders array
-        await PlantSlot.updateOne(
+        // Fetch slot to check if sowing is allowed for this plant
+        const slotForUpdate = await PlantSlot.findOne(
           { "subtypeSlots.slots._id": bookingSlot },
-          { 
-            $push: { 
-              "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": order[0]._id 
-            }
+          { "subtypeSlots.$": 1 }
+        ).populate("plantId", "sowingAllowed").session(session);
+
+        const isSowingAllowed = slotForUpdate?.plantId?.sowingAllowed || false;
+
+        // Add order to slot's orders array and update booking counts
+        let slotUpdateOperation = {
+          $push: { 
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": order[0]._id 
           },
+          $inc: {
+            // Always increment totalBookedPlants
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": numberOfPlants
+          }
+        };
+
+        // For regular plants (non-sowing-allowed), also decrement availablePlants
+        if (!isSowingAllowed) {
+          console.log(`📊 Regular plant: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numberOfPlants}, decrementing availablePlants by ${numberOfPlants}`);
+          slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = -numberOfPlants;
+        } else {
+          console.log(`📊 Sowing-allowed plant: Updating slot ${bookingSlot} - ONLY incrementing totalBookedPlants by ${numberOfPlants} (availablePlants unchanged)`);
+        }
+
+        const slotUpdateResult = await PlantSlot.updateOne(
+          { "subtypeSlots.slots._id": bookingSlot },
+          slotUpdateOperation,
           {
             arrayFilters: [
               { "subtypeSlot.slots._id": bookingSlot },
@@ -570,6 +609,7 @@ const createOne = (Model, modelName) =>
             session: session
           }
         );
+        console.log(`✅ Slot update result: matched=${slotUpdateResult.matchedCount}, modified=${slotUpdateResult.modifiedCount}`);
 
         // Create farmer from orderFor if name and mobileNumber are present
         console.log("🔍 Checking orderFor data:", {
@@ -881,6 +921,15 @@ const updateOne = (Model, modelName, allowedFields) =>
                 const reason = filteredBody.statusChangeReason || statusChange.reason || '';
                 await sendOrderRejectedNotification(userToNotify.expoPushToken, orderId, reason);
                 console.log(`❌ Order rejected notification sent for Order #${orderId}`);
+              } else if (newStatus === 'FARM_READY') {
+                // Get farmer details for notification
+                const farmerDetails = existingDoc.farmer ? await mongoose.model('Farmer').findById(existingDoc.farmer).session(session) : null;
+                const farmerName = farmerDetails?.name || 'Unknown Farmer';
+                const farmerVillage = farmerDetails?.village || 'Unknown Village';
+                
+                const message = `Order #${orderId} is ready for dispatch!\nFarmer: ${farmerName}\nVillage: ${farmerVillage}`;
+                await sendOrderStatusNotification(userToNotify.expoPushToken, orderId, 'FARM_READY', message);
+                console.log(`🌾 Farm ready notification sent for Order #${orderId}`);
               } else if (newStatus === 'DISPATCHED') {
                 await sendOrderDispatchedNotification(userToNotify.expoPushToken, orderId, {});
                 console.log(`🚚 Order dispatched notification sent for Order #${orderId}`);
@@ -1094,6 +1143,49 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
+      // Update slot when order is rejected or cancelled
+      if (
+        filteredBody.orderStatus && 
+        (filteredBody.orderStatus === "REJECTED" || filteredBody.orderStatus === "CANCELLED") &&
+        existingDoc.orderStatus !== "REJECTED" &&
+        existingDoc.orderStatus !== "CANCELLED"
+      ) {
+        // Fetch slot to check if sowing is allowed
+        const cancelSlot = await PlantSlot.findOne(
+          { "subtypeSlots.slots._id": existingDoc.bookingSlot },
+          { "subtypeSlots.$": 1 }
+        ).populate("plantId", "sowingAllowed").session(session);
+
+        const isSowingAllowed = cancelSlot?.plantId?.sowingAllowed || false;
+
+        let cancelUpdateOperation = {
+          $inc: {
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": -existingDoc.numberOfPlants
+          }
+        };
+
+        // For regular plants (non-sowing-allowed), also increment availablePlants
+        if (!isSowingAllowed) {
+          cancelUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = existingDoc.numberOfPlants;
+          console.log(`🔙 Regular plant: Order cancelled - decrementing totalBookedPlants by ${existingDoc.numberOfPlants}, incrementing availablePlants by ${existingDoc.numberOfPlants}`);
+        } else {
+          console.log(`🔙 Sowing-allowed plant: Order cancelled - ONLY decrementing totalBookedPlants by ${existingDoc.numberOfPlants} (availablePlants unchanged)`);
+        }
+
+        await PlantSlot.updateOne(
+          { "subtypeSlots.slots._id": existingDoc.bookingSlot },
+          cancelUpdateOperation,
+          {
+            arrayFilters: [
+              { "subtypeSlot.slots._id": existingDoc.bookingSlot },
+              { "slot._id": existingDoc.bookingSlot }
+            ],
+            session: session
+          }
+        );
+        console.log(`✅ Slot update completed for cancelled order`);
+      }
+
 
 
       // Handle payment updates
@@ -1257,7 +1349,7 @@ const handleSlotUpdatesWithSession = async (
       const currentSlot = await PlantSlot.findOne(
         { "subtypeSlots.slots._id": slotId },
         { "subtypeSlots.$": 1 }
-      ).session(session);
+      ).populate("plantId", "sowingAllowed").session(session);
 
       if (!currentSlot?.subtypeSlots?.[0]?.slots) {
         throw new AppError("Slot not found", 404);
@@ -1271,7 +1363,14 @@ const handleSlotUpdatesWithSession = async (
         throw new AppError("Specific slot not found", 404);
       }
 
-      // Calculate available plants considering buffer and already booked plants
+      // Skip availability check for sowing-allowed plants
+      const isSowingAllowed = currentSlot?.plantId?.sowingAllowed || false;
+      if (isSowingAllowed) {
+        console.log(`✅ Sowing-allowed plant: Skipping availability check for slot ${slotId}`);
+        return;
+      }
+
+      // Calculate available plants considering buffer and already booked plants (for regular plants only)
       const effectiveBuffer = slot.effectiveBuffer || slot.buffer || 0;
       const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
       const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
@@ -1295,13 +1394,46 @@ const handleSlotUpdatesWithSession = async (
 
     // Modified updateSlot function that works with a session
     const updateSlotWithSession = async (slotId, plantsCount, action) => {
-      // FIXED: Don't modify totalPlants - it represents capacity and should remain constant
-      // totalBookedPlants is calculated dynamically from orders, so we don't need to update it here either
+      // Fetch slot to check if sowing is allowed
+      const slotDoc = await PlantSlot.findOne(
+        { "subtypeSlots.slots._id": slotId },
+        { "subtypeSlots.$": 1 }
+      ).populate("plantId", "sowingAllowed").session(session);
+
+      const isSowingAllowed = slotDoc?.plantId?.sowingAllowed || false;
       
-      // Since we're not modifying any slot fields directly, just return success
-      // The slot data will be updated when orders are created/updated and the API recalculates
+      // Update totalBookedPlants based on action (add = decrement booked, subtract = increment booked)
+      const bookingIncrement = action === "add" ? -plantsCount : plantsCount;
       
-      return { matchedCount: 1, modifiedCount: 0 };
+      let updateOperation = {
+        $inc: {
+          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": bookingIncrement
+        }
+      };
+
+      // For regular plants (non-sowing-allowed), also update availablePlants
+      if (!isSowingAllowed) {
+        const availableIncrement = action === "add" ? plantsCount : -plantsCount;
+        updateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = availableIncrement;
+        console.log(`🔄 Regular plant: Updating slot ${slotId} - totalBookedPlants ${bookingIncrement > 0 ? '+' : ''}${bookingIncrement}, availablePlants ${availableIncrement > 0 ? '+' : ''}${availableIncrement}`);
+      } else {
+        console.log(`🔄 Sowing-allowed plant: Updating slot ${slotId} - ONLY totalBookedPlants ${bookingIncrement > 0 ? '+' : ''}${bookingIncrement} (availablePlants unchanged)`);
+      }
+      
+      const updateResult = await PlantSlot.updateOne(
+        { "subtypeSlots.slots._id": slotId },
+        updateOperation,
+        {
+          arrayFilters: [
+            { "subtypeSlot.slots._id": slotId },
+            { "slot._id": slotId }
+          ],
+          session: session
+        }
+      );
+      
+      console.log(`✅ Slot update result: matched=${updateResult.matchedCount}, modified=${updateResult.modifiedCount}`);
+      return updateResult;
     };
 
     if (
@@ -1362,7 +1494,7 @@ const handleSlotUpdates = async (existingDoc, filteredBody) => {
       const currentSlot = await PlantSlot.findOne(
         { "subtypeSlots.slots._id": slotId },
         { "subtypeSlots.$": 1 }
-      );
+      ).populate("plantId", "sowingAllowed");
 
       if (!currentSlot?.subtypeSlots?.[0]?.slots) {
         throw new AppError("Slot not found", 404);
@@ -1376,7 +1508,14 @@ const handleSlotUpdates = async (existingDoc, filteredBody) => {
         throw new AppError("Specific slot not found", 404);
       }
 
-      // Calculate available plants considering buffer and already booked plants
+      // Skip availability check for sowing-allowed plants
+      const isSowingAllowed = currentSlot?.plantId?.sowingAllowed || false;
+      if (isSowingAllowed) {
+        console.log(`✅ Sowing-allowed plant: Skipping availability check for slot ${slotId}`);
+        return;
+      }
+
+      // Calculate available plants considering buffer and already booked plants (for regular plants only)
       const effectiveBuffer = slot.effectiveBuffer || slot.buffer || 0;
       const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
       const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
@@ -1648,6 +1787,7 @@ const getAll = (Model, modelName) =>
         const userId = req.user._id;
         
         // Apply role-based filtering
+        // Exception: DISPATCH_MANAGER can see all orders (especially for ready_for_dispatch view)
         if (userRole === 'SALES') {
           // SALES users can only see orders assigned to them
           pipeline.push({
@@ -1659,7 +1799,7 @@ const getAll = (Model, modelName) =>
             $match: { dealer: userId }
           });
         }
-        // SUPER_ADMIN, ADMIN, OFFICE_ADMIN can see all orders (no filtering)
+        // SUPER_ADMIN, ADMIN, OFFICE_ADMIN, DISPATCH_MANAGER can see all orders (no filtering)
       }
 
       // Apply salesPerson filter if present (for admin users)
@@ -1725,14 +1865,11 @@ const getAll = (Model, modelName) =>
         });
       }
 
-      // Apply ready for dispatch filter if present
+      // Apply ready for dispatch filter if present - returns all FARM_READY orders
       if (ready_for_dispatch === "true") {
         pipeline.push({
           $match: {
-            $and: [
-              { orderStatus: "FARM_READY" },
-              { farmReadyDate: { $exists: true, $ne: null } }
-            ]
+            orderStatus: "FARM_READY"
           },
         });
       }
@@ -2141,6 +2278,10 @@ const getAll = (Model, modelName) =>
           orderPaymentStatus: 1,
           paymentCompleted: 1,
           dealerOrder: 1,
+          dealer: 1, // Add dealer reference
+          quotaSource: 1, // Add quota source (dealer/company/none)
+          quotaUsed: 1, // Add quota used amount
+          walletEntryId: 1, // Add wallet entry reference
           notes: 1,
           orderRemarks: 1, // Keep orderRemarks field as array of strings
           // Added farm ready date change history with user info

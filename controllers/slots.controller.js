@@ -205,7 +205,7 @@ export const getPlantNames = async (req, res) => {
     const { year } = req.query;
     
     // First, get all plants from PlantCms
-    const allPlants = await PlantCms.find({}).select('_id name subtypes');
+    const allPlants = await PlantCms.find({}).select('_id name subtypes sowingAllowed');
     
     if (allPlants.length === 0) {
       return res.status(404).json({ message: "No plants found in database." });
@@ -267,7 +267,8 @@ export const getPlantNames = async (req, res) => {
           name: plant.name,
           totalPlants: plantWithSlots ? plantWithSlots.totalPlants : 0,
           totalBookedPlants: plantWithSlots ? plantWithSlots.totalBookedPlants : 0,
-          hasSlots: !!plantWithSlots
+          hasSlots: !!plantWithSlots,
+          sowingAllowed: plant.sowingAllowed || false // Include sowingAllowed flag
         };
       });
 
@@ -279,7 +280,8 @@ export const getPlantNames = async (req, res) => {
         name: plant.name,
         totalPlants: 0,
         totalBookedPlants: 0,
-        hasSlots: false
+        hasSlots: false,
+        sowingAllowed: plant.sowingAllowed || false // Include sowingAllowed flag
       }));
 
       res.status(200).json(result);
@@ -2266,11 +2268,11 @@ export const getSlotTrail = async (req, res) => {
 };
 
 // New simplified function to get only slot dates
+// OPTIMIZED endpoint for sowing - returns ALL required fields FAST
 export const getSimpleSlots = async (req, res) => {
   try {
     const { plantId, subtypeId, year } = req.query;
 
-    // Validate required parameters
     if (!plantId || !subtypeId || !year) {
       return res.status(400).json({
         success: false,
@@ -2278,118 +2280,91 @@ export const getSimpleSlots = async (req, res) => {
       });
     }
 
-    // Build query
     const query = {
       plantId: new mongoose.Types.ObjectId(plantId),
-      year: Number(year)
+      year: Number(year),
+      "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(subtypeId)
     };
 
-    // Get slots with minimal data, including _id and filtering by availablePlants > 0
-    const results = await PlantSlot.aggregate([
-      { $match: query },
-      {
-        $project: {
-          _id: 0,
-          year: 1,
-          subtypeSlots: {
-            $filter: {
-              input: "$subtypeSlots",
-              as: "subtypeSlot",
-              cond: {
-                $eq: [
-                  "$$subtypeSlot.subtypeId",
-                  new mongoose.Types.ObjectId(subtypeId)
-                ]
-              }
-            }
-          }
-        }
-      },
-      { $unwind: "$subtypeSlots" },
-      {
-        $project: {
-          year: 1,
-          slots: {
-            $filter: {
-              input: "$subtypeSlots.slots",
-              as: "slot",
-              cond: {
-                $and: [
-                  { $eq: ["$$slot.status", true] }, // Only include slots with status: true
-                  { $gt: ["$$slot.availablePlants", 0] } // Also ensure availablePlants > 0
-                ]
-              }
-            }
-          }
-        }
-      },
-      {
-        $project: {
-          year: 1,
-          slots: {
-            $map: {
-              input: "$slots",
-              as: "slot",
-              in: {
-                $mergeObjects: [
-                  {
-                    _id: "$$slot._id", // Include the slot ID
-                    startDay: "$$slot.startDay",
-                    endDay: "$$slot.endDay",
-                    month: "$$slot.month"
-                  },
-                  {
-                    $cond: {
-                      if: { $gt: ["$$slot.availablePlants", 0] },
-                      then: { availablePlants: "$$slot.availablePlants" },
-                      else: {}
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          total_available: {
-            $sum: {
-              $map: {
-                input: "$slots",
-                as: "slot",
-                in: "$$slot.availablePlants"
-              }
-            }
-          }
-        }
-      }
-    ]);
+    // FAST query with lean() - no Mongoose overhead
+    // Include orders to calculate totalBookedPlants
+    const result = await PlantSlot.findOne(query)
+      .select('subtypeSlots')
+      .lean();
 
-    if (results.length === 0) {
+    if (!result) {
       return res.status(200).json({
         success: true,
-        data: {
-          year: Number(year),
-          slots: [],
-          total_available: 0,
-          key: "slots_data" // Added the requested key
-        },
-        message: "No slots found for the given parameters"
+        data: { year: Number(year), slots: [], total_available: 0 },
+        message: "No slots found"
       });
     }
 
-    const response = {
-      year: results[0].year,
-      slots: results[0].slots,
-      total_available: results[0].total_available,
-      key: "slots_data" // Added the requested key
-    };
+    // Find the specific subtype
+    const subtypeSlot = result.subtypeSlots.find(
+      s => s.subtypeId.toString() === subtypeId
+    );
+
+    if (!subtypeSlot || !subtypeSlot.slots) {
+      return res.status(200).json({
+        success: true,
+        data: { year: Number(year), slots: [], total_available: 0 },
+        message: "No slots found for subtype"
+      });
+    }
+
+    // Map to simplified structure - ALWAYS include all fields
+    // Return ALL slots for the year for month-wise grouping in UI
+    
+    // Get slot IDs for querying orders
+    const slotIds = subtypeSlot.slots.map(s => s._id);
+    
+    // Fetch orders for all slots in one query (FAST)
+    const orders = await Order.find({
+      bookingSlot: { $in: slotIds },
+      orderStatus: { $nin: ["CANCELLED", "REJECTED"] }
+    }).select('bookingSlot numberOfPlants').lean();
+    
+    // Create a map of slotId → totalBookedPlants
+    const bookingsMap = {};
+    orders.forEach(order => {
+      const slotId = order.bookingSlot.toString();
+      bookingsMap[slotId] = (bookingsMap[slotId] || 0) + (Number(order.numberOfPlants) || 0);
+    });
+    
+    // Return ALL active slots for the year (for month-wise grouping in UI)
+    const simplifiedSlots = subtypeSlot.slots
+      .filter(slot => slot.status !== false) // Only filter out inactive slots
+      .map(slot => {
+        const actualBookings = bookingsMap[slot._id.toString()] || 0;
+        
+        return {
+          _id: slot._id,
+          startDay: slot.startDay || "",
+          endDay: slot.endDay || "",
+          month: slot.month || "",
+          totalBookedPlants: actualBookings, // Use calculated value from orders
+          plantsSowed: Number(slot.plantsSowed) || 0,
+          officeSowed: Number(slot.officeSowed) || 0,
+          primarySowed: Number(slot.primarySowed) || 0,
+          availablePlants: Number(slot.availablePlants || slot.totalPlants) || 0,
+          status: slot.status !== false,
+          isManual: Boolean(slot.isManual)
+        };
+      });
 
     res.status(200).json({
       success: true,
-      data: response,
+      data: {
+        year: Number(year),
+        slots: simplifiedSlots,
+        total_available: simplifiedSlots.reduce((sum, slot) => sum + slot.availablePlants, 0)
+      },
       message: "Slots retrieved successfully"
     });
 
   } catch (error) {
-    console.error("Error fetching simple slots:", error);
+    console.error("Error in getSimpleSlots:", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",

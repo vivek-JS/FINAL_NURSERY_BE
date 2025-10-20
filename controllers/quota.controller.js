@@ -94,7 +94,17 @@ export const allocateDealerQuota = async (dealerId, plantType, subType, bookingS
     }
 
     const entry = wallet.entries[entryIndex];
+    const entryId = entry._id;
     const availableInWallet = entry.quantity - entry.bookedQuantity;
+    
+    console.log('🔍 Allocating quota from entry:', {
+      entryId: entryId?.toString(),
+      plantType: entry.plantType?.toString(),
+      subType: entry.subType?.toString(),
+      bookingSlot: entry.bookingSlot?.toString(),
+      availableInWallet,
+      requestedQuantity
+    });
     
     if (availableInWallet < requestedQuantity) {
       throw new AppError(`Insufficient quota. Available: ${availableInWallet}, Requested: ${requestedQuantity}`, 400);
@@ -124,9 +134,17 @@ export const allocateDealerQuota = async (dealerId, plantType, subType, bookingS
       throw new AppError("Failed to update dealer quota", 500);
     }
 
+    console.log('✅ Quota allocated, returning:', {
+      fromWallet: requestedQuantity,
+      fromSlot: 0,
+      walletEntryId: entryId?.toString(),
+      success: true
+    });
+
     return {
       fromWallet: requestedQuantity,
       fromSlot: 0,
+      walletEntryId: entryId, // Return the wallet entry ID
       success: true
     };
   } catch (error) {
