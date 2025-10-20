@@ -90,38 +90,24 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
         })
       : "To be confirmed";
 
-    // Parameters for WhatsApp template
-    // Adjust based on your actual WATI template structure
+    // Parameters for WATI template: order_accpeted_revamped
     const parameters = [
-      {
-        name: "name",
-        value: farmer.name || "Farmer",
-      },
-      {
-        name: "orderNumber",
-        value: orderId?.toString() || "N/A",
-      },
-      {
-        name: "plant",
-        value: plantName || "Plants",
-      },
-      {
-        name: "quantity",
-        value: numberOfPlants?.toString() || "0",
-      },
-      {
-        name: "delivery",
-        value: formattedDate,
-      },
-      {
-        name: "amount",
-        value: totalAmount ? `₹${totalAmount}` : "₹0",
-      },
+      { name: "name", value: farmer.name || "Farmer" },
+      { name: "id", value: orderId?.toString() || "N/A" },
+      { name: "village", value: farmer.village || "N/A" },
+      { name: "number", value: farmer.mobileNumber?.toString() || "N/A" },
+      { name: "plant", value: plantName || "Plants" },
+      { name: "subtype", value: orderDetails.plantSubtype || "N/A" },
+      { name: "total_booked", value: numberOfPlants?.toString() || "0" },
+      { name: "rate", value: rate?.toString() || "0" },
+      { name: "total", value: totalAmount?.toString() || "0" },
+      { name: "advacne", value: orderDetails.advanceAmount?.toString() || "0" },  // Note: typo in template
+      { name: "remaiing", value: orderDetails.remainingAmount?.toString() || "0" }, // Note: typo in template
+      { name: "delivery", value: formattedDate },
     ];
 
-    // Use your WATI template name for order acceptance
-    // Change this to match your actual template name in WATI
-    const templateName = "order_accepted"; // Update this with your actual template name
+    // WATI template name (approved template)
+    const templateName = "order_accpeted_revamped";
 
     return await sendWatiTemplateMessage(
       farmer.mobileNumber,

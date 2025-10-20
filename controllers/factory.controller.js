@@ -957,13 +957,24 @@ const updateOne = (Model, modelName, allowedFields) =>
               
               if (farmerDetails && farmerDetails.mobileNumber) {
                 const orderId = existingDoc.orderId || existingDoc._id;
+                
+                // Calculate payment amounts
+                const totalAmount = existingDoc.numberOfPlants * existingDoc.rate;
+                const paidAmount = existingDoc.payment && existingDoc.payment.length > 0
+                  ? existingDoc.payment.reduce((sum, p) => sum + (p.paidAmount || 0), 0)
+                  : 0;
+                const remainingAmount = totalAmount - paidAmount;
+                
                 const orderDetails = {
                   orderId: orderId,
                   plantName: existingDoc.plantType?.name || existingDoc.plantName?.name || 'Plants',
+                  plantSubtype: existingDoc.plantSubtype?.name || existingDoc.plantSubtype || 'N/A',
                   numberOfPlants: existingDoc.numberOfPlants,
                   deliveryDate: existingDoc.deliveryDate,
                   rate: existingDoc.rate,
-                  totalAmount: existingDoc.numberOfPlants * existingDoc.rate,
+                  totalAmount: totalAmount,
+                  advanceAmount: paidAmount,
+                  remainingAmount: remainingAmount,
                 };
 
                 console.log(`📱 Sending WhatsApp order accepted message to farmer: ${farmerDetails.name} (${farmerDetails.mobileNumber})`);
