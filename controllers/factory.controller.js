@@ -15,6 +15,11 @@ import {
   sendOrderDispatchedNotification,
   sendOrderStatusNotification,
 } from "../utility/pushNotification.js";
+import {
+  sendOrderAcceptedWhatsApp,
+  sendOrderReadyWhatsApp,
+  sendPaymentReminderWhatsApp
+} from "../utility/watiMessaging.js";
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
   const wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -940,6 +945,72 @@ const updateOne = (Model, modelName, allowedFields) =>
           })();
         } else {
           console.log('⚠️ No push token found for user, skipping order status notification');
+        }
+
+        // Send WhatsApp message to farmer when order is accepted or ready
+        if (newStatus === 'ACCEPTED' || newStatus === 'CONFIRMED') {
+          // Send WhatsApp message asynchronously (don't wait for it)
+          (async () => {
+            try {
+              // Get farmer details
+              const farmerDetails = existingDoc.farmer ? await mongoose.model('Farmer').findById(existingDoc.farmer) : null;
+              
+              if (farmerDetails && farmerDetails.mobileNumber) {
+                const orderId = existingDoc.orderId || existingDoc._id;
+                const orderDetails = {
+                  orderId: orderId,
+                  plantName: existingDoc.plantType?.name || existingDoc.plantName?.name || 'Plants',
+                  numberOfPlants: existingDoc.numberOfPlants,
+                  deliveryDate: existingDoc.deliveryDate,
+                  rate: existingDoc.rate,
+                  totalAmount: existingDoc.numberOfPlants * existingDoc.rate,
+                };
+
+                console.log(`📱 Sending WhatsApp order accepted message to farmer: ${farmerDetails.name} (${farmerDetails.mobileNumber})`);
+                const result = await sendOrderAcceptedWhatsApp(farmerDetails, orderDetails);
+                
+                if (result.success) {
+                  console.log(`✅ WhatsApp message sent successfully for Order #${orderId}`);
+                } else {
+                  console.log(`⚠️ WhatsApp message failed for Order #${orderId}:`, result.error);
+                }
+              } else {
+                console.log('⚠️ No farmer mobile number found, skipping WhatsApp message');
+              }
+            } catch (whatsappError) {
+              console.error('❌ Error sending WhatsApp message:', whatsappError.message);
+            }
+          })();
+        } else if (newStatus === 'FARM_READY') {
+          // Send WhatsApp message when farm ready
+          (async () => {
+            try {
+              const farmerDetails = existingDoc.farmer ? await mongoose.model('Farmer').findById(existingDoc.farmer) : null;
+              
+              if (farmerDetails && farmerDetails.mobileNumber) {
+                const orderId = existingDoc.orderId || existingDoc._id;
+                const orderDetails = {
+                  orderId: orderId,
+                  plantName: existingDoc.plantType?.name || existingDoc.plantName?.name || 'Plants',
+                  numberOfPlants: existingDoc.numberOfPlants,
+                  deliveryDate: existingDoc.deliveryDate,
+                };
+
+                console.log(`📱 Sending WhatsApp farm ready message to farmer: ${farmerDetails.name} (${farmerDetails.mobileNumber})`);
+                const result = await sendOrderReadyWhatsApp(farmerDetails, orderDetails);
+                
+                if (result.success) {
+                  console.log(`✅ WhatsApp farm ready message sent successfully for Order #${orderId}`);
+                } else {
+                  console.log(`⚠️ WhatsApp farm ready message failed for Order #${orderId}:`, result.error);
+                }
+              } else {
+                console.log('⚠️ No farmer mobile number found, skipping WhatsApp message');
+              }
+            } catch (whatsappError) {
+              console.error('❌ Error sending WhatsApp message:', whatsappError.message);
+            }
+          })();
         }
       }
 
