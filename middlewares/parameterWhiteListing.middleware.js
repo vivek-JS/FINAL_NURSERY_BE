@@ -40,6 +40,10 @@ const allowedParams = [
   "dealer",
   "farmReady",
   "ready_for_dispatch",
+  "isActive",
+  "category",
+  "sortBy",
+  "sortOrder",
 ];
 
 const parameterWhiteListing = (req, res, next) => {

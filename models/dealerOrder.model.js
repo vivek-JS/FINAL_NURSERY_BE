@@ -20,7 +20,7 @@ const paymentSchema = new Schema(
     },
     receiptPhoto: [
       {
-        type: String, // Store URLs (strings) for uploaded files
+        type: String, // Store Cloudinary URLs (strings) for uploaded files
       },
     ],
     modeOfPayment: {
@@ -88,6 +88,8 @@ const dealerOrderSchema = new Schema(
       default: "PENDING",
     },
     payment: [paymentSchema],
+    // Screenshots uploaded with the order (Cloudinary URLs)
+    screenshots: [String], // Array of Cloudinary image URLs
     notes: {
       type: String,
     },

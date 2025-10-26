@@ -547,6 +547,30 @@ const createOne = (Model, modelName) =>
           }));
         }
 
+        // Handle uploaded screenshots with Cloudinary
+        let screenshots = [];
+        if (req.files && req.files.length > 0) {
+          const { uploadMultipleImagesToCloudinary } = await import('../utils/cloudinaryUtils.js');
+          
+          try {
+            // Upload all files to Cloudinary
+            const uploadResults = await uploadMultipleImagesToCloudinary(
+              req.files.map(file => file.buffer),
+              `nursery-orders/order-${orderId}`
+            );
+            
+            // Extract successful uploads
+            screenshots = uploadResults
+              .filter(result => result.success)
+              .map(result => result.url);
+              
+            console.log('📸 Screenshots uploaded to Cloudinary:', screenshots);
+          } catch (error) {
+            console.error('Error uploading files to Cloudinary:', error);
+            // Continue with order creation even if image upload fails
+          }
+        }
+
         // Prepare order document - explicitly preserve orderStatus
         const orderDocument = {
           ...orderData,
@@ -564,6 +588,7 @@ const createOne = (Model, modelName) =>
           payment: paymentArray, // Include payment data if provided
           // Include orderFor field if provided
           orderFor: req.body.orderFor || undefined,
+          screenshots: screenshots, // Include uploaded screenshots
         };
         
         // Explicitly set orderStatus if provided in request (don't let model default override it)
@@ -718,12 +743,12 @@ const createOne = (Model, modelName) =>
                 let description = "";
 
                 // Wallet impact based on payment type and status
-                if (paymentItem.isWalletPayment && paymentItem.paymentStatus === "PENDING") {
-                  // Deduct from wallet (negative amount) - when dealer pays from wallet
+                if (paymentItem.isWalletPayment && (paymentItem.paymentStatus === "PENDING" || paymentItem.paymentStatus === "COLLECTED")) {
+                  // Deduct from wallet (negative amount) - when dealer pays from wallet (pending or collected)
                   walletAmount = -paymentItem.paidAmount;
-                  description = `Wallet payment for Order #${order[0]._id}`;
-                } else if (order[0].dealerOrder && paymentItem.paymentStatus === "COLLECTED") {
-                  // Add to wallet (positive amount) - when payment is collected from dealer
+                  description = `Wallet payment ${paymentItem.paymentStatus.toLowerCase()} for Order #${order[0]._id}`;
+                } else if (order[0].dealerOrder && paymentItem.paymentStatus === "COLLECTED" && !paymentItem.isWalletPayment) {
+                  // Add to wallet (positive amount) - when payment is collected from dealer (not wallet)
                   walletAmount = paymentItem.paidAmount;
                   description = `Payment collected for Order #${order[0]._id} via ${paymentItem.modeOfPayment}`;
                 }
@@ -2198,69 +2223,32 @@ const getAll = (Model, modelName) =>
     }
 
     // Add condition for dispatched = true
+    // For dispatched orders, filter by deliveryDate instead of slot dates
     if (dispatched === "true" && startDate && endDate && ready_for_dispatch !== "true") {
-      pipeline.push(
-        {
-          $addFields: {
-            parsedStartDay: {
-              $toDate: {
-                $dateFromString: {
-                  dateString: {
-                    $arrayElemAt: ["$bookingSlotDetails.startDay", 0],
-                  },
-                  format: "%d-%m-%Y",
-                },
-              },
-            },
-            parsedEndDay: {
-              $toDate: {
-                $dateFromString: {
-                  dateString: {
-                    $arrayElemAt: ["$bookingSlotDetails.endDay", 0],
-                  },
-                  format: "%d-%m-%Y",
-                },
-              },
-            },
-            queryStartDate: {
-              $toDate: {
-                $dateFromString: { dateString: startDate, format: "%d-%m-%Y" },
-              },
-            },
-            queryEndDate: {
-              $toDate: {
-                $dateFromString: { dateString: endDate, format: "%d-%m-%Y" },
-              },
-            },
-          },
-        },
-        {
-          $match: {
-            $expr: {
-              $or: [
-                {
-                  $and: [
-                    { $lte: ["$parsedStartDay", "$queryEndDate"] },
-                    { $gte: ["$parsedStartDay", "$queryStartDate"] },
-                  ],
-                },
-                {
-                  $and: [
-                    { $lte: ["$parsedEndDay", "$queryEndDate"] },
-                    { $gte: ["$parsedEndDay", "$queryStartDate"] },
-                  ],
-                },
-                {
-                  $and: [
-                    { $lte: ["$parsedStartDay", "$queryEndDate"] },
-                    { $gte: ["$parsedEndDay", "$queryStartDate"] },
-                  ],
-                },
-              ],
-            },
-          },
+      const parseDate = (dateStr, isEnd = false) => {
+        const [day, month, year] = dateStr.split("-");
+        // Create date in UTC to avoid timezone issues
+        const date = new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), 0, 0, 0, 0));
+        if (isEnd) {
+          date.setUTCHours(23, 59, 59, 999);
         }
-      );
+        return date;
+      };
+
+      const start = parseDate(startDate);
+      const end = parseDate(endDate, true);
+      
+      console.log(`Dispatched Orders Date Filter: ${startDate} to ${endDate}`);
+      console.log(`Parsed dates: ${start.toISOString()} to ${end.toISOString()}`);
+      
+      pipeline.push({
+        $match: {
+          deliveryDate: {
+            $gte: start,
+            $lte: end
+          }
+        }
+      });
     }
 
     // Enrich plantSubtype details (name and ID)

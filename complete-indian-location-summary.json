@@ -1,0 +1,1570 @@
+{
+  "timestamp": "2025-10-25T08:37:28.963Z",
+  "totalStates": 36,
+  "totalDistricts": 206,
+  "totalTalukas": 829,
+  "totalVillages": 5427,
+  "dataSource": "Mixed (Predefined + Generated)",
+  "states": [
+    {
+      "name": "Andhra Pradesh",
+      "code": "AP",
+      "districtsCount": 10,
+      "talukasCount": 38,
+      "villagesCount": 232,
+      "districts": [
+        {
+          "name": "Andhra Pradesh District 1",
+          "code": "AP_D1",
+          "talukasCount": 6,
+          "villagesCount": 38
+        },
+        {
+          "name": "Andhra Pradesh District 2",
+          "code": "AP_D2",
+          "talukasCount": 6,
+          "villagesCount": 38
+        },
+        {
+          "name": "Andhra Pradesh District 3",
+          "code": "AP_D3",
+          "talukasCount": 2,
+          "villagesCount": 16
+        },
+        {
+          "name": "Andhra Pradesh District 4",
+          "code": "AP_D4",
+          "talukasCount": 2,
+          "villagesCount": 11
+        },
+        {
+          "name": "Andhra Pradesh District 5",
+          "code": "AP_D5",
+          "talukasCount": 4,
+          "villagesCount": 22
+        },
+        {
+          "name": "Andhra Pradesh District 6",
+          "code": "AP_D6",
+          "talukasCount": 5,
+          "villagesCount": 35
+        },
+        {
+          "name": "Andhra Pradesh District 7",
+          "code": "AP_D7",
+          "talukasCount": 3,
+          "villagesCount": 16
+        },
+        {
+          "name": "Andhra Pradesh District 8",
+          "code": "AP_D8",
+          "talukasCount": 5,
+          "villagesCount": 29
+        },
+        {
+          "name": "Andhra Pradesh District 9",
+          "code": "AP_D9",
+          "talukasCount": 3,
+          "villagesCount": 17
+        },
+        {
+          "name": "Andhra Pradesh District 10",
+          "code": "AP_D10",
+          "talukasCount": 2,
+          "villagesCount": 10
+        }
+      ]
+    },
+    {
+      "name": "Arunachal Pradesh",
+      "code": "AR",
+      "districtsCount": 4,
+      "talukasCount": 19,
+      "villagesCount": 108,
+      "districts": [
+        {
+          "name": "Arunachal Pradesh District 1",
+          "code": "AR_D1",
+          "talukasCount": 3,
+          "villagesCount": 17
+        },
+        {
+          "name": "Arunachal Pradesh District 2",
+          "code": "AR_D2",
+          "talukasCount": 4,
+          "villagesCount": 26
+        },
+        {
+          "name": "Arunachal Pradesh District 3",
+          "code": "AR_D3",
+          "talukasCount": 6,
+          "villagesCount": 42
+        },
+        {
+          "name": "Arunachal Pradesh District 4",
+          "code": "AR_D4",
+          "talukasCount": 6,
+          "villagesCount": 23
+        }
+      ]
+    },
+    {
+      "name": "Assam",
+      "code": "AS",
+      "districtsCount": 4,
+      "talukasCount": 18,
+      "villagesCount": 101,
+      "districts": [
+        {
+          "name": "Assam District 1",
+          "code": "AS_D1",
+          "talukasCount": 5,
+          "villagesCount": 31
+        },
+        {
+          "name": "Assam District 2",
+          "code": "AS_D2",
+          "talukasCount": 5,
+          "villagesCount": 23
+        },
+        {
+          "name": "Assam District 3",
+          "code": "AS_D3",
+          "talukasCount": 4,
+          "villagesCount": 25
+        },
+        {
+          "name": "Assam District 4",
+          "code": "AS_D4",
+          "talukasCount": 4,
+          "villagesCount": 22
+        }
+      ]
+    },
+    {
+      "name": "Bihar",
+      "code": "BR",
+      "districtsCount": 10,
+      "talukasCount": 39,
+      "villagesCount": 241,
+      "districts": [
+        {
+          "name": "Bihar District 1",
+          "code": "BR_D1",
+          "talukasCount": 2,
+          "villagesCount": 11
+        },
+        {
+          "name": "Bihar District 2",
+          "code": "BR_D2",
+          "talukasCount": 6,
+          "villagesCount": 35
+        },
+        {
+          "name": "Bihar District 3",
+          "code": "BR_D3",
+          "talukasCount": 4,
+          "villagesCount": 24
+        },
+        {
+          "name": "Bihar District 4",
+          "code": "BR_D4",
+          "talukasCount": 6,
+          "villagesCount": 40
+        },
+        {
+          "name": "Bihar District 5",
+          "code": "BR_D5",
+          "talukasCount": 5,
+          "villagesCount": 26
+        },
+        {
+          "name": "Bihar District 6",
+          "code": "BR_D6",
+          "talukasCount": 2,
+          "villagesCount": 12
+        },
+        {
+          "name": "Bihar District 7",
+          "code": "BR_D7",
+          "talukasCount": 5,
+          "villagesCount": 36
+        },
+        {
+          "name": "Bihar District 8",
+          "code": "BR_D8",
+          "talukasCount": 3,
+          "villagesCount": 12
+        },
+        {
+          "name": "Bihar District 9",
+          "code": "BR_D9",
+          "talukasCount": 3,
+          "villagesCount": 22
+        },
+        {
+          "name": "Bihar District 10",
+          "code": "BR_D10",
+          "talukasCount": 3,
+          "villagesCount": 23
+        }
+      ]
+    },
+    {
+      "name": "Chhattisgarh",
+      "code": "CG",
+      "districtsCount": 3,
+      "talukasCount": 13,
+      "villagesCount": 81,
+      "districts": [
+        {
+          "name": "Chhattisgarh District 1",
+          "code": "CG_D1",
+          "talukasCount": 6,
+          "villagesCount": 42
+        },
+        {
+          "name": "Chhattisgarh District 2",
+          "code": "CG_D2",
+          "talukasCount": 4,
+          "villagesCount": 19
+        },
+        {
+          "name": "Chhattisgarh District 3",
+          "code": "CG_D3",
+          "talukasCount": 3,
+          "villagesCount": 20
+        }
+      ]
+    },
+    {
+      "name": "Goa",
+      "code": "GA",
+      "districtsCount": 4,
+      "talukasCount": 20,
+      "villagesCount": 127,
+      "districts": [
+        {
+          "name": "Goa District 1",
+          "code": "GA_D1",
+          "talukasCount": 5,
+          "villagesCount": 27
+        },
+        {
+          "name": "Goa District 2",
+          "code": "GA_D2",
+          "talukasCount": 6,
+          "villagesCount": 36
+        },
+        {
+          "name": "Goa District 3",
+          "code": "GA_D3",
+          "talukasCount": 3,
+          "villagesCount": 22
+        },
+        {
+          "name": "Goa District 4",
+          "code": "GA_D4",
+          "talukasCount": 6,
+          "villagesCount": 42
+        }
+      ]
+    },
+    {
+      "name": "Gujarat",
+      "code": "GJ",
+      "districtsCount": 4,
+      "talukasCount": 17,
+      "villagesCount": 116,
+      "districts": [
+        {
+          "name": "Gujarat District 1",
+          "code": "GJ_D1",
+          "talukasCount": 5,
+          "villagesCount": 34
+        },
+        {
+          "name": "Gujarat District 2",
+          "code": "GJ_D2",
+          "talukasCount": 3,
+          "villagesCount": 24
+        },
+        {
+          "name": "Gujarat District 3",
+          "code": "GJ_D3",
+          "talukasCount": 6,
+          "villagesCount": 42
+        },
+        {
+          "name": "Gujarat District 4",
+          "code": "GJ_D4",
+          "talukasCount": 3,
+          "villagesCount": 16
+        }
+      ]
+    },
+    {
+      "name": "Haryana",
+      "code": "HR",
+      "districtsCount": 6,
+      "talukasCount": 27,
+      "villagesCount": 177,
+      "districts": [
+        {
+          "name": "Haryana District 1",
+          "code": "HR_D1",
+          "talukasCount": 6,
+          "villagesCount": 38
+        },
+        {
+          "name": "Haryana District 2",
+          "code": "HR_D2",
+          "talukasCount": 6,
+          "villagesCount": 38
+        },
+        {
+          "name": "Haryana District 3",
+          "code": "HR_D3",
+          "talukasCount": 6,
+          "villagesCount": 38
+        },
+        {
+          "name": "Haryana District 4",
+          "code": "HR_D4",
+          "talukasCount": 3,
+          "villagesCount": 20
+        },
+        {
+          "name": "Haryana District 5",
+          "code": "HR_D5",
+          "talukasCount": 4,
+          "villagesCount": 32
+        },
+        {
+          "name": "Haryana District 6",
+          "code": "HR_D6",
+          "talukasCount": 2,
+          "villagesCount": 11
+        }
+      ]
+    },
+    {
+      "name": "Himachal Pradesh",
+      "code": "HP",
+      "districtsCount": 6,
+      "talukasCount": 28,
+      "villagesCount": 187,
+      "districts": [
+        {
+          "name": "Himachal Pradesh District 1",
+          "code": "HP_D1",
+          "talukasCount": 3,
+          "villagesCount": 24
+        },
+        {
+          "name": "Himachal Pradesh District 2",
+          "code": "HP_D2",
+          "talukasCount": 5,
+          "villagesCount": 37
+        },
+        {
+          "name": "Himachal Pradesh District 3",
+          "code": "HP_D3",
+          "talukasCount": 4,
+          "villagesCount": 24
+        },
+        {
+          "name": "Himachal Pradesh District 4",
+          "code": "HP_D4",
+          "talukasCount": 6,
+          "villagesCount": 33
+        },
+        {
+          "name": "Himachal Pradesh District 5",
+          "code": "HP_D5",
+          "talukasCount": 5,
+          "villagesCount": 38
+        },
+        {
+          "name": "Himachal Pradesh District 6",
+          "code": "HP_D6",
+          "talukasCount": 5,
+          "villagesCount": 31
+        }
+      ]
+    },
+    {
+      "name": "Jharkhand",
+      "code": "JH",
+      "districtsCount": 9,
+      "talukasCount": 38,
+      "villagesCount": 259,
+      "districts": [
+        {
+          "name": "Jharkhand District 1",
+          "code": "JH_D1",
+          "talukasCount": 5,
+          "villagesCount": 30
+        },
+        {
+          "name": "Jharkhand District 2",
+          "code": "JH_D2",
+          "talukasCount": 3,
+          "villagesCount": 24
+        },
+        {
+          "name": "Jharkhand District 3",
+          "code": "JH_D3",
+          "talukasCount": 4,
+          "villagesCount": 27
+        },
+        {
+          "name": "Jharkhand District 4",
+          "code": "JH_D4",
+          "talukasCount": 3,
+          "villagesCount": 21
+        },
+        {
+          "name": "Jharkhand District 5",
+          "code": "JH_D5",
+          "talukasCount": 5,
+          "villagesCount": 38
+        },
+        {
+          "name": "Jharkhand District 6",
+          "code": "JH_D6",
+          "talukasCount": 6,
+          "villagesCount": 38
+        },
+        {
+          "name": "Jharkhand District 7",
+          "code": "JH_D7",
+          "talukasCount": 5,
+          "villagesCount": 36
+        },
+        {
+          "name": "Jharkhand District 8",
+          "code": "JH_D8",
+          "talukasCount": 4,
+          "villagesCount": 27
+        },
+        {
+          "name": "Jharkhand District 9",
+          "code": "JH_D9",
+          "talukasCount": 3,
+          "villagesCount": 18
+        }
+      ]
+    },
+    {
+      "name": "Karnataka",
+      "code": "KA",
+      "districtsCount": 2,
+      "talukasCount": 3,
+      "villagesCount": 15,
+      "districts": [
+        {
+          "name": "Bangalore Urban",
+          "code": "BLR_URB",
+          "talukasCount": 2,
+          "villagesCount": 10
+        },
+        {
+          "name": "Mysore",
+          "code": "MYS",
+          "talukasCount": 1,
+          "villagesCount": 5
+        }
+      ]
+    },
+    {
+      "name": "Kerala",
+      "code": "KL",
+      "districtsCount": 3,
+      "talukasCount": 14,
+      "villagesCount": 82,
+      "districts": [
+        {
+          "name": "Kerala District 1",
+          "code": "KL_D1",
+          "talukasCount": 5,
+          "villagesCount": 35
+        },
+        {
+          "name": "Kerala District 2",
+          "code": "KL_D2",
+          "talukasCount": 3,
+          "villagesCount": 16
+        },
+        {
+          "name": "Kerala District 3",
+          "code": "KL_D3",
+          "talukasCount": 6,
+          "villagesCount": 31
+        }
+      ]
+    },
+    {
+      "name": "Madhya Pradesh",
+      "code": "MP",
+      "districtsCount": 6,
+      "talukasCount": 24,
+      "villagesCount": 151,
+      "districts": [
+        {
+          "name": "Madhya Pradesh District 1",
+          "code": "MP_D1",
+          "talukasCount": 3,
+          "villagesCount": 17
+        },
+        {
+          "name": "Madhya Pradesh District 2",
+          "code": "MP_D2",
+          "talukasCount": 6,
+          "villagesCount": 38
+        },
+        {
+          "name": "Madhya Pradesh District 3",
+          "code": "MP_D3",
+          "talukasCount": 3,
+          "villagesCount": 11
+        },
+        {
+          "name": "Madhya Pradesh District 4",
+          "code": "MP_D4",
+          "talukasCount": 5,
+          "villagesCount": 33
+        },
+        {
+          "name": "Madhya Pradesh District 5",
+          "code": "MP_D5",
+          "talukasCount": 2,
+          "villagesCount": 19
+        },
+        {
+          "name": "Madhya Pradesh District 6",
+          "code": "MP_D6",
+          "talukasCount": 5,
+          "villagesCount": 33
+        }
+      ]
+    },
+    {
+      "name": "Maharashtra",
+      "code": "MH",
+      "districtsCount": 6,
+      "talukasCount": 13,
+      "villagesCount": 82,
+      "districts": [
+        {
+          "name": "Pune",
+          "code": "PUN",
+          "talukasCount": 3,
+          "villagesCount": 21
+        },
+        {
+          "name": "Mumbai",
+          "code": "MUM",
+          "talukasCount": 2,
+          "villagesCount": 13
+        },
+        {
+          "name": "Nashik",
+          "code": "NAS",
+          "talukasCount": 2,
+          "villagesCount": 12
+        },
+        {
+          "name": "Aurangabad",
+          "code": "AUR",
+          "talukasCount": 2,
+          "villagesCount": 12
+        },
+        {
+          "name": "Kolhapur",
+          "code": "KOL",
+          "talukasCount": 2,
+          "villagesCount": 12
+        },
+        {
+          "name": "Sangli",
+          "code": "SAN",
+          "talukasCount": 2,
+          "villagesCount": 12
+        }
+      ]
+    },
+    {
+      "name": "Manipur",
+      "code": "MN",
+      "districtsCount": 7,
+      "talukasCount": 34,
+      "villagesCount": 236,
+      "districts": [
+        {
+          "name": "Manipur District 1",
+          "code": "MN_D1",
+          "talukasCount": 4,
+          "villagesCount": 35
+        },
+        {
+          "name": "Manipur District 2",
+          "code": "MN_D2",
+          "talukasCount": 6,
+          "villagesCount": 32
+        },
+        {
+          "name": "Manipur District 3",
+          "code": "MN_D3",
+          "talukasCount": 2,
+          "villagesCount": 14
+        },
+        {
+          "name": "Manipur District 4",
+          "code": "MN_D4",
+          "talukasCount": 6,
+          "villagesCount": 45
+        },
+        {
+          "name": "Manipur District 5",
+          "code": "MN_D5",
+          "talukasCount": 5,
+          "villagesCount": 28
+        },
+        {
+          "name": "Manipur District 6",
+          "code": "MN_D6",
+          "talukasCount": 6,
+          "villagesCount": 43
+        },
+        {
+          "name": "Manipur District 7",
+          "code": "MN_D7",
+          "talukasCount": 5,
+          "villagesCount": 39
+        }
+      ]
+    },
+    {
+      "name": "Meghalaya",
+      "code": "ML",
+      "districtsCount": 6,
+      "talukasCount": 28,
+      "villagesCount": 214,
+      "districts": [
+        {
+          "name": "Meghalaya District 1",
+          "code": "ML_D1",
+          "talukasCount": 5,
+          "villagesCount": 40
+        },
+        {
+          "name": "Meghalaya District 2",
+          "code": "ML_D2",
+          "talukasCount": 4,
+          "villagesCount": 25
+        },
+        {
+          "name": "Meghalaya District 3",
+          "code": "ML_D3",
+          "talukasCount": 5,
+          "villagesCount": 44
+        },
+        {
+          "name": "Meghalaya District 4",
+          "code": "ML_D4",
+          "talukasCount": 6,
+          "villagesCount": 45
+        },
+        {
+          "name": "Meghalaya District 5",
+          "code": "ML_D5",
+          "talukasCount": 3,
+          "villagesCount": 21
+        },
+        {
+          "name": "Meghalaya District 6",
+          "code": "ML_D6",
+          "talukasCount": 5,
+          "villagesCount": 39
+        }
+      ]
+    },
+    {
+      "name": "Mizoram",
+      "code": "MZ",
+      "districtsCount": 5,
+      "talukasCount": 20,
+      "villagesCount": 137,
+      "districts": [
+        {
+          "name": "Mizoram District 1",
+          "code": "MZ_D1",
+          "talukasCount": 2,
+          "villagesCount": 18
+        },
+        {
+          "name": "Mizoram District 2",
+          "code": "MZ_D2",
+          "talukasCount": 5,
+          "villagesCount": 37
+        },
+        {
+          "name": "Mizoram District 3",
+          "code": "MZ_D3",
+          "talukasCount": 4,
+          "villagesCount": 24
+        },
+        {
+          "name": "Mizoram District 4",
+          "code": "MZ_D4",
+          "talukasCount": 6,
+          "villagesCount": 39
+        },
+        {
+          "name": "Mizoram District 5",
+          "code": "MZ_D5",
+          "talukasCount": 3,
+          "villagesCount": 19
+        }
+      ]
+    },
+    {
+      "name": "Nagaland",
+      "code": "NL",
+      "districtsCount": 7,
+      "talukasCount": 27,
+      "villagesCount": 192,
+      "districts": [
+        {
+          "name": "Nagaland District 1",
+          "code": "NL_D1",
+          "talukasCount": 3,
+          "villagesCount": 25
+        },
+        {
+          "name": "Nagaland District 2",
+          "code": "NL_D2",
+          "talukasCount": 6,
+          "villagesCount": 42
+        },
+        {
+          "name": "Nagaland District 3",
+          "code": "NL_D3",
+          "talukasCount": 3,
+          "villagesCount": 14
+        },
+        {
+          "name": "Nagaland District 4",
+          "code": "NL_D4",
+          "talukasCount": 5,
+          "villagesCount": 31
+        },
+        {
+          "name": "Nagaland District 5",
+          "code": "NL_D5",
+          "talukasCount": 3,
+          "villagesCount": 23
+        },
+        {
+          "name": "Nagaland District 6",
+          "code": "NL_D6",
+          "talukasCount": 3,
+          "villagesCount": 26
+        },
+        {
+          "name": "Nagaland District 7",
+          "code": "NL_D7",
+          "talukasCount": 4,
+          "villagesCount": 31
+        }
+      ]
+    },
+    {
+      "name": "Odisha",
+      "code": "OR",
+      "districtsCount": 7,
+      "talukasCount": 36,
+      "villagesCount": 251,
+      "districts": [
+        {
+          "name": "Odisha District 1",
+          "code": "OR_D1",
+          "talukasCount": 6,
+          "villagesCount": 36
+        },
+        {
+          "name": "Odisha District 2",
+          "code": "OR_D2",
+          "talukasCount": 5,
+          "villagesCount": 32
+        },
+        {
+          "name": "Odisha District 3",
+          "code": "OR_D3",
+          "talukasCount": 6,
+          "villagesCount": 55
+        },
+        {
+          "name": "Odisha District 4",
+          "code": "OR_D4",
+          "talukasCount": 6,
+          "villagesCount": 52
+        },
+        {
+          "name": "Odisha District 5",
+          "code": "OR_D5",
+          "talukasCount": 2,
+          "villagesCount": 12
+        },
+        {
+          "name": "Odisha District 6",
+          "code": "OR_D6",
+          "talukasCount": 5,
+          "villagesCount": 33
+        },
+        {
+          "name": "Odisha District 7",
+          "code": "OR_D7",
+          "talukasCount": 6,
+          "villagesCount": 31
+        }
+      ]
+    },
+    {
+      "name": "Punjab",
+      "code": "PB",
+      "districtsCount": 4,
+      "talukasCount": 17,
+      "villagesCount": 111,
+      "districts": [
+        {
+          "name": "Punjab District 1",
+          "code": "PB_D1",
+          "talukasCount": 4,
+          "villagesCount": 21
+        },
+        {
+          "name": "Punjab District 2",
+          "code": "PB_D2",
+          "talukasCount": 6,
+          "villagesCount": 42
+        },
+        {
+          "name": "Punjab District 3",
+          "code": "PB_D3",
+          "talukasCount": 4,
+          "villagesCount": 31
+        },
+        {
+          "name": "Punjab District 4",
+          "code": "PB_D4",
+          "talukasCount": 3,
+          "villagesCount": 17
+        }
+      ]
+    },
+    {
+      "name": "Rajasthan",
+      "code": "RJ",
+      "districtsCount": 4,
+      "talukasCount": 16,
+      "villagesCount": 119,
+      "districts": [
+        {
+          "name": "Rajasthan District 1",
+          "code": "RJ_D1",
+          "talukasCount": 5,
+          "villagesCount": 34
+        },
+        {
+          "name": "Rajasthan District 2",
+          "code": "RJ_D2",
+          "talukasCount": 6,
+          "villagesCount": 42
+        },
+        {
+          "name": "Rajasthan District 3",
+          "code": "RJ_D3",
+          "talukasCount": 3,
+          "villagesCount": 26
+        },
+        {
+          "name": "Rajasthan District 4",
+          "code": "RJ_D4",
+          "talukasCount": 2,
+          "villagesCount": 17
+        }
+      ]
+    },
+    {
+      "name": "Sikkim",
+      "code": "SK",
+      "districtsCount": 3,
+      "talukasCount": 14,
+      "villagesCount": 101,
+      "districts": [
+        {
+          "name": "Sikkim District 1",
+          "code": "SK_D1",
+          "talukasCount": 4,
+          "villagesCount": 33
+        },
+        {
+          "name": "Sikkim District 2",
+          "code": "SK_D2",
+          "talukasCount": 6,
+          "villagesCount": 45
+        },
+        {
+          "name": "Sikkim District 3",
+          "code": "SK_D3",
+          "talukasCount": 4,
+          "villagesCount": 23
+        }
+      ]
+    },
+    {
+      "name": "Tamil Nadu",
+      "code": "TN",
+      "districtsCount": 2,
+      "talukasCount": 3,
+      "villagesCount": 15,
+      "districts": [
+        {
+          "name": "Chennai",
+          "code": "CHN",
+          "talukasCount": 2,
+          "villagesCount": 10
+        },
+        {
+          "name": "Coimbatore",
+          "code": "COI",
+          "talukasCount": 1,
+          "villagesCount": 5
+        }
+      ]
+    },
+    {
+      "name": "Telangana",
+      "code": "TG",
+      "districtsCount": 8,
+      "talukasCount": 28,
+      "villagesCount": 183,
+      "districts": [
+        {
+          "name": "Telangana District 1",
+          "code": "TG_D1",
+          "talukasCount": 5,
+          "villagesCount": 37
+        },
+        {
+          "name": "Telangana District 2",
+          "code": "TG_D2",
+          "talukasCount": 5,
+          "villagesCount": 32
+        },
+        {
+          "name": "Telangana District 3",
+          "code": "TG_D3",
+          "talukasCount": 2,
+          "villagesCount": 17
+        },
+        {
+          "name": "Telangana District 4",
+          "code": "TG_D4",
+          "talukasCount": 2,
+          "villagesCount": 8
+        },
+        {
+          "name": "Telangana District 5",
+          "code": "TG_D5",
+          "talukasCount": 6,
+          "villagesCount": 31
+        },
+        {
+          "name": "Telangana District 6",
+          "code": "TG_D6",
+          "talukasCount": 2,
+          "villagesCount": 12
+        },
+        {
+          "name": "Telangana District 7",
+          "code": "TG_D7",
+          "talukasCount": 3,
+          "villagesCount": 25
+        },
+        {
+          "name": "Telangana District 8",
+          "code": "TG_D8",
+          "talukasCount": 3,
+          "villagesCount": 21
+        }
+      ]
+    },
+    {
+      "name": "Tripura",
+      "code": "TR",
+      "districtsCount": 4,
+      "talukasCount": 19,
+      "villagesCount": 116,
+      "districts": [
+        {
+          "name": "Tripura District 1",
+          "code": "TR_D1",
+          "talukasCount": 6,
+          "villagesCount": 45
+        },
+        {
+          "name": "Tripura District 2",
+          "code": "TR_D2",
+          "talukasCount": 6,
+          "villagesCount": 38
+        },
+        {
+          "name": "Tripura District 3",
+          "code": "TR_D3",
+          "talukasCount": 5,
+          "villagesCount": 25
+        },
+        {
+          "name": "Tripura District 4",
+          "code": "TR_D4",
+          "talukasCount": 2,
+          "villagesCount": 8
+        }
+      ]
+    },
+    {
+      "name": "Uttar Pradesh",
+      "code": "UP",
+      "districtsCount": 2,
+      "talukasCount": 2,
+      "villagesCount": 10,
+      "districts": [
+        {
+          "name": "Lucknow",
+          "code": "LKO",
+          "talukasCount": 1,
+          "villagesCount": 5
+        },
+        {
+          "name": "Kanpur",
+          "code": "KAN",
+          "talukasCount": 1,
+          "villagesCount": 5
+        }
+      ]
+    },
+    {
+      "name": "Uttarakhand",
+      "code": "UK",
+      "districtsCount": 8,
+      "talukasCount": 33,
+      "villagesCount": 197,
+      "districts": [
+        {
+          "name": "Uttarakhand District 1",
+          "code": "UK_D1",
+          "talukasCount": 4,
+          "villagesCount": 27
+        },
+        {
+          "name": "Uttarakhand District 2",
+          "code": "UK_D2",
+          "talukasCount": 5,
+          "villagesCount": 27
+        },
+        {
+          "name": "Uttarakhand District 3",
+          "code": "UK_D3",
+          "talukasCount": 5,
+          "villagesCount": 29
+        },
+        {
+          "name": "Uttarakhand District 4",
+          "code": "UK_D4",
+          "talukasCount": 4,
+          "villagesCount": 19
+        },
+        {
+          "name": "Uttarakhand District 5",
+          "code": "UK_D5",
+          "talukasCount": 3,
+          "villagesCount": 20
+        },
+        {
+          "name": "Uttarakhand District 6",
+          "code": "UK_D6",
+          "talukasCount": 4,
+          "villagesCount": 29
+        },
+        {
+          "name": "Uttarakhand District 7",
+          "code": "UK_D7",
+          "talukasCount": 5,
+          "villagesCount": 29
+        },
+        {
+          "name": "Uttarakhand District 8",
+          "code": "UK_D8",
+          "talukasCount": 3,
+          "villagesCount": 17
+        }
+      ]
+    },
+    {
+      "name": "West Bengal",
+      "code": "WB",
+      "districtsCount": 10,
+      "talukasCount": 42,
+      "villagesCount": 285,
+      "districts": [
+        {
+          "name": "West Bengal District 1",
+          "code": "WB_D1",
+          "talukasCount": 3,
+          "villagesCount": 24
+        },
+        {
+          "name": "West Bengal District 2",
+          "code": "WB_D2",
+          "talukasCount": 4,
+          "villagesCount": 19
+        },
+        {
+          "name": "West Bengal District 3",
+          "code": "WB_D3",
+          "talukasCount": 5,
+          "villagesCount": 41
+        },
+        {
+          "name": "West Bengal District 4",
+          "code": "WB_D4",
+          "talukasCount": 4,
+          "villagesCount": 29
+        },
+        {
+          "name": "West Bengal District 5",
+          "code": "WB_D5",
+          "talukasCount": 3,
+          "villagesCount": 19
+        },
+        {
+          "name": "West Bengal District 6",
+          "code": "WB_D6",
+          "talukasCount": 5,
+          "villagesCount": 34
+        },
+        {
+          "name": "West Bengal District 7",
+          "code": "WB_D7",
+          "talukasCount": 6,
+          "villagesCount": 40
+        },
+        {
+          "name": "West Bengal District 8",
+          "code": "WB_D8",
+          "talukasCount": 5,
+          "villagesCount": 32
+        },
+        {
+          "name": "West Bengal District 9",
+          "code": "WB_D9",
+          "talukasCount": 4,
+          "villagesCount": 23
+        },
+        {
+          "name": "West Bengal District 10",
+          "code": "WB_D10",
+          "talukasCount": 3,
+          "villagesCount": 24
+        }
+      ]
+    },
+    {
+      "name": "Andaman and Nicobar Islands",
+      "code": "AN",
+      "districtsCount": 6,
+      "talukasCount": 19,
+      "villagesCount": 132,
+      "districts": [
+        {
+          "name": "Andaman and Nicobar Islands District 1",
+          "code": "AN_D1",
+          "talukasCount": 2,
+          "villagesCount": 17
+        },
+        {
+          "name": "Andaman and Nicobar Islands District 2",
+          "code": "AN_D2",
+          "talukasCount": 5,
+          "villagesCount": 39
+        },
+        {
+          "name": "Andaman and Nicobar Islands District 3",
+          "code": "AN_D3",
+          "talukasCount": 4,
+          "villagesCount": 30
+        },
+        {
+          "name": "Andaman and Nicobar Islands District 4",
+          "code": "AN_D4",
+          "talukasCount": 3,
+          "villagesCount": 17
+        },
+        {
+          "name": "Andaman and Nicobar Islands District 5",
+          "code": "AN_D5",
+          "talukasCount": 3,
+          "villagesCount": 19
+        },
+        {
+          "name": "Andaman and Nicobar Islands District 6",
+          "code": "AN_D6",
+          "talukasCount": 2,
+          "villagesCount": 10
+        }
+      ]
+    },
+    {
+      "name": "Chandigarh",
+      "code": "CH",
+      "districtsCount": 9,
+      "talukasCount": 31,
+      "villagesCount": 191,
+      "districts": [
+        {
+          "name": "Chandigarh District 1",
+          "code": "CH_D1",
+          "talukasCount": 2,
+          "villagesCount": 11
+        },
+        {
+          "name": "Chandigarh District 2",
+          "code": "CH_D2",
+          "talukasCount": 2,
+          "villagesCount": 10
+        },
+        {
+          "name": "Chandigarh District 3",
+          "code": "CH_D3",
+          "talukasCount": 6,
+          "villagesCount": 31
+        },
+        {
+          "name": "Chandigarh District 4",
+          "code": "CH_D4",
+          "talukasCount": 4,
+          "villagesCount": 27
+        },
+        {
+          "name": "Chandigarh District 5",
+          "code": "CH_D5",
+          "talukasCount": 3,
+          "villagesCount": 24
+        },
+        {
+          "name": "Chandigarh District 6",
+          "code": "CH_D6",
+          "talukasCount": 6,
+          "villagesCount": 37
+        },
+        {
+          "name": "Chandigarh District 7",
+          "code": "CH_D7",
+          "talukasCount": 2,
+          "villagesCount": 14
+        },
+        {
+          "name": "Chandigarh District 8",
+          "code": "CH_D8",
+          "talukasCount": 4,
+          "villagesCount": 24
+        },
+        {
+          "name": "Chandigarh District 9",
+          "code": "CH_D9",
+          "talukasCount": 2,
+          "villagesCount": 13
+        }
+      ]
+    },
+    {
+      "name": "Dadra and Nagar Haveli and Daman and Diu",
+      "code": "DN",
+      "districtsCount": 7,
+      "talukasCount": 24,
+      "villagesCount": 157,
+      "districts": [
+        {
+          "name": "Dadra and Nagar Haveli and Daman and Diu District 1",
+          "code": "DN_D1",
+          "talukasCount": 4,
+          "villagesCount": 30
+        },
+        {
+          "name": "Dadra and Nagar Haveli and Daman and Diu District 2",
+          "code": "DN_D2",
+          "talukasCount": 3,
+          "villagesCount": 14
+        },
+        {
+          "name": "Dadra and Nagar Haveli and Daman and Diu District 3",
+          "code": "DN_D3",
+          "talukasCount": 4,
+          "villagesCount": 26
+        },
+        {
+          "name": "Dadra and Nagar Haveli and Daman and Diu District 4",
+          "code": "DN_D4",
+          "talukasCount": 2,
+          "villagesCount": 12
+        },
+        {
+          "name": "Dadra and Nagar Haveli and Daman and Diu District 5",
+          "code": "DN_D5",
+          "talukasCount": 5,
+          "villagesCount": 29
+        },
+        {
+          "name": "Dadra and Nagar Haveli and Daman and Diu District 6",
+          "code": "DN_D6",
+          "talukasCount": 3,
+          "villagesCount": 28
+        },
+        {
+          "name": "Dadra and Nagar Haveli and Daman and Diu District 7",
+          "code": "DN_D7",
+          "talukasCount": 3,
+          "villagesCount": 18
+        }
+      ]
+    },
+    {
+      "name": "Delhi",
+      "code": "DL",
+      "districtsCount": 6,
+      "talukasCount": 24,
+      "villagesCount": 159,
+      "districts": [
+        {
+          "name": "Delhi District 1",
+          "code": "DL_D1",
+          "talukasCount": 3,
+          "villagesCount": 22
+        },
+        {
+          "name": "Delhi District 2",
+          "code": "DL_D2",
+          "talukasCount": 4,
+          "villagesCount": 29
+        },
+        {
+          "name": "Delhi District 3",
+          "code": "DL_D3",
+          "talukasCount": 6,
+          "villagesCount": 37
+        },
+        {
+          "name": "Delhi District 4",
+          "code": "DL_D4",
+          "talukasCount": 4,
+          "villagesCount": 25
+        },
+        {
+          "name": "Delhi District 5",
+          "code": "DL_D5",
+          "talukasCount": 4,
+          "villagesCount": 28
+        },
+        {
+          "name": "Delhi District 6",
+          "code": "DL_D6",
+          "talukasCount": 3,
+          "villagesCount": 18
+        }
+      ]
+    },
+    {
+      "name": "Jammu and Kashmir",
+      "code": "JK",
+      "districtsCount": 4,
+      "talukasCount": 16,
+      "villagesCount": 111,
+      "districts": [
+        {
+          "name": "Jammu and Kashmir District 1",
+          "code": "JK_D1",
+          "talukasCount": 2,
+          "villagesCount": 14
+        },
+        {
+          "name": "Jammu and Kashmir District 2",
+          "code": "JK_D2",
+          "talukasCount": 2,
+          "villagesCount": 15
+        },
+        {
+          "name": "Jammu and Kashmir District 3",
+          "code": "JK_D3",
+          "talukasCount": 6,
+          "villagesCount": 40
+        },
+        {
+          "name": "Jammu and Kashmir District 4",
+          "code": "JK_D4",
+          "talukasCount": 6,
+          "villagesCount": 42
+        }
+      ]
+    },
+    {
+      "name": "Ladakh",
+      "code": "LA",
+      "districtsCount": 6,
+      "talukasCount": 27,
+      "villagesCount": 172,
+      "districts": [
+        {
+          "name": "Ladakh District 1",
+          "code": "LA_D1",
+          "talukasCount": 6,
+          "villagesCount": 41
+        },
+        {
+          "name": "Ladakh District 2",
+          "code": "LA_D2",
+          "talukasCount": 4,
+          "villagesCount": 26
+        },
+        {
+          "name": "Ladakh District 3",
+          "code": "LA_D3",
+          "talukasCount": 4,
+          "villagesCount": 27
+        },
+        {
+          "name": "Ladakh District 4",
+          "code": "LA_D4",
+          "talukasCount": 6,
+          "villagesCount": 37
+        },
+        {
+          "name": "Ladakh District 5",
+          "code": "LA_D5",
+          "talukasCount": 4,
+          "villagesCount": 22
+        },
+        {
+          "name": "Ladakh District 6",
+          "code": "LA_D6",
+          "talukasCount": 3,
+          "villagesCount": 19
+        }
+      ]
+    },
+    {
+      "name": "Lakshadweep",
+      "code": "LD",
+      "districtsCount": 7,
+      "talukasCount": 28,
+      "villagesCount": 185,
+      "districts": [
+        {
+          "name": "Lakshadweep District 1",
+          "code": "LD_D1",
+          "talukasCount": 3,
+          "villagesCount": 26
+        },
+        {
+          "name": "Lakshadweep District 2",
+          "code": "LD_D2",
+          "talukasCount": 5,
+          "villagesCount": 27
+        },
+        {
+          "name": "Lakshadweep District 3",
+          "code": "LD_D3",
+          "talukasCount": 3,
+          "villagesCount": 23
+        },
+        {
+          "name": "Lakshadweep District 4",
+          "code": "LD_D4",
+          "talukasCount": 2,
+          "villagesCount": 11
+        },
+        {
+          "name": "Lakshadweep District 5",
+          "code": "LD_D5",
+          "talukasCount": 5,
+          "villagesCount": 34
+        },
+        {
+          "name": "Lakshadweep District 6",
+          "code": "LD_D6",
+          "talukasCount": 6,
+          "villagesCount": 42
+        },
+        {
+          "name": "Lakshadweep District 7",
+          "code": "LD_D7",
+          "talukasCount": 4,
+          "villagesCount": 22
+        }
+      ]
+    },
+    {
+      "name": "Puducherry",
+      "code": "PY",
+      "districtsCount": 7,
+      "talukasCount": 30,
+      "villagesCount": 194,
+      "districts": [
+        {
+          "name": "Puducherry District 1",
+          "code": "PY_D1",
+          "talukasCount": 2,
+          "villagesCount": 14
+        },
+        {
+          "name": "Puducherry District 2",
+          "code": "PY_D2",
+          "talukasCount": 4,
+          "villagesCount": 26
+        },
+        {
+          "name": "Puducherry District 3",
+          "code": "PY_D3",
+          "talukasCount": 5,
+          "villagesCount": 40
+        },
+        {
+          "name": "Puducherry District 4",
+          "code": "PY_D4",
+          "talukasCount": 5,
+          "villagesCount": 36
+        },
+        {
+          "name": "Puducherry District 5",
+          "code": "PY_D5",
+          "talukasCount": 6,
+          "villagesCount": 32
+        },
+        {
+          "name": "Puducherry District 6",
+          "code": "PY_D6",
+          "talukasCount": 3,
+          "villagesCount": 18
+        },
+        {
+          "name": "Puducherry District 7",
+          "code": "PY_D7",
+          "talukasCount": 5,
+          "villagesCount": 28
+        }
+      ]
+    }
+  ]
+}

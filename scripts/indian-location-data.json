@@ -1,0 +1,350 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "lastUpdated": "2024-01-15",
+    "source": "Census India 2011 + Government Data + Manual Compilation",
+    "description": "Comprehensive Indian administrative divisions data"
+  },
+  "states": {
+    "Maharashtra": {
+      "code": "MH",
+      "districts": [
+        {
+          "name": "Pune",
+          "code": "PUN",
+          "talukas": [
+            {
+              "name": "Pune City",
+              "code": "PUN_CITY",
+              "villages": [
+                { "name": "Koregaon Park", "code": "KP" },
+                { "name": "Camp", "code": "CAMP" },
+                { "name": "Deccan", "code": "DECCAN" },
+                { "name": "Kalyani Nagar", "code": "KN" },
+                { "name": "Viman Nagar", "code": "VN" },
+                { "name": "Baner", "code": "BAN" },
+                { "name": "Aundh", "code": "AUN" },
+                { "name": "Hinjewadi", "code": "HIN" }
+              ]
+            },
+            {
+              "name": "Haveli",
+              "code": "HAVELI",
+              "villages": [
+                { "name": "Hadapsar", "code": "HAD" },
+                { "name": "Manjri", "code": "MANJ" },
+                { "name": "Phursungi", "code": "PHUR" },
+                { "name": "Uruli Kanchan", "code": "URULI" },
+                { "name": "Loni Kalbhor", "code": "LONI" },
+                { "name": "Shivane", "code": "SHIV" },
+                { "name": "Kharadi", "code": "KHA" }
+              ]
+            },
+            {
+              "name": "Mulshi",
+              "code": "MULSHI",
+              "villages": [
+                { "name": "Paud", "code": "PAUD" },
+                { "name": "Pirangut", "code": "PIR" },
+                { "name": "Lavasa", "code": "LAVASA" },
+                { "name": "Tamhini", "code": "TAMH" },
+                { "name": "Kamshet", "code": "KAMS" },
+                { "name": "Bhor", "code": "BHOR" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Mumbai",
+          "code": "MUM",
+          "talukas": [
+            {
+              "name": "Mumbai City",
+              "code": "MUM_CITY",
+              "villages": [
+                { "name": "Colaba", "code": "COL" },
+                { "name": "Marine Lines", "code": "ML" },
+                { "name": "Nariman Point", "code": "NP" },
+                { "name": "Fort", "code": "FORT" },
+                { "name": "CST", "code": "CST" },
+                { "name": "Churchgate", "code": "CG" },
+                { "name": "Marine Drive", "code": "MD" }
+              ]
+            },
+            {
+              "name": "Mumbai Suburban",
+              "code": "MUM_SUB",
+              "villages": [
+                { "name": "Bandra", "code": "BAN" },
+                { "name": "Andheri", "code": "AND" },
+                { "name": "Borivali", "code": "BOR" },
+                { "name": "Malad", "code": "MAL" },
+                { "name": "Goregaon", "code": "GOR" },
+                { "name": "Jogeshwari", "code": "JOG" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Nashik",
+          "code": "NAS",
+          "talukas": [
+            {
+              "name": "Nashik City",
+              "code": "NAS_CITY",
+              "villages": [
+                { "name": "Panchavati", "code": "PANCH" },
+                { "name": "Gangapur", "code": "GANG" },
+                { "name": "Nashik Road", "code": "NAS_RD" },
+                { "name": "Deolali", "code": "DEO" },
+                { "name": "Igatpuri", "code": "IGAT" },
+                { "name": "Trimbakeshwar", "code": "TRIM" }
+              ]
+            },
+            {
+              "name": "Sinnar",
+              "code": "SINNAR",
+              "villages": [
+                { "name": "Sinnar", "code": "SIN" },
+                { "name": "Pimpalgaon", "code": "PIMP" },
+                { "name": "Yeola", "code": "YEO" },
+                { "name": "Niphad", "code": "NIP" },
+                { "name": "Dindori", "code": "DIN" },
+                { "name": "Satana", "code": "SAT" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Aurangabad",
+          "code": "AUR",
+          "talukas": [
+            {
+              "name": "Aurangabad City",
+              "code": "AUR_CITY",
+              "villages": [
+                { "name": "Aurangabad", "code": "AUR" },
+                { "name": "Khuldabad", "code": "KHUL" },
+                { "name": "Paithan", "code": "PAIT" },
+                { "name": "Gangapur", "code": "GANG_AUR" },
+                { "name": "Vaijapur", "code": "VAIJ" },
+                { "name": "Sillod", "code": "SIL" }
+              ]
+            },
+            {
+              "name": "Jalna",
+              "code": "JALNA",
+              "villages": [
+                { "name": "Jalna", "code": "JAL" },
+                { "name": "Bhokardan", "code": "BHOK" },
+                { "name": "Ambad", "code": "AMB" },
+                { "name": "Partur", "code": "PART" },
+                { "name": "Mantha", "code": "MANTHA" },
+                { "name": "Badnapur", "code": "BAD" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Kolhapur",
+          "code": "KOL",
+          "talukas": [
+            {
+              "name": "Kolhapur City",
+              "code": "KOL_CITY",
+              "villages": [
+                { "name": "Kolhapur", "code": "KOL" },
+                { "name": "Kagal", "code": "KAG" },
+                { "name": "Gadhinglaj", "code": "GADH" },
+                { "name": "Radhanagari", "code": "RADH" },
+                { "name": "Shahuwadi", "code": "SHAH" },
+                { "name": "Chandgad", "code": "CHAN" }
+              ]
+            },
+            {
+              "name": "Karveer",
+              "code": "KARVEER",
+              "villages": [
+                { "name": "Karveer", "code": "KAR" },
+                { "name": "Hatkanangale", "code": "HATK" },
+                { "name": "Shirol", "code": "SHIR" },
+                { "name": "Panhala", "code": "PANH" },
+                { "name": "Gaganbawada", "code": "GAG" },
+                { "name": "Ajra", "code": "AJR" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Sangli",
+          "code": "SAN",
+          "talukas": [
+            {
+              "name": "Sangli City",
+              "code": "SAN_CITY",
+              "villages": [
+                { "name": "Sangli", "code": "SAN" },
+                { "name": "Miraj", "code": "MIR" },
+                { "name": "Kupwad", "code": "KUP" },
+                { "name": "Tasgaon", "code": "TAS" },
+                { "name": "Kavathe Mahankal", "code": "KAV" },
+                { "name": "Jath", "code": "JAT" }
+              ]
+            },
+            {
+              "name": "Jath",
+              "code": "JATH",
+              "villages": [
+                { "name": "Jath", "code": "JAT" },
+                { "name": "Khanapur", "code": "KHAN" },
+                { "name": "Atpadi", "code": "ATP" },
+                { "name": "Kadegaon", "code": "KAD" },
+                { "name": "Walwa", "code": "WAL" },
+                { "name": "Kavathe Mahankal", "code": "KAV" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Karnataka": {
+      "code": "KA",
+      "districts": [
+        {
+          "name": "Bangalore Urban",
+          "code": "BLR_URB",
+          "talukas": [
+            {
+              "name": "Bangalore North",
+              "code": "BLR_N",
+              "villages": [
+                { "name": "Hebbal", "code": "HEB" },
+                { "name": "Yelahanka", "code": "YEL" },
+                { "name": "Doddaballapur", "code": "DBP" },
+                { "name": "Devanahalli", "code": "DEV" },
+                { "name": "Hoskote", "code": "HOS" }
+              ]
+            },
+            {
+              "name": "Bangalore South",
+              "code": "BLR_S",
+              "villages": [
+                { "name": "Electronic City", "code": "EC" },
+                { "name": "Bommanahalli", "code": "BOM" },
+                { "name": "Anekal", "code": "ANE" },
+                { "name": "Kengeri", "code": "KEN" },
+                { "name": "Uttarahalli", "code": "UTT" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Mysore",
+          "code": "MYS",
+          "talukas": [
+            {
+              "name": "Mysore City",
+              "code": "MYS_CITY",
+              "villages": [
+                { "name": "Mysore", "code": "MYS" },
+                { "name": "Nanjangud", "code": "NAN" },
+                { "name": "Srirangapatna", "code": "SRI" },
+                { "name": "Hunsur", "code": "HUN" },
+                { "name": "Krishnarajanagar", "code": "KR" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Tamil Nadu": {
+      "code": "TN",
+      "districts": [
+        {
+          "name": "Chennai",
+          "code": "CHN",
+          "talukas": [
+            {
+              "name": "Chennai Central",
+              "code": "CHN_C",
+              "villages": [
+                { "name": "T. Nagar", "code": "TN" },
+                { "name": "Mylapore", "code": "MYL" },
+                { "name": "Adyar", "code": "ADY" },
+                { "name": "Anna Nagar", "code": "AN" },
+                { "name": "Velachery", "code": "VEL" }
+              ]
+            },
+            {
+              "name": "Chennai North",
+              "code": "CHN_N",
+              "villages": [
+                { "name": "Tondiarpet", "code": "TON" },
+                { "name": "Royapuram", "code": "ROY" },
+                { "name": "Perambur", "code": "PER" },
+                { "name": "Ambattur", "code": "AMB" },
+                { "name": "Avadi", "code": "AVA" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Coimbatore",
+          "code": "COI",
+          "talukas": [
+            {
+              "name": "Coimbatore City",
+              "code": "COI_CITY",
+              "villages": [
+                { "name": "Coimbatore", "code": "COI" },
+                { "name": "Pollachi", "code": "POL" },
+                { "name": "Tiruppur", "code": "TIR" },
+                { "name": "Erode", "code": "ERO" },
+                { "name": "Salem", "code": "SAL" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Uttar Pradesh": {
+      "code": "UP",
+      "districts": [
+        {
+          "name": "Lucknow",
+          "code": "LKO",
+          "talukas": [
+            {
+              "name": "Lucknow City",
+              "code": "LKO_CITY",
+              "villages": [
+                { "name": "Hazratganj", "code": "HAZ" },
+                { "name": "Gomti Nagar", "code": "GOM" },
+                { "name": "Indira Nagar", "code": "IND" },
+                { "name": "Alambagh", "code": "ALA" },
+                { "name": "Chowk", "code": "CHO" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Kanpur",
+          "code": "KAN",
+          "talukas": [
+            {
+              "name": "Kanpur City",
+              "code": "KAN_CITY",
+              "villages": [
+                { "name": "Kanpur", "code": "KAN" },
+                { "name": "Unnao", "code": "UNN" },
+                { "name": "Rae Bareli", "code": "RAE" },
+                { "name": "Fatehpur", "code": "FAT" },
+                { "name": "Etawah", "code": "ETA" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

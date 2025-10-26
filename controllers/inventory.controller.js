@@ -2,7 +2,7 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
-import { Product, InventoryBatch, InventoryInward, InventoryOutward, StockAdjustment } from "../models/inventory.model.js";
+import { InventoryProduct, InventoryBatch, InventoryInward, InventoryOutwardTransaction, StockAdjustment } from "../models/inventory.model.js";
 import mongoose from "mongoose";
 
 // ==================== PRODUCT CONTROLLERS ====================
@@ -22,12 +22,12 @@ const createProduct = catchAsync(async (req, res, next) => {
     tags,
   } = req.body;
 
-  const existingProduct = await Product.findOne({ name, category });
+  const existingProduct = await InventoryProduct.findOne({ name, category });
   if (existingProduct) {
     return next(new AppError("Product with this name and category already exists", 409));
   }
 
-  const product = await Product.create({
+  const product = await InventoryProduct.create({
     name,
     description,
     category,
@@ -62,7 +62,7 @@ const getAllProducts = catchAsync(async (req, res, next) => {
     status,
   } = req.query;
 
-  let query = Product.find();
+  let query = InventoryProduct.find();
 
   if (search) {
     const searchRegex = new RegExp(search, "i");
@@ -90,7 +90,7 @@ const getAllProducts = catchAsync(async (req, res, next) => {
 
   const [products, total] = await Promise.all([
     query.exec(),
-    Product.countDocuments(query.getFilter()),
+    InventoryProduct.countDocuments(query.getFilter()),
   ]);
 
   const response = generateResponse(
@@ -118,7 +118,7 @@ const getProductById = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid product ID format", 400));
   }
 
-  const product = await Product.findById(id);
+  const product = await InventoryProduct.findById(id);
   if (!product) {
     return next(new AppError("No product found with that ID", 404));
   }
@@ -141,14 +141,14 @@ const updateProduct = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid product ID format", 400));
   }
 
-  const existingProduct = await Product.findById(id);
+  const existingProduct = await InventoryProduct.findById(id);
   if (!existingProduct) {
     return next(new AppError("No product found with that ID", 404));
   }
 
   // Check for duplicate name and category if being updated
   if (updateData.name && updateData.category) {
-    const duplicateProduct = await Product.findOne({
+    const duplicateProduct = await InventoryProduct.findOne({
       name: updateData.name,
       category: updateData.category,
       _id: { $ne: id },
@@ -158,7 +158,7 @@ const updateProduct = catchAsync(async (req, res, next) => {
     }
   }
 
-  const product = await Product.findByIdAndUpdate(id, updateData, {
+  const product = await InventoryProduct.findByIdAndUpdate(id, updateData, {
     new: true,
     runValidators: true,
   });
@@ -180,7 +180,7 @@ const deleteProduct = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid product ID format", 400));
   }
 
-  const product = await Product.findById(id);
+  const product = await InventoryProduct.findById(id);
   if (!product) {
     return next(new AppError("No product found with that ID", 404));
   }
@@ -189,13 +189,13 @@ const deleteProduct = catchAsync(async (req, res, next) => {
   const hasStock = product.currentStock > 0;
   const hasBatches = await InventoryBatch.exists({ productId: id });
   const hasTransactions = await InventoryInward.exists({ productId: id }) || 
-                         await InventoryOutward.exists({ productId: id });
+                         await InventoryOutwardTransaction.exists({ productId: id });
 
   if (hasStock || hasBatches || hasTransactions) {
     return next(new AppError("Cannot delete product with existing stock or transactions", 400));
   }
 
-  await Product.findByIdAndDelete(id);
+  await InventoryProduct.findByIdAndDelete(id);
 
   const response = generateResponse(
     "Success",
@@ -215,7 +215,7 @@ const toggleProductStatus = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid product ID format", 400));
   }
 
-  const product = await Product.findByIdAndUpdate(
+  const product = await InventoryProduct.findByIdAndUpdate(
     id,
     { isActive },
     {
@@ -257,7 +257,7 @@ const createBatch = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid product ID format", 400));
   }
 
-  const product = await Product.findById(productId);
+  const product = await InventoryProduct.findById(productId);
   if (!product) {
     return next(new AppError("Product not found", 404));
   }
@@ -286,7 +286,7 @@ const createBatch = catchAsync(async (req, res, next) => {
   });
 
   // Update product current stock
-  await Product.findByIdAndUpdate(productId, {
+  await InventoryProduct.findByIdAndUpdate(productId, {
     $inc: { currentStock: quantity },
   });
 
@@ -380,7 +380,7 @@ const createInward = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid product ID format", 400));
   }
 
-  const product = await Product.findById(productId);
+  const product = await InventoryProduct.findById(productId);
   if (!product) {
     return next(new AppError("Product not found", 404));
   }
@@ -441,7 +441,7 @@ const createInward = catchAsync(async (req, res, next) => {
   });
 
   // Update product current stock
-  await Product.findByIdAndUpdate(productId, {
+  await InventoryProduct.findByIdAndUpdate(productId, {
     $inc: { currentStock: quantity },
   });
 
@@ -545,7 +545,7 @@ const createOutward = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid product ID format", 400));
   }
 
-  const product = await Product.findById(productId);
+  const product = await InventoryProduct.findById(productId);
   if (!product) {
     return next(new AppError("Product not found", 404));
   }
@@ -571,7 +571,7 @@ const createOutward = catchAsync(async (req, res, next) => {
 
   const totalAmount = sellingPrice ? quantity * sellingPrice : 0;
 
-  const outward = await InventoryOutward.create({
+  const outward = await InventoryOutwardTransaction.create({
     productId,
     batchId,
     quantity,
@@ -592,7 +592,7 @@ const createOutward = catchAsync(async (req, res, next) => {
   }
 
   // Update product current stock
-  await Product.findByIdAndUpdate(productId, {
+  await InventoryProduct.findByIdAndUpdate(productId, {
     $inc: { currentStock: -quantity },
   });
 
@@ -620,7 +620,7 @@ const getAllOutwards = catchAsync(async (req, res, next) => {
     endDate,
   } = req.query;
 
-  let query = InventoryOutward.find()
+  let query = InventoryOutwardTransaction.find()
     .populate("productId", "name category unit")
     .populate("batchId", "batchNumber")
     .populate("issuedBy", "name");
@@ -661,7 +661,7 @@ const getAllOutwards = catchAsync(async (req, res, next) => {
 
   const [outwards, total] = await Promise.all([
     query.exec(),
-    InventoryOutward.countDocuments(query.getFilter()),
+    InventoryOutwardTransaction.countDocuments(query.getFilter()),
   ]);
 
   const response = generateResponse(
@@ -699,7 +699,7 @@ const createStockAdjustment = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid product ID format", 400));
   }
 
-  const product = await Product.findById(productId);
+  const product = await InventoryProduct.findById(productId);
   if (!product) {
     return next(new AppError("Product not found", 404));
   }
@@ -739,7 +739,7 @@ const createStockAdjustment = catchAsync(async (req, res, next) => {
   });
 
   // Update product current stock
-  await Product.findByIdAndUpdate(productId, {
+  await InventoryProduct.findByIdAndUpdate(productId, {
     $inc: { currentStock: stockChange },
   });
 
@@ -772,10 +772,10 @@ const getInventoryDashboard = catchAsync(async (req, res, next) => {
     recentOutwards,
     categoryStats,
   ] = await Promise.all([
-    Product.countDocuments(),
-    Product.countDocuments({ isActive: true }),
-    Product.countDocuments({ $expr: { $lte: ["$currentStock", "$minStockLevel"] } }),
-    Product.aggregate([
+    InventoryProduct.countDocuments(),
+    InventoryProduct.countDocuments({ isActive: true }),
+    InventoryProduct.countDocuments({ $expr: { $lte: ["$currentStock", "$minStockLevel"] } }),
+    InventoryProduct.aggregate([
       { $match: { isActive: true } },
       { $group: { _id: null, totalValue: { $sum: { $multiply: ["$currentStock", "$costPrice"] } } } },
     ]),
@@ -783,11 +783,11 @@ const getInventoryDashboard = catchAsync(async (req, res, next) => {
       .populate("productId", "name category")
       .sort({ createdAt: -1 })
       .limit(5),
-    InventoryOutward.find()
+    InventoryOutwardTransaction.find()
       .populate("productId", "name category")
       .sort({ createdAt: -1 })
       .limit(5),
-    Product.aggregate([
+    InventoryProduct.aggregate([
       { $match: { isActive: true } },
       { $group: { _id: "$category", count: { $sum: 1 }, totalStock: { $sum: "$currentStock" } } },
     ]),

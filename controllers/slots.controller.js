@@ -2337,16 +2337,20 @@ export const getSimpleSlots = async (req, res) => {
       .filter(slot => slot.status !== false) // Only filter out inactive slots
       .map(slot => {
         const actualBookings = bookingsMap[slot._id.toString()] || 0;
+        const primarySowed = Number(slot.primarySowed) || 0;
         
         return {
           _id: slot._id,
           startDay: slot.startDay || "",
           endDay: slot.endDay || "",
           month: slot.month || "",
+          totalPlants: Number(slot.totalPlants) || 0, // Total capacity
           totalBookedPlants: actualBookings, // Use calculated value from orders
           plantsSowed: Number(slot.plantsSowed) || 0,
           officeSowed: Number(slot.officeSowed) || 0,
-          primarySowed: Number(slot.primarySowed) || 0,
+          primarySowed: primarySowed,
+          // Gap = booked plants - primary sowed (not booked - total capacity)
+          gap: actualBookings - primarySowed,
           availablePlants: Number(slot.availablePlants || slot.totalPlants) || 0,
           status: slot.status !== false,
           isManual: Boolean(slot.isManual)

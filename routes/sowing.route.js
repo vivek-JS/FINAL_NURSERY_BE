@@ -8,6 +8,7 @@ import {
   updateHarvest,
   getPendingReminders,
   getSowingStats,
+  getSowingInsights,
   deleteSowing,
   updateSowing,
 } from "../controllers/sowing.controller.js";
@@ -18,6 +19,10 @@ const router = express.Router();
 router.post("/", createSowing); // Create new sowing record
 router.get("/", getSowings); // Get all sowings with filters
 router.get("/stats", getSowingStats); // Get sowing statistics
+router.get("/insights", (req, res) => {
+  console.log("Insights route called");
+  getSowingInsights(req, res);
+}); // Get comprehensive sowing insights for CEO dashboard
 router.get("/reminders", getPendingReminders); // Get pending reminders
 router.get("/:id", getSowingById); // Get single sowing by ID
 router.put("/:id", updateSowing); // Update sowing record
@@ -29,5 +34,7 @@ router.post("/:id/primary-sowed", updatePrimarySowed); // Update primary sowed q
 router.post("/:id/harvest", updateHarvest); // Update harvest information
 
 export default router;
+
+
 
 

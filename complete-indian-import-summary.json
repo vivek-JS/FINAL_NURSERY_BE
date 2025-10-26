@@ -1,0 +1,262 @@
+{
+  "timestamp": "2025-10-25T09:05:48.488Z",
+  "totalStates": 36,
+  "totalDistricts": 633,
+  "totalTalukas": 5920,
+  "totalVillages": 619287,
+  "dataSource": "Complete Indian Location Dataset (newstate.js)",
+  "states": [
+    {
+      "name": "Andaman & Nicobar Islands",
+      "code": "AN",
+      "districtsCount": 3,
+      "talukasCount": 9,
+      "villagesCount": 514
+    },
+    {
+      "name": "Andhra Pradesh",
+      "code": "AP",
+      "districtsCount": 13,
+      "talukasCount": 663,
+      "villagesCount": 17030
+    },
+    {
+      "name": "Arunachal Pradesh",
+      "code": "AR",
+      "districtsCount": 16,
+      "talukasCount": 188,
+      "villagesCount": 5548
+    },
+    {
+      "name": "Assam",
+      "code": "AS",
+      "districtsCount": 27,
+      "talukasCount": 184,
+      "villagesCount": 26092
+    },
+    {
+      "name": "Bihar",
+      "code": "BR",
+      "districtsCount": 38,
+      "talukasCount": 534,
+      "villagesCount": 42378
+    },
+    {
+      "name": "Chandigarh",
+      "code": "CH",
+      "districtsCount": 1,
+      "talukasCount": 1,
+      "villagesCount": 12
+    },
+    {
+      "name": "Chhattisgarh",
+      "code": "CG",
+      "districtsCount": 18,
+      "talukasCount": 149,
+      "villagesCount": 19543
+    },
+    {
+      "name": "Dadra & Nagar Haveli",
+      "code": "DN",
+      "districtsCount": 1,
+      "talukasCount": 1,
+      "villagesCount": 70
+    },
+    {
+      "name": "Daman & Diu",
+      "code": "DD",
+      "districtsCount": 2,
+      "talukasCount": 2,
+      "villagesCount": 25
+    },
+    {
+      "name": "Delhi",
+      "code": "DL",
+      "districtsCount": 9,
+      "talukasCount": 27,
+      "villagesCount": 222
+    },
+    {
+      "name": "Goa",
+      "code": "GA",
+      "districtsCount": 2,
+      "talukasCount": 11,
+      "villagesCount": 397
+    },
+    {
+      "name": "Gujarat",
+      "code": "GJ",
+      "districtsCount": 26,
+      "talukasCount": 225,
+      "villagesCount": 18259
+    },
+    {
+      "name": "Haryana",
+      "code": "HR",
+      "districtsCount": 21,
+      "talukasCount": 74,
+      "villagesCount": 6886
+    },
+    {
+      "name": "Himachal Pradesh",
+      "code": "HP",
+      "districtsCount": 12,
+      "talukasCount": 117,
+      "villagesCount": 20134
+    },
+    {
+      "name": "Jammu & Kashmir",
+      "code": "JK",
+      "districtsCount": 22,
+      "talukasCount": 82,
+      "villagesCount": 6649
+    },
+    {
+      "name": "Jharkhand",
+      "code": "JH",
+      "districtsCount": 24,
+      "talukasCount": 260,
+      "villagesCount": 31201
+    },
+    {
+      "name": "Karnataka",
+      "code": "KA",
+      "districtsCount": 30,
+      "talukasCount": 176,
+      "villagesCount": 28494
+    },
+    {
+      "name": "Kerala",
+      "code": "KL",
+      "districtsCount": 14,
+      "talukasCount": 63,
+      "villagesCount": 1495
+    },
+    {
+      "name": "Lakshadweep",
+      "code": "LD",
+      "districtsCount": 1,
+      "talukasCount": 10,
+      "villagesCount": 22
+    },
+    {
+      "name": "Madhya Pradesh",
+      "code": "MP",
+      "districtsCount": 50,
+      "talukasCount": 342,
+      "villagesCount": 53112
+    },
+    {
+      "name": "Maharashtra",
+      "code": "MH",
+      "districtsCount": 33,
+      "talukasCount": 355,
+      "villagesCount": 42926
+    },
+    {
+      "name": "Manipur",
+      "code": "MN",
+      "districtsCount": 9,
+      "talukasCount": 38,
+      "villagesCount": 2589
+    },
+    {
+      "name": "Meghalaya",
+      "code": "ML",
+      "districtsCount": 7,
+      "talukasCount": 39,
+      "villagesCount": 6736
+    },
+    {
+      "name": "Mizoram",
+      "code": "MZ",
+      "districtsCount": 8,
+      "talukasCount": 29,
+      "villagesCount": 827
+    },
+    {
+      "name": "Nagaland",
+      "code": "NL",
+      "districtsCount": 11,
+      "talukasCount": 114,
+      "villagesCount": 1403
+    },
+    {
+      "name": "Odisha",
+      "code": "OR",
+      "districtsCount": 30,
+      "talukasCount": 478,
+      "villagesCount": 50377
+    },
+    {
+      "name": "Puducherry",
+      "code": "PY",
+      "districtsCount": 4,
+      "talukasCount": 8,
+      "villagesCount": 93
+    },
+    {
+      "name": "Punjab",
+      "code": "PB",
+      "districtsCount": 20,
+      "talukasCount": 77,
+      "villagesCount": 12466
+    },
+    {
+      "name": "Rajasthan",
+      "code": "RJ",
+      "districtsCount": 31,
+      "talukasCount": 228,
+      "villagesCount": 38998
+    },
+    {
+      "name": "Sikkim",
+      "code": "SK",
+      "districtsCount": 4,
+      "talukasCount": 9,
+      "villagesCount": 446
+    },
+    {
+      "name": "Tamil Nadu",
+      "code": "TN",
+      "districtsCount": 31,
+      "talukasCount": 215,
+      "villagesCount": 16073
+    },
+    {
+      "name": "Telangana",
+      "code": "TG",
+      "districtsCount": 10,
+      "talukasCount": 459,
+      "villagesCount": 10761
+    },
+    {
+      "name": "Tripura",
+      "code": "TR",
+      "districtsCount": 4,
+      "talukasCount": 40,
+      "villagesCount": 899
+    },
+    {
+      "name": "Uttar Pradesh",
+      "code": "UP",
+      "districtsCount": 71,
+      "talukasCount": 312,
+      "villagesCount": 104139
+    },
+    {
+      "name": "Uttarakhand",
+      "code": "UK",
+      "districtsCount": 12,
+      "talukasCount": 60,
+      "villagesCount": 12077
+    },
+    {
+      "name": "West Bengal",
+      "code": "WB",
+      "districtsCount": 18,
+      "talukasCount": 341,
+      "villagesCount": 40394
+    }
+  ]
+}

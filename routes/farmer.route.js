@@ -19,7 +19,6 @@ import {
   createDistrict,
 } from "../controllers/cms.controller.js";
 import multer from "multer";
-// import { upload } from "../middlewares/multer.middleware.js";
 
 const router = express.Router();
 
@@ -33,7 +32,8 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({
+// Multer for Excel files (disk storage)
+const uploadExcel = multer({
   storage: storage,
   fileFilter: function (req, file, cb) {
     // Accept only excel files
@@ -49,16 +49,27 @@ const upload = multer({
   },
 });
 
+// Multer for images (memory storage for GridFS)
+const uploadImages = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
+  fileFilter: (req, file, cb) => {
+    const ok = ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"].includes(file.mimetype);
+    cb(ok ? null : new Error("Only JPG/PNG/WEBP/AVIF/GIF allowed"), ok);
+  },
+});
+
 router
   .get("/getfarmer/:mobileNumber", findFarmer)
   .get("/getFarmers", getFarmers)
   .get("/farmers/:farmerId/orders/:orderId?", getFarmerOrder)
-  .post("/uploadFarmers", upload.single("data"), uploadFarmers)
+  .post("/uploadFarmers", uploadExcel.single("data"), uploadFarmers)
   .get('/invalid-phones', getInvalidPhoneFarmers)
   .put('/:id/phone', updateFarmerPhone)
 
   .post(
     "/createFarmer",
+    uploadImages.array('screenshots', 10), // Handle multiple screenshot uploads
     [
       check("name").notEmpty().withMessage("Please enter valid name"),
       check("village").notEmpty().withMessage("Please enter valid village"),

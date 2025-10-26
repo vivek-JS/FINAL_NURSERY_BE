@@ -204,6 +204,8 @@ import purchaseOrderRoute from "./routes/purchaseOrder.route.js";
 import grnRoute from "./routes/grn.route.js";
 import inventoryOutwardRoute from "./routes/inventoryOutward.route.js";
 import inventoryTransactionRoute from "./routes/inventoryTransaction.route.js";
+import inventoryRoute from "./routes/inventory.route.js";
+import purchaseRoute from "./routes/purchase.route.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -253,6 +255,8 @@ server.use("/api/v1/notifications", notificationRoute); // Notification routes (
 server.use("/api/v1/sowing", authenticateToken, sowingRoute); // Sowing management routes
 
 // Inventory Management Routes (all require authentication)
+server.use("/api/v1/inventory", authenticateToken, inventoryRoute);
+server.use("/api/v1/purchase", authenticateToken, purchaseRoute);
 server.use("/api/v1/inventory/products", authenticateToken, productRoute);
 server.use("/api/v1/inventory/suppliers", authenticateToken, supplierRoute);
 server.use("/api/v1/inventory/units", authenticateToken, measurementUnitRoute);

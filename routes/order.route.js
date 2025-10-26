@@ -22,12 +22,22 @@ import {
 } from "../controllers/orderDispatchDetails.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
-import { upload } from "../middlewares/multer.middleware.js";
+import multer from "multer";
 import { requirePaymentAccess, authenticateToken } from "../middlewares/auth.middleware.js";
 import { sendPaymentCollectedNotification } from "../utility/pushNotification.js";
 import catchAsync from "../utility/catchAsync.js";
 
 const router = express.Router();
+
+// Multer for images (memory storage for Cloudinary)
+const uploadImages = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
+  fileFilter: (req, file, cb) => {
+    const ok = ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"].includes(file.mimetype);
+    cb(ok ? null : new Error("Only JPG/PNG/WEBP/AVIF/GIF allowed"), ok);
+  },
+});
 
 router
   .get("/getCSV", getCsv)
@@ -45,6 +55,7 @@ router
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .patch(
     "/payment/:orderId",
+    uploadImages.single('screenshot'), // Handle single file upload for screenshot
     addNewPayment // Controller function to add payment - anyone can add
   )
   .patch(
@@ -82,7 +93,7 @@ router
       }
     });
   }))
-  .post("/dealer-order", createDealerOrder)
+  .post("/dealer-order", uploadImages.array('screenshots', 10), createDealerOrder)
   .patch("/afterOrder",addAfterDispatchedOrderIds)
 
 export default router;

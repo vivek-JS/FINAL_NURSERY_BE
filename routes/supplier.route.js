@@ -1,6 +1,8 @@
 import express from 'express';
+import { check } from 'express-validator';
 import * as supplierController from '../controllers/supplier.controller.js';
 import { authenticateToken } from '../middlewares/auth.middleware.js';
+import checkErrors from '../middlewares/checkErrors.middleware.js';
 
 const router = express.Router();
 

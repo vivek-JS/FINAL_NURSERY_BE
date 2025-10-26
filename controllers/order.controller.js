@@ -17,27 +17,36 @@ import {
 } from "../utility/pushNotification.js";
 
 const updateDealerWalletBalance = async (dealerId, paymentAmount, description = "Wallet balance adjustment", performedBy = null) => {
-  let wallet = await DealerWallet.findOne({ dealer: dealerId });
+  // Validate dealerId
+  if (!dealerId) {
+    throw new Error("Dealer ID is required for wallet operations");
+  }
+
+  // Convert to ObjectId if it's a string
+  const dealerObjectId = typeof dealerId === 'string' ? new mongoose.Types.ObjectId(dealerId) : dealerId;
+  
+  let wallet = await DealerWallet.findOne({ dealer: dealerObjectId });
 
   if (!wallet) {
+    console.log('Creating new wallet for dealer:', dealerObjectId);
     wallet = new DealerWallet({
-      dealer: dealerId,
+      dealer: dealerObjectId,
       availableAmount: paymentAmount,
       entries: [],
+      transactions: []
     });
     await wallet.save();
   } else {
     // Record transaction before updating balance
     if (paymentAmount !== 0) {
       const transaction = await DealerWallet.addPayment(
-        dealerId,
+        dealerObjectId,
         paymentAmount,
         description,
-        performedBy || dealerId,
+        performedBy || dealerObjectId,
         "PAYMENT_STATUS_UPDATE",
         null
       );
-      console.log("Transaction recorded:", transaction);
     }
   }
 };
@@ -420,6 +429,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
   console.log("\n========== PAYMENT CONTROLLER DEBUGGING ==========");
   console.log("Request params:", req.params);
   console.log("Request body:", req.body);
+  console.log("Request file:", req.file);
 
   const { orderId } = req.params;
   const {
@@ -431,6 +441,27 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     modeOfPayment,
     isWalletPayment,
   } = req.body;
+
+  // Handle uploaded screenshot file with Cloudinary
+  let screenshotUrl = null;
+  if (req.file) {
+    try {
+      const { uploadImageToCloudinary } = await import('../utils/cloudinaryUtils.js');
+      const uploadResult = await uploadImageToCloudinary(
+        req.file.buffer,
+        'nursery-orders/payments'
+      );
+      
+      if (uploadResult.success) {
+        screenshotUrl = uploadResult.url;
+        console.log("Screenshot uploaded to Cloudinary:", screenshotUrl);
+      } else {
+        console.error("Failed to upload screenshot to Cloudinary:", uploadResult.error);
+      }
+    } catch (error) {
+      console.error("Error uploading screenshot to Cloudinary:", error);
+    }
+  }
 
   try {
     // Find the order and populate farmer details
@@ -491,7 +522,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       paymentStatus: finalPaymentStatus, // Use the determined status
       paymentDate,
       bankName,
-      receiptPhoto,
+      receiptPhoto: screenshotUrl ? [screenshotUrl] : (receiptPhoto || []), // Use uploaded screenshot or existing receiptPhoto
       modeOfPayment,
       isWalletPayment,
     };
@@ -562,28 +593,28 @@ const addNewPayment = catchAsync(async (req, res, next) => {
         let description = "";
 
         // Wallet impact based on payment type and status
-        // ONLY COLLECTED payments should impact wallet balance
-        if (isWalletPayment && finalPaymentStatus === "COLLECTED") {
-          // Deduct from wallet (negative amount) - when dealer pays from wallet and it's collected
+        // PENDING and COLLECTED payments should impact wallet balance
+        if (isWalletPayment && (finalPaymentStatus === "PENDING" || finalPaymentStatus === "COLLECTED")) {
+          // Deduct from wallet (negative amount) - when dealer pays from wallet (pending or collected)
           walletAmount = -amount;
-          description = `Wallet payment collected for Order #${order._id} - ${farmerInfo}`;
-          console.log("This is a collected wallet payment, deducting amount from wallet");
+          description = `Wallet payment ${finalPaymentStatus.toLowerCase()} for Order #${order._id} - ${farmerInfo}`;
+          console.log(`This is a ${finalPaymentStatus.toLowerCase()} wallet payment, deducting amount from wallet`);
         } else if (order.dealerOrder && finalPaymentStatus === "COLLECTED" && !isWalletPayment) {
           // Add to wallet (positive amount) - when payment is collected from dealer (not wallet)
           walletAmount = amount;
           description = `Payment collected for Order #${order._id} via ${modeOfPayment} - ${farmerInfo}`;
           console.log("This is a collected payment for dealer order, adding to wallet");
-        } else if (order.dealerOrder && isWalletPayment && finalPaymentStatus === "COLLECTED") {
-          // Special case: Dealer order with wallet payment marked as collected
+        } else if (order.dealerOrder && isWalletPayment && (finalPaymentStatus === "PENDING" || finalPaymentStatus === "COLLECTED")) {
+          // Special case: Dealer order with wallet payment (pending or collected)
           // This means the dealer is using their wallet balance to pay
           walletAmount = -amount;
-          description = `Wallet payment collected for Dealer Order #${order._id} - ${farmerInfo}`;
-          console.log("This is a dealer wallet payment being collected");
+          description = `Wallet payment ${finalPaymentStatus.toLowerCase()} for Dealer Order #${order._id} - ${farmerInfo}`;
+          console.log(`This is a dealer wallet payment being ${finalPaymentStatus.toLowerCase()}`);
         } else {
-          // PENDING payments should NOT impact wallet balance
+          // Non-wallet payments or other statuses should NOT impact wallet balance
           walletAmount = 0;
           description = `Payment recorded (no wallet impact) for Order #${order._id} - ${farmerInfo}`;
-          console.log("This is a pending payment - no wallet impact");
+          console.log("This payment has no wallet impact");
           console.log("Debug info:");
           console.log("- isWalletPayment:", isWalletPayment);
           console.log("- finalPaymentStatus:", finalPaymentStatus);
@@ -743,12 +774,12 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
       }
 
       // Determine the wallet impact
-      if (isWalletPayment && paymentStatus === "PENDING") {
-        // Deduct from wallet (negative amount)
+      if (isWalletPayment && (paymentStatus === "PENDING" || paymentStatus === "COLLECTED")) {
+        // Deduct from wallet (negative amount) - for both pending and collected wallet payments
         walletAmount = -amount;
-        description = `Wallet payment for Order #${order._id} - ${farmerInfo}`;
-      } else if (order.dealerOrder && paymentStatus === "COLLECTED") {
-        // Add to wallet (positive amount)
+        description = `Wallet payment ${paymentStatus.toLowerCase()} for Order #${order._id} - ${farmerInfo}`;
+      } else if (order.dealerOrder && paymentStatus === "COLLECTED" && !isWalletPayment) {
+        // Add to wallet (positive amount) - when payment is collected from dealer (not wallet)
         walletAmount = amount;
         description = `Payment collected for Order #${order._id} via ${modeOfPayment} - ${farmerInfo}`;
       }
@@ -820,6 +851,16 @@ const updatePaymentStatus = async (req, res) => {
       return res.status(404).json({ message: "Order not found." });
     }
 
+    // Debug: Log order details (can be removed in production)
+    console.log('Order found for payment status update:', {
+      orderId: order._id,
+      orderNumber: order.orderId,
+      dealerOrder: order.dealerOrder,
+      hasDealer: !!order.dealer,
+      hasSalesPerson: !!order.salesPerson,
+      hasFarmer: !!order.farmer
+    });
+
     const payment = order.payment.id(paymentId);
     if (!payment) {
       return res.status(404).json({ message: "Payment not found." });
@@ -864,24 +905,66 @@ const updatePaymentStatus = async (req, res) => {
       console.log('Current status:', payment.paymentStatus, 'New status:', paymentStatus);
       console.log('Order is dealer order:', order.dealerOrder);
       console.log('Payment is wallet payment:', payment.isWalletPayment);
+      console.log('Order dealer field:', order.dealer);
+      console.log('Order sales person field:', order.salesPerson);
+      
+      // Determine the dealer for wallet operations
+      let dealerForWallet = null;
+      
+      if (order.dealer) {
+        // Use the order's dealer field if available
+        dealerForWallet = order.dealer;
+        console.log('Using order dealer for wallet operations:', dealerForWallet);
+      } else if (order.salesPerson) {
+        // Check if sales person is a dealer
+        const salesPerson = await User.findById(order.salesPerson);
+        if (salesPerson && salesPerson.jobTitle === 'DEALER') {
+          dealerForWallet = order.salesPerson;
+          console.log('Using sales person as dealer for wallet operations:', dealerForWallet);
+        }
+      }
+      
+      if (!dealerForWallet) {
+        console.warn('Payment marked as wallet payment but no dealer found. Skipping wallet operations.');
+        console.log('This may indicate a data inconsistency. Payment will be updated without wallet operations.');
+        // Continue with payment status update but skip wallet operations
+      } else {
       
       // For wallet payments:
       // - When payment is rejected, credit back to wallet (add money)
-      // - When payment is collected, debit from wallet (subtract money)
+      // - When payment is pending or collected, debit from wallet (subtract money)
+      // - Since we now deduct on PENDING, we need to handle status changes carefully
       
-      if (payment.paymentStatus === "COLLECTED" && paymentStatus === "REJECTED") {
-        // Collected payment was rejected, credit back to wallet
-        await updateDealerWalletBalance(order.dealer, amount, `Payment rejected - credited back to wallet for Order #${order._id}`, req.user?._id);
-      } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "PENDING") {
-        // Collected payment is now pending, credit back to wallet
-        await updateDealerWalletBalance(order.dealer, amount, `Payment changed to pending - credited back to wallet for Order #${order._id}`, req.user?._id);
-      } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "COLLECTED") {
-        // Rejected payment is now collected, debit from wallet
-        await updateDealerWalletBalance(order.dealer, -amount, `Payment collected - debited from wallet for Order #${order._id}`, req.user?._id);
-      } else if (payment.paymentStatus === "PENDING" && paymentStatus === "COLLECTED") {
-        // Pending payment is now collected, debit from wallet
-        await updateDealerWalletBalance(order.dealer, -amount, `Payment collected - debited from wallet for Order #${order._id}`, req.user?._id);
+      try {
+        if (payment.paymentStatus === "COLLECTED" && paymentStatus === "REJECTED") {
+          // Collected payment was rejected, credit back to wallet
+          await updateDealerWalletBalance(dealerForWallet, amount, `Payment rejected - credited back to wallet for Order #${order._id}`, req.user?._id);
+        } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "PENDING") {
+          // Collected payment is now pending, but since we deduct on pending too, no change needed
+          // Just update the description in transaction history
+          console.log("Payment status changed from COLLECTED to PENDING - no wallet impact (both deduct from wallet)");
+        } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "COLLECTED") {
+          // Rejected payment is now collected, debit from wallet
+          await updateDealerWalletBalance(dealerForWallet, -amount, `Payment collected - debited from wallet for Order #${order._id}`, req.user?._id);
+        } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "PENDING") {
+          // Rejected payment is now pending, debit from wallet
+          await updateDealerWalletBalance(dealerForWallet, -amount, `Payment pending - debited from wallet for Order #${order._id}`, req.user?._id);
+        } else if (payment.paymentStatus === "PENDING" && paymentStatus === "COLLECTED") {
+          // Pending payment is now collected, but since we deduct on both, no change needed
+          console.log("Payment status changed from PENDING to COLLECTED - no wallet impact (both deduct from wallet)");
+        } else if (payment.paymentStatus === "PENDING" && paymentStatus === "REJECTED") {
+          // Pending payment is now rejected, credit back to wallet
+          await updateDealerWalletBalance(dealerForWallet, amount, `Payment rejected - credited back to wallet for Order #${order._id}`, req.user?._id);
+        }
+      } catch (walletError) {
+        console.error('Error updating dealer wallet:', walletError);
+        return res.status(500).json({
+          success: false,
+          message: "Error updating dealer wallet",
+          error: walletError.message,
+        });
       }
+      } // Close the else block for dealer validation
     }
     // Handle bulk order (dealer order) payment status changes (ONLY if not a wallet payment)
     else if (order.dealerOrder && order.dealer && !payment.isWalletPayment) {
@@ -889,23 +972,42 @@ const updatePaymentStatus = async (req, res) => {
       console.log('Current status:', payment.paymentStatus, 'New status:', paymentStatus);
       console.log('Order is dealer order:', order.dealerOrder);
       console.log('Payment is wallet payment:', payment.isWalletPayment);
+      console.log('Order dealer field:', order.dealer);
+      
+      // Validate that we have a dealer for wallet operations
+      if (!order.dealer) {
+        console.error('Cannot process bulk order payment: Order has no dealer field');
+        return res.status(400).json({
+          success: false,
+          message: "Cannot process bulk order payment: Order has no associated dealer",
+        });
+      }
       
       // For bulk orders (dealer orders):
       // - When payment is collected, credit to wallet (add money)
       // - When payment is rejected, debit from wallet (subtract money)
       
-      if (payment.paymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
-        // Payment is now collected, credit to wallet
-        await updateDealerWalletBalance(order.dealer, amount, `Payment collected for bulk order - credited to wallet for Order #${order._id}`, req.user?._id);
-      } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "REJECTED") {
-        // Collected payment is now rejected, debit from wallet
-        await updateDealerWalletBalance(order.dealer, -amount, `Payment rejected for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
-      } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "PENDING") {
-        // Collected payment is now pending, debit from wallet
-        await updateDealerWalletBalance(order.dealer, -amount, `Payment changed to pending for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
-      } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "COLLECTED") {
-        // Rejected payment is now collected, credit to wallet
-        await updateDealerWalletBalance(order.dealer, amount, `Payment collected for bulk order - credited to wallet for Order #${order._id}`, req.user?._id);
+      try {
+        if (payment.paymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
+          // Payment is now collected, credit to wallet
+          await updateDealerWalletBalance(order.dealer, amount, `Payment collected for bulk order - credited to wallet for Order #${order._id}`, req.user?._id);
+        } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "REJECTED") {
+          // Collected payment is now rejected, debit from wallet
+          await updateDealerWalletBalance(order.dealer, -amount, `Payment rejected for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
+        } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "PENDING") {
+          // Collected payment is now pending, debit from wallet
+          await updateDealerWalletBalance(order.dealer, -amount, `Payment changed to pending for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
+        } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "COLLECTED") {
+          // Rejected payment is now collected, credit to wallet
+          await updateDealerWalletBalance(order.dealer, amount, `Payment collected for bulk order - credited to wallet for Order #${order._id}`, req.user?._id);
+        }
+      } catch (walletError) {
+        console.error('Error updating dealer wallet for bulk order:', walletError);
+        return res.status(500).json({
+          success: false,
+          message: "Error updating dealer wallet for bulk order",
+          error: walletError.message,
+        });
       }
     }
 
@@ -1622,6 +1724,7 @@ const getAllPayments = catchAsync(async (req, res, next) => {
           ],
         },
         payment: 1,
+        screenshots: 1,
         orderBookingDate: 1,
         createdAt: 1,
         dealerOrder: 1,

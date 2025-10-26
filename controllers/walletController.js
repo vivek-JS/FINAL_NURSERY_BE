@@ -188,6 +188,9 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
     availableAmount: 0 
   };
 
+  // Calculate pending payment (total order amount - total paid amount)
+  const pendingPayment = financialDetails.totalOrderAmount - financialDetails.totalPaidAmount;
+
   // Format response
   return res.status(200).json({
     status: "success",
@@ -196,7 +199,8 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
         availableAmount: walletInfo.availableAmount,
         totalOrderAmount: financialDetails.totalOrderAmount,
         totalPaidAmount: financialDetails.totalPaidAmount,
-        remainingAmount: financialDetails.totalOrderAmount - financialDetails.totalPaidAmount
+        pendingPayment: pendingPayment,
+        remainingAmount: pendingPayment // Keep for backward compatibility
       },
       plantDetails: walletDetails[0].plantDetails
     }

@@ -161,7 +161,7 @@ const paymentSchema = new Schema(
     },
     receiptPhoto: [
       {
-        type: String, // Store URLs (strings) for uploaded files
+        type: String, // Store Cloudinary URLs (strings) for uploaded files
       },
     ],
     modeOfPayment: {
@@ -286,6 +286,8 @@ const orderSchema = new Schema(
     },
     // Changed to array of strings for order remarks
     orderRemarks: [String],
+    // Screenshots uploaded with the order (Cloudinary URLs)
+    screenshots: [String], // Array of Cloudinary image URLs
     orderStatus: {
       type: String,
       enum: [

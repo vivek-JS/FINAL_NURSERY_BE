@@ -65,7 +65,7 @@ const productSchema = new Schema({
 const inventoryBatchSchema = new Schema({
   productId: {
     type: Schema.Types.ObjectId,
-    ref: "Product",
+    ref: "InventoryProduct",
     required: true,
   },
   batchNumber: {
@@ -124,7 +124,7 @@ const inventoryBatchSchema = new Schema({
 const inventoryInwardSchema = new Schema({
   productId: {
     type: Schema.Types.ObjectId,
-    ref: "Product",
+    ref: "InventoryProduct",
     required: true,
   },
   batchId: {
@@ -175,7 +175,7 @@ const inventoryInwardSchema = new Schema({
 const inventoryOutwardSchema = new Schema({
   productId: {
     type: Schema.Types.ObjectId,
-    ref: "Product",
+    ref: "InventoryProduct",
     required: true,
   },
   batchId: {
@@ -232,7 +232,7 @@ const inventoryOutwardSchema = new Schema({
 const stockAdjustmentSchema = new Schema({
   productId: {
     type: Schema.Types.ObjectId,
-    ref: "Product",
+    ref: "InventoryProduct",
     required: true,
   },
   batchId: {
@@ -267,10 +267,10 @@ const stockAdjustmentSchema = new Schema({
 });
 
 // Create models
-const Product = model("Product", productSchema);
+const InventoryProduct = model("InventoryProduct", productSchema);
 const InventoryBatch = model("InventoryBatch", inventoryBatchSchema);
 const InventoryInward = model("InventoryInward", inventoryInwardSchema);
-const InventoryOutward = model("InventoryOutward", inventoryOutwardSchema);
+const InventoryOutwardTransaction = model("InventoryOutwardTransaction", inventoryOutwardSchema);
 const StockAdjustment = model("StockAdjustment", stockAdjustmentSchema);
 
-export { Product, InventoryBatch, InventoryInward, InventoryOutward, StockAdjustment }; 
+export { InventoryProduct, InventoryBatch, InventoryInward, InventoryOutwardTransaction, StockAdjustment }; 

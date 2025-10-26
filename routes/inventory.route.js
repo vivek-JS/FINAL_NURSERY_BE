@@ -56,7 +56,7 @@ router
     checkErrors,
     createProduct
   )
-  .get("/products/all", getAllProducts)
+  .get("/products", getAllProducts)
   .get("/products/:id", getProductById)
   .patch(
     "/products/:id",
