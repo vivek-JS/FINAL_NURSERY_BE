@@ -13,7 +13,7 @@ const userSchema = new Schema({
   password: {
     type: String,
     required: true,
-    default: "12345678",
+    default: "1234",
   },
   isPasswordSet: {
     type: Boolean,

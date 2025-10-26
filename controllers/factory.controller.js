@@ -1891,16 +1891,17 @@ const getAll = (Model, modelName) =>
       // Role-based filtering for non-admin users
       if (req.user) {
         const userRole = req.user.role;
+        const userJobTitle = req.user.jobTitle;
         const userId = req.user._id;
         
-        // Apply role-based filtering
+        // Apply role-based filtering based on jobTitle (not role)
         // Exception: DISPATCH_MANAGER can see all orders (especially for ready_for_dispatch view)
-        if (userRole === 'SALES') {
+        if (userJobTitle === 'SALES') {
           // SALES users can only see orders assigned to them
           pipeline.push({
             $match: { salesPerson: userId }
           });
-        } else if (userRole === 'DEALER') {
+        } else if (userJobTitle === 'DEALER') {
           // DEALER users can only see orders assigned to them
           pipeline.push({
             $match: { dealer: userId }

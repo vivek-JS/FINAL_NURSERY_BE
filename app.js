@@ -20,7 +20,7 @@ server.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'", "https:"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
       imgSrc: ["'self'", "data:", "https:", "http:"],
-      connectSrc: ["'self'", "https://final-nursery-be-1.onrender.com", "http://localhost:8000", "http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:8000", "ws://localhost:3000", "ws://127.0.0.1:3000", "https://ram-biotek.onrender.com"],
+      connectSrc: ["'self'", "https://final-nursery-be-1.onrender.com", "http://localhost:8000", "http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:8000", "http://localhost:8081", "http://127.0.0.1:8081", "http://localhost:8082", "http://127.0.0.1:8082", "http://localhost:8083", "http://127.0.0.1:8083", "http://localhost:8084", "http://127.0.0.1:8084", "http://localhost:8085", "http://127.0.0.1:8085", "ws://localhost:3000", "ws://127.0.0.1:3000", "https://ram-biotek.onrender.com"],
       fontSrc: ["'self'", "data:", "https:"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'", "https:"],
@@ -66,6 +66,12 @@ const corsOptions = {
       'http://127.0.0.1:8081', // Expo development server
       'http://localhost:8082', // Expo web server
       'http://127.0.0.1:8082', // Expo web server
+      'http://localhost:8083', // React Native web server
+      'http://127.0.0.1:8083', // React Native web server
+      'http://localhost:8084', // React Native web server
+      'http://127.0.0.1:8084', // React Native web server
+      'http://localhost:8085', // React Native web server
+      'http://127.0.0.1:8085', // React Native web server
       'exp://localhost:8081', // Expo protocol
       'exp://127.0.0.1:8081'   // Expo protocol
     ];
@@ -73,7 +79,7 @@ const corsOptions = {
     const allowedOrigins = [...envOrigins, ...fallbackOrigins];
     
     // In development, allow all origins for easier testing
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
       return callback(null, true);
     }
     

@@ -50,7 +50,7 @@ const getUsers = async (req, res) => {
   }
 };
 const encryptPassword = async (req, res, next) => {
-  const password = req.body.password || "12345";
+  const password = req.body.password || "1234";
   req.body.password = await bcrypt.hash(password, 10);
   next();
 };
@@ -141,6 +141,7 @@ const login = async (req, res, next) => {
       _id: user._id.toString(),
       phoneNumber: user.phoneNumber,
       role: user.role,
+      jobTitle: user.jobTitle,
       name: user.name
     });
 
