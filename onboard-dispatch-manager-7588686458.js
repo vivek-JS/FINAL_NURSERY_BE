@@ -18,7 +18,7 @@ const onboardDispatchManager = async () => {
   try {
     const phoneNumber = 7588686458;
     const name = "Dispatch Manager 7588686458";
-    const password = "12345678"; // Default password as per memory
+    const password = "1234"; // Default password as per memory
     
     console.log(`🔍 Checking if user with phone number ${phoneNumber} already exists...`);
     

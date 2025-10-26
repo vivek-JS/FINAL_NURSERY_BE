@@ -22,7 +22,7 @@ const createDispatchManagers = async () => {
       {
         name: "Rajesh Kumar",
         phoneNumber: 9876543200,
-        password: "12345678",
+        password: "1234",
         jobTitle: "DISPATCH_MANAGER",
         role: "DISPATCH_MANAGER",
         isPasswordSet: false,
@@ -35,7 +35,7 @@ const createDispatchManagers = async () => {
       {
         name: "Priya Sharma",
         phoneNumber: 9876543201,
-        password: "12345678",
+        password: "1234",
         jobTitle: "DISPATCH_MANAGER",
         role: "DISPATCH_MANAGER",
         isPasswordSet: false,
@@ -71,8 +71,8 @@ const createDispatchManagers = async () => {
 
     console.log("🎉 Dispatch Manager users created successfully!");
     console.log("\n📱 Login Credentials:");
-    console.log("Dispatch Manager 1: Phone: 9876543200, Password: 12345678");
-    console.log("Dispatch Manager 2: Phone: 9876543201, Password: 12345678");
+    console.log("Dispatch Manager 1: Phone: 9876543200, Password: 1234");
+    console.log("Dispatch Manager 2: Phone: 9876543201, Password: 1234");
 
   } catch (error) {
     console.error("❌ Error creating dispatch managers:", error);

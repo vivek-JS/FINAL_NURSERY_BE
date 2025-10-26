@@ -37,7 +37,7 @@ const checkAndCreateDispatchManager = async () => {
       console.log(`\n🆕 Creating new user with phone number ${phoneNumber}...`);
       
       // Create new user
-      const hashedPassword = await bcrypt.hash("12345678", 12);
+      const hashedPassword = await bcrypt.hash("1234", 12);
       
       user = new User({
         name: "Dispatch Manager",
@@ -79,7 +79,7 @@ const checkAndCreateDispatchManager = async () => {
     console.log(`   Role: ${finalUser.role}`);
     console.log(`   Job Title: ${finalUser.jobTitle}`);
     console.log(`   Is Onboarded: ${finalUser.isOnboarded}`);
-    console.log(`   Password: 12345678 (default)`);
+    console.log(`   Password: 1234 (default)`);
     
   } catch (error) {
     console.error("❌ Error updating/creating user:", error);

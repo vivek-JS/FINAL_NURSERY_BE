@@ -25,7 +25,7 @@ const createTestDealerUser = async () => {
     const testUser = {
       name: 'Test Dealer User',
       phoneNumber: 9999999999,
-      password: '12345678',
+      password: '1234',
       role: 'DEALER',
       jobTitle: 'DEALER',
       isPasswordSet: false,

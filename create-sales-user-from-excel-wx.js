@@ -154,7 +154,7 @@ const createSalesUserFromExcelWX = async () => {
         }
 
         // Create new user
-        const DEFAULT_PASSWORD = '12345678';
+        const DEFAULT_PASSWORD = '1234';
         const hashedPassword = await hashPassword(DEFAULT_PASSWORD);
         const newUser = new User({
           name: name,

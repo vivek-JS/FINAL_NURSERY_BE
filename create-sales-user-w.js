@@ -44,7 +44,7 @@ const createSalesUserW = async () => {
     }
 
     // Hash password
-    const DEFAULT_PASSWORD = '12345678';
+    const DEFAULT_PASSWORD = '1234';
     const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, 10);
 
     // Create new sales user

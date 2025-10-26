@@ -1,86 +1,67 @@
-import mongoose from "mongoose";
-import dotenv from "dotenv";
-import User from "./models/user.model.js";
+import mongoose from 'mongoose';
+import bcrypt from 'bcryptjs';
+import User from './models/user.model.js';
 
-// Load environment variables
-dotenv.config();
-
-const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/nursery";
-
-async function listAllUsers() {
+// Connect to MongoDB
+const connectDB = async () => {
   try {
-    console.log("===========================================");
-    console.log("List All Users in Database");
-    console.log("===========================================\n");
-
-    // Connect to MongoDB
-    console.log("Connecting to MongoDB...");
-    await mongoose.connect(MONGODB_URI);
-    console.log("✓ Connected to MongoDB successfully\n");
-
-    // Find all users
-    const users = await User.find({}).select('name phoneNumber role jobTitle isDisabled isPasswordSet');
-    
-    console.log(`Total users in database: ${users.length}\n`);
-    
-    if (users.length === 0) {
-      console.log("⚠️  No users found in database");
-      console.log("\nTo create a user, you can:");
-      console.log("1. Use the API: POST /api/user/createUser");
-      console.log("2. Run existing scripts like:");
-      console.log("   - create-dispatch-manager.js");
-      console.log("   - add-superadmin.js");
-      console.log("   - etc.");
-    } else {
-      console.log("Users List:");
-      console.log("═══════════════════════════════════════════════════════════════════\n");
-      
-      users.forEach((user, index) => {
-        console.log(`${index + 1}. ${user.name}`);
-        console.log(`   Phone:        ${user.phoneNumber}`);
-        console.log(`   Role:         ${user.role || 'N/A'}`);
-        console.log(`   Job Title:    ${user.jobTitle || 'N/A'}`);
-        console.log(`   Disabled:     ${user.isDisabled ? 'Yes ❌' : 'No ✓'}`);
-        console.log(`   Password Set: ${user.isPasswordSet ? 'Yes ✓' : 'No (needs reset)'}`);
-        console.log("");
-      });
-      
-      console.log("═══════════════════════════════════════════════════════════════════");
-      
-      // Group by role
-      const roleGroups = {};
-      users.forEach(user => {
-        const role = user.role || user.jobTitle || 'NO_ROLE';
-        if (!roleGroups[role]) roleGroups[role] = [];
-        roleGroups[role].push(user);
-      });
-      
-      console.log("\nSummary by Role:");
-      console.log("═══════════════════════════════════════════════════════════════════");
-      Object.keys(roleGroups).sort().forEach(role => {
-        console.log(`${role}: ${roleGroups[role].length} user(s)`);
-      });
-      console.log("═══════════════════════════════════════════════════════════════════");
-    }
-
-    console.log("");
-
-    // Close connection
-    await mongoose.connection.close();
-    console.log("✓ MongoDB connection closed");
-    
+    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/nursery-management');
+    console.log('✅ Connected to MongoDB');
   } catch (error) {
-    console.error("\n❌ ERROR:", error.message);
-    console.error(error);
-    
-    if (mongoose.connection.readyState === 1) {
-      await mongoose.connection.close();
-    }
-    
+    console.error('❌ MongoDB connection error:', error);
     process.exit(1);
   }
-}
+};
 
-// Run the script
+// List all users to find the correct phone number
+const listAllUsers = async () => {
+  try {
+    await connectDB();
+    
+    console.log('📋 All Users in Database:');
+    console.log('=' .repeat(80));
+    
+    const users = await User.find({}).select('name phoneNumber role jobTitle isOnboarded isPasswordSet isDisabled createdAt');
+    
+    if (users.length === 0) {
+      console.log('❌ No users found in database');
+      return;
+    }
+    
+    users.forEach((user, index) => {
+      console.log(`${index + 1}. Name: ${user.name}`);
+      console.log(`   Phone: ${user.phoneNumber}`);
+      console.log(`   Role: ${user.role}`);
+      console.log(`   Job Title: ${user.jobTitle}`);
+      console.log(`   Onboarded: ${user.isOnboarded ? '✅' : '❌'}`);
+      console.log(`   Password Set: ${user.isPasswordSet ? '✅' : '❌'}`);
+      console.log(`   Disabled: ${user.isDisabled ? '❌' : '✅'}`);
+      console.log(`   Created: ${user.createdAt}`);
+      console.log('   ' + '-'.repeat(60));
+    });
+    
+    console.log(`\n📊 Total Users: ${users.length}`);
+    
+    // Check for users with similar phone numbers
+    const similarUsers = users.filter(user => 
+      user.phoneNumber.toString().includes('1111') || 
+      user.phoneNumber.toString().includes('5555')
+    );
+    
+    if (similarUsers.length > 0) {
+      console.log('\n🔍 Users with similar phone numbers (containing 1111 or 5555):');
+      similarUsers.forEach(user => {
+        console.log(`   ${user.name} - ${user.phoneNumber}`);
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Error listing users:', error);
+  } finally {
+    await mongoose.disconnect();
+    console.log('\n🔌 Disconnected from MongoDB');
+  }
+};
+
+// Run the list
 listAllUsers();
-

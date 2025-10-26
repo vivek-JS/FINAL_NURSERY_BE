@@ -23,7 +23,7 @@ const connectDB = async () => {
 import User from './models/user.model.js';
 
 // Default password for new users
-const DEFAULT_PASSWORD = '12345678';
+const DEFAULT_PASSWORD = '1234';
 
 // Function to hash password
 const hashPassword = async (password) => {
