@@ -15,7 +15,11 @@ dotenv.config();
 
 const connectDB = async () => {
   try {
-    await mongoose.connect(process.env.MONGO_URL);
+    const uri = process.env.MONGO_URL || process.env.MONGODB_URI;
+    if (!uri) {
+      throw new Error("MONGO_URL or MONGODB_URI environment variable is required.");
+    }
+    await mongoose.connect(uri);
     console.log('✅ Connected to MongoDB');
   } catch (error) {
     console.error('❌ Database connection failed:', error);
@@ -115,7 +119,8 @@ const importBooking = async () => {
   try {
     console.log('\n📖 Reading Excel data...\n');
     
-    const { stdout } = await execAsync('python3 read-and-import-booking.py', {
+    const pythonInterpreter = process.env.PYTHON_PATH || 'python3';
+    const { stdout } = await execAsync(`${pythonInterpreter} read-and-import-booking.py`, {
       cwd: __dirname
     });
     
@@ -329,7 +334,7 @@ const importBooking = async () => {
           orderBookingDate: bookingDate,
           deliveryDate: deliveryDate,
           rate: parseFloat(row['Rate']) || 0,
-          orderStatus: 'PENDING',
+          orderStatus: 'ACCEPTED',
           orderPaymentStatus: 'PENDING'
         };
         
@@ -435,6 +440,10 @@ const importBooking = async () => {
       const failureExcelPath = path.join(__dirname, 'import-failures.xlsx');
       XLSX.writeFile(workbook, failureExcelPath);
       console.log(`📝 Saved failure workbook to ${failureExcelPath}`);
+
+      const erronWorkbookPath = path.join(__dirname, 'erron_new.xlsx');
+      XLSX.writeFile(workbook, erronWorkbookPath);
+      console.log(`📝 Saved erron workbook to ${erronWorkbookPath}`);
     }
     
   } catch (error) {

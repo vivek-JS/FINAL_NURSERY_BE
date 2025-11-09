@@ -10,6 +10,7 @@ import User from "../models/user.model.js";
 import Order from "../models/order.model.js";
 import { updateSlot } from "./factory.controller.js";
 import Tray from "../models/tray.model.js";
+import { generateSlotsForYear } from "./slots.controller.js";
 
 // Function to parse Excel date serial number
 function parseExcelDate(serialNumber) {
@@ -318,6 +319,209 @@ const createSalesPerson = async (name, phoneNumber = null) => {
   }
 };
 
+const TARGET_PLANT_CONFIG = {
+  Papaya: {
+    slotSize: 7,
+    plantReadyDays: 40,
+    sowingAllowed: true,
+  },
+  Muskmelon: {
+    slotSize: 1,
+    plantReadyDays: 13,
+    sowingAllowed: true,
+  },
+  Watermelon: {
+    slotSize: 1,
+    plantReadyDays: 18,
+    sowingAllowed: true,
+  },
+};
+
+const SLOT_YEARS = [2025, 2026];
+
+const normalizeName = (value) => (value || "").toString().trim();
+
+const findSubtypeByName = (plant, subtypeName) => {
+  if (!plant || !plant.subtypes || !subtypeName) {
+    return null;
+  }
+
+  const targetName = normalizeName(subtypeName).toLowerCase();
+  return plant.subtypes.find(
+    (subtype) => normalizeName(subtype.name).toLowerCase() === targetName
+  );
+};
+
+const buildSlotTemplates = (year, slotSize, plantReadyDays) => {
+  const baseSlots = generateSlotsForYear(year, slotSize);
+
+  return baseSlots.map((slot) => ({
+    ...slot,
+    totalPlants: 0,
+    totalBookedPlants: 0,
+    availablePlants: 0,
+    buffer: 0,
+    effectiveBuffer: 0,
+    bufferAdjustedCapacity: 0,
+    bufferAmount: 0,
+    originalTotalPlants: 0,
+    isOverflow: false,
+    overflow: false,
+    status: true,
+    plantReadyDays,
+    plantsSowed: 0,
+    officeSowed: 0,
+    primarySowed: 0,
+    sowingDate: null,
+    plantReadyDate: null,
+    reminderBeforePlantReadyDays: 0,
+    orders: [],
+    allowedSalesmen: [],
+    restrictToSalesmen: false,
+    isManual: false,
+  }));
+};
+
+const ensureSlotsForSubtype = async ({
+  plantId,
+  subtypeId,
+  slotSize,
+  plantReadyDays,
+}) => {
+  for (const year of SLOT_YEARS) {
+    const existingYearSlots = await PlantSlot.findOne({
+      plantId,
+      year,
+    });
+
+    const slots = buildSlotTemplates(year, slotSize, plantReadyDays);
+
+    if (!existingYearSlots) {
+      const subtypeSlots = [
+        {
+          subtypeId,
+          slots,
+        },
+      ];
+
+      await PlantSlot.create({
+        plantId,
+        year,
+        subtypeSlots,
+      });
+      continue;
+    }
+
+    const subtypeSlotEntry = existingYearSlots.subtypeSlots.find(
+      (entry) => entry.subtypeId.toString() === subtypeId.toString()
+    );
+
+    if (!subtypeSlotEntry) {
+      existingYearSlots.subtypeSlots.push({
+        subtypeId,
+        slots,
+      });
+      await existingYearSlots.save();
+    } else if (!subtypeSlotEntry.slots || subtypeSlotEntry.slots.length === 0) {
+      subtypeSlotEntry.slots = slots;
+      await existingYearSlots.save();
+    }
+  }
+};
+
+const ensurePlantAndSubtype = async ({
+  plantName,
+  subtypeName,
+  plantMap,
+}) => {
+  const config = TARGET_PLANT_CONFIG[plantName];
+  if (!config) {
+    return plantMap.get(plantName) || null;
+  }
+
+  const normalizedSubtypeName = normalizeName(subtypeName);
+
+  if (!normalizedSubtypeName) {
+    return plantMap.get(plantName) || null;
+  }
+
+  let plantEntry = plantMap.get(plantName);
+  let plantDoc = null;
+  let isDirty = false;
+
+  if (!plantEntry) {
+    plantDoc = new PlantCms({
+      name: plantName,
+      slotSize: config.slotSize,
+      sowingAllowed: config.sowingAllowed,
+      subtypes: [
+        {
+          name: normalizedSubtypeName,
+          plantReadyDays: config.plantReadyDays,
+        },
+      ],
+    });
+
+    await plantDoc.save();
+    isDirty = true;
+  } else {
+    plantDoc = await PlantCms.findById(plantEntry._id);
+
+    if (!plantDoc) {
+      plantMap.delete(plantName);
+      return null;
+    }
+
+    if (plantDoc.slotSize !== config.slotSize) {
+      plantDoc.slotSize = config.slotSize;
+      isDirty = true;
+    }
+
+    if (!plantDoc.sowingAllowed && config.sowingAllowed) {
+      plantDoc.sowingAllowed = true;
+      isDirty = true;
+    }
+
+    const existingSubtype = findSubtypeByName(
+      plantDoc,
+      normalizedSubtypeName
+    );
+
+    if (!existingSubtype) {
+      plantDoc.subtypes.push({
+        name: normalizedSubtypeName,
+        plantReadyDays: config.plantReadyDays,
+      });
+      isDirty = true;
+    } else if (
+      existingSubtype.plantReadyDays !== config.plantReadyDays
+    ) {
+      existingSubtype.plantReadyDays = config.plantReadyDays;
+      isDirty = true;
+    }
+
+    if (isDirty) {
+      await plantDoc.save();
+    }
+  }
+
+  const subtype = findSubtypeByName(plantDoc, normalizedSubtypeName);
+
+  if (subtype) {
+    await ensureSlotsForSubtype({
+      plantId: plantDoc._id,
+      subtypeId: subtype._id,
+      slotSize: config.slotSize,
+      plantReadyDays: config.plantReadyDays,
+    });
+  }
+
+  const refreshedPlant = await PlantCms.findById(plantDoc._id).lean();
+  plantMap.set(plantName, refreshedPlant);
+
+  return refreshedPlant;
+};
+
 export const validateExcelStructure = (buffer) => {
   console.log("🔍 Starting Excel validation...");
 
@@ -512,6 +716,8 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
     const orderNumber = parseOrderId(row["Booking NO."]);
+    const cropName = normalizeName(row["Crop"]);
+    const mappedVarietyName = mapVarietyName(cropName, row["Variety"]);
     
     // Track generated random IDs for 0 booking numbers
     if (row["Booking NO."] == 0 || row["Booking NO."] === "0") {
@@ -526,6 +732,8 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
     processedData.push({
       ...row,
       orderNumber,
+      normalizedCrop: cropName,
+      mappedVarietyName,
       date: convertDate(row["Date"]),
       slots: convertDate(row["Expected\r\nDel.\r\nDate"]),
       "Advance Date": row["Advance\r\nDate"] ? convertDate(row["Advance\r\nDate"]) : null,
@@ -533,7 +741,9 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
 
     uniqueOrderIds.add(orderNumber);
     uniqueSalesPersons.add(row["Refrence"]);
-    uniquePlants.add(row["Crop"]);
+    if (cropName) {
+      uniquePlants.add(cropName);
+    }
     
     if (row["Media"]) {
       uniqueTrays.add(row["Media"]);
@@ -580,8 +790,9 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
   const orderMap = new Map(existingOrders.map(o => [o.orderId, o]));
   const farmerPhoneMap = new Map();
   const salesPersonMap = new Map(salesPersons.map(s => [s.name, s]));
-  const plantMap = new Map(plants.map(p => [p.name, p]));
+  const plantMap = new Map(plants.map(p => [normalizeName(p.name), p]));
   const trayMap = new Map(trays.map(t => [t.cavity, t]));
+  const ensuredPlantSubtypeKeys = new Set();
 
   // Build farmer phone lookup
   existingFarmers.forEach(farmer => {
@@ -761,17 +972,43 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         }
 
         // Get plant and variety
-        const plant = plantMap.get(row["Crop"]);
-        if (!plant) {
-          throw new Error(`Plant type "${row["Crop"]}" not found`);
+        const plantName = row.normalizedCrop;
+        const displayPlantName = row["Crop"];
+        const varietyName = row.mappedVarietyName;
+        const plantConfig = TARGET_PLANT_CONFIG[plantName];
+
+        if (!plantName) {
+          throw new Error(`Missing plant name for booking no ${row["Booking NO."] || "unknown"}`);
         }
 
-        // Handle variety mapping for specific cases
-        let varietyName = mapVarietyName(row["Crop"], row["Variety"]);
+        if (!varietyName) {
+          throw new Error(
+            `Variety not provided for plant "${displayPlantName}" at row ${rowIndex + 2}`
+          );
+        }
 
-        const subtype = plant.subtypes.find(st => st.name === varietyName);
+        if (plantConfig && varietyName) {
+          const ensureKey = `${plantName}::${varietyName}`;
+          if (!ensuredPlantSubtypeKeys.has(ensureKey)) {
+            await ensurePlantAndSubtype({
+              plantName,
+              subtypeName: varietyName,
+              plantMap,
+            });
+            ensuredPlantSubtypeKeys.add(ensureKey);
+          }
+        }
+
+        const plant = plantMap.get(plantName);
+        if (!plant) {
+          throw new Error(`Plant type "${displayPlantName}" not found`);
+        }
+
+        const subtype = findSubtypeByName(plant, varietyName);
         if (!subtype) {
-          throw new Error(`Variety "${varietyName}" not found for ${row["Crop"]} (original: "${row["Variety"]}")`);
+          throw new Error(
+            `Variety "${varietyName}" not found for ${displayPlantName} (original: "${row["Variety"]}")`
+          );
         }
 
         // Find slot

@@ -43,51 +43,88 @@ server.use(helmet({
   crossOriginOpenerPolicy: false // Disable COOP completely for API
 }));
 
+const normalizeOrigin = (origin) => origin?.trim().replace(/\/+$/, '');
+
+const staticFallbackOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://localhost:3003',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+  'http://127.0.0.1:3002',
+  'http://127.0.0.1:3003',
+  'http://localhost:8000',
+  'http://127.0.0.1:8000',
+  'http://localhost:8081',
+  'http://127.0.0.1:8081',
+  'http://localhost:8082',
+  'http://127.0.0.1:8082',
+  'http://localhost:8083',
+  'http://127.0.0.1:8083',
+  'http://localhost:8084',
+  'http://127.0.0.1:8084',
+  'http://localhost:8085',
+  'http://127.0.0.1:8085',
+  'exp://localhost:8081',
+  'exp://127.0.0.1:8081'
+].map(normalizeOrigin);
+
+const dynamicEnvOrigins = [
+  process.env.ALLOWED_ORIGINS,
+  process.env.FRONTEND_URL,
+  process.env.FRONTEND_URLS,
+  process.env.CLIENT_URL,
+  process.env.DASHBOARD_URL,
+  process.env.MOBILE_APP_URL
+]
+  .filter(Boolean)
+  .flatMap((value) => value.split(','))
+  .map(normalizeOrigin)
+  .filter(Boolean);
+
+const renderExternalUrl = normalizeOrigin(process.env.RENDER_EXTERNAL_URL);
+const renderServiceUrl = normalizeOrigin(process.env.SERVICE_URL);
+
+const allowedOriginSet = new Set([
+  ...staticFallbackOrigins,
+  ...dynamicEnvOrigins,
+  renderExternalUrl,
+  renderServiceUrl
+].filter(Boolean));
+
+const allowedOriginPatterns = [
+  /^https:\/\/.*\.onrender\.com$/,
+  /^https:\/\/.*\.vercel\.app$/,
+  /^https:\/\/.*\.netlify\.app$/
+];
+
+const resolvedAllowedOrigins = Array.from(allowedOriginSet);
+
 // CORS configuration - More permissive for development and mobile apps
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
-    // Get allowed origins from environment variable or use fallback
-    const envOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
-    const fallbackOrigins = [
-      'http://localhost:3000', 
-      'http://localhost:3001', 
-      'http://localhost:3002', 
-      'http://localhost:3003', 
-      'http://127.0.0.1:3000', 
-      'http://127.0.0.1:3001',
-      'http://127.0.0.1:3002',
-      'http://127.0.0.1:3003',
-      'http://localhost:8000',
-      'http://127.0.0.1:8000',
-      'http://localhost:8081', // Expo development server
-      'http://127.0.0.1:8081', // Expo development server
-      'http://localhost:8082', // Expo web server
-      'http://127.0.0.1:8082', // Expo web server
-      'http://localhost:8083', // React Native web server
-      'http://127.0.0.1:8083', // React Native web server
-      'http://localhost:8084', // React Native web server
-      'http://127.0.0.1:8084', // React Native web server
-      'http://localhost:8085', // React Native web server
-      'http://127.0.0.1:8085', // React Native web server
-      'exp://localhost:8081', // Expo protocol
-      'exp://127.0.0.1:8081'   // Expo protocol
-    ];
-    
-    const allowedOrigins = [...envOrigins, ...fallbackOrigins];
-    
-    // In development, allow all origins for easier testing
+
+    const normalizedOrigin = normalizeOrigin(origin);
+
     if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
       return callback(null, true);
     }
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+
+    if (
+      resolvedAllowedOrigins.includes(normalizedOrigin) ||
+      allowedOriginPatterns.some((pattern) => pattern.test(normalizedOrigin))
+    ) {
+      return callback(null, true);
     }
+
+    // Allow same-host requests when API and frontend share the domain
+    if (renderExternalUrl && normalizedOrigin === renderExternalUrl) {
+      return callback(null, true);
+    }
+
+    callback(new Error(`Not allowed by CORS: ${normalizedOrigin}`));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -154,7 +191,8 @@ server.get("/cors-test", (req, res) => {
     origin: req.headers.origin,
     timestamp: new Date().toISOString(),
     cors: "enabled",
-    allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['default origins']
+    allowedOrigins: resolvedAllowedOrigins,
+    allowedOriginPatterns: allowedOriginPatterns.map((pattern) => pattern.toString())
   });
 });
 

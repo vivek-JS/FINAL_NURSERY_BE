@@ -1860,6 +1860,8 @@ const getAll = (Model, modelName) =>
       endDay, // For slot date validation
       farmReady, // New parameter to filter orders with farm ready date
       ready_for_dispatch, // New parameter to filter orders ready for dispatch
+      plantId, // Filter by plant
+      subtypeId, // Filter by plant subtype
       orderIds, // NEW: Filter by specific order IDs
     } = req.query;
 
@@ -1921,6 +1923,24 @@ const getAll = (Model, modelName) =>
       if (dealer) {
         pipeline.push({
           $match: { dealer: new mongoose.Types.ObjectId(dealer) },
+        });
+      }
+
+      if (plantId) {
+        if (!mongoose.Types.ObjectId.isValid(plantId)) {
+          throw new AppError("Invalid plantId provided", 400);
+        }
+        pipeline.push({
+          $match: { plantName: new mongoose.Types.ObjectId(plantId) },
+        });
+      }
+
+      if (subtypeId) {
+        if (!mongoose.Types.ObjectId.isValid(subtypeId)) {
+          throw new AppError("Invalid subtypeId provided", 400);
+        }
+        pipeline.push({
+          $match: { plantSubtype: new mongoose.Types.ObjectId(subtypeId) },
         });
       }
 
