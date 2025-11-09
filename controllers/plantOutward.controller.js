@@ -6,6 +6,9 @@ import Tray from "../models/tray.model.js";
 import mongoose from "mongoose";
 import PlantOutward from "../models/plantOutward.model.js";
 
+const BATCH_PROJECTION =
+  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive";
+
 const addLabEntry = catchAsync(async (req, res, next) => {
   const { batchId, labData } = req.body;
 
@@ -165,7 +168,7 @@ const getAllPlantOutwards = catchAsync(async (req, res, next) => {
 
   // Build and execute query
   const query = PlantOutward.find(queryObj)
-    .populate("batchId", "batchNumber dateAdded")
+    .populate("batchId", BATCH_PROJECTION)
     .sort("-createdAt");
 
   const outwards = await query;
@@ -192,7 +195,7 @@ const getPlantOutwardByBatchId = catchAsync(async (req, res, next) => {
 
   const outward = await PlantOutward.findOne({ batchId }).populate(
     "batchId",
-    "batchNumber dateAdded"
+    BATCH_PROJECTION
   );
 
   if (!outward) {
@@ -466,7 +469,7 @@ const getPrimaryInwardByBatchId = catchAsync(async (req, res, next) => {
 
   const outward = await PlantOutward.findOne({ batchId }).populate(
     "batchId",
-    "batchNumber dateAdded"
+    BATCH_PROJECTION
   );
 
   if (!outward) {
@@ -1007,7 +1010,7 @@ const getPrimaryInwards = catchAsync(async (req, res, next) => {
   }
 
   const plantOutwards = await PlantOutward.find(queryObj)
-    .populate("batchId", "batchNumber dateAdded")
+    .populate("batchId", BATCH_PROJECTION)
     .select("primaryInward")
     .sort("-createdAt");
 
@@ -1053,7 +1056,7 @@ const getPrimaryOutwards = catchAsync(async (req, res, next) => {
   }
 
   const plantOutwards = await PlantOutward.find(queryObj)
-    .populate("batchId", "batchNumber dateAdded")
+    .populate("batchId", BATCH_PROJECTION)
     .select("primaryOutward")
     .sort("-createdAt");
 
@@ -1094,7 +1097,7 @@ const getSecondaryInwards = catchAsync(async (req, res, next) => {
   }
 
   const plantOutwards = await PlantOutward.find(queryObj)
-    .populate("batchId", "batchNumber dateAdded")
+    .populate("batchId", BATCH_PROJECTION)
     .select("secondaryInward")
     .sort("-createdAt");
 
@@ -1135,7 +1138,7 @@ const getSecondaryOutwards = catchAsync(async (req, res, next) => {
   }
 
   const plantOutwards = await PlantOutward.find(queryObj)
-    .populate("batchId", "batchNumber dateAdded")
+    .populate("batchId", BATCH_PROJECTION)
     .select("secondaryOutward")
     .sort("-createdAt");
 
@@ -1158,7 +1161,7 @@ const getPrimaryInwardById = catchAsync(async (req, res, next) => {
   const plantOutward = await PlantOutward.findOne({
     batchId,
     "primaryInward._id": primaryInwardId
-  }).populate("batchId", "batchNumber dateAdded");
+  }).populate("batchId", BATCH_PROJECTION);
 
   if (!plantOutward) {
     return next(new AppError("No plant outward found with this batch ID", 404));
@@ -1185,7 +1188,7 @@ const getPrimaryOutwardById = catchAsync(async (req, res, next) => {
   const plantOutward = await PlantOutward.findOne({
     batchId,
     "primaryOutward._id": primaryOutwardId
-  }).populate("batchId", "batchNumber dateAdded");
+  }).populate("batchId", BATCH_PROJECTION);
 
   if (!plantOutward) {
     return next(new AppError("No plant outward found with this batch ID", 404));
@@ -1212,7 +1215,7 @@ const getSecondaryInwardById = catchAsync(async (req, res, next) => {
   const plantOutward = await PlantOutward.findOne({
     batchId,
     "secondaryInward._id": secondaryInwardId
-  }).populate("batchId", "batchNumber dateAdded");
+  }).populate("batchId", BATCH_PROJECTION);
 
   if (!plantOutward) {
     return next(new AppError("No plant outward found with this batch ID", 404));
@@ -1239,7 +1242,7 @@ const getSecondaryOutwardById = catchAsync(async (req, res, next) => {
   const plantOutward = await PlantOutward.findOne({
     batchId,
     "secondaryOutward._id": secondaryOutwardId
-  }).populate("batchId", "batchNumber dateAdded");
+  }).populate("batchId", BATCH_PROJECTION);
 
   if (!plantOutward) {
     return next(new AppError("No plant outward found with this batch ID", 404));

@@ -193,7 +193,7 @@ import batchRoute from "./routes/batch.route.js";
 import plantOutward from "./routes/plantOutward.route.js";
 import PollyHouse from "./routes/pollyhouse.route.js";
 import DelaerRoutes from "./routes/dealer.route.js";
-import { authenticateToken } from "./middlewares/auth.middleware.js";
+import { authenticateToken, optionalAuth } from "./middlewares/auth.middleware.js";
 import ExcelRoute from "./routes/excel.route.js";
 import pricingRoute from "./routes/pricing.route.js";
 import analyticsRoute from "./routes/analytics.route.js";
@@ -201,6 +201,7 @@ import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
 import sowingRoute from "./routes/sowing.route.js";
+import clearDataRoute from "./routes/clearData.route.js";
 
 // Inventory Management Routes
 import productRoute from "./routes/product.route.js";
@@ -229,7 +230,14 @@ server.use("/api/v1/user", userRoute);
 server.use("/api/v1/farmer", authenticateToken, farmerRoute);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/cms", authenticateToken, cmsRoute);
-server.use("/api/v1/employee", authenticateToken, employeeRoute);
+const employeeAuthMiddleware =
+  process.env.DISABLE_EMPLOYEE_AUTH === "true" ? optionalAuth : authenticateToken;
+
+if (process.env.DISABLE_EMPLOYEE_AUTH === "true") {
+  console.warn("⚠️  Employee authentication disabled. Remember to re-enable after testing.");
+}
+
+server.use("/api/v1/employee", employeeAuthMiddleware, employeeRoute);
 server.use("/api/v1/attendance", authenticateToken, attendanceRoute);
 server.use("/api/v1/reporting", authenticateToken, reportingRoute);
 server.use("/api/v1/lab", authenticateToken, labRoute);
@@ -259,6 +267,7 @@ server.use("/api/v1/state", authenticateToken, stateRoute);
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/notifications", notificationRoute); // Notification routes (has built-in auth)
 server.use("/api/v1/sowing", authenticateToken, sowingRoute); // Sowing management routes
+server.use("/api/v1/clear-data", authenticateToken, clearDataRoute); // Data clearing routes
 
 // Inventory Management Routes (all require authentication)
 server.use("/api/v1/inventory", authenticateToken, inventoryRoute);

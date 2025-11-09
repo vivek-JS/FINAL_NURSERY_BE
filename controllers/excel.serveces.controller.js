@@ -61,6 +61,14 @@ function parseOrderId(bookingNo) {
   }
 
   const bookingStr = bookingNo.toString().trim();
+  const numericValue = parseInt(bookingStr, 10);
+
+  // If booking number is 0, generate a random 5-digit ID
+  if (numericValue === 0) {
+    console.log(`⚠️  Booking number is 0, generating random 5-digit ID`);
+    const randomId = Math.floor(Math.random() * 90000) + 10000; // 5-digit random number (10000-99999)
+    return randomId;
+  }
 
   // Handle new format: "2025/2", "2025/10", etc.
   const newFormatMatch = bookingStr.match(/^(\d{4})\/(\d+)$/);
@@ -107,6 +115,25 @@ function convertDate(value) {
   }
 
   const valueStr = value.toString().trim();
+
+  // Handle MM/DD/YY format (like "11/10/25" for Nov 10, 2025)
+  const mmddyyMatch = valueStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (mmddyyMatch) {
+    const month = parseInt(mmddyyMatch[1], 10);
+    const day = parseInt(mmddyyMatch[2], 10);
+    const year = parseInt(mmddyyMatch[3], 10);
+    
+    // Convert 2-digit year to 4-digit year (00-30 = 2000-2030, 31-99 = 1931-1999)
+    const fullYear = year > 30 ? 1900 + year : 2000 + year;
+    
+    // Validate the date
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && fullYear >= 2000 && fullYear <= 2030) {
+      const date = moment(`${fullYear}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+      if (date.isValid()) {
+        return date.format("DD-MM-YYYY");
+      }
+    }
+  }
 
   // Handle MM/DD/YYYY format specifically (like "9/21/2024")
   const mmddyyyyMatch = valueStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -461,6 +488,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
     success: [],
     errors: [],
     autoCreatedSalesPersons: [],
+    generatedOrderIds: [], // Track generated IDs for 0 booking numbers
     summary: {
       totalProcessed: 0,
       successfulImports: 0,
@@ -484,6 +512,16 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
     const orderNumber = parseOrderId(row["Booking NO."]);
+    
+    // Track generated random IDs for 0 booking numbers
+    if (row["Booking NO."] == 0 || row["Booking NO."] === "0") {
+      results.generatedOrderIds.push({
+        row: i + 2, // Excel row number (1-indexed with header)
+        bookingNo: row["Booking NO."],
+        generatedOrderId: orderNumber,
+        name: row["Name"]
+      });
+    }
     
     processedData.push({
       ...row,
@@ -609,7 +647,13 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
             originalValue: mobileValue || "Missing",
           };
         } else {
-          cleanedNumbers = cleanAndValidateMobileNumber(mobileValue);
+          // Clean mobile number: remove newlines, spaces, etc.
+          let cleanMobile = String(mobileValue).trim().replace(/\n/g, '').replace(/\s+/g, '');
+          // Take first number if multiple
+          if (cleanMobile.includes('\n') || cleanMobile.length > 10) {
+            cleanMobile = cleanMobile.split(/[\s\n]+/)[0];
+          }
+          cleanedNumbers = cleanAndValidateMobileNumber(cleanMobile);
         }
 
         const primaryNumber = cleanedNumbers.primaryNumber;
@@ -705,6 +749,16 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
             message: "Auto-created during import"
           });
         }
+        
+        // If no sales person found, create a default one
+        if (!salesPerson) {
+          salesPerson = salesPersonMap.get('Default Sales');
+          
+          if (!salesPerson) {
+            salesPerson = await createSalesPerson('Default Sales', null);
+            salesPersonMap.set('Default Sales', salesPerson);
+          }
+        }
 
         // Get plant and variety
         const plant = plantMap.get(row["Crop"]);
@@ -749,6 +803,15 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         const advanceAmount = Number(row["Advance\r\nAmt."]) || 0;
         const balanceAmount = totalAmount - advanceAmount;
 
+        // Check if order is already dispatched based on "Del y n" column
+        const isDispatched = row["Del. Y/N"] && row["Del. Y/N"].toString().trim().toUpperCase() === "Y";
+        
+        // Determine order status
+        let orderStatus = 'ACCEPTED';
+        if (isDispatched) {
+          orderStatus = 'DISPATCHED';
+        }
+
         const orderData = {
           orderId: row.orderNumber,
           farmer: farmer._id,
@@ -759,23 +822,37 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           plantSubtype: subtype._id,
           bookingSlot: slot._id,
           cavity: tray ? tray._id : null,
-          orderStatus: 'ACCEPTED',
+          orderStatus: orderStatus,
           notes: row["Remark"] || "",
           paymentCompleted: balanceAmount <= 0,
           orderPaymentStatus: balanceAmount <= 0 ? "COMPLETED" : "PENDING",
           orderBookingDate: row.date ? moment(row.date, "DD-MM-YYYY").toDate() : new Date(),
+          deliveryDate: deliveryDate.toDate(), // Set the delivery date
         };
 
         const order = await Order.create(orderData);
 
         // Add payment if advance exists
         if (advanceAmount > 0) {
+          // Payment logic: If Ad. Amt. Mode is online, use Bank as mode. Otherwise use Ad. Amt. Mode as mode
+          let paymentMode;
+          const adAmtMode = row["Ad. Amt. Mode"] || '';
+          const bankValue = row["Bank"] ? String(row["Bank"]) : '';
+          
+          if (adAmtMode && adAmtMode.toLowerCase() === 'online') {
+            paymentMode = bankValue || 'online';
+          } else if (adAmtMode) {
+            paymentMode = adAmtMode;
+          } else {
+            paymentMode = bankValue || 'CASH';
+          }
+          
           const paymentData = {
             paidAmount: advanceAmount,
             paymentStatus: "COLLECTED",
             paymentDate: row["Advance Date"] ? moment(row["Advance Date"], "DD-MM-YYYY").toDate() : new Date(),
             bankName: row["Bank"] || "",
-            modeOfPayment: row["Ad. Amt. Mode"] || "CASH",
+            modeOfPayment: paymentMode,
             remark: row["Remark"] || "",
           };
 
@@ -908,19 +985,27 @@ async function findDeliverySlot(plantId, subtypeId, deliveryDate) {
       throw new Error(`No slots found for subtype ${subtypeId}`);
     }
 
+    // Normalize delivery date to midnight to avoid timezone issues
+    const deliveryDateStr = deliveryMoment.format("YYYY-MM-DD");
+    const normalizedDeliveryDate = moment(deliveryDateStr + 'T00:00:00');
+    
     const targetSlot = subtypeSlot.slots.find((slot) => {
-      const startMoment = moment(slot.startDay, "DD-MM-YYYY");
-      const endMoment = moment(slot.endDay, "DD-MM-YYYY");
+      const slotStart = slot.startDay.split('-').reverse().join('-');
+      const slotEnd = slot.endDay.split('-').reverse().join('-');
+      
+      // Normalize slot dates to midnight
+      const startMoment = moment(slotStart + 'T00:00:00');
+      const endMoment = moment(slotEnd + 'T00:00:00');
 
       return (
-        deliveryMoment.isSameOrAfter(startMoment, "day") &&
-        deliveryMoment.isSameOrBefore(endMoment, "day")
+        normalizedDeliveryDate.isSameOrAfter(startMoment, "day") &&
+        normalizedDeliveryDate.isSameOrBefore(endMoment, "day")
       );
     });
 
     if (!targetSlot) {
       throw new Error(
-        `No suitable slot found for delivery date ${deliveryMoment.format(
+        `No suitable slot found for delivery date ${normalizedDeliveryDate.format(
           "DD-MM-YYYY"
         )} in month ${month}`
       );

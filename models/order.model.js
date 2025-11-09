@@ -141,6 +141,34 @@ const orderEditHistorySchema = new Schema(
   { timestamps: true }
 );
 
+const additionalPlantsHistorySchema = new Schema(
+  {
+    previousTotal: {
+      type: Number,
+      required: true,
+    },
+    newTotal: {
+      type: Number,
+      required: true,
+    },
+    changeInPlants: {
+      type: Number,
+      required: true,
+    },
+    reason: {
+      type: String,
+    },
+    notes: {
+      type: String,
+    },
+    changedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+  },
+  { timestamps: true }
+);
+
 const paymentSchema = new Schema(
   {
     paidAmount: {
@@ -242,12 +270,29 @@ const orderSchema = new Schema(
       type: Number,
       required: true,
     },
-    // Field to track remaining plants (initially equals numberOfPlants)
+    additionalPlants: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalPlants: {
+      type: Number,
+      default: function () {
+        return (this.numberOfPlants || 0) + (this.additionalPlants || 0);
+      },
+    },
+    // Field to track remaining plants (initially equals totalPlants)
     remainingPlants: {
       type: Number,
       default: function () {
-        return this.numberOfPlants;
+        const basePlants = (this.numberOfPlants || 0) + (this.additionalPlants || 0);
+        return basePlants;
       },
+    },
+    // Reference to current dispatch (latest dispatch ID)
+    currentDispatchId: {
+      type: Schema.Types.ObjectId,
+      ref: "Dispatch",
     },
     plantName: {
       type: Schema.Types.ObjectId,
@@ -324,6 +369,7 @@ const orderSchema = new Schema(
     },
     // Field to track farm ready date changes history
     farmReadyDateChanges: [farmReadyDateChangeSchema],
+    additionalPlantsHistory: [additionalPlantsHistorySchema],
     returnedPlants: {
       type: Number,
       default: 0,
@@ -382,6 +428,12 @@ const orderSchema = new Schema(
           type: Schema.Types.ObjectId,
           ref: "User",
         },
+        driverName: {
+          type: String,
+        },
+        vehicleName: {
+          type: String,
+        },
       },
     ],
     // Order for field - optional field with address and mobile number
@@ -413,6 +465,17 @@ orderSchema.index({ createdAt: 1, orderStatus: 1 });
 orderSchema.index({ cavity: 1 }); // Added index for cavity field
 orderSchema.index({ returnedPlants: 1 }); // Added index for returnedPlants
 orderSchema.index({ remainingPlants: 1 }); // Added index for remainingPlants
+orderSchema.index({ additionalPlants: 1 }); // Added index for additionalPlants
+orderSchema.index({ totalPlants: 1 }); // Added index for totalPlants
+
+orderSchema.methods.setAdditionalPlantsChangeMeta = function (meta = {}) {
+  this._additionalPlantsChangeMeta = {
+    reason: meta?.reason,
+    notes: meta?.notes,
+    changedBy: meta?.changedBy,
+  };
+  return this;
+};
 
 // Pre-save middleware to generate unique orderId
 orderSchema.pre("save", async function (next) {
@@ -437,7 +500,9 @@ orderSchema.pre("save", function (next) {
     .filter((p) => p.paymentStatus === "COLLECTED")
     .reduce((sum, p) => sum + (p.paidAmount || 0), 0);
 
-  const totalAmount = this.rate * this.numberOfPlants;
+  const totalOrderedPlants =
+    (this.numberOfPlants || 0) + (this.additionalPlants || 0);
+  const totalAmount = this.rate * totalOrderedPlants;
 
   // Update orderPaymentStatus and paymentCompleted
   this.orderPaymentStatus =
@@ -449,38 +514,271 @@ orderSchema.pre("save", function (next) {
 
 // Pre-save middleware to update remainingPlants when returnedPlants changes
 orderSchema.pre("save", function (next) {
-  // If returnedPlants has changed
-  if (this.isModified("returnedPlants")) {
-    // Calculate remaining plants
-    this.remainingPlants = Math.max(
+  const totalOrderedPlants =
+    (this.numberOfPlants || 0) + (this.additionalPlants || 0);
+
+  this.totalPlants = totalOrderedPlants;
+
+  const shouldRecalculateRemaining =
+    this.isModified("returnedPlants") ||
+    this.isModified("numberOfPlants") ||
+    this.isModified("additionalPlants") ||
+    typeof this.remainingPlants === "undefined";
+
+  if (shouldRecalculateRemaining) {
+    const remaining = Math.max(
       0,
-      this.numberOfPlants - this.returnedPlants
+      totalOrderedPlants - (this.returnedPlants || 0)
     );
+    this.remainingPlants = remaining;
+  }
 
-    // Check if this is a new return (not just a modification of an existing return)
-    const returnEntry = this.returnHistory?.find(
-      (entry) =>
-        entry.quantity === this.returnedPlants - (this._oldReturnedPlants || 0)
-    );
+  if (!this.isNew && this.isModified("additionalPlants")) {
+    const previousTotal =
+      typeof this._oldAdditionalPlants === "number"
+        ? this._oldAdditionalPlants
+        : this._originalAdditionalPlants ?? 0;
+    const newTotal = this.additionalPlants || 0;
 
-    // If no matching entry found and there was an actual return (not just setting to 0)
-    if (!returnEntry && this.returnedPlants > (this._oldReturnedPlants || 0)) {
-      // Add a new return history entry
+    if (previousTotal !== newTotal) {
+      if (!this.additionalPlantsHistory) {
+        this.additionalPlantsHistory = [];
+      }
+
+      const changeMeta =
+        this._additionalPlantsChangeMeta || {
+          reason: this.additionalPlantsChangeReason,
+          notes: this.additionalPlantsChangeNotes,
+          changedBy: this.additionalPlantsChangedBy,
+        };
+
+      const historyEntry = {
+        previousTotal,
+        newTotal,
+        changeInPlants: newTotal - previousTotal,
+      };
+
+      if (changeMeta?.reason) {
+        historyEntry.reason = changeMeta.reason;
+      }
+      if (changeMeta?.notes) {
+        historyEntry.notes = changeMeta.notes;
+      }
+      if (changeMeta?.changedBy) {
+        historyEntry.changedBy = changeMeta.changedBy;
+      }
+
+      this.additionalPlantsHistory.push(historyEntry);
+
+      if (!this.orderEditHistory) {
+        this.orderEditHistory = [];
+      }
+
+      const editHistoryEntry = {
+        field: "additionalPlants",
+        previousValue: previousTotal,
+        newValue: newTotal,
+      };
+
+      if (historyEntry.notes) {
+        editHistoryEntry.notes = historyEntry.notes;
+      }
+      if (historyEntry.changedBy) {
+        editHistoryEntry.changedBy = historyEntry.changedBy;
+      }
+
+      this.orderEditHistory.push(editHistoryEntry);
+    }
+  }
+
+  if (this.isModified("returnedPlants")) {
+    const previousReturned = this._oldReturnedPlants || 0;
+    const delta = (this.returnedPlants || 0) - previousReturned;
+
+    if (delta > 0) {
       if (!this.returnHistory) {
         this.returnHistory = [];
       }
 
       this.returnHistory.push({
         date: new Date(),
-        quantity: this.returnedPlants - (this._oldReturnedPlants || 0),
+        quantity: delta,
         reason: this.returnReason,
       });
     }
 
-    // Store the current value for next comparison
-    this._oldReturnedPlants = this.returnedPlants;
+    this._oldReturnedPlants = this.returnedPlants || 0;
   }
 
+  this._oldAdditionalPlants = this.additionalPlants || 0;
+  if (typeof this._originalAdditionalPlants !== "number") {
+    this._originalAdditionalPlants = this.additionalPlants || 0;
+  }
+  if (typeof this._oldReturnedPlants !== "number") {
+    this._oldReturnedPlants = this.returnedPlants || 0;
+  }
+  this._additionalPlantsChangeMeta = undefined;
+  this.additionalPlantsChangeReason = undefined;
+  this.additionalPlantsChangeNotes = undefined;
+  this.additionalPlantsChangedBy = undefined;
+
+  next();
+});
+
+orderSchema.pre("findOneAndUpdate", async function (next) {
+  this.setOptions({ new: true, runValidators: true });
+
+  const update = this.getUpdate() || {};
+  const $set = { ...(update.$set || {}) };
+  const $unset = update.$unset ? { ...update.$unset } : undefined;
+  const meta = {};
+
+  const collectMeta = (source) => {
+    if (!source) return;
+    if (source.additionalPlantsChangeMeta) {
+      Object.assign(meta, source.additionalPlantsChangeMeta);
+      delete source.additionalPlantsChangeMeta;
+    }
+    if (source.additionalPlantsChangeReason !== undefined) {
+      meta.reason = source.additionalPlantsChangeReason;
+      delete source.additionalPlantsChangeReason;
+    }
+    if (source.additionalPlantsChangeNotes !== undefined) {
+      meta.notes = source.additionalPlantsChangeNotes;
+      delete source.additionalPlantsChangeNotes;
+    }
+    if (source.additionalPlantsChangedBy !== undefined) {
+      meta.changedBy = source.additionalPlantsChangedBy;
+      delete source.additionalPlantsChangedBy;
+    }
+  };
+
+  collectMeta(update);
+  collectMeta($set);
+
+  const relevantKeys = ["numberOfPlants", "additionalPlants", "returnedPlants"];
+  relevantKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(update, key)) {
+      $set[key] = update[key];
+      delete update[key];
+    }
+  });
+
+  const modifiesQuantity = relevantKeys.some((key) =>
+    Object.prototype.hasOwnProperty.call($set, key)
+  );
+
+  if (!modifiesQuantity) {
+    update.$set = $set;
+    if ($unset) {
+      const unsetKeys = Object.keys($unset);
+      if (unsetKeys.length) {
+        update.$unset = $unset;
+      } else {
+        delete update.$unset;
+      }
+    }
+    this.setUpdate(update);
+    return next();
+  }
+
+  let doc = null;
+  try {
+    doc = await this.model
+      .findOne(this.getQuery())
+      .select("numberOfPlants additionalPlants returnedPlants")
+      .lean();
+  } catch (error) {
+    return next(error);
+  }
+
+  const previous = {
+    numberOfPlants: doc?.numberOfPlants ?? 0,
+    additionalPlants: doc?.additionalPlants ?? 0,
+    returnedPlants: doc?.returnedPlants ?? 0,
+  };
+
+  const numberOfPlants =
+    $set.numberOfPlants ?? previous.numberOfPlants;
+  const additionalPlants =
+    $set.additionalPlants ?? previous.additionalPlants;
+  const returnedPlants =
+    $set.returnedPlants ?? previous.returnedPlants;
+
+  const totalPlants = numberOfPlants + additionalPlants;
+  const remainingPlants = Math.max(0, totalPlants - returnedPlants);
+
+  $set.totalPlants = totalPlants;
+  $set.remainingPlants = remainingPlants;
+
+  if (
+    doc &&
+    Object.prototype.hasOwnProperty.call($set, "additionalPlants") &&
+    additionalPlants !== previous.additionalPlants
+  ) {
+    const change = additionalPlants - previous.additionalPlants;
+
+    if (change !== 0) {
+      update.$push = update.$push || {};
+
+      const historyEntry = {
+        previousTotal: previous.additionalPlants,
+        newTotal: additionalPlants,
+        changeInPlants: change,
+      };
+
+      if (meta.reason) historyEntry.reason = meta.reason;
+      if (meta.notes) historyEntry.notes = meta.notes;
+      if (meta.changedBy) historyEntry.changedBy = meta.changedBy;
+
+      if (update.$push.additionalPlantsHistory) {
+        if (update.$push.additionalPlantsHistory.$each) {
+          update.$push.additionalPlantsHistory.$each.push(historyEntry);
+        } else {
+          update.$push.additionalPlantsHistory = {
+            $each: [update.$push.additionalPlantsHistory, historyEntry],
+          };
+        }
+      } else {
+        update.$push.additionalPlantsHistory = { $each: [historyEntry] };
+      }
+
+      const editHistoryEntry = {
+        field: "additionalPlants",
+        previousValue: previous.additionalPlants,
+        newValue: additionalPlants,
+      };
+
+      if (historyEntry.notes) editHistoryEntry.notes = historyEntry.notes;
+      if (historyEntry.changedBy)
+        editHistoryEntry.changedBy = historyEntry.changedBy;
+
+      if (update.$push.orderEditHistory) {
+        if (update.$push.orderEditHistory.$each) {
+          update.$push.orderEditHistory.$each.push(editHistoryEntry);
+        } else {
+          update.$push.orderEditHistory = {
+            $each: [update.$push.orderEditHistory, editHistoryEntry],
+          };
+        }
+      } else {
+        update.$push.orderEditHistory = { $each: [editHistoryEntry] };
+      }
+    }
+  }
+
+  update.$set = $set;
+
+  if ($unset) {
+    const unsetKeys = Object.keys($unset);
+    if (unsetKeys.length) {
+      update.$unset = $unset;
+    } else {
+      delete update.$unset;
+    }
+  }
+
+  this.setUpdate(update);
   next();
 });
 
@@ -524,8 +822,16 @@ orderSchema.pre("save", function (next) {
 
 // Add validation middleware to ensure proper business logic
 orderSchema.pre("validate", function (next) {
-  // Ensure returnedPlants doesn't exceed numberOfPlants
-  if (this.returnedPlants > this.numberOfPlants) {
+  const totalOrderedPlants =
+    (this.numberOfPlants || 0) + (this.additionalPlants || 0);
+
+  if (this.additionalPlants < 0) {
+    const error = new Error("Additional plants cannot be negative");
+    return next(error);
+  }
+
+  // Ensure returnedPlants doesn't exceed total ordered plants
+  if (this.returnedPlants > totalOrderedPlants) {
     const error = new Error(
       "Returned plants cannot exceed the total number of plants in the order"
     );
@@ -537,6 +843,9 @@ orderSchema.pre("validate", function (next) {
 // Track original values when document is loaded from database
 orderSchema.post("init", function() {
   this._originalOrderStatus = this.orderStatus;
+  this._originalAdditionalPlants = this.additionalPlants || 0;
+  this._oldAdditionalPlants = this.additionalPlants || 0;
+  this._oldReturnedPlants = this.returnedPlants || 0;
 });
 
 // Pre-save: Check if status changed and store the change

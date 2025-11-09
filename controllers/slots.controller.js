@@ -3,6 +3,7 @@ import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
 import mongoose from "mongoose";
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
+import SlotTransferLog from "../models/slotTransfer.model.js";
 import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity, addPlantsToAvailable } from "../utility/bufferUtils.js";
 import { updateSlotBufferCalculations, updateAllSlotBuffers } from "../utility/slotBufferUpdater.js";
 
@@ -21,6 +22,49 @@ const getDaysInMonth = (monthName, year) => {
   const monthNumber = getMonthNumber(monthName);
   return moment(`${year}-${monthNumber}`, 'YYYY-MM').daysInMonth();
 };
+
+const findSlotDetails = async (slotId) => {
+  if (!mongoose.Types.ObjectId.isValid(slotId)) {
+    return null;
+  }
+
+  const slotObjectId = new mongoose.Types.ObjectId(slotId);
+  const plantSlotDoc = await PlantSlot.findOne({
+    "subtypeSlots.slots._id": slotObjectId,
+  }).lean();
+
+  if (!plantSlotDoc) {
+    return null;
+  }
+
+  let matchedSubtype = null;
+  let matchedSlot = null;
+
+  for (const subtype of plantSlotDoc.subtypeSlots || []) {
+    const slot = (subtype.slots || []).find(
+      (item) => item._id?.toString() === slotObjectId.toString()
+    );
+    if (slot) {
+      matchedSubtype = subtype;
+      matchedSlot = slot;
+      break;
+    }
+  }
+
+  if (!matchedSlot) {
+    return null;
+  }
+
+  return {
+    plantSlotId: plantSlotDoc._id,
+    plantId: plantSlotDoc.plantId,
+    plantSlotYear: plantSlotDoc.year,
+    subtypeId: matchedSubtype.subtypeId,
+    slot: matchedSlot,
+  };
+};
+
+const safeArray = (value) => (Array.isArray(value) ? value : []);
 
 export const createSlotsForYear = async (year) => {
   try {
@@ -155,6 +199,7 @@ export const generateSlotsForYear = (year, slotSize = 5) => {
         restrictToSalesmen: false, // Flag to enable/disable salesman restrictions
         overflow: false,
         status: true,
+        plantReadyDays: 0,
       });
 
       // Move to next slot (this will exit if we extended to end of month)
@@ -1141,7 +1186,8 @@ export const addManualSlot = async (req, res) => {
       overflow: false,
       status: true,
       month,
-      isManual: true // Flag to identify manually added slots
+      isManual: true, // Flag to identify manually added slots
+      plantReadyDays: 0,
     };
     
     // Add the slot to the subtype slots array
@@ -2267,6 +2313,381 @@ export const getSlotTrail = async (req, res) => {
   }
 };
 
+export const getSlotTransferOptions = async (req, res) => {
+  try {
+    const { slotId } = req.query;
+    const backDays = Number(req.query.backDays) || 4;
+    const forwardDays = Number(req.query.forwardDays) || 10;
+
+    if (!slotId) {
+      return res.status(400).json({
+        success: false,
+        message: "slotId query parameter is required",
+      });
+    }
+
+    const sourceDetails = await findSlotDetails(slotId);
+
+    if (!sourceDetails) {
+      return res.status(404).json({
+        success: false,
+        message: "Source slot not found",
+      });
+    }
+
+    const sourceStart = moment(sourceDetails.slot.startDay, "DD-MM-YYYY", true);
+    if (!sourceStart.isValid()) {
+      return res.status(400).json({
+        success: false,
+        message: "Source slot start day is invalid",
+      });
+    }
+
+    const backWindow = Number(backDays) || 0;
+    const forwardWindow = Number(forwardDays) || 0;
+
+    const minDate = sourceStart.clone().subtract(backWindow, "days").startOf("day");
+    const maxDate = sourceStart.clone().add(forwardWindow, "days").endOf("day");
+
+    const plantInfo = await PlantCms.findById(sourceDetails.plantId)
+      .select("name subtypes")
+      .lean();
+
+    const subtypeNameMap = new Map(
+      safeArray(plantInfo?.subtypes).map((subtype) => [subtype._id.toString(), subtype.name])
+    );
+
+    const plantSlots = await PlantSlot.find({ plantId: sourceDetails.plantId }).lean();
+    const options = [];
+
+    plantSlots.forEach((plantSlotDoc) => {
+      safeArray(plantSlotDoc.subtypeSlots).forEach((subtypeSlot) => {
+        const subtypeIdStr = subtypeSlot.subtypeId.toString();
+        const subtypeName = subtypeNameMap.get(subtypeIdStr) || "Subtype";
+
+        safeArray(subtypeSlot.slots).forEach((slot) => {
+          if (slot._id?.toString() === slotId) {
+            return;
+          }
+
+          const slotStart = moment(slot.startDay, "DD-MM-YYYY", true);
+          if (!slotStart.isValid()) {
+            return;
+          }
+
+          if (slotStart.isBefore(minDate) || slotStart.isAfter(maxDate)) {
+            return;
+          }
+
+          const gap = (Number(slot.totalBookedPlants) || 0) - (Number(slot.primarySowed) || 0);
+          if (gap <= 0) {
+            return;
+          }
+
+          options.push({
+            slotId: slot._id.toString(),
+            plantSlotId: plantSlotDoc._id.toString(),
+            subtypeId: subtypeIdStr,
+            subtypeName,
+            startDay: slot.startDay,
+            endDay: slot.endDay,
+            month: slot.month,
+            year: plantSlotDoc.year,
+            gap,
+            primarySowed: Number(slot.primarySowed) || 0,
+            totalBookedPlants: Number(slot.totalBookedPlants) || 0,
+            daysDifference: slotStart.diff(sourceStart, "days"),
+          });
+        });
+      });
+    });
+
+    options.sort((a, b) => {
+      const diff = Math.abs(a.daysDifference) - Math.abs(b.daysDifference);
+      if (diff !== 0) return diff;
+      return b.gap - a.gap;
+    });
+
+    const sourceGap = (Number(sourceDetails.slot.totalBookedPlants) || 0) - (Number(sourceDetails.slot.primarySowed) || 0);
+    const surplus = Math.max(0, (Number(sourceDetails.slot.primarySowed) || 0) - (Number(sourceDetails.slot.totalBookedPlants) || 0));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        source: {
+          slotId: sourceDetails.slot._id.toString(),
+          subtypeId: sourceDetails.subtypeId.toString(),
+          subtypeName: subtypeNameMap.get(sourceDetails.subtypeId.toString()) || "Subtype",
+          startDay: sourceDetails.slot.startDay,
+          endDay: sourceDetails.slot.endDay,
+          month: sourceDetails.slot.month,
+          year: sourceDetails.plantSlotYear,
+          totalBookedPlants: Number(sourceDetails.slot.totalBookedPlants) || 0,
+          primarySowed: Number(sourceDetails.slot.primarySowed) || 0,
+          gap: sourceGap,
+          surplus,
+        },
+        options,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching transfer options:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch transfer options",
+      error: error.message,
+    });
+  }
+};
+
+export const transferSlotPlants = async (req, res) => {
+  const session = await PlantSlot.startSession();
+
+  try {
+    const {
+      sourceSlotId,
+      targetSlotId,
+      quantity,
+      reason = "",
+      backDays = 4,
+      forwardDays = 10,
+    } = req.body;
+
+    if (!sourceSlotId || !targetSlotId || !quantity) {
+      return res.status(400).json({
+        success: false,
+        message: "sourceSlotId, targetSlotId and quantity are required",
+      });
+    }
+
+    if (sourceSlotId === targetSlotId) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot transfer to the same slot",
+      });
+    }
+
+    const qty = Number(quantity);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Quantity must be a positive number",
+      });
+    }
+
+    const [sourceDetails, targetDetails] = await Promise.all([
+      findSlotDetails(sourceSlotId),
+      findSlotDetails(targetSlotId),
+    ]);
+
+    if (!sourceDetails || !targetDetails) {
+      return res.status(404).json({
+        success: false,
+        message: "Source or target slot not found",
+      });
+    }
+
+    if (sourceDetails.plantId.toString() !== targetDetails.plantId.toString()) {
+      return res.status(400).json({
+        success: false,
+        message: "Transfers are only allowed within the same plant",
+      });
+    }
+
+    const plantInfo = await PlantCms.findById(sourceDetails.plantId)
+      .select("name subtypes")
+      .lean();
+    const subtypeNameMap = new Map(
+      safeArray(plantInfo?.subtypes).map((subtype) => [subtype._id.toString(), subtype.name])
+    );
+
+    const sourcePrimary = Number(sourceDetails.slot.primarySowed) || 0;
+    const sourcePlantsSowed =
+      Number(sourceDetails.slot.plantsSowed) ||
+      sourcePrimary + (Number(sourceDetails.slot.officeSowed) || 0);
+    const sourceBooked = Number(sourceDetails.slot.totalBookedPlants) || 0;
+    const sourceGap = sourceBooked - sourcePrimary;
+
+    if (sourceGap >= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Transfer allowed only when source slot has surplus (negative gap)",
+      });
+    }
+
+    const sourceSurplus = Math.min(sourcePrimary - sourceBooked, sourcePrimary);
+    if (qty > sourceSurplus) {
+      return res.status(400).json({
+        success: false,
+        message: `Maximum transferable quantity is ${sourceSurplus}`,
+      });
+    }
+
+    const targetPrimary = Number(targetDetails.slot.primarySowed) || 0;
+    const targetPlantsSowed =
+      Number(targetDetails.slot.plantsSowed) ||
+      targetPrimary + (Number(targetDetails.slot.officeSowed) || 0);
+    const targetBooked = Number(targetDetails.slot.totalBookedPlants) || 0;
+    const targetGap = targetBooked - targetPrimary;
+
+    if (targetGap <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Target slot does not require additional plants",
+      });
+    }
+
+    if (qty > targetGap) {
+      return res.status(400).json({
+        success: false,
+        message: `Target slot can accept up to ${targetGap} plants`,
+      });
+    }
+
+    const sourceStart = moment(sourceDetails.slot.startDay, "DD-MM-YYYY", true);
+    const targetStart = moment(targetDetails.slot.startDay, "DD-MM-YYYY", true);
+
+    if (!sourceStart.isValid() || !targetStart.isValid()) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid slot start dates",
+      });
+    }
+
+    const diffDays = targetStart.diff(sourceStart, "days");
+    const allowedBack = Number(backDays) || 0;
+    const allowedForward = Number(forwardDays) || 0;
+
+    if (diffDays < -allowedBack || diffDays > allowedForward) {
+      return res.status(400).json({
+        success: false,
+        message: `Target slot must be within ${allowedBack} days before and ${allowedForward} days after the source slot`,
+      });
+    }
+
+    session.startTransaction();
+
+    const updatedSourcePrimary = sourcePrimary - qty;
+    const updatedSourcePlants = Math.max(0, sourcePlantsSowed - qty);
+    const updatedTargetPrimary = targetPrimary + qty;
+    const updatedTargetPlants = targetPlantsSowed + qty;
+
+    await PlantSlot.updateOne(
+      { _id: sourceDetails.plantSlotId },
+      {
+        $set: {
+          "subtypeSlots.$[st].slots.$[sl].primarySowed": updatedSourcePrimary,
+          "subtypeSlots.$[st].slots.$[sl].plantsSowed": updatedSourcePlants,
+        },
+      },
+      {
+        arrayFilters: [
+          { "st.subtypeId": sourceDetails.subtypeId },
+          { "sl._id": new mongoose.Types.ObjectId(sourceSlotId) },
+        ],
+        session,
+      }
+    );
+
+    await PlantSlot.updateOne(
+      { _id: targetDetails.plantSlotId },
+      {
+        $set: {
+          "subtypeSlots.$[st].slots.$[sl].primarySowed": updatedTargetPrimary,
+          "subtypeSlots.$[st].slots.$[sl].plantsSowed": updatedTargetPlants,
+        },
+      },
+      {
+        arrayFilters: [
+          { "st.subtypeId": targetDetails.subtypeId },
+          { "sl._id": new mongoose.Types.ObjectId(targetSlotId) },
+        ],
+        session,
+      }
+    );
+
+    await SlotTransferLog.create(
+      [
+        {
+          plantId: sourceDetails.plantId,
+          plantName: plantInfo?.name || "",
+          sourceSlotId: new mongoose.Types.ObjectId(sourceSlotId),
+          sourceSubtypeId: sourceDetails.subtypeId,
+          sourceSubtypeName: subtypeNameMap.get(sourceDetails.subtypeId.toString()) || "Subtype",
+          targetSlotId: new mongoose.Types.ObjectId(targetSlotId),
+          targetSubtypeId: targetDetails.subtypeId,
+          targetSubtypeName: subtypeNameMap.get(targetDetails.subtypeId.toString()) || "Subtype",
+          quantity: qty,
+          reason,
+          performedBy: req.user?._id || null,
+          sourceBefore: {
+            primarySowed: sourcePrimary,
+            plantsSowed: sourcePlantsSowed,
+            officeSowed: Number(sourceDetails.slot.officeSowed) || 0,
+            totalBookedPlants: sourceBooked,
+          },
+          sourceAfter: {
+            primarySowed: updatedSourcePrimary,
+            plantsSowed: updatedSourcePlants,
+            officeSowed: Number(sourceDetails.slot.officeSowed) || 0,
+            totalBookedPlants: sourceBooked,
+          },
+          targetBefore: {
+            primarySowed: targetPrimary,
+            plantsSowed: targetPlantsSowed,
+            officeSowed: Number(targetDetails.slot.officeSowed) || 0,
+            totalBookedPlants: targetBooked,
+          },
+          targetAfter: {
+            primarySowed: updatedTargetPrimary,
+            plantsSowed: updatedTargetPlants,
+            officeSowed: Number(targetDetails.slot.officeSowed) || 0,
+            totalBookedPlants: targetBooked,
+          },
+          metadata: {
+            sourceSlotStartDay: sourceDetails.slot.startDay,
+            sourceSlotEndDay: sourceDetails.slot.endDay,
+            targetSlotStartDay: targetDetails.slot.startDay,
+            targetSlotEndDay: targetDetails.slot.endDay,
+            daysDifference: diffDays,
+          },
+        },
+      ],
+      { session }
+    );
+
+    await session.commitTransaction();
+
+    return res.status(200).json({
+      success: true,
+      message: "Plants transferred successfully",
+      data: {
+        quantity: qty,
+        source: {
+          slotId: sourceSlotId,
+          primarySowed: updatedSourcePrimary,
+          gap: sourceBooked - updatedSourcePrimary,
+        },
+        target: {
+          slotId: targetSlotId,
+          primarySowed: updatedTargetPrimary,
+          gap: targetBooked - updatedTargetPrimary,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error transferring plants between slots:", error);
+    await session.abortTransaction();
+    return res.status(500).json({
+      success: false,
+      message: "Failed to transfer plants",
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
 // New simplified function to get only slot dates
 // OPTIMIZED endpoint for sowing - returns ALL required fields FAST
 export const getSimpleSlots = async (req, res) => {
@@ -2338,6 +2759,7 @@ export const getSimpleSlots = async (req, res) => {
       .map(slot => {
         const actualBookings = bookingsMap[slot._id.toString()] || 0;
         const primarySowed = Number(slot.primarySowed) || 0;
+        const plantReadyDays = Number(slot.plantReadyDays) || 0;
         
         return {
           _id: slot._id,
@@ -2349,6 +2771,7 @@ export const getSimpleSlots = async (req, res) => {
           plantsSowed: Number(slot.plantsSowed) || 0,
           officeSowed: Number(slot.officeSowed) || 0,
           primarySowed: primarySowed,
+          plantReadyDays,
           // Gap = booked plants - primary sowed (not booked - total capacity)
           gap: actualBookings - primarySowed,
           availablePlants: Number(slot.availablePlants || slot.totalPlants) || 0,

@@ -19,6 +19,8 @@ import {
   getSlotDetailsById,
   getSlotTrail,
   getSimpleSlots,
+  getSlotTransferOptions,
+  transferSlotPlants,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -29,6 +31,7 @@ slotRouter.get("/slots/get-plants", getPlantNames);
 slotRouter.get("/slots/subtyps", getSubtypesByPlant);
 slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.get("/slots/simple", getSimpleSlots);
+slotRouter.get("/slots/transfer-options", getSlotTransferOptions);
 slotRouter.get("/slots/stats", getPlantStats);
 slotRouter.get("/slots/dashBoardStats", getDashboardInsights);
 slotRouter.get("/slots/:slotId/details", getSlotDetailsById);
@@ -36,6 +39,7 @@ slotRouter.post("/slots/manual", addManualSlot);
 slotRouter.delete("/slots/manual/:slotId", deleteManualSlot);
 slotRouter.post("/slots/create-multiple-years", createSlotsForMultipleYears);
 slotRouter.post("/slots/create-subtype", createSlotsForSubtype);
+slotRouter.post("/slots/transfer", transferSlotPlants);
 
 // Salesmen restriction routes - Using completely different path pattern
 slotRouter.put("/salesmen-access/:slotId", updateSlotSalesmenRestrictions);

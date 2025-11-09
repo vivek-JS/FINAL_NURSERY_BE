@@ -31,12 +31,42 @@ const validateQuantities = (plantsDetails) => {
   }
 };
 
-// Generate unique transport ID
-const generateTransportId = async () => {
-  // Get total count of all dispatches
-  const count = await Dispatch.countDocuments();
-  // Simply add 1 to get the next ID
-  return (count + 1).toString();
+// Generate unique transport ID with max attempts to prevent infinite recursion
+const generateTransportId = async (attempts = 0) => {
+  const maxAttempts = 10;
+  
+  if (attempts >= maxAttempts) {
+    throw new AppError('Unable to generate unique transport ID after multiple attempts', 500);
+  }
+  
+  // Get the maximum transportId and increment
+  // Get all dispatches and find the max numeric transportId
+  const dispatches = await Dispatch.find({ transportId: { $exists: true, $ne: null } })
+    .select('transportId')
+    .lean();
+  
+  let maxId = 0;
+  if (dispatches.length > 0) {
+    const numericIds = dispatches
+      .map(d => parseInt(d.transportId, 10))
+      .filter(id => !isNaN(id));
+    
+    if (numericIds.length > 0) {
+      maxId = Math.max(...numericIds);
+    }
+  }
+  
+  const newTransportId = (maxId + 1).toString();
+  
+  // Double-check that this ID doesn't exist (race condition handling)
+  const exists = await Dispatch.findOne({ transportId: newTransportId });
+  
+  if (exists) {
+    // If it exists, recursively try next number
+    return generateTransportId(attempts + 1);
+  }
+  
+  return newTransportId;
 };
 
 const createDispatch = catchAsync(async (req, res, next) => {
@@ -46,7 +76,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
   try {
     const dispatchRequest = { ...req.body };
 
-    // Modify each plant's details
+    // Modify each plant's details and convert cavity strings to ObjectIds
     dispatchRequest.plantsDetails = dispatchRequest.plantsDetails.map(
       (plant) => ({
         ...plant,
@@ -54,8 +84,16 @@ const createDispatch = catchAsync(async (req, res, next) => {
           (sum, detail) => sum + detail.quantity,
           0
         ),
+        pickupDetails: plant.pickupDetails.map((pickup) => ({
+          ...pickup,
+          cavity: typeof pickup.cavity === 'string' 
+            ? new mongoose.Types.ObjectId(pickup.cavity) 
+            : pickup.cavity,
+        })),
         crates: plant.crates.map((crate) => ({
-          cavity: crate.cavity,
+          cavity: typeof crate.cavity === 'string'
+            ? new mongoose.Types.ObjectId(crate.cavity)
+            : crate.cavity,
           cavityName: crate.cavityName,
           crateCount: crate.crateDetails.reduce(
             (sum, detail) => sum + detail.crateCount,
@@ -114,6 +152,8 @@ const createDispatch = catchAsync(async (req, res, next) => {
           dispatchId: dispatch[0]._id,
           remainingAfterDispatch: newRemainingPlants,
           processedBy: req.user ? req.user._id : null,
+          driverName: dispatchRequest.driverName || "",
+          vehicleName: dispatchRequest.vehicleName || "",
         };
 
         // Update the order
@@ -123,6 +163,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
             $set: {
               remainingPlants: newRemainingPlants,
               orderStatus: newStatus,
+              currentDispatchId: dispatch[0]._id, // Set the current dispatch reference
             },
             $push: {
               dispatchHistory: dispatchHistoryEntry,
@@ -135,7 +176,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
       // Legacy behavior: update all orders to DISPATCH_PROCESS
       await Order.updateMany(
         { _id: { $in: dispatchRequest.orderIds }, orderStatus: "FARM_READY" },
-        { $set: { orderStatus: "DISPATCH_PROCESS" } },
+        { $set: { orderStatus: "DISPATCH_PROCESS", currentDispatchId: dispatch[0]._id } },
         { session }
       );
     }
@@ -659,43 +700,142 @@ const getDispatch = catchAsync(async (req, res, next) => {
 });
 
 const removeTransport = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { transportId } = req.params;
 
-    // Find and completely remove the dispatch document
-    const dispatch = await Dispatch.findOneAndDelete({ transportId });
+    // Find the dispatch document
+    const dispatch = await Dispatch.findOne({ transportId }).session(session);
 
     if (!dispatch) {
+      await session.abortTransaction();
       return res.status(404).json({
         success: false,
         message: "Transport not found",
       });
     }
 
-    // Get order IDs before deletion
-    const affectedOrderIds = [...dispatch.orderIds];
+    const ordersUpdated = [];
 
-    // Update all associated orders' status to FARM_READY
-    const updateOrdersResult = await Order.updateMany(
-      { _id: { $in: affectedOrderIds } },
-      { $set: { orderStatus: "FARM_READY" } }
-    );
+    // Update orders to restore quantities
+    if (dispatch.orderDispatchDetails && dispatch.orderDispatchDetails.length > 0) {
+      for (const orderDispatch of dispatch.orderDispatchDetails) {
+        const order = await Order.findById(orderDispatch.orderId).session(session);
+        
+        if (!order) {
+          console.log(`Order not found: ${orderDispatch.orderId}`);
+          continue;
+        }
+
+        console.log(`Processing order ${order.orderId}, current remainingPlants: ${order.remainingPlants}`);
+        console.log(`Dispatch history count: ${order.dispatchHistory?.length || 0}`);
+
+        // Get the dispatch history entry for this dispatch
+        const dispatchHistoryEntry = order.dispatchHistory?.find(
+          entry => {
+            if (!entry.dispatchId) return false;
+            return entry.dispatchId.toString() === dispatch._id.toString();
+          }
+        );
+
+        if (dispatchHistoryEntry) {
+          console.log(`Found dispatch history entry with quantity: ${dispatchHistoryEntry.quantity}`);
+          
+          // Restore the quantity
+          const restoredRemainingPlants = order.remainingPlants + dispatchHistoryEntry.quantity;
+          
+          console.log(`Restoring quantity: ${order.remainingPlants} + ${dispatchHistoryEntry.quantity} = ${restoredRemainingPlants}`);
+          
+          // Determine new status
+          let newStatus = "FARM_READY";
+          
+          // If order was partially dispatched (has other dispatch history entries)
+          const hasOtherDispatches = order.dispatchHistory?.filter(
+            entry => entry._id && entry._id.toString() !== dispatchHistoryEntry._id.toString()
+          ).length > 0;
+          
+          if (hasOtherDispatches && order.numberOfPlants !== restoredRemainingPlants) {
+            newStatus = "DISPATCH_PROCESS";
+            console.log(`Order has other dispatches, setting status to DISPATCH_PROCESS`);
+          } else {
+            console.log(`Setting order status to ${newStatus}`);
+          }
+
+          // Update order: restore quantity and update status
+          await Order.findByIdAndUpdate(
+            orderDispatch.orderId,
+            {
+              $set: {
+                remainingPlants: restoredRemainingPlants,
+                orderStatus: newStatus,
+              },
+            },
+            { session }
+          );
+
+          // Remove dispatch history entry separately
+          await Order.findByIdAndUpdate(
+            orderDispatch.orderId,
+            {
+              $pull: {
+                dispatchHistory: {
+                  _id: dispatchHistoryEntry._id,
+                },
+              },
+            },
+            { session }
+          );
+
+          ordersUpdated.push({
+            orderId: order.orderId,
+            restoredQuantity: dispatchHistoryEntry.quantity,
+            newRemainingPlants: restoredRemainingPlants,
+          });
+        } else {
+          console.log(`No dispatch history entry found for this dispatch`);
+          // If no dispatch history entry, just update status
+          await Order.findByIdAndUpdate(
+            orderDispatch.orderId,
+            { $set: { orderStatus: "FARM_READY" } },
+            { session }
+          );
+        }
+      }
+    } else {
+      console.log(`No orderDispatchDetails found, using legacy update`);
+      // Legacy behavior: just update status
+      await Order.updateMany(
+        { _id: { $in: dispatch.orderIds } },
+        { $set: { orderStatus: "FARM_READY" } },
+        { session }
+      );
+    }
+
+    // Delete the dispatch document
+    await Dispatch.deleteOne({ _id: dispatch._id }, { session });
+
+    await session.commitTransaction();
 
     return res.status(200).json({
       success: true,
       message: "Transport removed and orders updated successfully",
       data: {
         transportId: dispatch.transportId,
-        affectedOrders: updateOrdersResult.modifiedCount,
+        ordersUpdated,
       },
     });
   } catch (error) {
-    // console.error("Error in removeTransport:", error);
-    // return res.status(500).json({
-    //   success: false,
-    //   message: "Error removing transport",
-    //   error: error.message,
-    // });
+    await session.abortTransaction();
+    console.error("Error in removeTransport:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error removing transport",
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
   }
 };
 const handleDispatchReturns = catchAsync(async (req, res, next) => {
@@ -751,29 +891,92 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       }
 
       // Get the returns for this order
-      const returnsForThisOrder = Number(orderUpdate.returnedPlants) || 0;
+      const returnsForThisOrder = Math.max(
+        0,
+        Number.isNaN(Number(orderUpdate.returnedPlants))
+          ? 0
+          : Number(orderUpdate.returnedPlants)
+      );
+
+      const hasAdditionalUpdate =
+        orderUpdate.additionalPlants !== undefined &&
+        orderUpdate.additionalPlants !== null;
+      const additionalPlantsValue = hasAdditionalUpdate
+        ? Math.max(
+            0,
+            Number.isNaN(Number(orderUpdate.additionalPlants))
+              ? 0
+              : Number(orderUpdate.additionalPlants)
+          )
+        : order.additionalPlants || 0;
+
+      const basePlants =
+        orderUpdate.basePlants === undefined || orderUpdate.basePlants === null
+          ? order.numberOfPlants || 0
+          : Math.max(
+              0,
+              Number.isNaN(Number(orderUpdate.basePlants))
+                ? order.numberOfPlants || 0
+                : Number(orderUpdate.basePlants)
+            );
+
+      const totalOrderedPlants = basePlants + additionalPlantsValue;
 
       // Calculate the total returnedPlants (existing + new returns)
-      const totalReturnedPlants = order.returnedPlants + returnsForThisOrder;
+      const existingReturnedPlants = order.returnedPlants || 0;
+      const totalReturnedPlants = existingReturnedPlants + returnsForThisOrder;
 
-      // Calculate the new remainingPlants based on original numberOfPlants and total returns
-      const newRemainingPlants = Math.max(
-        0,
-        order.numberOfPlants - totalReturnedPlants
-      );
+      if (totalReturnedPlants > totalOrderedPlants) {
+        const orderDisplayId = order.orderId || order._id?.toString();
+        throw new AppError(
+          `Returned plants cannot exceed the total plants for Order #${orderDisplayId}`,
+          400
+        );
+      }
 
       // Prepare update object for the order - initially empty
       const orderUpdateData = {};
 
+      if (hasAdditionalUpdate) {
+        orderUpdateData.additionalPlants = additionalPlantsValue;
+        orderUpdateData.totalPlants = totalOrderedPlants;
+
+        if (orderUpdate.additionalPlantsChangeReason) {
+          orderUpdateData.additionalPlantsChangeReason =
+            orderUpdate.additionalPlantsChangeReason;
+        }
+        if (orderUpdate.additionalPlantsChangeNotes) {
+          orderUpdateData.additionalPlantsChangeNotes =
+            orderUpdate.additionalPlantsChangeNotes;
+        }
+        if (orderUpdate.additionalPlantsChangedBy) {
+          orderUpdateData.additionalPlantsChangedBy =
+            orderUpdate.additionalPlantsChangedBy;
+        }
+
+        await Dispatch.updateOne(
+          { _id: dispatch._id, "orderDispatchDetails.orderId": order._id },
+          {
+            $set: {
+              "orderDispatchDetails.$.additionalPlants": additionalPlantsValue,
+              "orderDispatchDetails.$.totalPlantsAfterAdjustments":
+                totalOrderedPlants,
+            },
+          },
+          { session }
+        );
+      }
+
       // Check if action properties exist with updated format from frontend
       const completeOrder = orderUpdate.actions?.completeOrder === true;
       const addToInventory = orderUpdate.actions?.addToInventory === true;
+      const finalStatusFromActions = orderUpdate.actions?.finalStatus;
 
-      // Update order status based on returns and completeOrder action
-      if (completeOrder) {
+      if (finalStatusFromActions) {
+        orderUpdateData.orderStatus = finalStatusFromActions;
+      } else if (completeOrder) {
         orderUpdateData.orderStatus = "COMPLETED";
-      } else {
-        // When completeOrder is false and there are returns, set status to PARTIALLY_COMPLETED
+      } else if (returnsForThisOrder > 0) {
         orderUpdateData.orderStatus = "PARTIALLY_COMPLETED";
       }
 
@@ -781,7 +984,6 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       if (returnsForThisOrder > 0) {
         // Add the return data to the update
         orderUpdateData.returnedPlants = totalReturnedPlants;
-        orderUpdateData.remainingPlants = newRemainingPlants;
 
         if (orderUpdate.returnReason) {
           orderUpdateData.returnReason = orderUpdate.returnReason;
@@ -803,6 +1005,31 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
           { session }
         );
       }
+
+      const remainingAfterAdjustments = Math.max(
+        0,
+        totalOrderedPlants - totalReturnedPlants
+      );
+
+      if (returnsForThisOrder > 0 || hasAdditionalUpdate) {
+        orderUpdateData.remainingPlants = remainingAfterAdjustments;
+      }
+
+      const collectedAmount = (order.payment || []).reduce((sum, payment) => {
+        if (payment?.paymentStatus === "COLLECTED") {
+          return sum + (payment.paidAmount || 0);
+        }
+        return sum;
+      }, 0);
+
+      const recalculatedTotalAmount = (order.rate || 0) * totalOrderedPlants;
+      const isPaymentComplete = collectedAmount >= recalculatedTotalAmount;
+
+      orderUpdateData.orderPaymentStatus = isPaymentComplete
+        ? "COMPLETED"
+        : "PENDING";
+      orderUpdateData.paymentCompleted = isPaymentComplete;
+
 
       // Skip update if there's nothing to update (which should never happen now
       // since we always set an orderStatus)

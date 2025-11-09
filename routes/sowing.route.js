@@ -11,6 +11,10 @@ import {
   getSowingInsights,
   deleteSowing,
   updateSowing,
+  getSlotPlantReadyDays,
+  getSowingAlerts,
+  getSowingAlertsByStart,
+  getTodaySowingSummary,
 } from "../controllers/sowing.controller.js";
 
 const router = express.Router();
@@ -24,6 +28,10 @@ router.get("/insights", (req, res) => {
   getSowingInsights(req, res);
 }); // Get comprehensive sowing insights for CEO dashboard
 router.get("/reminders", getPendingReminders); // Get pending reminders
+router.get("/alerts", getSowingAlerts); // Comprehensive sowing alerts
+router.get("/sowing-alerts", getSowingAlertsByStart); // Sowing alerts using slot start date logic
+router.get("/sowing-alerts/today", getTodaySowingSummary); // Plant-subtype summary for overdue + due today
+router.get("/slot-ready-days/:slotId", getSlotPlantReadyDays); // Fetch plant ready days for a slot
 router.get("/:id", getSowingById); // Get single sowing by ID
 router.put("/:id", updateSowing); // Update sowing record
 router.delete("/:id", deleteSowing); // Delete sowing record

@@ -193,7 +193,13 @@ const changePassword = async (req, res, next) => {
       return next(new AppError("Passwords do not match", 400));
     }
 
-    if (newPassword.length < 8) {
+    // Allow 4-digit PINs for mobile app users
+    if (newPassword.length < 4) {
+      return next(new AppError("Password must be at least 4 characters long", 400));
+    }
+    
+    // For web users, require 8+ characters, for mobile app users allow 4-digit PINs
+    if (newPassword.length < 8 && newPassword.length > 4) {
       return next(new AppError("Password must be at least 8 characters long", 400));
     }
 

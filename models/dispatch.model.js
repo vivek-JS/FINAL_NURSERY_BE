@@ -98,6 +98,20 @@ const plantDetailSchema = new Schema({
     },
     required: true,
   },
+  // Driver information for this plant detail
+  driverName: {
+    type: String,
+    default: "",
+  },
+  driverMobile: {
+    type: String,
+    default: "",
+  },
+  // Vehicle information for this plant detail
+  vehicleName: {
+    type: String,
+    default: "",
+  },
 });
 
 const dispatchSchema = new Schema(
@@ -158,9 +172,59 @@ const dispatchSchema = new Schema(
             type: Number,
             required: true,
           },
+          additionalPlants: {
+            type: Number,
+            default: 0,
+            min: 0,
+          },
+          totalPlantsAfterAdjustments: {
+            type: Number,
+            default: 0,
+            min: 0,
+          },
           isPartialDispatch: {
             type: Boolean,
             default: false,
+          },
+          // Driver information
+          driverName: {
+            type: String,
+            default: "",
+          },
+          driverMobile: {
+            type: String,
+            default: "",
+          },
+          // Vehicle information
+          vehicleName: {
+            type: String,
+            default: "",
+          },
+          // Crate details for this order
+          crates: {
+            type: [
+              {
+                cavity: {
+                  type: String,
+                },
+                cavityName: {
+                  type: String,
+                },
+                crateCount: {
+                  type: Number,
+                },
+                plantCount: {
+                  type: Number,
+                },
+                crateDetails: [
+                  {
+                    crateCount: Number,
+                    plantCount: Number,
+                  },
+                ],
+              },
+            ],
+            default: [],
           },
         },
       ],

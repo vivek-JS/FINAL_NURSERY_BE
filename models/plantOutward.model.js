@@ -1,6 +1,4 @@
 import { Schema, model } from "mongoose";
-import mongoose from "mongoose";
-import Batch from "./batch.model.js";
 
 // Lab Schema for outward entries
 const labSchema = new Schema({
@@ -347,7 +345,7 @@ const plantOutwardSchema = new Schema(
   {
     batchId: {
       type: Schema.Types.ObjectId,
-      ref: "Batch",
+      ref: "DispatchBatch",
       required: true,
     },
     dateAdded: {

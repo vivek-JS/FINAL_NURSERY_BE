@@ -44,6 +44,8 @@ const allowedParams = [
   "category",
   "sortBy",
   "sortOrder",
+  "backDays",
+  "forwardDays",
 ];
 
 const parameterWhiteListing = (req, res, next) => {

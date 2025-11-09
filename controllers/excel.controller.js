@@ -104,6 +104,7 @@ export const importExcelData = catchAsync(async (req, res) => {
           summary: results.summary,
           successfulImports: results.success,
           failedImports: results.errors,
+          generatedOrderIds: results.generatedOrderIds, // Include generated random IDs
           notes: results.summary.invalidPhoneNumbers > 0 
             ? `${results.summary.invalidPhoneNumbers} entries were created with invalid/missing phone numbers and marked with isInvalidPhone flag`
             : null

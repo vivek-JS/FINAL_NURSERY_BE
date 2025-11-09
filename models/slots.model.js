@@ -185,6 +185,11 @@ const slotSchema = new Schema({
     type: Boolean,
     default: false,
   },
+  plantReadyDays: {
+    type: Number,
+    default: 0,
+    min: 0,
+  }, // Days required for plants in this slot to be ready
   // Sowing management fields
   plantsSowed: {
     type: Number,

@@ -3,6 +3,7 @@ import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
 import moment from "moment";
+import mongoose from "mongoose";
 
 // Create a new sowing record
 export const createSowing = async (req, res) => {
@@ -38,17 +39,76 @@ export const createSowing = async (req, res) => {
       return res.status(404).json({ message: "Subtype not found" });
     }
 
-    if (!subtype.plantReadyDays || subtype.plantReadyDays === 0) {
-      return res.status(400).json({ 
-        message: "Plant Ready Days not set for this subtype. Please update plant settings." 
+    let effectivePlantReadyDays = Number(subtype.plantReadyDays) || 0;
+    let slotPlantReadyDays = null;
+
+    let slotObjectId = null;
+    if (slotId) {
+      if (!mongoose.Types.ObjectId.isValid(slotId)) {
+        return res.status(400).json({ message: "Invalid slotId provided" });
+      }
+      slotObjectId = new mongoose.Types.ObjectId(slotId);
+
+      const slotDoc = await PlantSlot.findOne(
+        { "subtypeSlots.slots._id": slotObjectId },
+        { subtypeSlots: 1, plantId: 1 }
+      ).lean();
+
+      if (!slotDoc) {
+        return res.status(404).json({
+          message: "Slot not found for the provided slotId",
+        });
+      }
+
+      if (slotDoc.plantId?.toString() !== plant._id.toString()) {
+        return res.status(400).json({
+          message: "Slot does not belong to the selected plant",
+        });
+      }
+
+      for (const subtypeSlot of slotDoc.subtypeSlots || []) {
+        if (subtypeSlot.subtypeId?.toString() !== subtypeId.toString()) {
+          continue;
+        }
+
+        const matchedSlot = (subtypeSlot.slots || []).find(
+          (slot) => slot._id.toString() === slotObjectId.toString()
+        );
+
+        if (matchedSlot) {
+          slotPlantReadyDays = Number(matchedSlot.plantReadyDays) || 0;
+          break;
+        }
+      }
+
+      if (slotPlantReadyDays === null) {
+        return res.status(404).json({
+          message: "Slot not found for the selected subtype",
+        });
+      }
+
+      if (!slotPlantReadyDays || slotPlantReadyDays <= 0) {
+        return res.status(400).json({
+          message:
+            "Plant Ready Days not set for this slot. Please update slot settings before creating sowing.",
+        });
+      }
+
+      effectivePlantReadyDays = slotPlantReadyDays;
+    }
+
+    if (!effectivePlantReadyDays || effectivePlantReadyDays <= 0) {
+      return res.status(400).json({
+        message:
+          "Plant Ready Days not configured. Please update slot or subtype settings.",
       });
     }
 
-    // Calculate expected ready date
+    // Calculate expected ready date using effective plant ready days
     const sowingMoment = moment(sowingDate, "DD-MM-YYYY");
     const expectedReadyDate = sowingMoment
       .clone()
-      .add(subtype.plantReadyDays, "days")
+      .add(effectivePlantReadyDays, "days")
       .format("DD-MM-YYYY");
 
     // Create sowing record
@@ -59,7 +119,7 @@ export const createSowing = async (req, res) => {
       subtypeName: subtype.name,
       slotId,
       sowingDate,
-      plantReadyDays: subtype.plantReadyDays,
+      plantReadyDays: effectivePlantReadyDays,
       expectedReadyDate,
       totalQuantityRequired,
       sowingLocation: sowingLocation || "OFFICE", // Default to OFFICE
@@ -76,7 +136,7 @@ export const createSowing = async (req, res) => {
     if (slotId) {
       try {
         const slot = await PlantSlot.findOne({
-          "subtypeSlots.slots._id": slotId
+          "subtypeSlots.slots._id": slotObjectId || slotId
         });
 
         if (slot) {
@@ -217,6 +277,73 @@ export const getSowingById = async (req, res) => {
     console.error("Error fetching sowing:", error);
     return res.status(500).json({
       message: "Error fetching sowing record",
+      error: error.message,
+    });
+  }
+};
+
+// Get plant ready days for a specific slot
+export const getSlotPlantReadyDays = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+
+    if (!slotId || !mongoose.Types.ObjectId.isValid(slotId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid slotId is required",
+      });
+    }
+
+    const slotObjectId = new mongoose.Types.ObjectId(slotId);
+
+    const slotDoc = await PlantSlot.findOne(
+      { "subtypeSlots.slots._id": slotObjectId },
+      { subtypeSlots: 1, plantId: 1 }
+    ).lean();
+
+    if (!slotDoc) {
+      return res.status(404).json({
+        success: false,
+        message: "Slot not found",
+      });
+    }
+
+    let readyDays = null;
+    let subtypeId = null;
+
+    for (const subtypeSlot of slotDoc.subtypeSlots || []) {
+      const match = (subtypeSlot.slots || []).find(
+        (slot) => slot._id.toString() === slotObjectId.toString()
+      );
+
+      if (match) {
+        readyDays = Number(match.plantReadyDays) || 0;
+        subtypeId = subtypeSlot.subtypeId;
+        break;
+      }
+    }
+
+    if (readyDays === null) {
+      return res.status(404).json({
+        success: false,
+        message: "Slot details not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        plantId: slotDoc.plantId,
+        subtypeId,
+        slotId: slotObjectId,
+        plantReadyDays: readyDays,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching slot plant ready days:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching slot plant ready days",
       error: error.message,
     });
   }
@@ -700,6 +827,980 @@ export const getPendingReminders = async (req, res) => {
       success: false,
       message: "Error fetching hybrid sowing reminders",
       error: error.message
+    });
+  }
+};
+
+export const getSowingAlerts = async (req, res) => {
+  try {
+    const lookaheadParam = req.query.lookahead;
+    const pastWindowParam = req.query.pastWindow;
+
+    const lookaheadDays =
+      lookaheadParam !== undefined
+        ? Math.min(Math.max(parseInt(lookaheadParam, 10) || 0, 0), 365)
+        : null;
+    const pastWindowDays =
+      pastWindowParam !== undefined
+        ? Math.min(Math.max(parseInt(pastWindowParam, 10) || 0, 0), 365)
+        : null;
+
+    const now = moment().startOf("day");
+    const nowDate = now.toDate();
+    const pastBoundary =
+      pastWindowDays !== null ? now.clone().subtract(pastWindowDays, "days").toDate() : null;
+    const futureBoundary =
+      lookaheadDays !== null ? now.clone().add(lookaheadDays, "days").endOf("day").toDate() : null;
+
+    const slotPipeline = [
+      { $unwind: "$subtypeSlots" },
+      { $unwind: "$subtypeSlots.slots" },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $lookup: {
+          from: "orders",
+          let: { slotId: "$subtypeSlots.slots._id" },
+          pipeline: [
+            {
+              $match: {
+                orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+              },
+            },
+            {
+              $match: {
+                $expr: {
+                  $eq: ["$bookingSlot", "$$slotId"],
+                },
+              },
+            },
+            {
+              $project: {
+                numberOfPlants: 1,
+              },
+            },
+          ],
+          as: "slotOrders",
+        },
+      },
+      {
+        $addFields: {
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          officeSowed: { $ifNull: ["$subtypeSlots.slots.officeSowed", 0] },
+          storedBooked: { $ifNull: ["$subtypeSlots.slots.totalBookedPlants", 0] },
+          slotReadyDays: {
+            $cond: [
+              { $gt: ["$subtypeSlots.slots.plantReadyDays", 0] },
+              "$subtypeSlots.slots.plantReadyDays",
+              { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          ordersBooked: {
+            $reduce: {
+              input: "$slotOrders",
+              initialValue: 0,
+              in: { $add: ["$$value", { $ifNull: ["$$this.numberOfPlants", 0] }] },
+            },
+          },
+          effectiveBooked: { $max: ["$ordersBooked", "$storedBooked"] },
+          pendingQuantity: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  { $max: ["$ordersBooked", "$storedBooked"] },
+                  { $ifNull: ["$primarySowed", 0] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          pendingQuantity: { $gt: 0 },
+        },
+      },
+      {
+        $addFields: {
+          slotEndISO: {
+            $dateFromString: {
+              dateString: {
+                $concat: [
+                  { $substr: ["$subtypeSlots.slots.endDay", 6, 4] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 3, 2] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 0, 2] },
+                ],
+              },
+              format: "%Y-%m-%d",
+            },
+          },
+        },
+      },
+      {
+        $addFields: {
+          sowByDateISO: {
+            $cond: [
+              { $gt: ["$slotReadyDays", 0] },
+              {
+                $dateSubtract: {
+                  startDate: "$slotEndISO",
+                  unit: "day",
+                  amount: "$slotReadyDays",
+                },
+              },
+              "$slotEndISO",
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          daysUntilSow: {
+            $divide: [
+              { $subtract: ["$sowByDateISO", nowDate] },
+              1000 * 60 * 60 * 24,
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          daysUntilSow: { $round: ["$daysUntilSow", 0] },
+          priority: {
+            $cond: [
+              { $lt: ["$daysUntilSow", 0] },
+              "overdue",
+              {
+                $cond: [
+                  { $lte: ["$daysUntilSow", 2] },
+                  "urgent",
+                  "upcoming",
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $project: {
+          _id: "$subtypeSlots.slots._id",
+          plantId: "$plantId",
+          plantName: { $ifNull: ["$plantInfo.name", "Unknown"] },
+          subtypeId: "$subtypeSlots.subtypeId",
+          subtypeName: { $ifNull: ["$subtypeDetails.name", "Subtype"] },
+          slotStartDay: "$subtypeSlots.slots.startDay",
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          month: "$subtypeSlots.slots.month",
+          year: "$year",
+          totalBookedPlants: { $ifNull: ["$effectiveBooked", 0] },
+          primarySowed: { $ifNull: ["$primarySowed", 0] },
+          officeSowed: { $ifNull: ["$officeSowed", 0] },
+          pendingQuantity: { $ifNull: ["$pendingQuantity", 0] },
+          slotReadyDays: "$slotReadyDays",
+          daysUntilSow: 1,
+          priority: 1,
+          sowByDate: {
+            $dateToString: {
+              date: "$sowByDateISO",
+              format: "%d-%m-%Y",
+            },
+          },
+          sowByDateISO: "$sowByDateISO",
+        },
+      },
+      { $sort: { daysUntilSow: 1, pendingQuantity: -1 } },
+    ];
+
+    if (pastBoundary !== null || futureBoundary !== null) {
+      const rangeMatch = {};
+      if (pastBoundary !== null) {
+        rangeMatch.$gte = pastBoundary;
+      }
+      if (futureBoundary !== null) {
+        rangeMatch.$lte = futureBoundary;
+      }
+      slotPipeline.splice(
+        slotPipeline.findIndex((stage) => stage.$addFields?.daysUntilSow !== undefined),
+        0,
+        {
+          $match: {
+            sowByDateISO: rangeMatch,
+          },
+        }
+      );
+    }
+
+    const slotAlertsRaw = await PlantSlot.aggregate(slotPipeline).allowDiskUse(true);
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log(
+        "[sowing-alerts] total slots",
+        slotAlertsRaw.length,
+        "sample",
+        slotAlertsRaw.slice(0, 2)
+      );
+    }
+    if (process.env.NODE_ENV !== "production") {
+      const totalSlots = await PlantSlot.aggregate([
+        { $unwind: "$subtypeSlots" },
+        { $unwind: "$subtypeSlots.slots" },
+        { $count: "count" }
+      ]);
+      console.log(
+        "alerts db",
+        PlantSlot.db.name,
+        "total slots",
+        totalSlots[0]?.count || 0,
+        "pending slots",
+        slotAlertsRaw.length
+      );
+      console.log("alerts: sample slots", slotAlertsRaw.slice(0, 3));
+    }
+
+    const priorityWeight = {
+      overdue: 2,
+      urgent: 1,
+      upcoming: 0,
+    };
+
+    const resolvePriority = (current, candidate) => {
+      if (!current) return candidate;
+      if (!candidate) return current;
+      return priorityWeight[candidate] > priorityWeight[current] ? candidate : current;
+    };
+
+    const slotAlerts = slotAlertsRaw
+      .map((alert) => ({
+        slotId: alert._id,
+        plantId: alert.plantId,
+        plantName: alert.plantName,
+        subtypeId: alert.subtypeId,
+        subtypeName: alert.subtypeName,
+        slotStartDay: alert.slotStartDay,
+        slotEndDay: alert.slotEndDay,
+        month: alert.month,
+        year: alert.year,
+        pendingQuantity: alert.pendingQuantity,
+        totalBookedPlants: alert.totalBookedPlants,
+        primarySowed: alert.primarySowed,
+        officeSowed: alert.officeSowed,
+        slotReadyDays: alert.slotReadyDays,
+        daysUntilSow: alert.daysUntilSow,
+        priority: alert.priority,
+        sowByDate: alert.sowByDate,
+        sowByDateISO: alert.sowByDateISO,
+      }))
+      .filter((alert) => alert.pendingQuantity > 0);
+
+    const dayMap = new Map();
+    const plantMap = new Map();
+    const impactedPlants = new Set();
+
+    slotAlerts.forEach((alert) => {
+      impactedPlants.add(`${alert.plantId}_${alert.subtypeId}`);
+      const dayKey = `${alert.plantId}_${alert.subtypeId}_${alert.sowByDate}`;
+      const dayExisting = dayMap.get(dayKey);
+      if (!dayExisting) {
+        dayMap.set(dayKey, {
+          id: dayKey,
+          plantId: alert.plantId,
+          plantName: alert.plantName,
+          subtypeId: alert.subtypeId,
+          subtypeName: alert.subtypeName,
+          sowByDate: alert.sowByDate,
+          sowByDateISO: alert.sowByDateISO,
+          daysUntilSow: alert.daysUntilSow,
+          totalPending: alert.pendingQuantity,
+          slotCount: 1,
+          priority: alert.priority,
+          slotIds: [alert.slotId],
+        });
+      } else {
+        dayExisting.totalPending += alert.pendingQuantity;
+        dayExisting.slotCount += 1;
+        dayExisting.daysUntilSow = Math.min(dayExisting.daysUntilSow, alert.daysUntilSow);
+        dayExisting.priority = resolvePriority(dayExisting.priority, alert.priority);
+        dayExisting.slotIds.push(alert.slotId);
+      }
+
+      const plantKey = alert.plantId.toString();
+      let plantEntry = plantMap.get(plantKey);
+      if (!plantEntry) {
+        plantEntry = {
+          plantId: alert.plantId,
+          plantName: alert.plantName,
+          totalPending: 0,
+          slotCount: 0,
+          overdueSlots: 0,
+          urgentSlots: 0,
+          upcomingSlots: 0,
+          subtypes: new Map(),
+        };
+        plantMap.set(plantKey, plantEntry);
+      }
+
+      plantEntry.totalPending += alert.pendingQuantity;
+      plantEntry.slotCount += 1;
+      if (alert.daysUntilSow < 0) {
+        plantEntry.overdueSlots += 1;
+      } else if (alert.daysUntilSow <= 2) {
+        plantEntry.urgentSlots += 1;
+      } else {
+        plantEntry.upcomingSlots += 1;
+      }
+
+      const subtypeKey = alert.subtypeId.toString();
+      let subtypeEntry = plantEntry.subtypes.get(subtypeKey);
+      if (!subtypeEntry) {
+        subtypeEntry = {
+          subtypeId: alert.subtypeId,
+          subtypeName: alert.subtypeName,
+          totalPending: 0,
+          slotCount: 0,
+          overdueSlots: 0,
+          urgentSlots: 0,
+          upcomingSlots: 0,
+          earliestSowByDate: alert.sowByDate,
+          earliestDaysUntilSow: alert.daysUntilSow,
+          latestSowByDate: alert.sowByDate,
+          slotAlerts: [],
+        };
+        plantEntry.subtypes.set(subtypeKey, subtypeEntry);
+      }
+
+      subtypeEntry.totalPending += alert.pendingQuantity;
+      subtypeEntry.slotCount += 1;
+      if (alert.daysUntilSow < 0) {
+        subtypeEntry.overdueSlots += 1;
+      } else if (alert.daysUntilSow <= 2) {
+        subtypeEntry.urgentSlots += 1;
+      } else {
+        subtypeEntry.upcomingSlots += 1;
+      }
+
+      if (alert.daysUntilSow < subtypeEntry.earliestDaysUntilSow) {
+        subtypeEntry.earliestDaysUntilSow = alert.daysUntilSow;
+        subtypeEntry.earliestSowByDate = alert.sowByDate;
+      }
+
+      subtypeEntry.latestSowByDate =
+        moment(alert.sowByDate, "DD-MM-YYYY").isAfter(moment(subtypeEntry.latestSowByDate, "DD-MM-YYYY"))
+          ? alert.sowByDate
+          : subtypeEntry.latestSowByDate;
+
+      if (subtypeEntry.slotAlerts.length < 3) {
+        subtypeEntry.slotAlerts.push(alert);
+      } else {
+        const minIndex = subtypeEntry.slotAlerts.reduce(
+          (idx, current, currentIdx, arr) =>
+            arr[idx].pendingQuantity <= current.pendingQuantity ? idx : currentIdx,
+          0
+        );
+        if (alert.pendingQuantity > subtypeEntry.slotAlerts[minIndex].pendingQuantity) {
+          subtypeEntry.slotAlerts[minIndex] = alert;
+        }
+      }
+    });
+
+    const dayAlerts = Array.from(dayMap.values()).sort(
+      (a, b) => a.daysUntilSow - b.daysUntilSow || b.totalPending - a.totalPending
+    );
+
+    const plantAlerts = Array.from(plantMap.values()).map((plant) => {
+      const subtypes = Array.from(plant.subtypes.values())
+        .map((subtype) => ({
+          subtypeId: subtype.subtypeId,
+          subtypeName: subtype.subtypeName,
+          totalPending: subtype.totalPending,
+          slotCount: subtype.slotCount,
+          overdueSlots: subtype.overdueSlots,
+          urgentSlots: subtype.urgentSlots,
+          upcomingSlots: subtype.upcomingSlots,
+          earliestSowByDate: subtype.earliestSowByDate,
+          latestSowByDate: subtype.latestSowByDate,
+          sampleSlots: subtype.slotAlerts
+            .sort((a, b) => a.daysUntilSow - b.daysUntilSow || b.pendingQuantity - a.pendingQuantity)
+            .map((slotAlert) => ({
+              slotId: slotAlert.slotId,
+              pendingQuantity: slotAlert.pendingQuantity,
+              sowByDate: slotAlert.sowByDate,
+              daysUntilSow: slotAlert.daysUntilSow,
+              priority: slotAlert.priority,
+              slotStartDay: slotAlert.slotStartDay,
+              slotEndDay: slotAlert.slotEndDay,
+            })),
+        }))
+        .sort((a, b) => b.totalPending - a.totalPending);
+
+      return {
+        plantId: plant.plantId,
+        plantName: plant.plantName,
+        totalPending: plant.totalPending,
+        slotCount: plant.slotCount,
+        overdueSlots: plant.overdueSlots,
+        urgentSlots: plant.urgentSlots,
+        upcomingSlots: plant.upcomingSlots,
+        subtypeCount: subtypes.length,
+        subtypes,
+      };
+    });
+
+    plantAlerts.sort((a, b) => b.totalPending - a.totalPending);
+
+    const debugInfo =
+      req.query.debug === "true"
+        ? {
+            slotSample: slotAlerts.slice(0, 5),
+            rawCount: slotAlertsRaw.length,
+          }
+        : undefined;
+
+    const totalPending = slotAlerts.reduce((sum, item) => sum + item.pendingQuantity, 0);
+    const rawTotalPending = slotAlertsRaw.reduce(
+      (sum, item) => sum + Number(item.pendingQuantity || 0),
+      0
+    );
+    const overdueSlots = slotAlerts.filter((item) => item.daysUntilSow < 0).length;
+    const urgentSlots = slotAlerts.filter(
+      (item) => item.daysUntilSow >= 0 && item.daysUntilSow <= 2
+    ).length;
+    const upcomingSlots = slotAlerts.length - overdueSlots - urgentSlots;
+
+    const summary = {
+      totalPending,
+      totalSlots: slotAlerts.length,
+      overdueSlots,
+      urgentSlots,
+      upcomingSlots,
+      plantsImpacted: impactedPlants.size,
+      lookaheadDays,
+      pastWindowDays,
+      rawSlotCount: slotAlertsRaw.length,
+      rawTotalPending,
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        summary,
+        slotAlerts,
+        dayAlerts,
+        plantAlerts,
+        debug: debugInfo,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching sowing alerts:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching sowing alerts",
+      error: error.message,
+    });
+  }
+};
+
+export const getSowingAlertsByStart = async (req, res) => {
+  try {
+    const now = moment().startOf("day");
+
+    const slotPipeline = [
+      { $unwind: "$subtypeSlots" },
+      { $unwind: "$subtypeSlots.slots" },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $lookup: {
+          from: "orders",
+          let: { slotId: "$subtypeSlots.slots._id" },
+          pipeline: [
+            {
+              $match: {
+                orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+              },
+            },
+            {
+              $match: {
+                $expr: {
+                  $eq: ["$bookingSlot", "$$slotId"],
+                },
+              },
+            },
+            {
+              $project: {
+                numberOfPlants: 1,
+              },
+            },
+          ],
+          as: "slotOrders",
+        },
+      },
+      {
+        $addFields: {
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          officeSowed: { $ifNull: ["$subtypeSlots.slots.officeSowed", 0] },
+          storedBooked: { $ifNull: ["$subtypeSlots.slots.totalBookedPlants", 0] },
+          slotReadyDays: {
+            $cond: [
+              { $gt: ["$subtypeSlots.slots.plantReadyDays", 0] },
+              "$subtypeSlots.slots.plantReadyDays",
+              { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          ordersBooked: {
+            $reduce: {
+              input: "$slotOrders",
+              initialValue: 0,
+              in: { $add: ["$$value", { $ifNull: ["$$this.numberOfPlants", 0] }] },
+            },
+          },
+          effectiveBooked: { $max: ["$ordersBooked", "$storedBooked"] },
+        },
+      },
+      {
+        $addFields: {
+          pendingQuantity: {
+            $max: [
+              0,
+              {
+                $subtract: ["$effectiveBooked", { $ifNull: ["$primarySowed", 0] }],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          pendingQuantity: { $gt: 0 },
+        },
+      },
+      {
+        $addFields: {
+          slotStartISO: {
+            $dateFromString: {
+              dateString: {
+                $concat: [
+                  { $substr: ["$subtypeSlots.slots.startDay", 6, 4] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.startDay", 3, 2] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.startDay", 0, 2] },
+                ],
+              },
+              format: "%Y-%m-%d",
+            },
+          },
+        },
+      },
+      {
+        $addFields: {
+          sowByDateISO: {
+            $cond: [
+              { $gt: ["$slotReadyDays", 0] },
+              {
+                $dateSubtract: {
+                  startDate: "$slotStartISO",
+                  unit: "day",
+                  amount: "$slotReadyDays",
+                },
+              },
+              "$slotStartISO",
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          daysUntilSow: {
+            $divide: [
+              { $subtract: ["$sowByDateISO", now.toDate()] },
+              1000 * 60 * 60 * 24,
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          daysUntilSow: { $round: ["$daysUntilSow", 0] },
+          priority: {
+            $cond: [
+              { $lt: ["$daysUntilSow", 0] },
+              "overdue",
+              {
+                $cond: [
+                  { $lte: ["$daysUntilSow", 2] },
+                  "urgent",
+                  "upcoming",
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $project: {
+          _id: "$subtypeSlots.slots._id",
+          plantId: "$plantId",
+          plantName: { $ifNull: ["$plantInfo.name", "Unknown"] },
+          subtypeId: "$subtypeSlots.subtypeId",
+          subtypeName: { $ifNull: ["$subtypeDetails.name", "Subtype"] },
+          slotStartDay: "$subtypeSlots.slots.startDay",
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          month: "$subtypeSlots.slots.month",
+          year: "$year",
+          totalBookedPlants: "$effectiveBooked",
+          primarySowed: "$primarySowed",
+          officeSowed: "$officeSowed",
+          pendingQuantity: 1,
+          slotReadyDays: "$slotReadyDays",
+          daysUntilSow: 1,
+          priority: 1,
+          sowByDate: {
+            $dateToString: {
+              date: "$sowByDateISO",
+              format: "%d-%m-%Y",
+            },
+          },
+          sowByDateISO: "$sowByDateISO",
+        },
+      },
+      { $sort: { daysUntilSow: 1, pendingQuantity: -1 } },
+    ];
+
+    const slotAlertsRaw = await PlantSlot.aggregate(slotPipeline).allowDiskUse(true);
+
+    const dayAggregates = {};
+    const plantAggregates = {};
+
+    slotAlertsRaw.forEach((slot) => {
+      const dayKey = `${slot.plantId}_${slot.subtypeId}_${slot.sowByDate}`;
+      if (!dayAggregates[dayKey]) {
+        dayAggregates[dayKey] = {
+          plantId: slot.plantId,
+          plantName: slot.plantName,
+          subtypeId: slot.subtypeId,
+          subtypeName: slot.subtypeName,
+          sowByDate: slot.sowByDate,
+          sowByDateISO: slot.sowByDateISO,
+          totalPending: 0,
+          slotIds: [],
+          slotCount: 0,
+          priority: slot.priority,
+          daysUntilSow: slot.daysUntilSow,
+        };
+      }
+      const day = dayAggregates[dayKey];
+      day.totalPending += slot.pendingQuantity;
+      day.slotCount += 1;
+      day.slotIds.push(slot._id);
+      day.priority =
+        slot.priority === "overdue"
+          ? "overdue"
+          : slot.priority === "urgent" && day.priority === "upcoming"
+          ? "urgent"
+          : day.priority;
+      day.daysUntilSow = Math.min(day.daysUntilSow, slot.daysUntilSow);
+
+      const plantKey = `${slot.plantId}_${slot.subtypeId}`;
+      if (!plantAggregates[plantKey]) {
+        plantAggregates[plantKey] = {
+          plantId: slot.plantId,
+          plantName: slot.plantName,
+          subtypeId: slot.subtypeId,
+          subtypeName: slot.subtypeName,
+          totalPending: 0,
+          slotCount: 0,
+          overdueSlots: 0,
+          urgentSlots: 0,
+          upcomingSlots: 0,
+          sampleSlots: [],
+        };
+      }
+      const aggregate = plantAggregates[plantKey];
+      aggregate.totalPending += slot.pendingQuantity;
+      aggregate.slotCount += 1;
+      if (slot.priority === "overdue") aggregate.overdueSlots += 1;
+      else if (slot.priority === "urgent") aggregate.urgentSlots += 1;
+      else aggregate.upcomingSlots += 1;
+      if (aggregate.sampleSlots.length < 5) {
+        aggregate.sampleSlots.push(slot);
+      }
+    });
+
+    const dayAlerts = Object.values(dayAggregates).sort(
+      (a, b) => a.daysUntilSow - b.daysUntilSow || b.totalPending - a.totalPending
+    );
+
+    const plantAlerts = Object.values(plantAggregates).sort((a, b) => b.totalPending - a.totalPending);
+
+    const totalPending = slotAlertsRaw.reduce((sum, slot) => sum + slot.pendingQuantity, 0);
+    const overdueSlots = slotAlertsRaw.filter((slot) => slot.daysUntilSow < 0).length;
+    const urgentSlots = slotAlertsRaw.filter(
+      (slot) => slot.daysUntilSow >= 0 && slot.daysUntilSow <= 2
+    ).length;
+    const upcomingSlots = slotAlertsRaw.length - overdueSlots - urgentSlots;
+    const plantsImpacted = new Set(
+      slotAlertsRaw.map((slot) => `${slot.plantId.toString()}_${slot.subtypeId.toString()}`)
+    ).size;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        summary: {
+          totalPending,
+          totalSlots: slotAlertsRaw.length,
+          overdueSlots,
+          urgentSlots,
+          upcomingSlots,
+          plantsImpacted,
+        },
+        slotAlerts: slotAlertsRaw,
+        dayAlerts,
+        plantAlerts,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching sowing alerts by start:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching sowing alerts",
+      error: error.message,
+    });
+  }
+};
+
+export const getTodaySowingSummary = async (req, res) => {
+  try {
+    const now = moment().startOf("day");
+
+    const ordersSummary = await Order.aggregate([
+      {
+        $match: {
+          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+        },
+      },
+      {
+        $group: {
+          _id: "$bookingSlot",
+          totalPlants: { $sum: { $ifNull: ["$numberOfPlants", 0] } },
+        },
+      },
+    ]);
+
+    const ordersMap = new Map(
+      ordersSummary.map((entry) => [entry._id?.toString(), entry.totalPlants || 0])
+    );
+
+    const slotData = await PlantSlot.aggregate([
+      { $unwind: "$subtypeSlots" },
+      { $unwind: "$subtypeSlots.slots" },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $project: {
+          _id: "$subtypeSlots.slots._id",
+          plantId: "$plantId",
+          plantName: { $ifNull: ["$plantInfo.name", "Unknown"] },
+          subtypeId: "$subtypeSlots.subtypeId",
+          subtypeName: { $ifNull: ["$subtypeDetails.name", "Subtype"] },
+          slotStartDay: "$subtypeSlots.slots.startDay",
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          month: "$subtypeSlots.slots.month",
+          year: "$year",
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          storedBooked: { $ifNull: ["$subtypeSlots.slots.totalBookedPlants", 0] },
+          slotReadyDays: {
+            $cond: [
+              { $gt: ["$subtypeSlots.slots.plantReadyDays", 0] },
+              "$subtypeSlots.slots.plantReadyDays",
+              { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+            ],
+          },
+        },
+      },
+    ]).allowDiskUse(true);
+
+    const plantSubtypeMap = new Map();
+
+    slotData.forEach((slot) => {
+      const slotId = slot._id?.toString();
+      const ordersBooked = ordersMap.get(slotId) || 0;
+      const effectiveBooked = Math.max(ordersBooked, slot.storedBooked || 0);
+      const pending = Math.max(0, effectiveBooked - (slot.primarySowed || 0));
+
+      if (pending <= 0) {
+        return;
+      }
+
+      const startMoment = moment(slot.slotStartDay, "DD-MM-YYYY");
+      const sowByMoment =
+        slot.slotReadyDays && slot.slotReadyDays > 0
+          ? startMoment.clone().subtract(slot.slotReadyDays, "days")
+          : startMoment.clone();
+
+      if (sowByMoment.isAfter(now)) {
+        return;
+      }
+
+      const daysUntilSow = sowByMoment.diff(now, "days");
+      const priority = daysUntilSow < 0 ? "overdue" : "due today";
+
+      const key = `${slot.plantId}_${slot.subtypeId}`;
+      if (!plantSubtypeMap.has(key)) {
+        plantSubtypeMap.set(key, {
+          plantId: slot.plantId,
+          plantName: slot.plantName,
+          subtypeId: slot.subtypeId,
+          subtypeName: slot.subtypeName,
+          pendingQuantity: 0,
+          slotCount: 0,
+          slots: [],
+        });
+      }
+
+      const entry = plantSubtypeMap.get(key);
+      entry.pendingQuantity += pending;
+      entry.slotCount += 1;
+      entry.slots.push({
+        slotId,
+        slotStartDay: slot.slotStartDay,
+        slotEndDay: slot.slotEndDay,
+        month: slot.month,
+        year: slot.year,
+        pendingQuantity: pending,
+        sowByDate: sowByMoment.format("DD-MM-YYYY"),
+        daysUntilSow,
+        priority,
+      });
+    });
+
+    const plantSubtypes = Array.from(plantSubtypeMap.values()).sort(
+      (a, b) => b.pendingQuantity - a.pendingQuantity
+    );
+    const totalPending = plantSubtypes.reduce((sum, entry) => sum + entry.pendingQuantity, 0);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        summary: {
+          totalPendingToday: totalPending,
+          plantSubtypeCount: plantSubtypes.length,
+        },
+        plantSubtypes,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching today sowing summary:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching sowing summary",
+      error: error.message,
     });
   }
 };

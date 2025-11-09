@@ -22,11 +22,25 @@ router
   .post(
     "/create",
     [
-      check("batchNumber").notEmpty().withMessage("Batch number is required"),
+      check("batchNumber").trim().notEmpty().withMessage("Batch number is required"),
       check("dateAdded")
         .optional()
         .isISO8601()
         .withMessage("Invalid date format"),
+      check("primaryPlantReadyDays")
+        .exists()
+        .withMessage("Primary plant ready days are required")
+        .bail()
+        .isInt({ min: 1 })
+        .withMessage("Primary plant ready days must be a positive integer")
+        .toInt(),
+      check("secondaryPlantReadyDays")
+        .exists()
+        .withMessage("Secondary plant ready days are required")
+        .bail()
+        .isInt({ min: 1 })
+        .withMessage("Secondary plant ready days must be a positive integer")
+        .toInt(),
     ],
     checkErrors,
     createBatch
@@ -41,12 +55,23 @@ router
         .custom(validateObjectId),
       check("batchNumber")
         .optional()
+        .trim()
         .notEmpty()
         .withMessage("Batch number cannot be empty"),
       check("dateAdded")
         .optional()
         .isISO8601()
         .withMessage("Invalid date format"),
+      check("primaryPlantReadyDays")
+        .optional()
+        .isInt({ min: 1 })
+        .withMessage("Primary plant ready days must be a positive integer")
+        .toInt(),
+      check("secondaryPlantReadyDays")
+        .optional()
+        .isInt({ min: 1 })
+        .withMessage("Secondary plant ready days must be a positive integer")
+        .toInt(),
     ],
     checkErrors,
     updateBatch
@@ -60,7 +85,8 @@ router
         .custom(validateObjectId),
       check("isActive")
         .isBoolean()
-        .withMessage("isActive must be a boolean value"),
+        .withMessage("isActive must be a boolean value")
+        .toBoolean(),
     ],
     checkErrors,
     toggleBatchStatus

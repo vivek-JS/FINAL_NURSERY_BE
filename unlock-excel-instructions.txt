@@ -1,0 +1,20 @@
+To unlock the booking.xlsx file so we can read it, please follow these steps:
+
+1. Open Microsoft Excel (or any compatible spreadsheet application)
+2. Open the file: booking.xlsx
+3. Enter the password: AV1312
+4. Go to File > Info > Protect Workbook
+5. Click "Encrypt with Password"
+6. Clear the password field and click OK (removing the password)
+7. Save the file (Ctrl+S or Cmd+S)
+
+Once you've removed the password, I can read the file.
+Alternatively, you can export the data to a CSV file without password.
+
+Script to read unlocked file: extract-excel-password.js
+The file will be readable once the password is removed.
+
+
+
+
+

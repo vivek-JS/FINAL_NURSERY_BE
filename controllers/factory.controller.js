@@ -2337,10 +2337,23 @@ const getAll = (Model, modelName) =>
           orderStatus: 1,
           payment: 1,
           numberOfPlants: 1,
+          additionalPlants: { $ifNull: ["$additionalPlants", 0] },
+          totalPlants: {
+            $ifNull: [
+              "$totalPlants",
+              {
+                $add: [
+                  { $ifNull: ["$numberOfPlants", 0] },
+                  { $ifNull: ["$additionalPlants", 0] }
+                ]
+              }
+            ]
+          },
           remainingPlants: 1, // Added field: remaining plants
           returnedPlants: 1, // Return tracking field
           returnReason: 1, // Return reason field
           returnHistory: 1, // Return history field
+          currentDispatchId: 1, // Reference to current dispatch
           orderId: 1,
           rate: 1,
           farmReadyDate: 1,
@@ -2533,6 +2546,7 @@ const getAll = (Model, modelName) =>
               },
             },
           },
+          additionalPlantsHistory: { $ifNull: ["$additionalPlantsHistory", []] },
           // Added dispatch history with user and dispatch info
           dispatchHistory: {
             $map: {
@@ -2543,6 +2557,8 @@ const getAll = (Model, modelName) =>
                 quantity: "$$dispatchEntry.quantity",
                 remainingAfterDispatch: "$$dispatchEntry.remainingAfterDispatch",
                 dispatchId: "$$dispatchEntry.dispatchId",
+                driverName: "$$dispatchEntry.driverName",
+                vehicleName: "$$dispatchEntry.vehicleName",
                 dispatch: {
                   $let: {
                     vars: {

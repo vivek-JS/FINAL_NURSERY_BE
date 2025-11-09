@@ -2,7 +2,7 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
-import Batch from "../models/batch.model.js";
+import DispatchBatch from "../models/dispatchBatch.model.js";
 import mongoose from "mongoose";
 import PlantOutward from "../models/plantOutward.model.js";
 
@@ -20,16 +20,50 @@ const createBatch = catchAsync(async (req, res, next) => {
     );
   }
 
-  const existingBatch = await Batch.findOne({ batchNumber });
+  const normalizedBatchNumber = batchNumber?.trim();
+
+  if (!normalizedBatchNumber) {
+    return next(new AppError("Batch number is required", 400));
+  }
+
+  const parsedPrimaryDays = Number(primaryPlantReadyDays);
+  const parsedSecondaryDays = Number(secondaryPlantReadyDays);
+
+  if (!Number.isInteger(parsedPrimaryDays) || parsedPrimaryDays <= 0) {
+    return next(
+      new AppError(
+        "Primary plant ready days must be a positive integer",
+        400
+      )
+    );
+  }
+
+  if (!Number.isInteger(parsedSecondaryDays) || parsedSecondaryDays <= 0) {
+    return next(
+      new AppError(
+        "Secondary plant ready days must be a positive integer",
+        400
+      )
+    );
+  }
+
+  const normalizedDate = dateAdded ? new Date(dateAdded) : new Date();
+  if (Number.isNaN(normalizedDate.getTime())) {
+    return next(new AppError("Invalid date format", 400));
+  }
+
+  const existingBatch = await DispatchBatch.findOne({
+    batchNumber: normalizedBatchNumber,
+  });
   if (existingBatch) {
     return next(new AppError("Batch number already exists", 409));
   }
 
-  const batch = await Batch.create({
-    batchNumber,
-    dateAdded, 
-    primaryPlantReadyDays,
-    secondaryPlantReadyDays,
+  const batch = await DispatchBatch.create({
+    batchNumber: normalizedBatchNumber,
+    dateAdded: normalizedDate,
+    primaryPlantReadyDays: parsedPrimaryDays,
+    secondaryPlantReadyDays: parsedSecondaryDays,
   }); 
 
   await PlantOutward.create({
@@ -55,9 +89,11 @@ const getAllBatches = catchAsync(async (req, res, next) => {
     page = 1,
     limit = 10,
     status,
+    startDate,
+    endDate,
   } = req.query;
 
-  let query = Batch.find();
+  let query = DispatchBatch.find();
 
   if (search) {
     const searchRegex = new RegExp(search, "i");
@@ -66,6 +102,15 @@ const getAllBatches = catchAsync(async (req, res, next) => {
 
   if (status !== undefined) {
     query = query.where("isActive").equals(status === "true");
+  }
+
+  if (startDate && endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      end.setHours(23, 59, 59, 999);
+      query = query.where("dateAdded").gte(start).lte(end);
+    }
   }
 
   const sort = {};
@@ -77,7 +122,7 @@ const getAllBatches = catchAsync(async (req, res, next) => {
 
   const [batches, total] = await Promise.all([
     query.exec(),
-    Batch.countDocuments(query.getFilter()),
+    DispatchBatch.countDocuments(query.getFilter()),
   ]);
 
   const transformedBatches = batches.map((batch) => {
@@ -115,14 +160,14 @@ const updateBatch = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid ID format", 400));
   }
 
-  const existingBatch = await Batch.findById(id);
+  const existingBatch = await DispatchBatch.findById(id);
   if (!existingBatch) {
     return next(new AppError("No batch found with that ID", 404));
   }
 
   if (batchNumber && batchNumber !== existingBatch.batchNumber) {
-    const duplicateBatch = await Batch.findOne({
-      batchNumber,
+    const duplicateBatch = await DispatchBatch.findOne({
+      batchNumber: batchNumber.trim(),
       _id: { $ne: id },
     });
     if (duplicateBatch) {
@@ -131,18 +176,51 @@ const updateBatch = catchAsync(async (req, res, next) => {
   }
 
   // Validate plant ready days if they are being updated
-  if (primaryPlantReadyDays !== undefined && primaryPlantReadyDays <= 0) {
+  if (
+    primaryPlantReadyDays !== undefined &&
+    (!Number.isInteger(Number(primaryPlantReadyDays)) ||
+      Number(primaryPlantReadyDays) <= 0)
+  ) {
     return next(
       new AppError("Primary plant ready days must be a positive number", 400)
     );
   }
-  if (secondaryPlantReadyDays !== undefined && secondaryPlantReadyDays <= 0) {
+  if (
+    secondaryPlantReadyDays !== undefined &&
+    (!Number.isInteger(Number(secondaryPlantReadyDays)) ||
+      Number(secondaryPlantReadyDays) <= 0)
+  ) {
     return next(
       new AppError("Secondary plant ready days must be a positive number", 400)
     );
   }
 
-  const doc = await Batch.findByIdAndUpdate(id, req.body, {
+  const updatePayload = { ...req.body };
+
+  delete updatePayload.id;
+  delete updatePayload._id;
+
+  if (batchNumber !== undefined) {
+    updatePayload.batchNumber = batchNumber.trim();
+  }
+
+  if (dateAdded !== undefined) {
+    const updatedDate = new Date(dateAdded);
+    if (Number.isNaN(updatedDate.getTime())) {
+      return next(new AppError("Invalid date format", 400));
+    }
+    updatePayload.dateAdded = updatedDate;
+  }
+
+  if (primaryPlantReadyDays !== undefined) {
+    updatePayload.primaryPlantReadyDays = Number(primaryPlantReadyDays);
+  }
+
+  if (secondaryPlantReadyDays !== undefined) {
+    updatePayload.secondaryPlantReadyDays = Number(secondaryPlantReadyDays);
+  }
+
+  const doc = await DispatchBatch.findByIdAndUpdate(id, updatePayload, {
     new: true,
     runValidators: true,
   });
@@ -168,7 +246,7 @@ const toggleBatchStatus = catchAsync(async (req, res, next) => {
     return next(new AppError("isActive must be a boolean value", 400));
   }
 
-  const doc = await Batch.findByIdAndUpdate(
+  const doc = await DispatchBatch.findByIdAndUpdate(
     id,
     { isActive },
     {

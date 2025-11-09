@@ -217,6 +217,19 @@ sowingSchema.virtual('shouldShowReminder').get(function() {
 
 // Pre-save middleware to calculate fields
 sowingSchema.pre('save', function(next) {
+  if (this.isModified('sowingDate') || this.isModified('plantReadyDays')) {
+    if (this.sowingDate) {
+      const sowingMoment = moment(this.sowingDate, 'DD-MM-YYYY');
+      if (sowingMoment.isValid()) {
+        const readyDays = Number(this.plantReadyDays) || 0;
+        this.expectedReadyDate = sowingMoment
+          .clone()
+          .add(readyDays, 'days')
+          .format('DD-MM-YYYY');
+      }
+    }
+  }
+
   // Calculate total sowed
   this.totalSowed = this.officeSowed + this.primarySowed;
   
@@ -266,6 +279,10 @@ sowingSchema.set('toObject', { virtuals: true });
 const Sowing = model("Sowing", sowingSchema);
 
 export default Sowing;
+
+
+
+
 
 
 
