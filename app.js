@@ -239,6 +239,7 @@ import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
 import sowingRoute from "./routes/sowing.route.js";
+import publicFarmerLinkRoute from "./routes/publicFarmerLink.route.js";
 import clearDataRoute from "./routes/clearData.route.js";
 
 // Inventory Management Routes
@@ -306,6 +307,7 @@ server.use("/api/v1/location", locationRoute); // No authentication required for
 server.use("/api/v1/notifications", notificationRoute); // Notification routes (has built-in auth)
 server.use("/api/v1/sowing", authenticateToken, sowingRoute); // Sowing management routes
 server.use("/api/v1/clear-data", authenticateToken, clearDataRoute); // Data clearing routes
+server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead links (mixed auth & public)
 
 // Inventory Management Routes (all require authentication)
 server.use("/api/v1/inventory", authenticateToken, inventoryRoute);
