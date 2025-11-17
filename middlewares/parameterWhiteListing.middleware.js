@@ -55,6 +55,12 @@ const parameterWhiteListing = (req, res, next) => {
     return next();
   }
 
+  // Skip parameter validation for public-links endpoints (completely public)
+  if (req.path.startsWith('/api/v1/public-links/config/') || 
+      req.path.startsWith('/api/v1/public-links/leads')) {
+    return next();
+  }
+
   const requestParams = { ...req.query, ...req.params };
 
   const invalidParams = Object.keys(requestParams).filter(

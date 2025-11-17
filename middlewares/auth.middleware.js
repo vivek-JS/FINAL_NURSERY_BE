@@ -8,6 +8,21 @@ import User from '../models/user.model.js';
  */
 export const authenticateToken = async (req, res, next) => {
   try {
+    // ============================================
+    // BYPASS AUTH FOR PUBLIC ENDPOINTS
+    // These endpoints must be accessible without any token
+    // ============================================
+    const publicPaths = [
+      '/api/v1/public-links/config',
+      '/api/v1/public-links/leads'
+    ];
+
+    const isPublicPath = publicPaths.some(path => req.path.startsWith(path));
+    if (isPublicPath) {
+      // Skip authentication completely for public endpoints
+      return next();
+    }
+
     const token = extractToken(req);
 
     if (!token) {

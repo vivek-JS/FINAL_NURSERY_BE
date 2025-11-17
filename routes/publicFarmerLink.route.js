@@ -48,9 +48,22 @@ router.get(
   getFarmerLeadsForLink
 );
 
-// Public endpoints for data entry
-router.get("/config/:slug", getPublicLinkConfigBySlug);
-router.post("/leads", createFarmerLead);
+// ============================================
+// PUBLIC ENDPOINTS - NO AUTHENTICATION REQUIRED
+// These endpoints are completely open and can be accessed from anywhere without token
+// Explicitly bypass any auth middleware that might be applied at app level
+// ============================================
+
+// Middleware to explicitly ensure no auth is checked (even if something intercepts)
+const bypassAuth = (req, res, next) => {
+  // Explicitly set req.user to null to prevent any auth checks
+  req.user = null;
+  req.token = null;
+  next();
+};
+
+router.get("/config/:slug", bypassAuth, getPublicLinkConfigBySlug);
+router.post("/leads", bypassAuth, createFarmerLead);
 
 export default router;
 

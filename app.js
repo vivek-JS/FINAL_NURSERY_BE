@@ -201,6 +201,15 @@ server.options('/api/v1/user/login', cors(corsOptions), (req, res) => {
   res.status(200).end();
 });
 
+// Handle CORS preflight for public-links endpoints (completely public, no auth)
+server.options('/api/v1/public-links/config/:slug', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+
+server.options('/api/v1/public-links/leads', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+
 
 
 // importing routes
@@ -265,6 +274,12 @@ server.get("/api/dummyData", (req, res) => {
 // defining routes
 server.use("/api/v1/user", userRoute);
 
+// ============================================
+// PUBLIC ROUTES - Must be BEFORE protected routes to avoid auth interception
+// ============================================
+server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead links (mixed auth & public)
+server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
+
 // Protected routes - require authentication
 server.use("/api/v1/farmer", authenticateToken, farmerRoute);
 server.use("/api/v1/order", authenticateToken, orderRoute);
@@ -303,11 +318,9 @@ server.use("/api/v1/excel", authenticateToken, ExcelRoute);
 server.use("/api/v1/pricing", authenticateToken, pricingRoute);
 server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
 server.use("/api/v1/state", authenticateToken, stateRoute);
-server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/notifications", notificationRoute); // Notification routes (has built-in auth)
 server.use("/api/v1/sowing", authenticateToken, sowingRoute); // Sowing management routes
 server.use("/api/v1/clear-data", authenticateToken, clearDataRoute); // Data clearing routes
-server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead links (mixed auth & public)
 
 // Inventory Management Routes (all require authentication)
 server.use("/api/v1/inventory", authenticateToken, inventoryRoute);

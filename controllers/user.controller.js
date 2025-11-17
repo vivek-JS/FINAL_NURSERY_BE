@@ -306,8 +306,11 @@ const aboutMe = async (req, res, next) => {
 export const refreshToken = async (req, res, next) => {
   const { refreshToken } = req.body;
 
-  if (!refreshToken) {
-    return next(new AppError("Refresh token is required", 400));
+  // Handle null/undefined/empty refreshToken gracefully
+  if (!refreshToken || refreshToken === null || refreshToken === 'null') {
+    return res.status(400).json(
+      generateResponse('error', 'Refresh token is required', null, null)
+    );
   }
 
   try {
