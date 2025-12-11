@@ -138,6 +138,13 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
 async function processOrderFlow(mobileNumber, userMessage, state) {
   const message = userMessage.trim().toLowerCase();
 
+  // Debug logging
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`🔄 Processing order flow for: ${mobileNumber}`);
+    console.log(`📝 Message: "${userMessage}"`);
+    console.log(`📍 Current step: ${state.step}`);
+  }
+
   try {
     switch (state.step) {
       case "welcome":
