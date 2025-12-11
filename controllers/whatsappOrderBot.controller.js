@@ -750,6 +750,20 @@ async function handleConfirmation(mobileNumber, message, state) {
 }
 
 /**
+ * Health check endpoint for webhook (GET request)
+ */
+export const webhookHealthCheck = catchAsync(async (req, res) => {
+  return res.status(200).json(
+    generateResponse("success", "WhatsApp webhook endpoint is active", {
+      endpoint: "/api/v1/whatsapp-order/webhook",
+      method: "POST",
+      status: "ready",
+      timestamp: new Date().toISOString(),
+    })
+  );
+});
+
+/**
  * Manual trigger to start order flow (for testing)
  */
 export const startOrderFlow = catchAsync(async (req, res) => {
