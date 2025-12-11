@@ -1,8 +1,13 @@
 import catchAsync from '../utility/catchAsync.js';
 import multer from 'multer';
-import { importOrdersAndFarmers, validateExcelStructure } from './excel.serveces.controller.js';
+import { importOrdersAndFarmers, validateExcelStructure, processExcelRowsForValidation } from './excel.serveces.controller.js';
 import PlantSlot from '../models/slots.model.js';
+import UnprocessedFile from '../models/unprocessedFile.model.js';
+import ErrorfulOrder from '../models/errorfulOrder.model.js';
 import mongoose from 'mongoose';
+import XLSX from 'xlsx';
+import path from 'path';
+import fs from 'fs';
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
@@ -18,7 +23,7 @@ const upload = multer({
   }
 }).single('file');
 
-// Validation endpoint
+// Validation endpoint - now processes rows and creates unprocessed rows file
 export const validateExcel = catchAsync(async (req, res) => {
   upload(req, res, async (err) => {
     if (err) {
@@ -36,28 +41,93 @@ export const validateExcel = catchAsync(async (req, res) => {
     }
 
     try {
+      // Step 1: Validate structure (don't block - just report)
       const validationResults = validateExcelStructure(req.file.buffer);
       
+      // Log validation results but NEVER block
       if (!validationResults.isValid) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Excel validation failed',
+        console.warn('⚠️  Validation issues detected (non-blocking):', {
           errors: validationResults.errors,
-          warnings: validationResults.warnings,
-          rowErrors: validationResults.rowErrors
+          warnings: validationResults.warnings
         });
+        console.log('✅ Validation endpoint will still return success - import can proceed');
       }
 
+      // Step 2: Process rows to identify unprocessed ones
+      let processResults;
+      try {
+        processResults = await processExcelRowsForValidation(req.file.buffer);
+      } catch (processError) {
+        console.warn('⚠️  Process error (non-blocking):', processError);
+        processResults = {
+          totalRows: 0,
+          processableRows: 0,
+          unprocessedRows: [],
+          errors: [processError.message]
+        };
+      }
+      
+      // Step 3: Create Excel file with unprocessed rows if any
+      let unprocessedFileUrl = null;
+      let unprocessedRowsCount = 0;
+      
+      if (processResults.unprocessedRows && processResults.unprocessedRows.length > 0) {
+        unprocessedRowsCount = processResults.unprocessedRows.length;
+        
+        // Create Excel workbook with unprocessed rows
+        const workbook = XLSX.utils.book_new();
+        const worksheet = XLSX.utils.json_to_sheet(processResults.unprocessedRows);
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Unprocessed Rows');
+        
+        // Generate filename with timestamp
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        const filename = `unprocessed-rows-${timestamp}.xlsx`;
+        const filepath = path.join(process.cwd(), 'uploads', filename);
+        
+        // Ensure uploads directory exists
+        const uploadsDir = path.join(process.cwd(), 'uploads');
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+        
+        // Write file
+        XLSX.writeFile(workbook, filepath);
+        
+        // Generate URL for download
+        unprocessedFileUrl = `/api/v1/excel/download-unprocessed/${filename}`;
+      }
+
+      // ALWAYS return success - validation is just for preview, never blocks
       return res.status(200).json({
         status: 'success',
-        message: 'Excel file is valid',
-        warnings: validationResults.warnings
+        message: validationResults.isValid 
+          ? 'Excel file validated successfully' 
+          : 'Excel file has validation issues but import can proceed',
+        data: {
+          totalRows: processResults.totalRows || 0,
+          processableRows: processResults.processableRows || 0,
+          unprocessedRowsCount: unprocessedRowsCount,
+          unprocessedFileUrl: unprocessedFileUrl,
+          warnings: validationResults.warnings || [],
+          errors: validationResults.errors || [], // These are just informational, not blocking
+          rowErrors: processResults.errors || []
+        }
       });
     } catch (error) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'Error validating file',
-        error: error.message
+      console.error('Validation endpoint error:', error);
+      // Even on error, return success so import can proceed
+      return res.status(200).json({
+        status: 'success',
+        message: 'Validation encountered issues but import can proceed',
+        data: {
+          totalRows: 0,
+          processableRows: 0,
+          unprocessedRowsCount: 0,
+          unprocessedFileUrl: null,
+          warnings: [],
+          errors: [error.message],
+          rowErrors: []
+        }
       });
     }
   });
@@ -81,40 +151,306 @@ export const importExcelData = catchAsync(async (req, res) => {
     }
 
     try {
-      // First validate
-      const validationResults = validateExcelStructure(req.file.buffer);
+      // Read the Excel file to get original data for unprocessed rows file
+      const workbook = XLSX.read(req.file.buffer, {
+        type: "buffer",
+        cellDates: true,
+        raw: true,
+      });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      const originalData = XLSX.utils.sheet_to_json(worksheet, {
+        raw: true,
+        dateNF: "DD-MM-YYYY",
+        defval: "",
+      });
+
+      // Validate structure (but NEVER block import - always proceed)
+      let validationResults;
+      try {
+        validationResults = validateExcelStructure(req.file.buffer);
+        console.log('📋 Validation completed:', {
+          isValid: validationResults.isValid,
+          errorsCount: validationResults.errors?.length || 0,
+          warningsCount: validationResults.warnings?.length || 0
+        });
+      } catch (validationError) {
+        console.warn('⚠️  Validation error (non-blocking):', validationError);
+        validationResults = {
+          isValid: false,
+          errors: [validationError.message],
+          warnings: [],
+          rowErrors: []
+        };
+      }
       
+      // CRITICAL: ALWAYS proceed with import regardless of validation result
+      // Log validation results but NEVER block import
       if (!validationResults.isValid) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Excel validation failed',
+        console.warn('⚠️  Validation issues detected, but proceeding with import anyway:', {
           errors: validationResults.errors,
           warnings: validationResults.warnings,
           rowErrors: validationResults.rowErrors
         });
+        console.log('✅ IMPORT WILL PROCEED - Invalid rows will be skipped, valid rows will be imported');
+      } else {
+        console.log('✅ Validation passed, proceeding with import');
       }
 
-      // If valid, proceed with import
-      const results = await importOrdersAndFarmers(req.file.buffer);
+      // Create unprocessed rows file DURING processing (not after)
+      // This allows the download link to be available immediately
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const filename = `unprocessed-rows-${timestamp}.xlsx`;
+      const filepath = path.join(process.cwd(), 'uploads', filename);
+      
+      // Ensure uploads directory exists
+      const uploadsDir = path.join(process.cwd(), 'uploads');
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+
+      // Proceed with import (it will skip invalid rows)
+      // Always proceed even if validation failed - import function handles errors gracefully
+      let results;
+      let unprocessedRows = [];
+      let unprocessedFileUrl = null;
+      let unprocessedRowsCount = 0;
+      
+      try {
+        // Generate import batch ID for this import session
+        const importBatchId = `import-${Date.now()}`;
+        results = await importOrdersAndFarmers(req.file.buffer, {
+          importBatchId: importBatchId,
+          sourceFilename: req.file.originalname || 'unknown.xlsx',
+        });
+        
+        // Create unprocessed rows file from failed imports
+        if (results.errors && results.errors.length > 0) {
+          // Map failed imports back to original rows
+          const failedBookingNos = new Set();
+          const failedOrderIds = new Set();
+          
+          // Add all failed booking numbers and orderIds to set (handle different formats)
+          results.errors.forEach(err => {
+            if (err.bookingNo) {
+              failedBookingNos.add(err.bookingNo.toString());
+              failedBookingNos.add(parseInt(err.bookingNo));
+              failedBookingNos.add(err.bookingNo);
+            }
+            if (err.orderId) {
+              failedOrderIds.add(err.orderId.toString());
+              failedOrderIds.add(parseInt(err.orderId));
+              failedOrderIds.add(err.orderId);
+            }
+          });
+          
+          originalData.forEach((row, index) => {
+            const bookingNo = row["Booking NO."];
+            const bookingNoStr = bookingNo?.toString().trim();
+            const bookingNoInt = bookingNo ? parseInt(bookingNo) : null;
+            
+            // Parse orderId from booking number
+            let orderId = null;
+            try {
+              const parseOrderId = (bookingNo) => {
+                if (!bookingNo) return null;
+                const bookingStr = bookingNo.toString().trim();
+                const numericValue = parseInt(bookingStr, 10);
+                if (numericValue === 0) return null;
+                const newFormatMatch = bookingStr.match(/^(\d{4})\/(\d+)$/);
+                if (newFormatMatch) {
+                  const year = newFormatMatch[1];
+                  const sequence = newFormatMatch[2];
+                  return parseInt(`${year}${sequence.padStart(3, '0')}`, 10);
+                }
+                const oldFormatMatch = bookingStr.match(/^(\d{2})-(\d{2})\/B(\d+)$/);
+                if (oldFormatMatch) {
+                  const startYear = oldFormatMatch[1];
+                  const endYear = oldFormatMatch[2];
+                  const sequence = oldFormatMatch[3];
+                  return parseInt(`${startYear}${endYear}${sequence.padStart(3, '0')}`, 10);
+                }
+                const numericMatch = bookingStr.match(/^(\d+)$/);
+                if (numericMatch) return parseInt(numericMatch[1], 10);
+                return null;
+              };
+              orderId = parseOrderId(bookingNo);
+            } catch (e) {
+              // Ignore parsing errors
+            }
+            
+            // Check if this row failed (by bookingNo or orderId)
+            const isFailedByBooking = failedBookingNos.has(bookingNoStr) || 
+                                      failedBookingNos.has(bookingNoInt) ||
+                                      failedBookingNos.has(bookingNo);
+            
+            const isFailedByOrderId = orderId && (
+              failedOrderIds.has(orderId.toString()) ||
+              failedOrderIds.has(orderId) ||
+              failedOrderIds.has(parseInt(orderId))
+            );
+            
+            if (isFailedByBooking || isFailedByOrderId) {
+              // Find the error message for this booking or orderId
+              const error = results.errors.find(err => {
+                const errBooking = err.bookingNo?.toString();
+                const errOrderId = err.orderId?.toString();
+                return errBooking === bookingNoStr || 
+                       errBooking === bookingNoInt?.toString() ||
+                       err.bookingNo === bookingNo ||
+                       err.bookingNo === bookingNoInt ||
+                       (orderId && (errOrderId === orderId.toString() || err.orderId === orderId));
+              });
+              unprocessedRows.push({
+                ...row,
+                "Error": error?.error || "Failed to import"
+              });
+            }
+          });
+          
+          if (unprocessedRows.length > 0) {
+            unprocessedRowsCount = unprocessedRows.length;
+            
+            // Create Excel workbook with unprocessed rows
+            const unprocessedWorkbook = XLSX.utils.book_new();
+            const unprocessedWorksheet = XLSX.utils.json_to_sheet(unprocessedRows);
+            XLSX.utils.book_append_sheet(unprocessedWorkbook, unprocessedWorksheet, 'Unprocessed Rows');
+            
+            // Write file
+            XLSX.writeFile(unprocessedWorkbook, filepath);
+            
+            // Generate URL for download
+            unprocessedFileUrl = `/api/v1/excel/download-unprocessed/${filename}`;
+            console.log(`📄 Created unprocessed rows file: ${filename} (${unprocessedRowsCount} rows)`);
+            
+            // Save file metadata to database
+            try {
+              await UnprocessedFile.create({
+                filename: filename,
+                originalFilename: req.file?.originalname || 'unknown.xlsx',
+                filepath: filepath,
+                unprocessedRowsCount: unprocessedRowsCount,
+                totalRows: originalData.length,
+                successfulImports: results.summary?.successfulImports || 0,
+                failedImports: results.summary?.failedImports || 0,
+                uploadedBy: req.user?._id || null,
+                uploadedByName: req.user?.name || 'System',
+                importSummary: results.summary || {},
+                errors: results.errors || [],
+                downloadUrl: unprocessedFileUrl,
+                isDownloaded: false,
+              });
+              console.log(`✅ Saved unprocessed file metadata to database: ${filename}`);
+            } catch (dbError) {
+              console.error('❌ Error saving unprocessed file metadata:', dbError);
+              // Continue even if DB save fails
+            }
+          }
+        }
+      } catch (importError) {
+        console.error('Import error:', importError);
+        // If import completely fails, create unprocessed file with all rows
+        unprocessedRows = originalData.map((row, index) => ({
+          ...row,
+          "Error": importError.message || "Import failed"
+        }));
+        unprocessedRowsCount = unprocessedRows.length;
+        
+        // Create Excel workbook with all rows as unprocessed
+        const unprocessedWorkbook = XLSX.utils.book_new();
+        const unprocessedWorksheet = XLSX.utils.json_to_sheet(unprocessedRows);
+        XLSX.utils.book_append_sheet(unprocessedWorkbook, unprocessedWorksheet, 'Unprocessed Rows');
+        XLSX.writeFile(unprocessedWorkbook, filepath);
+        unprocessedFileUrl = `/api/v1/excel/download-unprocessed/${filename}`;
+        
+        // Save file metadata to database
+        try {
+          await UnprocessedFile.create({
+            filename: filename,
+            originalFilename: req.file?.originalname || 'unknown.xlsx',
+            filepath: filepath,
+            unprocessedRowsCount: unprocessedRowsCount,
+            totalRows: originalData.length,
+            successfulImports: 0,
+            failedImports: originalData.length,
+            uploadedBy: req.user?._id || null,
+            uploadedByName: req.user?.name || 'System',
+            importSummary: {
+              totalProcessed: originalData.length,
+              successfulImports: 0,
+              failedImports: originalData.length,
+              overflowSlots: 0,
+              invalidPhoneNumbers: 0,
+            },
+            errors: results.errors || [],
+            downloadUrl: unprocessedFileUrl,
+            isDownloaded: false,
+          });
+        } catch (dbError) {
+          console.error('❌ Error saving unprocessed file metadata:', dbError);
+        }
+        
+        results = {
+          success: [],
+          errors: originalData.map((row, index) => ({
+            bookingNo: row["Booking NO."] || `Row ${index + 2}`,
+            error: importError.message || "Import failed"
+          })),
+          summary: {
+            totalProcessed: originalData.length,
+            successfulImports: 0,
+            failedImports: originalData.length,
+            overflowSlots: 0,
+            invalidPhoneNumbers: 0,
+          },
+          generatedOrderIds: []
+        };
+      }
+
+      // Always return success - import proceeded, even if some rows failed
+      const successMessage = results.summary.successfulImports > 0
+        ? `Import completed: ${results.summary.successfulImports} successful, ${results.summary.failedImports} failed`
+        : `Import attempted: ${results.summary.failedImports} rows failed to import`;
 
       return res.status(200).json({
         status: 'success',
-        message: 'Data imported successfully',
+        message: successMessage,
         data: {
           summary: results.summary,
           successfulImports: results.success,
           failedImports: results.errors,
-          generatedOrderIds: results.generatedOrderIds, // Include generated random IDs
+          generatedOrderIds: results.generatedOrderIds || [],
+          validationWarnings: validationResults.warnings || [],
+          validationErrors: validationResults.errors || [],
+          unprocessedRowsCount: unprocessedRowsCount,
+          unprocessedFileUrl: unprocessedFileUrl,
           notes: results.summary.invalidPhoneNumbers > 0 
             ? `${results.summary.invalidPhoneNumbers} entries were created with invalid/missing phone numbers and marked with isInvalidPhone flag`
             : null
         }
       });
     } catch (error) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'Error processing file',
-        error: error.message
+      console.error('Import endpoint error:', error);
+      // Even on error, try to return partial results if available
+      return res.status(200).json({
+        status: 'success',
+        message: 'Import completed with errors',
+        data: {
+          summary: {
+            totalProcessed: 0,
+            successfulImports: 0,
+            failedImports: 0,
+            overflowSlots: 0,
+            invalidPhoneNumbers: 0,
+          },
+          successfulImports: [],
+          failedImports: [{ bookingNo: 'Unknown', error: error.message }],
+          generatedOrderIds: [],
+          validationWarnings: [],
+          validationErrors: [error.message],
+          unprocessedRowsCount: 0,
+          unprocessedFileUrl: null,
+          notes: `Import error: ${error.message}`
+        }
       });
     }
   });
@@ -266,6 +602,178 @@ export const getOverflowSlots = catchAsync(async (req, res) => {
     return res.status(500).json({
       status: 'error',
       message: 'Error retrieving overflow slots',
+      error: error.message
+    });
+  }
+});
+
+// Download unprocessed rows file endpoint (no auth required)
+export const downloadUnprocessedFile = catchAsync(async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const filepath = path.join(process.cwd(), 'uploads', filename);
+    
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'File not found'
+      });
+    }
+    
+    // Update download status in database if file record exists
+    try {
+      await UnprocessedFile.updateOne(
+        { filename: filename },
+        { 
+          $set: { 
+            isDownloaded: true, 
+            downloadedAt: new Date(),
+            downloadedBy: req.user?._id || null
+          } 
+        }
+      );
+    } catch (dbError) {
+      console.warn('Could not update download status:', dbError.message);
+      // Continue with download even if DB update fails
+    }
+    
+    res.download(filepath, filename, (err) => {
+      if (err) {
+        console.error('Error downloading file:', err);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Error downloading file'
+        });
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error downloading file',
+      error: error.message
+    });
+  }
+});
+
+// Get list of unprocessed files
+export const getUnprocessedFiles = catchAsync(async (req, res) => {
+  try {
+    const { page = 1, limit = 20, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const sortOptions = {};
+    sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    
+    const [files, total] = await Promise.all([
+      UnprocessedFile.find({})
+        .populate('uploadedBy', 'name phoneNumber')
+        .populate('downloadedBy', 'name phoneNumber')
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      UnprocessedFile.countDocuments({})
+    ]);
+    
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        files,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          totalPages: Math.ceil(total / parseInt(limit))
+        }
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error fetching unprocessed files',
+      error: error.message
+    });
+  }
+});
+
+// Get errorful orders (failed imports saved to database)
+export const getErrorfulOrders = catchAsync(async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 20, 
+      sortBy = 'createdAt', 
+      sortOrder = 'desc',
+      errorType,
+      isResolved,
+      importBatchId,
+      bookingNumber
+    } = req.query;
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const sortOptions = {};
+    sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    
+    // Build query filter
+    const filter = {};
+    if (errorType) {
+      filter.errorType = errorType;
+    }
+    if (isResolved !== undefined) {
+      filter.isResolved = isResolved === 'true';
+    }
+    if (importBatchId) {
+      filter.importBatchId = importBatchId;
+    }
+    if (bookingNumber) {
+      filter.bookingNumber = { $regex: bookingNumber, $options: 'i' };
+    }
+    
+    const [orders, total] = await Promise.all([
+      ErrorfulOrder.find(filter)
+        .populate('resolvedBy', 'name phoneNumber')
+        .populate('importedOrderId', 'orderId numberOfPlants')
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      ErrorfulOrder.countDocuments(filter)
+    ]);
+    
+    // Get error type statistics
+    const errorTypeStats = await ErrorfulOrder.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: '$errorType',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        orders,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          totalPages: Math.ceil(total / parseInt(limit))
+        },
+        statistics: {
+          errorTypeBreakdown: errorTypeStats,
+          totalUnresolved: await ErrorfulOrder.countDocuments({ ...filter, isResolved: false }),
+          totalResolved: await ErrorfulOrder.countDocuments({ ...filter, isResolved: true })
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching errorful orders:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch errorful orders',
       error: error.message
     });
   }

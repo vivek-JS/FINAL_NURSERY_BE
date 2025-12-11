@@ -5,8 +5,7 @@ import PurchaseOrder from '../models/purchaseOrder.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
 
 // Helper function to create inventory transaction
-const createInventoryTransaction = async (item, grn, user) => {
-  const product = await Product.findById(item.product);
+const createInventoryTransaction = async (item, grn, user, balanceBefore, balanceAfter) => {
   const transactionNumber = await InventoryTransaction.generateTransactionNumber();
 
   const transaction = new InventoryTransaction({
@@ -16,8 +15,8 @@ const createInventoryTransaction = async (item, grn, user) => {
     batch: item.batch,
     quantity: item.acceptedQuantity,
     unit: item.unit,
-    balanceBeforeTransaction: product.currentStock,
-    balanceAfterTransaction: product.currentStock + item.acceptedQuantity,
+    balanceBeforeTransaction: balanceBefore,
+    balanceAfterTransaction: balanceAfter,
     rate: item.rate,
     value: item.amount,
     referenceType: 'GRN',
@@ -32,10 +31,40 @@ const createInventoryTransaction = async (item, grn, user) => {
   return transaction;
 };
 
+// Helper function to generate batch number
+const generateBatchNumber = async (productNameOrId, productId = null) => {
+  let productName = 'PROD';
+  let prodId = productId;
+  
+  // If first param is ObjectId, fetch product
+  if (typeof productNameOrId === 'string' && productNameOrId.length === 24 && !productNameOrId.includes(' ')) {
+    // Looks like ObjectId
+    const Product = (await import('../models/product.model.js')).default;
+    const product = await Product.findById(productNameOrId);
+    if (product) {
+      productName = product.name;
+      prodId = productNameOrId;
+    }
+  } else {
+    // First param is product name
+    productName = productNameOrId || 'PROD';
+    prodId = productId || productNameOrId;
+  }
+  
+  const date = new Date();
+  const year = date.getFullYear().toString().slice(-2);
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  const productCode = productName.substring(0, 3).toUpperCase().replace(/\s/g, '');
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  const productIdShort = prodId ? prodId.toString().slice(-3) : '000';
+  return `BATCH${productCode}${year}${month}${day}${random}`;
+};
+
 // Create GRN
 export const createGRN = async (req, res) => {
   try {
-    const {
+    let {
       supplier,
       purchaseOrder,
       invoiceNumber,
@@ -49,6 +78,24 @@ export const createGRN = async (req, res) => {
       otherCharges,
       notes,
     } = req.body;
+
+    // If supplier is null but purchaseOrder is provided, get supplier from PO
+    if (!supplier && purchaseOrder) {
+      const PurchaseOrder = (await import('../models/purchaseOrder.model.js')).default;
+      const po = await PurchaseOrder.findById(purchaseOrder);
+      if (po && po.supplier) {
+        supplier = po.supplier._id || po.supplier;
+      }
+    }
+
+    // Auto-generate batch numbers for items that don't have one or are blank
+    if (items && Array.isArray(items)) {
+      for (const item of items) {
+        if (!item.batchNumber || !item.batchNumber.trim()) {
+          item.batchNumber = await generateBatchNumber(item.product);
+        }
+      }
+    }
 
     // Generate GRN number
     const grnNumber = await GRN.generateGRNNumber();
@@ -85,7 +132,36 @@ export const createGRN = async (req, res) => {
     });
 
     await grn.save();
-    await grn.populate(['supplier', 'purchaseOrder', 'items.product', 'items.unit', 'createdBy']);
+    
+    // Populate without supplier first, then handle supplier/merchant separately
+    await grn.populate(['purchaseOrder', 'items.product', 'items.unit', 'createdBy']);
+    
+    // Handle supplier/merchant population using Merchant model
+    if (grn.supplier) {
+      const { default: Merchant } = await import('../models/merchant.model.js');
+      const { default: Supplier } = await import('../models/supplier.model.js');
+      
+      const supplierId = grn.supplier._id || grn.supplier;
+      const supplierDoc = await Supplier.findById(supplierId);
+      if (supplierDoc) {
+        grn.supplier = supplierDoc;
+      } else {
+        const merchant = await Merchant.findById(supplierId);
+        if (merchant) {
+          grn.supplier = {
+            _id: merchant._id,
+            name: merchant.name,
+            phone: merchant.phone,
+            email: merchant.email,
+            address: merchant.address,
+            gstin: merchant.gstin,
+            contactPerson: merchant.contactPerson,
+            type: 'merchant',
+            category: merchant.category,
+          };
+        }
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -127,12 +203,45 @@ export const approveGRN = async (req, res) => {
     // Create batches and update inventory
     for (const item of grn.items) {
       if (item.acceptedQuantity > 0) {
+        // Ensure batch number exists - auto-generate if blank
+        let batchNumber = item.batchNumber;
+        if (!batchNumber || !batchNumber.trim()) {
+          batchNumber = await generateBatchNumber(item.product);
+        }
+
+        // Check if batch number already exists
+        const existingBatch = await Batch.findOne({ batchNumber: batchNumber.trim() });
+        if (existingBatch) {
+          // If batch exists, append timestamp to make it unique
+          const timestamp = Date.now().toString().slice(-6);
+          batchNumber = `${batchNumber.trim()}_${timestamp}`;
+        }
+
+        // Convert expiryDate from string to Date if needed
+        let expiryDate = item.expiryDate;
+        if (expiryDate && typeof expiryDate === 'string') {
+          expiryDate = new Date(expiryDate);
+          // Check if date is valid
+          if (isNaN(expiryDate.getTime())) {
+            expiryDate = undefined;
+          }
+        }
+        
+        let manufactureDate = item.manufactureDate;
+        if (manufactureDate && typeof manufactureDate === 'string') {
+          manufactureDate = new Date(manufactureDate);
+          // Check if date is valid
+          if (isNaN(manufactureDate.getTime())) {
+            manufactureDate = undefined;
+          }
+        }
+
         // Create batch
         const batch = new Batch({
-          batchNumber: item.batchNumber,
+          batchNumber: batchNumber.trim(),
           product: item.product,
-          manufactureDate: item.manufactureDate,
-          expiryDate: item.expiryDate,
+          manufactureDate: manufactureDate || undefined,
+          expiryDate: expiryDate || undefined,
           receivedDate: grn.grnDate,
           supplier: grn.supplier,
           purchasePrice: item.rate,
@@ -144,24 +253,58 @@ export const approveGRN = async (req, res) => {
         });
 
         await batch.save();
-
-        // Update item with batch reference
+        
+        // Update item with batch reference and batch number (in case it was auto-generated)
         item.batch = batch._id;
+        item.batchNumber = batchNumber.trim();
 
         // Update product stock
         const product = await Product.findById(item.product);
-        const oldStock = product.currentStock;
-        const oldValue = product.stockValue;
+        if (!product) {
+          throw new Error(`Product not found for item: ${item.product}`);
+        }
 
-        product.currentStock += item.acceptedQuantity;
-        product.stockValue += item.amount;
-        product.averagePrice = product.stockValue / product.currentStock;
+        // Store old values for transaction
+        const oldStock = product.currentStock || 0;
+        const oldValue = product.stockValue || 0;
+
+        // Update stock values
+        product.currentStock = (product.currentStock || 0) + item.acceptedQuantity;
+        product.stockValue = (product.stockValue || 0) + item.amount;
+        
+        // Calculate average price safely (handles division by zero)
+        if (product.currentStock > 0) {
+          product.averagePrice = product.stockValue / product.currentStock;
+        } else {
+          product.averagePrice = 0;
+        }
+        
         product.updatedBy = req.user._id;
 
-        await product.save();
+        // Save product and verify it was saved
+        try {
+          await product.save();
+          console.log(`Stock updated for product ${item.product}: ${oldStock} -> ${product.currentStock}`);
+        } catch (saveError) {
+          console.error(`Error saving product ${item.product}:`, saveError);
+          throw new Error(`Failed to update stock for product: ${saveError.message}`);
+        }
+        
+        // Verify stock was updated by re-fetching
+        const updatedProduct = await Product.findById(item.product);
+        if (updatedProduct.currentStock !== product.currentStock) {
+          console.error(`Stock update mismatch for product ${item.product}. Expected: ${product.currentStock}, Got: ${updatedProduct.currentStock}`);
+          // Force update using findByIdAndUpdate
+          await Product.findByIdAndUpdate(item.product, {
+            currentStock: product.currentStock,
+            stockValue: product.stockValue,
+            averagePrice: product.averagePrice,
+            updatedBy: req.user._id,
+          });
+        }
 
-        // Create inventory transaction
-        await createInventoryTransaction(item, grn, req.user);
+        // Create inventory transaction with correct balance values
+        await createInventoryTransaction(item, grn, req.user, oldStock, product.currentStock);
       }
     }
 
@@ -203,7 +346,34 @@ export const approveGRN = async (req, res) => {
       }
     }
 
-    await grn.populate(['supplier', 'purchaseOrder', 'items.product', 'items.unit', 'items.batch']);
+    await grn.populate(['purchaseOrder', 'items.product', 'items.unit', 'items.batch']);
+    
+    // Handle supplier/merchant population
+    if (grn.supplier) {
+      const { default: Merchant } = await import('../models/merchant.model.js');
+      const { default: Supplier } = await import('../models/supplier.model.js');
+      
+      const supplierId = grn.supplier._id || grn.supplier;
+      const supplierDoc = await Supplier.findById(supplierId);
+      if (supplierDoc) {
+        grn.supplier = supplierDoc;
+      } else {
+        const merchant = await Merchant.findById(supplierId);
+        if (merchant) {
+          grn.supplier = {
+            _id: merchant._id,
+            name: merchant.name,
+            phone: merchant.phone,
+            email: merchant.email,
+            address: merchant.address,
+            gstin: merchant.gstin,
+            contactPerson: merchant.contactPerson,
+            type: 'merchant',
+            category: merchant.category,
+          };
+        }
+      }
+    }
 
     res.json({
       success: true,
@@ -259,14 +429,42 @@ export const getAllGRNs = async (req, res) => {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const [grns, total] = await Promise.all([
-      GRN.find(query)
-        .populate(['supplier', 'purchaseOrder', 'items.product', 'createdBy'])
-        .sort({ grnDate: -1 })
-        .skip(skip)
-        .limit(parseInt(limit)),
-      GRN.countDocuments(query),
-    ]);
+    const grns = await GRN.find(query)
+      .populate(['purchaseOrder', 'items.product', 'createdBy'])
+      .sort({ grnDate: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    // Handle supplier/merchant population for each GRN
+    const { default: Merchant } = await import('../models/merchant.model.js');
+    const { default: Supplier } = await import('../models/supplier.model.js');
+    
+    for (const grn of grns) {
+      if (grn.supplier) {
+        const supplierId = grn.supplier._id || grn.supplier;
+        const supplierDoc = await Supplier.findById(supplierId);
+        if (supplierDoc) {
+          grn.supplier = supplierDoc;
+        } else {
+          const merchant = await Merchant.findById(supplierId);
+          if (merchant) {
+            grn.supplier = {
+              _id: merchant._id,
+              name: merchant.name,
+              phone: merchant.phone,
+              email: merchant.email,
+              address: merchant.address,
+              gstin: merchant.gstin,
+              contactPerson: merchant.contactPerson,
+              type: 'merchant',
+              category: merchant.category,
+            };
+          }
+        }
+      }
+    }
+
+    const total = await GRN.countDocuments(query);
 
     res.json({
       success: true,
@@ -293,7 +491,6 @@ export const getGRNById = async (req, res) => {
   try {
     const grn = await GRN.findById(req.params.id)
       .populate([
-        'supplier',
         'purchaseOrder',
         'items.product',
         'items.unit',
@@ -308,6 +505,33 @@ export const getGRNById = async (req, res) => {
         success: false,
         message: 'GRN not found',
       });
+    }
+
+    // Handle supplier/merchant population using Merchant model
+    if (grn.supplier) {
+      const { default: Merchant } = await import('../models/merchant.model.js');
+      const { default: Supplier } = await import('../models/supplier.model.js');
+      
+      const supplierId = grn.supplier._id || grn.supplier;
+      const supplierDoc = await Supplier.findById(supplierId);
+      if (supplierDoc) {
+        grn.supplier = supplierDoc;
+      } else {
+        const merchant = await Merchant.findById(supplierId);
+        if (merchant) {
+          grn.supplier = {
+            _id: merchant._id,
+            name: merchant.name,
+            phone: merchant.phone,
+            email: merchant.email,
+            address: merchant.address,
+            gstin: merchant.gstin,
+            contactPerson: merchant.contactPerson,
+            type: 'merchant',
+            category: merchant.category,
+          };
+        }
+      }
     }
 
     res.json({
@@ -379,7 +603,34 @@ export const updateGRN = async (req, res) => {
     grn.updatedBy = req.user._id;
     await grn.save();
 
-    await grn.populate(['supplier', 'purchaseOrder', 'items.product', 'items.unit']);
+    await grn.populate(['purchaseOrder', 'items.product', 'items.unit']);
+    
+    // Handle supplier/merchant population using Merchant model
+    if (grn.supplier) {
+      const { default: Merchant } = await import('../models/merchant.model.js');
+      const { default: Supplier } = await import('../models/supplier.model.js');
+      
+      const supplierId = grn.supplier._id || grn.supplier;
+      const supplierDoc = await Supplier.findById(supplierId);
+      if (supplierDoc) {
+        grn.supplier = supplierDoc;
+      } else {
+        const merchant = await Merchant.findById(supplierId);
+        if (merchant) {
+          grn.supplier = {
+            _id: merchant._id,
+            name: merchant.name,
+            phone: merchant.phone,
+            email: merchant.email,
+            address: merchant.address,
+            gstin: merchant.gstin,
+            contactPerson: merchant.contactPerson,
+            type: 'merchant',
+            category: merchant.category,
+          };
+        }
+      }
+    }
 
     res.json({
       success: true,

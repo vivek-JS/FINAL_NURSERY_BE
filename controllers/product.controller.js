@@ -140,9 +140,44 @@ export const getProductById = async (req, res) => {
     }
 
     // Get batches for this product
-    const batches = await Batch.find({ product: product._id })
-      .populate(['unit', 'supplier'])
-      .sort({ receivedDate: -1 });
+    const batchDocs = await Batch.find({ product: product._id })
+      .populate(['unit'])
+      .sort({ receivedDate: -1 })
+      .lean(); // Use lean for plain objects
+    
+    // Manually populate supplier/merchant for batches
+    const { default: Merchant } = await import('../models/merchant.model.js');
+    const { default: Supplier } = await import('../models/supplier.model.js');
+    
+    const batches = await Promise.all(batchDocs.map(async (batch) => {
+      if (batch.supplier) {
+        let supplierId = batch.supplier;
+        if (typeof supplierId === 'object' && supplierId._id) {
+          supplierId = supplierId._id.toString();
+        } else if (typeof supplierId !== 'string') {
+          supplierId = supplierId.toString();
+        }
+        
+        // Try Supplier first
+        const supplierDoc = await Supplier.findById(supplierId).lean();
+        if (supplierDoc) {
+          batch.supplier = supplierDoc;
+        } else {
+          // Try Merchant
+          const merchant = await Merchant.findById(supplierId).lean();
+          if (merchant) {
+            batch.supplier = {
+              _id: merchant._id,
+              name: merchant.name,
+              phone: merchant.phone,
+              email: merchant.email,
+              type: 'merchant',
+            };
+          }
+        }
+      }
+      return batch;
+    }));
 
     // Get recent transactions
     const recentTransactions = await InventoryTransaction.find({ product: product._id })

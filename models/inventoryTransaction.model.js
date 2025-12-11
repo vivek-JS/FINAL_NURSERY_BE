@@ -52,7 +52,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
     },
     referenceType: {
       type: String,
-      enum: ['GRN', 'PurchaseOrder', 'Outward', 'Adjustment', 'Transfer'],
+      enum: ['GRN', 'PurchaseOrder', 'Outward', 'Adjustment', 'Transfer', 'SellOrder'],
     },
     referenceId: {
       type: mongoose.Schema.Types.ObjectId,

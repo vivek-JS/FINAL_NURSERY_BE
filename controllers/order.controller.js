@@ -9,6 +9,7 @@ import generateResponse from "../utility/responseFormat.js";
 import mongoose from "mongoose";
 import User from "../models/user.model.js";
 import Farmer from "../models/farmer.model.js";
+import Tray from "../models/tray.model.js";
 import {
   sendPaymentAcceptedNotification,
   sendPaymentRejectedNotification,
@@ -2180,6 +2181,75 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
   }
 });
 
+// Get all cavities from all orders
+const getAllCavitiesFromOrders = catchAsync(async (req, res, next) => {
+  try {
+    // Aggregate to get all unique cavity IDs from orders
+    const cavitiesFromOrders = await Order.aggregate([
+      {
+        $match: {
+          cavity: { $exists: true, $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: "$cavity",
+          orderCount: { $sum: 1 },
+          totalPlants: { $sum: "$numberOfPlants" }
+        }
+      },
+      {
+        $lookup: {
+          from: "trays",
+          localField: "_id",
+          foreignField: "_id",
+          as: "trayDetails"
+        }
+      },
+      {
+        $unwind: {
+          path: "$trayDetails",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          cavityId: "$_id",
+          cavityNumber: "$trayDetails.cavity",
+          cavityName: "$trayDetails.name",
+          numberPerCrate: "$trayDetails.numberPerCrate",
+          isActive: "$trayDetails.isActive",
+          orderCount: 1,
+          totalPlants: 1
+        }
+      },
+      {
+        $sort: { cavityNumber: 1 }
+      }
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        cavities: cavitiesFromOrders,
+        totalCavities: cavitiesFromOrders.length,
+        summary: {
+          totalOrders: cavitiesFromOrders.reduce((sum, c) => sum + c.orderCount, 0),
+          totalPlants: cavitiesFromOrders.reduce((sum, c) => sum + c.totalPlants, 0)
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error fetching cavities from orders:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching cavities.",
+      error: error.message
+    });
+  }
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -2195,5 +2265,6 @@ export {
   getUniqueVillages,
   getUniqueDistricts,
   getDealerWalletBalanceForOrder,
-  getOrdersToBeDispatched
+  getOrdersToBeDispatched,
+  getAllCavitiesFromOrders
 };

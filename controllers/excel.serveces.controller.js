@@ -8,6 +8,7 @@ import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import User from "../models/user.model.js";
 import Order from "../models/order.model.js";
+import ErrorfulOrder from "../models/errorfulOrder.model.js";
 import { updateSlot } from "./factory.controller.js";
 import Tray from "../models/tray.model.js";
 import { generateSlotsForYear } from "./slots.controller.js";
@@ -18,7 +19,14 @@ function parseExcelDate(serialNumber) {
   const offsetDays = serialNumber;
   const offsetMilliseconds = offsetDays * 24 * 60 * 60 * 1000;
   const date = new Date(epoch.getTime() + offsetMilliseconds);
-  return date;
+  // Excel dates represent dates at midnight in local timezone (IST)
+  // When converted to Date object, it's in UTC which can be the previous day
+  // Extract the local date parts to get the correct date
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  // Return a new Date object with the local date parts at noon UTC to avoid timezone issues
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
 }
 
 // Function to check if a value is an Excel date serial number
@@ -26,38 +34,31 @@ function isExcelDateSerial(value) {
   return typeof value === "number" && value > 1000 && value < 100000;
 }
 
-// Function to format date for display
+// Function to format date for display (use UTC to avoid timezone shifts)
 function formatDate(date) {
-  return moment(date).format("DD-MM-YYYY");
+  // Use UTC to prevent day shifts due to timezone differences
+  return moment.utc(date).format("DD-MM-YYYY");
 }
 
 // Function to map variety names to correct system names
 function mapVarietyName(cropName, varietyName) {
-  const varietyMappings = {
-    "Papaya": {
-      "Taiwan": "Red Lady",
-      "Taiwan Red": "Red Lady",
-      "Taiwan Red Lady": "Red Lady"
-    }
-    // Add more mappings as needed
-    // "CropName": {
-    //   "Excel Variety": "System Variety"
-    // }
-  };
+  // Variety mapping removed - using exact names from Excel
+  // const varietyMappings = {
+  //   "Papaya": {
+  //     "Taiwan": "Red Lady",
+  //     "Taiwan Red": "Red Lady",
+  //     "Taiwan Red Lady": "Red Lady"
+  //   }
+  // };
 
-  const cropMappings = varietyMappings[cropName];
-  if (cropMappings && cropMappings[varietyName]) {
-    const mappedName = cropMappings[varietyName];
-    console.log(`🔄 Mapping "${varietyName}" to "${mappedName}" for ${cropName}`);
-    return mappedName;
-  }
-
+  // Return variety name as-is without mapping
   return varietyName;
 }
 
 // Function to parse order ID from various formats
 function parseOrderId(bookingNo) {
-  if (!bookingNo) {
+  // Check if bookingNo is null, undefined, or empty string (but allow 0)
+  if (bookingNo === null || bookingNo === undefined || bookingNo === '') {
     throw new Error("Booking number is required");
   }
 
@@ -80,14 +81,18 @@ function parseOrderId(bookingNo) {
     return parseInt(`${year}${sequence.padStart(3, '0')}`, 10);
   }
 
-  // Handle old format: "24-25/B123", "24-25/B001", etc.
-  const oldFormatMatch = bookingStr.match(/^(\d{2})-(\d{2})\/B(\d+)$/);
+  // Handle old format: "24-25/B123", "24-25/B001", "25-26/80204", "25- 26/80204", etc.
+  // Support formats with or without "B", with or without spaces
+  const cleanedBooking = bookingStr.replace(/\s+/g, ''); // Remove all spaces
+  const oldFormatMatch = cleanedBooking.match(/^(\d{2})-(\d{2})\/B?(\d+)$/);
   if (oldFormatMatch) {
     const startYear = oldFormatMatch[1];
     const endYear = oldFormatMatch[2];
     const sequence = oldFormatMatch[3];
     // Create unique order ID by combining years and sequence
-    return parseInt(`${startYear}${endYear}${sequence.padStart(3, '0')}`, 10);
+    // For long sequences (like 80204), use last 3-4 digits to keep it reasonable
+    const sequenceDigits = sequence.length > 4 ? sequence.slice(-4) : sequence;
+    return parseInt(`${startYear}${endYear}${sequenceDigits.padStart(4, '0')}`, 10);
   }
 
   // Handle simple numeric format: "123", "001", etc.
@@ -111,8 +116,42 @@ function parseOrderId(bookingNo) {
 function convertDate(value) {
   if (!value) return null;
 
+  // If value is already a Date object (shouldn't happen with cellDates: false, but handle it)
+  if (value instanceof Date) {
+    // Use local date methods to get the date as entered in Excel
+    const year = value.getFullYear();
+    const month = value.getMonth() + 1; // getMonth() returns 0-11
+    const day = value.getDate();
+    
+    // Create UTC moment from the local date parts to preserve the intended date
+    const utcDate = moment.utc(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+    return utcDate.format("DD-MM-YYYY");
+  }
+
   if (isExcelDateSerial(Number(value))) {
-    return formatDate(parseExcelDate(Number(value)));
+    // Parse Excel serial number
+    // Excel serial numbers represent dates at midnight in Excel's timezone (IST)
+    // When converted to Date object, it's in UTC which can be the previous day
+    const serialNumber = Number(value);
+    const epoch = new Date(1899, 11, 30);
+    const offsetDays = serialNumber;
+    const offsetMilliseconds = offsetDays * 24 * 60 * 60 * 1000;
+    const date = new Date(epoch.getTime() + offsetMilliseconds);
+    
+    // Excel dates are stored at midnight IST, which is 5:30 AM UTC the same day
+    // But the Date object might show as previous day in UTC
+    // Add IST offset (5.5 hours) to get the correct IST date, then extract UTC parts
+    const istOffsetMs = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+    const istDate = new Date(date.getTime() + istOffsetMs);
+    
+    // Extract UTC date parts from the IST-adjusted date
+    const year = istDate.getUTCFullYear();
+    const month = istDate.getUTCMonth() + 1;
+    const day = istDate.getUTCDate();
+    
+    // Create UTC moment from the date parts to preserve the intended date
+    const utcDate = moment.utc(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+    return utcDate.format("DD-MM-YYYY");
   }
 
   const valueStr = value.toString().trim();
@@ -129,14 +168,15 @@ function convertDate(value) {
     
     // Validate the date
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && fullYear >= 2000 && fullYear <= 2030) {
-      const date = moment(`${fullYear}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+      // Use UTC to prevent timezone shifts
+      const date = moment.utc(`${fullYear}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
       if (date.isValid()) {
         return date.format("DD-MM-YYYY");
       }
     }
   }
 
-  // Handle MM/DD/YYYY format specifically (like "9/21/2024")
+  // Handle MM/DD/YYYY format specifically (like "9/21/2024" or "12/3/2025")
   const mmddyyyyMatch = valueStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (mmddyyyyMatch) {
     const month = parseInt(mmddyyyyMatch[1], 10);
@@ -145,7 +185,8 @@ function convertDate(value) {
     
     // Validate the date
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000 && year <= 2030) {
-      const date = moment(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+      // Use UTC to prevent timezone shifts
+      const date = moment.utc(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
       if (date.isValid()) {
         return date.format("DD-MM-YYYY");
       }
@@ -161,7 +202,8 @@ function convertDate(value) {
     
     // Validate the date
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000 && year <= 2030) {
-      const date = moment(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+      // Use UTC to prevent timezone shifts
+      const date = moment.utc(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
       if (date.isValid()) {
         return date.format("DD-MM-YYYY");
       }
@@ -177,15 +219,16 @@ function convertDate(value) {
     
     // Validate the date
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 2000 && year <= 2030) {
-      const date = moment(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+      // Use UTC to prevent timezone shifts
+      const date = moment.utc(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
       if (date.isValid()) {
         return date.format("DD-MM-YYYY");
       }
     }
   }
 
-  // Fallback to moment.js parsing for other formats
-  const date = moment(value, ["DD-MM-YYYY", "MM/DD/YYYY", "YYYY-MM-DD"]);
+  // Fallback to moment.js parsing for other formats (use UTC to prevent timezone shifts)
+  const date = moment.utc(value, ["DD-MM-YYYY", "MM/DD/YYYY", "YYYY-MM-DD"]);
   return date.isValid() ? date.format("DD-MM-YYYY") : null;
 }
 
@@ -340,6 +383,23 @@ const TARGET_PLANT_CONFIG = {
 const SLOT_YEARS = [2025, 2026];
 
 const normalizeName = (value) => (value || "").toString().trim();
+
+// Extract main crop name from compound names like "Watermelon Babubali" -> "Watermelon"
+const extractMainCropName = (cropName) => {
+  if (!cropName) return null;
+  const normalized = normalizeName(cropName);
+  
+  // Known crop names that might have suffixes
+  const mainCrops = ['Papaya', 'Muskmelon', 'Watermelon'];
+  
+  for (const mainCrop of mainCrops) {
+    if (normalized.toLowerCase().startsWith(mainCrop.toLowerCase())) {
+      return mainCrop;
+    }
+  }
+  
+  return normalized; // Return as-is if no match
+};
 
 const findSubtypeByName = (plant, subtypeName) => {
   if (!plant || !plant.subtypes || !subtypeName) {
@@ -535,11 +595,27 @@ export const validateExcelStructure = (buffer) => {
   const data = XLSX.utils.sheet_to_json(worksheet, {
     raw: true,
     dateNF: "DD-MM-YYYY",
+    defval: "", // Default value for empty cells
+    blankrows: true, // Include blank rows to process all 65 rows
   });
 
   console.log("Sample data:", data[0]);
+  const availableColumns = Object.keys(data[0] || {});
+  console.log("Available columns in first row:", availableColumns);
 
-  // Updated required columns based on new structure
+  // Helper function to normalize column names for comparison
+  const normalizeColumnName = (name) => {
+    if (!name) return "";
+    return name.toString().trim().replace(/\r\n/g, " ").replace(/\n/g, " ").replace(/\s+/g, " ").toLowerCase();
+  };
+
+  // Helper function to find column by normalized name
+  const findColumn = (targetName, availableCols) => {
+    const normalizedTarget = normalizeColumnName(targetName);
+    return availableCols.find(col => normalizeColumnName(col) === normalizedTarget);
+  };
+
+  // Required columns (core columns needed for import)
   const requiredColumns = [
     "Date", // A
     "Booking NO.", // B
@@ -556,6 +632,10 @@ export const validateExcelStructure = (buffer) => {
     "Rate", // P
     "Expected\r\nDel.\r\nDate", // Q
     "Order\r\nBy", // W
+  ];
+  
+  // Optional columns (nice to have but not required) - NEVER check these as required
+  const optionalColumns = [
     "Ad. Amt. Mode", // Y
     "Bank", // Z
     "CH No.", // [
@@ -577,15 +657,52 @@ export const validateExcelStructure = (buffer) => {
     return validationResults;
   }
 
-  // Check required columns
+  // Check required columns (with flexible matching)
   const firstRow = data[0];
-  const missingColumns = requiredColumns.filter((col) => !(col in firstRow));
-  if (missingColumns.length > 0) {
+  const missingRequiredColumns = [];
+  
+  console.log('🔍 Checking required columns...');
+  requiredColumns.forEach((requiredCol) => {
+    const found = findColumn(requiredCol, availableColumns);
+    if (!found) {
+      missingRequiredColumns.push(requiredCol);
+      console.log(`  ❌ Missing required: "${requiredCol}"`);
+    } else {
+      console.log(`  ✅ Found required: "${requiredCol}" (as "${found}")`);
+    }
+  });
+  
+  if (missingRequiredColumns.length > 0) {
     validationResults.isValid = false;
     validationResults.errors.push(
-      `Missing required columns: ${missingColumns.join(", ")}`
+      `Missing required columns: ${missingRequiredColumns.join(", ")}`
     );
   }
+  
+  // Check optional columns and add warnings if missing (NEVER add to errors)
+  const missingOptionalColumns = [];
+  console.log('🔍 Checking optional columns...');
+  optionalColumns.forEach((optionalCol) => {
+    const found = findColumn(optionalCol, availableColumns);
+    if (!found) {
+      missingOptionalColumns.push(optionalCol);
+      console.log(`  ⚠️  Missing optional: "${optionalCol}" (not blocking)`);
+    } else {
+      console.log(`  ✅ Found optional: "${optionalCol}" (as "${found}")`);
+    }
+  });
+  
+  if (missingOptionalColumns.length > 0) {
+    // Only add as warning, never as error - CRITICAL: These should NEVER block import
+    validationResults.warnings.push(
+      `Optional columns missing (will use defaults): ${missingOptionalColumns.join(", ")}`
+    );
+    console.log(`ℹ️  Optional columns missing (NOT blocking import): ${missingOptionalColumns.join(", ")}`);
+  }
+  
+  // IMPORTANT: Optional columns should NEVER cause isValid to be false
+  // Only required columns should affect isValid
+  console.log(`📊 Validation result: isValid=${validationResults.isValid}, required missing=${missingRequiredColumns.length}, optional missing=${missingOptionalColumns.length}`);
 
   // Validate each row
   data.forEach((row, index) => {
@@ -672,9 +789,13 @@ export const validateExcelStructure = (buffer) => {
 };
 
 // Fast and reliable Excel import with smart caching
-export const importOrdersAndFarmers = async (fileBuffer) => {
+export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
   console.log("🚀 Starting fast Excel import...");
   const startTime = Date.now();
+  
+  // Generate import batch ID for tracking this import session
+  const importBatchId = options.importBatchId || `import-${Date.now()}`;
+  const sourceFilename = options.sourceFilename || 'unknown.xlsx';
 
   const workbook = XLSX.read(fileBuffer, {
     type: "buffer",
@@ -686,6 +807,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
   const data = XLSX.utils.sheet_to_json(worksheet, {
     raw: true,
     dateNF: "DD-MM-YYYY",
+    blankrows: true, // Include blank rows to process all 65 rows
   });
 
   const results = {
@@ -715,8 +837,16 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
 
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
+    
+    // Skip completely empty rows (no booking number, no name, no crop)
+    if (!row["Booking NO."] && !row["Name"] && !row["Crop"]) {
+      console.log(`⏭️  Skipping empty row ${i + 2}`);
+      continue;
+    }
+    
     const orderNumber = parseOrderId(row["Booking NO."]);
-    const cropName = normalizeName(row["Crop"]);
+    const rawCropName = normalizeName(row["Crop"]);
+    const cropName = extractMainCropName(rawCropName); // Extract main crop name
     const mappedVarietyName = mapVarietyName(cropName, row["Variety"]);
     
     // Track generated random IDs for 0 booking numbers
@@ -1012,27 +1142,69 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         }
 
         // Find slot
-        const deliveryDate = moment(row.slots, "DD-MM-YYYY");
-        if (!deliveryDate.isValid()) {
-          throw new Error(`Invalid delivery date format: ${row.slots}`);
+        if (!row.slots || row.slots === null || row.slots === '') {
+          throw new Error(`Missing delivery date for booking ${row["Booking NO."] || "unknown"}. Expected Del. Date is required.`);
         }
+        
+        // Parse delivery date using UTC to prevent timezone shifts
+        const deliveryDate = moment.utc(row.slots, "DD-MM-YYYY");
+        if (!deliveryDate.isValid()) {
+          throw new Error(`Invalid delivery date format: ${row.slots} for booking ${row["Booking NO."] || "unknown"}`);
+        }
+
+        // Add 1 day to the delivery date to fix the day shift issue
+        const deliveryDatePlusOne = deliveryDate.clone().add(1, 'days');
+
+        // Use UTC date to avoid timezone issues (set to noon UTC to prevent day shift)
+        const deliveryDateUTC = moment.utc(deliveryDatePlusOne.format("YYYY-MM-DD")).hour(12).minute(0).second(0).millisecond(0);
 
         const slot = await findDeliverySlot(
           plant._id,
           subtype._id,
-          deliveryDate.toDate()
+          deliveryDateUTC.toDate()
         );
 
-        // Process tray
+        // Process tray (cavity logic)
         let tray = null;
         if (row["Media"]) {
           let cavityValue = row["Media"];
-          if (typeof cavityValue === "string" && cavityValue.trim().toLowerCase() === "elli") {
-            cavityValue = 10;
-          } else if (typeof cavityValue === "string") {
-            cavityValue = parseInt(cavityValue.trim(), 10);
+          
+          // Handle different Media formats:
+          // - "8 Cavity" -> extract 8
+          // - "elli" or "elli cavity" -> 10
+          // - Just a number -> use directly
+          
+          if (typeof cavityValue === "string") {
+            const mediaStr = cavityValue.trim().toLowerCase();
+            
+            // Check for "elli" (10 cavity)
+            if (mediaStr === "elli" || mediaStr.includes("elli")) {
+              cavityValue = 10;
+            } else if (mediaStr.includes("cavity")) {
+              // Extract number from "X Cavity" format (e.g., "8 Cavity" -> 8)
+              const match = mediaStr.match(/(\d+)\s*cavity/i);
+              if (match && match[1]) {
+                cavityValue = parseInt(match[1], 10);
+              } else {
+                // Try parsing the whole string as a number
+                const numMatch = mediaStr.match(/\d+/);
+                if (numMatch) {
+                  cavityValue = parseInt(numMatch[0], 10);
+                }
+              }
+            } else {
+              // Try to parse as a number directly
+              const parsed = parseInt(cavityValue.trim(), 10);
+              if (!isNaN(parsed)) {
+                cavityValue = parsed;
+              }
+            }
           }
-          tray = trayMap.get(cavityValue);
+          
+          // Look up tray by cavity number
+          if (typeof cavityValue === "number" && !isNaN(cavityValue)) {
+            tray = trayMap.get(cavityValue);
+          }
         }
 
         // Create order
@@ -1040,17 +1212,78 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
         const advanceAmount = Number(row["Advance\r\nAmt."]) || 0;
         const balanceAmount = totalAmount - advanceAmount;
 
-        // Check if order is already dispatched based on "Del y n" column
-        const isDispatched = row["Del. Y/N"] && row["Del. Y/N"].toString().trim().toUpperCase() === "Y";
+        // Check if order is already dispatched based on "Del. Y/N" column (handle line breaks in column name)
+        const delYN = row["Del. Y/N"] || row["Del.\r\nY/N"] || row["Del.\nY/N"];
+        const delYNUpper = delYN ? delYN.toString().trim().toUpperCase() : '';
         
-        // Determine order status
-        let orderStatus = 'ACCEPTED';
-        if (isDispatched) {
-          orderStatus = 'DISPATCHED';
+        // Determine order status based on Del. Y/N field:
+        // Y = COMPLETED
+        // TC = PENDING
+        // N = ACCEPTED (default)
+        let orderStatus = 'ACCEPTED'; // Default
+        if (delYNUpper === 'Y') {
+          orderStatus = 'COMPLETED';
+        } else if (delYNUpper === 'TC') {
+          orderStatus = 'PENDING';
+        } else if (delYNUpper === 'N') {
+          orderStatus = 'ACCEPTED';
+        }
+
+        // Check if orderId already exists in database (not just in our map)
+        let finalOrderId = row.orderNumber;
+        const existingOrderWithId = await Order.findOne({ orderId: finalOrderId }).lean();
+        
+        if (existingOrderWithId) {
+          // Check if farmer is different
+          const existingFarmerId = existingOrderWithId.farmer?.toString();
+          const newFarmerId = farmer._id.toString();
+          
+          if (existingFarmerId !== newFarmerId) {
+            // Farmer is different, generate a new orderId
+            console.log(`⚠️  OrderId ${finalOrderId} exists with different farmer. Generating new orderId.`);
+            // Generate a new orderId by appending a suffix
+            const maxAttempts = 10;
+            let newOrderId = finalOrderId;
+            let attempt = 1;
+            
+            while (attempt <= maxAttempts) {
+              // Try appending -1, -2, etc.
+              newOrderId = parseInt(`${finalOrderId}${attempt}`);
+              const checkOrder = await Order.findOne({ orderId: newOrderId }).lean();
+              if (!checkOrder) {
+                finalOrderId = newOrderId;
+                console.log(`✅ Generated new orderId: ${finalOrderId} for farmer ${farmer.name}`);
+                break;
+              }
+              attempt++;
+            }
+            
+            if (attempt > maxAttempts) {
+              // Fallback: use timestamp-based ID
+              finalOrderId = parseInt(`${finalOrderId}${Date.now().toString().slice(-6)}`);
+              console.log(`⚠️  Using timestamp-based orderId: ${finalOrderId}`);
+            }
+          } else {
+            // Same farmer, same orderId - skip or update
+            if (row.date) {
+              await Order.updateOne(
+                { _id: existingOrderWithId._id },
+                { orderBookingDate: moment(row.date, "DD-MM-YYYY").toDate() }
+              );
+            }
+            
+            results.success.push({
+              bookingNo: row["Booking NO."],
+              updated: true,
+              message: "Order already exists with same farmer, booking date updated",
+            });
+            results.summary.successfulImports++;
+            continue;
+          }
         }
 
         const orderData = {
-          orderId: row.orderNumber,
+          orderId: finalOrderId,
           farmer: farmer._id,
           salesPerson: salesPerson._id,
           numberOfPlants: row["Plant Qty."],
@@ -1063,8 +1296,8 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           notes: row["Remark"] || "",
           paymentCompleted: balanceAmount <= 0,
           orderPaymentStatus: balanceAmount <= 0 ? "COMPLETED" : "PENDING",
-          orderBookingDate: row.date ? moment(row.date, "DD-MM-YYYY").toDate() : new Date(),
-          deliveryDate: deliveryDate.toDate(), // Set the delivery date
+          orderBookingDate: row.date ? moment.utc(moment(row.date, "DD-MM-YYYY").format("YYYY-MM-DD")).hour(12).toDate() : new Date(),
+          deliveryDate: deliveryDateUTC.toDate(), // Set the delivery date (UTC to avoid timezone shift)
         };
 
         const order = await Order.create(orderData);
@@ -1087,7 +1320,7 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
           const paymentData = {
             paidAmount: advanceAmount,
             paymentStatus: "COLLECTED",
-            paymentDate: row["Advance Date"] ? moment(row["Advance Date"], "DD-MM-YYYY").toDate() : new Date(),
+            paymentDate: row["Advance Date"] ? moment.utc(row["Advance Date"], "DD-MM-YYYY").hour(12).toDate() : new Date(),
             bankName: row["Bank"] || "",
             modeOfPayment: paymentMode,
             remark: row["Remark"] || "",
@@ -1169,9 +1402,51 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
       } catch (error) {
         console.error(`❌ Error processing row ${rowIndex + 1}:`, error);
         
+        // Determine error type
+        let errorType = 'UNKNOWN_ERROR';
+        let errorMessage = error.message;
+        
+        if (error.code === 11000 || error.message.includes('duplicate key')) {
+          errorType = 'DUPLICATE_KEY';
+          const orderIdMatch = error.message.match(/orderId[:\s]+(\d+)/);
+          const orderId = orderIdMatch ? orderIdMatch[1] : row.orderNumber;
+          errorMessage = `Duplicate orderId ${orderId}. Order with this ID already exists for a different farmer.`;
+        } else if (error.message.includes('Missing') || error.message.includes('required')) {
+          errorType = 'MISSING_DATA';
+        } else if (error.message.includes('date') || error.message.includes('Date') || error.message.includes('delivery')) {
+          errorType = 'DATE_ERROR';
+        } else if (error.message.includes('farmer') || error.message.includes('Farmer')) {
+          errorType = 'FARMER_ERROR';
+        } else if (error.message.includes('plant') || error.message.includes('Plant') || error.message.includes('subtype')) {
+          errorType = 'PLANT_ERROR';
+        } else if (error.message.includes('slot') || error.message.includes('Slot')) {
+          errorType = 'SLOT_ERROR';
+        } else if (error.message.includes('Invalid') || error.message.includes('invalid')) {
+          errorType = 'VALIDATION_ERROR';
+        }
+        
+        // Save to ErrorfulOrder model
+        try {
+          await ErrorfulOrder.create({
+            rawData: row, // Store the entire raw row data
+            rowNumber: rowIndex + 2, // Excel row number (1-indexed with header)
+            bookingNumber: row["Booking NO."] || null,
+            parsedOrderId: row.orderNumber || null,
+            errorMessage: errorMessage,
+            errorType: errorType,
+            sourceFilename: sourceFilename,
+            importBatchId: importBatchId,
+          });
+          console.log(`💾 Saved errorful order to database: Row ${rowIndex + 2}, Booking ${row["Booking NO."] || "Unknown"}`);
+        } catch (dbError) {
+          console.error(`⚠️  Failed to save errorful order to database:`, dbError.message);
+          // Continue even if saving to database fails
+        }
+        
         results.errors.push({
           bookingNo: row["Booking NO."] || "Unknown",
-          error: error.message,
+          orderId: row.orderNumber || "Unknown",
+          error: errorMessage,
         });
         results.summary.failedImports++;
       }
@@ -1194,12 +1469,210 @@ export const importOrdersAndFarmers = async (fileBuffer) => {
   return results;
 };
 
+// Process Excel rows for validation (without saving) - identifies unprocessed rows
+export const processExcelRowsForValidation = async (fileBuffer) => {
+  console.log("🔍 Processing Excel rows for validation...");
+  
+  const workbook = XLSX.read(fileBuffer, {
+    type: "buffer",
+    cellDates: true,
+    raw: true,
+  });
+
+  const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+  const data = XLSX.utils.sheet_to_json(worksheet, {
+    raw: true,
+    dateNF: "DD-MM-YYYY",
+    blankrows: true, // Include blank rows to process all 65 rows
+  });
+
+  const results = {
+    totalRows: data.length,
+    processableRows: 0,
+    unprocessedRows: [],
+    errors: []
+  };
+
+  // Pre-process data similar to import function
+  const processedData = [];
+  const uniqueSalesPersons = new Set();
+  const uniquePlants = new Set();
+  const uniqueTrays = new Set();
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const rawCropName = normalizeName(row["Crop"]);
+    const cropName = extractMainCropName(rawCropName); // Extract main crop name
+    const mappedVarietyName = mapVarietyName(cropName, row["Variety"]);
+    
+    processedData.push({
+      ...row,
+      normalizedCrop: cropName,
+      mappedVarietyName,
+      date: convertDate(row["Date"]),
+      slots: convertDate(row["Expected\r\nDel.\r\nDate"]),
+    });
+
+    uniqueSalesPersons.add(row["Refrence"]);
+    if (cropName) {
+      uniquePlants.add(cropName);
+    }
+    if (row["Media"]) {
+      uniqueTrays.add(row["Media"]);
+    }
+  }
+
+  // Bulk fetch reference data
+  const [salesPersons, plants, trays] = await Promise.all([
+    User.find({ name: { $in: Array.from(uniqueSalesPersons) }, role: "SALES" }).lean(),
+    PlantCms.find({ name: { $in: Array.from(uniquePlants) } }).lean(),
+    Tray.find({ cavity: { $in: Array.from(uniqueTrays).map(t => {
+      if (typeof t === "string" && t.trim().toLowerCase() === "elli") return 10;
+      return typeof t === "string" ? parseInt(t.trim(), 10) : t;
+    }) } }).lean()
+  ]);
+
+  // Create maps for quick lookup
+  const salesPersonMap = new Map(salesPersons.map(sp => [normalizeName(sp.name), sp]));
+  const plantMap = new Map(plants.map(p => [normalizeName(p.name), p]));
+  const trayMap = new Map(trays.map(t => [t.cavity, t]));
+
+  // Process each row to identify issues
+  for (let i = 0; i < processedData.length; i++) {
+    const row = processedData[i];
+    const rowErrors = [];
+    
+    try {
+      // Check sales person
+      const salesPersonName = normalizeName(row["Refrence"]);
+      const salesPerson = salesPersonMap.get(salesPersonName);
+      if (!salesPerson) {
+        rowErrors.push(`Sales person "${row["Refrence"]}" not found`);
+      }
+
+      // Check plant
+      const plantName = row.normalizedCrop;
+      const plant = plantMap.get(plantName);
+      if (!plant) {
+        rowErrors.push(`Plant type "${row["Crop"]}" not found`);
+      } else {
+        // Check variety/subtype
+        const varietyName = row.mappedVarietyName;
+        if (varietyName) {
+          const subtype = findSubtypeByName(plant, varietyName);
+          if (!subtype) {
+            rowErrors.push(`Variety "${row["Variety"]}" not found for ${row["Crop"]}`);
+          }
+        }
+      }
+
+      // Check delivery date and slot availability
+      const deliveryDate = moment(row.slots, "DD-MM-YYYY");
+      if (!deliveryDate.isValid()) {
+        rowErrors.push(`Invalid delivery date format: ${row["Expected\r\nDel.\r\nDate"]}`);
+      } else if (plant) {
+        // Try to find slot for this delivery date
+        try {
+          const year = deliveryDate.year();
+          const plantSlot = await PlantSlot.findOne({
+            plantId: plant._id,
+            year: year,
+          });
+          
+          if (!plantSlot) {
+            rowErrors.push(`No slots found for plant in year ${year}`);
+          } else {
+            const subtype = findSubtypeByName(plant, varietyName);
+            if (subtype) {
+              const subtypeSlot = plantSlot.subtypeSlots.find(
+                (ss) => ss.subtypeId.toString() === subtype._id.toString()
+              );
+              
+              if (!subtypeSlot) {
+                rowErrors.push(`No slots found for variety "${row["Variety"]}"`);
+              } else {
+                // Check if slot exists for delivery date
+                const deliveryDateStr = deliveryDate.format("YYYY-MM-DD");
+                const normalizedDeliveryDate = moment(deliveryDateStr + 'T00:00:00');
+                
+                const targetSlot = subtypeSlot.slots.find((slot) => {
+                  const slotStart = slot.startDay.split('-').reverse().join('-');
+                  const slotEnd = slot.endDay.split('-').reverse().join('-');
+                  const startMoment = moment(slotStart + 'T00:00:00');
+                  const endMoment = moment(slotEnd + 'T00:00:00');
+                  
+                  return (
+                    normalizedDeliveryDate.isSameOrAfter(startMoment, "day") &&
+                    normalizedDeliveryDate.isSameOrBefore(endMoment, "day")
+                  );
+                });
+                
+                if (!targetSlot) {
+                  rowErrors.push(`No slot found for delivery date ${deliveryDate.format("DD-MM-YYYY")}`);
+                }
+              }
+            }
+          }
+        } catch (slotError) {
+          rowErrors.push(`Slot error: ${slotError.message}`);
+        }
+      }
+
+      // If no errors, row is processable
+      if (rowErrors.length === 0) {
+        results.processableRows++;
+      } else {
+        // Add to unprocessed rows with error column
+        results.unprocessedRows.push({
+          ...row,
+          "Error": rowErrors.join("; ")
+        });
+        results.errors.push({
+          row: i + 2,
+          errors: rowErrors
+        });
+      }
+    } catch (error) {
+      rowErrors.push(error.message);
+      results.unprocessedRows.push({
+        ...row,
+        "Error": error.message
+      });
+      results.errors.push({
+        row: i + 2,
+        errors: [error.message]
+      });
+    }
+  }
+
+  console.log(`📊 Validation complete: ${results.processableRows} processable, ${results.unprocessedRows.length} unprocessed`);
+  
+  return results;
+};
+
 async function findDeliverySlot(plantId, subtypeId, deliveryDate) {
   try {
-    const deliveryMoment = moment(deliveryDate);
+    // Handle both Date objects and moment objects, normalize to UTC to avoid timezone shifts
+    let deliveryMoment;
+    if (moment.isMoment(deliveryDate)) {
+      deliveryMoment = moment.utc(deliveryDate.format("YYYY-MM-DD"));
+    } else if (deliveryDate instanceof Date) {
+      // Extract date parts directly to avoid timezone shifts
+      // Date objects from our code are already at noon UTC, but we extract parts to be safe
+      const year = deliveryDate.getUTCFullYear();
+      const month = deliveryDate.getUTCMonth() + 1;
+      const day = deliveryDate.getUTCDate();
+      deliveryMoment = moment.utc(`${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+    } else {
+      deliveryMoment = moment.utc(deliveryDate);
+    }
+    
     if (!deliveryMoment.isValid()) {
       throw new Error(`Invalid delivery date: ${deliveryDate}`);
     }
+    
+    // Normalize to UTC date only (no time component to avoid day shifts)
+    deliveryMoment = moment.utc(deliveryMoment.format("YYYY-MM-DD"));
 
     const year = deliveryMoment.year();
     const month = deliveryMoment.format("MMMM");

@@ -47,6 +47,14 @@ const allowedParams = [
   "backDays",
   "forwardDays",
   "timeRange",
+  "_t", // Timestamp parameter for cache busting
+  "t", // Alternative timestamp parameter
+  "lookahead", // For alerts/reminders
+  "pastWindow", // For alerts/reminders
+  "priority", // For filtering by priority (overdue, urgent, upcoming, future)
+  "showAvailable", // For showing available plants
+  "showGap", // For showing booking gap
+  "minAvailable", // Minimum available plants threshold
 ];
 
 const parameterWhiteListing = (req, res, next) => {
@@ -68,7 +76,7 @@ const parameterWhiteListing = (req, res, next) => {
   );
 
   if (invalidParams.length > 0) {
-    next(new AppError("Invalid parameters", 400));
+    return next(new AppError("Invalid parameters", 400));
   }
 
   next();

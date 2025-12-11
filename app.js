@@ -247,6 +247,7 @@ import analyticsRoute from "./routes/analytics.route.js";
 import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
+import whatsappOrderBotRoute from "./routes/whatsappOrderBot.route.js";
 import sowingRoute from "./routes/sowing.route.js";
 import publicFarmerLinkRoute from "./routes/publicFarmerLink.route.js";
 import clearDataRoute from "./routes/clearData.route.js";
@@ -254,13 +255,16 @@ import clearDataRoute from "./routes/clearData.route.js";
 // Inventory Management Routes
 import productRoute from "./routes/product.route.js";
 import supplierRoute from "./routes/supplier.route.js";
+import merchantRoute from "./routes/merchant.route.js";
 import measurementUnitRoute from "./routes/measurementUnit.route.js";
+import categoryRoute from "./routes/category.route.js";
 import purchaseOrderRoute from "./routes/purchaseOrder.route.js";
 import grnRoute from "./routes/grn.route.js";
 import inventoryOutwardRoute from "./routes/inventoryOutward.route.js";
 import inventoryTransactionRoute from "./routes/inventoryTransaction.route.js";
 import inventoryRoute from "./routes/inventory.route.js";
 import purchaseRoute from "./routes/purchase.route.js";
+import sellOrderRoute from "./routes/sellOrder.route.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -279,6 +283,8 @@ server.use("/api/v1/user", userRoute);
 // ============================================
 server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead links (mixed auth & public)
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
+server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
+server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
 
 // Protected routes - require authentication
 server.use("/api/v1/farmer", authenticateToken, farmerRoute);
@@ -314,7 +320,7 @@ server.use("/api/v1/batch", authenticateToken, batchRoute);
 server.use("/api/v1/laboutward", authenticateToken, plantOutward);
 server.use("/api/v1/pollyhouse", authenticateToken, PollyHouse);
 server.use("/api/v1/dealer", authenticateToken, DelaerRoutes);
-server.use("/api/v1/excel", authenticateToken, ExcelRoute);
+// Excel route moved to PUBLIC ROUTES section above (download endpoint needs to be public)
 server.use("/api/v1/pricing", authenticateToken, pricingRoute);
 server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
 server.use("/api/v1/state", authenticateToken, stateRoute);
@@ -323,15 +329,20 @@ server.use("/api/v1/sowing", authenticateToken, sowingRoute); // Sowing manageme
 server.use("/api/v1/clear-data", authenticateToken, clearDataRoute); // Data clearing routes
 
 // Inventory Management Routes (all require authentication)
-server.use("/api/v1/inventory", authenticateToken, inventoryRoute);
-server.use("/api/v1/purchase", authenticateToken, purchaseRoute);
+// IMPORTANT: More specific routes must be registered BEFORE general routes
+// to avoid route conflicts (e.g., /api/v1/inventory/products must come before /api/v1/inventory)
 server.use("/api/v1/inventory/products", authenticateToken, productRoute);
 server.use("/api/v1/inventory/suppliers", authenticateToken, supplierRoute);
+server.use("/api/v1/inventory/merchants", authenticateToken, merchantRoute);
 server.use("/api/v1/inventory/units", authenticateToken, measurementUnitRoute);
+server.use("/api/v1/inventory/categories", authenticateToken, categoryRoute);
 server.use("/api/v1/inventory/purchase-orders", authenticateToken, purchaseOrderRoute);
 server.use("/api/v1/inventory/grn", authenticateToken, grnRoute);
+server.use("/api/v1/inventory/sell-orders", authenticateToken, sellOrderRoute);
 server.use("/api/v1/inventory/outward", authenticateToken, inventoryOutwardRoute);
 server.use("/api/v1/inventory/transactions", authenticateToken, inventoryTransactionRoute);
+server.use("/api/v1/inventory", authenticateToken, inventoryRoute); // General inventory route (must be last)
+server.use("/api/v1/purchase", authenticateToken, purchaseRoute);
 
 
 server.use(errorHandler);

@@ -13,7 +13,7 @@ export const calculateSlotBookedPlants = async (slotId) => {
         $match: {
           bookingSlot: slotId,
           orderStatus: { 
-            $nin: ['CANCELLED', 'REJECTED'] // Exclude cancelled/rejected orders
+            $nin: ['CANCELLED', 'REJECTED'] // Exclude cancelled/rejected orders - COMPLETED orders count in booked
           },
           // Exclude dealer quota orders - exclude orders where quotaSource is "dealer"
           $and: [
@@ -53,7 +53,7 @@ export const calculateMultipleSlotsBookedPlants = async (slotIds) => {
         $match: {
           bookingSlot: { $in: slotIds },
           orderStatus: { 
-            $nin: ['CANCELLED', 'REJECTED'] // Exclude cancelled/rejected orders
+            $nin: ['CANCELLED', 'REJECTED'] // Exclude cancelled/rejected orders - COMPLETED orders count in booked
           },
           // Exclude dealer quota orders - exclude orders where quotaSource is "dealer"
           $and: [

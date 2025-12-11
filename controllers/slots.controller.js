@@ -2087,7 +2087,7 @@ const calculateTotalBookedPlantsFromOrders = async (slotId) => {
       {
         $match: {
           bookingSlot: new mongoose.Types.ObjectId(slotId),
-          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] }, // Exclude cancelled and rejected orders
+          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] }, // Exclude cancelled and rejected orders - COMPLETED orders count in booked
           // Exclude dealer quota orders - exclude orders where quotaSource is "dealer"
           $and: [
             {
@@ -2279,7 +2279,7 @@ export const getSlotDetailsById = async (req, res) => {
   }
 };
 
-// Get slot trail history
+// Get slot trail history with populated user info
 export const getSlotTrail = async (req, res) => {
   try {
     const { slotId } = req.params;
@@ -2291,16 +2291,104 @@ export const getSlotTrail = async (req, res) => {
       });
     }
 
-    // Import the utility function
-    const { getSlotTrail } = await import('../utility/slotTrailTracker.js');
-    
-    // Get slot trail
-    const trail = await getSlotTrail(slotId);
-    
+    const slotObjectId = new mongoose.Types.ObjectId(slotId);
+
+    // Use aggregation to get slot trail with populated user info
+    const result = await PlantSlot.aggregate([
+      {
+        $match: {
+          "subtypeSlots.slots._id": slotObjectId,
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $match: {
+          "subtypeSlots.slots._id": slotObjectId,
+        },
+      },
+      {
+        $project: {
+          slotTrail: 1,
+        },
+      },
+      {
+        $unwind: {
+          path: "$slotTrail",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "slotTrail.performedBy",
+          foreignField: "_id",
+          as: "userInfo",
+        },
+      },
+      {
+        $addFields: {
+          "slotTrail.performedByInfo": {
+            $cond: {
+              if: { $gt: [{ $size: "$userInfo" }, 0] },
+              then: {
+                $arrayElemAt: ["$userInfo", 0],
+              },
+              else: null,
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          slotTrail: 1,
+          _id: 0,
+        },
+      },
+      {
+        $sort: {
+          "slotTrail.createdAt": -1,
+        },
+      },
+    ]);
+
+    // Filter primary sowing entries (reason contains "Primary sowing")
+    const primarySowingEntries = result
+      .filter((entry) => entry.slotTrail && entry.slotTrail.reason && entry.slotTrail.reason.includes("Primary sowing"))
+      .map((entry) => ({
+        ...entry.slotTrail,
+        performedBy: entry.slotTrail.performedByInfo
+          ? {
+              _id: entry.slotTrail.performedByInfo._id,
+              name: entry.slotTrail.performedByInfo.name,
+              phoneNumber: entry.slotTrail.performedByInfo.phoneNumber,
+            }
+          : null,
+      }));
+
+    // Get all trail entries with user info for general trail
+    const allTrailEntries = result
+      .filter((entry) => entry.slotTrail)
+      .map((entry) => ({
+        ...entry.slotTrail,
+        performedBy: entry.slotTrail.performedByInfo
+          ? {
+              _id: entry.slotTrail.performedByInfo._id,
+              name: entry.slotTrail.performedByInfo.name,
+              phoneNumber: entry.slotTrail.performedByInfo.phoneNumber,
+            }
+          : null,
+      }));
+
     res.status(200).json({
       success: true,
-      data: trail,
-      message: trail.length > 0 ? "Slot trail retrieved successfully" : "No trail entries found"
+      data: allTrailEntries,
+      primarySowingEntries,
+      message: allTrailEntries.length > 0 ? "Slot trail retrieved successfully" : "No trail entries found",
     });
     
   } catch (error) {
@@ -2741,10 +2829,11 @@ export const getSimpleSlots = async (req, res) => {
     const slotIds = subtypeSlot.slots.map(s => s._id);
     
     // Fetch orders for all slots in one query (FAST)
+    // Include COMPLETED orders in booked plants - only exclude CANCELLED and REJECTED
     const orders = await Order.find({
       bookingSlot: { $in: slotIds },
-      orderStatus: { $nin: ["CANCELLED", "REJECTED"] }
-    }).select('bookingSlot numberOfPlants').lean();
+      orderStatus: { $nin: ["CANCELLED", "REJECTED"] } // COMPLETED orders count in booked
+    }).select('bookingSlot numberOfPlants orderStatus').lean();
     
     // Create a map of slotId → totalBookedPlants
     const bookingsMap = {};

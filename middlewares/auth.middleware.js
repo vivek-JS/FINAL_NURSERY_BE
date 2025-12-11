@@ -14,12 +14,21 @@ export const authenticateToken = async (req, res, next) => {
     // ============================================
     const publicPaths = [
       '/api/v1/public-links/config',
-      '/api/v1/public-links/leads'
+      '/api/v1/public-links/leads',
+      '/api/v1/excel/download-unprocessed', // Allow unprocessed file downloads without auth
+      '/api/v1/location' // Location endpoints are public
     ];
 
-    const isPublicPath = publicPaths.some(path => req.path.startsWith(path));
+    // Check both req.path and req.originalUrl for public paths
+    const requestPath = req.path || req.originalUrl || '';
+    const isPublicPath = publicPaths.some(path => 
+      requestPath.startsWith(path) || 
+      (req.originalUrl && req.originalUrl.startsWith(path))
+    );
+    
     if (isPublicPath) {
       // Skip authentication completely for public endpoints
+      console.log(`✅ Public endpoint accessed: ${requestPath}`);
       return next();
     }
 

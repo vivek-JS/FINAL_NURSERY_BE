@@ -394,29 +394,103 @@ export const updatePrimarySowed = async (req, res) => {
     const { id } = req.params;
     const { quantity, performedBy, notes, date } = req.body;
 
+    // Get user ID from request (from auth middleware) or from body
+    const userId = req.user?._id || performedBy;
+    if (!userId) {
+      return res.status(401).json({ 
+        message: "User authentication required" 
+      });
+    }
+
     const sowing = await Sowing.findById(id);
     if (!sowing) {
       return res.status(404).json({ message: "Sowing record not found" });
     }
 
-    // Update primary sowed
-    sowing.primarySowed = (sowing.primarySowed || 0) + quantity;
-    sowing.updatedBy = performedBy;
+    // Store previous value for tracking
+    const previousPrimarySowed = sowing.primarySowed || 0;
+    const newPrimarySowed = previousPrimarySowed + quantity;
 
-    // Add to history
+    // Update primary sowed
+    sowing.primarySowed = newPrimarySowed;
+    sowing.updatedBy = userId;
+
+    // Add to history with user tracking
     sowing.sowingHistory.push({
       date: date || moment().format("DD-MM-YYYY"),
       location: "PRIMARY",
       quantity,
-      performedBy,
-      notes,
+      performedBy: userId,
+      notes: notes || `Primary sowing entry: ${quantity} plants`,
     });
 
     await sowing.save();
 
+    // Update slot's primarySowed field if slotId exists
+    if (sowing.slotId) {
+      try {
+        const slotObjectId = new mongoose.Types.ObjectId(sowing.slotId);
+        const plantSlot = await PlantSlot.findOne({
+          "subtypeSlots.slots._id": slotObjectId,
+        });
+
+        if (plantSlot) {
+          // Find the specific slot
+          for (const subtypeSlot of plantSlot.subtypeSlots || []) {
+            const matchedSlot = (subtypeSlot.slots || []).find(
+              (slot) => slot._id.toString() === slotObjectId.toString()
+            );
+
+            if (matchedSlot) {
+              const previousSlotPrimarySowed = matchedSlot.primarySowed || 0;
+              matchedSlot.primarySowed = (matchedSlot.primarySowed || 0) + quantity;
+
+              // Update plantsSowed (which is only primarySowed)
+              matchedSlot.plantsSowed = matchedSlot.primarySowed || 0;
+
+              // Track this change in slot trail
+              if (!matchedSlot.slotTrail) {
+                matchedSlot.slotTrail = [];
+              }
+
+              // Add trail entry for primary sowing
+              matchedSlot.slotTrail.unshift({
+                action: "UPDATE",
+                quantity: quantity,
+                previousTotalPlants: matchedSlot.totalPlants || 0,
+                newTotalPlants: matchedSlot.totalPlants || 0,
+                previousAvailablePlants: matchedSlot.availablePlants || 0,
+                newAvailablePlants: matchedSlot.availablePlants || 0,
+                reason: "Primary sowing entry",
+                performedBy: userId,
+                notes: `Primary sowing: ${quantity} plants added. Previous: ${previousSlotPrimarySowed}, New: ${matchedSlot.primarySowed}`,
+              });
+
+              // Limit trail to last 100 entries
+              if (matchedSlot.slotTrail.length > 100) {
+                matchedSlot.slotTrail = matchedSlot.slotTrail.slice(0, 100);
+              }
+
+              await plantSlot.save();
+              console.log(`✅ Updated slot ${sowing.slotId}: primarySowed += ${quantity} (tracked in trail)`);
+              break;
+            }
+          }
+        }
+      } catch (slotError) {
+        console.error("Error updating slot primarySowed:", slotError);
+        // Don't fail the request if slot update fails
+      }
+    }
+
+    // Populate user info in response
+    const populatedSowing = await Sowing.findById(sowing._id)
+      .populate("updatedBy", "name phoneNumber")
+      .populate("sowingHistory.performedBy", "name phoneNumber");
+
     return res.status(200).json({
       message: "Primary sowing updated successfully",
-      data: sowing,
+      data: populatedSowing,
     });
   } catch (error) {
     console.error("Error updating primary sowing:", error);
@@ -475,11 +549,63 @@ export const getPendingReminders = async (req, res) => {
           $unwind: "$subtypeSlots.slots"
         },
         {
+          $addFields: {
+            slotId: "$subtypeSlots.slots._id"
+          }
+        },
+        // Dynamically calculate totalBookedPlants from actual orders
+        {
+          $lookup: {
+            from: "orders",
+            let: { slotId: "$slotId" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$bookingSlot", "$$slotId"] },
+                      { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                      {
+                        $or: [
+                          { $ne: ["$quotaSource", "dealer"] },
+                          { $not: { $ifNull: ["$quotaSource", false] } }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalBookedPlants: { $sum: "$numberOfPlants" }
+                }
+              }
+            ],
+            as: "orderStats"
+          }
+        },
+        {
+          $addFields: {
+            dynamicTotalBookedPlants: {
+              $ifNull: [
+                { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
+                0
+              ]
+            }
+          }
+        },
+        {
           $match: {
-            "subtypeSlots.slots.totalBookedPlants": { $gt: 0 },
+            dynamicTotalBookedPlants: { $gt: 0 },
             $expr: {
               $gt: [
-                { $subtract: ["$subtypeSlots.slots.totalBookedPlants", { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] }] },
+                {
+                  $subtract: [
+                    "$dynamicTotalBookedPlants",
+                    { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] }
+                  ]
+                },
                 0
               ]
             }
@@ -538,7 +664,7 @@ export const getPendingReminders = async (req, res) => {
             plantReadyDays: { $arrayElemAt: ["$subtypeInfo.plantReadyDays", 0] },
             gap: {
               $subtract: [
-                "$subtypeSlots.slots.totalBookedPlants",
+                "$dynamicTotalBookedPlants",
                 { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] }
               ]
             },
@@ -619,10 +745,15 @@ export const getPendingReminders = async (req, res) => {
               ]
             },
             plantReadyDays: 1,
-            totalBookedPlants: "$subtypeSlots.slots.totalBookedPlants",
+            totalBookedPlants: "$dynamicTotalBookedPlants",
             primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
             officeSowed: { $ifNull: ["$subtypeSlots.slots.officeSowed", 0] },
             reminderType: "SLOT"
+          }
+        },
+        {
+          $project: {
+            orderStats: 0 // Remove intermediate orderStats field
           }
         },
         { $sort: { daysUntilSow: 1 } }
@@ -919,7 +1050,6 @@ export const getSowingAlerts = async (req, res) => {
         $addFields: {
           primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
           officeSowed: { $ifNull: ["$subtypeSlots.slots.officeSowed", 0] },
-          storedBooked: { $ifNull: ["$subtypeSlots.slots.totalBookedPlants", 0] },
           slotReadyDays: {
             $cond: [
               { $gt: ["$subtypeSlots.slots.plantReadyDays", 0] },
@@ -931,20 +1061,38 @@ export const getSowingAlerts = async (req, res) => {
       },
       {
         $addFields: {
+          // Dynamically calculate totalBookedPlants from orders - filter out dealer quota and cancelled/rejected
           ordersBooked: {
             $reduce: {
-              input: "$slotOrders",
+              input: {
+                $filter: {
+                  input: "$slotOrders",
+                  as: "order",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$order.quotaSource", "dealer"] },
+                      {
+                        $or: [
+                          { $eq: [{ $type: "$$order.quotaSource" }, "missing"] },
+                          { $not: { $ifNull: ["$$order.quotaSource", false] } }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
               initialValue: 0,
               in: { $add: ["$$value", { $ifNull: ["$$this.numberOfPlants", 0] }] },
             },
           },
-          effectiveBooked: { $max: ["$ordersBooked", "$storedBooked"] },
+          // Use only dynamic ordersBooked (no fallback to stored value)
+          effectiveBooked: { $ifNull: ["$ordersBooked", 0] },
           pendingQuantity: {
             $max: [
               0,
               {
                 $subtract: [
-                  { $max: ["$ordersBooked", "$storedBooked"] },
+                  { $ifNull: ["$ordersBooked", 0] },
                   { $ifNull: ["$primarySowed", 0] },
                 ],
               },
@@ -1386,19 +1534,24 @@ export const getSowingAlertsByStart = async (req, res) => {
           pipeline: [
             {
               $match: {
-                orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
-              },
-            },
-            {
-              $match: {
                 $expr: {
-                  $eq: ["$bookingSlot", "$$slotId"],
-                },
+                  $and: [
+                    { $eq: ["$bookingSlot", "$$slotId"] },
+                    { $nin: ["$orderStatus", ["CANCELLED", "REJECTED"]] },
+                    {
+                      $or: [
+                        { $ne: ["$quotaSource", "dealer"] },
+                        { $not: { $ifNull: ["$quotaSource", false] } }
+                      ]
+                    }
+                  ]
+                }
               },
             },
             {
               $project: {
                 numberOfPlants: 1,
+                quotaSource: 1,
               },
             },
           ],
@@ -1409,7 +1562,6 @@ export const getSowingAlertsByStart = async (req, res) => {
         $addFields: {
           primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
           officeSowed: { $ifNull: ["$subtypeSlots.slots.officeSowed", 0] },
-          storedBooked: { $ifNull: ["$subtypeSlots.slots.totalBookedPlants", 0] },
           slotReadyDays: {
             $cond: [
               { $gt: ["$subtypeSlots.slots.plantReadyDays", 0] },
@@ -1421,14 +1573,32 @@ export const getSowingAlertsByStart = async (req, res) => {
       },
       {
         $addFields: {
+          // Dynamically calculate from orders - filter out dealer quota and cancelled/rejected
           ordersBooked: {
             $reduce: {
-              input: "$slotOrders",
+              input: {
+                $filter: {
+                  input: "$slotOrders",
+                  as: "order",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$order.quotaSource", "dealer"] },
+                      {
+                        $or: [
+                          { $eq: [{ $type: "$$order.quotaSource" }, "missing"] },
+                          { $not: { $ifNull: ["$$order.quotaSource", false] } }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
               initialValue: 0,
               in: { $add: ["$$value", { $ifNull: ["$$this.numberOfPlants", 0] }] },
             },
           },
-          effectiveBooked: { $max: ["$ordersBooked", "$storedBooked"] },
+          // Use only dynamic ordersBooked (no fallback to stored value)
+          effectiveBooked: { $ifNull: ["$ordersBooked", 0] },
         },
       },
       {
@@ -2232,6 +2402,37 @@ export const updateSowing = async (req, res) => {
   }
 };
 
+// Delete all sowing records
+export const deleteAllSowings = async (req, res) => {
+  try {
+    // Get count before deletion
+    const count = await Sowing.countDocuments();
+    
+    if (count === 0) {
+      return res.status(200).json({
+        message: "No sowing records found to delete",
+        deletedCount: 0,
+      });
+    }
+
+    // Delete all sowing records
+    const result = await Sowing.deleteMany({});
+
+    console.log(`Deleted ${result.deletedCount} sowing records`);
+
+    return res.status(200).json({
+      message: `Successfully deleted ${result.deletedCount} sowing record${result.deletedCount !== 1 ? 's' : ''}`,
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    console.error("Error deleting all sowings:", error);
+    return res.status(500).json({
+      message: "Error deleting sowing records",
+      error: error.message,
+    });
+  }
+};
+
 // Get comprehensive sowing insights for CEO dashboard
 export const getSowingInsights = async (req, res) => {
   try {
@@ -2621,3 +2822,1627 @@ export const getSowingInsights = async (req, res) => {
   }
 };
 
+
+// NEW API: Get Plant Reminders (Plant selection mandatory, subtype-wise booking gap analysis)
+export const getPlantReminders = async (req, res) => {
+  try {
+    const { 
+      plantId,
+      subtypeId, // Filter by subtype
+      priority, // Filter by priority: overdue, urgent, upcoming, future
+      startDate, // Date range start (DD-MM-YYYY)
+      endDate, // Date range end (DD-MM-YYYY)
+      showAvailable, // Show slots with available capacity
+      showGap, // Show slots with booking gap
+    } = req.query;
+
+    if (!plantId) {
+      return res.status(400).json({
+        success: false,
+        message: "Plant ID is required. Please select a plant.",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(plantId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Plant ID format",
+      });
+    }
+
+    const today = moment().startOf("day");
+    let dateFilter = {};
+    
+    // Date range filter
+    if (startDate && endDate) {
+      const start = moment(startDate, "DD-MM-YYYY").startOf("day").toDate();
+      const end = moment(endDate, "DD-MM-YYYY").endOf("day").toDate();
+      dateFilter = {
+        sowByDateISO: {
+          $gte: start,
+          $lte: end,
+        },
+      };
+    }
+
+    // Build match conditions for filtering
+    const buildMatchConditions = () => {
+      const conditions = {};
+      
+      if (subtypeId && mongoose.Types.ObjectId.isValid(subtypeId)) {
+        conditions.subtypeId = new mongoose.Types.ObjectId(subtypeId);
+      }
+      
+      if (priority) {
+        conditions.priority = priority;
+      }
+      
+      if (showAvailable === "true") {
+        conditions.availablePlants = { $gt: 0 };
+      }
+      
+      if (showGap === "true") {
+        conditions.bookingGap = { $gt: 0 };
+      }
+      
+      if (Object.keys(dateFilter).length > 0) {
+        Object.assign(conditions, dateFilter);
+      }
+      
+      if (!showAvailable && !showGap && (!priority && !subtypeId && Object.keys(dateFilter).length === 0)) {
+        conditions.$or = [
+          { bookingGap: { $gt: 0 } }, // Has booking gap
+          { availablePlants: { $gt: 0 } }, // Has available capacity
+        ];
+      }
+      
+      return conditions;
+    };
+
+    const finalMatchConditions = buildMatchConditions();
+
+    // Get all slots for this plant with booking gaps
+    const reminders = await PlantSlot.aggregate([
+      {
+        $match: {
+          plantId: new mongoose.Types.ObjectId(plantId),
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+          slotId: "$subtypeSlots.slots._id",
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
+          slotReadyDays: {
+            $cond: [
+              { $gt: [{ $ifNull: ["$subtypeSlots.slots.plantReadyDays", 0] }, 0] },
+              "$subtypeSlots.slots.plantReadyDays",
+              { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+            ],
+          },
+        },
+      },
+      // Dynamically calculate totalBookedPlants from actual orders
+      {
+        $lookup: {
+          from: "orders",
+          let: { slotId: "$slotId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$bookingSlot", "$$slotId"] },
+                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    {
+                      $or: [
+                        { $ne: ["$quotaSource", "dealer"] },
+                        { $not: { $ifNull: ["$quotaSource", false] } }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalBookedPlants: { $sum: "$numberOfPlants" }
+              }
+            }
+          ],
+          as: "orderStats"
+        }
+      },
+      {
+        $addFields: {
+          totalBookedPlants: {
+            $ifNull: [
+              { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
+              0
+            ]
+          }
+        }
+      },
+      {
+        $project: {
+          orderStats: 0 // Remove the intermediate orderStats field
+        }
+      },
+      {
+        $addFields: {
+          bookingGap: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  "$totalBookedPlants",
+                  "$primarySowed",
+                ],
+              },
+            ],
+          },
+          availablePlants: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  "$totalPlants",
+                  "$totalBookedPlants",
+                ],
+              },
+            ],
+          },
+          slotEndISO: {
+            $dateFromString: {
+              dateString: {
+                $concat: [
+                  { $substr: ["$subtypeSlots.slots.endDay", 6, 4] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 3, 2] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 0, 2] },
+                ],
+              },
+              format: "%Y-%m-%d",
+            },
+          },
+        },
+      },
+      {
+        $addFields: {
+          sowByDateISO: {
+            $cond: [
+              { $gt: ["$slotReadyDays", 0] },
+              {
+                $dateSubtract: {
+                  startDate: "$slotEndISO",
+                  unit: "day",
+                  amount: "$slotReadyDays",
+                },
+              },
+              "$slotEndISO",
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          daysUntilSow: {
+            $round: [
+              {
+                $divide: [
+                  { $subtract: ["$sowByDateISO", today.toDate()] },
+                  1000 * 60 * 60 * 24,
+                ],
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          priority: {
+            $cond: [
+              { $lt: ["$daysUntilSow", 0] },
+              "overdue",
+              {
+                $cond: [
+                  { $lte: ["$daysUntilSow", 2] },
+                  "urgent",
+                  {
+                    $cond: [
+                      { $lte: ["$daysUntilSow", 5] },
+                      "upcoming",
+                      "future",
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $match: finalMatchConditions,
+      },
+      {
+        $project: {
+          _id: "$subtypeSlots.slots._id",
+          slotId: "$subtypeSlots.slots._id",
+          plantId: "$plantId",
+          plantName: { $ifNull: ["$plantInfo.name", "Unknown"] },
+          subtypeId: "$subtypeSlots.subtypeId",
+          subtypeName: { $ifNull: ["$subtypeDetails.name", "Subtype"] },
+          slotStartDay: "$subtypeSlots.slots.startDay",
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          month: "$subtypeSlots.slots.month",
+          totalBookedPlants: 1,
+          primarySowed: 1,
+          totalPlants: 1,
+          bookingGap: 1,
+          availablePlants: 1,
+          surplus: "$availablePlants", // Explicit surplus field (available for booking)
+          totalBookedPlants: 1,
+          totalPlants: 1,
+          primarySowed: 1,
+          sowByDate: {
+            $dateToString: {
+              date: "$sowByDateISO",
+              format: "%d-%m-%Y",
+            },
+          },
+          daysUntilSow: 1,
+          priority: 1,
+          plantReadyDays: "$slotReadyDays",
+        },
+      },
+      {
+        $sort: { daysUntilSow: 1, priority: 1 },
+      },
+    ]);
+
+    // Group by subtype for summary
+    const subtypeSummary = await PlantSlot.aggregate([
+      {
+        $match: {
+          plantId: new mongoose.Types.ObjectId(plantId),
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+          totalBookedPlants: { $ifNull: ["$subtypeSlots.slots.totalBookedPlants", 0] },
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
+        },
+      },
+      {
+        $group: {
+          _id: "$subtypeSlots.subtypeId",
+          subtypeName: { $first: { $ifNull: ["$subtypeDetails.name", "Subtype"] } },
+          totalBookedPlants: { $sum: "$totalBookedPlants" },
+          totalPrimarySowed: { $sum: "$primarySowed" },
+          totalCapacity: { $sum: "$totalPlants" },
+          slotCount: { $sum: 1 },
+        },
+      },
+      {
+        $addFields: {
+          totalBookingGap: {
+            $max: [
+              0,
+              {
+                $subtract: ["$totalBookedPlants", "$totalPrimarySowed"],
+              },
+            ],
+          },
+          totalAvailable: {
+            $max: [
+              0,
+              {
+                $subtract: ["$totalCapacity", "$totalBookedPlants"],
+              },
+            ],
+          },
+          completionPercentage: {
+            $cond: [
+              { $gt: ["$totalBookedPlants", 0] },
+              {
+                $multiply: [
+                  {
+                    $divide: ["$totalPrimarySowed", "$totalBookedPlants"],
+                  },
+                  100,
+                ],
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $sort: { totalBookingGap: -1 },
+      },
+    ]);
+
+    // Get plant info
+    const plantInfo = await PlantCms.findById(plantId).select("name sowingAllowed").lean();
+
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    return res.status(200).json({
+      success: true,
+      plantInfo: {
+        plantId,
+        plantName: plantInfo?.name || "Unknown",
+        sowingAllowed: plantInfo?.sowingAllowed || false,
+      },
+      subtypeSummary,
+      reminders,
+      summary: {
+        totalSlots: reminders.length,
+        totalBookingGap: reminders.reduce((sum, r) => sum + (r.bookingGap || 0), 0),
+        totalAvailable: reminders.reduce((sum, r) => sum + (r.availablePlants || 0), 0),
+        totalSurplus: reminders.reduce((sum, r) => sum + (r.surplus || r.availablePlants || 0), 0), // Total surplus (available for booking)
+        totalBooked: reminders.reduce((sum, r) => sum + (r.totalBookedPlants || 0), 0),
+        totalCapacity: reminders.reduce((sum, r) => sum + (r.totalPlants || 0), 0),
+        overdueCount: reminders.filter((r) => r.priority === "overdue").length,
+        urgentCount: reminders.filter((r) => r.priority === "urgent").length,
+        upcomingCount: reminders.filter((r) => r.priority === "upcoming").length,
+      },
+      generatedAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Error fetching plant reminders:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching plant reminders",
+      error: error.message,
+    });
+  }
+};
+
+// NEW API: Get Plant Alerts (Plant selection mandatory, subtype-wise alerts)
+export const getPlantAlerts = async (req, res) => {
+  try {
+    const { 
+      plantId,
+      subtypeId, // Filter by subtype
+      priority, // Filter by priority: overdue, urgent, upcoming, future
+      startDate, // Date range start (DD-MM-YYYY)
+      endDate, // Date range end (DD-MM-YYYY)
+      lookaheadDays = 14, // Default 14 days
+    } = req.query;
+
+    if (!plantId) {
+      return res.status(400).json({
+        success: false,
+        message: "Plant ID is required. Please select a plant.",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(plantId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Plant ID format",
+      });
+    }
+
+    const today = moment().startOf("day");
+    let futureBoundary;
+    
+    // Date range filter
+    if (startDate && endDate) {
+      futureBoundary = moment(endDate, "DD-MM-YYYY").endOf("day").toDate();
+    } else {
+      futureBoundary = today.clone().add(parseInt(lookaheadDays) || 14, "days").endOf("day").toDate();
+    }
+    
+    // Build match conditions for filtering
+    const buildAlertMatchConditions = () => {
+      const conditions = {
+        pendingQuantity: { $gt: 0 },
+      };
+      
+      if (subtypeId && mongoose.Types.ObjectId.isValid(subtypeId)) {
+        conditions.subtypeId = new mongoose.Types.ObjectId(subtypeId);
+      }
+      
+      if (priority) {
+        conditions.priority = priority;
+      }
+      
+      if (startDate && endDate) {
+        conditions.sowByDateISO = {
+          $gte: moment(startDate, "DD-MM-YYYY").startOf("day").toDate(),
+          $lte: moment(endDate, "DD-MM-YYYY").endOf("day").toDate(),
+        };
+      } else {
+        conditions.sowByDateISO = {
+          $lte: futureBoundary,
+        };
+      }
+      
+      return conditions;
+    };
+
+    const alertMatchConditions = buildAlertMatchConditions();
+
+    // Get alerts for this plant
+    const alerts = await PlantSlot.aggregate([
+      {
+        $match: {
+          plantId: new mongoose.Types.ObjectId(plantId),
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+          slotId: "$subtypeSlots.slots._id",
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          slotReadyDays: {
+            $cond: [
+              { $gt: [{ $ifNull: ["$subtypeSlots.slots.plantReadyDays", 0] }, 0] },
+              "$subtypeSlots.slots.plantReadyDays",
+              { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+            ],
+          },
+        },
+      },
+      // Dynamically calculate totalBookedPlants from actual orders
+      {
+        $lookup: {
+          from: "orders",
+          let: { slotId: "$slotId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$bookingSlot", "$$slotId"] },
+                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    {
+                      $or: [
+                        { $ne: ["$quotaSource", "dealer"] },
+                        { $not: { $ifNull: ["$quotaSource", false] } }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalBookedPlants: { $sum: "$numberOfPlants" }
+              }
+            }
+          ],
+          as: "orderStats"
+        }
+      },
+      {
+        $addFields: {
+          totalBookedPlants: {
+            $ifNull: [
+              { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
+              0
+            ]
+          }
+        }
+      },
+      {
+        $project: {
+          orderStats: 0
+        }
+      },
+      {
+        $addFields: {
+          pendingQuantity: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  "$totalBookedPlants",
+                  "$primarySowed",
+                ],
+              },
+            ],
+          },
+          slotEndISO: {
+            $dateFromString: {
+              dateString: {
+                $concat: [
+                  { $substr: ["$subtypeSlots.slots.endDay", 6, 4] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 3, 2] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 0, 2] },
+                ],
+              },
+              format: "%Y-%m-%d",
+            },
+          },
+        },
+      },
+      {
+        $addFields: {
+          sowByDateISO: {
+            $cond: [
+              { $gt: ["$slotReadyDays", 0] },
+              {
+                $dateSubtract: {
+                  startDate: "$slotEndISO",
+                  unit: "day",
+                  amount: "$slotReadyDays",
+                },
+              },
+              "$slotEndISO",
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          daysUntilSow: {
+            $round: [
+              {
+                $divide: [
+                  { $subtract: ["$sowByDateISO", today.toDate()] },
+                  1000 * 60 * 60 * 24,
+                ],
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          priority: {
+            $cond: [
+              { $lt: ["$daysUntilSow", 0] },
+              "overdue",
+              {
+                $cond: [
+                  { $lte: ["$daysUntilSow", 2] },
+                  "urgent",
+                  {
+                    $cond: [
+                      { $lte: ["$daysUntilSow", 5] },
+                      "upcoming",
+                      "future",
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $match: alertMatchConditions,
+      },
+      {
+        $project: {
+          _id: "$subtypeSlots.slots._id",
+          slotId: "$subtypeSlots.slots._id",
+          plantId: "$plantId",
+          plantName: { $ifNull: ["$plantInfo.name", "Unknown"] },
+          subtypeId: "$subtypeSlots.subtypeId",
+          subtypeName: { $ifNull: ["$subtypeDetails.name", "Subtype"] },
+          slotStartDay: "$subtypeSlots.slots.startDay",
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          month: "$subtypeSlots.slots.month",
+          totalBookedPlants: 1,
+          primarySowed: 1,
+          pendingQuantity: 1,
+          sowByDate: {
+            $dateToString: {
+              date: "$sowByDateISO",
+              format: "%d-%m-%Y",
+            },
+          },
+          daysUntilSow: 1,
+          priority: 1,
+          plantReadyDays: "$slotReadyDays",
+        },
+      },
+      {
+        $sort: { daysUntilSow: 1, priority: 1 },
+      },
+    ]);
+
+    // Group by subtype for summary
+    const subtypeAlerts = await PlantSlot.aggregate([
+      {
+        $match: {
+          plantId: new mongoose.Types.ObjectId(plantId),
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+          slotId: "$subtypeSlots.slots._id",
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+        },
+      },
+      // Dynamically calculate totalBookedPlants from actual orders for subtype summary
+      {
+        $lookup: {
+          from: "orders",
+          let: { slotId: "$slotId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$bookingSlot", "$$slotId"] },
+                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    {
+                      $or: [
+                        { $ne: ["$quotaSource", "dealer"] },
+                        { $not: { $ifNull: ["$quotaSource", false] } }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalBookedPlants: { $sum: "$numberOfPlants" }
+              }
+            }
+          ],
+          as: "orderStats"
+        }
+      },
+      {
+        $addFields: {
+          totalBookedPlants: {
+            $ifNull: [
+              { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
+              0
+            ]
+          },
+          pendingQuantity: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  { $ifNull: [{ $arrayElemAt: ["$orderStats.totalBookedPlants", 0] }, 0] },
+                  { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        $project: {
+          orderStats: 0
+        }
+      },
+      {
+        $match: {
+          pendingQuantity: { $gt: 0 },
+        },
+      },
+      {
+        $group: {
+          _id: "$subtypeSlots.subtypeId",
+          subtypeName: { $first: { $ifNull: ["$subtypeDetails.name", "Subtype"] } },
+          totalPending: { $sum: "$pendingQuantity" },
+          slotCount: { $sum: 1 },
+        },
+      },
+      {
+        $sort: { totalPending: -1 },
+      },
+    ]);
+
+    // Get plant info
+    const plantInfo = await PlantCms.findById(plantId).select("name sowingAllowed").lean();
+
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    return res.status(200).json({
+      success: true,
+      plantInfo: {
+        plantId,
+        plantName: plantInfo?.name || "Unknown",
+        sowingAllowed: plantInfo?.sowingAllowed || false,
+      },
+      subtypeAlerts,
+      alerts,
+      summary: {
+        totalAlerts: alerts.length,
+        totalPending: alerts.reduce((sum, a) => sum + a.pendingQuantity, 0),
+        overdueCount: alerts.filter((a) => a.priority === "overdue").length,
+        urgentCount: alerts.filter((a) => a.priority === "urgent").length,
+        upcomingCount: alerts.filter((a) => a.priority === "upcoming").length,
+      },
+      generatedAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Error fetching plant alerts:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching plant alerts",
+      error: error.message,
+    });
+  }
+};
+
+// NEW API: Get Plant Availability (Plant selection mandatory, shows only available slots with primary sowed info)
+export const getPlantAvailability = async (req, res) => {
+  try {
+    const { 
+      plantId,
+      subtypeId, // Filter by subtype
+      startDate, // Date range start (DD-MM-YYYY)
+      endDate, // Date range end (DD-MM-YYYY)
+      minAvailable, // Minimum available plants threshold
+    } = req.query;
+
+    if (!plantId) {
+      return res.status(400).json({
+        success: false,
+        message: "Plant ID is required. Please select a plant.",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(plantId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Plant ID format",
+      });
+    }
+
+    const today = moment().startOf("day");
+    let dateFilter = {};
+    
+    // Date range filter
+    if (startDate && endDate) {
+      const start = moment(startDate, "DD-MM-YYYY").startOf("day").toDate();
+      const end = moment(endDate, "DD-MM-YYYY").endOf("day").toDate();
+      dateFilter = {
+        slotEndISO: {
+          $gte: start,
+          $lte: end,
+        },
+      };
+    }
+
+    // Build match conditions - show slots with availability OR with bookings
+    const buildAvailabilityMatchConditions = () => {
+      const conditions = {};
+      
+      if (subtypeId && mongoose.Types.ObjectId.isValid(subtypeId)) {
+        conditions.subtypeId = new mongoose.Types.ObjectId(subtypeId);
+      }
+      
+      if (Object.keys(dateFilter).length > 0) {
+        Object.assign(conditions, dateFilter);
+      }
+      
+      // Show slots with available capacity OR slots that have bookings (even if totalPlants = 0)
+      // This ensures booked slots show up even when capacity is cleared
+      conditions.$or = [
+        { availablePlants: { $gt: 0 } }, // Has available capacity
+        { totalBookedPlants: { $gt: 0 } } // Has bookings (to show booked plants even if capacity is 0)
+      ];
+      
+      if (minAvailable) {
+        // If minAvailable is specified, add it as additional condition for availablePlants
+        conditions.$and = [
+          { $or: conditions.$or },
+          { availablePlants: { $gte: parseInt(minAvailable) || 0 } }
+        ];
+        delete conditions.$or; // Remove $or since we're using $and now
+      }
+      
+      return conditions;
+    };
+
+    const availabilityMatchConditions = buildAvailabilityMatchConditions();
+
+    // Get all slots for this plant with availability
+    const availability = await PlantSlot.aggregate([
+      {
+        $match: {
+          plantId: new mongoose.Types.ObjectId(plantId),
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+          slotId: "$subtypeSlots.slots._id",
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
+          slotReadyDays: {
+            $cond: [
+              { $gt: [{ $ifNull: ["$subtypeSlots.slots.plantReadyDays", 0] }, 0] },
+              "$subtypeSlots.slots.plantReadyDays",
+              { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+            ],
+          },
+        },
+      },
+      // Dynamically calculate totalBookedPlants from actual orders
+      {
+        $lookup: {
+          from: "orders",
+          let: { slotId: "$slotId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$bookingSlot", "$$slotId"] },
+                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    {
+                      $or: [
+                        { $ne: ["$quotaSource", "dealer"] },
+                        { $not: { $ifNull: ["$quotaSource", false] } }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalBookedPlants: { $sum: "$numberOfPlants" }
+              }
+            }
+          ],
+          as: "orderStats"
+        }
+      },
+      {
+        $addFields: {
+          totalBookedPlants: {
+            $ifNull: [
+              { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
+              0
+            ]
+          }
+        }
+      },
+      {
+        $project: {
+          orderStats: 0
+        }
+      },
+      {
+        $addFields: {
+          // For sowing-allowed plants: Available = primarySowed - totalBookedPlants
+          // This represents plants ready for booking (already sowed minus already booked)
+          availablePlants: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  "$primarySowed",
+                  "$totalBookedPlants",
+                ],
+              },
+            ],
+          },
+          slotEndISO: {
+            $dateFromString: {
+              dateString: {
+                $concat: [
+                  { $substr: ["$subtypeSlots.slots.endDay", 6, 4] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 3, 2] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 0, 2] },
+                ],
+              },
+              format: "%Y-%m-%d",
+            },
+          },
+        },
+      },
+      {
+        $match: availabilityMatchConditions,
+      },
+      {
+        $project: {
+          _id: "$subtypeSlots.slots._id",
+          slotId: "$subtypeSlots.slots._id",
+          plantId: "$plantId",
+          plantName: { $ifNull: ["$plantInfo.name", "Unknown"] },
+          subtypeId: "$subtypeSlots.subtypeId",
+          subtypeName: { $ifNull: ["$subtypeDetails.name", "Subtype"] },
+          slotStartDay: "$subtypeSlots.slots.startDay",
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          month: "$subtypeSlots.slots.month",
+          totalBookedPlants: 1,
+          primarySowed: 1,
+          totalPlants: 1,
+          availablePlants: 1,
+          surplus: "$availablePlants",
+          utilizationRate: {
+            $cond: [
+              { $gt: ["$totalPlants", 0] },
+              {
+                $multiply: [
+                  {
+                    $divide: ["$totalBookedPlants", "$totalPlants"],
+                  },
+                  100,
+                ],
+              },
+              0,
+            ],
+          },
+          plantReadyDays: "$slotReadyDays",
+        },
+      },
+      {
+        $sort: { availablePlants: -1, slotEndDay: 1 }, // Sort by availability (highest first)
+      },
+    ]);
+
+    // Group by subtype for summary
+    const subtypeAvailability = await PlantSlot.aggregate([
+      {
+        $match: {
+          plantId: new mongoose.Types.ObjectId(plantId),
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+          slotId: "$subtypeSlots.slots._id",
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
+        },
+      },
+      // Dynamically calculate totalBookedPlants from actual orders for subtype summary
+      {
+        $lookup: {
+          from: "orders",
+          let: { slotId: "$slotId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$bookingSlot", "$$slotId"] },
+                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    {
+                      $or: [
+                        { $ne: ["$quotaSource", "dealer"] },
+                        { $not: { $ifNull: ["$quotaSource", false] } }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalBookedPlants: { $sum: "$numberOfPlants" }
+              }
+            }
+          ],
+          as: "orderStats"
+        }
+      },
+      {
+        $addFields: {
+          totalBookedPlants: {
+            $ifNull: [
+              { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
+              0
+            ]
+          },
+          // For sowing-allowed plants: Available = primarySowed - totalBookedPlants
+          availablePlants: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  { $ifNull: ["$primarySowed", 0] },
+                  "$totalBookedPlants" // Use the field we just calculated above
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        $project: {
+          orderStats: 0
+        }
+      },
+      {
+        $match: {
+          availablePlants: { $gt: 0 },
+          ...(subtypeId && mongoose.Types.ObjectId.isValid(subtypeId) ? {
+            subtypeId: new mongoose.Types.ObjectId(subtypeId)
+          } : {}),
+        },
+      },
+      {
+        $group: {
+          _id: "$subtypeSlots.subtypeId",
+          subtypeName: { $first: { $ifNull: ["$subtypeDetails.name", "Subtype"] } },
+          totalAvailable: { $sum: "$availablePlants" },
+          totalBooked: { $sum: "$totalBookedPlants" },
+          totalPrimarySowed: { $sum: "$primarySowed" },
+          totalCapacity: { $sum: "$totalPlants" },
+          slotCount: { $sum: 1 },
+        },
+      },
+      {
+        $addFields: {
+          utilizationRate: {
+            $cond: [
+              { $gt: ["$totalCapacity", 0] },
+              {
+                $multiply: [
+                  {
+                    $divide: ["$totalBooked", "$totalCapacity"],
+                  },
+                  100,
+                ],
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $sort: { totalAvailable: -1 },
+      },
+    ]);
+
+    // Get plant info
+    const plantInfo = await PlantCms.findById(plantId).select("name sowingAllowed").lean();
+
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    return res.status(200).json({
+      success: true,
+      plantInfo: {
+        plantId,
+        plantName: plantInfo?.name || "Unknown",
+        sowingAllowed: plantInfo?.sowingAllowed || false,
+      },
+      subtypeAvailability,
+      availability,
+      summary: {
+        totalSlots: availability.length,
+        totalAvailable: availability.reduce((sum, a) => sum + (a.availablePlants || 0), 0),
+        totalBooked: availability.reduce((sum, a) => sum + (a.totalBookedPlants || 0), 0),
+        totalPrimarySowed: availability.reduce((sum, a) => sum + (a.primarySowed || 0), 0),
+        totalCapacity: availability.reduce((sum, a) => sum + (a.totalPlants || 0), 0),
+        avgUtilization: availability.length > 0 
+          ? availability.reduce((sum, a) => sum + (a.utilizationRate || 0), 0) / availability.length 
+          : 0,
+      },
+      generatedAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Error fetching plant availability:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching plant availability",
+      error: error.message,
+    });
+  }
+};
+
+// NEW API: Get All Plants Availability (Date range mandatory, shows all plants with all subtypes)
+export const getAllPlantsAvailability = async (req, res) => {
+  try {
+    const { 
+      startDate, // Date range start (DD-MM-YYYY) - MANDATORY
+      endDate, // Date range end (DD-MM-YYYY) - MANDATORY
+      minAvailable, // Minimum available plants threshold
+      groupByDays, // Optional: Group slots by days
+    } = req.query;
+
+    // Date range is mandatory
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Start date and end date are required. Please provide date range.",
+      });
+    }
+
+    // Validate date format
+    const start = moment(startDate, "DD-MM-YYYY");
+    const end = moment(endDate, "DD-MM-YYYY");
+    
+    if (!start.isValid() || !end.isValid()) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date format. Please use DD-MM-YYYY format.",
+      });
+    }
+
+    if (start.isAfter(end)) {
+      return res.status(400).json({
+        success: false,
+        message: "Start date must be before or equal to end date.",
+      });
+    }
+
+    const startDateISO = start.startOf("day").toDate();
+    const endDateISO = end.endOf("day").toDate();
+
+    // Build match conditions
+    const buildAvailabilityMatchConditions = () => {
+      const conditions = {
+        slotEndISO: {
+          $gte: startDateISO,
+          $lte: endDateISO,
+        },
+        availablePlants: { $gt: 0 }, // Only show slots with available plants
+      };
+      
+      if (minAvailable) {
+        conditions.availablePlants = { $gte: parseInt(minAvailable) || 0 };
+      }
+      
+      return conditions;
+    };
+
+    const availabilityMatchConditions = buildAvailabilityMatchConditions();
+
+    // Get all plants with sowing allowed
+    const allPlants = await PlantCms.find({ sowingAllowed: true })
+      .select("_id name subtypes")
+      .lean();
+
+    // Get availability for all plants
+    const allAvailability = await PlantSlot.aggregate([
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $match: {
+          "plantInfo.sowingAllowed": true,
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+          slotId: "$subtypeSlots.slots._id",
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
+        },
+      },
+      // Calculate totalBookedPlants from orders
+      {
+        $lookup: {
+          from: "orders",
+          let: { slotId: "$slotId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$bookingSlot", "$$slotId"] },
+                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    {
+                      $or: [
+                        { $ne: ["$quotaSource", "dealer"] },
+                        { $not: { $ifNull: ["$quotaSource", false] } }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalBookedPlants: { $sum: "$numberOfPlants" }
+              }
+            }
+          ],
+          as: "orderStats"
+        }
+      },
+      {
+        $addFields: {
+          totalBookedPlants: {
+            $ifNull: [
+              { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
+              0
+            ]
+          },
+          availablePlants: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  "$primarySowed",
+                  {
+                    $ifNull: [
+                      { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
+                      0
+                    ]
+                  },
+                ],
+              },
+            ],
+          },
+          slotEndISO: {
+            $dateFromString: {
+              dateString: {
+                $concat: [
+                  { $substr: ["$subtypeSlots.slots.endDay", 6, 4] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 3, 2] },
+                  "-",
+                  { $substr: ["$subtypeSlots.slots.endDay", 0, 2] },
+                ],
+              },
+              format: "%Y-%m-%d",
+              onError: null,
+              onNull: null,
+            },
+          },
+        },
+      },
+      {
+        $match: availabilityMatchConditions,
+      },
+      {
+        $project: {
+          _id: "$subtypeSlots.slots._id",
+          slotId: "$subtypeSlots.slots._id",
+          plantId: "$plantId",
+          plantName: { $ifNull: ["$plantInfo.name", "Unknown"] },
+          subtypeId: "$subtypeSlots.subtypeId",
+          subtypeName: { $ifNull: ["$subtypeDetails.name", "Subtype"] },
+          slotStartDay: "$subtypeSlots.slots.startDay",
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          month: "$subtypeSlots.slots.month",
+          totalBookedPlants: 1,
+          primarySowed: 1,
+          totalPlants: 1,
+          availablePlants: 1,
+          plantReadyDays: {
+            $cond: [
+              { $gt: [{ $ifNull: ["$subtypeSlots.slots.plantReadyDays", 0] }, 0] },
+              "$subtypeSlots.slots.plantReadyDays",
+              { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+            ],
+          },
+        },
+      },
+      {
+        $sort: { plantName: 1, subtypeName: 1, slotStartDay: 1 },
+      },
+    ]);
+
+    // Group by plant and subtype
+    const plantGroups = {};
+    
+    allAvailability.forEach((slot) => {
+      const plantKey = slot.plantId.toString();
+      const subtypeKey = slot.subtypeId.toString();
+      
+      if (!plantGroups[plantKey]) {
+        plantGroups[plantKey] = {
+          plantId: slot.plantId,
+          plantName: slot.plantName,
+          subtypes: {},
+          totalAvailable: 0,
+          totalSlots: 0,
+        };
+      }
+      
+      if (!plantGroups[plantKey].subtypes[subtypeKey]) {
+        plantGroups[plantKey].subtypes[subtypeKey] = {
+          subtypeId: slot.subtypeId,
+          subtypeName: slot.subtypeName,
+          slots: [],
+          totalAvailable: 0,
+        };
+      }
+      
+      plantGroups[plantKey].subtypes[subtypeKey].slots.push(slot);
+      plantGroups[plantKey].subtypes[subtypeKey].totalAvailable += slot.availablePlants || 0;
+      plantGroups[plantKey].totalAvailable += slot.availablePlants || 0;
+      plantGroups[plantKey].totalSlots += 1;
+    });
+
+    // Convert to array format
+    const plantsAvailability = Object.values(plantGroups).map((plant) => ({
+      ...plant,
+      subtypes: Object.values(plant.subtypes),
+    }));
+
+    // Calculate summary
+    const summary = {
+      totalPlants: plantsAvailability.length,
+      totalSubtypes: plantsAvailability.reduce((sum, p) => sum + p.subtypes.length, 0),
+      totalSlots: allAvailability.length,
+      totalAvailable: allAvailability.reduce((sum, s) => sum + (s.availablePlants || 0), 0),
+    };
+
+    return res.status(200).json({
+      success: true,
+      plantsAvailability,
+      summary,
+      dateRange: {
+        startDate,
+        endDate,
+      },
+      generatedAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Error fetching all plants availability:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching all plants availability",
+      error: error.message,
+    });
+  }
+};

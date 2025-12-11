@@ -156,14 +156,27 @@ export const issueOutward = async (req, res) => {
 
       // Update product stock
       const product = await Product.findById(item.product);
+      if (!product) {
+        throw new Error(`Product not found for item: ${item.product}`);
+      }
+
+      // Validate stock availability before reducing
+      if (product.currentStock < item.quantity) {
+        throw new Error(`Insufficient stock. Available: ${product.currentStock}, Required: ${item.quantity}`);
+      }
+
       product.currentStock -= item.quantity;
       
       if (item.rate) {
-        product.stockValue -= item.amount || (item.quantity * item.rate);
+        const amountToDeduct = item.amount || (item.quantity * item.rate);
+        product.stockValue = Math.max(0, (product.stockValue || 0) - amountToDeduct);
       }
       
-      if (product.currentStock > 0) {
+      // Calculate average price safely
+      if (product.currentStock > 0 && product.stockValue > 0) {
         product.averagePrice = product.stockValue / product.currentStock;
+      } else {
+        product.averagePrice = 0;
       }
       
       product.updatedBy = req.user._id;

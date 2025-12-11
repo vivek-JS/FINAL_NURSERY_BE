@@ -51,7 +51,50 @@ export const createPurchaseOrder = async (req, res) => {
     });
 
     await purchaseOrder.save();
-    await purchaseOrder.populate(['supplier', 'items.product', 'items.unit', 'createdBy']);
+    await purchaseOrder.populate(['items.product', 'items.unit', 'createdBy']);
+
+    // Handle supplier/merchant population - try Supplier first, then Merchant
+    // Note: supplier field contains ObjectId (or string representation), not populated yet
+    let supplierId = purchaseOrder.supplier;
+    
+    // Convert to string if it's an ObjectId
+    if (supplierId) {
+      if (typeof supplierId !== 'string' && supplierId.toString) {
+        supplierId = supplierId.toString();
+      } else if (typeof supplierId === 'object' && supplierId._id) {
+        supplierId = supplierId._id.toString();
+      }
+      
+      // Import both models
+      const { default: Merchant } = await import('../models/merchant.model.js');
+      const { default: Supplier } = await import('../models/supplier.model.js');
+      
+      // Try Supplier first
+      const supplierDoc = await Supplier.findById(supplierId);
+      if (supplierDoc) {
+        purchaseOrder.supplier = supplierDoc.toObject ? supplierDoc.toObject() : supplierDoc;
+      } else {
+        // Try Merchant (since supplier field can contain merchant ID)
+        const merchant = await Merchant.findById(supplierId);
+        if (merchant) {
+          purchaseOrder.supplier = {
+            _id: merchant._id,
+            name: merchant.name,
+            phone: merchant.phone,
+            email: merchant.email,
+            address: merchant.address,
+            gstin: merchant.gstin,
+            contactPerson: merchant.contactPerson,
+            type: 'merchant',
+            category: merchant.category,
+          };
+        } else {
+          // If neither found, keep as ObjectId string
+          console.log(`Warning: Supplier/Merchant not found for ID: ${supplierId}`);
+          purchaseOrder.supplier = supplierId;
+        }
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -103,14 +146,64 @@ export const getAllPurchaseOrders = async (req, res) => {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const [purchaseOrders, total] = await Promise.all([
-      PurchaseOrder.find(query)
-        .populate(['supplier', 'items.product', 'createdBy'])
-        .sort({ poDate: -1 })
-        .skip(skip)
-        .limit(parseInt(limit)),
-      PurchaseOrder.countDocuments(query),
-    ]);
+    // Use lean() to get plain objects, then manually populate
+    const purchaseOrders = await PurchaseOrder.find(query)
+      .populate(['items.product', 'items.unit', 'createdBy'])
+      .sort({ poDate: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean(); // Convert to plain objects
+
+    // Handle supplier/merchant population for each PO
+    const { default: Merchant } = await import('../models/merchant.model.js');
+    const { default: Supplier } = await import('../models/supplier.model.js');
+    
+    for (const po of purchaseOrders) {
+      if (!po.supplier) continue;
+      
+      let supplierId = po.supplier;
+      
+      // Convert to string if it's an ObjectId or object
+      if (typeof supplierId === 'object') {
+        if (supplierId._id) {
+          supplierId = supplierId._id.toString();
+        } else if (supplierId.toString) {
+          supplierId = supplierId.toString();
+        } else {
+          continue; // Skip if can't convert
+        }
+      } else if (typeof supplierId !== 'string') {
+        supplierId = supplierId.toString();
+      }
+      
+      // Try Supplier first
+      const supplierDoc = await Supplier.findById(supplierId).lean();
+      if (supplierDoc) {
+        po.supplier = supplierDoc;
+      } else {
+        // Try Merchant (since supplier field can contain merchant ID)
+        const merchant = await Merchant.findById(supplierId).lean();
+        if (merchant) {
+          po.supplier = {
+            _id: merchant._id,
+            name: merchant.name,
+            phone: merchant.phone,
+            email: merchant.email,
+            address: merchant.address,
+            gstin: merchant.gstin,
+            contactPerson: merchant.contactPerson,
+            type: 'merchant',
+            category: merchant.category,
+          };
+        } else {
+          // If neither found, keep as ID but log warning
+          console.log(`Warning: Supplier/Merchant not found for ID: ${supplierId} in PO ${po.poNumber}`);
+          po.supplier = { _id: supplierId, name: 'N/A' };
+        }
+      }
+    }
+
+    const total = await PurchaseOrder.countDocuments(query);
 
     res.json({
       success: true,
@@ -137,7 +230,6 @@ export const getPurchaseOrderById = async (req, res) => {
   try {
     const purchaseOrder = await PurchaseOrder.findById(req.params.id)
       .populate([
-        'supplier',
         'items.product',
         'items.unit',
         'createdBy',
@@ -152,8 +244,42 @@ export const getPurchaseOrderById = async (req, res) => {
       });
     }
 
+    // Handle supplier/merchant population - try Supplier first, then Merchant
+    if (purchaseOrder.supplier) {
+      const supplierId = purchaseOrder.supplier._id || purchaseOrder.supplier;
+      
+      // Import both models
+      const { default: Merchant } = await import('../models/merchant.model.js');
+      const { default: Supplier } = await import('../models/supplier.model.js');
+      
+      // Try Supplier first
+      const supplierDoc = await Supplier.findById(supplierId);
+      if (supplierDoc) {
+        purchaseOrder.supplier = supplierDoc;
+      } else {
+        // Try Merchant (since supplier field can contain merchant ID)
+        const merchant = await Merchant.findById(supplierId);
+        if (merchant) {
+          purchaseOrder.supplier = {
+            _id: merchant._id,
+            name: merchant.name,
+            phone: merchant.phone,
+            email: merchant.email,
+            address: merchant.address,
+            gstin: merchant.gstin,
+            contactPerson: merchant.contactPerson,
+            type: 'merchant',
+            category: merchant.category,
+          };
+        } else {
+          // If neither found, keep as is (might be ObjectId)
+          purchaseOrder.supplier = supplierId;
+        }
+      }
+    }
+
     // Get related GRNs
-      const { default: GRN } = await import('../models/grn.model.js');
+    const { default: GRN } = await import('../models/grn.model.js');
     const grns = await GRN.find({ purchaseOrder: purchaseOrder._id })
       .populate(['supplier', 'items.product'])
       .sort({ grnDate: -1 });

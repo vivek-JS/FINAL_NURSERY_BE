@@ -13,7 +13,8 @@ import {
   getUniqueVillages,
   getUniqueDistricts,
   getDealerWalletBalanceForOrder,
-  getOrdersToBeDispatched
+  getOrdersToBeDispatched,
+  getAllCavitiesFromOrders
 } from "../controllers/order.controller.js";
 import {
   getOrderDispatchDetails,
@@ -47,6 +48,7 @@ router
   .get("/payments", getAllPayments)
   .get("/villages", getUniqueVillages)
   .get("/districts", getUniqueDistricts)
+  .get("/cavities", getAllCavitiesFromOrders)
   .get("/dealer-wallet/:orderId", getDealerWalletBalanceForOrder)
   .get("/to-be-dispatched", getOrdersToBeDispatched)
   .get("/dispatch-details/:orderId", getOrderDispatchDetails)

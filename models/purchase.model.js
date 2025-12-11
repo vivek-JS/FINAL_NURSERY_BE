@@ -1,4 +1,5 @@
-import { Schema, model } from "mongoose";
+import mongoose from "mongoose";
+const { Schema, model } = mongoose;
 
 // Purchase Order Schema
 const purchaseOrderSchema = new Schema({
@@ -428,10 +429,10 @@ sellOrderSchema.pre('save', async function(next) {
   next();
 });
 
-// Create models
-const PurchaseOrderTransaction = model("PurchaseOrderTransaction", purchaseOrderSchema);
-const GRNTransaction = model("GRNTransaction", grnSchema);
-const ProductDispatch = model("ProductDispatch", productDispatchSchema);
-const SellOrder = model("SellOrder", sellOrderSchema);
+// Create models - check if they exist first to avoid overwrite errors
+const PurchaseOrderTransaction = mongoose.models.PurchaseOrderTransaction || model("PurchaseOrderTransaction", purchaseOrderSchema);
+const GRNTransaction = mongoose.models.GRNTransaction || model("GRNTransaction", grnSchema);
+const ProductDispatch = mongoose.models.ProductDispatch || model("ProductDispatch", productDispatchSchema);
+const SellOrder = mongoose.models.SellOrder || model("SellOrder", sellOrderSchema);
 
 export { PurchaseOrderTransaction, GRNTransaction, ProductDispatch, SellOrder };

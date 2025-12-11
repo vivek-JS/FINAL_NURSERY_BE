@@ -35,10 +35,12 @@ const batchSchema = new mongoose.Schema(
     quantity: {
       type: Number,
       required: true,
+      min: 0,
     },
     remainingQuantity: {
       type: Number,
       required: true,
+      min: 0,
     },
     unit: {
       type: mongoose.Schema.Types.ObjectId,
@@ -76,12 +78,27 @@ batchSchema.index({ expiryDate: 1 });
 
 // Auto-update status based on quantity and expiry
 batchSchema.pre('save', function(next) {
+  // Prevent negative quantities
+  if (this.remainingQuantity < 0) {
+    return next(new Error('Remaining quantity cannot be negative'));
+  }
+  
+  // Auto-update status
   if (this.remainingQuantity <= 0) {
     this.status = 'exhausted';
   } else if (this.expiryDate && this.expiryDate < new Date()) {
     this.status = 'expired';
+  } else if (this.status === 'exhausted' && this.remainingQuantity > 0) {
+    // Reactivate if quantity is added back
+    this.status = 'active';
   }
+  
   next();
+});
+
+// Virtual for batch availability
+batchSchema.virtual('isAvailable').get(function() {
+  return this.status === 'active' && this.remainingQuantity > 0;
 });
 
 const Batch = mongoose.model('Batch', batchSchema);
