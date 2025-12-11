@@ -16,7 +16,8 @@ export const authenticateToken = async (req, res, next) => {
       '/api/v1/public-links/config',
       '/api/v1/public-links/leads',
       '/api/v1/excel/download-unprocessed', // Allow unprocessed file downloads without auth
-      '/api/v1/location' // Location endpoints are public
+      '/api/v1/location', // Location endpoints are public
+      '/api/v1/whatsapp-order/webhook' // WhatsApp webhook from Wati (public, no auth)
     ];
 
     // Check both req.path and req.originalUrl for public paths
