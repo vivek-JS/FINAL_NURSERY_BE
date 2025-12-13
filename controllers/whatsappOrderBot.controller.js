@@ -98,6 +98,11 @@ function clearConversationState(mobileNumber) {
  * Handle incoming WhatsApp webhook from Wati
  */
 export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
+  // 🔥 RAW WATI WEBHOOK LOGGER - Logs everything before any processing
+  console.log("🔥🔥 RAW WATI WEBHOOK 🔥🔥");
+  console.log(JSON.stringify(req.body, null, 2));
+  console.log("🔥🔥 END RAW WEBHOOK 🔥🔥\n");
+
   // Debug logging for local testing
   if (process.env.NODE_ENV !== 'production') {
     const timestamp = new Date().toISOString();
