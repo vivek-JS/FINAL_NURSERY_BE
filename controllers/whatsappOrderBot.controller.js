@@ -1,55 +1,122 @@
 import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
-import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
 import fetch from "node-fetch";
 import Farmer from "../models/farmer.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import moment from "moment";
 
-const WATI_URL = process.env.WATI_URL || "https://live-mt-server.wati.io/385403";
+const WATI_BASE_URL = process.env.WATI_URL || "https://live-mt-server.wati.io/385403";
 const WATI_TOKEN = process.env.WATI_TOKEN;
 
 // Store conversation state (in production, use Redis or database)
 const conversationState = new Map();
 
 /**
+ * Send simple WhatsApp message using Wati API
+ * Matches frontend wati.js format
+ * @param {string} phone - Phone number (with or without country code)
+ * @param {string} text - Message text to send
+ * @returns {Promise<Object>} Send result
+ */
+async function sendWhatsAppMessage(phone, text) {
+  try {
+    if (!WATI_TOKEN) {
+      console.error("❌ WATI_TOKEN not configured");
+      return { success: false, error: "WATI_TOKEN not configured" };
+    }
+
+    // Clean and format phone number
+    const cleanNumber = phone.toString().replace(/\D/g, "");
+    const phoneNumber = cleanNumber.length === 12 && cleanNumber.startsWith("91") 
+      ? cleanNumber.substring(2) 
+      : cleanNumber;
+
+    const url = `${WATI_BASE_URL}/api/v1/sendSessionMessage/91${phoneNumber}`;
+    
+    console.log("📤 Sending WATI message to:", phoneNumber);
+    console.log("📤 Message:", text);
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": `Bearer ${WATI_TOKEN}`,
+      },
+      body: JSON.stringify({
+        messageText: text,
+      }),
+    });
+
+    const data = await response.json();
+    console.log("📤 WATI RESPONSE:", data);
+    
+    if (response.ok) {
+      return { success: true, data };
+    } else {
+      console.error("❌ WATI API error:", data);
+      return { success: false, error: data };
+    }
+  } catch (error) {
+    console.error("❌ Error sending WhatsApp message:", error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Send interactive message with buttons using Wati API
+ * ONLY uses /api/v1/sendSessionMessage/{phone} endpoint
  */
 async function sendInteractiveMessage(mobileNumber, message, buttons = []) {
   try {
+    if (!WATI_TOKEN) {
+      console.error("❌ WATI_TOKEN not configured");
+      return { success: false, error: "WATI_TOKEN not configured" };
+    }
+
     const cleanNumber = mobileNumber.toString().replace(/\D/g, "");
     const phoneNumber = cleanNumber.length === 12 && cleanNumber.startsWith("91") 
       ? cleanNumber.substring(2) 
       : cleanNumber;
 
-    // For interactive buttons, we'll use Wati's send message API
-    const url = `${WATI_URL}/api/v1/sendSessionMessage/91${phoneNumber}`;
+    // ONLY use sendSessionMessage endpoint (NOT sendTemplateMessage, sendMessage, or sendBroadcast)
+    const url = `${WATI_BASE_URL}/api/v1/sendSessionMessage/91${phoneNumber}`;
     
     let messageBody = message;
     
-    // Add buttons if provided
+    // Add buttons if provided (format as text since we're using sendSessionMessage)
     if (buttons.length > 0) {
-      // Format buttons for Wati (using text format for now)
       const buttonText = buttons.map((btn, idx) => `${idx + 1}. ${btn.text}`).join("\n");
       messageBody = `${message}\n\n${buttonText}`;
     }
+
+    console.log("📤 Sending interactive message to:", phoneNumber);
+    console.log("📤 Message:", messageBody);
 
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${WATI_TOKEN}`,
+        "Accept": "application/json",
+        "Authorization": `Bearer ${WATI_TOKEN}`,
       },
       body: JSON.stringify({
-        text: messageBody,
+        messageText: messageBody, // Use messageText (not text) to match format
       }),
     });
 
     const data = await response.json();
-    return { success: response.ok, data };
+    console.log("📤 WATI RESPONSE:", data);
+    
+    if (response.ok) {
+      return { success: true, data };
+    } else {
+      console.error("❌ WATI API error:", data);
+      return { success: false, error: data };
+    }
   } catch (error) {
-    console.error("Error sending interactive message:", error);
+    console.error("❌ Error sending interactive message:", error.message);
     return { success: false, error: error.message };
   }
 }
@@ -149,27 +216,57 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
     console.log(`${'='.repeat(60)}\n`);
   }
 
-  const { event, data } = req.body;
+  // Support multiple webhook formats
+  let message = null;
+  let phone = null;
+  let mobileNumber = null;
 
-  // Wati webhook format
-  if (event === "message" && data) {
-    const { waId, text, buttonText } = data;
-    const mobileNumber = waId?.replace("91", "") || data.from?.replace("91", "");
+  // Format 1: Direct format (req.body.text, req.body.waId)
+  if (req.body?.text && req.body?.waId) {
+    message = req.body.text;
+    phone = req.body.waId;
+    mobileNumber = phone.replace("91", "") || phone;
+    console.log("📩 Format 1 - Direct format detected");
+    console.log(`   Phone: ${phone}, Message: ${message}`);
+  }
+  // Format 2: Nested Wati format (req.body.event, req.body.data)
+  else if (req.body?.event === "message" && req.body?.data) {
+    const { waId, text, buttonText } = req.body.data;
+    phone = waId || req.body.data.from;
+    mobileNumber = phone?.replace("91", "") || phone;
+    message = buttonText || text?.body || text || "";
+    console.log("📩 Format 2 - Nested Wati format detected");
+    console.log(`   Phone: ${phone}, Message: ${message}`);
+  }
+  // Format 3: Simple nested (req.body.data.text, req.body.data.waId)
+  else if (req.body?.data?.text && req.body?.data?.waId) {
+    message = req.body.data.text;
+    phone = req.body.data.waId;
+    mobileNumber = phone.replace("91", "") || phone;
+    console.log("📩 Format 3 - Simple nested format detected");
+    console.log(`   Phone: ${phone}, Message: ${message}`);
+  }
 
-    if (!mobileNumber) {
-      return res.status(200).json({ success: true });
-    }
-
-    const userMessage = buttonText || text?.body || "";
-    const state = getConversationState(mobileNumber);
-
-    // Process the message based on current step
-    await processOrderFlow(mobileNumber, userMessage, state);
-
+  // If no message or phone, return success (webhook received but not a message)
+  if (!message || !phone) {
+    console.log("⚠️  No message or phone found in webhook payload");
     return res.status(200).json({ success: true });
   }
 
-  res.status(200).json({ success: true });
+  console.log("📩 Incoming WhatsApp:", phone, message);
+
+  // Quick reply examples (before processing order flow)
+  const messageLower = message.toLowerCase().trim();
+  if (messageLower === "hi" || messageLower === "hello") {
+    await sendWhatsAppMessage(phone, "Hello 👋 How can I help you?");
+    return res.status(200).json({ success: true });
+  }
+
+  // Process the message through order flow
+  const state = getConversationState(mobileNumber);
+  await processOrderFlow(mobileNumber, message, state);
+
+  return res.status(200).json({ success: true });
 });
 
 /**
