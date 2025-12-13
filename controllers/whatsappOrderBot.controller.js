@@ -99,9 +99,44 @@ function clearConversationState(mobileNumber) {
  */
 export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
   // 🔥 RAW WATI WEBHOOK LOGGER - Logs everything before any processing
-  console.log("🔥🔥 RAW WATI WEBHOOK 🔥🔥");
-  console.log(JSON.stringify(req.body, null, 2));
-  console.log("🔥🔥 END RAW WEBHOOK 🔥🔥\n");
+  console.log("\n🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥");
+  console.log("🔥🔥 RAW WATI WEBHOOK RECEIVED 🔥🔥");
+  console.log("🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥\n");
+  
+  // Log request method and URL
+  console.log("📋 REQUEST INFO:");
+  console.log(`   Method: ${req.method}`);
+  console.log(`   URL: ${req.originalUrl || req.url}`);
+  console.log(`   Path: ${req.path}`);
+  console.log(`   IP: ${req.ip || req.connection?.remoteAddress}`);
+  console.log(`   Timestamp: ${new Date().toISOString()}\n`);
+  
+  // Log all headers
+  console.log("📨 REQUEST HEADERS:");
+  console.log(JSON.stringify(req.headers, null, 2));
+  console.log("");
+  
+  // Log raw body
+  console.log("📦 REQUEST BODY:");
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log(JSON.stringify(req.body, null, 2));
+  } else {
+    console.log("   ⚠️  EMPTY BODY OR NO DATA");
+    console.log(`   Body type: ${typeof req.body}`);
+    console.log(`   Body keys: ${req.body ? Object.keys(req.body).join(', ') : 'null'}`);
+  }
+  console.log("");
+  
+  // Log query params
+  if (req.query && Object.keys(req.query).length > 0) {
+    console.log("🔍 QUERY PARAMS:");
+    console.log(JSON.stringify(req.query, null, 2));
+    console.log("");
+  }
+  
+  console.log("🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥");
+  console.log("🔥🔥 END RAW WEBHOOK LOG 🔥🔥");
+  console.log("🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥\n");
 
   // Debug logging for local testing
   if (process.env.NODE_ENV !== 'production') {

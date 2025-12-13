@@ -156,6 +156,23 @@ server.use(xss());
 // IP whitelisting (uncomment if needed)
 // server.use(IPWhiteListing);
 
+// Global request logger - logs ALL incoming requests (for debugging)
+server.use((req, res, next) => {
+  // Only log API requests to reduce noise
+  if (req.path.startsWith('/api/v1/whatsapp-order/webhook')) {
+    console.log("\n🌐🌐🌐 INCOMING REQUEST TO WEBHOOK 🌐🌐🌐");
+    console.log(`   Method: ${req.method}`);
+    console.log(`   Path: ${req.path}`);
+    console.log(`   Original URL: ${req.originalUrl}`);
+    console.log(`   IP: ${req.ip || req.connection?.remoteAddress}`);
+    console.log(`   User-Agent: ${req.headers['user-agent'] || 'N/A'}`);
+    console.log(`   Content-Type: ${req.headers['content-type'] || 'N/A'}`);
+    console.log(`   Timestamp: ${new Date().toISOString()}`);
+    console.log("🌐🌐🌐 PROCEEDING TO MIDDLEWARE 🌐🌐🌐\n");
+  }
+  next();
+});
+
 // Parameter whitelisting
 server.use(parameterWhiteListing);
 

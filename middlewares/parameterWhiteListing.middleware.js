@@ -69,6 +69,12 @@ const parameterWhiteListing = (req, res, next) => {
     return next();
   }
 
+  // Skip parameter validation for WhatsApp webhook (completely public, no params needed)
+  if (req.path === '/api/v1/whatsapp-order/webhook' || 
+      req.originalUrl === '/api/v1/whatsapp-order/webhook') {
+    return next();
+  }
+
   const requestParams = { ...req.query, ...req.params };
 
   const invalidParams = Object.keys(requestParams).filter(
