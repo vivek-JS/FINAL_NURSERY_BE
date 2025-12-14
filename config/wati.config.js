@@ -12,7 +12,19 @@ export const getWatiToken = () => {
 };
 
 export const getWatiBaseUrl = () => {
-  return process.env.WATI_URL || WATI_BASE_URL;
+  const envUrl = process.env.WATI_URL;
+  
+  // Validate env URL - must be a valid URL starting with http
+  if (envUrl && (envUrl.startsWith('http://') || envUrl.startsWith('https://'))) {
+    return envUrl;
+  }
+  
+  // If env URL is invalid or not set, use default
+  if (envUrl && !envUrl.startsWith('http')) {
+    console.warn(`⚠️  Invalid WATI_URL in env: "${envUrl}". Using default URL.`);
+  }
+  
+  return WATI_BASE_URL;
 };
 
 

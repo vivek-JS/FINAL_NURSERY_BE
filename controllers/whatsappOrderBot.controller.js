@@ -447,43 +447,23 @@ async function handleMainMenu(mobileNumber, state, message = "") {
   
   const messageLower = message.toLowerCase().trim();
 
-  // Trigger words: hi, hello, start, or option 1
-  if (messageLower === "hi" || messageLower === "hello" || messageLower === "start" || messageLower === "1" || messageLower === "नमस्कार" || messageLower === "namaskar") {
-    console.log("   ✅ Trigger word detected - Showing welcome menu");
-    await sendWhatsAppMessage(
-      mobileNumber,
-      `नमस्कार भाऊ!! 👋🙏🌱\n\n🌱 Ram Biotech मध्ये आपले स्वागत आहे!\n\nकृपया एक पर्याय निवडा:\n\n1️⃣ नवीन ऑर्डर\n2️⃣ माझ्या ऑर्डर\n3️⃣ मदत`
-    );
-    state.step = "MAIN_MENU";
+  // Trigger words: hi, hello, start - directly show plants
+  if (messageLower === "hi" || messageLower === "hello" || messageLower === "start" || messageLower === "नमस्कार" || messageLower === "namaskar") {
+    console.log("   ✅ Trigger word detected - Showing greeting and plants directly");
+    // Directly go to plant selection and combine greeting with plants
+    state.step = "SELECT_PLANT";
     saveConversationState(mobileNumber, state);
+    await loadPlants(mobileNumber, state, true); // Pass true to include greeting
     return;
   }
 
-  // Handle menu selection
-  if (messageLower === "1" || messageLower === "new order" || messageLower === "नवीन ऑर्डर") {
-    console.log("   ✅ Option 1 selected - Starting new order");
+  // If in MAIN_MENU and user sends any message, go to plant selection
+  if (state.step === "MAIN_MENU") {
+    console.log("   ✅ User in MAIN_MENU - Starting plant selection");
     state.step = "SELECT_PLANT";
     saveConversationState(mobileNumber, state);
     await loadPlants(mobileNumber, state);
-  } else if (messageLower === "2" || messageLower === "my orders" || messageLower === "माझ्या ऑर्डर") {
-    console.log("   ✅ Option 2 selected - My Orders");
-    await sendWhatsAppMessage(
-      mobileNumber,
-      "📋 *माझ्या ऑर्डर*\n\nही सुविधा लवकरच येणार आहे!\n\nनवीन ऑर्डर करण्यासाठी HI टाइप करा."
-    );
-  } else if (messageLower === "3" || messageLower === "help" || messageLower === "मदत") {
-    console.log("   ✅ Option 3 selected - Help");
-    await sendWhatsAppMessage(
-      mobileNumber,
-      "📖 *मदत*\n\n• सुरु करण्यासाठी HI टाइप करा\n• रद्द करण्यासाठी CANCEL टाइप करा\n• मुख्य मेनूसाठी MENU टाइप करा\n• पर्याय निवडण्यासाठी नंबर टाइप करा"
-    );
-  } else {
-    // Default: show main menu
-    console.log("   ℹ️  Default action - Showing main menu");
-    await sendWhatsAppMessage(
-      mobileNumber,
-      `नमस्कार भाऊ!! 👋🙏🌱\n\n🌱 Ram Biotech मध्ये आपले स्वागत आहे!\n\nकृपया एक पर्याय निवडा:\n\n1️⃣ नवीन ऑर्डर\n2️⃣ माझ्या ऑर्डर\n3️⃣ मदत`
-    );
+    return;
   }
   saveConversationState(mobileNumber, state);
   console.log("   ✅ MAIN_MENU handler completed\n");
@@ -491,8 +471,9 @@ async function handleMainMenu(mobileNumber, state, message = "") {
 
 /**
  * Load and send available plants
+ * @param {boolean} includeGreeting - If true, include greeting message at the start
  */
-async function loadPlants(mobileNumber, state) {
+async function loadPlants(mobileNumber, state, includeGreeting = false) {
   console.log("\n🌱 [LOAD] Loading plants from database...");
   try {
     const plants = await PlantCms.find({}).select("name _id").limit(10);
@@ -506,27 +487,44 @@ async function loadPlants(mobileNumber, state) {
       return;
     }
 
-    // Marathi plant names mapping
-    const marathiNames = {
-      "Banana": "केळी (Keli)",
-      "Papaya": "पपया (Papaya)",
-      "Watermelon": "तरबूज (Tarbooj)",
-      "Muskmelon": "खरबूज (Kharbooj)",
-      "Keli": "केळी (Keli)",
-      "Tarbooj": "तरबूज (Tarbooj)",
-      "Kharbooj": "खरबूज (Kharbooj)",
+    // Sort plants to ensure Banana comes first
+    const sortedPlants = [...plants].sort((a, b) => {
+      // Priority order: Banana first, then others alphabetically
+      const priority = { "Banana": 1, "Keli": 1 };
+      const aPriority = priority[a.name] || 999;
+      const bPriority = priority[b.name] || 999;
+      
+      if (aPriority !== bPriority) {
+        return aPriority - bPriority;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    // Plant display names (English first, then Marathi in parentheses)
+    const plantDisplayNames = {
+      "Banana": "Banana (केळी)",
+      "Papaya": "Papaya (पपया)",
+      "Watermelon": "Watermelon (तरबूज)",
+      "Muskmelon": "Muskmelon (खरबूज)",
+      "Keli": "Banana (केळी)",
+      "Tarbooj": "Watermelon (तरबूज)",
+      "Kharbooj": "Muskmelon (खरबूज)",
     };
 
-    let message = "🌱 आपल्याला कोणती रोप बुक करायची आहे?\n\n";
+    // Start message with greeting if requested
+    let message = includeGreeting 
+      ? `नमस्कार भाऊ!! 👋🙏🌱\n\n🌱 Ram Biotech मध्ये आपले स्वागत आहे!\n\n🌱 आपल्याला कोणती रोप बुक करायची आहे?\n\n`
+      : "🌱 आपल्याला कोणती रोप बुक करायची आहे?\n\n";
+    
     state.lists.plants = [];
-    plants.forEach((plant, idx) => {
-      const marathiName = marathiNames[plant.name] || plant.name;
-      message += `${idx + 1}️⃣ ${marathiName}\n`;
+    sortedPlants.forEach((plant, idx) => {
+      const displayName = plantDisplayNames[plant.name] || plant.name;
+      message += `${idx + 1}️⃣ ${displayName}\n`;
       state.lists.plants[idx] = {
         id: plant._id.toString(),
         name: plant.name,
       };
-      console.log(`   ${idx + 1}. ${plant.name} (Marathi: ${marathiName}) (ID: ${plant._id})`);
+      console.log(`   ${idx + 1}. ${plant.name} (Display: ${displayName}) (ID: ${plant._id})`);
     });
     message += "\nनंबर टाइप करा";
 

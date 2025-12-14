@@ -48,7 +48,7 @@ export const createPurchaseOrder = async (req, res) => {
       totalAmount,
       terms,
       notes,
-      autoGRN: autoGRN === true || autoGRN === 'true' || autoGRN === 1, // Store auto GRN flag (handle string/boolean)
+      autoGRN: autoGRN === true || autoGRN === 'true' || autoGRN === 1 || autoGRN === '1', // Store auto GRN flag (handle string/boolean)
       createdBy: req.user._id,
     });
 
@@ -100,7 +100,14 @@ export const createPurchaseOrder = async (req, res) => {
     }
 
     // Auto-approve and create GRN if autoGRN is enabled
-    const isAutoGRNEnabled = purchaseOrder.autoGRN === true || purchaseOrder.autoGRN === 'true' || purchaseOrder.autoGRN === 1 || autoGRN === true || autoGRN === 'true' || autoGRN === 1;
+    const isAutoGRNEnabled = purchaseOrder.autoGRN === true || 
+                              purchaseOrder.autoGRN === 'true' || 
+                              purchaseOrder.autoGRN === 1 || 
+                              purchaseOrder.autoGRN === '1' ||
+                              autoGRN === true || 
+                              autoGRN === 'true' || 
+                              autoGRN === 1 ||
+                              autoGRN === '1';
     console.log('🔍 Checking autoGRN flag:', { 
       autoGRN, 
       purchaseOrderAutoGRN: purchaseOrder.autoGRN,
@@ -202,22 +209,187 @@ export const createPurchaseOrder = async (req, res) => {
         await grn.save();
         console.log(`✅ GRN ${grnNumber} saved to database`);
         
-        // Populate GRN data
-        await grn.populate(['items.product', 'items.unit', 'purchaseOrder']);
+        // Reload GRN to ensure items are properly structured
+        const savedGRN = await GRN.findById(grn._id);
+        if (!savedGRN) {
+          throw new Error('Failed to retrieve saved GRN');
+        }
+        
+        // Auto-approve GRN to update inventory immediately
+        console.log(`🔄 Auto-approving GRN ${grnNumber} to update inventory...`);
+        
+        const { default: Batch } = await import('../models/batch.model.js');
+        const { default: InventoryTransaction } = await import('../models/inventoryTransaction.model.js');
+        
+        // Helper function to create inventory transaction (same as in grn.controller.js)
+        const createInventoryTransaction = async (item, grnDoc, user, balanceBefore, balanceAfter) => {
+          try {
+            const transactionNumber = await InventoryTransaction.generateTransactionNumber();
+            
+            const transaction = new InventoryTransaction({
+              transactionNumber,
+              transactionType: 'inward',
+              product: item.product,
+              batch: item.batch,
+              quantity: item.acceptedQuantity,
+              unit: item.unit,
+              balanceBeforeTransaction: balanceBefore,
+              balanceAfterTransaction: balanceAfter,
+              rate: item.rate,
+              value: item.amount,
+              referenceType: 'GRN',
+              referenceId: grnDoc._id,
+              referenceNumber: grnDoc.grnNumber,
+              toLocation: 'Main Warehouse',
+              reason: 'Auto-approved GRN Entry',
+              performedBy: user._id,
+            });
+            
+            await transaction.save();
+            return transaction;
+          } catch (error) {
+            console.error('Error creating inventory transaction:', error);
+            // Don't throw - transaction creation failure shouldn't block GRN approval
+            return null;
+          }
+        };
+        
+        // Process each item: create batches and update inventory
+        console.log(`📦 Processing ${savedGRN.items.length} items for GRN approval...`);
+        for (const item of savedGRN.items) {
+          if (item.acceptedQuantity > 0) {
+            // Ensure batch number exists
+            let batchNumber = item.batchNumber || item.lotNumber;
+            if (!batchNumber || !batchNumber.trim()) {
+              batchNumber = await generateBatchNumber(item.product);
+            }
+            batchNumber = batchNumber.trim();
+            
+            // Check if batch number already exists
+            const existingBatch = await Batch.findOne({ batchNumber: batchNumber });
+            if (existingBatch) {
+              const timestamp = Date.now().toString().slice(-6);
+              batchNumber = `${batchNumber}_${timestamp}`;
+            }
+            
+            // Convert expiryDate from string to Date if needed
+            let expiryDate = item.expiryDate;
+            if (expiryDate && typeof expiryDate === 'string') {
+              expiryDate = new Date(expiryDate);
+              if (isNaN(expiryDate.getTime())) {
+                expiryDate = undefined;
+              }
+            }
+            
+            let manufactureDate = item.manufactureDate;
+            if (manufactureDate && typeof manufactureDate === 'string') {
+              manufactureDate = new Date(manufactureDate);
+              if (isNaN(manufactureDate.getTime())) {
+                manufactureDate = undefined;
+              }
+            }
+            
+            // Create batch
+            const batch = new Batch({
+              batchNumber: batchNumber,
+              product: item.product,
+              manufactureDate: manufactureDate || undefined,
+              expiryDate: expiryDate || undefined,
+              receivedDate: savedGRN.grnDate,
+              supplier: savedGRN.supplier,
+              purchasePrice: item.rate,
+              quantity: item.acceptedQuantity,
+              remainingQuantity: item.acceptedQuantity,
+              unit: item.unit,
+              grn: savedGRN._id,
+              createdBy: req.user._id,
+            });
+            
+            await batch.save();
+            
+            // Update item with batch reference
+            item.batch = batch._id;
+            item.batchNumber = batchNumber;
+            
+            // Update product stock
+            const product = await Product.findById(item.product);
+            if (product) {
+              const oldStock = product.currentStock || 0;
+              
+              product.currentStock = (product.currentStock || 0) + item.acceptedQuantity;
+              product.stockValue = (product.stockValue || 0) + item.amount;
+              
+              if (product.currentStock > 0) {
+                product.averagePrice = product.stockValue / product.currentStock;
+              } else {
+                product.averagePrice = 0;
+              }
+              
+              product.updatedBy = req.user._id;
+              await product.save();
+              
+              // Create inventory transaction
+              await createInventoryTransaction(item, savedGRN, req.user, oldStock, product.currentStock);
+            }
+          }
+        }
+        
+        // Update GRN status to approved
+        savedGRN.status = 'approved';
+        savedGRN.qualityCheckBy = req.user._id;
+        savedGRN.qualityCheckDate = new Date();
+        savedGRN.qualityCheckRemarks = 'Auto-approved from Purchase Order';
+        savedGRN.updatedBy = req.user._id;
+        await savedGRN.save();
+        
+        console.log(`✅ GRN ${grnNumber} approved successfully`);
+        
+        // Update PO received quantities
+        if (savedGRN.purchaseOrder) {
+          const po = await PurchaseOrder.findById(savedGRN.purchaseOrder);
+          if (po) {
+            savedGRN.items.forEach((grnItem) => {
+              const poItem = po.items.find(
+                (item) => item.product.toString() === grnItem.product.toString()
+              );
+              if (poItem) {
+                poItem.receivedQuantity = (poItem.receivedQuantity || 0) + grnItem.acceptedQuantity;
+              }
+            });
+            
+            // Check if PO is fully received
+            const allReceived = po.items.every(
+              (item) => (item.receivedQuantity || 0) >= item.quantity
+            );
+            if (allReceived) {
+              po.status = 'received';
+            } else {
+              po.status = 'partial_received';
+            }
+            
+            await po.save();
+            console.log(`✅ Purchase Order ${po.poNumber} received quantities updated`);
+          }
+        }
+        
+        // Reload GRN with all populated fields for response
+        await savedGRN.populate(['items.product', 'items.unit', 'items.batch', 'purchaseOrder', 'qualityCheckBy']);
+        
+        console.log(`✅ GRN ${grnNumber} auto-approved and inventory updated`);
         
         // Handle supplier/merchant population
-        if (grn.supplier) {
+        if (savedGRN.supplier) {
           const { default: Merchant } = await import('../models/merchant.model.js');
           const { default: Supplier } = await import('../models/supplier.model.js');
           
-          const supplierId = grn.supplier._id || grn.supplier;
+          const supplierId = savedGRN.supplier._id || savedGRN.supplier;
           const supplierDoc = await Supplier.findById(supplierId);
           if (supplierDoc) {
-            grn.supplier = supplierDoc;
+            savedGRN.supplier = supplierDoc;
           } else {
             const merchant = await Merchant.findById(supplierId);
             if (merchant) {
-              grn.supplier = {
+              savedGRN.supplier = {
                 _id: merchant._id,
                 name: merchant.name,
                 phone: merchant.phone,
@@ -232,27 +404,27 @@ export const createPurchaseOrder = async (req, res) => {
           }
         }
 
-        const grnData = grn;
+        const grnData = savedGRN;
 
         // Re-populate purchase order with updated status
         await purchaseOrder.populate(['items.product', 'items.unit', 'approvedBy']);
 
         res.status(201).json({
           success: true,
-          message: 'Purchase Order created, approved, and GRN auto-generated successfully',
+          message: 'Purchase Order created, approved, GRN auto-generated and approved. Inventory updated.',
           data: {
             purchaseOrder,
             grn: grnData,
           },
         });
         return;
-        return;
       } catch (grnError) {
-        console.error('❌ Error auto-creating GRN:', grnError);
+        console.error('❌ Error auto-creating/approving GRN:', grnError);
+        console.error('Error stack:', grnError.stack);
         // If GRN creation fails, still return the PO but with a warning
         res.status(201).json({
           success: true,
-          message: 'Purchase Order created and approved, but GRN auto-generation failed. Please create GRN manually.',
+          message: 'Purchase Order created and approved, but GRN auto-generation/approval failed. Please create GRN manually.',
           data: purchaseOrder,
           warning: grnError.message,
         });
