@@ -151,11 +151,30 @@ async function sendWhatsAppMessage(phone, text) {
     console.log(`   📋 Request details:`);
     console.log(`      Method: POST`);
     console.log(`      URL: ${url.substring(0, 150)}${url.length > 150 ? '...' : ''}`);
-    console.log(`      Authorization: ${authToken.substring(0, 40)}...`);
+    console.log(`      Authorization header length: ${authToken.length} characters`);
+    console.log(`      Authorization header preview: ${authToken.substring(0, 50)}...`);
+    console.log(`      Authorization header ends with: ...${authToken.substring(authToken.length - 20)}`);
+    console.log(`      Token starts with Bearer: ${authToken.startsWith('Bearer ')}`);
+    console.log(`      Token from env: ${process.env.WATI_TOKEN ? 'YES' : 'NO'}`);
+    console.log(`      Raw WATI_TOKEN length: ${WATI_TOKEN?.length || 0}`);
+    console.log(`      Raw WATI_TOKEN preview: ${WATI_TOKEN ? WATI_TOKEN.substring(0, 50) : 'MISSING'}...`);
+    console.log(`      Raw WATI_TOKEN ends with: ${WATI_TOKEN ? '...' + WATI_TOKEN.substring(WATI_TOKEN.length - 20) : 'MISSING'}`);
     console.log(`      Body: EMPTY (using query parameter)`);
     
     // Use query parameter method (as per working Postman request)
     console.log(`   ⏱️  Making fetch request at: ${new Date().toISOString()}`);
+    console.log(`   🔑 TOKEN VERIFICATION:`);
+    console.log(`      Full authToken: ${authToken}`);
+    console.log(`      authToken length: ${authToken.length}`);
+    console.log(`      authToken first 100 chars: ${authToken.substring(0, 100)}`);
+    console.log(`      authToken last 100 chars: ...${authToken.substring(authToken.length - 100)}`);
+    console.log(`      Raw WATI_TOKEN: ${WATI_TOKEN}`);
+    console.log(`      Raw WATI_TOKEN length: ${WATI_TOKEN?.length || 0}`);
+    console.log(`      process.env.WATI_TOKEN exists: ${!!process.env.WATI_TOKEN}`);
+    if (process.env.WATI_TOKEN) {
+      console.log(`      process.env.WATI_TOKEN first 100: ${process.env.WATI_TOKEN.substring(0, 100)}`);
+      console.log(`      process.env.WATI_TOKEN last 100: ...${process.env.WATI_TOKEN.substring(process.env.WATI_TOKEN.length - 100)}`);
+    }
     const fetchStartTime = Date.now();
     
     let response;
