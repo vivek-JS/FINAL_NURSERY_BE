@@ -15,6 +15,23 @@ const ADMIN_PHONE = process.env.ADMIN_PHONE || "7588686452";
 // Store conversation state (in production, use Redis or database)
 const conversationState = new Map();
 
+// Log configuration on module load
+console.log("\n" + "=".repeat(60));
+console.log("🔧 [INIT] WhatsApp Order Bot Configuration");
+console.log("=".repeat(60));
+console.log(`   WATI_BASE_URL: ${WATI_BASE_URL || "❌ NOT SET"}`);
+console.log(`   WATI_TOKEN: ${WATI_TOKEN ? `${WATI_TOKEN.substring(0, 20)}...` : "❌ NOT SET"}`);
+console.log(`   ADMIN_PHONE: ${ADMIN_PHONE}`);
+console.log("=".repeat(60) + "\n");
+
+// Validate configuration
+if (!WATI_BASE_URL) {
+  console.error("⚠️  WARNING: WATI_BASE_URL is not configured!");
+}
+if (!WATI_TOKEN) {
+  console.error("⚠️  WARNING: WATI_TOKEN is not configured!");
+}
+
 /**
  * Send simple WhatsApp message using Wati API
  * @param {string} phone - Phone number (with or without country code)
@@ -22,46 +39,129 @@ const conversationState = new Map();
  * @returns {Promise<Object>} Send result
  */
 async function sendWhatsAppMessage(phone, text) {
+  console.log("\n📤 [WATI] Preparing to send WhatsApp message...");
+  console.log(`   📱 Input phone: ${phone}`);
+  console.log(`   📝 Message length: ${text?.length || 0} characters`);
+  
   try {
+    // Validate WATI configuration
     if (!WATI_TOKEN) {
-      console.error("❌ WATI_TOKEN not configured");
+      console.error("   ❌ WATI_TOKEN not configured");
       return { success: false, error: "WATI_TOKEN not configured" };
+    }
+    
+    if (!WATI_BASE_URL) {
+      console.error("   ❌ WATI_BASE_URL not configured");
+      return { success: false, error: "WATI_BASE_URL not configured" };
+    }
+    
+    console.log(`   ✅ WATI_BASE_URL: ${WATI_BASE_URL}`);
+    console.log(`   ✅ WATI_TOKEN: ${WATI_TOKEN.substring(0, 20)}...`);
+
+    // Validate phone number
+    if (!phone) {
+      console.error("   ❌ Phone number is empty or undefined");
+      return { success: false, error: "Phone number is required" };
     }
 
     // Clean and format phone number
     const cleanNumber = phone.toString().replace(/\D/g, "");
+    console.log(`   🔢 Cleaned number: ${cleanNumber}`);
+    
+    if (!cleanNumber || cleanNumber.length < 10) {
+      console.error(`   ❌ Invalid phone number length: ${cleanNumber.length}`);
+      return { success: false, error: "Invalid phone number" };
+    }
+    
     const phoneNumber = cleanNumber.length === 12 && cleanNumber.startsWith("91") 
       ? cleanNumber.substring(2) 
       : cleanNumber;
-
-    const url = `${WATI_BASE_URL}/api/v1/sendSessionMessage/91${phoneNumber}`;
     
-    console.log("📤 Sending WATI message to:", phoneNumber);
-    console.log("📤 Message:", text);
+    console.log(`   ✅ Formatted phone: ${phoneNumber}`);
+
+    // Construct URL - ensure no double slashes
+    const baseUrl = WATI_BASE_URL.endsWith('/') 
+      ? WATI_BASE_URL.slice(0, -1) 
+      : WATI_BASE_URL;
+    
+    // Use query parameter approach (MOST RELIABLE per WATI docs)
+    // Format: /api/v1/sendSessionMessage/91{phone}?messageText={message}
+    const encodedMessage = encodeURIComponent(text);
+    const url = `${baseUrl}/api/v1/sendSessionMessage/91${phoneNumber}?messageText=${encodedMessage}`;
+    
+    console.log(`   🔗 Constructed URL: ${url}`);
+    console.log(`   📋 URL breakdown:`);
+    console.log(`      Base: ${baseUrl}`);
+    console.log(`      Endpoint: /api/v1/sendSessionMessage/91${phoneNumber}`);
+    console.log(`      Query param: messageText=${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
+    console.log(`      Encoded message length: ${encodedMessage.length} characters`);
+    
+    // Validate URL
+    try {
+      const urlObj = new URL(url); // This will throw if URL is invalid
+      console.log("   ✅ URL is valid");
+      console.log(`      Protocol: ${urlObj.protocol}`);
+      console.log(`      Host: ${urlObj.host}`);
+      console.log(`      Path: ${urlObj.pathname}`);
+      console.log(`      Query: ${urlObj.search}`);
+      console.log(`      Full URL (first 100 chars): ${url.substring(0, 100)}...`);
+    } catch (urlError) {
+      console.error("   ❌ Invalid URL:", urlError.message);
+      console.error(`   📋 URL components:`);
+      console.error(`      Base URL: ${WATI_BASE_URL}`);
+      console.error(`      Base URL (cleaned): ${baseUrl}`);
+      console.error(`      Phone: 91${phoneNumber}`);
+      console.error(`      Message: ${text.substring(0, 50)}...`);
+      console.error(`      Full URL: ${url}`);
+      return { success: false, error: `Invalid URL: ${urlError.message}` };
+    }
+    
+    console.log("   📤 Sending message to WATI API (using query parameter method)...");
+    console.log(`   📋 Request details:`);
+    console.log(`      Method: POST`);
+    console.log(`      URL: ${url.substring(0, 150)}${url.length > 150 ? '...' : ''}`);
+    console.log(`      Headers: Authorization: Bearer ${WATI_TOKEN.substring(0, 20)}...`);
+    console.log(`      Body: NONE (using query parameter)`);
     
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
         "Authorization": `Bearer ${WATI_TOKEN}`,
+        // NO Content-Type header when using query param
+        // NO body when using query param
       },
-      body: JSON.stringify({
-        message: text,
-      }),
+      // NO body - message is in query parameter
     });
 
-    const data = await response.json();
-    console.log("📤 WATI RESPONSE:", data);
+    console.log(`   📡 Response status: ${response.status} ${response.statusText}`);
+    console.log(`   📡 Response headers:`, Object.fromEntries(response.headers.entries()));
+    
+    // Handle response (might be JSON or text)
+    let data;
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      data = await response.json();
+      console.log("   📡 WATI RESPONSE (JSON):", JSON.stringify(data, null, 2));
+    } else {
+      const textData = await response.text();
+      console.log("   📡 WATI RESPONSE (Text):", textData);
+      data = { raw: textData };
+    }
     
     if (response.ok) {
+      console.log("   ✅ Message sent successfully");
       return { success: true, data };
     } else {
-      console.error("❌ WATI API error:", data);
-      return { success: false, error: data };
+      console.error("   ❌ WATI API error:");
+      console.error(`      Status: ${response.status} ${response.statusText}`);
+      console.error(`      Response:`, data);
+      return { success: false, error: data, status: response.status };
     }
   } catch (error) {
-    console.error("❌ Error sending WhatsApp message:", error.message);
+    console.error("\n   ❌ [ERROR] Error sending WhatsApp message:");
+    console.error(`   Message: ${error.message}`);
+    console.error(`   Stack: ${error.stack}`);
+    console.error(`   URL attempted: ${WATI_BASE_URL}/api/v1/sendSessionMessage/91${phone?.toString().replace(/\D/g, "") || "unknown"}`);
     return { success: false, error: error.message };
   }
 }
@@ -255,23 +355,23 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
   console.log("─".repeat(60));
 
   // Global commands (work at any step)
-  if (message === "cancel" || message === "0") {
+  if (message === "cancel" || message === "0" || message === "रद्द") {
     console.log("   🛑 [COMMAND] CANCEL detected");
-    await sendWhatsAppMessage(mobileNumber, "❌ Order cancelled.\n\nType HI to start again.");
+    await sendWhatsAppMessage(mobileNumber, "❌ ऑर्डर रद्द झाली.\n\nपुन्हा सुरु करण्यासाठी HI टाइप करा.");
     clearConversationState(mobileNumber);
     return;
   }
 
-  if (message === "help") {
+  if (message === "help" || message === "मदत") {
     console.log("   ❓ [COMMAND] HELP detected");
     await sendWhatsAppMessage(
       mobileNumber,
-      "📖 *Help*\n\n• Type HI to start\n• Type CANCEL to cancel anytime\n• Type MENU to go to main menu\n• Reply with numbers to select options"
+      "📖 *मदत*\n\n• सुरु करण्यासाठी HI टाइप करा\n• रद्द करण्यासाठी CANCEL टाइप करा\n• मुख्य मेनूसाठी MENU टाइप करा\n• पर्याय निवडण्यासाठी नंबर टाइप करा"
     );
     return;
   }
 
-  if (message === "menu") {
+  if (message === "menu" || message === "मेनू") {
     console.log("   📋 [COMMAND] MENU detected");
     state.step = "MAIN_MENU";
     saveConversationState(mobileNumber, state);
@@ -321,7 +421,7 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
         console.log(`   ⚠️  [WARNING] Unknown step: ${state.step}`);
         await sendWhatsAppMessage(
           mobileNumber,
-          "I didn't understand that. Please type 'HI' to start."
+          "मला समजले नाही. कृपया 'HI' टाइप करा."
         );
         state.step = "MAIN_MENU";
         saveConversationState(mobileNumber, state);
@@ -332,7 +432,7 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
     console.error("   Stack:", error.stack);
     await sendWhatsAppMessage(
       mobileNumber,
-      "Sorry, an error occurred. Please type 'HI' to start again."
+      "क्षमस्व, एक त्रुटी आली. पुन्हा सुरु करण्यासाठी 'HI' टाइप करा."
     );
     clearConversationState(mobileNumber);
   }
@@ -348,11 +448,11 @@ async function handleMainMenu(mobileNumber, state, message = "") {
   const messageLower = message.toLowerCase().trim();
 
   // Trigger words: hi, hello, start, or option 1
-  if (messageLower === "hi" || messageLower === "hello" || messageLower === "start" || messageLower === "1") {
+  if (messageLower === "hi" || messageLower === "hello" || messageLower === "start" || messageLower === "1" || messageLower === "नमस्कार" || messageLower === "namaskar") {
     console.log("   ✅ Trigger word detected - Showing welcome menu");
     await sendWhatsAppMessage(
       mobileNumber,
-      `👋 Hello!\n\nWelcome to Nursery Order System 🌱\n\nPlease choose an option:\n\n1️⃣ New Order\n2️⃣ My Orders\n3️⃣ Help`
+      `नमस्कार भाऊ!! 👋🙏🌱\n\n🌱 Ram Biotech मध्ये आपले स्वागत आहे!\n\nकृपया एक पर्याय निवडा:\n\n1️⃣ नवीन ऑर्डर\n2️⃣ माझ्या ऑर्डर\n3️⃣ मदत`
     );
     state.step = "MAIN_MENU";
     saveConversationState(mobileNumber, state);
@@ -360,29 +460,29 @@ async function handleMainMenu(mobileNumber, state, message = "") {
   }
 
   // Handle menu selection
-  if (messageLower === "1" || messageLower === "new order") {
+  if (messageLower === "1" || messageLower === "new order" || messageLower === "नवीन ऑर्डर") {
     console.log("   ✅ Option 1 selected - Starting new order");
     state.step = "SELECT_PLANT";
     saveConversationState(mobileNumber, state);
     await loadPlants(mobileNumber, state);
-  } else if (messageLower === "2" || messageLower === "my orders") {
+  } else if (messageLower === "2" || messageLower === "my orders" || messageLower === "माझ्या ऑर्डर") {
     console.log("   ✅ Option 2 selected - My Orders");
     await sendWhatsAppMessage(
       mobileNumber,
-      "📋 *My Orders*\n\nThis feature is coming soon!\n\nType HI to place a new order."
+      "📋 *माझ्या ऑर्डर*\n\nही सुविधा लवकरच येणार आहे!\n\nनवीन ऑर्डर करण्यासाठी HI टाइप करा."
     );
-  } else if (messageLower === "3" || messageLower === "help") {
+  } else if (messageLower === "3" || messageLower === "help" || messageLower === "मदत") {
     console.log("   ✅ Option 3 selected - Help");
     await sendWhatsAppMessage(
       mobileNumber,
-      "📖 *Help*\n\n• Type HI to start\n• Type CANCEL to cancel anytime\n• Type MENU to go to main menu\n• Reply with numbers to select options"
+      "📖 *मदत*\n\n• सुरु करण्यासाठी HI टाइप करा\n• रद्द करण्यासाठी CANCEL टाइप करा\n• मुख्य मेनूसाठी MENU टाइप करा\n• पर्याय निवडण्यासाठी नंबर टाइप करा"
     );
   } else {
     // Default: show main menu
     console.log("   ℹ️  Default action - Showing main menu");
     await sendWhatsAppMessage(
       mobileNumber,
-      `👋 Hello!\n\nWelcome to Nursery Order System 🌱\n\nPlease choose an option:\n\n1️⃣ New Order\n2️⃣ My Orders\n3️⃣ Help`
+      `नमस्कार भाऊ!! 👋🙏🌱\n\n🌱 Ram Biotech मध्ये आपले स्वागत आहे!\n\nकृपया एक पर्याय निवडा:\n\n1️⃣ नवीन ऑर्डर\n2️⃣ माझ्या ऑर्डर\n3️⃣ मदत`
     );
   }
   saveConversationState(mobileNumber, state);
@@ -400,23 +500,35 @@ async function loadPlants(mobileNumber, state) {
     
     if (plants.length === 0) {
       console.log("   ⚠️  No plants found");
-      await sendWhatsAppMessage(mobileNumber, "❌ No plants available at the moment.");
+      await sendWhatsAppMessage(mobileNumber, "❌ सध्या कोणतेही रोप उपलब्ध नाहीत.");
       state.step = "MAIN_MENU";
       saveConversationState(mobileNumber, state);
       return;
     }
 
-    let message = "🌱 Select Plant:\n\n";
+    // Marathi plant names mapping
+    const marathiNames = {
+      "Banana": "केळी (Keli)",
+      "Papaya": "पपया (Papaya)",
+      "Watermelon": "तरबूज (Tarbooj)",
+      "Muskmelon": "खरबूज (Kharbooj)",
+      "Keli": "केळी (Keli)",
+      "Tarbooj": "तरबूज (Tarbooj)",
+      "Kharbooj": "खरबूज (Kharbooj)",
+    };
+
+    let message = "🌱 आपल्याला कोणती रोप बुक करायची आहे?\n\n";
     state.lists.plants = [];
     plants.forEach((plant, idx) => {
-      message += `${idx + 1}️⃣ ${plant.name}\n`;
+      const marathiName = marathiNames[plant.name] || plant.name;
+      message += `${idx + 1}️⃣ ${marathiName}\n`;
       state.lists.plants[idx] = {
         id: plant._id.toString(),
         name: plant.name,
       };
-      console.log(`   ${idx + 1}. ${plant.name} (ID: ${plant._id})`);
+      console.log(`   ${idx + 1}. ${plant.name} (Marathi: ${marathiName}) (ID: ${plant._id})`);
     });
-    message += "\nReply with number";
+    message += "\nनंबर टाइप करा";
 
     console.log("   ✅ Plants loaded, sending to user");
     await sendWhatsAppMessage(mobileNumber, message);
@@ -458,7 +570,7 @@ async function handlePlantSelection(mobileNumber, message, state) {
     
     await sendWhatsAppMessage(
       mobileNumber,
-      `✅ Plant: ${selectedPlant.name}\n\nLoading varieties...`
+      `✅ रोप निवडली: ${selectedPlant.name}\n\nविविधता लोड होत आहे...`
     );
     state.step = "SELECT_VARIETY";
     saveConversationState(mobileNumber, state);
@@ -491,7 +603,7 @@ async function loadVarieties(mobileNumber, state) {
     }
 
     console.log(`   📊 Found ${plant.subtypes.length} varieties`);
-    let message = "🍃 Banana varieties:\n\n";
+    let message = `🍃 ${plant.name} च्या विविधता:\n\n`;
     state.lists.varieties = [];
     plant.subtypes.forEach((subtype, idx) => {
       // Get the first rate from rates array, or default to 0
@@ -504,7 +616,7 @@ async function loadVarieties(mobileNumber, state) {
       };
       console.log(`   ${idx + 1}. ${subtype.name} - ₹${rate} (ID: ${subtype._id})`);
     });
-    message += "\nSelect variety";
+    message += "\nविविधता निवडा";
 
     console.log("   ✅ Varieties loaded, sending to user");
     await sendWhatsAppMessage(mobileNumber, message);
@@ -549,7 +661,7 @@ async function handleVarietySelection(mobileNumber, message, state) {
     
     await sendWhatsAppMessage(
       mobileNumber,
-      `✅ Variety: ${selectedVariety.name}\nRate: ₹${selectedVariety.rate}\n\n📦 Select tray cavity:\n\n1️⃣ 50\n2️⃣ 100\n3️⃣ 200`
+      `✅ विविधता: ${selectedVariety.name}\nदर: ₹${selectedVariety.rate}\n\n📦 ट्रे कॅविटी निवडा:\n\n1️⃣ 50\n2️⃣ 100\n3️⃣ 200`
     );
     state.step = "SELECT_CAVITY";
     saveConversationState(mobileNumber, state);
@@ -583,7 +695,7 @@ async function handleCavitySelection(mobileNumber, message, state) {
     
     await sendWhatsAppMessage(
       mobileNumber,
-      `✅ Cavity: ${selectedCavity}\n\n🔢 Enter quantity (number only)\n\nExample: 500`
+      `✅ कॅविटी: ${selectedCavity}\n\n🔢 प्रमाण टाइप करा (फक्त नंबर)\n\nउदाहरण: 500`
     );
     state.step = "ENTER_QUANTITY";
     saveConversationState(mobileNumber, state);
@@ -622,10 +734,10 @@ async function handleQuantity(mobileNumber, message, state) {
   console.log(`   💾 Updated order.total: ₹${state.order.total}`);
   console.log(`   💵 Calculation: ${quantity} × ₹${state.order.rate} = ₹${state.order.total}`);
   
-  await sendWhatsAppMessage(
-    mobileNumber,
-    `✅ Quantity: ${quantity}\n\nLoading available delivery dates...`
-  );
+    await sendWhatsAppMessage(
+      mobileNumber,
+      `✅ प्रमाण: ${quantity}\n\nउपलब्ध डिलिव्हरी तारखा लोड होत आहेत...`
+    );
   
   state.step = "SELECT_DATE";
   saveConversationState(mobileNumber, state);
@@ -665,10 +777,10 @@ async function loadDeliveryDates(mobileNumber, state) {
       return;
     }
 
-    let message = "📅 Select delivery week:\n\n";
+    let message = "📅 डिलिव्हरी आठवडा निवडा:\n\n";
     state.lists.slots = [];
     slots.forEach((slot, idx) => {
-      message += `${idx + 1}️⃣ ${slot.startDay}–${slot.endDay} (Available: ${slot.availableQuantity})\n`;
+      message += `${idx + 1}️⃣ ${slot.startDay}–${slot.endDay} (उपलब्ध: ${slot.availableQuantity})\n`;
       state.lists.slots[idx] = {
         id: slot._id.toString(),
         startDay: slot.startDay,
@@ -717,19 +829,19 @@ async function handleDateSelection(mobileNumber, message, state) {
     console.log(`   💾 Updated order.slotId: ${state.order.slotId}`);
 
     // Show order summary
-    const summary = `📋 *Order Summary*
+    const summary = `📋 *ऑर्डर सारांश*
 
-🌱 Plant: ${state.order.plantName}
-🍃 Variety: ${state.order.varietyName}
-📦 Cavity: ${state.order.cavity}
-🔢 Quantity: ${state.order.quantity}
-💰 Rate: ₹${state.order.rate}
-💵 Total: ₹${state.order.total}
-📅 Delivery: ${state.order.deliveryDate}
+🌱 रोप: ${state.order.plantName}
+🍃 विविधता: ${state.order.varietyName}
+📦 कॅविटी: ${state.order.cavity}
+🔢 प्रमाण: ${state.order.quantity}
+💰 दर: ₹${state.order.rate}
+💵 एकूण: ₹${state.order.total}
+📅 डिलिव्हरी: ${state.order.deliveryDate}
 
-Reply:
-1️⃣ Confirm Order
-2️⃣ Cancel`;
+उत्तर द्या:
+1️⃣ ऑर्डर पुष्टी करा
+2️⃣ रद्द करा`;
 
     console.log("   📋 Showing order summary to user");
     await sendWhatsAppMessage(mobileNumber, summary);
@@ -755,7 +867,7 @@ async function handleConfirmation(mobileNumber, message, state) {
     console.log("   ✅ User confirmed order");
     await sendWhatsAppMessage(
       mobileNumber,
-      "⏳ Processing your order... Please wait."
+      "⏳ आपली ऑर्डर प्रक्रिया करत आहे... कृपया प्रतीक्षा करा."
     );
 
     try {
@@ -835,7 +947,7 @@ async function handleConfirmation(mobileNumber, message, state) {
         
         await sendWhatsAppMessage(
           mobileNumber,
-          `✅ *Order Placed Successfully!*\n\n🧾 Order ID: ${orderId}\n📅 Delivery: ${state.order.deliveryDate}\n\nThank you 🙏\n\nType HI to place another order`
+          `✅ *ऑर्डर यशस्वीरित्या झाली!*\n\n🧾 ऑर्डर ID: ${orderId}\n📅 डिलिव्हरी: ${state.order.deliveryDate}\n\nधन्यवाद 🙏\n\nदुसरी ऑर्डर करण्यासाठी HI टाइप करा`
         );
 
         // Send admin notification
@@ -862,10 +974,10 @@ async function handleConfirmation(mobileNumber, message, state) {
     } catch (error) {
       console.error("\n   ❌ [ERROR] Error creating order:", error);
       console.error("   Stack:", error.stack);
-      await sendWhatsAppMessage(
-        mobileNumber,
-        "❌ Sorry, there was an error processing your order. Please try again or contact support."
-      );
+    await sendWhatsAppMessage(
+      mobileNumber,
+      "❌ आपली ऑर्डर प्रक्रिया करताना त्रुटी आली. कृपया पुन्हा प्रयत्न करा किंवा सपोर्टशी संपर्क साधा."
+    );
       clearConversationState(mobileNumber);
     }
   } else {
