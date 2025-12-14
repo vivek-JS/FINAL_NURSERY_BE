@@ -56,7 +56,9 @@ async function sendWhatsAppMessage(phone, text) {
     }
     
     console.log(`   ✅ WATI_BASE_URL: ${WATI_BASE_URL}`);
-    console.log(`   ✅ WATI_TOKEN: ${WATI_TOKEN.substring(0, 20)}...`);
+    console.log(`   ✅ WATI_TOKEN length: ${WATI_TOKEN?.length || 0} characters`);
+    console.log(`   ✅ WATI_TOKEN preview: ${WATI_TOKEN ? `${WATI_TOKEN.substring(0, 30)}...` : 'MISSING'}`);
+    console.log(`   ✅ WATI_TOKEN from env: ${process.env.WATI_TOKEN ? 'YES' : 'NO (using default)'}`);
 
     // Validate phone number
     if (!phone) {
@@ -116,22 +118,52 @@ async function sendWhatsAppMessage(phone, text) {
       return { success: false, error: `Invalid URL: ${urlError.message}` };
     }
     
+    // Ensure token has "Bearer " prefix (handle both cases)
+    const authToken = WATI_TOKEN.startsWith("Bearer ") 
+      ? WATI_TOKEN 
+      : `Bearer ${WATI_TOKEN}`;
+    
     console.log("   📤 Sending message to WATI API (using query parameter method)...");
     console.log(`   📋 Request details:`);
     console.log(`      Method: POST`);
     console.log(`      URL: ${url.substring(0, 150)}${url.length > 150 ? '...' : ''}`);
-    console.log(`      Headers: Authorization: Bearer ${WATI_TOKEN.substring(0, 20)}...`);
+    console.log(`      Authorization header: ${authToken.substring(0, 40)}...`);
+    console.log(`      Token starts with Bearer: ${authToken.startsWith('Bearer ')}`);
     console.log(`      Body: NONE (using query parameter)`);
     
-    const response = await fetch(url, {
+    // Try query parameter method first (as per WATI docs)
+    let response = await fetch(url, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${WATI_TOKEN}`,
+        "Authorization": authToken,
         // NO Content-Type header when using query param
-        // NO body when using query param
+        // NO Accept header when using query param  
       },
       // NO body - message is in query parameter
     });
+    
+    console.log(`   📡 Query param method - Status: ${response.status} ${response.statusText}`);
+    
+    // If 401, try with body format as fallback
+    if (response.status === 401) {
+      console.log("\n   ⚠️  Query param method returned 401, trying body format with messageText...");
+      const bodyUrl = `${baseUrl}/api/v1/sendSessionMessage/91${phoneNumber}`;
+      console.log(`   🔄 Fallback URL: ${bodyUrl}`);
+      console.log(`   🔄 Using body with messageText field`);
+      
+      response = await fetch(bodyUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": authToken,
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: JSON.stringify({
+          messageText: text,
+        }),
+      });
+      console.log(`   📡 Body format - Status: ${response.status} ${response.statusText}`);
+    }
 
     console.log(`   📡 Response status: ${response.status} ${response.statusText}`);
     console.log(`   📡 Response headers:`, Object.fromEntries(response.headers.entries()));
@@ -144,8 +176,8 @@ async function sendWhatsAppMessage(phone, text) {
       console.log("   📡 WATI RESPONSE (JSON):", JSON.stringify(data, null, 2));
     } else {
       const textData = await response.text();
-      console.log("   📡 WATI RESPONSE (Text):", textData);
-      data = { raw: textData };
+      console.log("   📡 WATI RESPONSE (Text):", textData || '(empty)');
+      data = { raw: textData || '' };
     }
     
     if (response.ok) {
@@ -155,6 +187,19 @@ async function sendWhatsAppMessage(phone, text) {
       console.error("   ❌ WATI API error:");
       console.error(`      Status: ${response.status} ${response.statusText}`);
       console.error(`      Response:`, data);
+      
+      // Special handling for 401 Unauthorized
+      if (response.status === 401) {
+        console.error("\n   🔐 AUTHENTICATION ERROR:");
+        console.error(`      The WATI token appears to be invalid or expired.`);
+        console.error(`      Token length: ${WATI_TOKEN?.length || 0}`);
+        console.error(`      Token preview: ${WATI_TOKEN ? WATI_TOKEN.substring(0, 50) : 'MISSING'}...`);
+        console.error(`      Please check:`);
+        console.error(`      1. WATI_TOKEN environment variable`);
+        console.error(`      2. Token expiration date`);
+        console.error(`      3. Token permissions in WATI dashboard`);
+      }
+      
       return { success: false, error: data, status: response.status };
     }
   } catch (error) {
