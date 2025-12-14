@@ -3,7 +3,15 @@ import MeasurementUnit from '../models/measurementUnit.model.js';
 // Create measurement unit
 export const createMeasurementUnit = async (req, res) => {
   try {
-    const { name, abbreviation, type, conversionToBase, baseUnit } = req.body;
+    const { 
+      name, 
+      abbreviation, 
+      type, 
+      conversionToBase, 
+      baseUnit,
+      requiresSecondaryUnit,
+      compatibleSecondaryUnits 
+    } = req.body;
 
     const measurementUnit = new MeasurementUnit({
       name,
@@ -11,12 +19,21 @@ export const createMeasurementUnit = async (req, res) => {
       type,
       conversionToBase: conversionToBase || 1,
       baseUnit,
+      requiresSecondaryUnit: requiresSecondaryUnit || false,
+      compatibleSecondaryUnits: compatibleSecondaryUnits || [],
     });
 
     await measurementUnit.save();
 
-    if (baseUnit) {
-      await measurementUnit.populate('baseUnit');
+    // Populate related fields
+    const populateFields = [];
+    if (baseUnit) populateFields.push('baseUnit');
+    if (compatibleSecondaryUnits && compatibleSecondaryUnits.length > 0) {
+      populateFields.push('compatibleSecondaryUnits');
+    }
+    
+    if (populateFields.length > 0) {
+      await measurementUnit.populate(populateFields);
     }
 
     res.status(201).json({
@@ -51,6 +68,7 @@ export const getAllMeasurementUnits = async (req, res) => {
 
     const measurementUnits = await MeasurementUnit.find(query)
       .populate('baseUnit')
+      .populate('compatibleSecondaryUnits')
       .sort({ type: 1, name: 1 });
 
     res.json({
@@ -70,7 +88,9 @@ export const getAllMeasurementUnits = async (req, res) => {
 // Get measurement unit by ID
 export const getMeasurementUnitById = async (req, res) => {
   try {
-    const measurementUnit = await MeasurementUnit.findById(req.params.id).populate('baseUnit');
+    const measurementUnit = await MeasurementUnit.findById(req.params.id)
+      .populate('baseUnit')
+      .populate('compatibleSecondaryUnits');
 
     if (!measurementUnit) {
       return res.status(404).json({
@@ -105,7 +125,7 @@ export const updateMeasurementUnit = async (req, res) => {
       });
     }
 
-    const updateFields = ['name', 'abbreviation', 'conversionToBase', 'isActive'];
+    const updateFields = ['name', 'abbreviation', 'conversionToBase', 'isActive', 'requiresSecondaryUnit', 'compatibleSecondaryUnits'];
 
     updateFields.forEach((field) => {
       if (req.body[field] !== undefined) {

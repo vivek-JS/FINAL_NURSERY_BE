@@ -6,10 +6,11 @@ import User from "../models/user.model.js";
 import BroadcastGroup from "../models/broadcast.model.js";
 import fetch from "node-fetch";
 import { createOne, getOne, getAll, deleteOne } from "./factory.controller.js";
+import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
 
 const sendMsg = catchAsync(async (req, res, next) => {
   const { mobileNumbers, templateName } = req.body;
-  const WATI_URL = process.env.SEND_TEMPLATE_MESSAGE_URL;
+  const WATI_URL = process.env.SEND_TEMPLATE_MESSAGE_URL || `${getWatiBaseUrl()}/api/v1/sendTemplateMessage`;
 
   mobileNumbers.map(async (mobileNumber) => {
     const farmer = await Farmer.findOne({ mobileNumber });
@@ -32,7 +33,7 @@ const sendMsg = catchAsync(async (req, res, next) => {
         body: JSON.stringify(body),
         headers: {
           "Content-Type": "application/json",
-          Authorization: process.env.WATI_TOKEN,
+          Authorization: getWatiToken(),
         },
       }
     );
@@ -53,13 +54,13 @@ const sendMsg = catchAsync(async (req, res, next) => {
 });
 
 const fetchTemplates = catchAsync(async (req, res, next) => {
-  const WATI_URL = process.env.WATI_URL;
+  const WATI_URL = getWatiBaseUrl();
 
   const watiResponse = await fetch(`${WATI_URL}/api/v1/getMessageTemplates`, {
     method: "get",
     headers: {
       "Content-Type": "application/json",
-      Authorization: process.env.WATI_TOKEN,
+      Authorization: getWatiToken(),
     },
   });
 

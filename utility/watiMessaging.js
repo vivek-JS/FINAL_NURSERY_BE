@@ -1,4 +1,5 @@
 import fetch from "node-fetch";
+import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
 
 /**
  * Send WhatsApp template message via WATI API
@@ -9,8 +10,8 @@ import fetch from "node-fetch";
  */
 export async function sendWatiTemplateMessage(mobileNumber, templateName, parameters = []) {
   try {
-    const WATI_URL = process.env.SEND_TEMPLATE_MESSAGE_URL || "https://live-mt-server.wati.io/385403/api/v1/sendTemplateMessage";
-    const WATI_TOKEN = process.env.WATI_TOKEN;
+    const WATI_URL = process.env.SEND_TEMPLATE_MESSAGE_URL || `${getWatiBaseUrl()}/api/v1/sendTemplateMessage`;
+    const WATI_TOKEN = getWatiToken();
 
     if (!WATI_TOKEN) {
       console.warn("⚠️ WATI_TOKEN not configured in environment variables");

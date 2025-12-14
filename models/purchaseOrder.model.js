@@ -35,6 +35,13 @@ const purchaseOrderItemSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  batchNumber: {
+    type: String,
+    trim: true,
+  },
+  expiryDate: {
+    type: Date,
+  },
   notes: String,
 });
 
@@ -99,6 +106,10 @@ const purchaseOrderSchema = new mongoose.Schema(
     },
     notes: {
       type: String,
+    },
+    autoGRN: {
+      type: Boolean,
+      default: false,
     },
     approvedBy: {
       type: mongoose.Schema.Types.ObjectId,

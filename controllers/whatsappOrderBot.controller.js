@@ -4,17 +4,19 @@ import fetch from "node-fetch";
 import Farmer from "../models/farmer.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
-import moment from "moment";
+import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
 
-const WATI_BASE_URL = process.env.WATI_URL || "https://live-mt-server.wati.io/385403";
-const WATI_TOKEN = process.env.WATI_TOKEN;
+const WATI_BASE_URL = getWatiBaseUrl();
+const WATI_TOKEN = getWatiToken();
+
+// Admin phone number for notifications (from env or default)
+const ADMIN_PHONE = process.env.ADMIN_PHONE || "7588686452";
 
 // Store conversation state (in production, use Redis or database)
 const conversationState = new Map();
 
 /**
  * Send simple WhatsApp message using Wati API
- * Matches frontend wati.js format
  * @param {string} phone - Phone number (with or without country code)
  * @param {string} text - Message text to send
  * @returns {Promise<Object>} Send result
@@ -45,7 +47,7 @@ async function sendWhatsAppMessage(phone, text) {
         "Authorization": `Bearer ${WATI_TOKEN}`,
       },
       body: JSON.stringify({
-        messageText: text,
+        message: text,
       }),
     });
 
@@ -65,59 +67,33 @@ async function sendWhatsAppMessage(phone, text) {
 }
 
 /**
- * Send interactive message with buttons using Wati API
- * ONLY uses /api/v1/sendSessionMessage/{phone} endpoint
+ * Send admin notification about new order
  */
-async function sendInteractiveMessage(mobileNumber, message, buttons = []) {
+async function sendAdminNotification(orderData) {
+  console.log("\n📤 [NOTIFICATION] Preparing admin notification...");
+  console.log(`   📱 Admin phone: ${ADMIN_PHONE}`);
+  console.log(`   📋 Order data:`, JSON.stringify(orderData, null, 2));
+  
   try {
-    if (!WATI_TOKEN) {
-      console.error("❌ WATI_TOKEN not configured");
-      return { success: false, error: "WATI_TOKEN not configured" };
-    }
+    const message = `📦 *New WhatsApp Order*
 
-    const cleanNumber = mobileNumber.toString().replace(/\D/g, "");
-    const phoneNumber = cleanNumber.length === 12 && cleanNumber.startsWith("91") 
-      ? cleanNumber.substring(2) 
-      : cleanNumber;
+👤 Customer: ${orderData.customerName || "Unknown"}
+📱 Phone: ${orderData.mobileNumber}
+🌱 Plant: ${orderData.plantName}
+🍃 Variety: ${orderData.varietyName}
+📦 Cavity: ${orderData.cavity}
+🔢 Quantity: ${orderData.quantity}
+💵 Amount: ₹${orderData.total}
+📅 Delivery: ${orderData.deliveryDate}
+🧾 Order ID: ${orderData.orderId || "Processing..."}`;
 
-    // ONLY use sendSessionMessage endpoint (NOT sendTemplateMessage, sendMessage, or sendBroadcast)
-    const url = `${WATI_BASE_URL}/api/v1/sendSessionMessage/91${phoneNumber}`;
-    
-    let messageBody = message;
-    
-    // Add buttons if provided (format as text since we're using sendSessionMessage)
-    if (buttons.length > 0) {
-      const buttonText = buttons.map((btn, idx) => `${idx + 1}. ${btn.text}`).join("\n");
-      messageBody = `${message}\n\n${buttonText}`;
-    }
-
-    console.log("📤 Sending interactive message to:", phoneNumber);
-    console.log("📤 Message:", messageBody);
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": `Bearer ${WATI_TOKEN}`,
-      },
-      body: JSON.stringify({
-        messageText: messageBody, // Use messageText (not text) to match format
-      }),
-    });
-
-    const data = await response.json();
-    console.log("📤 WATI RESPONSE:", data);
-    
-    if (response.ok) {
-      return { success: true, data };
-    } else {
-      console.error("❌ WATI API error:", data);
-      return { success: false, error: data };
-    }
+    console.log("   📝 Notification message prepared");
+    await sendWhatsAppMessage(ADMIN_PHONE, message);
+    console.log("   ✅ Admin notification sent successfully");
   } catch (error) {
-    console.error("❌ Error sending interactive message:", error.message);
-    return { success: false, error: error.message };
+    console.error("   ❌ Error sending admin notification:", error);
+    console.error("   Stack:", error.stack);
+    // Don't fail order creation if notification fails
   }
 }
 
@@ -125,126 +101,116 @@ async function sendInteractiveMessage(mobileNumber, message, buttons = []) {
  * Get or initialize conversation state
  */
 function getConversationState(mobileNumber) {
-  const state = conversationState.get(mobileNumber) || {
-    step: "welcome",
-    orderData: {
-      mobileNumber: mobileNumber,
-      name: "",
-      state: "",
-      district: "",
-      taluka: "",
-      village: "",
-      plant: "",
-      subtype: "",
-      cavity: "",
+  console.log(`\n📂 [STATE] Getting conversation state for: ${mobileNumber}`);
+  const existingState = conversationState.get(mobileNumber);
+  
+  if (existingState) {
+    console.log(`   ✅ Found existing state - Step: ${existingState.step}`);
+    console.log(`   📋 Order data:`, JSON.stringify(existingState.order, null, 2));
+    return existingState;
+  }
+  
+  console.log(`   🆕 Creating new state - Step: MAIN_MENU`);
+  const newState = {
+    step: "MAIN_MENU",
+    order: {
+      plant: null,
+      plantName: "",
+      variety: null,
+      varietyName: "",
+      rate: 0,
+      cavity: null,
+      quantity: null,
       deliveryDate: "",
-      noOfPlants: "",
-      rate: "",
+      slotId: null,
+      total: 0,
     },
-    farmerData: null,
+    lists: {
+      plants: [],
+      varieties: [],
+      slots: [],
+    },
   };
-  conversationState.set(mobileNumber, state);
-  return state;
+  conversationState.set(mobileNumber, newState);
+  console.log(`   ✅ New state created and saved\n`);
+  return newState;
 }
 
 /**
  * Save conversation state
  */
 function saveConversationState(mobileNumber, state) {
+  console.log(`\n💾 [STATE] Saving state for: ${mobileNumber}`);
+  console.log(`   📍 Step: ${state.step}`);
+  console.log(`   📋 Order:`, JSON.stringify(state.order, null, 2));
   conversationState.set(mobileNumber, state);
+  console.log(`   ✅ State saved\n`);
 }
 
 /**
  * Clear conversation state
  */
 function clearConversationState(mobileNumber) {
+  console.log(`\n🗑️  [STATE] Clearing state for: ${mobileNumber}`);
   conversationState.delete(mobileNumber);
+  console.log(`   ✅ State cleared\n`);
 }
 
 /**
  * Handle incoming WhatsApp webhook from Wati
  */
 export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
-  // 🔥 RAW WATI WEBHOOK LOGGER - Logs everything before any processing
-  console.log("\n🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥");
-  console.log("🔥🔥 RAW WATI WEBHOOK RECEIVED 🔥🔥");
-  console.log("🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥\n");
-  
-  // Log request method and URL
+  // 🔥 RAW WATI WEBHOOK LOGGER
+  console.log("\n🔥🔥🔥 RAW WATI WEBHOOK RECEIVED 🔥🔥🔥\n");
   console.log("📋 REQUEST INFO:");
   console.log(`   Method: ${req.method}`);
   console.log(`   URL: ${req.originalUrl || req.url}`);
-  console.log(`   Path: ${req.path}`);
-  console.log(`   IP: ${req.ip || req.connection?.remoteAddress}`);
   console.log(`   Timestamp: ${new Date().toISOString()}\n`);
   
-  // Log all headers
-  console.log("📨 REQUEST HEADERS:");
-  console.log(JSON.stringify(req.headers, null, 2));
-  console.log("");
-  
-  // Log raw body
   console.log("📦 REQUEST BODY:");
   if (req.body && Object.keys(req.body).length > 0) {
     console.log(JSON.stringify(req.body, null, 2));
   } else {
-    console.log("   ⚠️  EMPTY BODY OR NO DATA");
-    console.log(`   Body type: ${typeof req.body}`);
-    console.log(`   Body keys: ${req.body ? Object.keys(req.body).join(', ') : 'null'}`);
+    console.log("   ⚠️  EMPTY BODY");
   }
   console.log("");
-  
-  // Log query params
-  if (req.query && Object.keys(req.query).length > 0) {
-    console.log("🔍 QUERY PARAMS:");
-    console.log(JSON.stringify(req.query, null, 2));
-    console.log("");
-  }
-  
-  console.log("🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥");
-  console.log("🔥🔥 END RAW WEBHOOK LOG 🔥🔥");
-  console.log("🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥\n");
-
-  // Debug logging for local testing
-  if (process.env.NODE_ENV !== 'production') {
-    const timestamp = new Date().toISOString();
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`📥 [${timestamp}] Webhook Received`);
-    console.log(`${'='.repeat(60)}`);
-    console.log('Event:', req.body?.event);
-    console.log('Data:', JSON.stringify(req.body?.data, null, 2));
-    console.log(`${'='.repeat(60)}\n`);
-  }
 
   // Support multiple webhook formats
   let message = null;
   let phone = null;
   let mobileNumber = null;
+  let senderName = null;
 
-  // Format 1: Direct format (req.body.text, req.body.waId)
-  if (req.body?.text && req.body?.waId) {
+  // Format 1: New format (eventType, type, text, waId, senderName)
+  if (req.body?.eventType === "message" && req.body?.waId) {
+    message = req.body.text || "";
+    phone = req.body.waId;
+    senderName = req.body.senderName || "";
+    mobileNumber = phone.replace(/^91/, "") || phone;
+    console.log("📩 Format 1 - New format detected");
+    console.log(`   Phone: ${phone}, Message: ${message}, Sender: ${senderName}`);
+  }
+  // Format 2: Direct format (req.body.text, req.body.waId)
+  else if (req.body?.text && req.body?.waId) {
     message = req.body.text;
     phone = req.body.waId;
-    mobileNumber = phone.replace("91", "") || phone;
-    console.log("📩 Format 1 - Direct format detected");
-    console.log(`   Phone: ${phone}, Message: ${message}`);
+    mobileNumber = phone.replace(/^91/, "") || phone;
+    console.log("📩 Format 2 - Direct format detected");
   }
-  // Format 2: Nested Wati format (req.body.event, req.body.data)
+  // Format 3: Nested Wati format (req.body.event, req.body.data)
   else if (req.body?.event === "message" && req.body?.data) {
     const { waId, text, buttonText } = req.body.data;
     phone = waId || req.body.data.from;
-    mobileNumber = phone?.replace("91", "") || phone;
+    mobileNumber = phone?.replace(/^91/, "") || phone;
     message = buttonText || text?.body || text || "";
-    console.log("📩 Format 2 - Nested Wati format detected");
-    console.log(`   Phone: ${phone}, Message: ${message}`);
+    console.log("📩 Format 3 - Nested Wati format detected");
   }
-  // Format 3: Simple nested (req.body.data.text, req.body.data.waId)
+  // Format 4: Simple nested (req.body.data.text, req.body.data.waId)
   else if (req.body?.data?.text && req.body?.data?.waId) {
     message = req.body.data.text;
     phone = req.body.data.waId;
-    mobileNumber = phone.replace("91", "") || phone;
-    console.log("📩 Format 3 - Simple nested format detected");
-    console.log(`   Phone: ${phone}, Message: ${message}`);
+    mobileNumber = phone.replace(/^91/, "") || phone;
+    console.log("📩 Format 4 - Simple nested format detected");
   }
 
   // If no message or phone, return success (webhook received but not a message)
@@ -253,642 +219,658 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
     return res.status(200).json({ success: true });
   }
 
-  console.log("📩 Incoming WhatsApp:", phone, message);
-
-  // Quick reply examples (before processing order flow)
-  const messageLower = message.toLowerCase().trim();
-  if (messageLower === "hi" || messageLower === "hello") {
-    await sendWhatsAppMessage(phone, "Hello 👋 How can I help you?");
-    return res.status(200).json({ success: true });
-  }
+  console.log("\n" + "=".repeat(60));
+  console.log("📩 [WEBHOOK] Incoming WhatsApp Message");
+  console.log("=".repeat(60));
+  console.log(`   📱 Phone: ${phone}`);
+  console.log(`   📝 Message: "${message}"`);
+  console.log(`   👤 Sender: ${senderName || "Unknown"}`);
+  console.log(`   🔢 Clean Mobile: ${mobileNumber}`);
+  console.log("=".repeat(60) + "\n");
 
   // Process the message through order flow
+  console.log("🔄 [FLOW] Starting order flow processing...");
   const state = getConversationState(mobileNumber);
-  await processOrderFlow(mobileNumber, message, state);
+  await processOrderFlow(mobileNumber, message, state, senderName);
+  console.log("✅ [FLOW] Order flow processing completed\n");
 
+  console.log("📤 [RESPONSE] Sending 200 OK to WATI");
   return res.status(200).json({ success: true });
 });
 
 /**
  * Main order flow processor
  */
-async function processOrderFlow(mobileNumber, userMessage, state) {
+async function processOrderFlow(mobileNumber, userMessage, state, senderName = "") {
   const message = userMessage.trim().toLowerCase();
 
-  // Debug logging
-  if (process.env.NODE_ENV !== 'production') {
-    console.log(`🔄 Processing order flow for: ${mobileNumber}`);
-    console.log(`📝 Message: "${userMessage}"`);
-    console.log(`📍 Current step: ${state.step}`);
+  console.log("\n" + "─".repeat(60));
+  console.log("🔄 [PROCESS] Processing Order Flow");
+  console.log("─".repeat(60));
+  console.log(`   📱 Mobile: ${mobileNumber}`);
+  console.log(`   📝 User Message: "${userMessage}"`);
+  console.log(`   📝 Normalized: "${message}"`);
+  console.log(`   📍 Current Step: ${state.step}`);
+  console.log(`   👤 Sender Name: ${senderName || "Unknown"}`);
+  console.log("─".repeat(60));
+
+  // Global commands (work at any step)
+  if (message === "cancel" || message === "0") {
+    console.log("   🛑 [COMMAND] CANCEL detected");
+    await sendWhatsAppMessage(mobileNumber, "❌ Order cancelled.\n\nType HI to start again.");
+    clearConversationState(mobileNumber);
+    return;
+  }
+
+  if (message === "help") {
+    console.log("   ❓ [COMMAND] HELP detected");
+    await sendWhatsAppMessage(
+      mobileNumber,
+      "📖 *Help*\n\n• Type HI to start\n• Type CANCEL to cancel anytime\n• Type MENU to go to main menu\n• Reply with numbers to select options"
+    );
+    return;
+  }
+
+  if (message === "menu") {
+    console.log("   📋 [COMMAND] MENU detected");
+    state.step = "MAIN_MENU";
+    saveConversationState(mobileNumber, state);
+    await handleMainMenu(mobileNumber, state);
+    return;
   }
 
   try {
+    console.log(`\n   🎯 [ROUTING] Routing to handler for step: ${state.step}`);
     switch (state.step) {
-      case "welcome":
-        await handleWelcome(mobileNumber, state);
+      case "MAIN_MENU":
+        console.log("   → Calling handleMainMenu()");
+        await handleMainMenu(mobileNumber, state, message);
         break;
 
-      case "order_confirmation":
-        await handleOrderConfirmation(mobileNumber, message, state);
-        break;
-
-      case "mobile_verification":
-        await handleMobileVerification(mobileNumber, message, state);
-        break;
-
-      case "farmer_name":
-        await handleFarmerName(mobileNumber, message, state);
-        break;
-
-      case "state_selection":
-        await handleStateSelection(mobileNumber, message, state);
-        break;
-
-      case "district_selection":
-        await handleDistrictSelection(mobileNumber, message, state);
-        break;
-
-      case "taluka_selection":
-        await handleTalukaSelection(mobileNumber, message, state);
-        break;
-
-      case "village_selection":
-        await handleVillageSelection(mobileNumber, message, state);
-        break;
-
-      case "plant_selection":
+      case "SELECT_PLANT":
+        console.log("   → Calling handlePlantSelection()");
         await handlePlantSelection(mobileNumber, message, state);
         break;
 
-      case "subtype_selection":
-        await handleSubtypeSelection(mobileNumber, message, state);
+      case "SELECT_VARIETY":
+        console.log("   → Calling handleVarietySelection()");
+        await handleVarietySelection(mobileNumber, message, state);
         break;
 
-      case "cavity_selection":
+      case "SELECT_CAVITY":
+        console.log("   → Calling handleCavitySelection()");
         await handleCavitySelection(mobileNumber, message, state);
         break;
 
-      case "delivery_date":
-        await handleDeliveryDate(mobileNumber, message, state);
-        break;
-
-      case "quantity":
+      case "ENTER_QUANTITY":
+        console.log("   → Calling handleQuantity()");
         await handleQuantity(mobileNumber, message, state);
         break;
 
-      case "confirmation":
+      case "SELECT_DATE":
+        console.log("   → Calling handleDateSelection()");
+        await handleDateSelection(mobileNumber, message, state);
+        break;
+
+      case "CONFIRM_ORDER":
+        console.log("   → Calling handleConfirmation()");
         await handleConfirmation(mobileNumber, message, state);
         break;
 
       default:
-        await sendInteractiveMessage(
+        console.log(`   ⚠️  [WARNING] Unknown step: ${state.step}`);
+        await sendWhatsAppMessage(
           mobileNumber,
-          "I didn't understand that. Please type 'ORDER' to start a new order."
+          "I didn't understand that. Please type 'HI' to start."
         );
+        state.step = "MAIN_MENU";
+        saveConversationState(mobileNumber, state);
     }
+    console.log("   ✅ [ROUTING] Handler completed\n");
   } catch (error) {
-    console.error("Error in order flow:", error);
-    await sendInteractiveMessage(
+    console.error("\n❌ [ERROR] Error in order flow:", error);
+    console.error("   Stack:", error.stack);
+    await sendWhatsAppMessage(
       mobileNumber,
-      "Sorry, an error occurred. Please type 'ORDER' to start again."
+      "Sorry, an error occurred. Please type 'HI' to start again."
     );
     clearConversationState(mobileNumber);
   }
 }
 
 /**
- * Welcome step - Start order flow
+ * STEP 0: Main Menu (Greeting)
  */
-async function handleWelcome(mobileNumber, state) {
-  // Check if farmer exists
-  const farmer = await Farmer.findOne({ mobileNumber: parseInt(mobileNumber) });
-
-  if (farmer) {
-    state.farmerData = farmer;
-    state.orderData.name = farmer.name;
-    state.orderData.state = farmer.state || farmer.stateName || "Maharashtra";
-    state.orderData.district = farmer.district || farmer.districtName || "";
-    state.orderData.taluka = farmer.taluka || farmer.talukaName || "";
-    state.orderData.village = farmer.village || "";
-
-    await sendInteractiveMessage(
-      mobileNumber,
-      `👋 Hello ${farmer.name}!\n\nWelcome to Nursery Order System.\n\nYour details:\n📍 ${farmer.village}, ${farmer.talukaName || farmer.taluka}, ${farmer.districtName || farmer.district}\n\nWould you like to place an order?`,
-      [
-        { text: "Yes, Place Order", value: "yes" },
-        { text: "No, Cancel", value: "no" },
-      ]
-    );
-    state.step = "order_confirmation";
-  } else {
-    await sendInteractiveMessage(
-      mobileNumber,
-      "👋 Welcome to Nursery Order System!\n\nTo place an order, I need some information.\n\nPlease enter your 10-digit mobile number:",
-      []
-    );
-    state.step = "mobile_verification";
-  }
-  saveConversationState(mobileNumber, state);
-}
-
-/**
- * Order confirmation for existing farmers
- */
-async function handleOrderConfirmation(mobileNumber, message, state) {
-  if (message === "yes" || message === "1") {
-    state.step = "plant_selection";
-    await loadPlants(mobileNumber, state);
-  } else {
-    await sendInteractiveMessage(mobileNumber, "Order cancelled. Type 'ORDER' anytime to start again.");
-    clearConversationState(mobileNumber);
-  }
-  saveConversationState(mobileNumber, state);
-}
-
-/**
- * Mobile verification step
- */
-async function handleMobileVerification(mobileNumber, message, state) {
-  const cleanMobile = message.replace(/\D/g, "");
-  if (cleanMobile.length === 10) {
-    const farmer = await Farmer.findOne({ mobileNumber: parseInt(cleanMobile) });
-    if (farmer) {
-      state.farmerData = farmer;
-      state.orderData.mobileNumber = cleanMobile;
-      state.orderData.name = farmer.name;
-      state.orderData.state = farmer.state || farmer.stateName || "Maharashtra";
-      state.orderData.district = farmer.district || farmer.districtName || "";
-      state.orderData.taluka = farmer.taluka || farmer.talukaName || "";
-      state.orderData.village = farmer.village || "";
-
-      await sendInteractiveMessage(
-        mobileNumber,
-        `✅ Found your account!\n\nName: ${farmer.name}\nLocation: ${farmer.village}, ${farmer.talukaName || farmer.taluka}\n\nLet's proceed with your order.`,
-        []
-      );
-      state.step = "plant_selection";
-      await loadPlants(mobileNumber, state);
-    } else {
-      await sendInteractiveMessage(
-        mobileNumber,
-        "Mobile number not found. Please enter your name:",
-        []
-      );
-      state.orderData.mobileNumber = cleanMobile;
-      state.step = "farmer_name";
-    }
-  } else {
-    await sendInteractiveMessage(
-      mobileNumber,
-      "❌ Invalid mobile number. Please enter a valid 10-digit number:",
-      []
-    );
-  }
-  saveConversationState(mobileNumber, state);
-}
-
-/**
- * Farmer name step
- */
-async function handleFarmerName(mobileNumber, message, state) {
-  if (message.length >= 2) {
-    state.orderData.name = message;
-    await sendInteractiveMessage(
-      mobileNumber,
-      `✅ Name saved: ${message}\n\nNow, please select your State:`,
-      []
-    );
-    state.step = "state_selection";
-    await loadStates(mobileNumber, state);
-  } else {
-    await sendInteractiveMessage(
-      mobileNumber,
-      "❌ Name too short. Please enter your full name:",
-      []
-    );
-  }
-  saveConversationState(mobileNumber, state);
-}
-
-/**
- * Load and send states
- */
-async function loadStates(mobileNumber, state) {
-  // Get unique states from farmers or use predefined list
-  const states = ["Maharashtra", "Gujarat", "Karnataka"];
+async function handleMainMenu(mobileNumber, state, message = "") {
+  console.log("\n📋 [STEP] MAIN_MENU Handler");
+  console.log(`   📝 Input: "${message}"`);
   
-  let message = "Please select your State:\n\n";
-  states.forEach((stateName, idx) => {
-    message += `${idx + 1}. ${stateName}\n`;
-  });
+  const messageLower = message.toLowerCase().trim();
 
-  await sendInteractiveMessage(mobileNumber, message, []);
-}
-
-/**
- * State selection step
- */
-async function handleStateSelection(mobileNumber, message, state) {
-  const states = ["Maharashtra", "Gujarat", "Karnataka"];
-  const selectedIdx = parseInt(message) - 1;
-
-  if (selectedIdx >= 0 && selectedIdx < states.length) {
-    state.orderData.state = states[selectedIdx];
-    await sendInteractiveMessage(
+  // Trigger words: hi, hello, start, or option 1
+  if (messageLower === "hi" || messageLower === "hello" || messageLower === "start" || messageLower === "1") {
+    console.log("   ✅ Trigger word detected - Showing welcome menu");
+    await sendWhatsAppMessage(
       mobileNumber,
-      `✅ State: ${states[selectedIdx]}\n\nPlease enter your District:`,
-      []
+      `👋 Hello!\n\nWelcome to Nursery Order System 🌱\n\nPlease choose an option:\n\n1️⃣ New Order\n2️⃣ My Orders\n3️⃣ Help`
     );
-    state.step = "district_selection";
-  } else {
-    await sendInteractiveMessage(mobileNumber, "❌ Invalid selection. Please try again:", []);
-    await loadStates(mobileNumber, state);
+    state.step = "MAIN_MENU";
+    saveConversationState(mobileNumber, state);
+    return;
   }
-  saveConversationState(mobileNumber, state);
-}
 
-/**
- * District selection step
- */
-async function handleDistrictSelection(mobileNumber, message, state) {
-  if (message.length >= 2) {
-    state.orderData.district = message;
-    await sendInteractiveMessage(
-      mobileNumber,
-      `✅ District: ${message}\n\nPlease enter your Taluka:`,
-      []
-    );
-    state.step = "taluka_selection";
-  } else {
-    await sendInteractiveMessage(mobileNumber, "❌ Please enter a valid district name:", []);
-  }
-  saveConversationState(mobileNumber, state);
-}
-
-/**
- * Taluka selection step
- */
-async function handleTalukaSelection(mobileNumber, message, state) {
-  if (message.length >= 2) {
-    state.orderData.taluka = message;
-    await sendInteractiveMessage(
-      mobileNumber,
-      `✅ Taluka: ${message}\n\nPlease enter your Village:`,
-      []
-    );
-    state.step = "village_selection";
-  } else {
-    await sendInteractiveMessage(mobileNumber, "❌ Please enter a valid taluka name:", []);
-  }
-  saveConversationState(mobileNumber, state);
-}
-
-/**
- * Village selection step
- */
-async function handleVillageSelection(mobileNumber, message, state) {
-  if (message.length >= 2) {
-    state.orderData.village = message;
-    await sendInteractiveMessage(
-      mobileNumber,
-      `✅ Village: ${message}\n\nGreat! Now let's select your plant.`,
-      []
-    );
-    state.step = "plant_selection";
+  // Handle menu selection
+  if (messageLower === "1" || messageLower === "new order") {
+    console.log("   ✅ Option 1 selected - Starting new order");
+    state.step = "SELECT_PLANT";
+    saveConversationState(mobileNumber, state);
     await loadPlants(mobileNumber, state);
+  } else if (messageLower === "2" || messageLower === "my orders") {
+    console.log("   ✅ Option 2 selected - My Orders");
+    await sendWhatsAppMessage(
+      mobileNumber,
+      "📋 *My Orders*\n\nThis feature is coming soon!\n\nType HI to place a new order."
+    );
+  } else if (messageLower === "3" || messageLower === "help") {
+    console.log("   ✅ Option 3 selected - Help");
+    await sendWhatsAppMessage(
+      mobileNumber,
+      "📖 *Help*\n\n• Type HI to start\n• Type CANCEL to cancel anytime\n• Type MENU to go to main menu\n• Reply with numbers to select options"
+    );
   } else {
-    await sendInteractiveMessage(mobileNumber, "❌ Please enter a valid village name:", []);
+    // Default: show main menu
+    console.log("   ℹ️  Default action - Showing main menu");
+    await sendWhatsAppMessage(
+      mobileNumber,
+      `👋 Hello!\n\nWelcome to Nursery Order System 🌱\n\nPlease choose an option:\n\n1️⃣ New Order\n2️⃣ My Orders\n3️⃣ Help`
+    );
   }
   saveConversationState(mobileNumber, state);
+  console.log("   ✅ MAIN_MENU handler completed\n");
 }
 
 /**
  * Load and send available plants
  */
 async function loadPlants(mobileNumber, state) {
+  console.log("\n🌱 [LOAD] Loading plants from database...");
   try {
     const plants = await PlantCms.find({}).select("name _id").limit(10);
+    console.log(`   📊 Found ${plants.length} plants`);
     
     if (plants.length === 0) {
-      await sendInteractiveMessage(mobileNumber, "❌ No plants available at the moment.");
-      clearConversationState(mobileNumber);
+      console.log("   ⚠️  No plants found");
+      await sendWhatsAppMessage(mobileNumber, "❌ No plants available at the moment.");
+      state.step = "MAIN_MENU";
+      saveConversationState(mobileNumber, state);
       return;
     }
 
-    let message = "🌱 Please select a Plant:\n\n";
+    let message = "🌱 Select Plant:\n\n";
+    state.lists.plants = [];
     plants.forEach((plant, idx) => {
-      message += `${idx + 1}. ${plant.name}\n`;
-      state.plantsList = state.plantsList || [];
-      state.plantsList[idx] = plant._id.toString();
+      message += `${idx + 1}️⃣ ${plant.name}\n`;
+      state.lists.plants[idx] = {
+        id: plant._id.toString(),
+        name: plant.name,
+      };
+      console.log(`   ${idx + 1}. ${plant.name} (ID: ${plant._id})`);
     });
+    message += "\nReply with number";
 
-    await sendInteractiveMessage(mobileNumber, message, []);
+    console.log("   ✅ Plants loaded, sending to user");
+    await sendWhatsAppMessage(mobileNumber, message);
+    console.log("   ✅ Plants message sent\n");
   } catch (error) {
-    console.error("Error loading plants:", error);
-    await sendInteractiveMessage(mobileNumber, "❌ Error loading plants. Please try again later.");
+    console.error("   ❌ Error loading plants:", error);
+    console.error("   Stack:", error.stack);
+    await sendWhatsAppMessage(mobileNumber, "❌ Error loading plants. Please try again later.");
+    state.step = "MAIN_MENU";
+    saveConversationState(mobileNumber, state);
   }
 }
 
 /**
- * Plant selection step
+ * STEP 2: Select Plant
  */
 async function handlePlantSelection(mobileNumber, message, state) {
-  if (!state.plantsList) {
+  console.log("\n🌱 [STEP] SELECT_PLANT Handler");
+  console.log(`   📝 User input: "${message}"`);
+  
+  if (!state.lists.plants || state.lists.plants.length === 0) {
+    console.log("   ⚠️  Plants list empty, reloading...");
     await loadPlants(mobileNumber, state);
     return;
   }
 
   const selectedIdx = parseInt(message) - 1;
-  if (selectedIdx >= 0 && selectedIdx < state.plantsList.length) {
-    state.orderData.plant = state.plantsList[selectedIdx];
-    const plant = await PlantCms.findById(state.plantsList[selectedIdx]);
+  console.log(`   🔢 Parsed index: ${selectedIdx} (from input "${message}")`);
+  console.log(`   📊 Available plants: ${state.lists.plants.length}`);
+  
+  if (selectedIdx >= 0 && selectedIdx < state.lists.plants.length) {
+    const selectedPlant = state.lists.plants[selectedIdx];
+    console.log(`   ✅ Valid selection: ${selectedPlant.name} (ID: ${selectedPlant.id})`);
     
-    await sendInteractiveMessage(
+    state.order.plant = selectedPlant.id;
+    state.order.plantName = selectedPlant.name;
+    console.log(`   💾 Updated order.plant: ${state.order.plant}`);
+    console.log(`   💾 Updated order.plantName: ${state.order.plantName}`);
+    
+    await sendWhatsAppMessage(
       mobileNumber,
-      `✅ Plant: ${plant.name}\n\nLoading subtypes...`,
-      []
+      `✅ Plant: ${selectedPlant.name}\n\nLoading varieties...`
     );
-    state.step = "subtype_selection";
-    await loadSubtypes(mobileNumber, state);
+    state.step = "SELECT_VARIETY";
+    saveConversationState(mobileNumber, state);
+    await loadVarieties(mobileNumber, state);
   } else {
-    await sendInteractiveMessage(mobileNumber, "❌ Invalid selection. Please try again:", []);
+    console.log(`   ❌ Invalid selection (index ${selectedIdx} out of range)`);
+    await sendWhatsAppMessage(mobileNumber, "❌ Invalid selection. Please try again:");
     await loadPlants(mobileNumber, state);
   }
   saveConversationState(mobileNumber, state);
+  console.log("   ✅ SELECT_PLANT handler completed\n");
 }
 
 /**
- * Load and send subtypes
+ * Load and send varieties (subtypes)
  */
-async function loadSubtypes(mobileNumber, state) {
+async function loadVarieties(mobileNumber, state) {
+  console.log("\n🍃 [LOAD] Loading varieties for plant:", state.order.plant);
   try {
-    const plant = await PlantCms.findById(state.orderData.plant).select("subtypes");
+    const plant = await PlantCms.findById(state.order.plant).select("subtypes name");
+    console.log(`   📊 Plant found: ${plant?.name || "Not found"}`);
     
     if (!plant || !plant.subtypes || plant.subtypes.length === 0) {
-      await sendInteractiveMessage(mobileNumber, "❌ No subtypes available for this plant.");
-      state.step = "plant_selection";
+      console.log("   ⚠️  No varieties found");
+      await sendWhatsAppMessage(mobileNumber, "❌ No varieties available for this plant.");
+      state.step = "SELECT_PLANT";
+      saveConversationState(mobileNumber, state);
       await loadPlants(mobileNumber, state);
       return;
     }
 
-    let message = "🌿 Please select a Subtype:\n\n";
+    console.log(`   📊 Found ${plant.subtypes.length} varieties`);
+    let message = "🍃 Banana varieties:\n\n";
+    state.lists.varieties = [];
     plant.subtypes.forEach((subtype, idx) => {
       // Get the first rate from rates array, or default to 0
       const rate = subtype.rates && subtype.rates.length > 0 ? subtype.rates[0] : 0;
-      message += `${idx + 1}. ${subtype.name} (₹${rate})\n`;
-      state.subtypesList = state.subtypesList || [];
-      state.subtypesList[idx] = { id: subtype._id.toString(), rate: rate };
+      message += `${idx + 1}️⃣ ${subtype.name} – ₹${rate}\n`;
+      state.lists.varieties[idx] = {
+        id: subtype._id.toString(),
+        name: subtype.name,
+        rate: rate,
+      };
+      console.log(`   ${idx + 1}. ${subtype.name} - ₹${rate} (ID: ${subtype._id})`);
     });
+    message += "\nSelect variety";
 
-    await sendInteractiveMessage(mobileNumber, message, []);
+    console.log("   ✅ Varieties loaded, sending to user");
+    await sendWhatsAppMessage(mobileNumber, message);
+    console.log("   ✅ Varieties message sent\n");
   } catch (error) {
-    console.error("Error loading subtypes:", error);
-    await sendInteractiveMessage(mobileNumber, "❌ Error loading subtypes. Please try again.");
+    console.error("   ❌ Error loading varieties:", error);
+    console.error("   Stack:", error.stack);
+    await sendWhatsAppMessage(mobileNumber, "❌ Error loading varieties. Please try again.");
+    state.step = "SELECT_PLANT";
+    saveConversationState(mobileNumber, state);
+    await loadPlants(mobileNumber, state);
   }
 }
 
 /**
- * Subtype selection step
+ * STEP 3: Select Variety
  */
-async function handleSubtypeSelection(mobileNumber, message, state) {
-  if (!state.subtypesList) {
-    await loadSubtypes(mobileNumber, state);
+async function handleVarietySelection(mobileNumber, message, state) {
+  console.log("\n🍃 [STEP] SELECT_VARIETY Handler");
+  console.log(`   📝 User input: "${message}"`);
+  
+  if (!state.lists.varieties || state.lists.varieties.length === 0) {
+    console.log("   ⚠️  Varieties list empty, reloading...");
+    await loadVarieties(mobileNumber, state);
     return;
   }
 
   const selectedIdx = parseInt(message) - 1;
-  if (selectedIdx >= 0 && selectedIdx < state.subtypesList.length) {
-    state.orderData.subtype = state.subtypesList[selectedIdx].id;
-    state.orderData.rate = state.subtypesList[selectedIdx].rate;
+  console.log(`   🔢 Parsed index: ${selectedIdx} (from input "${message}")`);
+  console.log(`   📊 Available varieties: ${state.lists.varieties.length}`);
+  
+  if (selectedIdx >= 0 && selectedIdx < state.lists.varieties.length) {
+    const selectedVariety = state.lists.varieties[selectedIdx];
+    console.log(`   ✅ Valid selection: ${selectedVariety.name} (ID: ${selectedVariety.id}, Rate: ₹${selectedVariety.rate})`);
     
-    // Get subtype name from plant document
-    const plant = await PlantCms.findById(state.orderData.plant).select("subtypes");
-    const subtype = plant.subtypes.find(s => s._id.toString() === state.subtypesList[selectedIdx].id);
+    state.order.variety = selectedVariety.id;
+    state.order.varietyName = selectedVariety.name;
+    state.order.rate = selectedVariety.rate;
+    console.log(`   💾 Updated order.variety: ${state.order.variety}`);
+    console.log(`   💾 Updated order.varietyName: ${state.order.varietyName}`);
+    console.log(`   💾 Updated order.rate: ₹${state.order.rate}`);
     
-    await sendInteractiveMessage(
+    await sendWhatsAppMessage(
       mobileNumber,
-      `✅ Subtype: ${subtype.name}\nRate: ₹${state.orderData.rate}\n\nPlease select Cavity:\n\n1. 50\n2. 100\n3. 200`,
-      []
+      `✅ Variety: ${selectedVariety.name}\nRate: ₹${selectedVariety.rate}\n\n📦 Select tray cavity:\n\n1️⃣ 50\n2️⃣ 100\n3️⃣ 200`
     );
-    state.step = "cavity_selection";
+    state.step = "SELECT_CAVITY";
+    saveConversationState(mobileNumber, state);
   } else {
-    await sendInteractiveMessage(mobileNumber, "❌ Invalid selection. Please try again:", []);
-    await loadSubtypes(mobileNumber, state);
+    console.log(`   ❌ Invalid selection (index ${selectedIdx} out of range)`);
+    await sendWhatsAppMessage(mobileNumber, "❌ Invalid selection. Please try again:");
+    await loadVarieties(mobileNumber, state);
   }
   saveConversationState(mobileNumber, state);
+  console.log("   ✅ SELECT_VARIETY handler completed\n");
 }
 
 /**
- * Cavity selection step
+ * STEP 4: Select Cavity
  */
 async function handleCavitySelection(mobileNumber, message, state) {
+  console.log("\n📦 [STEP] SELECT_CAVITY Handler");
+  console.log(`   📝 User input: "${message}"`);
+  
   const cavities = ["50", "100", "200"];
   const selectedIdx = parseInt(message) - 1;
+  console.log(`   🔢 Parsed index: ${selectedIdx} (from input "${message}")`);
+  console.log(`   📊 Available cavities: ${cavities.join(", ")}`);
 
   if (selectedIdx >= 0 && selectedIdx < cavities.length) {
-    state.orderData.cavity = cavities[selectedIdx];
-    await sendInteractiveMessage(
+    const selectedCavity = cavities[selectedIdx];
+    console.log(`   ✅ Valid selection: ${selectedCavity}`);
+    
+    state.order.cavity = selectedCavity;
+    console.log(`   💾 Updated order.cavity: ${state.order.cavity}`);
+    
+    await sendWhatsAppMessage(
       mobileNumber,
-      `✅ Cavity: ${cavities[selectedIdx]}\n\nLoading available delivery dates...`,
-      []
+      `✅ Cavity: ${selectedCavity}\n\n🔢 Enter quantity (number only)\n\nExample: 500`
     );
-    state.step = "delivery_date";
-    await loadDeliveryDates(mobileNumber, state);
+    state.step = "ENTER_QUANTITY";
+    saveConversationState(mobileNumber, state);
   } else {
-    await sendInteractiveMessage(mobileNumber, "❌ Invalid selection. Please select 1, 2, or 3:", []);
+    console.log(`   ❌ Invalid selection (index ${selectedIdx} out of range)`);
+    await sendWhatsAppMessage(mobileNumber, "❌ Invalid selection. Please select 1, 2, or 3:");
   }
   saveConversationState(mobileNumber, state);
+  console.log("   ✅ SELECT_CAVITY handler completed\n");
+}
+
+/**
+ * STEP 5: Enter Quantity
+ */
+async function handleQuantity(mobileNumber, message, state) {
+  console.log("\n🔢 [STEP] ENTER_QUANTITY Handler");
+  console.log(`   📝 User input: "${message}"`);
+  
+  const quantity = parseInt(message);
+  console.log(`   🔢 Parsed quantity: ${quantity}`);
+  console.log(`   💰 Current rate: ₹${state.order.rate}`);
+  
+  if (isNaN(quantity) || quantity <= 0 || quantity > 10000) {
+    console.log(`   ❌ Invalid quantity: ${quantity} (must be 1-10000)`);
+    await sendWhatsAppMessage(
+      mobileNumber,
+      "❌ Invalid quantity. Please enter a number between 1 and 10000:"
+    );
+    return;
+  }
+
+  state.order.quantity = quantity;
+  state.order.total = quantity * parseFloat(state.order.rate);
+  console.log(`   ✅ Valid quantity: ${quantity}`);
+  console.log(`   💾 Updated order.quantity: ${state.order.quantity}`);
+  console.log(`   💾 Updated order.total: ₹${state.order.total}`);
+  console.log(`   💵 Calculation: ${quantity} × ₹${state.order.rate} = ₹${state.order.total}`);
+  
+  await sendWhatsAppMessage(
+    mobileNumber,
+    `✅ Quantity: ${quantity}\n\nLoading available delivery dates...`
+  );
+  
+  state.step = "SELECT_DATE";
+  saveConversationState(mobileNumber, state);
+  await loadDeliveryDates(mobileNumber, state);
+  console.log("   ✅ ENTER_QUANTITY handler completed\n");
 }
 
 /**
  * Load and send available delivery dates
  */
 async function loadDeliveryDates(mobileNumber, state) {
+  console.log("\n📅 [LOAD] Loading delivery slots...");
+  console.log(`   🌱 Plant ID: ${state.order.plant}`);
+  console.log(`   🍃 Variety ID: ${state.order.variety}`);
+  
   try {
     const slots = await PlantSlot.find({
-      plantId: state.orderData.plant,
-      subtypeId: state.orderData.subtype,
+      plantId: state.order.plant,
+      subtypeId: state.order.variety,
       availableQuantity: { $gt: 0 },
     })
       .sort({ startDay: 1 })
       .limit(5)
       .select("startDay endDay availableQuantity _id");
 
+    console.log(`   📊 Found ${slots.length} available slots`);
+
     if (slots.length === 0) {
-      await sendInteractiveMessage(
+      console.log("   ⚠️  No slots found");
+      await sendWhatsAppMessage(
         mobileNumber,
-        "❌ No delivery slots available. Please try a different plant/subtype."
+        "❌ No delivery slots available. Please try a different plant/variety."
       );
-      state.step = "plant_selection";
+      state.step = "SELECT_PLANT";
+      saveConversationState(mobileNumber, state);
       await loadPlants(mobileNumber, state);
       return;
     }
 
-    let message = "📅 Please select Delivery Date:\n\n";
+    let message = "📅 Select delivery week:\n\n";
+    state.lists.slots = [];
     slots.forEach((slot, idx) => {
-      message += `${idx + 1}. ${slot.startDay} to ${slot.endDay} (Available: ${slot.availableQuantity})\n`;
-      state.slotsList = state.slotsList || [];
-      state.slotsList[idx] = {
+      message += `${idx + 1}️⃣ ${slot.startDay}–${slot.endDay} (Available: ${slot.availableQuantity})\n`;
+      state.lists.slots[idx] = {
         id: slot._id.toString(),
         startDay: slot.startDay,
         endDay: slot.endDay,
       };
+      console.log(`   ${idx + 1}. ${slot.startDay}–${slot.endDay} (Available: ${slot.availableQuantity}, ID: ${slot._id})`);
     });
 
-    await sendInteractiveMessage(mobileNumber, message, []);
+    console.log("   ✅ Slots loaded, sending to user");
+    await sendWhatsAppMessage(mobileNumber, message);
+    console.log("   ✅ Slots message sent\n");
   } catch (error) {
-    console.error("Error loading slots:", error);
-    await sendInteractiveMessage(mobileNumber, "❌ Error loading delivery dates. Please try again.");
+    console.error("   ❌ Error loading slots:", error);
+    console.error("   Stack:", error.stack);
+    await sendWhatsAppMessage(mobileNumber, "❌ Error loading delivery dates. Please try again.");
+    state.step = "SELECT_PLANT";
+    saveConversationState(mobileNumber, state);
+    await loadPlants(mobileNumber, state);
   }
 }
 
 /**
- * Delivery date selection step
+ * STEP 6: Select Delivery Date
  */
-async function handleDeliveryDate(mobileNumber, message, state) {
-  if (!state.slotsList) {
+async function handleDateSelection(mobileNumber, message, state) {
+  console.log("\n📅 [STEP] SELECT_DATE Handler");
+  console.log(`   📝 User input: "${message}"`);
+  
+  if (!state.lists.slots || state.lists.slots.length === 0) {
+    console.log("   ⚠️  Slots list empty, reloading...");
     await loadDeliveryDates(mobileNumber, state);
     return;
   }
 
   const selectedIdx = parseInt(message) - 1;
-  if (selectedIdx >= 0 && selectedIdx < state.slotsList.length) {
-    const slot = state.slotsList[selectedIdx];
-    state.orderData.deliveryDate = slot.startDay; // Use start day as delivery date
-    state.orderData.slotId = slot.id;
+  console.log(`   🔢 Parsed index: ${selectedIdx} (from input "${message}")`);
+  console.log(`   📊 Available slots: ${state.lists.slots.length}`);
+  
+  if (selectedIdx >= 0 && selectedIdx < state.lists.slots.length) {
+    const slot = state.lists.slots[selectedIdx];
+    console.log(`   ✅ Valid selection: ${slot.startDay}–${slot.endDay} (ID: ${slot.id})`);
+    
+    state.order.deliveryDate = `${slot.startDay} to ${slot.endDay}`;
+    state.order.slotId = slot.id;
+    console.log(`   💾 Updated order.deliveryDate: ${state.order.deliveryDate}`);
+    console.log(`   💾 Updated order.slotId: ${state.order.slotId}`);
 
-    await sendInteractiveMessage(
-      mobileNumber,
-      `✅ Delivery Date: ${slot.startDay} to ${slot.endDay}\n\nPlease enter number of plants:`,
-      []
-    );
-    state.step = "quantity";
+    // Show order summary
+    const summary = `📋 *Order Summary*
+
+🌱 Plant: ${state.order.plantName}
+🍃 Variety: ${state.order.varietyName}
+📦 Cavity: ${state.order.cavity}
+🔢 Quantity: ${state.order.quantity}
+💰 Rate: ₹${state.order.rate}
+💵 Total: ₹${state.order.total}
+📅 Delivery: ${state.order.deliveryDate}
+
+Reply:
+1️⃣ Confirm Order
+2️⃣ Cancel`;
+
+    console.log("   📋 Showing order summary to user");
+    await sendWhatsAppMessage(mobileNumber, summary);
+    state.step = "CONFIRM_ORDER";
+    saveConversationState(mobileNumber, state);
   } else {
-    await sendInteractiveMessage(mobileNumber, "❌ Invalid selection. Please try again:", []);
+    console.log(`   ❌ Invalid selection (index ${selectedIdx} out of range)`);
+    await sendWhatsAppMessage(mobileNumber, "❌ Invalid selection. Please try again:");
     await loadDeliveryDates(mobileNumber, state);
   }
   saveConversationState(mobileNumber, state);
+  console.log("   ✅ SELECT_DATE handler completed\n");
 }
 
 /**
- * Quantity step
- */
-async function handleQuantity(mobileNumber, message, state) {
-  const quantity = parseInt(message);
-  if (quantity > 0 && quantity <= 10000) {
-    state.orderData.noOfPlants = quantity.toString();
-    
-    const totalAmount = quantity * parseFloat(state.orderData.rate);
-    
-    // Show order summary
-    const plant = await PlantCms.findById(state.orderData.plant).select("name subtypes");
-    const subtype = plant.subtypes.find(s => s._id.toString() === state.orderData.subtype);
-    
-    const summary = `
-📋 *Order Summary:*
-
-👤 Name: ${state.orderData.name}
-📱 Mobile: ${state.orderData.mobileNumber}
-📍 Location: ${state.orderData.village}, ${state.orderData.taluka}, ${state.orderData.district}
-
-🌱 Plant: ${plant.name}
-🌿 Subtype: ${subtype.name}
-🕳️ Cavity: ${state.orderData.cavity}
-📅 Delivery: ${state.orderData.deliveryDate}
-📦 Quantity: ${quantity} plants
-💰 Rate: ₹${state.orderData.rate}/plant
-💵 Total: ₹${totalAmount}
-
-Please confirm:
-1. ✅ Confirm Order
-2. ❌ Cancel
-    `;
-
-    await sendInteractiveMessage(mobileNumber, summary, []);
-    state.step = "confirmation";
-  } else {
-    await sendInteractiveMessage(
-      mobileNumber,
-      "❌ Invalid quantity. Please enter a number between 1 and 10000:",
-      []
-    );
-  }
-  saveConversationState(mobileNumber, state);
-}
-
-/**
- * Confirmation step - Create order
+ * STEP 7: Confirmation - Create Order
  */
 async function handleConfirmation(mobileNumber, message, state) {
+  console.log("\n✅ [STEP] CONFIRM_ORDER Handler");
+  console.log(`   📝 User input: "${message}"`);
+  
   if (message === "1" || message === "confirm" || message === "yes") {
-    await sendInteractiveMessage(
+    console.log("   ✅ User confirmed order");
+    await sendWhatsAppMessage(
       mobileNumber,
-      "⏳ Processing your order... Please wait.",
-      []
+      "⏳ Processing your order... Please wait."
     );
 
     try {
-      // Prepare order payload (similar to AddOrderFormScreen)
+      console.log("\n   👤 [FARMER] Looking up farmer...");
+      // Find or create farmer
+      let farmer = await Farmer.findOne({ mobileNumber: parseInt(mobileNumber) });
+      let farmerName = "Unknown";
+
+      if (!farmer) {
+        console.log("   🆕 Farmer not found, creating new farmer record...");
+        // Create minimal farmer record
+        farmer = await new Farmer({
+          name: "WhatsApp Customer",
+          mobileNumber: parseInt(mobileNumber),
+          village: "To be updated",
+          taluka: "To be updated",
+          district: "To be updated",
+          state: "Maharashtra",
+          stateName: "Maharashtra",
+          talukaName: "To be updated",
+          districtName: "To be updated",
+        }).save();
+        farmerName = "WhatsApp Customer";
+        console.log(`   ✅ New farmer created: ${farmerName} (ID: ${farmer._id})`);
+      } else {
+        farmerName = farmer.name || "Unknown";
+        console.log(`   ✅ Existing farmer found: ${farmerName} (ID: ${farmer._id})`);
+      }
+
+      // Prepare order payload
+      console.log("\n   📦 [ORDER] Preparing order payload...");
       const orderPayload = {
-        name: state.orderData.name,
-        mobileNumber: state.orderData.mobileNumber,
-        village: state.orderData.village,
-        taluka: state.orderData.taluka,
-        district: state.orderData.district,
-        state: state.orderData.state,
-        stateName: state.orderData.state,
-        districtName: state.orderData.district,
-        talukaName: state.orderData.taluka,
+        name: farmerName,
+        mobileNumber: mobileNumber,
+        village: farmer.village || "To be updated",
+        taluka: farmer.taluka || farmer.talukaName || "To be updated",
+        district: farmer.district || farmer.districtName || "To be updated",
+        state: farmer.state || farmer.stateName || "Maharashtra",
+        stateName: farmer.stateName || farmer.state || "Maharashtra",
+        districtName: farmer.districtName || farmer.district || "To be updated",
+        talukaName: farmer.talukaName || farmer.taluka || "To be updated",
         typeOfPlants: "",
-        numberOfPlants: parseInt(state.orderData.noOfPlants),
-        rate: parseFloat(state.orderData.rate),
+        numberOfPlants: state.order.quantity,
+        rate: parseFloat(state.order.rate),
         paymentStatus: "not paid",
         orderStatus: "PENDING",
-        plantName: state.orderData.plant,
-        plantSubtype: state.orderData.subtype,
-        bookingSlot: state.orderData.slotId,
-        deliveryDate: new Date().toISOString(), // Will be set properly
+        plantName: state.order.plant,
+        plantSubtype: state.order.variety,
+        bookingSlot: state.order.slotId,
+        deliveryDate: new Date().toISOString(),
         orderPaymentStatus: "PENDING",
-        cavity: parseInt(state.orderData.cavity),
+        cavity: parseInt(state.order.cavity),
         orderBookingDate: new Date().toISOString(),
       };
+      console.log("   📋 Order payload:", JSON.stringify(orderPayload, null, 2));
 
-      // Create order using internal API call to existing endpoint
-      // This mimics the AddOrderFormScreen flow
+      // Create order using internal API call
       const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8000";
-      const orderResponse = await fetch(`${API_BASE_URL}/api/v1/farmer/createFarmer`, {
+      const orderUrl = `${API_BASE_URL}/api/v1/farmer/createFarmer`;
+      console.log(`\n   🌐 [API] Calling order creation endpoint: ${orderUrl}`);
+      
+      const orderResponse = await fetch(orderUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          // Note: For WhatsApp orders, you may need a system user token
-          // Or create a special endpoint that doesn't require auth
         },
         body: JSON.stringify(orderPayload),
       });
 
+      console.log(`   📡 [API] Response status: ${orderResponse.status}`);
       const orderResult = await orderResponse.json();
+      console.log("   📡 [API] Response data:", JSON.stringify(orderResult, null, 2));
 
-      if (orderResult.success) {
-        await sendInteractiveMessage(
+      if (orderResult.success || orderResult.data) {
+        const orderId = orderResult.data?.orderId || orderResult.orderId || "Processing...";
+        console.log(`   ✅ Order created successfully! Order ID: ${orderId}`);
+        
+        await sendWhatsAppMessage(
           mobileNumber,
-          `✅ *Order Placed Successfully!*\n\nOrder ID: ${orderResult.orderId}\n\nYour order has been received and will be processed soon.\n\nThank you for your order! 🙏`,
-          []
+          `✅ *Order Placed Successfully!*\n\n🧾 Order ID: ${orderId}\n📅 Delivery: ${state.order.deliveryDate}\n\nThank you 🙏\n\nType HI to place another order`
         );
+
+        // Send admin notification
+        console.log("\n   📤 [NOTIFICATION] Sending admin notification...");
+        await sendAdminNotification({
+          customerName: farmerName,
+          mobileNumber: mobileNumber,
+          plantName: state.order.plantName,
+          varietyName: state.order.varietyName,
+          cavity: state.order.cavity,
+          quantity: state.order.quantity,
+          total: state.order.total,
+          deliveryDate: state.order.deliveryDate,
+          orderId: orderId,
+        });
+        console.log("   ✅ Admin notification sent");
+
         clearConversationState(mobileNumber);
+        console.log("   ✅ CONFIRM_ORDER handler completed successfully\n");
       } else {
+        console.error("   ❌ Order creation failed - API returned error");
         throw new Error("Order creation failed");
       }
     } catch (error) {
-      console.error("Error creating order:", error);
-      await sendInteractiveMessage(
+      console.error("\n   ❌ [ERROR] Error creating order:", error);
+      console.error("   Stack:", error.stack);
+      await sendWhatsAppMessage(
         mobileNumber,
-        "❌ Sorry, there was an error processing your order. Please try again or contact support.",
-        []
+        "❌ Sorry, there was an error processing your order. Please try again or contact support."
       );
       clearConversationState(mobileNumber);
     }
   } else {
-    await sendInteractiveMessage(mobileNumber, "Order cancelled. Type 'ORDER' to start again.");
+    console.log("   ❌ User cancelled order");
+    await sendWhatsAppMessage(mobileNumber, "❌ Order cancelled.\n\nType HI to start again.");
     clearConversationState(mobileNumber);
   }
 }
@@ -920,13 +902,12 @@ export const startOrderFlow = catchAsync(async (req, res) => {
   }
 
   const state = getConversationState(mobileNumber);
-  state.step = "welcome";
+  state.step = "MAIN_MENU";
   saveConversationState(mobileNumber, state);
 
-  await handleWelcome(mobileNumber, state);
+  await handleMainMenu(mobileNumber, state);
 
   return res.status(200).json(
     generateResponse("success", "Order flow started", { mobileNumber })
   );
 });
-

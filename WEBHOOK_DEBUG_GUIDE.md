@@ -187,3 +187,4 @@ If logs still don't appear after all these steps, the issue is likely:
 - Wati not sending webhooks
 - Network/firewall blocking Wati requests
 
+

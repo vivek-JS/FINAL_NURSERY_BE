@@ -66,12 +66,14 @@ const defaultUnits = [
     abbreviation: 'box',
     type: 'quantity',
     conversionToBase: 1,
+    requiresSecondaryUnit: true,
   },
   {
     name: 'Bag',
     abbreviation: 'bag',
     type: 'quantity',
     conversionToBase: 1,
+    requiresSecondaryUnit: true,
   },
   {
     name: 'Bundle',
@@ -84,6 +86,13 @@ const defaultUnits = [
     abbreviation: 'dozen',
     type: 'quantity',
     conversionToBase: 12,
+  },
+  {
+    name: 'Seeds',
+    abbreviation: 'seeds',
+    type: 'quantity',
+    conversionToBase: 1,
+    requiresSecondaryUnit: true,
   },
   
   // Area units
@@ -137,11 +146,16 @@ async function seedMeasurementUnits() {
         console.log(`ℹ️  Unit "${unitData.name} (${unitData.abbreviation})" already exists`);
         existingCount++;
       } else {
-        await MeasurementUnit.create({
+        const unitToCreate = {
           ...unitData,
           createdBy: user._id,
-        });
-        console.log(`✅ Created unit: ${unitData.name} (${unitData.abbreviation})`);
+        };
+        // Remove requiresSecondaryUnit if not provided (for backward compatibility)
+        if (unitToCreate.requiresSecondaryUnit === undefined) {
+          delete unitToCreate.requiresSecondaryUnit;
+        }
+        await MeasurementUnit.create(unitToCreate);
+        console.log(`✅ Created unit: ${unitData.name} (${unitData.abbreviation})${unitData.requiresSecondaryUnit ? ' [Requires Secondary UOM]' : ''}`);
         createdCount++;
       }
     }
@@ -169,6 +183,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 export default seedMeasurementUnits;
+
 
 
 

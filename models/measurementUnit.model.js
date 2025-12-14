@@ -32,6 +32,15 @@ const measurementUnitSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    requiresSecondaryUnit: {
+      type: Boolean,
+      default: false,
+    },
+    compatibleSecondaryUnits: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: 'MeasurementUnit',
+      default: [],
+    },
   },
   {
     timestamps: true,

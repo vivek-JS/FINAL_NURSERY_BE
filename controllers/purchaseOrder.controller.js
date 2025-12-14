@@ -11,6 +11,7 @@ export const createPurchaseOrder = async (req, res) => {
       otherCharges,
       terms,
       notes,
+      autoGRN, // Auto GRN flag
     } = req.body;
 
     // Generate PO number
@@ -47,6 +48,7 @@ export const createPurchaseOrder = async (req, res) => {
       totalAmount,
       terms,
       notes,
+      autoGRN: autoGRN || false, // Store auto GRN flag
       createdBy: req.user._id,
     });
 
@@ -403,9 +405,108 @@ export const approvePurchaseOrder = async (req, res) => {
 
     await purchaseOrder.save();
 
+    // Auto-create GRN if autoGRN is enabled
+    if (purchaseOrder.autoGRN) {
+      try {
+        const { default: GRN } = await import('../models/grn.model.js');
+        const { default: Product } = await import('../models/product.model.js');
+        
+        // Helper function to generate batch number (same as in grn.controller.js)
+        const generateBatchNumber = async (productId) => {
+          const product = await Product.findById(productId);
+          const productName = product?.name || 'PROD';
+          const date = new Date();
+          const year = date.getFullYear().toString().slice(-2);
+          const month = (date.getMonth() + 1).toString().padStart(2, '0');
+          const day = date.getDate().toString().padStart(2, '0');
+          const productCode = productName.substring(0, 3).toUpperCase().replace(/\s/g, '');
+          const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+          const productIdShort = productId ? productId.toString().slice(-3) : '000';
+          return `BATCH${productCode}${year}${month}${day}${random}`;
+        };
+
+        // Generate GRN number
+        const grnNumber = await GRN.generateGRNNumber();
+
+        // Transform PO items to GRN items
+        const grnItems = await Promise.all(
+          purchaseOrder.items.map(async (poItem) => {
+            // Auto-generate batch number if not provided
+            // batchNumber and lotNumber are treated as the same field
+            let batchNumber = poItem.batchNumber || poItem.lotNumber;
+            if (!batchNumber || !batchNumber.trim()) {
+              batchNumber = await generateBatchNumber(poItem.product);
+            }
+            batchNumber = batchNumber.trim();
+
+            // Convert expiryDate from string to Date if needed
+            let expiryDate = poItem.expiryDate;
+            if (expiryDate && typeof expiryDate === 'string') {
+              expiryDate = new Date(expiryDate);
+              if (isNaN(expiryDate.getTime())) {
+                expiryDate = undefined;
+              }
+            }
+
+            return {
+              product: poItem.product,
+              poItem: poItem._id,
+              batchNumber: batchNumber, // batchNumber and lotNumber are the same
+              quantity: poItem.quantity,
+              unit: poItem.unit,
+              rate: poItem.rate,
+              acceptedQuantity: poItem.quantity, // Accept full quantity by default
+              rejectedQuantity: 0,
+              damageQuantity: 0,
+              amount: poItem.amount,
+              expiryDate: expiryDate || undefined,
+              manufactureDate: undefined,
+            };
+          })
+        );
+
+        // Calculate totals
+        let subtotal = 0;
+        grnItems.forEach((item) => {
+          subtotal += item.amount;
+        });
+
+        const totalAmount = subtotal + (purchaseOrder.gstAmount || 0) + (purchaseOrder.otherCharges || 0);
+
+        // Create GRN
+        const grn = new GRN({
+          grnNumber,
+          supplier: purchaseOrder.supplier,
+          purchaseOrder: purchaseOrder._id,
+          items: grnItems,
+          subtotal,
+          gstAmount: purchaseOrder.gstAmount || 0,
+          freightCharges: 0,
+          otherCharges: purchaseOrder.otherCharges || 0,
+          totalAmount,
+          status: 'draft', // Start as draft, can be approved later
+          notes: `Auto-generated from Purchase Order ${purchaseOrder.poNumber}`,
+          createdBy: req.user._id,
+        });
+
+        await grn.save();
+        await grn.populate(['items.product', 'items.unit', 'purchaseOrder']);
+
+        console.log(`Auto-created GRN ${grnNumber} for Purchase Order ${purchaseOrder.poNumber}`);
+      } catch (grnError) {
+        console.error('Error auto-creating GRN:', grnError);
+        // Don't fail the approval if GRN creation fails, just log it
+        // The PO is still approved, but GRN will need to be created manually
+      }
+    }
+
+    await purchaseOrder.populate(['items.product', 'items.unit', 'approvedBy']);
+
     res.json({
       success: true,
-      message: 'Purchase Order approved successfully',
+      message: purchaseOrder.autoGRN 
+        ? 'Purchase Order approved successfully. GRN has been auto-created.' 
+        : 'Purchase Order approved successfully',
       data: purchaseOrder,
     });
   } catch (error) {

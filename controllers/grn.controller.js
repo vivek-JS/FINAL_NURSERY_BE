@@ -64,20 +64,36 @@ const generateBatchNumber = async (productNameOrId, productId = null) => {
 // Create GRN
 export const createGRN = async (req, res) => {
   try {
+    // Handle FormData - parse JSON fields
+    let items = [];
+    let additionalItems = [];
+    let purchaseOrder = null;
+    
+    if (req.body.items) {
+      items = typeof req.body.items === 'string' ? JSON.parse(req.body.items) : req.body.items;
+    }
+    if (req.body.additionalItems) {
+      additionalItems = typeof req.body.additionalItems === 'string' ? JSON.parse(req.body.additionalItems) : req.body.additionalItems;
+    }
+    if (req.body.purchaseOrder) {
+      purchaseOrder = typeof req.body.purchaseOrder === 'string' ? req.body.purchaseOrder : req.body.purchaseOrder;
+    }
+
     let {
       supplier,
-      purchaseOrder,
       invoiceNumber,
       invoiceDate,
       challanNumber,
       challanDate,
       vehicleNumber,
       driverName,
-      items,
       freightCharges,
       otherCharges,
       notes,
     } = req.body;
+
+    // Combine items and additionalItems
+    const allItems = [...items, ...additionalItems];
 
     // If supplier is null but purchaseOrder is provided, get supplier from PO
     if (!supplier && purchaseOrder) {
@@ -88,11 +104,50 @@ export const createGRN = async (req, res) => {
       }
     }
 
+    // Validate images are uploaded (mandatory)
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one image is required for GRN',
+      });
+    }
+
+    // Process uploaded images - save to attachments
+    const attachments = [];
+    if (req.files && req.files.length > 0) {
+      // For now, store file info - in production, upload to cloud storage (Cloudinary/S3)
+      for (const file of req.files) {
+        attachments.push({
+          name: file.originalname,
+          url: `/uploads/grn/${Date.now()}-${file.originalname}`, // Will be uploaded to storage
+          type: file.mimetype,
+          // In production, upload to Cloudinary/S3 and store the URL
+        });
+      }
+    }
+
     // Auto-generate batch numbers for items that don't have one or are blank
-    if (items && Array.isArray(items)) {
-      for (const item of items) {
+    // batchNumber and lotNumber are treated as the same field
+    if (allItems && Array.isArray(allItems)) {
+      for (const item of allItems) {
+        // Use lotNumber if batchNumber is empty, or vice versa (they're the same)
         if (!item.batchNumber || !item.batchNumber.trim()) {
-          item.batchNumber = await generateBatchNumber(item.product);
+          if (item.lotNumber && item.lotNumber.trim()) {
+            item.batchNumber = item.lotNumber.trim();
+          } else {
+            item.batchNumber = await generateBatchNumber(item.product);
+          }
+        } else {
+          // If batchNumber exists, also set lotNumber to the same value
+          item.lotNumber = item.batchNumber.trim();
+        }
+        
+        // Ensure expiryDate is provided (mandatory)
+        if (!item.expiryDate) {
+          return res.status(400).json({
+            success: false,
+            message: `Expiry date is required for all items. Missing for product: ${item.product}`,
+          });
         }
       }
     }
@@ -104,8 +159,8 @@ export const createGRN = async (req, res) => {
     let subtotal = 0;
     let gstAmount = 0;
 
-    items.forEach((item) => {
-      subtotal += item.amount;
+    allItems.forEach((item) => {
+      subtotal += item.amount || 0;
       // GST calculation if needed
     });
 
@@ -121,12 +176,13 @@ export const createGRN = async (req, res) => {
       challanDate,
       vehicleNumber,
       driverName,
-      items,
+      items: allItems, // Combined items and additionalItems
       subtotal,
       gstAmount,
       freightCharges: freightCharges || 0,
       otherCharges: otherCharges || 0,
       totalAmount,
+      attachments, // Add uploaded images
       notes,
       createdBy: req.user._id,
     });
@@ -204,10 +260,14 @@ export const approveGRN = async (req, res) => {
     for (const item of grn.items) {
       if (item.acceptedQuantity > 0) {
         // Ensure batch number exists - auto-generate if blank
-        let batchNumber = item.batchNumber;
+        // batchNumber and lotNumber are treated as the same field
+        let batchNumber = item.batchNumber || item.lotNumber;
         if (!batchNumber || !batchNumber.trim()) {
           batchNumber = await generateBatchNumber(item.product);
         }
+        // Ensure both fields have the same value
+        item.batchNumber = batchNumber.trim();
+        item.lotNumber = batchNumber.trim();
 
         // Check if batch number already exists
         const existingBatch = await Batch.findOne({ batchNumber: batchNumber.trim() });
@@ -430,7 +490,7 @@ export const getAllGRNs = async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const grns = await GRN.find(query)
-      .populate(['purchaseOrder', 'items.product', 'createdBy'])
+      .populate(['purchaseOrder', 'items.product', 'items.unit', 'items.batch', 'createdBy'])
       .sort({ grnDate: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -498,7 +558,8 @@ export const getGRNById = async (req, res) => {
         'createdBy',
         'updatedBy',
         'qualityCheckBy',
-      ]);
+      ])
+      .lean(); // Use lean() for better performance and to ensure all fields are returned
 
     if (!grn) {
       return res.status(404).json({
