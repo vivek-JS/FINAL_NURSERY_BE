@@ -69,19 +69,35 @@ async function sendWhatsAppMessage(phone, text) {
         const tokenParts = WATI_TOKEN.split('.');
         if (tokenParts.length === 3) {
           const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
+          console.log(`   🔑 Token payload decoded:`, JSON.stringify(payload, null, 2));
           if (payload.exp) {
             const expirationDate = new Date(payload.exp * 1000);
             const now = new Date();
             const isExpired = expirationDate < now;
+            const timeUntilExpiry = expirationDate - now;
             console.log(`   🔑 Token expiration: ${expirationDate.toISOString()}`);
+            console.log(`   🔑 Current time: ${now.toISOString()}`);
+            console.log(`   🔑 Time until expiry: ${Math.floor(timeUntilExpiry / (1000 * 60 * 60))} hours`);
             console.log(`   🔑 Token expired: ${isExpired ? 'YES ⚠️' : 'NO ✅'}`);
             if (isExpired) {
               console.error(`   ❌ TOKEN IS EXPIRED! Please get a new token from WATI dashboard.`);
             }
+          } else {
+            console.log(`   ⚠️  Token has no expiration claim (exp)`);
+          }
+          // Log other important claims
+          if (payload.tenant_id) {
+            console.log(`   🔑 Tenant ID: ${payload.tenant_id}`);
+          }
+          if (payload.email) {
+            console.log(`   🔑 Email: ${payload.email}`);
+          }
+          if (payload.role) {
+            console.log(`   🔑 Role: ${payload.role}`);
           }
         }
       } catch (e) {
-        // Not a JWT or can't decode, skip
+        console.error(`   ⚠️  Could not decode token: ${e.message}`);
       }
     }
 
