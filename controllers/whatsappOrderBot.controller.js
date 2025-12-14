@@ -213,10 +213,30 @@ async function sendWhatsAppMessage(phone, text) {
     } catch (fetchError) {
       const fetchDuration = Date.now() - fetchStartTime;
       console.error(`   ❌ Fetch failed after ${fetchDuration}ms`);
-      console.error(`   Error: ${fetchError.name} - ${fetchError.message}`);
+      console.error(`   Error Name: ${fetchError.name}`);
+      console.error(`   Error Message: ${fetchError.message}`);
+      console.error(`   Error Code: ${fetchError.code || 'N/A'}`);
+      console.error(`   Error Stack: ${fetchError.stack}`);
+      
       if (fetchError.name === 'AbortError' || fetchError.name === 'TimeoutError') {
         console.error(`   ⏱️  Request timed out - Render may have killed the request`);
+        console.error(`   💡 This could be a Render timeout issue (30s limit on free tier)`);
       }
+      
+      if (fetchError.code === 'ECONNREFUSED' || fetchError.code === 'ENOTFOUND') {
+        console.error(`   🌐 Network Error: Cannot reach WATI API from Render`);
+        console.error(`   💡 Possible causes:`);
+        console.error(`      1. Render is blocking outbound requests to WATI`);
+        console.error(`      2. WATI is blocking Render's IP addresses`);
+        console.error(`      3. DNS resolution failed`);
+        console.error(`   💡 Solution: Check Render's network settings or contact WATI support`);
+      }
+      
+      if (fetchError.message?.includes('certificate') || fetchError.message?.includes('SSL')) {
+        console.error(`   🔒 SSL/TLS Error: Certificate validation failed`);
+        console.error(`   💡 This could be a certificate issue between Render and WATI`);
+      }
+      
       throw fetchError;
     }
     
