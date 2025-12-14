@@ -4,12 +4,16 @@ import {
   handleWhatsAppWebhook,
   startOrderFlow,
   webhookHealthCheck,
+  webhookDiagnostics,
 } from "../controllers/whatsappOrderBot.controller.js";
 
 const router = express.Router();
 
 // Health check endpoint (GET - for testing webhook URL)
 router.get("/webhook", webhookHealthCheck);
+
+// Diagnostics endpoint (GET - to check WATI configuration)
+router.get("/diagnostics", webhookDiagnostics);
 
 // Simple test endpoint - immediately returns (for debugging)
 router.post("/webhook-test", (req, res) => {

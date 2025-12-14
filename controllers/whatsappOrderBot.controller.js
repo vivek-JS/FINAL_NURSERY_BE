@@ -19,8 +19,11 @@ const conversationState = new Map();
 console.log("\n" + "=".repeat(60));
 console.log("🔧 [INIT] WhatsApp Order Bot Configuration");
 console.log("=".repeat(60));
+console.log(`   NODE_ENV: ${process.env.NODE_ENV || "not set"}`);
 console.log(`   WATI_BASE_URL: ${WATI_BASE_URL || "❌ NOT SET"}`);
 console.log(`   WATI_TOKEN: ${WATI_TOKEN ? `${WATI_TOKEN.substring(0, 20)}...` : "❌ NOT SET"}`);
+console.log(`   WATI_TOKEN from env: ${process.env.WATI_TOKEN ? "✅ YES" : "❌ NO (using default)"}`);
+console.log(`   WATI_URL from env: ${process.env.WATI_URL ? `✅ YES (${process.env.WATI_URL})` : "❌ NO (using default)"}`);
 console.log(`   ADMIN_PHONE: ${ADMIN_PHONE}`);
 console.log("=".repeat(60) + "\n");
 
@@ -427,10 +430,27 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
   console.log("=".repeat(60) + "\n");
 
   // Process the message through order flow
-  console.log("🔄 [FLOW] Starting order flow processing...");
-  const state = getConversationState(mobileNumber);
-  await processOrderFlow(mobileNumber, message, state, senderName);
-  console.log("✅ [FLOW] Order flow processing completed\n");
+  try {
+    console.log("🔄 [FLOW] Starting order flow processing...");
+    const state = getConversationState(mobileNumber);
+    await processOrderFlow(mobileNumber, message, state, senderName);
+    console.log("✅ [FLOW] Order flow processing completed\n");
+  } catch (error) {
+    console.error("\n❌❌❌ ERROR IN WEBHOOK HANDLER ❌❌❌");
+    console.error("   Error:", error.message);
+    console.error("   Stack:", error.stack);
+    console.error("   Phone:", mobileNumber);
+    console.error("   Message:", message);
+    console.error("❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n");
+    
+    // Still return 200 to WATI (don't let webhook fail)
+    // But log the error for debugging
+    return res.status(200).json({ 
+      success: true, 
+      error: "Internal error logged",
+      message: "Webhook received but processing failed - check logs"
+    });
+  }
 
   console.log("📤 [RESPONSE] Sending 200 OK to WATI");
   return res.status(200).json({ success: true });
@@ -1094,6 +1114,51 @@ export const webhookHealthCheck = catchAsync(async (req, res) => {
       status: "ready",
       timestamp: new Date().toISOString(),
     })
+  );
+});
+
+/**
+ * Diagnostic endpoint to check WATI configuration
+ */
+export const webhookDiagnostics = catchAsync(async (req, res) => {
+  const diagnostics = {
+    environment: process.env.NODE_ENV || "not set",
+    wati: {
+      baseUrl: WATI_BASE_URL || "❌ NOT SET",
+      baseUrlFromEnv: process.env.WATI_URL || "❌ NOT SET",
+      tokenConfigured: WATI_TOKEN ? "✅ YES" : "❌ NO",
+      tokenFromEnv: process.env.WATI_TOKEN ? "✅ YES" : "❌ NO",
+      tokenLength: WATI_TOKEN?.length || 0,
+      tokenPreview: WATI_TOKEN ? `${WATI_TOKEN.substring(0, 30)}...` : "MISSING",
+    },
+    admin: {
+      phone: ADMIN_PHONE,
+      phoneFromEnv: process.env.ADMIN_PHONE || "❌ NOT SET",
+    },
+    timestamp: new Date().toISOString(),
+  };
+
+  // Check token expiration if it's a JWT
+  if (WATI_TOKEN && WATI_TOKEN.includes('.')) {
+    try {
+      const tokenParts = WATI_TOKEN.split('.');
+      if (tokenParts.length === 3) {
+        const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
+        if (payload.exp) {
+          const expirationDate = new Date(payload.exp * 1000);
+          const now = new Date();
+          const isExpired = expirationDate < now;
+          diagnostics.wati.tokenExpiration = expirationDate.toISOString();
+          diagnostics.wati.tokenExpired = isExpired;
+        }
+      }
+    } catch (e) {
+      diagnostics.wati.tokenParseError = "Could not parse token";
+    }
+  }
+
+  return res.status(200).json(
+    generateResponse("success", "WhatsApp webhook diagnostics", diagnostics)
   );
 });
 
