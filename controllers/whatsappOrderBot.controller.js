@@ -116,12 +116,13 @@ async function sendWhatsAppMessage(phone, text) {
     const encodedMessage = encodeURIComponent(text);
     const url = `${baseUrl}/api/v1/sendSessionMessage/91${phoneNumber}?messageText=${encodedMessage}`;
     
-    console.log(`   🔗 Constructed URL: ${url}`);
+    console.log(`   🔗 Constructed URL: ${url.substring(0, 200)}${url.length > 200 ? '...' : ''}`);
     console.log(`   📋 URL breakdown:`);
     console.log(`      Base: ${baseUrl}`);
     console.log(`      Endpoint: /api/v1/sendSessionMessage/91${phoneNumber}`);
     console.log(`      Query param: messageText=${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
     console.log(`      Encoded message length: ${encodedMessage.length} characters`);
+    console.log(`      Full URL length: ${url.length} characters`);
     
     // Validate URL
     try {
@@ -154,17 +155,35 @@ async function sendWhatsAppMessage(phone, text) {
     console.log(`      Body: EMPTY (using query parameter)`);
     
     // Use query parameter method (as per working Postman request)
-    let response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": authToken,
-        // NO Content-Type header when using query param
-        // NO Accept header when using query param
-      },
-      // NO body - message is in query parameter
-    });
+    console.log(`   ⏱️  Making fetch request at: ${new Date().toISOString()}`);
+    const fetchStartTime = Date.now();
     
-    console.log(`   📡 Response status: ${response.status} ${response.statusText}`);
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": authToken,
+          // NO Content-Type header when using query param
+          // NO Accept header when using query param
+        },
+        // NO body - message is in query parameter
+        // Add timeout for Render (30 seconds max)
+        signal: AbortSignal.timeout(25000), // 25 second timeout
+      });
+      
+      const fetchDuration = Date.now() - fetchStartTime;
+      console.log(`   ⏱️  Fetch completed in ${fetchDuration}ms`);
+      console.log(`   📡 Response status: ${response.status} ${response.statusText}`);
+    } catch (fetchError) {
+      const fetchDuration = Date.now() - fetchStartTime;
+      console.error(`   ❌ Fetch failed after ${fetchDuration}ms`);
+      console.error(`   Error: ${fetchError.name} - ${fetchError.message}`);
+      if (fetchError.name === 'AbortError' || fetchError.name === 'TimeoutError') {
+        console.error(`   ⏱️  Request timed out - Render may have killed the request`);
+      }
+      throw fetchError;
+    }
     
     // Handle response (might be JSON or text)
     let data;
@@ -260,10 +279,24 @@ async function sendWhatsAppMessage(phone, text) {
     }
   } catch (error) {
     console.error("\n   ❌ [ERROR] Error sending WhatsApp message:");
-    console.error(`   Message: ${error.message}`);
+    console.error(`   Error Type: ${error.name || 'Unknown'}`);
+    console.error(`   Error Message: ${error.message}`);
+    console.error(`   Error Code: ${error.code || 'N/A'}`);
     console.error(`   Stack: ${error.stack}`);
     console.error(`   URL attempted: ${WATI_BASE_URL}/api/v1/sendSessionMessage/91${phone?.toString().replace(/\D/g, "") || "unknown"}`);
-    return { success: false, error: error.message };
+    console.error(`   Phone: ${phone}`);
+    console.error(`   Message preview: ${text?.substring(0, 50) || 'empty'}...`);
+    console.error(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+    
+    // Check for specific error types
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+      console.error(`   🌐 Network Error: Cannot reach WATI API - Check internet connection or firewall`);
+    }
+    if (error.message?.includes('fetch') || error.message?.includes('timeout')) {
+      console.error(`   🌐 Fetch/Timeout Error: Request timed out or failed`);
+    }
+    
+    return { success: false, error: error.message, errorType: error.name, errorCode: error.code };
   }
 }
 
@@ -429,31 +462,31 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
   console.log(`   🔢 Clean Mobile: ${mobileNumber}`);
   console.log("=".repeat(60) + "\n");
 
-  // Process the message through order flow
-  try {
-    console.log("🔄 [FLOW] Starting order flow processing...");
-    const state = getConversationState(mobileNumber);
-    await processOrderFlow(mobileNumber, message, state, senderName);
-    console.log("✅ [FLOW] Order flow processing completed\n");
-  } catch (error) {
-    console.error("\n❌❌❌ ERROR IN WEBHOOK HANDLER ❌❌❌");
-    console.error("   Error:", error.message);
-    console.error("   Stack:", error.stack);
-    console.error("   Phone:", mobileNumber);
-    console.error("   Message:", message);
-    console.error("❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n");
-    
-    // Still return 200 to WATI (don't let webhook fail)
-    // But log the error for debugging
-    return res.status(200).json({ 
-      success: true, 
-      error: "Internal error logged",
-      message: "Webhook received but processing failed - check logs"
-    });
-  }
+  // Respond immediately to WATI (avoid timeout)
+  // Process message asynchronously
+  console.log("📤 [RESPONSE] Sending 200 OK to WATI immediately");
+  res.status(200).json({ success: true, message: "Webhook received, processing..." });
 
-  console.log("📤 [RESPONSE] Sending 200 OK to WATI");
-  return res.status(200).json({ success: true });
+  // Process the message through order flow asynchronously
+  // This prevents Render timeout issues
+  (async () => {
+    try {
+      console.log("🔄 [FLOW] Starting order flow processing (async)...");
+      const state = getConversationState(mobileNumber);
+      await processOrderFlow(mobileNumber, message, state, senderName);
+      console.log("✅ [FLOW] Order flow processing completed\n");
+    } catch (error) {
+      console.error("\n❌❌❌ ERROR IN WEBHOOK HANDLER ❌❌❌");
+      console.error("   Error:", error.message);
+      console.error("   Stack:", error.stack);
+      console.error("   Phone:", mobileNumber);
+      console.error("   Message:", message);
+      console.error("   Error Name:", error.name);
+      console.error("   Error Code:", error.code);
+      console.error("   Environment:", process.env.NODE_ENV || 'development');
+      console.error("❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n");
+    }
+  })();
 });
 
 /**
