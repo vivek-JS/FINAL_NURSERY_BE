@@ -59,6 +59,28 @@ async function sendWhatsAppMessage(phone, text) {
     console.log(`   ✅ WATI_TOKEN length: ${WATI_TOKEN?.length || 0} characters`);
     console.log(`   ✅ WATI_TOKEN preview: ${WATI_TOKEN ? `${WATI_TOKEN.substring(0, 30)}...` : 'MISSING'}`);
     console.log(`   ✅ WATI_TOKEN from env: ${process.env.WATI_TOKEN ? 'YES' : 'NO (using default)'}`);
+    
+    // Check if token is a JWT and try to decode expiration
+    if (WATI_TOKEN && WATI_TOKEN.includes('.')) {
+      try {
+        const tokenParts = WATI_TOKEN.split('.');
+        if (tokenParts.length === 3) {
+          const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
+          if (payload.exp) {
+            const expirationDate = new Date(payload.exp * 1000);
+            const now = new Date();
+            const isExpired = expirationDate < now;
+            console.log(`   🔑 Token expiration: ${expirationDate.toISOString()}`);
+            console.log(`   🔑 Token expired: ${isExpired ? 'YES ⚠️' : 'NO ✅'}`);
+            if (isExpired) {
+              console.error(`   ❌ TOKEN IS EXPIRED! Please get a new token from WATI dashboard.`);
+            }
+          }
+        }
+      } catch (e) {
+        // Not a JWT or can't decode, skip
+      }
+    }
 
     // Validate phone number
     if (!phone) {
@@ -86,8 +108,8 @@ async function sendWhatsAppMessage(phone, text) {
       ? WATI_BASE_URL.slice(0, -1) 
       : WATI_BASE_URL;
     
-    // Use query parameter approach (MOST RELIABLE per WATI docs)
-    // Format: /api/v1/sendSessionMessage/91{phone}?messageText={message}
+    // Use query parameter method (PROVEN TO WORK in Postman)
+    // Format: POST /api/v1/sendSessionMessage/91{phone}?messageText={encodedMessage}
     const encodedMessage = encodeURIComponent(text);
     const url = `${baseUrl}/api/v1/sendSessionMessage/91${phoneNumber}?messageText=${encodedMessage}`;
     
@@ -105,15 +127,13 @@ async function sendWhatsAppMessage(phone, text) {
       console.log(`      Protocol: ${urlObj.protocol}`);
       console.log(`      Host: ${urlObj.host}`);
       console.log(`      Path: ${urlObj.pathname}`);
-      console.log(`      Query: ${urlObj.search}`);
-      console.log(`      Full URL (first 100 chars): ${url.substring(0, 100)}...`);
+      console.log(`      Query: ${urlObj.search.substring(0, 100)}${urlObj.search.length > 100 ? '...' : ''}`);
     } catch (urlError) {
       console.error("   ❌ Invalid URL:", urlError.message);
       console.error(`   📋 URL components:`);
       console.error(`      Base URL: ${WATI_BASE_URL}`);
       console.error(`      Base URL (cleaned): ${baseUrl}`);
       console.error(`      Phone: 91${phoneNumber}`);
-      console.error(`      Message: ${text.substring(0, 50)}...`);
       console.error(`      Full URL: ${url}`);
       return { success: false, error: `Invalid URL: ${urlError.message}` };
     }
@@ -123,50 +143,25 @@ async function sendWhatsAppMessage(phone, text) {
       ? WATI_TOKEN 
       : `Bearer ${WATI_TOKEN}`;
     
-    console.log("   📤 Sending message to WATI API (using query parameter method)...");
+    console.log("   📤 Sending message to WATI API (using query parameter method - PROVEN WORKING)...");
     console.log(`   📋 Request details:`);
     console.log(`      Method: POST`);
     console.log(`      URL: ${url.substring(0, 150)}${url.length > 150 ? '...' : ''}`);
-    console.log(`      Authorization header: ${authToken.substring(0, 40)}...`);
-    console.log(`      Token starts with Bearer: ${authToken.startsWith('Bearer ')}`);
-    console.log(`      Body: NONE (using query parameter)`);
+    console.log(`      Authorization: ${authToken.substring(0, 40)}...`);
+    console.log(`      Body: EMPTY (using query parameter)`);
     
-    // Try query parameter method first (as per WATI docs)
+    // Use query parameter method (as per working Postman request)
     let response = await fetch(url, {
       method: "POST",
       headers: {
         "Authorization": authToken,
         // NO Content-Type header when using query param
-        // NO Accept header when using query param  
+        // NO Accept header when using query param
       },
       // NO body - message is in query parameter
     });
     
-    console.log(`   📡 Query param method - Status: ${response.status} ${response.statusText}`);
-    
-    // If 401, try with body format as fallback
-    if (response.status === 401) {
-      console.log("\n   ⚠️  Query param method returned 401, trying body format with messageText...");
-      const bodyUrl = `${baseUrl}/api/v1/sendSessionMessage/91${phoneNumber}`;
-      console.log(`   🔄 Fallback URL: ${bodyUrl}`);
-      console.log(`   🔄 Using body with messageText field`);
-      
-      response = await fetch(bodyUrl, {
-        method: "POST",
-        headers: {
-          "Authorization": authToken,
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
-        body: JSON.stringify({
-          messageText: text,
-        }),
-      });
-      console.log(`   📡 Body format - Status: ${response.status} ${response.statusText}`);
-    }
-
     console.log(`   📡 Response status: ${response.status} ${response.statusText}`);
-    console.log(`   📡 Response headers:`, Object.fromEntries(response.headers.entries()));
     
     // Handle response (might be JSON or text)
     let data;
@@ -180,13 +175,71 @@ async function sendWhatsAppMessage(phone, text) {
       data = { raw: textData || '' };
     }
     
-    if (response.ok) {
+    // WATI can return 200 OK but with result: false
+    // Check both HTTP status AND result field
+    const isSuccess = response.ok && data.result !== false;
+    
+    if (isSuccess) {
       console.log("   ✅ Message sent successfully");
       return { success: true, data };
     } else {
+      // If failed, try body format as fallback
+      if (response.status === 401 || (response.ok && data.result === false)) {
+        console.log("\n   ⚠️  Query param method failed, trying body format with 'message' field...");
+        const bodyUrl = `${baseUrl}/api/v1/sendSessionMessage/91${phoneNumber}`;
+        console.log(`   🔄 Fallback URL: ${bodyUrl}`);
+        
+        const fallbackResponse = await fetch(bodyUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": authToken,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+          },
+          body: JSON.stringify({
+            message: text,
+          }),
+        });
+        
+        console.log(`   📡 Body format fallback - Status: ${fallbackResponse.status} ${fallbackResponse.statusText}`);
+        
+        // Handle fallback response
+        let fallbackData;
+        const fallbackContentType = fallbackResponse.headers.get('content-type');
+        if (fallbackContentType && fallbackContentType.includes('application/json')) {
+          fallbackData = await fallbackResponse.json();
+          console.log("   📡 Fallback RESPONSE (JSON):", JSON.stringify(fallbackData, null, 2));
+        } else {
+          const fallbackText = await fallbackResponse.text();
+          console.log("   📡 Fallback RESPONSE (Text):", fallbackText || '(empty)');
+          fallbackData = { raw: fallbackText || '' };
+        }
+        
+        if (fallbackResponse.ok && fallbackData.result !== false) {
+          console.log("   ✅ Message sent successfully (via fallback)");
+          return { success: true, data: fallbackData };
+        }
+        
+        // Fallback also failed, continue with error handling
+        data = fallbackData;
+        response = fallbackResponse;
+      }
+      
       console.error("   ❌ WATI API error:");
       console.error(`      Status: ${response.status} ${response.statusText}`);
       console.error(`      Response:`, data);
+      
+      // Check for specific WATI error messages
+      if (data.info) {
+        console.error(`      WATI Info: ${data.info}`);
+        
+        if (data.info.includes("empty") || data.info.includes("session")) {
+          console.error("\n   💡 SESSION ERROR:");
+          console.error(`      The phone number ${phoneNumber} needs an ACTIVE SESSION.`);
+          console.error(`      This means the user must send a message TO your WATI number FIRST.`);
+          console.error(`      Once they message you, the session is active for 24 hours.`);
+        }
+      }
       
       // Special handling for 401 Unauthorized
       if (response.status === 401) {
