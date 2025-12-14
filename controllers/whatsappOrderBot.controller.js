@@ -199,8 +199,9 @@ async function sendWhatsAppMessage(phone, text) {
         method: "POST",
         headers: {
           "Authorization": authToken,
+          "User-Agent": "Node.js/WhatsApp-Bot",
+          "Accept": "*/*",
           // NO Content-Type header when using query param
-          // NO Accept header when using query param
         },
         // NO body - message is in query parameter
         // Add timeout for Render (30 seconds max)
