@@ -18,6 +18,8 @@ export const createProduct = async (req, res) => {
       reorderLevel,
       hsn,
       gst,
+      plantId, // For seeds category
+      subtypeId, // For seeds category
     } = req.body;
 
     // Check if product code already exists
@@ -29,7 +31,7 @@ export const createProduct = async (req, res) => {
       });
     }
 
-    const product = new Product({
+    const productData = {
       code,
       name,
       description,
@@ -43,16 +45,69 @@ export const createProduct = async (req, res) => {
       hsn,
       gst: gst || 0,
       createdBy: req.user._id,
-    });
+    };
+
+    // Add plantId and subtypeId only if category is "seeds"
+    if (category === 'seeds') {
+      // Explicitly check for valid values (not null, undefined, or empty string)
+      const validPlantId = plantId && 
+        plantId !== null && 
+        plantId !== undefined && 
+        plantId !== 'null' && 
+        plantId !== 'undefined' && 
+        String(plantId).trim() !== '';
+      
+      if (validPlantId) {
+        productData.plantId = plantId;
+      }
+      
+      const validSubtypeId = subtypeId && 
+        subtypeId !== null && 
+        subtypeId !== undefined && 
+        subtypeId !== 'null' && 
+        subtypeId !== 'undefined' && 
+        String(subtypeId).trim() !== '';
+      
+      if (validSubtypeId) {
+        productData.subtypeId = subtypeId;
+      }
+      
+      // Log for debugging
+      console.log('Product creation - category:', category, 'plantId:', plantId, 'subtypeId:', subtypeId, 'validPlantId:', validPlantId);
+    }
+
+    const product = new Product(productData);
 
     await product.save();
 
-    await product.populate(['primaryUnit', 'secondaryUnit', 'createdBy']);
+    await product.populate(['primaryUnit', 'secondaryUnit', 'createdBy', 'plantId']);
+    
+    // Convert to plain object for easier manipulation
+    const productObj = product.toObject ? product.toObject() : product;
+
+    // Manually populate subtype information if plantId and subtypeId exist
+    if (productObj.plantId && productObj.subtypeId) {
+      try {
+        const { default: PlantCms } = await import('../models/plantCms.model.js');
+        const plant = await PlantCms.findById(productObj.plantId).select('name subtypes').lean();
+        if (plant) {
+          const subtype = plant.subtypes?.id(productObj.subtypeId);
+          if (subtype) {
+            productObj.subtype = {
+              _id: subtype._id,
+              name: subtype.name,
+            };
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching subtype for product ${productObj._id}:`, error);
+      }
+    }
 
     res.status(201).json({
       success: true,
       message: 'Product created successfully',
-      data: product,
+      data: productObj,
     });
   } catch (error) {
     console.error('Error creating product:', error);
@@ -99,16 +154,41 @@ export const getAllProducts = async (req, res) => {
 
     const [products, total] = await Promise.all([
       Product.find(query)
-        .populate(['primaryUnit', 'secondaryUnit', 'createdBy'])
+        .populate(['primaryUnit', 'secondaryUnit', 'createdBy', 'plantId'])
         .sort(sort)
         .skip(skip)
-        .limit(parseInt(limit)),
+        .limit(parseInt(limit))
+        .lean(), // Use lean for easier manipulation
       Product.countDocuments(query),
     ]);
 
+    // Manually populate subtype information for products with plantId and subtypeId
+    const { default: PlantCms } = await import('../models/plantCms.model.js');
+    const productsWithSubtype = await Promise.all(
+      products.map(async (product) => {
+        if (product.plantId && product.subtypeId) {
+          try {
+            const plant = await PlantCms.findById(product.plantId).select('name subtypes').lean();
+            if (plant) {
+              const subtype = plant.subtypes?.id(product.subtypeId);
+              if (subtype) {
+                product.subtype = {
+                  _id: subtype._id,
+                  name: subtype.name,
+                };
+              }
+            }
+          } catch (error) {
+            console.error(`Error fetching subtype for product ${product._id}:`, error);
+          }
+        }
+        return product;
+      })
+    );
+
     res.json({
       success: true,
-      data: products,
+      data: productsWithSubtype,
       pagination: {
         total,
         page: parseInt(page),
@@ -130,13 +210,33 @@ export const getAllProducts = async (req, res) => {
 export const getProductById = async (req, res) => {
   try {
     const product = await Product.findById(req.params.id)
-      .populate(['primaryUnit', 'secondaryUnit', 'createdBy', 'updatedBy']);
+      .populate(['primaryUnit', 'secondaryUnit', 'createdBy', 'updatedBy', 'plantId'])
+      .lean(); // Use lean for easier manipulation
 
     if (!product) {
       return res.status(404).json({
         success: false,
         message: 'Product not found',
       });
+    }
+
+    // Manually populate subtype information if plantId and subtypeId exist
+    if (product.plantId && product.subtypeId) {
+      try {
+        const { default: PlantCms } = await import('../models/plantCms.model.js');
+        const plant = await PlantCms.findById(product.plantId).select('name subtypes').lean();
+        if (plant) {
+          const subtype = plant.subtypes?.id(product.subtypeId);
+          if (subtype) {
+            product.subtype = {
+              _id: subtype._id,
+              name: subtype.name,
+            };
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching subtype for product ${product._id}:`, error);
+      }
     }
 
     // Get batches for this product
@@ -219,6 +319,8 @@ export const updateProduct = async (req, res) => {
       hsn,
       gst,
       isActive,
+      plantId, // For seeds category
+      subtypeId, // For seeds category
     } = req.body;
 
     const product = await Product.findById(req.params.id);
@@ -244,15 +346,47 @@ export const updateProduct = async (req, res) => {
     if (gst !== undefined) product.gst = gst;
     if (isActive !== undefined) product.isActive = isActive;
 
+    // Update plantId and subtypeId only if category is "seeds"
+    if (category === 'seeds') {
+      if (plantId !== undefined) product.plantId = plantId || null;
+      if (subtypeId !== undefined) product.subtypeId = subtypeId || null;
+    } else {
+      // Clear plantId and subtypeId if category is not "seeds"
+      product.plantId = null;
+      product.subtypeId = null;
+    }
+
     product.updatedBy = req.user._id;
 
     await product.save();
-    await product.populate(['primaryUnit', 'secondaryUnit', 'createdBy', 'updatedBy']);
+    await product.populate(['primaryUnit', 'secondaryUnit', 'createdBy', 'updatedBy', 'plantId']);
+    
+    // Convert to plain object for easier manipulation
+    const productObj = product.toObject ? product.toObject() : product;
+
+    // Manually populate subtype information if plantId and subtypeId exist
+    if (productObj.plantId && productObj.subtypeId) {
+      try {
+        const { default: PlantCms } = await import('../models/plantCms.model.js');
+        const plant = await PlantCms.findById(productObj.plantId).select('name subtypes').lean();
+        if (plant) {
+          const subtype = plant.subtypes?.id(productObj.subtypeId);
+          if (subtype) {
+            productObj.subtype = {
+              _id: subtype._id,
+              name: subtype.name,
+            };
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching subtype for product ${productObj._id}:`, error);
+      }
+    }
 
     res.json({
       success: true,
       message: 'Product updated successfully',
-      data: product,
+      data: productObj,
     });
   } catch (error) {
     console.error('Error updating product:', error);
@@ -310,11 +444,37 @@ export const getLowStockProducts = async (req, res) => {
       $expr: {
         $lte: ['$currentStock', '$reorderLevel'],
       },
-    }).populate(['primaryUnit', 'secondaryUnit']);
+    })
+      .populate(['primaryUnit', 'secondaryUnit', 'plantId'])
+      .lean(); // Use lean for easier manipulation
+
+    // Manually populate subtype information for products with plantId and subtypeId
+    const { default: PlantCms } = await import('../models/plantCms.model.js');
+    const productsWithSubtype = await Promise.all(
+      products.map(async (product) => {
+        if (product.plantId && product.subtypeId) {
+          try {
+            const plant = await PlantCms.findById(product.plantId).select('name subtypes').lean();
+            if (plant) {
+              const subtype = plant.subtypes?.id(product.subtypeId);
+              if (subtype) {
+                product.subtype = {
+                  _id: subtype._id,
+                  name: subtype.name,
+                };
+              }
+            }
+          } catch (error) {
+            console.error(`Error fetching subtype for product ${product._id}:`, error);
+          }
+        }
+        return product;
+      })
+    );
 
     res.json({
       success: true,
-      data: products,
+      data: productsWithSubtype,
     });
   } catch (error) {
     console.error('Error fetching low stock products:', error);

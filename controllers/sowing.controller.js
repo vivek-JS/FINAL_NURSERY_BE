@@ -2,6 +2,7 @@ import Sowing from "../models/sowing.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
+import InventoryOutward from "../models/inventoryOutward.model.js";
 import moment from "moment";
 import mongoose from "mongoose";
 
@@ -13,13 +14,16 @@ export const createSowing = async (req, res) => {
       subtypeId,
       sowingDate,
       totalQuantityRequired,
+      sowedPlant, // For PRIMARY location - plants sowed
       slotId,
       orderId,
       orderNumber,
       reminderBeforeDays,
       notes,
+      batchNumber, // Batch number (mandatory - from packets or form field)
       createdBy,
       sowingLocation, // OFFICE or PRIMARY
+      packets, // Array of packets from outward entries
     } = req.body;
 
     // Validate plant and subtype
@@ -39,9 +43,23 @@ export const createSowing = async (req, res) => {
       return res.status(404).json({ message: "Subtype not found" });
     }
 
-    let effectivePlantReadyDays = Number(subtype.plantReadyDays) || 0;
-    let slotPlantReadyDays = null;
+    // Get plantReadyDays from PlantCMS (subtype), not from slot
+    const plantReadyDays = Number(subtype.plantReadyDays) || 0;
+    
+    if (!plantReadyDays || plantReadyDays <= 0) {
+      return res.status(400).json({
+        message: "Plant Ready Days not configured for this subtype. Please update plant settings.",
+      });
+    }
 
+    // Calculate plantReadyDate = sowingDate + plantReadyDays
+    const sowingMoment = moment(sowingDate, "DD-MM-YYYY");
+    const plantReadyDate = sowingMoment
+      .clone()
+      .add(plantReadyDays, "days")
+      .format("DD-MM-YYYY");
+
+    // Validate slot if provided
     let slotObjectId = null;
     if (slotId) {
       if (!mongoose.Types.ObjectId.isValid(slotId)) {
@@ -56,7 +74,7 @@ export const createSowing = async (req, res) => {
 
       if (!slotDoc) {
         return res.status(404).json({
-          message: "Slot not found for the provided slotId",
+          message: "Slot not found",
         });
       }
 
@@ -66,50 +84,88 @@ export const createSowing = async (req, res) => {
         });
       }
 
-      for (const subtypeSlot of slotDoc.subtypeSlots || []) {
-        if (subtypeSlot.subtypeId?.toString() !== subtypeId.toString()) {
-          continue;
-        }
-
-        const matchedSlot = (subtypeSlot.slots || []).find(
-          (slot) => slot._id.toString() === slotObjectId.toString()
-        );
-
-        if (matchedSlot) {
-          slotPlantReadyDays = Number(matchedSlot.plantReadyDays) || 0;
-          break;
-        }
-      }
-
-      if (slotPlantReadyDays === null) {
+      // Verify slot exists for this subtype
+      const subtypeSlot = slotDoc.subtypeSlots.find(
+        st => st.subtypeId?.toString() === subtypeId.toString()
+      );
+      
+      if (!subtypeSlot) {
         return res.status(404).json({
           message: "Slot not found for the selected subtype",
         });
       }
 
-      if (!slotPlantReadyDays || slotPlantReadyDays <= 0) {
-        return res.status(400).json({
-          message:
-            "Plant Ready Days not set for this slot. Please update slot settings before creating sowing.",
+      const matchedSlot = subtypeSlot.slots.find(
+        (slot) => slot._id.toString() === slotObjectId.toString()
+      );
+
+      if (!matchedSlot) {
+        return res.status(404).json({
+          message: "Slot not found",
         });
       }
-
-      effectivePlantReadyDays = slotPlantReadyDays;
     }
 
-    if (!effectivePlantReadyDays || effectivePlantReadyDays <= 0) {
+    // Determine actual slotId (provided or found) before creating sowing record
+    let actualSlotIdForSowing = slotId;
+    let actualSlotObjectIdForSowing = slotObjectId;
+    
+    if (!slotId) {
+      try {
+        // Extract year from plantReadyDate (format: DD-MM-YYYY)
+        // Slot should match based on plantReadyDate = sowingDate + plantReadyDays
+        const plantReadyMoment = moment(plantReadyDate, "DD-MM-YYYY");
+        if (!plantReadyMoment.isValid()) {
+          console.error(`Invalid plantReadyDate format: ${plantReadyDate}`);
+        } else {
+          const year = plantReadyMoment.year();
+          
+          // Find the slot for this plant, subtype, and year
+          const plantSlotDoc = await PlantSlot.findOne({
+            plantId: new mongoose.Types.ObjectId(plantId),
+            year: year,
+            "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(subtypeId)
+          }).lean();
+
+          if (plantSlotDoc) {
+            const subtypeSlot = plantSlotDoc.subtypeSlots.find(
+              st => st.subtypeId?.toString() === subtypeId.toString()
+            );
+
+            if (subtypeSlot && subtypeSlot.slots && subtypeSlot.slots.length > 0) {
+              // Find a slot where plantReadyDate (sowingDate + plantReadyDays) falls within the slot's date range
+              const matchingSlot = subtypeSlot.slots.find(slot => {
+                if (!slot.startDay || !slot.endDay) return false;
+                const startDate = moment(slot.startDay, "DD-MM-YYYY");
+                const endDate = moment(slot.endDay, "DD-MM-YYYY");
+                return plantReadyMoment.isBetween(startDate, endDate, null, '[]'); // inclusive
+              });
+
+              if (matchingSlot) {
+                // Use the matching slot
+                actualSlotIdForSowing = matchingSlot._id.toString();
+                actualSlotObjectIdForSowing = matchingSlot._id;
+                console.log(`✅ Found matching slot for plantReadyDate ${plantReadyDate} (sowingDate: ${sowingDate} + ${plantReadyDays} days): slot ${actualSlotIdForSowing} (${matchingSlot.startDay} to ${matchingSlot.endDay})`);
+              } else {
+                // Fallback: Use the first slot for this subtype if no match found
+                actualSlotIdForSowing = subtypeSlot.slots[0]._id.toString();
+                actualSlotObjectIdForSowing = subtypeSlot.slots[0]._id;
+                console.log(`⚠️  No slot found matching plantReadyDate ${plantReadyDate} (sowingDate: ${sowingDate} + ${plantReadyDays} days), using first slot: ${actualSlotIdForSowing} (${subtypeSlot.slots[0].startDay} to ${subtypeSlot.slots[0].endDay})`);
+              }
+            }
+          }
+        }
+      } catch (findSlotError) {
+        console.error("Error finding slot for sowing record:", findSlotError);
+      }
+    }
+
+    // Validate batchNumber (mandatory)
+    if (!batchNumber || batchNumber.trim() === "") {
       return res.status(400).json({
-        message:
-          "Plant Ready Days not configured. Please update slot or subtype settings.",
+        message: "Batch number is required. Please provide a batch number.",
       });
     }
-
-    // Calculate expected ready date using effective plant ready days
-    const sowingMoment = moment(sowingDate, "DD-MM-YYYY");
-    const expectedReadyDate = sowingMoment
-      .clone()
-      .add(effectivePlantReadyDays, "days")
-      .format("DD-MM-YYYY");
 
     // Create sowing record
     const sowing = new Sowing({
@@ -117,60 +173,178 @@ export const createSowing = async (req, res) => {
       plantName: plant.name,
       subtypeId,
       subtypeName: subtype.name,
-      slotId,
+      slotId: actualSlotIdForSowing,
       sowingDate,
-      plantReadyDays: effectivePlantReadyDays,
-      expectedReadyDate,
+      plantReadyDays: plantReadyDays,
+      expectedReadyDate: plantReadyDate,
       totalQuantityRequired,
       sowingLocation: sowingLocation || "OFFICE", // Default to OFFICE
       orderId,
       orderNumber,
       reminderBeforeDays: reminderBeforeDays || 5,
       notes,
+      batchNumber: batchNumber.trim(), // Store batch number
       createdBy,
     });
 
     const savedSowing = await sowing.save();
 
-    // Update the slot's officeSowed or primarySowed based on location
-    if (slotId) {
+    // Handle packets if provided (for OFFICE location with outward entries)
+    if (packets && Array.isArray(packets) && packets.length > 0 && sowingLocation === "OFFICE") {
       try {
-        const slot = await PlantSlot.findOne({
-          "subtypeSlots.slots._id": slotObjectId || slotId
-        });
+        for (const packet of packets) {
+          const { outwardId, itemId, quantity: packetQuantity, batchNumber } = packet;
+          
+          // Validate packet data
+          if (!outwardId || !itemId) {
+            console.warn(`Skipping invalid packet (missing outwardId or itemId):`, packet);
+            continue;
+          }
 
-        if (slot) {
-          // Find the subtype and slot
-          const subtypeSlot = slot.subtypeSlots.find(st => 
-            st.slots.some(s => s._id.toString() === slotId.toString())
-          );
+          // Validate quantity is a positive number
+          const quantityToUse = Number(packetQuantity);
+          if (!quantityToUse || quantityToUse <= 0 || isNaN(quantityToUse)) {
+            console.warn(`Skipping invalid packet (invalid quantity: ${packetQuantity}):`, packet);
+            continue;
+          }
 
-          if (subtypeSlot) {
-            const slotToUpdate = subtypeSlot.slots.find(s => s._id.toString() === slotId.toString());
-            
-            if (slotToUpdate) {
-              const location = sowingLocation || "OFFICE";
-              
-              // Update the appropriate field based on location
-              if (location === "PRIMARY") {
-                slotToUpdate.primarySowed = (slotToUpdate.primarySowed || 0) + totalQuantityRequired;
-                
-                // ADD to totalPlants (total capacity) when PRIMARY sowing is done
-                slotToUpdate.totalPlants = (slotToUpdate.totalPlants || 0) + totalQuantityRequired;
-                
-                console.log(`Updated slot ${slotId}: primarySowed += ${totalQuantityRequired}, totalPlants (capacity) += ${totalQuantityRequired}`);
-              } else {
-                // OFFICE sowing - just track seeds outward from office
-                slotToUpdate.officeSowed = (slotToUpdate.officeSowed || 0) + totalQuantityRequired;
-                console.log(`Updated slot ${slotId}: officeSowed += ${totalQuantityRequired} (seed outward)`);
+          // Find the outward entry
+          const outward = await InventoryOutward.findById(outwardId);
+          if (!outward) {
+            console.warn(`Outward entry not found: ${outwardId}`);
+            continue;
+          }
+
+          // Find the item in the outward entry
+          const item = outward.items.id(itemId);
+          if (!item) {
+            console.warn(`Item not found in outward ${outwardId}: ${itemId}`);
+            continue;
+          }
+
+          // Calculate available quantity (total - already used)
+          const currentUsedQty = item.usedQuantity || 0;
+          const totalQty = item.quantity || 0;
+          const availableQty = totalQty - currentUsedQty;
+
+          console.log(`Processing packet: outwardId=${outwardId}, itemId=${itemId}, requestedQuantity=${quantityToUse}, availableQty=${availableQty}, currentUsedQty=${currentUsedQty}, totalQty=${totalQty}`);
+
+          // Validate available quantity
+          if (quantityToUse > availableQty) {
+            console.warn(`Insufficient quantity in outward ${outwardId}, item ${itemId}. Available: ${availableQty}, Requested: ${quantityToUse}`);
+            // Use only the available quantity (don't exceed)
+            item.usedQuantity = currentUsedQty + availableQty;
+            console.log(`Used only available quantity: ${availableQty} (instead of requested ${quantityToUse})`);
+          } else {
+            // Update usedQuantity with the exact quantity from packet
+            item.usedQuantity = currentUsedQty + quantityToUse;
+            console.log(`Updated usedQuantity: ${currentUsedQty} + ${quantityToUse} = ${item.usedQuantity}`);
+          }
+
+          // Link sowing to the outward item (add to array if not already present)
+          if (!item.sowing || !Array.isArray(item.sowing)) {
+            item.sowing = [];
+          }
+          if (!item.sowing.includes(savedSowing._id)) {
+            item.sowing.push(savedSowing._id);
+          }
+
+          // Save the outward entry
+          await outward.save();
+          
+          console.log(`✅ Updated outward ${outwardId}, item ${itemId}: usedQuantity = ${item.usedQuantity} (was ${currentUsedQty}, added ${quantityToUse})`);
+        }
+      } catch (packetError) {
+        console.error("Error updating outward packets:", packetError);
+        // Don't fail the whole request if packet update fails, but log it
+      }
+    }
+
+    // Update slot using the slotId we found/used for the sowing record
+    if (actualSlotIdForSowing) {
+      try {
+        const searchSlotId = actualSlotObjectIdForSowing || new mongoose.Types.ObjectId(actualSlotIdForSowing);
+        const location = sowingLocation || "OFFICE";
+        
+        // Determine quantities:
+        // - If sowedPlant is provided, use it for primarySowed and totalPlants
+        // - For officeSowed, use totalQuantityRequired based on location
+        const sowedPlantValue = (sowedPlant !== undefined && sowedPlant !== null) ? Number(sowedPlant) : null;
+        const officeQuantity = location === "OFFICE" ? totalQuantityRequired : 0;
+        
+        // Build update operation
+        const updateOperation = {
+          $set: {
+            'subtypeSlots.$[subtypeSlot].slots.$[slot].sowingDate': sowingDate,
+            'subtypeSlots.$[subtypeSlot].slots.$[slot].plantReadyDate': plantReadyDate
+          },
+          $inc: {}
+        };
+        
+        // Update officeSowed based on location
+        if (location === "OFFICE" && officeQuantity > 0) {
+          updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].officeSowed'] = officeQuantity;
+        }
+        
+        // If sowedPlant is provided, update primarySowed and totalPlants with that value
+        if (sowedPlantValue !== null && sowedPlantValue > 0) {
+          updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = sowedPlantValue;
+          updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = sowedPlantValue;
+          console.log(`📊 Will update primarySowed and totalPlants with sowedPlant: ${sowedPlantValue}`);
+        } else if (location === "PRIMARY") {
+          // Fallback: For PRIMARY location without sowedPlant, use totalQuantityRequired
+          updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = totalQuantityRequired;
+          updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = totalQuantityRequired;
+        }
+        
+        // Use updateOne with arrayFilters for reliable nested updates
+        const updateResult = await PlantSlot.updateOne(
+          { "subtypeSlots.slots._id": searchSlotId },
+          updateOperation,
+          {
+            arrayFilters: [
+              { "subtypeSlot.slots._id": actualSlotIdForSowing },
+              { "slot._id": actualSlotIdForSowing }
+            ]
+          }
+        );
+        
+        if (updateResult.matchedCount > 0) {
+          console.log(`✅ Updated slot ${actualSlotIdForSowing}: sowingDate=${sowingDate}, plantReadyDate=${plantReadyDate}`);
+          if (sowedPlantValue) {
+            console.log(`   - primarySowed += ${sowedPlantValue} (from sowedPlant)`);
+            console.log(`   - totalPlants += ${sowedPlantValue} (from sowedPlant)`);
+          }
+          if (officeQuantity > 0) {
+            console.log(`   - officeSowed += ${officeQuantity}`);
+          }
+          
+          // Update plantsSowed separately if primarySowed was updated
+          if (sowedPlantValue !== null && sowedPlantValue > 0) {
+            const slot = await PlantSlot.findOne({ "subtypeSlots.slots._id": searchSlotId });
+            if (slot) {
+              const subtypeSlot = slot.subtypeSlots.find(st => 
+                st.slots.some(s => s._id.toString() === actualSlotIdForSowing.toString())
+              );
+              if (subtypeSlot) {
+                const slotToUpdate = subtypeSlot.slots.find(s => s._id.toString() === actualSlotIdForSowing.toString());
+                if (slotToUpdate) {
+                  // Update plantsSowed to match primarySowed
+                  slotToUpdate.plantsSowed = slotToUpdate.primarySowed || 0;
+                  
+                  // Calculate gap: gap = totalBookedPlants - primarySowed
+                  const totalBookedPlants = slotToUpdate.totalBookedPlants || 0;
+                  const gap = totalBookedPlants - (slotToUpdate.primarySowed || 0);
+                  console.log(`📊 Slot ${actualSlotIdForSowing} - totalBookedPlants: ${totalBookedPlants}, primarySowed: ${slotToUpdate.primarySowed}, gap: ${gap}`);
+                  
+                  slot.markModified('subtypeSlots');
+                  await slot.save();
+                }
               }
-              
-              // plantsSowed = ONLY primarySowed (actual plants in field)
-              slotToUpdate.plantsSowed = slotToUpdate.primarySowed || 0;
-              
-              await slot.save();
             }
           }
+        } else {
+          console.error(`❌ Slot ${actualSlotIdForSowing} not found or update failed`);
         }
       } catch (slotError) {
         console.error("Error updating slot:", slotError);
@@ -191,12 +365,397 @@ export const createSowing = async (req, res) => {
   }
 };
 
+// Create multiple sowing records in a single request
+export const createMultipleSowings = async (req, res) => {
+  try {
+    const { sowings } = req.body; // Array of sowing entries
+
+    if (!Array.isArray(sowings) || sowings.length === 0) {
+      return res.status(400).json({
+        message: "sowings array is required and must not be empty",
+      });
+    }
+
+    const results = [];
+    const errors = [];
+
+    // Process each sowing entry
+    for (let i = 0; i < sowings.length; i++) {
+      const sowingData = sowings[i];
+      
+      try {
+        const {
+          plantId,
+          subtypeId,
+          sowingDate,
+          totalQuantityRequired,
+          sowedPlant, // For PRIMARY location - plants sowed
+          slotId,
+          orderId,
+          orderNumber,
+          reminderBeforeDays,
+          notes,
+          batchNumber, // Batch number (mandatory - from packets or form field)
+          createdBy,
+          sowingLocation, // OFFICE or PRIMARY
+          packets, // Array of packets from outward entries
+        } = sowingData;
+
+        // Validate batchNumber (mandatory)
+        if (!batchNumber || batchNumber.trim() === "") {
+          errors.push({
+            index: i,
+            error: "Batch number is required. Please provide a batch number.",
+          });
+          continue;
+        }
+
+        // Validate plant and subtype
+        const plant = await PlantCms.findById(plantId);
+        if (!plant) {
+          errors.push({ index: i, error: "Plant not found" });
+          continue;
+        }
+
+        if (!plant.sowingAllowed) {
+          errors.push({ 
+            index: i, 
+            error: "Sowing is not allowed for this plant. Please enable 'Sowing Allowed' in plant settings." 
+          });
+          continue;
+        }
+
+        const subtype = plant.subtypes.id(subtypeId);
+        if (!subtype) {
+          errors.push({ index: i, error: "Subtype not found" });
+          continue;
+        }
+
+        // Get plantReadyDays from PlantCMS (subtype), not from slot
+        const plantReadyDays = Number(subtype.plantReadyDays) || 0;
+        
+        if (!plantReadyDays || plantReadyDays <= 0) {
+          errors.push({ 
+            index: i, 
+            error: "Plant Ready Days not configured for this subtype. Please update plant settings." 
+          });
+          continue;
+        }
+
+        // Calculate plantReadyDate = sowingDate + plantReadyDays
+        const sowingMoment = moment(sowingDate, "DD-MM-YYYY");
+        const plantReadyDate = sowingMoment
+          .clone()
+          .add(plantReadyDays, "days")
+          .format("DD-MM-YYYY");
+
+        // Validate slot if provided
+        let slotObjectId = null;
+        if (slotId) {
+          if (!mongoose.Types.ObjectId.isValid(slotId)) {
+            errors.push({ index: i, error: "Invalid slotId provided" });
+            continue;
+          }
+          slotObjectId = new mongoose.Types.ObjectId(slotId);
+
+          const slotDoc = await PlantSlot.findOne(
+            { "subtypeSlots.slots._id": slotObjectId },
+            { subtypeSlots: 1, plantId: 1 }
+          ).lean();
+
+          if (!slotDoc) {
+            errors.push({ index: i, error: "Slot not found" });
+            continue;
+          }
+
+          if (slotDoc.plantId?.toString() !== plant._id.toString()) {
+            errors.push({ index: i, error: "Slot does not belong to the selected plant" });
+            continue;
+          }
+
+          // Verify slot exists for this subtype
+          const subtypeSlot = slotDoc.subtypeSlots.find(
+            st => st.subtypeId?.toString() === subtypeId.toString()
+          );
+          
+          if (!subtypeSlot) {
+            errors.push({ index: i, error: "Slot not found for the selected subtype" });
+            continue;
+          }
+
+          const matchedSlot = subtypeSlot.slots.find(
+            (slot) => slot._id.toString() === slotObjectId.toString()
+          );
+
+          if (!matchedSlot) {
+            errors.push({ index: i, error: "Slot not found" });
+            continue;
+          }
+        }
+
+        // Determine actual slotId (provided or found) before creating sowing record
+        let actualSlotIdForSowing = slotId;
+        let actualSlotObjectIdForSowing = slotObjectId;
+        
+        if (!slotId) {
+          try {
+            // Extract year from plantReadyDate (format: DD-MM-YYYY)
+            // Slot should match based on plantReadyDate = sowingDate + plantReadyDays
+            const plantReadyMoment = moment(plantReadyDate, "DD-MM-YYYY");
+            if (!plantReadyMoment.isValid()) {
+              console.error(`Invalid plantReadyDate format: ${plantReadyDate}`);
+            } else {
+              const year = plantReadyMoment.year();
+              
+              // Find the slot for this plant, subtype, and year
+              const plantSlotDoc = await PlantSlot.findOne({
+                plantId: new mongoose.Types.ObjectId(plantId),
+                year: year,
+                "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(subtypeId)
+              }).lean();
+
+              if (plantSlotDoc) {
+                const subtypeSlot = plantSlotDoc.subtypeSlots.find(
+                  st => st.subtypeId?.toString() === subtypeId.toString()
+                );
+
+                if (subtypeSlot && subtypeSlot.slots && subtypeSlot.slots.length > 0) {
+                  // Find a slot where plantReadyDate (sowingDate + plantReadyDays) falls within the slot's date range
+                  const matchingSlot = subtypeSlot.slots.find(slot => {
+                    if (!slot.startDay || !slot.endDay) return false;
+                    const startDate = moment(slot.startDay, "DD-MM-YYYY");
+                    const endDate = moment(slot.endDay, "DD-MM-YYYY");
+                    return plantReadyMoment.isBetween(startDate, endDate, null, '[]'); // inclusive
+                  });
+
+                  if (matchingSlot) {
+                    // Use the matching slot
+                    actualSlotIdForSowing = matchingSlot._id.toString();
+                    actualSlotObjectIdForSowing = matchingSlot._id;
+                    console.log(`✅ Found matching slot for plantReadyDate ${plantReadyDate} (sowingDate: ${sowingDate} + ${plantReadyDays} days): slot ${actualSlotIdForSowing} (${matchingSlot.startDay} to ${matchingSlot.endDay})`);
+                  } else {
+                    // Fallback: Use the first slot for this subtype if no match found
+                    actualSlotIdForSowing = subtypeSlot.slots[0]._id.toString();
+                    actualSlotObjectIdForSowing = subtypeSlot.slots[0]._id;
+                    console.log(`⚠️  No slot found matching plantReadyDate ${plantReadyDate} (sowingDate: ${sowingDate} + ${plantReadyDays} days), using first slot: ${actualSlotIdForSowing} (${subtypeSlot.slots[0].startDay} to ${subtypeSlot.slots[0].endDay})`);
+                  }
+                }
+              }
+            }
+          } catch (findSlotError) {
+            console.error("Error finding slot for sowing record:", findSlotError);
+          }
+        }
+
+        // Create sowing record
+        const sowing = new Sowing({
+          plantId,
+          plantName: plant.name,
+          subtypeId,
+          subtypeName: subtype.name,
+          slotId: actualSlotIdForSowing,
+          sowingDate,
+          plantReadyDays: plantReadyDays,
+          expectedReadyDate: plantReadyDate,
+          totalQuantityRequired,
+          sowingLocation: sowingLocation || "OFFICE",
+          orderId,
+          orderNumber,
+          reminderBeforeDays: reminderBeforeDays || 5,
+          notes,
+          batchNumber: batchNumber.trim(), // Store batch number (mandatory)
+          createdBy,
+        });
+
+        const savedSowing = await sowing.save();
+
+        // Handle packets if provided (for OFFICE location)
+        if (packets && Array.isArray(packets) && packets.length > 0 && sowingLocation === "OFFICE") {
+          try {
+            for (const packet of packets) {
+              const { outwardId, itemId, quantity: packetQuantity, batchNumber } = packet;
+              
+              if (!outwardId || !itemId) {
+                console.warn(`Skipping invalid packet (missing outwardId or itemId):`, packet);
+                continue;
+              }
+
+              const quantityToUse = Number(packetQuantity);
+              if (!quantityToUse || quantityToUse <= 0 || isNaN(quantityToUse)) {
+                console.warn(`Skipping invalid packet (invalid quantity: ${packetQuantity}):`, packet);
+                continue;
+              }
+
+              const outward = await InventoryOutward.findById(outwardId);
+              if (!outward) {
+                console.warn(`Outward entry not found: ${outwardId}`);
+                continue;
+              }
+
+              const item = outward.items.id(itemId);
+              if (!item) {
+                console.warn(`Item not found in outward ${outwardId}: ${itemId}`);
+                continue;
+              }
+
+              const currentUsedQty = item.usedQuantity || 0;
+              const totalQty = item.quantity || 0;
+              const availableQty = totalQty - currentUsedQty;
+
+              if (quantityToUse > availableQty) {
+                console.warn(`Insufficient quantity in outward ${outwardId}, item ${itemId}. Available: ${availableQty}, Requested: ${quantityToUse}`);
+                item.usedQuantity = currentUsedQty + availableQty;
+              } else {
+                item.usedQuantity = currentUsedQty + quantityToUse;
+              }
+
+              if (!item.sowing || !Array.isArray(item.sowing)) {
+                item.sowing = [];
+              }
+              if (!item.sowing.includes(savedSowing._id)) {
+                item.sowing.push(savedSowing._id);
+              }
+
+              await outward.save();
+            }
+          } catch (packetError) {
+            console.error("Error updating outward packets:", packetError);
+          }
+        }
+
+        // Update slot using the slotId we found/used for the sowing record
+        if (actualSlotIdForSowing) {
+          try {
+            const searchSlotId = actualSlotObjectIdForSowing || new mongoose.Types.ObjectId(actualSlotIdForSowing);
+            const location = sowingLocation || "OFFICE";
+            
+            // Determine quantities:
+            // - If sowedPlant is provided, use it for primarySowed and totalPlants
+            // - For officeSowed, use totalQuantityRequired based on location
+            const sowedPlantValue = (sowedPlant !== undefined && sowedPlant !== null) ? Number(sowedPlant) : null;
+            const officeQuantity = location === "OFFICE" ? totalQuantityRequired : 0;
+            
+            // Build update operation
+            const updateOperation = {
+              $set: {
+                'subtypeSlots.$[subtypeSlot].slots.$[slot].sowingDate': sowingDate,
+                'subtypeSlots.$[subtypeSlot].slots.$[slot].plantReadyDate': plantReadyDate
+              },
+              $inc: {}
+            };
+            
+            // Update officeSowed based on location
+            if (location === "OFFICE" && officeQuantity > 0) {
+              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].officeSowed'] = officeQuantity;
+            }
+            
+            // If sowedPlant is provided, update primarySowed and totalPlants with that value
+            if (sowedPlantValue !== null && sowedPlantValue > 0) {
+              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = sowedPlantValue;
+              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = sowedPlantValue;
+              console.log(`📊 Will update primarySowed and totalPlants with sowedPlant: ${sowedPlantValue}`);
+            } else if (location === "PRIMARY") {
+              // Fallback: For PRIMARY location without sowedPlant, use totalQuantityRequired
+              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = totalQuantityRequired;
+              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = totalQuantityRequired;
+            }
+            
+            // Use updateOne with arrayFilters for reliable nested updates
+            const updateResult = await PlantSlot.updateOne(
+              { "subtypeSlots.slots._id": searchSlotId },
+              updateOperation,
+              {
+                arrayFilters: [
+                  { "subtypeSlot.slots._id": actualSlotIdForSowing },
+                  { "slot._id": actualSlotIdForSowing }
+                ]
+              }
+            );
+            
+            if (updateResult.matchedCount > 0) {
+              console.log(`✅ Updated slot ${actualSlotIdForSowing}: sowingDate=${sowingDate}, plantReadyDate=${plantReadyDate}`);
+              if (sowedPlantValue) {
+                console.log(`   - primarySowed += ${sowedPlantValue} (from sowedPlant)`);
+                console.log(`   - totalPlants += ${sowedPlantValue} (from sowedPlant)`);
+              }
+              if (officeQuantity > 0) {
+                console.log(`   - officeSowed += ${officeQuantity}`);
+              }
+              
+              // Update plantsSowed separately if primarySowed was updated
+              if (sowedPlantValue !== null && sowedPlantValue > 0) {
+                const slot = await PlantSlot.findOne({ "subtypeSlots.slots._id": searchSlotId });
+                if (slot) {
+                  const subtypeSlot = slot.subtypeSlots.find(st => 
+                    st.slots.some(s => s._id.toString() === actualSlotIdForSowing.toString())
+                  );
+                  if (subtypeSlot) {
+                    const slotToUpdate = subtypeSlot.slots.find(s => s._id.toString() === actualSlotIdForSowing.toString());
+                    if (slotToUpdate) {
+                      // Update plantsSowed to match primarySowed
+                      slotToUpdate.plantsSowed = slotToUpdate.primarySowed || 0;
+                      
+                      // Calculate gap: gap = totalBookedPlants - primarySowed
+                      const totalBookedPlants = slotToUpdate.totalBookedPlants || 0;
+                      const gap = totalBookedPlants - (slotToUpdate.primarySowed || 0);
+                      console.log(`📊 Slot ${actualSlotIdForSowing} - totalBookedPlants: ${totalBookedPlants}, primarySowed: ${slotToUpdate.primarySowed}, gap: ${gap}`);
+                      
+                      slot.markModified('subtypeSlots');
+                      await slot.save();
+                    }
+                  }
+                }
+              }
+            } else {
+              console.error(`❌ Slot ${actualSlotIdForSowing} not found or update failed`);
+            }
+          } catch (slotError) {
+            console.error("Error updating slot:", slotError);
+          }
+        }
+
+        results.push({
+          index: i,
+          success: true,
+          data: savedSowing,
+        });
+      } catch (error) {
+        console.error(`Error creating sowing at index ${i}:`, error);
+        errors.push({
+          index: i,
+          error: error.message || "Error creating sowing record",
+        });
+      }
+    }
+
+    // Return results
+    const successCount = results.length;
+    const errorCount = errors.length;
+
+    return res.status(successCount > 0 ? 201 : 400).json({
+      message: `Created ${successCount} sowing record(s)${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
+      success: successCount,
+      failed: errorCount,
+      results,
+      errors: errorCount > 0 ? errors : undefined,
+    });
+  } catch (error) {
+    console.error("Error creating multiple sowings:", error);
+    return res.status(500).json({
+      message: "Error creating multiple sowing records",
+      error: error.message,
+    });
+  }
+};
+
 // Get all sowing records with filters
 export const getSowings = async (req, res) => {
   try {
     const {
       plantId,
+      subtypeId,
       status,
+      date,
       fromDate,
       toDate,
       showPendingOnly,
@@ -208,10 +767,15 @@ export const getSowings = async (req, res) => {
     const query = {};
 
     if (plantId) query.plantId = plantId;
+    if (subtypeId) query.subtypeId = subtypeId;
     if (status) query.status = status;
 
-    // Date range filter
-    if (fromDate && toDate) {
+    // Date filter - priority: exact date > date range
+    if (date) {
+      // Single date filter (exact match for sowingDate)
+      query.sowingDate = date;
+    } else if (fromDate && toDate) {
+      // Date range filter
       query.sowingDate = {
         $gte: fromDate,
         $lte: toDate,
@@ -234,13 +798,63 @@ export const getSowings = async (req, res) => {
       .populate("updatedBy", "name phoneNumber")
       .sort({ sowingDate: -1, createdAt: -1 })
       .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .skip((page - 1) * limit)
+      .lean();
+
+    // Enhance sowings with slot details
+    const sowingsWithSlotDetails = await Promise.all(
+      sowings.map(async (sowing) => {
+        const sowingObj = { ...sowing };
+        
+        // If slotId exists, fetch slot details
+        if (sowing.slotId) {
+          try {
+            const slotDoc = await PlantSlot.findOne(
+              { "subtypeSlots.slots._id": new mongoose.Types.ObjectId(sowing.slotId) },
+              { subtypeSlots: 1, plantId: 1, year: 1 }
+            ).lean();
+
+            if (slotDoc) {
+              // Find the specific slot
+              for (const subtypeSlot of slotDoc.subtypeSlots || []) {
+                const slot = subtypeSlot.slots?.find(
+                  s => s._id.toString() === sowing.slotId.toString()
+                );
+                
+                if (slot) {
+                  sowingObj.slotDetails = {
+                    _id: slot._id,
+                    startDay: slot.startDay,
+                    endDay: slot.endDay,
+                    month: slot.month,
+                    year: slotDoc.year,
+                    primarySowed: slot.primarySowed || 0,
+                    officeSowed: slot.officeSowed || 0,
+                    totalPlants: slot.totalPlants || 0,
+                    plantsSowed: slot.plantsSowed || 0,
+                    sowingDate: slot.sowingDate,
+                    plantReadyDate: slot.plantReadyDate,
+                    status: slot.status !== false,
+                  };
+                  break;
+                }
+              }
+            }
+          } catch (slotError) {
+            console.error(`Error fetching slot details for sowing ${sowing._id}:`, slotError);
+            // Continue without slot details
+          }
+        }
+        
+        return sowingObj;
+      })
+    );
 
     const count = await Sowing.countDocuments(query);
 
     return res.status(200).json({
       success: true,
-      data: sowings,
+      data: sowingsWithSlotDetails,
       totalPages: Math.ceil(count / limit),
       currentPage: page,
       total: count,

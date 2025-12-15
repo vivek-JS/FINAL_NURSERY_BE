@@ -22,6 +22,14 @@ const productSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    // Plant and subtype references (for seeds category only)
+    plantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'PlantCms',
+    },
+    subtypeId: {
+      type: mongoose.Schema.Types.ObjectId,
+    },
     primaryUnit: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'MeasurementUnit',

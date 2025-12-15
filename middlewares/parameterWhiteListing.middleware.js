@@ -55,6 +55,9 @@ const allowedParams = [
   "showAvailable", // For showing available plants
   "showGap", // For showing booking gap
   "minAvailable", // Minimum available plants threshold
+  "showPendingOnly", // For showing pending sowings only
+  "showOverdueOnly", // For showing overdue sowings only
+  "toDate", // End date for date range filters
 ];
 
 const parameterWhiteListing = (req, res, next) => {

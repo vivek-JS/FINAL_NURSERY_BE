@@ -27,6 +27,16 @@ const outwardItemSchema = new mongoose.Schema({
     type: Number,
   },
   notes: String,
+  // Sowing references - for production purpose with seeds category (can be used in multiple sowings)
+  sowing: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Sowing',
+  }],
+  usedQuantity: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
 });
 
 const inventoryOutwardSchema = new mongoose.Schema(

@@ -1,6 +1,7 @@
 import express from "express";
 import {
   createSowing,
+  createMultipleSowings,
   getSowings,
   getSowingById,
   updateOfficeSowed,
@@ -27,6 +28,7 @@ const router = express.Router();
 
 // Sowing CRUD routes
 router.post("/", createSowing); // Create new sowing record
+router.post("/multiple", createMultipleSowings); // Create multiple sowing records
 router.get("/", getSowings); // Get all sowings with filters
 router.get("/stats", getSowingStats); // Get sowing statistics
 router.get("/insights", (req, res) => {

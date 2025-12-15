@@ -2,6 +2,7 @@ import InventoryOutward from '../models/inventoryOutward.model.js';
 import Batch from '../models/batch.model.js';
 import Product from '../models/product.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
+import mongoose from 'mongoose';
 
 // Helper function to create inventory transaction
 const createOutwardTransaction = async (item, outward, user) => {
@@ -439,6 +440,335 @@ export const getAvailableBatches = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching available batches',
+      error: error.message,
+    });
+  }
+};
+
+// Get available packets (outward entries) for sowing - for seeds category, production purpose, issued status
+export const getAvailablePacketsForSowing = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    if (!productId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Product ID is required',
+      });
+    }
+
+    // Get product to check category
+    const product = await Product.findById(productId);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found',
+      });
+    }
+
+    // Find issued outward entries with this product, purpose=production, status=issued
+    const outwards = await InventoryOutward.find({
+      purpose: 'production',
+      status: 'issued',
+      'items.product': productId,
+    })
+      .populate([
+        'items.product',
+        'items.batch',
+        'items.unit',
+        'items.sowing',
+      ])
+      .sort({ outwardDate: -1 });
+
+    // Extract items with available quantity (quantity - usedQuantity)
+    const availablePackets = [];
+    
+    outwards.forEach((outward) => {
+      outward.items.forEach((item) => {
+        if (item.product._id.toString() === productId) {
+          const availableQty = item.quantity - (item.usedQuantity || 0);
+          if (availableQty > 0) {
+            availablePackets.push({
+              outwardId: outward._id,
+              outwardNumber: outward.outwardNumber,
+              outwardDate: outward.outwardDate,
+              itemId: item._id,
+              batch: item.batch,
+              batchNumber: item.batch?.batchNumber || 'N/A',
+              quantity: item.quantity,
+              usedQuantity: item.usedQuantity || 0,
+              availableQuantity: availableQty,
+              unit: item.unit,
+              rate: item.rate,
+              amount: item.amount,
+              sowing: item.sowing,
+            });
+          }
+        }
+      });
+    });
+
+    res.json({
+      success: true,
+      data: availablePackets,
+    });
+  } catch (error) {
+    console.error('Error fetching available packets:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching available packets',
+      error: error.message,
+    });
+  }
+};
+
+// Get ALL available packets for sowing (all seeds products) - Single API call
+// Optional query params: plantId, subtypeId to filter by plant/subtype
+export const getAllAvailablePacketsForSowing = async (req, res) => {
+  try {
+    const { plantId, subtypeId } = req.query;
+
+    // Build product query - filter by plantId and subtypeId if provided
+    const productQuery = {
+      category: 'seeds',
+      isActive: true,
+    };
+
+    if (plantId) {
+      productQuery.plantId = plantId;
+    }
+
+    if (subtypeId) {
+      productQuery.subtypeId = subtypeId;
+    }
+
+    // Get seeds products (filtered by plant/subtype if provided)
+    const seedsProducts = await Product.find(productQuery)
+      .select('_id name code plantId subtypeId')
+      .populate('plantId', 'name');
+
+    if (!seedsProducts || seedsProducts.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+      });
+    }
+
+    // Include ALL seeds products, even if they don't have plantId
+    // Products without plantId will be grouped separately
+    const productIds = seedsProducts.map(p => p._id);
+
+    // Find all issued outward entries with seeds products, purpose=production, status=issued
+    const outwards = await InventoryOutward.find({
+      purpose: 'production',
+      status: 'issued',
+      'items.product': { $in: productIds },
+    })
+      .populate([
+        {
+          path: 'items.product',
+          populate: {
+            path: 'plantId',
+            select: 'name',
+          },
+        },
+        'items.batch',
+        'items.unit',
+        'items.sowing',
+      ])
+      .sort({ outwardDate: -1 })
+      .lean(); // Use lean() for better performance
+
+    // Extract items with available quantity and map to products
+    const productMap = new Map();
+    seedsProducts.forEach(product => {
+      const plantId = product.plantId?._id || product.plantId;
+      // Include all products, even if plantId is null/undefined
+      productMap.set(product._id.toString(), {
+        productId: product._id,
+        productName: product.name,
+        productCode: product.code,
+        plantId: plantId && plantId.toString() !== 'unknown' ? plantId : null,
+        plantName: product.plantId?.name || 'Unknown Plant',
+        subtypeId: product.subtypeId || null,
+      });
+    });
+
+    const allPackets = [];
+    
+    outwards.forEach((outward) => {
+      outward.items.forEach((item) => {
+        const productIdStr = item.product?._id?.toString() || item.product?.toString();
+        const productInfo = productMap.get(productIdStr);
+        
+        if (productInfo) {
+          const availableQty = item.quantity - (item.usedQuantity || 0);
+          if (availableQty > 0) {
+            // Get plant and subtype info from populated product
+            const populatedProduct = item.product;
+            const finalPlantId = populatedProduct?.plantId?._id?.toString() || populatedProduct?.plantId?.toString() || productInfo.plantId?.toString();
+            const finalPlantName = populatedProduct?.plantId?.name || productInfo.plantName;
+            const finalSubtypeId = populatedProduct?.subtypeId?.toString() || productInfo.subtypeId?.toString();
+
+            allPackets.push({
+              outwardId: outward._id,
+              outwardNumber: outward.outwardNumber,
+              outwardDate: outward.outwardDate,
+              itemId: item._id,
+              batch: item.batch,
+              batchNumber: item.batch?.batchNumber || 'N/A',
+              quantity: item.quantity,
+              usedQuantity: item.usedQuantity || 0,
+              availableQuantity: availableQty,
+              unit: item.unit,
+              rate: item.rate,
+              amount: item.amount,
+              sowing: item.sowing,
+              productId: productInfo.productId,
+              productName: productInfo.productName,
+              productCode: productInfo.productCode,
+              plantId: finalPlantId,
+              plantName: finalPlantName,
+              subtypeId: finalSubtypeId,
+            });
+          }
+        }
+      });
+    });
+
+    // Group packets by plant -> subtype
+    // Include ALL packets, even if they don't have plantId
+    const groupedData = {};
+    
+    allPackets.forEach(packet => {
+      // Handle packets with or without plantId
+      let plantKey = packet.plantId;
+      let plantName = packet.plantName || 'Unknown Plant';
+      
+      // If no valid plantId, use a special key for unassigned products
+      if (!plantKey || 
+          typeof plantKey !== 'string' || 
+          plantKey === 'unknown' ||
+          !/^[0-9a-fA-F]{24}$/.test(plantKey)) {
+        plantKey = 'no-plant';
+        plantName = 'Unassigned Products';
+      }
+      
+      const subtypeKey = packet.subtypeId || 'no-subtype';
+      
+      if (!groupedData[plantKey]) {
+        groupedData[plantKey] = {
+          plantId: plantKey === 'no-plant' ? null : plantKey,
+          plantName: plantName,
+          subtypes: {},
+        };
+      }
+      
+      if (!groupedData[plantKey].subtypes[subtypeKey]) {
+        groupedData[plantKey].subtypes[subtypeKey] = {
+          subtypeId: subtypeKey === 'no-subtype' ? null : subtypeKey,
+          packets: [],
+        };
+      }
+      
+      groupedData[plantKey].subtypes[subtypeKey].packets.push(packet);
+    });
+
+    // Convert to array format and get subtype names
+    const { default: PlantCms } = await import('../models/plantCms.model.js');
+    
+    const result = await Promise.all(
+      Object.values(groupedData).map(async (plantGroup) => {
+        // Handle unassigned products (no plantId)
+        if (!plantGroup.plantId || plantGroup.plantId === 'no-plant') {
+          // For products without plantId, just return the data as-is
+          const subtypes = Object.entries(plantGroup.subtypes).map(([subtypeId, subtypeData]) => {
+            return {
+              subtypeId: subtypeId === 'no-subtype' ? null : subtypeId,
+              subtypeName: subtypeId === 'no-subtype' ? 'No Subtype' : 'Unknown Subtype',
+              packets: subtypeData.packets,
+            };
+          });
+          
+          return {
+            plantId: null,
+            plantName: plantGroup.plantName,
+            subtypes: subtypes,
+          };
+        }
+        
+        // Validate plantId is a valid ObjectId before querying
+        if (!mongoose.Types.ObjectId.isValid(plantGroup.plantId)) {
+          console.warn(`Invalid plantId: ${plantGroup.plantId}, treating as unassigned`);
+          const subtypes = Object.entries(plantGroup.subtypes).map(([subtypeId, subtypeData]) => {
+            return {
+              subtypeId: subtypeId === 'no-subtype' ? null : subtypeId,
+              subtypeName: 'Unknown Subtype',
+              packets: subtypeData.packets,
+            };
+          });
+          return {
+            plantId: null,
+            plantName: 'Unassigned Products',
+            subtypes: subtypes,
+          };
+        }
+        
+        const plant = await PlantCms.findById(plantGroup.plantId).select('name subtypes');
+        if (!plant) {
+          console.warn(`Plant not found for plantId: ${plantGroup.plantId}, treating as unassigned`);
+          const subtypes = Object.entries(plantGroup.subtypes).map(([subtypeId, subtypeData]) => {
+            return {
+              subtypeId: subtypeId === 'no-subtype' ? null : subtypeId,
+              subtypeName: 'Unknown Subtype',
+              packets: subtypeData.packets,
+            };
+          });
+          return {
+            plantId: null,
+            plantName: 'Unassigned Products',
+            subtypes: subtypes,
+          };
+        }
+        
+        const subtypes = await Promise.all(
+          Object.entries(plantGroup.subtypes).map(async ([subtypeId, subtypeData]) => {
+            if (subtypeId === 'no-subtype') {
+              return {
+                subtypeId: null,
+                subtypeName: 'No Subtype',
+                packets: subtypeData.packets,
+              };
+            }
+            const subtype = plant?.subtypes?.id(subtypeId);
+            return {
+              subtypeId: subtypeId,
+              subtypeName: subtype?.name || 'Unknown Subtype',
+              packets: subtypeData.packets,
+            };
+          })
+        );
+        
+        return {
+          plantId: plantGroup.plantId,
+          plantName: plant?.name || plantGroup.plantName,
+          subtypes: subtypes,
+        };
+      })
+    );
+
+    // Filter out null results (shouldn't happen now, but keep for safety)
+    const filteredResult = result.filter(item => item !== null);
+
+    res.json({
+      success: true,
+      data: filteredResult,
+    });
+  } catch (error) {
+    console.error('Error fetching all available packets:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching available packets',
       error: error.message,
     });
   }
