@@ -141,7 +141,7 @@ export const addSubtype = async (req, res) => {
 // Update a specific subtype
 export const updateSubtype = async (req, res) => {
   const { plantId, subtypeId } = req.params;
-  const { name, description, characteristics } = req.body;
+  const { name, description, characteristics, plantReadyDays } = req.body;
 
   try {
     const plant = await PlantCms.findById(plantId);
@@ -156,9 +156,10 @@ export const updateSubtype = async (req, res) => {
       return res.status(404).json({ message: "Subtype not found" });
     }
 
-    subtype.name = name || subtype.name;
-    subtype.description = description || subtype.description;
-    subtype.characteristics = characteristics || subtype.characteristics;
+    if (name !== undefined) subtype.name = name;
+    if (description !== undefined) subtype.description = description;
+    if (characteristics !== undefined) subtype.characteristics = characteristics;
+    if (plantReadyDays !== undefined) subtype.plantReadyDays = Number(plantReadyDays) || 0;
 
     const updatedPlant = await plant.save();
 

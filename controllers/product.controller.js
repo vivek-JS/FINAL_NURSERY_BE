@@ -220,22 +220,31 @@ export const getProductById = async (req, res) => {
       });
     }
 
-    // Manually populate subtype information if plantId and subtypeId exist
-    if (product.plantId && product.subtypeId) {
+    // Manually populate plant and subtype information if plantId and subtypeId exist
+    if (product.plantId) {
       try {
         const { default: PlantCms } = await import('../models/plantCms.model.js');
         const plant = await PlantCms.findById(product.plantId).select('name subtypes').lean();
         if (plant) {
-          const subtype = plant.subtypes?.id(product.subtypeId);
-          if (subtype) {
-            product.subtype = {
-              _id: subtype._id,
-              name: subtype.name,
-            };
+          // Add plant object
+          product.plant = {
+            _id: plant._id,
+            name: plant.name,
+          };
+          
+          // Add subtype if subtypeId exists
+          if (product.subtypeId) {
+            const subtype = plant.subtypes?.id(product.subtypeId);
+            if (subtype) {
+              product.subtype = {
+                _id: subtype._id,
+                name: subtype.name,
+              };
+            }
           }
         }
       } catch (error) {
-        console.error(`Error fetching subtype for product ${product._id}:`, error);
+        console.error(`Error fetching plant/subtype for product ${product._id}:`, error);
       }
     }
 
@@ -285,12 +294,124 @@ export const getProductById = async (req, res) => {
       .sort({ transactionDate: -1 })
       .limit(20);
 
+    // Get packets information for seeds type products (both available and used)
+    let packets = [];
+    if (product.category && product.category.toLowerCase() === 'seeds') {
+      try {
+        const { default: InventoryOutward } = await import('../models/inventoryOutward.model.js');
+        
+        // Find all issued outward entries with this product, purpose=production, status=issued
+        const outwards = await InventoryOutward.find({
+          purpose: 'production',
+          status: 'issued',
+          'items.product': product._id,
+        })
+          .populate([
+            {
+              path: 'items.product',
+              select: 'name code plantId subtypeId',
+              populate: [
+                {
+                  path: 'plantId',
+                  select: 'name',
+                },
+              ],
+            },
+            'items.batch',
+            'items.unit',
+            {
+              path: 'items.sowing',
+              select: 'plantId plantName subtypeId subtypeName sowingDate expectedReadyDate totalQuantityRequired officeSowed primarySowed totalSowed status orderId orderNumber sowingLocation notes',
+              populate: [
+                {
+                  path: 'plantId',
+                  select: 'name',
+                },
+                {
+                  path: 'orderId',
+                  select: 'orderNumber orderDate',
+                },
+              ],
+            },
+          ])
+          .sort({ outwardDate: -1 })
+          .lean();
+
+        // Extract all items (both available and used)
+        outwards.forEach((outward) => {
+          outward.items.forEach((item) => {
+            if (item.product && item.product._id.toString() === product._id.toString()) {
+              const availableQty = item.quantity - (item.usedQuantity || 0);
+              
+              // Get plant and subtype info from product
+              let packetPlant = null;
+              let packetSubtype = null;
+              
+              // Get plant from product (already populated)
+              if (product.plant) {
+                packetPlant = product.plant;
+              } else if (product.plantId) {
+                // If plantId is populated as object
+                if (typeof product.plantId === 'object' && product.plantId.name) {
+                  packetPlant = {
+                    _id: product.plantId._id || product.plantId,
+                    name: product.plantId.name,
+                  };
+                } else if (item.product?.plantId) {
+                  // Try from item product
+                  if (typeof item.product.plantId === 'object' && item.product.plantId.name) {
+                    packetPlant = {
+                      _id: item.product.plantId._id || item.product.plantId,
+                      name: item.product.plantId.name,
+                    };
+                  }
+                }
+              }
+              
+              // Get subtype from product (already populated)
+              if (product.subtype) {
+                packetSubtype = product.subtype;
+              } else if (item.sowing && item.sowing.length > 0 && item.sowing[0].subtypeName) {
+                // Fallback to sowing subtype info
+                packetSubtype = {
+                  _id: item.sowing[0].subtypeId,
+                  name: item.sowing[0].subtypeName,
+                };
+              }
+              
+              packets.push({
+                outwardId: outward._id,
+                outwardNumber: outward.outwardNumber,
+                outwardDate: outward.outwardDate,
+                itemId: item._id,
+                batch: item.batch,
+                batchNumber: item.batch?.batchNumber || 'N/A',
+                quantity: item.quantity,
+                usedQuantity: item.usedQuantity || 0,
+                availableQuantity: availableQty,
+                unit: item.unit,
+                rate: item.rate,
+                amount: item.amount,
+                plant: packetPlant,
+                subtype: packetSubtype,
+                sowing: item.sowing || [],
+              });
+            }
+          });
+        });
+      } catch (error) {
+        console.error(`Error fetching packets for product ${product._id}:`, error);
+        // Continue without packets if there's an error
+      }
+    }
+
     res.json({
       success: true,
       data: {
         product,
         batches,
         recentTransactions,
+        ...(packets.length > 0 || product.category?.toLowerCase() === 'seeds' ? { packets } : {}),
       },
     });
   } catch (error) {

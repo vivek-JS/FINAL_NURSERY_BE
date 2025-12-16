@@ -1,0 +1,354 @@
+{
+  "success": true,
+  "data": {
+    "product": {
+      "_id": "693e9776334dd3c44422f518",
+      "code": "SEED-TOMATO-001",
+      "name": "Tomato Seeds - Hybrid",
+      "description": "High yield hybrid tomato seeds for greenhouse cultivation",
+      "category": "seeds",
+      "plantId": "60a1b2c3d4e5f6789012345a",
+      "subtypeId": "60a1b2c3d4e5f6789012345b",
+      "plant": {
+        "_id": "60a1b2c3d4e5f6789012345a",
+        "name": "Tomato"
+      },
+      "subtype": {
+        "_id": "60a1b2c3d4e5f6789012345b",
+        "name": "Hybrid"
+      },
+      "primaryUnit": {
+        "_id": "60a1b2c3d4e5f6789012345c",
+        "name": "Packets",
+        "symbol": "pkt",
+        "type": "count"
+      },
+      "secondaryUnit": null,
+      "conversionFactor": 1,
+      "minStockLevel": 10,
+      "maxStockLevel": 1000,
+      "reorderLevel": 50,
+      "currentStock": 150,
+      "stockValue": 15000,
+      "averagePrice": 100,
+      "hsn": "12099100",
+      "gst": 5,
+      "isActive": true,
+      "createdBy": {
+        "_id": "60a1b2c3d4e5f6789012345d",
+        "name": "Admin User",
+        "phoneNumber": 1234567890
+      },
+      "updatedBy": {
+        "_id": "60a1b2c3d4e5f6789012345d",
+        "name": "Admin User",
+        "phoneNumber": 1234567890
+      },
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-20T14:45:00.000Z"
+    },
+    "batches": [
+      {
+        "_id": "70b2c3d4e5f6789012345a",
+        "batchNumber": "BATCH-2024-001",
+        "product": "693e9776334dd3c44422f518",
+        "quantity": 200,
+        "receivedQuantity": 200,
+        "remainingQuantity": 50,
+        "receivedDate": "2024-01-10T00:00:00.000Z",
+        "unit": {
+          "_id": "60a1b2c3d4e5f6789012345c",
+          "name": "Packets",
+          "symbol": "pkt"
+        },
+        "supplier": {
+          "_id": "80c3d4e5f6789012345a",
+          "name": "Seed Supplier Co.",
+          "phone": "+91-9876543210",
+          "email": "supplier@example.com",
+          "address": "123 Supplier Street, City"
+        },
+        "costPrice": 100,
+        "manufacturingDate": "2024-01-01T00:00:00.000Z",
+        "expiryDate": "2025-12-31T00:00:00.000Z",
+        "status": "active",
+        "notes": "First batch of the year",
+        "createdAt": "2024-01-10T10:00:00.000Z",
+        "updatedAt": "2024-01-10T10:00:00.000Z"
+      },
+      {
+        "_id": "70b2c3d4e5f6789012345b",
+        "batchNumber": "BATCH-2024-002",
+        "product": "693e9776334dd3c44422f518",
+        "quantity": 150,
+        "receivedQuantity": 150,
+        "remainingQuantity": 150,
+        "receivedDate": "2024-01-20T00:00:00.000Z",
+        "unit": {
+          "_id": "60a1b2c3d4e5f6789012345c",
+          "name": "Packets",
+          "symbol": "pkt"
+        },
+        "supplier": {
+          "_id": "80c3d4e5f6789012345a",
+          "name": "Seed Supplier Co.",
+          "phone": "+91-9876543210",
+          "email": "supplier@example.com"
+        },
+        "costPrice": 100,
+        "manufacturingDate": "2024-01-15T00:00:00.000Z",
+        "expiryDate": "2025-12-31T00:00:00.000Z",
+        "status": "active",
+        "createdAt": "2024-01-20T10:00:00.000Z",
+        "updatedAt": "2024-01-20T10:00:00.000Z"
+      }
+    ],
+    "recentTransactions": [
+      {
+        "_id": "90d4e5f6789012345a",
+        "product": "693e9776334dd3c44422f518",
+        "batch": {
+          "_id": "70b2c3d4e5f6789012345a",
+          "batchNumber": "BATCH-2024-001"
+        },
+        "transactionType": "inward",
+        "quantity": 200,
+        "unit": {
+          "_id": "60a1b2c3d4e5f6789012345c",
+          "name": "Packets",
+          "symbol": "pkt"
+        },
+        "transactionDate": "2024-01-10T10:00:00.000Z",
+        "performedBy": {
+          "_id": "60a1b2c3d4e5f6789012345d",
+          "name": "Admin User"
+        },
+        "notes": "Initial stock received"
+      },
+      {
+        "_id": "90d4e5f6789012345b",
+        "product": "693e9776334dd3c44422f518",
+        "batch": {
+          "_id": "70b2c3d4e5f6789012345a",
+          "batchNumber": "BATCH-2024-001"
+        },
+        "transactionType": "outward",
+        "quantity": 50,
+        "unit": {
+          "_id": "60a1b2c3d4e5f6789012345c",
+          "name": "Packets",
+          "symbol": "pkt"
+        },
+        "transactionDate": "2024-01-15T09:00:00.000Z",
+        "performedBy": {
+          "_id": "60a1b2c3d4e5f6789012345d",
+          "name": "Admin User"
+        },
+        "notes": "Issued for production"
+      }
+    ],
+    "packets": [
+      {
+        "outwardId": "a0e5f6789012345a",
+        "outwardNumber": "OUT24010001",
+        "outwardDate": "2024-01-15T09:00:00.000Z",
+        "itemId": "b1f6789012345a",
+        "batch": {
+          "_id": "70b2c3d4e5f6789012345a",
+          "batchNumber": "BATCH-2024-001",
+          "product": "693e9776334dd3c44422f518",
+          "quantity": 200,
+          "receivedQuantity": 200,
+          "remainingQuantity": 50,
+          "receivedDate": "2024-01-10T00:00:00.000Z",
+          "costPrice": 100,
+          "status": "active"
+        },
+        "batchNumber": "BATCH-2024-001",
+        "quantity": 100,
+        "usedQuantity": 30,
+        "availableQuantity": 70,
+        "unit": {
+          "_id": "60a1b2c3d4e5f6789012345c",
+          "name": "Packets",
+          "symbol": "pkt",
+          "type": "count"
+        },
+        "rate": 100,
+        "amount": 10000,
+        "plant": {
+          "_id": "60a1b2c3d4e5f6789012345a",
+          "name": "Tomato"
+        },
+        "subtype": {
+          "_id": "60a1b2c3d4e5f6789012345b",
+          "name": "Hybrid"
+        },
+        "sowing": [
+          {
+            "_id": "c2f6789012345a",
+            "plantId": {
+              "_id": "60a1b2c3d4e5f6789012345a",
+              "name": "Tomato"
+            },
+            "plantName": "Tomato",
+            "subtypeId": "60a1b2c3d4e5f6789012345b",
+            "subtypeName": "Hybrid",
+            "sowingDate": "15-01-2024",
+            "expectedReadyDate": "20-02-2024",
+            "totalQuantityRequired": 500,
+            "officeSowed": 30,
+            "primarySowed": 0,
+            "totalSowed": 30,
+            "remainingToSow": 470,
+            "status": "PARTIALLY_SOWED",
+            "orderId": {
+              "_id": "d3f6789012345a",
+              "orderNumber": "ORD-2024-001",
+              "orderDate": "2024-01-10T00:00:00.000Z"
+            },
+            "orderNumber": "ORD-2024-001",
+            "sowingLocation": "OFFICE",
+            "notes": "Sowing in greenhouse section A, row 1-5",
+            "createdAt": "2024-01-15T09:30:00.000Z",
+            "updatedAt": "2024-01-15T10:00:00.000Z"
+          },
+          {
+            "_id": "c2f6789012345b",
+            "plantId": {
+              "_id": "60a1b2c3d4e5f6789012345a",
+              "name": "Tomato"
+            },
+            "plantName": "Tomato",
+            "subtypeId": "60a1b2c3d4e5f6789012345b",
+            "subtypeName": "Hybrid",
+            "sowingDate": "16-01-2024",
+            "expectedReadyDate": "21-02-2024",
+            "totalQuantityRequired": 300,
+            "officeSowed": 0,
+            "primarySowed": 0,
+            "totalSowed": 0,
+            "remainingToSow": 300,
+            "status": "PENDING",
+            "orderId": {
+              "_id": "d3f6789012345b",
+              "orderNumber": "ORD-2024-002",
+              "orderDate": "2024-01-12T00:00:00.000Z"
+            },
+            "orderNumber": "ORD-2024-002",
+            "sowingLocation": "BOTH",
+            "notes": "Pending sowing - waiting for slot availability",
+            "createdAt": "2024-01-16T08:00:00.000Z",
+            "updatedAt": "2024-01-16T08:00:00.000Z"
+          }
+        ]
+      },
+      {
+        "outwardId": "a0e5f6789012345b",
+        "outwardNumber": "OUT24010002",
+        "outwardDate": "2024-01-18T10:00:00.000Z",
+        "itemId": "b1f6789012345b",
+        "batch": {
+          "_id": "70b2c3d4e5f6789012345a",
+          "batchNumber": "BATCH-2024-001",
+          "product": "693e9776334dd3c44422f518",
+          "quantity": 200,
+          "receivedQuantity": 200,
+          "remainingQuantity": 50,
+          "receivedDate": "2024-01-10T00:00:00.000Z",
+          "costPrice": 100,
+          "status": "active"
+        },
+        "batchNumber": "BATCH-2024-001",
+        "quantity": 50,
+        "usedQuantity": 50,
+        "availableQuantity": 0,
+        "unit": {
+          "_id": "60a1b2c3d4e5f6789012345c",
+          "name": "Packets",
+          "symbol": "pkt",
+          "type": "count"
+        },
+        "rate": 100,
+        "amount": 5000,
+        "plant": {
+          "_id": "60a1b2c3d4e5f6789012345a",
+          "name": "Tomato"
+        },
+        "subtype": {
+          "_id": "60a1b2c3d4e5f6789012345b",
+          "name": "Hybrid"
+        },
+        "sowing": [
+          {
+            "_id": "c2f6789012345c",
+            "plantId": {
+              "_id": "60a1b2c3d4e5f6789012345a",
+              "name": "Tomato"
+            },
+            "plantName": "Tomato",
+            "subtypeId": "60a1b2c3d4e5f6789012345b",
+            "subtypeName": "Hybrid",
+            "sowingDate": "18-01-2024",
+            "expectedReadyDate": "23-02-2024",
+            "totalQuantityRequired": 200,
+            "officeSowed": 50,
+            "primarySowed": 0,
+            "totalSowed": 50,
+            "remainingToSow": 150,
+            "status": "PARTIALLY_SOWED",
+            "orderId": {
+              "_id": "d3f6789012345c",
+              "orderNumber": "ORD-2024-003",
+              "orderDate": "2024-01-15T00:00:00.000Z"
+            },
+            "orderNumber": "ORD-2024-003",
+            "sowingLocation": "OFFICE",
+            "notes": "Fully used packet - all 50 packets used in this sowing",
+            "createdAt": "2024-01-18T10:30:00.000Z",
+            "updatedAt": "2024-01-18T11:00:00.000Z"
+          }
+        ]
+      },
+      {
+        "outwardId": "a0e5f6789012345c",
+        "outwardNumber": "OUT24010003",
+        "outwardDate": "2024-01-20T11:00:00.000Z",
+        "itemId": "b1f6789012345c",
+        "batch": {
+          "_id": "70b2c3d4e5f6789012345b",
+          "batchNumber": "BATCH-2024-002",
+          "product": "693e9776334dd3c44422f518",
+          "quantity": 150,
+          "receivedQuantity": 150,
+          "remainingQuantity": 150,
+          "receivedDate": "2024-01-20T00:00:00.000Z",
+          "costPrice": 100,
+          "status": "active"
+        },
+        "batchNumber": "BATCH-2024-002",
+        "quantity": 80,
+        "usedQuantity": 0,
+        "availableQuantity": 80,
+        "unit": {
+          "_id": "60a1b2c3d4e5f6789012345c",
+          "name": "Packets",
+          "symbol": "pkt",
+          "type": "count"
+        },
+        "rate": 100,
+        "amount": 8000,
+        "plant": {
+          "_id": "60a1b2c3d4e5f6789012345a",
+          "name": "Tomato"
+        },
+        "subtype": {
+          "_id": "60a1b2c3d4e5f6789012345b",
+          "name": "Hybrid"
+        },
+        "sowing": []
+      }
+    ]
+  }
+}
+

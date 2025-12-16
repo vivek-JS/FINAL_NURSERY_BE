@@ -544,7 +544,7 @@ export const getAllAvailablePacketsForSowing = async (req, res) => {
 
     // Get seeds products (filtered by plant/subtype if provided)
     const seedsProducts = await Product.find(productQuery)
-      .select('_id name code plantId subtypeId')
+      .select('_id name code plantId subtypeId conversionFactor')
       .populate('plantId', 'name');
 
     if (!seedsProducts || seedsProducts.length === 0) {
@@ -591,6 +591,7 @@ export const getAllAvailablePacketsForSowing = async (req, res) => {
         plantId: plantId && plantId.toString() !== 'unknown' ? plantId : null,
         plantName: product.plantId?.name || 'Unknown Plant',
         subtypeId: product.subtypeId || null,
+        conversionFactor: product.conversionFactor || 1,
       });
     });
 
@@ -609,6 +610,7 @@ export const getAllAvailablePacketsForSowing = async (req, res) => {
             const finalPlantId = populatedProduct?.plantId?._id?.toString() || populatedProduct?.plantId?.toString() || productInfo.plantId?.toString();
             const finalPlantName = populatedProduct?.plantId?.name || productInfo.plantName;
             const finalSubtypeId = populatedProduct?.subtypeId?.toString() || productInfo.subtypeId?.toString();
+            const finalConversionFactor = populatedProduct?.conversionFactor || productInfo.conversionFactor || 1;
 
             allPackets.push({
               outwardId: outward._id,
@@ -630,6 +632,7 @@ export const getAllAvailablePacketsForSowing = async (req, res) => {
               plantId: finalPlantId,
               plantName: finalPlantName,
               subtypeId: finalSubtypeId,
+              conversionFactor: finalConversionFactor,
             });
           }
         }
@@ -734,17 +737,29 @@ export const getAllAvailablePacketsForSowing = async (req, res) => {
         const subtypes = await Promise.all(
           Object.entries(plantGroup.subtypes).map(async ([subtypeId, subtypeData]) => {
             if (subtypeId === 'no-subtype') {
+              const packetsWithReadyDays = subtypeData.packets.map(packet => ({
+                ...packet,
+                plantReadyDays: 0,
+              }));
               return {
                 subtypeId: null,
                 subtypeName: 'No Subtype',
-                packets: subtypeData.packets,
+                plantReadyDays: 0,
+                packets: packetsWithReadyDays,
               };
             }
             const subtype = plant?.subtypes?.id(subtypeId);
+            const plantReadyDays = subtype?.plantReadyDays || 0;
+            // Add plantReadyDays to each packet in this subtype
+            const packetsWithReadyDays = subtypeData.packets.map(packet => ({
+              ...packet,
+              plantReadyDays: plantReadyDays,
+            }));
             return {
               subtypeId: subtypeId,
               subtypeName: subtype?.name || 'Unknown Subtype',
-              packets: subtypeData.packets,
+              plantReadyDays: plantReadyDays,
+              packets: packetsWithReadyDays,
             };
           })
         );

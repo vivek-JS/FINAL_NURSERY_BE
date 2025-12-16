@@ -51,13 +51,16 @@ const allowedParams = [
   "t", // Alternative timestamp parameter
   "lookahead", // For alerts/reminders
   "pastWindow", // For alerts/reminders
-  "priority", // For filtering by priority (overdue, urgent, upcoming, future)
+  "priority", // For filtering by priority (overdue, urgent, upcoming - future is excluded)
+  "current", // Show only current priorities (urgent + upcoming), excludes future and overdue
   "showAvailable", // For showing available plants
   "showGap", // For showing booking gap
+  "gapFilter", // For filtering by gap type: "positive", "negative", "zero", or "all"
   "minAvailable", // Minimum available plants threshold
   "showPendingOnly", // For showing pending sowings only
   "showOverdueOnly", // For showing overdue sowings only
   "toDate", // End date for date range filters
+  "available", // For plants-gap-summary: return negative gaps (available/surplus) instead of positive gaps
 ];
 
 const parameterWhiteListing = (req, res, next) => {

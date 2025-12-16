@@ -282,6 +282,7 @@ import inventoryTransactionRoute from "./routes/inventoryTransaction.route.js";
 import inventoryRoute from "./routes/inventory.route.js";
 import purchaseRoute from "./routes/purchase.route.js";
 import sellOrderRoute from "./routes/sellOrder.route.js";
+import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -302,6 +303,7 @@ server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
+server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
 
 // Protected routes - require authentication
 server.use("/api/v1/farmer", authenticateToken, farmerRoute);

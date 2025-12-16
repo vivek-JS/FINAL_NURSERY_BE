@@ -21,6 +21,8 @@ import {
   getPlantAlerts,
   getPlantAvailability,
   getAllPlantsAvailability,
+  getPlantsGapSummary,
+  getSlotOrdersSummary,
 } from "../controllers/sowing.controller.js";
 import { sendSowingRemindersWhatsApp } from "../controllers/sowingWhatsApp.controller.js";
 
@@ -40,6 +42,8 @@ router.get("/plant-reminders", getPlantReminders); // Get plant reminders (plant
 router.get("/plant-alerts", getPlantAlerts); // Get plant alerts (plantId required, subtype-wise)
 router.get("/plant-availability", getPlantAvailability); // Get plant availability (plantId required, shows only available slots)
 router.get("/all-plants-availability", getAllPlantsAvailability); // Get all plants availability (date range mandatory, shows all plants with all subtypes)
+router.get("/plants-gap-summary", getPlantsGapSummary); // Get all plants with subtype-wise totalBookingGap summary
+router.get("/slot-orders/:slotId", getSlotOrdersSummary); // Get orders summary for a specific slot
 
 // WhatsApp integration for sowing reminders
 router.post("/whatsapp/reminders", sendSowingRemindersWhatsApp); // Generate and prepare sowing reminders for WhatsApp
