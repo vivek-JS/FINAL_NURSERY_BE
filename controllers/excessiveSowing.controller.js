@@ -357,11 +357,10 @@ export const getAvailablePlantsForExcessiveSowing = async (req, res) => {
             // Available = quantity - usedQuantity
             const outwardEntries = await InventoryOutward.find({
               'items.product': product._id,
-              purpose: 'production',
               status: { $in: ['approved', 'issued'] }, // Only approved/issued entries
             }).lean();
 
-            console.log(`[DEBUG] -- Found ${outwardEntries.length} outward entries with purpose=production`);
+            console.log(`[DEBUG] -- Found ${outwardEntries.length} outward entries (all purposes)`);
 
             // Calculate available packets (quantity - usedQuantity)
             const availablePackets = outwardEntries.reduce((sum, outward) => {
@@ -599,14 +598,12 @@ export const getDiagnosticInfo = async (req, res) => {
 
     // Check inventory outwards
     const totalOutwards = await InventoryOutward.countDocuments();
-    const productionOutwards = await InventoryOutward.countDocuments({
-      purpose: 'production',
+    const approvedOutwards = await InventoryOutward.countDocuments({
       status: { $in: ['approved', 'issued'] }
     });
     
     // Count outwards with available stock (quantity > usedQuantity)
     const outwardsWithStock = await InventoryOutward.find({
-      purpose: 'production',
       status: { $in: ['approved', 'issued'] }
     }).lean();
     
@@ -619,13 +616,12 @@ export const getDiagnosticInfo = async (req, res) => {
 
     diagnostic.inventoryOutwards = {
       total: totalOutwards,
-      withPurposeProduction: productionOutwards,
+      approvedOrIssued: approvedOutwards,
       withAvailableStock: outwardsWithAvailable
     };
 
     // Get sample outward
     const sampleOutward = await InventoryOutward.findOne({
-      purpose: 'production',
       status: { $in: ['approved', 'issued'] }
     })
       .select('purpose status items')
@@ -771,7 +767,6 @@ export const fixExcessiveSowingData = async (req, res) => {
 export const checkInventoryStock = async (req, res) => {
   try {
     const outwards = await InventoryOutward.find({
-      purpose: 'production',
       status: { $in: ['approved', 'issued'] }
     })
       .populate('items.product', 'name')
