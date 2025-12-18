@@ -4,6 +4,8 @@ import Sowing from '../models/sowing.model.js';
 import InventoryOutward from '../models/inventoryOutward.model.js';
 import Batch from '../models/batch.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
+import Product from '../models/product.model.js';
+import mongoose from 'mongoose';
 import moment from 'moment';
 import {
   logSowingRequestIssued,
@@ -583,7 +585,6 @@ export const cancelSowingRequest = async (req, res) => {
 
     // Step 2: Revert inventory - update batch remainingQuantity and product currentStock
     const revertedBatches = [];
-    const Product = mongoose.model('Product');
     
     if (outward.items && Array.isArray(outward.items)) {
       for (const item of outward.items) {
