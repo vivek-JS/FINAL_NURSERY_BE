@@ -6813,26 +6813,42 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         totalPacketsIssued,
         totalPlantsInProgress,
       };
-    }).filter(slot => {
+    });
+
+    // Separate slots into two categories:
+    // 1. Slots with gap (need action) - show in main cards
+    // 2. Slots with 0 gap but in progress (just tracking) - show separately
+    const slotsNeedingAction = allTodaySlots.filter(slot => {
       // Basic filters: must be due/today
       if (slot.daysUntilSow === null || slot.daysUntilSow > 0) {
         return false;
       }
-
-      // Show cards if:
-      // 1. They have booking gap (normal case), OR
-      // 2. They have sowing in progress (stock issued)
-      if (slot.bookingGap <= 0 && !slot.sowingInProgress) {
+      // Show ONLY if there's actual gap remaining
+      if (slot.bookingGap <= 0) {
         return false;
       }
-
       return true;
     });
 
-    // Process results and group by plant/subtype
+    const slotsInProgressOnly = allTodaySlots.filter(slot => {
+      // Basic filters: must be due/today
+      if (slot.daysUntilSow === null || slot.daysUntilSow > 0) {
+        return false;
+      }
+      // Show ONLY slots that are in progress but have 0 gap (fully covered)
+      if (slot.bookingGap > 0) {
+        return false; // Has gap, so it's in the main cards
+      }
+      if (!slot.sowingInProgress) {
+        return false; // No progress, just ignore
+      }
+      return true;
+    });
+
+    // Process results and group by plant/subtype for MAIN cards (with gap)
     const subtypeCardMap = new Map();
     
-    allTodaySlots.forEach((slot) => {
+    slotsNeedingAction.forEach((slot) => {
       const plantId = slot.plantId.toString();
       const subtypeId = slot.subtypeId.toString();
       const key = `${plantId}-${subtypeId}`;
@@ -6958,6 +6974,56 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
     // Sort by total gap (descending)
     allSubtypeCards.sort((a, b) => (b.totalGap || 0) - (a.totalGap || 0));
 
+    // Process "in progress only" slots (gap = 0, but sowing in progress)
+    const inProgressCardMap = new Map();
+    
+    slotsInProgressOnly.forEach((slot) => {
+      const plantId = slot.plantId.toString();
+      const subtypeId = slot.subtypeId.toString();
+      const key = `${plantId}-${subtypeId}`;
+      
+      if (!inProgressCardMap.has(key)) {
+        const plant = plantMap.get(plantId);
+        const subtypes = plant?.subtypes || [];
+        const subtypeDetails = subtypes.find(st => st._id.toString() === subtypeId);
+        
+        inProgressCardMap.set(key, {
+          plantId: plantId,
+          plantName: plant?.name || "Unknown",
+          subtypeId: subtypeId,
+          subtypeName: subtypeDetails?.name || "Subtype",
+          slots: [],
+          totalPacketsInProgress: 0,
+          totalPlantsInProgress: 0,
+        });
+      }
+      
+      const card = inProgressCardMap.get(key);
+      card.slots.push(slot);
+      card.totalPacketsInProgress += slot.totalPacketsIssued || 0;
+      card.totalPlantsInProgress += slot.totalPlantsInProgress || 0;
+    });
+
+    const inProgressCards = Array.from(inProgressCardMap.values()).map((card) => {
+      // Get product data from pre-fetched map
+      const productKey = `${card.plantId}-${card.subtypeId}`;
+      const product = productMap.get(productKey);
+      
+      return {
+        plantId: card.plantId,
+        plantName: card.plantName,
+        subtypeId: card.subtypeId,
+        subtypeName: card.subtypeName,
+        slots: card.slots,
+        totalPacketsInProgress: card.totalPacketsInProgress,
+        totalPlantsInProgress: card.totalPlantsInProgress,
+        totalSlots: card.slots.length,
+        conversionFactor: product?.conversionFactor || null,
+        primaryUnit: product?.primaryUnit || null,
+        secondaryUnit: product?.secondaryUnit || null,
+      };
+    });
+
     // Calculate summary
     const summary = {
       totalPlants: new Set(allSubtypeCards.map(c => c.plantId)).size,
@@ -6967,6 +7033,8 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       dueSlots: allSubtypeCards.reduce((sum, c) => sum + (c.dueSlots || 0), 0),
       todaySlots: allSubtypeCards.reduce((sum, c) => sum + (c.todaySlots || 0), 0),
       totalSlots: allSubtypeCards.reduce((sum, c) => sum + (c.totalSlots || 0), 0),
+      inProgressSlots: slotsInProgressOnly.length,
+      inProgressCards: inProgressCards.length,
     };
 
     res.set({
@@ -6978,6 +7046,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
     return res.status(200).json({
       success: true,
       subtypeCards: allSubtypeCards,
+      inProgressCards: inProgressCards, // Separate array for cards with gap = 0 but in progress
       summary,
       date: moment().format("DD-MM-YYYY"),
       generatedAt: new Date(),
