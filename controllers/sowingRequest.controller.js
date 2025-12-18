@@ -10,7 +10,7 @@ import mongoose from 'mongoose';
 // Create Sowing Request from today's sowing cards
 export const createSowingRequest = async (req, res) => {
   try {
-    const { plantId, subtypeId, packetsNeeded, packetsRequested, notes } = req.body;
+    const { plantId, subtypeId, packetsNeeded, packetsRequested, notes, slotIds } = req.body;
 
     if (!plantId || !subtypeId || !packetsNeeded) {
       return res.status(400).json({
@@ -79,6 +79,11 @@ export const createSowingRequest = async (req, res) => {
     // Generate request number
     const requestNumber = await SowingRequest.generateRequestNumber();
 
+    // Convert slotIds to ObjectIds if provided
+    const linkedSlotIds = slotIds && Array.isArray(slotIds) 
+      ? slotIds.map(id => new mongoose.Types.ObjectId(id))
+      : [];
+
     // Create request
     const request = new SowingRequest({
       requestNumber,
@@ -96,6 +101,7 @@ export const createSowingRequest = async (req, res) => {
       unitName: product.primaryUnit?.symbol || product.primaryUnit?.name || product.secondaryUnit?.symbol || product.secondaryUnit?.name || 'packets',
       status: 'pending',
       requestedBy: req.user._id,
+      linkedSlotIds,
       notes,
     });
 
