@@ -6651,20 +6651,29 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
     const slotIds = allSlots.map(s => s.slotId);
 
     // Step 2.5: Fetch sowing requests linked to these slots to check status
-    // Hide cards where stock is issued but sowing not started
+    // Show "Sowing in Progress" for cards where stock is issued
     const linkedRequests = await SowingRequest.find({
       linkedSlotIds: { $in: slotIds },
       status: 'issued', // Stock issued but not yet completed
       sowingCompleted: false, // Sowing not finished
     })
-      .select('linkedSlotIds')
+      .select('linkedSlotIds packetsRequested remainingSowingNeeded isExcessiveSowing requestNumber')
       .lean();
 
-    // Create set of slot IDs to hide (stock issued, waiting to start sowing)
-    const hideSlotIds = new Set();
+    // Create map of slot IDs with sowing in progress details
+    const sowingInProgressMap = new Map();
     linkedRequests.forEach(req => {
       req.linkedSlotIds?.forEach(slotId => {
-        hideSlotIds.add(slotId.toString());
+        const slotIdStr = slotId.toString();
+        if (!sowingInProgressMap.has(slotIdStr)) {
+          sowingInProgressMap.set(slotIdStr, []);
+        }
+        sowingInProgressMap.get(slotIdStr).push({
+          packetsIssued: req.packetsRequested || 0,
+          remainingPlants: req.remainingSowingNeeded || 0,
+          isExcessiveSowing: req.isExcessiveSowing || false,
+          requestNumber: req.requestNumber,
+        });
       });
     });
 
@@ -6749,6 +6758,24 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         }
       }
       
+      // Check if sowing is in progress for this slot
+      const slotIdStr = slot.slotId.toString();
+      const sowingProgress = sowingInProgressMap.get(slotIdStr);
+      
+      // Calculate adjusted booking gap if sowing in progress
+      let adjustedBookingGap = bookingGap;
+      let totalPacketsIssued = 0;
+      let totalPlantsInProgress = 0;
+      
+      if (sowingProgress && sowingProgress.length > 0) {
+        // Sum up all plants that are in progress
+        totalPlantsInProgress = sowingProgress.reduce((sum, prog) => sum + prog.remainingPlants, 0);
+        totalPacketsIssued = sowingProgress.reduce((sum, prog) => sum + prog.packetsIssued, 0);
+        
+        // Reduce the booking gap by plants that have stock issued
+        adjustedBookingGap = Math.max(0, bookingGap - totalPlantsInProgress);
+      }
+      
       return {
         _id: slot.slotId,
         slotId: slot.slotId,
@@ -6760,26 +6787,30 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         totalBookedPlants,
         primarySowed,
         totalPlants: slot.totalPlants,
-        bookingGap,
+        bookingGap: adjustedBookingGap, // Show adjusted gap
+        bookingGapRaw: bookingGap, // Keep original for reference
         sowByDate,
         daysUntilSow,
         priority,
         plantReadyDays: slotReadyDays,
-        bookingGapRaw: bookingGap,
+        sowingInProgress: sowingProgress ? true : false,
+        sowingProgressDetails: sowingProgress || null,
+        totalPacketsIssued,
+        totalPlantsInProgress,
       };
     }).filter(slot => {
-      // Basic filters: must be due/today with booking gap
-      if (slot.daysUntilSow === null || slot.daysUntilSow > 0 || slot.bookingGap <= 0) {
+      // Basic filters: must be due/today
+      if (slot.daysUntilSow === null || slot.daysUntilSow > 0) {
         return false;
       }
-      
-      // Hide cards where stock is issued but sowing not started
-      // (They should not appear until staff actually starts entering sowing data)
-      const slotIdStr = slot.slotId.toString();
-      if (hideSlotIds.has(slotIdStr)) {
-        return false; // Card hidden - stock issued, waiting for sowing to start
+
+      // Show cards if:
+      // 1. They have booking gap (normal case), OR
+      // 2. They have sowing in progress (stock issued)
+      if (slot.bookingGap <= 0 && !slot.sowingInProgress) {
+        return false;
       }
-      
+
       return true;
     });
 
