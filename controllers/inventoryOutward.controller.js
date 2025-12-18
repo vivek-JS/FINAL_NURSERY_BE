@@ -2,6 +2,7 @@ import InventoryOutward from '../models/inventoryOutward.model.js';
 import Batch from '../models/batch.model.js';
 import Product from '../models/product.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
+import SowingRequest from '../models/sowingRequest.model.js';
 import mongoose from 'mongoose';
 
 // Helper function to create inventory transaction
@@ -558,9 +559,8 @@ export const getAllAvailablePacketsForSowing = async (req, res) => {
     // Products without plantId will be grouped separately
     const productIds = seedsProducts.map(p => p._id);
 
-    // Find all issued outward entries with seeds products, purpose=production, status=issued
+    // Find all issued outward entries with seeds products (all purposes, including excessive sowing)
     const outwards = await InventoryOutward.find({
-      purpose: 'production',
       status: 'issued',
       'items.product': { $in: productIds },
     })
@@ -578,6 +578,27 @@ export const getAllAvailablePacketsForSowing = async (req, res) => {
       ])
       .sort({ outwardDate: -1 })
       .lean(); // Use lean() for better performance
+    
+    // Extract request numbers from purposeDetails (e.g., "Sowing request: SR202512180010 - Muskmelon Layalpur")
+    const requestNumberPattern = /SR\d+/;
+    const requestNumbers = outwards
+      .map(o => o.purposeDetails?.match(requestNumberPattern)?.[0])
+      .filter(Boolean);
+    
+    // Find sowing requests by request numbers to identify excessive sowing
+    const sowingRequests = requestNumbers.length > 0
+      ? await SowingRequest.find({
+          requestNumber: { $in: requestNumbers }
+        }).select('requestNumber isExcessiveSowing').lean()
+      : [];
+    
+    // Create a map of request numbers to excessive sowing flag
+    const excessiveSowingMap = new Map();
+    sowingRequests.forEach(req => {
+      if (req.isExcessiveSowing) {
+        excessiveSowingMap.set(req.requestNumber, true);
+      }
+    });
 
     // Extract items with available quantity and map to products
     const productMap = new Map();
@@ -612,6 +633,12 @@ export const getAllAvailablePacketsForSowing = async (req, res) => {
             const finalSubtypeId = populatedProduct?.subtypeId?.toString() || productInfo.subtypeId?.toString();
             const finalConversionFactor = populatedProduct?.conversionFactor || productInfo.conversionFactor || 1;
 
+            // Check if this outward is for excessive sowing
+            const isExcessiveSowing = outward.purposeDetails && 
+              Array.from(excessiveSowingMap.keys()).some(reqNum => 
+                outward.purposeDetails.includes(reqNum)
+              );
+            
             allPackets.push({
               outwardId: outward._id,
               outwardNumber: outward.outwardNumber,
@@ -633,6 +660,8 @@ export const getAllAvailablePacketsForSowing = async (req, res) => {
               plantName: finalPlantName,
               subtypeId: finalSubtypeId,
               conversionFactor: finalConversionFactor,
+              isExcessiveSowing: isExcessiveSowing || false,
+              purpose: outward.purpose,
             });
           }
         }

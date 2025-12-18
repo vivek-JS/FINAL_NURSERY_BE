@@ -6758,8 +6758,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         }
       }
       
-      // Check if sowing is in progress for this slot
-      const slotIdStr = slot.slotId.toString();
+      // Check if sowing is in progress for this slot (use slotIdStr already declared above)
       const sowingProgress = sowingInProgressMap.get(slotIdStr);
       
       // Calculate adjusted booking gap if sowing in progress
