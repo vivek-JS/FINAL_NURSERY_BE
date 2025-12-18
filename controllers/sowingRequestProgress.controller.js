@@ -581,8 +581,10 @@ export const cancelSowingRequest = async (req, res) => {
 
     console.log(`📦 Found outward: ${outward.outwardNumber}`);
 
-    // Step 2: Revert inventory - update batch remainingQuantity
+    // Step 2: Revert inventory - update batch remainingQuantity and product currentStock
     const revertedBatches = [];
+    const Product = mongoose.model('Product');
+    
     if (outward.items && Array.isArray(outward.items)) {
       for (const item of outward.items) {
         const batch = await Batch.findById(item.batch);
@@ -590,6 +592,15 @@ export const cancelSowingRequest = async (req, res) => {
           const previousRemaining = batch.remainingQuantity || 0;
           batch.remainingQuantity = previousRemaining + item.quantity;
           await batch.save();
+          
+          // Update product currentStock
+          const product = await Product.findById(item.product);
+          if (product) {
+            const previousStock = product.currentStock || 0;
+            product.currentStock = previousStock + item.quantity;
+            await product.save();
+            console.log(`✅ Updated product ${product.name}: ${previousStock} → ${product.currentStock} (returned ${item.quantity})`);
+          }
           
           revertedBatches.push({
             batchId: batch._id,
@@ -601,8 +612,9 @@ export const cancelSowingRequest = async (req, res) => {
 
           console.log(`✅ Reverted batch ${batch.batchNumber}: ${previousRemaining} → ${batch.remainingQuantity} (returned ${item.quantity})`);
 
-          // Create return transaction
+          // Create return transaction with updated balance
           const transactionNumber = await InventoryTransaction.generateTransactionNumber();
+          const updatedProduct = await Product.findById(item.product);
           const transaction = new InventoryTransaction({
             transactionNumber,
             transactionDate: new Date(),
@@ -611,8 +623,8 @@ export const cancelSowingRequest = async (req, res) => {
             batch: batch._id,
             quantity: item.quantity,
             unit: item.unit,
-            balanceBeforeTransaction: previousRemaining,
-            balanceAfterTransaction: batch.remainingQuantity,
+            balanceBeforeTransaction: (updatedProduct?.currentStock || 0) - item.quantity,
+            balanceAfterTransaction: updatedProduct?.currentStock || 0,
             referenceType: 'Outward',
             referenceId: outward._id,
             referenceNumber: outward.outwardNumber,
