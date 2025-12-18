@@ -125,6 +125,14 @@ const inventoryOutwardSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'SowingRequest',
     },
+    // Cancellation tracking
+    cancelledBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    cancelledDate: {
+      type: Date,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

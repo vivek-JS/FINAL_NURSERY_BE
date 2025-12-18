@@ -55,6 +55,7 @@ import {
   getSowingRequestStatus,
   getActiveSowingRequests,
   recalculateSowingRemaining,
+  cancelSowingRequest as cancelSowingAndRevertStock,
 } from "../controllers/sowingRequestProgress.controller.js";
 
 const router = express.Router();
@@ -92,7 +93,8 @@ router.put("/request/:requestId/mark-issued", markRequestAsIssued); // Mark requ
 router.put("/request/:requestId/update-progress", updateSowingProgress); // Update sowing progress
 router.post("/request/:requestId/recalculate", recalculateSowingRemaining); // Recalculate sowing remaining
 router.post("/request/:id/reject", rejectSowingRequest); // Reject sowing request
-router.post("/request/:id/cancel", cancelSowingRequest); // Cancel sowing request
+router.post("/request/:id/cancel", cancelSowingRequest); // Cancel sowing request (old - just marks as cancelled)
+router.post("/request/:requestId/cancel-and-revert", cancelSowingAndRevertStock); // Cancel and revert all changes (slots + inventory)
 router.post("/request/cancel-all", cancelAllSowingRequests); // Cancel all pending sowing requests (for testing)
 
 // Excessive Sowing routes

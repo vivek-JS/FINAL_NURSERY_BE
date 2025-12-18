@@ -130,6 +130,17 @@ const sowingRequestSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     }, // Flag to mark excessive sowing (no orders)
+    // Cancellation tracking
+    cancelledBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    cancelledDate: {
+      type: Date,
+    },
+    cancellationReason: {
+      type: String,
+    },
   },
   {
     timestamps: true,

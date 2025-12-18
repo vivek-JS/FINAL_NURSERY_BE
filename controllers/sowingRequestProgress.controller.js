@@ -1,6 +1,9 @@
 import SowingRequest from '../models/sowingRequest.model.js';
 import PlantSlot from '../models/slots.model.js';
 import Sowing from '../models/sowing.model.js';
+import InventoryOutward from '../models/inventoryOutward.model.js';
+import Batch from '../models/batch.model.js';
+import InventoryTransaction from '../models/inventoryTransaction.model.js';
 import moment from 'moment';
 import {
   logSowingRequestIssued,
@@ -508,10 +511,238 @@ export const recalculateSowingRemaining = async (req, res) => {
   }
 };
 
+/**
+ * Cancel sowing request and revert all changes
+ * - Remove from slot's sowingInProgress array
+ * - Return stock to inventory (update batch usedQuantity)
+ * - Create return transaction
+ * - Mark request as cancelled
+ * POST /api/v1/sowing/request/:requestId/cancel
+ */
+export const cancelSowingRequest = async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { reason } = req.body;
+
+    // Find the sowing request
+    const request = await SowingRequest.findById(requestId)
+      .populate('plantId', 'name')
+      .populate('subtypeId', 'name')
+      .populate('productId', 'name conversionFactor primaryUnit secondaryUnit');
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: 'Sowing request not found',
+      });
+    }
+
+    // Check if request can be cancelled
+    if (request.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Request is already cancelled',
+      });
+    }
+
+    if (request.sowingCompleted) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot cancel a completed sowing request',
+      });
+    }
+
+    if (!request.outwardId) {
+      // No stock was issued yet, just mark as cancelled
+      request.status = 'cancelled';
+      request.cancelledBy = req.user._id;
+      request.cancelledDate = new Date();
+      request.cancellationReason = reason || 'Request cancelled before stock issuance';
+      await request.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Request cancelled successfully (no stock was issued)',
+        request,
+      });
+    }
+
+    // Stock was issued - need to revert everything
+    console.log(`🔄 Cancelling sowing request ${request.requestNumber}...`);
+
+    // Step 1: Find the outward record
+    const outward = await InventoryOutward.findById(request.outwardId);
+    if (!outward) {
+      return res.status(404).json({
+        success: false,
+        message: 'Outward record not found',
+      });
+    }
+
+    console.log(`📦 Found outward: ${outward.outwardNumber}`);
+
+    // Step 2: Revert inventory - update batch usedQuantity
+    const revertedBatches = [];
+    for (const allocation of outward.batchAllocations) {
+      const batch = await Batch.findById(allocation.batch);
+      if (batch) {
+        const previousUsed = batch.usedQuantity || 0;
+        batch.usedQuantity = Math.max(0, previousUsed - allocation.quantity);
+        await batch.save();
+        
+        revertedBatches.push({
+          batchId: batch._id,
+          batchNumber: batch.batchNumber,
+          quantityReturned: allocation.quantity,
+          previousUsed,
+          newUsed: batch.usedQuantity,
+        });
+
+        console.log(`✅ Reverted batch ${batch.batchNumber}: ${previousUsed} → ${batch.usedQuantity} (returned ${allocation.quantity})`);
+
+        // Create return transaction
+        const transactionNumber = await InventoryTransaction.generateTransactionNumber();
+        const transaction = new InventoryTransaction({
+          transactionNumber,
+          transactionDate: new Date(),
+          transactionType: 'return',
+          product: outward.product,
+          batch: batch._id,
+          quantity: allocation.quantity,
+          unit: outward.unit,
+          balanceBeforeTransaction: previousUsed,
+          balanceAfterTransaction: batch.usedQuantity,
+          referenceType: 'Outward',
+          referenceId: outward._id,
+          referenceNumber: outward.outwardNumber,
+          reason: `Cancelled sowing request: ${request.requestNumber}`,
+          remarks: reason || 'Stock returned due to sowing cancellation',
+          performedBy: req.user._id,
+          metadata: {
+            sowingRequestId: request._id,
+            sowingRequestNumber: request.requestNumber,
+            cancelledBy: req.user._id,
+            cancelledDate: new Date(),
+          },
+        });
+        await transaction.save();
+        console.log(`📝 Created return transaction: ${transactionNumber}`);
+      }
+    }
+
+    // Step 3: Revert slot changes - remove from sowingInProgress array
+    const revertedSlots = [];
+    if (request.linkedSlotIds && request.linkedSlotIds.length > 0) {
+      for (const slotId of request.linkedSlotIds) {
+        const plantSlotDoc = await PlantSlot.findOne({
+          'subtypeSlots.slots._id': slotId,
+        });
+
+        if (plantSlotDoc) {
+          for (const subtypeSlot of plantSlotDoc.subtypeSlots) {
+            const slot = subtypeSlot.slots.find(s => s._id.toString() === slotId.toString());
+            if (slot) {
+              // Find and remove the entry from sowingInProgress
+              const progressEntry = Array.isArray(slot.sowingInProgress)
+                ? slot.sowingInProgress.find(prog => prog.sowingRequestId?.toString() === request._id.toString())
+                : null;
+
+              if (progressEntry) {
+                slot.sowingInProgress = slot.sowingInProgress.filter(
+                  prog => prog.sowingRequestId?.toString() !== request._id.toString()
+                );
+
+                // Add cancellation trail entry
+                if (!slot.slotTrail) {
+                  slot.slotTrail = [];
+                }
+                slot.slotTrail.unshift({
+                  action: 'SOWING_CANCELLED',
+                  quantity: progressEntry.packetsIssued,
+                  previousTotalPlants: slot.totalPlants || 0,
+                  newTotalPlants: slot.totalPlants || 0,
+                  previousAvailablePlants: slot.availablePlants || 0,
+                  newAvailablePlants: slot.availablePlants || 0,
+                  reason: reason || `Sowing cancelled for ${request.requestNumber}`,
+                  sowingRequestId: request._id,
+                  performedBy: req.user._id,
+                  notes: `Cancelled: ${progressEntry.packetsIssued} packets (${progressEntry.plantsExpected} plants) returned to inventory`,
+                });
+
+                await plantSlotDoc.save();
+                
+                revertedSlots.push({
+                  slotId: slot._id,
+                  slotIdentifier: `${slot.slotStartDay} - ${slot.slotEndDay}`,
+                  packetsReturned: progressEntry.packetsIssued,
+                  plantsReturned: progressEntry.plantsExpected,
+                });
+
+                console.log(`✅ Removed request from slot ${slotId} sowingInProgress`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Step 4: Mark outward as cancelled
+    outward.status = 'cancelled';
+    outward.cancelledBy = req.user._id;
+    outward.cancelledDate = new Date();
+    outward.notes = `${outward.notes || ''}\n[CANCELLED] ${reason || 'Sowing request cancelled'}`.trim();
+    await outward.save();
+
+    // Step 5: Mark request as cancelled
+    request.status = 'cancelled';
+    request.sowingInProgress = false;
+    request.cancelledBy = req.user._id;
+    request.cancelledDate = new Date();
+    request.cancellationReason = reason || 'Sowing request cancelled';
+    await request.save();
+
+    console.log(`✅ Successfully cancelled sowing request ${request.requestNumber}`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Sowing request cancelled successfully. All changes reverted.',
+      request: {
+        _id: request._id,
+        requestNumber: request.requestNumber,
+        status: request.status,
+        plantName: request.plantId?.name,
+        subtypeName: request.subtypeId?.name,
+        packetsRequested: request.packetsRequested,
+        cancelledBy: req.user._id,
+        cancelledDate: request.cancelledDate,
+        cancellationReason: request.cancellationReason,
+      },
+      reverted: {
+        outward: {
+          outwardNumber: outward.outwardNumber,
+          status: outward.status,
+        },
+        batches: revertedBatches,
+        slots: revertedSlots,
+        totalPacketsReturned: revertedBatches.reduce((sum, b) => sum + b.quantityReturned, 0),
+        totalSlotsUpdated: revertedSlots.length,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error cancelling sowing request:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to cancel sowing request',
+      error: error.message,
+    });
+  }
+};
+
 export default {
   markRequestAsIssued,
   updateSowingProgress,
   getSowingRequestStatus,
   getActiveSowingRequests,
   recalculateSowingRemaining,
+  cancelSowingRequest,
 };
