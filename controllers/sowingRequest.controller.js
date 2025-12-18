@@ -590,10 +590,14 @@ export const issueStockFromRequest = async (req, res) => {
 
     // Update slots' sowingInProgress array
     if (request.linkedSlotIds && request.linkedSlotIds.length > 0) {
+      // Calculate expected plants from packets issued
+      const conversionFactor = request.conversionFactor || 1;
+      const plantsExpected = packetsRequested * conversionFactor;
+      
       const sowingProgressEntry = {
         requestNumber: request.requestNumber,
         packetsIssued: packetsRequested,
-        plantsExpected: request.remainingSowingNeeded || request.packetsNeeded * (request.conversionFactor || 1),
+        plantsExpected: plantsExpected,
         outwardId: outward._id,
         sowingRequestId: request._id,
         isExcessiveSowing: request.isExcessiveSowing || false,
