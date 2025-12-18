@@ -581,52 +581,54 @@ export const cancelSowingRequest = async (req, res) => {
 
     console.log(`📦 Found outward: ${outward.outwardNumber}`);
 
-    // Step 2: Revert inventory - update batch usedQuantity
+    // Step 2: Revert inventory - update batch remainingQuantity
     const revertedBatches = [];
-    for (const allocation of outward.batchAllocations) {
-      const batch = await Batch.findById(allocation.batch);
-      if (batch) {
-        const previousUsed = batch.usedQuantity || 0;
-        batch.usedQuantity = Math.max(0, previousUsed - allocation.quantity);
-        await batch.save();
-        
-        revertedBatches.push({
-          batchId: batch._id,
-          batchNumber: batch.batchNumber,
-          quantityReturned: allocation.quantity,
-          previousUsed,
-          newUsed: batch.usedQuantity,
-        });
+    if (outward.items && Array.isArray(outward.items)) {
+      for (const item of outward.items) {
+        const batch = await Batch.findById(item.batch);
+        if (batch) {
+          const previousRemaining = batch.remainingQuantity || 0;
+          batch.remainingQuantity = previousRemaining + item.quantity;
+          await batch.save();
+          
+          revertedBatches.push({
+            batchId: batch._id,
+            batchNumber: batch.batchNumber,
+            quantityReturned: item.quantity,
+            previousRemaining,
+            newRemaining: batch.remainingQuantity,
+          });
 
-        console.log(`✅ Reverted batch ${batch.batchNumber}: ${previousUsed} → ${batch.usedQuantity} (returned ${allocation.quantity})`);
+          console.log(`✅ Reverted batch ${batch.batchNumber}: ${previousRemaining} → ${batch.remainingQuantity} (returned ${item.quantity})`);
 
-        // Create return transaction
-        const transactionNumber = await InventoryTransaction.generateTransactionNumber();
-        const transaction = new InventoryTransaction({
-          transactionNumber,
-          transactionDate: new Date(),
-          transactionType: 'return',
-          product: outward.product,
-          batch: batch._id,
-          quantity: allocation.quantity,
-          unit: outward.unit,
-          balanceBeforeTransaction: previousUsed,
-          balanceAfterTransaction: batch.usedQuantity,
-          referenceType: 'Outward',
-          referenceId: outward._id,
-          referenceNumber: outward.outwardNumber,
-          reason: `Cancelled sowing request: ${request.requestNumber}`,
-          remarks: reason || 'Stock returned due to sowing cancellation',
-          performedBy: req.user._id,
-          metadata: {
-            sowingRequestId: request._id,
-            sowingRequestNumber: request.requestNumber,
-            cancelledBy: req.user._id,
-            cancelledDate: new Date(),
-          },
-        });
-        await transaction.save();
-        console.log(`📝 Created return transaction: ${transactionNumber}`);
+          // Create return transaction
+          const transactionNumber = await InventoryTransaction.generateTransactionNumber();
+          const transaction = new InventoryTransaction({
+            transactionNumber,
+            transactionDate: new Date(),
+            transactionType: 'return',
+            product: item.product,
+            batch: batch._id,
+            quantity: item.quantity,
+            unit: item.unit,
+            balanceBeforeTransaction: previousRemaining,
+            balanceAfterTransaction: batch.remainingQuantity,
+            referenceType: 'Outward',
+            referenceId: outward._id,
+            referenceNumber: outward.outwardNumber,
+            reason: `Cancelled sowing request: ${request.requestNumber}`,
+            remarks: reason || 'Stock returned due to sowing cancellation',
+            performedBy: req.user._id,
+            metadata: {
+              sowingRequestId: request._id,
+              sowingRequestNumber: request.requestNumber,
+              cancelledBy: req.user._id,
+              cancelledDate: new Date(),
+            },
+          });
+          await transaction.save();
+          console.log(`📝 Created return transaction: ${transactionNumber}`);
+        }
       }
     }
 
