@@ -6687,6 +6687,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         remainingPlants: prog.plantsExpected || 0, // Use plantsExpected from slot
         isExcessiveSowing: prog.isExcessiveSowing || false,
         requestNumber: prog.requestNumber,
+        sowingRequestId: prog.sowingRequestId, // Include request ID for cancellation
       }));
       if (progressDetails.length > 0) {
         sowingInProgressMap.set(slotIdStr, progressDetails);
