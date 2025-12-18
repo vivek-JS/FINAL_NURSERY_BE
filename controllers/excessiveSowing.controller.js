@@ -3,6 +3,7 @@ import PlantSlot from '../models/slots.model.js';
 import SowingRequest from '../models/sowingRequest.model.js';
 import Product from '../models/product.model.js';
 import InventoryOutward from '../models/inventoryOutward.model.js';
+import Batch from '../models/batch.model.js';
 import moment from 'moment';
 import mongoose from 'mongoose';
 import {
@@ -353,49 +354,40 @@ export const getAvailablePlantsForExcessiveSowing = async (req, res) => {
               conversionFactor = product.conversionFactor || 1;
             }
 
-            // Step 4: Get available packets from inventory
-            // Available = quantity - usedQuantity
-            const outwardEntries = await InventoryOutward.find({
-              'items.product': product._id,
-              status: { $in: ['approved', 'issued'] }, // Only approved/issued entries
+            // Step 4: Get available packets from warehouse batches
+            // Use batch remainingQuantity (total warehouse stock)
+            const batches = await Batch.find({
+              product: product._id,
+              status: 'active', // Only active batches
             }).lean();
 
-            console.log(`[DEBUG] -- Found ${outwardEntries.length} outward entries (all purposes)`);
+            console.log(`[DEBUG] -- Found ${batches.length} active batches`);
 
-            // Calculate available packets (quantity - usedQuantity)
-            const availablePackets = outwardEntries.reduce((sum, outward) => {
-              const items = outward.items.filter(
-                (item) => item.product?.toString() === product._id.toString()
-              );
-              
-              const itemTotal = items.reduce((itemSum, item) => {
-                const quantity = item.quantity || 0;
-                const usedQuantity = item.usedQuantity || 0;
-                const available = Math.max(0, quantity - usedQuantity);
-                return itemSum + available;
-              }, 0);
-              
-              return sum + itemTotal;
+            // Calculate available packets from batch remainingQuantity
+            const availablePackets = batches.reduce((sum, batch) => {
+              const remaining = batch.remainingQuantity || 0;
+              return sum + remaining;
             }, 0);
 
-            console.log(`[DEBUG] -- Available packets calculated: ${availablePackets}`);
+            console.log(`[DEBUG] -- Available packets (warehouse stock): ${availablePackets}`);
 
-            // Debug: Check if no inventory
-            if (outwardEntries.length === 0) {
-              const allOutwards = await InventoryOutward.find({
-                'items.product': product._id,
-              }).select('purpose status items').lean();
-              console.log(`[DEBUG] -- Total outward entries for product: ${allOutwards.length}`);
-              if (allOutwards.length > 0) {
-                console.log('[DEBUG] -- Sample outward:', {
-                  purpose: allOutwards[0].purpose,
-                  status: allOutwards[0].status,
-                  itemsCount: allOutwards[0].items.length
+            // Debug: Check if no batches
+            if (batches.length === 0) {
+              const allBatches = await Batch.find({
+                product: product._id,
+              }).select('batchNumber status quantity remainingQuantity').lean();
+              console.log(`[DEBUG] -- Total batches for product: ${allBatches.length}`);
+              if (allBatches.length > 0) {
+                console.log('[DEBUG] -- Sample batch:', {
+                  batchNumber: allBatches[0].batchNumber,
+                  status: allBatches[0].status,
+                  quantity: allBatches[0].quantity,
+                  remainingQuantity: allBatches[0].remainingQuantity
                 });
               }
             }
 
-            console.log(`[DEBUG] -- Available packets: ${availablePackets}`);
+            console.log(`[DEBUG] -- Total warehouse stock: ${availablePackets}`);
 
             subtypesWithProducts.push({
               ...subtype,
