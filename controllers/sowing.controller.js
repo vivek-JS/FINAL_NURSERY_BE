@@ -3,6 +3,11 @@ import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
 import InventoryOutward from "../models/inventoryOutward.model.js";
+import Product from "../models/product.model.js";
+import Batch from "../models/batch.model.js";
+import InventoryTransaction from "../models/inventoryTransaction.model.js";
+import ReturnRequest from "../models/returnRequest.model.js";
+import SowingRequest from "../models/sowingRequest.model.js";
 import moment from "moment";
 import mongoose from "mongoose";
 
@@ -189,11 +194,11 @@ export const createSowing = async (req, res) => {
 
     const savedSowing = await sowing.save();
 
-    // Handle packets if provided (for OFFICE location with outward entries)
-    if (packets && Array.isArray(packets) && packets.length > 0 && sowingLocation === "OFFICE") {
+    // Handle packets if provided (for PRIMARY or OFFICE location with outward entries)
+    if (packets && Array.isArray(packets) && packets.length > 0) {
       try {
         for (const packet of packets) {
-          const { outwardId, itemId, quantity: packetQuantity, batchNumber } = packet;
+          const { outwardId, itemId, quantity: packetQuantity, batchNumber, completeSowing, remainingQuantity } = packet;
           
           // Validate packet data
           if (!outwardId || !itemId) {
@@ -227,19 +232,54 @@ export const createSowing = async (req, res) => {
           const totalQty = item.quantity || 0;
           const availableQty = totalQty - currentUsedQty;
 
-          console.log(`Processing packet: outwardId=${outwardId}, itemId=${itemId}, requestedQuantity=${quantityToUse}, availableQty=${availableQty}, currentUsedQty=${currentUsedQty}, totalQty=${totalQty}`);
+          console.log(`Processing packet: outwardId=${outwardId}, itemId=${itemId}, requestedQuantity=${quantityToUse}, availableQty=${availableQty}, currentUsedQty=${currentUsedQty}, totalQty=${totalQty}, completeSowing=${completeSowing}, remainingQuantity=${remainingQuantity}`);
+
+          console.log(`[createSowing] Packet processing details:`, {
+            outwardId,
+            itemId,
+            totalQty,
+            quantityToUse,
+            currentUsedQty,
+            availableQty,
+            completeSowing,
+            remainingQuantityFromPayload: remainingQuantity
+          });
 
           // Validate available quantity
+          let finalUsedQuantity;
+          let finalRemainingQty = 0;
+          
           if (quantityToUse > availableQty) {
             console.warn(`Insufficient quantity in outward ${outwardId}, item ${itemId}. Available: ${availableQty}, Requested: ${quantityToUse}`);
             // Use only the available quantity (don't exceed)
-            item.usedQuantity = currentUsedQty + availableQty;
+            finalUsedQuantity = currentUsedQty + availableQty;
             console.log(`Used only available quantity: ${availableQty} (instead of requested ${quantityToUse})`);
           } else {
-            // Update usedQuantity with the exact quantity from packet
-            item.usedQuantity = currentUsedQty + quantityToUse;
-            console.log(`Updated usedQuantity: ${currentUsedQty} + ${quantityToUse} = ${item.usedQuantity}`);
+            // If complete sowing, mark the full original quantity as used (so it doesn't appear in available packets)
+            // Otherwise, just update with the used quantity
+            if (completeSowing) {
+              // Mark full quantity as used since remaining is being returned to inventory
+              finalUsedQuantity = totalQty;
+              // Calculate remaining: totalQty - quantityToUse (what's left after using quantityToUse)
+              finalRemainingQty = Math.max(0, totalQty - quantityToUse);
+              console.log(`✅ Complete sowing: Marked full quantity ${totalQty} as used (used ${quantityToUse}, returning ${finalRemainingQty} to inventory)`);
+            } else {
+              // Update usedQuantity with the exact quantity from packet
+              finalUsedQuantity = currentUsedQty + quantityToUse;
+              console.log(`Updated usedQuantity: ${currentUsedQty} + ${quantityToUse} = ${finalUsedQuantity}`);
+            }
           }
+          
+          // Update the item's usedQuantity
+          item.usedQuantity = finalUsedQuantity;
+          
+          // Use payload remainingQuantity as fallback if calculation is 0
+          if (completeSowing && finalRemainingQty === 0 && remainingQuantity > 0) {
+            finalRemainingQty = remainingQuantity;
+            console.log(`[createSowing] Using payload remainingQuantity: ${finalRemainingQty}`);
+          }
+          
+          console.log(`[createSowing] Final values: usedQuantity=${finalUsedQuantity}, remainingQty=${finalRemainingQty}`);
 
           // Link sowing to the outward item (add to array if not already present)
           if (!item.sowing || !Array.isArray(item.sowing)) {
@@ -253,6 +293,81 @@ export const createSowing = async (req, res) => {
           await outward.save();
           
           console.log(`✅ Updated outward ${outwardId}, item ${itemId}: usedQuantity = ${item.usedQuantity} (was ${currentUsedQty}, added ${quantityToUse})`);
+          
+          // If complete sowing is checked, create return request instead of directly updating inventory
+          console.log(`[createSowing] Checking if should create return request: completeSowing=${completeSowing}, finalRemainingQty=${finalRemainingQty}`);
+          if (completeSowing && finalRemainingQty > 0) {
+            console.log(`[createSowing] ✅ Creating return request for ${finalRemainingQty} units...`);
+            try {
+              // Get product and batch from outward item
+              // Handle both ObjectId and string formats
+              const productId = item.product?.toString ? item.product.toString() : (item.product?._id?.toString() || item.product);
+              const batchId = item.batch?.toString ? item.batch.toString() : (item.batch?._id?.toString() || item.batch);
+              
+              console.log(`[createSowing] Product ID: ${productId} (type: ${typeof productId}), Batch ID: ${batchId} (type: ${typeof batchId})`);
+              
+              // Create return request instead of directly updating inventory
+              if (productId && mongoose.Types.ObjectId.isValid(productId)) {
+                try {
+                  const product = await Product.findById(productId);
+                  if (product) {
+                    // Use item.unit (from outward item) or product.primaryUnit as fallback
+                    const unitId = item.unit?.toString ? item.unit.toString() : (item.unit?._id?.toString() || item.unit || product.primaryUnit?.toString() || product.primaryUnit);
+                      
+                    // Generate return request number
+                    const requestNumber = await ReturnRequest.generateRequestNumber();
+                      
+                    // Create return request
+                    const returnRequest = new ReturnRequest({
+                      requestNumber,
+                      returnType: 'sowing',
+                      product: productId,
+                      batch: batchId || null,
+                      quantity: finalRemainingQty,
+                      unit: unitId,
+                      referenceType: 'Sowing',
+                      referenceId: savedSowing._id,
+                      referenceNumber: savedSowing.batchNumber || null,
+                      outwardId: outward._id,
+                      itemId: itemId,
+                      originalQuantity: totalQty,
+                      usedQuantity: quantityToUse,
+                      remainingQuantity: finalRemainingQty,
+                      reason: 'Return from complete sowing - remaining stock',
+                      remarks: `Remaining ${finalRemainingQty} units returned from sowing ${savedSowing._id} (complete sowing: used ${quantityToUse} out of ${totalQty})`,
+                      status: 'pending',
+                      requestedBy: createdBy || req.user?._id,
+                      metadata: {
+                        sowingId: savedSowing._id,
+                        outwardId: outward._id,
+                        itemId: itemId,
+                        originalQuantity: totalQty,
+                        usedQuantity: quantityToUse,
+                        remainingQuantity: finalRemainingQty
+                      }
+                    });
+                      
+                    await returnRequest.save();
+                    console.log(`✅ Created return request ${requestNumber} for ${finalRemainingQty} units (pending approval)`);
+                  } else {
+                    console.error(`❌ Product not found: ${productId}`);
+                  }
+                } catch (returnRequestError) {
+                  console.error(`❌ Error creating return request:`, returnRequestError);
+                  console.error(`❌ Return request error stack:`, returnRequestError.stack);
+                  // Don't fail the whole request, just log the error
+                }
+              } else {
+                console.warn(`⚠️ No valid productId found in outward item ${itemId} (productId: ${productId})`);
+              }
+            } catch (returnStockError) {
+              console.error(`❌ Error returning remaining stock to inventory for packet ${itemId}:`, returnStockError);
+              console.error(`❌ Error stack:`, returnStockError.stack);
+              // Don't fail the whole request, just log the error
+            }
+          } else {
+            console.log(`[createSowing] ⚠️ Not returning stock: completeSowing=${completeSowing}, finalRemainingQty=${finalRemainingQty}`);
+          }
         }
       } catch (packetError) {
         console.error("Error updating outward packets:", packetError);
@@ -571,11 +686,13 @@ export const createMultipleSowings = async (req, res) => {
 
         const savedSowing = await sowing.save();
 
-        // Handle packets if provided (for OFFICE location)
-        if (packets && Array.isArray(packets) && packets.length > 0 && sowingLocation === "OFFICE") {
+        // Handle packets if provided (for PRIMARY or OFFICE location)
+        if (packets && Array.isArray(packets) && packets.length > 0) {
+          console.log(`[createMultipleSowings] Processing ${packets.length} packet(s) for sowing ${savedSowing._id}`);
           try {
             for (const packet of packets) {
-              const { outwardId, itemId, quantity: packetQuantity, batchNumber } = packet;
+              console.log(`[createMultipleSowings] Starting packet processing:`, JSON.stringify(packet, null, 2));
+              const { outwardId, itemId, quantity: packetQuantity, batchNumber, completeSowing, remainingQuantity } = packet;
               
               if (!outwardId || !itemId) {
                 console.warn(`Skipping invalid packet (missing outwardId or itemId):`, packet);
@@ -604,12 +721,51 @@ export const createMultipleSowings = async (req, res) => {
               const totalQty = item.quantity || 0;
               const availableQty = totalQty - currentUsedQty;
 
+              console.log(`Processing packet: outwardId=${outwardId}, itemId=${itemId}, requestedQuantity=${quantityToUse}, availableQty=${availableQty}, currentUsedQty=${currentUsedQty}, totalQty=${totalQty}, completeSowing=${completeSowing}, remainingQuantity=${remainingQuantity}`);
+
+              console.log(`[createMultipleSowings] Packet processing details:`, {
+                outwardId,
+                itemId,
+                totalQty,
+                quantityToUse,
+                currentUsedQty,
+                availableQty,
+                completeSowing,
+                remainingQuantityFromPayload: remainingQuantity
+              });
+
+              let finalUsedQuantity;
+              let finalRemainingQty = 0;
+              
               if (quantityToUse > availableQty) {
                 console.warn(`Insufficient quantity in outward ${outwardId}, item ${itemId}. Available: ${availableQty}, Requested: ${quantityToUse}`);
-                item.usedQuantity = currentUsedQty + availableQty;
+                finalUsedQuantity = currentUsedQty + availableQty;
               } else {
-                item.usedQuantity = currentUsedQty + quantityToUse;
+                // If complete sowing, mark the full original quantity as used (so it doesn't appear in available packets)
+                // Otherwise, just update with the used quantity
+                if (completeSowing) {
+                  // Mark full quantity as used since remaining is being returned to inventory
+                  finalUsedQuantity = totalQty;
+                  // Calculate remaining: totalQty - quantityToUse (what's left after using quantityToUse)
+                  finalRemainingQty = Math.max(0, totalQty - quantityToUse);
+                  console.log(`✅ Complete sowing: Marked full quantity ${totalQty} as used (used ${quantityToUse}, returning ${finalRemainingQty} to inventory)`);
+                } else {
+                  // Update usedQuantity with the exact quantity from packet
+                  finalUsedQuantity = currentUsedQty + quantityToUse;
+                  console.log(`Updated usedQuantity: ${currentUsedQty} + ${quantityToUse} = ${finalUsedQuantity}`);
+                }
               }
+              
+              // Update the item's usedQuantity
+              item.usedQuantity = finalUsedQuantity;
+              
+              // Use payload remainingQuantity as fallback if calculation is 0
+              if (completeSowing && finalRemainingQty === 0 && remainingQuantity > 0) {
+                finalRemainingQty = remainingQuantity;
+                console.log(`[createMultipleSowings] Using payload remainingQuantity: ${finalRemainingQty}`);
+              }
+              
+              console.log(`[createMultipleSowings] Final values: usedQuantity=${finalUsedQuantity}, remainingQty=${finalRemainingQty}`);
 
               if (!item.sowing || !Array.isArray(item.sowing)) {
                 item.sowing = [];
@@ -619,6 +775,83 @@ export const createMultipleSowings = async (req, res) => {
               }
 
               await outward.save();
+              
+              console.log(`✅ Updated outward ${outwardId}, item ${itemId}: usedQuantity = ${item.usedQuantity} (was ${currentUsedQty}, added ${quantityToUse})`);
+              
+              // If complete sowing is checked, create return request instead of directly updating inventory
+              console.log(`[createMultipleSowings] Checking if should create return request: completeSowing=${completeSowing}, finalRemainingQty=${finalRemainingQty}`);
+              if (completeSowing && finalRemainingQty > 0) {
+                console.log(`[createMultipleSowings] ✅ Creating return request for ${finalRemainingQty} units...`);
+                try {
+                  // Get product and batch from outward item
+                  // Handle both ObjectId and string formats
+                  const productId = item.product?.toString ? item.product.toString() : (item.product?._id?.toString() || item.product);
+                  const batchId = item.batch?.toString ? item.batch.toString() : (item.batch?._id?.toString() || item.batch);
+                  
+                  console.log(`[createMultipleSowings] Product ID: ${productId} (type: ${typeof productId}), Batch ID: ${batchId} (type: ${typeof batchId})`);
+                  
+                  // Create return request instead of directly updating inventory
+                  if (productId && mongoose.Types.ObjectId.isValid(productId)) {
+                    try {
+                      const product = await Product.findById(productId);
+                      if (product) {
+                        // Use item.unit (from outward item) or product.primaryUnit as fallback
+                        const unitId = item.unit?.toString ? item.unit.toString() : (item.unit?._id?.toString() || item.unit || product.primaryUnit?.toString() || product.primaryUnit);
+                        
+                        // Generate return request number
+                        const requestNumber = await ReturnRequest.generateRequestNumber();
+                        
+                        // Create return request
+                        const returnRequest = new ReturnRequest({
+                          requestNumber,
+                          returnType: 'sowing',
+                          product: productId,
+                          batch: batchId || null,
+                          quantity: finalRemainingQty,
+                          unit: unitId,
+                          referenceType: 'Sowing',
+                          referenceId: savedSowing._id,
+                          referenceNumber: savedSowing.batchNumber || null,
+                          outwardId: outward._id,
+                          itemId: itemId,
+                          originalQuantity: totalQty,
+                          usedQuantity: quantityToUse,
+                          remainingQuantity: finalRemainingQty,
+                          reason: 'Return from complete sowing - remaining stock',
+                          remarks: `Remaining ${finalRemainingQty} units returned from sowing ${savedSowing._id} (complete sowing: used ${quantityToUse} out of ${totalQty})`,
+                          status: 'pending',
+                          requestedBy: createdBy || req.user?._id,
+                          metadata: {
+                            sowingId: savedSowing._id,
+                            outwardId: outward._id,
+                            itemId: itemId,
+                            originalQuantity: totalQty,
+                            usedQuantity: quantityToUse,
+                            remainingQuantity: finalRemainingQty
+                          }
+                        });
+                        
+                        await returnRequest.save();
+                        console.log(`✅ Created return request ${requestNumber} for ${finalRemainingQty} units (pending approval)`);
+                      } else {
+                        console.error(`❌ Product not found: ${productId}`);
+                      }
+                    } catch (returnRequestError) {
+                      console.error(`❌ Error creating return request:`, returnRequestError);
+                      console.error(`❌ Return request error stack:`, returnRequestError.stack);
+                      // Don't fail the whole request, just log the error
+                    }
+                  } else {
+                    console.warn(`⚠️ No productId found in outward item ${itemId}`);
+                  }
+                } catch (returnStockError) {
+                  console.error(`❌ Error creating return request for packet ${itemId}:`, returnStockError);
+                  console.error(`❌ Error stack:`, returnStockError.stack);
+                  // Don't fail the whole request, just log the error
+                }
+              } else {
+                console.log(`[createMultipleSowings] ⚠️ Not creating return request: completeSowing=${completeSowing}, finalRemainingQty=${finalRemainingQty}`);
+              }
             }
           } catch (packetError) {
             console.error("Error updating outward packets:", packetError);
@@ -3490,9 +3723,9 @@ export const getPlantReminders = async (req, res) => {
       // subtypeId is filtered earlier in pipeline, don't include here
       
       // Priority filtering: exclude "future" by default, only show overdue, urgent, upcoming
-      // EXCEPTION: If gapFilter is "negative" (available tab), include ALL priorities including future
-      if (gapFilter === "negative") {
-        // For available tab (negative gaps), show ALL priorities (future, overdue, urgent, upcoming)
+      // EXCEPTION: If gapFilter is set (positive, negative, zero, all), include ALL priorities including future
+      if (gapFilter) {
+        // When gapFilter is set, show ALL priorities (future, overdue, urgent, upcoming)
         // Don't filter by priority - include everything
         // Skip priority filtering entirely
       } else if (current === "true") {
@@ -3596,21 +3829,43 @@ export const getPlantReminders = async (req, res) => {
       },
       {
         $addFields: {
+          // Convert subtypeId to string for comparison
+          subtypeIdStr: { $toString: "$subtypeSlots.subtypeId" },
+        },
+      },
+      {
+        $addFields: {
           subtypeDetails: {
-            $arrayElemAt: [
-              {
-                $filter: {
-                  input: { $ifNull: ["$plantInfo.subtypes", []] },
-                  as: "subtype",
-                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+            $let: {
+              vars: {
+                matchedSubtype: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: { $ifNull: ["$plantInfo.subtypes", []] },
+                        as: "subtype",
+                        cond: {
+                          $eq: [
+                            { $toString: "$$subtype._id" },
+                            "$subtypeIdStr"
+                          ]
+                        },
+                      },
+                    },
+                    0,
+                  ],
                 },
               },
-              0,
-            ],
+              in: "$$matchedSubtype",
+            },
           },
           slotId: "$subtypeSlots.slots._id",
           primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
           totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
+        },
+      },
+      {
+        $addFields: {
           slotReadyDays: {
             $cond: [
               { $gt: [{ $ifNull: ["$subtypeSlots.slots.plantReadyDays", 0] }, 0] },
@@ -3669,12 +3924,44 @@ export const getPlantReminders = async (req, res) => {
       },
       {
         $addFields: {
-          // Calculate bookingGap - allow negative values (for available/surplus)
-          // Negative gap means primarySowed > totalBookedPlants (surplus/available)
-          bookingGap: {
+          // Calculate raw bookingGap first
+          bookingGapRaw: {
             $subtract: [
               "$totalBookedPlants",
               "$primarySowed",
+            ],
+          },
+          // Get sowingBuffer from plantInfo
+          sowingBuffer: { $ifNull: ["$plantInfo.sowingBuffer", 0] },
+        },
+      },
+      {
+        $addFields: {
+          // Apply sowing buffer to positive gaps: gapWithBuffer = gap * (1 + sowingBuffer/100)
+          bookingGap: {
+            $cond: [
+              {
+                $and: [
+                  { $gt: ["$bookingGapRaw", 0] }, // Only apply to positive gaps
+                  { $gt: ["$sowingBuffer", 0] }, // Only if buffer > 0
+                ],
+              },
+              {
+                $round: [
+                  {
+                    $multiply: [
+                      "$bookingGapRaw",
+                      {
+                        $add: [
+                          1,
+                          { $divide: ["$sowingBuffer", 100] },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+              "$bookingGapRaw", // Use raw gap if buffer is 0 or gap is negative
             ],
           },
           availablePlants: {
@@ -3846,6 +4133,7 @@ export const getPlantReminders = async (req, res) => {
           totalBookedPlants: { $ifNull: ["$subtypeSlots.slots.totalBookedPlants", 0] },
           primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
           totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
+          sowingBuffer: { $ifNull: ["$plantInfo.sowingBuffer", 0] },
         },
       },
       {
@@ -3856,16 +4144,49 @@ export const getPlantReminders = async (req, res) => {
           totalPrimarySowed: { $sum: "$primarySowed" },
           totalCapacity: { $sum: "$totalPlants" },
           slotCount: { $sum: 1 },
+          sowingBuffer: { $first: "$sowingBuffer" }, // Get buffer from first record
         },
       },
       {
         $addFields: {
-          totalBookingGap: {
+          // Calculate raw gap first
+          totalBookingGapRaw: {
             $max: [
               0,
               {
                 $subtract: ["$totalBookedPlants", "$totalPrimarySowed"],
               },
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          // Apply sowing buffer: gapWithBuffer = gap * (1 + sowingBuffer/100)
+          totalBookingGap: {
+            $cond: [
+              {
+                $and: [
+                  { $gt: ["$totalBookingGapRaw", 0] },
+                  { $gt: ["$sowingBuffer", 0] },
+                ],
+              },
+              {
+                $round: [
+                  {
+                    $multiply: [
+                      "$totalBookingGapRaw",
+                      {
+                        $add: [
+                          1,
+                          { $divide: ["$sowingBuffer", 100] },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+              "$totalBookingGapRaw",
             ],
           },
           totalAvailable: {
@@ -3900,6 +4221,75 @@ export const getPlantReminders = async (req, res) => {
     // Get plant info
     const plantInfo = await PlantCms.findById(plantId).select("name sowingAllowed").lean();
 
+        // Add conversion factor and available stock to subtypeSummary
+    const subtypeSummaryWithConversion = await Promise.all(
+      subtypeSummary.map(async (subtype) => {
+        let conversionFactor = null;
+        let secondaryUnit = null;
+        let primaryUnit = null;
+        let availablePackets = 0;
+        try {
+          const product = await Product.findOne({
+            plantId: new mongoose.Types.ObjectId(plantId),
+            subtypeId: new mongoose.Types.ObjectId(subtype._id),
+            category: "seeds",
+            isActive: true,
+          })
+            .select("conversionFactor secondaryUnit primaryUnit _id")
+            .populate("secondaryUnit", "name symbol")
+            .populate("primaryUnit", "name symbol")
+            .lean();
+
+          conversionFactor = product?.conversionFactor || null;
+          secondaryUnit = product?.secondaryUnit || null;
+          primaryUnit = product?.primaryUnit || null;
+
+          // Get available stock from all active batches for this product
+          if (product?._id) {
+            const batches = await Batch.find({
+              product: product._id,
+              status: "active",
+              remainingQuantity: { $gt: 0 },
+            })
+              .select("remainingQuantity unit")
+              .populate("unit", "name symbol")
+              .lean();
+
+            let totalAvailable = 0;
+            batches.forEach((batch) => {
+              const batchUnitId = batch.unit?._id?.toString();
+              const primaryUnitId = primaryUnit?._id?.toString();
+              const secondaryUnitId = secondaryUnit?._id?.toString();
+
+              if (batchUnitId === primaryUnitId && conversionFactor) {
+                totalAvailable += batch.remainingQuantity / conversionFactor;
+              } else if (batchUnitId === secondaryUnitId) {
+                totalAvailable += batch.remainingQuantity;
+              } else {
+                if (conversionFactor) {
+                  totalAvailable += batch.remainingQuantity / conversionFactor;
+                } else {
+                  totalAvailable += batch.remainingQuantity;
+                }
+              }
+            });
+
+            availablePackets = Math.floor(totalAvailable);
+          }
+        } catch (error) {
+          console.error(`Error fetching conversion factor/stock for plant ${plantId}, subtype ${subtype._id}:`, error);
+        }
+
+        return {
+          ...subtype,
+          conversionFactor: conversionFactor,
+          secondaryUnit: secondaryUnit,
+          primaryUnit: primaryUnit,
+          availablePackets: availablePackets,
+        };
+      })
+    );
+
     res.set({
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       'Pragma': 'no-cache',
@@ -3913,7 +4303,7 @@ export const getPlantReminders = async (req, res) => {
         plantName: plantInfo?.name || "Unknown",
         sowingAllowed: plantInfo?.sowingAllowed || false,
       },
-      subtypeSummary,
+      subtypeSummary: subtypeSummaryWithConversion,
       reminders,
       summary: {
         totalSlots: reminders.length,
@@ -3925,7 +4315,26 @@ export const getPlantReminders = async (req, res) => {
         overdueCount: reminders.filter((r) => r.priority === "overdue").length, // Past
         urgentCount: reminders.filter((r) => r.priority === "urgent").length, // Current
         upcomingCount: reminders.filter((r) => r.priority === "upcoming").length, // Current
-        // Note: future is excluded from all counts
+        futureCount: reminders.filter((r) => r.priority === "future").length, // Future
+        // Stats excluding future entries (for sowing needed cards)
+        currentSowingNeeded: {
+          totalSlots: reminders.filter((r) => r.priority !== "future").length,
+          totalBookingGap: reminders
+            .filter((r) => r.priority !== "future")
+            .reduce((sum, r) => sum + Math.max(0, r.bookingGap || 0), 0),
+          overdueGap: reminders
+            .filter((r) => r.priority === "overdue")
+            .reduce((sum, r) => sum + Math.max(0, r.bookingGap || 0), 0),
+          urgentGap: reminders
+            .filter((r) => r.priority === "urgent")
+            .reduce((sum, r) => sum + Math.max(0, r.bookingGap || 0), 0),
+          upcomingGap: reminders
+            .filter((r) => r.priority === "upcoming")
+            .reduce((sum, r) => sum + Math.max(0, r.bookingGap || 0), 0),
+          overdueCount: reminders.filter((r) => r.priority === "overdue").length,
+          urgentCount: reminders.filter((r) => r.priority === "urgent").length,
+          upcomingCount: reminders.filter((r) => r.priority === "upcoming").length,
+        },
       },
       generatedAt: new Date(),
     });
@@ -5122,14 +5531,14 @@ export const getAllPlantsAvailability = async (req, res) => {
   }
 };
 
-// NEW API: Get Plants Gap Summary (all plants with subtype-wise totalBookingGap)
+// NEW API: Get Plants Gap Summary (all plants with subtype-wise totalBookingGap) - OPTIMIZED
 export const getPlantsGapSummary = async (req, res) => {
   try {
     const { available } = req.query; // If "true", return negative gaps (available/surplus) instead of positive gaps
     
-    // Get all plants with sowingAllowed = true
+    // Get all plants with sowingAllowed = true (including sowingBuffer) - single query
     const plants = await PlantCms.find({ sowingAllowed: true })
-      .select("_id name subtypes")
+      .select("_id name subtypes sowingBuffer")
       .lean();
 
     if (!plants || plants.length === 0) {
@@ -5145,197 +5554,410 @@ export const getPlantsGapSummary = async (req, res) => {
       });
     }
 
-    // Get gap summary for each plant and subtype
-    const plantsWithGaps = await Promise.all(
-      plants.map(async (plant) => {
-        // Get subtype summaries for this plant
-        const subtypeSummary = await PlantSlot.aggregate([
-          {
-            $match: {
-              plantId: new mongoose.Types.ObjectId(plant._id),
-            },
-          },
-          {
-            $unwind: "$subtypeSlots",
-          },
-          {
-            $unwind: "$subtypeSlots.slots",
-          },
-          {
-            $lookup: {
-              from: "plantcms",
-              localField: "plantId",
-              foreignField: "_id",
-              as: "plantInfo",
-            },
-          },
-          {
-            $addFields: {
-              plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
-            },
-          },
-          {
-            $addFields: {
-              subtypeDetails: {
-                $arrayElemAt: [
-                  {
-                    $filter: {
-                      input: { $ifNull: ["$plantInfo.subtypes", []] },
-                      as: "subtype",
-                      cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
-                    },
-                  },
-                  0,
-                ],
-              },
-            },
-          },
-          {
-            $lookup: {
-              from: "orders",
-              let: { slotId: "$subtypeSlots.slots._id" },
-              pipeline: [
-                {
-                  $match: {
-                    $expr: {
-                      $and: [
-                        { $eq: ["$bookingSlot", "$$slotId"] },
-                        { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
-                        {
-                          $or: [
-                            { $ne: ["$quotaSource", "dealer"] },
-                            { $not: { $ifNull: ["$quotaSource", false] } }
-                          ]
-                        }
-                      ]
-                    }
-                  }
-                },
-                {
-                  $group: {
-                    _id: null,
-                    totalBookedPlants: { $sum: "$numberOfPlants" }
-                  }
-                }
-              ],
-              as: "orderStats"
-            }
-          },
-          {
-            $addFields: {
-              totalBookedPlants: {
-                $ifNull: [
-                  { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
-                  0
-                ]
-              },
-              primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
-            }
-          },
-          {
-            $addFields: {
-              // Calculate slot-level gap (can be negative for available/surplus)
-              slotGap: {
-                $subtract: ["$totalBookedPlants", "$primarySowed"],
-              },
-            },
-          },
-          // Filter slots based on available parameter BEFORE grouping
-          // When available=true, only include slots with negative gaps (available/surplus)
-          // When available=false, only include slots with positive gaps (booking gap)
-          ...(available === "true" 
-            ? [{
-                $match: {
-                  slotGap: { $lt: 0 }, // Negative gap = available/surplus
-                },
-              }]
-            : [{
-                $match: {
-                  slotGap: { $gt: 0 }, // Positive gap = booking gap
-                },
-              }]
-          ),
-          {
-            $group: {
-              _id: "$subtypeSlots.subtypeId",
-              subtypeName: { $first: { $ifNull: ["$subtypeDetails.name", "Unknown"] } },
-              totalBookedPlants: { $sum: "$totalBookedPlants" },
-              totalPrimarySowed: { $sum: "$primarySowed" },
-              slotCount: { $sum: 1 },
-            },
-          },
-          {
-            $addFields: {
-              // Calculate booking gap (positive) - when booked > sowed
-              totalBookingGap: {
-                $max: [
-                  0,
-                  {
-                    $subtract: ["$totalBookedPlants", "$totalPrimarySowed"],
-                  },
-                ],
-              },
-              // Calculate available gap (negative gap as positive) - when sowed > booked (surplus)
-              // This is the negative of bookingGap, shown as positive available
-              totalAvailableGap: {
-                $max: [
-                  0,
-                  {
-                    $subtract: ["$totalPrimarySowed", "$totalBookedPlants"],
-                  },
-                ],
-              },
-              // Also calculate raw gap (can be negative) for filtering
-              rawGap: {
-                $subtract: ["$totalBookedPlants", "$totalPrimarySowed"],
-              },
-            },
-          },
-          {
-            $sort: available === "true" 
-              ? { totalAvailableGap: -1 } 
-              : { totalBookingGap: -1 },
-          },
-        ]);
+    const plantIds = plants.map(p => p._id);
+    const plantMap = new Map(plants.map(p => [p._id.toString(), p]));
 
-        // Convert to array format
-        let subtypesWithGaps = subtypeSummary.map((subtype) => ({
+    // Batch fetch all products for all plants at once
+    const products = await Product.find({
+      plantId: { $in: plantIds },
+      category: "seeds",
+      isActive: true,
+    })
+      .select("plantId subtypeId conversionFactor secondaryUnit primaryUnit _id")
+      .populate("secondaryUnit", "name symbol")
+      .populate("primaryUnit", "name symbol")
+      .lean();
+
+    // Create product map: key = "plantId-subtypeId"
+    const productMap = new Map();
+    products.forEach(p => {
+      const key = `${p.plantId}-${p.subtypeId}`;
+      productMap.set(key, p);
+    });
+
+    // Batch fetch all batches for all products at once
+    const productIds = products.map(p => p._id);
+    const batches = await Batch.find({
+      product: { $in: productIds },
+      status: "active",
+      remainingQuantity: { $gt: 0 },
+    })
+      .select("product remainingQuantity unit")
+      .populate("unit", "name symbol _id")
+      .lean();
+
+    // Group batches by product
+    const batchMap = new Map();
+    batches.forEach(batch => {
+      const productId = batch.product.toString();
+      if (!batchMap.has(productId)) {
+        batchMap.set(productId, []);
+      }
+      batchMap.get(productId).push(batch);
+    });
+
+    // Step 1: Get all slots with their IDs, endDay, and plantReadyDays - FAST aggregation
+    const allSlots = await PlantSlot.aggregate([
+      {
+        $match: {
+          plantId: { $in: plantIds },
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          slotReadyDays: {
+            $cond: [
+              { $gt: [{ $ifNull: ["$subtypeSlots.slots.plantReadyDays", 0] }, 0] },
+              "$subtypeSlots.slots.plantReadyDays",
+              { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+            ],
+          },
+        },
+      },
+      {
+        $project: {
+          plantId: 1,
+          subtypeId: "$subtypeSlots.subtypeId",
+          slotId: "$subtypeSlots.slots._id",
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          slotReadyDays: 1,
+        },
+      },
+    ]);
+
+    // Step 2: Collect all slot IDs and create slot map
+    const slotIds = allSlots.map(s => s.slotId);
+    const slotMap = new Map();
+    allSlots.forEach(slot => {
+      slotMap.set(slot.slotId.toString(), slot);
+    });
+
+    // Step 3: Single aggregation on orders to get all bookings grouped by slot - MUCH FASTER
+    const orderBookings = await Order.aggregate([
+      {
+        $match: {
+          bookingSlot: { $in: slotIds },
+          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+          $or: [
+            { quotaSource: { $ne: "dealer" } },
+            { quotaSource: { $exists: false } },
+            { quotaSource: null },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: "$bookingSlot",
+          totalBookedPlants: { $sum: "$numberOfPlants" },
+        },
+      },
+    ]);
+
+    // Step 4: Create booking map for fast lookup
+    const bookingMap = new Map();
+    orderBookings.forEach(booking => {
+      bookingMap.set(booking._id.toString(), booking.totalBookedPlants);
+    });
+
+    // Step 5: Join slots with bookings in memory and calculate gaps, overdue status
+    const today = moment().startOf("day");
+    
+    const slotsWithBookings = allSlots.map(slot => {
+      const slotIdStr = slot.slotId.toString();
+      const totalBookedPlants = bookingMap.get(slotIdStr) || 0;
+      const primarySowed = slot.primarySowed || 0;
+      const slotGap = totalBookedPlants - primarySowed;
+      
+      // Calculate overdue status
+      // A slot is overdue if: sowByDate (slotEndDay - plantReadyDays) is in the past
+      // slotReadyDays is already set from aggregation (slot-level first, then PlantCMS fallback)
+      let isOverdue = false;
+      let sowByDate = null;
+      const slotReadyDays = slot.slotReadyDays || 0;
+      
+      if (slot.slotEndDay) {
+        // Parse slot end date (DD-MM-YYYY format) and calculate sowByDate
+        const slotEndMoment = moment(slot.slotEndDay, "DD-MM-YYYY", true); // Strict parsing
+        if (slotEndMoment.isValid()) {
+          if (slotReadyDays > 0) {
+            // Calculate: sowByDate = slotEndDate - plantReadyDays
+            // Example: slotEndDate = 25-01-2025, plantReadyDays = 20, sowByDate = 05-01-2025
+            const sowByMoment = slotEndMoment.clone().subtract(slotReadyDays, "days");
+            sowByDate = sowByMoment.format("DD-MM-YYYY");
+            
+            // Check if overdue: sowByDate is in the past (before today)
+            if (sowByMoment.isBefore(today, "day")) {
+              isOverdue = true;
+            }
+          } else {
+            // If no plantReadyDays configured, use slotEndDate as sowByDate (fallback)
+            sowByDate = slotEndMoment.format("DD-MM-YYYY");
+            // Check if overdue: slotEndDate is in the past
+            if (slotEndMoment.isBefore(today, "day")) {
+              isOverdue = true;
+            }
+          }
+        } else {
+          console.warn(`[getPlantsGapSummary] Invalid slot endDay: ${slot.slotEndDay} for slotId: ${slot.slotId}`);
+        }
+      }
+      
+      // Debug logging for Twinkle subtype
+      if (slot.subtypeId && slot.plantId) {
+        const plant = plantMap.get(slot.plantId.toString());
+        const subtypes = plant?.subtypes || [];
+        const subtypeDetails = subtypes.find(st => st._id.toString() === slot.subtypeId.toString());
+        if (subtypeDetails?.name?.toLowerCase().includes("twinkle")) {
+          console.log(`[getPlantsGapSummary] Twinkle: slotEndDay=${slot.slotEndDay}, plantReadyDays=${slotReadyDays}, sowByDate=${sowByDate}, isOverdue=${isOverdue}, slotGap=${slotGap}`);
+        }
+      }
+      
+      return {
+        plantId: slot.plantId,
+        subtypeId: slot.subtypeId,
+        totalBookedPlants,
+        primarySowed,
+        slotGap,
+        isOverdue,
+        sowByDate,
+        plantReadyDays: slotReadyDays,
+      };
+    });
+
+    // Step 6: Filter slots based on available parameter
+    // For critical mode: include slots with positive gap OR overdue slots (even with 0 gap)
+    // For available mode: only negative gap slots
+    const filteredSlots = available === "true"
+      ? slotsWithBookings.filter(s => s.slotGap < 0) // Negative gap = available/surplus
+      : slotsWithBookings.filter(s => {
+          // Include if positive gap OR overdue
+          if (s.slotGap > 0 || s.isOverdue) {
+            // Debug logging for overdue slots
+            if (s.isOverdue) {
+              console.log(`[getPlantsGapSummary] Overdue slot found: plantId=${s.plantId}, subtypeId=${s.subtypeId}, slotGap=${s.slotGap}, sowByDate=${s.sowByDate}`);
+            }
+            return true;
+          }
+          return false;
+        });
+
+    // Step 7: Group by plant/subtype
+    const subtypeGroupMap = new Map();
+    filteredSlots.forEach(slot => {
+      const key = `${slot.plantId.toString()}-${slot.subtypeId.toString()}`;
+      if (!subtypeGroupMap.has(key)) {
+        subtypeGroupMap.set(key, {
+          plantId: slot.plantId,
+          subtypeId: slot.subtypeId,
+          totalBookedPlants: 0,
+          totalPrimarySowed: 0,
+          slotCount: 0,
+          overdueSlotCount: 0,
+          plantReadyDays: slot.plantReadyDays || 0, // Store plantReadyDays from first slot
+        });
+      }
+      const group = subtypeGroupMap.get(key);
+      group.totalBookedPlants += slot.totalBookedPlants;
+      group.totalPrimarySowed += slot.primarySowed;
+      group.slotCount += 1;
+      if (slot.isOverdue) {
+        group.overdueSlotCount += 1;
+      }
+    });
+
+    // Step 8: Convert to array and calculate gaps
+    const allSubtypeSummary = Array.from(subtypeGroupMap.values()).map(item => {
+      const totalBookingGap = Math.max(0, item.totalBookedPlants - item.totalPrimarySowed);
+      const totalAvailableGap = Math.max(0, item.totalPrimarySowed - item.totalBookedPlants);
+      const rawGap = item.totalBookedPlants - item.totalPrimarySowed;
+      
+      return {
+        _id: {
+          plantId: item.plantId,
+          subtypeId: item.subtypeId,
+        },
+        totalBookedPlants: item.totalBookedPlants,
+        totalPrimarySowed: item.totalPrimarySowed,
+        slotCount: item.slotCount,
+        overdueSlotCount: item.overdueSlotCount || 0,
+        plantReadyDays: item.plantReadyDays || 0,
+        totalBookingGap,
+        totalAvailableGap,
+        rawGap,
+      };
+    });
+
+    // Process results and group by plant
+    const plantSubtypeMap = new Map();
+    
+    allSubtypeSummary.forEach((item) => {
+      const plantId = item._id.plantId.toString();
+      const subtypeId = item._id.subtypeId.toString();
+      
+      if (!plantSubtypeMap.has(plantId)) {
+        plantSubtypeMap.set(plantId, []);
+      }
+      
+      plantSubtypeMap.get(plantId).push({
+        _id: subtypeId,
+        totalBookingGap: item.totalBookingGap,
+        totalAvailableGap: item.totalAvailableGap,
+        totalBookedPlants: item.totalBookedPlants,
+        totalPrimarySowed: item.totalPrimarySowed,
+        slotCount: item.slotCount,
+        overdueSlotCount: item.overdueSlotCount,
+        plantReadyDays: item.plantReadyDays,
+      });
+    });
+
+    // Process each plant and enrich with product/batch data
+    const plantsWithGaps = plants.map((plant) => {
+      const plantIdStr = plant._id.toString();
+      const sowingBuffer = plant.sowingBuffer || 0;
+      const subtypes = plant.subtypes || [];
+      
+      // Get subtypes for this plant from aggregation results
+      const subtypeSummary = plantSubtypeMap.get(plantIdStr) || [];
+      
+      // Enrich with subtype names and product data
+      const subtypesWithGaps = subtypeSummary.map((subtype) => {
+        // Find subtype name from plant data
+        const subtypeDetails = subtypes.find(
+          st => st._id.toString() === subtype._id
+        );
+        const subtypeName = subtypeDetails?.name || "Unknown";
+        
+        // Apply sowing buffer
+        const bookingGapWithBuffer = sowingBuffer > 0 
+          ? Math.round(subtype.totalBookingGap * (1 + sowingBuffer / 100))
+          : subtype.totalBookingGap;
+        
+        // Get product data from pre-fetched map
+        const productKey = `${plantIdStr}-${subtype._id}`;
+        const product = productMap.get(productKey);
+        
+        let conversionFactor = null;
+        let secondaryUnit = null;
+        let primaryUnit = null;
+        let availablePackets = 0;
+        
+        if (product) {
+          conversionFactor = product.conversionFactor || null;
+          secondaryUnit = product.secondaryUnit || null;
+          primaryUnit = product.primaryUnit || null;
+          
+          // Get batches from pre-fetched map
+          const productBatches = batchMap.get(product._id.toString()) || [];
+          
+          let totalAvailable = 0;
+          productBatches.forEach((batch) => {
+            const batchUnitId = batch.unit?._id?.toString();
+            const primaryUnitId = primaryUnit?._id?.toString();
+            const secondaryUnitId = secondaryUnit?._id?.toString();
+
+            if (batchUnitId === primaryUnitId) {
+              totalAvailable += batch.remainingQuantity;
+            } else if (batchUnitId === secondaryUnitId && conversionFactor) {
+              totalAvailable += batch.remainingQuantity / conversionFactor;
+            } else {
+              totalAvailable += batch.remainingQuantity;
+            }
+          });
+          
+          availablePackets = Math.floor(totalAvailable);
+        }
+        
+        return {
           _id: subtype._id,
-          subtypeName: subtype.subtypeName || "Unknown",
-          totalBookingGap: subtype.totalBookingGap,
-          totalAvailableGap: subtype.totalAvailableGap || 0, // Negative gap (surplus)
+          subtypeName: subtypeName,
+          totalBookingGap: bookingGapWithBuffer,
+          totalBookingGapRaw: subtype.totalBookingGap,
+          totalAvailableGap: subtype.totalAvailableGap || 0,
           totalBookedPlants: subtype.totalBookedPlants,
           totalPrimarySowed: subtype.totalPrimarySowed,
           slotCount: subtype.slotCount,
-        }));
-
-        // Filter based on available parameter
-        // Note: We already filter at slot level, but this is a safety check
-        if (available === "true") {
-          // Show only subtypes with available/surplus (negative raw gaps)
-          // This means primarySowed > totalBookedPlants (surplus/available)
-          subtypesWithGaps = subtypesWithGaps.filter((st) => {
-            const rawGap = (st.totalBookedPlants || 0) - (st.totalPrimarySowed || 0);
-            return rawGap < 0; // Negative gap means available/surplus
-          });
-        } else {
-          // Default: show only subtypes with positive gaps
-          subtypesWithGaps = subtypesWithGaps.filter((st) => (st.totalBookingGap || 0) > 0);
-        }
-
-        const plantTotalGap = available === "true"
-          ? subtypesWithGaps.reduce((sum, st) => sum + (st.totalAvailableGap || 0), 0)
-          : subtypesWithGaps.reduce((sum, st) => sum + (st.totalBookingGap || 0), 0);
-
-        return {
-          _id: plant._id,
-          plantName: plant.name,
-          subtypes: subtypesWithGaps,
-          totalBookingGap: available === "true" ? 0 : plantTotalGap, // Only set if not available mode
-          totalAvailableGap: available === "true" ? plantTotalGap : 0, // Set if available mode
+          overdueSlotCount: subtype.overdueSlotCount || 0,
+          plantReadyDays: subtype.plantReadyDays || subtypeDetails?.plantReadyDays || 0,
+          sowingBuffer: sowingBuffer,
+          conversionFactor: conversionFactor,
+          secondaryUnit: secondaryUnit,
+          primaryUnit: primaryUnit,
+          availablePackets: availablePackets,
         };
-      })
-    );
+      });
+
+      // Filter based on available parameter
+      // For critical mode: show subtypes with positive gap OR overdue slots
+      // For available mode: show subtypes with negative gap
+      let filteredSubtypes = subtypesWithGaps;
+      if (available === "true") {
+        filteredSubtypes = subtypesWithGaps.filter((st) => {
+          const rawGap = (st.totalBookedPlants || 0) - (st.totalPrimarySowed || 0);
+          return rawGap < 0;
+        });
+      } else {
+        filteredSubtypes = subtypesWithGaps.filter((st) => {
+          const hasGap = (st.totalBookingGap || 0) > 0;
+          const hasOverdue = (st.overdueSlotCount || 0) > 0;
+          const shouldInclude = hasGap || hasOverdue;
+          
+          // Debug logging for overdue subtypes
+          if (hasOverdue) {
+            console.log(`[getPlantsGapSummary] Overdue subtype found: plant=${plant.name}, subtype=${st.subtypeName}, gap=${st.totalBookingGap}, overdueSlots=${st.overdueSlotCount}`);
+          }
+          
+          return shouldInclude;
+        });
+      }
+
+      const plantTotalGap = available === "true"
+        ? filteredSubtypes.reduce((sum, st) => sum + (st.totalAvailableGap || 0), 0)
+        : filteredSubtypes.reduce((sum, st) => sum + (st.totalBookingGap || 0), 0);
+
+      return {
+        _id: plant._id,
+        plantName: plant.name,
+        subtypes: filteredSubtypes,
+        totalBookingGap: available === "true" ? 0 : plantTotalGap,
+        totalAvailableGap: available === "true" ? plantTotalGap : 0,
+      };
+    });
 
     // Sort by appropriate gap type
     if (available === "true") {
@@ -5550,6 +6172,775 @@ export const getSlotOrdersSummary = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Error fetching slot orders summary",
+      error: error.message,
+    });
+  }
+};
+
+// NEW API: Get Today's Sowing Data (All plants with due and current day entries)
+export const getTodaySowingData = async (req, res) => {
+  try {
+    const today = moment().startOf("day");
+    const todayDate = today.toDate();
+
+    // Get all plants with sowingAllowed = true
+    const plants = await PlantCms.find({ sowingAllowed: true })
+      .select("_id name subtypes")
+      .lean();
+
+    if (!plants || plants.length === 0) {
+      return res.status(200).json({
+        success: true,
+        plants: [],
+        summary: {
+          totalPlants: 0,
+          totalSubtypes: 0,
+          totalDueGap: 0,
+          totalTodayGap: 0,
+          dueSlots: 0,
+          todaySlots: 0,
+        },
+        generatedAt: new Date(),
+      });
+    }
+
+    // Get today's sowing data for all plants
+    const plantsWithTodayData = await Promise.all(
+      plants.map(async (plant) => {
+        // Get slots with sowByDate = today or overdue (due)
+        const todaySlots = await PlantSlot.aggregate([
+          {
+            $match: {
+              plantId: new mongoose.Types.ObjectId(plant._id),
+            },
+          },
+          {
+            $unwind: "$subtypeSlots",
+          },
+          {
+            $unwind: "$subtypeSlots.slots",
+          },
+          {
+            $lookup: {
+              from: "plantcms",
+              localField: "plantId",
+              foreignField: "_id",
+              as: "plantInfo",
+            },
+          },
+          {
+            $addFields: {
+              plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+            },
+          },
+          {
+            $match: {
+              "plantInfo.sowingAllowed": true,
+            },
+          },
+          {
+            $addFields: {
+              subtypeDetails: {
+                $arrayElemAt: [
+                  {
+                    $filter: {
+                      input: { $ifNull: ["$plantInfo.subtypes", []] },
+                      as: "subtype",
+                      cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                    },
+                  },
+                  0,
+                ],
+              },
+              slotId: "$subtypeSlots.slots._id",
+              primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+              totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
+              slotReadyDays: {
+                $cond: [
+                  { $gt: [{ $ifNull: ["$subtypeSlots.slots.plantReadyDays", 0] }, 0] },
+                  "$subtypeSlots.slots.plantReadyDays",
+                  { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+                ],
+              },
+            },
+          },
+          // Calculate totalBookedPlants from orders
+          {
+            $lookup: {
+              from: "orders",
+              let: { slotId: "$slotId" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $eq: ["$bookingSlot", "$$slotId"] },
+                        { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                        {
+                          $or: [
+                            { $ne: ["$quotaSource", "dealer"] },
+                            { $not: { $ifNull: ["$quotaSource", false] } }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  $group: {
+                    _id: null,
+                    totalBookedPlants: { $sum: "$numberOfPlants" }
+                  }
+                }
+              ],
+              as: "orderStats"
+            }
+          },
+          {
+            $addFields: {
+              totalBookedPlants: {
+                $ifNull: [
+                  { $arrayElemAt: ["$orderStats.totalBookedPlants", 0] },
+                  0
+                ]
+              }
+            }
+          },
+          {
+            $project: {
+              orderStats: 0
+            }
+          },
+          {
+            $addFields: {
+              bookingGap: {
+                $subtract: ["$totalBookedPlants", "$primarySowed"],
+              },
+              slotEndISO: {
+                $dateFromString: {
+                  dateString: {
+                    $concat: [
+                      { $substr: ["$subtypeSlots.slots.endDay", 6, 4] },
+                      "-",
+                      { $substr: ["$subtypeSlots.slots.endDay", 3, 2] },
+                      "-",
+                      { $substr: ["$subtypeSlots.slots.endDay", 0, 2] },
+                    ],
+                  },
+                  format: "%Y-%m-%d",
+                },
+              },
+            },
+          },
+          {
+            $addFields: {
+              sowByDateISO: {
+                $cond: [
+                  { $gt: ["$slotReadyDays", 0] },
+                  {
+                    $dateSubtract: {
+                      startDate: "$slotEndISO",
+                      unit: "day",
+                      amount: "$slotReadyDays",
+                    },
+                  },
+                  "$slotEndISO",
+                ],
+              },
+            },
+          },
+          {
+            $addFields: {
+              daysUntilSow: {
+                $round: [
+                  {
+                    $divide: [
+                      { $subtract: ["$sowByDateISO", todayDate] },
+                      1000 * 60 * 60 * 24,
+                    ],
+                  },
+                  0,
+                ],
+              },
+              sowByDate: {
+                $dateToString: {
+                  date: "$sowByDateISO",
+                  format: "%d-%m-%Y",
+                },
+              },
+            },
+          },
+          // Filter: only today (daysUntilSow === 0) or overdue (daysUntilSow < 0)
+          {
+            $match: {
+              daysUntilSow: { $lte: 0 }, // Today or overdue
+              bookingGap: { $gt: 0 }, // Only positive gaps (needs sowing)
+            },
+          },
+          {
+            $addFields: {
+              priority: {
+                $cond: [
+                  { $lt: ["$daysUntilSow", 0] },
+                  "due", // Overdue
+                  "today", // Current day
+                ],
+              },
+            },
+          },
+          {
+            $project: {
+              _id: "$subtypeSlots.slots._id",
+              slotId: "$subtypeSlots.slots._id",
+              subtypeId: "$subtypeSlots.subtypeId",
+              subtypeName: { $ifNull: ["$subtypeDetails.name", "Subtype"] },
+              slotStartDay: "$subtypeSlots.slots.startDay",
+              slotEndDay: "$subtypeSlots.slots.endDay",
+              month: "$subtypeSlots.slots.month",
+              totalBookedPlants: 1,
+              primarySowed: 1,
+              totalPlants: 1,
+              bookingGap: 1,
+              sowByDate: 1,
+              daysUntilSow: 1,
+              priority: 1,
+              plantReadyDays: "$slotReadyDays",
+            },
+          },
+        ]);
+
+        // Group by subtype
+        const subtypeMap = new Map();
+        
+        todaySlots.forEach((slot) => {
+          const subtypeKey = slot.subtypeId.toString();
+          
+          if (!subtypeMap.has(subtypeKey)) {
+            subtypeMap.set(subtypeKey, {
+              _id: slot.subtypeId,
+              subtypeName: slot.subtypeName,
+              dueGap: 0,
+              todayGap: 0,
+              dueSlots: 0,
+              todaySlots: 0,
+              slots: [],
+            });
+          }
+          
+          const subtype = subtypeMap.get(subtypeKey);
+          subtype.slots.push(slot);
+          
+          if (slot.priority === "due") {
+            subtype.dueGap += slot.bookingGap || 0;
+            subtype.dueSlots += 1;
+          } else {
+            subtype.todayGap += slot.bookingGap || 0;
+            subtype.todaySlots += 1;
+          }
+        });
+
+        const subtypes = Array.from(subtypeMap.values());
+
+        // Calculate plant totals
+        const plantDueGap = subtypes.reduce((sum, st) => sum + st.dueGap, 0);
+        const plantTodayGap = subtypes.reduce((sum, st) => sum + st.todayGap, 0);
+        const plantDueSlots = subtypes.reduce((sum, st) => sum + st.dueSlots, 0);
+        const plantTodaySlots = subtypes.reduce((sum, st) => sum + st.todaySlots, 0);
+
+        return {
+          _id: plant._id,
+          plantName: plant.name,
+          subtypes,
+          dueGap: plantDueGap,
+          todayGap: plantTodayGap,
+          dueSlots: plantDueSlots,
+          todaySlots: plantTodaySlots,
+          totalGap: plantDueGap + plantTodayGap,
+          totalSlots: plantDueSlots + plantTodaySlots,
+        };
+      })
+    );
+
+    // Filter out plants with no slots
+    const plantsWithData = plantsWithTodayData.filter(
+      (plant) => plant.totalSlots > 0
+    );
+
+    // Sort by total gap (highest first)
+    plantsWithData.sort((a, b) => b.totalGap - a.totalGap);
+
+    // Calculate overall summary
+    const summary = {
+      totalPlants: plantsWithData.length,
+      totalSubtypes: plantsWithData.reduce(
+        (sum, plant) => sum + plant.subtypes.length,
+        0
+      ),
+      totalDueGap: plantsWithData.reduce((sum, plant) => sum + plant.dueGap, 0),
+      totalTodayGap: plantsWithData.reduce(
+        (sum, plant) => sum + plant.todayGap,
+        0
+      ),
+      totalGap: plantsWithData.reduce((sum, plant) => sum + plant.totalGap, 0),
+      dueSlots: plantsWithData.reduce((sum, plant) => sum + plant.dueSlots, 0),
+      todaySlots: plantsWithData.reduce((sum, plant) => sum + plant.todaySlots, 0),
+      totalSlots: plantsWithData.reduce((sum, plant) => sum + plant.totalSlots, 0),
+    };
+
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    return res.status(200).json({
+      success: true,
+      plants: plantsWithData,
+      summary,
+      date: today.format("DD-MM-YYYY"),
+      generatedAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Error fetching today's sowing data:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching today's sowing data",
+      error: error.message,
+    });
+  }
+};
+
+// NEW API: Get All Plants Today Sowing Cards (Flat structure with subtype cards, today + overdue only) - OPTIMIZED
+export const getAllPlantsTodaySowingCards = async (req, res) => {
+  try {
+    const today = moment().startOf("day");
+    const todayDate = today.toDate();
+
+    // Get all plants with sowingAllowed = true (including sowingBuffer) - single query
+    const plants = await PlantCms.find({ sowingAllowed: true })
+      .select("_id name subtypes sowingBuffer")
+      .lean();
+
+    if (!plants || plants.length === 0) {
+      return res.status(200).json({
+        success: true,
+        subtypeCards: [],
+        summary: {
+          totalPlants: 0,
+          totalSubtypes: 0,
+          totalDueGap: 0,
+          totalTodayGap: 0,
+          dueSlots: 0,
+          todaySlots: 0,
+        },
+        generatedAt: new Date(),
+      });
+    }
+
+    const plantIds = plants.map(p => p._id);
+    const plantMap = new Map(plants.map(p => [p._id.toString(), p]));
+
+    // Batch fetch all products for all plants at once
+    const products = await Product.find({
+      plantId: { $in: plantIds },
+      category: "seeds",
+      isActive: true,
+    })
+      .select("plantId subtypeId conversionFactor secondaryUnit primaryUnit _id")
+      .populate("secondaryUnit", "name symbol")
+      .populate("primaryUnit", "name symbol")
+      .lean();
+
+    // Create product map: key = "plantId-subtypeId"
+    const productMap = new Map();
+    products.forEach(p => {
+      const key = `${p.plantId}-${p.subtypeId}`;
+      productMap.set(key, p);
+    });
+
+    // Batch fetch all batches for all products at once
+    const productIds = products.map(p => p._id);
+    const batches = await Batch.find({
+      product: { $in: productIds },
+      status: "active",
+      remainingQuantity: { $gt: 0 },
+    })
+      .select("product remainingQuantity unit")
+      .populate("unit", "name symbol _id")
+      .lean();
+
+    // Group batches by product
+    const batchMap = new Map();
+    batches.forEach(batch => {
+      const productId = batch.product.toString();
+      if (!batchMap.has(productId)) {
+        batchMap.set(productId, []);
+      }
+      batchMap.get(productId).push(batch);
+    });
+
+    // Step 1: Get all slots with their data - FAST aggregation with PlantCMS lookup for plantReadyDays
+    const allSlots = await PlantSlot.aggregate([
+      {
+        $match: {
+          plantId: { $in: plantIds },
+        },
+      },
+      {
+        $unwind: "$subtypeSlots",
+      },
+      {
+        $unwind: "$subtypeSlots.slots",
+      },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantId",
+          foreignField: "_id",
+          as: "plantInfo",
+        },
+      },
+      {
+        $addFields: {
+          plantInfo: { $arrayElemAt: ["$plantInfo", 0] },
+        },
+      },
+      {
+        $addFields: {
+          subtypeDetails: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$plantInfo.subtypes", []] },
+                  as: "subtype",
+                  cond: { $eq: ["$$subtype._id", "$subtypeSlots.subtypeId"] },
+                },
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          slotReadyDays: {
+            $cond: [
+              { $gt: [{ $ifNull: ["$subtypeSlots.slots.plantReadyDays", 0] }, 0] },
+              "$subtypeSlots.slots.plantReadyDays",
+              { $ifNull: ["$subtypeDetails.plantReadyDays", 0] },
+            ],
+          },
+        },
+      },
+      {
+        $project: {
+          plantId: 1,
+          subtypeId: "$subtypeSlots.subtypeId",
+          slotId: "$subtypeSlots.slots._id",
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
+          slotReadyDays: 1,
+          slotStartDay: "$subtypeSlots.slots.startDay",
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          month: "$subtypeSlots.slots.month",
+        },
+      },
+    ]);
+
+    // Step 2: Collect all slot IDs
+    const slotIds = allSlots.map(s => s.slotId);
+
+    // Step 2.5: Fetch sowing requests linked to these slots to check status
+    // Hide cards where stock is issued but sowing not started
+    const linkedRequests = await SowingRequest.find({
+      linkedSlotIds: { $in: slotIds },
+      status: 'issued', // Stock issued but not yet completed
+      sowingCompleted: false, // Sowing not finished
+    })
+      .select('linkedSlotIds')
+      .lean();
+
+    // Create set of slot IDs to hide (stock issued, waiting to start sowing)
+    const hideSlotIds = new Set();
+    linkedRequests.forEach(req => {
+      req.linkedSlotIds?.forEach(slotId => {
+        hideSlotIds.add(slotId.toString());
+      });
+    });
+
+    // Step 3: Single aggregation on orders to get all bookings grouped by slot - MUCH FASTER
+    const orderBookings = await Order.aggregate([
+      {
+        $match: {
+          bookingSlot: { $in: slotIds },
+          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+          $or: [
+            { quotaSource: { $ne: "dealer" } },
+            { quotaSource: { $exists: false } },
+            { quotaSource: null },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: "$bookingSlot",
+          totalBookedPlants: { $sum: "$numberOfPlants" },
+        },
+      },
+    ]);
+
+    // Step 4: Create booking map for fast lookup
+    const bookingMap = new Map();
+    orderBookings.forEach(booking => {
+      bookingMap.set(booking._id.toString(), booking.totalBookedPlants);
+    });
+
+    // Step 5: Join slots with bookings in memory and calculate dates/gaps
+    const allTodaySlots = allSlots.map(slot => {
+      const slotIdStr = slot.slotId.toString();
+      const totalBookedPlants = bookingMap.get(slotIdStr) || 0;
+      const primarySowed = slot.primarySowed || 0;
+      const bookingGap = totalBookedPlants - primarySowed;
+      
+      // Parse slot end date
+      const endDayParts = slot.slotEndDay.match(/(\d{2})-(\d{2})-(\d{4})/);
+      const slotEndISO = endDayParts 
+        ? new Date(`${endDayParts[3]}-${endDayParts[2]}-${endDayParts[1]}`)
+        : null;
+      
+      // Calculate sowByDateISO
+      // slotReadyDays is already set from aggregation (slot-level first, then PlantCMS fallback)
+      const slotReadyDays = slot.slotReadyDays || 0;
+      
+      let sowByDateISO = null;
+      if (slotEndISO) {
+        if (slotReadyDays > 0) {
+          // Calculate: sowByDate = slotEndDate - plantReadyDays
+          sowByDateISO = new Date(slotEndISO.getTime() - slotReadyDays * 24 * 60 * 60 * 1000);
+        } else {
+          // If no plantReadyDays configured, use slotEndDate as sowByDate (fallback)
+          sowByDateISO = slotEndISO;
+        }
+      }
+      
+      // Calculate daysUntilSow (negative = overdue, 0 = today, positive = future)
+      const daysUntilSow = sowByDateISO
+        ? Math.round((sowByDateISO - todayDate) / (1000 * 60 * 60 * 24))
+        : null;
+      
+      // Format sowByDate
+      const sowByDate = sowByDateISO
+        ? moment(sowByDateISO).format("DD-MM-YYYY")
+        : null;
+      
+      // Determine priority: "due" for overdue, "today" for today
+      // Note: Filter below only includes slots with daysUntilSow <= 0, so "future" slots are excluded
+      const priority = daysUntilSow !== null
+        ? (daysUntilSow < 0 ? "due" : "today")
+        : null;
+      
+      // Debug logging for Twinkle subtype to verify calculation
+      if (slot.subtypeId && slot.plantId) {
+        const plant = plantMap.get(slot.plantId.toString());
+        const subtypes = plant?.subtypes || [];
+        const subtypeDetails = subtypes.find(st => st._id.toString() === slot.subtypeId.toString());
+        if (subtypeDetails?.name?.toLowerCase().includes("twinkle")) {
+          console.log(`[getAllPlantsTodaySowingCards] Twinkle: slotEndDay=${slot.slotEndDay}, plantReadyDays=${slotReadyDays}, sowByDate=${sowByDate}, daysUntilSow=${daysUntilSow}, priority=${priority}, bookingGap=${bookingGap}`);
+        }
+      }
+      
+      return {
+        _id: slot.slotId,
+        slotId: slot.slotId,
+        plantId: slot.plantId,
+        subtypeId: slot.subtypeId,
+        slotStartDay: slot.slotStartDay,
+        slotEndDay: slot.slotEndDay,
+        month: slot.month,
+        totalBookedPlants,
+        primarySowed,
+        totalPlants: slot.totalPlants,
+        bookingGap,
+        sowByDate,
+        daysUntilSow,
+        priority,
+        plantReadyDays: slotReadyDays,
+        bookingGapRaw: bookingGap,
+      };
+    }).filter(slot => {
+      // Basic filters: must be due/today with booking gap
+      if (slot.daysUntilSow === null || slot.daysUntilSow > 0 || slot.bookingGap <= 0) {
+        return false;
+      }
+      
+      // Hide cards where stock is issued but sowing not started
+      // (They should not appear until staff actually starts entering sowing data)
+      const slotIdStr = slot.slotId.toString();
+      if (hideSlotIds.has(slotIdStr)) {
+        return false; // Card hidden - stock issued, waiting for sowing to start
+      }
+      
+      return true;
+    });
+
+    // Process results and group by plant/subtype
+    const subtypeCardMap = new Map();
+    
+    allTodaySlots.forEach((slot) => {
+      const plantId = slot.plantId.toString();
+      const subtypeId = slot.subtypeId.toString();
+      const key = `${plantId}-${subtypeId}`;
+      
+      if (!subtypeCardMap.has(key)) {
+        const plant = plantMap.get(plantId);
+        const subtypes = plant?.subtypes || [];
+        const subtypeDetails = subtypes.find(st => st._id.toString() === subtypeId);
+        
+        subtypeCardMap.set(key, {
+          plantId: plantId,
+          plantName: plant?.name || "Unknown",
+          subtypeId: subtypeId,
+          subtypeName: subtypeDetails?.name || "Subtype",
+          slots: [],
+          dueGap: 0,
+          todayGap: 0,
+          dueSlots: 0,
+          todaySlots: 0,
+          totalBookedPlants: 0,
+          totalPrimarySowed: 0,
+          sowingBuffer: plant?.sowingBuffer || 0,
+        });
+      }
+      
+      const card = subtypeCardMap.get(key);
+      card.slots.push(slot);
+      card.totalBookedPlants += slot.totalBookedPlants || 0;
+      card.totalPrimarySowed += slot.primarySowed || 0;
+      
+      if (slot.priority === "due") {
+        card.dueGap += slot.bookingGap || 0;
+        card.dueSlots += 1;
+      } else {
+        card.todayGap += slot.bookingGap || 0;
+        card.todaySlots += 1;
+      }
+    });
+
+    // Process each subtype card and enrich with product/batch data
+    const allSubtypeCards = Array.from(subtypeCardMap.values()).map((card) => {
+      const sowingBuffer = card.sowingBuffer || 0;
+      
+      // Apply sowing buffer to gaps
+      const dueGapWithBuffer = sowingBuffer > 0 && card.dueGap > 0
+        ? Math.round(card.dueGap * (1 + sowingBuffer / 100))
+        : card.dueGap;
+      const todayGapWithBuffer = sowingBuffer > 0 && card.todayGap > 0
+        ? Math.round(card.todayGap * (1 + sowingBuffer / 100))
+        : card.todayGap;
+      const totalGap = dueGapWithBuffer + todayGapWithBuffer;
+      
+      // Get product data from pre-fetched map
+      const productKey = `${card.plantId}-${card.subtypeId}`;
+      const product = productMap.get(productKey);
+      
+      let conversionFactor = null;
+      let secondaryUnit = null;
+      let primaryUnit = null;
+      let availablePackets = 0;
+      
+      if (product) {
+        conversionFactor = product.conversionFactor || null;
+        secondaryUnit = product.secondaryUnit || null;
+        primaryUnit = product.primaryUnit || null;
+        
+        // Get batches from pre-fetched map
+        const productBatches = batchMap.get(product._id.toString()) || [];
+        
+        let totalAvailable = 0;
+        productBatches.forEach((batch) => {
+          const batchUnitId = batch.unit?._id?.toString();
+          const primaryUnitId = primaryUnit?._id?.toString();
+          const secondaryUnitId = secondaryUnit?._id?.toString();
+
+          if (batchUnitId === primaryUnitId) {
+            totalAvailable += batch.remainingQuantity;
+          } else if (batchUnitId === secondaryUnitId && conversionFactor) {
+            totalAvailable += batch.remainingQuantity / conversionFactor;
+          } else {
+            totalAvailable += batch.remainingQuantity;
+          }
+        });
+        
+        availablePackets = Math.floor(totalAvailable);
+      }
+      
+      // Apply buffer to individual slots
+      const slotsWithBuffer = card.slots.map(slot => {
+        const gapWithBuffer = sowingBuffer > 0 && slot.bookingGapRaw > 0
+          ? Math.round(slot.bookingGapRaw * (1 + sowingBuffer / 100))
+          : slot.bookingGapRaw;
+        
+        return {
+          ...slot,
+          bookingGap: gapWithBuffer,
+          bookingGapRaw: slot.bookingGapRaw,
+        };
+      });
+      
+      return {
+        plantId: card.plantId,
+        plantName: card.plantName,
+        subtypeId: card.subtypeId,
+        subtypeName: card.subtypeName,
+        dueGap: dueGapWithBuffer,
+        todayGap: todayGapWithBuffer,
+        dueSlots: card.dueSlots,
+        todaySlots: card.todaySlots,
+        totalBookedPlants: card.totalBookedPlants,
+        totalPrimarySowed: card.totalPrimarySowed,
+        slots: slotsWithBuffer,
+        totalGap: totalGap,
+        totalSlots: card.slots.length,
+        sowingBuffer: sowingBuffer,
+        conversionFactor: conversionFactor,
+        secondaryUnit: secondaryUnit,
+        primaryUnit: primaryUnit,
+        availablePackets: availablePackets,
+      };
+    });
+
+    // Sort by total gap (descending)
+    allSubtypeCards.sort((a, b) => (b.totalGap || 0) - (a.totalGap || 0));
+
+    // Calculate summary
+    const summary = {
+      totalPlants: new Set(allSubtypeCards.map(c => c.plantId)).size,
+      totalSubtypes: allSubtypeCards.length,
+      totalDueGap: allSubtypeCards.reduce((sum, c) => sum + (c.dueGap || 0), 0),
+      totalTodayGap: allSubtypeCards.reduce((sum, c) => sum + (c.todayGap || 0), 0),
+      dueSlots: allSubtypeCards.reduce((sum, c) => sum + (c.dueSlots || 0), 0),
+      todaySlots: allSubtypeCards.reduce((sum, c) => sum + (c.todaySlots || 0), 0),
+      totalSlots: allSubtypeCards.reduce((sum, c) => sum + (c.totalSlots || 0), 0),
+    };
+
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
+
+    return res.status(200).json({
+      success: true,
+      subtypeCards: allSubtypeCards,
+      summary,
+      date: moment().format("DD-MM-YYYY"),
+      generatedAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Error fetching today's sowing cards:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching today's sowing cards",
       error: error.message,
     });
   }

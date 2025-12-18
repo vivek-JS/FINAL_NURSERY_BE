@@ -16,7 +16,13 @@ const slotTrailSchema = new Schema({
       "ADD_WITH_BUFFER_RELEASE",
       "SUBTRACT_WITH_BUFFER",
       "SUBTRACT_WITH_BUFFER_RELEASE",
-      "UPDATE"
+      "UPDATE",
+      "SOWING_STARTED",
+      "SOWING_COMPLETED",
+      "EXCESSIVE_SOWING_ADDED",
+      "STOCK_REQUEST_CREATED",
+      "STOCK_REQUEST_ISSUED",
+      "STOCK_REQUEST_CANCELLED"
     ],
     required: true,
   },
@@ -55,6 +61,10 @@ const slotTrailSchema = new Schema({
   orderId: {
     type: Schema.Types.ObjectId,
     ref: "Order",
+  },
+  sowingRequestId: {
+    type: Schema.Types.ObjectId,
+    ref: "SowingRequest",
   },
   performedBy: {
     type: Schema.Types.ObjectId,
@@ -235,6 +245,44 @@ const slotSchema = new Schema({
     type: Number,
     default: 0,
   }, // Days before plant ready date to send reminder
+  // Excessive sowing tracking
+  excessiveSowing: {
+    packets: {
+      type: Number,
+      default: 0,
+    }, // Excessive packets sowed (packets beyond orders)
+    plants: {
+      type: Number,
+      default: 0,
+    }, // Excessive plants sowed (plants beyond orders)
+  },
+  // Sowing completion tracking
+  sowingCompleted: {
+    type: Boolean,
+    default: false,
+  }, // Flag to indicate if sowing is completed for this slot
+  sowingCompletedDate: {
+    type: String, // Store date in "dd-mm-yyyy" format
+    validate: {
+      validator: function (value) {
+        if (!value) return true; // Allow empty value
+        return (
+          /^\d{2}-\d{2}-\d{4}$/.test(value) &&
+          moment(value, "DD-MM-YYYY", true).isValid()
+        );
+      },
+      message: (props) =>
+        `${props.value} is not a valid date in the format dd-mm-yyyy`,
+    },
+  },
+  sowingInProgress: {
+    type: Boolean,
+    default: false,
+  }, // Flag to indicate if sowing is in progress
+  linkedSowingRequests: [{
+    type: Schema.Types.ObjectId,
+    ref: 'SowingRequest',
+  }], // Track all sowing requests linked to this slot
   // Slot trail tracking
   slotTrail: [slotTrailSchema],
 });

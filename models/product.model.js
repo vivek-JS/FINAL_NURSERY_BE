@@ -22,6 +22,12 @@ const productSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    purpose: {
+      type: String,
+      enum: ['production', 'sales', 'internal', 'other'],
+      default: 'other',
+      trim: true,
+    },
     // Plant and subtype references (for seeds category only)
     plantId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -30,6 +36,15 @@ const productSchema = new mongoose.Schema(
     subtypeId: {
       type: mongoose.Schema.Types.ObjectId,
     },
+    plantSubtypeInfo: [{
+      subtypeId: {
+        type: mongoose.Schema.Types.ObjectId,
+      },
+      conversionFactor: {
+        type: Number,
+        default: 1,
+      },
+    }],
     primaryUnit: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'MeasurementUnit',
