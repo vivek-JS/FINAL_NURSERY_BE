@@ -885,6 +885,91 @@ export const addTestInventoryStock = async (req, res) => {
   }
 };
 
+/**
+ * Analyze inventory purpose breakdown
+ * GET /api/v1/sowing/excessive/analyze-inventory-purpose/:productId
+ */
+export const analyzeInventoryPurpose = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    if (!productId || !mongoose.Types.ObjectId.isValid(productId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid product ID is required'
+      });
+    }
+
+    // Get all inventory entries for this product
+    const allEntries = await InventoryOutward.find({
+      'items.product': new mongoose.Types.ObjectId(productId),
+      status: { $in: ['approved', 'issued'] }
+    })
+      .select('purpose status items outwardNumber outwardDate')
+      .lean();
+
+    const byPurpose = {};
+    let totalPackets = 0;
+    let totalProduction = 0;
+
+    allEntries.forEach(entry => {
+      const purpose = entry.purpose || 'undefined';
+      
+      if (!byPurpose[purpose]) {
+        byPurpose[purpose] = {
+          count: 0,
+          packets: 0,
+          entries: []
+        };
+      }
+
+      // Find matching items
+      const matchingItems = entry.items.filter(
+        item => item.product?.toString() === productId
+      );
+
+      matchingItems.forEach(item => {
+        const available = Math.max(0, (item.quantity || 0) - (item.usedQuantity || 0));
+        
+        byPurpose[purpose].count++;
+        byPurpose[purpose].packets += available;
+        byPurpose[purpose].entries.push({
+          outwardNumber: entry.outwardNumber,
+          outwardDate: entry.outwardDate,
+          quantity: item.quantity,
+          usedQuantity: item.usedQuantity,
+          available
+        });
+
+        totalPackets += available;
+        if (purpose === 'production') {
+          totalProduction += available;
+        }
+      });
+    });
+
+    return res.status(200).json({
+      success: true,
+      productId,
+      totalEntries: allEntries.length,
+      breakdown: byPurpose,
+      summary: {
+        totalPackets,
+        productionOnly: totalProduction,
+        otherPurposes: totalPackets - totalProduction,
+        explanation: `When filtering by purpose='production', only ${totalProduction} packets were found. After removing the filter, all ${totalPackets} packets are now visible.`
+      }
+    });
+  } catch (error) {
+    console.error('[analyzeInventoryPurpose] Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to analyze inventory purpose',
+      error: error.message
+    });
+  }
+};
+
 export default {
   createExcessiveSowingRequest,
   getAvailablePlantsForExcessiveSowing,
@@ -893,4 +978,5 @@ export default {
   fixExcessiveSowingData,
   checkInventoryStock,
   addTestInventoryStock,
+  analyzeInventoryPurpose,
 };

@@ -47,6 +47,7 @@ import {
   fixExcessiveSowingData,
   checkInventoryStock,
   addTestInventoryStock,
+  analyzeInventoryPurpose,
 } from "../controllers/excessiveSowing.controller.js";
 import {
   markRequestAsIssued,
@@ -102,6 +103,7 @@ router.get("/excessive/diagnostic", getDiagnosticInfo); // Get diagnostic info f
 router.post("/excessive/fix-data", fixExcessiveSowingData); // Fix data - enable sowing and set purposes
 router.get("/excessive/check-inventory", checkInventoryStock); // Check inventory stock details
 router.post("/excessive/add-test-stock", addTestInventoryStock); // Add test inventory stock (for testing)
+router.get("/excessive/analyze-purpose/:productId", analyzeInventoryPurpose); // Analyze inventory purpose breakdown
 
 // WhatsApp integration for sowing reminders
 router.post("/whatsapp/reminders", sendSowingRemindersWhatsApp); // Generate and prepare sowing reminders for WhatsApp
