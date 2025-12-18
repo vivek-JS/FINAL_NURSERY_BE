@@ -121,6 +121,7 @@ export const updateSowingProgress = async (req, res) => {
     request.remainingSowingNeeded = Math.max(0, expectedPlants - request.sowedQuantity);
 
     // Check if sowing is completed
+    const wasJustCompleted = request.remainingSowingNeeded <= 0 && !request.sowingCompleted;
     if (request.remainingSowingNeeded <= 0) {
       request.sowingCompleted = true;
       request.sowingCompletedDate = new Date();
@@ -131,6 +132,55 @@ export const updateSowingProgress = async (req, res) => {
     }
 
     await request.save();
+
+    // Remove from all linked slots' sowingInProgress array when completed
+    if (wasJustCompleted && request.linkedSlotIds && request.linkedSlotIds.length > 0) {
+      for (const linkedSlotId of request.linkedSlotIds) {
+        try {
+          const plantSlotDoc = await PlantSlot.findOne({
+            'subtypeSlots.slots._id': linkedSlotId,
+          });
+
+          if (plantSlotDoc) {
+            for (const subtypeSlot of plantSlotDoc.subtypeSlots) {
+              const slot = subtypeSlot.slots.find(s => s._id.toString() === linkedSlotId.toString());
+              if (slot) {
+                // Remove this request from sowingInProgress array
+                if (Array.isArray(slot.sowingInProgress)) {
+                  slot.sowingInProgress = slot.sowingInProgress.filter(
+                    prog => prog.sowingRequestId?.toString() !== request._id.toString()
+                  );
+                }
+
+                // Add completion trail entry
+                if (!slot.slotTrail) {
+                  slot.slotTrail = [];
+                }
+                slot.slotTrail.unshift({
+                  action: 'SOWING_COMPLETED',
+                  quantity: sowedQuantity,
+                  previousTotalPlants: slot.totalPlants || 0,
+                  newTotalPlants: slot.totalPlants || 0,
+                  previousAvailablePlants: slot.availablePlants || 0,
+                  newAvailablePlants: slot.availablePlants || 0,
+                  reason: `Sowing completed for ${request.requestNumber}`,
+                  sowingRequestId: request._id,
+                  performedBy: req.user._id,
+                  notes: `Request ${request.requestNumber} completed: ${request.sowedQuantity} plants sowed`,
+                });
+
+                await plantSlotDoc.save();
+                console.log(`✅ Removed request ${request.requestNumber} from slot ${linkedSlotId} sowingInProgress`);
+                break;
+              }
+            }
+          }
+        } catch (slotError) {
+          console.error(`Error updating slot ${linkedSlotId}:`, slotError);
+          // Continue with other slots
+        }
+      }
+    }
 
     // Update slot if provided
     if (slotId) {
@@ -380,6 +430,7 @@ export const recalculateSowingRemaining = async (req, res) => {
     request.sowedQuantity = totalSowed;
     request.remainingSowingNeeded = remaining;
 
+    const wasJustCompleted = remaining <= 0 && !request.sowingCompleted;
     if (remaining <= 0 && !request.sowingCompleted) {
       request.sowingCompleted = true;
       request.sowingCompletedDate = new Date();
@@ -387,6 +438,55 @@ export const recalculateSowingRemaining = async (req, res) => {
     }
 
     await request.save();
+
+    // Remove from all linked slots' sowingInProgress array when completed
+    if (wasJustCompleted && request.linkedSlotIds && request.linkedSlotIds.length > 0) {
+      for (const linkedSlotId of request.linkedSlotIds) {
+        try {
+          const plantSlotDoc = await PlantSlot.findOne({
+            'subtypeSlots.slots._id': linkedSlotId,
+          });
+
+          if (plantSlotDoc) {
+            for (const subtypeSlot of plantSlotDoc.subtypeSlots) {
+              const slot = subtypeSlot.slots.find(s => s._id.toString() === linkedSlotId.toString());
+              if (slot) {
+                // Remove this request from sowingInProgress array
+                if (Array.isArray(slot.sowingInProgress)) {
+                  slot.sowingInProgress = slot.sowingInProgress.filter(
+                    prog => prog.sowingRequestId?.toString() !== request._id.toString()
+                  );
+                }
+
+                // Add completion trail entry
+                if (!slot.slotTrail) {
+                  slot.slotTrail = [];
+                }
+                slot.slotTrail.unshift({
+                  action: 'SOWING_COMPLETED',
+                  quantity: totalSowed,
+                  previousTotalPlants: slot.totalPlants || 0,
+                  newTotalPlants: slot.totalPlants || 0,
+                  previousAvailablePlants: slot.availablePlants || 0,
+                  newAvailablePlants: slot.availablePlants || 0,
+                  reason: `Sowing completed for ${request.requestNumber} (recalculated)`,
+                  sowingRequestId: request._id,
+                  performedBy: req.user._id,
+                  notes: `Request ${request.requestNumber} completed via recalculation: ${totalSowed} plants total`,
+                });
+
+                await plantSlotDoc.save();
+                console.log(`✅ Removed request ${request.requestNumber} from slot ${linkedSlotId} sowingInProgress (recalc)`);
+                break;
+              }
+            }
+          }
+        } catch (slotError) {
+          console.error(`Error updating slot ${linkedSlotId}:`, slotError);
+          // Continue with other slots
+        }
+      }
+    }
 
     return res.status(200).json({
       success: true,

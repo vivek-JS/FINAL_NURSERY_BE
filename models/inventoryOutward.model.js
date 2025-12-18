@@ -116,6 +116,15 @@ const inventoryOutwardSchema = new mongoose.Schema(
     notes: {
       type: String,
     },
+    // Sowing tracking - link to slots
+    linkedSlotIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'PlantSlot',
+    }],
+    sowingRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SowingRequest',
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

@@ -275,10 +275,34 @@ const slotSchema = new Schema({
         `${props.value} is not a valid date in the format dd-mm-yyyy`,
     },
   },
-  sowingInProgress: {
-    type: Boolean,
-    default: false,
-  }, // Flag to indicate if sowing is in progress
+  sowingInProgress: [{
+    requestNumber: {
+      type: String,
+    },
+    packetsIssued: {
+      type: Number,
+      default: 0,
+    },
+    plantsExpected: {
+      type: Number,
+      default: 0,
+    },
+    outwardId: {
+      type: Schema.Types.ObjectId,
+      ref: 'InventoryOutward',
+    },
+    sowingRequestId: {
+      type: Schema.Types.ObjectId,
+      ref: 'SowingRequest',
+    },
+    isExcessiveSowing: {
+      type: Boolean,
+      default: false,
+    },
+    issuedDate: {
+      type: Date,
+    },
+  }], // Array to track multiple sowing requests in progress for this slot
   linkedSowingRequests: [{
     type: Schema.Types.ObjectId,
     ref: 'SowingRequest',
