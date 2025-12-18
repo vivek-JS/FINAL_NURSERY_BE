@@ -6650,31 +6650,47 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
     // Step 2: Collect all slot IDs
     const slotIds = allSlots.map(s => s.slotId);
 
-    // Step 2.5: Fetch sowing requests linked to these slots to check status
-    // Show "Sowing in Progress" for cards where stock is issued
-    const linkedRequests = await SowingRequest.find({
-      linkedSlotIds: { $in: slotIds },
-      status: 'issued', // Stock issued but not yet completed
-      sowingCompleted: false, // Sowing not finished
-    })
-      .select('linkedSlotIds packetsRequested remainingSowingNeeded isExcessiveSowing requestNumber')
-      .lean();
+    // Step 2.5: Get sowing in progress details directly from slots
+    // This ensures we use the correct plantsExpected calculation
+    const slotsWithProgress = await PlantSlot.aggregate([
+      {
+        $match: {
+          'subtypeSlots.slots._id': { $in: slotIds },
+        },
+      },
+      {
+        $unwind: '$subtypeSlots',
+      },
+      {
+        $unwind: '$subtypeSlots.slots',
+      },
+      {
+        $match: {
+          'subtypeSlots.slots._id': { $in: slotIds },
+          'subtypeSlots.slots.sowingInProgress': { $exists: true, $ne: [] },
+        },
+      },
+      {
+        $project: {
+          slotId: '$subtypeSlots.slots._id',
+          sowingInProgress: '$subtypeSlots.slots.sowingInProgress',
+        },
+      },
+    ]);
 
-    // Create map of slot IDs with sowing in progress details
+    // Create map of slot IDs with sowing in progress details from slot data
     const sowingInProgressMap = new Map();
-    linkedRequests.forEach(req => {
-      req.linkedSlotIds?.forEach(slotId => {
-        const slotIdStr = slotId.toString();
-        if (!sowingInProgressMap.has(slotIdStr)) {
-          sowingInProgressMap.set(slotIdStr, []);
-        }
-        sowingInProgressMap.get(slotIdStr).push({
-          packetsIssued: req.packetsRequested || 0,
-          remainingPlants: req.remainingSowingNeeded || 0,
-          isExcessiveSowing: req.isExcessiveSowing || false,
-          requestNumber: req.requestNumber,
-        });
-      });
+    slotsWithProgress.forEach(slotData => {
+      const slotIdStr = slotData.slotId.toString();
+      const progressDetails = (slotData.sowingInProgress || []).map(prog => ({
+        packetsIssued: prog.packetsIssued || 0,
+        remainingPlants: prog.plantsExpected || 0, // Use plantsExpected from slot
+        isExcessiveSowing: prog.isExcessiveSowing || false,
+        requestNumber: prog.requestNumber,
+      }));
+      if (progressDetails.length > 0) {
+        sowingInProgressMap.set(slotIdStr, progressDetails);
+      }
     });
 
     // Step 3: Single aggregation on orders to get all bookings grouped by slot - MUCH FASTER
