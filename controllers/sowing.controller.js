@@ -879,18 +879,20 @@ export const createMultipleSowings = async (req, res) => {
               $inc: {}
             };
             
-            // Update officeSowed based on location
-            if (location === "OFFICE" && officeQuantity > 0) {
-              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].officeSowed'] = officeQuantity;
+            // Update officeSowed if packets are present (regardless of location)
+            if (packets && packets.length > 0) {
+              const totalPacketsCount = packets.reduce((sum, p) => sum + (Number(p.quantity) || 0), 0);
+              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].officeSowed'] = totalPacketsCount;
+              console.log(`📦 Will update officeSowed with ${totalPacketsCount} packets`);
             }
             
-            // If sowedPlant is provided, update primarySowed and totalPlants with that value
+            // If sowedPlant is provided, update primarySowed and totalPlants
             if (sowedPlantValue !== null && sowedPlantValue > 0) {
               updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = sowedPlantValue;
               updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = sowedPlantValue;
               console.log(`📊 Will update primarySowed and totalPlants with sowedPlant: ${sowedPlantValue}`);
-            } else if (location === "PRIMARY") {
-              // Fallback: For PRIMARY location without sowedPlant, use totalQuantityRequired
+            } else if (totalQuantityRequired > 0) {
+              // Fallback: Use totalQuantityRequired
               updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = totalQuantityRequired;
               updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = totalQuantityRequired;
             }
@@ -946,6 +948,372 @@ export const createMultipleSowings = async (req, res) => {
             }
           } catch (slotError) {
             console.error("Error updating slot:", slotError);
+          }
+        }
+
+        // ADDITION: Handle sowingInProgress cleanup and availablePlants update
+        if (!actualSlotIdForSowing) {
+          console.log(`[sowingInProgress] ⚠️ No slotId found - skipping cleanup. slotId from request: ${slotId}`);
+        }
+        
+        if (actualSlotIdForSowing) {
+          const completeSowing = sowingData.completeSowing || false;
+          console.log(`[sowingInProgress] Starting cleanup for slotId=${actualSlotIdForSowing}, sowedPlant=${sowedPlant}, completeSowing=${completeSowing}`);
+          
+          try {
+            const searchSlotId = actualSlotObjectIdForSowing || new mongoose.Types.ObjectId(actualSlotIdForSowing);
+            const sowedPlantValue = (sowedPlant !== undefined && sowedPlant !== null) ? Number(sowedPlant) : 0;
+            const location = sowingLocation || "OFFICE";
+
+            console.log(`[sowingInProgress] Looking for slot with ID: ${searchSlotId}`);
+            // Find the slot document
+            const slotDoc = await PlantSlot.findOne({ "subtypeSlots.slots._id": searchSlotId });
+            
+            if (!slotDoc) {
+              console.log(`[sowingInProgress] ❌ No slot document found for slotId: ${searchSlotId}`);
+            }
+            
+            if (slotDoc) {
+              console.log(`[sowingInProgress] ✅ Found slot document for slotId: ${searchSlotId}`);
+              const subtypeSlot = slotDoc.subtypeSlots.find(st => 
+                st.slots.some(s => s._id.toString() === actualSlotIdForSowing.toString())
+              );
+              
+              if (subtypeSlot) {
+                const slotToUpdate = subtypeSlot.slots.find(s => s._id.toString() === actualSlotIdForSowing.toString());
+                
+                if (slotToUpdate) {
+                  // LOGIC:
+                  // 1. If completeSowing = true → Clear sowingInProgress (sowing is done, packets returned if any)
+                  // 2. If completeSowing = true AND PRIMARY location → Add to availablePlants
+                  // 3. Store packet info in sowingInProgress for OFFICE sowing (record-keeping)
+                  
+                  // ALWAYS completeSowing = true (from frontend)
+                  // Logic:
+                  // 1. ALWAYS clear sowingInProgress (sowing is always complete)
+                  // 2. If sowedPlant > 0, add to availablePlants (plants are ready)
+                  // 3. Track packets for record-keeping before clearing
+                  
+                  console.log(`[sowingInProgress] ✅ completeSowing=true → Processing complete sowing`);
+                  
+                  // Step 1: Track packets in sowingInProgress for record before clearing (if packets exist)
+                  if (packets && packets.length > 0) {
+                    const totalPacketsIssued = packets.reduce((sum, p) => sum + (Number(p.quantity) || 0), 0);
+                    
+                    // Add to sowingInProgress temporarily for record
+                    const sowingProgressEntry = {
+                      requestNumber: batchNumber,
+                      packetsIssued: totalPacketsIssued,
+                      plantsExpected: totalQuantityRequired,
+                      sowingRequestId: savedSowing._id,
+                      isExcessiveSowing: false,
+                      issuedDate: new Date()
+                    };
+                    
+                    slotToUpdate.sowingInProgress.push(sowingProgressEntry);
+                    console.log(`[sowingInProgress] 📦 Tracked ${totalPacketsIssued} packets (will clear after processing)`);
+                  }
+                  
+                  // Step 2: Distribute plants - FIRST cover previous gaps, THEN add to current slot
+                  if (sowedPlantValue > 0) {
+                    let remainingPlants = sowedPlantValue;
+                    console.log(`[GapCoverage] 🎯 Starting gap coverage distribution for ${remainingPlants} plants`);
+                    
+                    // Find all previous slots with gaps for this plant/subtype
+                    const currentSlotDate = moment(slotToUpdate.startDay, "DD-MM-YYYY");
+                    const allSlots = subtypeSlot.slots
+                      .filter(s => {
+                        const slotDate = moment(s.startDay, "DD-MM-YYYY");
+                        return slotDate.isBefore(currentSlotDate); // Only previous slots
+                      })
+                      .sort((a, b) => {
+                        // Sort oldest first (22 -> 23 -> 24)
+                        const dateA = moment(a.startDay, "DD-MM-YYYY");
+                        const dateB = moment(b.startDay, "DD-MM-YYYY");
+                        return dateA.diff(dateB);
+                      });
+                    
+                    console.log(`[GapCoverage] Found ${allSlots.length} previous slots to check`);
+                    
+                    // ✅ VALIDATION: Check for previous gaps
+                    const previousGaps = allSlots
+                      .map(s => {
+                        const gap = (s.totalBookedPlants || 0) - (s.primarySowed || 0);
+                        const covered = (s.gapCovered || []).reduce((sum, g) => sum + (g.plantsCovered || 0), 0);
+                        return {
+                          slotDate: s.startDay,
+                          gap: Math.max(0, gap - covered),
+                        };
+                      })
+                      .filter(s => s.gap > 0);
+                    
+                    if (previousGaps.length > 0) {
+                      const totalPreviousGaps = previousGaps.reduce((sum, s) => sum + s.gap, 0);
+                      console.log(`[GapCoverage] ⚠️ Found ${previousGaps.length} previous slots with gaps (total: ${totalPreviousGaps})`);
+                      console.log(`[GapCoverage] 📋 Gap details:`, previousGaps);
+                      
+                      if (totalPreviousGaps > sowedPlantValue) {
+                        console.log(`[GapCoverage] ⚠️ WARNING: Sowing ${sowedPlantValue} plants, but ${totalPreviousGaps} needed to cover all previous gaps`);
+                        console.log(`[GapCoverage] 📌 Plants will be distributed to cover gaps oldest-first`);
+                      } else {
+                        console.log(`[GapCoverage] ✅ Sowing ${sowedPlantValue} plants: ${totalPreviousGaps} to cover gaps, ${sowedPlantValue - totalPreviousGaps} to current slot`);
+                      }
+                    }
+                    
+                    // Distribute plants to cover gaps in previous slots (oldest first)
+                    for (const prevSlot of allSlots) {
+                      if (remainingPlants <= 0) break;
+                      
+                      const gap = (prevSlot.totalBookedPlants || 0) - (prevSlot.primarySowed || 0);
+                      
+                      if (gap > 0) {
+                        const toCover = Math.min(remainingPlants, gap);
+                        
+                        console.log(`[GapCoverage] 📍 Slot ${prevSlot.startDay}: Gap=${gap}, Covering=${toCover}`);
+                        
+                        // Initialize gapCovered array if not exists
+                        if (!prevSlot.gapCovered) {
+                          prevSlot.gapCovered = [];
+                        }
+                        
+                        // Add coverage entry
+                        prevSlot.gapCovered.push({
+                          fromSlotId: slotToUpdate._id,
+                          fromSlotDate: slotToUpdate.startDay,
+                          plantsCovered: toCover,
+                          coverageDate: new Date(),
+                          sowingBatchNumber: batchNumber || 'N/A',
+                          sowingId: savedSowing._id,
+                        });
+                        
+                        // Check if gap is fully covered
+                        const totalCovered = prevSlot.gapCovered.reduce((sum, g) => sum + (g.plantsCovered || 0), 0);
+                        if (totalCovered >= gap) {
+                          prevSlot.gapFullyCovered = true;
+                        }
+                        
+                        remainingPlants -= toCover;
+                        
+                        console.log(`[GapCoverage] ✅ Covered ${toCover} plants in slot ${prevSlot.startDay}, remaining: ${remainingPlants}`);
+                      }
+                    }
+                    
+                    // Add remaining plants to current slot's availablePlants
+                    if (remainingPlants > 0) {
+                      const currentAvailable = slotToUpdate.availablePlants || 0;
+                      slotToUpdate.availablePlants = currentAvailable + remainingPlants;
+                      console.log(`[GapCoverage] ✅ Added ${remainingPlants} to current slot availablePlants (was ${currentAvailable}, now ${slotToUpdate.availablePlants})`);
+                    } else {
+                      console.log(`[GapCoverage] ⚠️ All ${sowedPlantValue} plants used to cover previous gaps`);
+                    }
+                    
+                    console.log(`[GapCoverage] 🎯 Distribution complete: ${sowedPlantValue} plants total, ${sowedPlantValue - remainingPlants} to gaps, ${remainingPlants} to current slot`);
+                  }
+                  
+                  // Step 3: Clear sowingInProgress (sowing complete for this day)
+                  slotToUpdate.sowingInProgress = [];
+                  console.log(`[sowingInProgress] ✅ Cleared sowingInProgress → Sowing complete`);
+                  
+                  slotDoc.markModified('subtypeSlots');
+                  await slotDoc.save();
+                  console.log(`[sowingInProgress] ✅ Slot updated successfully`);
+                  
+                  // OLD CODE BELOW - keeping sowingInProgress entry processing
+                  if (false && slotToUpdate.sowingInProgress && slotToUpdate.sowingInProgress.length > 0) {
+                    console.log(`[sowingInProgress] Found ${slotToUpdate.sowingInProgress.length} in-progress entries for slot ${actualSlotIdForSowing}`);
+                    
+                    // Process each sowingInProgress entry - CLEAR ALL (end of sowing)
+                    const updatedProgress = [];
+                    let remainingSowedPlant = sowedPlantValue; // Track how much we've allocated
+                    
+                    for (const progress of slotToUpdate.sowingInProgress) {
+                      const plantsExpected = progress.plantsExpected || 0;
+                      const packetsIssued = progress.packetsIssued || 0;
+                      const conversionFactor = 1000; // Default conversion factor
+                      
+                      if (remainingSowedPlant <= 0) {
+                        // No more sowing to allocate, but still remove this entry (end of sowing day)
+                        console.log(`[sowingInProgress] Clearing entry (end of sowing day): ${progress.requestNumber}`);
+                        
+                        // Create return request for all remaining packets
+                        await createReturnRequestForProgress(progress, 0, packetsIssued, createdBy, req);
+                        continue; // Don't add to updatedProgress (remove it)
+                      }
+                      
+                      // Calculate how much of this entry is fulfilled
+                      const allocatedToThisEntry = Math.min(remainingSowedPlant, plantsExpected);
+                      const plantsSowed = allocatedToThisEntry;
+                      remainingSowedPlant -= allocatedToThisEntry;
+                      
+                      // Calculate packets used and remaining
+                      const packetsUsed = Math.floor(plantsSowed / conversionFactor);
+                      const packetsRemaining = packetsIssued - packetsUsed;
+                      
+                      console.log(`[sowingInProgress] Processing: requestNumber=${progress.requestNumber}, plantsExpected=${plantsExpected}, plantsSowed=${plantsSowed}, packetsIssued=${packetsIssued}, packetsUsed=${packetsUsed}, packetsRemaining=${packetsRemaining}`);
+                      
+                      // ALWAYS CLEAR (end of sowing for this day)
+                      console.log(`[sowingInProgress] ✅ Clearing entry (end of sowing): ${progress.requestNumber}`);
+                      
+                      // Create return request for remaining packets
+                      if (packetsRemaining > 0) {
+                        await createReturnRequestForProgress(progress, packetsUsed, packetsRemaining, createdBy, req);
+                      }
+                      
+                      // Mark packets as used in InventoryOutward
+                      await markPacketsAsUsed(progress, packetsUsed);
+                      
+                      // Update slot officeSowed (add packets used)
+                      if (slotToUpdate.officeSowed === undefined) {
+                        slotToUpdate.officeSowed = 0;
+                      }
+                      slotToUpdate.officeSowed += packetsUsed;
+                      console.log(`[sowingInProgress] ✅ Updated slot officeSowed: +${packetsUsed} (now ${slotToUpdate.officeSowed})`);
+                      
+                      // Add SOWING_COMPLETED to slotTrail
+                      if (!slotToUpdate.slotTrail) {
+                        slotToUpdate.slotTrail = [];
+                      }
+                      slotToUpdate.slotTrail.push({
+                        action: 'SOWING_COMPLETED',
+                        timestamp: new Date(),
+                        user: createdBy || req.user?._id,
+                        details: {
+                          sowingRequestId: progress.sowingRequestId,
+                          requestNumber: progress.requestNumber,
+                          packetsIssued: packetsIssued,
+                          packetsUsed: packetsUsed,
+                          packetsRemaining: packetsRemaining,
+                          plantsExpected: plantsExpected,
+                          plantsSowed: plantsSowed,
+                          isExcessiveSowing: progress.isExcessiveSowing || false,
+                        },
+                        metadata: {
+                          sowingId: savedSowing._id,
+                          batchNumber: batchNumber,
+                          sowingDate: sowingDate,
+                        }
+                      });
+                      
+                      // Don't add to updatedProgress - remove it completely
+                    }
+                    
+                    // Helper function to create return request
+                    async function createReturnRequestForProgress(progress, packetsUsed, packetsRemaining, userId, request) {
+                      try {
+                        if (packetsRemaining <= 0) return;
+                        
+                        console.log(`[sowingInProgress] Creating return request for ${packetsRemaining} packets`);
+                        
+                        // Find the SowingRequest to get outwardId
+                        const sowingRequest = await SowingRequest.findById(progress.sowingRequestId);
+                        if (!sowingRequest || !sowingRequest.outwardId) {
+                          console.warn(`[sowingInProgress] No outwardId found for request ${progress.requestNumber}`);
+                          return;
+                        }
+                        
+                        // Find the outward entry
+                        const outward = await InventoryOutward.findById(sowingRequest.outwardId);
+                        if (!outward || !outward.items || outward.items.length === 0) {
+                          console.warn(`[sowingInProgress] No outward items found`);
+                          return;
+                        }
+                        
+                        // Get first item (assuming single product per request)
+                        const item = outward.items[0];
+                        const productId = item.product?.toString() || item.product;
+                        const batchId = item.batch?.toString() || item.batch;
+                        const unitId = item.unit?.toString() || item.unit;
+                        
+                        // Generate return request number
+                        const requestNumber = await ReturnRequest.generateRequestNumber();
+                        
+                        // Create return request
+                        const returnRequest = new ReturnRequest({
+                          requestNumber,
+                          returnType: 'sowing',
+                          product: productId,
+                          batch: batchId || null,
+                          quantity: packetsRemaining,
+                          unit: unitId,
+                          referenceType: 'SowingInProgress',
+                          referenceId: progress.sowingRequestId,
+                          referenceNumber: progress.requestNumber,
+                          outwardId: sowingRequest.outwardId,
+                          itemId: item._id,
+                          originalQuantity: progress.packetsIssued,
+                          usedQuantity: packetsUsed,
+                          remainingQuantity: packetsRemaining,
+                          reason: 'End of sowing - return remaining packets',
+                          remarks: `Remaining ${packetsRemaining} packets returned from sowing ${progress.requestNumber} (used ${packetsUsed} out of ${progress.packetsIssued})`,
+                          status: 'pending',
+                          requestedBy: userId || request.user?._id,
+                          metadata: {
+                            sowingRequestId: progress.sowingRequestId,
+                            requestNumber: progress.requestNumber,
+                            packetsIssued: progress.packetsIssued,
+                            packetsUsed: packetsUsed,
+                            packetsRemaining: packetsRemaining
+                          }
+                        });
+                        
+                        await returnRequest.save();
+                        console.log(`[sowingInProgress] ✅ Created return request ${requestNumber} for ${packetsRemaining} packets`);
+                      } catch (error) {
+                        console.error(`[sowingInProgress] Error creating return request:`, error);
+                      }
+                    }
+                    
+                    // Helper function to mark packets as used
+                    async function markPacketsAsUsed(progress, packetsUsed) {
+                      try {
+                        if (packetsUsed <= 0) return;
+                        
+                        console.log(`[sowingInProgress] Marking ${packetsUsed} packets as used`);
+                        
+                        // Find the SowingRequest to get outwardId
+                        const sowingRequest = await SowingRequest.findById(progress.sowingRequestId);
+                        if (!sowingRequest || !sowingRequest.outwardId) return;
+                        
+                        // Update outward item usedQuantity
+                        const outward = await InventoryOutward.findById(sowingRequest.outwardId);
+                        if (!outward || !outward.items || outward.items.length === 0) return;
+                        
+                        const item = outward.items[0];
+                        const currentUsed = item.usedQuantity || 0;
+                        item.usedQuantity = currentUsed + packetsUsed;
+                        
+                        await outward.save();
+                        console.log(`[sowingInProgress] ✅ Updated usedQuantity from ${currentUsed} to ${item.usedQuantity}`);
+                      } catch (error) {
+                        console.error(`[sowingInProgress] Error marking packets as used:`, error);
+                      }
+                    }
+                    
+                    // Update the sowingInProgress array
+                    const oldLength = slotToUpdate.sowingInProgress.length;
+                    slotToUpdate.sowingInProgress = updatedProgress;
+                    
+                    console.log(`[sowingInProgress] Updating slot: old entries=${oldLength}, new entries=${updatedProgress.length}`);
+                    console.log(`[sowingInProgress] Updated progress details:`, updatedProgress.map(p => ({
+                      requestNumber: p.requestNumber,
+                      plantsExpected: p.plantsExpected,
+                      packetsIssued: p.packetsIssued
+                    })));
+                    
+                    // Mark as modified and save
+                    slotDoc.markModified('subtypeSlots');
+                    await slotDoc.save();
+                    
+                    console.log(`[sowingInProgress] ✅ Slot ${actualSlotIdForSowing} SAVED: ${updatedProgress.length} entries remaining (was ${oldLength})`);
+                  } else {
+                    console.log(`[sowingInProgress] No in-progress entries found for slot ${actualSlotIdForSowing}`);
+                  }
+                }
+              }
+            }
+          } catch (progressError) {
+            console.error("[sowingInProgress] Error handling progress cleanup:", progressError);
+            // Don't fail the whole request, just log the error
           }
         }
 
@@ -5702,7 +6070,15 @@ export const getPlantsGapSummary = async (req, res) => {
       const slotIdStr = slot.slotId.toString();
       const totalBookedPlants = bookingMap.get(slotIdStr) || 0;
       const primarySowed = slot.primarySowed || 0;
-      const slotGap = totalBookedPlants - primarySowed;
+      
+      // Calculate gap covered by later slots
+      const gapCoveredAmount = (slot.gapCovered || []).reduce((sum, coverage) => {
+        return sum + (coverage.plantsCovered || 0);
+      }, 0);
+      
+      // Effective gap = raw gap - covered amount
+      const rawGap = totalBookedPlants - primarySowed;
+      const slotGap = Math.max(0, rawGap - gapCoveredAmount);
       
       // Calculate overdue status
       // A slot is overdue if: sowByDate (slotEndDay - plantReadyDays) is in the past
@@ -5754,6 +6130,10 @@ export const getPlantsGapSummary = async (req, res) => {
         totalBookedPlants,
         primarySowed,
         slotGap,
+        rawGap, // Include raw gap for comparison
+        gapCovered: slot.gapCovered || [], // Gap coverage details
+        gapCoveredAmount, // Total amount covered
+        gapFullyCovered: slot.gapFullyCovered || false, // Is gap fully covered
         isOverdue,
         sowByDate,
         plantReadyDays: slotReadyDays,
@@ -6643,6 +7023,8 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
           slotStartDay: "$subtypeSlots.slots.startDay",
           slotEndDay: "$subtypeSlots.slots.endDay",
           month: "$subtypeSlots.slots.month",
+          gapCovered: { $ifNull: ["$subtypeSlots.slots.gapCovered", []] },
+          gapFullyCovered: { $ifNull: ["$subtypeSlots.slots.gapFullyCovered", false] },
         },
       },
     ]);
@@ -6726,7 +7108,15 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       const slotIdStr = slot.slotId.toString();
       const totalBookedPlants = bookingMap.get(slotIdStr) || 0;
       const primarySowed = slot.primarySowed || 0;
-      const bookingGap = totalBookedPlants - primarySowed;
+      
+      // Calculate gap covered by later slots
+      const gapCoveredAmount = (slot.gapCovered || []).reduce((sum, coverage) => {
+        return sum + (coverage.plantsCovered || 0);
+      }, 0);
+      
+      // Calculate raw gap and effective gap
+      const rawBookingGap = totalBookedPlants - primarySowed;
+      const bookingGap = Math.max(0, rawBookingGap - gapCoveredAmount); // Gap after coverage
       
       // Parse slot end date
       const endDayParts = slot.slotEndDay.match(/(\d{2})-(\d{2})-(\d{4})/);
@@ -6803,8 +7193,12 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         totalBookedPlants,
         primarySowed,
         totalPlants: slot.totalPlants,
-        bookingGap: adjustedBookingGap, // Show adjusted gap
-        bookingGapRaw: bookingGap, // Keep original for reference
+        bookingGap: adjustedBookingGap, // Show adjusted gap (after in-progress)
+        bookingGapRaw: rawBookingGap, // Original gap before coverage
+        bookingGapEffective: bookingGap, // Gap after gapCovered (before in-progress)
+        gapCovered: slot.gapCovered || [], // Gap coverage details
+        gapCoveredAmount, // Total covered by later slots
+        gapFullyCovered: slot.gapFullyCovered || false, // Is fully covered
         sowByDate,
         daysUntilSow,
         priority,
@@ -6824,8 +7218,9 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       if (slot.daysUntilSow === null || slot.daysUntilSow > 0) {
         return false;
       }
-      // Show ONLY if there's actual gap remaining
-      if (slot.bookingGap <= 0) {
+      // ✅ FIX: Show slots with gap OR slots with sowing in progress
+      // This ensures all slots with distributed packets are shown
+      if (slot.bookingGap <= 0 && !slot.sowingInProgress) {
         return false;
       }
       return true;
@@ -7038,6 +7433,289 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       inProgressCards: inProgressCards.length,
     };
 
+    // ADDITION: Fetch available packets for sowing (for PrimarySowingEntry)
+    let availablePacketsData = [];
+    try {
+      // First, collect all in-progress outwardIds to exclude them
+      const inProgressOutwardIds = new Set();
+      const sowingRequestIds = [];
+      
+      // Extract sowingRequestIds from all in-progress entries
+      slotsWithProgress.forEach(slotData => {
+        if (slotData.sowingInProgress && slotData.sowingInProgress.length > 0) {
+          slotData.sowingInProgress.forEach(prog => {
+            if (prog.sowingRequestId) {
+              sowingRequestIds.push(prog.sowingRequestId);
+            }
+          });
+        }
+      });
+
+      // Fetch SowingRequest documents to get outwardIds
+      if (sowingRequestIds.length > 0) {
+        const inProgressRequests = await SowingRequest.find({
+          _id: { $in: sowingRequestIds }
+        }).select('outwardId').lean();
+        
+        inProgressRequests.forEach(req => {
+          if (req.outwardId) {
+            inProgressOutwardIds.add(req.outwardId.toString());
+          }
+        });
+      }
+
+      console.log(`[availablePackets] Found ${inProgressOutwardIds.size} in-progress outward entries to INCLUDE (show only these)`);
+
+      // Get all seeds products
+      const seedsProducts = await Product.find({
+        category: 'seeds',
+        isActive: true,
+      }).select('_id name code plantId subtypeId conversionFactor').populate('plantId', 'name');
+
+      if (seedsProducts && seedsProducts.length > 0) {
+        const productIds = seedsProducts.map(p => p._id);
+
+        // Find all issued outward entries with seeds products
+        const outwards = await InventoryOutward.find({
+          status: 'issued',
+          'items.product': { $in: productIds },
+        })
+          .populate([
+            {
+              path: 'items.product',
+              populate: {
+                path: 'plantId',
+                select: 'name',
+              },
+            },
+            'items.batch',
+            'items.unit',
+            'items.sowing',
+          ])
+          .sort({ outwardDate: -1 })
+          .lean();
+
+        // Extract request numbers for excessive sowing check
+        const requestNumberPattern = /SR\d+/;
+        const requestNumbers = outwards
+          .map(o => o.purposeDetails?.match(requestNumberPattern)?.[0])
+          .filter(Boolean);
+
+        const sowingRequests = requestNumbers.length > 0
+          ? await SowingRequest.find({
+              requestNumber: { $in: requestNumbers }
+            }).select('requestNumber isExcessiveSowing').lean()
+          : [];
+
+        const excessiveSowingMap = new Map();
+        sowingRequests.forEach(req => {
+          if (req.isExcessiveSowing) {
+            excessiveSowingMap.set(req.requestNumber, true);
+          }
+        });
+
+        // Build product map
+        const productPacketMap = new Map();
+        seedsProducts.forEach(product => {
+          const plantId = product.plantId?._id || product.plantId;
+          productPacketMap.set(product._id.toString(), {
+            productId: product._id,
+            productName: product.name,
+            productCode: product.code,
+            plantId: plantId && plantId.toString() !== 'unknown' ? plantId : null,
+            plantName: product.plantId?.name || 'Unknown Plant',
+            subtypeId: product.subtypeId || null,
+            conversionFactor: product.conversionFactor || 1,
+          });
+        });
+
+        const allPackets = [];
+
+        outwards.forEach((outward) => {
+          // ONLY include outwards that are in progress (need to be completed)
+          const outwardIdStr = outward._id.toString();
+          if (!inProgressOutwardIds.has(outwardIdStr)) {
+            // Skip outwards that are NOT in progress (only show in-progress ones)
+            return;
+          }
+          
+          console.log(`[availablePackets] Including in-progress outward ${outwardIdStr}`);
+
+          outward.items.forEach((item) => {
+            const productIdStr = item.product?._id?.toString() || item.product?.toString();
+            const productInfo = productPacketMap.get(productIdStr);
+
+            if (productInfo) {
+              const availableQty = item.quantity - (item.usedQuantity || 0);
+              if (availableQty > 0) {
+                const populatedProduct = item.product;
+                const finalPlantId = populatedProduct?.plantId?._id?.toString() || populatedProduct?.plantId?.toString() || productInfo.plantId?.toString();
+                const finalPlantName = populatedProduct?.plantId?.name || productInfo.plantName;
+                const finalSubtypeId = populatedProduct?.subtypeId?.toString() || productInfo.subtypeId?.toString();
+                const finalConversionFactor = populatedProduct?.conversionFactor || productInfo.conversionFactor || 1;
+
+                const isExcessiveSowing = outward.purposeDetails && 
+                  Array.from(excessiveSowingMap.keys()).some(reqNum => 
+                    outward.purposeDetails.includes(reqNum)
+                  );
+
+                allPackets.push({
+                  outwardId: outward._id,
+                  outwardNumber: outward.outwardNumber,
+                  outwardDate: outward.outwardDate,
+                  itemId: item._id,
+                  batch: item.batch,
+                  batchNumber: item.batch?.batchNumber || 'N/A',
+                  quantity: item.quantity,
+                  usedQuantity: item.usedQuantity || 0,
+                  availableQuantity: availableQty,
+                  unit: item.unit,
+                  rate: item.rate,
+                  amount: item.amount,
+                  sowing: item.sowing,
+                  productId: productInfo.productId,
+                  productName: productInfo.productName,
+                  productCode: productInfo.productCode,
+                  plantId: finalPlantId,
+                  plantName: finalPlantName,
+                  subtypeId: finalSubtypeId,
+                  conversionFactor: finalConversionFactor,
+                  isExcessiveSowing: isExcessiveSowing || false,
+                  purpose: outward.purpose,
+                });
+              }
+            }
+          });
+        });
+
+        // Group packets by plant -> subtype
+        const groupedPacketsData = {};
+
+        allPackets.forEach(packet => {
+          let plantKey = packet.plantId;
+          let plantName = packet.plantName || 'Unknown Plant';
+
+          if (!plantKey || 
+              typeof plantKey !== 'string' || 
+              plantKey === 'unknown' ||
+              !/^[0-9a-fA-F]{24}$/.test(plantKey)) {
+            plantKey = 'no-plant';
+            plantName = 'Unassigned Products';
+          }
+
+          const subtypeKey = packet.subtypeId || 'no-subtype';
+
+          if (!groupedPacketsData[plantKey]) {
+            groupedPacketsData[plantKey] = {
+              plantId: plantKey === 'no-plant' ? null : plantKey,
+              plantName: plantName,
+              subtypes: {},
+            };
+          }
+
+          if (!groupedPacketsData[plantKey].subtypes[subtypeKey]) {
+            groupedPacketsData[plantKey].subtypes[subtypeKey] = {
+              subtypeId: subtypeKey === 'no-subtype' ? null : subtypeKey,
+              packets: [],
+            };
+          }
+
+          groupedPacketsData[plantKey].subtypes[subtypeKey].packets.push(packet);
+        });
+
+        // Convert to array and get subtype names with plantReadyDays
+        availablePacketsData = await Promise.all(
+          Object.values(groupedPacketsData).map(async (plantGroup) => {
+            if (!plantGroup.plantId || plantGroup.plantId === 'no-plant') {
+              const subtypes = Object.entries(plantGroup.subtypes).map(([subtypeId, subtypeData]) => {
+                return {
+                  subtypeId: subtypeId === 'no-subtype' ? null : subtypeId,
+                  subtypeName: subtypeId === 'no-subtype' ? 'No Subtype' : 'Unknown Subtype',
+                  plantReadyDays: 0,
+                  packets: subtypeData.packets.map(p => ({ ...p, plantReadyDays: 0 })),
+                };
+              });
+
+              return {
+                plantId: null,
+                plantName: plantGroup.plantName,
+                subtypes: subtypes,
+              };
+            }
+
+            if (!mongoose.Types.ObjectId.isValid(plantGroup.plantId)) {
+              const subtypes = Object.entries(plantGroup.subtypes).map(([subtypeId, subtypeData]) => {
+                return {
+                  subtypeId: subtypeId === 'no-subtype' ? null : subtypeId,
+                  subtypeName: 'Unknown Subtype',
+                  plantReadyDays: 0,
+                  packets: subtypeData.packets.map(p => ({ ...p, plantReadyDays: 0 })),
+                };
+              });
+              return {
+                plantId: null,
+                plantName: 'Unassigned Products',
+                subtypes: subtypes,
+              };
+            }
+
+            const plant = await PlantCms.findById(plantGroup.plantId).select('name subtypes');
+            if (!plant) {
+              const subtypes = Object.entries(plantGroup.subtypes).map(([subtypeId, subtypeData]) => {
+                return {
+                  subtypeId: subtypeId === 'no-subtype' ? null : subtypeId,
+                  subtypeName: 'Unknown Subtype',
+                  plantReadyDays: 0,
+                  packets: subtypeData.packets.map(p => ({ ...p, plantReadyDays: 0 })),
+                };
+              });
+              return {
+                plantId: null,
+                plantName: 'Unassigned Products',
+                subtypes: subtypes,
+              };
+            }
+
+            const subtypes = await Promise.all(
+              Object.entries(plantGroup.subtypes).map(async ([subtypeId, subtypeData]) => {
+                if (subtypeId === 'no-subtype') {
+                  return {
+                    subtypeId: null,
+                    subtypeName: 'No Subtype',
+                    plantReadyDays: 0,
+                    packets: subtypeData.packets.map(p => ({ ...p, plantReadyDays: 0 })),
+                  };
+                }
+
+                const subtype = plant.subtypes.id(subtypeId);
+                const plantReadyDays = subtype?.plantReadyDays || 0;
+
+                return {
+                  subtypeId: subtypeId,
+                  subtypeName: subtype?.name || 'Unknown Subtype',
+                  plantReadyDays: plantReadyDays,
+                  packets: subtypeData.packets.map(p => ({
+                    ...p,
+                    plantReadyDays: plantReadyDays,
+                  })),
+                };
+              })
+            );
+
+            return {
+              plantId: plantGroup.plantId,
+              plantName: plantGroup.plantName,
+              subtypes: subtypes,
+            };
+          })
+        );
+      }
+    } catch (packetsError) {
+      console.error("Error fetching available packets:", packetsError);
+      // Don't fail the whole request, just return empty packets
+      availablePacketsData = [];
+    }
+
     res.set({
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       'Pragma': 'no-cache',
@@ -7048,6 +7726,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       success: true,
       subtypeCards: allSubtypeCards,
       inProgressCards: inProgressCards, // Separate array for cards with gap = 0 but in progress
+      availablePackets: availablePacketsData, // Available packets for PrimarySowingEntry
       summary,
       date: moment().format("DD-MM-YYYY"),
       generatedAt: new Date(),

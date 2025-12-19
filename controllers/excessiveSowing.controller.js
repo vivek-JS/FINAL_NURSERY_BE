@@ -972,3 +972,4 @@ export default {
   addTestInventoryStock,
   analyzeInventoryPurpose,
 };
+

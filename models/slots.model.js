@@ -310,6 +310,37 @@ const slotSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: 'SowingRequest',
   }], // Track all sowing requests linked to this slot
+  // Gap coverage tracking - when later slots cover previous gaps
+  gapCovered: [{
+    fromSlotId: {
+      type: Schema.Types.ObjectId,
+      required: true,
+    }, // Which slot's sowing covered this gap
+    fromSlotDate: {
+      type: String,
+      required: true,
+    }, // Date of the slot that covered gap (DD-MM-YYYY)
+    plantsCovered: {
+      type: Number,
+      required: true,
+      default: 0,
+    }, // How many plants covered from that slot
+    coverageDate: {
+      type: Date,
+      default: Date.now,
+    }, // When gap was covered
+    sowingBatchNumber: {
+      type: String,
+    }, // Batch number reference from the sowing
+    sowingId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Sowing',
+    }, // Reference to sowing record
+  }],
+  gapFullyCovered: {
+    type: Boolean,
+    default: false,
+  }, // True if gap completely covered by later sowings
   // Slot trail tracking
   slotTrail: [slotTrailSchema],
 });

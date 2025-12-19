@@ -285,7 +285,7 @@ export const getSowingRequestById = async (req, res) => {
       });
     }
 
-    // Get available batches for this product
+    // Get available batches for this product (warehouse stock)
     const batches = await Batch.find({
       product: request.productId._id,
       status: 'active',
@@ -296,20 +296,68 @@ export const getSowingRequestById = async (req, res) => {
       .sort({ receivedDate: 1 })
       .lean();
 
-    // Calculate available packets
-    let availablePackets = 0;
+    // Calculate available packets from batches (warehouse)
+    let availablePacketsFromBatches = 0;
     const primaryUnitId = request.primaryUnit?._id?.toString();
     const secondaryUnitId = request.secondaryUnit?._id?.toString();
 
     batches.forEach((batch) => {
       const batchUnitId = batch.unit?._id?.toString();
       if (batchUnitId === primaryUnitId) {
-        availablePackets += batch.remainingQuantity;
+        availablePacketsFromBatches += batch.remainingQuantity;
       } else if (batchUnitId === secondaryUnitId && request.conversionFactor) {
-        availablePackets += batch.remainingQuantity / request.conversionFactor;
+        availablePacketsFromBatches += batch.remainingQuantity / request.conversionFactor;
       } else {
-        availablePackets += batch.remainingQuantity;
+        availablePacketsFromBatches += batch.remainingQuantity;
       }
+    });
+
+    // Get issued but unused packets (issued from inventory but not fully used in sowing)
+    const outwardRecords = await InventoryOutward.find({
+      type: 'sowing',
+      status: 'approved',
+    })
+      .populate({
+        path: 'items.product',
+        select: '_id',
+      })
+      .populate('items.unit', 'name symbol')
+      .lean();
+
+    let availablePacketsFromOutward = 0;
+    
+    outwardRecords.forEach((outward) => {
+      outward.items?.forEach((item) => {
+        // Check if this item is for our product
+        if (item.product?._id?.toString() === request.productId._id.toString()) {
+          const totalQty = item.quantity || 0;
+          const usedQty = item.usedQuantity || 0;
+          const availableQty = totalQty - usedQty; // Issued but not used yet
+          
+          if (availableQty > 0) {
+            const itemUnitId = item.unit?._id?.toString();
+            
+            // Convert to secondary unit (packets) based on unit
+            if (itemUnitId === primaryUnitId) {
+              availablePacketsFromOutward += availableQty;
+            } else if (itemUnitId === secondaryUnitId && request.conversionFactor) {
+              availablePacketsFromOutward += availableQty / request.conversionFactor;
+            } else {
+              availablePacketsFromOutward += availableQty;
+            }
+          }
+        }
+      });
+    });
+
+    // Total available = warehouse stock + issued but unused
+    const availablePackets = availablePacketsFromBatches + availablePacketsFromOutward;
+    
+    console.log(`[getSowingRequestById] Real-time stock calculation:`, {
+      productId: request.productId._id,
+      availablePacketsFromBatches,
+      availablePacketsFromOutward,
+      totalAvailable: availablePackets,
     });
 
     res.json({
@@ -317,6 +365,8 @@ export const getSowingRequestById = async (req, res) => {
       data: {
         ...request,
         availablePackets: Math.floor(availablePackets),
+        availablePacketsFromBatches: Math.floor(availablePacketsFromBatches),
+        availablePacketsFromOutward: Math.floor(availablePacketsFromOutward),
         batches,
       },
     });
@@ -588,71 +638,189 @@ export const issueStockFromRequest = async (req, res) => {
     request.excessPackets = excessPackets;
     await request.save();
 
-    // Update slots' sowingInProgress array
+    // Update slots' sowingInProgress array - DISTRIBUTE BASED ON EACH SLOT'S GAP
     if (request.linkedSlotIds && request.linkedSlotIds.length > 0) {
-      // Calculate expected plants from packets issued
       const conversionFactor = request.conversionFactor || 1;
-      const plantsExpected = packetsRequested * conversionFactor;
       
-      const sowingProgressEntry = {
-        requestNumber: request.requestNumber,
-        packetsIssued: packetsRequested,
-        plantsExpected: plantsExpected,
-        outwardId: outward._id,
-        sowingRequestId: request._id,
-        isExcessiveSowing: request.isExcessiveSowing || false,
-        issuedDate: new Date(),
-      };
-
-      // Update each linked slot
+      console.log(`[IssueStock] Distributing ${packetsRequested} packets across ${request.linkedSlotIds.length} slots based on each slot's gap`);
+      
+      // Step 1: Fetch all unique PlantSlot documents ONCE (avoid multiple instances of same document)
+      const plantSlotsMap = new Map(); // Map<plantSlotId, plantSlotDoc>
+      
       for (const slotId of request.linkedSlotIds) {
         try {
-          // Find the plant slot document containing this slot
           const plantSlot = await PlantSlot.findOne({
             'subtypeSlots.slots._id': slotId,
           });
-
+          
           if (plantSlot) {
-            // Find the specific slot within the nested structure
+            const plantSlotId = plantSlot._id.toString();
+            if (!plantSlotsMap.has(plantSlotId)) {
+              plantSlotsMap.set(plantSlotId, plantSlot);
+            }
+          }
+        } catch (err) {
+          console.error(`[IssueStock] Error fetching PlantSlot for slot ${slotId}:`, err);
+        }
+      }
+      
+      // Step 2: Build slotGaps array from unique PlantSlot documents
+      const slotGaps = [];
+      let totalGap = 0;
+      
+      // Get sowing buffer from PlantCms (fetch once)
+      const plant = await PlantCms.findById(request.plantId).select('sowingBuffer');
+      const sowingBuffer = plant?.sowingBuffer || 0;
+      
+      for (const slotId of request.linkedSlotIds) {
+        try {
+          // Find the slot in the unique PlantSlot documents
+          let foundSlot = null;
+          let foundPlantSlot = null;
+          let foundSubtypeSlot = null;
+          
+          for (const [plantSlotId, plantSlot] of plantSlotsMap.entries()) {
             for (const subtypeSlot of plantSlot.subtypeSlots) {
               const slot = subtypeSlot.slots.find(s => s._id.toString() === slotId.toString());
               if (slot) {
-                // Initialize sowingInProgress as array if it's a boolean (backward compatibility)
-                if (typeof slot.sowingInProgress === 'boolean') {
-                  slot.sowingInProgress = [];
-                }
-                
-                // Add the new progress entry
-                if (!Array.isArray(slot.sowingInProgress)) {
-                  slot.sowingInProgress = [];
-                }
-                slot.sowingInProgress.push(sowingProgressEntry);
-                
-                // Add trail entry
-                slot.slotTrail = slot.slotTrail || [];
-                slot.slotTrail.push({
-                  action: 'STOCK_REQUEST_ISSUED',
-                  quantity: sowingProgressEntry.packetsIssued,
-                  previousTotalPlants: slot.totalPlants || 0,
-                  newTotalPlants: slot.totalPlants || 0,
-                  previousAvailablePlants: slot.availablePlants || 0,
-                  newAvailablePlants: slot.availablePlants || 0,
-                  reason: `Stock issued for ${request.requestNumber}: ${sowingProgressEntry.packetsIssued} packets (${sowingProgressEntry.plantsExpected} plants expected)`,
-                  sowingRequestId: request._id,
-                  performedBy: req.user._id,
-                  notes: `Outward: ${outward.outwardNumber}`,
-                });
-
-                await plantSlot.save();
+                foundSlot = slot;
+                foundPlantSlot = plantSlot;
+                foundSubtypeSlot = subtypeSlot;
                 break;
               }
             }
+            if (foundSlot) break;
           }
-        } catch (slotError) {
-          console.error(`Error updating slot ${slotId}:`, slotError);
-          // Continue with other slots even if one fails
+          
+          if (foundSlot) {
+            // Calculate gap for this slot (including buffer if applicable)
+            const totalBookedPlants = foundSlot.totalBookedPlants || 0;
+            const primarySowed = foundSlot.primarySowed || 0;
+            const rawGap = totalBookedPlants - primarySowed;
+            const gapWithBuffer = Math.ceil(rawGap * (1 + sowingBuffer / 100));
+            
+            slotGaps.push({
+              slotId: slotId,
+              slot: foundSlot,
+              plantSlot: foundPlantSlot,
+              subtypeSlot: foundSubtypeSlot,
+              gap: gapWithBuffer,
+              rawGap: rawGap
+            });
+            
+            totalGap += gapWithBuffer;
+            
+            console.log(`[IssueStock] Slot ${slotId}: Gap=${gapWithBuffer} plants (raw: ${rawGap}, buffer: ${sowingBuffer}%)`);
+          }
+        } catch (err) {
+          console.error(`[IssueStock] Error processing slot ${slotId}:`, err);
         }
       }
+      
+      console.log(`[IssueStock] Total gap across all slots: ${totalGap} plants`);
+      
+      // Step 2: Distribute packets/plants proportionally based on each slot's gap
+      let remainingPackets = packetsRequested;
+      let remainingPlants = packetsRequested * conversionFactor;
+      
+      // Step 3: Group slots by their parent PlantSlot document to avoid version conflicts
+      const plantSlotUpdates = new Map(); // Map<plantSlotId, {plantSlot, slotsToUpdate: []}>
+      
+      for (let i = 0; i < slotGaps.length; i++) {
+        const slotData = slotGaps[i];
+        const isLastSlot = i === slotGaps.length - 1;
+        
+        // Calculate this slot's share
+        let slotPackets, slotPlants;
+        
+        if (isLastSlot) {
+          // Last slot gets remaining (to handle rounding)
+          slotPackets = remainingPackets;
+          slotPlants = remainingPlants;
+        } else {
+          // Proportional distribution: (slot gap / total gap) × total packets
+          const proportion = slotData.gap / totalGap;
+          slotPackets = packetsRequested * proportion;
+          slotPlants = slotData.gap; // Actual gap for this slot
+          
+          remainingPackets -= slotPackets;
+          remainingPlants -= slotPlants;
+        }
+        
+        // Round packets to 2 decimal places
+        slotPackets = Math.round(slotPackets * 100) / 100;
+        
+        console.log(`[IssueStock] Slot ${slotData.slotId}: Allocating ${slotPackets} packets, ${slotPlants} plants`);
+        
+        // Group by plantSlot document
+        const plantSlotId = slotData.plantSlot._id.toString();
+        if (!plantSlotUpdates.has(plantSlotId)) {
+          plantSlotUpdates.set(plantSlotId, {
+            plantSlot: slotData.plantSlot,
+            slotsToUpdate: []
+          });
+        }
+        
+        plantSlotUpdates.get(plantSlotId).slotsToUpdate.push({
+          slot: slotData.slot,
+          slotId: slotData.slotId,
+          slotPackets,
+          slotPlants
+        });
+      }
+      
+      // Step 4: Update all slots within each PlantSlot document, then save once per document
+      for (const [plantSlotId, updateData] of plantSlotUpdates.entries()) {
+        const { plantSlot, slotsToUpdate } = updateData;
+        
+        for (const { slot, slotId, slotPackets, slotPlants } of slotsToUpdate) {
+          // Initialize sowingInProgress as array if needed
+          if (typeof slot.sowingInProgress === 'boolean') {
+            slot.sowingInProgress = [];
+          }
+          if (!Array.isArray(slot.sowingInProgress)) {
+            slot.sowingInProgress = [];
+          }
+          
+          const sowingProgressEntry = {
+            requestNumber: request.requestNumber,
+            packetsIssued: slotPackets,
+            plantsExpected: slotPlants,
+            outwardId: outward._id,
+            sowingRequestId: request._id,
+            isExcessiveSowing: request.isExcessiveSowing || false,
+            issuedDate: new Date(),
+          };
+          
+          slot.sowingInProgress.push(sowingProgressEntry);
+          
+          // Add trail entry
+          slot.slotTrail = slot.slotTrail || [];
+          slot.slotTrail.push({
+            action: 'STOCK_REQUEST_ISSUED',
+            quantity: slotPackets,
+            previousTotalPlants: slot.totalPlants || 0,
+            newTotalPlants: slot.totalPlants || 0,
+            previousAvailablePlants: slot.availablePlants || 0,
+            newAvailablePlants: slot.availablePlants || 0,
+            reason: `Stock issued for ${request.requestNumber}: ${slotPackets} packets (${slotPlants} plants expected) - Part of ${request.linkedSlotIds.length} slot request`,
+            sowingRequestId: request._id,
+            performedBy: req.user._id,
+            notes: `Outward: ${outward.outwardNumber}`,
+          });
+        }
+        
+        // Save plantSlot once with all slot updates
+        try {
+          plantSlot.markModified('subtypeSlots');
+          await plantSlot.save();
+          console.log(`[IssueStock] ✅ PlantSlot ${plantSlotId} updated with ${slotsToUpdate.length} slot(s)`);
+        } catch (err) {
+          console.error(`[IssueStock] ❌ Error saving PlantSlot ${plantSlotId}:`, err);
+        }
+      }
+      
+      console.log(`[IssueStock] ✅ Distribution complete: ${packetsRequested} packets distributed across ${slotGaps.length} slots`);
     }
 
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'issuedBy', 'outwardId']);

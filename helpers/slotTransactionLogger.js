@@ -253,3 +253,4 @@ export default {
   calculateRemainingSowing,
   getSlotTransactionHistory,
 };
+

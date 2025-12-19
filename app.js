@@ -282,6 +282,7 @@ import inventoryTransactionRoute from "./routes/inventoryTransaction.route.js";
 import inventoryRoute from "./routes/inventory.route.js";
 import purchaseRoute from "./routes/purchase.route.js";
 import sellOrderRoute from "./routes/sellOrder.route.js";
+import returnRequestRoute from "./routes/returnRequest.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
 
 // Health check routes (no authentication required)
@@ -360,6 +361,7 @@ server.use("/api/v1/inventory/grn", authenticateToken, grnRoute);
 server.use("/api/v1/inventory/sell-orders", authenticateToken, sellOrderRoute);
 server.use("/api/v1/inventory/outward", authenticateToken, inventoryOutwardRoute);
 server.use("/api/v1/inventory/transactions", authenticateToken, inventoryTransactionRoute);
+server.use("/api/v1/inventory/return-requests", authenticateToken, returnRequestRoute);
 server.use("/api/v1/inventory", authenticateToken, inventoryRoute); // General inventory route (must be last)
 server.use("/api/v1/purchase", authenticateToken, purchaseRoute);
 

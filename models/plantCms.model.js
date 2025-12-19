@@ -9,6 +9,10 @@ const plantSubtypeSchema = new Schema({
   dailyDispatch: { type: Number, default: 0 }, // Daily dispatch capacity for this subtype
   buffer: { type: Number, default: 0 }, // Buffer at plant subtype level
   plantReadyDays: { type: Number, default: 0 }, // Number of days for plant to be ready from sowing
+  slotDays: { type: Number, required: true }, // Number of days per slot for this subtype
+  slotStartDate: { type: String, required: true }, // Start date for slot generation (YYYY-MM-DD or DD-MM-YYYY format)
+  slotEndDate: { type: String, required: true }, // End date for slot generation (YYYY-MM-DD or DD-MM-YYYY format)
+  slotCapacity: { type: Number, required: true }, // Total plants per slot for this subtype
 });
 
 const plantSchema = new Schema({
@@ -19,6 +23,8 @@ const plantSchema = new Schema({
   slotSize: { type: Number, default: 5, required: true }, // Slot size in days
   buffer: { type: Number, default: 0 }, // Buffer at plant level
   sowingAllowed: { type: Boolean, default: false }, // Whether sowing is allowed for this plant
+  dailyDispatchCapacity: { type: Number, default: 2000 }, // Daily dispatch capacity for this plant
+  sowingBuffer: { type: Number, default: 0 }, // Sowing buffer percentage for this plant
 });
 
 // Auto slot generation removed - slots are now managed through dedicated slot management system

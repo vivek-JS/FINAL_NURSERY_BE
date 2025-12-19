@@ -2782,6 +2782,8 @@ export const getSimpleSlots = async (req, res) => {
   try {
     const { plantId, subtypeId, year } = req.query;
 
+    console.log('\n📊 getSimpleSlots called with:', { plantId, subtypeId, year });
+
     if (!plantId || !subtypeId || !year) {
       return res.status(400).json({
         success: false,
@@ -2795,13 +2797,18 @@ export const getSimpleSlots = async (req, res) => {
       "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(subtypeId)
     };
 
+    console.log('🔍 Query:', JSON.stringify(query, null, 2));
+
     // FAST query with lean() - no Mongoose overhead
     // Include orders to calculate totalBookedPlants
     const result = await PlantSlot.findOne(query)
       .select('subtypeSlots')
       .lean();
 
+    console.log('📦 Query result:', result ? `Found document with ${result.subtypeSlots?.length} subtypeSlots` : 'No document found');
+
     if (!result) {
+      console.log('❌ No PlantSlot document found for query');
       return res.status(200).json({
         success: true,
         data: { year: Number(year), slots: [], total_available: 0 },
@@ -2810,17 +2817,31 @@ export const getSimpleSlots = async (req, res) => {
     }
 
     // Find the specific subtype
+    console.log('📋 All subtypeIds in document:',
+      result.subtypeSlots.map(s => s.subtypeId.toString())
+    );
+    console.log('🔎 Looking for subtypeId:', subtypeId);
+    
     const subtypeSlot = result.subtypeSlots.find(
       s => s.subtypeId.toString() === subtypeId
     );
 
+    console.log('🎯 Found subtype slot:', subtypeSlot ? `Yes, with ${subtypeSlot.slots?.length} slots` : 'No');
+
     if (!subtypeSlot || !subtypeSlot.slots) {
+      console.log('❌ No slots found for subtype');
+      console.log('   Available subtypes:', result.subtypeSlots.map(s => ({
+        id: s.subtypeId.toString(),
+        slotsCount: s.slots?.length || 0
+      })));
       return res.status(200).json({
         success: true,
         data: { year: Number(year), slots: [], total_available: 0 },
         message: "No slots found for subtype"
       });
     }
+
+    console.log(`✅ Returning ${subtypeSlot.slots.length} slots for subtype\n`);
 
     // Map to simplified structure - ALWAYS include all fields
     // Return ALL slots for the year for month-wise grouping in UI
@@ -2843,6 +2864,13 @@ export const getSimpleSlots = async (req, res) => {
     });
     
     // Return ALL active slots for the year (for month-wise grouping in UI)
+    console.log('🔧 Before filter - Total slots:', subtypeSlot.slots.length);
+    console.log('🔧 Sample slot status values:', subtypeSlot.slots.slice(0, 3).map(s => ({ 
+      _id: s._id, 
+      status: s.status, 
+      statusType: typeof s.status 
+    })));
+    
     const simplifiedSlots = subtypeSlot.slots
       .filter(slot => slot.status !== false) // Only filter out inactive slots
       .map(slot => {
@@ -2868,6 +2896,11 @@ export const getSimpleSlots = async (req, res) => {
           isManual: Boolean(slot.isManual)
         };
       });
+
+    console.log('🔧 After filter - Simplified slots count:', simplifiedSlots.length);
+    if (simplifiedSlots.length === 0 && subtypeSlot.slots.length > 0) {
+      console.log('⚠️  All slots were filtered out due to status field!');
+    }
 
     res.status(200).json({
       success: true,

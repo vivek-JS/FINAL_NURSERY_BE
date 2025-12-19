@@ -15,6 +15,10 @@ import Log from "../models/log.model.js";
 import PlantOutward from "../models/plantOutward.model.js";
 import InventoryTransaction from "../models/inventoryTransaction.model.js";
 import InventoryOutward from "../models/inventoryOutward.model.js";
+import Product from "../models/product.model.js";
+import Batch from "../models/batch.model.js";
+import SowingRequest from "../models/sowingRequest.model.js";
+import ReturnRequest from "../models/returnRequest.model.js";
 
 const router = express.Router();
 
@@ -37,12 +41,16 @@ router.delete("/clear-all", async (req, res) => {
       farmers: 0,
       employees: 0,
       sowings: 0,
+      sowingRequests: 0,
+      returnRequests: 0,
       attendance: 0,
       labs: 0,
       logs: 0,
       plantOutward: 0,
       inventoryTransactions: 0,
       inventoryOutward: 0,
+      batches: 0,
+      products: 0,
     };
 
     // Step 1: Delete all dispatches first (referenced by orders)
@@ -122,6 +130,30 @@ router.delete("/clear-all", async (req, res) => {
     const inventoryOutwardResult = await InventoryOutward.deleteMany({});
     deletionResults.inventoryOutward = inventoryOutwardResult.deletedCount;
     console.log(`Deleted ${inventoryOutwardResult.deletedCount} inventory outward records`);
+
+    // Step 13.5: Delete batches
+    console.log("Deleting batches...");
+    const batchResult = await Batch.deleteMany({});
+    deletionResults.batches = batchResult.deletedCount;
+    console.log(`Deleted ${batchResult.deletedCount} batches`);
+
+    // Step 13.6: Delete products
+    console.log("Deleting products...");
+    const productResult = await Product.deleteMany({});
+    deletionResults.products = productResult.deletedCount;
+    console.log(`Deleted ${productResult.deletedCount} products`);
+
+    // Step 13.7: Delete sowing requests
+    console.log("Deleting sowing requests...");
+    const sowingRequestResult = await SowingRequest.deleteMany({});
+    deletionResults.sowingRequests = sowingRequestResult.deletedCount;
+    console.log(`Deleted ${sowingRequestResult.deletedCount} sowing requests`);
+
+    // Step 13.8: Delete return requests
+    console.log("Deleting return requests...");
+    const returnRequestResult = await ReturnRequest.deleteMany({});
+    deletionResults.returnRequests = returnRequestResult.deletedCount;
+    console.log(`Deleted ${returnRequestResult.deletedCount} return requests`);
 
     // Step 14: Delete dealers (Users with dealer role)
     console.log("Deleting dealers...");
@@ -267,6 +299,70 @@ router.delete("/clear-dealers-only", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error deleting dealers",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * Clear inventory only (batches + outwards + transactions)
+ */
+router.delete("/clear-inventory-only", async (req, res) => {
+  try {
+    console.log("Deleting inventory...");
+    
+    const deletionResults = {
+      batches: 0,
+      inventoryOutward: 0,
+      inventoryTransactions: 0,
+    };
+    
+    // Delete batches
+    const batchResult = await Batch.deleteMany({});
+    deletionResults.batches = batchResult.deletedCount;
+    
+    // Delete inventory outward
+    const outwardResult = await InventoryOutward.deleteMany({});
+    deletionResults.inventoryOutward = outwardResult.deletedCount;
+    
+    // Delete inventory transactions
+    const transactionResult = await InventoryTransaction.deleteMany({});
+    deletionResults.inventoryTransactions = transactionResult.deletedCount;
+    
+    res.status(200).json({
+      success: true,
+      message: "Inventory deleted successfully",
+      summary: deletionResults,
+      totalDeleted: Object.values(deletionResults).reduce((sum, count) => sum + count, 0),
+    });
+  } catch (error) {
+    console.error("Error deleting inventory:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error deleting inventory",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * Clear products only
+ */
+router.delete("/clear-products-only", async (req, res) => {
+  try {
+    console.log("Deleting products...");
+    const result = await Product.deleteMany({});
+    
+    res.status(200).json({
+      success: true,
+      message: `Deleted ${result.deletedCount} products successfully`,
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    console.error("Error deleting products:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error deleting products",
       error: error.message,
     });
   }
