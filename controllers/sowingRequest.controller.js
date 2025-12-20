@@ -672,8 +672,13 @@ export const issueStockFromRequest = async (req, res) => {
       const plant = await PlantCms.findById(request.plantId).select('sowingBuffer');
       const sowingBuffer = plant?.sowingBuffer || 0;
       
+      console.log(`[IssueStock] ==========================================`);
+      console.log(`[IssueStock] Processing ${request.linkedSlotIds.length} linked slots:`, request.linkedSlotIds.map(id => id.toString()));
+      console.log(`[IssueStock] ==========================================`);
+      
       for (const slotId of request.linkedSlotIds) {
         try {
+          console.log(`[IssueStock] 🔍 Looking for slot ${slotId} in PlantSlot documents...`);
           // Find the slot in the unique PlantSlot documents
           let foundSlot = null;
           let foundPlantSlot = null;
@@ -686,6 +691,7 @@ export const issueStockFromRequest = async (req, res) => {
                 foundSlot = slot;
                 foundPlantSlot = plantSlot;
                 foundSubtypeSlot = subtypeSlot;
+                console.log(`[IssueStock] ✅ Found slot ${slotId} in PlantSlot ${plantSlotId}, subtypeSlot ${subtypeSlot.subtypeId}`);
                 break;
               }
             }
@@ -710,12 +716,19 @@ export const issueStockFromRequest = async (req, res) => {
             
             totalGap += gapWithBuffer;
             
-            console.log(`[IssueStock] Slot ${slotId}: Gap=${gapWithBuffer} plants (raw: ${rawGap}, buffer: ${sowingBuffer}%)`);
+            console.log(`[IssueStock] ✅ Slot ${slotId}: Added to slotGaps. Gap=${gapWithBuffer} plants (raw: ${rawGap}, buffer: ${sowingBuffer}%)`);
+          } else {
+            console.error(`[IssueStock] ❌ Slot ${slotId} NOT FOUND in PlantSlot documents! Cannot add sowingInProgress entry.`);
           }
         } catch (err) {
-          console.error(`[IssueStock] Error processing slot ${slotId}:`, err);
+          console.error(`[IssueStock] ❌ Error processing slot ${slotId}:`, err);
         }
       }
+      
+      console.log(`[IssueStock] ==========================================`);
+      console.log(`[IssueStock] 📊 SUMMARY: Processed ${request.linkedSlotIds.length} linked slots, found ${slotGaps.length} slots in slotGaps array`);
+      console.log(`[IssueStock] 📋 slotGaps array contains:`, slotGaps.map(s => ({ slotId: s.slotId.toString(), gap: s.gap })));
+      console.log(`[IssueStock] ==========================================`);
       
       console.log(`[IssueStock] Total gap across all slots: ${totalGap} plants`);
       
@@ -770,10 +783,15 @@ export const issueStockFromRequest = async (req, res) => {
       }
       
       // Step 4: Update all slots within each PlantSlot document, then save once per document
+      console.log(`[IssueStock] Step 4: Updating ${plantSlotUpdates.size} PlantSlot document(s) with ${Array.from(plantSlotUpdates.values()).reduce((sum, data) => sum + data.slotsToUpdate.length, 0)} total slot(s)`);
+      
       for (const [plantSlotId, updateData] of plantSlotUpdates.entries()) {
         const { plantSlot, slotsToUpdate } = updateData;
+        console.log(`[IssueStock] 📦 Processing PlantSlot ${plantSlotId} with ${slotsToUpdate.length} slot(s) to update`);
         
         for (const { slot, slotId, slotPackets, slotPlants } of slotsToUpdate) {
+          console.log(`[IssueStock] 🔄 Processing slot ${slotId}: packets=${slotPackets}, plants=${slotPlants}`);
+          
           // Initialize sowingInProgress as array if needed
           if (typeof slot.sowingInProgress === 'boolean') {
             slot.sowingInProgress = [];
@@ -781,6 +799,8 @@ export const issueStockFromRequest = async (req, res) => {
           if (!Array.isArray(slot.sowingInProgress)) {
             slot.sowingInProgress = [];
           }
+          
+          const previousProgressLength = slot.sowingInProgress.length;
           
           const sowingProgressEntry = {
             requestNumber: request.requestNumber,
@@ -793,6 +813,7 @@ export const issueStockFromRequest = async (req, res) => {
           };
           
           slot.sowingInProgress.push(sowingProgressEntry);
+          console.log(`[IssueStock] ✅ Slot ${slotId}: Added sowingInProgress entry (was ${previousProgressLength}, now ${slot.sowingInProgress.length})`);
           
           // Add trail entry
           slot.slotTrail = slot.slotTrail || [];
@@ -812,11 +833,49 @@ export const issueStockFromRequest = async (req, res) => {
         
         // Save plantSlot once with all slot updates
         try {
+          // Verify slots before save
+          console.log(`[IssueStock] 🔍 Before save - Verifying ${slotsToUpdate.length} slot(s) in PlantSlot ${plantSlotId}:`);
+          slotsToUpdate.forEach(({ slot, slotId, slotPackets }) => {
+            const progressLength = slot?.sowingInProgress?.length || 0;
+            const lastEntry = progressLength > 0 ? slot.sowingInProgress[progressLength - 1] : null;
+            console.log(`[IssueStock]   Slot ${slotId}: sowingInProgress.length=${progressLength}, lastEntry.requestNumber=${lastEntry?.requestNumber || 'N/A'}`);
+          });
+          
           plantSlot.markModified('subtypeSlots');
           await plantSlot.save();
-          console.log(`[IssueStock] ✅ PlantSlot ${plantSlotId} updated with ${slotsToUpdate.length} slot(s)`);
+          
+          console.log(`[IssueStock] ✅ PlantSlot ${plantSlotId} saved successfully with ${slotsToUpdate.length} slot(s) updated`);
+          
+          // Verify slots after save by re-fetching
+          const savedPlantSlot = await PlantSlot.findById(plantSlotId);
+          if (savedPlantSlot) {
+            console.log(`[IssueStock] 🔍 After save - Verifying slots in database:`);
+            slotsToUpdate.forEach(({ slotId: checkSlotId }) => {
+              let found = false;
+              for (const subtypeSlot of savedPlantSlot.subtypeSlots) {
+                const savedSlot = subtypeSlot.slots.id(checkSlotId);
+                if (savedSlot) {
+                  const savedProgressLength = savedSlot.sowingInProgress?.length || 0;
+                  const savedLastEntry = savedProgressLength > 0 ? savedSlot.sowingInProgress[savedProgressLength - 1] : null;
+                  console.log(`[IssueStock]   ✅ Slot ${checkSlotId}: sowingInProgress.length=${savedProgressLength}, lastEntry.requestNumber=${savedLastEntry?.requestNumber || 'N/A'}`);
+                  found = true;
+                  break;
+                }
+              }
+              if (!found) {
+                console.error(`[IssueStock]   ❌ Slot ${checkSlotId}: NOT FOUND in saved document!`);
+              }
+            });
+          }
+          
+          // Log details of each slot that was updated
+          slotsToUpdate.forEach(({ slot, slotId, slotPackets }) => {
+            const progressLength = slot?.sowingInProgress?.length || 0;
+            console.log(`[IssueStock] 📊 Slot ${slotId}: Added ${slotPackets} packets, sowingInProgress.length=${progressLength}`);
+          });
         } catch (err) {
           console.error(`[IssueStock] ❌ Error saving PlantSlot ${plantSlotId}:`, err);
+          console.error(`[IssueStock] ❌ Error stack:`, err.stack);
         }
       }
       

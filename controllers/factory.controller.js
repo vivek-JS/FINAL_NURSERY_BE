@@ -290,6 +290,19 @@ const createOne = (Model, modelName) =>
       console.log('📊 Order Status from request:', req.body?.orderStatus);
       console.log('📋 OrderData after destructuring:', orderData);
 
+      // Normalize componyQuota to boolean (handle string "true"/"false" from JSON)
+      const normalizedComponyQuota = 
+        componyQuota === true || componyQuota === "true" || componyQuota === "True"
+          ? true
+          : componyQuota === false || componyQuota === "false" || componyQuota === "False"
+          ? false
+          : undefined;
+      console.log('🎯 Quota normalization:', { 
+        original: componyQuota, 
+        type: typeof componyQuota, 
+        normalized: normalizedComponyQuota 
+      });
+
       if (!bookingSlot || !numberOfPlants) {
         return res.status(400).json({
           message: "bookingSlot and numberOfPlants are required",
@@ -387,14 +400,14 @@ const createOne = (Model, modelName) =>
           await wallet.save({ session });
         }
         // Case 1.5: If it's a dealer order with componyQuota=true (new case)
-        else if (salesPerson.jobTitle === "DEALER" && componyQuota === true) {
+        else if (salesPerson.jobTitle === "DEALER" && normalizedComponyQuota === true) {
           // Execute this code when DEALER selects company quota option
           await updateSlot(bookingSlot, numberOfPlants, "subtract", session);
         }
         // Case 2: If it's a farmer order through a dealer
         else if (salesPerson.jobTitle === "DEALER") {
           // Check if dealer quota is explicitly selected
-          if (componyQuota === false) {
+          if (normalizedComponyQuota === false) {
             // Dealer quota selected - ONLY use dealer quota, don't touch slot
             const quotaValidation = await validateDealerQuota(
               salesPerson._id,
@@ -453,7 +466,7 @@ const createOne = (Model, modelName) =>
           }
         }
         // Case 2.5: If dealer is selected but salesPerson is not a dealer (e.g., office staff selects dealer)
-        else if (orderData.dealer && !componyQuota) {
+        else if (orderData.dealer && normalizedComponyQuota === false) {
           // Validate dealer quota before creating order
           const quotaValidation = await validateDealerQuota(
             orderData.dealer,
@@ -584,7 +597,7 @@ const createOne = (Model, modelName) =>
           returnedPlants: 0, // Initialize with zero returned plants
           returnHistory: [], // Initialize with empty return history
           deliveryChanges: [], // Initialize with empty delivery changes history
-          componyQuota, // Include the componyQuota flag in the order document
+          componyQuota: normalizedComponyQuota, // Include the normalized componyQuota flag in the order document
           payment: paymentArray, // Include payment data if provided
           // Include orderFor field if provided
           orderFor: req.body.orderFor || undefined,

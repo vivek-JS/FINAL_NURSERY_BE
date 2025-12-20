@@ -1,5 +1,53 @@
 import { Schema, model } from "mongoose";
 import DealerBooking from "./dealerBooking.model.js";
+
+const followUpSchema = new Schema({
+  title: {
+    type: String,
+    required: true,
+  },
+  description: {
+    type: String,
+    default: "",
+  },
+  followUpDate: {
+    type: String,
+    required: true,
+  },
+  dueTime: {
+    type: String,
+    default: "",
+  },
+  priority: {
+    type: String,
+    enum: ["low", "medium", "high", "urgent"],
+    default: "medium",
+  },
+  status: {
+    type: String,
+    enum: ["pending", "completed", "incomplete", "not_done"],
+    default: "pending",
+  },
+  publicToken: {
+    type: String,
+    required: true,
+    unique: true,
+    sparse: true,
+    index: true,
+  },
+  createdBy: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+  completedAt: {
+    type: Date,
+  },
+}, { _id: true });
+
 const userSchema = new Schema({
   name: {
     type: String,
@@ -66,6 +114,10 @@ const userSchema = new Schema({
   expoPushToken: {
     type: String,
     default: null,
+  },
+  followUps: {
+    type: [followUpSchema],
+    default: [],
   },
 });
 
