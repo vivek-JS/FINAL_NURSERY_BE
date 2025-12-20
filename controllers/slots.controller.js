@@ -2468,30 +2468,114 @@ export const getSlotTrail = async (req, res) => {
     // Filter primary sowing entries (reason contains "Primary sowing")
     const primarySowingEntries = result
       .filter((entry) => entry.slotTrail && entry.slotTrail.reason && entry.slotTrail.reason.includes("Primary sowing"))
-      .map((entry) => ({
-        ...entry.slotTrail,
-        performedBy: entry.slotTrail.performedByInfo
-          ? {
-              _id: entry.slotTrail.performedByInfo._id,
-              name: entry.slotTrail.performedByInfo.name,
-              phoneNumber: entry.slotTrail.performedByInfo.phoneNumber,
-            }
-          : null,
-      }));
+      .map((entry) => {
+        const trail = entry.slotTrail;
+        return {
+          // Core fields
+          action: trail.action,
+          activityName: trail.activityName,
+          quantity: trail.quantity,
+          // Plus values
+          plus: trail.plus || {},
+          // Minus values
+          minus: trail.minus || {},
+          // Before state
+          before: trail.before || {},
+          // After state
+          after: trail.after || {},
+          // Legacy fields (for backward compatibility)
+          previousTotalPlants: trail.previousTotalPlants,
+          newTotalPlants: trail.newTotalPlants,
+          previousAvailablePlants: trail.previousAvailablePlants,
+          newAvailablePlants: trail.newAvailablePlants,
+          bufferPercentage: trail.bufferPercentage,
+          bufferAmount: trail.bufferAmount,
+          reason: trail.reason,
+          notes: trail.notes,
+          // Sowing-specific fields
+          sowingId: trail.sowingId,
+          sowingLocation: trail.sowingLocation,
+          batchNumber: trail.batchNumber,
+          sowingDate: trail.sowingDate,
+          plantReadyDate: trail.plantReadyDate,
+          isExcessiveSowing: trail.isExcessiveSowing,
+          orderId: trail.orderId,
+          sowingRequestId: trail.sowingRequestId,
+          requestNumber: trail.requestNumber,
+          gapCoverageDetails: trail.gapCoverageDetails,
+          // Metadata
+          metadata: trail.metadata || {},
+          // Timestamps
+          createdAt: trail.createdAt,
+          updatedAt: trail.updatedAt,
+          // Performed by info
+          performedBy: trail.performedByInfo
+            ? {
+                _id: trail.performedByInfo._id,
+                name: trail.performedByInfo.name,
+                phoneNumber: trail.performedByInfo.phoneNumber,
+              }
+            : trail.performedBy || null,
+          // Also include raw performedBy for reference
+          performedById: trail.performedBy,
+        };
+      });
 
     // Get all trail entries with user info for general trail
     const allTrailEntries = result
       .filter((entry) => entry.slotTrail)
-      .map((entry) => ({
-        ...entry.slotTrail,
-        performedBy: entry.slotTrail.performedByInfo
-          ? {
-              _id: entry.slotTrail.performedByInfo._id,
-              name: entry.slotTrail.performedByInfo.name,
-              phoneNumber: entry.slotTrail.performedByInfo.phoneNumber,
-            }
-          : null,
-      }));
+      .map((entry) => {
+        const trail = entry.slotTrail;
+        return {
+          // Core fields
+          action: trail.action,
+          activityName: trail.activityName,
+          quantity: trail.quantity,
+          // Plus values
+          plus: trail.plus || {},
+          // Minus values
+          minus: trail.minus || {},
+          // Before state
+          before: trail.before || {},
+          // After state
+          after: trail.after || {},
+          // Legacy fields (for backward compatibility)
+          previousTotalPlants: trail.previousTotalPlants,
+          newTotalPlants: trail.newTotalPlants,
+          previousAvailablePlants: trail.previousAvailablePlants,
+          newAvailablePlants: trail.newAvailablePlants,
+          bufferPercentage: trail.bufferPercentage,
+          bufferAmount: trail.bufferAmount,
+          reason: trail.reason,
+          notes: trail.notes,
+          // Sowing-specific fields
+          sowingId: trail.sowingId,
+          sowingLocation: trail.sowingLocation,
+          batchNumber: trail.batchNumber,
+          sowingDate: trail.sowingDate,
+          plantReadyDate: trail.plantReadyDate,
+          isExcessiveSowing: trail.isExcessiveSowing,
+          orderId: trail.orderId,
+          sowingRequestId: trail.sowingRequestId,
+          requestNumber: trail.requestNumber,
+          gapCoverageDetails: trail.gapCoverageDetails,
+          // Metadata
+          metadata: trail.metadata || {},
+          // Timestamps
+          createdAt: trail.createdAt,
+          updatedAt: trail.updatedAt,
+          // Performed by info
+          performedBy: trail.performedByInfo
+            ? {
+                _id: trail.performedByInfo._id,
+                name: trail.performedByInfo.name,
+                phoneNumber: trail.performedByInfo.phoneNumber,
+              }
+            : trail.performedBy || null,
+          // Also include raw performedBy for reference
+          performedById: trail.performedBy,
+        };
+      });
 
     res.status(200).json({
       success: true,

@@ -21,17 +21,65 @@ const slotTrailSchema = new Schema({
       "STOCK_REQUEST_ISSUED",
       "SOWING_COMPLETED",
       "SOWING_CANCELLED",
-      "SOWING_COMPLETED",
+      "SOWING_PRIMARY", // Primary location sowing
+      "SOWING_OFFICE", // Office location sowing
+      "SOWING_EXCESSIVE", // Excessive sowing
       "EXCESSIVE_SOWING_ADDED",
       "STOCK_REQUEST_CREATED",
       "STOCK_REQUEST_ISSUED",
-      "STOCK_REQUEST_CANCELLED"
+      "STOCK_REQUEST_CANCELLED",
+      "GAP_COVERED", // Gap coverage from later slots
+      "SOWING_IN_PROGRESS_CLEARED", // Clearing in-progress entries
+      "PACKETS_RETURNED", // Packets returned after sowing
+      "PACKETS_USED", // Packets marked as used
     ],
     required: true,
+  },
+  activityName: {
+    type: String,
+    required: true, // Human-readable activity name
   },
   quantity: {
     type: Number,
     required: true,
+  },
+  // Plus values (what was added)
+  plus: {
+    primarySowed: { type: Number, default: 0 },
+    officeSowed: { type: Number, default: 0 },
+    totalPlants: { type: Number, default: 0 },
+    availablePlants: { type: Number, default: 0 },
+    excessivePlants: { type: Number, default: 0 }, // Excessive sowing plants
+    packetsUsed: { type: Number, default: 0 },
+    plantsSowed: { type: Number, default: 0 },
+    gapCovered: { type: Number, default: 0 }, // Plants used to cover gaps
+  },
+  // Minus values (what was subtracted)
+  minus: {
+    packetsRemaining: { type: Number, default: 0 }, // Packets returned/subtracted
+    inProgressEntries: { type: Number, default: 0 }, // Number of in-progress entries cleared
+  },
+  // Before state (snapshot of values before change)
+  before: {
+    primarySowed: { type: Number, default: 0 },
+    officeSowed: { type: Number, default: 0 },
+    totalPlants: { type: Number, default: 0 },
+    availablePlants: { type: Number, default: 0 },
+    excessivePlants: { type: Number, default: 0 },
+    plantsSowed: { type: Number, default: 0 },
+    totalBookedPlants: { type: Number, default: 0 },
+    inProgressCount: { type: Number, default: 0 }, // Number of in-progress entries
+  },
+  // After state (snapshot of values after change)
+  after: {
+    primarySowed: { type: Number, default: 0 },
+    officeSowed: { type: Number, default: 0 },
+    totalPlants: { type: Number, default: 0 },
+    availablePlants: { type: Number, default: 0 },
+    excessivePlants: { type: Number, default: 0 },
+    plantsSowed: { type: Number, default: 0 },
+    totalBookedPlants: { type: Number, default: 0 },
+    inProgressCount: { type: Number, default: 0 },
   },
   previousTotalPlants: {
     type: Number,
@@ -61,6 +109,28 @@ const slotTrailSchema = new Schema({
     type: String,
     required: true,
   },
+  // Sowing-specific fields
+  sowingId: {
+    type: Schema.Types.ObjectId,
+    ref: "Sowing",
+  },
+  sowingLocation: {
+    type: String,
+    enum: ["PRIMARY", "OFFICE"],
+  },
+  batchNumber: {
+    type: String,
+  },
+  sowingDate: {
+    type: String, // DD-MM-YYYY format
+  },
+  plantReadyDate: {
+    type: String, // DD-MM-YYYY format
+  },
+  isExcessiveSowing: {
+    type: Boolean,
+    default: false,
+  },
   orderId: {
     type: Schema.Types.ObjectId,
     ref: "Order",
@@ -69,12 +139,28 @@ const slotTrailSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: "SowingRequest",
   },
+  requestNumber: {
+    type: String, // Sowing request number
+  },
+  // Gap coverage details
+  gapCoverageDetails: {
+    fromSlotId: { type: Schema.Types.ObjectId },
+    fromSlotDate: { type: String },
+    plantsCovered: { type: Number, default: 0 },
+    toSlotId: { type: Schema.Types.ObjectId },
+    toSlotDate: { type: String },
+  },
   performedBy: {
     type: Schema.Types.ObjectId,
     ref: "User",
   },
   notes: {
     type: String,
+  },
+  // Additional metadata for debugging/recovery
+  metadata: {
+    type: Map,
+    of: Schema.Types.Mixed,
   },
 }, { timestamps: true });
 
@@ -517,6 +603,107 @@ slotSchema.methods.trackOrderChange = function(action, orderId, quantity, perfor
 // Method to set performer for tracking
 slotSchema.methods.setPerformer = function(userId) {
   this._performedBy = userId;
+};
+
+// Method to log comprehensive sowing activity
+slotSchema.methods.logSowingActivity = function(activityData) {
+  const {
+    action,
+    activityName,
+    quantity = 0,
+    plus = {},
+    minus = {},
+    before = {},
+    after = {},
+    sowingId,
+    sowingLocation,
+    batchNumber,
+    sowingDate,
+    plantReadyDate,
+    isExcessiveSowing = false,
+    orderId,
+    sowingRequestId,
+    requestNumber,
+    gapCoverageDetails,
+    performedBy,
+    reason,
+    notes,
+    metadata = {},
+  } = activityData;
+
+  // Get current slot state for before/after comparison
+  const currentBefore = {
+    primarySowed: this.primarySowed || 0,
+    officeSowed: this.officeSowed || 0,
+    totalPlants: this.totalPlants || 0,
+    availablePlants: this.availablePlants || 0,
+    excessivePlants: this.excessiveSowing?.plants || 0,
+    plantsSowed: this.plantsSowed || 0,
+    totalBookedPlants: this.totalBookedPlants || 0,
+    inProgressCount: this.sowingInProgress?.length || 0,
+  };
+
+  // Merge provided before/after with current state
+  const finalBefore = { ...currentBefore, ...before };
+  const finalAfter = { ...currentBefore, ...after };
+
+  // Build comprehensive trail entry
+  const trailEntry = {
+    action,
+    activityName: activityName || action, // Fallback to action if name not provided
+    quantity,
+    plus: {
+      primarySowed: plus.primarySowed || 0,
+      officeSowed: plus.officeSowed || 0,
+      totalPlants: plus.totalPlants || 0,
+      availablePlants: plus.availablePlants || 0,
+      excessivePlants: plus.excessivePlants || 0,
+      packetsUsed: plus.packetsUsed || 0,
+      plantsSowed: plus.plantsSowed || 0,
+      gapCovered: plus.gapCovered || 0,
+    },
+    minus: {
+      packetsRemaining: minus.packetsRemaining || 0,
+      inProgressEntries: minus.inProgressEntries || 0,
+    },
+    before: finalBefore,
+    after: finalAfter,
+    previousTotalPlants: finalBefore.totalPlants,
+    newTotalPlants: finalAfter.totalPlants,
+    previousAvailablePlants: finalBefore.availablePlants,
+    newAvailablePlants: finalAfter.availablePlants,
+    bufferPercentage: this.slotBuffer || 0,
+    bufferAmount: this.bufferAmount || 0,
+    reason: reason || `Sowing activity: ${activityName || action}`,
+    sowingId,
+    sowingLocation,
+    batchNumber,
+    sowingDate,
+    plantReadyDate,
+    isExcessiveSowing,
+    orderId,
+    sowingRequestId,
+    requestNumber,
+    gapCoverageDetails,
+    performedBy: performedBy || this._performedBy || null,
+    notes: notes || '',
+    metadata: metadata || {},
+  };
+
+  // Initialize slotTrail if it doesn't exist
+  if (!this.slotTrail) {
+    this.slotTrail = [];
+  }
+
+  // Add to trail array (newest first for easy access)
+  this.slotTrail.unshift(trailEntry);
+
+  // Keep only last 1000 entries to prevent unbounded growth
+  if (this.slotTrail.length > 1000) {
+    this.slotTrail = this.slotTrail.slice(0, 1000);
+  }
+
+  return trailEntry;
 };
 
 // Ensure virtual fields are included when converting to JSON

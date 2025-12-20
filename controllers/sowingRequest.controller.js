@@ -291,6 +291,7 @@ export const getSowingRequestById = async (req, res) => {
       status: 'active',
       remainingQuantity: { $gt: 0 },
     })
+      .select('batchNumber product receivedDate supplier purchasePrice quantity remainingQuantity unit status grn expiryDate manufactureDate')
       .populate('unit', 'name symbol')
       .populate('supplier', 'name')
       .sort({ receivedDate: 1 })
@@ -524,13 +525,22 @@ export const issueStockFromRequest = async (req, res) => {
 
     // Create outward entry and issue stock directly
     const outwardNumber = await InventoryOutward.generateOutwardNumber();
-    const outwardItems = batchAllocations.map((allocation) => ({
-      product: request.productId,
-      batch: allocation.batchId,
-      quantity: allocation.quantity,
-      unit: request.primaryUnit || request.secondaryUnit,
-      notes: allocation.notes || notes,
-    }));
+    const outwardItems = batchAllocations.map((allocation) => {
+      const item = {
+        product: request.productId,
+        batch: allocation.batchId,
+        quantity: allocation.quantity,
+        unit: request.primaryUnit || request.secondaryUnit,
+        notes: allocation.notes || notes,
+      };
+      
+      // Add expiry date if provided
+      if (allocation.expiryDate) {
+        item.expiryDate = new Date(allocation.expiryDate);
+      }
+      
+      return item;
+    });
 
     const outward = new InventoryOutward({
       outwardNumber,

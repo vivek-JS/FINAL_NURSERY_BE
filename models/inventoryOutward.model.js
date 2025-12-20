@@ -37,6 +37,9 @@ const outwardItemSchema = new mongoose.Schema({
     default: 0,
     min: 0,
   },
+  expiryDate: {
+    type: Date,
+  },
 });
 
 const inventoryOutwardSchema = new mongoose.Schema(
