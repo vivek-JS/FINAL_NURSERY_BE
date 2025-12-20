@@ -667,6 +667,7 @@ export const issueStockFromRequest = async (req, res) => {
       // Step 2: Build slotGaps array from unique PlantSlot documents
       const slotGaps = [];
       let totalGap = 0;
+      const isExcessiveSowing = request.isExcessiveSowing || false;
       
       // Get sowing buffer from PlantCms (fetch once)
       const plant = await PlantCms.findById(request.plantId).select('sowingBuffer');
@@ -674,6 +675,7 @@ export const issueStockFromRequest = async (req, res) => {
       
       console.log(`[IssueStock] ==========================================`);
       console.log(`[IssueStock] Processing ${request.linkedSlotIds.length} linked slots:`, request.linkedSlotIds.map(id => id.toString()));
+      console.log(`[IssueStock] isExcessiveSowing: ${isExcessiveSowing}`);
       console.log(`[IssueStock] ==========================================`);
       
       for (const slotId of request.linkedSlotIds) {
@@ -699,24 +701,36 @@ export const issueStockFromRequest = async (req, res) => {
           }
           
           if (foundSlot) {
-            // Calculate gap for this slot (including buffer if applicable)
-            const totalBookedPlants = foundSlot.totalBookedPlants || 0;
-            const primarySowed = foundSlot.primarySowed || 0;
-            const rawGap = totalBookedPlants - primarySowed;
-            const gapWithBuffer = Math.ceil(rawGap * (1 + sowingBuffer / 100));
+            let gap, rawGap;
+            
+            if (isExcessiveSowing) {
+              // For excessive sowing: allocate ALL packets to this specific slot (linked based on creation date)
+              // No gap calculation needed - just track the slot for allocation
+              rawGap = 0; // No gap for excessive sowing
+              gap = 1; // Use 1 as weight - will allocate all packets to this slot
+              console.log(`[IssueStock] [EXCESSIVE] Slot ${slotId}: Linked slot for excessive sowing, will allocate ALL ${packetsRequested} packets to this slot`);
+            } else {
+              // Calculate gap for this slot (including buffer if applicable)
+              const totalBookedPlants = foundSlot.totalBookedPlants || 0;
+              const primarySowed = foundSlot.primarySowed || 0;
+              rawGap = totalBookedPlants - primarySowed;
+              gap = Math.ceil(rawGap * (1 + sowingBuffer / 100));
+              console.log(`[IssueStock] ✅ Slot ${slotId}: Added to slotGaps. Gap=${gap} plants (raw: ${rawGap}, buffer: ${sowingBuffer}%)`);
+            }
             
             slotGaps.push({
               slotId: slotId,
               slot: foundSlot,
               plantSlot: foundPlantSlot,
               subtypeSlot: foundSubtypeSlot,
-              gap: gapWithBuffer,
-              rawGap: rawGap
+              gap: gap,
+              rawGap: rawGap,
+              isExcessiveSowing: isExcessiveSowing
             });
             
-            totalGap += gapWithBuffer;
-            
-            console.log(`[IssueStock] ✅ Slot ${slotId}: Added to slotGaps. Gap=${gapWithBuffer} plants (raw: ${rawGap}, buffer: ${sowingBuffer}%)`);
+            if (!isExcessiveSowing) {
+              totalGap += gap;
+            }
           } else {
             console.error(`[IssueStock] ❌ Slot ${slotId} NOT FOUND in PlantSlot documents! Cannot add sowingInProgress entry.`);
           }
@@ -727,12 +741,14 @@ export const issueStockFromRequest = async (req, res) => {
       
       console.log(`[IssueStock] ==========================================`);
       console.log(`[IssueStock] 📊 SUMMARY: Processed ${request.linkedSlotIds.length} linked slots, found ${slotGaps.length} slots in slotGaps array`);
-      console.log(`[IssueStock] 📋 slotGaps array contains:`, slotGaps.map(s => ({ slotId: s.slotId.toString(), gap: s.gap })));
+      console.log(`[IssueStock] 📋 slotGaps array contains:`, slotGaps.map(s => ({ slotId: s.slotId.toString(), gap: s.gap, isExcessive: s.isExcessiveSowing })));
       console.log(`[IssueStock] ==========================================`);
       
-      console.log(`[IssueStock] Total gap across all slots: ${totalGap} plants`);
+      if (!isExcessiveSowing) {
+        console.log(`[IssueStock] Total gap across all slots: ${totalGap} plants`);
+      }
       
-      // Step 2: Distribute packets/plants proportionally based on each slot's gap
+      // Step 2: Distribute packets/plants based on slot gaps (or allocate all to specific slot for excessive sowing)
       let remainingPackets = packetsRequested;
       let remainingPlants = packetsRequested * conversionFactor;
       
@@ -746,24 +762,32 @@ export const issueStockFromRequest = async (req, res) => {
         // Calculate this slot's share
         let slotPackets, slotPlants;
         
-        if (isLastSlot) {
-          // Last slot gets remaining (to handle rounding)
-          slotPackets = remainingPackets;
-          slotPlants = remainingPlants;
+        if (slotData.isExcessiveSowing) {
+          // For excessive sowing: allocate ALL packets to this specific slot (linked based on creation date)
+          // Excessive sowing requests are linked to one specific slot calculated from the sowing date
+          slotPackets = packetsRequested; // All packets go to this slot
+          slotPlants = packetsRequested * conversionFactor; // All plants go to this slot
+          console.log(`[IssueStock] [EXCESSIVE] Slot ${slotData.slotId}: Allocating ALL ${slotPackets} packets, ${slotPlants} plants to this linked slot (based on creation date)`);
         } else {
-          // Proportional distribution: (slot gap / total gap) × total packets
-          const proportion = slotData.gap / totalGap;
-          slotPackets = packetsRequested * proportion;
-          slotPlants = slotData.gap; // Actual gap for this slot
-          
-          remainingPackets -= slotPackets;
-          remainingPlants -= slotPlants;
+          // Regular sowing: proportional distribution based on gap
+          if (isLastSlot) {
+            // Last slot gets remaining (to handle rounding)
+            slotPackets = remainingPackets;
+            slotPlants = remainingPlants;
+          } else {
+            // Proportional distribution: (slot gap / total gap) × total packets
+            const proportion = totalGap > 0 ? slotData.gap / totalGap : 1 / slotGaps.length;
+            slotPackets = packetsRequested * proportion;
+            slotPlants = slotData.gap; // Actual gap for this slot
+            
+            remainingPackets -= slotPackets;
+            remainingPlants -= slotPlants;
+          }
+          console.log(`[IssueStock] Slot ${slotData.slotId}: Allocating ${slotPackets} packets, ${slotPlants} plants (proportional to gap)`);
         }
         
         // Round packets to 2 decimal places
         slotPackets = Math.round(slotPackets * 100) / 100;
-        
-        console.log(`[IssueStock] Slot ${slotData.slotId}: Allocating ${slotPackets} packets, ${slotPlants} plants`);
         
         // Group by plantSlot document
         const plantSlotId = slotData.plantSlot._id.toString();

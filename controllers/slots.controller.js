@@ -2115,52 +2115,161 @@ const calculateTotalBookedPlantsFromOrders = async (slotId) => {
 };
 
 // Function to populate slots with orders and calculate totalBookedPlants
+// OPTIMIZED: Batches all queries instead of N+1 queries
 const populateSlotsWithOrders = async (slots) => {
   try {
+    // Collect all slot information for batch querying
+    const slotIds = [];
+    const slotDateMap = new Map(); // Map for date-based matching
+    const slotMap = new Map(); // Map slotId -> slot for quick lookup
+    
     for (const slotGroup of slots) {
       for (const slot of slotGroup.slots) {
-        // Get orders for this slot - handle both ObjectId and array formats
-        // Exclude CANCELLED and REJECTED orders when calculating booked plants
-        // Also exclude dealer quota orders (quotaSource = "dealer")
-        const orders = await Order.find({
-          $or: [
-            { bookingSlot: slot._id }, // Direct ObjectId reference
-            { "bookingSlot.slotId": slot._id.toString() }, // Array format with slotId
-            { "bookingSlot.startDay": slot.startDay, "bookingSlot.endDay": slot.endDay } // Array format with date matching
-          ],
-          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] }, // Exclude cancelled and rejected orders
-          // Exclude dealer quota orders - exclude orders where quotaSource is "dealer"
-          $and: [
-            {
-              $or: [
-                { quotaSource: { $ne: "dealer" } }, // quotaSource is not "dealer"
-                { quotaSource: { $exists: false } } // quotaSource field doesn't exist
-              ]
-            }
-          ]
-        }).select('_id orderId numberOfPlants farmer salesPerson orderStatus dealer quotaSource');
+        const slotId = slot._id?.toString ? slot._id.toString() : slot._id;
+        slotIds.push(new mongoose.Types.ObjectId(slotId));
+        slotMap.set(slotId, slot);
+        
+        // Store date-based lookup
+        if (slot.startDay && slot.endDay) {
+          const dateKey = `${slot.startDay}|${slot.endDay}`;
+          if (!slotDateMap.has(dateKey)) {
+            slotDateMap.set(dateKey, []);
+          }
+          slotDateMap.get(dateKey).push(slot);
+        }
+      }
+    }
 
-        // Calculate totalBookedPlants from active orders only (excluding dealer quota orders)
-        const totalBookedPlants = orders.reduce((sum, order) => sum + order.numberOfPlants, 0);
+    // Batch query: Get all orders for all slots in one query
+    // Exclude CANCELLED and REJECTED orders, and exclude dealer quota orders
+    const orConditions = [
+      { bookingSlot: { $in: slotIds } } // Direct ObjectId reference
+    ];
+    
+    // Handle array format with slotId
+    if (slotIds.length > 0) {
+      orConditions.push({ "bookingSlot.slotId": { $in: slotIds.map(id => id.toString()) } });
+    }
+    
+    // Handle array format with date matching
+    const dateConditions = [];
+    for (const dateKey of slotDateMap.keys()) {
+      const [startDay, endDay] = dateKey.split('|');
+      dateConditions.push({ "bookingSlot.startDay": startDay, "bookingSlot.endDay": endDay });
+    }
+    if (dateConditions.length > 0) {
+      orConditions.push(...dateConditions);
+    }
+    
+    const allOrders = await Order.find({
+      $or: orConditions,
+      orderStatus: { $nin: ['CANCELLED', 'REJECTED'] },
+      $and: [
+        {
+          $or: [
+            { quotaSource: { $ne: "dealer" } },
+            { quotaSource: { $exists: false } }
+          ]
+        }
+      ]
+    }).select('_id orderId numberOfPlants farmer salesPerson orderStatus dealer quotaSource bookingSlot').lean();
+
+    // Batch query: Get all dealer quota orders for all slots
+    const dealerQuotaOrders = await Order.aggregate([
+      {
+        $match: {
+          bookingSlot: { $in: slotIds },
+          orderStatus: { $nin: ['CANCELLED', 'REJECTED'] },
+          quotaSource: "dealer"
+        }
+      },
+      {
+        $group: {
+          _id: "$bookingSlot",
+          totalDealerQuotaUsed: { $sum: '$numberOfPlants' },
+          dealerOrders: { $push: '$$ROOT' }
+        }
+      }
+    ]);
+
+    // Create a map for dealer quota by slotId
+    const dealerQuotaMap = new Map();
+    dealerQuotaOrders.forEach(item => {
+      const slotId = item._id?.toString ? item._id.toString() : item._id;
+      dealerQuotaMap.set(slotId, {
+        totalDealerQuotaUsed: item.totalDealerQuotaUsed,
+        dealerOrders: item.dealerOrders,
+        hasDealerQuota: true
+      });
+    });
+
+    // Group orders by slot
+    const ordersBySlot = new Map();
+    for (const order of allOrders) {
+      let matchedSlotId = null;
+      
+      // Try to match by direct ObjectId
+      if (order.bookingSlot) {
+        const bookingSlotId = order.bookingSlot?.toString ? order.bookingSlot.toString() : order.bookingSlot;
+        if (slotMap.has(bookingSlotId)) {
+          matchedSlotId = bookingSlotId;
+        }
+      }
+      
+      // Try to match by slotId in array format
+      if (!matchedSlotId && order.bookingSlot?.slotId) {
+        const slotId = order.bookingSlot.slotId.toString();
+        if (slotMap.has(slotId)) {
+          matchedSlotId = slotId;
+        }
+      }
+      
+      // Try to match by date
+      if (!matchedSlotId && order.bookingSlot?.startDay && order.bookingSlot?.endDay) {
+        const dateKey = `${order.bookingSlot.startDay}|${order.bookingSlot.endDay}`;
+        const matchingSlots = slotDateMap.get(dateKey);
+        if (matchingSlots && matchingSlots.length > 0) {
+          // Use first matching slot (in case of duplicates, all will get the order)
+          matchedSlotId = matchingSlots[0]._id?.toString ? matchingSlots[0]._id.toString() : matchingSlots[0]._id;
+        }
+      }
+      
+      if (matchedSlotId) {
+        if (!ordersBySlot.has(matchedSlotId)) {
+          ordersBySlot.set(matchedSlotId, []);
+        }
+        ordersBySlot.get(matchedSlotId).push(order);
+      }
+    }
+
+    // Update slots with orders and calculate values
+    for (const slotGroup of slots) {
+      for (const slot of slotGroup.slots) {
+        const slotId = slot._id?.toString ? slot._id.toString() : slot._id;
+        const orders = ordersBySlot.get(slotId) || [];
+        
+        // Calculate totalBookedPlants from active orders
+        const totalBookedPlants = orders.reduce((sum, order) => sum + (order.numberOfPlants || 0), 0);
         
         // Get dealer quota information for this slot
-        const dealerQuota = await getDealerQuotaForSlot(slot._id);
+        const dealerQuota = dealerQuotaMap.get(slotId) || {
+          totalDealerQuotaUsed: 0,
+          dealerOrders: [],
+          hasDealerQuota: false
+        };
         
         // Update slot with calculated values
         slot.orders = orders;
         slot.totalBookedPlants = totalBookedPlants;
-        slot.dealerQuota = dealerQuota; // Add dealer quota information
+        slot.dealerQuota = dealerQuota;
         
         // Calculate available plants as totalPlants - totalBookedPlants
         slot.availablePlants = Math.max(0, slot.totalPlants - totalBookedPlants);
         
-        // Calculate buffer-related fields for reference (but don't use for availablePlants)
+        // Calculate buffer-related fields for reference
         const effectiveBuffer = slot.effectiveBuffer || 0;
         const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
         const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
-        
-        // Ensure totalPlants remains as the original capacity
-        // Don't modify totalPlants here - it should always represent the actual slot capacity
         
         // Set overflow flag
         slot.isOverflow = slot.availablePlants < 0;

@@ -57,26 +57,26 @@ export const createExcessiveSowingRequest = async (req, res) => {
       });
     }
 
-    // Get product (seed) for this subtype
+    // Get product (seed) for this subtype (removed purpose: 'production' filter)
     // Try multiple strategies to find a matching product
     let product = await Product.findOne({
       plantId,
       'plantSubtypeInfo.subtypeId': subtypeId,
-      purpose: 'production',
+      isActive: true,
     }).populate('primaryUnit secondaryUnit');
 
     // Fallback 1: Find by plantId only
     if (!product) {
       product = await Product.findOne({
         plantId,
-        purpose: 'production',
+        isActive: true,
       }).populate('primaryUnit secondaryUnit');
     }
 
-    // Fallback 2: Find any production product
+    // Fallback 2: Find any active product for this plant
     if (!product) {
       const products = await Product.find({
-        purpose: 'production',
+        plantId,
         isActive: true,
       }).populate('primaryUnit secondaryUnit').limit(1);
       product = products[0];
@@ -85,7 +85,7 @@ export const createExcessiveSowingRequest = async (req, res) => {
     if (!product) {
       return res.status(404).json({
         success: false,
-        message: 'No seed product found for this plant/subtype. Please ensure products have purpose="production" and are linked to plants.',
+        message: 'No active product found for this plant/subtype. Please ensure products are linked to plants and are active.',
       });
     }
 
@@ -98,6 +98,21 @@ export const createExcessiveSowingRequest = async (req, res) => {
       conversionFactor = plantSubtypeInfo?.conversionFactor || product.conversionFactor || 1;
     } else {
       conversionFactor = product.conversionFactor || 1;
+    }
+
+    // Get plantReadyDays from subtype
+    const plantReadyDays = subtype.plantReadyDays || 0;
+
+    // Calculate plant ready by date (sowingDate + plantReadyDays)
+    let plantReadyBy = null;
+    if (sowingDate) {
+      const sowingDateMoment = moment(sowingDate, 'DD-MM-YYYY');
+      if (sowingDateMoment.isValid() && plantReadyDays > 0) {
+        plantReadyBy = sowingDateMoment.clone().add(plantReadyDays, 'days').format('DD-MM-YYYY');
+      } else if (sowingDateMoment.isValid()) {
+        // If plantReadyDays is 0, plants are ready on sowing date
+        plantReadyBy = sowingDateMoment.format('DD-MM-YYYY');
+      }
     }
 
     // Generate request number
@@ -124,20 +139,27 @@ export const createExcessiveSowingRequest = async (req, res) => {
       isExcessiveSowing: true,
       notes: notes || 'Excessive sowing request (no orders)',
       remainingSowingNeeded: packetsRequested * conversionFactor,
+      plantReadyDays: plantReadyDays,
+      plantReadyBy: plantReadyBy, // Date when plants will be ready (sowingDate + plantReadyDays)
+      actualSowingDate: sowingDate ? moment(sowingDate, 'DD-MM-YYYY').format('DD-MM-YYYY') : null, // Store actual sowing date for stock issue reference
     };
 
     const newRequest = await SowingRequest.create(requestData);
 
     // Find or create slot for this request
-    // Use the provided sowingDate or default to today + 7 days
-    const targetSowingDate = sowingDate
+    // Slot date = sowingDate + plantReadyDays (when plants will be ready)
+    const sowingDateMoment = sowingDate
       ? moment(sowingDate, 'DD-MM-YYYY')
       : moment().add(7, 'days');
     
-    const startDay = targetSowingDate.format('DD-MM-YYYY');
+    // Calculate slot date: sowing date + plant ready days
+    const slotDate = sowingDateMoment.clone().add(plantReadyDays, 'days');
+    const startDay = slotDate.format('DD-MM-YYYY');
     const endDay = startDay; // Single-day slot
-    const month = targetSowingDate.format('MMMM');
-    const year = targetSowingDate.year();
+    const month = slotDate.format('MMMM');
+    const year = slotDate.year();
+    
+    console.log(`[DEBUG] Slot creation: sowingDate=${sowingDateMoment.format('DD-MM-YYYY')}, plantReadyDays=${plantReadyDays}, slotDate=${startDay}`);
 
     // Try to find existing slot for this date
     let plantSlotDoc = await PlantSlot.findOne({
@@ -188,6 +210,7 @@ export const createExcessiveSowingRequest = async (req, res) => {
         month,
         isManual: true,
         plantReadyDays: subtype.plantReadyDays || 0,
+        actualSowingDate: sowingDate ? moment(sowingDate, 'DD-MM-YYYY').format('DD-MM-YYYY') : null, // Store actual sowing date
         excessiveSowing: {
           packets: packetsRequested,
           plants: expectedPlants,
@@ -208,6 +231,11 @@ export const createExcessiveSowingRequest = async (req, res) => {
       slot.excessiveSowing.plants += expectedPlants;
       slot.totalPlants += expectedPlants;
       slot.availablePlants += expectedPlants;
+      
+      // Store actual sowing date if not already set
+      if (!slot.actualSowingDate && sowingDate) {
+        slot.actualSowingDate = moment(sowingDate, 'DD-MM-YYYY').format('DD-MM-YYYY');
+      }
       
       if (!slot.linkedSowingRequests) {
         slot.linkedSowingRequests = [];
@@ -240,11 +268,15 @@ export const createExcessiveSowingRequest = async (req, res) => {
         request: newRequest,
         slot: {
           slotId: slot._id,
-          startDay: slot.startDay,
+          startDay: slot.startDay, // This is sowingDate + plantReadyDays (when plants will be ready)
           endDay: slot.endDay,
           totalPlants: slot.totalPlants,
           excessiveSowing: slot.excessiveSowing,
+          actualSowingDate: slot.actualSowingDate, // Actual sowing date (for stock issue)
         },
+        plantReadyBy: plantReadyBy, // Date when plants will be ready (sowingDate + plantReadyDays)
+        plantReadyDays: plantReadyDays,
+        sowingDate: sowingDate ? moment(sowingDate, 'DD-MM-YYYY').format('DD-MM-YYYY') : null, // Actual sowing date
       },
     });
   } catch (error) {
@@ -265,23 +297,16 @@ export const getAvailablePlantsForExcessiveSowing = async (req, res) => {
   try {
     console.log('[DEBUG] Fetching plants for excessive sowing...');
     
-    // Step 1: Get all plants with sowing allowed
-    const plants = await PlantCms.find({
-      sowingAllowed: true,
-    })
-      .select('name subtypes')
+    // Step 1: Get all plants (no filter on fetch)
+    const allPlants = await PlantCms.find({})
+      .select('name subtypes sowingAllowed')
       .lean();
 
-    console.log(`[DEBUG] Found ${plants.length} plants with sowingAllowed=true`);
+    console.log(`[DEBUG] Found ${allPlants.length} total plants in DB`);
 
-    // Check if no plants found, try to see total plants
-    if (plants.length === 0) {
-      const allPlants = await PlantCms.find({})
-        .select('name sowingAllowed')
-        .lean();
-      console.log(`[DEBUG] Total plants in DB: ${allPlants.length}`);
-      console.log('[DEBUG] Plants with sowingAllowed:', allPlants.filter(p => p.sowingAllowed).length);
-    }
+    // Filter only plants with sowingAllowed: true
+    const plants = allPlants.filter(plant => plant.sowingAllowed === true);
+    console.log(`[DEBUG] Filtered to ${plants.length} plants with sowingAllowed=true`);
 
     const result = [];
 
@@ -298,28 +323,15 @@ export const getAvailablePlantsForExcessiveSowing = async (req, res) => {
       console.log(`[DEBUG] - Found ${subtypes.length} active subtypes`);
 
       if (subtypes.length > 0) {
-        // Step 2: Get seed products for this plant
+        // Step 2: Get all active products for this plant (removed purpose: 'production' filter)
         const products = await Product.find({
           plantId: plant._id,
-          purpose: 'production',
           isActive: true,
         })
           .populate('primaryUnit secondaryUnit')
           .lean();
 
-        console.log(`[DEBUG] - Found ${products.length} products with purpose='production'`);
-
-        // Check if no products, try without purpose filter
-        if (products.length === 0) {
-          const allProducts = await Product.find({
-            plantId: plant._id,
-            isActive: true,
-          }).select('name purpose').lean();
-          console.log(`[DEBUG] - Total active products for plant: ${allProducts.length}`);
-          if (allProducts.length > 0) {
-            console.log('[DEBUG] - Product purposes:', allProducts.map(p => p.purpose));
-          }
-        }
+        console.log(`[DEBUG] - Found ${products.length} active products (all purposes)`);
 
         // Step 3: Get available packets for each subtype
         const subtypesWithProducts = [];
@@ -337,7 +349,7 @@ export const getAvailablePlantsForExcessiveSowing = async (req, res) => {
               return p.subtypeId.toString() === subtype.subtypeId.toString();
             }
             return false;
-          }) || products[0]; // Use first product as ultimate fallback
+          }) || products[0]; // Use first product as ultimate fallback if no match found
 
           if (product) {
             console.log(`[DEBUG] -- Subtype ${subtype.subtypeName}: Found matching product ${product.name}`);
@@ -511,6 +523,117 @@ export const checkExcessiveSowingCard = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to check excessive sowing card',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Get all slots with excessive sowing data
+ * GET /api/v1/sowing/excessive/all-slots
+ */
+export const getAllExcessiveSowingSlots = async (req, res) => {
+  try {
+    // Find all excessive sowing requests
+    const excessiveRequests = await SowingRequest.find({ isExcessiveSowing: true })
+      .select('_id requestNumber plantId subtypeId linkedSlotIds isExcessiveSowing')
+      .lean();
+    
+    // Create a map of slot IDs to excessive requests
+    const slotToRequestMap = new Map();
+    excessiveRequests.forEach(req => {
+      if (req.linkedSlotIds && req.linkedSlotIds.length > 0) {
+        req.linkedSlotIds.forEach(slotId => {
+          const slotIdStr = slotId.toString();
+          if (!slotToRequestMap.has(slotIdStr)) {
+            slotToRequestMap.set(slotIdStr, []);
+          }
+          slotToRequestMap.get(slotIdStr).push({
+            requestId: req._id.toString(),
+            requestNumber: req.requestNumber,
+          });
+        });
+      }
+    });
+
+    // Find all slots with excessive sowing data
+    const plantSlots = await PlantSlot.find({})
+      .populate('plantId', 'name subtypes')
+      .lean();
+
+    const excessiveSlots = [];
+
+    plantSlots.forEach(plantSlot => {
+      plantSlot.subtypeSlots.forEach(subtypeSlot => {
+        subtypeSlot.slots.forEach(slot => {
+          const excessivePackets = slot.excessiveSowing?.packets || 0;
+          const excessivePlants = slot.excessiveSowing?.plants || 0;
+          const slotIdStr = slot._id.toString();
+          const linkedExcessiveRequests = slotToRequestMap.get(slotIdStr) || [];
+
+          // Include slot if it has excessive sowing data OR is linked to excessive requests
+          if (excessivePackets > 0 || excessivePlants > 0 || linkedExcessiveRequests.length > 0) {
+            // Get plant name
+            const plantName = plantSlot.plantId?.name || 'Unknown';
+            
+            // Get subtype name
+            const plant = plantSlot.plantId;
+            let subtypeName = 'Unknown';
+            if (plant && plant.subtypes) {
+              const subtype = plant.subtypes.find(
+                st => st._id.toString() === subtypeSlot.subtypeId?.toString()
+              );
+              subtypeName = subtype?.name || 'Unknown';
+            }
+
+            excessiveSlots.push({
+              slotId: slot._id.toString(),
+              plantId: plantSlot.plantId?._id?.toString() || 'Unknown',
+              plantName: plantName,
+              subtypeId: subtypeSlot.subtypeId?.toString() || 'Unknown',
+              subtypeName: subtypeName,
+              startDay: slot.startDay,
+              endDay: slot.endDay,
+              month: slot.month,
+              excessiveSowing: {
+                packets: excessivePackets,
+                plants: excessivePlants,
+              },
+              totalPlants: slot.totalPlants || 0,
+              primarySowed: slot.primarySowed || 0,
+              availablePlants: slot.availablePlants || 0,
+              sowingInProgress: slot.sowingInProgress || false,
+              sowingCompleted: slot.sowingCompleted || false,
+              actualSowingDate: slot.actualSowingDate || null,
+              linkedSowingRequests: slot.linkedSowingRequests?.map(id => id.toString()) || [],
+              linkedExcessiveRequests: linkedExcessiveRequests,
+              hasExcessiveSowingData: excessivePackets > 0 || excessivePlants > 0,
+              isLinkedToExcessiveRequest: linkedExcessiveRequests.length > 0,
+            });
+          }
+        });
+      });
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Found ${excessiveSlots.length} slots with excessive sowing data`,
+      data: {
+        slots: excessiveSlots,
+        count: excessiveSlots.length,
+        summary: {
+          totalExcessivePackets: excessiveSlots.reduce((sum, slot) => sum + slot.excessiveSowing.packets, 0),
+          totalExcessivePlants: excessiveSlots.reduce((sum, slot) => sum + slot.excessiveSowing.plants, 0),
+          slotsWithData: excessiveSlots.filter(s => s.hasExcessiveSowingData).length,
+          slotsLinkedToRequests: excessiveSlots.filter(s => s.isLinkedToExcessiveRequest).length,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching excessive sowing slots:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch excessive sowing slots',
       error: error.message,
     });
   }
@@ -972,5 +1095,6 @@ export default {
   addTestInventoryStock,
   analyzeInventoryPurpose,
 };
+
 
 

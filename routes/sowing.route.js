@@ -43,6 +43,7 @@ import {
   createExcessiveSowingRequest,
   getAvailablePlantsForExcessiveSowing,
   checkExcessiveSowingCard,
+  getAllExcessiveSowingSlots,
   getDiagnosticInfo,
   fixExcessiveSowingData,
   checkInventoryStock,
@@ -101,6 +102,7 @@ router.post("/request/cancel-all", cancelAllSowingRequests); // Cancel all pendi
 router.post("/excessive/create-request", createExcessiveSowingRequest); // Create excessive sowing request (no orders)
 router.get("/excessive/available-plants", getAvailablePlantsForExcessiveSowing); // Get plants available for excessive sowing
 router.get("/excessive/check-card/:plantId/:subtypeId", checkExcessiveSowingCard); // Check if excessive sowing card exists
+router.get("/excessive/all-slots", getAllExcessiveSowingSlots); // Get all slots with excessive sowing data
 router.get("/excessive/diagnostic", getDiagnosticInfo); // Get diagnostic info for troubleshooting
 router.post("/excessive/fix-data", fixExcessiveSowingData); // Fix data - enable sowing and set purposes
 router.get("/excessive/check-inventory", checkInventoryStock); // Check inventory stock details

@@ -462,6 +462,9 @@ orderSchema.index({ orderStatus: 1 });
 orderSchema.index({ createdAt: 1 });
 orderSchema.index({ orderPaymentStatus: 1 });
 orderSchema.index({ createdAt: 1, orderStatus: 1 });
+// Compound indexes for optimized slot queries
+orderSchema.index({ bookingSlot: 1, orderStatus: 1 }); // For filtering orders by slot and status
+orderSchema.index({ bookingSlot: 1, orderStatus: 1, quotaSource: 1 }); // For populateSlotsWithOrders query
 orderSchema.index({ cavity: 1 }); // Added index for cavity field
 orderSchema.index({ returnedPlants: 1 }); // Added index for returnedPlants
 orderSchema.index({ remainingPlants: 1 }); // Added index for remainingPlants

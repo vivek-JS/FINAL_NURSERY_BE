@@ -555,6 +555,11 @@ const plantSlotSchema = new Schema({
   },
 });
 
+// Compound indexes for optimized queries
+plantSlotSchema.index({ plantId: 1, year: 1 }); // Compound index for getSlotsByPlantAndSubtype query
+plantSlotSchema.index({ "subtypeSlots.subtypeId": 1 }); // Index for filtering by subtypeId
+plantSlotSchema.index({ "subtypeSlots.slots._id": 1 }); // Index for finding slots by _id
+
 const PlantSlot = model("PlantSlot", plantSlotSchema);
 
 export default PlantSlot;

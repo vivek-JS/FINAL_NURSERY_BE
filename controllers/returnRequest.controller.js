@@ -76,6 +76,9 @@ export const getReturnRequestById = async (req, res) => {
 
 // Approve return request (only ADMIN, SUPER_ADMIN, or INVENTORY_MANAGER)
 export const approveReturnRequest = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
   try {
     const { id } = req.params;
     const { remarks } = req.body;
@@ -84,14 +87,18 @@ export const approveReturnRequest = async (req, res) => {
     // Check user role - only ADMIN, SUPER_ADMIN can approve
     const userRole = req.user?.role;
     if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(403).json({
         success: false,
         message: "Only ADMIN or SUPER_ADMIN can approve return requests"
       });
     }
     
-    const returnRequest = await ReturnRequest.findById(id);
+    const returnRequest = await ReturnRequest.findById(id).session(session);
     if (!returnRequest) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({
         success: false,
         message: "Return request not found"
@@ -99,6 +106,8 @@ export const approveReturnRequest = async (req, res) => {
     }
     
     if (returnRequest.status !== 'pending') {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         message: `Return request is already ${returnRequest.status}`
@@ -106,11 +115,32 @@ export const approveReturnRequest = async (req, res) => {
     }
     
     // Get product and batch details
-    const product = await Product.findById(returnRequest.product);
+    const product = await Product.findById(returnRequest.product).session(session);
     if (!product) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({
         success: false,
         message: "Product not found"
+      });
+    }
+    
+    // Validate required fields for transaction
+    if (!returnRequest.unit) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Return request is missing unit information"
+      });
+    }
+    
+    if (!returnRequest.requestedBy) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Return request is missing requestedBy information"
       });
     }
     
@@ -120,41 +150,46 @@ export const approveReturnRequest = async (req, res) => {
     returnRequest.approvedDate = new Date();
     if (remarks) returnRequest.remarks = remarks;
     
-    await returnRequest.save();
+    await returnRequest.save({ session });
     
     // Update product stock
     const balanceBefore = product.currentStock || 0;
     product.currentStock = balanceBefore + returnRequest.quantity;
     const balanceAfter = product.currentStock;
-    await product.save();
+    await product.save({ session });
     
     console.log(`✅ Approved return request ${returnRequest.requestNumber}: Added ${returnRequest.quantity} units to product ${product.name} stock: ${balanceBefore} -> ${balanceAfter}`);
     
     // Update batch if exists
     if (returnRequest.batch && mongoose.Types.ObjectId.isValid(returnRequest.batch)) {
       try {
-        const batch = await Batch.findById(returnRequest.batch);
+        const batch = await Batch.findById(returnRequest.batch).session(session);
         if (batch) {
           const batchBefore = batch.remainingQuantity || 0;
           batch.remainingQuantity = batchBefore + returnRequest.quantity;
           if (batch.remainingQuantity > 0 && batch.status === 'exhausted') {
             batch.status = 'active';
           }
-          await batch.save();
+          await batch.save({ session });
           console.log(`✅ Updated batch ${batch.batchNumber}: ${batchBefore} -> ${batch.remainingQuantity}`);
         }
       } catch (batchError) {
         console.error(`❌ Error updating batch:`, batchError);
-        // Don't fail the whole request, just log the error
+        throw batchError; // Re-throw to abort transaction
       }
     }
     
     // Create inventory transaction log
+    // Note: Return approval is logged as 'inward' transaction since stock is coming back to warehouse
     try {
       const transactionNumber = await InventoryTransaction.generateTransactionNumber();
+      
+      // Map returnRequest.referenceType to valid transaction referenceType
+      // ReturnRequest referenceType can be 'Sowing', 'Outward', 'Other'
+      // We'll use 'ReturnRequest' as the referenceType for the transaction
       const transaction = new InventoryTransaction({
         transactionNumber,
-        transactionType: 'return',
+        transactionType: 'inward', // Return approval is an inward transaction (stock coming back)
         product: returnRequest.product,
         batch: returnRequest.batch || null,
         quantity: returnRequest.quantity,
@@ -163,27 +198,41 @@ export const approveReturnRequest = async (req, res) => {
         balanceAfterTransaction: balanceAfter,
         rate: product.averagePrice || 0,
         value: (product.averagePrice || 0) * returnRequest.quantity,
-        referenceType: returnRequest.referenceType,
-        referenceId: returnRequest.referenceId,
-        referenceNumber: returnRequest.referenceNumber,
-        fromLocation: 'Sowing',
+        referenceType: 'ReturnRequest', // Use 'ReturnRequest' as reference type
+        referenceId: returnRequest._id, // Reference the return request itself
+        referenceNumber: returnRequest.requestNumber, // Use return request number
+        fromLocation: returnRequest.referenceType === 'Sowing' ? 'Sowing' : (returnRequest.referenceType === 'Outward' ? 'Outward' : 'Other'),
         toLocation: 'Main Warehouse',
-        reason: returnRequest.reason,
-        remarks: `Approved return request ${returnRequest.requestNumber}. ${returnRequest.remarks || ''}`,
+        reason: returnRequest.reason || 'Return from ' + (returnRequest.referenceType || 'Other'),
+        remarks: `Approved return request ${returnRequest.requestNumber}. Original reference: ${returnRequest.referenceType}${returnRequest.referenceNumber ? ' - ' + returnRequest.referenceNumber : ''}. ${returnRequest.remarks || ''}`,
         performedBy: returnRequest.requestedBy,
         approvedBy: approvedBy,
         metadata: {
           returnRequestId: returnRequest._id,
           returnRequestNumber: returnRequest.requestNumber,
+          originalReferenceType: returnRequest.referenceType,
+          originalReferenceId: returnRequest.referenceId,
+          originalReferenceNumber: returnRequest.referenceNumber,
           ...returnRequest.metadata
         }
       });
-      await transaction.save();
-      console.log(`✅ Created inventory transaction ${transactionNumber} for approved return`);
+      await transaction.save({ session });
+      console.log(`✅ Created inventory transaction ${transactionNumber} for approved return request ${returnRequest.requestNumber}`);
+      console.log(`✅ Transaction details: ${returnRequest.quantity} units of product ${product.name} returned to Main Warehouse`);
     } catch (transactionError) {
       console.error(`❌ Error creating inventory transaction:`, transactionError);
-      // Don't fail the whole request, just log the error
+      console.error(`❌ Transaction error details:`, {
+        message: transactionError.message,
+        stack: transactionError.stack,
+        name: transactionError.name,
+        errors: transactionError.errors
+      });
+      throw transactionError; // Re-throw to abort transaction
     }
+    
+    // Commit transaction
+    await session.commitTransaction();
+    session.endSession();
     
     // Populate and return updated return request
     const updatedReturnRequest = await ReturnRequest.findById(id)
@@ -199,7 +248,15 @@ export const approveReturnRequest = async (req, res) => {
       data: updatedReturnRequest
     });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     console.error("Error approving return request:", error);
+    console.error("Error details:", {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      errors: error.errors
+    });
     res.status(500).json({
       success: false,
       message: "Error approving return request",
