@@ -47,8 +47,8 @@ export const createProduct = async (req, res) => {
       createdBy: req.user._id,
     };
 
-    // Add plantId and subtypeId only if category is "seeds"
-    if (category === 'seeds') {
+    // Add plantId and subtypeId if category is "seeds" or "plants"
+    if (category === 'seeds' || category === 'plants') {
       // Explicitly check for valid values (not null, undefined, or empty string)
       const validPlantId = plantId && 
         plantId !== null && 
@@ -467,12 +467,12 @@ export const updateProduct = async (req, res) => {
     if (gst !== undefined) product.gst = gst;
     if (isActive !== undefined) product.isActive = isActive;
 
-    // Update plantId and subtypeId only if category is "seeds"
-    if (category === 'seeds') {
+    // Update plantId and subtypeId if category is "seeds" or "plants"
+    if (category === 'seeds' || category === 'plants') {
       if (plantId !== undefined) product.plantId = plantId || null;
       if (subtypeId !== undefined) product.subtypeId = subtypeId || null;
     } else {
-      // Clear plantId and subtypeId if category is not "seeds"
+      // Clear plantId and subtypeId if category is not "seeds" or "plant"
       product.plantId = null;
       product.subtypeId = null;
     }

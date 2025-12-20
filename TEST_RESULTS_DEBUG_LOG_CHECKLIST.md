@@ -171,3 +171,4 @@ The slot should have a new `slotTrail` entry with:
 ✅ **InventoryOutward usedQuantity updated** by 1  
 ✅ **Slot trail entry added** for SOWING_COMPLETED  
 ✅ **No errors** in backend logs
+

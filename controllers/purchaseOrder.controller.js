@@ -165,6 +165,11 @@ export const createPurchaseOrder = async (req, res) => {
               }
             }
 
+            // Log slotId for debugging
+            if (poItem.slotId) {
+              console.log(`📦 PO Item has slotId: ${poItem.slotId} (type: ${typeof poItem.slotId})`);
+            }
+
             // Format exactly matching the GRN API payload from curl command
             return {
               product: poItem.product._id || poItem.product,
@@ -178,6 +183,7 @@ export const createPurchaseOrder = async (req, res) => {
               amount: poItem.amount,
               expiryDate: expiryDate || undefined,
               manufactureDate: undefined,
+              slotId: poItem.slotId || undefined, // Pass slotId if provided
             };
           })
         );
@@ -330,6 +336,131 @@ export const createPurchaseOrder = async (req, res) => {
               
               // Create inventory transaction
               await createInventoryTransaction(item, savedGRN, req.user, oldStock, product.currentStock);
+
+              // Update slot availablePlants if slotId is provided
+              if (item.slotId) {
+                try {
+                  console.log(`🔄 Attempting to update slot ${item.slotId} with quantity ${item.acceptedQuantity}`);
+                  const { default: PlantSlot } = await import('../models/slots.model.js');
+                  const mongoose = await import('mongoose');
+                  
+                  // Convert slotId to ObjectId if it's a string
+                  let slotObjectId;
+                  try {
+                    slotObjectId = typeof item.slotId === 'string' 
+                      ? new mongoose.default.Types.ObjectId(item.slotId)
+                      : item.slotId;
+                  } catch (e) {
+                    console.error(`❌ Invalid slotId format: ${item.slotId}`, e);
+                    throw new Error(`Invalid slotId format: ${item.slotId}`);
+                  }
+                  
+                  // Find the slot document - try both ObjectId and string formats
+                  let plantSlotDoc = await PlantSlot.findOne({
+                    "subtypeSlots.slots._id": slotObjectId
+                  });
+                  
+                  // If not found with ObjectId, try with string
+                  if (!plantSlotDoc) {
+                    plantSlotDoc = await PlantSlot.findOne({
+                      "subtypeSlots.slots._id": item.slotId
+                    });
+                  }
+                  
+                  if (!plantSlotDoc) {
+                    console.warn(`⚠️ Slot ${item.slotId} not found in database - searching all years...`);
+                    // Try searching without year filter (slot might be in different year)
+                    const allSlots = await PlantSlot.find({
+                      "subtypeSlots.slots._id": slotObjectId
+                    }).limit(5);
+                    
+                    if (allSlots.length > 0) {
+                      plantSlotDoc = allSlots[0];
+                      console.log(`✅ Found slot in year ${plantSlotDoc.year}`);
+                    } else {
+                      console.warn(`⚠️ Slot ${item.slotId} not found in any year`);
+                    }
+                  }
+                  
+                  if (plantSlotDoc) {
+                    // Find the slot in the document
+                    let slotFound = false;
+                    let currentAvailablePlants = 0;
+                    let targetSlot = null;
+                    let targetSubtypeIndex = -1;
+                    let targetSlotIndex = -1;
+                    
+                    for (let i = 0; i < (plantSlotDoc.subtypeSlots || []).length; i++) {
+                      const subtypeSlot = plantSlotDoc.subtypeSlots[i];
+                      for (let j = 0; j < (subtypeSlot.slots || []).length; j++) {
+                        const slot = subtypeSlot.slots[j];
+                        if (slot._id && slot._id.toString() === slotObjectId.toString()) {
+                          slotFound = true;
+                          targetSlot = slot;
+                          targetSubtypeIndex = i;
+                          targetSlotIndex = j;
+                          currentAvailablePlants = slot.availablePlants || 0;
+                          console.log(`✅ Found slot: availablePlants before = ${currentAvailablePlants}, year = ${plantSlotDoc.year}`);
+                          break;
+                        }
+                      }
+                      if (slotFound) break;
+                    }
+                    
+                    if (slotFound && targetSlot) {
+                      // Method 1: Try updateOne with arrayFilters
+                      const updateResult = await PlantSlot.updateOne(
+                        { 
+                          _id: plantSlotDoc._id,
+                          "subtypeSlots.slots._id": slotObjectId 
+                        },
+                        {
+                          $inc: {
+                            "subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants": item.acceptedQuantity
+                          }
+                        },
+                        {
+                          arrayFilters: [
+                            { "subtypeSlot.slots._id": slotObjectId },
+                            { "slot._id": slotObjectId }
+                          ]
+                        }
+                      );
+
+                      console.log(`📊 Slot update result: matched=${updateResult.matchedCount}, modified=${updateResult.modifiedCount}`);
+                      
+                      if (updateResult.matchedCount > 0 && updateResult.modifiedCount > 0) {
+                        console.log(`✅ Updated slot ${item.slotId} availablePlants by +${item.acceptedQuantity}`);
+                        
+                        // Verify the update
+                        await plantSlotDoc.populate();
+                        const updatedSlot = plantSlotDoc.subtypeSlots[targetSubtypeIndex]?.slots[targetSlotIndex];
+                        if (updatedSlot) {
+                          console.log(`✅ Verified: availablePlants after = ${updatedSlot.availablePlants || 0}`);
+                        }
+                      } else {
+                        // Method 2: Direct update using array indices
+                        console.log(`⚠️ ArrayFilters method failed, trying direct update...`);
+                        const newAvailablePlants = currentAvailablePlants + item.acceptedQuantity;
+                        plantSlotDoc.subtypeSlots[targetSubtypeIndex].slots[targetSlotIndex].availablePlants = newAvailablePlants;
+                        await plantSlotDoc.save();
+                        console.log(`✅ Updated slot using direct method: availablePlants = ${newAvailablePlants}`);
+                      }
+                    } else {
+                      console.warn(`⚠️ Slot ${item.slotId} not found in document structure`);
+                    }
+                  } else {
+                    console.warn(`⚠️ Could not find slot document for slotId: ${item.slotId}`);
+                  }
+                } catch (slotError) {
+                  console.error(`❌ Error updating slot ${item.slotId}:`, slotError);
+                  console.error(`   Error details:`, slotError.message);
+                  console.error(`   Stack:`, slotError.stack);
+                  // Don't fail the GRN approval if slot update fails, just log it
+                }
+              } else {
+                console.log(`ℹ️ No slotId provided for item, skipping slot update`);
+              }
             }
           }
         }

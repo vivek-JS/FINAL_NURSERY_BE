@@ -626,6 +626,9 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
       year: slot._id.year,
       subtypeId: slot._id.subtypeId,
       slots: slot.slots.map(slotItem => {
+        // PRESERVE the stored availablePlants from database (includes GRN updates)
+        const storedAvailablePlants = slotItem.availablePlants;
+        
         // Calculate effective buffer for this slot
         const effectiveBuffer = calculateEffectiveBuffer(
           slotItem.buffer || 0,
@@ -644,7 +647,10 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
           ...slotItem,
           effectiveBuffer,
           bufferAdjustedCapacity: bufferAdjusted.bufferAdjustedCapacity,
-          availablePlants: bufferAdjusted.availablePlants,
+          // Use stored availablePlants if it exists (includes GRN updates), otherwise use buffer-adjusted
+          availablePlants: storedAvailablePlants !== undefined && storedAvailablePlants !== null 
+            ? storedAvailablePlants 
+            : bufferAdjusted.availablePlants,
           bufferAmount: bufferAdjusted.bufferAmount,
           // Keep original totalPlants unchanged - this is the actual capacity
           originalTotalPlants: slotItem.totalPlants,
@@ -2263,8 +2269,14 @@ const populateSlotsWithOrders = async (slots) => {
         slot.totalBookedPlants = totalBookedPlants;
         slot.dealerQuota = dealerQuota;
         
-        // Calculate available plants as totalPlants - totalBookedPlants
-        slot.availablePlants = Math.max(0, slot.totalPlants - totalBookedPlants);
+        // PRESERVE stored availablePlants from database (includes GRN updates)
+        // Do NOT recalculate - the stored value already accounts for GRN additions
+        // Only calculate if availablePlants was never set in database
+        if (slot.availablePlants === undefined || slot.availablePlants === null) {
+          // Fallback: Calculate available plants as totalPlants - totalBookedPlants
+          slot.availablePlants = Math.max(0, slot.totalPlants - totalBookedPlants);
+        }
+        // Otherwise, keep the stored value which includes GRN updates
         
         // Calculate buffer-related fields for reference
         const effectiveBuffer = slot.effectiveBuffer || 0;
@@ -2526,44 +2538,93 @@ export const getSlotTrail = async (req, res) => {
       .filter((entry) => entry.slotTrail)
       .map((entry) => {
         const trail = entry.slotTrail;
+        
+        // Ensure all required fields have defaults
+        const getActivityName = (action) => {
+          const map = {
+            'ADD': 'Plants Added',
+            'SUBTRACT': 'Plants Subtracted',
+            'BUFFER_APPLIED': 'Buffer Applied',
+            'BUFFER_RELEASED': 'Buffer Released',
+            'UPDATE': 'Slot Updated',
+            'ORDER_CANCELLED': 'Order Cancelled',
+            'ORDER_RETURNED': 'Order Returned',
+            'SOWING_STARTED': 'Sowing Started',
+            'SOWING_COMPLETED': 'Sowing Completed',
+            'SOWING_PRIMARY': 'Primary Location Sowing',
+            'SOWING_OFFICE': 'Office Location Sowing',
+          };
+          return map[action] || (action ? action.replace(/_/g, ' ') : 'Unknown Activity');
+        };
+
         return {
-          // Core fields
-          action: trail.action,
-          activityName: trail.activityName,
-          quantity: trail.quantity,
-          // Plus values
-          plus: trail.plus || {},
-          // Minus values
-          minus: trail.minus || {},
-          // Before state
-          before: trail.before || {},
-          // After state
-          after: trail.after || {},
+          // Core fields with defaults
+          action: trail.action || 'UPDATE',
+          activityName: trail.activityName || getActivityName(trail.action),
+          quantity: trail.quantity ?? 0,
+          // Plus values with defaults
+          plus: {
+            primarySowed: trail.plus?.primarySowed ?? 0,
+            officeSowed: trail.plus?.officeSowed ?? 0,
+            totalPlants: trail.plus?.totalPlants ?? 0,
+            availablePlants: trail.plus?.availablePlants ?? 0,
+            excessivePlants: trail.plus?.excessivePlants ?? 0,
+            packetsUsed: trail.plus?.packetsUsed ?? 0,
+            plantsSowed: trail.plus?.plantsSowed ?? 0,
+            gapCovered: trail.plus?.gapCovered ?? 0,
+          },
+          // Minus values with defaults
+          minus: {
+            packetsRemaining: trail.minus?.packetsRemaining ?? 0,
+            inProgressEntries: trail.minus?.inProgressEntries ?? 0,
+          },
+          // Before state with defaults
+          before: {
+            primarySowed: trail.before?.primarySowed ?? 0,
+            officeSowed: trail.before?.officeSowed ?? 0,
+            totalPlants: trail.before?.totalPlants ?? trail.previousTotalPlants ?? 0,
+            availablePlants: trail.before?.availablePlants ?? trail.previousAvailablePlants ?? 0,
+            excessivePlants: trail.before?.excessivePlants ?? 0,
+            plantsSowed: trail.before?.plantsSowed ?? 0,
+            totalBookedPlants: trail.before?.totalBookedPlants ?? 0,
+            inProgressCount: trail.before?.inProgressCount ?? 0,
+          },
+          // After state with defaults
+          after: {
+            primarySowed: trail.after?.primarySowed ?? 0,
+            officeSowed: trail.after?.officeSowed ?? 0,
+            totalPlants: trail.after?.totalPlants ?? trail.newTotalPlants ?? 0,
+            availablePlants: trail.after?.availablePlants ?? trail.newAvailablePlants ?? 0,
+            excessivePlants: trail.after?.excessivePlants ?? 0,
+            plantsSowed: trail.after?.plantsSowed ?? 0,
+            totalBookedPlants: trail.after?.totalBookedPlants ?? 0,
+            inProgressCount: trail.after?.inProgressCount ?? 0,
+          },
           // Legacy fields (for backward compatibility)
-          previousTotalPlants: trail.previousTotalPlants,
-          newTotalPlants: trail.newTotalPlants,
-          previousAvailablePlants: trail.previousAvailablePlants,
-          newAvailablePlants: trail.newAvailablePlants,
-          bufferPercentage: trail.bufferPercentage,
-          bufferAmount: trail.bufferAmount,
-          reason: trail.reason,
-          notes: trail.notes,
+          previousTotalPlants: trail.previousTotalPlants ?? trail.before?.totalPlants ?? 0,
+          newTotalPlants: trail.newTotalPlants ?? trail.after?.totalPlants ?? 0,
+          previousAvailablePlants: trail.previousAvailablePlants ?? trail.before?.availablePlants ?? 0,
+          newAvailablePlants: trail.newAvailablePlants ?? trail.after?.availablePlants ?? 0,
+          bufferPercentage: trail.bufferPercentage ?? 0,
+          bufferAmount: trail.bufferAmount ?? 0,
+          reason: trail.reason || 'Slot activity',
+          notes: trail.notes || '',
           // Sowing-specific fields
-          sowingId: trail.sowingId,
-          sowingLocation: trail.sowingLocation,
-          batchNumber: trail.batchNumber,
-          sowingDate: trail.sowingDate,
-          plantReadyDate: trail.plantReadyDate,
-          isExcessiveSowing: trail.isExcessiveSowing,
-          orderId: trail.orderId,
-          sowingRequestId: trail.sowingRequestId,
-          requestNumber: trail.requestNumber,
-          gapCoverageDetails: trail.gapCoverageDetails,
+          sowingId: trail.sowingId || null,
+          sowingLocation: trail.sowingLocation || null,
+          batchNumber: trail.batchNumber || null,
+          sowingDate: trail.sowingDate || null,
+          plantReadyDate: trail.plantReadyDate || null,
+          isExcessiveSowing: trail.isExcessiveSowing ?? false,
+          orderId: trail.orderId || null,
+          sowingRequestId: trail.sowingRequestId || null,
+          requestNumber: trail.requestNumber || null,
+          gapCoverageDetails: trail.gapCoverageDetails || null,
           // Metadata
           metadata: trail.metadata || {},
           // Timestamps
-          createdAt: trail.createdAt,
-          updatedAt: trail.updatedAt,
+          createdAt: trail.createdAt || new Date(),
+          updatedAt: trail.updatedAt || new Date(),
           // Performed by info
           performedBy: trail.performedByInfo
             ? {
@@ -2573,7 +2634,7 @@ export const getSlotTrail = async (req, res) => {
               }
             : trail.performedBy || null,
           // Also include raw performedBy for reference
-          performedById: trail.performedBy,
+          performedById: trail.performedBy || null,
         };
       });
 

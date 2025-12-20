@@ -491,8 +491,22 @@ slotSchema.pre('save', function(next) {
           notes = `Buffer changed from ${previousBuffer}% to ${currentBuffer}%`;
         }
         
+        // Generate activity name from action
+        const activityNameMap = {
+          'ADD': 'Plants Added',
+          'SUBTRACT': 'Plants Subtracted',
+          'BUFFER_APPLIED': 'Buffer Applied',
+          'BUFFER_RELEASED': 'Buffer Released',
+          'ADD_WITH_BUFFER': 'Plants Added with Buffer',
+          'ADD_WITH_BUFFER_RELEASE': 'Plants Added with Buffer Release',
+          'SUBTRACT_WITH_BUFFER': 'Plants Subtracted with Buffer',
+          'SUBTRACT_WITH_BUFFER_RELEASE': 'Plants Subtracted with Buffer Release',
+          'UPDATE': 'Slot Updated'
+        };
+
         const trailEntry = {
           action,
+          activityName: activityNameMap[action] || action.replace(/_/g, ' '),
           quantity: Math.abs(totalPlantsDifference) || Math.abs(bufferDifference),
           previousTotalPlants,
           newTotalPlants: currentTotalPlants,
@@ -504,7 +518,43 @@ slotSchema.pre('save', function(next) {
           performedBy: this._performedBy || null,
           notes,
           totalPlantsChange: totalPlantsDifference,
-          bufferChange: bufferDifference
+          bufferChange: bufferDifference,
+          // Ensure plus/minus/before/after are properly initialized
+          plus: {
+            primarySowed: 0,
+            officeSowed: 0,
+            totalPlants: totalPlantsDifference > 0 ? totalPlantsDifference : 0,
+            availablePlants: 0,
+            excessivePlants: 0,
+            packetsUsed: 0,
+            plantsSowed: 0,
+            gapCovered: 0,
+          },
+          minus: {
+            packetsRemaining: 0,
+            inProgressEntries: 0,
+          },
+          before: {
+            primarySowed: this._original?.primarySowed || 0,
+            officeSowed: this._original?.officeSowed || 0,
+            totalPlants: previousTotalPlants,
+            availablePlants: this._original?.availablePlants || 0,
+            excessivePlants: this._original?.excessiveSowing?.plants || 0,
+            plantsSowed: this._original?.plantsSowed || 0,
+            totalBookedPlants: this._original?.totalBookedPlants || 0,
+            inProgressCount: this._original?.sowingInProgress?.length || 0,
+          },
+          after: {
+            primarySowed: this.primarySowed || 0,
+            officeSowed: this.officeSowed || 0,
+            totalPlants: currentTotalPlants,
+            availablePlants: this.availablePlants || 0,
+            excessivePlants: this.excessiveSowing?.plants || 0,
+            plantsSowed: this.plantsSowed || 0,
+            totalBookedPlants: this.totalBookedPlants || 0,
+            inProgressCount: this.sowingInProgress?.length || 0,
+          },
+          metadata: {},
         };
         
         // Initialize slotTrail if it doesn't exist
@@ -524,8 +574,18 @@ slotSchema.pre('save', function(next) {
           const action = difference > 0 ? 'ADD' : 'SUBTRACT';
           const quantity = Math.abs(difference);
           
+          // Generate activity name from action
+          const activityNameMap = {
+            'ADD': 'Plants Added',
+            'SUBTRACT': 'Plants Subtracted',
+            'BUFFER_APPLIED': 'Buffer Applied',
+            'BUFFER_RELEASED': 'Buffer Released',
+            'UPDATE': 'Slot Updated'
+          };
+
           const trailEntry = {
             action,
+            activityName: activityNameMap[action] || action.replace(/_/g, ' '),
             quantity,
             previousTotalPlants,
             newTotalPlants: currentTotalPlants,
@@ -535,7 +595,43 @@ slotSchema.pre('save', function(next) {
             bufferAmount: this.bufferAmount || 0,
             reason: `Manual ${action.toLowerCase()} of plants`,
             performedBy: this._performedBy || null,
-            notes: `Changed from ${previousTotalPlants} to ${currentTotalPlants} plants`
+            notes: `Changed from ${previousTotalPlants} to ${currentTotalPlants} plants`,
+            // Ensure plus/minus/before/after are properly initialized
+            plus: {
+              primarySowed: 0,
+              officeSowed: 0,
+              totalPlants: difference > 0 ? difference : 0,
+              availablePlants: 0,
+              excessivePlants: 0,
+              packetsUsed: 0,
+              plantsSowed: 0,
+              gapCovered: 0,
+            },
+            minus: {
+              packetsRemaining: 0,
+              inProgressEntries: 0,
+            },
+            before: {
+              primarySowed: this._original?.primarySowed || 0,
+              officeSowed: this._original?.officeSowed || 0,
+              totalPlants: previousTotalPlants,
+              availablePlants: this._original?.availablePlants || 0,
+              excessivePlants: this._original?.excessiveSowing?.plants || 0,
+              plantsSowed: this._original?.plantsSowed || 0,
+              totalBookedPlants: this._original?.totalBookedPlants || 0,
+              inProgressCount: this._original?.sowingInProgress?.length || 0,
+            },
+            after: {
+              primarySowed: this.primarySowed || 0,
+              officeSowed: this.officeSowed || 0,
+              totalPlants: currentTotalPlants,
+              availablePlants: this.availablePlants || 0,
+              excessivePlants: this.excessiveSowing?.plants || 0,
+              plantsSowed: this.plantsSowed || 0,
+              totalBookedPlants: this.totalBookedPlants || 0,
+              inProgressCount: this.sowingInProgress?.length || 0,
+            },
+            metadata: {},
           };
           
           if (!this.slotTrail) {
@@ -553,8 +649,15 @@ slotSchema.pre('save', function(next) {
           const action = bufferDifference > 0 ? 'BUFFER_APPLIED' : 'BUFFER_RELEASED';
           const bufferAmount = Math.abs(bufferDifference);
           
+          // Generate activity name from action
+          const activityNameMap = {
+            'BUFFER_APPLIED': 'Buffer Applied',
+            'BUFFER_RELEASED': 'Buffer Released'
+          };
+
           const trailEntry = {
             action,
+            activityName: activityNameMap[action] || action.replace(/_/g, ' '),
             quantity: bufferAmount,
             previousTotalPlants: currentTotalPlants,
             newTotalPlants: currentTotalPlants,
@@ -564,7 +667,43 @@ slotSchema.pre('save', function(next) {
             bufferAmount: Math.round((currentTotalPlants * currentBuffer) / 100),
             reason: `Buffer ${bufferDifference > 0 ? 'applied' : 'released'}`,
             performedBy: this._performedBy || null,
-            notes: `Buffer changed from ${previousBuffer}% to ${currentBuffer}%`
+            notes: `Buffer changed from ${previousBuffer}% to ${currentBuffer}%`,
+            // Ensure plus/minus/before/after are properly initialized
+            plus: {
+              primarySowed: 0,
+              officeSowed: 0,
+              totalPlants: 0,
+              availablePlants: 0,
+              excessivePlants: 0,
+              packetsUsed: 0,
+              plantsSowed: 0,
+              gapCovered: 0,
+            },
+            minus: {
+              packetsRemaining: 0,
+              inProgressEntries: 0,
+            },
+            before: {
+              primarySowed: this._original?.primarySowed || 0,
+              officeSowed: this._original?.officeSowed || 0,
+              totalPlants: currentTotalPlants,
+              availablePlants: this._original?.availablePlants || 0,
+              excessivePlants: this._original?.excessiveSowing?.plants || 0,
+              plantsSowed: this._original?.plantsSowed || 0,
+              totalBookedPlants: this._original?.totalBookedPlants || 0,
+              inProgressCount: this._original?.sowingInProgress?.length || 0,
+            },
+            after: {
+              primarySowed: this.primarySowed || 0,
+              officeSowed: this.officeSowed || 0,
+              totalPlants: currentTotalPlants,
+              availablePlants: this.availablePlants || 0,
+              excessivePlants: this.excessiveSowing?.plants || 0,
+              plantsSowed: this.plantsSowed || 0,
+              totalBookedPlants: this.totalBookedPlants || 0,
+              inProgressCount: this.sowingInProgress?.length || 0,
+            },
+            metadata: {},
           };
           
           if (!this.slotTrail) {
@@ -582,8 +721,15 @@ slotSchema.pre('save', function(next) {
 
 // Method to track order-related changes
 slotSchema.methods.trackOrderChange = function(action, orderId, quantity, performedBy, reason) {
+  const activityNameMap = {
+    'ORDER_CANCELLED': 'Order Cancelled',
+    'ORDER_RETURNED': 'Order Returned',
+    'SUBTRACT': 'Order Booked'
+  };
+
   const trailEntry = {
     action,
+    activityName: activityNameMap[action] || action.replace(/_/g, ' '),
     quantity,
     previousTotalPlants: this.totalPlants,
     newTotalPlants: this.totalPlants,
@@ -594,7 +740,43 @@ slotSchema.methods.trackOrderChange = function(action, orderId, quantity, perfor
     reason,
     orderId,
     performedBy,
-    notes: `Order ${action === 'SUBTRACT' ? 'booked' : 'cancelled/returned'} - ${quantity} plants`
+    notes: `Order ${action === 'SUBTRACT' ? 'booked' : 'cancelled/returned'} - ${quantity} plants`,
+    // Ensure plus/minus/before/after are properly initialized
+    plus: {
+      primarySowed: 0,
+      officeSowed: 0,
+      totalPlants: 0,
+      availablePlants: 0,
+      excessivePlants: 0,
+      packetsUsed: 0,
+      plantsSowed: 0,
+      gapCovered: 0,
+    },
+    minus: {
+      packetsRemaining: 0,
+      inProgressEntries: 0,
+    },
+    before: {
+      primarySowed: this.primarySowed || 0,
+      officeSowed: this.officeSowed || 0,
+      totalPlants: this.totalPlants,
+      availablePlants: this.availablePlants + (action === 'SUBTRACT' ? quantity : -quantity),
+      excessivePlants: this.excessiveSowing?.plants || 0,
+      plantsSowed: this.plantsSowed || 0,
+      totalBookedPlants: this.totalBookedPlants || 0,
+      inProgressCount: this.sowingInProgress?.length || 0,
+    },
+    after: {
+      primarySowed: this.primarySowed || 0,
+      officeSowed: this.officeSowed || 0,
+      totalPlants: this.totalPlants,
+      availablePlants: this.availablePlants,
+      excessivePlants: this.excessiveSowing?.plants || 0,
+      plantsSowed: this.plantsSowed || 0,
+      totalBookedPlants: this.totalBookedPlants || 0,
+      inProgressCount: this.sowingInProgress?.length || 0,
+    },
+    metadata: {},
   };
   
   this.slotTrail.unshift(trailEntry);

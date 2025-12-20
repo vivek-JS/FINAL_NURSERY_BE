@@ -7051,7 +7051,16 @@ export const getPlantsGapSummary = async (req, res) => {
     // For critical mode: include slots with positive gap OR overdue slots (even with 0 gap)
     // For available mode: only negative gap slots (primarySowed > totalBookedPlants = surplus)
     const filteredSlots = available === "true"
-      ? slotsWithBookings.filter(s => s.rawGap < 0) // Negative rawGap = available/surplus (primarySowed > totalBookedPlants)
+      ? slotsWithBookings.filter(s => {
+          const hasSurplus = s.rawGap < 0;
+          if (hasSurplus) {
+            const plant = plantMap.get(s.plantId.toString());
+            const subtypes = plant?.subtypes || [];
+            const subtypeDetails = subtypes.find(st => st._id.toString() === s.subtypeId.toString());
+            console.log(`[getPlantsGapSummary] Available slot: plant=${plant?.name || 'Unknown'}, subtype=${subtypeDetails?.name || 'Unknown'}, rawGap=${s.rawGap}, primarySowed=${s.primarySowed}, totalBooked=${s.totalBookedPlants}`);
+          }
+          return hasSurplus;
+        })
       : slotsWithBookings.filter(s => {
           // Include if positive gap OR overdue
           if (s.slotGap > 0 || s.isOverdue) {
@@ -7063,6 +7072,21 @@ export const getPlantsGapSummary = async (req, res) => {
           }
           return false;
         });
+    
+    // Debug: Log summary of filtered slots by plant
+    if (available === "true") {
+      const slotsByPlant = new Map();
+      filteredSlots.forEach(slot => {
+        const plantId = slot.plantId.toString();
+        if (!slotsByPlant.has(plantId)) {
+          const plant = plantMap.get(plantId);
+          slotsByPlant.set(plantId, { plantName: plant?.name || 'Unknown', count: 0 });
+        }
+        slotsByPlant.get(plantId).count++;
+      });
+      console.log(`[getPlantsGapSummary] Available mode: Found ${filteredSlots.length} slots with surplus across ${slotsByPlant.size} plants:`, 
+        Array.from(slotsByPlant.entries()).map(([id, data]) => `${data.plantName}(${data.count})`).join(', '));
+    }
 
     // Step 7: Group by plant/subtype
     const subtypeGroupMap = new Map();
@@ -7262,6 +7286,13 @@ export const getPlantsGapSummary = async (req, res) => {
       };
     });
 
+    // Filter out plants with no subtypes when in available mode (only show plants with actual surplus)
+    if (available === "true") {
+      plantsWithGaps = plantsWithGaps.filter(plant => 
+        plant.subtypes && plant.subtypes.length > 0 && (plant.totalAvailableGap || 0) > 0
+      );
+    }
+    
     // Sort by appropriate gap type
     if (available === "true") {
       plantsWithGaps.sort((a, b) => (b.totalAvailableGap || 0) - (a.totalAvailableGap || 0));

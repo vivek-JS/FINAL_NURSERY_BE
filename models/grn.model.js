@@ -53,6 +53,10 @@ const grnItemSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Batch',
   },
+  slotId: {
+    type: mongoose.Schema.Types.ObjectId,
+    // Reference to slot for updating availablePlants when GRN is approved
+  },
   notes: String,
 });
 

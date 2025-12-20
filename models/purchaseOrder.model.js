@@ -42,6 +42,10 @@ const purchaseOrderItemSchema = new mongoose.Schema({
   expiryDate: {
     type: Date,
   },
+  slotId: {
+    type: mongoose.Schema.Types.ObjectId,
+    // Reference to slot for updating availablePlants when GRN is approved
+  },
   notes: String,
 });
 

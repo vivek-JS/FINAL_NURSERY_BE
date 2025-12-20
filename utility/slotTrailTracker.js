@@ -24,24 +24,75 @@ export const addSlotTrailEntry = async (slotId, trailData) => {
       notes
     } = trailData;
 
+    // Get activity name from action
+    const getActivityName = (action) => {
+      const activityNameMap = {
+        'ADD': 'Plants Added',
+        'SUBTRACT': 'Plants Subtracted',
+        'BUFFER_APPLIED': 'Buffer Applied',
+        'BUFFER_RELEASED': 'Buffer Released',
+        'UPDATE': 'Slot Updated',
+        'ORDER_CANCELLED': 'Order Cancelled',
+        'ORDER_RETURNED': 'Order Returned',
+      };
+      return activityNameMap[action] || action.replace(/_/g, ' ');
+    };
+
     // Find the slot and add trail entry
     const result = await PlantSlot.updateOne(
       { "subtypeSlots.slots._id": slotId },
       {
         $push: {
           "subtypeSlots.$[].slots.$[slotElem].slotTrail": {
-            action,
-            quantity,
-            previousTotalPlants,
-            newTotalPlants,
-            previousAvailablePlants,
-            newAvailablePlants,
-            bufferPercentage,
-            bufferAmount,
-            reason,
-            orderId,
-            performedBy,
-            notes
+            action: action || 'UPDATE',
+            activityName: getActivityName(action || 'UPDATE'),
+            quantity: quantity ?? 0,
+            previousTotalPlants: previousTotalPlants ?? 0,
+            newTotalPlants: newTotalPlants ?? 0,
+            previousAvailablePlants: previousAvailablePlants ?? 0,
+            newAvailablePlants: newAvailablePlants ?? 0,
+            bufferPercentage: bufferPercentage ?? 0,
+            bufferAmount: bufferAmount ?? 0,
+            reason: reason || 'Slot activity',
+            orderId: orderId || null,
+            performedBy: performedBy || null,
+            notes: notes || '',
+            // Ensure plus/minus/before/after are properly initialized
+            plus: {
+              primarySowed: 0,
+              officeSowed: 0,
+              totalPlants: 0,
+              availablePlants: 0,
+              excessivePlants: 0,
+              packetsUsed: 0,
+              plantsSowed: 0,
+              gapCovered: 0,
+            },
+            minus: {
+              packetsRemaining: 0,
+              inProgressEntries: 0,
+            },
+            before: {
+              primarySowed: 0,
+              officeSowed: 0,
+              totalPlants: previousTotalPlants ?? 0,
+              availablePlants: previousAvailablePlants ?? 0,
+              excessivePlants: 0,
+              plantsSowed: 0,
+              totalBookedPlants: 0,
+              inProgressCount: 0,
+            },
+            after: {
+              primarySowed: 0,
+              officeSowed: 0,
+              totalPlants: newTotalPlants ?? 0,
+              availablePlants: newAvailablePlants ?? 0,
+              excessivePlants: 0,
+              plantsSowed: 0,
+              totalBookedPlants: 0,
+              inProgressCount: 0,
+            },
+            metadata: {},
           }
         }
       },

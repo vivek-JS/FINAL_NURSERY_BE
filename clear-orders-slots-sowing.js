@@ -128,3 +128,4 @@ const clearOrdersSlotsSowing = async () => {
 
 // Run the script
 clearOrdersSlotsSowing();
+
