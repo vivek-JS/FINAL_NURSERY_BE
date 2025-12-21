@@ -35,6 +35,7 @@ slotRouter.get("/slots/transfer-options", getSlotTransferOptions);
 slotRouter.get("/slots/stats", getPlantStats);
 slotRouter.get("/slots/dashBoardStats", getDashboardInsights);
 slotRouter.get("/slots/:slotId/details", getSlotDetailsById);
+slotRouter.get("/slots/:slotId/full", getSlotDetailsById); // Full DB document endpoint
 slotRouter.post("/slots/manual", addManualSlot);
 slotRouter.delete("/slots/manual/:slotId", deleteManualSlot);
 slotRouter.post("/slots/create-multiple-years", createSlotsForMultipleYears);

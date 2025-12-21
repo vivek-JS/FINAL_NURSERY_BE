@@ -12,6 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@eyeseetea/xlsx-populate": "^4.3.1",
     "archiver": "^7.0.1",
     "axios": "^1.12.2",
     "bcryptjs": "^3.0.2",
@@ -19,6 +20,7 @@
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^7.5.0",
@@ -35,6 +37,7 @@
     "node-fetch": "^3.3.2",
     "nodemon": "^3.1.9",
     "unzipper": "^0.12.3",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "xlsx-populate": "^1.21.0"
   }
 }

@@ -94,6 +94,7 @@ export const testLogin = async (req, res) => {
 const login = async (req, res, next) => {
   try {
     console.log("Login attempt started");
+    console.log("Request body:", JSON.stringify(req.body));
     const { password } = req.body;
     let phoneNumber = Number(req.body?.phoneNumber);
 
@@ -103,13 +104,25 @@ const login = async (req, res, next) => {
       return next(new AppError("Valid phone number is required", 400));
     }
 
-    console.log("Looking for user with phone number:", phoneNumber);
+    console.log("Looking for user with phone number:", phoneNumber, "(type:", typeof phoneNumber, ")");
     const user = await User.findOne({ phoneNumber: phoneNumber });
-
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      console.log("Authentication failed - wrong credentials");
+    console.log("User found:", !!user);
+    
+    if (user) {
+      console.log("User details - Name:", user.name, "Phone:", user.phoneNumber, "isDisabled:", user.isDisabled);
+      console.log("Password hash exists:", !!user.password, "Length:", user.password?.length);
+      const passwordMatch = await bcrypt.compare(password, user.password);
+      console.log("Password comparison result:", passwordMatch, "for password:", password);
+      
+      if (!passwordMatch) {
+        console.log("Authentication failed - password mismatch");
+        return next(new AppError("Wrong credentials", 400));
+      }
+    } else {
+      console.log("Authentication failed - user not found");
       return next(new AppError("Wrong credentials", 400));
     }
+
 
     console.log("User authenticated successfully");
 

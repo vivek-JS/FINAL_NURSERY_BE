@@ -641,6 +641,82 @@ const createOne = (Model, modelName) =>
           console.log(`📊 Sowing-allowed plant: Updating slot ${bookingSlot} - ONLY incrementing totalBookedPlants by ${numberOfPlants} (availablePlants unchanged)`);
         }
 
+        // Update productStock booked quantity if productMappingId is provided
+        if (orderData.productMappingId && orderData.productName) {
+          try {
+            const PlantProductMapping = (await import('../models/plantProductMapping.model.js')).default;
+            const mapping = await PlantProductMapping.findById(orderData.productMappingId).session(session);
+            
+            if (mapping) {
+              // Find the slot and update productStock
+              const slotDoc = await PlantSlot.findOne({
+                "subtypeSlots.slots._id": bookingSlot
+              }).session(session);
+              
+              if (slotDoc) {
+                for (const subtypeSlot of slotDoc.subtypeSlots || []) {
+                  const slot = subtypeSlot.slots.find(s => s._id && s._id.toString() === bookingSlot.toString());
+                  if (slot) {
+                    // Initialize productStock if it doesn't exist
+                    if (!slot.productStock) {
+                      slot.productStock = [];
+                    }
+                    
+                    // Find productStock entry by productName or productMappingId
+                    let productStock = slot.productStock.find(
+                      ps => ps.productName === orderData.productName || 
+                            (ps.productMappingId && ps.productMappingId.toString() === orderData.productMappingId.toString())
+                    );
+                    
+                    if (productStock) {
+                      // Just increment booked quantity - no pre-allocation
+                      productStock.booked = (productStock.booked || 0) + numberOfPlants;
+                      
+                      // Update poQuantity to match booked (tracks total allocated to this slot)
+                      productStock.poQuantity = productStock.booked;
+                      
+                      // Increment mapping's allocated quantity
+                      mapping.allocatedQuantity = (mapping.allocatedQuantity || 0) + numberOfPlants;
+                      await mapping.save({ session });
+                      
+                      console.log(`✅ Updated productStock booked for "${orderData.productName}": +${numberOfPlants}, new booked: ${productStock.booked}`);
+                      console.log(`✅ Updated mapping allocatedQuantity: ${mapping.allocatedQuantity} (added ${numberOfPlants})`);
+                    } else {
+                      // Create new productStock entry when first order is placed for this slot
+                      slot.productStock.push({
+                        productName: orderData.productName,
+                        available: 0, // Will be updated when GRN is approved
+                        booked: numberOfPlants, // Booked quantity from this order
+                        poQuantity: numberOfPlants, // Tracks total allocated to this slot (same as booked for now)
+                        received: false,
+                        startDate: mapping.dateRange.startDate,
+                        endDate: mapping.dateRange.endDate,
+                        displayTitle: mapping.displayTitle,
+                        productMappingId: mapping._id,
+                      });
+                      
+                      // Increment mapping's allocated quantity
+                      mapping.allocatedQuantity = (mapping.allocatedQuantity || 0) + numberOfPlants;
+                      await mapping.save({ session });
+                      
+                      console.log(`✅ Created productStock entry for "${orderData.productName}" in slot ${bookingSlot} with booked: ${numberOfPlants}`);
+                      console.log(`✅ Updated mapping allocatedQuantity: ${mapping.allocatedQuantity} (added ${numberOfPlants})`);
+                    }
+                    
+                    // Mark as modified and save
+                    slotDoc.markModified(`subtypeSlots.${slotDoc.subtypeSlots.indexOf(subtypeSlot)}.slots`);
+                    await slotDoc.save({ validateBeforeSave: false, session });
+                    break;
+                  }
+                }
+              }
+            }
+          } catch (productStockError) {
+            console.error('❌ Error updating productStock booked quantity:', productStockError);
+            // Don't fail order creation if productStock update fails
+          }
+        }
+
         const slotUpdateResult = await PlantSlot.updateOne(
           { "subtypeSlots.slots._id": bookingSlot },
           slotUpdateOperation,

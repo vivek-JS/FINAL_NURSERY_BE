@@ -286,6 +286,7 @@ import returnRequestRoute from "./routes/returnRequest.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
 import followUpRoute from "./routes/followUp.route.js";
 import taskRoute from "./routes/task.route.js";
+import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -367,6 +368,7 @@ server.use("/api/v1/inventory/outward", authenticateToken, inventoryOutwardRoute
 server.use("/api/v1/inventory/transactions", authenticateToken, inventoryTransactionRoute);
 server.use("/api/v1/inventory/return-requests", authenticateToken, returnRequestRoute);
 server.use("/api/v1/inventory", authenticateToken, inventoryRoute); // General inventory route (must be last)
+server.use("/api/v1/plant-product-mappings", plantProductMappingRoute); // Plant product mapping routes (has built-in auth)
 server.use("/api/v1/purchase", authenticateToken, purchaseRoute);
 
 

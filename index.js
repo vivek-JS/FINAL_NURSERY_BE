@@ -2,10 +2,23 @@ import dotenv from "dotenv";
 dotenv.config();
 import mongoose from "mongoose";
 import server from "./app.js";
+
+// Production-ready MongoDB connection options
+const mongoOptions = {
+  serverSelectionTimeoutMS: 10000, // 10 seconds timeout
+  socketTimeoutMS: 45000, // 45 seconds socket timeout
+  connectTimeoutMS: 10000, // 10 seconds connection timeout
+  maxPoolSize: 10, // Maintain up to 10 socket connections
+  minPoolSize: process.env.NODE_ENV === 'production' ? 2 : 1, // At least 2 connections in production
+  retryWrites: true,
+  w: 'majority',
+  retryReads: true,
+};
+
 mongoose
-  .connect(process.env.MONGO_URL)
+  .connect(process.env.MONGO_URL, mongoOptions)
   .then(async () => {
-    console.log(`Connected to database`);
+    console.log(`✅ Connected to database: ${mongoose.connection.name}@${mongoose.connection.host}:${mongoose.connection.port}`);
 
     // Define plants and varieties to be inserted
 

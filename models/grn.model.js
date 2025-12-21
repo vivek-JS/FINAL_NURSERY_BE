@@ -57,6 +57,11 @@ const grnItemSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     // Reference to slot for updating availablePlants when GRN is approved
   },
+  productName: {
+    type: String,
+    trim: true,
+    // Reference name for plant products (e.g., "Ghatude") - independent of actual product
+  },
   notes: String,
 });
 

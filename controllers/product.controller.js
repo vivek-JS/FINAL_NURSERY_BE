@@ -47,8 +47,15 @@ export const createProduct = async (req, res) => {
       createdBy: req.user._id,
     };
 
-    // Add plantId and subtypeId if category is "seeds" or "plants"
-    if (category === 'seeds' || category === 'plants') {
+    // Helper function to check if category requires plant/subtype
+    const isPlantCategory = (cat) => {
+      if (!cat) return false;
+      const normalized = cat.toLowerCase().trim().replace(/_/g, ' ');
+      return normalized === 'seeds' || normalized === 'plants' || normalized === 'ready plants';
+    };
+
+    // Add plantId and subtypeId if category is "seeds", "plants", or "ready plants"/"ready_plants"
+    if (isPlantCategory(category)) {
       // Explicitly check for valid values (not null, undefined, or empty string)
       const validPlantId = plantId && 
         plantId !== null && 
@@ -73,7 +80,7 @@ export const createProduct = async (req, res) => {
       }
       
       // Log for debugging
-      console.log('Product creation - category:', category, 'plantId:', plantId, 'subtypeId:', subtypeId, 'validPlantId:', validPlantId);
+      console.log('Product creation - category:', category, 'plantId:', plantId, 'subtypeId:', subtypeId, 'validPlantId:', validPlantId, 'validSubtypeId:', validSubtypeId);
     }
 
     const product = new Product(productData);
@@ -467,12 +474,19 @@ export const updateProduct = async (req, res) => {
     if (gst !== undefined) product.gst = gst;
     if (isActive !== undefined) product.isActive = isActive;
 
-    // Update plantId and subtypeId if category is "seeds" or "plants"
-    if (category === 'seeds' || category === 'plants') {
+    // Helper function to check if category requires plant/subtype
+    const isPlantCategory = (cat) => {
+      if (!cat) return false;
+      const normalized = cat.toLowerCase().trim().replace(/_/g, ' ');
+      return normalized === 'seeds' || normalized === 'plants' || normalized === 'ready plants';
+    };
+
+    // Update plantId and subtypeId if category is "seeds", "plants", or "ready plants"/"ready_plants"
+    if (category && isPlantCategory(category)) {
       if (plantId !== undefined) product.plantId = plantId || null;
       if (subtypeId !== undefined) product.subtypeId = subtypeId || null;
-    } else {
-      // Clear plantId and subtypeId if category is not "seeds" or "plant"
+    } else if (category) {
+      // Clear plantId and subtypeId if category is not "seeds", "plants", or "ready plants"
       product.plantId = null;
       product.subtypeId = null;
     }

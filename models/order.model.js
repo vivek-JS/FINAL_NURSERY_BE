@@ -201,6 +201,9 @@ const paymentSchema = new Schema(
     remark: {
       type: String,
     },
+    chequeNumber: {
+      type: String,
+    },
     isWalletPayment: {
       type: Boolean,
       default: false,
@@ -333,6 +336,16 @@ const orderSchema = new Schema(
     orderRemarks: [String],
     // Screenshots uploaded with the order (Cloudinary URLs)
     screenshots: [String], // Array of Cloudinary image URLs
+    // Ready plants product fields - for products from other nurseries
+    productName: {
+      type: String,
+      // Reference name for plant products (e.g., "Ghatude") - independent of actual product
+    },
+    productMappingId: {
+      type: Schema.Types.ObjectId,
+      ref: 'PlantProductMapping',
+      // Reference to PlantProductMapping for ready plants products
+    },
     orderStatus: {
       type: String,
       enum: [
@@ -447,6 +460,19 @@ const orderSchema = new Schema(
       mobileNumber: {
         type: Number,
       },
+    },
+    // Expected nursery field - for tracking expected nursery source
+    expectedNursery: {
+      type: String,
+    },
+    // Reference field - reference to user/employee
+    reference: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    // Old delivery date - for tracking delivery date changes
+    oldDeliveryDate: {
+      type: Date,
     },
   },
   { timestamps: true }

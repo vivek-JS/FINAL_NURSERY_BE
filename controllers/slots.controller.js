@@ -2343,6 +2343,8 @@ const getDealerQuotaForSlot = async (slotId) => {
 export const getSlotDetailsById = async (req, res) => {
   try {
     const { slotId } = req.params;
+    const isFullEndpoint = req.path && req.path.includes('/full'); // Check if it's the /full endpoint
+    const { full = false } = req.query; // Query parameter to get full DB document
     
     if (!slotId) {
       return res.status(400).json({ 
@@ -2351,7 +2353,53 @@ export const getSlotDetailsById = async (req, res) => {
       });
     }
 
-    console.log("Getting slot details for slot ID:", slotId);
+    console.log("Getting slot details for slot ID:", slotId, "isFullEndpoint:", isFullEndpoint);
+
+    // If full endpoint or full=true, return complete database document
+    if (isFullEndpoint || req.query.full === 'true' || req.query.full === true) {
+      const slotObjectId = new mongoose.Types.ObjectId(slotId);
+      const plantSlotDoc = await PlantSlot.findOne({
+        "subtypeSlots.slots._id": slotObjectId,
+      }).lean();
+
+      if (!plantSlotDoc) {
+        return res.status(404).json({ 
+          success: false, 
+          message: "Slot not found" 
+        });
+      }
+
+      // Find the specific slot
+      let matchedSubtype = null;
+      let matchedSlot = null;
+
+      for (const subtype of plantSlotDoc.subtypeSlots || []) {
+        const slot = (subtype.slots || []).find(
+          (item) => item._id && item._id.toString() === slotObjectId.toString()
+        );
+        if (slot) {
+          matchedSubtype = subtype;
+          matchedSlot = slot;
+          break;
+        }
+      }
+
+      if (!matchedSlot) {
+        return res.status(404).json({ 
+          success: false, 
+          message: "Slot not found in subtypeSlots" 
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          plantSlotDocument: plantSlotDoc,
+          matchedSubtype: matchedSubtype,
+          matchedSlot: matchedSlot
+        }
+      });
+    }
 
     // Import the utility function
     const { getSlotInfoWithBookedPlants } = await import('../utility/slotBookedPlantsCalculator.js');
@@ -3147,7 +3195,15 @@ export const getSimpleSlots = async (req, res) => {
           gap: actualBookings - primarySowed,
           availablePlants: Number(slot.availablePlants || slot.totalPlants) || 0,
           status: slot.status !== false,
-          isManual: Boolean(slot.isManual)
+          isManual: Boolean(slot.isManual),
+          // Include productStock for products ordered from other nurseries
+          productStock: (slot.productStock || []).map(ps => ({
+            productName: ps.productName,
+            available: Number(ps.available || 0),
+            booked: Number(ps.booked || 0),
+            poQuantity: Number(ps.poQuantity || 0),
+            received: Boolean(ps.received || false)
+          }))
         };
       });
 

@@ -46,6 +46,59 @@ const purchaseOrderItemSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     // Reference to slot for updating availablePlants when GRN is approved
   },
+  productName: {
+    type: String,
+    trim: true,
+    // Reference name for plant products (e.g., "Ghatude") - independent of actual product
+  },
+  // Ready Plants Product fields
+  isReadyPlantsProduct: {
+    type: Boolean,
+    default: false,
+  },
+  plantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PlantCms',
+    // Plant ID for ready plants products
+  },
+  subtypeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    // Subtype ID for ready plants products
+  },
+  dateRange: {
+    startDate: {
+      type: String, // DD-MM-YYYY format
+      validate: {
+        validator: function (value) {
+          if (!value) return true; // Optional
+          return /^\d{2}-\d{2}-\d{4}$/.test(value);
+        },
+        message: (props) =>
+          `${props.value} is not a valid date in the format dd-mm-yyyy`,
+      },
+    },
+    endDate: {
+      type: String, // DD-MM-YYYY format
+      validate: {
+        validator: function (value) {
+          if (!value) return true; // Optional
+          return /^\d{2}-\d{2}-\d{4}$/.test(value);
+        },
+        message: (props) =>
+          `${props.value} is not a valid date in the format dd-mm-yyyy`,
+      },
+    },
+  },
+  displayTitle: {
+    type: String,
+    trim: true,
+    // Display title for ready plants products (e.g., "Banana G9 - Premium Ready Plants")
+  },
+  plantProductMappingId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PlantProductMapping',
+    // Reference to PlantProductMapping if created from PO
+  },
   notes: String,
 });
 

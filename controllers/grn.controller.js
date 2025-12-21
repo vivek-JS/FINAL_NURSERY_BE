@@ -368,10 +368,13 @@ export const approveGRN = async (req, res) => {
         // Create inventory transaction with correct balance values
         await createInventoryTransaction(item, grn, req.user, oldStock, product.currentStock);
 
-        // Update slot availablePlants if slotId is provided
+        // Update slot availablePlants and productStock if slotId is provided
         if (item.slotId) {
           try {
             console.log(`🔄 Attempting to update slot ${item.slotId} with quantity ${item.acceptedQuantity}`);
+            if (item.productName) {
+              console.log(`📦 Product name: "${item.productName}"`);
+            }
             const { default: PlantSlot } = await import('../models/slots.model.js');
             const mongoose = await import('mongoose');
             
