@@ -478,6 +478,23 @@ const orderSchema = new Schema(
     oldDeliveryDate: {
       type: Date,
     },
+    // Field to track call history for dispatch managers
+    callHistory: [
+      {
+        date: {
+          type: Date,
+          default: Date.now,
+        },
+        calledBy: {
+          type: Schema.Types.ObjectId,
+          ref: "User",
+        },
+        note: {
+          type: String,
+          default: "",
+        },
+      },
+    ],
   },
   { timestamps: true }
 );

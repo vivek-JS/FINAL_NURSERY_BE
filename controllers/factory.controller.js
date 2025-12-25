@@ -1020,6 +1020,30 @@ const updateOne = (Model, modelName, allowedFields) =>
         // If we're replacing the entire array (array), keep as is
       }
 
+      // Special handling for callHistory - append if it's an object
+      if (filteredBody.callHistory !== undefined) {
+        // If we're adding a single call record (object)
+        if (typeof filteredBody.callHistory === "object" && !Array.isArray(filteredBody.callHistory)) {
+          // Ensure date is a Date object
+          const callHistoryEntry = {
+            ...filteredBody.callHistory,
+            date: filteredBody.callHistory.date ? new Date(filteredBody.callHistory.date) : new Date(),
+          };
+          
+          // Use $push to add to existing array or create new array
+          if (!filteredBody.$push) filteredBody.$push = {};
+          filteredBody.$push.callHistory = callHistoryEntry;
+          
+          console.log("=== CALL HISTORY UPDATE ===");
+          console.log("Call history entry:", JSON.stringify(callHistoryEntry, null, 2));
+          console.log("$push operation:", JSON.stringify(filteredBody.$push, null, 2));
+          
+          // Remove the original field to avoid conflict
+          delete filteredBody.callHistory;
+        }
+        // If we're replacing the entire array (array), keep as is
+      }
+
       // Special handling for statusChanges - update with user info
       if (
         filteredBody.orderStatus &&
@@ -1521,6 +1545,7 @@ const updateOne = (Model, modelName, allowedFields) =>
       console.log("=== FINAL UPDATE OPERATION ===");
       console.log("Update operation:", JSON.stringify(updateOperation, null, 2));
       console.log("deliveryDate in update operation:", updateOperation.deliveryDate);
+      console.log("$push in update operation:", updateOperation.$push);
 
       const updatedDoc = await Model.findOneAndUpdate(
         {
@@ -1533,7 +1558,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           runValidators: true,
           session,
         }
-      );
+      ).populate("callHistory.calledBy", "name phoneNumber");
 
       if (!updatedDoc) {
         throw new AppError(
@@ -2283,6 +2308,15 @@ const getAll = (Model, modelName) =>
           foreignField: "_id",
           as: "dispatchHistoryDispatches",
         },
+      },
+      // Additional lookup for user references in call history
+      {
+        $lookup: {
+          from: "users",
+          localField: "callHistory.calledBy",
+          foreignField: "_id",
+          as: "callHistoryUsers",
+        },
       }
     );
 
@@ -2692,6 +2726,58 @@ const getAll = (Model, modelName) =>
             },
           },
           additionalPlantsHistory: { $ifNull: ["$additionalPlantsHistory", []] },
+          // Added call history with user info
+          callHistory: {
+            $map: {
+              input: { $ifNull: ["$callHistory", []] },
+              as: "call",
+              in: {
+                date: "$$call.date",
+                note: "$$call.note",
+                calledBy: {
+                  $cond: {
+                    if: "$$call.calledBy",
+                    then: {
+                      $let: {
+                        vars: {
+                          userId: { $toString: "$$call.calledBy" }
+                        },
+                        in: {
+                          $let: {
+                            vars: {
+                              userData: {
+                                $arrayElemAt: [
+                                  {
+                                    $filter: {
+                                      input: "$callHistoryUsers",
+                                      as: "user",
+                                      cond: { $eq: [{ $toString: "$$user._id" }, "$$userId"] }
+                                    }
+                                  },
+                                  0
+                                ]
+                              }
+                            },
+                            in: {
+                              $ifNull: [
+                                {
+                                  _id: "$$userData._id",
+                                  name: "$$userData.name",
+                                  phoneNumber: "$$userData.phoneNumber"
+                                },
+                                { _id: "$$call.calledBy" }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    else: null,
+                  },
+                },
+              },
+            },
+          },
           // Added dispatch history with user and dispatch info
           dispatchHistory: {
             $map: {

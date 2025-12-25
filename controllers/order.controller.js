@@ -412,6 +412,7 @@ const updateOrder = updateOne(Order, "Order", [
   "farmReadyDateChangeReason",
   "farmReadyDateChangeNotes",
   "deliveryDate", // Specific delivery date
+  "callHistory", // Call history for dispatch managers
 ]);
 /**
  * Add a new payment to an order and update dealer wallet accordingly
