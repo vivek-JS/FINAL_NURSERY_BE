@@ -14,7 +14,9 @@ import {
   getUniqueDistricts,
   getDealerWalletBalanceForOrder,
   getOrdersToBeDispatched,
-  getAllCavitiesFromOrders
+  getAllCavitiesFromOrders,
+  getOrderBucketing,
+  getSalesmenBucketing
 } from "../controllers/order.controller.js";
 import {
   getOrderDispatchDetails,
@@ -49,6 +51,8 @@ router
   .get("/villages", getUniqueVillages)
   .get("/districts", getUniqueDistricts)
   .get("/cavities", getAllCavitiesFromOrders)
+  .get("/bucketing", getOrderBucketing)
+  .get("/salesmen-bucketing", getSalesmenBucketing)
   .get("/dealer-wallet/:orderId", getDealerWalletBalanceForOrder)
   .get("/to-be-dispatched", getOrdersToBeDispatched)
   .get("/dispatch-details/:orderId", getOrderDispatchDetails)

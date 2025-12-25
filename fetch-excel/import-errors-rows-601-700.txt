@@ -1,0 +1,9 @@
+IMPORT ERRORS (Rows 601-700)
+================================================================================
+
+Total Errors: 4
+
+1. 25-26/B0032: farmer.save is not a function
+2. 25-26/B0036: No suitable slot found for delivery date 19-10-2025 in month October
+3. 25-26/B0040: No suitable slot found for delivery date 21-10-2025 in month October
+4. 25-26/B0052: farmer.save is not a function

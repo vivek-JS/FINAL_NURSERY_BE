@@ -61,6 +61,11 @@ const allowedParams = [
   "showOverdueOnly", // For showing overdue sowings only
   "toDate", // End date for date range filters
   "available", // For plants-gap-summary: return negative gaps (available/surplus) instead of positive gaps
+  "level", // For bucketing endpoints (order/inventory bucketing)
+  "month", // For bucketing endpoints (month-level grouping)
+  "day", // For bucketing endpoints (day-level grouping)
+  "salesPersonId", // For salesmen bucketing endpoints
+  "taluka", // For salesmen bucketing endpoints (geographical grouping)
 ];
 
 const parameterWhiteListing = (req, res, next) => {

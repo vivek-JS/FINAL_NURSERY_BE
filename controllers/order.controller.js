@@ -2250,6 +2250,482 @@ const getAllCavitiesFromOrders = catchAsync(async (req, res, next) => {
   }
 });
 
+// Order Bucketing - Hierarchical grouping of orders
+const getOrderBucketing = catchAsync(async (req, res, next) => {
+  try {
+    const { level, startDate, endDate, status, plantId, subtypeId, year, month, day } = req.query;
+
+    // Validate level parameter
+    const levelNum = parseInt(level);
+    if (!levelNum || levelNum < 1 || levelNum > 5) {
+      return res.status(400).json({
+        success: false,
+        message: "Level must be between 1 and 5"
+      });
+    }
+
+    // Build match filter
+    const matchFilter = {};
+
+    // Date filter
+    if (startDate || endDate) {
+      matchFilter.orderBookingDate = {};
+      if (startDate) {
+        matchFilter.orderBookingDate.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        matchFilter.orderBookingDate.$lte = new Date(endDate);
+      }
+    }
+
+    // Status filter
+    if (status) {
+      matchFilter.orderStatus = status;
+    }
+
+    // Plant filter
+    if (plantId) {
+      matchFilter.plantName = new mongoose.Types.ObjectId(plantId);
+    }
+
+    // Subtype filter
+    if (subtypeId) {
+      matchFilter.plantSubtype = new mongoose.Types.ObjectId(subtypeId);
+    }
+
+    // Year filter
+    if (year) {
+      const yearNum = parseInt(year);
+      matchFilter.orderBookingDate = matchFilter.orderBookingDate || {};
+      matchFilter.orderBookingDate.$gte = new Date(`${yearNum}-01-01`);
+      matchFilter.orderBookingDate.$lte = new Date(`${yearNum}-12-31T23:59:59.999Z`);
+    }
+
+    // Month filter
+    if (month && year) {
+      const yearNum = parseInt(year);
+      const monthNum = parseInt(month);
+      matchFilter.orderBookingDate = matchFilter.orderBookingDate || {};
+      matchFilter.orderBookingDate.$gte = new Date(yearNum, monthNum - 1, 1);
+      matchFilter.orderBookingDate.$lte = new Date(yearNum, monthNum, 0, 23, 59, 59, 999);
+    }
+
+    // Day filter
+    if (day && month && year) {
+      const yearNum = parseInt(year);
+      const monthNum = parseInt(month);
+      const dayNum = parseInt(day);
+      matchFilter.orderBookingDate = matchFilter.orderBookingDate || {};
+      matchFilter.orderBookingDate.$gte = new Date(yearNum, monthNum - 1, dayNum);
+      matchFilter.orderBookingDate.$lte = new Date(yearNum, monthNum - 1, dayNum, 23, 59, 59, 999);
+    }
+
+    let pipeline = [{ $match: matchFilter }];
+
+    // Add lookup for plant information
+    pipeline.push({
+      $lookup: {
+        from: "plantcms",
+        localField: "plantName",
+        foreignField: "_id",
+        as: "plantDetails"
+      }
+    });
+
+    // Add lookup for subtype information
+    pipeline.push({
+      $lookup: {
+        from: "plantcms",
+        let: { plantId: "$plantName", subtypeId: "$plantSubtype" },
+        pipeline: [
+          { $match: { $expr: { $eq: ["$_id", "$$plantId"] } } },
+          { $unwind: "$subtypes" },
+          { $match: { $expr: { $eq: ["$subtypes._id", "$$subtypeId"] } } },
+          { $project: { subtypeName: "$subtypes.name" } }
+        ],
+        as: "subtypeDetails"
+      }
+    });
+
+    // Group by level
+    const groupStage = {
+      totalOrders: { $sum: 1 },
+      totalPlants: { $sum: "$numberOfPlants" },
+      totalAmount: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+      plantId: { $first: "$plantName" },
+      plantName: { $first: { $arrayElemAt: ["$plantDetails.name", 0] } }
+    };
+
+    // Level 1: Group by plant
+    if (levelNum === 1) {
+      groupStage._id = "$plantName";
+    }
+    // Level 2: Group by plant + subtype
+    else if (levelNum === 2) {
+      groupStage._id = {
+        plantId: "$plantName",
+        subtypeId: "$plantSubtype"
+      };
+      groupStage.subtypeId = { $first: "$plantSubtype" };
+      groupStage.subtypeName = { $first: { $arrayElemAt: ["$subtypeDetails.subtypeName", 0] } };
+    }
+    // Level 3: Group by plant + subtype + month
+    else if (levelNum === 3) {
+      groupStage._id = {
+        plantId: "$plantName",
+        subtypeId: "$plantSubtype",
+        year: { $year: "$orderBookingDate" },
+        month: { $month: "$orderBookingDate" }
+      };
+      groupStage.subtypeId = { $first: "$plantSubtype" };
+      groupStage.subtypeName = { $first: { $arrayElemAt: ["$subtypeDetails.subtypeName", 0] } };
+      groupStage.year = { $first: { $year: "$orderBookingDate" } };
+      groupStage.month = { $first: { $month: "$orderBookingDate" } };
+    }
+    // Level 4: Group by plant + subtype + month + day
+    else if (levelNum === 4) {
+      groupStage._id = {
+        plantId: "$plantName",
+        subtypeId: "$plantSubtype",
+        year: { $year: "$orderBookingDate" },
+        month: { $month: "$orderBookingDate" },
+        day: { $dayOfMonth: "$orderBookingDate" }
+      };
+      groupStage.subtypeId = { $first: "$plantSubtype" };
+      groupStage.subtypeName = { $first: { $arrayElemAt: ["$subtypeDetails.subtypeName", 0] } };
+      groupStage.year = { $first: { $year: "$orderBookingDate" } };
+      groupStage.month = { $first: { $month: "$orderBookingDate" } };
+      groupStage.day = { $first: { $dayOfMonth: "$orderBookingDate" } };
+    }
+    // Level 5: Individual orders
+    else if (levelNum === 5) {
+      groupStage._id = "$_id";
+      groupStage.orderId = { $first: "$_id" };
+      groupStage.numberOfPlants = { $first: "$numberOfPlants" };
+      groupStage.rate = { $first: "$rate" };
+      groupStage.orderStatus = { $first: "$orderStatus" };
+      groupStage.farmer = { $first: "$farmer" };
+      groupStage.orderBookingDate = { $first: "$orderBookingDate" };
+      groupStage.deliveryDate = { $first: "$deliveryDate" };
+    }
+
+    pipeline.push({ $group: groupStage });
+
+    // Format output based on level
+    const projectStage = {
+      _id: 0,
+      totalOrders: 1,
+      totalPlants: 1,
+      totalAmount: 1,
+      plantId: 1,
+      plantName: 1
+    };
+
+    if (levelNum >= 2) {
+      projectStage.subtypeId = 1;
+      projectStage.subtypeName = 1;
+    }
+
+    if (levelNum >= 3) {
+      projectStage.year = 1;
+      projectStage.month = 1;
+      projectStage.monthName = {
+        $let: {
+          vars: {
+            months: ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+          },
+          in: { $arrayElemAt: ["$$months", "$month"] }
+        }
+      };
+      projectStage.monthKey = { $concat: [{ $toString: "$year" }, "-", { $toString: "$month" }] };
+    }
+
+    if (levelNum >= 4) {
+      projectStage.day = 1;
+      projectStage.dayName = {
+        $concat: [
+          { $toString: "$day" },
+          " ",
+          {
+            $let: {
+              vars: {
+                months: ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+              },
+              in: { $arrayElemAt: ["$$months", "$month"] }
+            }
+          },
+          " ",
+          { $toString: "$year" }
+        ]
+      };
+      projectStage.dayKey = { $concat: [{ $toString: "$year" }, "-", { $toString: "$month" }, "-", { $toString: "$day" }] };
+    }
+
+    if (levelNum === 5) {
+      projectStage.orderId = 1;
+      projectStage.numberOfPlants = 1;
+      projectStage.rate = 1;
+      projectStage.orderStatus = 1;
+      projectStage.farmer = 1;
+      projectStage.orderBookingDate = 1;
+      projectStage.deliveryDate = 1;
+    }
+
+    pipeline.push({ $project: projectStage });
+
+    // Sort results
+    const sortStage = {};
+    if (levelNum === 1) {
+      sortStage.plantName = 1;
+    } else if (levelNum === 2) {
+      sortStage.subtypeName = 1;
+    } else if (levelNum === 3) {
+      sortStage.year = 1;
+      sortStage.month = 1;
+    } else if (levelNum === 4) {
+      sortStage.year = 1;
+      sortStage.month = 1;
+      sortStage.day = 1;
+    } else {
+      sortStage.orderBookingDate = -1;
+    }
+    pipeline.push({ $sort: sortStage });
+
+    const results = await Order.aggregate(pipeline);
+
+    return res.status(200).json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error("Error in getOrderBucketing:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching bucketing data.",
+      error: error.message
+    });
+  }
+});
+
+// Salesmen Bucketing - Hierarchical grouping of orders by salesperson and location
+const getSalesmenBucketing = catchAsync(async (req, res, next) => {
+  try {
+    const { level, startDate, endDate, status, salesPersonId, district, taluka, village } = req.query;
+
+    // Validate level parameter
+    const levelNum = parseInt(level);
+    if (!levelNum || levelNum < 1 || levelNum > 5) {
+      return res.status(400).json({
+        success: false,
+        message: "Level must be between 1 and 5"
+      });
+    }
+
+    // Build match filter
+    const matchFilter = {};
+
+    // Date filter
+    if (startDate || endDate) {
+      matchFilter.orderBookingDate = {};
+      if (startDate) {
+        matchFilter.orderBookingDate.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        matchFilter.orderBookingDate.$lte = new Date(endDate);
+      }
+    }
+
+    // Status filter
+    if (status) {
+      matchFilter.orderStatus = status;
+    }
+
+    // Salesperson filter
+    if (salesPersonId) {
+      matchFilter.salesPerson = new mongoose.Types.ObjectId(salesPersonId);
+    }
+
+    let pipeline = [{ $match: matchFilter }];
+
+    // Add lookup for salesperson (User) information
+    pipeline.push({
+      $lookup: {
+        from: "users",
+        localField: "salesPerson",
+        foreignField: "_id",
+        as: "salesPersonDetails"
+      }
+    });
+
+    // Add lookup for farmer information (for location data)
+    pipeline.push({
+      $lookup: {
+        from: "farmers",
+        localField: "farmer",
+        foreignField: "_id",
+        as: "farmerDetails"
+      }
+    });
+
+    // Unwind farmer details (assuming one farmer per order)
+    pipeline.push({
+      $unwind: {
+        path: "$farmerDetails",
+        preserveNullAndEmptyArrays: true // Handle dealer orders that might not have a farmer
+      }
+    });
+
+    // Add location filters after lookup (farmerDetails fields are now available)
+    const locationFilter = {};
+    if (district) {
+      locationFilter["farmerDetails.district"] = district;
+    }
+    if (taluka) {
+      locationFilter["farmerDetails.taluka"] = taluka;
+    }
+    if (village) {
+      locationFilter["farmerDetails.village"] = village;
+    }
+    if (Object.keys(locationFilter).length > 0) {
+      pipeline.push({ $match: locationFilter });
+    }
+
+    // Group by level
+    const groupStage = {
+      totalOrders: { $sum: 1 },
+      totalPlants: { $sum: "$numberOfPlants" },
+      totalAmount: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+      salesPersonId: { $first: "$salesPerson" },
+      salesPersonName: { $first: { $arrayElemAt: ["$salesPersonDetails.name", 0] } },
+      salesPersonPhone: { $first: { $arrayElemAt: ["$salesPersonDetails.phoneNumber", 0] } }
+    };
+
+    // Level 1: Group by salesperson
+    if (levelNum === 1) {
+      groupStage._id = "$salesPerson";
+    }
+    // Level 2: Group by salesperson + district
+    else if (levelNum === 2) {
+      groupStage._id = {
+        salesPersonId: "$salesPerson",
+        district: "$farmerDetails.district"
+      };
+      groupStage.district = { $first: "$farmerDetails.district" };
+      groupStage.districtName = { $first: "$farmerDetails.districtName" };
+    }
+    // Level 3: Group by salesperson + district + taluka
+    else if (levelNum === 3) {
+      groupStage._id = {
+        salesPersonId: "$salesPerson",
+        district: "$farmerDetails.district",
+        taluka: "$farmerDetails.taluka"
+      };
+      groupStage.district = { $first: "$farmerDetails.district" };
+      groupStage.districtName = { $first: "$farmerDetails.districtName" };
+      groupStage.taluka = { $first: "$farmerDetails.taluka" };
+      groupStage.talukaName = { $first: "$farmerDetails.talukaName" };
+    }
+    // Level 4: Group by salesperson + district + taluka + village
+    else if (levelNum === 4) {
+      groupStage._id = {
+        salesPersonId: "$salesPerson",
+        district: "$farmerDetails.district",
+        taluka: "$farmerDetails.taluka",
+        village: "$farmerDetails.village"
+      };
+      groupStage.district = { $first: "$farmerDetails.district" };
+      groupStage.districtName = { $first: "$farmerDetails.districtName" };
+      groupStage.taluka = { $first: "$farmerDetails.taluka" };
+      groupStage.talukaName = { $first: "$farmerDetails.talukaName" };
+      groupStage.village = { $first: "$farmerDetails.village" };
+    }
+    // Level 5: Individual orders
+    else if (levelNum === 5) {
+      groupStage._id = "$_id";
+      groupStage.orderId = { $first: "$_id" };
+      groupStage.numberOfPlants = { $first: "$numberOfPlants" };
+      groupStage.rate = { $first: "$rate" };
+      groupStage.orderStatus = { $first: "$orderStatus" };
+      groupStage.farmer = { $first: "$farmer" };
+      groupStage.orderBookingDate = { $first: "$orderBookingDate" };
+      groupStage.deliveryDate = { $first: "$deliveryDate" };
+      groupStage.district = { $first: "$farmerDetails.district" };
+      groupStage.districtName = { $first: "$farmerDetails.districtName" };
+      groupStage.taluka = { $first: "$farmerDetails.taluka" };
+      groupStage.talukaName = { $first: "$farmerDetails.talukaName" };
+      groupStage.village = { $first: "$farmerDetails.village" };
+    }
+
+    pipeline.push({ $group: groupStage });
+
+    // Format output based on level
+    const projectStage = {
+      _id: 0,
+      totalOrders: 1,
+      totalPlants: 1,
+      totalAmount: 1,
+      salesPersonId: 1,
+      salesPersonName: 1,
+      salesPersonPhone: 1
+    };
+
+    if (levelNum >= 2) {
+      projectStage.district = 1;
+      projectStage.districtName = 1;
+    }
+
+    if (levelNum >= 3) {
+      projectStage.taluka = 1;
+      projectStage.talukaName = 1;
+    }
+
+    if (levelNum >= 4) {
+      projectStage.village = 1;
+    }
+
+    if (levelNum === 5) {
+      projectStage.orderId = 1;
+      projectStage.numberOfPlants = 1;
+      projectStage.rate = 1;
+      projectStage.orderStatus = 1;
+      projectStage.farmer = 1;
+      projectStage.orderBookingDate = 1;
+      projectStage.deliveryDate = 1;
+    }
+
+    pipeline.push({ $project: projectStage });
+
+    // Sort results
+    const sortStage = {};
+    if (levelNum === 1) {
+      sortStage.salesPersonName = 1;
+    } else if (levelNum === 2) {
+      sortStage.districtName = 1;
+    } else if (levelNum === 3) {
+      sortStage.talukaName = 1;
+    } else if (levelNum === 4) {
+      sortStage.village = 1;
+    } else {
+      sortStage.orderBookingDate = -1;
+    }
+    pipeline.push({ $sort: sortStage });
+
+    const results = await Order.aggregate(pipeline);
+
+    return res.status(200).json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error("Error in getSalesmenBucketing:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching salesmen bucketing data.",
+      error: error.message
+    });
+  }
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -2266,5 +2742,7 @@ export {
   getUniqueDistricts,
   getDealerWalletBalanceForOrder,
   getOrdersToBeDispatched,
-  getAllCavitiesFromOrders
+  getAllCavitiesFromOrders,
+  getOrderBucketing,
+  getSalesmenBucketing
 };

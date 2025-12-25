@@ -116,11 +116,31 @@ export const validateExcel = catchAsync(async (req, res) => {
         unprocessedFileUrl = `/api/v1/excel/download-unprocessed/${filename}`;
       }
 
+      // Return comprehensive error list
+      const errorSummary = {
+        total: processResults.errors?.length || 0,
+        byType: {},
+        byRow: processResults.errors || []
+      };
+      
+      // Group errors by type
+      if (processResults.errors && processResults.errors.length > 0) {
+        processResults.errors.forEach(error => {
+          const type = error.errorType || 'UNKNOWN_ERROR';
+          if (!errorSummary.byType[type]) {
+            errorSummary.byType[type] = [];
+          }
+          errorSummary.byType[type].push(error);
+        });
+      }
+      
       // ALWAYS return success - validation is just for preview, never blocks
       return res.status(200).json({
         status: 'success',
-        message: validationResults.isValid 
-          ? 'Excel file validated successfully' 
+        message: validationResults.isValid && processResults.processableRows === processResults.totalRows
+          ? 'Excel file validated successfully - all rows are processable' 
+          : processResults.unprocessedRowsCount > 0
+          ? `Excel file has ${processResults.unprocessedRowsCount} row(s) with errors. ${processResults.processableRows} row(s) are processable.`
           : 'Excel file has validation issues but import can proceed',
         data: {
           totalRows: processResults.totalRows || 0,
@@ -129,7 +149,8 @@ export const validateExcel = catchAsync(async (req, res) => {
           unprocessedFileUrl: unprocessedFileUrl,
           warnings: validationResults.warnings || [],
           errors: validationResults.errors || [], // These are just informational, not blocking
-          rowErrors: processResults.errors || []
+          rowErrors: processResults.errors || [],
+          errorSummary: errorSummary
         }
       });
     } catch (error) {
@@ -960,6 +981,7 @@ export const importOrdersWithPayment = catchAsync(async (req, res) => {
           autoCreatedSalesPersons: results.autoCreatedSalesPersons,
           autoCreatedTrays: results.autoCreatedTrays || [],
           autoCreatedReferenceUsers: results.autoCreatedReferenceUsers || [],
+          autoCreatedVarieties: results.autoCreatedVarieties || [],
           skipped: results.skipped,
           errorfulOrders: results.errorfulOrders || [],
           errorfulOrdersCount: results.errorfulOrders?.length || 0,

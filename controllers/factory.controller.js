@@ -622,6 +622,9 @@ const createOne = (Model, modelName) =>
 
         const isSowingAllowed = slotForUpdate?.plantId?.sowingAllowed || false;
 
+        // Check if this is a ready plants order
+        const isReadyPlantsOrder = !!(orderData.productMappingId && orderData.productName);
+
         // Add order to slot's orders array and update booking counts
         let slotUpdateOperation = {
           $push: { 
@@ -633,22 +636,29 @@ const createOne = (Model, modelName) =>
           }
         };
 
-        // For regular plants (non-sowing-allowed), also decrement availablePlants
-        if (!isSowingAllowed) {
+        // For ready plants orders: INCREASE availablePlants (plants are already grown and available)
+        // For regular plants (non-sowing-allowed): DECREMENT availablePlants
+        // For sowing-allowed plants: NO change to availablePlants
+        if (isReadyPlantsOrder) {
+          // Ready plants are already grown and available from other nursery
+          // So we INCREASE availablePlants in the slot
+          slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = numberOfPlants;
+          console.log(`📦 Ready Plants Order: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numberOfPlants}, INCREMENTING availablePlants by ${numberOfPlants} (plants already available from other nursery)`);
+        } else if (!isSowingAllowed) {
           console.log(`📊 Regular plant: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numberOfPlants}, decrementing availablePlants by ${numberOfPlants}`);
           slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = -numberOfPlants;
         } else {
           console.log(`📊 Sowing-allowed plant: Updating slot ${bookingSlot} - ONLY incrementing totalBookedPlants by ${numberOfPlants} (availablePlants unchanged)`);
         }
 
-        // Update productStock booked quantity if productMappingId is provided
-        if (orderData.productMappingId && orderData.productName) {
+        // Update PlantProductMapping and slot productStock if productMappingId is provided
+        if (isReadyPlantsOrder) {
           try {
             const PlantProductMapping = (await import('../models/plantProductMapping.model.js')).default;
             const mapping = await PlantProductMapping.findById(orderData.productMappingId).session(session);
             
             if (mapping) {
-              // Find the slot and update productStock
+              // Find the slot document to update productStock
               const slotDoc = await PlantSlot.findOne({
                 "subtypeSlots.slots._id": bookingSlot
               }).session(session);
@@ -669,38 +679,27 @@ const createOne = (Model, modelName) =>
                     );
                     
                     if (productStock) {
-                      // Just increment booked quantity - no pre-allocation
+                      // Ready plants are already available, so increment both available and booked
+                      productStock.available = (productStock.available || 0) + numberOfPlants;
                       productStock.booked = (productStock.booked || 0) + numberOfPlants;
+                      productStock.poQuantity = (productStock.poQuantity || 0) + numberOfPlants;
                       
-                      // Update poQuantity to match booked (tracks total allocated to this slot)
-                      productStock.poQuantity = productStock.booked;
-                      
-                      // Increment mapping's allocated quantity
-                      mapping.allocatedQuantity = (mapping.allocatedQuantity || 0) + numberOfPlants;
-                      await mapping.save({ session });
-                      
-                      console.log(`✅ Updated productStock booked for "${orderData.productName}": +${numberOfPlants}, new booked: ${productStock.booked}`);
-                      console.log(`✅ Updated mapping allocatedQuantity: ${mapping.allocatedQuantity} (added ${numberOfPlants})`);
+                      console.log(`✅ Updated productStock for "${orderData.productName}": available +${numberOfPlants}, booked +${numberOfPlants}`);
                     } else {
                       // Create new productStock entry when first order is placed for this slot
                       slot.productStock.push({
                         productName: orderData.productName,
-                        available: 0, // Will be updated when GRN is approved
+                        available: numberOfPlants, // Ready plants are already available
                         booked: numberOfPlants, // Booked quantity from this order
-                        poQuantity: numberOfPlants, // Tracks total allocated to this slot (same as booked for now)
-                        received: false,
+                        poQuantity: numberOfPlants, // Tracks total allocated to this slot
+                        received: true, // Ready plants are already received (from other nursery)
                         startDate: mapping.dateRange.startDate,
                         endDate: mapping.dateRange.endDate,
                         displayTitle: mapping.displayTitle,
                         productMappingId: mapping._id,
                       });
                       
-                      // Increment mapping's allocated quantity
-                      mapping.allocatedQuantity = (mapping.allocatedQuantity || 0) + numberOfPlants;
-                      await mapping.save({ session });
-                      
-                      console.log(`✅ Created productStock entry for "${orderData.productName}" in slot ${bookingSlot} with booked: ${numberOfPlants}`);
-                      console.log(`✅ Updated mapping allocatedQuantity: ${mapping.allocatedQuantity} (added ${numberOfPlants})`);
+                      console.log(`✅ Created productStock entry for "${orderData.productName}" in slot ${bookingSlot} with available: ${numberOfPlants}, booked: ${numberOfPlants}`);
                     }
                     
                     // Mark as modified and save
@@ -710,10 +709,47 @@ const createOne = (Model, modelName) =>
                   }
                 }
               }
+              
+              // Increment mapping's allocated quantity (reduces available quantity in mapping)
+              mapping.allocatedQuantity = (mapping.allocatedQuantity || 0) + numberOfPlants;
+              
+              // Store slot reference for dynamic calculation (if slotReferences array doesn't exist, initialize it)
+              if (!mapping.slotReferences) {
+                mapping.slotReferences = [];
+              }
+              
+              // Check if slot reference already exists
+              const slotRefExists = mapping.slotReferences.some(
+                ref => ref.slotId && ref.slotId.toString() === bookingSlot.toString()
+              );
+              
+              if (!slotRefExists) {
+                mapping.slotReferences.push({
+                  slotId: bookingSlot,
+                  bookedQuantity: numberOfPlants
+                });
+              } else {
+                // Update existing slot reference
+                const slotRef = mapping.slotReferences.find(
+                  ref => ref.slotId && ref.slotId.toString() === bookingSlot.toString()
+                );
+                if (slotRef) {
+                  slotRef.bookedQuantity = (slotRef.bookedQuantity || 0) + numberOfPlants;
+                }
+              }
+              
+              await mapping.save({ session });
+              
+              console.log(`📦 Ready Plants Product Order: "${orderData.productName}" (productMappingId: ${orderData.productMappingId})`);
+              console.log(`✅ Updated mapping allocatedQuantity: ${mapping.allocatedQuantity} (added ${numberOfPlants})`);
+              console.log(`✅ Updated slot productStock: available +${numberOfPlants}, booked +${numberOfPlants}`);
+              console.log(`ℹ️  Mapping Available quantity: ${(mapping.totalQuantity || 0) - mapping.allocatedQuantity}`);
+            } else {
+              console.warn(`⚠️  PlantProductMapping not found for productMappingId: ${orderData.productMappingId}`);
             }
-          } catch (productStockError) {
-            console.error('❌ Error updating productStock booked quantity:', productStockError);
-            // Don't fail order creation if productStock update fails
+          } catch (productMappingError) {
+            console.error('❌ Error updating PlantProductMapping and productStock:', productMappingError);
+            // Don't fail order creation if mapping update fails
           }
         }
 

@@ -69,6 +69,19 @@ const plantProductMappingSchema = new Schema({
     min: 0,
     // Quantity allocated to specific slots (sum of all slot allocations)
   },
+  slotReferences: [{
+    slotId: {
+      type: Schema.Types.ObjectId,
+      ref: "PlantSlot",
+      required: true,
+    },
+    bookedQuantity: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    // Track which slots have orders for this mapping and how much is booked in each
+  }],
   isActive: {
     type: Boolean,
     default: true,
@@ -136,6 +149,18 @@ plantProductMappingSchema.statics.findActiveByPlantAndSubtype = function(plantId
   }
   
   return this.find(query).populate('productId').sort({ createdAt: -1 });
+};
+
+// Method to recalculate allocatedQuantity from slotReferences (for dynamic calculation)
+plantProductMappingSchema.methods.recalculateAllocatedQuantity = function() {
+  if (this.slotReferences && Array.isArray(this.slotReferences)) {
+    this.allocatedQuantity = this.slotReferences.reduce((total, ref) => {
+      return total + (ref.bookedQuantity || 0);
+    }, 0);
+  } else {
+    this.allocatedQuantity = 0;
+  }
+  return this.allocatedQuantity;
 };
 
 const PlantProductMapping = model("PlantProductMapping", plantProductMappingSchema);

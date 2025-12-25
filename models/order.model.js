@@ -55,6 +55,7 @@ const statusChangeSchema = new Schema(
         "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",
         "PARTIALLY_COMPLETED",
+        "TEMPORARY_CANCELLED",
       ],
       required: true,
     },
@@ -72,6 +73,7 @@ const statusChangeSchema = new Schema(
         "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",
         "PARTIALLY_COMPLETED",
+        "TEMPORARY_CANCELLED",
       ],
       required: true,
     },
@@ -360,6 +362,7 @@ const orderSchema = new Schema(
         "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",
         "PARTIALLY_COMPLETED",
+        "TEMPORARY_CANCELLED",
       ],
       default: "PENDING",
     },
@@ -374,8 +377,9 @@ const orderSchema = new Schema(
     },
     deliveryDate: {
       type: Date,
-      required: true,
+      required: false, // Optional to allow undated orders (assigned to dummy slot)
       // The specific date selected by user for plant delivery
+      // null for undated orders that are assigned to dummy slot
     },
     farmReadyDate: {
       type: Date,
