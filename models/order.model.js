@@ -495,6 +495,33 @@ const orderSchema = new Schema(
         },
       },
     ],
+    // Driver assignment for dispatch routes
+    assignedDriver: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      // Reference to the driver assigned to deliver this order
+    },
+    assignedVehicle: {
+      type: String,
+      // Vehicle number or identifier
+    },
+    routeId: {
+      type: String,
+      // Route identifier to group orders in the same delivery route
+    },
+    routeSequence: {
+      type: Number,
+      // Sequence number in the route (1, 2, 3, etc.)
+    },
+    assignedAt: {
+      type: Date,
+      // When the order was assigned to a route
+    },
+    assignedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      // User who assigned the order to the route
+    },
   },
   { timestamps: true }
 );

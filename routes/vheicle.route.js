@@ -28,6 +28,17 @@ router
           }
           return true;
         }),
+      check("capacity")
+        .notEmpty()
+        .withMessage("Vehicle capacity is required")
+        .isNumeric()
+        .withMessage("Capacity must be a number")
+        .custom((value) => {
+          if (parseFloat(value) <= 0) {
+            throw new Error("Capacity must be greater than 0");
+          }
+          return true;
+        }),
     ],
     checkErrors,
     createVehicle
@@ -70,6 +81,16 @@ router
         .custom((value) => {
           if (!/^[A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{4}$/.test(value)) {
             throw new Error("Invalid vehicle number format");
+          }
+          return true;
+        }),
+      check("capacity")
+        .optional()
+        .isNumeric()
+        .withMessage("Capacity must be a number")
+        .custom((value) => {
+          if (parseFloat(value) <= 0) {
+            throw new Error("Capacity must be greater than 0");
           }
           return true;
         }),

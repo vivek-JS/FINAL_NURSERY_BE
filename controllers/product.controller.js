@@ -20,6 +20,7 @@ export const createProduct = async (req, res) => {
       gst,
       plantId, // For seeds category
       subtypeId, // For seeds category
+      isRamAgriSales,
     } = req.body;
 
     // Check if product code already exists
@@ -44,6 +45,9 @@ export const createProduct = async (req, res) => {
       reorderLevel,
       hsn,
       gst: gst || 0,
+      isRamAgriSales: isRamAgriSales || false,
+      ramAgriCropId: ramAgriCropId || null,
+      ramAgriVarietyId: ramAgriVarietyId || null,
       createdBy: req.user._id,
     };
 
@@ -449,6 +453,7 @@ export const updateProduct = async (req, res) => {
       isActive,
       plantId, // For seeds category
       subtypeId, // For seeds category
+      isRamAgriSales,
     } = req.body;
 
     const product = await Product.findById(req.params.id);
@@ -473,6 +478,9 @@ export const updateProduct = async (req, res) => {
     if (hsn !== undefined) product.hsn = hsn;
     if (gst !== undefined) product.gst = gst;
     if (isActive !== undefined) product.isActive = isActive;
+    if (isRamAgriSales !== undefined) product.isRamAgriSales = isRamAgriSales;
+    if (ramAgriCropId !== undefined) product.ramAgriCropId = ramAgriCropId || null;
+    if (ramAgriVarietyId !== undefined) product.ramAgriVarietyId = ramAgriVarietyId || null;
 
     // Helper function to check if category requires plant/subtype
     const isPlantCategory = (cat) => {

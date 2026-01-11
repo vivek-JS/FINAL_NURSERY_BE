@@ -24,3 +24,6 @@ router.delete('/:id', deletePlantProductMapping);
 
 export default router;
 
+
+
+

@@ -4,14 +4,18 @@ const grnItemSchema = new mongoose.Schema({
   product: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Product',
-    required: true,
+    required: function() {
+      return !this.isRamAgriProduct; // Required only if it's not a Ram Agri product
+    },
   },
   poItem: {
     type: mongoose.Schema.Types.ObjectId,
   },
   batchNumber: {
     type: String,
-    required: true,
+    required: function() {
+      return !this.isRamAgriProduct; // Not required for Ram Agri products (they don't use batches)
+    },
     trim: true,
   },
   quantity: {
@@ -61,6 +65,36 @@ const grnItemSchema = new mongoose.Schema({
     type: String,
     trim: true,
     // Reference name for plant products (e.g., "Ghatude") - independent of actual product
+  },
+  // Ram Agri Inputs Product fields
+  isRamAgriProduct: {
+    type: Boolean,
+    default: false,
+  },
+  ramAgriCropId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'RamAgriInputsProduct',
+  },
+  ramAgriVarietyId: {
+    type: mongoose.Schema.Types.ObjectId,
+  },
+  ramAgriCropName: {
+    type: String,
+    trim: true,
+  },
+  ramAgriVarietyName: {
+    type: String,
+    trim: true,
+  },
+  selectedUnitType: {
+    type: String,
+    enum: ['primary', 'secondary'],
+    // 'primary' or 'secondary' - indicates which unit was used for the order
+  },
+  conversionFactor: {
+    type: Number,
+    default: 1,
+    // Conversion factor for converting secondary unit to primary unit
   },
   notes: String,
 });

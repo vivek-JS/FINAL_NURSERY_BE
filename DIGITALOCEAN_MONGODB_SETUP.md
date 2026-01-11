@@ -416,3 +416,6 @@ MONGO_URL=mongodb://nursery_user:YOUR_PASSWORD@YOUR_STATIC_IP:27017/nursery_prod
 5. Document your MongoDB credentials securely
 6. Consider setting up MongoDB replica set for high availability (production best practice)
 
+
+
+

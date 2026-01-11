@@ -185,3 +185,6 @@ async function getSlotDetails() {
 
 getSlotDetails();
 
+
+
+

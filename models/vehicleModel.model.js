@@ -12,6 +12,12 @@ const vehicleSchema = new Schema(
       required: true,
       unique: true,
     },
+    capacity: {
+      type: Number,
+      required: true,
+      min: 1,
+      default: 0,
+    },
     isActive: {
       type: Boolean,
       default: true,

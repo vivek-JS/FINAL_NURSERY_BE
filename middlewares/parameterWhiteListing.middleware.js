@@ -66,6 +66,20 @@ const allowedParams = [
   "day", // For bucketing endpoints (day-level grouping)
   "salesPersonId", // For salesmen bucketing endpoints
   "taluka", // For salesmen bucketing endpoints (geographical grouping)
+    // Agri Sales Order parameters
+    "orderStatus", // For filtering by order status (PENDING, ACCEPTED, REJECTED, etc.)
+    "productId", // For filtering by product ID
+    "customerMobile", // For filtering by customer mobile number
+    "customerName", // For filtering by customer name
+    "customerId", // For filtering by customer ID
+    "isAgriSales", // For filtering products by Agri Sales flag
+    "createdBy", // For filtering orders by creator (employee who created)
+    "myOrders", // Boolean: show only current user's orders
+    "paymentStatus", // For filtering by payment status (PENDING, PARTIAL, COMPLETED)
+    // Ram Agri Ledger parameters
+    "cropId", // For Ram Agri variety ledger (crop ID)
+    "varietyId", // For Ram Agri variety ledger (variety ID)
+    "merchantId", // For Ram Agri merchant ledger (merchant ID)
 ];
 
 const parameterWhiteListing = (req, res, next) => {
@@ -86,14 +100,20 @@ const parameterWhiteListing = (req, res, next) => {
     return next();
   }
 
-  const requestParams = { ...req.query, ...req.params };
+  // Only check query parameters, not path parameters (path params are defined in routes)
+  const requestParams = req.query || {};
 
+  // Check all query parameter keys (empty string values are still valid parameters)
   const invalidParams = Object.keys(requestParams).filter(
     (param) => !allowedParams.includes(param)
   );
 
   if (invalidParams.length > 0) {
-    return next(new AppError("Invalid parameters", 400));
+    console.log("❌ Invalid query parameters detected:", invalidParams);
+    console.log("Request path:", req.path);
+    console.log("Request method:", req.method);
+    console.log("Query params:", requestParams);
+    return next(new AppError(`Invalid parameters: ${invalidParams.join(", ")}`, 400));
   }
 
   next();

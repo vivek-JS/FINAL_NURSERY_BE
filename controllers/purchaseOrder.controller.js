@@ -526,12 +526,12 @@ export const createPurchaseOrder = async (req, res) => {
         // Transform PO items to GRN items (matching the exact API format from curl)
         const grnItems = await Promise.all(
           purchaseOrder.items.map(async (poItem) => {
-            // Auto-generate batch number if not provided
+            // Auto-generate batch number if not provided (only for non-Ram Agri products)
             let batchNumber = poItem.batchNumber || poItem.lotNumber;
-            if (!batchNumber || !batchNumber.trim()) {
+            if (!poItem.isRamAgriProduct && (!batchNumber || !batchNumber.trim())) {
               batchNumber = await generateBatchNumber(poItem.product._id || poItem.product);
             }
-            batchNumber = batchNumber.trim();
+            batchNumber = batchNumber ? batchNumber.trim() : '';
 
             // Convert expiryDate from string to Date if needed
             let expiryDate = poItem.expiryDate;
@@ -548,9 +548,7 @@ export const createPurchaseOrder = async (req, res) => {
             }
 
             // Format exactly matching the GRN API payload from curl command
-            return {
-              product: poItem.product._id || poItem.product,
-              batchNumber: batchNumber,
+            const grnItem = {
               quantity: poItem.quantity,
               unit: poItem.unit._id || poItem.unit,
               rate: poItem.rate,
@@ -560,9 +558,40 @@ export const createPurchaseOrder = async (req, res) => {
               amount: poItem.amount,
               expiryDate: expiryDate || undefined,
               manufactureDate: undefined,
-              slotId: poItem.slotId || undefined, // Pass slotId if provided
-              productName: poItem.productName || undefined, // Pass productName if provided
             };
+            
+            // Add product and batchNumber only for non-Ram Agri products
+            if (!poItem.isRamAgriProduct) {
+              grnItem.product = poItem.product._id || poItem.product;
+              grnItem.batchNumber = batchNumber;
+            }
+            
+            // Add Ram Agri fields if applicable
+            if (poItem.isRamAgriProduct) {
+              grnItem.isRamAgriProduct = true;
+              grnItem.ramAgriCropId = poItem.ramAgriCropId;
+              grnItem.ramAgriVarietyId = poItem.ramAgriVarietyId;
+              grnItem.ramAgriCropName = poItem.ramAgriCropName;
+              grnItem.ramAgriVarietyName = poItem.ramAgriVarietyName;
+              // Add unit conversion fields for stock updates
+              if (poItem.selectedUnitType) {
+                grnItem.selectedUnitType = poItem.selectedUnitType;
+              }
+              if (poItem.conversionFactor) {
+                grnItem.conversionFactor = poItem.conversionFactor;
+              }
+              console.log(`🌾 Ram Agri GRN Item: ${poItem.ramAgriCropName} - ${poItem.ramAgriVarietyName}, quantity: ${poItem.quantity}, selectedUnitType: ${poItem.selectedUnitType}, conversionFactor: ${poItem.conversionFactor}`);
+            }
+            
+            // Add slot-related fields if applicable
+            if (poItem.slotId) {
+              grnItem.slotId = poItem.slotId;
+            }
+            if (poItem.productName) {
+              grnItem.productName = poItem.productName;
+            }
+            
+            return grnItem;
           })
         );
 
@@ -642,80 +671,143 @@ export const createPurchaseOrder = async (req, res) => {
         console.log(`📦 Processing ${savedGRN.items.length} items for GRN approval...`);
         for (const item of savedGRN.items) {
           if (item.acceptedQuantity > 0) {
-            // Ensure batch number exists
-            let batchNumber = item.batchNumber || item.lotNumber;
-            if (!batchNumber || !batchNumber.trim()) {
-              batchNumber = await generateBatchNumber(item.product);
-            }
-            batchNumber = batchNumber.trim();
-            
-            // Check if batch number already exists
-            const existingBatch = await Batch.findOne({ batchNumber: batchNumber });
-            if (existingBatch) {
-              const timestamp = Date.now().toString().slice(-6);
-              batchNumber = `${batchNumber}_${timestamp}`;
-            }
-            
-            // Convert expiryDate from string to Date if needed
-            let expiryDate = item.expiryDate;
-            if (expiryDate && typeof expiryDate === 'string') {
-              expiryDate = new Date(expiryDate);
-              if (isNaN(expiryDate.getTime())) {
-                expiryDate = undefined;
+            // Skip batch creation for Ram Agri products (they don't use the batch system)
+            if (!item.isRamAgriProduct) {
+              // Ensure batch number exists
+              let batchNumber = item.batchNumber || item.lotNumber;
+              if (!batchNumber || !batchNumber.trim()) {
+                batchNumber = await generateBatchNumber(item.product);
               }
-            }
-            
-            let manufactureDate = item.manufactureDate;
-            if (manufactureDate && typeof manufactureDate === 'string') {
-              manufactureDate = new Date(manufactureDate);
-              if (isNaN(manufactureDate.getTime())) {
-                manufactureDate = undefined;
+              batchNumber = batchNumber.trim();
+              
+              // Check if batch number already exists
+              const existingBatch = await Batch.findOne({ batchNumber: batchNumber });
+              if (existingBatch) {
+                const timestamp = Date.now().toString().slice(-6);
+                batchNumber = `${batchNumber}_${timestamp}`;
               }
+              
+              // Convert expiryDate from string to Date if needed
+              let expiryDate = item.expiryDate;
+              if (expiryDate && typeof expiryDate === 'string') {
+                expiryDate = new Date(expiryDate);
+                if (isNaN(expiryDate.getTime())) {
+                  expiryDate = undefined;
+                }
+              }
+              
+              let manufactureDate = item.manufactureDate;
+              if (manufactureDate && typeof manufactureDate === 'string') {
+                manufactureDate = new Date(manufactureDate);
+                if (isNaN(manufactureDate.getTime())) {
+                  manufactureDate = undefined;
+                }
+              }
+              
+              // Create batch
+              const batch = new Batch({
+                batchNumber: batchNumber,
+                product: item.product,
+                manufactureDate: manufactureDate || undefined,
+                expiryDate: expiryDate || undefined,
+                receivedDate: savedGRN.grnDate,
+                supplier: savedGRN.supplier,
+                purchasePrice: item.rate,
+                quantity: item.acceptedQuantity,
+                remainingQuantity: item.acceptedQuantity,
+                unit: item.unit,
+                grn: savedGRN._id,
+                createdBy: req.user._id,
+              });
+              
+              await batch.save();
+              
+              // Update item with batch reference
+              item.batch = batch._id;
+              item.batchNumber = batchNumber;
             }
             
-            // Create batch
-            const batch = new Batch({
-              batchNumber: batchNumber,
-              product: item.product,
-              manufactureDate: manufactureDate || undefined,
-              expiryDate: expiryDate || undefined,
-              receivedDate: savedGRN.grnDate,
-              supplier: savedGRN.supplier,
-              purchasePrice: item.rate,
-              quantity: item.acceptedQuantity,
-              remainingQuantity: item.acceptedQuantity,
-              unit: item.unit,
-              grn: savedGRN._id,
-              createdBy: req.user._id,
-            });
-            
-            await batch.save();
-            
-            // Update item with batch reference
-            item.batch = batch._id;
-            item.batchNumber = batchNumber;
-            
-            // Update product stock
-            const product = await Product.findById(item.product);
-            if (product) {
-              const oldStock = product.currentStock || 0;
-              
-              product.currentStock = (product.currentStock || 0) + item.acceptedQuantity;
-              product.stockValue = (product.stockValue || 0) + item.amount;
-              
-              if (product.currentStock > 0) {
-                product.averagePrice = product.stockValue / product.currentStock;
+            // Update product stock (for regular products) or variety stock (for Ram Agri products)
+            if (item.isRamAgriProduct && item.ramAgriCropId && item.ramAgriVarietyId) {
+              // Update Ram Agri variety stock
+              const { default: RamAgriInputsProduct } = await import('../models/ramAgriInputsProduct.model.js');
+              const mongoose = await import('mongoose');
+              const crop = await RamAgriInputsProduct.findById(item.ramAgriCropId).populate('varieties.primaryUnit varieties.secondaryUnit');
+              if (crop) {
+                const variety = crop.varieties.id(item.ramAgriVarietyId);
+                if (variety) {
+                  const oldStock = variety.currentStock || 0;
+                  
+                  // Convert quantity to primary unit if secondary unit was used
+                  let quantityInPrimaryUnit = item.acceptedQuantity;
+                  
+                  // Method 1: Use selectedUnitType and conversionFactor from item if available (more reliable)
+                  if (item.selectedUnitType === 'secondary' && item.conversionFactor && item.conversionFactor > 0) {
+                    // Convert from secondary to primary: quantity * conversionFactor
+                    quantityInPrimaryUnit = item.acceptedQuantity * item.conversionFactor;
+                    console.log(`🔄 Converting quantity from secondary unit (using item.conversionFactor): ${item.acceptedQuantity} -> ${quantityInPrimaryUnit} (factor: ${item.conversionFactor})`);
+                  } else {
+                    // Method 2: Fallback to checking unit IDs (for backward compatibility)
+                    const itemUnitId = item.unit?._id?.toString() || item.unit?.toString() || item.unit;
+                    const varietyPrimaryUnitId = variety.primaryUnit?._id?.toString() || variety.primaryUnit?.toString() || variety.primaryUnit;
+                    const varietySecondaryUnitId = variety.secondaryUnit?._id?.toString() || variety.secondaryUnit?.toString() || variety.secondaryUnit;
+                    
+                    // If unit matches secondary unit, convert to primary unit
+                    if (varietySecondaryUnitId && itemUnitId && itemUnitId.toString() === varietySecondaryUnitId.toString() && variety.conversionFactor && variety.conversionFactor > 0) {
+                      // Convert from secondary to primary: quantity * conversionFactor
+                      quantityInPrimaryUnit = item.acceptedQuantity * variety.conversionFactor;
+                      console.log(`🔄 Converting quantity from secondary unit (using variety.conversionFactor): ${item.acceptedQuantity} -> ${quantityInPrimaryUnit} (factor: ${variety.conversionFactor})`);
+                    } else {
+                      console.log(`ℹ️ Quantity already in primary unit or no conversion needed. selectedUnitType: ${item.selectedUnitType}, itemUnitId: ${itemUnitId}, varietyPrimary: ${varietyPrimaryUnitId}, varietySecondary: ${varietySecondaryUnitId}`);
+                    }
+                  }
+                  
+                  // Update stock in primary unit (atomic operation)
+                  variety.currentStock = (variety.currentStock || 0) + quantityInPrimaryUnit;
+                  variety.stockValue = (variety.stockValue || 0) + item.amount;
+                  
+                  if (variety.currentStock > 0) {
+                    variety.averagePrice = variety.stockValue / variety.currentStock;
+                  } else {
+                    variety.averagePrice = 0;
+                  }
+                  
+                  crop.updatedBy = req.user._id;
+                  await crop.save();
+                  
+                  console.log(`✅ Updated Ram Agri variety stock: ${item.ramAgriCropName} - ${item.ramAgriVarietyName}: ${oldStock} -> ${variety.currentStock} (added ${quantityInPrimaryUnit} in primary unit)`);
+                  
+                  // Note: Inventory transactions for Ram Agri varieties can be added if needed
+                  // For now, we'll just update the stock
+                } else {
+                  console.warn(`⚠️ Variety ${item.ramAgriVarietyId} not found in crop ${item.ramAgriCropId}`);
+                }
               } else {
-                product.averagePrice = 0;
+                console.warn(`⚠️ Crop ${item.ramAgriCropId} not found`);
+              }
+            } else {
+              // Update regular product stock
+              const product = await Product.findById(item.product);
+              if (product) {
+                const oldStock = product.currentStock || 0;
+                
+                product.currentStock = (product.currentStock || 0) + item.acceptedQuantity;
+                product.stockValue = (product.stockValue || 0) + item.amount;
+                
+                if (product.currentStock > 0) {
+                  product.averagePrice = product.stockValue / product.currentStock;
+                } else {
+                  product.averagePrice = 0;
+                }
+                
+                product.updatedBy = req.user._id;
+                await product.save();
+                
+                // Create inventory transaction
+                await createInventoryTransaction(item, savedGRN, req.user, oldStock, product.currentStock);
               }
               
-              product.updatedBy = req.user._id;
-              await product.save();
-              
-              // Create inventory transaction
-              await createInventoryTransaction(item, savedGRN, req.user, oldStock, product.currentStock);
-
-              // Update slot availablePlants and productStock if slotId is provided
+              // Update slot availablePlants and productStock if slotId is provided (for regular products only)
               if (item.slotId) {
                 try {
                   console.log(`🔄 Attempting to update slot ${item.slotId} with quantity ${item.acceptedQuantity}`);

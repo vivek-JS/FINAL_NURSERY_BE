@@ -20,6 +20,7 @@ const createProduct = catchAsync(async (req, res, next) => {
     supplier,
     image,
     tags,
+    isAgriSales,
   } = req.body;
 
   const existingProduct = await InventoryProduct.findOne({ name, category });
@@ -39,6 +40,7 @@ const createProduct = catchAsync(async (req, res, next) => {
     supplier,
     image,
     tags,
+    isAgriSales: isAgriSales || false,
   });
 
   const response = generateResponse(
@@ -60,6 +62,8 @@ const getAllProducts = catchAsync(async (req, res, next) => {
     limit = 10,
     category,
     status,
+    isActive,
+    isAgriSales,
   } = req.query;
 
   let query = InventoryProduct.find();
@@ -77,8 +81,15 @@ const getAllProducts = catchAsync(async (req, res, next) => {
     query = query.where("category").equals(category);
   }
 
+  // Support both 'status' and 'isActive' parameters for backward compatibility
   if (status !== undefined) {
     query = query.where("isActive").equals(status === "true");
+  } else if (isActive !== undefined) {
+    query = query.where("isActive").equals(isActive === "true");
+  }
+
+  if (isAgriSales !== undefined) {
+    query = query.where("isAgriSales").equals(isAgriSales === "true");
   }
 
   const sort = {};
@@ -760,6 +771,60 @@ const createStockAdjustment = catchAsync(async (req, res, next) => {
   return res.status(201).json(response);
 });
 
+// ==================== INVENTORY SUMMARY ====================
+
+const getInventorySummary = catchAsync(async (req, res, next) => {
+  const [
+    totalProducts,
+    activeProducts,
+    lowStockCount,
+    totalStockValue,
+    categoryWiseStock,
+  ] = await Promise.all([
+    InventoryProduct.countDocuments(),
+    InventoryProduct.countDocuments({ isActive: true }),
+    InventoryProduct.countDocuments({
+      isActive: true,
+      $expr: { $lte: ["$currentStock", "$minStockLevel"] },
+    }),
+    InventoryProduct.aggregate([
+      { $match: { isActive: true } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $multiply: ["$currentStock", "$costPrice"] } },
+        },
+      },
+    ]),
+    InventoryProduct.aggregate([
+      { $match: { isActive: true } },
+      {
+        $group: {
+          _id: "$category",
+          count: { $sum: 1 },
+          totalValue: { $sum: { $multiply: ["$currentStock", "$costPrice"] } },
+          totalStock: { $sum: "$currentStock" },
+        },
+      },
+    ]),
+  ]);
+
+  const response = generateResponse(
+    "Success",
+    "Inventory summary fetched successfully",
+    {
+      totalProducts,
+      activeProducts,
+      lowStockCount,
+      totalStockValue: totalStockValue[0]?.total || 0,
+      categoryWiseStock,
+    },
+    undefined
+  );
+
+  return res.status(200).json(response);
+});
+
 // ==================== INVENTORY DASHBOARD ====================
 
 const getInventoryDashboard = catchAsync(async (req, res, next) => {
@@ -840,6 +905,9 @@ export {
   
   // Stock adjustment controllers
   createStockAdjustment,
+  
+  // Summary
+  getInventorySummary,
   
   // Dashboard
   getInventoryDashboard,

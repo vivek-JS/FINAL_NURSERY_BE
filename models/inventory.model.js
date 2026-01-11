@@ -53,6 +53,11 @@ const productSchema = new Schema({
     type: Boolean,
     default: true,
   },
+  isAgriSales: {
+    type: Boolean,
+    default: false,
+    comment: "Flag to indicate if product is available for Ram Agri Sales orders",
+  },
   image: {
     type: String,
   },

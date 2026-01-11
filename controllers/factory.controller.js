@@ -2094,7 +2094,22 @@ const getAll = (Model, modelName) =>
         });
       }
 
-      if (status) {
+      // Apply ready for dispatch filter if present - returns all READY_FOR_DISPATCH orders
+      // This should be checked BEFORE status filter to avoid conflicts
+      // Ready for dispatch means: orderStatus is READY_FOR_DISPATCH
+      if (ready_for_dispatch === "true") {
+        const readyForDispatchMatch = {
+          orderStatus: "READY_FOR_DISPATCH"
+        };
+        
+        pipeline.push({
+          $match: readyForDispatchMatch,
+        });
+        
+        console.log(`[Ready for Dispatch Filter] Looking for orders with:`);
+        console.log(`  - orderStatus: "READY_FOR_DISPATCH"`);
+      } else if (status) {
+        // Only apply status filter if ready_for_dispatch is not set
         // Convert comma-separated string to array and handle single status case
         const statusArray = status.split(",").map((s) => s.trim());
         pipeline.push({
@@ -2140,15 +2155,6 @@ const getAll = (Model, modelName) =>
 
         pipeline.push({
           $match: farmReadyMatch,
-        });
-      }
-
-      // Apply ready for dispatch filter if present - returns all FARM_READY orders
-      if (ready_for_dispatch === "true") {
-        pipeline.push({
-          $match: {
-            orderStatus: "FARM_READY"
-          },
         });
       }
 
