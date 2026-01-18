@@ -29,6 +29,11 @@ const paymentSchema = new Schema({
     type: String,
     enum: ["Cash", "UPI", "Cheque", "NEFT/RTGS", "1341", "434", "Wallet"],
   },
+  transactionId: {
+    type: String,
+    trim: true,
+    // This field stores: UTR/Transaction ID for UPI, Cheque Number for Cheque, Transaction ID for NEFT/RTGS and others
+  },
   remark: {
     type: String,
   },
