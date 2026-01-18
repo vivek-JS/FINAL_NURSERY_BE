@@ -55,6 +55,8 @@ import {
 import { getRamAgriSalesDashboard } from "../controllers/ramAgriSalesDashboard.controller.js";
 import { getVarietyLedger, getCustomerLedger } from "../controllers/ramAgriLedger.controller.js";
 import { getMerchantLedger } from "../controllers/ramAgriMerchantLedger.controller.js";
+// Import product controller for Product model (with code, primaryUnit, secondaryUnit, etc.)
+import * as productController from "../controllers/product.controller.js";
 
 const router = express.Router();
 
@@ -67,6 +69,30 @@ const validateObjectId = (value) => {
 
 // ==================== PRODUCT ROUTES ====================
 
+// POST /products - Create product using Product model (supports code, primaryUnit, secondaryUnit, plantId, subtypeId, isRamAgriSales)
+// This route handles products with the extended schema (used by frontend ProductForm)
+router.post(
+  "/products",
+  [
+    check("code").notEmpty().withMessage("Product code is required"),
+    check("name").notEmpty().withMessage("Product name is required"),
+    check("category").notEmpty().withMessage("Product category is required"),
+    check("primaryUnit").notEmpty().withMessage("Primary unit is required"),
+    check("secondaryUnit").optional({ nullable: true, checkFalsy: true }).custom((value) => {
+      if (value === null || value === undefined || value === '') return true;
+      return validateObjectId(value);
+    }).withMessage("Invalid secondary unit ID"),
+    check("conversionFactor").optional().isNumeric().withMessage("Conversion factor must be a number"),
+    check("minStockLevel").optional().isNumeric().withMessage("Min stock level must be a number"),
+    check("reorderLevel").optional().isNumeric().withMessage("Reorder level must be a number"),
+    check("gst").optional().isNumeric().withMessage("GST must be a number"),
+    check("isRamAgriSales").optional().isBoolean().withMessage("isRamAgriSales must be a boolean value"),
+  ],
+  checkErrors,
+  productController.createProduct
+);
+
+// POST /products/create - Create product using InventoryProduct model (legacy route)
 router
   .post(
     "/products/create",

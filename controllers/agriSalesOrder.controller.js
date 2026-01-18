@@ -198,7 +198,9 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     orderData.ramAgriCropName = ramAgriCropName || crop.cropName;
     orderData.ramAgriVarietyName = ramAgriVarietyName || variety.name;
     orderData.primaryUnit = variety.primaryUnit?._id || primaryUnit;
-    orderData.secondaryUnit = variety.secondaryUnit?._id || secondaryUnit;
+    // Convert empty string to null for secondaryUnit (MongoDB ObjectId fields don't accept empty strings)
+    const secondaryUnitValue = variety.secondaryUnit?._id || secondaryUnit;
+    orderData.secondaryUnit = secondaryUnitValue && secondaryUnitValue !== "" ? secondaryUnitValue : null;
     orderData.conversionFactor = variety.conversionFactor || conversionFactor || 1;
     // Explicitly set productId to null for Ram Agri products to avoid validation errors
     orderData.productId = null;
@@ -1050,7 +1052,7 @@ const getPendingPayments = catchAsync(async (req, res, next) => {
         createdAt: 1,
       },
     },
-    { $sort: { "payment.paymentDate": -1 } },
+    { $sort: { "createdAt": -1 } },
     { $skip: skip },
     { $limit: parseInt(limit) },
   ];

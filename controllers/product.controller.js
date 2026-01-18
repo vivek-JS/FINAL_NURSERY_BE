@@ -1,6 +1,7 @@
 import Product from '../models/product.model.js';
 import Batch from '../models/batch.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
+import mongoose from 'mongoose';
 
 // Create product
 export const createProduct = async (req, res) => {
@@ -21,6 +22,8 @@ export const createProduct = async (req, res) => {
       plantId, // For seeds category
       subtypeId, // For seeds category
       isRamAgriSales,
+      ramAgriCropId, // For Ram Agri Sales products
+      ramAgriVarietyId, // For Ram Agri Sales products
     } = req.body;
 
     // Check if product code already exists
@@ -29,6 +32,56 @@ export const createProduct = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Product code already exists',
+      });
+    }
+
+    // Validate Ram Agri Sales product linkage ONLY if IDs are provided
+    // Allow products with isRamAgriSales: true without linkage (can be added later)
+    if (isRamAgriSales && ramAgriCropId && ramAgriVarietyId) {
+      // Only validate if both IDs are provided (if one is provided, both should be)
+      if (!mongoose.isValidObjectId(ramAgriCropId) || !mongoose.isValidObjectId(ramAgriVarietyId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid Crop ID or Variety ID format',
+        });
+      }
+
+      // Validate that crop exists in Ram Agri Inputs Product Master
+      const { default: RamAgriInputsProduct } = await import('../models/ramAgriInputsProduct.model.js');
+      const crop = await RamAgriInputsProduct.findById(ramAgriCropId)
+        .populate('varieties.primaryUnit', 'name abbreviation')
+        .populate('varieties.secondaryUnit', 'name abbreviation');
+      
+      if (!crop) {
+        return res.status(404).json({
+          success: false,
+          message: 'Crop not found in Ram Agri Inputs Product Master',
+        });
+      }
+
+      // Validate that variety exists within the crop
+      const variety = crop.varieties.id(ramAgriVarietyId);
+      if (!variety) {
+        return res.status(404).json({
+          success: false,
+          message: 'Variety not found in the specified crop',
+        });
+      }
+
+      // Validate that variety is active
+      if (!variety.isActive) {
+        return res.status(400).json({
+          success: false,
+          message: 'The specified variety is not active',
+        });
+      }
+    }
+
+    // If only one ID is provided (partial linkage), return error
+    if (isRamAgriSales && ((ramAgriCropId && !ramAgriVarietyId) || (!ramAgriCropId && ramAgriVarietyId))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both Crop ID and Variety ID must be provided together, or neither',
       });
     }
 
@@ -454,6 +507,8 @@ export const updateProduct = async (req, res) => {
       plantId, // For seeds category
       subtypeId, // For seeds category
       isRamAgriSales,
+      ramAgriCropId, // For Ram Agri Sales products
+      ramAgriVarietyId, // For Ram Agri Sales products
     } = req.body;
 
     const product = await Product.findById(req.params.id);
@@ -462,6 +517,60 @@ export const updateProduct = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Product not found',
+      });
+    }
+
+    // Validate Ram Agri Sales product linkage ONLY if IDs are provided
+    // Allow products with isRamAgriSales: true without linkage (can be added later)
+    const willBeRamAgriSales = isRamAgriSales !== undefined ? isRamAgriSales : product.isRamAgriSales;
+    const cropIdToValidate = ramAgriCropId !== undefined ? ramAgriCropId : (willBeRamAgriSales ? product.ramAgriCropId : null);
+    const varietyIdToValidate = ramAgriVarietyId !== undefined ? ramAgriVarietyId : (willBeRamAgriSales ? product.ramAgriVarietyId : null);
+
+    // Only validate if both IDs are provided (either from request or existing product)
+    if (willBeRamAgriSales && cropIdToValidate && varietyIdToValidate) {
+      if (!mongoose.isValidObjectId(cropIdToValidate) || !mongoose.isValidObjectId(varietyIdToValidate)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid Crop ID or Variety ID format',
+        });
+      }
+
+      // Validate that crop exists in Ram Agri Inputs Product Master
+      const { default: RamAgriInputsProduct } = await import('../models/ramAgriInputsProduct.model.js');
+      const crop = await RamAgriInputsProduct.findById(cropIdToValidate)
+        .populate('varieties.primaryUnit', 'name abbreviation')
+        .populate('varieties.secondaryUnit', 'name abbreviation');
+      
+      if (!crop) {
+        return res.status(404).json({
+          success: false,
+          message: 'Crop not found in Ram Agri Inputs Product Master',
+        });
+      }
+
+      // Validate that variety exists within the crop
+      const variety = crop.varieties.id(varietyIdToValidate);
+      if (!variety) {
+        return res.status(404).json({
+          success: false,
+          message: 'Variety not found in the specified crop',
+        });
+      }
+
+      // Validate that variety is active
+      if (!variety.isActive) {
+        return res.status(400).json({
+          success: false,
+          message: 'The specified variety is not active',
+        });
+      }
+    }
+
+    // If only one ID is being provided (partial linkage), return error
+    if (willBeRamAgriSales && ((ramAgriCropId && !ramAgriVarietyId) || (!ramAgriCropId && ramAgriVarietyId))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both Crop ID and Variety ID must be provided together, or neither',
       });
     }
 
