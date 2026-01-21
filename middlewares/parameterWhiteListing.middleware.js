@@ -68,6 +68,7 @@ const allowedParams = [
   "taluka", // For salesmen bucketing endpoints (geographical grouping)
     // Agri Sales Order parameters
     "orderStatus", // For filtering by order status (PENDING, ACCEPTED, REJECTED, etc.)
+    "dispatchStatus", // For filtering by dispatch status (DISPATCHED, IN_TRANSIT, DELIVERED, etc.)
     "productId", // For filtering by product ID
     "customerMobile", // For filtering by customer mobile number
     "customerName", // For filtering by customer name

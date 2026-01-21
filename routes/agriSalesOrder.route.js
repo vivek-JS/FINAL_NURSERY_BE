@@ -18,6 +18,15 @@ import {
   getPendingPaymentsCount,
   getOutstandingAnalysis,
   getCustomerOutstanding,
+  assignOrdersToSalesPerson,
+  getAssignedOrders,
+  cancelAssignment,
+  dispatchOrders,
+  updateDispatchStatus,
+  completeOrders,
+  processSalesReturn,
+  getOrdersForDispatch,
+  getDispatchedOrders,
 } from "../controllers/agriSalesOrder.controller.js";
 
 const router = express.Router();
@@ -42,6 +51,94 @@ router.get("/pending-payments/count", getPendingPaymentsCount);
 // ==================== OUTSTANDING ANALYSIS ====================
 router.get("/outstanding-analysis", getOutstandingAnalysis);
 router.get("/customer-outstanding", getCustomerOutstanding);
+
+// ==================== ASSIGNMENT ROUTES ====================
+router.get("/assigned", getAssignedOrders); // Get orders assigned to sales person
+router.patch(
+  "/assign",
+  [
+    check("orderIds").isArray({ min: 1 }).withMessage("At least one order ID is required"),
+    check("orderIds.*").isMongoId().withMessage("All order IDs must be valid"),
+    check("assignToUserId").isMongoId().withMessage("Valid sales person ID is required"),
+    check("assignmentNotes").optional().isString(),
+  ],
+  checkErrors,
+  assignOrdersToSalesPerson
+);
+router.patch(
+  "/:id/cancel-assignment",
+  [
+    check("id").isMongoId().withMessage("Valid order ID is required"),
+    check("reason").optional().isString(),
+  ],
+  checkErrors,
+  cancelAssignment
+);
+
+// ==================== DISPATCH ROUTES ====================
+router.get("/dispatch/pending", getOrdersForDispatch); // Get orders ready for dispatch
+router.get("/dispatch/history", getDispatchedOrders); // Get dispatched orders
+router.patch(
+  "/dispatch",
+  [
+    check("orderIds").isArray({ min: 1 }).withMessage("At least one order ID is required"),
+    check("orderIds.*").isMongoId().withMessage("All order IDs must be valid"),
+    check("dispatchMode").optional().isIn(["VEHICLE", "COURIER"]).withMessage("Dispatch mode must be VEHICLE or COURIER"),
+    // Vehicle mode validations (optional - validated in controller based on mode)
+    check("driverName").optional(),
+    check("driverMobile").optional(),
+    check("vehicleNumber").optional(),
+    // Courier mode validations (optional - validated in controller based on mode)
+    check("courierName").optional(),
+    check("courierTrackingId").optional(),
+    check("courierContact").optional(),
+  ],
+  checkErrors,
+  dispatchOrders
+);
+router.patch(
+  "/:id/dispatch-status",
+  [
+    check("id").isMongoId().withMessage("Valid order ID is required"),
+    check("dispatchStatus")
+      .isIn(["IN_TRANSIT", "DELIVERED", "NOT_DISPATCHED"])
+      .withMessage("Invalid dispatch status"),
+  ],
+  checkErrors,
+  updateDispatchStatus
+);
+
+// ==================== COMPLETE ORDERS (Mark as Delivered with Return Handling) ====================
+router.patch(
+  "/complete",
+  [
+    check("orderIds").isArray({ min: 1 }).withMessage("At least one order ID is required"),
+    check("orderIds.*").isMongoId().withMessage("All order IDs must be valid"),
+    check("returnQuantities").optional().isObject().withMessage("Return quantities must be an object"),
+    check("returnReason").optional().isString().withMessage("Return reason must be a string"),
+    check("returnNotes").optional().isString().withMessage("Return notes must be a string"),
+  ],
+  checkErrors,
+  completeOrders
+);
+
+// ==================== SALES RETURN (For Sales Person Dispatched Orders - NO Stock Impact) ====================
+router.patch(
+  "/:id/sales-return",
+  [
+    check("id").isMongoId().withMessage("Valid order ID is required"),
+    check("returnQuantity").isNumeric().withMessage("Return quantity must be a number").isFloat({ min: 0 }).withMessage("Return quantity must be >= 0"),
+    check("returnReason").optional().isString().withMessage("Return reason must be a string"),
+    check("returnNotes").optional().isString().withMessage("Return notes must be a string"),
+    check("paymentAdjustments").optional().isArray().withMessage("Payment adjustments must be an array"),
+    check("paymentAdjustments.*.amount").optional().isNumeric().withMessage("Payment adjustment amount must be a number"),
+    check("paymentAdjustments.*.adjustmentType").optional().isIn(["REFUND", "CREDIT", "ADJUSTMENT", "DEDUCTION"]).withMessage("Invalid adjustment type"),
+    check("paymentAdjustments.*.reason").optional().isString().withMessage("Adjustment reason must be a string"),
+    check("paymentAdjustments.*.notes").optional().isString().withMessage("Adjustment notes must be a string"),
+  ],
+  checkErrors,
+  processSalesReturn
+);
 
 // ==================== ORDER ROUTES ====================
 router

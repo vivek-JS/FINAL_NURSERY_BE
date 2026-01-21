@@ -1,5 +1,62 @@
 import mongoose, { Schema, model } from "mongoose";
 
+// Activity/History Log Schema for tracking all changes
+const activityLogSchema = new Schema({
+  action: {
+    type: String,
+    required: true,
+    enum: [
+      "ORDER_CREATED",
+      "ORDER_UPDATED",
+      "ORDER_ACCEPTED",
+      "ORDER_REJECTED",
+      "ORDER_COMPLETED",
+      "ORDER_CANCELLED",
+      "ORDER_DELIVERED",
+      "PAYMENT_ADDED",
+      "PAYMENT_UPDATED",
+      "PAYMENT_STATUS_CHANGED",
+      "CUSTOMER_UPDATED",
+      "PRODUCT_UPDATED",
+      "QUANTITY_UPDATED",
+      "RATE_UPDATED",
+      "NOTES_UPDATED",
+      "DELIVERY_DATE_UPDATED",
+      "STOCK_DEDUCTED",
+      "STOCK_RETURNED",
+      "ORDER_DISPATCHED",
+      "DISPATCH_UPDATED",
+      "ORDER_ASSIGNED",
+      "ASSIGNMENT_CANCELLED",
+      "SALES_RETURN_PROCESSED",
+      "PAYMENT_ADJUSTED",
+    ],
+  },
+  description: {
+    type: String,
+    required: true,
+  },
+  performedBy: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+  },
+  performedByName: {
+    type: String,
+  },
+  previousValue: {
+    type: Schema.Types.Mixed, // Can store any type of previous value
+  },
+  newValue: {
+    type: Schema.Types.Mixed, // Can store any type of new value
+  },
+  metadata: {
+    type: Schema.Types.Mixed, // Additional context data
+  },
+}, {
+  timestamps: true,
+});
+
 // Payment Schema for Agri Sales Orders
 const paymentSchema = new Schema({
   paidAmount: {
@@ -158,9 +215,10 @@ const agriSalesOrderSchema = new Schema(
       min: 0,
     },
     // Order Status
+    // PENDING -> ACCEPTED -> ASSIGNED (optional) -> DISPATCHED -> COMPLETED
     orderStatus: {
       type: String,
-      enum: ["PENDING", "ACCEPTED", "REJECTED", "COMPLETED", "CANCELLED"],
+      enum: ["PENDING", "ACCEPTED", "ASSIGNED", "DISPATCHED", "REJECTED", "COMPLETED", "CANCELLED"],
       default: "PENDING",
     },
     // Payment Information
@@ -217,6 +275,170 @@ const agriSalesOrderSchema = new Schema(
     remarks: [String],
     // Screenshots
     screenshots: [String], // Cloudinary URLs
+    // Dispatch Information
+    dispatchStatus: {
+      type: String,
+      enum: ["NOT_DISPATCHED", "DISPATCHED", "IN_TRANSIT", "DELIVERED"],
+      default: "NOT_DISPATCHED",
+    },
+    vehicleId: {
+      type: Schema.Types.ObjectId,
+      ref: "Vehicle",
+    },
+    vehicleNumber: {
+      type: String,
+      trim: true,
+    },
+    driverName: {
+      type: String,
+      trim: true,
+    },
+    driverMobile: {
+      type: String,
+      trim: true,
+    },
+    dispatchedAt: {
+      type: Date,
+    },
+    dispatchedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    // Dispatch Mode: VEHICLE or COURIER
+    dispatchMode: {
+      type: String,
+      enum: ["VEHICLE", "COURIER"],
+      default: "VEHICLE",
+    },
+    // Courier fields (when dispatchMode is COURIER)
+    courierName: {
+      type: String,
+      trim: true,
+    },
+    courierTrackingId: {
+      type: String,
+      trim: true,
+    },
+    courierContact: {
+      type: String,
+      trim: true,
+    },
+    dispatchNotes: {
+      type: String,
+      trim: true,
+    },
+    // Assignment Information (when admin assigns to sales person for dispatch)
+    assignedTo: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    assignedAt: {
+      type: Date,
+    },
+    assignedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    assignmentNotes: {
+      type: String,
+      trim: true,
+    },
+    // Order Completion Information (after delivery)
+    completedAt: {
+      type: Date,
+    },
+    completedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    // Return Information (if customer returns some quantity)
+    returnQuantity: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    returnReason: {
+      type: String,
+      trim: true,
+    },
+    returnNotes: {
+      type: String,
+      trim: true,
+    },
+    // Actual delivered quantity (quantity - returnQuantity)
+    deliveredQuantity: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    // Stock returned (added back to inventory)
+    stockReturned: {
+      type: Boolean,
+      default: false,
+    },
+    stockReturnedAt: {
+      type: Date,
+    },
+    // Sales Return Information (for orders dispatched by sales person - NO stock impact)
+    salesReturnQuantity: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    salesReturnReason: {
+      type: String,
+      trim: true,
+    },
+    salesReturnNotes: {
+      type: String,
+      trim: true,
+    },
+    salesReturnedAt: {
+      type: Date,
+    },
+    salesReturnedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    // Payment adjustments for sales returns (can be negative for refunds/credits)
+    paymentAdjustments: [
+      {
+        amount: {
+          type: Number,
+          required: true, // Can be negative for refunds/credits
+        },
+        adjustmentType: {
+          type: String,
+          enum: ["REFUND", "CREDIT", "ADJUSTMENT", "DEDUCTION"],
+          required: true,
+        },
+        reason: {
+          type: String,
+          trim: true,
+        },
+        notes: {
+          type: String,
+          trim: true,
+        },
+        adjustedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        adjustedBy: {
+          type: Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        adjustedByName: {
+          type: String,
+        },
+        paymentId: {
+          type: Schema.Types.ObjectId, // Reference to original payment if applicable
+        },
+      },
+    ],
+    // Activity/History Log - tracks all changes to the order
+    activityLog: [activityLogSchema],
   },
   {
     timestamps: true,
@@ -234,6 +456,7 @@ agriSalesOrderSchema.index({ orderDate: -1 }); // For date-based sorting
 agriSalesOrderSchema.index({ paymentStatus: 1 }); // For payment filtering
 agriSalesOrderSchema.index({ stockDeducted: 1 }); // For stock deduction tracking
 agriSalesOrderSchema.index({ createdAt: -1 }); // For creation time sorting
+agriSalesOrderSchema.index({ dispatchStatus: 1 }); // For dispatch filtering
 
 // Compound indexes for common queries
 agriSalesOrderSchema.index({ createdBy: 1, orderStatus: 1 }); // User's orders by status
