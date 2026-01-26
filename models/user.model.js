@@ -67,7 +67,7 @@ const userSchema = new Schema({
     type: Boolean,
     default: false,
   },
-  jobTitle: {
+    jobTitle: {
     type: String,
     enum: [
       "Manager",
@@ -82,6 +82,8 @@ const userSchema = new Schema({
       "ACCOUNTANT",
       "DISPATCH_MANAGER",
       "RAM_AGRI_SALES",
+      "RAM_AGRI_SALES_MANAGER",
+      "AGRI_INPUT_DEALER",
     ],
   },
   role: {

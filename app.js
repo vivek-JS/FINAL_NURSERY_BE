@@ -262,6 +262,7 @@ import { authenticateToken, optionalAuth } from "./middlewares/auth.middleware.j
 import ExcelRoute from "./routes/excel.route.js";
 import pricingRoute from "./routes/pricing.route.js";
 import analyticsRoute from "./routes/analytics.route.js";
+import oldSalesRoute from "./routes/oldSales.route.js";
 import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
@@ -353,6 +354,7 @@ server.use("/api/v1/dealer", authenticateToken, DelaerRoutes);
 // Excel route moved to PUBLIC ROUTES section above (download endpoint needs to be public)
 server.use("/api/v1/pricing", authenticateToken, pricingRoute);
 server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
+server.use("/api/v1/old-sales", authenticateToken, oldSalesRoute);
 server.use("/api/v1/state", authenticateToken, stateRoute);
 server.use("/api/v1/notifications", notificationRoute); // Notification routes (has built-in auth)
 server.use("/api/v1/sowing", authenticateToken, sowingRoute); // Sowing management routes

@@ -9,6 +9,10 @@ import Farmer from "../models/farmer.model.js";
 import Vehicle from "../models/vehicleModel.model.js";
 import User from "../models/user.model.js";
 import mongoose from "mongoose";
+import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
+
+const shouldLogRamAgriLedger = (order) =>
+  Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
 
 // ==================== CREATE AGRI SALES ORDER ====================
 
@@ -210,6 +214,29 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   const order = await AgriSalesOrder.create(orderData);
 
+  if (shouldLogRamAgriLedger(order)) {
+    await createCustomerLedgerEntry({
+      customerMobile: order.customerMobile,
+      customerName: order.customerName,
+      refType: "ORDER",
+      refId: order._id,
+      orderId: order._id,
+      debit: order.totalAmount || totalAmount,
+      reference: order.orderNumber,
+      category: "Order",
+      description: `Order created for ${order.ramAgriCropName || productName}`,
+      entryDate: order.orderDate || order.createdAt,
+      createdBy: userId,
+      metadata: {
+        cropId: order.ramAgriCropId,
+        varietyId: order.ramAgriVarietyId,
+        customerVillage: order.customerVillage,
+        customerTaluka: order.customerTaluka,
+        customerDistrict: order.customerDistrict,
+      },
+    });
+  }
+
   // Add activity log for order creation
   order.activityLog = [{
     action: "ORDER_CREATED",
@@ -247,6 +274,32 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
   }
 
   await order.save();
+
+  if (shouldLogRamAgriLedger(order) && order.payment && Array.isArray(order.payment)) {
+    const collectedPayments = order.payment.filter(
+      (payment) => payment.paymentStatus === "COLLECTED"
+    );
+    for (const payment of collectedPayments) {
+      await createCustomerLedgerEntry({
+        customerMobile: order.customerMobile,
+        customerName: order.customerName,
+        refType: "PAYMENT",
+        refId: payment._id,
+        orderId: order._id,
+        paymentId: payment._id,
+        credit: payment.paidAmount || 0,
+        reference: order.orderNumber,
+        category: "Payment",
+        description: `Payment via ${payment.modeOfPayment || "N/A"}`,
+        entryDate: payment.paymentDate || order.orderDate || order.createdAt,
+        createdBy: userId,
+        metadata: {
+          paymentStatus: payment.paymentStatus,
+          modeOfPayment: payment.modeOfPayment,
+        },
+      });
+    }
+  }
 
   // Populate fields
   if (!isRamAgriProduct) {
@@ -498,6 +551,25 @@ const cancelAgriSalesOrder = catchAsync(async (req, res, next) => {
     order.remarks.push(`Cancelled: ${reason}`);
   }
   await order.save();
+
+  if (shouldLogRamAgriLedger(order)) {
+    await createCustomerLedgerEntry({
+      customerMobile: order.customerMobile,
+      customerName: order.customerName,
+      refType: "REVERSAL",
+      refId: order._id,
+      orderId: order._id,
+      credit: order.totalAmount || 0,
+      reference: order.orderNumber,
+      category: "Order Reversal",
+      description: `Order cancelled${reason ? `: ${reason}` : ""}`,
+      entryDate: new Date(),
+      createdBy: req.user?._id || req.user?.id,
+      metadata: {
+        orderStatus: order.orderStatus,
+      },
+    });
+  }
 
   // Populate fields
   await order.populate("productId");
@@ -827,6 +899,7 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
   // Store previous status for activity log
   const previousPaymentStatus = order.payment[index].paymentStatus;
   const paymentAmount = order.payment[index].paidAmount;
+  const activityLogLength = order.activityLog ? order.activityLog.length : 0;
 
   // Update payment status
   order.payment[index].paymentStatus = paymentStatus;
@@ -843,10 +916,72 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
     metadata: {
       paymentIndex: index,
       paymentAmount,
+      changedAt: new Date(),
     },
   });
 
   await order.save();
+
+  const shouldCreateLedgerEntry = shouldLogRamAgriLedger(order) && (
+    (previousPaymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") ||
+    (previousPaymentStatus === "COLLECTED" && paymentStatus !== "COLLECTED")
+  );
+
+  if (shouldCreateLedgerEntry) {
+    try {
+      let ledgerEntry = null;
+      if (previousPaymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
+        ledgerEntry = await createCustomerLedgerEntry({
+          customerMobile: order.customerMobile,
+          customerName: order.customerName,
+          refType: "PAYMENT",
+          refId: order.payment[index]._id,
+          orderId: order._id,
+          paymentId: order.payment[index]._id,
+          credit: paymentAmount || 0,
+          reference: order.orderNumber,
+          category: "Payment",
+          description: `Payment collected via ${order.payment[index].modeOfPayment || "N/A"}`,
+          entryDate: new Date(),
+          createdBy: req.user?._id || req.user?.id,
+          metadata: {
+            previousPaymentStatus,
+            paymentStatus,
+          },
+        });
+      } else if (previousPaymentStatus === "COLLECTED" && paymentStatus !== "COLLECTED") {
+        ledgerEntry = await createCustomerLedgerEntry({
+          customerMobile: order.customerMobile,
+          customerName: order.customerName,
+          refType: "REVERSAL",
+          refId: order.payment[index]._id,
+          orderId: order._id,
+          paymentId: order.payment[index]._id,
+          debit: paymentAmount || 0,
+          reference: order.orderNumber,
+          category: "Payment Reversal",
+          description: `Payment reversed (${paymentStatus})`,
+          entryDate: new Date(),
+          createdBy: req.user?._id || req.user?.id,
+          metadata: {
+            previousPaymentStatus,
+            paymentStatus,
+          },
+        });
+      }
+
+      if (!ledgerEntry) {
+        throw new Error("Ledger entry was not created");
+      }
+    } catch (error) {
+      order.payment[index].paymentStatus = previousPaymentStatus;
+      if (order.activityLog && order.activityLog.length > activityLogLength) {
+        order.activityLog.splice(activityLogLength);
+      }
+      await order.save();
+      return next(new AppError("Ledger entry failed, payment status rolled back", 500));
+    }
+  }
 
   // Populate fields
   await order.populate("productId");
@@ -986,6 +1121,7 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
   Object.keys(filteredData).forEach((key) => {
     previousValues[key] = order[key];
   });
+  const previousTotalAmount = order.totalAmount || 0;
 
   // Update order fields
   Object.keys(filteredData).forEach((key) => {
@@ -1031,6 +1167,31 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   // Save order (this will trigger pre-save hook to recalculate totalAmount and balanceAmount)
   await order.save();
+
+  if (shouldLogRamAgriLedger(order)) {
+    const newTotalAmount = order.totalAmount || 0;
+    const deltaAmount = newTotalAmount - previousTotalAmount;
+    if (deltaAmount !== 0) {
+      await createCustomerLedgerEntry({
+        customerMobile: order.customerMobile,
+        customerName: order.customerName,
+        refType: "ADJUSTMENT",
+        refId: order._id,
+        orderId: order._id,
+        debit: deltaAmount > 0 ? deltaAmount : 0,
+        credit: deltaAmount < 0 ? Math.abs(deltaAmount) : 0,
+        reference: order.orderNumber,
+        category: "Adjustment",
+        description: `Order adjusted (Δ ${deltaAmount > 0 ? "+" : ""}${deltaAmount})`,
+        entryDate: new Date(),
+        createdBy: req.user?._id || req.user?.id,
+        metadata: {
+          previousTotalAmount,
+          newTotalAmount,
+        },
+      });
+    }
+  }
 
   // Populate references
   await order.populate("productId");
@@ -1235,9 +1396,15 @@ const getOutstandingAnalysis = catchAsync(async (req, res, next) => {
     };
 
     // If logged-in user has jobTitle RAM_AGRI_SALES, filter by their user ID
+    // RAM_AGRI_SALES_MANAGER can see all orders (no filter)
     // Otherwise, use the createdBy query parameter if provided
     if (req.user && req.user.jobTitle === "RAM_AGRI_SALES") {
       matchQuery.createdBy = req.user._id;
+    } else if (req.user && req.user.jobTitle === "RAM_AGRI_SALES_MANAGER") {
+      // RAM_AGRI_SALES_MANAGER can see all orders, but can filter by createdBy if provided
+      if (createdBy && mongoose.isValidObjectId(createdBy)) {
+        matchQuery.createdBy = new mongoose.Types.ObjectId(createdBy);
+      }
     } else if (createdBy && mongoose.isValidObjectId(createdBy)) {
       matchQuery.createdBy = new mongoose.Types.ObjectId(createdBy);
     }
@@ -1708,9 +1875,15 @@ const getAssignedOrders = catchAsync(async (req, res, next) => {
   };
 
   // If user is a sales person, only show their assigned orders
+  // RAM_AGRI_SALES_MANAGER can see all orders (no filter)
   // If admin, can view all or filter by assignedTo
   if (userJobTitle === "RAM_AGRI_SALES" && userRole !== "SUPER_ADMIN") {
     query.assignedTo = userId;
+  } else if (userJobTitle === "RAM_AGRI_SALES_MANAGER" && userRole !== "SUPER_ADMIN") {
+    // RAM_AGRI_SALES_MANAGER can see all orders, but can filter by assignedTo if provided
+    if (assignedTo && mongoose.isValidObjectId(assignedTo)) {
+      query.assignedTo = assignedTo;
+    }
   } else if (assignedTo && mongoose.isValidObjectId(assignedTo)) {
     query.assignedTo = assignedTo;
   }
@@ -1956,7 +2129,7 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
   }
 
   // For sales person, verify they are dispatching their own assigned orders
-  const isSalesPersonDispatchingAssigned = !isAdmin && userJobTitle === "RAM_AGRI_SALES";
+  const isSalesPersonDispatchingAssigned = !isAdmin && (userJobTitle === "RAM_AGRI_SALES" || userJobTitle === "RAM_AGRI_SALES_MANAGER");
   
   if (isSalesPersonDispatchingAssigned) {
     const unassignedOrders = orders.filter(
@@ -1987,7 +2160,7 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     
     if (shouldDeductStock && !order.stockDeducted) {
       try {
-        if (order.isRamAgriProduct) {
+  if (shouldLogRamAgriLedger(order)) {
           // Handle Ram Agri products
           const crop = await RamAgriInputsProduct.findById(order.ramAgriCropId);
           if (crop) {
@@ -2347,8 +2520,11 @@ const completeOrders = catchAsync(async (req, res, next) => {
     // Calculate delivered quantity
     const deliveredQty = order.quantity - returnQty;
 
-    // If there are returns, add stock back to inventory
-    if (returnQty > 0) {
+    // If dispatched by current user (e.g. from mobile), do NOT add/subtract stock (same as sales return).
+    const wasDispatchedBySelf = order.dispatchedBy && order.dispatchedBy.toString() === userId.toString();
+
+    // If there are returns, add stock back to inventory (only when NOT dispatched by self)
+    if (returnQty > 0 && !wasDispatchedBySelf) {
       try {
         if (order.isRamAgriProduct) {
           // Handle Ram Agri products

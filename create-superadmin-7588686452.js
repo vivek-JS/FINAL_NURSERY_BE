@@ -1,17 +1,30 @@
+import dotenv from "dotenv";
+dotenv.config();
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import User from "./models/user.model.js";
 
-const MONGO_URL = "mongodb+srv://vivekcreact_db_user:Vivek006%40%23@ram.tddrg8s.mongodb.net/?appName=Ram";
+// Production-ready MongoDB connection options
+const mongoOptions = {
+  serverSelectionTimeoutMS: 10000,
+  socketTimeoutMS: 45000,
+  connectTimeoutMS: 10000,
+  maxPoolSize: 10,
+  minPoolSize: 1,
+  retryWrites: true,
+  w: 'majority',
+  retryReads: true,
+};
 
 const createSuperAdmin = async () => {
   try {
     // Connect to MongoDB
-    await mongoose.connect(MONGO_URL);
+    await mongoose.connect(process.env.MONGO_URL, mongoOptions);
     console.log("✅ Connected to database");
+    console.log(`Database: ${mongoose.connection.db.databaseName}`);
 
     const phoneNumber = 7588686452;
-    const password = "12345";
+    const password = "123321123";
 
     // Check if user already exists
     const existingUser = await User.findOne({ phoneNumber: phoneNumber });

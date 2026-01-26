@@ -2,6 +2,7 @@ import express from "express";
 import { check } from "express-validator";
 import mongoose from "mongoose";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
+import { restrictRamAgriSalesManager } from "../middlewares/auth.middleware.js";
 import {
   // Product controllers
   createProduct,
@@ -53,8 +54,10 @@ import {
   getCustomerOutstanding as getAgriSalesCustomerOutstanding,
 } from "../controllers/agriSalesOrder.controller.js";
 import { getRamAgriSalesDashboard } from "../controllers/ramAgriSalesDashboard.controller.js";
-import { getVarietyLedger, getCustomerLedger } from "../controllers/ramAgriLedger.controller.js";
+import { getRamAgriSalesRankboard } from "../controllers/ramAgriSalesRankboard.controller.js";
+import { getVarietyLedger, getCustomerLedger, clearCustomerLedger } from "../controllers/ramAgriLedger.controller.js";
 import { getMerchantLedger } from "../controllers/ramAgriMerchantLedger.controller.js";
+import { getRamAgriSalesTargets, upsertRamAgriSalesTarget } from "../controllers/ramAgriSalesTarget.controller.js";
 // Import product controller for Product model (with code, primaryUnit, secondaryUnit, etc.)
 import * as productController from "../controllers/product.controller.js";
 
@@ -68,6 +71,21 @@ const validateObjectId = (value) => {
 };
 
 // ==================== PRODUCT ROUTES ====================
+
+// Apply RAM_AGRI_SALES_MANAGER restriction to all routes except allowed ones
+// Note: Ram Agri routes are allowed, but other inventory routes are restricted
+router.use((req, res, next) => {
+  // Skip restriction for Ram Agri routes (they're explicitly allowed)
+  const path = req.path || req.originalUrl || '';
+  const isRamAgriRoute = path.includes('ram-agri') || path === '/dashboard';
+  
+  if (isRamAgriRoute) {
+    return next(); // Ram Agri routes are allowed, skip restriction
+  }
+  
+  // Apply restriction for all other routes
+  restrictRamAgriSalesManager(req, res, next);
+});
 
 // POST /products - Create product using Product model (supports code, primaryUnit, secondaryUnit, plantId, subtypeId, isRamAgriSales)
 // This route handles products with the extended schema (used by frontend ProductForm)
@@ -301,10 +319,26 @@ router.get("/change-logs/:entityType/:entityId", getChangeLogsByEntity);
 
 // ==================== RAM AGRI SALES DASHBOARD ====================
 router.get("/ram-agri-sales-dashboard", getRamAgriSalesDashboard);
+router.get("/ram-agri-sales-rankboard", getRamAgriSalesRankboard);
+router
+  .get("/ram-agri-sales-targets", getRamAgriSalesTargets)
+  .post("/ram-agri-sales-targets", upsertRamAgriSalesTarget);
 
 // ==================== RAM AGRI LEDGERS ====================
 router.get("/ram-agri-variety-ledger", getVarietyLedger);
 router.get("/ram-agri-customer-ledger", getCustomerLedger);
+router.delete(
+  "/ram-agri-customer-ledger",
+  [
+    check("customerMobile")
+      .notEmpty()
+      .withMessage("Customer mobile is required")
+      .isLength({ min: 10, max: 10 })
+      .withMessage("Customer mobile must be 10 digits"),
+  ],
+  checkErrors,
+  clearCustomerLedger
+);
 router.get("/ram-agri-merchant-ledger", getMerchantLedger);
 
 export default router; 

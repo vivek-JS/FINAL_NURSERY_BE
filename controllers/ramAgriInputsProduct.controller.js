@@ -8,24 +8,50 @@ import {
   generateChangesArray,
 } from '../utils/changeLogHelper.js';
 
+const normalizeProductType = (value, { allowAll = false } = {}) => {
+  if (value === undefined || value === null || value === '') {
+    return 'seed';
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'seeds') return 'seed';
+  if (normalized === 'chemicals') return 'chemical';
+  if (normalized === 'seed' || normalized === 'chemical') {
+    return normalized;
+  }
+  if (normalized === 'all') return allowAll ? 'all' : null;
+  return null;
+};
+
 // Create crop
 export const createCrop = catchAsync(async (req, res, next) => {
-  const { cropName, description, varieties } = req.body;
+  const { cropName, description, varieties, productType } = req.body;
 
   if (!cropName || !cropName.trim()) {
     return next(new AppError('Crop name is required', 400));
   }
 
+  const normalizedType = normalizeProductType(productType);
+  if (productType && (!normalizedType || normalizedType === 'all')) {
+    return next(new AppError('Invalid product type. Use "seed" or "chemical"', 400));
+  }
+  const finalProductType = normalizedType || 'seed';
+
   // Check if crop already exists
-  const existingCrop = await RamAgriInputsProduct.findOne({
-    cropName: cropName.trim(),
-  });
+  const existingQuery = { cropName: cropName.trim() };
+  if (finalProductType === 'seed') {
+    existingQuery.$or = [{ productType: 'seed' }, { productType: { $exists: false } }];
+  } else {
+    existingQuery.productType = finalProductType;
+  }
+
+  const existingCrop = await RamAgriInputsProduct.findOne(existingQuery);
 
   if (existingCrop) {
     return next(new AppError('Crop with this name already exists', 409));
   }
 
   const crop = await RamAgriInputsProduct.create({
+    productType: finalProductType,
     cropName: cropName.trim(),
     description: description?.trim() || '',
     varieties: varieties || [],
@@ -44,8 +70,9 @@ export const createCrop = catchAsync(async (req, res, next) => {
 
 // Get all crops
 export const getAllCrops = catchAsync(async (req, res, next) => {
-  const { search, isActive } = req.query;
+  const { search, isActive, productType } = req.query;
   const query = {};
+  let typeFilter = null;
 
   if (search) {
     query.$or = [
@@ -57,6 +84,29 @@ export const getAllCrops = catchAsync(async (req, res, next) => {
 
   if (isActive !== undefined) {
     query.isActive = isActive === 'true';
+  }
+
+  if (productType !== undefined) {
+    const normalizedType = normalizeProductType(productType, { allowAll: true });
+    if (!normalizedType) {
+      return next(new AppError('Invalid product type. Use "seed" or "chemical"', 400));
+    }
+    if (normalizedType === 'seed') {
+      typeFilter = {
+        $or: [{ productType: 'seed' }, { productType: { $exists: false } }],
+      };
+    } else if (normalizedType === 'chemical') {
+      typeFilter = { productType: 'chemical' };
+    }
+  }
+
+  if (typeFilter) {
+    if (query.$or) {
+      query.$and = [{ $or: query.$or }, typeFilter];
+      delete query.$or;
+    } else {
+      Object.assign(query, typeFilter);
+    }
   }
 
   const crops = await RamAgriInputsProduct.find(query)
@@ -107,7 +157,7 @@ export const getCropById = catchAsync(async (req, res, next) => {
 // Update crop
 export const updateCrop = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-  const { cropName, description, isActive } = req.body;
+  const { cropName, description, isActive, productType } = req.body;
 
   if (!mongoose.isValidObjectId(id)) {
     return next(new AppError('Invalid ID format', 400));
@@ -119,12 +169,25 @@ export const updateCrop = catchAsync(async (req, res, next) => {
     return next(new AppError('Crop not found', 404));
   }
 
+  const normalizedType = productType !== undefined ? normalizeProductType(productType) : null;
+  if (productType !== undefined && (!normalizedType || normalizedType === 'all')) {
+    return next(new AppError('Invalid product type. Use "seed" or "chemical"', 400));
+  }
+  const nextProductType = normalizedType || crop.productType || 'seed';
+
   // Check if crop name is being changed and if it already exists
-  if (cropName && cropName.trim() !== crop.cropName) {
-    const existingCrop = await RamAgriInputsProduct.findOne({
-      cropName: cropName.trim(),
+  if ((cropName && cropName.trim() !== crop.cropName) || (normalizedType && normalizedType !== crop.productType)) {
+    const existingQuery = {
+      cropName: cropName ? cropName.trim() : crop.cropName,
       _id: { $ne: id },
-    });
+    };
+    if (nextProductType === 'seed') {
+      existingQuery.$or = [{ productType: 'seed' }, { productType: { $exists: false } }];
+    } else {
+      existingQuery.productType = nextProductType;
+    }
+
+    const existingCrop = await RamAgriInputsProduct.findOne(existingQuery);
 
     if (existingCrop) {
       return next(new AppError('Crop with this name already exists', 409));
@@ -135,6 +198,7 @@ export const updateCrop = catchAsync(async (req, res, next) => {
 
   if (description !== undefined) crop.description = description?.trim() || '';
   if (isActive !== undefined) crop.isActive = isActive;
+  if (normalizedType) crop.productType = normalizedType;
 
   crop.updatedBy = req.user._id;
   await crop.save();

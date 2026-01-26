@@ -28,6 +28,7 @@ const allowedParams = [
   "slotId",
   "orderId",
   "orderIds",
+  "userId",
   "date",
   "fromDate",
   "dispatched",
@@ -77,10 +78,39 @@ const allowedParams = [
     "createdBy", // For filtering orders by creator (employee who created)
     "myOrders", // Boolean: show only current user's orders
     "paymentStatus", // For filtering by payment status (PENDING, PARTIAL, COMPLETED)
+  // Old sales analytics filters
+  "plant",
+  "variety",
+  "media",
+  "batch",
+  "paymentMode",
+  "reference",
+  "marketingReference",
+  "billGivenOrNot",
+  "verifiedOrNot",
+  "bookingNo",
+  "mobileNo",
+  "shadeNo",
+  "vehicleNo",
+  "driverName",
+  // Old sales data quality parameters
+  "field",
+  "minSimilarity",
+  "maxSimilarity",
+  "minCount",
+  "referenceLimit",
+  "suggestionLimit",
+  "normalizedKey",
+  "minVariants",
+  "limit",
+  "minOrders",
+  "sortBy",
+  "sortOrder",
     // Ram Agri Ledger parameters
     "cropId", // For Ram Agri variety ledger (crop ID)
     "varietyId", // For Ram Agri variety ledger (variety ID)
     "merchantId", // For Ram Agri merchant ledger (merchant ID)
+  "productType", // For Ram Agri inputs filter (seed/chemical)
 ];
 
 const parameterWhiteListing = (req, res, next) => {

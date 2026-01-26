@@ -8,8 +8,19 @@ import mongoose from "mongoose";
 
 // ==================== RAM AGRI SALES DASHBOARD ====================
 
+const ORDER_STATUSES = ['PENDING', 'ACCEPTED', 'ASSIGNED', 'DISPATCHED', 'REJECTED', 'COMPLETED', 'CANCELLED'];
+const PAYMENT_STATUSES = ['COLLECTED', 'PENDING', 'REJECTED'];
+
 export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
-  const { startDate, endDate, cropId, varietyId } = req.query;
+  const { startDate, endDate, cropId, varietyId, orderStatus, paymentStatus } = req.query;
+
+  // Parse status filters (comma-separated or single)
+  const orderStatusFilter = orderStatus
+    ? (Array.isArray(orderStatus) ? orderStatus : orderStatus.split(',').map((s) => s.trim()).filter(Boolean))
+    : [];
+  const paymentStatusFilter = paymentStatus
+    ? (Array.isArray(paymentStatus) ? paymentStatus : paymentStatus.split(',').map((s) => s.trim()).filter(Boolean))
+    : [];
 
   // Calculate date range for transactions
   const dateFilter = {};
@@ -74,6 +85,7 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
   const stockByCrop = crops.map(crop => ({
     cropId: crop._id,
     cropName: crop.cropName,
+    productType: crop.productType || 'seed',
     varietiesCount: crop.varieties?.length || 0,
     totalStock: crop.varieties?.reduce((sum, v) => sum + (v.currentStock || 0), 0) || 0,
     totalValue: crop.varieties?.reduce((sum, v) => sum + (v.stockValue || 0), 0) || 0,
@@ -103,7 +115,7 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
     .lean();
 
   // Filter orders by date range
-  const filteredOrders = Object.keys(dateFilter).length > 0
+  let filteredOrders = Object.keys(dateFilter).length > 0
     ? agriSalesOrders.filter(order => {
         const orderDate = new Date(order.orderDate || order.createdAt);
         const start = dateFilter.orderDate?.$gte ? new Date(dateFilter.orderDate.$gte) : null;
@@ -114,7 +126,33 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
       })
     : agriSalesOrders;
 
-  // Extract all payments
+  // Status counts (always from full date-filtered set, no status filter)
+  const orderStatusCounts = ORDER_STATUSES.reduce((acc, s) => {
+    acc[s] = filteredOrders.filter((o) => (o.orderStatus || 'PENDING') === s).length;
+    return acc;
+  }, {});
+  let paymentStatusCounts = { COLLECTED: 0, PENDING: 0, REJECTED: 0 };
+  filteredOrders.forEach((o) => {
+    (o.payment || []).forEach((p) => {
+      const ps = p.paymentStatus || 'PENDING';
+      if (paymentStatusCounts[ps] !== undefined) paymentStatusCounts[ps] += 1;
+    });
+  });
+
+  // Apply order status filter
+  if (orderStatusFilter.length > 0) {
+    const set = new Set(orderStatusFilter);
+    filteredOrders = filteredOrders.filter((o) => set.has(o.orderStatus || 'PENDING'));
+  }
+  // Apply payment status filter (orders that have at least one payment with given status)
+  if (paymentStatusFilter.length > 0) {
+    const set = new Set(paymentStatusFilter);
+    filteredOrders = filteredOrders.filter((o) => {
+      return (o.payment || []).some((p) => set.has(p.paymentStatus || 'PENDING'));
+    });
+  }
+
+  // Extract all payments (from status-filtered orders)
   const allPayments = [];
   filteredOrders.forEach(order => {
     if (order.payment && Array.isArray(order.payment)) {
@@ -424,6 +462,10 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
   // ==================== PREPARE RESPONSE ====================
 
   const responseData = {
+    statusCounts: {
+      orderStatus: orderStatusCounts,
+      paymentStatus: paymentStatusCounts,
+    },
     summary: {
       stock: {
         totalCrops,
