@@ -81,6 +81,7 @@ const userSchema = new Schema({
       "OFFICE_ADMIN",
       "ACCOUNTANT",
       "DISPATCH_MANAGER",
+      "RAM_AGRI_SALES",
     ],
   },
   role: {

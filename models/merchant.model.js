@@ -78,6 +78,28 @@ const merchantSchema = new mongoose.Schema(
     notes: {
       type: String,
     },
+    linkedProducts: [
+      {
+        cropId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'RamAgriInputsProduct',
+          required: true,
+        },
+        varietyId: {
+          type: mongoose.Schema.Types.ObjectId,
+          required: true,
+          comment: "Reference to variety within the crop (subdocument ID)",
+        },
+        cropName: {
+          type: String,
+          trim: true,
+        },
+        varietyName: {
+          type: String,
+          trim: true,
+        },
+      },
+    ],
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

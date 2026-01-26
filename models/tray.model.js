@@ -15,6 +15,11 @@ const traySchema = new Schema(
       required: true,
       min: 1,
     },
+    aliases: {
+      type: [String],
+      default: [],
+      // Alternative names that map to this tray (e.g., "Elli" for 10 cavity tray)
+    },
     isActive: {
       type: Boolean,
       default: true,

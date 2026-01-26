@@ -1,6 +1,6 @@
 import catchAsync from '../utility/catchAsync.js';
 import multer from 'multer';
-import { importOrdersAndFarmers, validateExcelStructure, processExcelRowsForValidation } from './excel.serveces.controller.js';
+import { importOrdersAndFarmers, validateExcelStructure, processExcelRowsForValidation, importOrdersFromExcel, retryErrorfulOrders, readPasswordProtectedExcel } from './excel.serveces.controller.js';
 import PlantSlot from '../models/slots.model.js';
 import UnprocessedFile from '../models/unprocessedFile.model.js';
 import ErrorfulOrder from '../models/errorfulOrder.model.js';
@@ -41,8 +41,27 @@ export const validateExcel = catchAsync(async (req, res) => {
     }
 
     try {
+      // Get password from request body if provided
+      const password = req.body.password || null;
+      
+      // Handle password-protected files
+      let processedBuffer = req.file.buffer;
+      if (password) {
+        console.log("🔐 Password provided for validation, attempting to decrypt Excel file...");
+        try {
+          processedBuffer = await readPasswordProtectedExcel(req.file.buffer, password);
+          console.log("✅ Successfully decrypted password-protected Excel file for validation");
+        } catch (passwordError) {
+          console.error("❌ Error decrypting password-protected file:", passwordError.message);
+          return res.status(400).json({
+            status: 'error',
+            message: `Failed to decrypt Excel file: ${passwordError.message}. Please check the password.`
+          });
+        }
+      }
+      
       // Step 1: Validate structure (don't block - just report)
-      const validationResults = validateExcelStructure(req.file.buffer);
+      const validationResults = validateExcelStructure(processedBuffer);
       
       // Log validation results but NEVER block
       if (!validationResults.isValid) {
@@ -56,7 +75,7 @@ export const validateExcel = catchAsync(async (req, res) => {
       // Step 2: Process rows to identify unprocessed ones
       let processResults;
       try {
-        processResults = await processExcelRowsForValidation(req.file.buffer);
+        processResults = await processExcelRowsForValidation(processedBuffer);
       } catch (processError) {
         console.warn('⚠️  Process error (non-blocking):', processError);
         processResults = {
@@ -97,11 +116,31 @@ export const validateExcel = catchAsync(async (req, res) => {
         unprocessedFileUrl = `/api/v1/excel/download-unprocessed/${filename}`;
       }
 
+      // Return comprehensive error list
+      const errorSummary = {
+        total: processResults.errors?.length || 0,
+        byType: {},
+        byRow: processResults.errors || []
+      };
+      
+      // Group errors by type
+      if (processResults.errors && processResults.errors.length > 0) {
+        processResults.errors.forEach(error => {
+          const type = error.errorType || 'UNKNOWN_ERROR';
+          if (!errorSummary.byType[type]) {
+            errorSummary.byType[type] = [];
+          }
+          errorSummary.byType[type].push(error);
+        });
+      }
+      
       // ALWAYS return success - validation is just for preview, never blocks
       return res.status(200).json({
         status: 'success',
-        message: validationResults.isValid 
-          ? 'Excel file validated successfully' 
+        message: validationResults.isValid && processResults.processableRows === processResults.totalRows
+          ? 'Excel file validated successfully - all rows are processable' 
+          : processResults.unprocessedRowsCount > 0
+          ? `Excel file has ${processResults.unprocessedRowsCount} row(s) with errors. ${processResults.processableRows} row(s) are processable.`
           : 'Excel file has validation issues but import can proceed',
         data: {
           totalRows: processResults.totalRows || 0,
@@ -110,7 +149,8 @@ export const validateExcel = catchAsync(async (req, res) => {
           unprocessedFileUrl: unprocessedFileUrl,
           warnings: validationResults.warnings || [],
           errors: validationResults.errors || [], // These are just informational, not blocking
-          rowErrors: processResults.errors || []
+          rowErrors: processResults.errors || [],
+          errorSummary: errorSummary
         }
       });
     } catch (error) {
@@ -892,6 +932,109 @@ export const fixBookingSlotFormat = catchAsync(async (req, res) => {
     return res.status(500).json({
       status: 'error',
       message: 'Error fixing bookingSlot format',
+      error: error.message
+    });
+  }
+});
+
+// New import endpoint for order structure with payment and reference fields
+export const importOrdersWithPayment = catchAsync(async (req, res) => {
+  upload(req, res, async (err) => {
+    if (err) {
+      return res.status(400).json({
+        status: 'error',
+        message: err.message
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please upload an Excel file'
+      });
+    }
+
+    try {
+      // Get password from request body if provided
+      const password = req.body.password || null;
+      
+      // Get row limit from request body if provided
+      const rowLimit = req.body.rowLimit ? parseInt(req.body.rowLimit) : null;
+      
+      // Generate import batch ID for this import session
+      const importBatchId = `import-${Date.now()}`;
+      const results = await importOrdersFromExcel(req.file.buffer, {
+        importBatchId: importBatchId,
+        sourceFilename: req.file.originalname || 'unknown.xlsx',
+        password: password, // Pass password if provided
+        rowLimit: rowLimit, // Pass row limit if provided
+      });
+
+      return res.status(200).json({
+        status: 'success',
+        message: `Import completed: ${results.success} successful, ${results.failed} failed`,
+        data: {
+          success: results.success,
+          failed: results.failed,
+          errors: results.errors,
+          autoCreatedFarmers: results.autoCreatedFarmers,
+          autoCreatedSalesPersons: results.autoCreatedSalesPersons,
+          autoCreatedTrays: results.autoCreatedTrays || [],
+          autoCreatedReferenceUsers: results.autoCreatedReferenceUsers || [],
+          autoCreatedVarieties: results.autoCreatedVarieties || [],
+          skipped: results.skipped,
+          errorfulOrders: results.errorfulOrders || [],
+          errorfulOrdersCount: results.errorfulOrders?.length || 0,
+        }
+      });
+    } catch (error) {
+      console.error('Import error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Error importing orders',
+        error: error.message
+      });
+    }
+  });
+});
+
+// Retry errorful orders endpoint - automatically imports orders after clearing faults
+export const retryFailedOrders = catchAsync(async (req, res) => {
+  try {
+    const { 
+      filter = {}, // Optional filter for errorful orders
+      limit = null, // Optional limit on number of orders to retry
+      importBatchId = null // Optional custom batch ID
+    } = req.body;
+
+    // Build filter - default to unresolved, not successfully imported
+    const retryFilter = {
+      isResolved: false,
+      successfullyImported: false,
+      ...filter
+    };
+
+    const results = await retryErrorfulOrders({
+      filter: retryFilter,
+      limit: limit,
+      importBatchId: importBatchId || `retry-${Date.now()}`,
+    });
+
+    return res.status(200).json({
+      status: 'success',
+      message: `Retry completed: ${results.success} successful, ${results.failed} failed`,
+      data: {
+        success: results.success,
+        failed: results.failed,
+        retried: results.retried,
+        errors: results.errors,
+      }
+    });
+  } catch (error) {
+    console.error('Retry error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error retrying failed orders',
       error: error.message
     });
   }

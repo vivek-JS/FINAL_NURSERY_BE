@@ -1,0 +1,8 @@
+IMPORT ERRORS (Rows 701-800)
+================================================================================
+
+Total Errors: 3
+
+1. 25-26/B0096: No suitable slot found for delivery date 13-11-2025 in month November
+2. 25-26/B0097: No suitable slot found for delivery date 13-11-2025 in month November
+3. 25-26/B0103: No suitable slot found for delivery date 16-11-2025 in month November

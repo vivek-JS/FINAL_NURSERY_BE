@@ -1,0 +1,7 @@
+IMPORT ERRORS (First 100 Rows)
+================================================================================
+
+Total Errors: 2
+
+1. Unknown: Order validation failed: deliveryDate: Path `deliveryDate` is required.
+2. Unknown: Order validation failed: deliveryDate: Path `deliveryDate` is required.

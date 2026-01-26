@@ -26,9 +26,37 @@ import {
   // Stock adjustment controllers
   createStockAdjustment,
   
+  // Summary
+  getInventorySummary,
+  
   // Dashboard
   getInventoryDashboard,
 } from "../controllers/inventory.controller.js";
+import {
+  createCrop,
+  getAllCrops,
+  getCropById,
+  updateCrop,
+  deleteCrop,
+  addVariety,
+  updateVariety,
+  deleteVariety,
+  addRate,
+  updateRate,
+  deleteRate,
+} from "../controllers/ramAgriInputsProduct.controller.js";
+import {
+  getPendingPayments as getAgriSalesPendingPayments,
+  getPendingPaymentsCount as getAgriSalesPendingPaymentsCount,
+  getOutstandingAnalysis as getAgriSalesOutstandingAnalysis,
+  getSalesAnalysis as getAgriSalesSalesAnalysis,
+  getCustomerOutstanding as getAgriSalesCustomerOutstanding,
+} from "../controllers/agriSalesOrder.controller.js";
+import { getRamAgriSalesDashboard } from "../controllers/ramAgriSalesDashboard.controller.js";
+import { getVarietyLedger, getCustomerLedger } from "../controllers/ramAgriLedger.controller.js";
+import { getMerchantLedger } from "../controllers/ramAgriMerchantLedger.controller.js";
+// Import product controller for Product model (with code, primaryUnit, secondaryUnit, etc.)
+import * as productController from "../controllers/product.controller.js";
 
 const router = express.Router();
 
@@ -41,6 +69,30 @@ const validateObjectId = (value) => {
 
 // ==================== PRODUCT ROUTES ====================
 
+// POST /products - Create product using Product model (supports code, primaryUnit, secondaryUnit, plantId, subtypeId, isRamAgriSales)
+// This route handles products with the extended schema (used by frontend ProductForm)
+router.post(
+  "/products",
+  [
+    check("code").notEmpty().withMessage("Product code is required"),
+    check("name").notEmpty().withMessage("Product name is required"),
+    check("category").notEmpty().withMessage("Product category is required"),
+    check("primaryUnit").notEmpty().withMessage("Primary unit is required"),
+    check("secondaryUnit").optional({ nullable: true, checkFalsy: true }).custom((value) => {
+      if (value === null || value === undefined || value === '') return true;
+      return validateObjectId(value);
+    }).withMessage("Invalid secondary unit ID"),
+    check("conversionFactor").optional().isNumeric().withMessage("Conversion factor must be a number"),
+    check("minStockLevel").optional().isNumeric().withMessage("Min stock level must be a number"),
+    check("reorderLevel").optional().isNumeric().withMessage("Reorder level must be a number"),
+    check("gst").optional().isNumeric().withMessage("GST must be a number"),
+    check("isRamAgriSales").optional().isBoolean().withMessage("isRamAgriSales must be a boolean value"),
+  ],
+  checkErrors,
+  productController.createProduct
+);
+
+// POST /products/create - Create product using InventoryProduct model (legacy route)
 router
   .post(
     "/products/create",
@@ -52,10 +104,12 @@ router
       check("minStockLevel").optional().isNumeric().withMessage("Min stock level must be a number"),
       check("maxStockLevel").optional().isNumeric().withMessage("Max stock level must be a number"),
       check("sellingPrice").optional().isNumeric().withMessage("Selling price must be a number"),
+      check("isAgriSales").optional().isBoolean().withMessage("isAgriSales must be a boolean value"),
     ],
     checkErrors,
     createProduct
   )
+  .get("/products/summary", getInventorySummary)
   .get("/products", getAllProducts)
   .get("/products/:id", getProductById)
   .patch(
@@ -68,6 +122,7 @@ router
       check("minStockLevel").optional().isNumeric().withMessage("Min stock level must be a number"),
       check("maxStockLevel").optional().isNumeric().withMessage("Max stock level must be a number"),
       check("sellingPrice").optional().isNumeric().withMessage("Selling price must be a number"),
+      check("isAgriSales").optional().isBoolean().withMessage("isAgriSales must be a boolean value"),
     ],
     checkErrors,
     updateProduct
@@ -157,5 +212,99 @@ router
 // ==================== DASHBOARD ROUTES ====================
 
 router.get("/dashboard", getInventoryDashboard);
+
+// ==================== AGRI SALES PENDING PAYMENTS ROUTE ====================
+// Dedicated endpoint for Ram Agri Sales pending payments (for accountant)
+router.get("/agri-sales-pending-payments", getAgriSalesPendingPayments);
+router.get("/agri-sales-pending-payments/count", getAgriSalesPendingPaymentsCount);
+
+// ==================== AGRI SALES OUTSTANDING ROUTES ====================
+router.get("/agri-sales-outstanding-analysis", getAgriSalesOutstandingAnalysis);
+router.get("/agri-sales-customer-outstanding", getAgriSalesCustomerOutstanding);
+
+// ==================== AGRI SALES SALES ANALYSIS ROUTES ====================
+router.get("/agri-sales-sales-analysis", getAgriSalesSalesAnalysis);
+
+// ==================== RAM AGRI INPUTS PRODUCT MASTER ROUTES ====================
+router
+  .post(
+    "/ram-agri-inputs",
+    [
+      check("cropName").notEmpty().withMessage("Crop name is required"),
+      check("varieties").optional().isArray().withMessage("Varieties must be an array"),
+    ],
+    checkErrors,
+    createCrop
+  )
+  .get("/ram-agri-inputs", getAllCrops)
+  .get("/ram-agri-inputs/:id", getCropById)
+  .patch(
+    "/ram-agri-inputs/:id",
+    [
+      check("cropName").optional().notEmpty().withMessage("Crop name cannot be empty"),
+    ],
+    checkErrors,
+    updateCrop
+  )
+  .delete("/ram-agri-inputs/:id", deleteCrop)
+  .post(
+    "/ram-agri-inputs/:id/varieties",
+    [
+      check("name").notEmpty().withMessage("Variety name is required"),
+    ],
+    checkErrors,
+    addVariety
+  )
+  .patch(
+    "/ram-agri-inputs/:id/varieties/:varietyId",
+    [
+      check("name").optional().notEmpty().withMessage("Variety name cannot be empty"),
+    ],
+    checkErrors,
+    updateVariety
+  )
+  .delete("/ram-agri-inputs/:id/varieties/:varietyId", deleteVariety)
+  .post(
+    "/ram-agri-inputs/:id/varieties/:varietyId/rates",
+    [
+      check("minRate").optional().isNumeric().withMessage("Min rate must be a number"),
+      check("maxRate").optional().isNumeric().withMessage("Max rate must be a number"),
+      check("rate").optional().isNumeric().withMessage("Rate must be a number"),
+      check("startDate").notEmpty().withMessage("Start date is required"),
+      check("endDate").notEmpty().withMessage("End date is required"),
+    ],
+    checkErrors,
+    addRate
+  )
+  .patch(
+    "/ram-agri-inputs/:id/varieties/:varietyId/rates/:rateId",
+    [
+      check("minRate").optional().isNumeric().withMessage("Min rate must be a number"),
+      check("maxRate").optional().isNumeric().withMessage("Max rate must be a number"),
+      check("rate").optional().isNumeric().withMessage("Rate must be a number"),
+    ],
+    checkErrors,
+    updateRate
+  )
+  .delete("/ram-agri-inputs/:id/varieties/:varietyId/rates/:rateId", deleteRate);
+
+// ==================== INVENTORY CHANGE LOG ROUTES ====================
+import {
+  getChangeLogsByEntity,
+  getAllChangeLogs,
+  getChangeLogStats,
+} from "../controllers/inventoryChangeLog.controller.js";
+
+router.get("/change-logs", getAllChangeLogs);
+router.get("/change-logs/stats", getChangeLogStats);
+router.get("/change-logs/:entityType/:entityId", getChangeLogsByEntity);
+
+// ==================== RAM AGRI SALES DASHBOARD ====================
+router.get("/ram-agri-sales-dashboard", getRamAgriSalesDashboard);
+
+// ==================== RAM AGRI LEDGERS ====================
+router.get("/ram-agri-variety-ledger", getVarietyLedger);
+router.get("/ram-agri-customer-ledger", getCustomerLedger);
+router.get("/ram-agri-merchant-ledger", getMerchantLedger);
 
 export default router; 

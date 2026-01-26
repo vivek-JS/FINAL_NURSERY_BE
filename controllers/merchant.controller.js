@@ -78,6 +78,9 @@ export const getAllMerchants = async (req, res) => {
 
     const query = {};
 
+    // Note: /all endpoint returns ALL merchants (not filtered)
+    // Frontend filtering for Ram Agri purchase order is handled in RamAgriInputOrderForm.js
+
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },

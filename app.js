@@ -248,6 +248,7 @@ import distrctRoutes from "./routes/districts.route.js";
 import slotRouter from "./routes/slots.route.js";
 import plantCmsRouter from "./routes/plantCms.route.js";
 import vheicleRouter from "./routes/vheicle.route.js";
+import tripRouter from "./routes/trip.route.js";
 import shadeRoter from "./routes/shades.route.js";
 import trayRouter from "./routes/tray.route.js";
 import dispatchRoute from "./routes/dispatched.route.js";
@@ -283,9 +284,12 @@ import inventoryRoute from "./routes/inventory.route.js";
 import purchaseRoute from "./routes/purchase.route.js";
 import sellOrderRoute from "./routes/sellOrder.route.js";
 import returnRequestRoute from "./routes/returnRequest.route.js";
+import agriSalesOrderRoute from "./routes/agriSalesOrder.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
 import followUpRoute from "./routes/followUp.route.js";
 import taskRoute from "./routes/task.route.js";
+import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
+import mapsRoute from "./routes/maps.route.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -337,8 +341,10 @@ server.use("/api/v1/plantcms", authenticateToken, plantCmsRouter);
 server.use("/api/v1/shade", authenticateToken, shadeRoter);
 server.use("/api/v1/tray", authenticateToken, trayRouter);
 server.use("/api/v1/vehicles", authenticateToken, vheicleRouter);
+server.use("/api/v1/trips", authenticateToken, tripRouter);
 server.use("/api/v1/dispatched", authenticateToken, dispatchRoute);
 server.use("/api/v1/msg", authenticateToken, msgRoute);
+server.use("/api/v1/maps", mapsRoute); // Maps API proxy (requires auth)
 server.use("/api/v1/backup", authenticateToken, backupRoute);
 server.use("/api/v1/batch", authenticateToken, batchRoute);
 server.use("/api/v1/laboutward", authenticateToken, plantOutward);
@@ -355,7 +361,9 @@ server.use("/api/v1/clear-data", authenticateToken, clearDataRoute); // Data cle
 // Inventory Management Routes (all require authentication)
 // IMPORTANT: More specific routes must be registered BEFORE general routes
 // to avoid route conflicts (e.g., /api/v1/inventory/products must come before /api/v1/inventory)
-server.use("/api/v1/inventory/products", authenticateToken, productRoute);
+// NOTE: /api/v1/inventory/products is now handled by inventoryRoute, not productRoute
+// The old productRoute (for nursery products) uses a different model and doesn't support isAgriSales
+// server.use("/api/v1/inventory/products", authenticateToken, productRoute); // REMOVED - now using inventoryRoute
 server.use("/api/v1/inventory/suppliers", authenticateToken, supplierRoute);
 server.use("/api/v1/inventory/merchants", authenticateToken, merchantRoute);
 server.use("/api/v1/inventory/units", authenticateToken, measurementUnitRoute);
@@ -363,10 +371,12 @@ server.use("/api/v1/inventory/categories", authenticateToken, categoryRoute);
 server.use("/api/v1/inventory/purchase-orders", authenticateToken, purchaseOrderRoute);
 server.use("/api/v1/inventory/grn", authenticateToken, grnRoute);
 server.use("/api/v1/inventory/sell-orders", authenticateToken, sellOrderRoute);
+server.use("/api/v1/inventory/agri-sales-orders", authenticateToken, agriSalesOrderRoute);
 server.use("/api/v1/inventory/outward", authenticateToken, inventoryOutwardRoute);
 server.use("/api/v1/inventory/transactions", authenticateToken, inventoryTransactionRoute);
 server.use("/api/v1/inventory/return-requests", authenticateToken, returnRequestRoute);
 server.use("/api/v1/inventory", authenticateToken, inventoryRoute); // General inventory route (must be last)
+server.use("/api/v1/plant-product-mappings", plantProductMappingRoute); // Plant product mapping routes (has built-in auth)
 server.use("/api/v1/purchase", authenticateToken, purchaseRoute);
 
 

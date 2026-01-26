@@ -22,6 +22,8 @@ import {
   refreshToken,
   logout,
   verifyToken,
+  uploadMedia,
+  processOCR,
 } from "../controllers/user.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
@@ -33,8 +35,19 @@ import {
 } from "../controllers/walletController.js";
 import catchAsync from "../utility/catchAsync.js";
 import { savePushToken } from "../controllers/notification.controller.js";
+import multer from "multer";
 
 const router = express.Router();
+
+// Multer for media uploads (memory storage for Cloudinary)
+const uploadMediaFile = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
+  fileFilter: (req, file, cb) => {
+    const ok = ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"].includes(file.mimetype);
+    cb(ok ? null : new Error("Only JPG/PNG/WEBP/AVIF/GIF allowed"), ok);
+  },
+});
 
 router.post("/login", login);
 router.get("/test-login", testLogin);
@@ -85,5 +98,7 @@ router
   .get("/dealers/transactions/:dealerId", getDealerWalletTransactions)
   .get("/dealers/transactions/:dealerId/csv", exportDealerWalletTransactionsCSV)
   .get("/dealers/:dealerId", getDealerWalletDetails)
-  .post("/push-token", authenticateToken, savePushToken);
+  .post("/push-token", authenticateToken, savePushToken)
+  .post("/media/", authenticateToken, uploadMediaFile.single("media_key"), uploadMedia)
+  .post("/media/ocr", authenticateToken, processOCR);
 export default router;

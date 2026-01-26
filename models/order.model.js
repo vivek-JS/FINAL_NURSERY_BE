@@ -55,6 +55,7 @@ const statusChangeSchema = new Schema(
         "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",
         "PARTIALLY_COMPLETED",
+        "TEMPORARY_CANCELLED",
       ],
       required: true,
     },
@@ -72,6 +73,7 @@ const statusChangeSchema = new Schema(
         "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",
         "PARTIALLY_COMPLETED",
+        "TEMPORARY_CANCELLED",
       ],
       required: true,
     },
@@ -199,6 +201,9 @@ const paymentSchema = new Schema(
       },
     },
     remark: {
+      type: String,
+    },
+    chequeNumber: {
       type: String,
     },
     isWalletPayment: {
@@ -333,6 +338,16 @@ const orderSchema = new Schema(
     orderRemarks: [String],
     // Screenshots uploaded with the order (Cloudinary URLs)
     screenshots: [String], // Array of Cloudinary image URLs
+    // Ready plants product fields - for products from other nurseries
+    productName: {
+      type: String,
+      // Reference name for plant products (e.g., "Ghatude") - independent of actual product
+    },
+    productMappingId: {
+      type: Schema.Types.ObjectId,
+      ref: 'PlantProductMapping',
+      // Reference to PlantProductMapping for ready plants products
+    },
     orderStatus: {
       type: String,
       enum: [
@@ -347,6 +362,7 @@ const orderSchema = new Schema(
         "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",
         "PARTIALLY_COMPLETED",
+        "TEMPORARY_CANCELLED",
       ],
       default: "PENDING",
     },
@@ -361,8 +377,9 @@ const orderSchema = new Schema(
     },
     deliveryDate: {
       type: Date,
-      required: true,
+      required: false, // Optional to allow undated orders (assigned to dummy slot)
       // The specific date selected by user for plant delivery
+      // null for undated orders that are assigned to dummy slot
     },
     farmReadyDate: {
       type: Date,
@@ -447,6 +464,63 @@ const orderSchema = new Schema(
       mobileNumber: {
         type: Number,
       },
+    },
+    // Expected nursery field - for tracking expected nursery source
+    expectedNursery: {
+      type: String,
+    },
+    // Reference field - reference to user/employee
+    reference: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    // Old delivery date - for tracking delivery date changes
+    oldDeliveryDate: {
+      type: Date,
+    },
+    // Field to track call history for dispatch managers
+    callHistory: [
+      {
+        date: {
+          type: Date,
+          default: Date.now,
+        },
+        calledBy: {
+          type: Schema.Types.ObjectId,
+          ref: "User",
+        },
+        note: {
+          type: String,
+          default: "",
+        },
+      },
+    ],
+    // Driver assignment for dispatch routes
+    assignedDriver: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      // Reference to the driver assigned to deliver this order
+    },
+    assignedVehicle: {
+      type: String,
+      // Vehicle number or identifier
+    },
+    routeId: {
+      type: String,
+      // Route identifier to group orders in the same delivery route
+    },
+    routeSequence: {
+      type: Number,
+      // Sequence number in the route (1, 2, 3, etc.)
+    },
+    assignedAt: {
+      type: Date,
+      // When the order was assigned to a route
+    },
+    assignedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      // User who assigned the order to the route
     },
   },
   { timestamps: true }

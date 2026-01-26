@@ -622,6 +622,9 @@ const createOne = (Model, modelName) =>
 
         const isSowingAllowed = slotForUpdate?.plantId?.sowingAllowed || false;
 
+        // Check if this is a ready plants order
+        const isReadyPlantsOrder = !!(orderData.productMappingId && orderData.productName);
+
         // Add order to slot's orders array and update booking counts
         let slotUpdateOperation = {
           $push: { 
@@ -633,12 +636,121 @@ const createOne = (Model, modelName) =>
           }
         };
 
-        // For regular plants (non-sowing-allowed), also decrement availablePlants
-        if (!isSowingAllowed) {
+        // For ready plants orders: INCREASE availablePlants (plants are already grown and available)
+        // For regular plants (non-sowing-allowed): DECREMENT availablePlants
+        // For sowing-allowed plants: NO change to availablePlants
+        if (isReadyPlantsOrder) {
+          // Ready plants are already grown and available from other nursery
+          // So we INCREASE availablePlants in the slot
+          slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = numberOfPlants;
+          console.log(`📦 Ready Plants Order: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numberOfPlants}, INCREMENTING availablePlants by ${numberOfPlants} (plants already available from other nursery)`);
+        } else if (!isSowingAllowed) {
           console.log(`📊 Regular plant: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numberOfPlants}, decrementing availablePlants by ${numberOfPlants}`);
           slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = -numberOfPlants;
         } else {
           console.log(`📊 Sowing-allowed plant: Updating slot ${bookingSlot} - ONLY incrementing totalBookedPlants by ${numberOfPlants} (availablePlants unchanged)`);
+        }
+
+        // Update PlantProductMapping and slot productStock if productMappingId is provided
+        if (isReadyPlantsOrder) {
+          try {
+            const PlantProductMapping = (await import('../models/plantProductMapping.model.js')).default;
+            const mapping = await PlantProductMapping.findById(orderData.productMappingId).session(session);
+            
+            if (mapping) {
+              // Find the slot document to update productStock
+              const slotDoc = await PlantSlot.findOne({
+                "subtypeSlots.slots._id": bookingSlot
+              }).session(session);
+              
+              if (slotDoc) {
+                for (const subtypeSlot of slotDoc.subtypeSlots || []) {
+                  const slot = subtypeSlot.slots.find(s => s._id && s._id.toString() === bookingSlot.toString());
+                  if (slot) {
+                    // Initialize productStock if it doesn't exist
+                    if (!slot.productStock) {
+                      slot.productStock = [];
+                    }
+                    
+                    // Find productStock entry by productName or productMappingId
+                    let productStock = slot.productStock.find(
+                      ps => ps.productName === orderData.productName || 
+                            (ps.productMappingId && ps.productMappingId.toString() === orderData.productMappingId.toString())
+                    );
+                    
+                    if (productStock) {
+                      // Ready plants are already available, so increment both available and booked
+                      productStock.available = (productStock.available || 0) + numberOfPlants;
+                      productStock.booked = (productStock.booked || 0) + numberOfPlants;
+                      productStock.poQuantity = (productStock.poQuantity || 0) + numberOfPlants;
+                      
+                      console.log(`✅ Updated productStock for "${orderData.productName}": available +${numberOfPlants}, booked +${numberOfPlants}`);
+                    } else {
+                      // Create new productStock entry when first order is placed for this slot
+                      slot.productStock.push({
+                        productName: orderData.productName,
+                        available: numberOfPlants, // Ready plants are already available
+                        booked: numberOfPlants, // Booked quantity from this order
+                        poQuantity: numberOfPlants, // Tracks total allocated to this slot
+                        received: true, // Ready plants are already received (from other nursery)
+                        startDate: mapping.dateRange.startDate,
+                        endDate: mapping.dateRange.endDate,
+                        displayTitle: mapping.displayTitle,
+                        productMappingId: mapping._id,
+                      });
+                      
+                      console.log(`✅ Created productStock entry for "${orderData.productName}" in slot ${bookingSlot} with available: ${numberOfPlants}, booked: ${numberOfPlants}`);
+                    }
+                    
+                    // Mark as modified and save
+                    slotDoc.markModified(`subtypeSlots.${slotDoc.subtypeSlots.indexOf(subtypeSlot)}.slots`);
+                    await slotDoc.save({ validateBeforeSave: false, session });
+                    break;
+                  }
+                }
+              }
+              
+              // Increment mapping's allocated quantity (reduces available quantity in mapping)
+              mapping.allocatedQuantity = (mapping.allocatedQuantity || 0) + numberOfPlants;
+              
+              // Store slot reference for dynamic calculation (if slotReferences array doesn't exist, initialize it)
+              if (!mapping.slotReferences) {
+                mapping.slotReferences = [];
+              }
+              
+              // Check if slot reference already exists
+              const slotRefExists = mapping.slotReferences.some(
+                ref => ref.slotId && ref.slotId.toString() === bookingSlot.toString()
+              );
+              
+              if (!slotRefExists) {
+                mapping.slotReferences.push({
+                  slotId: bookingSlot,
+                  bookedQuantity: numberOfPlants
+                });
+              } else {
+                // Update existing slot reference
+                const slotRef = mapping.slotReferences.find(
+                  ref => ref.slotId && ref.slotId.toString() === bookingSlot.toString()
+                );
+                if (slotRef) {
+                  slotRef.bookedQuantity = (slotRef.bookedQuantity || 0) + numberOfPlants;
+                }
+              }
+              
+              await mapping.save({ session });
+              
+              console.log(`📦 Ready Plants Product Order: "${orderData.productName}" (productMappingId: ${orderData.productMappingId})`);
+              console.log(`✅ Updated mapping allocatedQuantity: ${mapping.allocatedQuantity} (added ${numberOfPlants})`);
+              console.log(`✅ Updated slot productStock: available +${numberOfPlants}, booked +${numberOfPlants}`);
+              console.log(`ℹ️  Mapping Available quantity: ${(mapping.totalQuantity || 0) - mapping.allocatedQuantity}`);
+            } else {
+              console.warn(`⚠️  PlantProductMapping not found for productMappingId: ${orderData.productMappingId}`);
+            }
+          } catch (productMappingError) {
+            console.error('❌ Error updating PlantProductMapping and productStock:', productMappingError);
+            // Don't fail order creation if mapping update fails
+          }
         }
 
         const slotUpdateResult = await PlantSlot.updateOne(
@@ -904,6 +1016,30 @@ const updateOne = (Model, modelName, allowedFields) =>
           };
           // Remove the original field to avoid conflict
           delete filteredBody.orderRemarks;
+        }
+        // If we're replacing the entire array (array), keep as is
+      }
+
+      // Special handling for callHistory - append if it's an object
+      if (filteredBody.callHistory !== undefined) {
+        // If we're adding a single call record (object)
+        if (typeof filteredBody.callHistory === "object" && !Array.isArray(filteredBody.callHistory)) {
+          // Ensure date is a Date object
+          const callHistoryEntry = {
+            ...filteredBody.callHistory,
+            date: filteredBody.callHistory.date ? new Date(filteredBody.callHistory.date) : new Date(),
+          };
+          
+          // Use $push to add to existing array or create new array
+          if (!filteredBody.$push) filteredBody.$push = {};
+          filteredBody.$push.callHistory = callHistoryEntry;
+          
+          console.log("=== CALL HISTORY UPDATE ===");
+          console.log("Call history entry:", JSON.stringify(callHistoryEntry, null, 2));
+          console.log("$push operation:", JSON.stringify(filteredBody.$push, null, 2));
+          
+          // Remove the original field to avoid conflict
+          delete filteredBody.callHistory;
         }
         // If we're replacing the entire array (array), keep as is
       }
@@ -1409,6 +1545,7 @@ const updateOne = (Model, modelName, allowedFields) =>
       console.log("=== FINAL UPDATE OPERATION ===");
       console.log("Update operation:", JSON.stringify(updateOperation, null, 2));
       console.log("deliveryDate in update operation:", updateOperation.deliveryDate);
+      console.log("$push in update operation:", updateOperation.$push);
 
       const updatedDoc = await Model.findOneAndUpdate(
         {
@@ -1421,7 +1558,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           runValidators: true,
           session,
         }
-      );
+      ).populate("callHistory.calledBy", "name phoneNumber");
 
       if (!updatedDoc) {
         throw new AppError(
@@ -1957,7 +2094,22 @@ const getAll = (Model, modelName) =>
         });
       }
 
-      if (status) {
+      // Apply ready for dispatch filter if present - returns all READY_FOR_DISPATCH orders
+      // This should be checked BEFORE status filter to avoid conflicts
+      // Ready for dispatch means: orderStatus is READY_FOR_DISPATCH
+      if (ready_for_dispatch === "true") {
+        const readyForDispatchMatch = {
+          orderStatus: "READY_FOR_DISPATCH"
+        };
+        
+        pipeline.push({
+          $match: readyForDispatchMatch,
+        });
+        
+        console.log(`[Ready for Dispatch Filter] Looking for orders with:`);
+        console.log(`  - orderStatus: "READY_FOR_DISPATCH"`);
+      } else if (status) {
+        // Only apply status filter if ready_for_dispatch is not set
         // Convert comma-separated string to array and handle single status case
         const statusArray = status.split(",").map((s) => s.trim());
         pipeline.push({
@@ -2003,15 +2155,6 @@ const getAll = (Model, modelName) =>
 
         pipeline.push({
           $match: farmReadyMatch,
-        });
-      }
-
-      // Apply ready for dispatch filter if present - returns all FARM_READY orders
-      if (ready_for_dispatch === "true") {
-        pipeline.push({
-          $match: {
-            orderStatus: "FARM_READY"
-          },
         });
       }
 
@@ -2170,6 +2313,15 @@ const getAll = (Model, modelName) =>
           localField: "dispatchHistory.dispatchId",
           foreignField: "_id",
           as: "dispatchHistoryDispatches",
+        },
+      },
+      // Additional lookup for user references in call history
+      {
+        $lookup: {
+          from: "users",
+          localField: "callHistory.calledBy",
+          foreignField: "_id",
+          as: "callHistoryUsers",
         },
       }
     );
@@ -2580,6 +2732,58 @@ const getAll = (Model, modelName) =>
             },
           },
           additionalPlantsHistory: { $ifNull: ["$additionalPlantsHistory", []] },
+          // Added call history with user info
+          callHistory: {
+            $map: {
+              input: { $ifNull: ["$callHistory", []] },
+              as: "call",
+              in: {
+                date: "$$call.date",
+                note: "$$call.note",
+                calledBy: {
+                  $cond: {
+                    if: "$$call.calledBy",
+                    then: {
+                      $let: {
+                        vars: {
+                          userId: { $toString: "$$call.calledBy" }
+                        },
+                        in: {
+                          $let: {
+                            vars: {
+                              userData: {
+                                $arrayElemAt: [
+                                  {
+                                    $filter: {
+                                      input: "$callHistoryUsers",
+                                      as: "user",
+                                      cond: { $eq: [{ $toString: "$$user._id" }, "$$userId"] }
+                                    }
+                                  },
+                                  0
+                                ]
+                              }
+                            },
+                            in: {
+                              $ifNull: [
+                                {
+                                  _id: "$$userData._id",
+                                  name: "$$userData.name",
+                                  phoneNumber: "$$userData.phoneNumber"
+                                },
+                                { _id: "$$call.calledBy" }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    else: null,
+                  },
+                },
+              },
+            },
+          },
           // Added dispatch history with user and dispatch info
           dispatchHistory: {
             $map: {

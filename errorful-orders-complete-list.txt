@@ -1,0 +1,3190 @@
+✅ MongoDB connected
+
+====================================================================================================
+📋 ALL ERRORFUL ORDERS - COMPLETE LIST
+====================================================================================================
+
+Total Errorful Orders: 121
+
+📊 Error Types Summary:
+   UNKNOWN_ERROR: 6
+   PLANT_ERROR: 30
+   MISSING_DATA: 34
+   FARMER_ERROR: 7
+   DATE_ERROR: 44
+
+1. Row 2
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: UNKNOWN_ERROR
+   ├─ Farmer Name: Arun Pundalik Patil
+   ├─ Mobile: 9284775531
+   ├─ Address: Kasali
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 17
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: TC
+   ├─ Order By: Sandip p 
+   ├─ Reference: Sandip p 
+   ├─ Advance Amt: 12500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: advMatchOrNot is not defined
+   ├─ Created At: 12/21/2025, 1:17:39 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766303254561
+
+2. Row 2
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Arun Pundalik Patil
+   ├─ Mobile: 9284775531
+   ├─ Address: Kasali
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 17
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: TC
+   ├─ Order By: Sandip p 
+   ├─ Reference: Sandip p 
+   ├─ Advance Amt: 12500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:44 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+3. Row 2
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Arun Pundalik Patil
+   ├─ Mobile: 9284775531
+   ├─ Address: Kasali
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 17
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: TC
+   ├─ Order By: Sandip p 
+   ├─ Reference: Sandip p 
+   ├─ Advance Amt: 12500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:12 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+4. Row 2
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Arun Pundalik Patil
+   ├─ Mobile: 9284775531
+   ├─ Address: Kasali
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 17
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: TC
+   ├─ Order By: Sandip p 
+   ├─ Reference: Sandip p 
+   ├─ Advance Amt: 12500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 2
+   ├─ Created At: 12/21/2025, 12:24:01 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+5. Row 2
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Arun Pundalik Patil
+   ├─ Mobile: 9284775531
+   ├─ Address: Kasali
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 17
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: TC
+   ├─ Order By: Sandip p 
+   ├─ Reference: Sandip p 
+   ├─ Advance Amt: 12500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:22:58 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+6. Row 2
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Arun Pundalik Patil
+   ├─ Mobile: 9284775531
+   ├─ Address: Kasali
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 17
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: TC
+   ├─ Order By: Sandip p 
+   ├─ Reference: Sandip p 
+   ├─ Advance Amt: 12500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 2
+   ├─ Created At: 12/21/2025, 12:19:02 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+7. Row 2
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: 64268
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Bapu Zinga Bagala
+   ├─ Mobile: 8007870540
+   ├─ Address: Hatti
+   ├─ Taluka: Sakri
+   ├─ District: Dhule
+   ├─ Crop: Papaya
+   ├─ Variety: Taiwan
+   ├─ Media: Elli
+   ├─ Plant Qty: 2500
+   ├─ Rate: 14
+   ├─ Expected Del. Date: N/A
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: TC
+   ├─ Order By: N/A
+   ├─ Reference: New Agro Agency
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: N/A
+   ├─ Error Message: Missing delivery date for booking unknown. Expected Del. Date is required.
+   ├─ Created At: 11/23/2025, 6:44:00 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1763903634488
+
+8. Row 3
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: UNKNOWN_ERROR
+   ├─ Farmer Name: Sushila Suresh Atre
+   ├─ Mobile: 9404558601
+   ├─ Address: Fuknagari
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 8500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45989
+   ├─ Old Del. Date: 25-03-2025
+25/10
+12/11
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: advMatchOrNot is not defined
+   ├─ Created At: 12/21/2025, 1:17:41 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766303254561
+
+9. Row 3
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Sushila Suresh Atre
+   ├─ Mobile: 9404558601
+   ├─ Address: Fuknagari
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 8500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45989
+   ├─ Old Del. Date: 25-03-2025
+25/10
+12/11
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:44 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+10. Row 3
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Sushila Suresh Atre
+   ├─ Mobile: 9404558601
+   ├─ Address: Fuknagari
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 8500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45989
+   ├─ Old Del. Date: 25-03-2025
+25/10
+12/11
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:12 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+11. Row 3
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Sushila Suresh Atre
+   ├─ Mobile: 9404558601
+   ├─ Address: Fuknagari
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 8500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45989
+   ├─ Old Del. Date: 25-03-2025
+25/10
+12/11
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 3
+   ├─ Created At: 12/21/2025, 12:24:01 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+12. Row 3
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Sushila Suresh Atre
+   ├─ Mobile: 9404558601
+   ├─ Address: Fuknagari
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 8500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45989
+   ├─ Old Del. Date: 25-03-2025
+25/10
+12/11
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:22:58 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+13. Row 3
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Sushila Suresh Atre
+   ├─ Mobile: 9404558601
+   ├─ Address: Fuknagari
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 8500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45989
+   ├─ Old Del. Date: 25-03-2025
+25/10
+12/11
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 3
+   ├─ Created At: 12/21/2025, 12:19:02 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+14. Row 4
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Jayesh Hemandra Sapkale
+   ├─ Mobile: 7588696988
+   ├─ Address: Dhamangaon
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45979
+   ├─ Old Del. Date: 05-06-2025
+10/12
+15/11
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:44 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+15. Row 4
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Jayesh Hemandra Sapkale
+   ├─ Mobile: 7588696988
+   ├─ Address: Dhamangaon
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45979
+   ├─ Old Del. Date: 05-06-2025
+10/12
+15/11
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:12 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+16. Row 4
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Jayesh Hemandra Sapkale
+   ├─ Mobile: 7588696988
+   ├─ Address: Dhamangaon
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45979
+   ├─ Old Del. Date: 05-06-2025
+10/12
+15/11
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: Missing delivery date at row 4
+   ├─ Created At: 12/21/2025, 12:24:02 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+17. Row 4
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Jayesh Hemandra Sapkale
+   ├─ Mobile: 7588696988
+   ├─ Address: Dhamangaon
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45979
+   ├─ Old Del. Date: 05-06-2025
+10/12
+15/11
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:22:58 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+18. Row 4
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Jayesh Hemandra Sapkale
+   ├─ Mobile: 7588696988
+   ├─ Address: Dhamangaon
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45979
+   ├─ Old Del. Date: 05-06-2025
+10/12
+15/11
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 4
+   ├─ Created At: 12/21/2025, 12:19:02 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+19. Row 5
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Yuvraj Ramesh Shinkar
+   ├─ Mobile: 8275922868
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:45 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+20. Row 5
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Yuvraj Ramesh Shinkar
+   ├─ Mobile: 8275922868
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:13 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+21. Row 5
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Yuvraj Ramesh Shinkar
+   ├─ Mobile: 8275922868
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 5
+   ├─ Created At: 12/21/2025, 12:24:02 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+22. Row 5
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Yuvraj Ramesh Shinkar
+   ├─ Mobile: 8275922868
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:22:59 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+23. Row 5
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Yuvraj Ramesh Shinkar
+   ├─ Mobile: 8275922868
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 5
+   ├─ Created At: 12/21/2025, 12:19:02 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+24. Row 6
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Ankush Sudhakar Pandit
+   ├─ Mobile: 8390926092
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 12000
+   ├─ ADV Y/N: y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:45 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+25. Row 6
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Ankush Sudhakar Pandit
+   ├─ Mobile: 8390926092
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 12000
+   ├─ ADV Y/N: y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:13 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+26. Row 6
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Ankush Sudhakar Pandit
+   ├─ Mobile: 8390926092
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 12000
+   ├─ ADV Y/N: y
+   ├─ Error Message: Missing delivery date at row 6
+   ├─ Created At: 12/21/2025, 12:24:02 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+27. Row 6
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Ankush Sudhakar Pandit
+   ├─ Mobile: 8390926092
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 12000
+   ├─ ADV Y/N: y
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:22:59 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+28. Row 6
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Ankush Sudhakar Pandit
+   ├─ Mobile: 8390926092
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 12000
+   ├─ ADV Y/N: y
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 6
+   ├─ Created At: 12/21/2025, 12:19:03 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+29. Row 7
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: UNKNOWN_ERROR
+   ├─ Farmer Name: Sulochanbai Suresh Patil
+   ├─ Mobile: 9769312797
+   ├─ Address: Muktal
+   ├─ Taluka: Bodwad
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45981
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: advMatchOrNot is not defined
+   ├─ Created At: 12/21/2025, 1:17:45 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766303254561
+
+30. Row 7
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Sulochanbai Suresh Patil
+   ├─ Mobile: 9769312797
+   ├─ Address: Muktal
+   ├─ Taluka: Bodwad
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45981
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:46 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+31. Row 7
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Sulochanbai Suresh Patil
+   ├─ Mobile: 9769312797
+   ├─ Address: Muktal
+   ├─ Taluka: Bodwad
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45981
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:14 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+32. Row 7
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Sulochanbai Suresh Patil
+   ├─ Mobile: 9769312797
+   ├─ Address: Muktal
+   ├─ Taluka: Bodwad
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45981
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 7
+   ├─ Created At: 12/21/2025, 12:24:03 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+33. Row 7
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Sulochanbai Suresh Patil
+   ├─ Mobile: 9769312797
+   ├─ Address: Muktal
+   ├─ Taluka: Bodwad
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45981
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:22:59 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+34. Row 7
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Sulochanbai Suresh Patil
+   ├─ Mobile: 9769312797
+   ├─ Address: Muktal
+   ├─ Taluka: Bodwad
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45981
+   ├─ Old Del. Date: 45962
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 7
+   ├─ Created At: 12/21/2025, 12:19:03 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+35. Row 8
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Ashok Madhuakar Patil
+   ├─ Mobile: 9403125877
+   ├─ Address: Jamner
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 6100
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45945
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 4100
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:47 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+36. Row 8
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Ashok Madhuakar Patil
+   ├─ Mobile: 9403125877
+   ├─ Address: Jamner
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 6100
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45945
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 4100
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:14 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+37. Row 8
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Ashok Madhuakar Patil
+   ├─ Mobile: 9403125877
+   ├─ Address: Jamner
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 6100
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45945
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 4100
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 8
+   ├─ Created At: 12/21/2025, 12:24:03 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+38. Row 8
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Ashok Madhuakar Patil
+   ├─ Mobile: 9403125877
+   ├─ Address: Jamner
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 6100
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45945
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 4100
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:23:00 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+39. Row 8
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Ashok Madhuakar Patil
+   ├─ Mobile: 9403125877
+   ├─ Address: Jamner
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 6100
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45945
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 4100
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 8
+   ├─ Created At: 12/21/2025, 12:19:03 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+40. Row 9
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Suresh Vishwanth Shinde
+   ├─ Mobile: 9604844200
+   ├─ Address: Devpimpri
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 9000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 9000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:47 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+41. Row 9
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Suresh Vishwanth Shinde
+   ├─ Mobile: 9604844200
+   ├─ Address: Devpimpri
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 9000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 9000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:14 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+42. Row 9
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Suresh Vishwanth Shinde
+   ├─ Mobile: 9604844200
+   ├─ Address: Devpimpri
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 9000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 9000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 9
+   ├─ Created At: 12/21/2025, 12:24:03 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+43. Row 9
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Suresh Vishwanth Shinde
+   ├─ Mobile: 9604844200
+   ├─ Address: Devpimpri
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 9000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 9000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:23:00 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+44. Row 9
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Suresh Vishwanth Shinde
+   ├─ Mobile: 9604844200
+   ├─ Address: Devpimpri
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 9000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 9000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 9
+   ├─ Created At: 12/21/2025, 12:19:04 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+45. Row 10
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: UNKNOWN_ERROR
+   ├─ Farmer Name: Sunil Rajaram Kulkarni
+   ├─ Mobile: 9881144759
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: Elli
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: advMatchOrNot is not defined
+   ├─ Created At: 12/21/2025, 1:17:48 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766303254561
+
+46. Row 10
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Sunil Rajaram Kulkarni
+   ├─ Mobile: 9881144759
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: Elli
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:48 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+47. Row 10
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Sunil Rajaram Kulkarni
+   ├─ Mobile: 9881144759
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: Elli
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:15 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+48. Row 10
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: UNKNOWN_ERROR
+   ├─ Farmer Name: Sunil Rajaram Kulkarni
+   ├─ Mobile: 9881144759
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: Elli
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Cast to Number failed for value "NaN" (type number) at path "cavity" for model "Tray"
+   ├─ Created At: 12/21/2025, 12:24:04 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+49. Row 10
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Sunil Rajaram Kulkarni
+   ├─ Mobile: 9881144759
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: Elli
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:23:01 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+50. Row 10
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Sunil Rajaram Kulkarni
+   ├─ Mobile: 9881144759
+   ├─ Address: Kekat Nimbhora
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: Elli
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45962
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 10
+   ├─ Created At: 12/21/2025, 12:19:04 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+51. Row 11
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: UNKNOWN_ERROR
+   ├─ Farmer Name: Vilas Bhimrao Wagh
+   ├─ Mobile: 9022502453
+   ├─ Address: Gornala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45991
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: advMatchOrNot is not defined
+   ├─ Created At: 12/21/2025, 1:17:49 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766303254561
+
+52. Row 11
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Vilas Bhimrao Wagh
+   ├─ Mobile: 9022502453
+   ├─ Address: Gornala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45991
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:49 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300139398
+
+53. Row 11
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Vilas Bhimrao Wagh
+   ├─ Mobile: 9022502453
+   ├─ Address: Gornala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45991
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No slot configuration found for plant in year 2025
+   ├─ Created At: 12/21/2025, 12:25:15 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300109272
+
+54. Row 11
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Vilas Bhimrao Wagh
+   ├─ Mobile: 9022502453
+   ├─ Address: Gornala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45991
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 11
+   ├─ Created At: 12/21/2025, 12:24:04 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766300037255
+
+55. Row 11
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Vilas Bhimrao Wagh
+   ├─ Mobile: 9022502453
+   ├─ Address: Gornala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45991
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantCms validation failed: subtypes.0.slotCapacity: Path `slotCapacity` is required., subtypes.0.slotEndDate: Path `slotEndDate` is required., subtypes.0.slotStartDate: Path `slotStartDate` is required., subtypes.0.slotDays: Path `slotDays` is required., subtypes.1.slotCapacity: Path `slotCapacity` is required., subtypes.1.slotEndDate: Path `slotEndDate` is required., subtypes.1.slotStartDate: Path `slotStartDate` is required., subtypes.1.slotDays: Path `slotDays` is required.
+   ├─ Created At: 12/21/2025, 12:23:01 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299972462
+
+56. Row 11
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: PLANT_ERROR
+   ├─ Farmer Name: Vilas Bhimrao Wagh
+   ├─ Mobile: 9022502453
+   ├─ Address: Gornala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3500
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45991
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 3500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Variety "G-9" not found for "Banana" at row 11
+   ├─ Created At: 12/21/2025, 12:19:04 PM
+   ├─ Resolved: No
+   └─ Import Batch: test-import-1766299738510
+
+57. Row 37
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Bapu Zinga Bagala
+   ├─ Mobile: 8007870540
+   ├─ Address: Hatti
+   ├─ Taluka: Sakri
+   ├─ District: Dhule
+   ├─ Crop: Papaya
+   ├─ Variety: Taiwan
+   ├─ Media: Elli
+   ├─ Plant Qty: 2500
+   ├─ Rate: 14
+   ├─ Expected Del. Date: N/A
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: TC
+   ├─ Order By: Sandip C.
+   ├─ Reference: New Agro Agency
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 37
+   ├─ Created At: 12/21/2025, 2:20:05 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766306798016
+
+58. Row 37
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Bapu Zinga Bagala
+   ├─ Mobile: 8007870540
+   ├─ Address: Hatti
+   ├─ Taluka: Sakri
+   ├─ District: Dhule
+   ├─ Crop: Papaya
+   ├─ Variety: Taiwan
+   ├─ Media: Elli
+   ├─ Plant Qty: 2500
+   ├─ Rate: 14
+   ├─ Expected Del. Date: N/A
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: TC
+   ├─ Order By: Sandip C.
+   ├─ Reference: New Agro Agency
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 37
+   ├─ Created At: 12/21/2025, 1:41:06 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+59. Row 37
+   ┌─ Booking Number: 25-26/B0076
+   ├─ Parsed Order ID: 25260076
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Tushar Chaudhari
+   ├─ Mobile: 7770048888
+   ├─ Address: Khedi
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Muskmelon
+   ├─ Variety: Layalpur
+   ├─ Media: 126
+   ├─ Plant Qty: 28000
+   ├─ Rate: 2.1
+   ├─ Expected Del. Date: N/A
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: N/A
+   ├─ Reference: Deepak Patil Sir
+   ├─ Advance Amt: 28000
+   ├─ ADV Y/N: N/A
+   ├─ Error Message: Missing delivery date for booking 25-26/B0076. Expected Del. Date is required.
+   ├─ Created At: 11/23/2025, 6:44:37 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1763903634488
+
+60. Row 80
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Ravindra Shaligram Patil
+   ├─ Mobile: 9834203360
+   ├─ Address: Sonala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: N/A
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Om Sai Swar chhaya 
+   ├─ Advance Amt: 20000
+   ├─ ADV Y/N: N
+   ├─ Error Message: Missing delivery date at row 80
+   ├─ Created At: 12/21/2025, 2:22:48 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766306798016
+
+61. Row 80
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Ravindra Shaligram Patil
+   ├─ Mobile: 9834203360
+   ├─ Address: Sonala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: N/A
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Om Sai Swar chhaya 
+   ├─ Advance Amt: 20000
+   ├─ ADV Y/N: N
+   ├─ Error Message: Missing delivery date at row 80
+   ├─ Created At: 12/21/2025, 1:41:44 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+62. Row 192
+   ┌─ Booking Number: 25-26/B0264
+   ├─ Parsed Order ID: 25260264
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Vikas Thansing Patil
+   ├─ Mobile: 9850704981
+   ├─ Address: Moygaon
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simgham
+   ├─ Media: 126
+   ├─ Plant Qty: 14000
+   ├─ Rate: N/A
+   ├─ Expected Del. Date: 2025-12-15
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: N/A
+   ├─ Reference: Prashant S.
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N/A
+   ├─ Error Message: Order validation failed: rate: Path `rate` is required.
+   ├─ Created At: 11/23/2025, 6:48:35 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1763903634488
+
+63. Row 209
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: FARMER_ERROR
+   ├─ Farmer Name: Vishanu Kukaji Patil 
+   ├─ Mobile: -9503568311
+   ├─ Address: Pimpalgaon
+   ├─ Taluka: Motala
+   ├─ District: N/A
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 5000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 45955
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: c
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Farmer validation failed: district: District ID requried, districtName: District name requried
+   ├─ Created At: 12/21/2025, 1:43:25 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+64. Row 302
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: FARMER_ERROR
+   ├─ Farmer Name: Deepak Patil 
+   ├─ Mobile: N/A
+   ├─ Address: Bodharli
+   ├─ Taluka: N/A
+   ├─ District: N/A
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 10000
+   ├─ Rate: 20
+   ├─ Expected Del. Date: 45945
+   ├─ Old Del. Date: 45840
+   ├─ Del. Y/N: Y
+   ├─ Order By: N/A
+   ├─ Reference: N/A
+   ├─ Advance Amt: 50000
+   ├─ ADV Y/N: N
+   ├─ Error Message: Farmer validation failed: taluka: Taluka ID requried, district: District ID requried, talukaName: Taluka name requried, districtName: District name requried
+   ├─ Created At: 12/21/2025, 1:44:17 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+65. Row 555
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: FARMER_ERROR
+   ├─ Farmer Name: Vithhal Bhivsan Chavhan
+   ├─ Mobile: 9665206663
+   ├─ Address: Liha Digar
+   ├─ Taluka: Soygaon
+   ├─ District: N/A
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media:  8 Cavity
+   ├─ Plant Qty: 3000
+   ├─ Rate: 19
+   ├─ Expected Del. Date: 46006
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: 3000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Farmer validation failed: district: District ID requried, districtName: District name requried
+   ├─ Created At: 12/21/2025, 1:46:51 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+66. Row 587
+   ┌─ Booking Number: N/A
+   ├─ Parsed Order ID: N/A
+   ├─ Error Type: FARMER_ERROR
+   ├─ Farmer Name: Ravindra Govinda Marathe
+   ├─ Mobile: 9421499800
+   ├─ Address: Brahmane
+   ├─ Taluka: Shindkheda
+   ├─ District: N/A
+   ├─ Crop: Banana
+   ├─ Variety: G-9
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 4900
+   ├─ Rate: 20
+   ├─ Expected Del. Date: 46021
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Unnati Agro
+   ├─ Reference: Unnati Agro
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Farmer validation failed: district: District ID requried, districtName: District name requried
+   ├─ Created At: 12/21/2025, 1:47:13 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+67. Row 666
+   ┌─ Booking Number: 25-26/B0036
+   ├─ Parsed Order ID: 25260036
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Pradip Vitthal Chavhan
+   ├─ Mobile: 9096409547
+   ├─ Address: Chinchkheda
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 5000
+   ├─ Rate: 2.6
+   ├─ Expected Del. Date: 45948
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 18-10-2025 in month October
+   ├─ Created At: 12/21/2025, 1:48:15 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+68. Row 669
+   ┌─ Booking Number: 25-26/B0039
+   ├─ Parsed Order ID: 25260039
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Subhash Sarangdhar Sonawane
+   ├─ Mobile: 8788713849
+   ├─ Address: Dahigaon
+   ├─ Taluka: Bhokardhan
+   ├─ District: Jalna
+   ├─ Crop: Muskmelon
+   ├─ Variety: Layalpur
+   ├─ Media: 126
+   ├─ Plant Qty: 10000
+   ├─ Rate: 2.2
+   ├─ Expected Del. Date: 45948
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 8000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.4.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.5.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.6.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.7.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.8.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.9.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.3.activityName: Path `activityName` is required.
+   ├─ Created At: 12/21/2025, 1:48:30 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+69. Row 670
+   ┌─ Booking Number: 25-26/B0040
+   ├─ Parsed Order ID: 25260040
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Gajanan Dnyanoba Patil
+   ├─ Mobile: 8605393861
+   ├─ Address: Surwada
+   ├─ Taluka: Bodwad
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 7500
+   ├─ Rate: 2.6
+   ├─ Expected Del. Date: 45950
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 9500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 20-10-2025 in month October
+   ├─ Created At: 12/21/2025, 1:48:31 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+70. Row 698
+   ┌─ Booking Number: 25-26/B0067
+   ├─ Parsed Order ID: 25260067
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Pravin Ramdas Wagh
+   ├─ Mobile: 8975135923
+   ├─ Address: Umala
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Muskmelon
+   ├─ Variety: Layalpur
+   ├─ Media: 126
+   ├─ Plant Qty: 2000
+   ├─ Rate: 2.1
+   ├─ Expected Del. Date: 45955
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 500
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.4.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.5.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.6.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.7.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.8.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.9.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.3.activityName: Path `activityName` is required.
+   ├─ Created At: 12/21/2025, 1:49:02 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+71. Row 702
+   ┌─ Booking Number: 25-26/B0071
+   ├─ Parsed Order ID: 25260071
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Purshottam dagdu birhade
+   ├─ Mobile: 9822331754
+8380921409
+   ├─ Address: Umala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 16000
+   ├─ Rate: 2.6
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10400
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 10-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:49:04 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+72. Row 707
+   ┌─ Booking Number: 25-26/B0076
+   ├─ Parsed Order ID: 25260076
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Tushar Chaudhari
+   ├─ Mobile: 7770048888
+   ├─ Address: Khedi
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Muskmelon
+   ├─ Variety: Layalpur
+   ├─ Media: 126
+   ├─ Plant Qty: 28000
+   ├─ Rate: 2.1
+   ├─ Expected Del. Date: N/A
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: PKC Sir 
+   ├─ Reference: PKC
+   ├─ Advance Amt: 28000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Missing delivery date at row 707
+   ├─ Created At: 12/21/2025, 1:49:08 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+73. Row 717
+   ┌─ Booking Number: 25-26/B0086
+   ├─ Parsed Order ID: 25260086
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Dipshor Bansilal Sonawane
+   ├─ Mobile: 8975782990
+   ├─ Address: Padsod
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Muskmelon
+   ├─ Variety: Layalpur
+   ├─ Media: 126
+   ├─ Plant Qty: 18000
+   ├─ Rate: 2.1
+   ├─ Expected Del. Date: 45963
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Sandip p 
+   ├─ Reference: Sandip p 
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.4.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.5.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.6.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.7.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.8.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.9.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.3.activityName: Path `activityName` is required.
+   ├─ Created At: 12/21/2025, 1:49:19 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+74. Row 719
+   ┌─ Booking Number: 25-26/B0088
+   ├─ Parsed Order ID: 25260088
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Vijay Chaurasiya 
+   ├─ Mobile: 9326005211
+   ├─ Address: Kanalda
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 17500
+   ├─ Rate: 2.6
+   ├─ Expected Del. Date: 45966
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Office
+   ├─ Reference: Ram Agree Sales
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 05-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:49:20 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+75. Row 720
+   ┌─ Booking Number: 25-26/B0088
+   ├─ Parsed Order ID: 25260088
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Vijay Chaurasiya 
+   ├─ Mobile: 9326005211
+   ├─ Address: Kanalda
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Muskmelon
+   ├─ Variety: Layalpur
+   ├─ Media: 126
+   ├─ Plant Qty: 14000
+   ├─ Rate: 2.1
+   ├─ Expected Del. Date: 45966
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Office
+   ├─ Reference: Ram Agree Sales
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.4.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.5.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.6.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.7.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.8.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.9.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.3.activityName: Path `activityName` is required.
+   ├─ Created At: 12/21/2025, 1:49:23 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+76. Row 722
+   ┌─ Booking Number: 25-26/B0090
+   ├─ Parsed Order ID: 25260090
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Ganesh Dondu Dhakare
+   ├─ Mobile: 9730819171
+   ├─ Address: Ranjani
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 30000
+   ├─ Rate: 2.6
+   ├─ Expected Del. Date: 45965
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 15000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 04-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:49:26 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+77. Row 723
+   ┌─ Booking Number: 25-26/B0091
+   ├─ Parsed Order ID: 25260091
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Vijay Ananada Patil
+   ├─ Mobile: 9730673426
+   ├─ Address: Ranjani
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 10500
+   ├─ Rate: 2.6
+   ├─ Expected Del. Date: 45966
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 05-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:49:28 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+78. Row 729
+   ┌─ Booking Number: 25-26/B0095
+   ├─ Parsed Order ID: 25260095
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Roshan Pitamber Patil
+   ├─ Mobile: 9579234066
+   ├─ Address: Samrod
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 11000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45971
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: RB 
+   ├─ Reference: Idhashi Mata Tredar
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 10-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:49:39 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+79. Row 730
+   ┌─ Booking Number: 25-26/B0096
+   ├─ Parsed Order ID: 25260096
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Dnyaneshwar lukudu Patil
+   ├─ Mobile: 9518738972
+   ├─ Address: Dhanwad
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Prachand
+   ├─ Media: 126
+   ├─ Plant Qty: 9000
+   ├─ Rate: 2.8
+   ├─ Expected Del. Date: 45973
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 12-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:49:51 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+80. Row 731
+   ┌─ Booking Number: 25-26/B0097
+   ├─ Parsed Order ID: 25260097
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Santosh Adhav 
+   ├─ Mobile: 9588641864
+   ├─ Address: Tondapur 
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Prachand
+   ├─ Media: 126
+   ├─ Plant Qty: 12000
+   ├─ Rate: 2.8
+   ├─ Expected Del. Date: 45973
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: c
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 12-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:49:53 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+81. Row 732
+   ┌─ Booking Number: 25-26/B0098
+   ├─ Parsed Order ID: 25260098
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Sambhaji Vasant chavan
+   ├─ Mobile: 8275922869
+   ├─ Address: Chinchkheda 1
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 7000
+   ├─ Rate: 2.6
+   ├─ Expected Del. Date: 45964
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 03-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:49:55 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+82. Row 735
+   ┌─ Booking Number: 25-26/B0101
+   ├─ Parsed Order ID: 25260101
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Gajanan Hari Ubale
+   ├─ Mobile: 8459597670
+   ├─ Address: Jalandri
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 12000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45976
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: y
+   ├─ Error Message: No suitable slot found for delivery date 15-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:49:59 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+83. Row 736
+   ┌─ Booking Number: 25-26/B0102
+   ├─ Parsed Order ID: 25260102
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Ishwar Narayan Shinde
+   ├─ Mobile: 9766164182
+   ├─ Address: Ranjani
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 11000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45975
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Vaibhav P
+   ├─ Reference: Muktai k k Rajni
+   ├─ Advance Amt: 6000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 14-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:50:00 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+84. Row 737
+   ┌─ Booking Number: 25-26/B0103
+   ├─ Parsed Order ID: 25260103
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Ashish Jayvantrao Patil
+   ├─ Mobile: 7620148971
+   ├─ Address: Manur
+   ├─ Taluka: Bodwad
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Prachand
+   ├─ Media: 126
+   ├─ Plant Qty: 5500
+   ├─ Rate: 2.8
+   ├─ Expected Del. Date: 45976
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Sandip p 
+   ├─ Reference: Sandip p 
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 15-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:50:02 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+85. Row 739
+   ┌─ Booking Number: 25-26/B0105
+   ├─ Parsed Order ID: 25260105
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Vinod Bhavlal Gopal
+   ├─ Mobile: 7057672831
+   ├─ Address: Chincholi Pimpri
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 7000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45976
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 15-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:50:05 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+86. Row 740
+   ┌─ Booking Number: 25-26/B0106
+   ├─ Parsed Order ID: 25260106
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Bandu Totaram Shinde
+   ├─ Mobile: 9529499743
+   ├─ Address: Kapuswadi
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 12000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45976
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 15-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:50:11 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+87. Row 741
+   ┌─ Booking Number: 25-26/B0107
+   ├─ Parsed Order ID: 25260107
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Prakash Sudhakar Gadhe
+   ├─ Mobile: 9822556439‬
+   ├─ Address: Betavad
+   ├─ Taluka: Bodwad
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 12000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45976
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: C
+   ├─ Order By: Vaibhav P
+   ├─ Reference: Vaibhav P
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 15-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:50:17 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+88. Row 746
+   ┌─ Booking Number: 25-26/B0112
+   ├─ Parsed Order ID: 25260112
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Prakash Pundalik Kurkure
+   ├─ Mobile: 9822400554
+   ├─ Address: Sakegaon
+   ├─ Taluka: Bhusawal 
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 12000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45981
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 20-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:50:33 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+89. Row 748
+   ┌─ Booking Number: 25-26/B0114
+   ├─ Parsed Order ID: 25260114
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Subhash Chindhu Patil
+   ├─ Mobile: 9209380014
+   ├─ Address: Samrod
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 8000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45981
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 20-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:50:37 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+90. Row 751
+   ┌─ Booking Number: 25-26/B0117
+   ├─ Parsed Order ID: 25260117
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Dipak Pandurang Patil
+   ├─ Mobile: 9665084642
+   ├─ Address: Maskawad
+   ├─ Taluka: Raver
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 8 Cavity
+   ├─ Plant Qty: 11000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45992
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Sandip p 
+   ├─ Reference: Sandip p 
+   ├─ Advance Amt: 11000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 01-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:50:47 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+91. Row 769
+   ┌─ Booking Number: 25-26/B0135
+   ├─ Parsed Order ID: 25260135
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Bapu Bhaskar Bagul
+   ├─ Mobile: 8007980045
+   ├─ Address: Chilgaon
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 24000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45992
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: y
+   ├─ Error Message: No suitable slot found for delivery date 01-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:53:33 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+92. Row 770
+   ┌─ Booking Number: 25-26/B0135
+   ├─ Parsed Order ID: 25260135
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Bapu Bhaskar Bagul
+   ├─ Mobile: 8007980045
+   ├─ Address: Chilgaon
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 40000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45996
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: y
+   ├─ Error Message: No suitable slot found for delivery date 05-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:53:38 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+93. Row 774
+   ┌─ Booking Number: 25-26/B0139
+   ├─ Parsed Order ID: 25260139
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Mayur Uttam Kanade
+   ├─ Mobile: 9834665868
+9975631596
+   ├─ Address: Primpri 
+   ├─ Taluka: Yawal
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 13000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45998
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 13000
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 07-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:53:56 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+94. Row 775
+   ┌─ Booking Number: 25-26/B0140
+   ├─ Parsed Order ID: 25260140
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Mahendra Umesh Patil
+   ├─ Mobile: 9158469357
+   ├─ Address: Primpri 
+   ├─ Taluka: Yawal
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 38000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45998
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 38000
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 07-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:54:03 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+95. Row 776
+   ┌─ Booking Number: 25-26/B0141
+   ├─ Parsed Order ID: 25260141
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Suresh Bhavlal Gopal
+   ├─ Mobile: 7620885414
+   ├─ Address: Chincholi Pimpri
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 6500
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45997
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 06-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:54:09 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+96. Row 781
+   ┌─ Booking Number: 25-26/B0146
+   ├─ Parsed Order ID: 25260146
+   ├─ Error Type: FARMER_ERROR
+   ├─ Farmer Name: Nagesh Kodur
+   ├─ Mobile: N/A
+   ├─ Address: N/A
+   ├─ Taluka: N/A
+   ├─ District: N/A
+   ├─ Crop: Papaya
+   ├─ Variety: Taiwan
+   ├─ Media: Elli
+   ├─ Plant Qty: 25000
+   ├─ Rate: 20
+   ├─ Expected Del. Date: 45986
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: PKC
+   ├─ Advance Amt: 100000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Farmer validation failed: village: Village ID requried, taluka: Taluka ID requried, district: District ID requried, talukaName: Taluka name requried, districtName: District name requried
+   ├─ Created At: 12/21/2025, 1:54:13 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+97. Row 782
+   ┌─ Booking Number: 25-26/B0146
+   ├─ Parsed Order ID: 25260146
+   ├─ Error Type: FARMER_ERROR
+   ├─ Farmer Name: Nagesh Kodur
+   ├─ Mobile: N/A
+   ├─ Address: N/A
+   ├─ Taluka: N/A
+   ├─ District: N/A
+   ├─ Crop: Papaya
+   ├─ Variety: Taiwan
+   ├─ Media: Elli
+   ├─ Plant Qty: 15000
+   ├─ Rate: 20
+   ├─ Expected Del. Date: 45993
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: PKC
+   ├─ Advance Amt: 100000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Farmer validation failed: village: Village ID requried, taluka: Taluka ID requried, district: District ID requried, talukaName: Taluka name requried, districtName: District name requried
+   ├─ Created At: 12/21/2025, 1:54:13 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+98. Row 802
+   ┌─ Booking Number: 25-26/B0166
+   ├─ Parsed Order ID: 25260166
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Sachin Kadu Patil
+   ├─ Mobile: 9284644917
+   ├─ Address: Mahalkheda
+   ├─ Taluka: Muktainagar
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 21000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45992
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 01-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:56:49 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+99. Row 807
+   ┌─ Booking Number: 25-26/B0171
+   ├─ Parsed Order ID: 25260171
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Panjabrao Murlidhar Sisode
+   ├─ Mobile: 9209506576
+   ├─ Address: Pimpalgaon Golait
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 20000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45994
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 03-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:57:30 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+100. Row 808
+   ┌─ Booking Number: 25-26/B0172
+   ├─ Parsed Order ID: 25260172
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Suresh Dattu Patil
+   ├─ Mobile: 8390685501
+   ├─ Address: Sonala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 15000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45993
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 02-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:57:37 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+101. Row 809
+   ┌─ Booking Number: 25-26/B0173
+   ├─ Parsed Order ID: 25260173
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Ananda Bhika Patil
+   ├─ Mobile: 8007986285
+   ├─ Address: Sonala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 13000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45994
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 03-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:57:45 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+102. Row 817
+   ┌─ Booking Number: 25-26/B0180
+   ├─ Parsed Order ID: 25260180
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Samadhan Narayan Kumavat
+   ├─ Mobile: 9309215013
+   ├─ Address: Neri 
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 7000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45986
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 25-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:58:24 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+103. Row 829
+   ┌─ Booking Number: 25-26/B0192
+   ├─ Parsed Order ID: 25260192
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Sandip Yuvraj Patil
+   ├─ Mobile: 9403855507
+   ├─ Address: Chinchkhede
+   ├─ Taluka: Chalisgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Muskmelon
+   ├─ Variety: Layalpur
+   ├─ Media: 126
+   ├─ Plant Qty: 15500
+   ├─ Rate: 2.1
+   ├─ Expected Del. Date: 45993
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.4.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.5.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.6.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.7.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.8.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.9.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.3.activityName: Path `activityName` is required.
+   ├─ Created At: 12/21/2025, 1:58:38 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+104. Row 831
+   ┌─ Booking Number: 25-26/B0194
+   ├─ Parsed Order ID: 25260194
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Rajendra krushna Dandage
+   ├─ Mobile: 8806008 768
+   ├─ Address: Jalki bajar
+   ├─ Taluka: Sillod
+   ├─ District: Ch.Sambhaji Nagar
+   ├─ Crop: Muskmelon
+   ├─ Variety: Layalpur
+   ├─ Media: 126
+   ├─ Plant Qty: 4000
+   ├─ Rate: 2.1
+   ├─ Expected Del. Date: 45986
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.4.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.5.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.6.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.7.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.8.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.9.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.3.activityName: Path `activityName` is required.
+   ├─ Created At: 12/21/2025, 1:58:39 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+105. Row 835
+   ┌─ Booking Number: 25-26/B0198
+   ├─ Parsed Order ID: 25260198
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Kishor Kashinath Paygvhan
+   ├─ Mobile: 9579714208
+   ├─ Address: Vadgaon BK
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Prachand
+   ├─ Media: 126
+   ├─ Plant Qty: 7000
+   ├─ Rate: 2.8
+   ├─ Expected Del. Date: 45991
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 30-11-2025 in month November
+   ├─ Created At: 12/21/2025, 1:58:56 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+106. Row 837
+   ┌─ Booking Number: 25-26/B0200
+   ├─ Parsed Order ID: 25260200
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Dipali Gajanan Patil
+   ├─ Mobile: 7875079653
+   ├─ Address: Sonala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 16000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45993
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 02-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:59:06 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+107. Row 838
+   ┌─ Booking Number: 25-26/B0201
+   ├─ Parsed Order ID: 25260201
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Mango Dagadu Patil
+   ├─ Mobile: 9765394742
+   ├─ Address: Sonala
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 14000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45994
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 03-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:59:12 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+108. Row 840
+   ┌─ Booking Number: 25-26/B0203
+   ├─ Parsed Order ID: 25260203
+   ├─ Error Type: MISSING_DATA
+   ├─ Farmer Name: Sachin Santosh Dandage
+   ├─ Mobile: 9373451891
+   ├─ Address: Jalki Bajar
+   ├─ Taluka: Sillod
+   ├─ District: Ch.Sambhaji Nagar
+   ├─ Crop: Muskmelon
+   ├─ Variety: Layalpur
+   ├─ Media: 126
+   ├─ Plant Qty: 15000
+   ├─ Rate: 2.1
+   ├─ Expected Del. Date: 45995
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.21.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.4.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.5.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.6.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.7.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.8.activityName: Path `activityName` is required., subtypeSlots.2.slots.23.slotTrail.9.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.2.slots.30.slotTrail.3.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.1.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.2.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.0.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.1.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.2.activityName: Path `activityName` is required., subtypeSlots.3.slots.3.slotTrail.3.activityName: Path `activityName` is required.
+   ├─ Created At: 12/21/2025, 1:59:20 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+109. Row 845
+   ┌─ Booking Number: 25-26/B0208
+   ├─ Parsed Order ID: 25260208
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Namdev Kashinath Khadse
+   ├─ Mobile: 9082610097
+   ├─ Address: Umala
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 12000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45999
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 08-12-2025 in month December
+   ├─ Created At: 12/21/2025, 1:59:42 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+110. Row 850
+   ┌─ Booking Number: 25-26/B0213
+   ├─ Parsed Order ID: 25260213
+   ├─ Error Type: FARMER_ERROR
+   ├─ Farmer Name: Yogesh Patil
+   ├─ Mobile: ‪9834765655‬
+   ├─ Address: Madani 
+   ├─ Taluka: N/A
+   ├─ District: N/A
+   ├─ Crop: Watermelon
+   ├─ Variety: Impact
+   ├─ Media: 126
+   ├─ Plant Qty: 11250
+   ├─ Rate: 2.6
+   ├─ Expected Del. Date: 46001
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: PKC Sir 
+   ├─ Reference: PKC
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: Farmer validation failed: taluka: Taluka ID requried, district: District ID requried, talukaName: Taluka name requried, districtName: District name requried
+   ├─ Created At: 12/21/2025, 2:00:15 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+111. Row 858
+   ┌─ Booking Number: 25-26/B0221
+   ├─ Parsed Order ID: 25260221
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Gopal Thansing Patil
+   ├─ Mobile: 9325918772
+   ├─ Address: Bohardi
+   ├─ Taluka: Bhusawal 
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Prachand
+   ├─ Media: 126
+   ├─ Plant Qty: 12500
+   ├─ Rate: 2.8
+   ├─ Expected Del. Date: 45996
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 05-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:00:57 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+112. Row 861
+   ┌─ Booking Number: 25-26/B0224
+   ├─ Parsed Order ID: 25260224
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Bhagwan Keshav Patil
+   ├─ Mobile: 8600070984
+   ├─ Address: Nachankheda
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 4400
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45996
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Om Sai Swar chhaya 
+   ├─ Advance Amt: 4400
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 05-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:01:13 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+113. Row 866
+   ┌─ Booking Number: 25-26/B0229
+   ├─ Parsed Order ID: 25260229
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Dinakar Sahebrao Sonawane
+   ├─ Mobile: 9021926052
+   ├─ Address: Nandgaon
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 36000
+   ├─ Rate: 2.6
+   ├─ Expected Del. Date: 46000
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Sandip p
+   ├─ Reference: Sandip p
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 09-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:02:06 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+114. Row 867
+   ┌─ Booking Number: 25-26/B0230
+   ├─ Parsed Order ID: 25260230
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Durgesh Shivaji Patil
+   ├─ Mobile: 8999745542
+   ├─ Address: Dhanwad
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 12000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 46006
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Office
+   ├─ Reference: Ram Agree Sales
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 15-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:02:13 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+115. Row 868
+   ┌─ Booking Number: 25-26/B0231
+   ├─ Parsed Order ID: 25260231
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Narayan Kashinath Khadase
+   ├─ Mobile: 9623096721
+   ├─ Address: Umala
+   ├─ Taluka: Jalgaon
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 9000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 45996
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: N/A
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 05-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:02:18 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+116. Row 869
+   ┌─ Booking Number: 25-26/B0232
+   ├─ Parsed Order ID: 25260232
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Atul Mahajan
+   ├─ Mobile: 9545776570
+   ├─ Address: Ambilhol
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 45000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 46004
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: N
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 20000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 13-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:02:28 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+117. Row 871
+   ┌─ Booking Number: 25-26/B0234
+   ├─ Parsed Order ID: 25260234
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Devidas Eknath Ubale
+   ├─ Mobile: 8459597670
+   ├─ Address: Jalandri
+   ├─ Taluka: Jamner
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 6100
+   ├─ Rate: 2.5
+   ├─ Expected Del. Date: 46011
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Barde Sir
+   ├─ Reference: Barde Sir
+   ├─ Advance Amt: 4000
+   ├─ ADV Y/N: Y
+   ├─ Error Message: No suitable slot found for delivery date 20-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:02:59 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+118. Row 872
+   ┌─ Booking Number: 25-26/B0235
+   ├─ Parsed Order ID: 25260235
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Samadhan Nathu Shirsagar
+   ├─ Mobile: 9373481534
+   ├─ Address: Palaskheda
+   ├─ Taluka: Soygaon
+   ├─ District: Ch.Sambhaji Nagar
+   ├─ Crop: Muskmelon
+   ├─ Variety: Vijay
+   ├─ Media: 126
+   ├─ Plant Qty: 9000
+   ├─ Rate: 2.1
+   ├─ Expected Del. Date: 45996
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 8000
+   ├─ ADV Y/N: y
+   ├─ Error Message: No suitable slot found for delivery date 05-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:03:00 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+119. Row 874
+   ┌─ Booking Number: 25-26/B0237
+   ├─ Parsed Order ID: 25260237
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Vinod Bhagwat Deshmukh
+   ├─ Mobile: 9689642433
+   ├─ Address: Lohara
+   ├─ Taluka: Pachora
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Prachand
+   ├─ Media: 126
+   ├─ Plant Qty: 12000
+   ├─ Rate: 2.8
+   ├─ Expected Del. Date: 46003
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 12-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:07:31 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+120. Row 875
+   ┌─ Booking Number: 25-26/B0238
+   ├─ Parsed Order ID: 25260238
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Rambhau Patil
+   ├─ Mobile: 9767934870
+   ├─ Address: Lohara
+   ├─ Taluka: Pachora
+   ├─ District: Jalgaon
+   ├─ Crop: Watermelon
+   ├─ Variety: Prachand
+   ├─ Media: 126
+   ├─ Plant Qty: 10000
+   ├─ Rate: 2.8
+   ├─ Expected Del. Date: 46003
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: Y
+   ├─ Order By: Prashant Shinde 
+   ├─ Reference: Prashant Shinde 
+   ├─ Advance Amt: 5000
+   ├─ ADV Y/N: N
+   ├─ Error Message: No suitable slot found for delivery date 12-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:09:25 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+121. Row 881
+   ┌─ Booking Number: 25-26/B0244
+   ├─ Parsed Order ID: 25260244
+   ├─ Error Type: DATE_ERROR
+   ├─ Farmer Name: Sarthak Nagendra Patidar
+   ├─ Mobile: 8966939373
+   ├─ Address: Ajnadi
+   ├─ Taluka: Manvar
+   ├─ District: Dhar
+   ├─ Crop: Watermelon
+   ├─ Variety: Simbha
+   ├─ Media: 126
+   ├─ Plant Qty: 22000
+   ├─ Rate: 2.7
+   ├─ Expected Del. Date: 46006
+   ├─ Old Del. Date: N/A
+   ├─ Del. Y/N: y
+   ├─ Order By: D. Patil
+   ├─ Reference: D. Patil
+   ├─ Advance Amt: 10000
+   ├─ ADV Y/N: y
+   ├─ Error Message: No suitable slot found for delivery date 15-12-2025 in month December
+   ├─ Created At: 12/21/2025, 2:12:18 PM
+   ├─ Resolved: No
+   └─ Import Batch: import-1766304618745
+
+====================================================================================================
+Total: 121 errorful orders
+====================================================================================================
+
+🔌 Database connection closed

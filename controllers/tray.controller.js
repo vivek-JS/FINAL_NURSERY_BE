@@ -6,7 +6,7 @@ import Tray from "../models/tray.model.js";
 import mongoose from "mongoose";
 
 const createTray = catchAsync(async (req, res, next) => {
-  const { name, cavity, numberPerCrate } = req.body;
+  const { name, cavity, numberPerCrate, aliases } = req.body;
 
   if (!Number.isInteger(numberPerCrate) || numberPerCrate < 1) {
     return next(new AppError("numberPerCrate must be a positive integer", 400));
@@ -17,10 +17,21 @@ const createTray = catchAsync(async (req, res, next) => {
     return next(new AppError("Tray with this name already exists", 409));
   }
 
+  // Validate aliases if provided
+  let aliasesArray = [];
+  if (aliases) {
+    if (Array.isArray(aliases)) {
+      aliasesArray = aliases.map(a => String(a).trim().toLowerCase()).filter(a => a.length > 0);
+    } else if (typeof aliases === 'string') {
+      aliasesArray = aliases.split(',').map(a => a.trim().toLowerCase()).filter(a => a.length > 0);
+    }
+  }
+
   const doc = await Tray.create({
     name,
     cavity,
     numberPerCrate,
+    aliases: aliasesArray,
   });
 
   const response = generateResponse(
@@ -128,7 +139,17 @@ const updateTray = catchAsync(async (req, res, next) => {
     }
   }
 
-  const doc = await Tray.findByIdAndUpdate(id, req.body, {
+  // Handle aliases if provided
+  const updateData = { ...req.body };
+  if (updateData.aliases !== undefined) {
+    if (Array.isArray(updateData.aliases)) {
+      updateData.aliases = updateData.aliases.map(a => String(a).trim().toLowerCase()).filter(a => a.length > 0);
+    } else if (typeof updateData.aliases === 'string') {
+      updateData.aliases = updateData.aliases.split(',').map(a => a.trim().toLowerCase()).filter(a => a.length > 0);
+    }
+  }
+
+  const doc = await Tray.findByIdAndUpdate(id, updateData, {
     new: true,
     runValidators: true,
   });

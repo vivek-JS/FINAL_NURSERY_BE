@@ -427,6 +427,71 @@ const slotSchema = new Schema({
     type: Boolean,
     default: false,
   }, // True if gap completely covered by later sowings
+  // Product stock tracking - for products ordered from other nurseries
+  productStock: [{
+    productName: {
+      type: String,
+      required: true,
+      trim: true,
+    }, // Reference name like "Ghatude" (independent of actual product)
+    available: {
+      type: Number,
+      default: 0,
+    }, // Quantity received via GRN (ready to book)
+    booked: {
+      type: Number,
+      default: 0,
+    }, // Quantity booked via orders (taken from available/poQuantity)
+    poQuantity: {
+      type: Number,
+      default: 0,
+    }, // Quantity from PO (not yet received, but 99% will come)
+    received: {
+      type: Boolean,
+      default: false,
+    }, // True when GRN approved, false when only PO exists
+    // Ready Plants Product fields
+    dateRange: {
+      startDate: {
+        type: String, // DD-MM-YYYY format
+        validate: {
+          validator: function (value) {
+            if (!value) return true; // Optional for backward compatibility
+            return (
+              /^\d{2}-\d{2}-\d{4}$/.test(value) &&
+              moment(value, "DD-MM-YYYY", true).isValid()
+            );
+          },
+          message: (props) =>
+            `${props.value} is not a valid date in the format dd-mm-yyyy`,
+        },
+      },
+      endDate: {
+        type: String, // DD-MM-YYYY format
+        validate: {
+          validator: function (value) {
+            if (!value) return true; // Optional for backward compatibility
+            return (
+              /^\d{2}-\d{2}-\d{4}$/.test(value) &&
+              moment(value, "DD-MM-YYYY", true).isValid()
+            );
+          },
+          message: (props) =>
+            `${props.value} is not a valid date in the format dd-mm-yyyy`,
+        },
+      },
+    },
+    displayTitle: {
+      type: String,
+      trim: true,
+      // Display title for ready plants products (e.g., "Banana G9 - Premium Ready Plants")
+    },
+    productMappingId: {
+      type: Schema.Types.ObjectId,
+      ref: "PlantProductMapping",
+      // Reference to PlantProductMapping
+    },
+  }],
   // Slot trail tracking
   slotTrail: [slotTrailSchema],
 });

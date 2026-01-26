@@ -54,7 +54,384 @@ export const createPurchaseOrder = async (req, res) => {
 
     await purchaseOrder.save();
     console.log('💾 Purchase Order saved with autoGRN:', purchaseOrder.autoGRN);
+    
+    // IMPORTANT: Process ready plants BEFORE populate, as populate converts product to object
+    // Create new product and PlantProductMapping for ready plants products
+    try {
+      const PlantProductMapping = (await import('../models/plantProductMapping.model.js')).default;
+      const { default: Product } = await import('../models/product.model.js');
+      const { default: MeasurementUnit } = await import('../models/measurementUnit.model.js');
+      
+      // Process items from the purchaseOrder object (before populate)
+      for (const poItem of purchaseOrder.items) {
+        // Debug log
+        console.log(`🔍 Processing PO item for ready plants:`, {
+          isReadyPlantsProduct: poItem.isReadyPlantsProduct,
+          hasPlantId: !!poItem.plantId,
+          hasSubtypeId: !!poItem.subtypeId,
+          hasDateRange: !!poItem.dateRange,
+          hasDisplayTitle: !!poItem.displayTitle,
+          productId: poItem.product,
+          dateRange: poItem.dateRange
+        });
+        
+        // Check if all required fields are present
+        const hasAllFields = poItem.isReadyPlantsProduct && 
+                            poItem.plantId && 
+                            poItem.subtypeId && 
+                            poItem.dateRange && 
+                            poItem.dateRange.startDate && 
+                            poItem.dateRange.endDate && 
+                            poItem.displayTitle;
+        
+        if (!hasAllFields) {
+          console.log(`⏭️ Skipping PO item - missing required fields`);
+          continue;
+        }
+        
+        if (poItem.isReadyPlantsProduct && poItem.plantId && poItem.subtypeId && poItem.dateRange && poItem.dateRange.startDate && poItem.dateRange.endDate && poItem.displayTitle) {
+          try {
+            // Helper function to check if category is ready plants
+            const isReadyPlantsCategory = (category) => {
+              if (!category) return false;
+              const normalized = category.toLowerCase().trim().replace(/_/g, ' ');
+              return normalized === 'ready plants';
+            };
+            
+            // Step 1: Check if product already exists and is ready_plants category
+            let readyPlantsProduct = null;
+            if (poItem.product) {
+              // Product ID is provided - check if it's already a ready_plants product
+              const existingProduct = await Product.findById(poItem.product);
+              if (existingProduct) {
+                if (isReadyPlantsCategory(existingProduct.category)) {
+                  // Use existing ready_plants product
+                  readyPlantsProduct = existingProduct;
+                  console.log(`✅ Using existing ready plants product: ${existingProduct.code} - ${existingProduct.name}`);
+                } else {
+                  // Product exists but is not ready_plants category - this shouldn't happen if frontend is correct
+                  console.warn(`⚠️ Product ${existingProduct.code} is not ready_plants category, but isReadyPlantsProduct is true`);
+                }
+              }
+            }
+            
+            // Step 2: If no existing ready_plants product, create a new one
+            if (!readyPlantsProduct) {
+              // Generate product code
+              const productCount = await Product.countDocuments();
+              const productCode = `RPL${String(productCount + 1).padStart(6, '0')}`; // Ready Plants Product code
+              
+              // Check if product with this code already exists (unlikely but safe)
+              readyPlantsProduct = await Product.findOne({ code: productCode });
+              
+              if (!readyPlantsProduct) {
+                // Get default unit (Piece) for ready plants products
+                let defaultUnit = await MeasurementUnit.findOne({ 
+                  $or: [
+                    { name: 'Piece', type: 'quantity' },
+                    { abbreviation: 'pcs', type: 'quantity' },
+                    { abbreviation: 'Pc', type: 'quantity' }
+                  ],
+                  isActive: true
+                });
+                
+                // If Piece unit not found, get first available quantity unit
+                if (!defaultUnit) {
+                  defaultUnit = await MeasurementUnit.findOne({ 
+                    type: 'quantity',
+                    isActive: true
+                  });
+                }
+                
+                if (!defaultUnit) {
+                  throw new Error('No measurement unit found. Please create a "Piece" unit first.');
+                }
+                
+                // Create new product with category "ready plants"
+                readyPlantsProduct = await Product.create({
+                  code: productCode,
+                  name: poItem.displayTitle, // Use display title as product name
+                  description: `Ready plants product for ${poItem.displayTitle}`,
+                  category: 'ready plants', // New category for ready plants
+                  primaryUnit: defaultUnit._id,
+                  plantId: poItem.plantId,
+                  subtypeId: poItem.subtypeId,
+                  purpose: 'sales',
+                  createdBy: req.user._id,
+                });
+                
+                console.log(`✅ Created new ready plants product: ${productCode} - ${poItem.displayTitle}`);
+              }
+              
+              // Update PO item to use the new/created product
+              poItem.product = readyPlantsProduct._id;
+              await purchaseOrder.save();
+            }
+            
+            // Step 3: Check if mapping already exists
+            console.log(`🔍 Checking for existing mapping:`, {
+              productId: readyPlantsProduct._id,
+              plantId: poItem.plantId,
+              subtypeId: poItem.subtypeId,
+              dateRange: poItem.dateRange
+            });
+            
+            // Check for existing mapping with EXACT date range match
+            const existingMapping = await PlantProductMapping.findOne({
+              productId: readyPlantsProduct._id,
+              plantId: poItem.plantId,
+              subtypeId: poItem.subtypeId,
+              isActive: true,
+              // Check for exact date range match
+              'dateRange.startDate': poItem.dateRange.startDate,
+              'dateRange.endDate': poItem.dateRange.endDate,
+            });
+
+            let mapping;
+            if (existingMapping) {
+              // Update existing mapping - add to totalQuantity
+              existingMapping.displayTitle = poItem.displayTitle;
+              existingMapping.dateRange = poItem.dateRange;
+              existingMapping.totalQuantity = (existingMapping.totalQuantity || 0) + poItem.quantity; // Add new quantity to existing
+              existingMapping.updatedBy = req.user._id;
+              await existingMapping.save();
+              mapping = existingMapping;
+              console.log(`✅ Updated existing PlantProductMapping for product ${readyPlantsProduct._id} - totalQuantity: ${existingMapping.totalQuantity} (added ${poItem.quantity})`);
+            } else {
+              // Create new mapping
+              console.log(`📝 Creating new PlantProductMapping with data:`, {
+                productId: readyPlantsProduct._id,
+                plantId: poItem.plantId,
+                subtypeId: poItem.subtypeId,
+                dateRange: poItem.dateRange,
+                displayTitle: poItem.displayTitle,
+                totalQuantity: poItem.quantity,
+                createdBy: req.user._id
+              });
+              
+              mapping = await PlantProductMapping.create({
+                productId: readyPlantsProduct._id,
+                plantId: poItem.plantId,
+                subtypeId: poItem.subtypeId,
+                dateRange: poItem.dateRange,
+                displayTitle: poItem.displayTitle,
+                totalQuantity: poItem.quantity, // Initial stock from PO
+                allocatedQuantity: 0, // Will be updated when orders are placed
+                createdBy: req.user._id,
+              });
+              console.log(`✅ Created PlantProductMapping ${mapping._id} for product ${readyPlantsProduct._id} with totalQuantity: ${poItem.quantity}`);
+            }
+
+            // Store mapping ID in PO item for reference
+            // Update the item directly in purchaseOrder.items array
+            const itemIndex = purchaseOrder.items.findIndex(item => {
+              // Compare by _id if available, or by position
+              if (item._id && poItem._id) {
+                return item._id.toString() === poItem._id.toString();
+              }
+              return purchaseOrder.items.indexOf(item) === purchaseOrder.items.indexOf(poItem);
+            });
+            
+            if (itemIndex !== -1) {
+              purchaseOrder.items[itemIndex].plantProductMappingId = mapping._id;
+              // Mark the array as modified
+              purchaseOrder.markModified('items');
+              await purchaseOrder.save();
+              console.log(`✅ Stored plantProductMappingId ${mapping._id} in PO item`);
+            } else {
+              console.warn(`⚠️ Could not find PO item to update with mapping ID`);
+            }
+          } catch (mappingError) {
+            console.error(`❌ Error creating/updating ready plants product and mapping:`, mappingError);
+            console.error(`   Error stack:`, mappingError.stack);
+            console.error(`   PO Item data:`, {
+              isReadyPlantsProduct: poItem.isReadyPlantsProduct,
+              plantId: poItem.plantId,
+              subtypeId: poItem.subtypeId,
+              dateRange: poItem.dateRange,
+              displayTitle: poItem.displayTitle,
+              product: poItem.product
+            });
+            // Don't fail PO creation if product/mapping creation fails
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error processing ready plants products:', error);
+      console.error('   Error stack:', error.stack);
+      // Don't fail PO creation if mapping processing fails
+    }
+
+    // Now populate for response
     await purchaseOrder.populate(['items.product', 'items.unit', 'createdBy']);
+
+    // Initialize productStock in slots for plant products
+    try {
+      const { default: PlantSlot } = await import('../models/slots.model.js');
+      const { default: Product } = await import('../models/product.model.js');
+      const mongoose = await import('mongoose');
+      
+      for (const poItem of purchaseOrder.items) {
+        // Check if this is a plant product with slotId and productName
+        // After populate, product is already an object
+        const product = poItem.product;
+        
+        console.log(`🔍 PO Item Debug:`, {
+          hasProduct: !!product,
+          productType: typeof product,
+          productIsObject: typeof product === 'object',
+          productCategory: product?.category,
+          slotId: poItem.slotId,
+          productName: poItem.productName,
+          quantity: poItem.quantity
+        });
+        
+        // Check if product is populated (has category) or if we need to fetch it
+        let productCategory = null;
+        if (product) {
+          if (typeof product === 'object' && product.category) {
+            // Product is populated - use it directly
+            productCategory = product.category;
+            console.log(`✅ Product is populated, category: ${productCategory}`);
+          } else {
+            // Product is just an ID - fetch it
+            console.log(`⚠️ Product is not populated, fetching...`);
+            const fetchedProduct = await Product.findById(product);
+            productCategory = fetchedProduct?.category;
+            console.log(`✅ Fetched product, category: ${productCategory}`);
+          }
+        } else {
+          console.log(`❌ No product found in PO item`);
+        }
+        
+        console.log(`🔍 Final check: productCategory=${productCategory}, slotId=${poItem.slotId}, productName=${poItem.productName}, isReadyPlants=${poItem.isReadyPlantsProduct}`);
+        
+        // Handle both regular plants and ready plants products
+        // For ready plants, productName comes from displayTitle if not provided
+        // Note: slotId is optional for ready plants products - productStock can be initialized later during GRN
+        const productNameForStock = poItem.productName || poItem.displayTitle;
+        
+        // Helper function to check if category is ready plants (handles both 'ready plants' and 'ready_plants')
+        const isReadyPlantsCategory = (category) => {
+          if (!category) return false;
+          const normalized = category.toLowerCase().trim().replace(/_/g, ' ');
+          return normalized === 'ready plants';
+        };
+        
+        // Initialize productStock only in the specific slot when slotId is provided
+        // For ready plants products, slotId should be provided or stock will be initialized when booking happens
+        const shouldInitializeProductStock = 
+          (productCategory === 'plants' || isReadyPlantsCategory(productCategory) || poItem.isReadyPlantsProduct) &&
+          poItem.slotId && // slotId is required to initialize productStock
+          productNameForStock;
+        
+        if (shouldInitializeProductStock) {
+            // For regular plants: Initialize in specific slot
+            console.log(`🌱 Initializing productStock for "${productNameForStock}" in slot ${poItem.slotId}`);
+            
+            let slotObjectId;
+            try {
+              slotObjectId = typeof poItem.slotId === 'string' 
+                ? new mongoose.default.Types.ObjectId(poItem.slotId)
+                : poItem.slotId;
+            } catch (e) {
+              console.error(`❌ Invalid slotId format: ${poItem.slotId}`, e);
+              continue;
+            }
+            
+            const slotDoc = await PlantSlot.findOne({
+              "subtypeSlots.slots._id": slotObjectId
+            });
+            
+            if (!slotDoc) {
+              console.warn(`⚠️ Slot ${poItem.slotId} not found for productStock initialization`);
+              continue;
+            }
+            
+            // Find the slot in the document and update productStock
+            let slotFound = false;
+            for (const subtypeSlot of slotDoc.subtypeSlots || []) {
+              const slot = subtypeSlot.slots.find(s => s._id && s._id.toString() === slotObjectId.toString());
+              if (slot) {
+                slotFound = true;
+                // Initialize productStock array if it doesn't exist
+                if (!slot.productStock) {
+                  slot.productStock = [];
+                }
+                
+                // Find existing productStock entry - match by productName or productMappingId for ready plants
+                let productStock = null;
+                if (poItem.isReadyPlantsProduct && poItem.plantProductMappingId) {
+                  productStock = slot.productStock.find(ps => 
+                    ps.productMappingId && ps.productMappingId.toString() === poItem.plantProductMappingId.toString()
+                  );
+                }
+                if (!productStock) {
+                  productStock = slot.productStock.find(ps => ps.productName === productNameForStock);
+                }
+                
+                if (!productStock) {
+                  // Create new entry
+                  const newProductStock = {
+                    productName: productNameForStock,
+                    available: 0,
+                    booked: 0,
+                    poQuantity: poItem.quantity,
+                    received: false
+                  };
+
+                  // Add ready plants fields if applicable
+                  if (poItem.isReadyPlantsProduct && poItem.dateRange) {
+                    newProductStock.startDate = poItem.dateRange.startDate;
+                    newProductStock.endDate = poItem.dateRange.endDate;
+                    newProductStock.displayTitle = poItem.displayTitle;
+                    if (poItem.plantProductMappingId) {
+                      newProductStock.productMappingId = poItem.plantProductMappingId;
+                    }
+                  }
+
+                  slot.productStock.push(newProductStock);
+                  console.log(`✅ Created productStock entry for "${newProductStock.productName}" with poQuantity: ${poItem.quantity}`);
+                } else {
+                  // Update existing entry - accumulate poQuantity
+                  productStock.poQuantity = (productStock.poQuantity || 0) + poItem.quantity;
+                  
+                  // Update ready plants fields if applicable
+                  if (poItem.isReadyPlantsProduct && poItem.dateRange) {
+                    productStock.startDate = poItem.dateRange.startDate;
+                    productStock.endDate = poItem.dateRange.endDate;
+                    productStock.displayTitle = poItem.displayTitle;
+                    if (poItem.plantProductMappingId) {
+                      productStock.productMappingId = poItem.plantProductMappingId;
+                    }
+                  }
+                  
+                  console.log(`✅ Updated productStock entry for "${productNameForStock}" - poQuantity: ${productStock.poQuantity}`);
+                }
+                
+                // Mark the nested path as modified
+                slotDoc.markModified(`subtypeSlots.${slotDoc.subtypeSlots.indexOf(subtypeSlot)}.slots`);
+                
+                // Save with validation disabled to avoid errors from other slots
+                await slotDoc.save({ validateBeforeSave: false });
+                const productNameForLog = poItem.productName || poItem.displayTitle || 'Unknown Product';
+                console.log(`✅ ProductStock updated for "${productNameForLog}" in slot ${poItem.slotId || 'N/A'}`);
+                break;
+              }
+            }
+            
+            if (!slotFound) {
+              console.warn(`⚠️ Slot ${poItem.slotId} not found in document structure`);
+            }
+        } else if (poItem.isReadyPlantsProduct && !poItem.slotId) {
+          // For ready plants products without slotId, productStock will be initialized when booking happens
+          console.log(`ℹ️ Ready plants product "${productNameForStock}" - productStock will be initialized when order is booked in a specific slot`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error initializing productStock:', error);
+      // Don't fail PO creation if productStock update fails
+    }
 
     // Handle supplier/merchant population - try Supplier first, then Merchant
     // Note: supplier field contains ObjectId (or string representation), not populated yet
@@ -149,12 +526,12 @@ export const createPurchaseOrder = async (req, res) => {
         // Transform PO items to GRN items (matching the exact API format from curl)
         const grnItems = await Promise.all(
           purchaseOrder.items.map(async (poItem) => {
-            // Auto-generate batch number if not provided
+            // Auto-generate batch number if not provided (only for non-Ram Agri products)
             let batchNumber = poItem.batchNumber || poItem.lotNumber;
-            if (!batchNumber || !batchNumber.trim()) {
+            if (!poItem.isRamAgriProduct && (!batchNumber || !batchNumber.trim())) {
               batchNumber = await generateBatchNumber(poItem.product._id || poItem.product);
             }
-            batchNumber = batchNumber.trim();
+            batchNumber = batchNumber ? batchNumber.trim() : '';
 
             // Convert expiryDate from string to Date if needed
             let expiryDate = poItem.expiryDate;
@@ -171,9 +548,7 @@ export const createPurchaseOrder = async (req, res) => {
             }
 
             // Format exactly matching the GRN API payload from curl command
-            return {
-              product: poItem.product._id || poItem.product,
-              batchNumber: batchNumber,
+            const grnItem = {
               quantity: poItem.quantity,
               unit: poItem.unit._id || poItem.unit,
               rate: poItem.rate,
@@ -183,8 +558,40 @@ export const createPurchaseOrder = async (req, res) => {
               amount: poItem.amount,
               expiryDate: expiryDate || undefined,
               manufactureDate: undefined,
-              slotId: poItem.slotId || undefined, // Pass slotId if provided
             };
+            
+            // Add product and batchNumber only for non-Ram Agri products
+            if (!poItem.isRamAgriProduct) {
+              grnItem.product = poItem.product._id || poItem.product;
+              grnItem.batchNumber = batchNumber;
+            }
+            
+            // Add Ram Agri fields if applicable
+            if (poItem.isRamAgriProduct) {
+              grnItem.isRamAgriProduct = true;
+              grnItem.ramAgriCropId = poItem.ramAgriCropId;
+              grnItem.ramAgriVarietyId = poItem.ramAgriVarietyId;
+              grnItem.ramAgriCropName = poItem.ramAgriCropName;
+              grnItem.ramAgriVarietyName = poItem.ramAgriVarietyName;
+              // Add unit conversion fields for stock updates
+              if (poItem.selectedUnitType) {
+                grnItem.selectedUnitType = poItem.selectedUnitType;
+              }
+              if (poItem.conversionFactor) {
+                grnItem.conversionFactor = poItem.conversionFactor;
+              }
+              console.log(`🌾 Ram Agri GRN Item: ${poItem.ramAgriCropName} - ${poItem.ramAgriVarietyName}, quantity: ${poItem.quantity}, selectedUnitType: ${poItem.selectedUnitType}, conversionFactor: ${poItem.conversionFactor}`);
+            }
+            
+            // Add slot-related fields if applicable
+            if (poItem.slotId) {
+              grnItem.slotId = poItem.slotId;
+            }
+            if (poItem.productName) {
+              grnItem.productName = poItem.productName;
+            }
+            
+            return grnItem;
           })
         );
 
@@ -264,83 +671,149 @@ export const createPurchaseOrder = async (req, res) => {
         console.log(`📦 Processing ${savedGRN.items.length} items for GRN approval...`);
         for (const item of savedGRN.items) {
           if (item.acceptedQuantity > 0) {
-            // Ensure batch number exists
-            let batchNumber = item.batchNumber || item.lotNumber;
-            if (!batchNumber || !batchNumber.trim()) {
-              batchNumber = await generateBatchNumber(item.product);
-            }
-            batchNumber = batchNumber.trim();
-            
-            // Check if batch number already exists
-            const existingBatch = await Batch.findOne({ batchNumber: batchNumber });
-            if (existingBatch) {
-              const timestamp = Date.now().toString().slice(-6);
-              batchNumber = `${batchNumber}_${timestamp}`;
-            }
-            
-            // Convert expiryDate from string to Date if needed
-            let expiryDate = item.expiryDate;
-            if (expiryDate && typeof expiryDate === 'string') {
-              expiryDate = new Date(expiryDate);
-              if (isNaN(expiryDate.getTime())) {
-                expiryDate = undefined;
+            // Skip batch creation for Ram Agri products (they don't use the batch system)
+            if (!item.isRamAgriProduct) {
+              // Ensure batch number exists
+              let batchNumber = item.batchNumber || item.lotNumber;
+              if (!batchNumber || !batchNumber.trim()) {
+                batchNumber = await generateBatchNumber(item.product);
               }
-            }
-            
-            let manufactureDate = item.manufactureDate;
-            if (manufactureDate && typeof manufactureDate === 'string') {
-              manufactureDate = new Date(manufactureDate);
-              if (isNaN(manufactureDate.getTime())) {
-                manufactureDate = undefined;
+              batchNumber = batchNumber.trim();
+              
+              // Check if batch number already exists
+              const existingBatch = await Batch.findOne({ batchNumber: batchNumber });
+              if (existingBatch) {
+                const timestamp = Date.now().toString().slice(-6);
+                batchNumber = `${batchNumber}_${timestamp}`;
               }
+              
+              // Convert expiryDate from string to Date if needed
+              let expiryDate = item.expiryDate;
+              if (expiryDate && typeof expiryDate === 'string') {
+                expiryDate = new Date(expiryDate);
+                if (isNaN(expiryDate.getTime())) {
+                  expiryDate = undefined;
+                }
+              }
+              
+              let manufactureDate = item.manufactureDate;
+              if (manufactureDate && typeof manufactureDate === 'string') {
+                manufactureDate = new Date(manufactureDate);
+                if (isNaN(manufactureDate.getTime())) {
+                  manufactureDate = undefined;
+                }
+              }
+              
+              // Create batch
+              const batch = new Batch({
+                batchNumber: batchNumber,
+                product: item.product,
+                manufactureDate: manufactureDate || undefined,
+                expiryDate: expiryDate || undefined,
+                receivedDate: savedGRN.grnDate,
+                supplier: savedGRN.supplier,
+                purchasePrice: item.rate,
+                quantity: item.acceptedQuantity,
+                remainingQuantity: item.acceptedQuantity,
+                unit: item.unit,
+                grn: savedGRN._id,
+                createdBy: req.user._id,
+              });
+              
+              await batch.save();
+              
+              // Update item with batch reference
+              item.batch = batch._id;
+              item.batchNumber = batchNumber;
             }
             
-            // Create batch
-            const batch = new Batch({
-              batchNumber: batchNumber,
-              product: item.product,
-              manufactureDate: manufactureDate || undefined,
-              expiryDate: expiryDate || undefined,
-              receivedDate: savedGRN.grnDate,
-              supplier: savedGRN.supplier,
-              purchasePrice: item.rate,
-              quantity: item.acceptedQuantity,
-              remainingQuantity: item.acceptedQuantity,
-              unit: item.unit,
-              grn: savedGRN._id,
-              createdBy: req.user._id,
-            });
-            
-            await batch.save();
-            
-            // Update item with batch reference
-            item.batch = batch._id;
-            item.batchNumber = batchNumber;
-            
-            // Update product stock
-            const product = await Product.findById(item.product);
-            if (product) {
-              const oldStock = product.currentStock || 0;
-              
-              product.currentStock = (product.currentStock || 0) + item.acceptedQuantity;
-              product.stockValue = (product.stockValue || 0) + item.amount;
-              
-              if (product.currentStock > 0) {
-                product.averagePrice = product.stockValue / product.currentStock;
+            // Update product stock (for regular products) or variety stock (for Ram Agri products)
+            if (item.isRamAgriProduct && item.ramAgriCropId && item.ramAgriVarietyId) {
+              // Update Ram Agri variety stock
+              const { default: RamAgriInputsProduct } = await import('../models/ramAgriInputsProduct.model.js');
+              const mongoose = await import('mongoose');
+              const crop = await RamAgriInputsProduct.findById(item.ramAgriCropId).populate('varieties.primaryUnit varieties.secondaryUnit');
+              if (crop) {
+                const variety = crop.varieties.id(item.ramAgriVarietyId);
+                if (variety) {
+                  const oldStock = variety.currentStock || 0;
+                  
+                  // Convert quantity to primary unit if secondary unit was used
+                  let quantityInPrimaryUnit = item.acceptedQuantity;
+                  
+                  // Method 1: Use selectedUnitType and conversionFactor from item if available (more reliable)
+                  if (item.selectedUnitType === 'secondary' && item.conversionFactor && item.conversionFactor > 0) {
+                    // Convert from secondary to primary: quantity * conversionFactor
+                    quantityInPrimaryUnit = item.acceptedQuantity * item.conversionFactor;
+                    console.log(`🔄 Converting quantity from secondary unit (using item.conversionFactor): ${item.acceptedQuantity} -> ${quantityInPrimaryUnit} (factor: ${item.conversionFactor})`);
+                  } else {
+                    // Method 2: Fallback to checking unit IDs (for backward compatibility)
+                    const itemUnitId = item.unit?._id?.toString() || item.unit?.toString() || item.unit;
+                    const varietyPrimaryUnitId = variety.primaryUnit?._id?.toString() || variety.primaryUnit?.toString() || variety.primaryUnit;
+                    const varietySecondaryUnitId = variety.secondaryUnit?._id?.toString() || variety.secondaryUnit?.toString() || variety.secondaryUnit;
+                    
+                    // If unit matches secondary unit, convert to primary unit
+                    if (varietySecondaryUnitId && itemUnitId && itemUnitId.toString() === varietySecondaryUnitId.toString() && variety.conversionFactor && variety.conversionFactor > 0) {
+                      // Convert from secondary to primary: quantity * conversionFactor
+                      quantityInPrimaryUnit = item.acceptedQuantity * variety.conversionFactor;
+                      console.log(`🔄 Converting quantity from secondary unit (using variety.conversionFactor): ${item.acceptedQuantity} -> ${quantityInPrimaryUnit} (factor: ${variety.conversionFactor})`);
+                    } else {
+                      console.log(`ℹ️ Quantity already in primary unit or no conversion needed. selectedUnitType: ${item.selectedUnitType}, itemUnitId: ${itemUnitId}, varietyPrimary: ${varietyPrimaryUnitId}, varietySecondary: ${varietySecondaryUnitId}`);
+                    }
+                  }
+                  
+                  // Update stock in primary unit (atomic operation)
+                  variety.currentStock = (variety.currentStock || 0) + quantityInPrimaryUnit;
+                  variety.stockValue = (variety.stockValue || 0) + item.amount;
+                  
+                  if (variety.currentStock > 0) {
+                    variety.averagePrice = variety.stockValue / variety.currentStock;
+                  } else {
+                    variety.averagePrice = 0;
+                  }
+                  
+                  crop.updatedBy = req.user._id;
+                  await crop.save();
+                  
+                  console.log(`✅ Updated Ram Agri variety stock: ${item.ramAgriCropName} - ${item.ramAgriVarietyName}: ${oldStock} -> ${variety.currentStock} (added ${quantityInPrimaryUnit} in primary unit)`);
+                  
+                  // Note: Inventory transactions for Ram Agri varieties can be added if needed
+                  // For now, we'll just update the stock
+                } else {
+                  console.warn(`⚠️ Variety ${item.ramAgriVarietyId} not found in crop ${item.ramAgriCropId}`);
+                }
               } else {
-                product.averagePrice = 0;
+                console.warn(`⚠️ Crop ${item.ramAgriCropId} not found`);
+              }
+            } else {
+              // Update regular product stock
+              const product = await Product.findById(item.product);
+              if (product) {
+                const oldStock = product.currentStock || 0;
+                
+                product.currentStock = (product.currentStock || 0) + item.acceptedQuantity;
+                product.stockValue = (product.stockValue || 0) + item.amount;
+                
+                if (product.currentStock > 0) {
+                  product.averagePrice = product.stockValue / product.currentStock;
+                } else {
+                  product.averagePrice = 0;
+                }
+                
+                product.updatedBy = req.user._id;
+                await product.save();
+                
+                // Create inventory transaction
+                await createInventoryTransaction(item, savedGRN, req.user, oldStock, product.currentStock);
               }
               
-              product.updatedBy = req.user._id;
-              await product.save();
-              
-              // Create inventory transaction
-              await createInventoryTransaction(item, savedGRN, req.user, oldStock, product.currentStock);
-
-              // Update slot availablePlants if slotId is provided
+              // Update slot availablePlants and productStock if slotId is provided (for regular products only)
               if (item.slotId) {
                 try {
                   console.log(`🔄 Attempting to update slot ${item.slotId} with quantity ${item.acceptedQuantity}`);
+                  if (item.productName) {
+                    console.log(`📦 Product name: "${item.productName}"`);
+                  }
                   const { default: PlantSlot } = await import('../models/slots.model.js');
                   const mongoose = await import('mongoose');
                   
@@ -445,6 +918,44 @@ export const createPurchaseOrder = async (req, res) => {
                         plantSlotDoc.subtypeSlots[targetSubtypeIndex].slots[targetSlotIndex].availablePlants = newAvailablePlants;
                         await plantSlotDoc.save();
                         console.log(`✅ Updated slot using direct method: availablePlants = ${newAvailablePlants}`);
+                      }
+                      
+                      // Update productStock if productName is provided
+                      if (item.productName && targetSlot) {
+                        try {
+                          // Initialize productStock array if it doesn't exist
+                          if (!targetSlot.productStock) {
+                            targetSlot.productStock = [];
+                          }
+                          
+                          // Find existing productStock entry
+                          let productStock = targetSlot.productStock.find(ps => ps.productName === item.productName);
+                          
+                          if (!productStock) {
+                            // Create new entry (shouldn't happen if PO was created first, but handle it)
+                            targetSlot.productStock.push({
+                              productName: item.productName,
+                              available: item.acceptedQuantity,
+                              booked: 0,
+                              poQuantity: 0,
+                              received: true
+                            });
+                            console.log(`✅ Created productStock entry for "${item.productName}" with available: ${item.acceptedQuantity}`);
+                          } else {
+                            // Update existing entry
+                            productStock.available = (productStock.available || 0) + item.acceptedQuantity;
+                            productStock.poQuantity = Math.max(0, (productStock.poQuantity || 0) - item.acceptedQuantity);
+                            productStock.received = true;
+                            console.log(`✅ Updated productStock for "${item.productName}": available=${productStock.available}, poQuantity=${productStock.poQuantity}`);
+                          }
+                          
+                          // Save the document
+                          await plantSlotDoc.save();
+                          console.log(`✅ ProductStock updated for "${item.productName}" in slot ${item.slotId}`);
+                        } catch (productStockError) {
+                          console.error(`❌ Error updating productStock for "${item.productName}":`, productStockError);
+                          // Don't fail GRN approval if productStock update fails
+                        }
                       }
                     } else {
                       console.warn(`⚠️ Slot ${item.slotId} not found in document structure`);

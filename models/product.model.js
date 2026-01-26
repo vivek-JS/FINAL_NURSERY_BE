@@ -95,6 +95,20 @@ const productSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    isRamAgriSales: {
+      type: Boolean,
+      default: false,
+      comment: "Flag to indicate if product is available for Ram Agri Sales orders",
+    },
+    ramAgriCropId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'RamAgriInputsProduct',
+      comment: "Reference to Ram Agri Inputs Product Master - Crop",
+    },
+    ramAgriVarietyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      comment: "Reference to variety within the crop (subdocument ID)",
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

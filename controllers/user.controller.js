@@ -19,6 +19,10 @@ import Order from "../models/order.model.js";
 import DealerWallet from "../models/dealerWallet.js";
 import PlantCms from "../models/plantCms.model.js";
 import mongoose from "mongoose";
+import { uploadImageToCloudinary } from "../utils/cloudinaryUtils.js";
+import axios from "axios";
+import moment from "moment";
+import { ImageAnnotatorClient } from "@google-cloud/vision";
 
 const createUser = [isPhoneNumberExists(User, "User"), createOne(User, "User")];
 const updateUser = updateOne(User, "User");
@@ -94,6 +98,7 @@ export const testLogin = async (req, res) => {
 const login = async (req, res, next) => {
   try {
     console.log("Login attempt started");
+    console.log("Request body:", JSON.stringify(req.body));
     const { password } = req.body;
     let phoneNumber = Number(req.body?.phoneNumber);
 
@@ -103,13 +108,25 @@ const login = async (req, res, next) => {
       return next(new AppError("Valid phone number is required", 400));
     }
 
-    console.log("Looking for user with phone number:", phoneNumber);
+    console.log("Looking for user with phone number:", phoneNumber, "(type:", typeof phoneNumber, ")");
     const user = await User.findOne({ phoneNumber: phoneNumber });
-
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      console.log("Authentication failed - wrong credentials");
+    console.log("User found:", !!user);
+    
+    if (user) {
+      console.log("User details - Name:", user.name, "Phone:", user.phoneNumber, "isDisabled:", user.isDisabled);
+      console.log("Password hash exists:", !!user.password, "Length:", user.password?.length);
+      const passwordMatch = await bcrypt.compare(password, user.password);
+      console.log("Password comparison result:", passwordMatch, "for password:", password);
+      
+      if (!passwordMatch) {
+        console.log("Authentication failed - password mismatch");
+        return next(new AppError("Wrong credentials", 400));
+      }
+    } else {
+      console.log("Authentication failed - user not found");
       return next(new AppError("Wrong credentials", 400));
     }
+
 
     console.log("User authenticated successfully");
 
@@ -1780,6 +1797,408 @@ const resetAllDispatchManagerPasswords = async (req, res, next) => {
   }
 };
 
+// Upload media (images) to Cloudinary
+const uploadMedia = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return next(new AppError("No file uploaded. Please provide a file.", 400));
+    }
+
+    const { media_type = "IMAGE" } = req.body;
+
+    // Validate file type
+    if (media_type === "IMAGE") {
+      const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"];
+      if (!allowedTypes.includes(req.file.mimetype)) {
+        return next(new AppError("Invalid file type. Only JPG, PNG, WEBP, AVIF, and GIF images are allowed.", 400));
+      }
+    }
+
+    // Upload to Cloudinary
+    const uploadResult = await uploadImageToCloudinary(
+      req.file.buffer,
+      `nursery-${media_type.toLowerCase()}s`,
+      {
+        resource_type: media_type === "IMAGE" ? "image" : "auto",
+      }
+    );
+
+    if (!uploadResult.success) {
+      return next(new AppError(uploadResult.error || "Failed to upload media", 500));
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Media uploaded successfully",
+      data: {
+        media_url: uploadResult.url,
+        public_id: uploadResult.publicId,
+        format: uploadResult.format,
+        width: uploadResult.width,
+        height: uploadResult.height,
+        bytes: uploadResult.bytes,
+      },
+    });
+  } catch (error) {
+    console.error("Error uploading media:", error);
+    return next(new AppError(error.message || "Failed to upload media", 500));
+  }
+};
+
+// Process image with OCR to extract payment information
+const processOCR = async (req, res, next) => {
+  try {
+    const { imageUrl } = req.body;
+
+    if (!imageUrl) {
+      return next(new AppError("Image URL is required", 400));
+    }
+
+    // Download image from URL
+    const imageResponse = await axios({
+      method: "GET",
+      url: imageUrl,
+      responseType: "arraybuffer",
+      timeout: 30000, // 30 second timeout
+    });
+
+    const imageBuffer = Buffer.from(imageResponse.data);
+    const imageBase64 = imageBuffer.toString("base64");
+
+    // Try OCR services in priority order: PaddleOCR > Google Vision > Tesseract
+    let text = "";
+    
+    // Option 1: PaddleOCR (if PaddleOCR service URL is configured)
+    if (process.env.PADDLEOCR_SERVICE_URL) {
+      try {
+        const paddleUrl = process.env.PADDLEOCR_SERVICE_URL;
+        const paddleResponse = await axios.post(
+          `${paddleUrl}/ocr`,
+          {
+            imageUrl: imageUrl,
+          },
+          {
+            timeout: 30000,
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        
+        // PaddleOCR service should return { text: "...", results: [...] }
+        if (paddleResponse.data) {
+          text = paddleResponse.data.text || paddleResponse.data.data?.text || "";
+          
+          // If PaddleOCR returns structured results, we can also extract structured data
+          if (paddleResponse.data.results || paddleResponse.data.data?.results) {
+            // PaddleOCR returns array of [bbox, text, confidence]
+            const results = paddleResponse.data.results || paddleResponse.data.data.results || [];
+            if (Array.isArray(results) && results.length > 0 && !text) {
+              // Combine all text from results
+              text = results
+                .map(item => {
+                  // Handle different response formats
+                  if (Array.isArray(item) && item.length > 1) {
+                    return item[1]; // Text is usually at index 1
+                  }
+                  return item.text || item[1] || "";
+                })
+                .filter(t => t)
+                .join(" ");
+            }
+          }
+        }
+      } catch (paddleError) {
+        console.error("PaddleOCR service error:", paddleError.response?.data || paddleError.message);
+        // Continue to next fallback
+      }
+    }
+    
+    // Option 2: Google Cloud Vision API (if no PaddleOCR or if PaddleOCR failed)
+    if (!text && process.env.GOOGLE_CLOUD_VISION_API_KEY) {
+      // Use REST API with API key (recommended for simple integration)
+      const visionApiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${process.env.GOOGLE_CLOUD_VISION_API_KEY}`;
+      
+      try {
+        const visionResponse = await axios.post(visionApiUrl, {
+          requests: [{
+            image: {
+              content: imageBase64,
+            },
+            features: [{
+              type: "TEXT_DETECTION",
+              maxResults: 10,
+            }],
+          }],
+        }, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        if (visionResponse.data.responses && visionResponse.data.responses[0]) {
+          const response = visionResponse.data.responses[0];
+          if (response.fullTextAnnotation) {
+            text = response.fullTextAnnotation.text || "";
+          } else if (response.textAnnotations && response.textAnnotations.length > 0) {
+            // First annotation contains all text
+            text = response.textAnnotations[0].description || "";
+          }
+        }
+      } catch (visionError) {
+        console.error("Google Cloud Vision API error:", visionError.response?.data || visionError.message);
+        // Fallback to Tesseract if Google Vision fails
+        const { createWorker } = await import("tesseract.js");
+        const worker = await createWorker("eng");
+        const ocrResult = await worker.recognize(imageBuffer);
+        text = ocrResult.data.text;
+        await worker.terminate();
+      }
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      // Use Google Cloud Vision client library with service account
+      const client = new ImageAnnotatorClient({
+        keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+        projectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
+      });
+      
+      try {
+        const [result] = await client.textDetection({
+          image: {
+            content: imageBase64,
+          },
+        });
+        
+        if (result.fullTextAnnotation) {
+          text = result.fullTextAnnotation.text || "";
+        } else if (result.textAnnotations && result.textAnnotations.length > 0) {
+          text = result.textAnnotations[0].description || "";
+        }
+      } catch (visionError) {
+        console.error("Google Cloud Vision client error:", visionError);
+        // Fallback to Tesseract
+        const { createWorker } = await import("tesseract.js");
+        const worker = await createWorker("eng");
+        const ocrResult = await worker.recognize(imageBuffer);
+        text = ocrResult.data.text;
+        await worker.terminate();
+      }
+    } else {
+      // Fallback to Tesseract if no Google Cloud credentials
+      const { createWorker } = await import("tesseract.js");
+      const worker = await createWorker("eng");
+      const ocrResult = await worker.recognize(imageBuffer);
+      text = ocrResult.data.text;
+      await worker.terminate();
+    }
+
+    // Extract information from text
+    const lowerText = text.toLowerCase();
+    const extractedData = {
+      rawText: text,
+      amount: null,
+      transactionId: null,
+      chequeNumber: null,
+      date: null,
+      bankName: null,
+      type: "Receipt",
+    };
+
+    // Extract amount - improved patterns for UPI receipts
+    // First, try to find amount near "paid", "₹", or "amount" keywords
+    const contextPatterns = [
+      /(?:paid|amount|total)[\s:]*₹?\s*([\d,]+\.?\d{2})/gi,
+      /₹\s*([\d,]+\.?\d{2})/gi, // ₹90.00 format
+    ];
+    const contextAmounts = [];
+    for (const pattern of contextPatterns) {
+      const matches = [...text.matchAll(pattern)];
+      for (const match of matches) {
+        const amount = match[1].replace(/,/g, "");
+        const numAmount = parseFloat(amount);
+        if (amount && numAmount > 0 && numAmount < 1000000) {
+          contextAmounts.push(numAmount);
+        }
+      }
+    }
+    
+    // If no context amounts found, try generic decimal patterns
+    if (contextAmounts.length === 0) {
+      const decimalPattern = /(\d{1,6}\.\d{2})/g; // Numbers with 2 decimal places
+      const matches = [...text.matchAll(decimalPattern)];
+      for (const match of matches) {
+        const amount = match[1];
+        const numAmount = parseFloat(amount);
+        if (numAmount > 0 && numAmount < 1000000 && numAmount % 0.01 === 0) { // Valid currency amount
+          contextAmounts.push(numAmount);
+        }
+      }
+    }
+    
+    // Prefer smaller amounts (transaction amounts are usually smaller than account numbers)
+    // Filter out very large numbers that might be transaction IDs or dates
+    const validAmounts = contextAmounts.filter(amt => amt > 0 && amt < 50000);
+    
+    if (validAmounts.length > 0) {
+      // If multiple amounts, prefer the one that's more reasonable (usually the smaller one for transactions)
+      // Or if there's only one reasonable amount, use it
+      if (validAmounts.length === 1) {
+        extractedData.amount = validAmounts[0].toString();
+      } else {
+        // For multiple amounts, prefer smaller amounts (transaction amounts vs totals)
+        extractedData.amount = Math.min(...validAmounts).toString();
+      }
+    }
+
+    // Extract transaction ID - improved patterns for UPI receipts
+    const txnPatterns = [
+      /(?:transaction\s*id|txn\s*id|id)[\s:]*(\d{12,15})/i, // 171221161822 format
+      /(\d{12,15})/g, // Long numeric IDs (12-15 digits)
+      /(?:transaction|txn|ref)[\s#:]*([A-Z0-9]{8,20})/i,
+      /(?:upi|upi\s*ref)[\s:]*([A-Z0-9]{8,20})/i,
+      /(?:ref|reference)[\s:]*([A-Z0-9]{6,20})/i,
+    ];
+    
+    // Try structured patterns first
+    for (const pattern of txnPatterns) {
+      if (pattern.global) {
+        const matches = [...text.matchAll(pattern)];
+        for (const match of matches) {
+          const id = match[1];
+          // Filter out dates and amounts (they shouldn't be transaction IDs)
+          if (id && !id.includes('.') && parseInt(id) > 100000000000) {
+            extractedData.transactionId = id;
+            break;
+          }
+        }
+      } else {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          extractedData.transactionId = match[1].toUpperCase();
+          break;
+        }
+      }
+      if (extractedData.transactionId) break;
+    }
+
+    // Extract cheque number
+    if (lowerText.includes("cheque") || lowerText.includes("chq")) {
+      extractedData.type = "Cheque";
+      const chequePatterns = [
+        /(?:cheque|chq|check)[\s#:]*no\.?[\s:]*(\d{6,12})/i,
+        /cheque[\s#:]*(\d{6,12})/i,
+      ];
+      for (const pattern of chequePatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          extractedData.chequeNumber = match[1];
+          break;
+        }
+      }
+    } else {
+      extractedData.type = "Digital Payment";
+    }
+
+    // Extract date - improved patterns for various formats
+    const datePatterns = [
+      /(\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})/i, // "6th Sep 25" format
+      /(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})/,
+      /(\d{4}[-/]\d{1,2}[-/]\d{1,2})/, // YYYY-MM-DD
+      /(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4})/i, // "6 Sep 2025"
+    ];
+    
+    let dateMatch = null;
+    for (const pattern of datePatterns) {
+      dateMatch = text.match(pattern);
+      if (dateMatch) break;
+    }
+    
+    if (dateMatch) {
+      try {
+        const dateStr = dateMatch[1].trim();
+        let date;
+        
+        // Handle "6th Sep 25" or "6 Sep 2025" format
+        if (/\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i.test(dateStr)) {
+          const monthMap = {
+            'jan': 0, 'feb': 1, 'mar': 2, 'apr': 3, 'may': 4, 'jun': 5,
+            'jul': 6, 'aug': 7, 'sep': 8, 'oct': 9, 'nov': 10, 'dec': 11
+          };
+          
+          const parts = dateStr.replace(/(\d+)(st|nd|rd|th)/i, '$1').split(/\s+/);
+          if (parts.length >= 3) {
+            const day = parseInt(parts[0]);
+            const monthName = parts[1].toLowerCase().substring(0, 3);
+            const yearStr = parts[2];
+            
+            let year = parseInt(yearStr);
+            if (year < 100) {
+              year = year < 50 ? 2000 + year : 1900 + year;
+            }
+            
+            if (monthMap[monthName] !== undefined) {
+              date = new Date(year, monthMap[monthName], day);
+            }
+          }
+        } else if (dateStr.includes("/")) {
+          const parts = dateStr.split("/");
+          if (parts.length === 3) {
+            if (parts[2].length === 4) {
+              date = new Date(parts[2], parts[1] - 1, parts[0]);
+              if (isNaN(date.getTime())) {
+                date = new Date(parts[2], parts[0] - 1, parts[1]);
+              }
+            } else {
+              const year = parseInt(parts[2]) < 50 ? 2000 + parseInt(parts[2]) : 1900 + parseInt(parts[2]);
+              date = new Date(year, parts[1] - 1, parts[0]);
+            }
+          }
+        } else if (dateStr.includes("-")) {
+          date = new Date(dateStr);
+        }
+        
+        if (date && !isNaN(date.getTime())) {
+          extractedData.date = moment(date).format("YYYY-MM-DD");
+        }
+      } catch (e) {
+        console.error("Date parsing error:", e);
+      }
+    }
+
+    // Extract bank name - improved patterns
+    const banks = [
+      { pattern: /state\s*bank\s*of\s*india/i, name: "State Bank of India" },
+      { pattern: /state\s*bank/i, name: "State Bank of India" },
+      { pattern: /\bSBI\b/i, name: "SBI" },
+      { pattern: /HDFC/i, name: "HDFC" },
+      { pattern: /ICICI/i, name: "ICICI" },
+      { pattern: /Axis/i, name: "Axis" },
+      { pattern: /Kotak/i, name: "Kotak" },
+      { pattern: /Punjab\s*National\s*Bank/i, name: "Punjab National Bank" },
+      { pattern: /\bPNB\b/i, name: "PNB" },
+      { pattern: /Bank\s*of\s*Baroda/i, name: "Bank of Baroda" },
+      { pattern: /Canara\s*Bank/i, name: "Canara Bank" },
+      { pattern: /Union\s*Bank/i, name: "Union Bank" },
+      { pattern: /Indian\s*Bank/i, name: "Indian Bank" },
+      { pattern: /Bank\s*of\s*India/i, name: "Bank of India" },
+    ];
+    for (const bank of banks) {
+      if (bank.pattern.test(text)) {
+        extractedData.bankName = bank.name;
+        break;
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "OCR processing completed",
+      data: extractedData,
+    });
+  } catch (error) {
+    console.error("Error processing OCR:", error);
+    return next(new AppError(error.message || "OCR processing failed", 500));
+  }
+};
+
 // Export all controller functions as raw async functions (not wrapped in catchAsync)
 export {
   getUsers,
@@ -1797,5 +2216,7 @@ export {
   calculatePerformanceMetrics,
   getDealerWalletDetails,
   getDealerWalletTransactions,
-  exportDealerWalletTransactionsCSV
+  exportDealerWalletTransactionsCSV,
+  uploadMedia,
+  processOCR
 };

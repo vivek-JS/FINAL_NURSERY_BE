@@ -1,0 +1,92 @@
+{
+  "orderData": {
+    "Date": "1/25/25",
+    "Booking NO.": 0,
+    "Name": "Sushila Suresh Atre",
+    "Mobile No.": "9404558601",
+    "Address": "Fuknagari",
+    "Taluka": "Jalgaon",
+    "District": "Jalgaon",
+    "Advance On": "5/16/25",
+    "adv match": "FALSE",
+    "Advance Amt.": 10000,
+    "Crop": "Banana",
+    "Variety": "G-9",
+    "Media": "8 Cavity",
+    "Expected": "RB",
+    "Plant Qty.": 19,
+    "Rate": 8500,
+    "Expected Del.": "11/28/25",
+    "Old Del. Date": "25-03-2025",
+    "Del. Y/N": "N",
+    "Invoice amount": 161500,
+    "Bal. Amt.": 161500,
+    "Refrence": "Barde Sir",
+    "Order By": "Barde Sir",
+    "Ad. Amt. Mode": "online",
+    "Bank": "",
+    "CH No.": "1341",
+    "Advance Date": "5/16/25",
+    "Receipt Code": 0,
+    "ADV Y/N": "Y",
+    "CC Y/N": "",
+    "Remark": "Mukesh Suresh Atre Cahnge Name Add Quantity Ref Sandip P\nON Call 24/7/25\nlu 31/10\nLu 17/11"
+  },
+  "expectedMapping": {
+    "Date": "orderBookingDate → 2025-01-25",
+    "Booking NO.": "Auto-generated (Year + Month + Sequence)",
+    "Name": "Farmer name → Sushila Suresh Atre",
+    "Mobile No.": "Farmer mobile → 9404558601 (will find or create farmer)",
+    "Address": "Village → Fuknagari",
+    "Taluka": "Taluka → Jalgaon",
+    "District": "District → Jalgaon",
+    "Advance On": "Payment date → 2025-05-16",
+    "Advance Amt.": "Payment amount → ₹10,000",
+    "ADV Y/N": "Payment status → COLLECTED (Y = COLLECTED)",
+    "Crop": "Plant → Banana",
+    "Variety": "Subtype → G-9",
+    "Media": "Cavity → 8 Cavity (will find or create tray)",
+    "Expected": "expectedNursery → RB",
+    "Plant Qty.": "numberOfPlants → 19",
+    "Rate": "rate → ₹8,500",
+    "Expected Del.": "deliveryDate → 2025-11-28",
+    "Old Del. Date": "oldDeliveryDate & slot date → 2025-03-25 (since Old Del. Date is present, deliveryDate will be null)",
+    "Del. Y/N": "orderStatus → ACCEPTED (N = ACCEPTED)",
+    "Refrence": "reference → Barde Sir (will find or create user)",
+    "Order By": "salesPerson → Barde Sir (will find or create sales person)",
+    "Ad. Amt. Mode": "modeOfPayment → online",
+    "CH No.": "chequeNumber → 1341",
+    "Remark": "payment remark → Full remark text"
+  },
+  "expectedResult": {
+    "order": {
+      "orderId": "Auto-generated",
+      "farmer": "Sushila Suresh Atre (9404558601) - found or created",
+      "salesPerson": "Barde Sir - found or created",
+      "reference": "Barde Sir - found or created",
+      "numberOfPlants": 19,
+      "plantName": "Banana",
+      "plantSubtype": "G-9",
+      "cavity": "8 Cavity tray - found or created",
+      "rate": 8500,
+      "orderStatus": "ACCEPTED",
+      "orderBookingDate": "2025-01-25",
+      "deliveryDate": null,
+      "oldDeliveryDate": "2025-03-25",
+      "expectedNursery": "RB",
+      "bookingSlot": "Slot matching 2025-03-25"
+    },
+    "payment": {
+      "paidAmount": 10000,
+      "paymentDate": "2025-05-16",
+      "paymentStatus": "COLLECTED",
+      "modeOfPayment": "online",
+      "chequeNumber": "1341",
+      "remark": "Full remark text"
+    }
+  }
+}
+
+
+
+

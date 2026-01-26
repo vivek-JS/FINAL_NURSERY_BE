@@ -10,7 +10,9 @@ const farmerLeadSchema = new Schema(
     mobileNumber: {
       type: String,
       required: true,
-      trim: true
+      trim: true,
+      unique: true,
+      index: true
     },
     stateCode: { type: String, required: true },
     stateName: { type: String, required: true },

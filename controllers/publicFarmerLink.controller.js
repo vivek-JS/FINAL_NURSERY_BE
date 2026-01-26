@@ -203,6 +203,12 @@ export const createFarmerLead = catchAsync(async (req, res, next) => {
     return next(new AppError("Mobile number must be 10 digits", 400));
   }
 
+  // Check for duplicate mobile number
+  const existingLead = await FarmerLead.findOne({ mobileNumber: String(mobileNumber) }).lean();
+  if (existingLead) {
+    return next(new AppError("या मोबाईल नंबरवर आधीच शेतकरी नोंदणी झालेली आहे", 400));
+  }
+
   const normalizedSlug = normalizeSlug(slug);
 
   const link = await PublicFarmerLink.findOne({

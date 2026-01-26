@@ -1,0 +1,107 @@
+ERRORFUL ORDERS - EDITABLE LIST
+================================
+
+Total: 72 unique rows with errors
+
+FORMAT: Row | Booking | Farmer | Mobile | Crop-Variety | Qty | Expected Date | Old Date | Del Y/N | Error Type | Error Message
+
+====================================================================================================
+DATE_ERROR (44 orders) - No suitable slot found
+====================================================================================================
+Row 666 | 25-26/B0036 | Pradip Vitthal Chavhan | 9096409547 | Watermelon-Simbha | 5000 | 45948 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 18-10-2025 in month October
+Row 670 | 25-26/B0040 | Gajanan Dnyanoba Patil | 8605393861 | Watermelon-Simbha | 7500 | 45950 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 20-10-2025 in month October
+Row 702 | 25-26/B0071 | Purshottam dagdu birhade | 9822331754
+8380921409 | Watermelon-Simbha | 16000 | 45971 | N/A | N | DATE_ERROR | No suitable slot found for delivery date 10-11-2025 in month November
+Row 719 | 25-26/B0088 | Vijay Chaurasiya  | 9326005211 | Watermelon-Simbha | 17500 | 45966 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 05-11-2025 in month November
+Row 722 | 25-26/B0090 | Ganesh Dondu Dhakare | 9730819171 | Watermelon-Simbha | 30000 | 45965 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 04-11-2025 in month November
+Row 723 | 25-26/B0091 | Vijay Ananada Patil | 9730673426 | Watermelon-Simbha | 10500 | 45966 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 05-11-2025 in month November
+Row 729 | 25-26/B0095 | Roshan Pitamber Patil | 9579234066 | Watermelon-Simbha | 11000 | 45971 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 10-11-2025 in month November
+Row 730 | 25-26/B0096 | Dnyaneshwar lukudu Patil | 9518738972 | Watermelon-Prachand | 9000 | 45973 | N/A | N | DATE_ERROR | No suitable slot found for delivery date 12-11-2025 in month November
+Row 731 | 25-26/B0097 | Santosh Adhav  | 9588641864 | Watermelon-Prachand | 12000 | 45973 | N/A | c | DATE_ERROR | No suitable slot found for delivery date 12-11-2025 in month November
+Row 732 | 25-26/B0098 | Sambhaji Vasant chavan | 8275922869 | Watermelon-Simbha | 7000 | 45964 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 03-11-2025 in month November
+Row 735 | 25-26/B0101 | Gajanan Hari Ubale | 8459597670 | Watermelon-Simbha | 12000 | 45976 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 15-11-2025 in month November
+Row 736 | 25-26/B0102 | Ishwar Narayan Shinde | 9766164182 | Watermelon-Simbha | 11000 | 45975 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 14-11-2025 in month November
+Row 737 | 25-26/B0103 | Ashish Jayvantrao Patil | 7620148971 | Watermelon-Prachand | 5500 | 45976 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 15-11-2025 in month November
+Row 739 | 25-26/B0105 | Vinod Bhavlal Gopal | 7057672831 | Watermelon-Simbha | 7000 | 45976 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 15-11-2025 in month November
+Row 740 | 25-26/B0106 | Bandu Totaram Shinde | 9529499743 | Watermelon-Simbha | 12000 | 45976 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 15-11-2025 in month November
+Row 741 | 25-26/B0107 | Prakash Sudhakar Gadhe | 9822556439‬ | Watermelon-Simbha | 12000 | 45976 | N/A | C | DATE_ERROR | No suitable slot found for delivery date 15-11-2025 in month November
+Row 746 | 25-26/B0112 | Prakash Pundalik Kurkure | 9822400554 | Watermelon-Simbha | 12000 | 45981 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 20-11-2025 in month November
+Row 748 | 25-26/B0114 | Subhash Chindhu Patil | 9209380014 | Watermelon-Simbha | 8000 | 45981 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 20-11-2025 in month November
+Row 751 | 25-26/B0117 | Dipak Pandurang Patil | 9665084642 | Watermelon-Simbha | 11000 | 45992 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 01-12-2025 in month December
+Row 769 | 25-26/B0135 | Bapu Bhaskar Bagul | 8007980045 | Watermelon-Simbha | 24000 | 45992 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 01-12-2025 in month December
+Row 770 | 25-26/B0135 | Bapu Bhaskar Bagul | 8007980045 | Watermelon-Simbha | 40000 | 45996 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 05-12-2025 in month December
+Row 774 | 25-26/B0139 | Mayur Uttam Kanade | 9834665868
+9975631596 | Watermelon-Simbha | 13000 | 45998 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 07-12-2025 in month December
+Row 775 | 25-26/B0140 | Mahendra Umesh Patil | 9158469357 | Watermelon-Simbha | 38000 | 45998 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 07-12-2025 in month December
+Row 776 | 25-26/B0141 | Suresh Bhavlal Gopal | 7620885414 | Watermelon-Simbha | 6500 | 45997 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 06-12-2025 in month December
+Row 802 | 25-26/B0166 | Sachin Kadu Patil | 9284644917 | Watermelon-Simbha | 21000 | 45992 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 01-12-2025 in month December
+Row 807 | 25-26/B0171 | Panjabrao Murlidhar Sisode | 9209506576 | Watermelon-Simbha | 20000 | 45994 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 03-12-2025 in month December
+Row 808 | 25-26/B0172 | Suresh Dattu Patil | 8390685501 | Watermelon-Simbha | 15000 | 45993 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 02-12-2025 in month December
+Row 809 | 25-26/B0173 | Ananda Bhika Patil | 8007986285 | Watermelon-Simbha | 13000 | 45994 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 03-12-2025 in month December
+Row 817 | 25-26/B0180 | Samadhan Narayan Kumavat | 9309215013 | Watermelon-Simbha | 7000 | 45986 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 25-11-2025 in month November
+Row 835 | 25-26/B0198 | Kishor Kashinath Paygvhan | 9579714208 | Watermelon-Prachand | 7000 | 45991 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 30-11-2025 in month November
+Row 837 | 25-26/B0200 | Dipali Gajanan Patil | 7875079653 | Watermelon-Simbha | 16000 | 45993 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 02-12-2025 in month December
+Row 838 | 25-26/B0201 | Mango Dagadu Patil | 9765394742 | Watermelon-Simbha | 14000 | 45994 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 03-12-2025 in month December
+Row 845 | 25-26/B0208 | Namdev Kashinath Khadse | 9082610097 | Watermelon-Simbha | 12000 | 45999 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 08-12-2025 in month December
+Row 858 | 25-26/B0221 | Gopal Thansing Patil | 9325918772 | Watermelon-Prachand | 12500 | 45996 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 05-12-2025 in month December
+Row 861 | 25-26/B0224 | Bhagwan Keshav Patil | 8600070984 | Watermelon-Simbha | 4400 | 45996 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 05-12-2025 in month December
+Row 866 | 25-26/B0229 | Dinakar Sahebrao Sonawane | 9021926052 | Watermelon-Simbha | 36000 | 46000 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 09-12-2025 in month December
+Row 867 | 25-26/B0230 | Durgesh Shivaji Patil | 8999745542 | Watermelon-Simbha | 12000 | 46006 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 15-12-2025 in month December
+Row 868 | 25-26/B0231 | Narayan Kashinath Khadase | 9623096721 | Watermelon-Simbha | 9000 | 45996 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 05-12-2025 in month December
+Row 869 | 25-26/B0232 | Atul Mahajan | 9545776570 | Watermelon-Simbha | 45000 | 46004 | N/A | N | DATE_ERROR | No suitable slot found for delivery date 13-12-2025 in month December
+Row 871 | 25-26/B0234 | Devidas Eknath Ubale | 8459597670 | Watermelon-Simbha | 6100 | 46011 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 20-12-2025 in month December
+Row 872 | 25-26/B0235 | Samadhan Nathu Shirsagar | 9373481534 | Muskmelon-Vijay | 9000 | 45996 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 05-12-2025 in month December
+Row 874 | 25-26/B0237 | Vinod Bhagwat Deshmukh | 9689642433 | Watermelon-Prachand | 12000 | 46003 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 12-12-2025 in month December
+Row 875 | 25-26/B0238 | Rambhau Patil | 9767934870 | Watermelon-Prachand | 10000 | 46003 | N/A | Y | DATE_ERROR | No suitable slot found for delivery date 12-12-2025 in month December
+Row 881 | 25-26/B0244 | Sarthak Nagendra Patidar | 8966939373 | Watermelon-Simbha | 22000 | 46006 | N/A | y | DATE_ERROR | No suitable slot found for delivery date 15-12-2025 in month December
+
+====================================================================================================
+MISSING_DATA (11 orders) - Missing delivery dates or validation errors
+====================================================================================================
+Row 37 | N/A | Bapu Zinga Bagala | 8007870540 | Papaya-Taiwan | 2500 | N/A | N/A | TC | MISSING_DATA | Missing delivery date at row 37
+Row 80 | N/A | Ravindra Shaligram Patil | 9834203360 | Banana-G-9 | 3000 | N/A | N/A | Y | MISSING_DATA | Missing delivery date at row 80
+Row 192 | 25-26/B0264 | Vikas Thansing Patil | 9850704981 | Watermelon-Simgham | 14000 | 2025-12-15 | N/A | N | MISSING_DATA | Order validation failed: rate: Path `rate` is required.
+Row 669 | 25-26/B0039 | Subhash Sarangdhar Sonawane | 8788713849 | Muskmelon-Layalpur | 10000 | 45948 | N/A | Y | MISSING_DATA | PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: P
+Row 698 | 25-26/B0067 | Pravin Ramdas Wagh | 8975135923 | Muskmelon-Layalpur | 2000 | 45955 | N/A | Y | MISSING_DATA | PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: P
+Row 707 | 25-26/B0076 | Tushar Chaudhari | 7770048888 | Muskmelon-Layalpur | 28000 | N/A | N/A | Y | MISSING_DATA | Missing delivery date at row 707
+Row 717 | 25-26/B0086 | Dipshor Bansilal Sonawane | 8975782990 | Muskmelon-Layalpur | 18000 | 45963 | N/A | Y | MISSING_DATA | PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: P
+Row 720 | 25-26/B0088 | Vijay Chaurasiya  | 9326005211 | Muskmelon-Layalpur | 14000 | 45966 | N/A | Y | MISSING_DATA | PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: P
+Row 829 | 25-26/B0192 | Sandip Yuvraj Patil | 9403855507 | Muskmelon-Layalpur | 15500 | 45993 | N/A | Y | MISSING_DATA | PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: P
+Row 831 | 25-26/B0194 | Rajendra krushna Dandage | 8806008 768 | Muskmelon-Layalpur | 4000 | 45986 | N/A | N | MISSING_DATA | PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: P
+Row 840 | 25-26/B0203 | Sachin Santosh Dandage | 9373451891 | Muskmelon-Layalpur | 15000 | 45995 | N/A | Y | MISSING_DATA | PlantSlot validation failed: subtypeSlots.2.slots.21.slotTrail.0.activityName: P
+
+====================================================================================================
+FARMER_ERROR (7 orders) - Missing location data
+====================================================================================================
+Row 209 | N/A | Vishanu Kukaji Patil  | -9503568311 | Banana-G-9 | 5000 | 45955 | N/A | c | FARMER_ERROR | Farmer validation failed: district: District ID requried, districtName: District
+Row 302 | N/A | Deepak Patil  | N/A | Banana-G-9 | 10000 | 45945 | 45840 | Y | FARMER_ERROR | Farmer validation failed: taluka: Taluka ID requried, district: District ID requ
+Row 555 | N/A | Vithhal Bhivsan Chavhan | 9665206663 | Banana-G-9 | 3000 | 46006 | N/A | Y | FARMER_ERROR | Farmer validation failed: district: District ID requried, districtName: District
+Row 587 | N/A | Ravindra Govinda Marathe | 9421499800 | Banana-G-9 | 4900 | 46021 | N/A | N | FARMER_ERROR | Farmer validation failed: district: District ID requried, districtName: District
+Row 781 | 25-26/B0146 | Nagesh Kodur | N/A | Papaya-Taiwan | 25000 | 45986 | N/A | Y | FARMER_ERROR | Farmer validation failed: village: Village ID requried, taluka: Taluka ID requri
+Row 782 | 25-26/B0146 | Nagesh Kodur | N/A | Papaya-Taiwan | 15000 | 45993 | N/A | Y | FARMER_ERROR | Farmer validation failed: village: Village ID requried, taluka: Taluka ID requri
+Row 850 | 25-26/B0213 | Yogesh Patil | ‪9834765655‬ | Watermelon-Impact | 11250 | 46001 | N/A | N | FARMER_ERROR | Farmer validation failed: taluka: Taluka ID requried, district: District ID requ
+
+====================================================================================================
+PLANT_ERROR (5 orders) - No slot configuration found
+====================================================================================================
+Row 4 | N/A | Jayesh Hemandra Sapkale | 7588696988 | Banana-G-9 | 5000 | 45979 | 05-06-2025
+10/12
+15/11 | y | PLANT_ERROR | No slot configuration found for plant in year 2025
+Row 5 | N/A | Yuvraj Ramesh Shinkar | 8275922868 | Banana-G-9 | 3000 | 45971 | 45962 | y | PLANT_ERROR | No slot configuration found for plant in year 2025
+Row 6 | N/A | Ankush Sudhakar Pandit | 8390926092 | Banana-G-9 | 3000 | 45962 | N/A | Y | PLANT_ERROR | No slot configuration found for plant in year 2025
+Row 8 | N/A | Ashok Madhuakar Patil | 9403125877 | Banana-G-9 | 6100 | 45945 | N/A | Y | PLANT_ERROR | No slot configuration found for plant in year 2025
+Row 9 | N/A | Suresh Vishwanth Shinde | 9604844200 | Banana-G-9 | 9000 | 45971 | N/A | Y | PLANT_ERROR | No slot configuration found for plant in year 2025
+
+====================================================================================================
+UNKNOWN_ERROR (5 orders) - Code errors (already fixed)
+====================================================================================================
+Row 2 | N/A | Arun Pundalik Patil | 9284775531 | Banana-G-9 | 5000 | 45971 | 45962 | TC | UNKNOWN_ERROR | advMatchOrNot is not defined (FIXED)
+Row 3 | N/A | Sushila Suresh Atre | 9404558601 | Banana-G-9 | 8500 | 45989 | 25-03-2025
+25/10
+12/11 | N | UNKNOWN_ERROR | advMatchOrNot is not defined (FIXED)
+Row 7 | N/A | Sulochanbai Suresh Patil | 9769312797 | Banana-G-9 | 3000 | 45981 | 45962 | N | UNKNOWN_ERROR | advMatchOrNot is not defined (FIXED)
+Row 10 | N/A | Sunil Rajaram Kulkarni | 9881144759 | Banana-G-9 | 3000 | 45962 | N/A | y | UNKNOWN_ERROR | advMatchOrNot is not defined (FIXED)
+Row 11 | N/A | Vilas Bhimrao Wagh | 9022502453 | Banana-G-9 | 3500 | 45991 | N/A | N | UNKNOWN_ERROR | advMatchOrNot is not defined (FIXED)
+
+
+
