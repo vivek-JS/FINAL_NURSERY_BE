@@ -73,6 +73,7 @@ export const authenticateToken = async (req, res, next) => {
 
 /**
  * Middleware to check if user has required role(s)
+ * Prioritizes jobTitle over role for all checks
  * @param {String|Array} roles - Required role(s)
  */
 export const authorizeRoles = (roles) => {
@@ -83,7 +84,8 @@ export const authorizeRoles = (roles) => {
       );
     }
 
-    const userRole = req.user.role;
+    // Prioritize jobTitle over role
+    const userRole = req.user.jobTitle || req.user.role;
     const requiredRoles = Array.isArray(roles) ? roles : [roles];
 
     if (!requiredRoles.includes(userRole)) {
@@ -161,8 +163,9 @@ export const requireOwnership = (resourceIdField = 'id', modelName = 'Resource')
         );
       }
 
-      // Admins can access any resource
-      if (['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
+      // Admins can access any resource - check jobTitle first, then role
+      const userRole = req.user.jobTitle || req.user.role;
+      if (['ADMIN', 'SUPER_ADMIN'].includes(userRole)) {
         return next();
       }
 
@@ -295,4 +298,72 @@ export const checkUserStatus = async (req, res, next) => {
       generateResponse('error', 'Internal server error', null, null)
     );
   }
+};
+
+/**
+ * Middleware to restrict RAM_AGRI_SALES_MANAGER to only allowed routes
+ * RAM_AGRI_SALES_MANAGER can only access:
+ * - Ram Agri Inputs Master (CRUD)
+ * - Ram Agri Sales Dashboard
+ * - Ram Agri Sales Rankboard
+ * - Ram Agri Sales Targets
+ * - Ram Agri Ledgers (Variety, Customer, Merchant)
+ * - Agri Sales Orders (view/create)
+ * - Inventory Dashboard (limited view)
+ */
+export const restrictRamAgriSalesManager = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json(
+      generateResponse('error', 'Authentication required', null, null)
+    );
+  }
+
+  // Allow SUPER_ADMIN and ADMIN to access all routes - check jobTitle first, then role
+  const userRole = req.user.jobTitle || req.user.role;
+  if (['SUPER_ADMIN', 'ADMIN'].includes(userRole)) {
+    return next();
+  }
+
+  // Check if user is RAM_AGRI_SALES_MANAGER - prioritize jobTitle
+  const isRamAgriSalesManager = req.user.jobTitle === 'RAM_AGRI_SALES_MANAGER' || req.user.role === 'RAM_AGRI_SALES_MANAGER';
+  
+  if (!isRamAgriSalesManager) {
+    // Not a RAM_AGRI_SALES_MANAGER, allow access
+    return next();
+  }
+
+  // Get the route path
+  const path = req.path || req.originalUrl || '';
+  
+  // Allowed routes for RAM_AGRI_SALES_MANAGER
+  const allowedRoutes = [
+    '/ram-agri-inputs',           // Ram Agri Inputs Master (all operations)
+    '/ram-agri-sales-dashboard',  // Dashboard
+    '/ram-agri-sales-rankboard',  // Rankboard
+    '/ram-agri-sales-targets',   // Targets (GET and POST)
+    '/ram-agri-variety-ledger',   // Variety Ledger
+    '/ram-agri-customer-ledger',  // Customer Ledger
+    '/ram-agri-merchant-ledger',  // Merchant Ledger
+    '/agri-sales-orders',         // Agri Sales Orders (view/create/manage)
+    '/dashboard',                 // Inventory Dashboard (limited view)
+  ];
+
+  // Check if the route is allowed
+  const isAllowed = allowedRoutes.some(route => {
+    // Exact match or starts with (for routes with IDs like /ram-agri-inputs/:id)
+    return path === route || path.startsWith(route + '/');
+  });
+
+  if (!isAllowed) {
+    return res.status(403).json(
+      generateResponse(
+        'error',
+        'Access denied. RAM_AGRI_SALES_MANAGER can only access Ram Agri Input related routes.',
+        null,
+        null
+      )
+    );
+  }
+
+  next();
 }; 

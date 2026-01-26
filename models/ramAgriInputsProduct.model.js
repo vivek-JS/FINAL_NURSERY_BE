@@ -110,6 +110,12 @@ const varietySchema = new mongoose.Schema({
 
 const ramAgriInputsProductSchema = new mongoose.Schema(
   {
+    productType: {
+      type: String,
+      enum: ['seed', 'chemical'],
+      default: 'seed',
+      index: true,
+    },
     cropName: {
       type: String,
       required: true,
@@ -145,6 +151,7 @@ const ramAgriInputsProductSchema = new mongoose.Schema(
 );
 
 // Indexes for better query performance
+ramAgriInputsProductSchema.index({ productType: 1, cropName: 1 });
 ramAgriInputsProductSchema.index({ cropName: 1 });
 ramAgriInputsProductSchema.index({ isActive: 1 });
 ramAgriInputsProductSchema.index({ createdAt: -1 });

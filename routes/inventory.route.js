@@ -2,6 +2,11 @@ import express from "express";
 import { check } from "express-validator";
 import mongoose from "mongoose";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
+import { restrictRamAgriSalesManager } from "../middlewares/auth.middleware.js";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs/promises";
+import { createReadStream } from "fs";
 import {
   // Product controllers
   createProduct,
@@ -53,8 +58,11 @@ import {
   getCustomerOutstanding as getAgriSalesCustomerOutstanding,
 } from "../controllers/agriSalesOrder.controller.js";
 import { getRamAgriSalesDashboard } from "../controllers/ramAgriSalesDashboard.controller.js";
-import { getVarietyLedger, getCustomerLedger } from "../controllers/ramAgriLedger.controller.js";
+import { getRamAgriSalesRankboard } from "../controllers/ramAgriSalesRankboard.controller.js";
+import { getVarietyLedger, getCustomerLedger, clearCustomerLedger } from "../controllers/ramAgriLedger.controller.js";
 import { getMerchantLedger } from "../controllers/ramAgriMerchantLedger.controller.js";
+import { getRamAgriSalesTargets, upsertRamAgriSalesTarget } from "../controllers/ramAgriSalesTarget.controller.js";
+import { generateRamAgriVideoSummary } from "../controllers/ramAgriVideoSummary.controller.js";
 // Import product controller for Product model (with code, primaryUnit, secondaryUnit, etc.)
 import * as productController from "../controllers/product.controller.js";
 
@@ -67,7 +75,70 @@ const validateObjectId = (value) => {
   return true;
 };
 
+// ==================== PUBLIC VIDEO FILE SERVING ====================
+// Serve generated video files (public access for video playback - must be before auth middleware)
+router.get("/videos/:filename", async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    // Sanitize filename to prevent directory traversal
+    const sanitizedFilename = path.basename(filename);
+    const videoPath = path.join(process.cwd(), "temp", "videos", sanitizedFilename);
+    
+    // Check if file exists
+    try {
+      await fs.access(videoPath);
+    } catch (error) {
+      return res.status(404).json({
+        status: "Error",
+        message: "Video file not found",
+      });
+    }
+    
+    // Set appropriate headers for video streaming
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", `inline; filename="${sanitizedFilename}"`);
+    res.setHeader("Accept-Ranges", "bytes");
+    
+    // Stream the video file
+    const videoStream = createReadStream(videoPath);
+    videoStream.pipe(res);
+    
+    videoStream.on("error", (error) => {
+      console.error("Error streaming video:", error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          status: "Error",
+          message: "Error streaming video file",
+        });
+      }
+    });
+  } catch (error) {
+    console.error("Error serving video:", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        status: "Error",
+        message: "Error serving video file",
+      });
+    }
+  }
+});
+
 // ==================== PRODUCT ROUTES ====================
+
+// Apply RAM_AGRI_SALES_MANAGER restriction to all routes except allowed ones
+// Note: Ram Agri routes are allowed, but other inventory routes are restricted
+router.use((req, res, next) => {
+  // Skip restriction for Ram Agri routes (they're explicitly allowed)
+  const path = req.path || req.originalUrl || '';
+  const isRamAgriRoute = path.includes('ram-agri') || path === '/dashboard' || path.startsWith('/videos/');
+  
+  if (isRamAgriRoute) {
+    return next(); // Ram Agri routes are allowed, skip restriction
+  }
+  
+  // Apply restriction for all other routes
+  restrictRamAgriSalesManager(req, res, next);
+});
 
 // POST /products - Create product using Product model (supports code, primaryUnit, secondaryUnit, plantId, subtypeId, isRamAgriSales)
 // This route handles products with the extended schema (used by frontend ProductForm)
@@ -301,10 +372,27 @@ router.get("/change-logs/:entityType/:entityId", getChangeLogsByEntity);
 
 // ==================== RAM AGRI SALES DASHBOARD ====================
 router.get("/ram-agri-sales-dashboard", getRamAgriSalesDashboard);
+router.get("/ram-agri-sales-rankboard", getRamAgriSalesRankboard);
+router
+  .get("/ram-agri-sales-targets", getRamAgriSalesTargets)
+  .post("/ram-agri-sales-targets", upsertRamAgriSalesTarget);
+router.get("/ram-agri-video-summary", generateRamAgriVideoSummary);
 
 // ==================== RAM AGRI LEDGERS ====================
 router.get("/ram-agri-variety-ledger", getVarietyLedger);
 router.get("/ram-agri-customer-ledger", getCustomerLedger);
+router.delete(
+  "/ram-agri-customer-ledger",
+  [
+    check("customerMobile")
+      .notEmpty()
+      .withMessage("Customer mobile is required")
+      .isLength({ min: 10, max: 10 })
+      .withMessage("Customer mobile must be 10 digits"),
+  ],
+  checkErrors,
+  clearCustomerLedger
+);
 router.get("/ram-agri-merchant-ledger", getMerchantLedger);
 
 export default router; 

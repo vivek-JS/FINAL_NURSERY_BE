@@ -10,6 +10,7 @@ import mongoose from "mongoose";
 import User from "../models/user.model.js";
 import Farmer from "../models/farmer.model.js";
 import Tray from "../models/tray.model.js";
+import PaymentActivity from "../models/paymentActivity.model.js";
 import {
   sendPaymentAcceptedNotification,
   sendPaymentRejectedNotification,
@@ -494,7 +495,8 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     }
 
     // Set payment status based on payment type and user role
-    const userRole = req.user?.role;
+    // Prioritize jobTitle over role
+    const userRole = req.user?.jobTitle || req.user?.role;
     let finalPaymentStatus = "PENDING"; // Default to PENDING for new payments
     
     // For OFFICE_ADMIN, always keep payment status as PENDING
@@ -894,7 +896,8 @@ const updatePaymentStatus = async (req, res) => {
     }
 
     // Prevent OFFICE_ADMIN from changing payment status to COLLECTED
-    const userRole = req.user?.role;
+    // Prioritize jobTitle over role
+    const userRole = req.user?.jobTitle || req.user?.role;
     if (userRole === "OFFICE_ADMIN" && paymentStatus === "COLLECTED") {
       return res.status(403).json({
         message: "OFFICE_ADMIN cannot change payment status to COLLECTED. Contact an Accountant or Super Admin.",
@@ -2727,6 +2730,122 @@ const getSalesmenBucketing = catchAsync(async (req, res, next) => {
   }
 });
 
+// Payment Activity Controllers
+const createPaymentActivity = catchAsync(async (req, res, next) => {
+  try {
+    const {
+      orderId,
+      paymentId,
+      activityType,
+      activityDescription,
+      paymentType,
+      paymentAmount,
+      previousStatus,
+      newStatus,
+      performedBy,
+      timestamp,
+      metadata
+    } = req.body;
+
+    const paymentActivity = new PaymentActivity({
+      orderId,
+      paymentId,
+      activityType,
+      activityDescription,
+      paymentType,
+      paymentAmount,
+      previousStatus,
+      newStatus,
+      performedBy,
+      timestamp: timestamp ? new Date(timestamp) : new Date(),
+      metadata
+    });
+
+    await paymentActivity.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Payment activity logged successfully",
+      data: paymentActivity
+    });
+  } catch (error) {
+    console.error("Error creating payment activity:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while logging payment activity",
+      error: error.message
+    });
+  }
+});
+
+const getPaymentActivities = catchAsync(async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    const query = {};
+    
+    if (startDate && endDate) {
+      query.timestamp = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    const activities = await PaymentActivity.find(query)
+      .populate('orderId', 'orderId')
+      .populate('performedBy.userId', 'name phoneNumber')
+      .sort({ timestamp: -1 })
+      .limit(1000);
+
+    return res.status(200).json({
+      success: true,
+      message: "Payment activities fetched successfully",
+      data: activities
+    });
+  } catch (error) {
+    console.error("Error fetching payment activities:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching payment activities",
+      error: error.message
+    });
+  }
+});
+
+const getTodaysPaymentActivities = catchAsync(async (req, res, next) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const activities = await PaymentActivity.find({
+      timestamp: {
+        $gte: today,
+        $lt: tomorrow
+      }
+    })
+      .populate('orderId', 'orderId')
+      .populate('performedBy.userId', 'name phoneNumber')
+      .sort({ timestamp: -1 })
+      .limit(500);
+
+    return res.status(200).json({
+      success: true,
+      message: "Today's payment activities fetched successfully",
+      data: activities
+    });
+  } catch (error) {
+    console.error("Error fetching today's payment activities:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching today's payment activities",
+      error: error.message
+    });
+  }
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -2745,5 +2864,8 @@ export {
   getOrdersToBeDispatched,
   getAllCavitiesFromOrders,
   getOrderBucketing,
-  getSalesmenBucketing
+  getSalesmenBucketing,
+  createPaymentActivity,
+  getPaymentActivities,
+  getTodaysPaymentActivities
 };

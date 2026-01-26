@@ -1,5 +1,33 @@
 import mongoose, { Schema, model } from "mongoose";
 
+// Order Edit History Schema - tracks field-level changes (same as regular orders)
+const orderEditHistorySchema = new Schema(
+  {
+    field: {
+      type: String,
+      required: true,
+      // Field that was changed (e.g., 'rate', 'quantity', 'deliveryDate')
+    },
+    previousValue: {
+      type: Schema.Types.Mixed,
+      // Store the old value (can be any type)
+    },
+    newValue: {
+      type: Schema.Types.Mixed,
+      required: true,
+      // Store the new value (can be any type)
+    },
+    changedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    notes: {
+      type: String,
+    },
+  },
+  { timestamps: true }
+);
+
 // Activity/History Log Schema for tracking all changes
 const activityLogSchema = new Schema({
   action: {
@@ -437,6 +465,8 @@ const agriSalesOrderSchema = new Schema(
         },
       },
     ],
+    // Order Edit History - tracks field-level changes (same as regular orders)
+    orderEditHistory: [orderEditHistorySchema],
     // Activity/History Log - tracks all changes to the order
     activityLog: [activityLogSchema],
   },
@@ -539,13 +569,20 @@ agriSalesOrderSchema.pre("validate", async function (next) {
 
 // Calculate total amount and balance before save
 agriSalesOrderSchema.pre("save", function (next) {
-  // Recalculate total amount if quantity or rate changes
-  if (this.isModified("quantity") || this.isModified("rate")) {
-    this.totalAmount = (this.quantity || 0) * (this.rate || 0);
+  // Recalculate total amount if quantity, rate, or deliveredQuantity changes
+  // For completed orders, use deliveredQuantity; otherwise use quantity
+  if (this.isModified("quantity") || this.isModified("rate") || this.isModified("deliveredQuantity") || this.isModified("orderStatus")) {
+    // If order is completed and has deliveredQuantity, use that for payment calculation
+    // Otherwise use original quantity
+    const quantityForAmount = (this.orderStatus === "COMPLETED" && this.deliveredQuantity > 0) 
+      ? this.deliveredQuantity 
+      : (this.quantity || 0);
+    
+    this.totalAmount = quantityForAmount * (this.rate || 0);
   }
 
   // Recalculate payment status and balance if payment changes
-  if (this.isModified("payment") || this.isModified("totalAmount")) {
+  if (this.isModified("payment") || this.isModified("totalAmount") || this.isModified("deliveredQuantity") || this.isModified("orderStatus")) {
     const totalPaid = this.payment && this.payment.length > 0
       ? this.payment.reduce((sum, p) => {
           if (p.paymentStatus === "COLLECTED") {
@@ -556,6 +593,12 @@ agriSalesOrderSchema.pre("save", function (next) {
       : 0;
 
     this.totalPaidAmount = totalPaid;
+    
+    // For completed orders, recalculate totalAmount based on deliveredQuantity
+    if (this.orderStatus === "COMPLETED" && this.deliveredQuantity > 0) {
+      this.totalAmount = this.deliveredQuantity * (this.rate || 0);
+    }
+    
     this.balanceAmount = (this.totalAmount || 0) - totalPaid;
 
     // Update payment status

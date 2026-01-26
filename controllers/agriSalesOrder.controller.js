@@ -9,6 +9,10 @@ import Farmer from "../models/farmer.model.js";
 import Vehicle from "../models/vehicleModel.model.js";
 import User from "../models/user.model.js";
 import mongoose from "mongoose";
+import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
+
+const shouldLogRamAgriLedger = (order) =>
+  Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
 
 // ==================== CREATE AGRI SALES ORDER ====================
 
@@ -210,6 +214,29 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   const order = await AgriSalesOrder.create(orderData);
 
+  if (shouldLogRamAgriLedger(order)) {
+    await createCustomerLedgerEntry({
+      customerMobile: order.customerMobile,
+      customerName: order.customerName,
+      refType: "ORDER",
+      refId: order._id,
+      orderId: order._id,
+      debit: order.totalAmount || totalAmount,
+      reference: order.orderNumber,
+      category: "Order",
+      description: `Order created for ${order.ramAgriCropName || productName}`,
+      entryDate: order.orderDate || order.createdAt,
+      createdBy: userId,
+      metadata: {
+        cropId: order.ramAgriCropId,
+        varietyId: order.ramAgriVarietyId,
+        customerVillage: order.customerVillage,
+        customerTaluka: order.customerTaluka,
+        customerDistrict: order.customerDistrict,
+      },
+    });
+  }
+
   // Add activity log for order creation
   order.activityLog = [{
     action: "ORDER_CREATED",
@@ -248,6 +275,72 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   await order.save();
 
+  // Create farmer from customer data if farmer doesn't exist
+  try {
+    console.log("🔍 Checking if farmer exists for customer mobile:", customerMobile);
+    
+    // Check if farmer already exists with this mobile number
+    let customerFarmer = await Farmer.findOne({ 
+      mobileNumber: customerMobile 
+    });
+    
+    if (!customerFarmer) {
+      console.log("✅ Farmer not found - Creating new farmer from agri sales order customer data");
+      
+      // Create new farmer with customer data from order
+      const farmerData = {
+        name: customerName.trim(),
+        mobileNumber: customerMobile.trim(),
+        village: customerVillage?.trim() || "To be updated",
+        taluka: customerTaluka?.trim() || "To be updated",
+        district: customerDistrict?.trim() || "To be updated",
+        state: customerState?.trim() || "Maharashtra",
+        stateName: customerState?.trim() || "Maharashtra",
+        talukaName: customerTaluka?.trim() || "To be updated",
+        districtName: customerDistrict?.trim() || "To be updated",
+      };
+      
+      console.log("📝 Creating new farmer with data:", farmerData);
+      
+      // Create the farmer
+      customerFarmer = await Farmer.create(farmerData);
+      
+      console.log("✅ Successfully created new farmer from agri sales order! ID:", customerFarmer._id, "Name:", customerFarmer.name);
+    } else {
+      console.log("ℹ️ Farmer already exists with mobile number:", customerMobile, "- Skipping creation");
+    }
+  } catch (error) {
+    console.error("❌ Error creating farmer from agri sales order customer data:", error.message);
+    console.error("Full error:", error);
+    // Don't fail the order creation if farmer creation fails
+  }
+
+  if (shouldLogRamAgriLedger(order) && order.payment && Array.isArray(order.payment)) {
+    const collectedPayments = order.payment.filter(
+      (payment) => payment.paymentStatus === "COLLECTED"
+    );
+    for (const payment of collectedPayments) {
+      await createCustomerLedgerEntry({
+        customerMobile: order.customerMobile,
+        customerName: order.customerName,
+        refType: "PAYMENT",
+        refId: payment._id,
+        orderId: order._id,
+        paymentId: payment._id,
+        credit: payment.paidAmount || 0,
+        reference: order.orderNumber,
+        category: "Payment",
+        description: `Payment via ${payment.modeOfPayment || "N/A"}`,
+        entryDate: payment.paymentDate || order.orderDate || order.createdAt,
+        createdBy: userId,
+        metadata: {
+          paymentStatus: payment.paymentStatus,
+          modeOfPayment: payment.modeOfPayment,
+        },
+      });
+    }
+  }
+
   // Populate fields
   if (!isRamAgriProduct) {
     await order.populate("productId");
@@ -282,12 +375,19 @@ const acceptAgriSalesOrder = catchAsync(async (req, res, next) => {
     return next(new AppError("Order not found", 404));
   }
 
-  if (order.orderStatus !== "PENDING") {
+  // Allow accepting PENDING or ASSIGNED orders
+  if (!["PENDING", "ASSIGNED"].includes(order.orderStatus)) {
     return next(new AppError(`Cannot accept order with status: ${order.orderStatus}`, 400));
   }
 
   // NO stock check on accept - stock will be checked only when admin dispatches directly
   // If order is assigned to sales person, no stock check/deduction happens at all
+
+  const previousStatus = order.orderStatus;
+  const previousAssignedTo = order.assignedTo;
+  const previousAssignedBy = order.assignedBy;
+  const previousAssignedAt = order.assignedAt;
+  const previousAssignmentNotes = order.assignmentNotes;
 
   // Update order status (NO stock deduction - happens on direct admin dispatch only)
   order.orderStatus = "ACCEPTED";
@@ -295,17 +395,52 @@ const acceptAgriSalesOrder = catchAsync(async (req, res, next) => {
   order.acceptedBy = req.user?._id || req.user?.id;
   order.acceptedAt = new Date();
 
+  // If order was ASSIGNED, clear the assignment fields
+  if (previousStatus === "ASSIGNED") {
+    order.assignedTo = undefined;
+    order.assignedBy = undefined;
+    order.assignedAt = undefined;
+    order.assignmentNotes = undefined;
+  }
+
   // Add activity log
   if (!order.activityLog) order.activityLog = [];
-  order.activityLog.push({
+  
+  let description = `Order accepted. Status: ${previousStatus} → ACCEPTED. Stock will be checked/deducted only if admin dispatches directly.`;
+  if (previousStatus === "ASSIGNED") {
+    description += " Assignment cleared.";
+  }
+
+  const activityLogEntry = {
     action: "ORDER_ACCEPTED",
-    description: `Order accepted. Status: PENDING → ACCEPTED. Stock will be checked/deducted only if admin dispatches directly.`,
+    description,
     performedBy: req.user?._id || req.user?.id,
     performedByName: req.user?.name || "Unknown",
-    previousValue: { orderStatus: "PENDING" },
-    newValue: { orderStatus: "ACCEPTED" },
-    metadata: { requiredQuantity: order.quantity },
-  });
+    previousValue: { 
+      orderStatus: previousStatus,
+      ...(previousStatus === "ASSIGNED" ? {
+        assignedTo: previousAssignedTo,
+        assignedBy: previousAssignedBy,
+        assignedAt: previousAssignedAt,
+        assignmentNotes: previousAssignmentNotes,
+      } : {}),
+    },
+    newValue: { 
+      orderStatus: "ACCEPTED",
+      ...(previousStatus === "ASSIGNED" ? {
+        assignedTo: null,
+        assignedBy: null,
+        assignedAt: null,
+        assignmentNotes: null,
+      } : {}),
+    },
+    metadata: { 
+      requiredQuantity: order.quantity,
+      ...(previousStatus === "ASSIGNED" ? { assignmentCleared: true } : {}),
+    },
+  };
+
+  order.activityLog.push(activityLogEntry);
 
   await order.save();
 
@@ -499,6 +634,25 @@ const cancelAgriSalesOrder = catchAsync(async (req, res, next) => {
   }
   await order.save();
 
+  if (shouldLogRamAgriLedger(order)) {
+    await createCustomerLedgerEntry({
+      customerMobile: order.customerMobile,
+      customerName: order.customerName,
+      refType: "REVERSAL",
+      refId: order._id,
+      orderId: order._id,
+      credit: order.totalAmount || 0,
+      reference: order.orderNumber,
+      category: "Order Reversal",
+      description: `Order cancelled${reason ? `: ${reason}` : ""}`,
+      entryDate: new Date(),
+      createdBy: req.user?._id || req.user?.id,
+      metadata: {
+        orderStatus: order.orderStatus,
+      },
+    });
+  }
+
   // Populate fields
   await order.populate("productId");
   await order.populate("createdBy");
@@ -647,6 +801,138 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
     "Agri Sales Orders fetched successfully",
     {
       data: orders,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
+    },
+    undefined
+  );
+
+  return res.status(200).json(response);
+});
+
+// ==================== GET OUTSTANDING ORDERS ====================
+
+const getOutstandingAgriSalesOrders = catchAsync(async (req, res, next) => {
+  const {
+    sortBy = "balanceAmount",
+    sortOrder = "desc",
+    search,
+    page = 1,
+    limit = 20,
+    createdBy,
+  } = req.query;
+
+  // Build aggregation pipeline to calculate balanceAmount
+  const pipeline = [];
+
+  // Match only COMPLETED orders (no date filter for outstanding)
+  pipeline.push({
+    $match: {
+      orderStatus: "COMPLETED"
+    }
+  });
+
+  // Add search filter if provided
+  if (search) {
+    const searchRegex = new RegExp(search, "i");
+    pipeline.push({
+      $match: {
+        $or: [
+          { customerName: searchRegex },
+          { customerMobile: searchRegex },
+          { orderNumber: searchRegex },
+          { productName: searchRegex },
+        ]
+      }
+    });
+  }
+
+  // Filter by createdBy if provided
+  if (createdBy && mongoose.isValidObjectId(createdBy)) {
+    pipeline.push({
+      $match: { createdBy: new mongoose.Types.ObjectId(createdBy) }
+    });
+  }
+
+  // Calculate balanceAmount = totalAmount - totalPaidAmount
+  pipeline.push({
+    $addFields: {
+      balanceAmount: {
+        $subtract: [
+          { $ifNull: ["$totalAmount", 0] },
+          { $ifNull: ["$totalPaidAmount", 0] }
+        ]
+      }
+    }
+  });
+
+  // Filter orders with outstanding balance > 0 (only COMPLETED orders with balance)
+  pipeline.push({
+    $match: {
+      balanceAmount: { $gt: 0 }
+    }
+  });
+
+  // Sort by balanceAmount (most outstanding first)
+  const sort = {};
+  sort[sortBy] = sortOrder === "desc" ? -1 : 1;
+  pipeline.push({ $sort: sort });
+
+  // Get total count before pagination
+  const countPipeline = [...pipeline, { $count: "total" }];
+  const countResult = await AgriSalesOrder.aggregate(countPipeline);
+  const total = countResult[0]?.total || 0;
+
+  // Apply pagination
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+  pipeline.push({ $skip: skip });
+  pipeline.push({ $limit: parseInt(limit) });
+
+  // Populate references
+  pipeline.push({
+    $lookup: {
+      from: "inventoryproducts",
+      localField: "productId",
+      foreignField: "_id",
+      as: "productId"
+    }
+  });
+  pipeline.push({
+    $lookup: {
+      from: "users",
+      localField: "createdBy",
+      foreignField: "_id",
+      as: "createdBy"
+    }
+  });
+  pipeline.push({
+    $lookup: {
+      from: "users",
+      localField: "assignedTo",
+      foreignField: "_id",
+      as: "assignedTo"
+    }
+  });
+  pipeline.push({
+    $addFields: {
+      productId: { $arrayElemAt: ["$productId", 0] },
+      createdBy: { $arrayElemAt: ["$createdBy", 0] },
+      assignedTo: { $arrayElemAt: ["$assignedTo", 0] }
+    }
+  });
+
+  const orders = await AgriSalesOrder.aggregate(pipeline);
+
+  const response = generateResponse(
+    "Success",
+    "Outstanding Agri Sales Orders fetched successfully",
+    {
+      data: orders,
+      total: total,
       pagination: {
         total,
         page: parseInt(page),
@@ -827,6 +1113,7 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
   // Store previous status for activity log
   const previousPaymentStatus = order.payment[index].paymentStatus;
   const paymentAmount = order.payment[index].paidAmount;
+  const activityLogLength = order.activityLog ? order.activityLog.length : 0;
 
   // Update payment status
   order.payment[index].paymentStatus = paymentStatus;
@@ -843,10 +1130,72 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
     metadata: {
       paymentIndex: index,
       paymentAmount,
+      changedAt: new Date(),
     },
   });
 
   await order.save();
+
+  const shouldCreateLedgerEntry = shouldLogRamAgriLedger(order) && (
+    (previousPaymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") ||
+    (previousPaymentStatus === "COLLECTED" && paymentStatus !== "COLLECTED")
+  );
+
+  if (shouldCreateLedgerEntry) {
+    try {
+      let ledgerEntry = null;
+      if (previousPaymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
+        ledgerEntry = await createCustomerLedgerEntry({
+          customerMobile: order.customerMobile,
+          customerName: order.customerName,
+          refType: "PAYMENT",
+          refId: order.payment[index]._id,
+          orderId: order._id,
+          paymentId: order.payment[index]._id,
+          credit: paymentAmount || 0,
+          reference: order.orderNumber,
+          category: "Payment",
+          description: `Payment collected via ${order.payment[index].modeOfPayment || "N/A"}`,
+          entryDate: new Date(),
+          createdBy: req.user?._id || req.user?.id,
+          metadata: {
+            previousPaymentStatus,
+            paymentStatus,
+          },
+        });
+      } else if (previousPaymentStatus === "COLLECTED" && paymentStatus !== "COLLECTED") {
+        ledgerEntry = await createCustomerLedgerEntry({
+          customerMobile: order.customerMobile,
+          customerName: order.customerName,
+          refType: "REVERSAL",
+          refId: order.payment[index]._id,
+          orderId: order._id,
+          paymentId: order.payment[index]._id,
+          debit: paymentAmount || 0,
+          reference: order.orderNumber,
+          category: "Payment Reversal",
+          description: `Payment reversed (${paymentStatus})`,
+          entryDate: new Date(),
+          createdBy: req.user?._id || req.user?.id,
+          metadata: {
+            previousPaymentStatus,
+            paymentStatus,
+          },
+        });
+      }
+
+      if (!ledgerEntry) {
+        throw new Error("Ledger entry was not created");
+      }
+    } catch (error) {
+      order.payment[index].paymentStatus = previousPaymentStatus;
+      if (order.activityLog && order.activityLog.length > activityLogLength) {
+        order.activityLog.splice(activityLogLength);
+      }
+      await order.save();
+      return next(new AppError("Ledger entry failed, payment status rolled back", 500));
+    }
+  }
 
   // Populate fields
   await order.populate("productId");
@@ -913,9 +1262,18 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
     return next(new AppError("Order not found", 404));
   }
 
-  // Don't allow updates if order is completed or cancelled
-  if (order.orderStatus === "COMPLETED" || order.orderStatus === "CANCELLED") {
-    return next(new AppError("Cannot update completed or cancelled order", 400));
+  // Don't allow updates if order is completed or cancelled (unless updating status)
+  if (updateData.orderStatus) {
+    // Allow status updates except to COMPLETED or CANCELLED from COMPLETED/CANCELLED
+    if ((order.orderStatus === "COMPLETED" || order.orderStatus === "CANCELLED") && 
+        (updateData.orderStatus === "COMPLETED" || updateData.orderStatus === "CANCELLED")) {
+      return next(new AppError("Cannot change status of completed or cancelled order", 400));
+    }
+  } else {
+    // Don't allow other field updates if order is completed or cancelled
+    if (order.orderStatus === "COMPLETED" || order.orderStatus === "CANCELLED") {
+      return next(new AppError("Cannot update completed or cancelled order", 400));
+    }
   }
 
   // Fields that can be updated
@@ -934,13 +1292,19 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
     "deliveryDate",
     "notes",
     "screenshots",
+    "orderStatus", // Allow status updates (except COMPLETED which is blocked above)
   ];
 
   // Filter and validate update data
   const filteredData = {};
   Object.keys(updateData).forEach((key) => {
     if (allowedFields.includes(key)) {
-      filteredData[key] = updateData[key];
+      // Handle deliveryDate: allow null to clear the date
+      if (key === "deliveryDate" && (updateData[key] === null || updateData[key] === undefined || updateData[key] === "")) {
+        filteredData[key] = null;
+      } else {
+        filteredData[key] = updateData[key];
+      }
     }
   });
 
@@ -981,11 +1345,89 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
     }
   }
 
-  // Store previous values for activity log
+  // Store previous values for activity log and edit history
   const previousValues = {};
   Object.keys(filteredData).forEach((key) => {
     previousValues[key] = order[key];
   });
+  const previousTotalAmount = order.totalAmount || 0;
+
+  // Track edit history entries (same as regular orders)
+  const editHistoryEntries = [];
+  
+  // Track rate changes
+  if (filteredData.rate !== undefined && filteredData.rate !== order.rate) {
+    editHistoryEntries.push({
+      field: "rate",
+      previousValue: order.rate,
+      newValue: filteredData.rate,
+      changedBy: req.user?._id || req.user?.id,
+      notes: `Rate changed from ₹${order.rate} to ₹${filteredData.rate}`,
+    });
+  }
+
+  // Track quantity changes
+  if (filteredData.quantity !== undefined && filteredData.quantity !== order.quantity) {
+    editHistoryEntries.push({
+      field: "quantity",
+      previousValue: order.quantity,
+      newValue: filteredData.quantity,
+      changedBy: req.user?._id || req.user?.id,
+      notes: `Quantity changed from ${order.quantity} to ${filteredData.quantity}`,
+    });
+  }
+
+  // Track deliveryDate changes
+  if (filteredData.deliveryDate !== undefined) {
+    const oldDate = order.deliveryDate ? new Date(order.deliveryDate) : null;
+    const newDate = filteredData.deliveryDate ? new Date(filteredData.deliveryDate) : null;
+    
+    // Check if date actually changed
+    const oldDateStr = oldDate ? oldDate.toISOString() : null;
+    const newDateStr = newDate ? newDate.toISOString() : null;
+    
+    if (oldDateStr !== newDateStr) {
+      editHistoryEntries.push({
+        field: "deliveryDate",
+        previousValue: oldDate,
+        newValue: newDate,
+        changedBy: req.user?._id || req.user?.id,
+        notes: `Delivery date changed from ${oldDate ? oldDate.toLocaleDateString('en-IN') : 'Not set'} to ${newDate ? newDate.toLocaleDateString('en-IN') : 'Not set'}`,
+      });
+    }
+  }
+
+  // Track customer name changes
+  if (filteredData.customerName !== undefined && filteredData.customerName !== order.customerName) {
+    editHistoryEntries.push({
+      field: "customerName",
+      previousValue: order.customerName,
+      newValue: filteredData.customerName,
+      changedBy: req.user?._id || req.user?.id,
+      notes: `Customer name changed from "${order.customerName}" to "${filteredData.customerName}"`,
+    });
+  }
+
+  // Track customer mobile changes
+  if (filteredData.customerMobile !== undefined && filteredData.customerMobile !== order.customerMobile) {
+    editHistoryEntries.push({
+      field: "customerMobile",
+      previousValue: order.customerMobile,
+      newValue: filteredData.customerMobile,
+      changedBy: req.user?._id || req.user?.id,
+      notes: `Customer mobile changed from ${order.customerMobile} to ${filteredData.customerMobile}`,
+    });
+  }
+
+  // Initialize orderEditHistory if it doesn't exist
+  if (!order.orderEditHistory) {
+    order.orderEditHistory = [];
+  }
+
+  // Add all edit history entries
+  if (editHistoryEntries.length > 0) {
+    order.orderEditHistory.push(...editHistoryEntries);
+  }
 
   // Update order fields
   Object.keys(filteredData).forEach((key) => {
@@ -1031,6 +1473,87 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   // Save order (this will trigger pre-save hook to recalculate totalAmount and balanceAmount)
   await order.save();
+
+  // Always update payment ledger if order is edited and has payments or amount changed
+  if (shouldLogRamAgriLedger(order)) {
+    const newTotalAmount = order.totalAmount || 0;
+    const previousBalanceAmount = order.balanceAmount || 0;
+    
+    // Recalculate balance after save (in case it changed)
+    const totalPaid = order.payment && order.payment.length > 0
+      ? order.payment.reduce((sum, p) => {
+          if (p.paymentStatus === "COLLECTED") {
+            return sum + (p.paidAmount || 0);
+          }
+          return sum;
+        }, 0)
+      : 0;
+    
+    const newBalanceAmount = newTotalAmount - totalPaid;
+    const deltaAmount = newTotalAmount - previousTotalAmount;
+    const deltaBalance = newBalanceAmount - previousBalanceAmount;
+    
+    // Update ledger if amount changed OR if order has payments (to ensure payment ledger is always updated)
+    if (deltaAmount !== 0 || (order.payment && order.payment.length > 0)) {
+      try {
+        // If amount changed, create adjustment entry
+        if (deltaAmount !== 0) {
+          await createCustomerLedgerEntry({
+            customerMobile: order.customerMobile,
+            customerName: order.customerName,
+            refType: "ADJUSTMENT",
+            refId: order._id,
+            orderId: order._id,
+            debit: deltaAmount > 0 ? deltaAmount : 0,
+            credit: deltaAmount < 0 ? Math.abs(deltaAmount) : 0,
+            reference: order.orderNumber,
+            category: "Adjustment",
+            description: `Order adjusted (Δ ${deltaAmount > 0 ? "+" : ""}${deltaAmount.toFixed(2)}). Outstanding: ₹${newBalanceAmount.toFixed(2)}`,
+            entryDate: new Date(),
+            createdBy: req.user?._id || req.user?.id,
+            metadata: {
+              previousTotalAmount,
+              newTotalAmount,
+              previousBalanceAmount,
+              newBalanceAmount,
+              deltaAmount,
+              deltaBalance,
+              totalPaid,
+              fieldsUpdated: Object.keys(filteredData),
+            },
+          });
+        }
+        
+        // If balance changed but amount didn't (payment-related change), create balance adjustment entry
+        if (deltaAmount === 0 && deltaBalance !== 0 && (order.payment && order.payment.length > 0)) {
+          await createCustomerLedgerEntry({
+            customerMobile: order.customerMobile,
+            customerName: order.customerName,
+            refType: "BALANCE_ADJUSTMENT",
+            refId: order._id,
+            orderId: order._id,
+            debit: deltaBalance > 0 ? deltaBalance : 0,
+            credit: deltaBalance < 0 ? Math.abs(deltaBalance) : 0,
+            reference: order.orderNumber,
+            category: "Balance Adjustment",
+            description: `Outstanding balance adjusted (Δ ${deltaBalance > 0 ? "+" : ""}${deltaBalance.toFixed(2)}). New outstanding: ₹${newBalanceAmount.toFixed(2)}`,
+            entryDate: new Date(),
+            createdBy: req.user?._id || req.user?.id,
+            metadata: {
+              previousBalanceAmount,
+              newBalanceAmount,
+              deltaBalance,
+              totalPaid,
+              fieldsUpdated: Object.keys(filteredData),
+            },
+          });
+        }
+      } catch (ledgerError) {
+        console.error("Error creating ledger entry for order update:", ledgerError);
+        // Don't fail the order update if ledger entry fails, but log it
+      }
+    }
+  }
 
   // Populate references
   await order.populate("productId");
@@ -1235,9 +1758,15 @@ const getOutstandingAnalysis = catchAsync(async (req, res, next) => {
     };
 
     // If logged-in user has jobTitle RAM_AGRI_SALES, filter by their user ID
+    // RAM_AGRI_SALES_MANAGER can see all orders (no filter)
     // Otherwise, use the createdBy query parameter if provided
     if (req.user && req.user.jobTitle === "RAM_AGRI_SALES") {
       matchQuery.createdBy = req.user._id;
+    } else if (req.user && req.user.jobTitle === "RAM_AGRI_SALES_MANAGER") {
+      // RAM_AGRI_SALES_MANAGER can see all orders, but can filter by createdBy if provided
+      if (createdBy && mongoose.isValidObjectId(createdBy)) {
+        matchQuery.createdBy = new mongoose.Types.ObjectId(createdBy);
+      }
     } else if (createdBy && mongoose.isValidObjectId(createdBy)) {
       matchQuery.createdBy = new mongoose.Types.ObjectId(createdBy);
     }
@@ -1708,9 +2237,15 @@ const getAssignedOrders = catchAsync(async (req, res, next) => {
   };
 
   // If user is a sales person, only show their assigned orders
+  // RAM_AGRI_SALES_MANAGER can see all orders (no filter)
   // If admin, can view all or filter by assignedTo
   if (userJobTitle === "RAM_AGRI_SALES" && userRole !== "SUPER_ADMIN") {
     query.assignedTo = userId;
+  } else if (userJobTitle === "RAM_AGRI_SALES_MANAGER" && userRole !== "SUPER_ADMIN") {
+    // RAM_AGRI_SALES_MANAGER can see all orders, but can filter by assignedTo if provided
+    if (assignedTo && mongoose.isValidObjectId(assignedTo)) {
+      query.assignedTo = assignedTo;
+    }
   } else if (assignedTo && mongoose.isValidObjectId(assignedTo)) {
     query.assignedTo = assignedTo;
   }
@@ -1943,7 +2478,9 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
 
   // Determine if user is admin (can dispatch directly with stock deduction)
   // or sales person (dispatching their assigned orders - stock should be deducted)
-  const isAdmin = userRole === "SUPER_ADMIN" || userRole === "ADMIN" || userJobTitle === "OFFICE_ADMIN";
+  // Prioritize jobTitle over role
+  const effectiveRole = userJobTitle || userRole;
+  const isAdmin = effectiveRole === "SUPER_ADMIN" || effectiveRole === "ADMIN" || effectiveRole === "OFFICE_ADMIN";
 
   // Find and update all orders - ACCEPTED or ASSIGNED orders can be dispatched
   const orders = await AgriSalesOrder.find({
@@ -1956,7 +2493,7 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
   }
 
   // For sales person, verify they are dispatching their own assigned orders
-  const isSalesPersonDispatchingAssigned = !isAdmin && userJobTitle === "RAM_AGRI_SALES";
+  const isSalesPersonDispatchingAssigned = !isAdmin && (userJobTitle === "RAM_AGRI_SALES" || userJobTitle === "RAM_AGRI_SALES_MANAGER");
   
   if (isSalesPersonDispatchingAssigned) {
     const unassignedOrders = orders.filter(
@@ -1983,11 +2520,12 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
 
     // DEDUCT STOCK ON DISPATCH - ONLY if admin dispatches directly (not assigned orders)
     // When sales person dispatches their assigned orders, stock is NOT deducted
+    // Sales person orders don't impact warehouse stock - they manage their own inventory
     const shouldDeductStock = isAdmin && !isAssignedOrder;
     
     if (shouldDeductStock && !order.stockDeducted) {
       try {
-        if (order.isRamAgriProduct) {
+  if (shouldLogRamAgriLedger(order)) {
           // Handle Ram Agri products
           const crop = await RamAgriInputsProduct.findById(order.ramAgriCropId);
           if (crop) {
@@ -2308,6 +2846,13 @@ const completeOrders = catchAsync(async (req, res, next) => {
   // Get user info for activity log
   const userId = req.user?._id || req.user?.id;
   const userName = req.user?.name || "Unknown";
+  const userRole = req.user?.role;
+  const userJobTitle = req.user?.jobTitle;
+
+  // Determine if user is manager/admin (can return stock to warehouse)
+  // Prioritize jobTitle over role
+  const effectiveRole = userJobTitle || userRole;
+  const isManager = effectiveRole === "SUPER_ADMIN" || effectiveRole === "ADMIN" || effectiveRole === "OFFICE_ADMIN" || effectiveRole === "RAM_AGRI_SALES_MANAGER";
 
   // Find all orders that can be completed (must be dispatched)
   const orders = await AgriSalesOrder.find({
@@ -2347,8 +2892,20 @@ const completeOrders = catchAsync(async (req, res, next) => {
     // Calculate delivered quantity
     const deliveredQty = order.quantity - returnQty;
 
-    // If there are returns, add stock back to inventory
-    if (returnQty > 0) {
+    // Check if order was assigned to a sales person (sales person dispatched orders)
+    const isAssignedOrder = order.assignedTo != null;
+    
+    // If dispatched by current user (e.g. from mobile), do NOT add/subtract stock (same as sales return).
+    const wasDispatchedBySelf = order.dispatchedBy && order.dispatchedBy.toString() === userId.toString();
+
+    // If there are returns, add stock back to inventory ONLY if:
+    // 1. Current user is a MANAGER/ADMIN (not sales person)
+    // 2. AND order was NOT assigned to a sales person (admin dispatched)
+    // 3. AND order was NOT dispatched by current user (if sales person)
+    // Only managers can return stock to warehouse - sales person returns don't impact warehouse stock
+    const shouldAddStockBack = returnQty > 0 && isManager && !isAssignedOrder && (!wasDispatchedBySelf || isManager);
+    
+    if (shouldAddStockBack) {
       try {
         if (order.isRamAgriProduct) {
           // Handle Ram Agri products
@@ -2402,7 +2959,7 @@ const completeOrders = catchAsync(async (req, res, next) => {
           }
         }
 
-        // Mark stock as returned
+        // Mark stock as returned (only if stock was actually added back by manager)
         if (stockReturnSuccess) {
           order.stockReturned = true;
           order.stockReturnedAt = new Date();
@@ -2411,6 +2968,11 @@ const completeOrders = catchAsync(async (req, res, next) => {
         console.error(`Error returning stock for order ${order.orderNumber}:`, stockError);
         // Continue with completion even if stock return fails
       }
+    } else if (returnQty > 0 && (!isManager || isAssignedOrder || wasDispatchedBySelf)) {
+      // Sales person completing order with returns OR manager completing assigned order - no stock impact
+      // Don't mark stockReturned = true since stock wasn't added back to warehouse
+      order.stockReturned = false; // Explicitly set to false for sales person returns
+      stockReturnSuccess = false;
     }
 
     stockReturnResults.push({
@@ -2433,14 +2995,340 @@ const completeOrders = catchAsync(async (req, res, next) => {
     order.deliveredQuantity = deliveredQty;
     order.returnReason = returnReason || "";
     order.returnNotes = returnNotes || "";
+    
+    // Store original quantity and previous values for ledger entry
+    // IMPORTANT: Calculate previous values based on ORIGINAL quantity, not current order values
+    // This ensures we get the correct previous balance even if order was modified before
+    const originalQuantity = order.quantity || 0;
+    const previousDeliveredQuantity = order.deliveredQuantity || originalQuantity;
+    
+    // Calculate previous totalAmount from ORIGINAL quantity (not from order.totalAmount which might be modified)
+    // IMPORTANT: Always use originalQuantity * rate for previousTotalAmount to ensure correct calculation
+    // even if order.totalAmount was modified in a previous operation
+    const originalTotalAmount = originalQuantity * (order.rate || 0);
+    // For previousTotalAmount, use the original calculation UNLESS order was already completed
+    // If order was already completed, use the current totalAmount as previous (it was already adjusted)
+    const isAlreadyCompleted = order.orderStatus === "COMPLETED" || order.deliveredQuantity > 0;
+    const previousTotalAmount = isAlreadyCompleted && order.totalAmount 
+      ? order.totalAmount 
+      : originalTotalAmount;
+    
+    // Calculate previous balance based on original totalAmount and current payments
+    const previousTotalPaid = order.payment && order.payment.length > 0
+      ? order.payment.reduce((sum, p) => {
+          if (p.paymentStatus === "COLLECTED") {
+            return sum + (p.paidAmount || 0);
+          }
+          return sum;
+        }, 0)
+      : 0;
+    const previousBalanceAmount = previousTotalAmount - previousTotalPaid;
+    
+    // Recalculate totalAmount based on deliveredQuantity (final quantity after returns)
+    // This ensures payment calculations use the actual delivered quantity
+    order.totalAmount = deliveredQty * (order.rate || 0);
+    
+    // Recalculate balanceAmount based on new totalAmount
+    const totalPaid = order.payment && order.payment.length > 0
+      ? order.payment.reduce((sum, p) => {
+          if (p.paymentStatus === "COLLECTED") {
+            return sum + (p.paidAmount || 0);
+          }
+          return sum;
+        }, 0)
+      : 0;
+    
+    order.totalPaidAmount = totalPaid;
+    order.balanceAmount = order.totalAmount - totalPaid;
+    
+    // Update payment status based on new balance
+    if (order.balanceAmount <= 0) {
+      order.paymentStatus = "COMPLETED";
+    } else if (totalPaid > 0) {
+      order.paymentStatus = "PARTIAL";
+    } else {
+      order.paymentStatus = "PENDING";
+    }
+
+    // Create ledger entry if quantity changed OR totalAmount changed OR balance changed
+    // This ensures outstanding is adjusted when delivered quantity differs from original
+    const quantityChanged = deliveredQty !== originalQuantity;
+    const quantityReduced = deliveredQty < originalQuantity;
+    const amountChanged = previousTotalAmount !== order.totalAmount;
+    const balanceChanged = previousBalanceAmount !== order.balanceAmount;
+    
+    // Calculate differences
+    const amountDifference = previousTotalAmount - order.totalAmount;
+    const balanceDifference = previousBalanceAmount - order.balanceAmount;
+    const outstandingReduction = balanceDifference > 0 ? balanceDifference : 0;
+    
+    // Debug logging
+    console.log("🔍 Order Completion Ledger Debug:", {
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      shouldLogRamAgriLedger: shouldLogRamAgriLedger(order),
+      isRamAgriProduct: order.isRamAgriProduct,
+      ramAgriCropId: order.ramAgriCropId,
+      ramAgriVarietyId: order.ramAgriVarietyId,
+      originalQuantity,
+      deliveredQty,
+      returnQty,
+      quantityChanged,
+      quantityReduced,
+      previousTotalAmount,
+      newTotalAmount: order.totalAmount,
+      amountDifference,
+      previousBalanceAmount,
+      newBalanceAmount: order.balanceAmount,
+      balanceDifference,
+      outstandingReduction,
+    });
+    
+    // Always create ledger entry if quantity is reduced OR amount changed OR outstanding changed
+    // This ensures outstanding is properly tracked and adjusted when quantity is reduced
+    // CRITICAL: Always create entry when quantity is reduced for RAM Agri orders
+    const shouldCreateLedger = shouldLogRamAgriLedger(order);
+    
+    console.log("🔍 Ledger Creation Check:", {
+      shouldCreateLedger,
+      isRamAgriProduct: order.isRamAgriProduct,
+      ramAgriCropId: order.ramAgriCropId,
+      ramAgriVarietyId: order.ramAgriVarietyId,
+      quantityReduced,
+      amountChanged,
+      balanceChanged,
+      amountDifference,
+      balanceDifference,
+    });
+    
+    if (shouldCreateLedger) {
+      // If quantity is reduced, we MUST create a ledger entry to adjust outstanding
+      // ALWAYS create entry when quantity is reduced, regardless of other conditions
+      // CRITICAL: If quantity is reduced, ALWAYS create ledger entry
+      // This is the primary use case - when order is completed with returns
+      if (quantityReduced || returnQty > 0) {
+        // Quantity reduced OR returns exist - create CREDIT entry to reduce outstanding (customer owes less)
+        // Calculate credit amount: prefer balanceDifference (outstanding reduction), then amountDifference, then returnQty * rate
+        let creditToUse = 0;
+        
+        if (balanceDifference > 0) {
+          // Outstanding was reduced - use the outstanding reduction amount
+          creditToUse = outstandingReduction;
+        } else if (amountDifference > 0) {
+          // Amount was reduced - use the amount difference
+          creditToUse = amountDifference;
+        } else if (returnQty > 0 && (order.rate || 0) > 0) {
+          // Amount difference is 0 but there are returns - calculate from return quantity
+          // This handles cases where order was already adjusted but returns still need ledger entry
+          creditToUse = returnQty * order.rate;
+        }
+        
+        // ALWAYS create ledger entry when there are returns, even if calculated credit is 0
+        // This ensures returns are tracked in the ledger
+        // If creditToUse is still 0, calculate from return quantity as fallback
+        if (creditToUse === 0 && returnQty > 0 && (order.rate || 0) > 0) {
+          creditToUse = returnQty * order.rate;
+        }
+        
+        // Create ledger entry if we have a valid credit amount
+        if (creditToUse > 0) {
+          try {
+            console.log("📝 Creating ledger entry for order completion:", {
+              orderId: order._id,
+              orderNumber: order.orderNumber,
+              creditAmount: creditToUse,
+              balanceDifference,
+              amountDifference,
+              outstandingReduction,
+              previousTotalAmount,
+              newTotalAmount: order.totalAmount,
+              previousBalanceAmount,
+              newBalanceAmount: order.balanceAmount,
+            });
+            
+            const ledgerEntry = await createCustomerLedgerEntry({
+              customerMobile: order.customerMobile,
+              customerName: order.customerName,
+              refType: "ORDER_COMPLETION",
+              refId: order._id,
+              orderId: order._id,
+              credit: creditToUse,
+              reference: order.orderNumber,
+              category: "Order Completion",
+              description: `Order completed: Quantity reduced from ${originalQuantity} to ${deliveredQty} units. ${returnQty > 0 ? `Returned: ${returnQty} units. ` : ''}${balanceDifference > 0 ? `Outstanding reduced by ₹${outstandingReduction.toFixed(2)} (from ₹${previousBalanceAmount.toFixed(2)} to ₹${order.balanceAmount.toFixed(2)})` : `Amount reduced by ₹${amountDifference.toFixed(2)}. Outstanding: ₹${order.balanceAmount.toFixed(2)}`}`,
+              entryDate: completedAt || new Date(),
+              createdBy: userId,
+              metadata: {
+                originalQuantity: originalQuantity,
+                previousDeliveredQuantity: previousDeliveredQuantity,
+                deliveredQuantity: deliveredQty,
+                returnQuantity: returnQty,
+                previousTotalAmount,
+                newTotalAmount: order.totalAmount,
+                previousBalanceAmount,
+                newBalanceAmount: order.balanceAmount,
+                amountDifference,
+                balanceDifference,
+                outstandingReduction,
+                returnReason: returnReason || "",
+                returnNotes: returnNotes || "",
+                quantityChanged,
+                quantityReduced,
+                amountChanged,
+                balanceChanged,
+              },
+            });
+            
+            console.log("✅ Ledger entry created successfully:", ledgerEntry?._id || ledgerEntry?.id || "created");
+          } catch (ledgerError) {
+            console.error("❌ Error creating ledger entry for order completion (quantity reduced):", ledgerError);
+            console.error("Error details:", {
+              message: ledgerError.message,
+              stack: ledgerError.stack,
+              orderId: order._id,
+              orderNumber: order.orderNumber,
+            });
+            // Don't fail the order completion if ledger entry fails, but log it
+          }
+        } else {
+          console.error("❌ CRITICAL: Cannot create ledger entry - credit amount is 0 even after calculations!", {
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            creditToUse,
+            balanceDifference,
+            amountDifference,
+            outstandingReduction,
+            originalQuantity,
+            deliveredQty,
+            returnQty,
+            rate: order.rate,
+            previousTotalAmount,
+            newTotalAmount: order.totalAmount,
+            previousBalanceAmount,
+            newBalanceAmount: order.balanceAmount,
+          });
+        }
+      } else if (amountDifference > 0) {
+        // Amount decreased but no outstanding change (already paid) - still create entry for tracking
+        try {
+          await createCustomerLedgerEntry({
+            customerMobile: order.customerMobile,
+            customerName: order.customerName,
+            refType: "ORDER_ADJUSTMENT",
+            refId: order._id,
+            orderId: order._id,
+            credit: amountDifference,
+            reference: order.orderNumber,
+            category: "Order Adjustment",
+            description: `Order completed with quantity change. Returned: ${returnQty} units. Final delivered: ${deliveredQty}/${originalQuantity} units. Amount reduced by ₹${amountDifference.toFixed(2)}. Outstanding: ₹${order.balanceAmount.toFixed(2)}`,
+            entryDate: completedAt || new Date(),
+            createdBy: userId,
+            metadata: {
+              originalQuantity: originalQuantity,
+              previousDeliveredQuantity: previousDeliveredQuantity,
+              deliveredQuantity: deliveredQty,
+              returnQuantity: returnQty,
+              previousTotalAmount,
+              newTotalAmount: order.totalAmount,
+              previousBalanceAmount,
+              newBalanceAmount: order.balanceAmount,
+              amountDifference,
+              balanceDifference,
+              returnReason: returnReason || "",
+              returnNotes: returnNotes || "",
+              quantityChanged,
+              quantityReduced,
+              amountChanged,
+              balanceChanged,
+            },
+          });
+        } catch (ledgerError) {
+          console.error("Error creating ledger entry for order adjustment:", ledgerError);
+        }
+      } else if (amountDifference < 0) {
+        // Amount increased - customer owes more, so DEBIT (unlikely with returns, but handle it)
+        try {
+          await createCustomerLedgerEntry({
+            customerMobile: order.customerMobile,
+            customerName: order.customerName,
+            refType: "ORDER_ADJUSTMENT",
+            refId: order._id,
+            orderId: order._id,
+            debit: Math.abs(amountDifference),
+            reference: order.orderNumber,
+            category: "Order Adjustment",
+            description: `Order completed with quantity change. Amount increased by ₹${Math.abs(amountDifference).toFixed(2)}. Outstanding: ₹${order.balanceAmount.toFixed(2)}`,
+            entryDate: completedAt || new Date(),
+            createdBy: userId,
+            metadata: {
+              originalQuantity: originalQuantity,
+              previousDeliveredQuantity: previousDeliveredQuantity,
+              deliveredQuantity: deliveredQty,
+              returnQuantity: returnQty,
+              previousTotalAmount,
+              newTotalAmount: order.totalAmount,
+              previousBalanceAmount,
+              newBalanceAmount: order.balanceAmount,
+              amountDifference,
+              balanceDifference,
+              quantityChanged,
+              quantityReduced,
+              amountChanged,
+              balanceChanged,
+            },
+          });
+        } catch (ledgerError) {
+          console.error("Error creating ledger entry for order adjustment:", ledgerError);
+        }
+      } else if (balanceChanged && !quantityReduced) {
+        // Balance changed but quantity didn't reduce (payment-related change)
+        try {
+          await createCustomerLedgerEntry({
+            customerMobile: order.customerMobile,
+            customerName: order.customerName,
+            refType: "BALANCE_ADJUSTMENT",
+            refId: order._id,
+            orderId: order._id,
+            credit: balanceDifference > 0 ? balanceDifference : 0,
+            debit: balanceDifference < 0 ? Math.abs(balanceDifference) : 0,
+            reference: order.orderNumber,
+            category: "Balance Adjustment",
+            description: `Outstanding adjusted from ₹${previousBalanceAmount.toFixed(2)} to ₹${order.balanceAmount.toFixed(2)}`,
+            entryDate: completedAt || new Date(),
+            createdBy: userId,
+            metadata: {
+              previousBalanceAmount,
+              newBalanceAmount: order.balanceAmount,
+              balanceDifference,
+              balanceChanged,
+            },
+          });
+        } catch (ledgerError) {
+          console.error("Error creating ledger entry for balance adjustment:", ledgerError);
+        }
+      }
+    } // End of if (shouldLogRamAgriLedger(order))
 
     // Build activity log
     let activityDescription = `Order delivered and completed. Status: ${previousOrderStatus} → COMPLETED. Delivered: ${deliveredQty}/${order.quantity}`;
     if (returnQty > 0) {
-      activityDescription += `. Returned: ${returnQty} (Stock: ${stockBefore} → ${stockAfter})`;
+      if (stockReturnSuccess) {
+        // Stock was actually returned to inventory
+        activityDescription += `. Returned: ${returnQty} (Stock: ${stockBefore} → ${stockAfter})`;
+      } else if (isAssignedOrder || wasDispatchedBySelf) {
+        // Sales person order - no stock impact
+        activityDescription += `. Returned: ${returnQty} (No stock impact - Sales person order)`;
+      } else {
+        // Return attempted but stock return failed
+        activityDescription += `. Returned: ${returnQty} (Stock return failed)`;
+      }
       if (returnReason) {
         activityDescription += `. Reason: ${returnReason}`;
       }
+    }
+    // Add payment adjustment info if totalAmount changed
+    if (previousTotalAmount !== order.totalAmount) {
+      activityDescription += `. Payment adjusted: Total Amount updated from ₹${previousTotalAmount.toFixed(2)} to ₹${order.totalAmount.toFixed(2)} based on delivered quantity (${deliveredQty} × ₹${order.rate})`;
     }
 
     // Add activity log
@@ -2459,6 +3347,8 @@ const completeOrders = catchAsync(async (req, res, next) => {
         orderStatus: "COMPLETED",
         deliveredQuantity: deliveredQty,
         returnQuantity: returnQty,
+        totalAmount: order.totalAmount,
+        balanceAmount: order.balanceAmount,
       },
       metadata: {
         originalQuantity: order.quantity,
@@ -2466,6 +3356,8 @@ const completeOrders = catchAsync(async (req, res, next) => {
         returnQuantity: returnQty,
         returnReason,
         returnNotes,
+        previousTotalAmount,
+        newTotalAmount: order.totalAmount,
         stockReturn: returnQty > 0 ? { stockBefore, stockAfter, success: stockReturnSuccess } : null,
       },
     });
@@ -2538,9 +3430,11 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
   }
 
   // Validate: Only sales person who dispatched the order (or assigned order) can process returns
+  // Prioritize jobTitle over role
   const userId = req.user?._id || req.user?.id;
   const userName = req.user?.name || "Unknown";
-  const isAdmin = req.user?.role === "SUPER_ADMIN" || req.user?.jobTitle === "OFFICE_ADMIN";
+  const effectiveRole = req.user?.jobTitle || req.user?.role;
+  const isAdmin = effectiveRole === "SUPER_ADMIN" || effectiveRole === "ADMIN" || effectiveRole === "OFFICE_ADMIN";
   const isAssignedOrder = order.assignedTo != null;
   const wasDispatchedBySalesPerson = order.dispatchedBy && order.dispatchedBy.toString() === userId.toString();
 
@@ -2607,6 +3501,62 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
       });
 
       totalAdjustment += amount; // amount can be negative for refunds
+
+      // Create ledger entry for each payment adjustment
+      if (shouldLogRamAgriLedger(order)) {
+        try {
+          // Positive amount = credit (customer paid more or refund reversed)
+          // Negative amount = debit (refund given to customer)
+          if (amount > 0) {
+            await createCustomerLedgerEntry({
+              customerMobile: order.customerMobile,
+              customerName: order.customerName,
+              refType: "PAYMENT_ADJUSTMENT",
+              refId: order._id,
+              orderId: order._id,
+              paymentId: paymentId || null,
+              credit: amount,
+              reference: order.orderNumber,
+              category: "Payment Adjustment",
+              description: `Payment adjustment: ${adjustmentType} - ${reason || notes || "N/A"}`,
+              entryDate: new Date(),
+              createdBy: userId,
+              metadata: {
+                adjustmentType,
+                reason: reason || "",
+                notes: notes || "",
+                paymentId: paymentId || null,
+                salesReturnQuantity: returnQty,
+              },
+            });
+          } else if (amount < 0) {
+            await createCustomerLedgerEntry({
+              customerMobile: order.customerMobile,
+              customerName: order.customerName,
+              refType: "PAYMENT_ADJUSTMENT",
+              refId: order._id,
+              orderId: order._id,
+              paymentId: paymentId || null,
+              debit: Math.abs(amount),
+              reference: order.orderNumber,
+              category: "Payment Adjustment",
+              description: `Payment adjustment: ${adjustmentType} - ${reason || notes || "N/A"}`,
+              entryDate: new Date(),
+              createdBy: userId,
+              metadata: {
+                adjustmentType,
+                reason: reason || "",
+                notes: notes || "",
+                paymentId: paymentId || null,
+                salesReturnQuantity: returnQty,
+              },
+            });
+          }
+        } catch (ledgerError) {
+          console.error("Error creating ledger entry for payment adjustment:", ledgerError);
+          // Don't fail the sales return if ledger entry fails, but log it
+        }
+      }
     }
 
     // Update total paid amount (adjustments can be negative)
@@ -2908,6 +3858,7 @@ export {
   rejectAgriSalesOrder,
   cancelAgriSalesOrder,
   getAllAgriSalesOrders,
+  getOutstandingAgriSalesOrders,
   getAgriSalesOrderById,
   addPaymentToAgriSalesOrder,
   updatePaymentStatus,

@@ -247,8 +247,9 @@ const resetPasswordForUser = async (req, res, next) => {
     const { userId } = req.params;
     const { newPassword } = req.body;
 
-    // Check if current user is super admin
-    if (req.user.role !== 'SUPER_ADMIN') {
+    // Check if current user is super admin - prioritize jobTitle over role
+    const userRole = req.user?.jobTitle || req.user?.role;
+    if (userRole !== 'SUPER_ADMIN') {
       return next(new AppError("Only super admin can reset user passwords", 403));
     }
 
@@ -1662,8 +1663,9 @@ export const getDealerStats = async (req, res) => {
 // Controller to reset all dealer passwords to 1234
 const resetAllDealerPasswords = async (req, res, next) => {
   try {
-    // Check if current user is super admin or admin
-    if (!req.user || (req.user.role !== "SUPER_ADMIN" && req.user.role !== "ADMIN")) {
+    // Check if current user is super admin or admin - prioritize jobTitle over role
+    const userRole = req.user?.jobTitle || req.user?.role;
+    if (!req.user || (userRole !== "SUPER_ADMIN" && userRole !== "ADMIN")) {
       return res.status(403).json({
         success: false,
         message: "Only Super Admin or Admin can reset dealer passwords"
@@ -1731,8 +1733,9 @@ const resetAllDealerPasswords = async (req, res, next) => {
 // Controller to reset all dispatch manager passwords to 1234
 const resetAllDispatchManagerPasswords = async (req, res, next) => {
   try {
-    // Check if current user is super admin or admin
-    if (!req.user || (req.user.role !== "SUPER_ADMIN" && req.user.role !== "ADMIN")) {
+    // Check if current user is super admin or admin - prioritize jobTitle over role
+    const userRole = req.user?.jobTitle || req.user?.role;
+    if (!req.user || (userRole !== "SUPER_ADMIN" && userRole !== "ADMIN")) {
       return res.status(403).json({
         success: false,
         message: "Only Super Admin or Admin can reset dispatch manager passwords"
