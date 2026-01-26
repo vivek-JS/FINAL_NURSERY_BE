@@ -231,6 +231,7 @@ server.options('/api/v1/public-links/leads', cors(corsOptions), (req, res) => {
 
 // importing routes
 import farmerRoute from "./routes/farmer.route.js";
+import farmerListRoute from "./routes/farmerList.route.js";
 import orderRoute from "./routes/order.route.js";
 import userRoute from "./routes/user.route.js";
 import cmsRoute from "./routes/cms.route.js";
@@ -317,6 +318,7 @@ server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
 
 // Protected routes - require authentication
 server.use("/api/v1/farmer", authenticateToken, farmerRoute);
+server.use("/api/v1/farmer-list", authenticateToken, farmerListRoute);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/cms", authenticateToken, cmsRoute);
 const employeeAuthMiddleware =

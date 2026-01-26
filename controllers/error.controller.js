@@ -6,8 +6,26 @@ const handleCastErrorDB = (err) => {
 };
 
 const handleDuplicateFieldsDB = (err) => {
-  const value = err?.errmsg?.match(/(["'])(\\?.)*?\1/)[0];
-  const message = `Duplicate field value: ${value}. Please use another value!`;
+  // Modern MongoDB errors (MongoServerError) have keyPattern and keyValue
+  if (err.keyPattern && err.keyValue) {
+    const duplicateFields = Object.keys(err.keyPattern);
+    const duplicateValues = duplicateFields.map(field => `${field}: ${err.keyValue[field]}`).join(', ');
+    const message = `Duplicate field value: ${duplicateValues}. Please use another value!`;
+    return new AppError(message, 400);
+  }
+  
+  // Fallback for older error format (errmsg)
+  if (err.errmsg) {
+    const match = err.errmsg.match(/(["'])(\\?.)*?\1/);
+    if (match && match[0]) {
+      const value = match[0];
+      const message = `Duplicate field value: ${value}. Please use another value!`;
+      return new AppError(message, 400);
+    }
+  }
+  
+  // If we can't extract the value, provide a generic message
+  const message = `Duplicate field value detected. Please use another value!`;
   return new AppError(message, 400);
 };
 

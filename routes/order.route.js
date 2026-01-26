@@ -16,7 +16,10 @@ import {
   getOrdersToBeDispatched,
   getAllCavitiesFromOrders,
   getOrderBucketing,
-  getSalesmenBucketing
+  getSalesmenBucketing,
+  createPaymentActivity,
+  getPaymentActivities,
+  getTodaysPaymentActivities
 } from "../controllers/order.controller.js";
 import {
   getOrderDispatchDetails,
@@ -58,6 +61,9 @@ router
   .get("/dispatch-details/:orderId", getOrderDispatchDetails)
   .get("/by-dispatch/:transportId", getOrdersByDispatch)
   .get("/dispatch-summary", getDispatchSummary)
+  .get("/payment-activity", authenticateToken, getPaymentActivities)
+  .get("/payment-activity/today", authenticateToken, getTodaysPaymentActivities)
+  .post("/payment-activity", authenticateToken, createPaymentActivity)
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .patch(
     "/payment/:orderId",

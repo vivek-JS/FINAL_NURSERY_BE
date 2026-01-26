@@ -18,6 +18,7 @@ import {
   getPendingPaymentsCount,
   getOutstandingAnalysis,
   getCustomerOutstanding,
+  getOutstandingAgriSalesOrders,
   assignOrdersToSalesPerson,
   getAssignedOrders,
   cancelAssignment,
@@ -214,6 +215,7 @@ router
     checkErrors,
     createAgriSalesOrder
   )
+  .get("/outstanding", getOutstandingAgriSalesOrders)
   .get("/", getAllAgriSalesOrders)
   .get("/:id", getAgriSalesOrderById)
   .patch(
@@ -225,7 +227,21 @@ router
       check("quantity").optional().isNumeric().withMessage("Quantity must be a number").isFloat({ min: 0.01 }).withMessage("Quantity must be greater than 0"),
       check("rate").optional().isNumeric().withMessage("Rate must be a number").isFloat({ min: 0 }).withMessage("Rate must be greater than or equal to 0"),
       check("orderDate").optional().isISO8601().withMessage("Invalid order date format"),
-      check("deliveryDate").optional().isISO8601().withMessage("Invalid delivery date format"),
+      check("deliveryDate")
+        .optional({ nullable: true, checkFalsy: false })
+        .custom((value) => {
+          // Allow null, undefined, or empty string
+          if (value === null || value === undefined || value === "") {
+            return true;
+          }
+          // If value exists, validate it's a valid ISO8601 date
+          const dateRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?$/;
+          if (typeof value === "string" && dateRegex.test(value)) {
+            return !isNaN(Date.parse(value));
+          }
+          return false;
+        })
+        .withMessage("Invalid delivery date format"),
     ],
     checkErrors,
     updateAgriSalesOrder

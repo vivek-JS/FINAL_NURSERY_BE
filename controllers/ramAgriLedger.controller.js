@@ -92,15 +92,22 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
     .sort({ grnDate: -1 })
     .lean();
 
-  // Get all sales orders with actual stock deduction (DEBIT)
+  // Get all dispatched sales orders (DEBIT) - ONLY track manager dispatches (stockDeducted = true)
+  // Sales person dispatches don't impact warehouse stock, so they shouldn't appear in variety ledger
+  const dispatchDateFilter = {};
+  if (Object.keys(dateFilter).length > 0) {
+    dispatchDateFilter.dispatchedAt = dateFilter;
+  }
+  
   const salesOrders = await AgriSalesOrder.find({
     isRamAgriProduct: true,
     ramAgriCropId: new mongoose.Types.ObjectId(cropId),
     ramAgriVarietyId: new mongoose.Types.ObjectId(varietyId),
-    stockDeducted: true,
-    ...(Object.keys(dateFilter).length > 0 ? { stockDeductedAt: dateFilter } : {}),
+    dispatchStatus: { $in: ["DISPATCHED", "IN_TRANSIT", "DELIVERED"] },
+    stockDeducted: true, // ONLY manager dispatches (stock deducted = true)
+    ...dispatchDateFilter,
   })
-    .sort({ stockDeductedAt: -1 })
+    .sort({ dispatchedAt: -1 })
     .lean();
 
   // Build ledger entries
@@ -135,12 +142,16 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
     }
   });
 
-  // Add Sales Orders (DEBIT)
+  // Add Sales Orders (DEBIT) - Only manager dispatches (stockDeducted = true)
+  // All orders in salesOrders array already have stockDeducted = true
   salesOrders.forEach(order => {
+    const dispatchDate = order.dispatchedAt || order.stockDeductedAt || order.orderDate || order.createdAt;
+    const dispatchMode = order.dispatchMode || "UNKNOWN";
+    
     ledgerEntries.push({
-      date: order.stockDeductedAt || order.orderDate || order.createdAt,
+      date: dispatchDate,
       type: 'DEBIT',
-      category: 'Sale',
+      category: 'Sale (Manager Dispatch)',
       reference: order.orderNumber || order._id.toString(),
       description: `Sale to ${order.customerName || 'Customer'}`,
       quantity: order.quantity || 0,
@@ -154,16 +165,44 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
         customerMobile: order.customerMobile,
         paymentStatus: order.paymentStatus,
         orderStatus: order.orderStatus,
+        dispatchStatus: order.dispatchStatus,
+        dispatchedAt: order.dispatchedAt,
+        stockDeducted: true, // Always true for variety ledger entries
         stockDeductedAt: order.stockDeductedAt,
+        dispatchMode: dispatchMode,
+        vehicleNumber: order.vehicleNumber,
+        driverName: order.driverName,
+        driverMobile: order.driverMobile,
       },
     });
   });
 
   // Add Stock Returns (CREDIT) from completed orders
-  salesOrders.forEach(order => {
+  // ONLY track returns from manager-dispatched orders (stockReturned = true)
+  // Sales person order returns don't impact warehouse stock, so they shouldn't appear in variety ledger
+  const returnDateFilter = {};
+  if (Object.keys(dateFilter).length > 0) {
+    returnDateFilter.stockReturnedAt = dateFilter;
+    // Also check completedAt if stockReturnedAt is not available
+    if (!returnDateFilter.stockReturnedAt) {
+      returnDateFilter.completedAt = dateFilter;
+    }
+  }
+  
+  const ordersWithReturns = await AgriSalesOrder.find({
+    isRamAgriProduct: true,
+    ramAgriCropId: new mongoose.Types.ObjectId(cropId),
+    ramAgriVarietyId: new mongoose.Types.ObjectId(varietyId),
+    returnQuantity: { $gt: 0 }, // Has returns
+    orderStatus: "COMPLETED", // Only completed orders can have returns
+    stockReturned: true, // ONLY manager-dispatched orders (stock was returned to warehouse)
+  })
+    .sort({ stockReturnedAt: -1, completedAt: -1 })
+    .lean();
+  
+  ordersWithReturns.forEach(order => {
     const returnDate = order.stockReturnedAt || order.completedAt || order.updatedAt || order.createdAt;
     if (
-      order.stockReturned &&
       order.returnQuantity &&
       order.returnQuantity > 0 &&
       isWithinDateFilter(returnDate)
@@ -171,9 +210,9 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
       ledgerEntries.push({
         date: returnDate,
         type: 'CREDIT',
-        category: 'Sales Return',
+        category: 'Sales Return (Stock Added)',
         reference: order.orderNumber || order._id.toString(),
-        description: `Return from ${order.customerName || 'Customer'}`,
+        description: `Return from ${order.customerName || 'Customer'}${order.returnReason ? ` - ${order.returnReason}` : ''}`,
         quantity: order.returnQuantity || 0,
         unit: order.primaryUnit || null,
         rate: order.rate || 0,
@@ -182,9 +221,13 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
         details: {
           orderId: order._id,
           returnQuantity: order.returnQuantity,
+          deliveredQuantity: order.deliveredQuantity,
+          originalQuantity: order.quantity,
           returnReason: order.returnReason,
           returnNotes: order.returnNotes,
+          stockReturned: true, // Always true for variety ledger entries
           stockReturnedAt: order.stockReturnedAt,
+          completedAt: order.completedAt,
         },
       });
     }

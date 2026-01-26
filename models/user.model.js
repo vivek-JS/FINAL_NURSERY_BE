@@ -84,6 +84,7 @@ const userSchema = new Schema({
       "RAM_AGRI_SALES",
       "RAM_AGRI_SALES_MANAGER",
       "AGRI_INPUT_DEALER",
+      "SUPER_ADMIN",
     ],
   },
   role: {

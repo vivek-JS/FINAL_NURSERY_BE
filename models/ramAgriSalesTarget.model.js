@@ -6,7 +6,7 @@ const ramAgriSalesTargetSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
+      // No individual index - part of compound unique index below
     },
     cropId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -30,7 +30,7 @@ const ramAgriSalesTargetSchema = new mongoose.Schema(
     rangeKey: {
       type: String,
       required: true,
-      index: true,
+      // No individual index - part of compound unique index below
     },
     targetAmount: {
       type: Number,
@@ -51,9 +51,10 @@ const ramAgriSalesTargetSchema = new mongoose.Schema(
   }
 );
 
+// Compound unique index - ensures uniqueness of userId + rangeKey + cropId + varietyId combination
 ramAgriSalesTargetSchema.index(
   { userId: 1, rangeKey: 1, cropId: 1, varietyId: 1 },
-  { unique: true }
+  { unique: true, name: "userId_rangeKey_cropId_varietyId_unique" }
 );
 
 const RamAgriSalesTarget = mongoose.model("RamAgriSalesTarget", ramAgriSalesTargetSchema);

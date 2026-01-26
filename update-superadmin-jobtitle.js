@@ -24,24 +24,36 @@ const updateSuperAdminJobTitle = async () => {
     console.log(`✅ Connected to database: ${mongoose.connection.db.databaseName}\n`);
     
     // Find super admin user
-    const superAdmin = await User.findOne({ phoneNumber: 7588686452 });
+    const phoneNumber = 7588686452;
+    const superAdmin = await User.findOne({ phoneNumber });
     
     if (!superAdmin) {
-      console.log('❌ Super admin user not found!');
+      console.log(`❌ User with phone number ${phoneNumber} not found!`);
       return;
     }
     
     console.log('📋 Current Details:');
+    console.log(`   Name: ${superAdmin.name}`);
+    console.log(`   Phone: ${superAdmin.phoneNumber}`);
     console.log(`   Role: ${superAdmin.role}`);
     console.log(`   Job Title: ${superAdmin.jobTitle || 'Not set'}\n`);
     
-    // Update job title to Manager for SUPER_ADMIN
-    superAdmin.jobTitle = "Manager";
+    // Update job title to SUPER_ADMIN
+    const oldJobTitle = superAdmin.jobTitle;
+    superAdmin.jobTitle = "SUPER_ADMIN";
     await superAdmin.save();
     
     console.log('✅ Updated Super Admin Job Title:');
     console.log(`   Role: ${superAdmin.role}`);
-    console.log(`   Job Title: ${superAdmin.jobTitle}`);
+    console.log(`   Job Title: ${oldJobTitle || 'Not set'} → ${superAdmin.jobTitle}`);
+    
+    // Verify the update
+    const updatedUser = await User.findOne({ phoneNumber });
+    console.log('\n🔍 Verification:');
+    console.log(`   Name: ${updatedUser.name}`);
+    console.log(`   Phone: ${updatedUser.phoneNumber}`);
+    console.log(`   Role: ${updatedUser.role}`);
+    console.log(`   Job Title: ${updatedUser.jobTitle}`);
     
   } catch (error) {
     console.error('❌ Error:', error);

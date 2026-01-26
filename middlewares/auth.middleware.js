@@ -73,6 +73,7 @@ export const authenticateToken = async (req, res, next) => {
 
 /**
  * Middleware to check if user has required role(s)
+ * Prioritizes jobTitle over role for all checks
  * @param {String|Array} roles - Required role(s)
  */
 export const authorizeRoles = (roles) => {
@@ -83,7 +84,8 @@ export const authorizeRoles = (roles) => {
       );
     }
 
-    const userRole = req.user.role;
+    // Prioritize jobTitle over role
+    const userRole = req.user.jobTitle || req.user.role;
     const requiredRoles = Array.isArray(roles) ? roles : [roles];
 
     if (!requiredRoles.includes(userRole)) {
@@ -161,8 +163,9 @@ export const requireOwnership = (resourceIdField = 'id', modelName = 'Resource')
         );
       }
 
-      // Admins can access any resource
-      if (['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
+      // Admins can access any resource - check jobTitle first, then role
+      const userRole = req.user.jobTitle || req.user.role;
+      if (['ADMIN', 'SUPER_ADMIN'].includes(userRole)) {
         return next();
       }
 
@@ -315,13 +318,14 @@ export const restrictRamAgriSalesManager = (req, res, next) => {
     );
   }
 
-  // Allow SUPER_ADMIN and ADMIN to access all routes
-  if (['SUPER_ADMIN', 'ADMIN'].includes(req.user.role)) {
+  // Allow SUPER_ADMIN and ADMIN to access all routes - check jobTitle first, then role
+  const userRole = req.user.jobTitle || req.user.role;
+  if (['SUPER_ADMIN', 'ADMIN'].includes(userRole)) {
     return next();
   }
 
-  // Check if user is RAM_AGRI_SALES_MANAGER
-  const isRamAgriSalesManager = req.user.jobTitle === 'RAM_AGRI_SALES_MANAGER';
+  // Check if user is RAM_AGRI_SALES_MANAGER - prioritize jobTitle
+  const isRamAgriSalesManager = req.user.jobTitle === 'RAM_AGRI_SALES_MANAGER' || req.user.role === 'RAM_AGRI_SALES_MANAGER';
   
   if (!isRamAgriSalesManager) {
     // Not a RAM_AGRI_SALES_MANAGER, allow access

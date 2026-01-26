@@ -111,6 +111,7 @@ const allowedParams = [
     "varietyId", // For Ram Agri variety ledger (variety ID)
     "merchantId", // For Ram Agri merchant ledger (merchant ID)
   "productType", // For Ram Agri inputs filter (seed/chemical)
+  "period", // For Ram Agri video summary (day/week)
 ];
 
 const parameterWhiteListing = (req, res, next) => {
