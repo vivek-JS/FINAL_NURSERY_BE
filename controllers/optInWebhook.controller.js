@@ -28,16 +28,76 @@ function normalizePhoneNumber(phone) {
  * Updates opt_in field in Farmer and FarmerLead models based on webhook event
  */
 export const handleOptInWebhook = catchAsync(async (req, res) => {
+  // Check if request is from Wati (has Wati user agent)
+  const userAgent = req.headers['user-agent'] || '';
+  const isWatiWebhook = userAgent.includes('Wati-webhook') || userAgent.includes('wati.io');
+  
   // Log incoming webhook request
   console.log("\n" + "=".repeat(60));
-  console.log("📥 [OPT-IN WEBHOOK] Received webhook from Wati");
+  console.log(`📥 [OPT-IN WEBHOOK] Received ${isWatiWebhook ? 'Wati' : 'non-Wati'} request`);
   console.log("=".repeat(60));
   console.log(`   Timestamp: ${new Date().toISOString()}`);
   console.log(`   Method: ${req.method}`);
   console.log(`   URL: ${req.originalUrl || req.url}`);
-  console.log(`   Headers: ${JSON.stringify(req.headers, null, 2)}`);
+  console.log(`   User-Agent: ${userAgent}`);
+  console.log(`   Is Wati Webhook: ${isWatiWebhook}`);
   console.log(`   Body: ${JSON.stringify(req.body, null, 2)}`);
   console.log("=".repeat(60) + "\n");
+
+  // Early rejection for non-Wati requests without proper webhook format
+  if (!isWatiWebhook) {
+    // Check for empty body
+    if (!req.body || Object.keys(req.body || {}).length === 0) {
+      console.log(`\n❌ [OPT-IN WEBHOOK] Empty body from non-Wati source - rejecting`);
+      return res.status(400).json({
+        success: false,
+        message: "This endpoint is for Wati webhooks only",
+        received: "Empty request body from browser/frontend",
+        note: "This endpoint only accepts webhook events from Wati. Use the correct API endpoints for frontend requests.",
+        webhookEndpoint: "/api/v1/opt-in/webhook",
+        expectedFormat: {
+          eventType: "opt_in or opt_out",
+          waId: "Phone number with country code (e.g., 919876543210)"
+        }
+      });
+    }
+
+    // Early detection of login requests
+    if (req.body?.phoneNumber && req.body?.password) {
+      console.log(`\n❌ [OPT-IN WEBHOOK] Login request detected - wrong endpoint`);
+      return res.status(400).json({
+        success: false,
+        message: "This endpoint is for Wati opt-in/opt-out webhooks only, not login requests",
+        received: "Login payload detected",
+        correctEndpoint: "/api/v1/user/login",
+        webhookEndpoint: "/api/v1/opt-in/webhook",
+        note: "Use /api/v1/user/login for authentication. This endpoint only accepts Wati webhook events."
+      });
+    }
+
+    // If missing required webhook fields, return helpful error
+    if (!req.body?.eventType && !req.body?.event && !req.body?.waId) {
+      return res.status(400).json({
+        success: false,
+        message: "This endpoint is for Wati webhooks only",
+        received: {
+          hasEventType: !!req.body?.eventType,
+          hasEvent: !!req.body?.event,
+          hasWaId: !!req.body?.waId,
+          bodyKeys: Object.keys(req.body || {})
+        },
+        expectedFormat: {
+          eventType: "opt_in or opt_out",
+          waId: "Phone number with country code (e.g., 919876543210)"
+        },
+        example: {
+          eventType: "opt_in",
+          waId: "919876543210"
+        },
+        note: "This endpoint only accepts webhook events from Wati. Requests from browsers/frontend are not supported."
+      });
+    }
+  }
 
   // Extract event type and phone number from webhook payload
   let eventType = null;
@@ -85,33 +145,42 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
   console.log(`   Extracted eventType: ${eventType || 'null'}`);
   console.log(`   Extracted waId: ${waId || 'null'}`);
 
-  // Validate event type
-  // Ignore message events - this endpoint is only for opt_in/opt_out events
-  if (eventType === "message" || eventType === "message_received" || eventType === "message_sent") {
-    console.log(`\nℹ️  [OPT-IN WEBHOOK] Received ${eventType} event - ignoring (not an opt-in/opt-out event)`);
-    console.log(`   This endpoint only processes opt_in and opt_out events`);
-    // Return 200 OK to prevent Wati from retrying
-    return res.status(200).json({
-      success: true,
-      message: `Received ${eventType} event - this endpoint only processes opt_in/opt_out events`,
-      receivedEvent: eventType,
-      note: "Configure Wati webhook to only send 'opt_in' and 'opt_out' events to this endpoint"
-    });
-  }
+  // Accept: opt_in, opt_out, and all message events (message = treat as opt-in)
+  const isOptOut = eventType === "opt_out";
+  const isOptInOrMessage =
+    eventType === "opt_in" ||
+    eventType === "message" ||
+    eventType === "message_received" ||
+    eventType === "message_sent";
 
-  if (eventType !== "opt_in" && eventType !== "opt_out") {
+  if (!isOptInOrMessage && !isOptOut) {
     console.log(`\n⚠️  [OPT-IN WEBHOOK] Invalid or missing event type`);
     console.log(`   Received eventType: ${eventType || "none"}`);
     console.log(`   Expected: "opt_in" or "opt_out"`);
     console.log(`   Full body received: ${JSON.stringify(req.body, null, 2)}`);
     
-    // Return 200 OK to prevent Wati from retrying
-    return res.status(200).json({
-      success: true,
-      message: "Webhook received but event type not recognized",
+    // If this looks like a login request or other non-webhook request, return 400
+    if (req.body?.phoneNumber && req.body?.password) {
+      return res.status(400).json({
+        success: false,
+        message: "This endpoint is for Wati opt-in/opt-out webhooks only, not login requests",
+        received: "Login payload detected",
+        endpoint: "/api/v1/opt-in/webhook",
+        note: "Use /api/v1/user/login for authentication"
+      });
+    }
+    
+    // Return 200 OK to prevent Wati from retrying (for actual Wati webhooks)
+    return res.status(isWatiWebhook ? 200 : 400).json({
+      success: isWatiWebhook,
+      message: isWatiWebhook 
+        ? "Webhook received but event type not recognized" 
+        : "Invalid request format - this endpoint expects Wati webhook payload",
       receivedEvent: eventType || "none",
       expectedEvents: ["opt_in", "opt_out"],
-      note: "This endpoint only processes opt_in and opt_out events. Configure Wati webhook to filter events."
+      note: isWatiWebhook 
+        ? "Configure Wati webhook to only send 'opt_in' and 'opt_out' events to this endpoint"
+        : "This endpoint only processes Wati opt_in and opt_out webhook events"
     });
   }
 
@@ -138,8 +207,8 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
   console.log(`\n📱 [OPT-IN WEBHOOK] Processing ${eventType} for phone: ${phoneNumber}`);
   console.log(`   Original waId: ${waId}`);
 
-  // Determine opt_in value based on event type
-  const optInValue = eventType === "opt_in" ? true : false;
+  // Determine opt_in value: opt_out = false, everything else (opt_in, message, etc.) = true
+  const optInValue = isOptOut ? false : true;
 
   try {
     let farmersUpdated = 0;
