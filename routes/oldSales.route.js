@@ -10,6 +10,7 @@ import {
   getOldSalesRepeatCustomers,
   getOldSalesGeoSummary,
   getOldSalesRecords,
+  getOldSalesUniqueCustomers,
   exportOldSalesCsv,
 } from "../controllers/oldSalesAnalytics.controller.js";
 
@@ -21,6 +22,7 @@ router.get("/suggestions", getOldSalesSuggestions);
 router.get("/case-mismatches", getOldSalesCaseMismatches);
 router.get("/repeat-customers", getOldSalesRepeatCustomers);
 router.get("/geo-summary", getOldSalesGeoSummary);
+router.get("/unique-customers", getOldSalesUniqueCustomers);
 router.get("/records", getOldSalesRecords);
 router.patch("/normalize", normalizeOldSalesField);
 router.patch("/normalize-case", normalizeOldSalesCase);

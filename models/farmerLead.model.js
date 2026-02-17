@@ -37,12 +37,19 @@ const farmerLeadSchema = new Schema(
     },
     meta: {
       type: Schema.Types.Mixed
+    },
+    opt_in: {
+      type: Boolean,
+      default: false
     }
   },
   {
     timestamps: true
   }
 );
+
+// Add index for opt_in status lookups
+farmerLeadSchema.index({ opt_in: 1 });
 
 const FarmerLead = model("FarmerLead", farmerLeadSchema);
 

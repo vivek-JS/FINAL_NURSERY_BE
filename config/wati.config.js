@@ -1,30 +1,21 @@
 /**
- * WATI Configuration
- * Matches frontend wati.js configuration
+ * WATI Configuration – from environment only (no secrets in code).
+ * Set WATI_TOKEN and WATI_BASE_URL in .env
  */
 
-export const WATI_BASE_URL = "https://live-mt-server.wati.io/385403";
-export const WATI_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwNjY4YWY5Zi1jN2I1LTQ2N2QtOWU0Yi01ZjRjOTJhNThlZjMiLCJ1bmlxdWVfbmFtZSI6InZpdmVrYy5hcGtAZ21haWwuY29tIiwibmFtZWlkIjoidml2ZWtjLmFwa0BnbWFpbC5jb20iLCJlbWFpbCI6InZpdmVrYy5hcGtAZ21haWwuY29tIiwiYXV0aF90aW1lIjoiMDkvMjEvMjAyNSAwNDo1ODozMiIsInRlbmFudF9pZCI6IjM4NTQwMyIsImRiX25hbWUiOiJtdC1wcm9kLVRlbmFudHMiLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJBRE1JTklTVFJBVE9SIiwiZXhwIjoyNTM0MDIzMDA4MDAsImlzcyI6IkNsYXJlX0FJIiwiYXVkIjoiQ2xhcmVfQUkifQ.zAP3ZxQXUO1NWJGLe0e39qVeiXLK_d8U2y0bonMjomw";
-
-// Use environment variable if set, otherwise use hardcoded token
 export const getWatiToken = () => {
-  return process.env.WATI_TOKEN || WATI_TOKEN;
+  return process.env.WATI_TOKEN || null;
 };
 
 export const getWatiBaseUrl = () => {
-  const envUrl = process.env.WATI_URL;
-  
-  // Validate env URL - must be a valid URL starting with http
-  if (envUrl && (envUrl.startsWith('http://') || envUrl.startsWith('https://'))) {
-    return envUrl;
+  const url = process.env.WATI_BASE_URL || process.env.WATI_URL;
+  if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
+    return url.replace(/\/+$/, "");
   }
-  
-  // If env URL is invalid or not set, use default
-  if (envUrl && !envUrl.startsWith('http')) {
-    console.warn(`⚠️  Invalid WATI_URL in env: "${envUrl}". Using default URL.`);
+  if (url && !url.startsWith("http")) {
+    console.warn(`⚠️ Invalid WATI_BASE_URL/WATI_URL in env: "${url}"`);
   }
-  
-  return WATI_BASE_URL;
+  return null;
 };
 
-
+export const isWatiConfigured = () => !!(getWatiToken() && getWatiBaseUrl());

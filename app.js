@@ -227,11 +227,18 @@ server.options('/api/v1/public-links/leads', cors(corsOptions), (req, res) => {
   res.status(200).end();
 });
 
+// Handle CORS preflight for opt-in webhook endpoint (public, no auth)
+server.options('/api/v1/opt-in/webhook', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+
 
 
 // importing routes
 import farmerRoute from "./routes/farmer.route.js";
 import farmerListRoute from "./routes/farmerList.route.js";
+import whatsappContactListRoute from "./routes/whatsappContactList.route.js";
+import watiProxyRoute from "./routes/watiProxy.route.js";
 import orderRoute from "./routes/order.route.js";
 import userRoute from "./routes/user.route.js";
 import cmsRoute from "./routes/cms.route.js";
@@ -268,6 +275,7 @@ import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
 import whatsappOrderBotRoute from "./routes/whatsappOrderBot.route.js";
+import optInWebhookRoute from "./routes/optInWebhook.route.js";
 import sowingRoute from "./routes/sowing.route.js";
 import publicFarmerLinkRoute from "./routes/publicFarmerLink.route.js";
 import clearDataRoute from "./routes/clearData.route.js";
@@ -312,6 +320,7 @@ server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
+server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook (public, no auth required)
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
 server.use("/api/v1", followUpRoute); // Follow-up routes (public endpoints for token access, admin endpoints require auth)
 server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
@@ -319,6 +328,8 @@ server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
 // Protected routes - require authentication
 server.use("/api/v1/farmer", authenticateToken, farmerRoute);
 server.use("/api/v1/farmer-list", authenticateToken, farmerListRoute);
+server.use("/api/v1/whatsapp-contact-list", authenticateToken, whatsappContactListRoute);
+server.use("/api/v1/wati", watiProxyRoute);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/cms", authenticateToken, cmsRoute);
 const employeeAuthMiddleware =

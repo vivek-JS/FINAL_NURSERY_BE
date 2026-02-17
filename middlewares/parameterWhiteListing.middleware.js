@@ -112,6 +112,10 @@ const allowedParams = [
     "merchantId", // For Ram Agri merchant ledger (merchant ID)
   "productType", // For Ram Agri inputs filter (seed/chemical)
   "period", // For Ram Agri video summary (day/week)
+  // WATI proxy
+  "pageSize",
+  "pageNumber",
+  "channelPhoneNumber",
 ];
 
 const parameterWhiteListing = (req, res, next) => {
@@ -129,6 +133,11 @@ const parameterWhiteListing = (req, res, next) => {
   // Skip parameter validation for WhatsApp webhook (completely public, no params needed)
   if (req.path === '/api/v1/whatsapp-order/webhook' || 
       req.originalUrl === '/api/v1/whatsapp-order/webhook') {
+    return next();
+  }
+
+  // Skip parameter validation for WATI proxy (query params: pageSize, pageNumber, channelPhoneNumber)
+  if (req.path.startsWith('/api/v1/wati')) {
     return next();
   }
 
