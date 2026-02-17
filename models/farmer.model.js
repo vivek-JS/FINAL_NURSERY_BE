@@ -50,6 +50,10 @@ const farmerSchema = new Schema({
     type: String,
     default: null,
   },
+  opt_in: {
+    type: Boolean,
+    default: false,
+  },
   // Array field to store all farmers referred by this farmer
   referredTo: [
     {
@@ -76,6 +80,8 @@ farmerSchema.index({ name: 1, village: 1, taluka: 1, district: 1 });
 // Add index for phone number lookups
 farmerSchema.index({ mobileNumber: 1 });
 farmerSchema.index({ alternateNumber: 1 });
+// Add index for opt_in status lookups
+farmerSchema.index({ opt_in: 1 });
 
 const Farmer = model("Farmer", farmerSchema);
 export default Farmer;

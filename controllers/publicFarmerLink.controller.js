@@ -156,6 +156,35 @@ export const getFarmerLeadsForLink = catchAsync(async (req, res, next) => {
   );
 });
 
+/** Get all farmer leads across all public links (for admin broadcast list) */
+export const getAllFarmerLeads = catchAsync(async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000);
+
+  const leads = await FarmerLead.find({})
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
+
+  const linkIds = [...new Set(leads.map((l) => l.publicLinkId?.toString()).filter(Boolean))];
+  const links = await PublicFarmerLink.find({ _id: { $in: linkIds } })
+    .select("_id name slug")
+    .lean();
+  const linkMap = Object.fromEntries(links.map((l) => [l._id.toString(), l]));
+
+  const leadsWithLink = leads.map((lead) => ({
+    ...lead,
+    linkName: linkMap[lead.publicLinkId?.toString()]?.name || "",
+    linkSlug: linkMap[lead.publicLinkId?.toString()]?.slug || ""
+  }));
+
+  return res.status(200).json(
+    generateResponse("success", "All farmer leads fetched", {
+      total: leadsWithLink.length,
+      leads: leadsWithLink
+    })
+  );
+});
+
 const isLocationAllowed = (locationRules, payload) => {
   if (!Array.isArray(locationRules) || locationRules.length === 0) return false;
 

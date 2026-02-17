@@ -749,6 +749,48 @@ export const getOldSalesGeoSummary = catchAsync(async (req, res) => {
   });
 });
 
+/** Unique customers (farmers) from old sales for broadcast lists. Same filters as analytics/records. */
+export const getOldSalesUniqueCustomers = catchAsync(async (req, res) => {
+  const match = buildMatch(req.query);
+  const matchStage = Object.keys(match).length ? [{ $match: match }] : [];
+  const limit = Math.min(parseInt(req.query.limit || "2000", 10), 5000);
+
+  const customers = await OldSalesData.aggregate([
+    ...matchStage,
+    { $match: { mobileNo: { $nin: [null, ""] }, $expr: { $gte: [{ $strLenCP: { $ifNull: ["$mobileNo", ""] } }, 10] } } },
+    {
+      $group: {
+        _id: "$mobileNo",
+        customerName: { $first: "$customerName" },
+        mobileNo: { $first: "$mobileNo" },
+        village: { $first: "$village" },
+        taluka: { $first: "$taluka" },
+        district: { $first: "$district" },
+        state: { $first: "$state" },
+      },
+    },
+    { $project: { _id: 0, customerName: 1, mobileNo: 1, village: 1, taluka: 1, district: 1, state: 1 } },
+    { $limit: limit },
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      total: customers.length,
+      customers: customers.map((c) => ({
+        name: c.customerName || "",
+        mobileNumber: (c.mobileNo || "").toString().trim(),
+        customerName: c.customerName || "",
+        mobileNo: (c.mobileNo || "").toString().trim(),
+        village: c.village || "",
+        taluka: c.taluka || "",
+        district: c.district || "",
+        state: c.state || "",
+      })).filter((c) => c.mobileNumber.length >= 10),
+    },
+  });
+});
+
 export const getOldSalesCaseMismatches = catchAsync(async (req, res, next) => {
   const field = req.query.field;
   if (!field || !QUALITY_FIELDS.has(field)) {

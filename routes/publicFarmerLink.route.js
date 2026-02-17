@@ -7,7 +7,8 @@ import {
   updatePublicFarmerLink,
   getPublicLinkConfigBySlug,
   createFarmerLead,
-  getFarmerLeadsForLink
+  getFarmerLeadsForLink,
+  getAllFarmerLeads
 } from "../controllers/publicFarmerLink.controller.js";
 
 const router = express.Router();
@@ -27,6 +28,21 @@ router.get(
   getPublicFarmerLinks
 );
 
+// Must be before /links/:id so /links/leads/:id is matched correctly
+router.get(
+  "/links/leads/:id",
+  authenticateToken,
+  requireOfficeAdmin,
+  getFarmerLeadsForLink
+);
+
+router.get(
+  "/links/all-leads",
+  authenticateToken,
+  requireOfficeAdmin,
+  getAllFarmerLeads
+);
+
 router.get(
   "/links/:id",
   authenticateToken,
@@ -39,13 +55,6 @@ router.patch(
   authenticateToken,
   requireOfficeAdmin,
   updatePublicFarmerLink
-);
-
-router.get(
-  "/links/leads/:id",
-  authenticateToken,
-  requireOfficeAdmin,
-  getFarmerLeadsForLink
 );
 
 // ============================================
