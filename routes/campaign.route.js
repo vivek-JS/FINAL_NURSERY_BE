@@ -4,9 +4,12 @@ import {
   listCampaigns,
   getCampaign,
   startCampaign,
+  runNowCampaign,
+  resumeWebCampaign,
   pauseCampaign,
   stopCampaign,
   resumeCampaign,
+  resetTargetsCampaign,
   campaignHistory,
   exportCampaignCsv,
   updateCampaign,
@@ -32,8 +35,11 @@ router.get("/:id", getCampaign);
 router.patch("/:id", updateCampaign);
 router.patch("/:id/targets", updateTargetsStatus);
 router.post("/:id/start", startCampaign);
+router.post("/:id/run-now", runNowCampaign);
+router.post("/:id/resume-web", resumeWebCampaign);
 router.post("/:id/pause", pauseCampaign);
 router.post("/:id/stop", stopCampaign);
+router.post("/:id/reset-targets", resetTargetsCampaign);
 router.post("/:id/resume", resumeCampaign);
 router.get("/:id/history", campaignHistory);
 router.get("/:id/export", exportCampaignCsv);

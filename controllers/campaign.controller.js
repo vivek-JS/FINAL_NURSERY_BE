@@ -1,3 +1,7 @@
+import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import Campaign from "../models/campaign.model.js";
 import FarmerList from "../models/farmerList.model.js";
 import Farmer from "../models/farmer.model.js";
@@ -8,6 +12,33 @@ import SendEvent from "../models/sendEvent.model.js";
 import AutomationReport from "../models/automationReport.model.js";
 import xlsx from "xlsx";
 import { cleanAndValidateMobileNumber } from "./excel.serveces.controller.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CAMPAIGN_PID_DIR = path.join(__dirname, "..", ".campaign-pids");
+
+function getPidPath(campaignId) {
+  return path.join(CAMPAIGN_PID_DIR, `${String(campaignId)}.pid`);
+}
+
+/** Kill existing run-campaign-now.js and Chrome processes before starting */
+function killExistingCampaignProcesses(campaignId) {
+  try {
+    fs.mkdirSync(CAMPAIGN_PID_DIR, { recursive: true });
+    const pidPath = getPidPath(campaignId);
+    if (fs.existsSync(pidPath)) {
+      const pid = parseInt(fs.readFileSync(pidPath, "utf8").trim(), 10);
+      if (pid && !isNaN(pid)) {
+        try {
+          process.kill(pid, "SIGTERM");
+          console.log("[CAMPAIGN] Killed existing process:", pid);
+        } catch (e) {}
+      }
+      fs.unlinkSync(pidPath);
+    }
+  } catch (e) {
+    console.warn("[CAMPAIGN] killExisting:", e?.message);
+  }
+}
 
 // Create campaign (supports preview=true to not persist)
 export const createCampaign = async (req, res, next) => {
@@ -43,6 +74,12 @@ export const createCampaign = async (req, res, next) => {
     }
     if (typeof farmerListIds === "string") {
       farmerListIds = farmerListIds.split(",").map((s) => s.trim()).filter(Boolean)
+    }
+
+    // Manual phone numbers: comma, newline, or space separated
+    let manualPhones = req.body.manualPhones || req.body.phoneNumbers || ""
+    if (typeof manualPhones === "string") {
+      manualPhones = manualPhones.split(/[\n,\s]+/).map((s) => s.trim()).filter(Boolean)
     }
 
     // If a file was uploaded under 'video' (multer), expose its originalname as a videoFilename fallback
@@ -129,20 +166,33 @@ export const createCampaign = async (req, res, next) => {
       }
     }
 
-    // If explicit targets were provided (via farmerIds/farmerListIds) use them directly; otherwise fall back to dedupeCandidates flow
+    // Manual phone numbers (no farmerId - phone-only targets)
+    if (Array.isArray(manualPhones) && manualPhones.length > 0) {
+      const normPhone = (p) => {
+        const s = String(p || "").replace(/\D/g, "")
+        if (s.length === 10 && !s.startsWith("0")) return "91" + s
+        if (s.length === 12 && s.startsWith("91")) return s
+        return s
+      }
+      for (const p of manualPhones) {
+        const norm = normPhone(p)
+        if (norm.length >= 10) {
+          if (!seenTargets.has(norm)) {
+            seenTargets.add(norm)
+            targets.push({ farmerId: null, name: "", phone: norm, status: "pending", attempts: 0 })
+          }
+        }
+      }
+    }
+
+    // If targets were provided (farmerIds, farmerListIds, or manualPhones) use them; otherwise fall back to dedupeCandidates
     let finalTargets = targets
     let duplicatesCount = 0
-    if ((!Array.isArray(farmerIds) || farmerIds.length === 0) && (!Array.isArray(farmerListIds) || farmerListIds.length === 0)) {
-      // collect candidates for dedupe flow
+    if (targets.length === 0) {
       let candidates = []
-      // gather from lists if present (already handled above), but this branch covers when no farmerIds/list provided
-      // (this supports older behavior where candidates were provided by other sources)
-      // For now, run dedupeCandidates on empty candidates -> results empty
       const dedupeResult = dedupeCandidates(candidates, String(req.body.countryCode || "91"))
       finalTargets = dedupeResult.finalTargets
       duplicatesCount = dedupeResult.duplicatesCount
-    } else {
-      duplicatesCount = 0
     }
 
     if (preview) {
@@ -468,11 +518,103 @@ export const stopCampaign = async (req, res, next) => {
     const { id } = req.params;
     const campaign = await Campaign.findById(id);
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    killExistingCampaignProcesses(id);
     campaign.status = "stopped";
     await campaign.save();
-    // Optionally mark pending targets as skipped
-    await Campaign.updateOne({ _id: id }, { $set: { "targets.$[elem].status": "skipped" } }, { arrayFilters: [{ "elem.status": "pending" }], multi: true });
-    res.json({ success: true });
+    await Campaign.updateOne({ _id: id }, { $set: { "targets.$[elem].status": "skipped" } }, { arrayFilters: [{ "elem.status": "pending" }] });
+    res.json({ success: true, message: "Campaign stopped. Chrome/browser closed." });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** Reset all campaign targets to pending so campaign can be rerun. Only updates status/lastError, does not remove targets. */
+export const resetTargetsCampaign = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const campaign = await Campaign.findById(id).lean();
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    const targets = campaign.targets || [];
+    const toReset = targets.filter((t) => t.status && t.status !== "pending");
+    if (toReset.length === 0) {
+      return res.json({ success: true, message: "All targets already pending. You can rerun now." });
+    }
+    await Campaign.updateOne(
+      { _id: id },
+      {
+        $set: {
+          "targets.$[elem].status": "pending",
+          "targets.$[elem].lastError": null,
+          status: "created",
+        },
+      },
+      { arrayFilters: [{ "elem.status": { $in: ["sent", "error", "skipped"] } }] }
+    );
+    console.log("[CAMPAIGN] Reset targets for campaign:", id, "count:", toReset.length);
+    res.json({ success: true, message: `Reset ${toReset.length} targets to pending. You can rerun now.` });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** Resume Web campaign: reset failed+pending to pending, then run. */
+export const resumeWebCampaign = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { delaySeconds = 10 } = req.body || {};
+    const campaign = await Campaign.findById(id);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    const toReset = (campaign.targets || []).filter((t) => !t.status || t.status === "pending" || t.status === "error" || t.status === "skipped");
+    if (toReset.length === 0) {
+      return res.status(400).json({ error: "No targets to resume. All already sent." });
+    }
+    await Campaign.updateOne(
+      { _id: id },
+      {
+        $set: {
+          "targets.$[elem].status": "pending",
+          "targets.$[elem].lastError": null,
+          status: "created",
+        },
+      },
+      { arrayFilters: [{ "elem.status": { $in: ["error", "skipped"] } }] }
+    );
+    req.params = { ...req.params };
+    req.body = { delaySeconds };
+    return runNowCampaign(req, res, next);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** Run campaign via Chrome/WhatsApp Web script (no Redis). Spawns run-campaign-now.js */
+export const runNowCampaign = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { delaySeconds = 10 } = req.body || {};
+    const campaign = await Campaign.findById(id);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    const pending = (campaign.targets || []).filter((t) => !t.status || t.status === "pending");
+    if (pending.length === 0) {
+      return res.status(400).json({ error: "No pending targets. Campaign may already be sent." });
+    }
+    killExistingCampaignProcesses(id);
+    const scriptPath = path.join(__dirname, "..", "scripts", "run-campaign-now.js");
+    const delay = delaySeconds != null ? Math.max(1, Math.min(300, Number(delaySeconds) || 10)) : 10;
+    const pidPath = getPidPath(id);
+    const child = spawn("node", [scriptPath, `--campaignId=${id}`, `--delaySeconds=${delay}`], {
+      stdio: "inherit",
+      env: { ...process.env, CAMPAIGN_PID_FILE: pidPath },
+      cwd: path.join(__dirname, ".."),
+      detached: true,
+    });
+    child.unref();
+    try {
+      fs.mkdirSync(CAMPAIGN_PID_DIR, { recursive: true });
+      fs.writeFileSync(pidPath, String(child.pid));
+    } catch (e) {}
+    console.log("[CAMPAIGN] Spawned run-campaign-now.js for campaign:", id, "pid:", child.pid);
+    res.json({ success: true, message: "Chrome is opening. WhatsApp Web will send messages." });
   } catch (err) {
     next(err);
   }

@@ -25,6 +25,7 @@ const allowedParams = [
   "name",
   "entity",
   "mobileNumber",
+  "phone",
   "slotId",
   "orderId",
   "orderIds",
@@ -125,6 +126,7 @@ const allowedParams = [
   "linkId", // public farmer link id for farmer form filter
   "opt_in", // filter by opt-in status (true/false)
   "includeAll", // include all records (don't exclude those in call lists)
+  "campaignId", // campaigns/targets endpoint
 ];
 
 const parameterWhiteListing = (req, res, next) => {

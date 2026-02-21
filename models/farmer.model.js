@@ -76,15 +76,6 @@ const farmerSchema = new Schema({
     type: Boolean,
     default: false
   },
-  // Follow-up metadata for quick lookup
-  lastFollowUpAt: {
-    type: Date,
-    default: null
-  },
-  followUpCount: {
-    type: Number,
-    default: 0
-  },
   // Record of WhatsApp automation activities for this farmer
   whatsappAutomationActivities: [
     {

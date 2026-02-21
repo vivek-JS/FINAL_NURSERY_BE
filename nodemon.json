@@ -1,0 +1,7 @@
+{
+  "ignore": [
+    "whatsapp-profile/**",
+    "logs/**",
+    "*.log"
+  ]
+}
