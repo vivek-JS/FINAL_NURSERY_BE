@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import Campaign from "../models/campaign.model.js";
+import CampaignRunQueue from "../models/campaignRunQueue.model.js";
 import FarmerList from "../models/farmerList.model.js";
 import Farmer from "../models/farmer.model.js";
 import FarmerLead from "../models/farmerLead.model.js";
@@ -587,7 +588,7 @@ export const resumeWebCampaign = async (req, res, next) => {
   }
 };
 
-/** Run campaign via Chrome/WhatsApp Web script (no Redis). Spawns run-campaign-now.js */
+/** Run campaign via Chrome/WhatsApp Web script. On server with display: spawns directly. On production: adds to queue for local worker. */
 export const runNowCampaign = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -598,23 +599,72 @@ export const runNowCampaign = async (req, res, next) => {
     if (pending.length === 0) {
       return res.status(400).json({ error: "No pending targets. Campaign may already be sent." });
     }
-    killExistingCampaignProcesses(id);
-    const scriptPath = path.join(__dirname, "..", "scripts", "run-campaign-now.js");
     const delay = delaySeconds != null ? Math.max(1, Math.min(300, Number(delaySeconds) || 10)) : 10;
-    const pidPath = getPidPath(id);
-    const child = spawn("node", [scriptPath, `--campaignId=${id}`, `--delaySeconds=${delay}`], {
-      stdio: "inherit",
-      env: { ...process.env, CAMPAIGN_PID_FILE: pidPath },
-      cwd: path.join(__dirname, ".."),
-      detached: true,
+
+    const runOnServer = process.env.API_RUN_CAMPAIGN === "true";
+    if (runOnServer) {
+      killExistingCampaignProcesses(id);
+      const scriptPath = path.join(__dirname, "..", "scripts", "run-campaign-now.js");
+      const pidPath = getPidPath(id);
+      const child = spawn("node", [scriptPath, `--campaignId=${id}`, `--delaySeconds=${delay}`], {
+        stdio: "inherit",
+        env: { ...process.env, CAMPAIGN_PID_FILE: pidPath },
+        cwd: path.join(__dirname, ".."),
+        detached: true,
+      });
+      child.unref();
+      try {
+        fs.mkdirSync(CAMPAIGN_PID_DIR, { recursive: true });
+        fs.writeFileSync(pidPath, String(child.pid));
+      } catch (e) {}
+      console.log("[CAMPAIGN] Spawned run-campaign-now.js for campaign:", id, "pid:", child.pid);
+      return res.json({ success: true, message: "Chrome is opening. WhatsApp Web will send messages." });
+    }
+
+    await CampaignRunQueue.create({ campaignId: id, delaySeconds: delay, status: "pending" });
+    console.log("[CAMPAIGN] Queued for local worker:", id);
+    res.json({
+      success: true,
+      message: "Campaign queued. Ensure Campaign Runner is open on your computer (with Chrome). It will start automatically.",
     });
-    child.unref();
-    try {
-      fs.mkdirSync(CAMPAIGN_PID_DIR, { recursive: true });
-      fs.writeFileSync(pidPath, String(child.pid));
-    } catch (e) {}
-    console.log("[CAMPAIGN] Spawned run-campaign-now.js for campaign:", id, "pid:", child.pid);
-    res.json({ success: true, message: "Chrome is opening. WhatsApp Web will send messages." });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** Worker-only: claim next pending campaign. Requires X-Campaign-Worker-Key header. */
+export const claimCampaignRun = async (req, res, next) => {
+  try {
+    const key = req.headers["x-campaign-worker-key"];
+    if (!key || key !== process.env.CAMPAIGN_WORKER_SECRET) {
+      return res.status(401).json({ error: "Invalid worker key" });
+    }
+    const job = await CampaignRunQueue.findOneAndUpdate(
+      { status: "pending" },
+      { $set: { status: "running", claimedAt: new Date(), workerId: req.headers["x-worker-id"] || "local" } },
+      { new: true }
+    ).populate("campaignId", "name");
+    if (!job) return res.json({ success: true, job: null });
+    res.json({ success: true, job: { id: job._id, campaignId: job.campaignId, delaySeconds: job.delaySeconds } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** Worker-only: mark job completed or failed. */
+export const completeCampaignRun = async (req, res, next) => {
+  try {
+    const key = req.headers["x-campaign-worker-key"];
+    if (!key || key !== process.env.CAMPAIGN_WORKER_SECRET) {
+      return res.status(401).json({ error: "Invalid worker key" });
+    }
+    const { id } = req.params;
+    const { status = "completed", error } = req.body || {};
+    await CampaignRunQueue.updateOne(
+      { _id: id },
+      { $set: { status: status === "failed" ? "failed" : "completed", completedAt: new Date(), error: error || null } }
+    );
+    res.json({ success: true });
   } catch (err) {
     next(err);
   }

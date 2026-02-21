@@ -3,6 +3,7 @@ import FarmerLead from "../models/farmerLead.model.js";
 import PublicFarmerLink from "../models/publicFarmerLink.model.js";
 import CallAssignmentList from "../models/callAssignmentList.model.js";
 import User from "../models/user.model.js";
+import FollowUp from "../models/followUp.model.js";
 import AppError from "../utility/appError.js";
 import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
@@ -461,6 +462,28 @@ export const getListForMobile = catchAsync(async (req, res, next) => {
   }
 
   const stats = getListStats(list);
+  // Also fetch any follow-ups related to farmers present in this list (by farmerId)
+  const farmerIds = (list.entries || [])
+    .map((e) => {
+      if (e.source === "farmer") return e.sourceId;
+      return null;
+    })
+    .filter(Boolean);
+
+  let followUpsByFarmer = {};
+  if (farmerIds.length > 0) {
+    const fups = await FollowUp.find({ farmerId: { $in: farmerIds } }).sort({ scheduledAt: 1 }).lean();
+    followUpsByFarmer = fups.reduce((acc, fu) => {
+      const key = String(fu.farmerId);
+      acc[key] = acc[key] || [];
+      acc[key].push(fu);
+      return acc;
+    }, {});
+  }
+
+  // Provide list of employees (id + name) so mobile UI can offer assignment options
+  const employees = await User.find({}).select("name _id").lean();
+
   return res.status(200).json(
     generateResponse("success", "List fetched for mobile", {
       list: {
@@ -468,6 +491,8 @@ export const getListForMobile = catchAsync(async (req, res, next) => {
         name: list.name,
         assignedTo: list.assignedTo,
         entries: list.entries || [],
+        followUpsByFarmer,
+        employees,
         ...stats,
       },
     })
@@ -639,6 +664,81 @@ export const addCallLogPublic = catchAsync(async (req, res, next) => {
     const copy = typeof entry.toObject === "function" ? entry.toObject() : JSON.parse(JSON.stringify(entry));
     list.completedEntries.push(copy);
     list.entries = list.entries.filter((e) => e.status !== "done");
+  }
+
+  // If client requested follow-up action on an existing FollowUp (reschedule / mark complete)
+  const { followUpAction, followUpId, followUpNewScheduledAt } = req.body;
+  if (followUpAction && followUpId) {
+    try {
+      if (!mongoose.Types.ObjectId.isValid(followUpId)) {
+        // ignore invalid id
+      } else {
+        const fu = await FollowUp.findById(followUpId);
+        if (fu) {
+          // Ensure the phone or farmer matches the entry / request
+          const reqPhone = String(phone).replace(/\D/g, "").slice(-10);
+          if (String(fu.phone).slice(-10) === reqPhone || String(fu.farmerId) === String(entry.sourceId) || entry.source !== "farmer") {
+            if (followUpAction === "reschedule" && followUpNewScheduledAt) {
+              fu.scheduledAt = new Date(followUpNewScheduledAt);
+              fu.status = "pending";
+              fu.reminderSent = false;
+            } else if (followUpAction === "complete") {
+              fu.status = "completed";
+              fu.completedAt = new Date();
+            }
+            await fu.save();
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to apply followUpAction:", err);
+    }
+  }
+
+  // Support scheduling a follow-up from public mobile: if followUpScheduledAt provided, create FollowUp
+  const { followUpScheduledAt, followUpAssignTo, followUpNotes } = req.body;
+  if (followUpScheduledAt) {
+    try {
+      // Determine farmerId: if source is farmer use sourceId, else try to resolve by phone
+      let farmerId = null;
+      if (entry.source === "farmer") farmerId = entry.sourceId;
+      else {
+        const possible = await Farmer.findOne({ mobileNumber: Number(String(phone).replace(/\D/g, "").slice(-10)) });
+        if (possible) farmerId = possible._id;
+      }
+
+      const assignedBy = list.assignedTo || null;
+      const assignedTo = followUpAssignTo && mongoose.Types.ObjectId.isValid(followUpAssignTo) ? followUpAssignTo : assignedBy;
+
+      const fu = await FollowUp.create({
+        farmerId: farmerId || null,
+        phone: String(phone).replace(/\D/g, "").slice(-10),
+        scheduledAt: new Date(followUpScheduledAt),
+        notes: String(followUpNotes || remark || ""),
+        source: "call-list-followup",
+        assignedBy: assignedTo,
+      });
+
+      // Update farmer metadata if applicable
+      if (farmerId) {
+        const farmer = await Farmer.findById(farmerId);
+        if (farmer) {
+          farmer.lastFollowUpAt = fu.scheduledAt;
+          farmer.followUpCount = (farmer.followUpCount || 0) + 1;
+          await farmer.save();
+        }
+      }
+      // Mark the call-list entry as done so it disappears from active entries
+      if (entry && entry.status !== "done") {
+        entry.status = "done";
+        list.completedEntries = list.completedEntries || [];
+        const copy2 = typeof entry.toObject === "function" ? entry.toObject() : JSON.parse(JSON.stringify(entry));
+        list.completedEntries.push(copy2);
+        list.entries = list.entries.filter((e) => e.status !== "done");
+      }
+    } catch (err) {
+      console.error("Failed to create follow-up from public call-log:", err);
+    }
   }
 
   await list.save();
