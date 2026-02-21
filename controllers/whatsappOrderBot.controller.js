@@ -2,7 +2,6 @@ import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
 import fetch from "node-fetch";
 import Farmer from "../models/farmer.model.js";
-import FarmerLead from "../models/farmerLead.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
@@ -563,22 +562,15 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
   console.log(`   👤 Sender Name: ${senderName || "Unknown"}`);
   console.log("─".repeat(60));
 
-  // "मार्गदर्शन सुरू करा" button click – send final_video_name template
+  // "मार्गदर्शन सुरू करा" button click – send final_first template
   const GUIDANCE_BUTTON_TEXT = "मार्गदर्शन सुरू करा";
-  const followupTemplate = process.env.GUIDANCE_BUTTON_FOLLOWUP_TEMPLATE || "final_video_name";
+  const followupTemplate = process.env.GUIDANCE_BUTTON_FOLLOWUP_TEMPLATE || "final_first";
   if (userMessage?.trim() === GUIDANCE_BUTTON_TEXT && followupTemplate) {
     console.log(`   📤 [GUIDANCE] User clicked "मार्गदर्शन सुरू करा" – sending template: ${followupTemplate}`);
-    let nameForTemplate = senderName?.trim();
-    if (!nameForTemplate) {
-      const farmer = await Farmer.findOne({ mobileNumber: parseInt(mobileNumber) }).select("name").lean().catch(() => null);
-      if (farmer?.name) nameForTemplate = farmer.name;
-      else {
-        const lead = await FarmerLead.findOne({ mobileNumber: String(mobileNumber) }).select("name").lean().catch(() => null);
-        if (lead?.name) nameForTemplate = lead.name;
-      }
-    }
-    nameForTemplate = nameForTemplate || "भाऊ";
+    const nameForTemplate = senderName?.trim() || "भाऊ";
+    const joinLink = process.env.GUIDANCE_JOIN_LINK || "";
     const params = [{ name: "1", value: nameForTemplate }];
+    if (joinLink) params.push({ name: "2", value: joinLink });
     const result = await sendWatiTemplateMessage(mobileNumber, followupTemplate, params);
     if (result.success) {
       return;

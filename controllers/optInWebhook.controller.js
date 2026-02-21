@@ -226,35 +226,28 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
   console.log(`\n📱 [OPT-IN WEBHOOK] Processing ${eventType} for phone: ${phoneNumber}`);
   console.log(`   Original waId: ${waId}`);
 
-  // "मार्गदर्शन सुरू करा" button click – send final_video_name template (WATI sends messages to opt-in webhook)
-  const messageText = req.body?.text || req.body?.buttonReply?.text || req.body?.data?.text || "";
-  const GUIDANCE_BUTTON_TEXT = "मार्गदर्शन सुरू करा";
-  const followupTemplate = process.env.GUIDANCE_BUTTON_FOLLOWUP_TEMPLATE || "final_video_name";
-  if (messageText?.trim() === GUIDANCE_BUTTON_TEXT && followupTemplate) {
-    const senderNameVal = req.body?.senderName || req.body?.data?.senderName || "";
-    let nameForTemplate = senderNameVal?.trim();
-    if (!nameForTemplate) {
-      const farmer = await Farmer.findOne({ mobileNumber: parseInt(phoneNumber) }).select("name").lean().catch(() => null);
-      if (farmer?.name) nameForTemplate = farmer.name;
-      else {
-        const lead = await FarmerLead.findOne({ mobileNumber: String(phoneNumber) }).select("name").lean().catch(() => null);
-        if (lead?.name) nameForTemplate = lead.name;
+  // Respond immediately to WATI (avoids timeout, template sends faster)
+  res.status(200).json({ success: true, message: "Webhook received, processing..." });
+
+  // Process in background (guidance first so user sees reply faster, then opt-in)
+  (async () => {
+    try {
+      const messageText = req.body?.text || req.body?.buttonReply?.text || req.body?.data?.text || "";
+      const GUIDANCE_BUTTON_TEXT = "मार्गदर्शन सुरू करा";
+      const followupTemplate = process.env.GUIDANCE_BUTTON_FOLLOWUP_TEMPLATE || "final_first";
+      if (messageText?.trim() === GUIDANCE_BUTTON_TEXT && followupTemplate) {
+        const senderNameVal = req.body?.senderName || req.body?.data?.senderName || "";
+        const nameForTemplate = senderNameVal?.trim() || "भाऊ";
+        const joinLink = process.env.GUIDANCE_JOIN_LINK || "";
+        const params = [{ name: "1", value: nameForTemplate }];
+        if (joinLink) params.push({ name: "2", value: joinLink });
+        console.log(`   📤 [GUIDANCE] Sending template ${followupTemplate} to ${phoneNumber} (name: ${nameForTemplate})`);
+        const result = await sendWatiTemplateMessage(phoneNumber, followupTemplate, params);
+        if (result.success) console.log(`   ✅ [GUIDANCE] Template sent successfully`);
+        else console.warn(`   ⚠️ [GUIDANCE] Template send failed:`, result.error);
       }
-    }
-    nameForTemplate = nameForTemplate || "भाऊ";
-    console.log(`   📤 [GUIDANCE] Sending template ${followupTemplate} to ${phoneNumber} (name: ${nameForTemplate})`);
-    const result = await sendWatiTemplateMessage(phoneNumber, followupTemplate, [{ name: "1", value: nameForTemplate }]);
-    if (result.success) {
-      console.log(`   ✅ [GUIDANCE] Template sent successfully`);
-    } else {
-      console.warn(`   ⚠️ [GUIDANCE] Template send failed:`, result.error);
-    }
-  }
 
-  // Determine opt_in value: opt_out = false, everything else (opt_in, message, etc.) = true
-  const optInValue = isOptOut ? false : true;
-
-  try {
+      const optInValue = isOptOut ? false : true;
     let farmersUpdated = 0;
     let farmersCreated = 0;
     let farmerLeadsUpdated = 0;
@@ -371,41 +364,21 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
       console.log(`   ℹ️  No farmer lead found for ${phoneNumber} - skipping (requires publicLinkId)`);
     }
 
-    console.log(`\n✅ [OPT-IN WEBHOOK] Update completed:`);
-    console.log(`   Event: ${eventType}`);
-    console.log(`   Phone: ${phoneNumber}`);
-    console.log(`   opt_in value: ${optInValue}`);
-    console.log(`   Farmers updated: ${farmersUpdated}`);
-    console.log(`   Farmers created: ${farmersCreated}`);
-    console.log(`   FarmerLeads updated: ${farmerLeadsUpdated}`);
-
-    // Return success response
-    return res.status(200).json({
-      success: true,
-      message: `Opt-in status updated successfully`,
-      event: eventType,
-      phoneNumber: phoneNumber,
-      optIn: optInValue,
-      farmersUpdated: farmersUpdated,
-      farmersCreated: farmersCreated,
-      farmerLeadsUpdated: farmerLeadsUpdated,
-      totalProcessed: farmersUpdated + farmersCreated + farmerLeadsUpdated
-    });
-
-  } catch (error) {
-    console.error("\n❌ [OPT-IN WEBHOOK] Error updating opt-in status:");
-    console.error(`   Error: ${error.message}`);
-    console.error(`   Stack: ${error.stack}`);
-    console.error(`   Phone: ${phoneNumber}`);
-    console.error(`   Event: ${eventType}`);
-
-    // Return 200 OK even on error to prevent Wati from retrying
-    return res.status(200).json({
-      success: false,
-      message: "Error processing webhook",
-      error: error.message
-    });
-  }
+      console.log(`\n✅ [OPT-IN WEBHOOK] Update completed:`);
+      console.log(`   Event: ${eventType}`);
+      console.log(`   Phone: ${phoneNumber}`);
+      console.log(`   opt_in value: ${optInValue}`);
+      console.log(`   Farmers updated: ${farmersUpdated}`);
+      console.log(`   Farmers created: ${farmersCreated}`);
+      console.log(`   FarmerLeads updated: ${farmerLeadsUpdated}`);
+    } catch (error) {
+      console.error("\n❌ [OPT-IN WEBHOOK] Error updating opt-in status:");
+      console.error(`   Error: ${error.message}`);
+      console.error(`   Stack: ${error.stack}`);
+      console.error(`   Phone: ${phoneNumber}`);
+      console.error(`   Event: ${eventType}`);
+    }
+  })();
 });
 
 /**
