@@ -601,7 +601,7 @@ export const runNowCampaign = async (req, res, next) => {
     }
     const delay = delaySeconds != null ? Math.max(1, Math.min(300, Number(delaySeconds) || 10)) : 10;
 
-    const runOnServer = process.env.API_RUN_CAMPAIGN === "true";
+    const runOnServer = process.env.API_RUN_CAMPAIGN !== "false";
     if (runOnServer) {
       killExistingCampaignProcesses(id);
       const scriptPath = path.join(__dirname, "..", "scripts", "run-campaign-now.js");
