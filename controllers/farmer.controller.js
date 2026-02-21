@@ -201,6 +201,63 @@ const updateFarmerPhone = catchAsync(async (req, res, next) => {
   }
 });
 
+// Record WhatsApp send history for farmers (and mirror to FarmerLead)
+const recordWhatsappHistory = catchAsync(async (req, res, next) => {
+  const { farmerIds = [], campaignId = null, message = "", status = "sent", sendEventId = null, timestamp = null } = req.body;
+
+  if (!Array.isArray(farmerIds) || farmerIds.length === 0) {
+    return res.status(400).json({ status: "error", message: "farmerIds array is required" });
+  }
+
+  const time = timestamp ? new Date(timestamp) : new Date();
+
+  const FarmerLead = (await import("../models/farmerLead.model.js")).default;
+
+  const results = { updatedFarmers: [], updatedLeads: [], errors: [] };
+
+  for (const id of farmerIds) {
+    try {
+      const farmer = await Farmer.findById(id);
+      if (!farmer) {
+        results.errors.push({ id, reason: "Farmer not found" });
+        continue;
+      }
+
+      const entry = {
+        automationJobId: null,
+        sendEventId: sendEventId || null,
+        phone: farmer.mobileNumber ? String(farmer.mobileNumber) : "",
+        message,
+        status,
+        timestamp: time,
+      };
+
+      farmer.whatsappAutomationActivities = farmer.whatsappAutomationActivities || [];
+      farmer.whatsappAutomationActivities.push(entry);
+      await farmer.save();
+      results.updatedFarmers.push(farmer._id);
+
+      // Try to find FarmerLead by phone (string) or numeric
+      const phoneStr = String(farmer.mobileNumber || "");
+      let lead = await FarmerLead.findOne({ mobileNumber: phoneStr });
+      if (!lead) {
+        // try numeric match if stored differently
+        lead = await FarmerLead.findOne({ mobileNumber: String(parseInt(phoneStr || "0", 10)) });
+      }
+      if (lead) {
+        lead.whatsappAutomationActivities = lead.whatsappAutomationActivities || [];
+        lead.whatsappAutomationActivities.push(entry);
+        await lead.save();
+        results.updatedLeads.push(lead._id);
+      }
+    } catch (e) {
+      results.errors.push({ id, reason: e.message || "failed" });
+    }
+  }
+
+  return res.status(200).json({ status: "success", data: results });
+});
+
 export {
   createFarmer,
   updateFarmer,
@@ -211,4 +268,5 @@ export {
   getFarmerOrder,
   getInvalidPhoneFarmers,
   updateFarmerPhone
+  ,recordWhatsappHistory
 };

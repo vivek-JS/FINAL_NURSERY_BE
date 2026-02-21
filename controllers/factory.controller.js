@@ -1936,58 +1936,47 @@ const getOne = (Model, modelName, popOptions) =>
 
 const getAll = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
+    // Accept 'q' as an alias for 'search' to support clients sending 'q'
+    if (req.query) {
+      if ("q" in req.query) {
+        if (req.query.q && !req.query.search) {
+          req.query.search = req.query.q;
+        }
+        // Remove 'q' so it doesn't accidentally become a Mongo filter when empty
+        delete req.query.q;
+      }
+      // Remove any empty-string query params to avoid accidental filtering
+      Object.keys(req.query).forEach((k) => {
+        if (req.query[k] === "") delete req.query[k];
+      });
+    }
     if (modelName !== "Order") {
       let filter = {};
 
       let query = Model.find(filter);
       
-      // For Farmer model, skip pagination to get all farmers
-      if (modelName === "Farmer") {
-        const features = new APIFeatures(query, req.query, modelName)
-          .filter()
-          .sort()
-          .limitFields();
-        // No pagination for Farmer model
-        
-        const doc = await features.query.lean();
+      // Use standard features including pagination for all models (including Farmer).
+      const features = new APIFeatures(query, req.query, modelName)
+        .filter()
+        .sort()
+        .limitFields()
+        .paginate();
 
-        const transformedDoc = doc.map((item) => {
-          const { _id, ...rest } = item;
-          return { id: _id, _id: _id, ...rest };
-        });
+      const doc = await features.query.lean();
 
-        const response = generateResponse(
-          "Success",
-          `${modelName} found successfully`,
-          transformedDoc,
-          undefined
-        );
+      const transformedDoc = doc.map((item) => {
+        const { _id, ...rest } = item;
+        return { id: _id, _id: _id, ...rest };
+      });
 
-        return res.status(200).json(response);
-      } else {
-        // For other models, keep pagination
-        const features = new APIFeatures(query, req.query, modelName)
-          .filter()
-          .sort()
-          .limitFields()
-          .paginate();
+      const response = generateResponse(
+        "Success",
+        `${modelName} found successfully`,
+        transformedDoc,
+        undefined
+      );
 
-        const doc = await features.query.lean();
-
-        const transformedDoc = doc.map((item) => {
-          const { _id, ...rest } = item;
-          return { id: _id, _id: _id, ...rest };
-        });
-
-        const response = generateResponse(
-          "Success",
-          `${modelName} found successfully`,
-          transformedDoc,
-          undefined
-        );
-
-        return res.status(200).json(response);
-      }
+      return res.status(200).json(response);
     }
 
     const {

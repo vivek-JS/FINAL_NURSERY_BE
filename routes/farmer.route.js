@@ -9,6 +9,7 @@ import {
   getInvalidPhoneFarmers,
   updateFarmerPhone
 } from "../controllers/farmer.controller.js";
+import { recordWhatsappHistory } from "../controllers/farmer.controller.js";
 import { createOrder } from "../controllers/order.controller.js";
 import express from "express";
 import { check } from "express-validator";
@@ -66,6 +67,7 @@ router
   .post("/uploadFarmers", uploadExcel.single("data"), uploadFarmers)
   .get('/invalid-phones', getInvalidPhoneFarmers)
   .put('/:id/phone', updateFarmerPhone)
+  .post('/whatsapp-history', recordWhatsappHistory)
 
   .post(
     "/createFarmer",

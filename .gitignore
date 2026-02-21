@@ -19,3 +19,6 @@ deployment/aws/terraform/cost-optimized/.terraform/
 .env.staging
 .env.backup
 *.env
+
+# WhatsApp Selenium bot – Chrome profile (session data, do not commit)
+scripts/whatsapp-chrome-profile/

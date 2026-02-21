@@ -753,40 +753,100 @@ export const getOldSalesGeoSummary = catchAsync(async (req, res) => {
 export const getOldSalesUniqueCustomers = catchAsync(async (req, res) => {
   const match = buildMatch(req.query);
   const matchStage = Object.keys(match).length ? [{ $match: match }] : [];
-  const limit = Math.min(parseInt(req.query.limit || "2000", 10), 5000);
+  const page = Math.max(parseInt(req.query.page || "1", 10), 1);
+  const limit = Math.min(Math.max(parseInt(req.query.limit || "200", 10), 1), 5000);
+  const skip = (page - 1) * limit;
 
-  const customers = await OldSalesData.aggregate([
+  // Aggregate unique mobile numbers with a lookup to farmers to fetch opt_in
+  const pipeline = [
     ...matchStage,
-    { $match: { mobileNo: { $nin: [null, ""] }, $expr: { $gte: [{ $strLenCP: { $ifNull: ["$mobileNo", ""] } }, 10] } } },
+    {
+      $match: {
+        mobileNo: { $nin: [null, ""] },
+        $expr: { $gte: [{ $strLenCP: { $ifNull: ["$mobileNo", ""] } }, 10] },
+      },
+    },
     {
       $group: {
         _id: "$mobileNo",
         customerName: { $first: "$customerName" },
-        mobileNo: { $first: "$mobileNo" },
         village: { $first: "$village" },
         taluka: { $first: "$taluka" },
         district: { $first: "$district" },
         state: { $first: "$state" },
       },
     },
-    { $project: { _id: 0, customerName: 1, mobileNo: 1, village: 1, taluka: 1, district: 1, state: 1 } },
-    { $limit: limit },
-  ]);
+    {
+      $project: {
+        _id: 1,
+        customerName: 1,
+        village: 1,
+        taluka: 1,
+        district: 1,
+        state: 1,
+      },
+    },
+    // Lookup Farmer by matching mobile number string
+    {
+      $lookup: {
+        from: "farmers",
+        let: { mobile: "$_id" },
+        pipeline: [
+          {
+            $addFields: {
+              mobileStr: { $toString: "$mobileNumber" },
+            },
+          },
+          {
+            $match: {
+              $expr: { $eq: ["$mobileStr", "$$mobile"] },
+            },
+          },
+          { $project: { opt_in: 1, mobileNumber: 1 } },
+        ],
+        as: "farmerMatch",
+      },
+    },
+    {
+      $addFields: {
+        opt_in: { $ifNull: [{ $arrayElemAt: ["$farmerMatch.opt_in", 0] }, null] },
+      },
+    },
+    { $sort: { customerName: 1 } },
+    {
+      $facet: {
+        metadata: [{ $count: "total" }],
+        data: [{ $skip: skip }, { $limit: limit }],
+      },
+    },
+  ];
+
+  const result = await OldSalesData.aggregate(pipeline);
+  const metadata = result[0]?.metadata?.[0] || { total: 0 };
+  const customers = result[0]?.data || [];
 
   res.status(200).json({
     success: true,
     data: {
-      total: customers.length,
-      customers: customers.map((c) => ({
-        name: c.customerName || "",
-        mobileNumber: (c.mobileNo || "").toString().trim(),
-        customerName: c.customerName || "",
-        mobileNo: (c.mobileNo || "").toString().trim(),
-        village: c.village || "",
-        taluka: c.taluka || "",
-        district: c.district || "",
-        state: c.state || "",
-      })).filter((c) => c.mobileNumber.length >= 10),
+      pagination: {
+        page,
+        limit,
+        total: metadata.total,
+        totalPages: Math.ceil(metadata.total / limit),
+      },
+      customers: customers
+        .map((c) => ({
+          name: c.customerName || "",
+          mobileNumber: (c._id || "").toString().trim(),
+          customerName: c.customerName || "",
+          mobileNo: (c._id || "").toString().trim(),
+          village: c.village || "",
+          taluka: c.taluka || "",
+          district: c.district || "",
+          state: c.state || "",
+          opt_in: c.opt_in ?? null,
+        }))
+        .filter((c) => c.mobileNumber.length >= 10),
     },
   });
 });
