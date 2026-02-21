@@ -2,7 +2,7 @@
  * Test "मार्गदर्शन सुरू करा" button webhook flow
  *
  * Simulates WATI sending a webhook when user clicks the button.
- * Backend should respond by sending the final_video_name template.
+ * Backend should respond by sending the final_first template.
  *
  * Usage:
  *   node test-guidance-button-webhook.js
@@ -13,7 +13,7 @@
  * Prerequisites:
  *   1. Backend running (npm run dev)
  *   2. WATI_TOKEN in .env
- *   3. final_video_name template approved in WATI
+ *   3. final_first template approved in WATI
  */
 
 // WATI sends message events to opt-in webhook in production – use that URL to test
@@ -69,7 +69,7 @@ async function testGuidanceButtonWebhook() {
 
   console.log("📋 Next steps:");
   console.log("   1. Check backend logs for: [GUIDANCE] User clicked...");
-  console.log("   2. If TEST_PHONE is your WhatsApp number, you should receive the final_video_name template");
+  console.log("   2. If TEST_PHONE is your WhatsApp number, you should receive the final_first template");
   console.log("   3. For DB fallback test: use a phone that exists in Farmer/FarmerLead but omit senderName\n");
 }
 
