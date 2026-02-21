@@ -216,17 +216,50 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
     let farmerLeadsUpdated = 0;
     let farmerLeadsCreated = 0;
 
-    // Handle Farmer collection
+    // Extract event id and timestamp if provided (for idempotency & audit)
+    const eventId =
+      req.body?.id ||
+      req.body?.eventId ||
+      req.body?.data?.id ||
+      req.body?.data?.eventId ||
+      req.headers["x-wati-event-id"] ||
+      null;
+
+    const eventTimestamp =
+      req.body?.timestamp || req.body?.data?.timestamp || new Date().toISOString();
+
+    // Minimal metadata to store (avoid storing entire payload blindly)
+    const metadata = {
+      raw: req.body,
+      userAgent,
+      ip: req.ip || req.connection?.remoteAddress || null,
+    };
+
+    // Handle Farmer collection (upsert-like behavior)
     const existingFarmer = await Farmer.findOne({ mobileNumber: parseInt(phoneNumber) });
-    
+
     if (existingFarmer) {
-      // Update existing farmer
-      await Farmer.updateOne(
-        { mobileNumber: parseInt(phoneNumber) },
-        { $set: { opt_in: optInValue } }
-      );
-      farmersUpdated = 1;
-      console.log(`   ✅ Updated existing farmer: ${phoneNumber}`);
+      // Idempotency: if we've already processed this exact webhook event, skip
+      if (eventId && existingFarmer.opt_in_webhook_id === eventId) {
+        console.log(`   ℹ️  Duplicate event detected for farmer ${phoneNumber} (eventId=${eventId}) - skipping update`);
+      } else {
+        // Update existing farmer with opt-in details
+        await Farmer.updateOne(
+          { mobileNumber: parseInt(phoneNumber) },
+          {
+            $set: {
+              opt_in: optInValue,
+              opt_in_at: new Date(eventTimestamp),
+              opt_in_source: isWatiWebhook ? "wati-webhook" : "webhook",
+              opt_in_webhook_id: eventId,
+              opt_in_metadata: metadata,
+              opt_in_verified: isWatiWebhook
+            }
+          }
+        );
+        farmersUpdated = 1;
+        console.log(`   ✅ Updated existing farmer: ${phoneNumber}`);
+      }
     } else {
       // Create new farmer if doesn't exist
       const newFarmer = await Farmer.create({
@@ -239,7 +272,12 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
         stateName: "Maharashtra",
         talukaName: "To be updated",
         districtName: "To be updated",
-        opt_in: optInValue
+        opt_in: optInValue,
+        opt_in_at: new Date(eventTimestamp),
+        opt_in_source: isWatiWebhook ? "wati-webhook" : "webhook",
+        opt_in_webhook_id: eventId,
+        opt_in_metadata: metadata,
+        opt_in_verified: isWatiWebhook
       });
       farmersCreated = 1;
       console.log(`   ✅ Created new farmer: ${phoneNumber} (ID: ${newFarmer._id})`);
@@ -249,13 +287,27 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
     const existingFarmerLead = await FarmerLead.findOne({ mobileNumber: phoneNumber });
     
     if (existingFarmerLead) {
-      // Update existing farmer lead
-      await FarmerLead.updateOne(
-        { mobileNumber: phoneNumber },
-        { $set: { opt_in: optInValue } }
-      );
-      farmerLeadsUpdated = 1;
-      console.log(`   ✅ Updated existing farmer lead: ${phoneNumber}`);
+      // Idempotency for lead as well
+      if (eventId && existingFarmerLead.opt_in_webhook_id === eventId) {
+        console.log(`   ℹ️  Duplicate event detected for farmer lead ${phoneNumber} (eventId=${eventId}) - skipping update`);
+      } else {
+        // Update existing farmer lead with opt-in details
+        await FarmerLead.updateOne(
+          { mobileNumber: phoneNumber },
+          {
+            $set: {
+              opt_in: optInValue,
+              opt_in_at: new Date(eventTimestamp),
+              opt_in_source: isWatiWebhook ? "wati-webhook" : "webhook",
+              opt_in_webhook_id: eventId,
+              opt_in_metadata: metadata,
+              opt_in_verified: isWatiWebhook
+            }
+          }
+        );
+        farmerLeadsUpdated = 1;
+        console.log(`   ✅ Updated existing farmer lead: ${phoneNumber}`);
+      }
     } else {
       // Note: FarmerLead requires publicLinkId, so we'll only update if exists
       // We don't create FarmerLead here as it needs more context (publicLinkId)

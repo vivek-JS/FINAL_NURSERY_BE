@@ -41,17 +41,12 @@ godownStockOutwardSchema.add({
   },
 });
 
-const options = { timestamps: true };
+// Enable timestamps on the cloned schemas instead of passing an options object
+// as the third parameter to `model()` (third param is interpreted as collection name).
+godownStockInwardSchema.set("timestamps", true);
+godownStockOutwardSchema.set("timestamps", true);
 
-const GodownStockInward = model(
-  "GodownStockInward",
-  godownStockInwardSchema,
-  options
-);
-const GodownStockOutward = model(
-  "GodownStockOutward",
-  godownStockOutwardSchema,
-  options
-);
+const GodownStockInward = model("GodownStockInward", godownStockInwardSchema);
+const GodownStockOutward = model("GodownStockOutward", godownStockOutwardSchema);
 
 export { GodownStockInward, GodownStockOutward };

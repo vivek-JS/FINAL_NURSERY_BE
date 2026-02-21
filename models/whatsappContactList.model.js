@@ -13,6 +13,10 @@ const contactSchema = new Schema(
       trim: true,
       default: "",
     },
+    state: { type: String, trim: true, default: "" },
+    district: { type: String, trim: true, default: "" },
+    taluka: { type: String, trim: true, default: "" },
+    village: { type: String, trim: true, default: "" },
   },
   { _id: false }
 );

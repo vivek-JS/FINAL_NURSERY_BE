@@ -54,6 +54,39 @@ const farmerSchema = new Schema({
     type: Boolean,
     default: false,
   },
+  // Opt-in metadata for webhook/event tracking
+  opt_in_at: {
+    type: Date,
+    default: null,
+  },
+  opt_in_source: {
+    type: String,
+    default: null,
+  },
+  opt_in_webhook_id: {
+    type: String,
+    default: null,
+    index: true
+  },
+  opt_in_metadata: {
+    type: Schema.Types.Mixed,
+    default: null
+  },
+  opt_in_verified: {
+    type: Boolean,
+    default: false
+  },
+  // Record of WhatsApp automation activities for this farmer
+  whatsappAutomationActivities: [
+    {
+      automationJobId: { type: Schema.Types.ObjectId, ref: "AutomationJob" },
+      sendEventId: { type: Schema.Types.ObjectId, ref: "SendEvent" },
+      phone: { type: String },
+      message: { type: String },
+      status: { type: String, enum: ["sent", "failed", "skipped"] },
+      timestamp: { type: Date, default: Date.now },
+    },
+  ],
   // Array field to store all farmers referred by this farmer
   referredTo: [
     {

@@ -138,6 +138,16 @@ server.use(cors(corsOptions));
 // Body parsing middlewares
 server.use(express.json({ limit: '10mb' }));
 server.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Gracefully handle invalid JSON bodies (e.g., clients sending literal 'null')
+server.use((err, req, res, next) => {
+  if (err && err.type === 'entity.parse.failed') {
+    // Log and treat body as empty to avoid hard failures
+    console.warn("Warning: Invalid JSON body received; treating as empty body.")
+    req.body = {}
+    return next()
+  }
+  return next(err)
+});
 // Removed: server.use(cookieParser());
 
 // Set timeout for all requests (10 minutes)
@@ -239,6 +249,7 @@ import farmerRoute from "./routes/farmer.route.js";
 import farmerListRoute from "./routes/farmerList.route.js";
 import whatsappContactListRoute from "./routes/whatsappContactList.route.js";
 import watiProxyRoute from "./routes/watiProxy.route.js";
+import exotelRoute from "./routes/exotel.route.js";
 import orderRoute from "./routes/order.route.js";
 import userRoute from "./routes/user.route.js";
 import cmsRoute from "./routes/cms.route.js";
@@ -279,6 +290,11 @@ import optInWebhookRoute from "./routes/optInWebhook.route.js";
 import sowingRoute from "./routes/sowing.route.js";
 import publicFarmerLinkRoute from "./routes/publicFarmerLink.route.js";
 import clearDataRoute from "./routes/clearData.route.js";
+import automationRoute from "./routes/automation.route.js";
+import mediaRoute from "./routes/media.route.js";
+import profileRoute from "./routes/profile.route.js";
+import campaignRoute from "./routes/campaign.route.js";
+import whatsappCampaignRoute from "./routes/whatsappCampaign.route.js";
 
 // Inventory Management Routes
 import productRoute from "./routes/product.route.js";
@@ -300,6 +316,8 @@ import followUpRoute from "./routes/followUp.route.js";
 import taskRoute from "./routes/task.route.js";
 import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
 import mapsRoute from "./routes/maps.route.js";
+import callAssignmentRoute from "./routes/callAssignment.route.js";
+import callListPublicRoute from "./routes/callListPublic.route.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -320,16 +338,24 @@ server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
+server.use("/api/v1/automations", authenticateToken, automationRoute);
 server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook (public, no auth required)
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
 server.use("/api/v1", followUpRoute); // Follow-up routes (public endpoints for token access, admin endpoints require auth)
+server.use("/api/v1/call-list", callListPublicRoute); // Public call list (token-based, no auth)
 server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
+server.use("/api/v1/media", authenticateToken, mediaRoute);
+server.use("/api/v1/profiles", authenticateToken, profileRoute);
+server.use("/api/v1/campaigns", authenticateToken, campaignRoute);
+server.use("/api/v1/whatsapp/campaigns", authenticateToken, whatsappCampaignRoute);
 
 // Protected routes - require authentication
 server.use("/api/v1/farmer", authenticateToken, farmerRoute);
 server.use("/api/v1/farmer-list", authenticateToken, farmerListRoute);
+server.use("/api/v1/call-assignment", callAssignmentRoute);
 server.use("/api/v1/whatsapp-contact-list", authenticateToken, whatsappContactListRoute);
 server.use("/api/v1/wati", watiProxyRoute);
+server.use("/api/v1/exotel", exotelRoute);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/cms", authenticateToken, cmsRoute);
 const employeeAuthMiddleware =

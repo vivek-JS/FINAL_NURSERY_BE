@@ -38,6 +38,8 @@ const allowedParams = [
   "endDay",
   "village",
   "district",
+  "districtName",
+  "talukaName",
   "dealer",
   "farmReady",
   "ready_for_dispatch",
@@ -116,6 +118,13 @@ const allowedParams = [
   "pageSize",
   "pageNumber",
   "channelPhoneNumber",
+  "q",
+  // Call assignment combined list
+  "source", // farmer | lead | farmerForm | all
+  "stateName",
+  "linkId", // public farmer link id for farmer form filter
+  "opt_in", // filter by opt-in status (true/false)
+  "includeAll", // include all records (don't exclude those in call lists)
 ];
 
 const parameterWhiteListing = (req, res, next) => {
