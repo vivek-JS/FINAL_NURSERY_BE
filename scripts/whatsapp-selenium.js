@@ -3,7 +3,10 @@ import chrome from "selenium-webdriver/chrome.js";
 
 export async function initDriver({ userDataDir = null, headless = false } = {}) {
   const options = new chrome.Options();
-  if (userDataDir) options.addArguments(`--user-data-dir=${userDataDir}`);
+  if (userDataDir) {
+    options.addArguments(`--user-data-dir=${userDataDir}`);
+    options.addArguments("--remote-debugging-port=9222");
+  }
   if (headless) {
     options.addArguments("--headless=new");
     options.addArguments("--disable-gpu");

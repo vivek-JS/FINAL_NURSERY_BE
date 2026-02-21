@@ -287,6 +287,7 @@ import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
 import whatsappOrderBotRoute from "./routes/whatsappOrderBot.route.js";
 import optInWebhookRoute from "./routes/optInWebhook.route.js";
+import whatsappStatusWebhookRoute from "./routes/whatsappStatusWebhook.route.js";
 import sowingRoute from "./routes/sowing.route.js";
 import publicFarmerLinkRoute from "./routes/publicFarmerLink.route.js";
 import clearDataRoute from "./routes/clearData.route.js";
@@ -295,6 +296,7 @@ import mediaRoute from "./routes/media.route.js";
 import profileRoute from "./routes/profile.route.js";
 import campaignRoute from "./routes/campaign.route.js";
 import whatsappCampaignRoute from "./routes/whatsappCampaign.route.js";
+import whatsappBroadcastRoute from "./routes/whatsappBroadcast.route.js";
 
 // Inventory Management Routes
 import productRoute from "./routes/product.route.js";
@@ -313,6 +315,7 @@ import returnRequestRoute from "./routes/returnRequest.route.js";
 import agriSalesOrderRoute from "./routes/agriSalesOrder.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
 import followUpRoute from "./routes/followUp.route.js";
+import assignmentsRoute from "./routes/assignments.routes.js";
 import taskRoute from "./routes/task.route.js";
 import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
 import mapsRoute from "./routes/maps.route.js";
@@ -340,14 +343,19 @@ server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is p
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
 server.use("/api/v1/automations", authenticateToken, automationRoute);
 server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook (public, no auth required)
+// WATI status webhook (templateMessageSent_v2, delivered, read, failed)
+server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
 server.use("/api/v1", followUpRoute); // Follow-up routes (public endpoints for token access, admin endpoints require auth)
 server.use("/api/v1/call-list", callListPublicRoute); // Public call list (token-based, no auth)
+// Assignments (follow-ups linked to farmers)
+server.use("/api/v1/assignments", authenticateToken, assignmentsRoute);
 server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
 server.use("/api/v1/media", authenticateToken, mediaRoute);
 server.use("/api/v1/profiles", authenticateToken, profileRoute);
 server.use("/api/v1/campaigns", authenticateToken, campaignRoute);
 server.use("/api/v1/whatsapp/campaigns", authenticateToken, whatsappCampaignRoute);
+server.use("/api/v1/whatsapp-broadcast", whatsappBroadcastRoute);
 
 // Protected routes - require authentication
 server.use("/api/v1/farmer", authenticateToken, farmerRoute);

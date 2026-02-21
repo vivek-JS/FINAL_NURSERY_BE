@@ -134,16 +134,32 @@ export const getPublicLinkConfigBySlug = catchAsync(async (req, res, next) => {
   );
 });
 
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export const getFarmerLeadsForLink = catchAsync(async (req, res, next) => {
   const { id } = req.params;
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const q = (req.query.q || req.query.search || "").toString().trim();
 
   const link = await PublicFarmerLink.findById(id).lean();
   if (!link) {
     return next(new AppError("Public farmer link not found", 404));
   }
 
-  const leads = await FarmerLead.find({ publicLinkId: link._id })
+  const leadQuery = { publicLinkId: link._id };
+  if (q) {
+    const regex = { $regex: escapeRegex(q), $options: "i" };
+    leadQuery.$or = [
+      { name: regex },
+      { mobileNumber: regex },
+      { villageName: regex },
+      { talukaName: regex },
+      { districtName: regex },
+      { stateName: regex },
+    ];
+  }
+
+  const leads = await FarmerLead.find(leadQuery)
     .sort({ createdAt: -1 })
     .limit(limit)
     .lean();
@@ -159,8 +175,22 @@ export const getFarmerLeadsForLink = catchAsync(async (req, res, next) => {
 /** Get all farmer leads across all public links (for admin broadcast list) */
 export const getAllFarmerLeads = catchAsync(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000);
+  const q = (req.query.q || req.query.search || "").toString().trim();
 
-  const leads = await FarmerLead.find({})
+  const leadQuery = {};
+  if (q) {
+    const regex = { $regex: escapeRegex(q), $options: "i" };
+    leadQuery.$or = [
+      { name: regex },
+      { mobileNumber: regex },
+      { villageName: regex },
+      { talukaName: regex },
+      { districtName: regex },
+      { stateName: regex },
+    ];
+  }
+
+  const leads = await FarmerLead.find(leadQuery)
     .sort({ createdAt: -1 })
     .limit(limit)
     .lean();

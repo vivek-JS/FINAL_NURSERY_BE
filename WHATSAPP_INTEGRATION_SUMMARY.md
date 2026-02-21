@@ -306,3 +306,38 @@ This WhatsApp integration system is **fully functional** and ready to be deploye
 
 *Last Updated: January 2025*
 *Status: Fully Working*
+
+---
+
+## 🗂️ Call Assignment / Follow-up Integration (New)
+
+Added a small follow-up/assignment system (Feb 2026) to allow scheduling follow-ups from a public mobile link and managing them inside the web app.
+
+### Backend (NEW)
+- Model: `models/followUp.model.js` — stores follow-ups linked to `Farmer`:
+  - fields: `farmerId`, `phone`, `scheduledAt`, `status`, `source`, `assignedBy`, `notes`, timestamps
+- Routes:
+  - POST `/api/v1/assignments` — create assignment (requires normal login). Rate-limited.
+  - GET `/api/v1/assignments?filter=current|followup` — list assignments for logged-in user (`current` = due now, `followup` = scheduled future).
+  - PATCH `/api/v1/assignments/:id` — update (reschedule, mark completed, add notes).
+
+### Frontend (NEW)
+- Public route: `/u/call-assignment` — mobile-first page that prompts normal login, then shows a scheduling form (phone, datetime, notes).
+- Private route: `/u/call-assignment` (authenticated) — Assignments page with two tabs: Current and Follow-ups, actions to mark done and reschedule.
+
+### Notes & Security
+- The public scheduling page requires normal login before creating assignments (safer workflow).
+- Phone normalization and basic validation are applied server-side.
+- Simple IP-based rate-limiting is applied on assignment creation endpoint.
+
+### Files added/changed
+- `FINAL_NURSERY_BE/models/followUp.model.js` (new)
+- `FINAL_NURSERY_BE/controllers/assignments.controller.js` (new)
+- `FINAL_NURSERY_BE/routes/assignments.routes.js` (new)
+- `nursery-mgmt/src/pages/public/CallAssignmentMobile.jsx` (new)
+- `nursery-mgmt/src/pages/private/assignments/Assignments.jsx` (new)
+- Router entries updated to expose `/u/call-assignment`
+
+--- 
+
+*Last Updated: Feb 2026*

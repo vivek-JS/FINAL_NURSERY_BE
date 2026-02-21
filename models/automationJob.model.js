@@ -18,6 +18,7 @@ const automationJobSchema = new Schema(
     message: { type: String, default: "" },
     mode: { type: String, enum: ["rate", "immediate"], default: "immediate" },
     ratePerHour: { type: Number, default: 30 },
+    ratePer2Min: { type: Number, default: 1 }, // messages per 2 minutes (1 = 1 msg every 2 min)
     batchSize: { type: Number, default: 30 },
     status: { type: String, enum: ["created", "active", "paused", "completed"], default: "created" },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
