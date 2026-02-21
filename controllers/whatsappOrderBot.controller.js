@@ -2,9 +2,11 @@ import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
 import fetch from "node-fetch";
 import Farmer from "../models/farmer.model.js";
+import FarmerLead from "../models/farmerLead.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
+import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
 
 const WATI_BASE_URL = getWatiBaseUrl();
 const WATI_TOKEN = getWatiToken();
@@ -560,6 +562,29 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
   console.log(`   📍 Current Step: ${state.step}`);
   console.log(`   👤 Sender Name: ${senderName || "Unknown"}`);
   console.log("─".repeat(60));
+
+  // "मार्गदर्शन सुरू करा" button click – send final_video_name template
+  const GUIDANCE_BUTTON_TEXT = "मार्गदर्शन सुरू करा";
+  const followupTemplate = process.env.GUIDANCE_BUTTON_FOLLOWUP_TEMPLATE || "final_video_name";
+  if (userMessage?.trim() === GUIDANCE_BUTTON_TEXT && followupTemplate) {
+    console.log(`   📤 [GUIDANCE] User clicked "मार्गदर्शन सुरू करा" – sending template: ${followupTemplate}`);
+    let nameForTemplate = senderName?.trim();
+    if (!nameForTemplate) {
+      const farmer = await Farmer.findOne({ mobileNumber: parseInt(mobileNumber) }).select("name").lean().catch(() => null);
+      if (farmer?.name) nameForTemplate = farmer.name;
+      else {
+        const lead = await FarmerLead.findOne({ mobileNumber: String(mobileNumber) }).select("name").lean().catch(() => null);
+        if (lead?.name) nameForTemplate = lead.name;
+      }
+    }
+    nameForTemplate = nameForTemplate || "भाऊ";
+    const params = [{ name: "1", value: nameForTemplate }];
+    const result = await sendWatiTemplateMessage(mobileNumber, followupTemplate, params);
+    if (result.success) {
+      return;
+    }
+    console.warn(`   ⚠️ [GUIDANCE] Failed to send follow-up template:`, result.error);
+  }
 
   // Global commands (work at any step)
   if (message === "cancel" || message === "0" || message === "रद्द") {
