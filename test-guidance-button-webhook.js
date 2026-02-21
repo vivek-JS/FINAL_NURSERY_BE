@@ -16,8 +16,9 @@
  *   3. final_video_name template approved in WATI
  */
 
+// WATI sends message events to opt-in webhook in production – use that URL to test
 const WEBHOOK_URL =
-  process.env.WEBHOOK_URL || "http://localhost:8000/api/v1/whatsapp-order/webhook";
+  process.env.WEBHOOK_URL || "http://localhost:8000/api/v1/opt-in/webhook";
 
 // Use your phone number to receive the follow-up template (optional - for live test)
 const TEST_PHONE = process.env.TEST_PHONE || "919876543210";
@@ -28,28 +29,19 @@ async function testGuidanceButtonWebhook() {
   console.log(`   Test phone:  ${TEST_PHONE}`);
   console.log("");
 
-  // Format 1: eventType + text (button text as message)
-  const payload1 = {
+  // Production format (from WATI – opt-in webhook receives this)
+  const payloadProd = {
     eventType: "message",
     waId: TEST_PHONE,
     text: "मार्गदर्शन सुरू करा",
-    senderName: "Test Farmer",
-  };
-
-  // Format 3: Nested (buttonText - how WATI sends button clicks)
-  const payload3 = {
-    event: "message",
-    data: {
-      waId: TEST_PHONE,
-      buttonText: "मार्गदर्शन सुरू करा",
-      senderName: "Test Farmer",
+    senderName: "vivek",
+    buttonReply: {
+      payload: '{"ButtonIndex":0,"CarouselCardIndex":null,"BroadcastLinkId":"6999b7b0fe6080096ec60249"}',
+      text: "मार्गदर्शन सुरू करा",
     },
   };
 
-  const payloads = [
-    { name: "Format 1 (eventType)", body: payload1 },
-    { name: "Format 3 (buttonText)", body: payload3 },
-  ];
+  const payloads = [{ name: "Production format (eventType + buttonReply)", body: payloadProd }];
 
   for (const { name, body } of payloads) {
     console.log(`📤 Sending ${name}...`);
