@@ -1,6 +1,7 @@
 import catchAsync from "../utility/catchAsync.js";
 import Farmer from "../models/farmer.model.js";
 import FarmerLead from "../models/farmerLead.model.js";
+import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
 
 /**
  * Parse webhook timestamp to valid Date.
@@ -224,6 +225,31 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
 
   console.log(`\n📱 [OPT-IN WEBHOOK] Processing ${eventType} for phone: ${phoneNumber}`);
   console.log(`   Original waId: ${waId}`);
+
+  // "मार्गदर्शन सुरू करा" button click – send final_video_name template (WATI sends messages to opt-in webhook)
+  const messageText = req.body?.text || req.body?.buttonReply?.text || req.body?.data?.text || "";
+  const GUIDANCE_BUTTON_TEXT = "मार्गदर्शन सुरू करा";
+  const followupTemplate = process.env.GUIDANCE_BUTTON_FOLLOWUP_TEMPLATE || "final_video_name";
+  if (messageText?.trim() === GUIDANCE_BUTTON_TEXT && followupTemplate) {
+    const senderNameVal = req.body?.senderName || req.body?.data?.senderName || "";
+    let nameForTemplate = senderNameVal?.trim();
+    if (!nameForTemplate) {
+      const farmer = await Farmer.findOne({ mobileNumber: parseInt(phoneNumber) }).select("name").lean().catch(() => null);
+      if (farmer?.name) nameForTemplate = farmer.name;
+      else {
+        const lead = await FarmerLead.findOne({ mobileNumber: String(phoneNumber) }).select("name").lean().catch(() => null);
+        if (lead?.name) nameForTemplate = lead.name;
+      }
+    }
+    nameForTemplate = nameForTemplate || "भाऊ";
+    console.log(`   📤 [GUIDANCE] Sending template ${followupTemplate} to ${phoneNumber} (name: ${nameForTemplate})`);
+    const result = await sendWatiTemplateMessage(phoneNumber, followupTemplate, [{ name: "1", value: nameForTemplate }]);
+    if (result.success) {
+      console.log(`   ✅ [GUIDANCE] Template sent successfully`);
+    } else {
+      console.warn(`   ⚠️ [GUIDANCE] Template send failed:`, result.error);
+    }
+  }
 
   // Determine opt_in value: opt_out = false, everything else (opt_in, message, etc.) = true
   const optInValue = isOptOut ? false : true;
