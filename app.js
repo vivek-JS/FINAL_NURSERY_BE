@@ -96,7 +96,8 @@ const allowedOriginSet = new Set([
 const allowedOriginPatterns = [
   /^https:\/\/.*\.onrender\.com$/,
   /^https:\/\/.*\.vercel\.app$/,
-  /^https:\/\/.*\.netlify\.app$/
+  /^https:\/\/.*\.netlify\.app$/,
+  /^https:\/\/.*\.rambiotechplants\.com$/
 ];
 
 const resolvedAllowedOrigins = Array.from(allowedOriginSet);
@@ -242,7 +243,28 @@ server.options('/api/v1/opt-in/webhook', cors(corsOptions), (req, res) => {
   res.status(200).end();
 });
 
-
+// Handle CORS preflight for campaigns (run-now, resume-web, etc.)
+server.options('/api/v1/campaigns/:id/run-now', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+server.options('/api/v1/campaigns/:id/resume-web', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+server.options('/api/v1/campaigns/:id/stop', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+server.options('/api/v1/campaigns/:id/reset-targets', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+server.options('/api/v1/campaign-worker/claim', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+server.options('/api/v1/campaign-worker/complete/:id', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+server.options('/api/v1/campaign-worker/download', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
 
 // importing routes
 import farmerRoute from "./routes/farmer.route.js";
@@ -295,6 +317,7 @@ import automationRoute from "./routes/automation.route.js";
 import mediaRoute from "./routes/media.route.js";
 import profileRoute from "./routes/profile.route.js";
 import campaignRoute from "./routes/campaign.route.js";
+import campaignWorkerRoute from "./routes/campaignWorker.route.js";
 import whatsappCampaignRoute from "./routes/whatsappCampaign.route.js";
 import whatsappBroadcastRoute from "./routes/whatsappBroadcast.route.js";
 
@@ -315,6 +338,7 @@ import returnRequestRoute from "./routes/returnRequest.route.js";
 import agriSalesOrderRoute from "./routes/agriSalesOrder.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
 import followUpRoute from "./routes/followUp.route.js";
+import followupMetricsRoute from "./routes/followupMetrics.route.js";
 import taskRoute from "./routes/task.route.js";
 import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
 import mapsRoute from "./routes/maps.route.js";
@@ -352,6 +376,7 @@ server.use("/api/v1/media", authenticateToken, mediaRoute);
 server.use("/api/v1/profiles", authenticateToken, profileRoute);
 server.use("/api/v1/campaigns", authenticateToken, campaignRoute);
 server.use("/api/v1/whatsapp/campaigns", authenticateToken, whatsappCampaignRoute);
+server.use("/api/v1/campaign-worker", campaignWorkerRoute);
 server.use("/api/v1/whatsapp-broadcast", whatsappBroadcastRoute);
 
 // Protected routes - require authentication
@@ -360,6 +385,8 @@ server.use("/api/v1/farmer-list", authenticateToken, farmerListRoute);
 server.use("/api/v1/call-assignment", callAssignmentRoute);
 server.use("/api/v1/whatsapp-contact-list", authenticateToken, whatsappContactListRoute);
 server.use("/api/v1/wati", watiProxyRoute);
+// Follow-up metrics (employee performance)
+server.use("/api/v1/assignments", authenticateToken, followupMetricsRoute);
 server.use("/api/v1/exotel", exotelRoute);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/cms", authenticateToken, cmsRoute);

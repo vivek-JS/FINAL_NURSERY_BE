@@ -11,6 +11,7 @@ import {
   getAllFarmerLeads,
   getLeadFilterOptions
 } from "../controllers/publicFarmerLink.controller.js";
+import { importContactsForLink } from "../controllers/publicFarmerLinkImport.controller.js";
 
 const router = express.Router();
 
@@ -64,6 +65,8 @@ router.patch(
   requireOfficeAdmin,
   updatePublicFarmerLink
 );
+
+router.post("/links/:id/import-contacts", authenticateToken, requireOfficeAdmin, importContactsForLink);
 
 // ============================================
 // PUBLIC ENDPOINTS - NO AUTHENTICATION REQUIRED

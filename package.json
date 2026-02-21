@@ -10,7 +10,8 @@
     "start": "node index.js",
     "whatsapp-bot": "node scripts/whatsapp-selenium-bot.js",
     "automation-targets": "node scripts/queue/automation-target-processor.js",
-    "run-campaign": "node scripts/run-campaign-now.js"
+    "run-campaign": "node scripts/run-campaign-now.js",
+    "campaign-runner": "node scripts/campaign-runner-worker.js"
   },
   "author": "",
   "license": "ISC",
