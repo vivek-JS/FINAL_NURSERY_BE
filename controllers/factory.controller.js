@@ -1954,13 +1954,16 @@ const getAll = (Model, modelName) =>
       let filter = {};
 
       let query = Model.find(filter);
-      
-      // Use standard features including pagination for all models (including Farmer).
+      const page = req.query.page * 1 || 1;
+      const limit = req.query.limit * 1 || 50;
+
       const features = new APIFeatures(query, req.query, modelName)
         .filter()
         .sort()
-        .limitFields()
-        .paginate();
+        .limitFields();
+
+      const total = await Model.countDocuments(features.query.getFilter());
+      features.paginate();
 
       const doc = await features.query.lean();
 
@@ -1969,10 +1972,29 @@ const getAll = (Model, modelName) =>
         return { id: _id, _id: _id, ...rest };
       });
 
+      const totalPages = Math.ceil(total / limit) || 1;
+      const hasNextPage = page < totalPages;
+      const nextPage = hasNextPage ? page + 1 : null;
+
+      const payload =
+        modelName === "Farmer"
+          ? {
+              farmers: transformedDoc,
+              pagination: {
+                page,
+                limit,
+                total,
+                totalPages,
+                hasNextPage,
+                nextPage,
+              },
+            }
+          : transformedDoc;
+
       const response = generateResponse(
         "Success",
         `${modelName} found successfully`,
-        transformedDoc,
+        payload,
         undefined
       );
 

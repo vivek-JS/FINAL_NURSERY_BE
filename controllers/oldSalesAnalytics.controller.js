@@ -163,15 +163,60 @@ const parseNumberParam = (value, fallback) => {
 const normalizeCaseKey = (value) =>
   value?.toString?.().trim().toLowerCase() || "";
 
-const getDistinctValues = async (field) => {
-  const values = await OldSalesData.distinct(field, {
-    [field]: { $nin: [null, ""] },
-  });
+const getDistinctValues = async (field, filter = {}) => {
+  const match = { [field]: { $nin: [null, ""] }, ...filter };
+  const values = await OldSalesData.distinct(field, match);
   return values
     .map((value) => value?.toString().trim())
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));
 };
+
+/** GET /old-sales/filter-options - Cascading district/taluka/village + all other filters */
+export const getOldSalesFilterOptions = catchAsync(async (req, res) => {
+  const { district, taluka } = req.query;
+  const talukaFilter = district ? { district } : {};
+  const villageFilter = district && taluka ? { district, taluka } : district ? { district } : taluka ? { taluka } : {};
+
+  const [districts, talukas, villages, plants, varieties, media, batches, paymentModes, references, marketingReferences, billGivenOptions, verifiedOptions, shadeNumbers, vehicleNumbers, driverNames] = await Promise.all([
+    getDistinctValues("district"),
+    getDistinctValues("taluka", talukaFilter),
+    getDistinctValues("village", villageFilter),
+    getDistinctValues("plant"),
+    getDistinctValues("variety"),
+    getDistinctValues("media"),
+    getDistinctValues("batch"),
+    getDistinctValues("paymentMode"),
+    getDistinctValues("reference"),
+    getDistinctValues("marketingReference"),
+    getDistinctValues("billGivenOrNot"),
+    getDistinctValues("verifiedOrNot"),
+    getDistinctValues("shadeNo"),
+    getDistinctValues("vehicleNo"),
+    getDistinctValues("driverName"),
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      district: districts,
+      taluka: talukas,
+      village: villages,
+      plant: plants,
+      variety: varieties,
+      media: media,
+      batch: batches,
+      paymentMode: paymentModes,
+      reference: references,
+      marketingReference: marketingReferences,
+      billGivenOrNot: billGivenOptions,
+      verifiedOrNot: verifiedOptions,
+      shadeNo: shadeNumbers,
+      vehicleNo: vehicleNumbers,
+      driverName: driverNames,
+    },
+  });
+});
 
 export const getOldSalesFilters = catchAsync(async (req, res) => {
   const [
@@ -767,7 +812,7 @@ export const getOldSalesUniqueCustomers = catchAsync(async (req, res) => {
   const match = buildMatch(req.query);
   const matchStage = Object.keys(match).length ? [{ $match: match }] : [];
   const page = Math.max(parseInt(req.query.page || "1", 10), 1);
-  const limit = Math.min(Math.max(parseInt(req.query.limit || "200", 10), 1), 5000);
+  const limit = Math.min(Math.max(parseInt(req.query.limit || "50", 10), 1), 5000);
   const skip = (page - 1) * limit;
 
   // Aggregate unique mobile numbers with a lookup to farmers to fetch opt_in
@@ -837,6 +882,10 @@ export const getOldSalesUniqueCustomers = catchAsync(async (req, res) => {
   const result = await OldSalesData.aggregate(pipeline);
   const metadata = result[0]?.metadata?.[0] || { total: 0 };
   const customers = result[0]?.data || [];
+  const total = metadata.total;
+  const totalPages = Math.ceil(total / limit) || 1;
+  const hasNextPage = page < totalPages;
+  const nextPage = hasNextPage ? page + 1 : null;
 
   res.status(200).json({
     success: true,
@@ -844,8 +893,10 @@ export const getOldSalesUniqueCustomers = catchAsync(async (req, res) => {
       pagination: {
         page,
         limit,
-        total: metadata.total,
-        totalPages: Math.ceil(metadata.total / limit),
+        total,
+        totalPages,
+        hasNextPage,
+        nextPage,
       },
       customers: customers
         .map((c) => ({

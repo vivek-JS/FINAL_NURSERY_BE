@@ -2,6 +2,7 @@ import express from "express";
 import {
   getOldSalesAnalytics,
   getOldSalesFilters,
+  getOldSalesFilterOptions,
   getOldSalesSuggestions,
   normalizeOldSalesField,
   getOldSalesChangeLogs,
@@ -17,6 +18,7 @@ import {
 const router = express.Router();
 
 router.get("/filters", getOldSalesFilters);
+router.get("/filter-options", getOldSalesFilterOptions);
 router.get("/analytics", getOldSalesAnalytics);
 router.get("/suggestions", getOldSalesSuggestions);
 router.get("/case-mismatches", getOldSalesCaseMismatches);

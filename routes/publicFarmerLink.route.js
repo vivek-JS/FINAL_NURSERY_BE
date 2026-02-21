@@ -8,7 +8,8 @@ import {
   getPublicLinkConfigBySlug,
   createFarmerLead,
   getFarmerLeadsForLink,
-  getAllFarmerLeads
+  getAllFarmerLeads,
+  getLeadFilterOptions
 } from "../controllers/publicFarmerLink.controller.js";
 
 const router = express.Router();
@@ -41,6 +42,13 @@ router.get(
   authenticateToken,
   requireOfficeAdmin,
   getAllFarmerLeads
+);
+
+router.get(
+  "/filter-options",
+  authenticateToken,
+  requireOfficeAdmin,
+  getLeadFilterOptions
 );
 
 router.get(

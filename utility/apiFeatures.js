@@ -10,6 +10,18 @@ class APIFeatures {
     const excludedFields = ["page", "sort", "limit", "fields"];
     excludedFields.forEach((el) => delete queryObj[el]);
 
+    // Farmer: map district/taluka to districtName/talukaName for filtering
+    if (this.modelName === "Farmer") {
+      if (queryObj.district) {
+        queryObj.districtName = queryObj.district;
+        delete queryObj.district;
+      }
+      if (queryObj.taluka) {
+        queryObj.talukaName = queryObj.taluka;
+        delete queryObj.taluka;
+      }
+    }
+
     if (this.queryString.startDate && this.queryString.endDate) {
       this.query = this.query
         .where("createdAt")
@@ -78,7 +90,7 @@ class APIFeatures {
 
   paginate() {
     const page = this.queryString.page * 1 || 1;
-    const limit = this.queryString.limit * 1 || 100;
+    const limit = this.queryString.limit * 1 || 50;
     const skip = (page - 1) * limit;
 
     this.query = this.query.skip(skip).limit(limit);

@@ -136,9 +136,31 @@ export const getPublicLinkConfigBySlug = catchAsync(async (req, res, next) => {
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** GET /public-links/filter-options - Cascading district/taluka/village for leads filter dropdowns */
+export const getLeadFilterOptions = catchAsync(async (req, res) => {
+  const { district, taluka } = req.query;
+  const talukaFilter = district ? { districtName: district } : {};
+  const villageFilter = district && taluka ? { districtName: district, talukaName: taluka } : district ? { districtName: district } : taluka ? { talukaName: taluka } : {};
+
+  const [districts, talukas, villages] = await Promise.all([
+    FarmerLead.distinct("districtName").then((arr) => arr.filter(Boolean).sort()),
+    FarmerLead.distinct("talukaName", talukaFilter).then((arr) => arr.filter(Boolean).sort()),
+    FarmerLead.distinct("villageName", villageFilter).then((arr) => arr.filter(Boolean).sort()),
+  ]);
+  return res.status(200).json(
+    generateResponse("success", "Filter options fetched", {
+      districts,
+      talukas,
+      villages,
+    })
+  );
+});
+
 export const getFarmerLeadsForLink = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  const skip = (page - 1) * limit;
   const q = (req.query.q || req.query.search || "").toString().trim();
 
   const link = await PublicFarmerLink.findById(id).lean();
@@ -147,6 +169,9 @@ export const getFarmerLeadsForLink = catchAsync(async (req, res, next) => {
   }
 
   const leadQuery = { publicLinkId: link._id };
+  if (req.query.district) leadQuery.districtName = req.query.district;
+  if (req.query.taluka) leadQuery.talukaName = req.query.taluka;
+  if (req.query.village) leadQuery.villageName = req.query.village;
   if (q) {
     const regex = { $regex: escapeRegex(q), $options: "i" };
     leadQuery.$or = [
@@ -159,14 +184,23 @@ export const getFarmerLeadsForLink = catchAsync(async (req, res, next) => {
     ];
   }
 
-  const leads = await FarmerLead.find(leadQuery)
-    .sort({ createdAt: -1 })
-    .limit(limit)
-    .lean();
+  const [total, leads] = await Promise.all([
+    FarmerLead.countDocuments(leadQuery),
+    FarmerLead.find(leadQuery).sort({ createdAt: -1 }).skip(skip).limit(limit).lean()
+  ]);
+
+  const totalPages = Math.ceil(total / limit) || 1;
+  const hasNextPage = page < totalPages;
+  const nextPage = hasNextPage ? page + 1 : null;
 
   return res.status(200).json(
     generateResponse("success", "Farmer leads fetched", {
-      total: leads.length,
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage,
+      nextPage,
       leads
     })
   );
@@ -174,10 +208,15 @@ export const getFarmerLeadsForLink = catchAsync(async (req, res, next) => {
 
 /** Get all farmer leads across all public links (for admin broadcast list) */
 export const getAllFarmerLeads = catchAsync(async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000);
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  const skip = (page - 1) * limit;
   const q = (req.query.q || req.query.search || "").toString().trim();
 
   const leadQuery = {};
+  if (req.query.district) leadQuery.districtName = req.query.district;
+  if (req.query.taluka) leadQuery.talukaName = req.query.taluka;
+  if (req.query.village) leadQuery.villageName = req.query.village;
   if (q) {
     const regex = { $regex: escapeRegex(q), $options: "i" };
     leadQuery.$or = [
@@ -190,10 +229,14 @@ export const getAllFarmerLeads = catchAsync(async (req, res) => {
     ];
   }
 
-  const leads = await FarmerLead.find(leadQuery)
-    .sort({ createdAt: -1 })
-    .limit(limit)
-    .lean();
+  const [total, leads] = await Promise.all([
+    FarmerLead.countDocuments(leadQuery),
+    FarmerLead.find(leadQuery).sort({ createdAt: -1 }).skip(skip).limit(limit).lean()
+  ]);
+
+  const totalPages = Math.ceil(total / limit) || 1;
+  const hasNextPage = page < totalPages;
+  const nextPage = hasNextPage ? page + 1 : null;
 
   const linkIds = [...new Set(leads.map((l) => l.publicLinkId?.toString()).filter(Boolean))];
   const links = await PublicFarmerLink.find({ _id: { $in: linkIds } })
@@ -209,7 +252,12 @@ export const getAllFarmerLeads = catchAsync(async (req, res) => {
 
   return res.status(200).json(
     generateResponse("success", "All farmer leads fetched", {
-      total: leadsWithLink.length,
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage,
+      nextPage,
       leads: leadsWithLink
     })
   );
