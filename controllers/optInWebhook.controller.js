@@ -3,6 +3,24 @@ import Farmer from "../models/farmer.model.js";
 import FarmerLead from "../models/farmerLead.model.js";
 
 /**
+ * Parse webhook timestamp to valid Date.
+ * Handles: Unix seconds (string/number), Unix ms, ISO string.
+ * @param {string|number} ts - Timestamp from webhook
+ * @returns {Date} - Valid Date instance
+ */
+function parseEventTimestamp(ts) {
+  if (!ts) return new Date();
+  const num = typeof ts === "string" ? parseInt(ts, 10) : Number(ts);
+  if (!isNaN(num)) {
+    // Unix seconds: 10 digits (e.g. 1771672610); ms: 13 digits
+    const date = num < 1e12 ? new Date(num * 1000) : new Date(num);
+    if (!isNaN(date.getTime())) return date;
+  }
+  const iso = new Date(ts);
+  return !isNaN(iso.getTime()) ? iso : new Date();
+}
+
+/**
  * Normalize phone number to 10-digit format
  * Removes country code prefix (e.g., "91" for India)
  * @param {string} phone - Phone number with or without country code
@@ -225,8 +243,17 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
       req.headers["x-wati-event-id"] ||
       null;
 
-    const eventTimestamp =
+    const rawTimestamp =
       req.body?.timestamp || req.body?.data?.timestamp || new Date().toISOString();
+    const optInAt = parseEventTimestamp(rawTimestamp);
+
+    // Extract sender name from webhook (Wati sends senderName for message events)
+    const senderName =
+      req.body?.senderName ||
+      req.body?.data?.senderName ||
+      req.body?.data?.sender_name ||
+      null;
+    const farmerName = (senderName && String(senderName).trim()) || "WhatsApp User";
 
     // Minimal metadata to store (avoid storing entire payload blindly)
     const metadata = {
@@ -243,27 +270,29 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
       if (eventId && existingFarmer.opt_in_webhook_id === eventId) {
         console.log(`   ℹ️  Duplicate event detected for farmer ${phoneNumber} (eventId=${eventId}) - skipping update`);
       } else {
-        // Update existing farmer with opt-in details
+        // Update existing farmer with opt-in details and name if provided
+        const updateFields = {
+          opt_in: optInValue,
+          opt_in_at: optInAt,
+          opt_in_source: isWatiWebhook ? "wati-webhook" : "webhook",
+          opt_in_webhook_id: eventId,
+          opt_in_metadata: metadata,
+          opt_in_verified: isWatiWebhook
+        };
+        if (farmerName !== "WhatsApp User") {
+          updateFields.name = farmerName;
+        }
         await Farmer.updateOne(
           { mobileNumber: parseInt(phoneNumber) },
-          {
-            $set: {
-              opt_in: optInValue,
-              opt_in_at: new Date(eventTimestamp),
-              opt_in_source: isWatiWebhook ? "wati-webhook" : "webhook",
-              opt_in_webhook_id: eventId,
-              opt_in_metadata: metadata,
-              opt_in_verified: isWatiWebhook
-            }
-          }
+          { $set: updateFields }
         );
         farmersUpdated = 1;
-        console.log(`   ✅ Updated existing farmer: ${phoneNumber}`);
+        console.log(`   ✅ Updated existing farmer: ${phoneNumber}${farmerName !== "WhatsApp User" ? ` (name: ${farmerName})` : ""}`);
       }
     } else {
-      // Create new farmer if doesn't exist
+      // Create new farmer with number and name from webhook
       const newFarmer = await Farmer.create({
-        name: "WhatsApp User", // Default name, can be updated later
+        name: farmerName,
         mobileNumber: parseInt(phoneNumber),
         village: "To be updated",
         taluka: "To be updated",
@@ -273,14 +302,14 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
         talukaName: "To be updated",
         districtName: "To be updated",
         opt_in: optInValue,
-        opt_in_at: new Date(eventTimestamp),
+        opt_in_at: optInAt,
         opt_in_source: isWatiWebhook ? "wati-webhook" : "webhook",
         opt_in_webhook_id: eventId,
         opt_in_metadata: metadata,
         opt_in_verified: isWatiWebhook
       });
       farmersCreated = 1;
-      console.log(`   ✅ Created new farmer: ${phoneNumber} (ID: ${newFarmer._id})`);
+      console.log(`   ✅ Created new farmer: ${phoneNumber} (name: ${farmerName}, ID: ${newFarmer._id})`);
     }
 
     // Handle FarmerLead collection
@@ -292,18 +321,20 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
         console.log(`   ℹ️  Duplicate event detected for farmer lead ${phoneNumber} (eventId=${eventId}) - skipping update`);
       } else {
         // Update existing farmer lead with opt-in details
+        const leadUpdateFields = {
+          opt_in: optInValue,
+          opt_in_at: optInAt,
+          opt_in_source: isWatiWebhook ? "wati-webhook" : "webhook",
+          opt_in_webhook_id: eventId,
+          opt_in_metadata: metadata,
+          opt_in_verified: isWatiWebhook
+        };
+        if (farmerName !== "WhatsApp User") {
+          leadUpdateFields.name = farmerName;
+        }
         await FarmerLead.updateOne(
           { mobileNumber: phoneNumber },
-          {
-            $set: {
-              opt_in: optInValue,
-              opt_in_at: new Date(eventTimestamp),
-              opt_in_source: isWatiWebhook ? "wati-webhook" : "webhook",
-              opt_in_webhook_id: eventId,
-              opt_in_metadata: metadata,
-              opt_in_verified: isWatiWebhook
-            }
-          }
+          { $set: leadUpdateFields }
         );
         farmerLeadsUpdated = 1;
         console.log(`   ✅ Updated existing farmer lead: ${phoneNumber}`);
