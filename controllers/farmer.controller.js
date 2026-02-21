@@ -11,6 +11,26 @@ const getFarmers = getAll(Farmer, "Farmer");
 const updateFarmer = updateOne(Farmer, "Farmer");
 const deleteFarmer = deleteOne(Farmer, "Farmer");
 
+/** GET /farmer/filter-options - Cascading district/taluka/village for filter dropdowns */
+export const getFarmerFilterOptions = catchAsync(async (req, res) => {
+  const { district, taluka } = req.query;
+  const talukaFilter = district ? { districtName: district } : {};
+  const villageFilter = district && taluka ? { districtName: district, talukaName: taluka } : district ? { districtName: district } : taluka ? { talukaName: taluka } : {};
+
+  const [districts, talukas, villages] = await Promise.all([
+    Farmer.distinct("districtName").then((arr) => arr.filter(Boolean).sort()),
+    Farmer.distinct("talukaName", talukaFilter).then((arr) => arr.filter(Boolean).sort()),
+    Farmer.distinct("village", villageFilter).then((arr) => arr.filter(Boolean).sort()),
+  ]);
+  return res.status(200).json(
+    generateResponse("Success", "Filter options fetched", {
+      districts,
+      talukas,
+      villages,
+    })
+  );
+});
+
 const findFarmer = catchAsync(async (req, res, next) => {
   const { mobileNumber } = req.params;
   const farmer = await Farmer.findOne({ mobileNumber });
@@ -291,8 +311,8 @@ export {
   uploadFarmers,
   getFarmerOrder,
   getInvalidPhoneFarmers,
-  updateFarmerPhone
-  ,recordWhatsappHistory
+  updateFarmerPhone,
+  recordWhatsappHistory,
 };
 // Get WhatsApp activity history for farmer by ID
 export const getFarmerWhatsappHistory = catchAsync(async (req, res) => {

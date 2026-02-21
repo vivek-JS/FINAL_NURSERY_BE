@@ -4,6 +4,7 @@ import {
   deleteFarmer,
   findFarmer,
   getFarmers,
+  getFarmerFilterOptions,
   uploadFarmers,
   getFarmerOrder,
   getInvalidPhoneFarmers,
@@ -64,6 +65,7 @@ const uploadImages = multer({
 router
   .get("/getfarmer/:mobileNumber", findFarmer)
   .get("/getFarmers", getFarmers)
+  .get("/filter-options", getFarmerFilterOptions)
   .get("/farmers/:farmerId/orders/:orderId?", getFarmerOrder)
   .post("/uploadFarmers", uploadExcel.single("data"), uploadFarmers)
   .get('/invalid-phones', getInvalidPhoneFarmers)
