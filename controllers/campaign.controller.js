@@ -390,18 +390,28 @@ export const getCampaign = async (req, res, next) => {
 export const startCampaign = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { ratePer2Min } = req.body || {};
+    console.log("[CAMPAIGN] startCampaign called, campaignId:", id, "ratePer2Min:", ratePer2Min);
     const campaign = await Campaign.findById(id);
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
-    if (campaign.status === "active") return res.status(400).json({ error: "Campaign already active" });
+    if (campaign.status === "active") {
+      console.log("[CAMPAIGN] Campaign already active, skipping:", id);
+      return res.status(400).json({ error: "Campaign already active" });
+    }
     campaign.status = "active";
     await campaign.save();
+
+    // ratePer2Min: messages per 2 minutes (default 1). ratePerHour = ratePer2Min * 30
+    const effectiveRatePer2Min = ratePer2Min != null ? Math.max(1, Math.min(30, Number(ratePer2Min) || 1)) : null;
+    const ratePerHour = effectiveRatePer2Min != null ? effectiveRatePer2Min * 30 : campaign.ratePerHour;
 
     // create an AutomationJob mirror for processing with existing processors
     const job = await AutomationJob.create({
       name: `Campaign:${campaign._id} ${campaign.name}`,
       message: campaign.message,
       mode: "rate",
-      ratePerHour: campaign.ratePerHour,
+      ratePerHour,
+      ratePer2Min: effectiveRatePer2Min ?? 1,
       batchSize: campaign.batchSize,
       status: "created",
       createdBy: req.user?.id || null,
@@ -427,6 +437,13 @@ export const startCampaign = async (req, res, next) => {
     }
     await tQueue.close();
 
+    const queuedCount = job.targets.filter((t) => !t.status || t.status === "pending").length;
+    console.log("[CAMPAIGN] Campaign started:", {
+      campaignId: campaign._id,
+      jobId: job._id,
+      targetsQueued: queuedCount,
+      totalTargets: job.targets.length,
+    });
     res.json({ success: true, campaignId: campaign._id, jobId: job._id });
   } catch (err) {
     next(err);

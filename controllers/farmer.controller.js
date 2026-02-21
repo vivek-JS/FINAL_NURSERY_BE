@@ -202,8 +202,18 @@ const updateFarmerPhone = catchAsync(async (req, res, next) => {
 });
 
 // Record WhatsApp send history for farmers (and mirror to FarmerLead)
+// Now supports templateName and broadcastName. Default status when creating is 'pending' (updated by webhook).
 const recordWhatsappHistory = catchAsync(async (req, res, next) => {
-  const { farmerIds = [], campaignId = null, message = "", status = "sent", sendEventId = null, timestamp = null } = req.body;
+  const {
+    farmerIds = [],
+    campaignId = null,
+    message = "",
+    status = "pending", // default to pending; webhook will update to sent/delivered/read/failed
+    sendEventId = null,
+    timestamp = null,
+    templateName = null,
+    broadcastName = null
+  } = req.body;
 
   if (!Array.isArray(farmerIds) || farmerIds.length === 0) {
     return res.status(400).json({ status: "error", message: "farmerIds array is required" });
@@ -230,6 +240,15 @@ const recordWhatsappHistory = catchAsync(async (req, res, next) => {
         message,
         status,
         timestamp: time,
+        localMessageId: null,
+        whatsappMessageId: null,
+        deliveredAt: null,
+        readAt: null,
+        failedCode: null,
+        failedDetail: null,
+        templateName: templateName || null,
+        broadcastName: broadcastName || null,
+        source: "farmer"
       };
 
       farmer.whatsappAutomationActivities = farmer.whatsappAutomationActivities || [];
@@ -245,8 +264,13 @@ const recordWhatsappHistory = catchAsync(async (req, res, next) => {
         lead = await FarmerLead.findOne({ mobileNumber: String(parseInt(phoneStr || "0", 10)) });
       }
       if (lead) {
+        const leadEntry = {
+          ...entry,
+          phone: String(lead.mobileNumber || ""),
+          source: "lead"
+        };
         lead.whatsappAutomationActivities = lead.whatsappAutomationActivities || [];
-        lead.whatsappAutomationActivities.push(entry);
+        lead.whatsappAutomationActivities.push(leadEntry);
         await lead.save();
         results.updatedLeads.push(lead._id);
       }
@@ -270,3 +294,11 @@ export {
   updateFarmerPhone
   ,recordWhatsappHistory
 };
+// Get WhatsApp activity history for farmer by ID
+export const getFarmerWhatsappHistory = catchAsync(async (req, res) => {
+  const { id } = req.params;
+  const farmer = await Farmer.findById(id).lean();
+  if (!farmer) return res.status(404).json({ status: "error", message: "Farmer not found" });
+  const activities = (farmer.whatsappAutomationActivities || []).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  return res.status(200).json({ status: "success", data: activities });
+});

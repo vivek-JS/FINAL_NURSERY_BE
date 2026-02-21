@@ -77,6 +77,19 @@ const buildMatch = (query) => {
     }
   });
 
+  // Generic search: q or search searches across customerName, mobileNo, village, taluka, district
+  const q = query.q || query.search;
+  if (q && typeof q === "string" && q.trim()) {
+    const regex = { $regex: escapeRegex(q.trim()), $options: "i" };
+    match.$or = [
+      { customerName: regex },
+      { mobileNo: regex },
+      { village: regex },
+      { taluka: regex },
+      { district: regex },
+    ];
+  }
+
   return match;
 };
 

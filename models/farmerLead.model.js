@@ -68,11 +68,23 @@ farmerLeadSchema.add({
       sendEventId: { type: Schema.Types.ObjectId, ref: "SendEvent" },
       phone: { type: String },
       message: { type: String },
-      status: { type: String, enum: ["sent", "failed", "skipped"] },
+      status: { type: String, enum: ["pending", "sent", "delivered", "read", "failed", "skipped"], default: "pending" },
       timestamp: { type: Date, default: Date.now },
+      localMessageId: { type: String, default: null, index: false },
+      whatsappMessageId: { type: String, default: null },
+      deliveredAt: { type: Date, default: null },
+      readAt: { type: Date, default: null },
+      failedCode: { type: String, default: null },
+      failedDetail: { type: String, default: null },
+      templateName: { type: String, default: null },
+      broadcastName: { type: String, default: null },
+      source: { type: String, enum: ["farmer", "lead"], default: "lead" }
     },
   ],
 });
+
+// Index to find activities by localMessageId quickly
+farmerLeadSchema.index({ "whatsappAutomationActivities.localMessageId": 1 });
 
 const FarmerLead = model("FarmerLead", farmerLeadSchema);
 

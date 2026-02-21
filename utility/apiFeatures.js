@@ -23,7 +23,34 @@ class APIFeatures {
     queryStr = queryStr.replace(/\b(gte|gt|lte|lt)\b/g, (match) => `$${match}`);
 
     const parsedQuery = JSON.parse(queryStr);
-    this.query = this.query.find(parsedQuery);
+
+    // Farmer model: search by name, mobileNumber, village, taluka, district
+    let finalMatch = parsedQuery;
+    if (this.modelName === "Farmer" && parsedQuery.search) {
+      const searchVal = String(parsedQuery.search).trim();
+      delete parsedQuery.search;
+      if (searchVal) {
+        const escaped = searchVal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(escaped, "i");
+        const orConditions = [
+          { name: regex },
+          { village: regex },
+          { talukaName: regex },
+          { districtName: regex },
+          { stateName: regex },
+        ];
+        if (/^\d+$/.test(searchVal)) {
+          orConditions.push({ mobileNumber: parseInt(searchVal, 10) });
+        }
+        const searchMatch = { $or: orConditions };
+        finalMatch =
+          Object.keys(parsedQuery).length > 0
+            ? { $and: [searchMatch, parsedQuery] }
+            : searchMatch;
+      }
+    }
+
+    this.query = this.query.find(finalMatch);
     return this;
   }
 

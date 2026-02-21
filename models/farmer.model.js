@@ -76,6 +76,15 @@ const farmerSchema = new Schema({
     type: Boolean,
     default: false
   },
+  // Follow-up metadata for quick lookup
+  lastFollowUpAt: {
+    type: Date,
+    default: null
+  },
+  followUpCount: {
+    type: Number,
+    default: 0
+  },
   // Record of WhatsApp automation activities for this farmer
   whatsappAutomationActivities: [
     {
@@ -83,8 +92,19 @@ const farmerSchema = new Schema({
       sendEventId: { type: Schema.Types.ObjectId, ref: "SendEvent" },
       phone: { type: String },
       message: { type: String },
-      status: { type: String, enum: ["sent", "failed", "skipped"] },
+      // Status lifecycle: pending -> sent -> delivered -> read (or failed/skipped)
+      status: { type: String, enum: ["pending", "sent", "delivered", "read", "failed", "skipped"], default: "pending" },
       timestamp: { type: Date, default: Date.now },
+      // WATI tracking fields
+      localMessageId: { type: String, default: null, index: false },
+      whatsappMessageId: { type: String, default: null },
+      deliveredAt: { type: Date, default: null },
+      readAt: { type: Date, default: null },
+      failedCode: { type: String, default: null },
+      failedDetail: { type: String, default: null },
+      templateName: { type: String, default: null },
+      broadcastName: { type: String, default: null },
+      source: { type: String, enum: ["farmer", "lead"], default: "farmer" }
     },
   ],
   // Array field to store all farmers referred by this farmer
@@ -115,6 +135,8 @@ farmerSchema.index({ mobileNumber: 1 });
 farmerSchema.index({ alternateNumber: 1 });
 // Add index for opt_in status lookups
 farmerSchema.index({ opt_in: 1 });
+// Index for quick lookup by localMessageId in embedded activities
+farmerSchema.index({ "whatsappAutomationActivities.localMessageId": 1 });
 
 const Farmer = model("Farmer", farmerSchema);
 export default Farmer;
