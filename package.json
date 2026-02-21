@@ -9,7 +9,8 @@
     "dev": "nodemon index.js",
     "start": "node index.js",
     "whatsapp-bot": "node scripts/whatsapp-selenium-bot.js",
-    "automation-targets": "node scripts/queue/automation-target-processor.js"
+    "automation-targets": "node scripts/queue/automation-target-processor.js",
+    "run-campaign": "node scripts/run-campaign-now.js"
   },
   "author": "",
   "license": "ISC",

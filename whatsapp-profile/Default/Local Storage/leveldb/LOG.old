@@ -1,0 +1,6 @@
+2026/02/21-23:13:15.467 cd4f4 Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/whatsapp-profile/Default/Local Storage/leveldb/MANIFEST-000001
+2026/02/21-23:13:15.469 cd4f4 Recovering log #16
+2026/02/21-23:13:15.470 cd4f4 Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/whatsapp-profile/Default/Local Storage/leveldb/000016.log 
+2026/02/21-23:14:15.474 cd4f4 Level-0 table #20: started
+2026/02/21-23:14:15.475 cd4f4 Level-0 table #20: 16029 bytes OK
+2026/02/21-23:14:15.477 cd4f4 Delete type=0 #16

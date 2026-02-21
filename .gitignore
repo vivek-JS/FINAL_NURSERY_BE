@@ -22,3 +22,6 @@ deployment/aws/terraform/cost-optimized/.terraform/
 
 # WhatsApp Selenium bot – Chrome profile (session data, do not commit)
 scripts/whatsapp-chrome-profile/
+
+# Campaign run PIDs
+.campaign-pids/

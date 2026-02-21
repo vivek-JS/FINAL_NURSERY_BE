@@ -1,40 +1,21 @@
-[38148:119437:0218/000645.000514:INFO:components/enterprise/browser/controller/chrome_browser_cloud_management_controller.cc:206] No machine level policy manager exists.
-[38148:119437:0218/000646.878520:INFO:CONSOLE:77] "ErrorUtils caught an error:
+[64520:844158:0221/231507.729995:INFO:components/enterprise/browser/controller/chrome_browser_cloud_management_controller.cc:225] No machine level policy manager exists.
+[64520:844158:0221/231508.485709:INFO:CONSOLE:180] "Event handler of 'x-storagemutated-1' event must be added on the initial evaluation of worker script.", source: https://static.whatsapp.net/rsrc.php/v4/y1/r/qIi0AktuAfo.js (180)
+[64520:844158:0221/231508.830832:INFO:CONSOLE:77] "ErrorUtils caught an error:
 
-[uim] Attempting to set multiple UIM tree roots. Expecting only one. Existing root: App, New root: App (multiple-uim-roots)
-
-Subsequent non-fatal errors won't be logged; see https://fburl.com/debugjs. [object Object]", source: https://static.whatsapp.net/rsrc.php/v4/y1/r/nNYs_w7IK4e.js (77)
-[38154:119514:0218/000647.293950:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000647.293992:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38154:119514:0218/000647.294003:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000647.294011:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38148:119437:0218/000648.152396:INFO:CONSOLE:180] "Event handler of 'x-storagemutated-1' event must be added on the initial evaluation of worker script.", source: https://static.whatsapp.net/rsrc.php/v4/y1/r/VOTxV6oyK8t.js (180)
-[38148:119488:0218/000651.709563:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
-[38148:119437:0218/000713.385172:INFO:CONSOLE:1] "Refused to display 'https://flows.whatsapp.net/' in a frame because it set 'X-Frame-Options' to 'deny'.", source: chrome-error://chromewebdata/ (1)
-[38148:119488:0218/000715.863094:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
-[38148:119437:0218/000717.888121:INFO:CONSOLE:77] "ErrorUtils caught an error:
-
-[uim] Attempting to set multiple UIM tree roots. Expecting only one. Existing root: App, New root: App (multiple-uim-roots)
+[uim] multiple roots: existing=App new=App (multiple-uim-roots)
 
 Subsequent non-fatal errors won't be logged; see https://fburl.com/debugjs. [object Object]", source: https://static.whatsapp.net/rsrc.php/v4/y1/r/nNYs_w7IK4e.js (77)
-[38148:119488:0218/000802.921201:ERROR:google_apis/gcm/engine/registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
-[38154:119514:0218/000835.949946:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000835.950134:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38154:119514:0218/000835.950155:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000835.950166:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38154:119514:0218/000835.950175:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000835.950183:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38154:119514:0218/000835.950189:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000835.950195:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38154:119514:0218/000835.950528:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000835.950553:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38154:119514:0218/000835.950561:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000835.950566:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38154:119514:0218/000835.950572:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000835.950577:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38154:119514:0218/000835.950582:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000835.950587:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38154:119514:0218/000835.950592:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:496] SharedImageManager::ProduceOverlay: Trying to Produce a Overlay representation from a non-existent mailbox.
-[38154:119514:0218/000835.950599:ERROR:components/viz/service/display_embedder/skia_output_device_buffer_queue.cc:263] Invalid mailbox.
-[38155:119562:0218/000835.983392:WARNING:net/extras/sqlite/sqlite_persistent_store_backend_base.cc:176] Failed to post task from FlushAndNotifyInBackground@net/extras/sqlite/sqlite_persistent_store_backend_base.cc:226 to client_task_runner_.
-[38155:119562:0218/000835.986667:WARNING:net/extras/sqlite/sqlite_persistent_store_backend_base.cc:176] Failed to post task from FlushAndNotifyInBackground@net/extras/sqlite/sqlite_persistent_store_backend_base.cc:226 to client_task_runner_.
+[64520:844158:0221/231512.967906:INFO:CONSOLE:77] "ErrorUtils caught an error:
+
+[uim] multiple roots: existing=App new=App (multiple-uim-roots)
+
+Subsequent non-fatal errors won't be logged; see https://fburl.com/debugjs. [object Object]", source: https://static.whatsapp.net/rsrc.php/v4/y1/r/nNYs_w7IK4e.js (77)
+[64607:844584:0221/231516.317843:ERROR:sandbox/mac/system_services.cc:31] SetApplicationIsDaemon: Error Domain=NSOSStatusErrorDomain Code=-50 "paramErr: error in user parameter list" (-50)
+[64520:844193:0221/231522.455108:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+[64520:844158:0221/231535.824003:INFO:CONSOLE:77] "ErrorUtils caught an error:
+
+[uim] multiple roots: existing=App new=App (multiple-uim-roots)
+
+Subsequent non-fatal errors won't be logged; see https://fburl.com/debugjs. [object Object]", source: https://static.whatsapp.net/rsrc.php/v4/y1/r/nNYs_w7IK4e.js (77)
+[64520:844193:0221/231545.495724:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+[64520:844193:0221/231637.840701:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
