@@ -4,6 +4,7 @@ import AppError from "../utility/appError.js";
 import Order from "../models/order.model.js";
 import DealerWallet from "../models/dealerWallet.js";
 import PlantSlot from "../models/slots.model.js";
+import DealerPlantInventoryLedger from "../models/dealerPlantInventoryLedger.model.js";
 
 // Function to validate dealer quota before order creation
 export const validateDealerQuota = async (dealerId, plantType, subType, bookingSlot, requestedQuantity) => {
@@ -145,7 +146,18 @@ export const allocateDealerQuota = async (dealerId, plantType, subType, bookingS
       fromWallet: requestedQuantity,
       fromSlot: 0,
       walletEntryId: entryId, // Return the wallet entry ID
-      success: true
+      success: true,
+      ledgerParams: {
+        transactionType: "INVENTORY_BOOK",
+        dealer: dealerId,
+        plantType,
+        subType,
+        bookingSlot,
+        quantity: -requestedQuantity, // Negative = reduces available
+        balanceBefore: availableInWallet,
+        balanceAfter: availableInWallet - requestedQuantity,
+        description: `Farmer order from dealer quota: -${requestedQuantity} plants`,
+      },
     };
   } catch (error) {
     console.error("Error allocating dealer quota:", error);
@@ -154,7 +166,7 @@ export const allocateDealerQuota = async (dealerId, plantType, subType, bookingS
 };
 
 // Function to restore dealer quota when order is rejected
-export const restoreDealerQuota = async (orderId, session) => {
+export const restoreDealerQuota = async (orderId, session, performedBy = null) => {
   try {
     const order = await Order.findById(orderId).session(session);
     
@@ -165,6 +177,23 @@ export const restoreDealerQuota = async (orderId, session) => {
     if (order.quotaUsed === 0) {
       return { success: true, message: "No quota to restore" };
     }
+
+    // Get current entry state for ledger before update
+    const wallet = await DealerWallet.findOne({
+      dealer: order.dealer,
+      "entries.plantType": order.plantName,
+      "entries.subType": order.plantSubtype,
+      "entries.bookingSlot": order.bookingSlot
+    }).session(session);
+
+    const entry = wallet?.entries?.find(
+      (e) =>
+        e.plantType?.equals(order.plantName) &&
+        e.subType?.equals(order.plantSubtype) &&
+        e.bookingSlot?.equals(order.bookingSlot)
+    );
+    const balanceBefore = entry ? entry.quantity - entry.bookedQuantity : 0;
+    const balanceAfter = balanceBefore + order.quotaUsed;
 
     // Use atomic update to avoid write conflicts
     // Also update remainingQuantity since pre-save middleware doesn't run with findOneAndUpdate
@@ -190,6 +219,28 @@ export const restoreDealerQuota = async (orderId, session) => {
 
     if (!result) {
       return { success: false, message: "Quota entry not found or could not be updated" };
+    }
+
+    // Create ledger entry (INVENTORY_RELEASE)
+    try {
+      await DealerPlantInventoryLedger.createLedgerEntry(
+        {
+          transactionType: "INVENTORY_RELEASE",
+          dealer: order.dealer,
+          plantType: order.plantName,
+          subType: order.plantSubtype,
+          bookingSlot: order.bookingSlot,
+          quantity: order.quotaUsed,
+          balanceBefore,
+          balanceAfter,
+          referenceId: order._id,
+          description: `Order rejected: +${order.quotaUsed} plants to dealer quota`,
+          performedBy,
+        },
+        session
+      );
+    } catch (ledgerErr) {
+      console.error("DealerPlantInventoryLedger INVENTORY_RELEASE failed:", ledgerErr);
     }
 
     // Mark order as quota restored

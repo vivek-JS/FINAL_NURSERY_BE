@@ -33,6 +33,7 @@ import {
   getDealerWalletDetails,
   getDealerWalletSummary,
 } from "../controllers/walletController.js";
+import { getDealerPlantLedger } from "../controllers/dealerPlantInventoryLedger.controller.js";
 import catchAsync from "../utility/catchAsync.js";
 import { savePushToken } from "../controllers/notification.controller.js";
 import multer from "multer";
@@ -97,6 +98,7 @@ router
   .get("/dealers/stats/:dealerId", getDealerWalletStats)
   .get("/dealers/transactions/:dealerId", getDealerWalletTransactions)
   .get("/dealers/transactions/:dealerId/csv", exportDealerWalletTransactionsCSV)
+  .get("/dealers/:dealerId/plant-ledger", getDealerPlantLedger)
   .get("/dealers/:dealerId", getDealerWalletDetails)
   .post("/push-token", authenticateToken, savePushToken)
   .post("/media/", authenticateToken, uploadMediaFile.single("media_key"), uploadMedia)

@@ -8,6 +8,8 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
   const { dealerId } = req.params;
 
   // First get dealer's orders and calculate total order amount
+  // totalOrderAmount = rate * (numberOfPlants + additionalPlants) for each order
+  // totalPaidAmount = sum of COLLECTED payments only (excludes PENDING/REJECTED)
   const orderDetails = await Order.aggregate([
     {
       $match: {
@@ -18,7 +20,12 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
       $group: {
         _id: null,
         totalOrderAmount: {
-          $sum: { $multiply: ["$numberOfPlants", "$rate"] }
+          $sum: {
+            $multiply: [
+              "$rate",
+              { $add: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$additionalPlants", 0] }] }
+            ]
+          }
         },
         totalPaidAmount: {
           $sum: {
@@ -31,7 +38,7 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
                 }
               },
               initialValue: 0,
-              in: { $add: ["$$value", "$$this.paidAmount"] }
+              in: { $add: ["$$value", { $ifNull: ["$$this.paidAmount", 0] }] }
             }
           }
         }

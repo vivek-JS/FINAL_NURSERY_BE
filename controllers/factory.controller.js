@@ -6,6 +6,7 @@ import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
 import DealerWallet from "../models/dealerWallet.js";
 import { validateDealerQuota, allocateDealerQuota, restoreDealerQuota } from "./quota.controller.js";
+import DealerPlantInventoryLedger from "../models/dealerPlantInventoryLedger.model.js";
 import User from "../models/user.model.js";
 import Tray from "../models/tray.model.js";
 import Farmer from "../models/farmer.model.js";
@@ -362,6 +363,7 @@ const createOne = (Model, modelName) =>
         }
 
         // Case 1: If it's a dealer's own order (creating stock)
+        let pendingInventoryLedgerEntry = null;
         if (orderData.dealerOrder) {
           // Update slot first
           try {
@@ -393,6 +395,7 @@ const createOne = (Model, modelName) =>
               e.bookingSlot?.equals(bookingSlot)
           );
 
+          const balanceBefore = entry ? entry.quantity : 0;
           if (entry) {
             entry.quantity += numberOfPlants;
           } else {
@@ -405,8 +408,23 @@ const createOne = (Model, modelName) =>
               remainingQuantity: numberOfPlants,
             });
           }
+          const balanceAfter = balanceBefore + numberOfPlants;
 
           await wallet.save({ session });
+
+          // Queue ledger entry (created after order is saved so we have referenceId)
+          pendingInventoryLedgerEntry = {
+            transactionType: "INVENTORY_ADD",
+            dealer: orderData.dealer,
+            plantType: orderData.plantName,
+            subType: orderData.plantSubtype,
+            bookingSlot,
+            quantity: numberOfPlants,
+            balanceBefore,
+            balanceAfter,
+            description: `Dealer bulk order: +${numberOfPlants} plants`,
+            performedBy: req.user?._id || orderData.dealer,
+          };
         }
         // Case 1.5: If it's a dealer order with componyQuota=true (new case)
         else if (salesPerson.jobTitle === "DEALER" && normalizedComponyQuota === true) {
@@ -448,6 +466,12 @@ const createOne = (Model, modelName) =>
             orderData.quotaUsed = quotaAllocation.fromWallet;
             orderData.quotaSource = "dealer";
             orderData.originalQuotaAllocation = quotaAllocation;
+            if (quotaAllocation.ledgerParams) {
+              pendingInventoryLedgerEntry = {
+                ...quotaAllocation.ledgerParams,
+                performedBy: req.user?._id || salesPerson._id,
+              };
+            }
 
             // NO slot update - dealer quota only
           } else {
@@ -504,6 +528,12 @@ const createOne = (Model, modelName) =>
           orderData.quotaSource = "dealer";
           orderData.originalQuotaAllocation = quotaAllocation;
           orderData.walletEntryId = quotaAllocation.walletEntryId; // Link to wallet entry
+          if (quotaAllocation.ledgerParams) {
+            pendingInventoryLedgerEntry = {
+              ...quotaAllocation.ledgerParams,
+              performedBy: req.user?._id || orderData.dealer,
+            };
+          }
           
           console.log('💾 Saving order with quota data:', {
             quotaUsed: orderData.quotaUsed,
@@ -624,6 +654,22 @@ const createOne = (Model, modelName) =>
         
         // Create the Order with all new fields
         const order = await Model.create([orderDocument], { session });
+
+        // Create plant inventory ledger entry (immutable, append-only)
+        if (pendingInventoryLedgerEntry) {
+          try {
+            await DealerPlantInventoryLedger.createLedgerEntry(
+              {
+                ...pendingInventoryLedgerEntry,
+                referenceId: order[0]._id,
+              },
+              session
+            );
+          } catch (ledgerErr) {
+            console.error("DealerPlantInventoryLedger create failed:", ledgerErr);
+            // Don't fail order creation - ledger is for audit
+          }
+        }
 
         // Fetch slot to check if sowing is allowed for this plant
         const slotForUpdate = await PlantSlot.findOne(
@@ -1346,7 +1392,30 @@ const updateOne = (Model, modelName, allowedFields) =>
             if (totalCollectedAmount > 0) {
               // Reduce booked quantity and add back to quantity
               if (entry.bookedQuantity >= existingDoc.numberOfPlants) {
+                const balanceBefore = entry.quantity - entry.bookedQuantity;
+                const balanceAfter = balanceBefore + existingDoc.numberOfPlants;
                 entry.bookedQuantity -= existingDoc.numberOfPlants;
+                // Create ledger entry (INVENTORY_RELEASE)
+                try {
+                  await DealerPlantInventoryLedger.createLedgerEntry(
+                    {
+                      transactionType: "INVENTORY_RELEASE",
+                      dealer: existingDoc.salesPerson._id,
+                      plantType: existingDoc.plantName._id,
+                      subType: existingDoc.plantSubtype._id,
+                      bookingSlot: existingDoc.bookingSlot,
+                      quantity: existingDoc.numberOfPlants,
+                      balanceBefore,
+                      balanceAfter,
+                      referenceId: existingDoc._id,
+                      description: `Order rejected: +${existingDoc.numberOfPlants} plants to dealer quota`,
+                      performedBy: req.user?._id,
+                    },
+                    session
+                  );
+                } catch (ledgerErr) {
+                  console.error("DealerPlantInventoryLedger INVENTORY_RELEASE failed:", ledgerErr);
+                }
               }
             }
             await wallet.save({ session });
@@ -1361,7 +1430,7 @@ const updateOne = (Model, modelName, allowedFields) =>
         !existingDoc.quotaRestored
       ) {
         try {
-          const quotaRestoration = await restoreDealerQuota(existingDoc._id, session);
+          const quotaRestoration = await restoreDealerQuota(existingDoc._id, session, req.user?._id);
           if (quotaRestoration.success) {
             console.log(`✅ Quota restored for order ${existingDoc._id}: ${quotaRestoration.message}`);
           } else {
