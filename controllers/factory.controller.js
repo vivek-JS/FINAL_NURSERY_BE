@@ -303,6 +303,15 @@ const createOne = (Model, modelName) =>
         normalized: normalizedComponyQuota 
       });
 
+      // Parse productOrderSnapshot if sent as JSON string (from FormData)
+      if (orderData.productOrderSnapshot && typeof orderData.productOrderSnapshot === 'string') {
+        try {
+          orderData.productOrderSnapshot = JSON.parse(orderData.productOrderSnapshot);
+        } catch (e) {
+          delete orderData.productOrderSnapshot;
+        }
+      }
+
       if (!bookingSlot || !numberOfPlants) {
         return res.status(400).json({
           message: "bookingSlot and numberOfPlants are required",

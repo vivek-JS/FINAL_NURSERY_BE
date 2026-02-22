@@ -175,8 +175,17 @@ const getDistinctValues = async (field, filter = {}) => {
 /** GET /old-sales/filter-options - Cascading district/taluka/village + all other filters */
 export const getOldSalesFilterOptions = catchAsync(async (req, res) => {
   const { district, taluka } = req.query;
-  const talukaFilter = district ? { district } : {};
-  const villageFilter = district && taluka ? { district, taluka } : district ? { district } : taluka ? { taluka } : {};
+  const districtList = district ? parseList(district) : [];
+  const talukaList = taluka ? parseList(taluka) : [];
+  const talukaFilter = districtList.length ? { district: districtList.length === 1 ? districtList[0] : { $in: districtList } } : {};
+  const villageFilter =
+    districtList.length && talukaList.length
+      ? { district: districtList.length === 1 ? districtList[0] : { $in: districtList }, taluka: talukaList.length === 1 ? talukaList[0] : { $in: talukaList } }
+      : districtList.length
+        ? { district: districtList.length === 1 ? districtList[0] : { $in: districtList } }
+        : talukaList.length
+          ? { taluka: talukaList.length === 1 ? talukaList[0] : { $in: talukaList } }
+          : {};
 
   const [districts, talukas, villages, plants, varieties, media, batches, paymentModes, references, marketingReferences, billGivenOptions, verifiedOptions, shadeNumbers, vehicleNumbers, driverNames] = await Promise.all([
     getDistinctValues("district"),
@@ -1168,6 +1177,50 @@ export const exportOldSalesCsv = catchAsync(async (req, res) => {
   res.setHeader(
     "Content-Disposition",
     `attachment; filename=old-sales-${Date.now()}.csv`
+  );
+  res.status(200).send(csv);
+});
+
+/** GET /old-sales/export-farmers - Export unique farmers with name, mobile, village, taluka, district */
+export const exportOldSalesFarmers = catchAsync(async (req, res) => {
+  const match = buildMatch(req.query);
+  const pipeline = [
+    ...(Object.keys(match).length ? [{ $match: match }] : []),
+    {
+      $match: {
+        mobileNo: { $nin: [null, ""] },
+        $expr: { $gte: [{ $strLenCP: { $ifNull: ["$mobileNo", ""] } }, 10] },
+      },
+    },
+    {
+      $group: {
+        _id: "$mobileNo",
+        customerName: { $first: "$customerName" },
+        village: { $first: "$village" },
+        taluka: { $first: "$taluka" },
+        district: { $first: "$district" },
+      },
+    },
+    { $sort: { customerName: 1 } },
+  ];
+
+  const records = await OldSalesData.aggregate(pipeline);
+  const rows = records.map((r) => ({
+    name: r.customerName || "",
+    mobileNo: (r._id || "").toString().trim(),
+    village: r.village || "",
+    taluka: r.taluka || "",
+    district: r.district || "",
+  }));
+
+  const fields = ["name", "mobileNo", "village", "taluka", "district"];
+  const parser = new Parser({ fields });
+  const csv = parser.parse(rows);
+
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename=old-sales-farmers-${Date.now()}.csv`
   );
   res.status(200).send(csv);
 });

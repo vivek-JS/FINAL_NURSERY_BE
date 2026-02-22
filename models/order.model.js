@@ -348,6 +348,17 @@ const orderSchema = new Schema(
       ref: 'PlantProductMapping',
       // Reference to PlantProductMapping for ready plants products
     },
+    // Snapshot of product order details at order time - for future reference (not linked)
+    productOrderSnapshot: {
+      productName: { type: String },
+      productMappingId: { type: Schema.Types.ObjectId },
+      displayTitle: { type: String },
+      productId: { type: Schema.Types.ObjectId },
+      dateRange: {
+        startDate: { type: String },
+        endDate: { type: String },
+      },
+    },
     orderStatus: {
       type: String,
       enum: [

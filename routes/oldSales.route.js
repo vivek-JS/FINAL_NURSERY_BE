@@ -13,6 +13,7 @@ import {
   getOldSalesRecords,
   getOldSalesUniqueCustomers,
   exportOldSalesCsv,
+  exportOldSalesFarmers,
 } from "../controllers/oldSalesAnalytics.controller.js";
 
 const router = express.Router();
@@ -30,5 +31,6 @@ router.patch("/normalize", normalizeOldSalesField);
 router.patch("/normalize-case", normalizeOldSalesCase);
 router.get("/changes", getOldSalesChangeLogs);
 router.get("/export", exportOldSalesCsv);
+router.get("/export-farmers", exportOldSalesFarmers);
 
 export default router;
