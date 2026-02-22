@@ -89,7 +89,25 @@ const userSchema = new Schema({
   },
   role: {
     type: String,
-    enum: ["SUPER_ADMIN", "ADMIN", "SALES", "DEALER", "FARMER", "ACCOUNTANT", "OFFICE_ADMIN", "DISPATCH_MANAGER"],
+    enum: [
+      "SUPER_ADMIN",
+      "ADMIN",
+      "SALES",
+      "DEALER",
+      "FARMER",
+      "ACCOUNTANT",
+      "OFFICE_ADMIN",
+      "DISPATCH_MANAGER",
+      "Manager",
+      "HR",
+      "PRIMARY",
+      "OFFICE_STAFF",
+      "DRIVER",
+      "LABORATORY_MANAGER",
+      "RAM_AGRI_SALES",
+      "RAM_AGRI_SALES_MANAGER",
+      "AGRI_INPUT_DEALER",
+    ],
     default: "FARMER"
   },
   isDisabled: {
@@ -123,7 +141,7 @@ const userSchema = new Schema({
     type: [followUpSchema],
     default: [],
   },
-});
+}, { timestamps: true });
 
 // Middleware to handle DealerBooking creation for new dealers
 

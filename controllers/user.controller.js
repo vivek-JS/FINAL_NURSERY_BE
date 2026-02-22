@@ -24,7 +24,14 @@ import axios from "axios";
 import moment from "moment";
 import { ImageAnnotatorClient } from "@google-cloud/vision";
 
-const createUser = [isPhoneNumberExists(User, "User"), createOne(User, "User")];
+const setRoleFromJobTitle = (req, res, next) => {
+  if (req.body.jobTitle) {
+    req.body.role = req.body.jobTitle;
+  }
+  next();
+};
+
+const createUser = [isPhoneNumberExists(User, "User"), setRoleFromJobTitle, createOne(User, "User")];
 const updateUser = updateOne(User, "User");
 const deleteUser = deleteOne(User, "User");
 const getUsers = async (req, res) => {
