@@ -2908,6 +2908,5 @@ export {
   getSalesmenBucketing,
   createPaymentActivity,
   getPaymentActivities,
-  getTodaysPaymentActivities,
-  sendOrderAcceptedWhatsAppController
+  getTodaysPaymentActivities
 };
