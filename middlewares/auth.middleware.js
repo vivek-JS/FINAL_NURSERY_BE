@@ -9,6 +9,14 @@ import User from '../models/user.model.js';
 export const authenticateToken = async (req, res, next) => {
   try {
     // ============================================
+    // BYPASS AUTH FOR OPTIONS (CORS preflight)
+    // OPTIONS has no Authorization header - must not block preflight
+    // ============================================
+    if (req.method === 'OPTIONS') {
+      return next();
+    }
+
+    // ============================================
     // BYPASS AUTH FOR PUBLIC ENDPOINTS
     // These endpoints must be accessible without any token
     // ============================================

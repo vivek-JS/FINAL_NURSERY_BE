@@ -136,6 +136,12 @@ const corsOptions = {
 };
 server.use(cors(corsOptions));
 
+// Catch-all OPTIONS handler - handles preflight for ALL routes including dynamic paths
+// Must be before routes; OPTIONS has no auth token so must not go through auth middleware
+server.options("*", cors(corsOptions), (req, res) => {
+  res.sendStatus(204);
+});
+
 // Body parsing middlewares
 server.use(express.json({ limit: '10mb' }));
 server.use(express.urlencoded({ extended: true, limit: '10mb' }));
