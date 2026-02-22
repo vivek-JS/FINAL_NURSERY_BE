@@ -229,6 +229,11 @@ server.options('/api/v1/user/login', cors(corsOptions), (req, res) => {
   res.status(200).end();
 });
 
+// Handle CORS preflight for wallet-details (dynamic :dealerId - some proxies need explicit OPTIONS)
+server.options('/api/v1/user/wallet-details/:dealerId', cors(corsOptions), (req, res) => {
+  res.status(200).end();
+});
+
 // Handle CORS preflight for public-links endpoints (completely public, no auth)
 server.options('/api/v1/public-links/config/:slug', cors(corsOptions), (req, res) => {
   res.status(200).end();
