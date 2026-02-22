@@ -24,10 +24,12 @@ export async function sendWatiTemplateMessage(mobileNumber, templateName, parame
       ? cleanNumber.substring(2) 
       : cleanNumber;
 
+    const channelNumber = process.env.WATI_CHANNEL_NUMBER || "917276386452";
     const body = {
       template_name: templateName,
       broadcast_name: `Order_${Date.now()}`,
       parameters: parameters,
+      channel_number: channelNumber,
     };
 
     console.log(`📤 Sending WATI message to ${phoneNumber} using template: ${templateName}`);
