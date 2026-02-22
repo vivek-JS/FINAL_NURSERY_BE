@@ -6,12 +6,20 @@ const transferSnapshotSchema = new Schema(
     plantsSowed: { type: Number, default: 0 },
     officeSowed: { type: Number, default: 0 },
     totalBookedPlants: { type: Number, default: 0 },
+    totalPlants: { type: Number, default: 0 },
+    availablePlants: { type: Number, default: 0 },
   },
   { _id: false }
 );
 
 const slotTransferSchema = new Schema(
   {
+    transferType: {
+      type: String,
+      enum: ["sowing", "capacity", "orders"],
+      default: "sowing",
+    },
+    orderIds: [{ type: Schema.Types.ObjectId, ref: "Order" }],
     plantId: { type: Schema.Types.ObjectId, ref: "PlantCms", required: true },
     plantName: { type: String, default: "" },
     sourceSlotId: { type: Schema.Types.ObjectId, required: true },

@@ -21,6 +21,10 @@ import {
   getSimpleSlots,
   getSlotTransferOptions,
   transferSlotPlants,
+  getTransferCapacityOptions,
+  transferCapacity,
+  getOrdersTransferTargets,
+  transferOrders,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -32,6 +36,8 @@ slotRouter.get("/slots/subtyps", getSubtypesByPlant);
 slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.get("/slots/simple", getSimpleSlots);
 slotRouter.get("/slots/transfer-options", getSlotTransferOptions);
+slotRouter.get("/slots/transfer-capacity-options", getTransferCapacityOptions);
+slotRouter.get("/slots/orders-transfer-targets", getOrdersTransferTargets);
 slotRouter.get("/slots/stats", getPlantStats);
 slotRouter.get("/slots/dashBoardStats", getDashboardInsights);
 slotRouter.get("/slots/:slotId/details", getSlotDetailsById);
@@ -41,6 +47,8 @@ slotRouter.delete("/slots/manual/:slotId", deleteManualSlot);
 slotRouter.post("/slots/create-multiple-years", createSlotsForMultipleYears);
 slotRouter.post("/slots/create-subtype", createSlotsForSubtype);
 slotRouter.post("/slots/transfer", transferSlotPlants);
+slotRouter.post("/slots/transfer-capacity", transferCapacity);
+slotRouter.post("/slots/transfer-orders", transferOrders);
 
 // Salesmen restriction routes - Using completely different path pattern
 slotRouter.put("/salesmen-access/:slotId", updateSlotSalesmenRestrictions);
