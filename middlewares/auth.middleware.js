@@ -85,8 +85,8 @@ export const authorizeRoles = (roles) => {
       );
     }
 
-    // Prioritize jobTitle over role
-    const userRole = req.user.jobTitle || req.user.role;
+    // Prioritize role over jobTitle for authorization (role = security, jobTitle = display)
+    const userRole = req.user.role || req.user.jobTitle;
     const requiredRoles = Array.isArray(roles) ? roles : [roles];
 
     if (!requiredRoles.includes(userRole)) {
@@ -164,8 +164,8 @@ export const requireOwnership = (resourceIdField = 'id', modelName = 'Resource')
         );
       }
 
-      // Admins can access any resource - check jobTitle first, then role
-      const userRole = req.user.jobTitle || req.user.role;
+      // Admins can access any resource - check role first (role = security)
+      const userRole = req.user.role || req.user.jobTitle;
       if (['ADMIN', 'SUPER_ADMIN'].includes(userRole)) {
         return next();
       }
@@ -319,8 +319,8 @@ export const restrictRamAgriSalesManager = (req, res, next) => {
     );
   }
 
-  // Allow SUPER_ADMIN and ADMIN to access all routes - check jobTitle first, then role
-  const userRole = req.user.jobTitle || req.user.role;
+  // Allow SUPER_ADMIN and ADMIN to access all routes - check role first (role = security)
+  const userRole = req.user.role || req.user.jobTitle;
   if (['SUPER_ADMIN', 'ADMIN'].includes(userRole)) {
     return next();
   }

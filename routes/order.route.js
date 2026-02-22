@@ -19,7 +19,8 @@ import {
   getSalesmenBucketing,
   createPaymentActivity,
   getPaymentActivities,
-  getTodaysPaymentActivities
+  getTodaysPaymentActivities,
+  sendOrderAcceptedWhatsAppController
 } from "../controllers/order.controller.js";
 import {
   getOrderDispatchDetails,
@@ -76,6 +77,7 @@ router
     checkErrors,
     updateOrder
   )
+  .post("/:orderId/send-accepted-whatsapp", sendOrderAcceptedWhatsAppController)
   .post("/test-notification", authenticateToken, catchAsync(async (req, res) => {
     // Test endpoint to send a notification to current user
     const User = (await import("../models/user.model.js")).default;

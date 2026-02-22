@@ -613,9 +613,11 @@ const createOne = (Model, modelName) =>
           screenshots: screenshots, // Include uploaded screenshots
         };
         
-        // Explicitly set orderStatus if provided in request (don't let model default override it)
-        if (req.body.orderStatus) {
-          orderDocument.orderStatus = req.body.orderStatus;
+        // Order status: default PENDING. Only DISPATCHED for instant orders. Check backend - enforce PENDING by default.
+        if (req.body.orderStatus === "DISPATCHED") {
+          orderDocument.orderStatus = "DISPATCHED"; // Instant order
+        } else {
+          orderDocument.orderStatus = "PENDING"; // Default - only SUPERADMIN/OFFICE_ADMIN can change via update
         }
         
         console.log('🎯 Final order document orderStatus:', orderDocument.orderStatus);
@@ -1053,6 +1055,13 @@ const updateOne = (Model, modelName, allowedFields) =>
         // If we're replacing the entire array (array), keep as is
       }
 
+      // Order status change: only SUPERADMIN and OFFICE_ADMIN can change order status
+      const jt = req.user?.jobTitle || req.user?.role;
+      const canChangeOrderStatus = req.user && (jt === "SUPERADMIN" || jt === "SUPER_ADMIN" || jt === "OFFICE_ADMIN");
+      if (filteredBody.orderStatus && !canChangeOrderStatus) {
+        delete filteredBody.orderStatus; // Reject status change from non-admin users
+      }
+
       // Special handling for statusChanges - update with user info
       if (
         filteredBody.orderStatus &&
@@ -1130,52 +1139,8 @@ const updateOne = (Model, modelName, allowedFields) =>
           console.log('⚠️ No push token found for user, skipping order status notification');
         }
 
-        // Send WhatsApp message to farmer when order is accepted or ready
-        if (newStatus === 'ACCEPTED' || newStatus === 'CONFIRMED') {
-          // Send WhatsApp message asynchronously (don't wait for it)
-          (async () => {
-            try {
-              // Get farmer details
-              const farmerDetails = existingDoc.farmer ? await mongoose.model('Farmer').findById(existingDoc.farmer) : null;
-              
-              if (farmerDetails && farmerDetails.mobileNumber) {
-                const orderId = existingDoc.orderId || existingDoc._id;
-                
-                // Calculate payment amounts
-                const totalAmount = existingDoc.numberOfPlants * existingDoc.rate;
-                const paidAmount = existingDoc.payment && existingDoc.payment.length > 0
-                  ? existingDoc.payment.reduce((sum, p) => sum + (p.paidAmount || 0), 0)
-                  : 0;
-                const remainingAmount = totalAmount - paidAmount;
-                
-                const orderDetails = {
-                  orderId: orderId,
-                  plantName: existingDoc.plantType?.name || existingDoc.plantName?.name || 'Plants',
-                  plantSubtype: existingDoc.plantSubtype?.name || existingDoc.plantSubtype || 'N/A',
-                  numberOfPlants: existingDoc.numberOfPlants,
-                  deliveryDate: existingDoc.deliveryDate,
-                  rate: existingDoc.rate,
-                  totalAmount: totalAmount,
-                  advanceAmount: paidAmount,
-                  remainingAmount: remainingAmount,
-                };
-
-                console.log(`📱 Sending WhatsApp order accepted message to farmer: ${farmerDetails.name} (${farmerDetails.mobileNumber})`);
-                const result = await sendOrderAcceptedWhatsApp(farmerDetails, orderDetails);
-                
-                if (result.success) {
-                  console.log(`✅ WhatsApp message sent successfully for Order #${orderId}`);
-                } else {
-                  console.log(`⚠️ WhatsApp message failed for Order #${orderId}:`, result.error);
-                }
-              } else {
-                console.log('⚠️ No farmer mobile number found, skipping WhatsApp message');
-              }
-            } catch (whatsappError) {
-              console.error('❌ Error sending WhatsApp message:', whatsappError.message);
-            }
-          })();
-        } else if (newStatus === 'FARM_READY') {
+        // WhatsApp for ACCEPTED: now triggered by frontend (user preview + send on Yes)
+        if (newStatus === 'FARM_READY') {
           // Send WhatsApp message when farm ready
           (async () => {
             try {

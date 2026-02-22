@@ -17,6 +17,7 @@ import {
   sendPaymentCollectedNotification,
   sendPaymentPendingNotification,
 } from "../utility/pushNotification.js";
+import { sendOrderAcceptedWhatsApp } from "../utility/watiMessaging.js";
 
 const updateDealerWalletBalance = async (dealerId, paymentAmount, description = "Wallet balance adjustment", performedBy = null) => {
   // Validate dealerId
@@ -443,6 +444,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     receiptPhoto,
     modeOfPayment,
     isWalletPayment,
+    remark,
   } = req.body;
 
   // Handle uploaded screenshot file with Cloudinary
@@ -529,6 +531,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       receiptPhoto: screenshotUrl ? [screenshotUrl] : (receiptPhoto || []), // Use uploaded screenshot or existing receiptPhoto
       modeOfPayment,
       isWalletPayment,
+      remark: remark || "",
     };
     
     console.log("Created payment object with status:", newPayment.paymentStatus);
@@ -2846,6 +2849,44 @@ const getTodaysPaymentActivities = catchAsync(async (req, res, next) => {
   }
 });
 
+/**
+ * Send order accepted WhatsApp message to farmer (triggered by frontend after status change to ACCEPTED)
+ */
+export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) => {
+  const { orderId } = req.params;
+  const order = await Order.findById(orderId)
+    .populate("farmer", "name mobileNumber village")
+    .populate("plantName", "name")
+    .populate("plantSubtype", "name")
+    .populate("plantType", "name");
+  if (!order) {
+    return res.status(404).json({ message: "Order not found" });
+  }
+  const farmer = order.farmer;
+  if (!farmer || !farmer.mobileNumber) {
+    return res.status(400).json({ message: "Order has no farmer with mobile number" });
+  }
+  const totalAmount = (order.numberOfPlants || 0) * (order.rate || 0);
+  const paidAmount = order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0;
+  const remainingAmount = totalAmount - paidAmount;
+  const orderDetails = {
+    orderId: order.orderId || order._id,
+    plantName: order.plantName?.name || order.plantType?.name || "Plants",
+    plantSubtype: order.plantSubtype?.name || order.plantSubtype || "N/A",
+    numberOfPlants: order.numberOfPlants,
+    deliveryDate: order.deliveryDate,
+    rate: order.rate,
+    totalAmount,
+    advanceAmount: paidAmount,
+    remainingAmount,
+  };
+  const result = await sendOrderAcceptedWhatsApp(farmer, orderDetails);
+  if (result.success) {
+    return res.status(200).json(generateResponse("Success", "WhatsApp message sent successfully", result.data, undefined));
+  }
+  return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -2867,5 +2908,6 @@ export {
   getSalesmenBucketing,
   createPaymentActivity,
   getPaymentActivities,
-  getTodaysPaymentActivities
+  getTodaysPaymentActivities,
+  sendOrderAcceptedWhatsAppController
 };
