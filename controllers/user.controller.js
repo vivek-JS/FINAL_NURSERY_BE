@@ -17,6 +17,7 @@ import {
 } from "../utility/jwtUtils.js";
 import Order from "../models/order.model.js";
 import DealerWallet from "../models/dealerWallet.js";
+import DealerLedgerEntry from "../models/dealerLedgerEntry.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import mongoose from "mongoose";
 import { uploadImageToCloudinary } from "../utils/cloudinaryUtils.js";
@@ -1169,6 +1170,86 @@ const getDealerWalletTransactions = async (req, res) => {
 };
 
 /**
+ * Get immutable dealer ledger entries for audit
+ * GET /dealers/:dealerId/ledger?startDate=&endDate=&page=&limit=
+ */
+const getDealerLedger = async (req, res) => {
+  try {
+    const { dealerId } = req.params;
+    const { startDate, endDate, page = 1, limit = 50 } = req.query;
+
+    if (!dealerId || !mongoose.Types.ObjectId.isValid(dealerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid dealer ID is required",
+      });
+    }
+
+    const query = { dealer: new mongoose.Types.ObjectId(dealerId) };
+
+    if (startDate || endDate) {
+      query.entryDate = {};
+      if (startDate) query.entryDate.$gte = new Date(startDate);
+      if (endDate) query.entryDate.$lte = new Date(endDate + "T23:59:59.999Z");
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [entries, totalCount] = await Promise.all([
+      DealerLedgerEntry.find(query)
+        .populate("createdBy", "name")
+        .populate("orderId", "orderId numberOfPlants")
+        .sort({ entryDate: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      DealerLedgerEntry.countDocuments(query),
+    ]);
+
+    const totalDebit = (
+      await DealerLedgerEntry.aggregate([
+        { $match: query },
+        { $group: { _id: null, total: { $sum: "$debit" } } },
+      ])
+    )[0]?.total || 0;
+
+    const totalCredit = (
+      await DealerLedgerEntry.aggregate([
+        { $match: query },
+        { $group: { _id: null, total: { $sum: "$credit" } } },
+      ])
+    )[0]?.total || 0;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        entries,
+        summary: {
+          totalDebit,
+          totalCredit,
+          balance: totalCredit - totalDebit,
+        },
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: totalCount,
+          totalPages: Math.ceil(totalCount / limitNum),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching dealer ledger:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching dealer ledger",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * Export dealer wallet transactions to CSV
  */
 const exportDealerWalletTransactionsCSV = async (req, res) => {
@@ -2226,6 +2307,7 @@ export {
   calculatePerformanceMetrics,
   getDealerWalletDetails,
   getDealerWalletTransactions,
+  getDealerLedger,
   exportDealerWalletTransactionsCSV,
   uploadMedia,
   processOCR

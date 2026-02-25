@@ -87,11 +87,37 @@ const inventoryTransactionSchema = new mongoose.Schema(
     metadata: {
       type: mongoose.Schema.Types.Mixed,
     },
+    reversalOf: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'InventoryTransaction',
+    },
   },
   {
     timestamps: true,
   }
 );
+
+// Immutability: block update/delete operations
+const immutableOperations = [
+  'updateOne',
+  'updateMany',
+  'findOneAndUpdate',
+  'findByIdAndUpdate',
+  'deleteOne',
+  'deleteMany',
+  'findOneAndDelete',
+  'findByIdAndDelete',
+];
+
+immutableOperations.forEach((operation) => {
+  inventoryTransactionSchema.pre(operation, function (next) {
+    next(
+      new Error(
+        'Inventory transactions are immutable. Create a reversal/correction transaction instead.'
+      )
+    );
+  });
+});
 
 // Indexes
 inventoryTransactionSchema.index({ transactionNumber: 1 });

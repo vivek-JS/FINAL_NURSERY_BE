@@ -17,6 +17,7 @@ import {
   getSalesAnalytics,
   getAllDealersWithWalletInfo,
   getDealerWalletTransactions,
+  getDealerLedger,
   exportDealerWalletTransactionsCSV,
   getDealerWalletStats,
   refreshToken,
@@ -98,6 +99,7 @@ router
   .get("/dealers/stats/:dealerId", getDealerWalletStats)
   .get("/dealers/transactions/:dealerId", getDealerWalletTransactions)
   .get("/dealers/transactions/:dealerId/csv", exportDealerWalletTransactionsCSV)
+  .get("/dealers/:dealerId/ledger", getDealerLedger)
   .get("/dealers/:dealerId/plant-ledger", getDealerPlantLedger)
   .get("/dealers/:dealerId", getDealerWalletDetails)
   .post("/push-token", authenticateToken, savePushToken)

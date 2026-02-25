@@ -986,6 +986,7 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
     modeOfPayment,
     bankName,
     transactionId,
+    chequeNumber,
     receiptPhoto,
     remark,
     isWalletPayment,
@@ -1020,6 +1021,7 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
     modeOfPayment: isWalletPayment ? "Wallet" : modeOfPayment,
     bankName: bankName || "",
     transactionId: transactionId || "",
+    chequeNumber: chequeNumber || "",
     receiptPhoto: receiptPhoto || [],
     remark: remark || "",
     isWalletPayment: isWalletPayment || false,
@@ -1096,7 +1098,7 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid order ID format", 400));
   }
 
-  if (!["COLLECTED", "REJECTED", "PENDING"].includes(paymentStatus)) {
+  if (!["COLLECTED", "REJECTED", "PENDING", "BANK_VERIFIED"].includes(paymentStatus)) {
     return next(new AppError("Invalid payment status", 400));
   }
 

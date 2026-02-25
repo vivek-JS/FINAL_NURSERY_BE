@@ -20,6 +20,9 @@ import {
   createPaymentActivity,
   getPaymentActivities,
   getTodaysPaymentActivities,
+  getUnclearedPayments,
+  getPaymentsForApproval,
+  reconcilePayments,
   sendOrderAcceptedWhatsAppController
 } from "../controllers/order.controller.js";
 import {
@@ -64,6 +67,9 @@ router
   .get("/dispatch-summary", getDispatchSummary)
   .get("/payment-activity", authenticateToken, getPaymentActivities)
   .get("/payment-activity/today", authenticateToken, getTodaysPaymentActivities)
+  .get("/payments/uncleared", requirePaymentAccess, getUnclearedPayments)
+  .get("/payments/for-approval", requirePaymentAccess, getPaymentsForApproval)
+  .post("/payments/reconcile", requirePaymentAccess, reconcilePayments)
   .post("/payment-activity", authenticateToken, createPaymentActivity)
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .patch(

@@ -46,9 +46,23 @@ export const createPublicFarmerLink = catchAsync(async (req, res, next) => {
 });
 
 export const getPublicFarmerLinks = catchAsync(async (req, res) => {
-  const links = await PublicFarmerLink.find({})
-    .sort({ createdAt: -1 })
-    .lean();
+  const links = await PublicFarmerLink.aggregate([
+    { $sort: { createdAt: -1 } },
+    {
+      $lookup: {
+        from: "farmerleads",
+        localField: "_id",
+        foreignField: "publicLinkId",
+        as: "_leads"
+      }
+    },
+    {
+      $addFields: {
+        leadCount: { $size: "$_leads" }
+      }
+    },
+    { $project: { _leads: 0 } }
+  ]);
 
   return res.status(200).json(
     generateResponse("success", "Public farmer links fetched", {

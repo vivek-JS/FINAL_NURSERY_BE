@@ -287,7 +287,7 @@ router
     [
       check("id").isMongoId().withMessage("Valid order ID is required"),
       check("paymentIndex").isInt({ min: 0 }).withMessage("Valid payment index is required"),
-      check("paymentStatus").isIn(["COLLECTED", "REJECTED", "PENDING"]).withMessage("Invalid payment status"),
+      check("paymentStatus").isIn(["COLLECTED", "REJECTED", "PENDING", "BANK_VERIFIED"]).withMessage("Invalid payment status"),
     ],
     checkErrors,
     updatePaymentStatus

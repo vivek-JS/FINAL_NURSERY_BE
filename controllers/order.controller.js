@@ -18,6 +18,7 @@ import {
   sendPaymentPendingNotification,
 } from "../utility/pushNotification.js";
 import { sendOrderAcceptedWhatsApp } from "../utility/watiMessaging.js";
+import { getUnclearedPayments as getUnclearedPaymentsService, getPaymentsForApproval as getPaymentsForApprovalService, reconcile as reconcileService } from "../services/paymentReconciliationService.js";
 
 const updateDealerWalletBalance = async (dealerId, paymentAmount, description = "Wallet balance adjustment", performedBy = null) => {
   // Validate dealerId
@@ -445,6 +446,8 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     modeOfPayment,
     isWalletPayment,
     remark,
+    transactionId,
+    chequeNumber,
   } = req.body;
 
   // Handle uploaded screenshot file with Cloudinary
@@ -532,6 +535,8 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       modeOfPayment,
       isWalletPayment,
       remark: remark || "",
+      transactionId: transactionId || undefined,
+      chequeNumber: chequeNumber || undefined,
     };
     
     console.log("Created payment object with status:", newPayment.paymentStatus);
@@ -843,7 +848,9 @@ const updatePaymentStatus = async (req, res) => {
       paymentDate, 
       modeOfPayment, 
       bankName, 
-      remark 
+      remark,
+      transactionId,
+      chequeNumber,
     } = req.body;
 
     if (!orderId || !paymentId || !paymentStatus) {
@@ -889,6 +896,12 @@ const updatePaymentStatus = async (req, res) => {
     if (remark !== undefined) {
       payment.remark = remark;
     }
+    if (transactionId !== undefined) {
+      payment.transactionId = transactionId;
+    }
+    if (chequeNumber !== undefined) {
+      payment.chequeNumber = chequeNumber;
+    }
 
     // Ensure amount is a number
     const amount = Number(payment.paidAmount);
@@ -898,13 +911,18 @@ const updatePaymentStatus = async (req, res) => {
         .json({ message: "Invalid payment amount in record" });
     }
 
-    // Prevent OFFICE_ADMIN from changing payment status to COLLECTED
+    // Prevent OFFICE_ADMIN from changing payment status to COLLECTED (accountant/super admin only)
     // Prioritize jobTitle over role
     const userRole = req.user?.jobTitle || req.user?.role;
     if (userRole === "OFFICE_ADMIN" && paymentStatus === "COLLECTED") {
       return res.status(403).json({
         message: "OFFICE_ADMIN cannot change payment status to COLLECTED. Contact an Accountant or Super Admin.",
       });
+    }
+    // Validate paymentStatus is one of the allowed values
+    const validStatuses = ["PENDING", "COLLECTED", "REJECTED", "BANK_VERIFIED"];
+    if (!validStatuses.includes(paymentStatus)) {
+      return res.status(400).json({ message: "Invalid payment status." });
     }
 
     // Handle wallet payment status changes (PRIORITY: Wallet payments take precedence)
@@ -951,19 +969,26 @@ const updatePaymentStatus = async (req, res) => {
           // Collected payment is now pending, but since we deduct on pending too, no change needed
           // Just update the description in transaction history
           console.log("Payment status changed from COLLECTED to PENDING - no wallet impact (both deduct from wallet)");
+        } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "BANK_VERIFIED") {
+          console.log("Payment status changed from COLLECTED to BANK_VERIFIED - no wallet impact");
         } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "COLLECTED") {
           // Rejected payment is now collected, debit from wallet
           await updateDealerWalletBalance(dealerForWallet, -amount, `Payment collected - debited from wallet for Order #${order._id}`, req.user?._id);
         } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "PENDING") {
           // Rejected payment is now pending, debit from wallet
           await updateDealerWalletBalance(dealerForWallet, -amount, `Payment pending - debited from wallet for Order #${order._id}`, req.user?._id);
+        } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "BANK_VERIFIED") {
+          await updateDealerWalletBalance(dealerForWallet, -amount, `Payment bank verified - debited from wallet for Order #${order._id}`, req.user?._id);
         } else if (payment.paymentStatus === "PENDING" && paymentStatus === "COLLECTED") {
           // Pending payment is now collected, but since we deduct on both, no change needed
           console.log("Payment status changed from PENDING to COLLECTED - no wallet impact (both deduct from wallet)");
         } else if (payment.paymentStatus === "PENDING" && paymentStatus === "REJECTED") {
           // Pending payment is now rejected, credit back to wallet
           await updateDealerWalletBalance(dealerForWallet, amount, `Payment rejected - credited back to wallet for Order #${order._id}`, req.user?._id);
+        } else if (payment.paymentStatus === "BANK_VERIFIED" && paymentStatus === "REJECTED") {
+          await updateDealerWalletBalance(dealerForWallet, amount, `Payment rejected - credited back to wallet for Order #${order._id}`, req.user?._id);
         }
+        // PENDING <-> BANK_VERIFIED: no wallet change (both represent "not yet collected")
       } catch (walletError) {
         console.error('Error updating dealer wallet:', walletError);
         return res.status(500).json({
@@ -996,17 +1021,18 @@ const updatePaymentStatus = async (req, res) => {
       // - When payment is rejected, debit from wallet (subtract money)
       
       try {
+        // Credit to wallet when payment becomes COLLECTED (from PENDING or BANK_VERIFIED)
         if (payment.paymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
           // Payment is now collected, credit to wallet
           await updateDealerWalletBalance(order.dealer, amount, `Payment collected for bulk order - credited to wallet for Order #${order._id}`, req.user?._id);
         } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "REJECTED") {
           // Collected payment is now rejected, debit from wallet
           await updateDealerWalletBalance(order.dealer, -amount, `Payment rejected for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
-        } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "PENDING") {
-          // Collected payment is now pending, debit from wallet
-          await updateDealerWalletBalance(order.dealer, -amount, `Payment changed to pending for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
-        } else if (payment.paymentStatus === "REJECTED" && paymentStatus === "COLLECTED") {
-          // Rejected payment is now collected, credit to wallet
+        } else if (payment.paymentStatus === "COLLECTED" && (paymentStatus === "PENDING" || paymentStatus === "BANK_VERIFIED")) {
+          // Collected payment is now pending or bank-verified, debit from wallet
+          await updateDealerWalletBalance(order.dealer, -amount, `Payment changed to ${paymentStatus.toLowerCase()} for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
+        } else if ((payment.paymentStatus === "REJECTED" || payment.paymentStatus === "PENDING" || payment.paymentStatus === "BANK_VERIFIED") && paymentStatus === "COLLECTED") {
+          // Rejected/Pending/BankVerified payment is now collected, credit to wallet
           await updateDealerWalletBalance(order.dealer, amount, `Payment collected for bulk order - credited to wallet for Order #${order._id}`, req.user?._id);
         }
       } catch (walletError) {
@@ -2887,6 +2913,27 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
   return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
 });
 
+const getUnclearedPayments = catchAsync(async (req, res) => {
+  const { dateFrom, dateTo, source } = req.query;
+  const list = await getUnclearedPaymentsService({ dateFrom, dateTo, source: source || "all" });
+  return res.status(200).json({ success: true, data: list });
+});
+
+const getPaymentsForApproval = catchAsync(async (req, res) => {
+  const { dateFrom, dateTo, source } = req.query;
+  const list = await getPaymentsForApprovalService({ dateFrom, dateTo, source: source || "all" });
+  return res.status(200).json({ success: true, data: list });
+});
+
+const reconcilePayments = catchAsync(async (req, res) => {
+  const { dateFrom, dateTo } = req.body || req.query;
+  if (!dateFrom || !dateTo) {
+    return res.status(400).json({ success: false, message: "dateFrom and dateTo are required" });
+  }
+  const result = await reconcileService(dateFrom, dateTo);
+  return res.status(200).json({ success: true, ...result });
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -2908,5 +2955,8 @@ export {
   getSalesmenBucketing,
   createPaymentActivity,
   getPaymentActivities,
-  getTodaysPaymentActivities
+  getTodaysPaymentActivities,
+  getUnclearedPayments,
+  getPaymentsForApproval,
+  reconcilePayments
 };

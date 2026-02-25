@@ -1,4 +1,5 @@
 import { Schema, model } from "mongoose";
+import { addPaymentToLedgerEntry } from "../utils/dealerLedgerHelper.js";
 
 // Entry schema for individual quota allocations
 const entrySchema = new Schema({
@@ -106,10 +107,14 @@ dealerWalletSchema.statics.addPayment = async function (
   description = "Wallet transaction",
   performedBy = null,
   type = "ADJUSTMENT",
-  relatedOrder = null
+  relatedOrder = null,
+  session = null,
+  metadata = {}
 ) {
   try {
-    let wallet = await this.findOne({ dealer: dealerId });
+    let query = this.findOne({ dealer: dealerId });
+    if (session) query = query.session(session);
+    let wallet = await query;
 
     if (!wallet) {
       // Create new wallet if it doesn't exist
@@ -124,7 +129,7 @@ dealerWalletSchema.statics.addPayment = async function (
     const balanceBefore = wallet.availableAmount;
     const balanceAfter = balanceBefore + amount;
 
-    // Add transaction record
+    // Add transaction record (embedded - legacy)
     const transaction = {
       type: amount >= 0 ? "CREDIT" : "DEBIT",
       amount: Math.abs(amount),
@@ -138,7 +143,27 @@ dealerWalletSchema.statics.addPayment = async function (
     wallet.transactions.push(transaction);
     wallet.availableAmount = balanceAfter;
 
-    await wallet.save();
+    const saveOptions = session ? { session } : {};
+    await wallet.save(saveOptions);
+
+    // Write to immutable DealerLedgerEntry collection for audit
+    try {
+      await addPaymentToLedgerEntry({
+        dealerId,
+        amount,
+        description,
+        performedBy,
+        type,
+        relatedOrder,
+        balanceBefore,
+        balanceAfter,
+        metadata,
+        session,
+      });
+    } catch (ledgerError) {
+      console.error("Error writing to dealer ledger (wallet updated):", ledgerError);
+      // Don't fail the main operation; ledger write is best-effort audit
+    }
 
     return transaction;
   } catch (error) {

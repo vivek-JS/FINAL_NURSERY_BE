@@ -94,7 +94,7 @@ const paymentSchema = new Schema({
   },
   paymentStatus: {
     type: String,
-    enum: ["COLLECTED", "REJECTED", "PENDING"],
+    enum: ["COLLECTED", "REJECTED", "PENDING", "BANK_VERIFIED"],
     default: "PENDING",
   },
   paymentDate: {
@@ -118,6 +118,10 @@ const paymentSchema = new Schema({
     type: String,
     trim: true,
     // This field stores: UTR/Transaction ID for UPI, Cheque Number for Cheque, Transaction ID for NEFT/RTGS and others
+  },
+  chequeNumber: {
+    type: String,
+    trim: true,
   },
   remark: {
     type: String,
@@ -630,7 +634,7 @@ agriSalesOrderSchema.virtual("paymentSummary").get(function () {
       summary.count++;
       if (p.paymentStatus === "COLLECTED") {
         summary.totalPaid += p.paidAmount || 0;
-      } else if (p.paymentStatus === "PENDING") {
+      } else if (p.paymentStatus === "PENDING" || p.paymentStatus === "BANK_VERIFIED") {
         summary.totalPending += p.paidAmount || 0;
       } else if (p.paymentStatus === "REJECTED") {
         summary.totalRejected += p.paidAmount || 0;

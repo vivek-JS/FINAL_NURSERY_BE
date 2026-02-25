@@ -179,7 +179,7 @@ const paymentSchema = new Schema(
     },
     paymentStatus: {
       type: String,
-      enum: ["COLLECTED", "REJECTED", "PENDING"],
+      enum: ["COLLECTED", "REJECTED", "PENDING", "BANK_VERIFIED"],
       default: "PENDING",
     },
     paymentDate: {
@@ -205,6 +205,10 @@ const paymentSchema = new Schema(
     },
     chequeNumber: {
       type: String,
+    },
+    transactionId: {
+      type: String,
+      trim: true,
     },
     isWalletPayment: {
       type: Boolean,
