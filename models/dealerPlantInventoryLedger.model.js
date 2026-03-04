@@ -77,18 +77,20 @@ dealerPlantInventoryLedgerSchema.index({ dealer: 1, plantType: 1, subType: 1 });
 dealerPlantInventoryLedgerSchema.index({ referenceId: 1 });
 dealerPlantInventoryLedgerSchema.index({ transactionNumber: 1 });
 
-// Generate transaction number: PLT-YYYYMMDD-0001
-dealerPlantInventoryLedgerSchema.statics.generateTransactionNumber = async function () {
+// Generate transaction number: PLT-YYYYMMDD-0001 (optional session for use inside transaction)
+dealerPlantInventoryLedgerSchema.statics.generateTransactionNumber = async function (session = null) {
   const date = new Date();
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
   const prefix = `PLT-${yyyy}${mm}${dd}`;
 
-  const last = await this.findOne({ transactionNumber: new RegExp(`^${prefix}`) })
+  const q = this.findOne({ transactionNumber: new RegExp(`^${prefix}`) })
     .sort({ transactionNumber: -1 })
     .select("transactionNumber")
     .lean();
+  if (session) q.session(session);
+  const last = await q;
 
   let seq = 1;
   if (last?.transactionNumber) {
@@ -106,7 +108,7 @@ dealerPlantInventoryLedgerSchema.statics.generateTransactionNumber = async funct
 dealerPlantInventoryLedgerSchema.statics.createLedgerEntry = async function (params, session = null) {
   const { dealer, plantType, subType, bookingSlot, transactionType, quantity, balanceBefore, balanceAfter, referenceId, description, performedBy } = params;
   const balanceAfterComputed = balanceAfter ?? balanceBefore + quantity;
-  const transactionNumber = await this.generateTransactionNumber();
+  const transactionNumber = await this.generateTransactionNumber(session);
   const doc = await this.create(
     [
       {

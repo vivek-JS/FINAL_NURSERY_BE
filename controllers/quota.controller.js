@@ -165,16 +165,19 @@ export const allocateDealerQuota = async (dealerId, plantType, subType, bookingS
   }
 };
 
-// Function to restore dealer quota when order is rejected
-export const restoreDealerQuota = async (orderId, session, performedBy = null) => {
+// Function to restore dealer quota when order is rejected or cancelled
+export const restoreDealerQuota = async (orderId, session, performedBy = null, reason = "rejected") => {
   try {
-    const order = await Order.findById(orderId).session(session);
+    const order = await Order.findById(orderId).populate("farmer", "name").populate("plantName", "name").session(session);
     
     if (!order || !order.dealerOrder || order.quotaRestored) {
       return { success: false, message: "Order not found or quota already restored" };
     }
 
-    if (order.quotaUsed === 0) {
+    // Dealer bulk orders (dealerOrder: true) created via factory don't set quotaUsed; they use numberOfPlants in wallet.
+    // Use numberOfPlants when quotaUsed is 0 so we still create the ledger entry. Wallet update is done by factory's automatic block.
+    const quantityToRestore = order.quotaUsed > 0 ? order.quotaUsed : (order.numberOfPlants || 0);
+    if (quantityToRestore === 0) {
       return { success: true, message: "No quota to restore" };
     }
 
@@ -193,54 +196,63 @@ export const restoreDealerQuota = async (orderId, session, performedBy = null) =
         e.bookingSlot?.equals(order.bookingSlot)
     );
     const balanceBefore = entry ? entry.quantity - entry.bookedQuantity : 0;
-    const balanceAfter = balanceBefore + order.quotaUsed;
+    const balanceAfter = balanceBefore + quantityToRestore;
 
-    // Use atomic update to avoid write conflicts
-    // Also update remainingQuantity since pre-save middleware doesn't run with findOneAndUpdate
-    const result = await DealerWallet.findOneAndUpdate(
-      {
-        dealer: order.dealer,
-        "entries.plantType": order.plantName,
-        "entries.subType": order.plantSubtype,
-        "entries.bookingSlot": order.bookingSlot
-      },
-      {
-        $inc: {
-          "entries.$.bookedQuantity": -order.quotaUsed,
-          "entries.$.remainingQuantity": order.quotaUsed
+    // Only update wallet when quotaUsed was set (farmer orders via dealer quota). Dealer bulk orders (quotaUsed === 0)
+    // have their wallet updated by the factory's automatic dealer quota block, so skip to avoid double update.
+    if (order.quotaUsed > 0) {
+      const result = await DealerWallet.findOneAndUpdate(
+        {
+          dealer: order.dealer,
+          "entries.plantType": order.plantName,
+          "entries.subType": order.plantSubtype,
+          "entries.bookingSlot": order.bookingSlot
+        },
+        {
+          $inc: {
+            "entries.$.bookedQuantity": -order.quotaUsed,
+            "entries.$.remainingQuantity": order.quotaUsed
+          }
+        },
+        {
+          session,
+          new: true,
+          runValidators: true
         }
-      },
-      {
-        session,
-        new: true,
-        runValidators: true
-      }
-    );
+      );
 
-    if (!result) {
-      return { success: false, message: "Quota entry not found or could not be updated" };
+      if (!result) {
+        return { success: false, message: "Quota entry not found or could not be updated" };
+      }
     }
 
-    // Create ledger entry (INVENTORY_RELEASE)
-    try {
-      await DealerPlantInventoryLedger.createLedgerEntry(
-        {
-          transactionType: "INVENTORY_RELEASE",
-          dealer: order.dealer,
-          plantType: order.plantName,
-          subType: order.plantSubtype,
-          bookingSlot: order.bookingSlot,
-          quantity: order.quotaUsed,
-          balanceBefore,
-          balanceAfter,
-          referenceId: order._id,
-          description: `Order rejected: +${order.quotaUsed} plants to dealer quota`,
-          performedBy,
-        },
-        session
-      );
-    } catch (ledgerErr) {
-      console.error("DealerPlantInventoryLedger INVENTORY_RELEASE failed:", ledgerErr);
+    // Create ledger entry (INVENTORY_RELEASE). Dealer bulk orders (quotaUsed === 0) get ledger from factory; only create here for farmer orders via dealer quota.
+    if (order.quotaUsed > 0) {
+      try {
+        const actionLabel = reason === "cancelled" ? "cancelled" : "rejected";
+        const orderIdDisplay = order.orderId ?? order._id?.toString?.() ?? "";
+        const farmerName = order.farmer?.name ?? (order.dealerOrder ? "Dealer order" : "—");
+        const plantNameDisplay = order.plantName?.name ?? "Plant";
+        const releaseDescription = `Release added to dealer quota. Order ID: ${orderIdDisplay}, Farmer: ${farmerName}, Plant: ${plantNameDisplay}, Qty: ${quantityToRestore}, Reason: Order ${actionLabel}.`;
+        await DealerPlantInventoryLedger.createLedgerEntry(
+          {
+            transactionType: "INVENTORY_RELEASE",
+            dealer: order.dealer,
+            plantType: order.plantName?._id ?? order.plantName,
+            subType: order.plantSubtype,
+            bookingSlot: order.bookingSlot,
+            quantity: quantityToRestore,
+            balanceBefore,
+            balanceAfter,
+            referenceId: order._id,
+            description: releaseDescription,
+            performedBy,
+          },
+          session
+        );
+      } catch (ledgerErr) {
+        console.error("DealerPlantInventoryLedger INVENTORY_RELEASE failed:", ledgerErr);
+      }
     }
 
     // Mark order as quota restored
@@ -249,8 +261,8 @@ export const restoreDealerQuota = async (orderId, session, performedBy = null) =
 
     return { 
       success: true, 
-      message: `Restored ${order.quotaUsed} plants to dealer quota`,
-      restoredQuantity: order.quotaUsed
+      message: `Restored ${quantityToRestore} plants to dealer quota`,
+      restoredQuantity: quantityToRestore
     };
   } catch (error) {
     console.error("Error restoring dealer quota:", error);

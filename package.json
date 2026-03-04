@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "test:cancel-ledger-quota": "node scripts/test-cancel-ledger-and-quota-api.js",
+    "test:cancel-ledger-quota:backend": "node scripts/test-cancel-ledger-quota-backend.js",
     "dev": "nodemon index.js",
     "start": "node index.js",
     "whatsapp-bot": "node scripts/whatsapp-selenium-bot.js",
