@@ -23,8 +23,15 @@ import {
   getUnclearedPayments,
   getPaymentsForApproval,
   reconcilePayments,
+  generatePaymentQR,
   sendOrderAcceptedWhatsAppController
 } from "../controllers/order.controller.js";
+import { getFarmerPlantOrderDetails } from "../controllers/farmerPlantOrderLedger.controller.js";
+import {
+  createBulkPayment,
+  getBulkPayments,
+  acceptBulkPayment
+} from "../controllers/bulkPayment.controller.js";
 import {
   getOrderDispatchDetails,
   getOrdersByDispatch,
@@ -50,11 +57,15 @@ const uploadImages = multer({
 });
 
 router
+  .get("/farmer-plant/:orderId/details", getFarmerPlantOrderDetails)
   .get("/getCSV", getCsv)
   .get("/slots", getOrdersBySlot)
   .get("/getOrders", getOrders)
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)
+  .get("/bulk-payments", getBulkPayments)
+  .post("/bulk-payment", requirePaymentAccess, createBulkPayment)
+  .patch("/bulk-payment/:id/accept", requirePaymentAccess, acceptBulkPayment)
   .get("/villages", getUniqueVillages)
   .get("/districts", getUniqueDistricts)
   .get("/cavities", getAllCavitiesFromOrders)
@@ -72,10 +83,12 @@ router
   .post("/payments/reconcile", requirePaymentAccess, reconcilePayments)
   .post("/payment-activity", authenticateToken, createPaymentActivity)
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
+  .post("/:orderId/generate-payment-qr", generatePaymentQR)
   .patch(
     "/payment/:orderId",
+    requirePaymentAccess,
     uploadImages.single('screenshot'), // Handle single file upload for screenshot
-    addNewPayment // Controller function to add payment - anyone can add
+    addNewPayment // Controller function to add payment
   )
   .patch(
     "/updateOrder",

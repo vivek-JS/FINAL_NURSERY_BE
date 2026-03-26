@@ -19,6 +19,59 @@ import {
 } from "../utility/pushNotification.js";
 import { sendOrderAcceptedWhatsApp } from "../utility/watiMessaging.js";
 import { getUnclearedPayments as getUnclearedPaymentsService, getPaymentsForApproval as getPaymentsForApprovalService, reconcile as reconcileService } from "../services/paymentReconciliationService.js";
+import { generateQR } from "../services/iciciBankService.js";
+import crypto from "crypto";
+import {
+  ensureFarmerPlantOrderDebit,
+  recordFarmerPlantLedgerPaymentTransition,
+  getFarmerPlantPaymentTransitionAction,
+} from "../utils/farmerPlantOrderLedgerHelper.js";
+
+const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
+const DEBUG_SESSION_ID = "69bde0";
+const DEBUG_RUN_ID = "due-before-after-investigation";
+
+function debugLog(hypothesisId, location, message, data = {}) {
+  // #region agent log
+  fetch(DEBUG_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": DEBUG_SESSION_ID,
+    },
+    body: JSON.stringify({
+      sessionId: DEBUG_SESSION_ID,
+      runId: DEBUG_RUN_ID,
+      hypothesisId,
+      location,
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+}
+
+/** Numeric business order id (Order.orderId) — query must match stored Number type. */
+function parseBusinessOrderId(raw) {
+  if (raw == null || raw === "") return NaN;
+  const n = typeof raw === "number" ? raw : Number(String(raw).trim());
+  return Number.isFinite(n) ? Math.trunc(n) : NaN;
+}
+
+function findPaymentSubdocument(order, paymentId) {
+  if (!order?.payment?.length) return null;
+  if (paymentId == null || paymentId === "") return null;
+  let p = order.payment.id(paymentId);
+  if (p) return p;
+  const s = String(paymentId).trim();
+  if (mongoose.Types.ObjectId.isValid(s)) {
+    const oid = new mongoose.Types.ObjectId(s);
+    p = order.payment.id(oid);
+    if (p) return p;
+  }
+  return order.payment.find((x) => x?._id && String(x._id) === s);
+}
 
 const updateDealerWalletBalance = async (dealerId, paymentAmount, description = "Wallet balance adjustment", performedBy = null) => {
   // Validate dealerId
@@ -474,7 +527,10 @@ const addNewPayment = catchAsync(async (req, res, next) => {
   try {
     // Find the order and populate farmer details
     console.log("Finding order with ID:", orderId);
-    const order = await Order.findById(orderId).populate('farmer', 'name village');
+    const order = await Order.findById(orderId).populate(
+      "farmer",
+      "name village mobileNumber"
+    );
     if (!order) {
       console.error("Order not found");
       return res.status(404).json({ message: "Order not found" });
@@ -684,6 +740,22 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       );
     }
 
+    if (!order.dealerOrder && order.farmer) {
+      try {
+        await ensureFarmerPlantOrderDebit(order, { userId: req.user?._id });
+        const lastPayment = order.payment[order.payment.length - 1];
+        await recordFarmerPlantLedgerPaymentTransition(
+          order,
+          lastPayment,
+          null,
+          lastPayment.paymentStatus,
+          { userId: req.user?._id }
+        );
+      } catch (farmerLedgerErr) {
+        console.error("Farmer plant ledger (add payment):", farmerLedgerErr);
+      }
+    }
+
     // Return success with transaction info if it was created
     if (transaction) {
       console.log("Returning success response with transaction");
@@ -853,14 +925,22 @@ const updatePaymentStatus = async (req, res) => {
       chequeNumber,
     } = req.body;
 
-    if (!orderId || !paymentId || !paymentStatus) {
+    if (orderId == null || orderId === "" || !paymentId || !paymentStatus) {
       return res.status(400).json({
         message: "Order ID, Payment ID, and Payment Status are required.",
       });
     }
 
+    const orderIdNum = parseBusinessOrderId(orderId);
+    if (!Number.isFinite(orderIdNum)) {
+      return res.status(400).json({ message: "Invalid order id." });
+    }
+
     // Find order by orderId field (numeric) instead of _id (ObjectId)
-    const order = await Order.findOne({ orderId: orderId });
+    const order = await Order.findOne({ orderId: orderIdNum }).populate(
+      "farmer",
+      "name village mobileNumber"
+    );
     if (!order) {
       return res.status(404).json({ message: "Order not found." });
     }
@@ -875,7 +955,7 @@ const updatePaymentStatus = async (req, res) => {
       hasFarmer: !!order.farmer
     });
 
-    const payment = order.payment.id(paymentId);
+    const payment = findPaymentSubdocument(order, paymentId);
     if (!payment) {
       return res.status(404).json({ message: "Payment not found." });
     }
@@ -1045,8 +1125,78 @@ const updatePaymentStatus = async (req, res) => {
       }
     }
 
+    const previousPaymentStatus = payment.paymentStatus;
+    if (previousPaymentStatus === paymentStatus) {
+      return res.status(200).json({
+        success: true,
+        message: "Payment status unchanged.",
+        order,
+      });
+    }
     payment.paymentStatus = paymentStatus;
     await order.save();
+
+    if (!order.dealerOrder && order.farmer) {
+      try {
+        const action = getFarmerPlantPaymentTransitionAction(
+          previousPaymentStatus,
+          paymentStatus
+        );
+        const transitionNeedsAmount = action === "CREDIT" || action === "REVERSAL";
+        debugLog("H1", "order.controller.js:updatePaymentStatus", "Farmer ledger transition decision", {
+          orderId: order.orderId,
+          orderMongoId: String(order._id || ""),
+          paymentId: String(payment._id || ""),
+          previousPaymentStatus,
+          newPaymentStatus: paymentStatus,
+          action,
+          transitionNeedsAmount,
+          paidAmount: Number(payment.paidAmount || 0),
+          paymentDate: payment.paymentDate || null,
+        });
+        if (action === "INVALID") {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid payment status transition.",
+          });
+        }
+        if (transitionNeedsAmount && !(Number(payment.paidAmount) > 0)) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Cannot create farmer ledger entry: payment amount must be greater than 0 for this status transition.",
+          });
+        }
+
+        await ensureFarmerPlantOrderDebit(order, { userId: req.user?._id });
+        const ledgerTransition = await recordFarmerPlantLedgerPaymentTransition(
+          order,
+          payment,
+          previousPaymentStatus,
+          paymentStatus,
+          { userId: req.user?._id }
+        );
+        debugLog("H1", "order.controller.js:updatePaymentStatus", "Farmer ledger transition result", {
+          orderId: order.orderId,
+          paymentId: String(payment._id || ""),
+          action,
+          transitionNeedsAmount,
+          ledgerTransitionCreated: Boolean(ledgerTransition),
+          ledgerTransitionRefType: ledgerTransition?.refType || null,
+          ledgerOutstandingBefore: ledgerTransition?.outstandingBefore ?? null,
+          ledgerOutstandingAfter: ledgerTransition?.outstandingAfter ?? null,
+        });
+        if (transitionNeedsAmount && !ledgerTransition) {
+          return res.status(409).json({
+            success: false,
+            message:
+              "Payment status updated but farmer ledger transition was not recorded (duplicate or invalid transition).",
+          });
+        }
+      } catch (farmerLedgerErr) {
+        console.error("Farmer plant ledger (payment status):", farmerLedgerErr);
+      }
+    }
 
     // Send push notification based on payment status change
     try {
@@ -2934,6 +3084,131 @@ const reconcilePayments = catchAsync(async (req, res) => {
   return res.status(200).json({ success: true, ...result });
 });
 
+/**
+ * POST /api/v1/order/:orderId/generate-payment-qr
+ * Generate QR for order outstanding. Creates PENDING payment with 30-min expiry.
+ */
+const generatePaymentQR = catchAsync(async (req, res) => {
+  const orderId = req.params.orderId;
+  const order = await Order.findById(orderId).populate("farmer", "name village mobileNumber");
+  if (!order) {
+    return res.status(404).json({ success: false, message: "Order not found" });
+  }
+  const totalOrderedPlants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
+  const totalAmount = order.rate * totalOrderedPlants;
+  const totalCollected = (order.payment || [])
+    .filter((p) => p.paymentStatus === "COLLECTED")
+    .reduce((sum, p) => sum + (p.paidAmount || 0), 0);
+  const outstanding = Math.round((totalAmount - totalCollected) * 100) / 100;
+  if (outstanding <= 0) {
+    return res.status(400).json({ success: false, message: "No outstanding amount for this order" });
+  }
+  const now = new Date();
+  const hasActiveQR = (order.payment || []).some(
+    (p) => p.paymentStatus === "PENDING" && p.qrReferenceId && p.qrExpiresAt && new Date(p.qrExpiresAt) > now
+  );
+  if (hasActiveQR) {
+    return res.status(400).json({ success: false, message: "An active payment QR already exists for this order" });
+  }
+  const qrReferenceId = crypto.randomUUID();
+  const qrExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  const customerName = order.dealerOrder ? "Dealer Order" : (order.farmer?.name || "Customer");
+  const mobileNumber = order.farmer?.mobileNumber ? String(order.farmer.mobileNumber) : "";
+  const qrResult = await generateQR({
+    amount: outstanding,
+    referenceId: qrReferenceId,
+    customerName,
+    mobileNumber,
+    orderId: order.orderId,
+  });
+  const qrImageOrString = qrResult.qrImageBase64 || qrResult.qrString || "";
+  const newPayment = {
+    paidAmount: outstanding,
+    paymentStatus: "PENDING",
+    paymentDate: new Date(),
+    modeOfPayment: "UPI_QR",
+    qrReferenceId,
+    qrExpiresAt,
+    qrImage: qrResult.qrImageBase64 || undefined,
+    qrPayload: qrResult.qrString || undefined,
+  };
+  order.payment.push(newPayment);
+  await order.save();
+  const added = order.payment[order.payment.length - 1];
+  return res.status(200).json({
+    success: true,
+    paymentId: added._id.toString(),
+    qrReferenceId,
+    qrImageOrString,
+    expiresAt: qrExpiresAt,
+    amount: outstanding,
+    orderId: order.orderId,
+    customerName,
+    mobileNumber,
+  });
+});
+
+/**
+ * POST /api/v1/order/payment/qr-callback
+ * Webhook for ICICI QR payment notification. Match by referenceId or UTR+amount; set BANK_VERIFIED if PENDING and not expired.
+ * Body: { referenceId?, utr?, amount } (referenceId or utr+amount). Idempotent: already BANK_VERIFIED/COLLECTED returns 200.
+ */
+const handleQRPaymentCallback = catchAsync(async (req, res) => {
+  const { referenceId, utr, amount } = req.body || {};
+  const ref = (referenceId && String(referenceId).trim()) || (utr && String(utr).trim());
+  const amt = amount != null ? Math.round(Number(amount) * 100) / 100 : null;
+  if (!ref && amt == null) {
+    return res.status(400).json({ success: false, message: "referenceId or (utr and amount) required" });
+  }
+  const now = new Date();
+  const buildQuery = () => {
+    const q = { "payment.paymentStatus": "PENDING" };
+    if (ref) q["payment.qrReferenceId"] = ref;
+    if (amt != null) q["payment.paidAmount"] = amt;
+    return q;
+  };
+  const tryOrder = async () => {
+    const orderDoc = await Order.findOne(buildQuery()).select("payment");
+    if (!orderDoc) return false;
+    for (const p of orderDoc.payment || []) {
+      if (p.paymentStatus !== "PENDING") continue;
+      if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
+      const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
+      const matchAmount = amt != null && p.paidAmount === amt;
+      if (!matchRef && !matchAmount) continue;
+      if (ref && !matchRef) continue;
+      if (amt != null && !matchAmount) continue;
+      p.paymentStatus = "BANK_VERIFIED";
+      if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
+      await orderDoc.save();
+      return true;
+    }
+    return false;
+  };
+  let updated = await tryOrder();
+  if (!updated) {
+    const AgriSalesOrder = (await import("../models/agriSalesOrder.model.js")).default;
+    const agriDoc = await AgriSalesOrder.findOne(buildQuery()).select("payment");
+    if (agriDoc) {
+      for (const p of agriDoc.payment || []) {
+        if (p.paymentStatus !== "PENDING") continue;
+        if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
+        const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
+        const matchAmount = amt != null && p.paidAmount === amt;
+        if (!matchRef && !matchAmount) continue;
+        if (ref && !matchRef) continue;
+        if (amt != null && !matchAmount) continue;
+        p.paymentStatus = "BANK_VERIFIED";
+        if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
+        await agriDoc.save();
+        updated = true;
+        break;
+      }
+    }
+  }
+  return res.status(200).json({ success: true, updated });
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -2958,5 +3233,7 @@ export {
   getTodaysPaymentActivities,
   getUnclearedPayments,
   getPaymentsForApproval,
-  reconcilePayments
+  reconcilePayments,
+  generatePaymentQR,
+  handleQRPaymentCallback,
 };
