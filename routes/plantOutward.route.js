@@ -2,6 +2,11 @@ import express from "express";
 import {
   addLabEntry,
   updateLabEntry,
+  patchLabReviewStatus,
+  getPlantOutwardByBatchId,
+  getPrimaryMobileDashboard,
+  getSecondaryMobileDashboard,
+  getAcceptedLabLines,
   getAllPlantOutwards,
   addPrimaryInward,
   updatePrimaryInward,
@@ -25,7 +30,12 @@ import {
 const router = express.Router();
 
 router.post("/batch/labs", addLabEntry);
+router.patch("/batch/:batchId/lab/:labId/review", patchLabReviewStatus);
 router.put("/batch/outward/lab/:batchId/:outwardId/:labId", updateLabEntry);
+router.get("/batch/:batchId", getPlantOutwardByBatchId);
+router.get("/primary-mobile-dashboard", getPrimaryMobileDashboard);
+router.get("/secondary-mobile-dashboard", getSecondaryMobileDashboard);
+router.get("/accepted-lab-lines", getAcceptedLabLines);
 router.get("/outwards", getAllPlantOutwards);
 router.post("/plant-outward/primary-inward", addPrimaryInward);
 router.patch(
@@ -45,6 +55,17 @@ router.post(
 router.post("/primary-to-secondary/:batchId", primaryToSecondaryInward);
 router.post(
   "/secondaryInward-to-secondaryOutward/:batchId",
+  secondaryInwardToSecondaryOutward
+);
+/** Namespaced aliases (same handlers) — primary vs secondary mobile flows */
+router.post("/primary/lab-to-primary-inward/:batchId", labToPrimaryInward);
+router.post(
+  "/primary/primary-inward-to-primary-outward/:batchId",
+  primaryInwardToPrimaryOutward
+);
+router.post("/secondary/from-primary-outward/:batchId", primaryToSecondaryInward);
+router.post(
+  "/secondary/secondary-inward-to-outward/:batchId",
   secondaryInwardToSecondaryOutward
 );
 router.get("/transfers/:batchId", getTransferHistory);

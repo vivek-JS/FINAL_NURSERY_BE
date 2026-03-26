@@ -26,6 +26,7 @@ export const createSowing = async (req, res) => {
       reminderBeforeDays,
       notes,
       batchNumber, // Batch number (mandatory - from packets or form field)
+      dispatchBatchId, // Optional DispatchBatch _id — strengthens primary countdown matching
       createdBy,
       sowingLocation, // OFFICE or PRIMARY
       packets, // Array of packets from outward entries
@@ -172,6 +173,11 @@ export const createSowing = async (req, res) => {
       });
     }
 
+    const dispatchBatchRef =
+      dispatchBatchId && mongoose.Types.ObjectId.isValid(String(dispatchBatchId))
+        ? new mongoose.Types.ObjectId(String(dispatchBatchId))
+        : undefined;
+
     // Create sowing record
     const sowing = new Sowing({
       plantId,
@@ -189,6 +195,7 @@ export const createSowing = async (req, res) => {
       reminderBeforeDays: reminderBeforeDays || 5,
       notes,
       batchNumber: batchNumber.trim(), // Store batch number
+      ...(dispatchBatchRef ? { dispatchBatchId: dispatchBatchRef } : {}),
       createdBy,
     });
 
@@ -511,6 +518,7 @@ export const createMultipleSowings = async (req, res) => {
           reminderBeforeDays,
           notes,
           batchNumber, // Batch number (mandatory - from packets or form field)
+          dispatchBatchId,
           createdBy,
           sowingLocation, // OFFICE or PRIMARY
           packets, // Array of packets from outward entries
@@ -666,6 +674,11 @@ export const createMultipleSowings = async (req, res) => {
           }
         }
 
+        const dispatchBatchRefMulti =
+          dispatchBatchId && mongoose.Types.ObjectId.isValid(String(dispatchBatchId))
+            ? new mongoose.Types.ObjectId(String(dispatchBatchId))
+            : undefined;
+
         // Create sowing record
         const sowing = new Sowing({
           plantId,
@@ -683,6 +696,7 @@ export const createMultipleSowings = async (req, res) => {
           reminderBeforeDays: reminderBeforeDays || 5,
           notes,
           batchNumber: batchNumber.trim(), // Store batch number (mandatory)
+          ...(dispatchBatchRefMulti ? { dispatchBatchId: dispatchBatchRefMulti } : {}),
           createdBy,
         });
 

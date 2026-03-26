@@ -21,6 +21,11 @@ import {
   sendOrderReadyWhatsApp,
   sendPaymentReminderWhatsApp
 } from "../utility/watiMessaging.js";
+import {
+  ensureFarmerPlantOrderDebit,
+  syncFarmerPlantLedgerForOrderUpdate,
+  archiveFarmerPlantOrderBeforeDelete,
+} from "../utils/farmerPlantOrderLedgerHelper.js";
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
   const wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -962,6 +967,17 @@ const createOne = (Model, modelName) =>
           }
         }
 
+        if (modelName === "Order" && order[0]) {
+          try {
+            await ensureFarmerPlantOrderDebit(order[0], {
+              userId: req.user?._id,
+              session,
+            });
+          } catch (ledgerErr) {
+            console.error("FarmerPlantOrderLedger ORDER debit failed:", ledgerErr);
+          }
+        }
+
         await session.commitTransaction();
         session.endSession();
 
@@ -1743,6 +1759,19 @@ const updateOne = (Model, modelName, allowedFields) =>
       console.log("Updated rate:", updatedDoc.rate);
       console.log("Updated numberOfPlants:", updatedDoc.numberOfPlants);
 
+      if (modelName === "Order") {
+        try {
+          await syncFarmerPlantLedgerForOrderUpdate(
+            existingDoc,
+            updatedDoc,
+            req.user?._id,
+            session
+          );
+        } catch (ledgerErr) {
+          console.error("Farmer plant ledger sync on update failed:", ledgerErr);
+        }
+      }
+
       await session.commitTransaction();
       session.endSession();
 
@@ -2068,10 +2097,26 @@ const updateOneAndPushElement = (Model, modelName) =>
 
 const deleteOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
-    const doc = await Model.findByIdAndDelete(req.body.id);
-
-    if (!doc) {
-      return next(new AppError("No document found with that ID", 404));
+    if (modelName === "Order" && req.body.id) {
+      const existing = await Model.findById(req.body.id).populate([
+        { path: "farmer", select: "name village mobileNumber" },
+        { path: "plantName", select: "name" },
+        { path: "salesPerson", select: "name jobTitle" },
+      ]);
+      if (!existing) {
+        return next(new AppError("No document found with that ID", 404));
+      }
+      try {
+        await archiveFarmerPlantOrderBeforeDelete(existing, req.user?._id);
+      } catch (archErr) {
+        console.error("FarmerPlantOrderArchive failed:", archErr);
+      }
+      await Model.findByIdAndDelete(req.body.id);
+    } else {
+      const doc = await Model.findByIdAndDelete(req.body.id);
+      if (!doc) {
+        return next(new AppError("No document found with that ID", 404));
+      }
     }
 
     const response = generateResponse(

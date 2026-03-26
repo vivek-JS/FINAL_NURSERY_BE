@@ -121,6 +121,18 @@ const sowingSchema = new Schema({
   orderNumber: {
     type: String,
   },
+  /** Links sowing rows to DispatchBatch.batchNumber for lab→primary countdowns */
+  batchNumber: {
+    type: String,
+    trim: true,
+    index: true,
+  },
+  /** When set, plant-ready countdowns can resolve sowing even if batchNumber text differs */
+  dispatchBatchId: {
+    type: Schema.Types.ObjectId,
+    ref: "DispatchBatch",
+    index: true,
+  },
   // Notes and tracking
   notes: {
     type: String,
@@ -199,6 +211,8 @@ const sowingSchema = new Schema({
 sowingSchema.index({ plantId: 1, subtypeId: 1, sowingDate: 1 });
 sowingSchema.index({ status: 1, expectedReadyDate: 1 });
 sowingSchema.index({ reminderDate: 1 });
+sowingSchema.index({ batchNumber: 1, sowingDate: 1 });
+sowingSchema.index({ dispatchBatchId: 1, sowingDate: 1 });
 
 // Virtual field to check if sowing is overdue
 sowingSchema.virtual('isOverdue').get(function() {

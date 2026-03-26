@@ -112,7 +112,7 @@ const paymentSchema = new Schema({
   ],
   modeOfPayment: {
     type: String,
-    enum: ["Cash", "UPI", "Cheque", "NEFT/RTGS", "1341", "434", "Wallet"],
+    enum: ["Cash", "UPI", "Cheque", "NEFT/RTGS", "1341", "434", "Wallet", "UPI_QR"],
   },
   transactionId: {
     type: String,
@@ -130,6 +130,15 @@ const paymentSchema = new Schema({
     type: Boolean,
     default: false,
   },
+  mainPaymentId: {
+    type: Schema.Types.ObjectId,
+    ref: "BulkPayment",
+    default: null,
+  },
+  qrReferenceId: { type: String, trim: true },
+  qrExpiresAt: { type: Date },
+  qrImage: { type: String },
+  qrPayload: { type: String },
 }, {
   timestamps: true,
 });

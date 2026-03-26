@@ -1,4 +1,10 @@
 import { Schema, model } from "mongoose";
+import {
+  safeMongooseNumber,
+  safeNonNegativeInt,
+  safeSubtractNonNegative,
+  clampUintForDb,
+} from "../utility/safeMongooseNumber.js";
 
 // Lab Schema for outward entries
 const labSchema = new Schema({
@@ -47,6 +53,23 @@ const labSchema = new Schema({
   availablePlants: {
     type: Number,
     min: 0,
+  },
+  /** Primary must accept before recording inward from this lab line */
+  primaryReviewStatus: {
+    type: String,
+    enum: ["pending", "accepted", "rejected"],
+    default: "pending",
+  },
+  acceptedAt: {
+    type: Date,
+  },
+  acceptedBy: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+  },
+  rejectionReason: {
+    type: String,
+    trim: true,
   },
 });
 
@@ -110,6 +133,13 @@ const primaryInwardSchema = new Schema({
       remarks: String,
     },
   ],
+  sourceLabId: {
+    type: Schema.Types.ObjectId,
+  },
+  remarks: {
+    type: String,
+    trim: true,
+  },
 });
 
 // Primary Outward Schema
@@ -562,6 +592,100 @@ function calculateSecondaryOutwardSummary(secondaryOutwardArray) {
   );
 }
 
+function calculatePrimaryOutwardSummary(primaryOutwardArray) {
+  return primaryOutwardArray.reduce(
+    (summary, item) => {
+      const totalPlants = item.cavity * item.numberOfTrays;
+      summary[item.size].primaryOutwardBottles += item.numberOfBottles;
+      summary[item.size].primaryOutwardPlants += totalPlants;
+      summary[item.size].primaryInwardBottles -= item.numberOfBottles;
+      summary[item.size].primaryInwardPlants -= totalPlants;
+      summary.total.primaryOutwardBottles += item.numberOfBottles;
+      summary.total.primaryOutwardPlants += totalPlants;
+      summary.total.primaryInwardBottles -= item.numberOfBottles;
+      summary.total.primaryInwardPlants -= totalPlants;
+      return summary;
+    },
+    {
+      R1: {
+        primaryOutwardBottles: 0,
+        primaryOutwardPlants: 0,
+        primaryInwardBottles: 0,
+        primaryInwardPlants: 0,
+      },
+      R2: {
+        primaryOutwardBottles: 0,
+        primaryOutwardPlants: 0,
+        primaryInwardBottles: 0,
+        primaryInwardPlants: 0,
+      },
+      R3: {
+        primaryOutwardBottles: 0,
+        primaryOutwardPlants: 0,
+        primaryInwardBottles: 0,
+        primaryInwardPlants: 0,
+      },
+      total: {
+        primaryOutwardBottles: 0,
+        primaryOutwardPlants: 0,
+        primaryInwardBottles: 0,
+        primaryInwardPlants: 0,
+      },
+    }
+  );
+}
+
+function combineAllStageSummaries(
+  outwardSummary,
+  primaryInwardSummary,
+  primaryOutwardSummary,
+  secondaryInwardSummary,
+  secondaryOutwardSummary
+) {
+  const sizes = ["R1", "R2", "R3", "total"];
+  const combined = {};
+
+  sizes.forEach((size) => {
+    const o = outwardSummary[size] || {};
+    const pi = primaryInwardSummary[size] || {};
+    const po = primaryOutwardSummary[size] || {};
+    const si = secondaryInwardSummary[size] || {};
+    const so = secondaryOutwardSummary[size] || {};
+
+    const totalBottles =
+      size === "total"
+        ? o.bottles ?? o.totalBottles ?? 0
+        : o.totalBottles ?? 0;
+    const totalPlants =
+      size === "total"
+        ? o.plants ?? o.totalPlants ?? 0
+        : o.totalPlants ?? 0;
+
+    combined[size] = {
+      totalBottles,
+      availableBottles: Math.max(
+        0,
+        totalBottles - (pi.primaryInwardBottles || 0)
+      ),
+      totalPlants,
+      availablePlants: Math.max(
+        0,
+        totalPlants - (pi.primaryInwardPlants || 0)
+      ),
+      primaryInwardBottles: pi.primaryInwardBottles || 0,
+      primaryInwardPlants: pi.primaryInwardPlants || 0,
+      primaryOutwardBottles: po.primaryOutwardBottles || 0,
+      primaryOutwardPlants: po.primaryOutwardPlants || 0,
+      secondaryInwardBottles: si.secondaryInwardBottles || 0,
+      secondaryInwardPlants: si.secondaryInwardPlants || 0,
+      secondaryOutwardBottles: so.secondaryOutwardBottles || 0,
+      secondaryOutwardPlants: so.secondaryOutwardPlants || 0,
+    };
+  });
+
+  return combined;
+}
+
 // Helper function to combine summaries
 function combineSummaries(outwardSummary, primaryInwardSummary) {
   const sizes = ["R1", "R2", "R3", "total"];
@@ -602,16 +726,23 @@ plantOutwardSchema.pre("save", function (next) {
   ) {
     // Calculate available quantities
     this.outward.forEach((lab) => {
-      const transferredBottles = lab.transferHistory.reduce(
-        (sum, t) => sum + t.bottlesTransferred,
+      const th = lab.transferHistory || [];
+      const transferredBottles = th.reduce(
+        (sum, t) => sum + safeNonNegativeInt(t?.bottlesTransferred, 0),
         0
       );
-      const transferredPlants = lab.transferHistory.reduce(
-        (sum, t) => sum + t.plantsTransferred,
+      const transferredPlants = th.reduce(
+        (sum, t) => sum + safeNonNegativeInt(t?.plantsTransferred, 0),
         0
       );
-      lab.availableBottles = lab.bottles - transferredBottles;
-      lab.availablePlants = lab.plants - transferredPlants;
+      const bottles = safeNonNegativeInt(safeMongooseNumber(lab.bottles), 0);
+      const plants = safeNonNegativeInt(safeMongooseNumber(lab.plants), 0);
+      lab.availableBottles = clampUintForDb(
+        safeSubtractNonNegative(bottles, transferredBottles)
+      );
+      lab.availablePlants = clampUintForDb(
+        safeSubtractNonNegative(plants, transferredPlants)
+      );
     });
 
     [
@@ -621,11 +752,18 @@ plantOutwardSchema.pre("save", function (next) {
       "secondaryOutward",
     ].forEach((stage) => {
       this[stage].forEach((entry) => {
-        const transferredQuantity = entry.transferHistory.reduce(
-          (sum, t) => sum + t.quantityTransferred,
+        const th = entry.transferHistory || [];
+        const transferredQuantity = th.reduce(
+          (sum, t) => sum + safeNonNegativeInt(t?.quantityTransferred, 0),
           0
         );
-        entry.availableQuantity = entry.totalQuantity - transferredQuantity;
+        const totalQty = safeNonNegativeInt(
+          safeMongooseNumber(entry.totalQuantity),
+          0
+        );
+        entry.availableQuantity = clampUintForDb(
+          safeSubtractNonNegative(totalQty, transferredQuantity)
+        );
       });
     });
 

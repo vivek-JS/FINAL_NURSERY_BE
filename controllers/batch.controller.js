@@ -68,7 +68,7 @@ const createBatch = catchAsync(async (req, res, next) => {
 
   await PlantOutward.create({
     batchId: batch._id,
-    labs: [],
+    outward: [],
   });
 
   const response = generateResponse(
@@ -154,6 +154,7 @@ const updateBatch = catchAsync(async (req, res, next) => {
     dateAdded,
     primaryPlantReadyDays,
     secondaryPlantReadyDays,
+    plantReadyDaysChangeReason,
   } = req.body;
 
   if (!mongoose.isValidObjectId(id)) {
@@ -199,6 +200,7 @@ const updateBatch = catchAsync(async (req, res, next) => {
 
   delete updatePayload.id;
   delete updatePayload._id;
+  delete updatePayload.plantReadyDaysChangeReason;
 
   if (batchNumber !== undefined) {
     updatePayload.batchNumber = batchNumber.trim();
@@ -220,7 +222,60 @@ const updateBatch = catchAsync(async (req, res, next) => {
     updatePayload.secondaryPlantReadyDays = Number(secondaryPlantReadyDays);
   }
 
-  const doc = await DispatchBatch.findByIdAndUpdate(id, updatePayload, {
+  const auditEntries = [];
+  const reasonTrim =
+    plantReadyDaysChangeReason && String(plantReadyDaysChangeReason).trim();
+
+  if (
+    primaryPlantReadyDays !== undefined &&
+    Number(primaryPlantReadyDays) !== existingBatch.primaryPlantReadyDays
+  ) {
+    if (!reasonTrim) {
+      return next(
+        new AppError(
+          "plantReadyDaysChangeReason is required when changing primary or secondary plant ready days",
+          400
+        )
+      );
+    }
+    auditEntries.push({
+      field: "primaryPlantReadyDays",
+      oldValue: existingBatch.primaryPlantReadyDays,
+      newValue: Number(primaryPlantReadyDays),
+      changedBy: req.user?._id,
+      reason: reasonTrim,
+      changedAt: new Date(),
+    });
+  }
+
+  if (
+    secondaryPlantReadyDays !== undefined &&
+    Number(secondaryPlantReadyDays) !== existingBatch.secondaryPlantReadyDays
+  ) {
+    if (!reasonTrim) {
+      return next(
+        new AppError(
+          "plantReadyDaysChangeReason is required when changing primary or secondary plant ready days",
+          400
+        )
+      );
+    }
+    auditEntries.push({
+      field: "secondaryPlantReadyDays",
+      oldValue: existingBatch.secondaryPlantReadyDays,
+      newValue: Number(secondaryPlantReadyDays),
+      reason: reasonTrim,
+      changedBy: req.user?._id,
+      changedAt: new Date(),
+    });
+  }
+
+  const mongoUpdate = { $set: updatePayload };
+  if (auditEntries.length > 0) {
+    mongoUpdate.$push = { plantReadyDaysAudit: { $each: auditEntries } };
+  }
+
+  const doc = await DispatchBatch.findByIdAndUpdate(id, mongoUpdate, {
     new: true,
     runValidators: true,
   });

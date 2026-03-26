@@ -9,7 +9,9 @@ import Farmer from "../models/farmer.model.js";
 import Vehicle from "../models/vehicleModel.model.js";
 import User from "../models/user.model.js";
 import mongoose from "mongoose";
+import crypto from "crypto";
 import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
+import { generateQR } from "../services/iciciBankService.js";
 
 const shouldLogRamAgriLedger = (order) =>
   Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
@@ -1086,6 +1088,73 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
   );
 
   return res.status(200).json(response);
+});
+
+// ==================== GENERATE PAYMENT QR (AGRI) ====================
+
+/**
+ * POST /api/v1/inventory/agri-sales-orders/:id/generate-payment-qr
+ * Generate QR for agri order balance. Creates PENDING payment with 30-min expiry.
+ */
+const generatePaymentQRAgri = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  if (!mongoose.isValidObjectId(id)) {
+    return next(new AppError("Invalid order ID format", 400));
+  }
+  const order = await AgriSalesOrder.findById(id);
+  if (!order) {
+    return next(new AppError("Order not found", 404));
+  }
+  const totalPaid = (order.payment || []).reduce((sum, p) => (p.paymentStatus === "COLLECTED" ? sum + (p.paidAmount || 0) : sum), 0);
+  const totalAmount = order.totalAmount ?? (order.quantity || 0) * (order.rate || 0);
+  const outstanding = Math.round((totalAmount - totalPaid) * 100) / 100;
+  if (outstanding <= 0) {
+    return next(new AppError("No outstanding amount for this order", 400));
+  }
+  const now = new Date();
+  const hasActiveQR = (order.payment || []).some(
+    (p) => p.paymentStatus === "PENDING" && p.qrReferenceId && p.qrExpiresAt && new Date(p.qrExpiresAt) > now
+  );
+  if (hasActiveQR) {
+    return next(new AppError("An active payment QR already exists for this order", 400));
+  }
+  const qrReferenceId = crypto.randomUUID();
+  const qrExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  const customerName = order.customerName || "Customer";
+  const mobileNumber = order.customerMobile || "";
+  const qrResult = await generateQR({
+    amount: outstanding,
+    referenceId: qrReferenceId,
+    customerName,
+    mobileNumber,
+    orderId: order.orderNumber,
+  });
+  const qrImageOrString = qrResult.qrImageBase64 || qrResult.qrString || "";
+  const newPayment = {
+    paidAmount: outstanding,
+    paymentStatus: "PENDING",
+    paymentDate: new Date(),
+    modeOfPayment: "UPI_QR",
+    qrReferenceId,
+    qrExpiresAt,
+    qrImage: qrResult.qrImageBase64 || undefined,
+    qrPayload: qrResult.qrString || undefined,
+  };
+  if (!order.payment) order.payment = [];
+  order.payment.push(newPayment);
+  await order.save();
+  const added = order.payment[order.payment.length - 1];
+  return res.status(200).json({
+    success: true,
+    paymentId: added._id.toString(),
+    qrReferenceId,
+    qrImageOrString,
+    expiresAt: qrExpiresAt,
+    amount: outstanding,
+    orderId: order.orderNumber,
+    customerName,
+    mobileNumber,
+  });
 });
 
 // ==================== UPDATE PAYMENT STATUS ====================
@@ -3863,6 +3932,7 @@ export {
   getOutstandingAgriSalesOrders,
   getAgriSalesOrderById,
   addPaymentToAgriSalesOrder,
+  generatePaymentQRAgri,
   updatePaymentStatus,
   getCustomerByMobile,
   getPendingPayments,

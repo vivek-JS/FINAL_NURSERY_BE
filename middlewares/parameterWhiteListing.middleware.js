@@ -1,5 +1,21 @@
-import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
+
+/** Normalize path for routing checks (Express may set path/originalUrl/url differently behind proxies). */
+function stripQuery(url) {
+  if (typeof url !== "string") return "";
+  const q = url.indexOf("?");
+  return q === -1 ? url : url.slice(0, q);
+}
+
+/** Do not whitelist-query-filter lab routes (many dynamic params). Use substring match so BOM/weird encoding cannot break startsWith. */
+function shouldSkipQueryWhitelist(req) {
+  const blob = [
+    stripQuery(req.originalUrl),
+    stripQuery(req.url),
+    typeof req.path === "string" ? req.path : "",
+  ].join("\0");
+  return blob.includes("laboutward");
+}
 
 const allowedParams = [
   "stateId",
@@ -75,6 +91,8 @@ const allowedParams = [
     "dispatchStatus", // For filtering by dispatch status (DISPATCHED, IN_TRANSIT, DELIVERED, etc.)
     "productId", // For filtering by product ID
     "customerMobile", // For filtering by customer mobile number
+    "farmer", // Farmer plant ledger (ObjectId)
+    "linesOnly", // Farmer plant ledger: include line entries
     "customerName", // For filtering by customer name
     "customerId", // For filtering by customer ID
     "isAgriSales", // For filtering products by Agri Sales flag
@@ -127,9 +145,15 @@ const allowedParams = [
   "opt_in", // filter by opt-in status (true/false)
   "includeAll", // include all records (don't exclude those in call lists)
   "campaignId", // campaigns/targets endpoint
+  "upcomingDays", // laboutward primary-mobile-dashboard window
 ];
 
 const parameterWhiteListing = (req, res, next) => {
+  // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
+  if (shouldSkipQueryWhitelist(req)) {
+    return next();
+  }
+
   // Skip parameter validation for login route
   if (req.path === '/api/v1/user/login' && req.method === 'POST') {
     return next();

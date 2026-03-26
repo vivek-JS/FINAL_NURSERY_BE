@@ -27,6 +27,19 @@ const dispatchBatchSchema = new Schema(
       type: Boolean,
       default: true,
     },
+    plantReadyDaysAudit: [
+      {
+        changedAt: { type: Date, default: Date.now },
+        changedBy: { type: Schema.Types.ObjectId, ref: "User" },
+        field: {
+          type: String,
+          enum: ["primaryPlantReadyDays", "secondaryPlantReadyDays"],
+        },
+        oldValue: { type: Number },
+        newValue: { type: Number },
+        reason: { type: String, trim: true },
+      },
+    ],
   },
   {
     timestamps: true,

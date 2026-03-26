@@ -16,12 +16,14 @@ export async function getUnclearedPayments(options = {}) {
   const { dateFrom, dateTo, source = "all" } = options;
   const list = [];
 
+  const now = new Date();
   if (source === "all" || source === "order") {
     const query = {
       "payment.paymentStatus": "PENDING",
       $or: [
         { "payment.transactionId": { $exists: true, $ne: "", $type: "string" } },
         { "payment.chequeNumber": { $exists: true, $ne: "", $type: "string" } },
+        { "payment.qrReferenceId": { $exists: true, $ne: "", $type: "string" } },
       ],
     };
     if (dateFrom || dateTo) {
@@ -37,8 +39,9 @@ export async function getUnclearedPayments(options = {}) {
     for (const order of orders) {
       for (const p of order.payment || []) {
         if (p.paymentStatus !== "PENDING") continue;
-        const hasRef = (p.transactionId && String(p.transactionId).trim()) || (p.chequeNumber && String(p.chequeNumber).trim());
+        const hasRef = (p.transactionId && String(p.transactionId).trim()) || (p.chequeNumber && String(p.chequeNumber).trim()) || (p.qrReferenceId && String(p.qrReferenceId).trim());
         if (!hasRef) continue;
+        if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
         if (dateFrom && new Date(p.paymentDate) < new Date(dateFrom)) continue;
         if (dateTo && new Date(p.paymentDate) > new Date(dateTo)) continue;
         list.push({
@@ -52,7 +55,9 @@ export async function getUnclearedPayments(options = {}) {
           bankName: p.bankName,
           transactionId: p.transactionId,
           chequeNumber: p.chequeNumber,
-          ref: p.transactionId || p.chequeNumber,
+          qrReferenceId: p.qrReferenceId,
+          qrExpiresAt: p.qrExpiresAt,
+          ref: p.transactionId || p.chequeNumber || p.qrReferenceId,
           farmerName: order.farmer?.name,
           village: order.farmer?.village,
           dealerOrder: order.dealerOrder,
@@ -67,6 +72,7 @@ export async function getUnclearedPayments(options = {}) {
       $or: [
         { "payment.transactionId": { $exists: true, $ne: "", $type: "string" } },
         { "payment.chequeNumber": { $exists: true, $ne: "", $type: "string" } },
+        { "payment.qrReferenceId": { $exists: true, $ne: "", $type: "string" } },
       ],
     };
     if (dateFrom || dateTo) {
@@ -81,8 +87,9 @@ export async function getUnclearedPayments(options = {}) {
     for (const order of agriOrders) {
       for (const p of order.payment || []) {
         if (p.paymentStatus !== "PENDING") continue;
-        const hasRef = (p.transactionId && String(p.transactionId).trim()) || (p.chequeNumber && String(p.chequeNumber).trim());
+        const hasRef = (p.transactionId && String(p.transactionId).trim()) || (p.chequeNumber && String(p.chequeNumber).trim()) || (p.qrReferenceId && String(p.qrReferenceId).trim());
         if (!hasRef) continue;
+        if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
         if (dateFrom && new Date(p.paymentDate) < new Date(dateFrom)) continue;
         if (dateTo && new Date(p.paymentDate) > new Date(dateTo)) continue;
         list.push({
@@ -96,7 +103,9 @@ export async function getUnclearedPayments(options = {}) {
           bankName: p.bankName,
           transactionId: p.transactionId,
           chequeNumber: p.chequeNumber,
-          ref: p.transactionId || p.chequeNumber,
+          qrReferenceId: p.qrReferenceId,
+          qrExpiresAt: p.qrExpiresAt,
+          ref: p.transactionId || p.chequeNumber || p.qrReferenceId,
           customerName: order.customerName,
           customerMobile: order.customerMobile,
         });
@@ -224,11 +233,15 @@ export async function reconcile(dateFrom, dateTo) {
 
   for (const pay of uncleared) {
     const amount = normalizeAmount(pay.paidAmount);
-    const utrKey = pay.transactionId ? `${normalizeUtr(pay.transactionId)}|${amount}` : null;
+    const refForUtr = pay.transactionId || pay.qrReferenceId;
+    const utrKey = refForUtr ? `${normalizeUtr(refForUtr)}|${amount}` : null;
     const chequeKey = pay.chequeNumber ? `${String(pay.chequeNumber).trim()}|${amount}` : null;
     const matchedByUtr = utrKey && bankByUtr.has(utrKey);
     const matchedByCheque = chequeKey && bankByCheque.has(chequeKey);
     if (!matchedByUtr && !matchedByCheque) continue;
+
+    const subdocExpiresAt = pay.qrExpiresAt ? new Date(pay.qrExpiresAt) : null;
+    if (subdocExpiresAt && subdocExpiresAt < new Date()) continue;
 
     try {
       if (pay.source === "order") {
@@ -236,14 +249,24 @@ export async function reconcile(dateFrom, dateTo) {
         if (!order) { errors.push({ paymentId: pay.paymentId, message: "Order not found" }); continue; }
         const subdoc = order.payment.id(pay.paymentId);
         if (!subdoc || subdoc.paymentStatus !== "PENDING") continue;
+        if (subdoc.qrExpiresAt && new Date(subdoc.qrExpiresAt) < new Date()) continue;
         subdoc.paymentStatus = "BANK_VERIFIED";
+        if (matchedByUtr && pay.qrReferenceId && !subdoc.transactionId) {
+          const bankTxn = bankByUtr.get(utrKey);
+          if (bankTxn && bankTxn.utrOrRef) subdoc.transactionId = String(bankTxn.utrOrRef).trim();
+        }
         await order.save();
       } else if (pay.source === "agriSales") {
         const order = await AgriSalesOrder.findById(pay.orderMongoId);
         if (!order) { errors.push({ paymentId: pay.paymentId, message: "Agri order not found" }); continue; }
         const subdoc = order.payment.id(pay.paymentId);
         if (!subdoc || subdoc.paymentStatus !== "PENDING") continue;
+        if (subdoc.qrExpiresAt && new Date(subdoc.qrExpiresAt) < new Date()) continue;
         subdoc.paymentStatus = "BANK_VERIFIED";
+        if (matchedByUtr && pay.qrReferenceId && !subdoc.transactionId) {
+          const bankTxn = bankByUtr.get(utrKey);
+          if (bankTxn && bankTxn.utrOrRef) subdoc.transactionId = String(bankTxn.utrOrRef).trim();
+        }
         await order.save();
       }
       updatedCount += 1;

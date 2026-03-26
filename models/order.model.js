@@ -214,6 +214,15 @@ const paymentSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    mainPaymentId: {
+      type: Schema.Types.ObjectId,
+      ref: "BulkPayment",
+      default: null,
+    },
+    qrReferenceId: { type: String, trim: true },
+    qrExpiresAt: { type: Date },
+    qrImage: { type: String },
+    qrPayload: { type: String },
   },
   { timestamps: true }
 );

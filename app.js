@@ -284,6 +284,8 @@ import whatsappContactListRoute from "./routes/whatsappContactList.route.js";
 import watiProxyRoute from "./routes/watiProxy.route.js";
 import exotelRoute from "./routes/exotel.route.js";
 import orderRoute from "./routes/order.route.js";
+import { handleQRPaymentCallback } from "./controllers/order.controller.js";
+import { getFarmerPlantLedger } from "./controllers/farmerPlantOrderLedger.controller.js";
 import userRoute from "./routes/user.route.js";
 import cmsRoute from "./routes/cms.route.js";
 import employeeRoute from "./routes/employee.route.js";
@@ -399,6 +401,9 @@ server.use("/api/v1/wati", watiProxyRoute);
 // Follow-up metrics (employee performance)
 server.use("/api/v1/assignments", authenticateToken, followupMetricsRoute);
 server.use("/api/v1/exotel", exotelRoute);
+server.post("/api/v1/order/payment/qr-callback", handleQRPaymentCallback);
+// Registered here (before order router) so GET /farmer-plant-ledger always resolves — mirrors order.route.js
+server.get("/api/v1/order/farmer-plant-ledger", authenticateToken, getFarmerPlantLedger);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/cms", authenticateToken, cmsRoute);
 const employeeAuthMiddleware =

@@ -4,10 +4,170 @@ import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
 import Tray from "../models/tray.model.js";
 import mongoose from "mongoose";
+import moment from "moment";
 import PlantOutward from "../models/plantOutward.model.js";
+import Sowing from "../models/sowing.model.js";
+import DispatchBatch from "../models/dispatchBatch.model.js";
+import {
+  safeMongooseNumber,
+  safeNonNegativeInt,
+  safeSubtractNonNegative,
+  clampUintForDb,
+} from "../utility/safeMongooseNumber.js";
+import {
+  batchNumericValue,
+  buildSowingMatchForBatchList,
+  buildSowingMatchForSingleBatch,
+} from "../utility/sowingBatchMatch.js";
 
 const BATCH_PROJECTION =
   "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive";
+
+/** Align DispatchBatch.batchNumber with Sowing.batchNumber (trim, string, legacy types). */
+const normBatchNumber = (v) => {
+  if (v == null || v === "") return "";
+  return String(v).trim();
+};
+
+const parseSowingDateToMoment = (raw) => {
+  if (raw == null || raw === "") return null;
+  const strict = moment(raw, "DD-MM-YYYY", true);
+  if (strict.isValid()) return strict.startOf("day");
+  const alt = moment(raw, ["DD/MM/YYYY", "MM-DD-YYYY", "YYYY-MM-DD"], true);
+  if (alt.isValid()) return alt.startOf("day");
+  const iso = moment(raw);
+  return iso.isValid() ? iso.startOf("day") : null;
+};
+
+/** Days remaining until primary / secondary plant-ready targets (sowing anchor + batch ready days). */
+const buildPlantReadyMeta = async (batchId) => {
+  const batch = await DispatchBatch.findById(batchId)
+    .select("batchNumber primaryPlantReadyDays secondaryPlantReadyDays")
+    .lean();
+  if (!batch) {
+    return {
+      hasAnchor: false,
+      reason: "batch_not_found",
+      primaryPlantReadyDays: 0,
+      secondaryPlantReadyDays: 0,
+    };
+  }
+  const bn = normBatchNumber(batch.batchNumber);
+  const primaryDays = batch.primaryPlantReadyDays ?? 0;
+  const secondaryDays = batch.secondaryPlantReadyDays ?? 0;
+
+  if (!bn) {
+    return {
+      hasAnchor: false,
+      batchId: String(batchId),
+      batchNumber: null,
+      primaryPlantReadyDays: primaryDays,
+      secondaryPlantReadyDays: secondaryDays,
+      batchPlantReadyDaysSource: "dispatch_batch",
+    };
+  }
+
+  const sowingFilter = buildSowingMatchForSingleBatch(batchId, bn);
+  const sowingRows = sowingFilter
+    ? await Sowing.find(sowingFilter).select("batchNumber sowingDate").lean()
+    : [];
+
+  let anchor = null;
+  for (const row of sowingRows) {
+    const m = parseSowingDateToMoment(row.sowingDate);
+    if (!m) continue;
+    if (!anchor || m.isBefore(anchor)) anchor = m;
+  }
+
+  if (!anchor) {
+    return {
+      hasAnchor: false,
+      batchId: String(batchId),
+      batchNumber: bn,
+      primaryPlantReadyDays: primaryDays,
+      secondaryPlantReadyDays: secondaryDays,
+      batchPlantReadyDaysSource: "dispatch_batch",
+    };
+  }
+
+  const today = moment().startOf("day");
+  const primaryStageReadyAt = anchor.clone().add(primaryDays, "days");
+  const secondaryReadyAt = anchor.clone().add(primaryDays + secondaryDays, "days");
+
+  return {
+    hasAnchor: true,
+    batchId: String(batchId),
+    batchNumber: bn,
+    anchorSowingDate: anchor.format("DD-MM-YYYY"),
+    primaryPlantReadyDays: primaryDays,
+    secondaryPlantReadyDays: secondaryDays,
+    /** Calendar days from start of today until each stage date */
+    daysRemainingToPrimary: Math.max(0, primaryStageReadyAt.diff(today, "days")),
+    daysRemainingToSecondary: Math.max(0, secondaryReadyAt.diff(today, "days")),
+    primaryStageReadyAt: primaryStageReadyAt.toISOString(),
+    secondaryReadyAt: secondaryReadyAt.toISOString(),
+    secondaryStageReadyAt: secondaryReadyAt.toISOString(),
+    daysSinceSowing: Math.max(0, today.diff(anchor, "days")),
+  };
+};
+
+/** Same numeric rules as labToPrimaryInward for lab line totals and transfer sums */
+const computeLabLineStock = (lab) => {
+  const labBottlesTotal = safeMongooseNumber(lab.bottles);
+  const labPlantsTotal = safeMongooseNumber(lab.plants);
+  const transferredBottlesSoFar = (lab.transferHistory || []).reduce(
+    (sum, t) => sum + safeNonNegativeInt(t?.bottlesTransferred, 0),
+    0
+  );
+  const transferredPlantsSoFar = (lab.transferHistory || []).reduce(
+    (sum, t) => sum + safeNonNegativeInt(t?.plantsTransferred, 0),
+    0
+  );
+  const bottlesTotal = safeNonNegativeInt(labBottlesTotal, 0);
+  const plantsTotal = safeNonNegativeInt(labPlantsTotal, 0);
+  return {
+    bottlesTotal,
+    plantsTotal,
+    bottlesTransferred: transferredBottlesSoFar,
+    plantsTransferred: transferredPlantsSoFar,
+    bottlesRemaining: safeSubtractNonNegative(bottlesTotal, transferredBottlesSoFar),
+    plantsRemaining: safeSubtractNonNegative(plantsTotal, transferredPlantsSoFar),
+  };
+};
+
+/** Lab line is usable for primary inward: accepted (or legacy missing status), not rejected */
+const isLabLineAcceptedForPrimary = (lab) => {
+  const st = lab.primaryReviewStatus;
+  if (st === "pending" || st === "rejected") return false;
+  return true;
+};
+
+/** Build accepted lab lines list; works even when batchId populate is null (uses raw ref). */
+const collectAcceptedLabLines = (plantOutwards) => {
+  const acceptedLabLines = [];
+  for (const po of plantOutwards) {
+    const b = po.batchId;
+    const resolvedBatchId = b?._id ?? po.batchId;
+    const batchNum = b?.batchNumber ?? null;
+    for (const lab of po.outward || []) {
+      if (!isLabLineAcceptedForPrimary(lab)) continue;
+      const stock = computeLabLineStock(lab);
+      const labObj =
+        typeof lab.toObject === "function"
+          ? lab.toObject({ virtuals: false })
+          : { ...lab };
+      acceptedLabLines.push({
+        plantOutwardId: po._id,
+        batchId: resolvedBatchId,
+        batchNumber: batchNum ?? String(resolvedBatchId),
+        labEntryId: lab._id,
+        labEntry: labObj,
+        ...stock,
+      });
+    }
+  }
+  return acceptedLabLines;
+};
 
 const addLabEntry = catchAsync(async (req, res, next) => {
   const { batchId, labData } = req.body;
@@ -26,6 +186,7 @@ const addLabEntry = catchAsync(async (req, res, next) => {
     bottles: Number(labData.bottles), // Using Number instead of parseInt
     plants: Number(labData.plants),
     rootingDate: new Date(labData.rootingDate),
+    primaryReviewStatus: "pending",
   };
 
   // Log the formatted entry for debugging
@@ -89,6 +250,61 @@ const updateLabEntry = catchAsync(async (req, res, next) => {
   const response = generateResponse(
     "Success",
     "Lab entry updated successfully",
+    doc,
+    undefined
+  );
+
+  return res.status(200).json(response);
+});
+
+/** Accept or reject a lab outward line before primary can record inward */
+const patchLabReviewStatus = catchAsync(async (req, res, next) => {
+  const { batchId, labId } = req.params;
+  const { action, rejectionReason } = req.body;
+  const userId = req.user?._id;
+
+  if (!action || !["accept", "reject"].includes(action)) {
+    return next(new AppError("action must be accept or reject", 400));
+  }
+
+  const plantOutward = await PlantOutward.findOne({ batchId });
+  if (!plantOutward) {
+    return next(new AppError("No plant outward found with this batch ID", 404));
+  }
+
+  const labEntry = plantOutward.outward.id(labId);
+  if (!labEntry) {
+    return next(new AppError("Lab entry not found", 404));
+  }
+
+  const setPayload =
+    action === "accept"
+      ? {
+          "outward.$.primaryReviewStatus": "accepted",
+          "outward.$.acceptedAt": new Date(),
+          "outward.$.acceptedBy": userId,
+          "outward.$.rejectionReason": null,
+        }
+      : {
+          "outward.$.primaryReviewStatus": "rejected",
+          "outward.$.acceptedAt": null,
+          "outward.$.acceptedBy": null,
+          "outward.$.rejectionReason": (rejectionReason && String(rejectionReason).trim()) || "Rejected",
+        };
+
+  const doc = await PlantOutward.findOneAndUpdate(
+    { batchId, "outward._id": labId },
+    { $set: setPayload },
+    { new: true, runValidators: true }
+  );
+
+  if (!doc) {
+    return next(new AppError("Failed to update lab review status", 400));
+  }
+
+  const response = generateResponse(
+    "Success",
+    action === "accept" ? "Lab outward accepted" : "Lab outward rejected",
     doc,
     undefined
   );
@@ -207,6 +423,441 @@ const getPlantOutwardByBatchId = catchAsync(async (req, res, next) => {
     message: "Plant outward retrieved successfully",
     data: outward,
   });
+});
+
+/**
+ * Shared: outwards + sowing + dispatch batch plant-ready map (primary + secondary stage dates).
+ * Used by primary and secondary mobile dashboards.
+ */
+const buildPlantReadyBundleForMobile = async (upcomingDays) => {
+  const windowDays = Math.min(Math.max(parseInt(upcomingDays, 10) || 7, 1), 31);
+  const today = moment().startOf("day");
+  const windowEnd = today.clone().add(windowDays, "days").endOf("day");
+
+  const plantOutwards = await PlantOutward.find({})
+    .populate("batchId", BATCH_PROJECTION)
+    .sort("-updatedAt");
+
+  const batchIdRefs = plantOutwards
+    .map((po) => {
+      const ref = po.batchId;
+      if (!ref) return null;
+      return ref._id ? ref._id : ref;
+    })
+    .filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
+
+  const uniqueBatchIds = [...new Set(batchIdRefs.map((id) => String(id)))].map(
+    (s) => new mongoose.Types.ObjectId(s)
+  );
+
+  const batchesFromDb =
+    uniqueBatchIds.length > 0
+      ? await DispatchBatch.find({ _id: { $in: uniqueBatchIds } })
+          .select(BATCH_PROJECTION)
+          .lean()
+      : [];
+
+  const batchByIdStr = new Map(batchesFromDb.map((b) => [b._id.toString(), b]));
+
+  const batchNumbers = [
+    ...new Set(
+      batchesFromDb.map((b) => normBatchNumber(b.batchNumber)).filter(Boolean)
+    ),
+  ];
+
+  const batchObjectIds = batchesFromDb.map((b) => b._id);
+
+  const sowingFilter = buildSowingMatchForBatchList(batchObjectIds, batchNumbers);
+  const sowingRows = sowingFilter
+    ? await Sowing.find(sowingFilter)
+        .select("batchNumber sowingDate dispatchBatchId")
+        .lean()
+    : [];
+
+  const batchNumByDispatchId = new Map();
+  for (const b of batchesFromDb) {
+    const n = normBatchNumber(b.batchNumber);
+    if (n) batchNumByDispatchId.set(b._id.toString(), n);
+  }
+
+  const earliestByBatch = new Map();
+  for (const row of sowingRows) {
+    const m = parseSowingDateToMoment(row.sowingDate);
+    if (!m) continue;
+    const keys = new Set();
+    const nb = normBatchNumber(row.batchNumber);
+    if (nb) keys.add(nb);
+    const rowNv = batchNumericValue(nb);
+    if (rowNv != null) {
+      for (const bn of batchNumbers) {
+        if (batchNumericValue(bn) === rowNv) keys.add(bn);
+      }
+    }
+    if (row.dispatchBatchId) {
+      const linked = batchNumByDispatchId.get(String(row.dispatchBatchId));
+      if (linked) keys.add(linked);
+    }
+    for (const k of keys) {
+      const prev = earliestByBatch.get(k);
+      if (!prev || m.isBefore(prev)) earliestByBatch.set(k, m);
+    }
+  }
+
+  const batchDocByNumber = new Map();
+  for (const b of batchesFromDb) {
+    const bn = normBatchNumber(b.batchNumber);
+    if (bn) batchDocByNumber.set(bn, b);
+  }
+
+  const plantReadyByBatchNumber = {};
+  for (const bn of batchNumbers) {
+    const key = bn;
+    const bdoc = batchDocByNumber.get(bn);
+    const anchor = earliestByBatch.get(bn) || null;
+    const primaryDays = bdoc
+      ? Number(safeMongooseNumber(bdoc.primaryPlantReadyDays)) || 0
+      : 0;
+    const secondaryDays = bdoc
+      ? Number(safeMongooseNumber(bdoc.secondaryPlantReadyDays)) || 0
+      : 0;
+    const batchIdStr = bdoc?._id ? String(bdoc._id) : undefined;
+
+    if (!bdoc || !anchor) {
+      plantReadyByBatchNumber[key] = {
+        hasAnchor: false,
+        batchNumber: key,
+        batchId: batchIdStr,
+        primaryPlantReadyDays: primaryDays,
+        secondaryPlantReadyDays: secondaryDays,
+        batchPlantReadyDaysSource: "dispatch_batch",
+      };
+      continue;
+    }
+    const primaryStageReadyAt = anchor.clone().add(primaryDays, "days");
+    const secondaryReadyAt = anchor.clone().add(primaryDays + secondaryDays, "days");
+    plantReadyByBatchNumber[key] = {
+      hasAnchor: true,
+      batchNumber: key,
+      batchId: batchIdStr,
+      anchorSowingDate: anchor.format("DD-MM-YYYY"),
+      primaryStageReadyAt: primaryStageReadyAt.toISOString(),
+      secondaryReadyAt: secondaryReadyAt.toISOString(),
+      secondaryStageReadyAt: secondaryReadyAt.toISOString(),
+      daysToPrimary: Math.max(0, primaryStageReadyAt.diff(today, "days")),
+      daysToSecondary: Math.max(0, secondaryReadyAt.diff(today, "days")),
+      primaryPlantReadyDays: primaryDays,
+      secondaryPlantReadyDays: secondaryDays,
+      batchPlantReadyDaysSource: "dispatch_batch",
+    };
+  }
+
+  return {
+    plantOutwards,
+    batchByIdStr,
+    earliestByBatch,
+    plantReadyByBatchNumber,
+    today,
+    windowEnd,
+    windowDays,
+  };
+};
+
+/** Aggregated payload for PRIMARY mobile: pending lab lines, milestone windows, expected primary outward */
+const getPrimaryMobileDashboard = catchAsync(async (req, res, next) => {
+  const { upcomingDays = 7 } = req.query;
+  const {
+    plantOutwards,
+    batchByIdStr,
+    earliestByBatch,
+    plantReadyByBatchNumber,
+    today,
+    windowEnd,
+    windowDays,
+  } = await buildPlantReadyBundleForMobile(upcomingDays);
+
+  const pendingIncoming = [];
+  const upcomingMilestones = [];
+  const upcomingPrimaryOutward = [];
+
+  for (const po of plantOutwards) {
+    const rawRef = po.batchId;
+    const resolvedBatchId = rawRef?._id ?? rawRef;
+    const b =
+      resolvedBatchId &&
+      (batchByIdStr.get(String(resolvedBatchId)) ||
+        (typeof rawRef === "object" &&
+        rawRef !== null &&
+        rawRef.batchNumber != null
+          ? rawRef
+          : null));
+    const batchNum =
+      b?.batchNumber != null ? normBatchNumber(b.batchNumber) : null;
+    const anchor = batchNum ? earliestByBatch.get(batchNum) || null : null;
+
+    const primaryDays = b
+      ? Number(safeMongooseNumber(b.primaryPlantReadyDays)) || 0
+      : 0;
+    const secondaryDays = b
+      ? Number(safeMongooseNumber(b.secondaryPlantReadyDays)) || 0
+      : 0;
+
+    let primaryStageReadyAt = null;
+    let secondaryReadyAt = null;
+    if (anchor) {
+      primaryStageReadyAt = anchor.clone().add(primaryDays, "days");
+      secondaryReadyAt = anchor.clone().add(primaryDays + secondaryDays, "days");
+    }
+
+    for (const lab of po.outward || []) {
+      const st = lab.primaryReviewStatus ?? "accepted";
+      if (st === "pending") {
+        pendingIncoming.push({
+          plantOutwardId: po._id,
+          batchId: resolvedBatchId,
+          batchNumber: batchNum ?? String(resolvedBatchId),
+          labEntry: lab,
+        });
+      }
+    }
+
+    if (anchor && primaryStageReadyAt && secondaryReadyAt) {
+      const inWindow = (d) =>
+        d && d.isSameOrAfter(today) && d.isSameOrBefore(windowEnd);
+      if (inWindow(primaryStageReadyAt) || inWindow(secondaryReadyAt)) {
+        upcomingMilestones.push({
+          plantOutwardId: po._id,
+          batchId: resolvedBatchId,
+          batchNumber: batchNum ?? "—",
+          anchorSowingDate: anchor.format("DD-MM-YYYY"),
+          primaryStageReadyAt: primaryStageReadyAt.toISOString(),
+          secondaryReadyAt: secondaryReadyAt.toISOString(),
+          daysToPrimary: Math.max(0, primaryStageReadyAt.diff(today, "days")),
+          daysToSecondary: Math.max(0, secondaryReadyAt.diff(today, "days")),
+        });
+      }
+    }
+
+    for (const pi of po.primaryInward || []) {
+      const expectedRaw = pi.primaryOutwardExpectedDate;
+      const fallback = primaryStageReadyAt ? primaryStageReadyAt.toDate() : null;
+      const expected = expectedRaw || fallback;
+      if (!expected) continue;
+      const expM = moment(expected);
+      if (expM.isSameOrAfter(today) && expM.isSameOrBefore(windowEnd)) {
+        upcomingPrimaryOutward.push({
+          plantOutwardId: po._id,
+          batchId: resolvedBatchId,
+          batchNumber: batchNum ?? "—",
+          primaryInward: pi,
+          expectedDate: expM.toISOString(),
+        });
+      }
+    }
+  }
+
+  const acceptedLabLines = collectAcceptedLabLines(plantOutwards);
+
+  if (process.env.DEBUG_PRIMARY_MOBILE === "1") {
+    const keys = Object.keys(plantReadyByBatchNumber);
+    const withBatchId = keys.filter((k) => plantReadyByBatchNumber[k]?.batchId).length;
+    console.log("[primary-mobile-dashboard] plantReadyByBatchNumber", {
+      batchNumberKeys: keys.length,
+      entriesWithBatchId: withBatchId,
+      sample: keys.slice(0, 8).map((k) => ({
+        batchNumber: k,
+        batchId: plantReadyByBatchNumber[k]?.batchId,
+        hasAnchor: plantReadyByBatchNumber[k]?.hasAnchor,
+        primaryPlantReadyDays: plantReadyByBatchNumber[k]?.primaryPlantReadyDays,
+        secondaryPlantReadyDays: plantReadyByBatchNumber[k]?.secondaryPlantReadyDays,
+      })),
+    });
+  }
+
+  const response = generateResponse(
+    "Success",
+    "Primary mobile dashboard",
+    {
+      pendingIncoming,
+      upcomingMilestones,
+      upcomingPrimaryOutward,
+      acceptedLabLines,
+      plantReadyByBatchNumber,
+      windowDays,
+    },
+    undefined
+  );
+
+  return res.status(200).json(response);
+});
+
+/**
+ * Secondary nursery mobile: incoming from primary (primary outward stock), secondary-stage milestones,
+ * plant-ready (same map — secondary stage dates), expected secondary inward/outward in window.
+ */
+const getSecondaryMobileDashboard = catchAsync(async (req, res, next) => {
+  const { upcomingDays = 7 } = req.query;
+  const {
+    plantOutwards,
+    batchByIdStr,
+    earliestByBatch,
+    plantReadyByBatchNumber,
+    today,
+    windowEnd,
+    windowDays,
+  } = await buildPlantReadyBundleForMobile(upcomingDays);
+
+  const incomingFromPrimary = [];
+  const upcomingSecondaryMilestones = [];
+  const upcomingSecondaryInwardExpected = [];
+  const upcomingSecondaryOutwardExpected = [];
+  const availableSecondaryInwardLines = [];
+
+  for (const po of plantOutwards) {
+    const rawRef = po.batchId;
+    const resolvedBatchId = rawRef?._id ?? rawRef;
+    const b =
+      resolvedBatchId &&
+      (batchByIdStr.get(String(resolvedBatchId)) ||
+        (typeof rawRef === "object" &&
+        rawRef !== null &&
+        rawRef.batchNumber != null
+          ? rawRef
+          : null));
+    const batchNum =
+      b?.batchNumber != null ? normBatchNumber(b.batchNumber) : null;
+    const anchor = batchNum ? earliestByBatch.get(batchNum) || null : null;
+
+    const primaryDays = b
+      ? Number(safeMongooseNumber(b.primaryPlantReadyDays)) || 0
+      : 0;
+    const secondaryDays = b
+      ? Number(safeMongooseNumber(b.secondaryPlantReadyDays)) || 0
+      : 0;
+
+    let primaryStageReadyAt = null;
+    let secondaryReadyAt = null;
+    if (anchor) {
+      primaryStageReadyAt = anchor.clone().add(primaryDays, "days");
+      secondaryReadyAt = anchor.clone().add(primaryDays + secondaryDays, "days");
+    }
+
+    for (const pout of po.primaryOutward || []) {
+      const avail = safeNonNegativeInt(
+        safeMongooseNumber(pout.availableQuantity),
+        0
+      );
+      if (
+        avail > 0 &&
+        (pout.transferStatus ?? "available") !== "fully_transferred"
+      ) {
+        incomingFromPrimary.push({
+          plantOutwardId: po._id,
+          batchId: resolvedBatchId,
+          batchNumber: batchNum ?? String(resolvedBatchId),
+          primaryOutward: pout,
+        });
+      }
+    }
+
+    if (anchor && secondaryReadyAt) {
+      const inWindow = (d) =>
+        d && d.isSameOrAfter(today) && d.isSameOrBefore(windowEnd);
+      if (inWindow(secondaryReadyAt)) {
+        upcomingSecondaryMilestones.push({
+          plantOutwardId: po._id,
+          batchId: resolvedBatchId,
+          batchNumber: batchNum ?? "—",
+          anchorSowingDate: anchor.format("DD-MM-YYYY"),
+          secondaryReadyAt: secondaryReadyAt.toISOString(),
+          daysToSecondary: Math.max(0, secondaryReadyAt.diff(today, "days")),
+          primaryPlantReadyDays: primaryDays,
+          secondaryPlantReadyDays: secondaryDays,
+        });
+      }
+    }
+
+    for (const si of po.secondaryInward || []) {
+      const expectedRaw = si.secondaryOutwardExpectedDate;
+      const fallback = secondaryReadyAt ? secondaryReadyAt.toDate() : null;
+      const expected = expectedRaw || fallback;
+      if (expected) {
+        const expM = moment(expected);
+        if (expM.isSameOrAfter(today) && expM.isSameOrBefore(windowEnd)) {
+          upcomingSecondaryInwardExpected.push({
+            plantOutwardId: po._id,
+            batchId: resolvedBatchId,
+            batchNumber: batchNum ?? "—",
+            secondaryInward: si,
+            expectedDate: expM.toISOString(),
+          });
+        }
+      }
+      const availSi = safeNonNegativeInt(
+        safeMongooseNumber(si.availableQuantity),
+        0
+      );
+      if (
+        availSi > 0 &&
+        (si.transferStatus ?? "available") !== "fully_transferred"
+      ) {
+        availableSecondaryInwardLines.push({
+          plantOutwardId: po._id,
+          batchId: resolvedBatchId,
+          batchNumber: batchNum ?? String(resolvedBatchId),
+          secondaryInward: si,
+        });
+      }
+    }
+
+    for (const so of po.secondaryOutward || []) {
+      const d = moment(so.secondaryOutwardDate);
+      if (!d.isValid()) continue;
+      if (d.isSameOrAfter(today) && d.isSameOrBefore(windowEnd)) {
+        upcomingSecondaryOutwardExpected.push({
+          plantOutwardId: po._id,
+          batchId: resolvedBatchId,
+          batchNumber: batchNum ?? "—",
+          secondaryOutward: so,
+          expectedDate: d.toISOString(),
+        });
+      }
+    }
+  }
+
+  const response = generateResponse(
+    "Success",
+    "Secondary mobile dashboard",
+    {
+      incomingFromPrimary,
+      upcomingSecondaryMilestones,
+      upcomingSecondaryInwardExpected,
+      upcomingSecondaryOutwardExpected,
+      availableSecondaryInwardLines,
+      plantReadyByBatchNumber,
+      windowDays,
+    },
+    undefined
+  );
+
+  return res.status(200).json(response);
+});
+
+/** Dedicated list of accepted lab lines (same payload as dashboard.acceptedLabLines) */
+const getAcceptedLabLines = catchAsync(async (req, res, next) => {
+  const plantOutwards = await PlantOutward.find({})
+    .populate("batchId", BATCH_PROJECTION)
+    .sort("-updatedAt");
+
+  const acceptedLabLines = collectAcceptedLabLines(plantOutwards);
+
+  const response = generateResponse(
+    "Success",
+    "Accepted lab lines",
+    { acceptedLabLines },
+    undefined
+  );
+
+  return res.status(200).json(response);
 });
 
 const addPrimaryInward = catchAsync(async (req, res, next) => {
@@ -502,7 +1153,16 @@ const labToPrimaryInward = catchAsync(async (req, res, next) => {
 
   try {
     // Validate required fields
-    if (!labEntryId || !primaryInwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse) {
+    if (
+      !labEntryId ||
+      !primaryInwardDate ||
+      !numberOfBottles ||
+      !size ||
+      !cavity ||
+      !numberOfTrays ||
+      !pollyhouse ||
+      laboursEngaged == null
+    ) {
       throw new AppError("Missing required fields", 400);
     }
 
@@ -518,20 +1178,93 @@ const labToPrimaryInward = catchAsync(async (req, res, next) => {
       throw new AppError("Lab entry not found", 404);
     }
 
-    // Calculate available quantities
-    const calculatedTotalQuantity = cavity * numberOfTrays;
+    const reviewStatus = labEntry.primaryReviewStatus;
+    if (reviewStatus === "rejected") {
+      throw new AppError("Lab outward was rejected; cannot record inward", 400);
+    }
+    if (reviewStatus === "pending") {
+      throw new AppError(
+        "Lab outward must be accepted by primary before inward",
+        403
+      );
+    }
 
-    // Validate transfer using model method
-    try {
-      plantOutward.validateTransfer('outward', labEntryId, calculatedTotalQuantity);
-    } catch (error) {
-      throw new AppError(error.message, 400);
+    if (size !== labEntry.size) {
+      throw new AppError(
+        `Size must match the lab line (${labEntry.size}). Got: ${size}`,
+        400
+      );
+    }
+
+    const numBottles = Number(numberOfBottles);
+    if (!Number.isFinite(numBottles) || numBottles < 1) {
+      throw new AppError("numberOfBottles must be a positive number", 400);
+    }
+
+    const cavityN = Number(cavity);
+    const traysN = Number(numberOfTrays);
+    if (
+      !Number.isFinite(cavityN) ||
+      !Number.isFinite(traysN) ||
+      cavityN < 1 ||
+      traysN < 1
+    ) {
+      throw new AppError("cavity and numberOfTrays must be positive numbers", 400);
+    }
+
+    const labBottlesTotal = safeMongooseNumber(labEntry.bottles);
+    const labPlantsTotal = safeMongooseNumber(labEntry.plants);
+    if (!Number.isFinite(labBottlesTotal) || labBottlesTotal < 0) {
+      throw new AppError(
+        "Lab line has invalid bottles on record; fix the lab outward entry",
+        400
+      );
+    }
+    if (!Number.isFinite(labPlantsTotal) || labPlantsTotal < 0) {
+      throw new AppError(
+        "Lab line has invalid plants on record; fix the lab outward entry",
+        400
+      );
+    }
+
+    const transferredBottlesSoFar = (labEntry.transferHistory || []).reduce(
+      (sum, t) => sum + safeNonNegativeInt(t?.bottlesTransferred, 0),
+      0
+    );
+    const transferredPlantsSoFar = (labEntry.transferHistory || []).reduce(
+      (sum, t) => sum + safeNonNegativeInt(t?.plantsTransferred, 0),
+      0
+    );
+    const availableBottlesFromLab = safeSubtractNonNegative(
+      labBottlesTotal,
+      transferredBottlesSoFar
+    );
+    const availablePlantsFromLab = safeSubtractNonNegative(
+      labPlantsTotal,
+      transferredPlantsSoFar
+    );
+
+    if (numBottles > availableBottlesFromLab) {
+      throw new AppError(
+        `Bottles cannot exceed what remains on this accepted lab line. Requested: ${numBottles}, available: ${availableBottlesFromLab} (lab line: ${labBottlesTotal} bottles total)`,
+        400
+      );
+    }
+
+    // Calculate plant quantity for this inward (trays × cavity)
+    const calculatedTotalQuantity = cavityN * traysN;
+
+    if (calculatedTotalQuantity > availablePlantsFromLab) {
+      throw new AppError(
+        `Plants (trays × cavity) cannot exceed what remains on this lab line. Required: ${calculatedTotalQuantity}, available plants: ${availablePlantsFromLab} (lab line: ${labPlantsTotal} plants total)`,
+        400
+      );
     }
 
     // Create transfer history entry for lab
     const labTransferHistory = {
       transferDate: primaryInwardDate,
-      bottlesTransferred: numberOfBottles,
+      bottlesTransferred: numBottles,
       plantsTransferred: calculatedTotalQuantity,
       remarks
     };
@@ -539,22 +1272,29 @@ const labToPrimaryInward = catchAsync(async (req, res, next) => {
     // Create primary inward entry
     const primaryInwardEntry = {
       primaryInwardDate,
-      numberOfBottles,
+      numberOfBottles: numBottles,
       size,
-      cavity,
-      numberOfTrays,
+      cavity: cavityN,
+      numberOfTrays: traysN,
       totalQuantity: calculatedTotalQuantity,
       availableQuantity: calculatedTotalQuantity,
       pollyhouse,
       laboursEngaged,
-      transferStatus: 'available',
-      sourceLabId: labEntryId
+      transferStatus: "available",
+      sourceLabId: labEntryId,
+      remarks: remarks || undefined,
     };
 
-    // Update lab entry's transfer status
-    const newLabStatus = 
-      labEntry.availablePlants - calculatedTotalQuantity === 0 ? 
-      'fully_transferred' : 'partially_transferred';
+    const newAvailableBottles = clampUintForDb(
+      safeSubtractNonNegative(availableBottlesFromLab, numBottles)
+    );
+    const newAvailablePlants = clampUintForDb(
+      safeSubtractNonNegative(availablePlantsFromLab, calculatedTotalQuantity)
+    );
+    const newLabStatus =
+      newAvailablePlants === 0 && newAvailableBottles === 0
+        ? "fully_transferred"
+        : "partially_transferred";
 
     const updatedDoc = await PlantOutward.findOneAndUpdate(
       { batchId, "outward._id": labEntryId },
@@ -565,8 +1305,8 @@ const labToPrimaryInward = catchAsync(async (req, res, next) => {
         },
         $set: {
           "outward.$.transferStatus": newLabStatus,
-          "outward.$.availablePlants": labEntry.availablePlants - calculatedTotalQuantity,
-          "outward.$.availableBottles": labEntry.availableBottles - numberOfBottles
+          "outward.$.availablePlants": newAvailablePlants,
+          "outward.$.availableBottles": newAvailableBottles
         }
       },
       { new: true, session, runValidators: true }
@@ -574,10 +1314,20 @@ const labToPrimaryInward = catchAsync(async (req, res, next) => {
 
     await session.commitTransaction();
 
+    const plantReadyCountdown = await buildPlantReadyMeta(batchId);
+    const docPlain =
+      typeof updatedDoc.toObject === "function"
+        ? updatedDoc.toObject({ virtuals: false })
+        : { ...updatedDoc };
+
     const response = generateResponse(
       "Success",
       "Transfer from lab to primary completed successfully",
-      updatedDoc
+      {
+        ...docPlain,
+        plantReadyCountdown,
+      },
+      undefined
     );
 
     res.status(200).json(response);
@@ -1266,7 +2016,11 @@ const getSecondaryOutwardById = catchAsync(async (req, res, next) => {
 export {
   addLabEntry,
   updateLabEntry,
+  patchLabReviewStatus,
   getPlantOutwardByBatchId,
+  getPrimaryMobileDashboard,
+  getSecondaryMobileDashboard,
+  getAcceptedLabLines,
   getAllPlantOutwards,
   addPrimaryInward,
   updatePrimaryInward,

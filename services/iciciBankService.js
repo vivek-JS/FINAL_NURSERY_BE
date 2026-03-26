@@ -32,4 +32,28 @@ export async function fetchBankTransactions(dateFrom, dateTo) {
   }
 }
 
+/**
+ * Generate QR for payment collection (ICICI UPI Collect / QR API).
+ * @param {Object} params - { amount, referenceId, customerName, mobileNumber, orderId }
+ * @returns {Promise<{ qrString?: string, qrImageBase64?: string, requestId?: string }>}
+ */
+export async function generateQR(params) {
+  const { amount, referenceId, customerName, mobileNumber, orderId } = params || {};
+  const baseUrl = process.env.ICICI_BASE_URL;
+  const apiKey = process.env.ICICI_API_KEY;
+
+  if (!baseUrl || !apiKey) {
+    console.warn("ICICI_BASE_URL or ICICI_API_KEY not set; returning stub QR.");
+    return { qrString: `upi://pay?pa=stub@icici&pn=${encodeURIComponent(customerName || "Customer")}&am=${amount}&tr=${referenceId}` };
+  }
+
+  try {
+    // TODO: Replace with actual ICICI QR/Collect API call per their docs.
+    return { qrString: `upi://pay?pa=stub@icici&pn=${encodeURIComponent(customerName || "Customer")}&am=${amount}&tr=${referenceId}` };
+  } catch (err) {
+    console.error("ICICI generateQR error:", err);
+    throw err;
+  }
+}
+
 export { normalizeUtr, normalizeAmount };

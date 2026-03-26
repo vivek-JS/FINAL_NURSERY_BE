@@ -12,6 +12,7 @@ import {
   getAllAgriSalesOrders,
   getAgriSalesOrderById,
   addPaymentToAgriSalesOrder,
+  generatePaymentQRAgri,
   updatePaymentStatus,
   getCustomerByMobile,
   getPendingPayments,
@@ -270,6 +271,7 @@ router
     checkErrors,
     cancelAgriSalesOrder
   )
+  .post("/:id/generate-payment-qr", [check("id").isMongoId().withMessage("Valid order ID is required")], checkErrors, generatePaymentQRAgri)
   .patch(
     "/:id/payment",
     [
