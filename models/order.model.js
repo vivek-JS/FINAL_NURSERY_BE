@@ -408,6 +408,13 @@ const orderSchema = new Schema(
     farmReadyDate: {
       type: Date,
     },
+    dispatchDayKey: {
+      type: String,
+      enum: ["TODAY", "TOMORROW", "DAY_AFTER"],
+    },
+    dispatchTargetDate: {
+      type: Date,
+    },
     // Field to track farm ready date changes history
     farmReadyDateChanges: [farmReadyDateChangeSchema],
     additionalPlantsHistory: [additionalPlantsHistorySchema],

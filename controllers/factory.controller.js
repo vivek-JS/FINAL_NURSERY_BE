@@ -36,6 +36,26 @@ import {
   DISPATCH_MANAGER_ALLOWED_STATUSES,
   resolveUserForOrderUpdatePermissions,
 } from "../utils/orderUpdatePermissions.js";
+
+const DISPATCH_DAY_KEY_TO_OFFSET = {
+  TODAY: 0,
+  TOMORROW: 1,
+  DAY_AFTER: 2,
+};
+
+const normalizeToDayStart = (dateObj) => {
+  const d = new Date(dateObj);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const getDispatchTargetDateFromKey = (dispatchDayKey) => {
+  const offset = DISPATCH_DAY_KEY_TO_OFFSET[dispatchDayKey];
+  if (offset === undefined) return null;
+  const base = normalizeToDayStart(new Date());
+  base.setDate(base.getDate() + offset);
+  return base;
+};
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
   const wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -1113,6 +1133,8 @@ const updateOne = (Model, modelName, allowedFields) =>
         "quantity",
         "bookingSlot",
         "deliveryDate",
+        "dispatchDayKey",
+        "dispatchTargetDate",
         "farmReadyDate",
         "farmReadyDateChangeReason",
         "farmReadyDateChangeNotes",
@@ -1205,6 +1227,38 @@ const updateOne = (Model, modelName, allowedFields) =>
           });
           delete filteredBody.orderStatus;
         }
+      }
+
+      // Enforce dispatch day and server-side target date mapping for READY_FOR_DISPATCH transitions.
+      const isReadyForDispatchTransition =
+        filteredBody.orderStatus === "READY_FOR_DISPATCH" &&
+        existingDoc.orderStatus !== "READY_FOR_DISPATCH";
+      const hasIncomingDispatchDayKey = filteredBody.dispatchDayKey !== undefined;
+
+      if (isReadyForDispatchTransition && !hasIncomingDispatchDayKey) {
+        throw new AppError(
+          "dispatchDayKey is required when changing status to READY_FOR_DISPATCH",
+          400
+        );
+      }
+
+      if (hasIncomingDispatchDayKey) {
+        const normalizedDispatchDayKey = String(filteredBody.dispatchDayKey || "").trim().toUpperCase();
+        const mappedDispatchDate = getDispatchTargetDateFromKey(normalizedDispatchDayKey);
+        if (!mappedDispatchDate) {
+          throw new AppError(
+            "Invalid dispatchDayKey. Allowed values: TODAY, TOMORROW, DAY_AFTER",
+            400
+          );
+        }
+        filteredBody.dispatchDayKey = normalizedDispatchDayKey;
+        // Always derive target date on server to avoid client tampering.
+        filteredBody.dispatchTargetDate = mappedDispatchDate;
+      } else if (filteredBody.dispatchTargetDate !== undefined) {
+        throw new AppError(
+          "dispatchTargetDate cannot be set directly. Please send dispatchDayKey instead.",
+          400
+        );
       }
 
       // Special handling for statusChanges - update with user info

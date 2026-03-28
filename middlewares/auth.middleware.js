@@ -27,7 +27,6 @@ export const authenticateToken = async (req, res, next) => {
       '/api/v1/location', // Location endpoints are public
       '/api/v1/whatsapp-order/webhook', // WhatsApp webhook from Wati (public, no auth)
       '/api/v1/opt-in/webhook', // Opt-in/opt-out webhook from Wati (public, no auth)
-      '/api/v1/public/follow-up' // Public follow-up endpoints (token-based access)
     ];
 
     // Check both req.path and req.originalUrl for public paths

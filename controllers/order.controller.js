@@ -468,6 +468,8 @@ const updateOrder = updateOne(Order, "Order", [
   "farmReadyDateChangeReason",
   "farmReadyDateChangeNotes",
   "deliveryDate", // Specific delivery date
+  "dispatchDayKey",
+  "dispatchTargetDate",
   "callHistory", // Call history for dispatch managers
 ]);
 /**

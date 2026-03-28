@@ -72,6 +72,7 @@ const allowedParams = [
   "lookahead", // For alerts/reminders
   "pastWindow", // For alerts/reminders
   "priority", // For filtering by priority (overdue, urgent, upcoming - future is excluded)
+  "sourceType", // For task filters (manual/call_assignment)
   "current", // Show only current priorities (urgent + upcoming), excludes future and overdue
   "showAvailable", // For showing available plants
   "showGap", // For showing booking gap

@@ -5,8 +5,10 @@ import { authenticateToken } from "../middlewares/auth.middleware.js";
 import {
   createTask,
   getTasks,
+  getTaskStats,
   getTaskById,
   updateTask,
+  updateMyAssignment,
   addTaskComment,
   deleteTask,
   getPublicTasksByEmployee,
@@ -14,8 +16,8 @@ import {
 } from "../controllers/task.controller.js";
 
 const router = express.Router();
+const TASK_ID_PARAM = ":taskId([0-9a-fA-F]{24})";
 
-// Create task (assign to multiple employees)
 router.post(
   "/",
   authenticateToken,
@@ -28,53 +30,22 @@ router.post(
     check("assignedEmployees.*")
       .isMongoId()
       .withMessage("Invalid employee ID format"),
+    check("sourceType")
+      .optional()
+      .isIn(["manual", "call_assignment"])
+      .withMessage("Invalid source type"),
+    check("callAssignmentListId")
+      .optional({ nullable: true, checkFalsy: true })
+      .isMongoId()
+      .withMessage("Invalid call assignment list ID format"),
   ],
   checkErrors,
   createTask
 );
 
-// Get all tasks (with optional filters)
 router.get("/", authenticateToken, getTasks);
+router.get("/stats", authenticateToken, getTaskStats);
 
-// Get task by ID
-router.get("/:taskId", authenticateToken, getTaskById);
-
-// Update task
-router.put(
-  "/:taskId",
-  authenticateToken,
-  [
-    check("taskId").isMongoId().withMessage("Invalid task ID format"),
-  ],
-  checkErrors,
-  updateTask
-);
-
-// Add comment to task
-router.post(
-  "/:taskId/comment",
-  authenticateToken,
-  [
-    check("taskId").isMongoId().withMessage("Invalid task ID format"),
-    check("name").notEmpty().withMessage("Name is required"),
-    check("comment").notEmpty().withMessage("Comment is required"),
-  ],
-  checkErrors,
-  addTaskComment
-);
-
-// Delete task
-router.delete(
-  "/:taskId",
-  authenticateToken,
-  [
-    check("taskId").isMongoId().withMessage("Invalid task ID format"),
-  ],
-  checkErrors,
-  deleteTask
-);
-
-// Public routes (no authentication required)
 router.get(
   "/public/employee/:employeeId",
   getPublicTasksByEmployee
@@ -92,11 +63,57 @@ router.post(
   addPublicTaskComment
 );
 
+router.patch(
+  `/${TASK_ID_PARAM}/my-assignment`,
+  authenticateToken,
+  [
+    check("taskId").isMongoId().withMessage("Invalid task ID format"),
+    check("status").isIn(["pending", "in_progress", "completed"]).withMessage("Invalid status"),
+  ],
+  checkErrors,
+  updateMyAssignment
+);
+
+router.get(
+  `/${TASK_ID_PARAM}`,
+  authenticateToken,
+  [
+    check("taskId").isMongoId().withMessage("Invalid task ID format"),
+  ],
+  checkErrors,
+  getTaskById
+);
+
+router.put(
+  `/${TASK_ID_PARAM}`,
+  authenticateToken,
+  [
+    check("taskId").isMongoId().withMessage("Invalid task ID format"),
+  ],
+  checkErrors,
+  updateTask
+);
+
+router.post(
+  `/${TASK_ID_PARAM}/comment`,
+  authenticateToken,
+  [
+    check("taskId").isMongoId().withMessage("Invalid task ID format"),
+    check("name").notEmpty().withMessage("Name is required"),
+    check("comment").notEmpty().withMessage("Comment is required"),
+  ],
+  checkErrors,
+  addTaskComment
+);
+
+router.delete(
+  `/${TASK_ID_PARAM}`,
+  authenticateToken,
+  [
+    check("taskId").isMongoId().withMessage("Invalid task ID format"),
+  ],
+  checkErrors,
+  deleteTask
+);
+
 export default router;
-
-
-
-
-
-
-

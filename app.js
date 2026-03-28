@@ -350,13 +350,20 @@ import sellOrderRoute from "./routes/sellOrder.route.js";
 import returnRequestRoute from "./routes/returnRequest.route.js";
 import agriSalesOrderRoute from "./routes/agriSalesOrder.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
-import followUpRoute from "./routes/followUp.route.js";
 import followupMetricsRoute from "./routes/followupMetrics.route.js";
 import taskRoute from "./routes/task.route.js";
 import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
 import mapsRoute from "./routes/maps.route.js";
 import callAssignmentRoute from "./routes/callAssignment.route.js";
 import callListPublicRoute from "./routes/callListPublic.route.js";
+import readyDispatchGroupRoute from "./routes/readyDispatchGroup.route.js";
+import {
+  suggestReadyDispatchGroups,
+  createReadyDispatchGroups,
+  getReadyDispatchGroups,
+  updateReadyDispatchGroup,
+  convertReadyDispatchGroupToDispatch,
+} from "./controllers/readyDispatchGroup.controller.js";
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
@@ -382,7 +389,6 @@ server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook (publ
 // WATI status webhook (templateMessageSent_v2, delivered, read, failed)
 server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
-server.use("/api/v1", followUpRoute); // Follow-up routes (public endpoints for token access, admin endpoints require auth)
 server.use("/api/v1/call-list", callListPublicRoute); // Public call list (token-based, no auth)
 server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
 server.use("/api/v1/media", authenticateToken, mediaRoute);
@@ -405,6 +411,17 @@ server.post("/api/v1/order/payment/qr-callback", handleQRPaymentCallback);
 // Registered here (before order router) so GET /farmer-plant-ledger always resolves — mirrors order.route.js
 server.get("/api/v1/order/farmer-plant-ledger", authenticateToken, getFarmerPlantLedger);
 server.use("/api/v1/order", authenticateToken, orderRoute);
+// Direct bindings for reliability in environments with stale router mounts.
+server.get("/api/v1/ready-dispatch-groups", authenticateToken, getReadyDispatchGroups);
+server.post("/api/v1/ready-dispatch-groups", authenticateToken, createReadyDispatchGroups);
+server.post("/api/v1/ready-dispatch-groups/suggest", authenticateToken, suggestReadyDispatchGroups);
+server.patch("/api/v1/ready-dispatch-groups/:id", authenticateToken, updateReadyDispatchGroup);
+server.post(
+  "/api/v1/ready-dispatch-groups/:id/convert-to-dispatch",
+  authenticateToken,
+  convertReadyDispatchGroupToDispatch
+);
+server.use("/api/v1/ready-dispatch-groups", authenticateToken, readyDispatchGroupRoute);
 server.use("/api/v1/cms", authenticateToken, cmsRoute);
 const employeeAuthMiddleware =
   process.env.DISABLE_EMPLOYEE_AUTH === "true" ? optionalAuth : authenticateToken;

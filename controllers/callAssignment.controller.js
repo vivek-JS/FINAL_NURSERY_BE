@@ -3,11 +3,71 @@ import FarmerLead from "../models/farmerLead.model.js";
 import PublicFarmerLink from "../models/publicFarmerLink.model.js";
 import CallAssignmentList from "../models/callAssignmentList.model.js";
 import User from "../models/user.model.js";
+import Task from "../models/task.model.js";
 import FollowUp from "../models/followUp.model.js";
 import AppError from "../utility/appError.js";
 import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
 import crypto from "crypto";
+
+const syncTaskForCallAssignmentList = async (list) => {
+  try {
+    const task = await Task.findOne({
+      sourceType: "call_assignment",
+      callAssignmentListId: list._id,
+    });
+    if (!task) return;
+
+    const pendingCount = (list.entries || []).filter((e) => e.status !== "done").length;
+    const completedCount = (list.completedEntries || []).length;
+    const allEntries = [...(list.entries || []), ...(list.completedEntries || [])];
+    const hasActivity = allEntries.some((e) => (e.callLogs || []).length > 0);
+    const assignedId = String(list.assignedTo?._id || list.assignedTo || "");
+
+    if (!Array.isArray(task.assignments) || task.assignments.length === 0) {
+      task.assignments = (task.assignedEmployees || []).map((id) => ({
+        employeeId: id,
+        status: "pending",
+      }));
+    }
+
+    task.assignments = task.assignments.map((a) => {
+      if (assignedId && String(a.employeeId) !== assignedId) return a;
+      const next = { ...(a?.toObject ? a.toObject() : a) };
+      if (pendingCount === 0 && completedCount > 0) {
+        next.status = "completed";
+        next.completedAt = next.completedAt || new Date();
+        if (!next.startedAt) next.startedAt = next.completedAt;
+      } else if (hasActivity || completedCount > 0) {
+        next.status = "in_progress";
+        next.startedAt = next.startedAt || new Date();
+        next.completedAt = undefined;
+      } else {
+        next.status = "pending";
+        next.startedAt = undefined;
+        next.completedAt = undefined;
+      }
+      return next;
+    });
+
+    const allDone = task.assignments.length > 0 && task.assignments.every((x) => x.status === "completed");
+    const anyStarted = task.assignments.some((x) => x.status === "in_progress" || x.status === "completed");
+    if (allDone) {
+      task.status = "completed";
+      task.completedAt = task.completedAt || new Date();
+    } else if (anyStarted) {
+      task.status = "in_progress";
+      task.completedAt = undefined;
+    } else {
+      task.status = "pending";
+      task.completedAt = undefined;
+    }
+
+    await task.save();
+  } catch (e) {
+    console.error("Failed to sync linked task for call assignment list:", e);
+  }
+};
 
 const normalizePhone = (v) => {
   if (v == null) return "";
@@ -369,6 +429,25 @@ export const assignList = catchAsync(async (req, res, next) => {
     publicToken: token,
   });
 
+  const dueDateStr = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  try {
+    await Task.create({
+      title: `Call list: ${name.trim()}`,
+      description: description || `Call assignment for ${entries.length} contacts`,
+      dueDate: dueDateStr,
+      priority: "medium",
+      status: "pending",
+      assignedEmployees: [assignedTo],
+      assignments: [{ employeeId: assignedTo, status: "pending" }],
+      tags: ["call-assignment"],
+      sourceType: "call_assignment",
+      callAssignmentListId: list._id,
+      createdBy: req.user?._id || assignedTo,
+    });
+  } catch (e) {
+    console.error("Failed to create linked ERP task for call assignment:", e);
+  }
+
   const populated = await CallAssignmentList.findById(list._id)
     .populate("assignedTo", "name phoneNumber")
     .populate("assignedBy", "name")
@@ -551,6 +630,7 @@ export const addCallLog = catchAsync(async (req, res, next) => {
   }
 
   await list.save();
+  await syncTaskForCallAssignmentList(list);
 
   const updated = await CallAssignmentList.findById(id)
     .populate("assignedTo", "name phoneNumber")
@@ -742,6 +822,7 @@ export const addCallLogPublic = catchAsync(async (req, res, next) => {
   }
 
   await list.save();
+  await syncTaskForCallAssignmentList(list);
 
   const updated = await CallAssignmentList.findById(id)
     .populate("assignedTo", "name phoneNumber")
