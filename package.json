@@ -5,7 +5,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test tests/orderUpdatePermissions.test.mjs",
+    "test:order-permissions": "node --test tests/orderUpdatePermissions.test.mjs",
+    "test:dispatch-status-patch": "node scripts/test-dispatch-order-status-patch.js",
     "test:cancel-ledger-quota": "node scripts/test-cancel-ledger-and-quota-api.js",
     "test:cancel-ledger-quota:backend": "node scripts/test-cancel-ledger-quota-backend.js",
     "seed:dealers-sales": "node scripts/seed-dealers-sales-ram-biotech.js",

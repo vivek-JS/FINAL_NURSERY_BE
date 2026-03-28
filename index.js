@@ -50,4 +50,18 @@ mongoose
   })
   .catch((error) => {
     console.error(`Problem while connecting to database`, error);
+    const msg = String(error?.message || error);
+    if (msg.includes("querySrv") || error?.code === "EREFUSED") {
+      console.error(
+        "Hint (DNS): SRV lookup for mongodb+srv failed. Try another network or DNS (e.g. 1.1.1.1), toggle VPN, or use Atlas “standard” connection string."
+      );
+    }
+    if (
+      error?.name === "MongoServerSelectionError" ||
+      error?.name === "MongooseServerSelectionError"
+    ) {
+      console.error(
+        "Hint (Atlas): Check Network Access allows this machine’s IP, cluster is not paused, and credentials are correct."
+      );
+    }
   });

@@ -31,6 +31,11 @@ import {
   resolveFarmerIdentity,
   roundMoney,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import {
+  getOrderUpdateUserContext,
+  DISPATCH_MANAGER_ALLOWED_STATUSES,
+  resolveUserForOrderUpdatePermissions,
+} from "../utils/orderUpdatePermissions.js";
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
   const wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -1085,6 +1090,9 @@ const updateOne = (Model, modelName, allowedFields) =>
           return obj;
         }, {});
 
+      /** Fields requested but not applied (permissions); returned on success for client visibility */
+      const rejectedFields = [];
+
       console.log("=== UPDATE ORDER DEBUG ===");
       console.log("Received body:", req.body);
       console.log("Filtered body:", filteredBody);
@@ -1092,9 +1100,13 @@ const updateOne = (Model, modelName, allowedFields) =>
       console.log("deliveryDate in filtered body:", filteredBody.deliveryDate);
       console.log("Allowed fields:", allowedFields);
 
-      // Rate/qty/slot/delivery and related fields: only OFFICE_ADMIN, SUPER_ADMIN, ACCOUNTANT
-      const jtOrderEdit = req.user?.jobTitle || req.user?.role;
-      const canEditOrderCore = ["OFFICE_ADMIN", "SUPER_ADMIN", "ACCOUNTANT"].includes(jtOrderEdit);
+      // Rate/qty/slot/delivery and related fields: office roles + DISPATCH_MANAGER (dispatch UI)
+      const {
+        userRole,
+        isDispatchManagerUser,
+        canEditOrderCore,
+        canChangeOrderStatusFull,
+      } = getOrderUpdateUserContext(resolveUserForOrderUpdatePermissions(req));
       const orderCoreEditFields = [
         "rate",
         "numberOfPlants",
@@ -1109,7 +1121,14 @@ const updateOne = (Model, modelName, allowedFields) =>
       ];
       if (!canEditOrderCore) {
         for (const key of orderCoreEditFields) {
-          if (filteredBody[key] !== undefined) delete filteredBody[key];
+          if (filteredBody[key] !== undefined) {
+            rejectedFields.push({
+              field: key,
+              reason: "INSUFFICIENT_PERMISSION",
+              detail: "Only OFFICE_ADMIN, SUPER_ADMIN, ACCOUNTANT, or DISPATCH_MANAGER can change this field",
+            });
+            delete filteredBody[key];
+          }
         }
       }
 
@@ -1161,11 +1180,31 @@ const updateOne = (Model, modelName, allowedFields) =>
         // If we're replacing the entire array (array), keep as is
       }
 
-      // Order status change: only SUPERADMIN and OFFICE_ADMIN can change order status
-      const jt = req.user?.jobTitle || req.user?.role;
-      const canChangeOrderStatus = req.user && (jt === "SUPERADMIN" || jt === "SUPER_ADMIN" || jt === "OFFICE_ADMIN");
-      if (filteredBody.orderStatus && !canChangeOrderStatus) {
-        delete filteredBody.orderStatus; // Reject status change from non-admin users
+      // Order status: full access for SUPERADMIN / SUPER_ADMIN / OFFICE_ADMIN;
+      // DISPATCH_MANAGER may only set workflow statuses (see orderUpdatePermissions.js).
+      const isDispatchManager = isDispatchManagerUser;
+
+      if (filteredBody.orderStatus !== undefined) {
+        if (req.user && canChangeOrderStatusFull) {
+          // keep orderStatus
+        } else if (
+          isDispatchManager &&
+          DISPATCH_MANAGER_ALLOWED_STATUSES.has(filteredBody.orderStatus)
+        ) {
+          // keep orderStatus (dispatch queue)
+        } else {
+          rejectedFields.push({
+            field: "orderStatus",
+            reason: isDispatchManager
+              ? "DISPATCH_STATUS_NOT_ALLOWED"
+              : "INSUFFICIENT_PERMISSION",
+            detail: isDispatchManager
+              ? `DISPATCH_MANAGER may only set: ${[...DISPATCH_MANAGER_ALLOWED_STATUSES].join(", ")}`
+              : "Only SUPER_ADMIN or OFFICE_ADMIN may change order status",
+            value: filteredBody.orderStatus,
+          });
+          delete filteredBody.orderStatus;
+        }
       }
 
       // Special handling for statusChanges - update with user info
@@ -1764,16 +1803,23 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
-      // Update document with filtered body and any accumulated $push operations
-      const updateOperation = { ...filteredBody, $inc: { __v: 1 } };
-      // When re-opening from CANCELLED/REJECTED, clear quotaRestored so a future cancel can run restoreDealerQuota again
+      // Update document: use explicit $set for scalar fields so MongoDB applies them alongside $push/$inc
+      const { $push, ...setFields } = filteredBody;
+      const setDoc = { ...setFields };
       if (wasCancelledOrRejected && isNowActive) {
-        updateOperation.quotaRestored = false;
+        setDoc.quotaRestored = false;
+      }
+      const updateOperation = { $inc: { __v: 1 } };
+      if (Object.keys(setDoc).length > 0) {
+        updateOperation.$set = setDoc;
+      }
+      if ($push) {
+        updateOperation.$push = $push;
       }
 
       console.log("=== FINAL UPDATE OPERATION ===");
       console.log("Update operation:", JSON.stringify(updateOperation, null, 2));
-      console.log("deliveryDate in update operation:", updateOperation.deliveryDate);
+      console.log("deliveryDate in update operation:", updateOperation.$set?.deliveryDate);
       console.log("$push in update operation:", updateOperation.$push);
 
       const updatedDoc = await Model.findOneAndUpdate(
@@ -1873,15 +1919,18 @@ const updateOne = (Model, modelName, allowedFields) =>
             }
           : updatedDoc;
 
-      return res
-        .status(200)
-        .json(
-          generateResponse(
-            "Success",
-            `${modelName} updated successfully`,
-            responseDoc
-          )
-        );
+      const msg =
+        modelName === "Order" && rejectedFields.length > 0
+          ? `${modelName} updated successfully; ${rejectedFields.length} field(s) were not applied (see rejectedFields)`
+          : `${modelName} updated successfully`;
+
+      return res.status(200).json(
+        generateResponse("Success", msg, responseDoc, undefined, {
+          ...(modelName === "Order" && rejectedFields.length > 0
+            ? { rejectedFields }
+            : {}),
+        })
+      );
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
