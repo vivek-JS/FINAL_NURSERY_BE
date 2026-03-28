@@ -1113,6 +1113,14 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
+      // Canonicalize quantity aliases so all downstream logic uses one field.
+      if (filteredBody.quantity !== undefined && filteredBody.numberOfPlants === undefined) {
+        filteredBody.numberOfPlants = filteredBody.quantity;
+      }
+      if (filteredBody.quantity !== undefined) {
+        delete filteredBody.quantity;
+      }
+
       // Handle special fields updates
 
       // Special handling for orderRemarks - append if it's an array or a string
@@ -1364,9 +1372,9 @@ const updateOne = (Model, modelName, allowedFields) =>
         });
       }
 
-      // Track quantity changes (check both numberOfPlants and quantity)
-      const newQuantity = filteredBody.numberOfPlants || filteredBody.quantity;
-      if (newQuantity && newQuantity !== existingDoc.numberOfPlants) {
+      // Track quantity changes.
+      const newQuantity = filteredBody.numberOfPlants;
+      if (newQuantity !== undefined && newQuantity !== existingDoc.numberOfPlants) {
         editHistoryEntries.push({
           field: "numberOfPlants",
           previousValue: existingDoc.numberOfPlants,
@@ -1795,16 +1803,36 @@ const updateOne = (Model, modelName, allowedFields) =>
       console.log("Updated numberOfPlants:", updatedDoc.numberOfPlants);
 
       if (modelName === "Order") {
+        console.log("Order ledger sync start", {
+          orderId: String(updatedDoc?._id || id),
+          oldRate: Number(existingDoc?.rate || 0),
+          newRate: Number(updatedDoc?.rate || 0),
+          oldQuantity: Number(existingDoc?.numberOfPlants || 0) + Number(existingDoc?.additionalPlants || 0),
+          newQuantity: Number(updatedDoc?.numberOfPlants || 0) + Number(updatedDoc?.additionalPlants || 0),
+          oldStatus: existingDoc?.orderStatus,
+          newStatus: updatedDoc?.orderStatus,
+        });
         try {
           await syncFarmerPlantLedgerForOrderUpdate(
             existingDoc,
             updatedDoc,
             req.user?._id,
-            session
+            session,
+            { strict: true }
           );
         } catch (ledgerErr) {
-          console.error("Farmer plant ledger sync on update failed:", ledgerErr);
+          console.error("Order ledger sync failed", {
+            orderId: String(updatedDoc?._id || id),
+            error: ledgerErr?.message || ledgerErr,
+          });
+          throw new AppError(
+            "Order update reverted because ledger sync failed. Please retry.",
+            500
+          );
         }
+        console.log("Order ledger sync completed", {
+          orderId: String(updatedDoc?._id || id),
+        });
       }
 
       let ledgerMessage = null;

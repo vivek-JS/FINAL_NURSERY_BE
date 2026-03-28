@@ -15,8 +15,16 @@ const mongoOptions = {
   retryReads: true,
 };
 
+const mongoUrl = process.env.MONGO_URL;
+if (!mongoUrl || typeof mongoUrl !== "string") {
+  console.error(
+    "Missing MONGO_URL. Set it in .env (e.g. your stage Atlas URI from STAGE_MONGO_URL)."
+  );
+  process.exit(1);
+}
+
 mongoose
-  .connect(process.env.MONGO_URL, mongoOptions)
+  .connect(mongoUrl, mongoOptions)
   .then(async () => {
     console.log(`✅ Connected to database: ${mongoose.connection.name}@${mongoose.connection.host}:${mongoose.connection.port}`);
 

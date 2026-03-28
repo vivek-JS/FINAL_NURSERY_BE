@@ -454,14 +454,98 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
   existingDoc,
   updatedDoc,
   userId,
-  session
+  session,
+  options = {}
 ) {
+  const strict = options?.strict === true;
   if (!shouldLogFarmerPlantLedger(updatedDoc)) return;
 
   try {
     await ensureFarmerPlantOrderDebit(updatedDoc, { userId, session });
   } catch (e) {
     console.error("ensureFarmerPlantOrderDebit failed:", e);
+    if (strict) throw e;
+  }
+
+  // Order total edit transition: write immutable delta adjustment rows for rate/quantity changes.
+  // Skip when previous state is terminal to avoid double-counting with reopen logic.
+  try {
+    const oid = updatedDoc?._id;
+    const prevStatus = existingDoc?.orderStatus;
+    const nextStatus = updatedDoc?.orderStatus;
+    const terminalStatuses = ["CANCELLED", "REJECTED"];
+    const prevIsTerminal = terminalStatuses.includes(prevStatus);
+
+    const previousLineTotal = roundMoney(getPlantOrderLineTotal(existingDoc || {}));
+    const nextLineTotal = roundMoney(getPlantOrderLineTotal(updatedDoc || {}));
+    const deltaAmount = roundMoney(nextLineTotal - previousLineTotal);
+    const hasDelta = Math.abs(deltaAmount) > 0;
+    const oldRate = roundMoney(Number(existingDoc?.rate || 0));
+    const oldQuantity = Number(existingDoc?.numberOfPlants || 0) + Number(existingDoc?.additionalPlants || 0);
+    const newRate = roundMoney(Number(updatedDoc?.rate || 0));
+    const newQuantity = Number(updatedDoc?.numberOfPlants || 0) + Number(updatedDoc?.additionalPlants || 0);
+
+    if (oid && hasDelta && !prevIsTerminal) {
+      const transitionAt =
+        updatedDoc?.updatedAt instanceof Date
+          ? updatedDoc.updatedAt.getTime()
+          : updatedDoc?.updatedAt
+            ? new Date(updatedDoc.updatedAt).getTime()
+            : Date.now();
+      const orderVersion =
+        typeof updatedDoc?.__v === "number" || typeof updatedDoc?.__v === "string"
+          ? String(updatedDoc.__v)
+          : "0";
+      const transitionKey = `ORDER_EDIT_DELTA_${oid}_${previousLineTotal}_${nextLineTotal}_${transitionAt}_${orderVersion}`;
+
+      if (!(await ledgerTransitionExists(oid, transitionKey, session))) {
+        const { customerMobile, customerName, farmerId } =
+          await resolveFarmerIdentity(updatedDoc);
+
+        if (customerMobile) {
+          const entryDate = Number.isFinite(transitionAt)
+            ? new Date(transitionAt)
+            : new Date();
+          const isIncrease = deltaAmount > 0;
+
+          await createFarmerPlantLedgerEntry({
+            customerMobile,
+            customerName,
+            farmerId,
+            refType: "ADJUSTMENT",
+            refId: oid,
+            orderId: oid,
+            debit: isIncrease ? Math.abs(deltaAmount) : 0,
+            credit: isIncrease ? 0 : Math.abs(deltaAmount),
+            reference: String(updatedDoc.orderId ?? ""),
+            category: isIncrease ? "Order Edit Increase" : "Order Edit Decrease",
+            description: isIncrease
+              ? `Order ${updatedDoc.orderId ?? ""} edited — total ₹${previousLineTotal} -> ₹${nextLineTotal} (debit +₹${Math.abs(deltaAmount)})`
+              : `Order ${updatedDoc.orderId ?? ""} edited — total ₹${previousLineTotal} -> ₹${nextLineTotal} (credit -₹${Math.abs(deltaAmount)})`,
+            entryDate,
+            createdBy: userId,
+            metadata: {
+              transitionKey,
+              previousStatus: prevStatus,
+              newStatus: nextStatus,
+              oldRate,
+              oldQuantity,
+              oldTotal: previousLineTotal,
+              newRate,
+              newQuantity,
+              newTotal: nextLineTotal,
+              previousLineTotal,
+              nextLineTotal,
+              deltaAmount,
+            },
+            session,
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Farmer plant ledger order edit delta failed:", e);
+    if (strict) throw e;
   }
 
   // Order status transition: write an immutable adjustment on cancel/re-open.
@@ -493,7 +577,7 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
             ? new Date(transitionAt)
             : new Date();
 
-          // Terminal: cancel or reject — reverse the ORDER debit (same line total as original debit).
+          // Terminal: cancel or reject — reverse current principal for the order.
           if (nextStatus === "CANCELLED" || nextStatus === "REJECTED") {
             const isCancel = nextStatus === "CANCELLED";
             await createFarmerPlantLedgerEntry({
@@ -541,6 +625,7 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
     }
   } catch (e) {
     console.error("Farmer plant ledger status transition failed:", e);
+    if (strict) throw e;
   }
 
   const beforeMap = {};
@@ -564,6 +649,7 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
       );
     } catch (e) {
       console.error("Farmer plant ledger payment transition failed:", e);
+      if (strict) throw e;
     }
   }
 }

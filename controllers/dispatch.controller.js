@@ -6,6 +6,69 @@ import Order from "../models/order.model.js";
 import mongoose from "mongoose";
 import PlantCms from "../models/plantCms.model.js";
 import Tray from "../models/tray.model.js";
+import { syncFarmerPlantLedgerForOrderUpdate } from "../utils/farmerPlantOrderLedgerHelper.js";
+
+const updateOrderWithLedgerSync = async ({
+  orderId,
+  updateOperation,
+  session,
+  userId,
+  existingDoc,
+  contextLabel = "dispatch_order_update",
+}) => {
+  const previousOrder =
+    existingDoc || (await Order.findById(orderId).session(session));
+  if (!previousOrder) {
+    throw new AppError(`Order not found: ${orderId}`, 404);
+  }
+
+  const updatedOrder = await Order.findByIdAndUpdate(orderId, updateOperation, {
+    new: true,
+    runValidators: true,
+    session,
+  });
+
+  if (!updatedOrder) {
+    throw new AppError(`Failed to update order: ${orderId}`, 500);
+  }
+
+  try {
+    await syncFarmerPlantLedgerForOrderUpdate(
+      previousOrder,
+      updatedOrder,
+      userId,
+      session,
+      { strict: true }
+    );
+  } catch (ledgerErr) {
+    console.error("Dispatch order ledger sync failed", {
+      contextLabel,
+      orderId: String(updatedOrder?._id || orderId),
+      error: ledgerErr?.message || ledgerErr,
+    });
+    throw new AppError(
+      `Order update reverted because ledger sync failed (${contextLabel}). Please retry.`,
+      500
+    );
+  }
+
+  console.log("Dispatch order ledger sync completed", {
+    contextLabel,
+    orderId: String(updatedOrder?._id || orderId),
+    oldRate: Number(previousOrder?.rate || 0),
+    newRate: Number(updatedOrder?.rate || 0),
+    oldQuantity:
+      Number(previousOrder?.numberOfPlants || 0) +
+      Number(previousOrder?.additionalPlants || 0),
+    newQuantity:
+      Number(updatedOrder?.numberOfPlants || 0) +
+      Number(updatedOrder?.additionalPlants || 0),
+    oldStatus: previousOrder?.orderStatus,
+    newStatus: updatedOrder?.orderStatus,
+  });
+
+  return updatedOrder;
+};
 // Helper to validate quantities
 const validateQuantities = (plantsDetails) => {
   for (const plant of plantsDetails) {
@@ -157,9 +220,10 @@ const createDispatch = catchAsync(async (req, res, next) => {
         };
 
         // Update the order
-        await Order.findByIdAndUpdate(
-          orderDispatch.orderId,
-          {
+        await updateOrderWithLedgerSync({
+          orderId: orderDispatch.orderId,
+          existingDoc: order,
+          updateOperation: {
             $set: {
               remainingPlants: newRemainingPlants,
               orderStatus: newStatus,
@@ -169,8 +233,10 @@ const createDispatch = catchAsync(async (req, res, next) => {
               dispatchHistory: dispatchHistoryEntry,
             },
           },
-          { session, new: true }
-        );
+          session,
+          userId: req.user?._id,
+          contextLabel: "create_dispatch_split_update",
+        });
       }
     } else {
       // Legacy behavior: update all orders to DISPATCH_PROCESS
@@ -980,30 +1046,23 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         orderUpdateData.orderStatus = "PARTIALLY_COMPLETED";
       }
 
+      let returnHistoryEntry = null;
       // Only update return-related fields if there are actual returns
       if (returnsForThisOrder > 0) {
-        // Add the return data to the update
         orderUpdateData.returnedPlants = totalReturnedPlants;
 
         if (orderUpdate.returnReason) {
           orderUpdateData.returnReason = orderUpdate.returnReason;
         }
 
-        // Add to return history regardless of whether adding to inventory
-        const returnHistoryEntry = {
+        // Add to return history regardless of whether adding to inventory.
+        returnHistoryEntry = {
           date: new Date(),
           quantity: returnsForThisOrder,
           reason: orderUpdate.returnReason || "Return from dispatch",
           dispatchId: dispatch._id,
           processedBy: req.user ? req.user._id : undefined,
         };
-
-        // Use $push to add to the return history array
-        await Order.findByIdAndUpdate(
-          orderId,
-          { $push: { returnHistory: returnHistoryEntry } },
-          { session }
-        );
       }
 
       const remainingAfterAdjustments = Math.max(
@@ -1038,11 +1097,21 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       }
 
       // Update the order
-      const updatedOrder = await Order.findByIdAndUpdate(
+      const updateOperation = {
+        $set: orderUpdateData,
+      };
+      if (returnHistoryEntry) {
+        updateOperation.$push = { returnHistory: returnHistoryEntry };
+      }
+
+      const updatedOrder = await updateOrderWithLedgerSync({
         orderId,
-        orderUpdateData,
-        { new: true, runValidators: true, session }
-      );
+        existingDoc: order,
+        updateOperation,
+        session,
+        userId: req.user?._id,
+        contextLabel: "complete_dispatch_order_update",
+      });
 
       // If order has returns AND addToInventory is true, update the slot's totalPlants
       if (returnsForThisOrder > 0 && addToInventory) {
