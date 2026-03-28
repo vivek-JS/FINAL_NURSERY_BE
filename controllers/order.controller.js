@@ -559,13 +559,20 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     // Prioritize jobTitle over role
     const userRole = req.user?.jobTitle || req.user?.role;
     let finalPaymentStatus = "PENDING"; // Default to PENDING for new payments
-    
-    // For OFFICE_ADMIN, always keep payment status as PENDING
+    const canMarkPaymentCollected =
+      userRole === "ACCOUNTANT" ||
+      userRole === "SUPER_ADMIN" ||
+      userRole === "SUPERADMIN";
+
+    // OFFICE_ADMIN: always PENDING. Others: only accountant/super-admin may set COLLECTED.
     if (userRole === "OFFICE_ADMIN") {
       finalPaymentStatus = "PENDING";
       console.log("OFFICE_ADMIN payment - forcing status to PENDING");
-    } else if (paymentStatus && (paymentStatus === "COLLECTED" || paymentStatus === "PENDING")) {
-      // Use the requested payment status if provided, otherwise default to PENDING
+    } else if (
+      canMarkPaymentCollected &&
+      paymentStatus &&
+      (paymentStatus === "COLLECTED" || paymentStatus === "PENDING")
+    ) {
       finalPaymentStatus = paymentStatus;
       console.log("Using requested payment status:", finalPaymentStatus);
     } else {

@@ -92,9 +92,9 @@ router
   .post("/payment-activity", authenticateToken, createPaymentActivity)
   .patch("/updatePaymentStatus", requirePaymentAccess, updatePaymentStatus)
   .post("/:orderId/generate-payment-qr", generatePaymentQR)
+  // Add payment: any authenticated user (router mounted with authenticateToken in app.js)
   .patch(
     "/payment/:orderId",
-    requirePaymentAccess,
     uploadImages.single('screenshot'), // Handle single file upload for screenshot
     addNewPayment // Controller function to add payment
   )

@@ -297,6 +297,15 @@ const createOne = (Model, modelName) =>
         componyQuota, // Added this field to destructure from request body
         ...orderData
       } = req.body;
+
+      let paymentFromBody = payment;
+      if (typeof paymentFromBody === "string") {
+        try {
+          paymentFromBody = JSON.parse(paymentFromBody);
+        } catch (e) {
+          paymentFromBody = undefined;
+        }
+      }
       console.log('📦 Request Body:', req?.body);
       console.log('📊 Order Status from request:', req.body?.orderStatus);
       console.log('📋 OrderData after destructuring:', orderData);
@@ -597,8 +606,8 @@ const createOne = (Model, modelName) =>
 
         // Process payment data if provided
         let paymentArray = [];
-        if (payment && Array.isArray(payment) && payment.length > 0) {
-          paymentArray = payment.map(paymentItem => ({
+        if (paymentFromBody && Array.isArray(paymentFromBody) && paymentFromBody.length > 0) {
+          paymentArray = paymentFromBody.map(paymentItem => ({
             paidAmount: Number(paymentItem.paidAmount) || 0,
             paymentStatus: "PENDING", // Always PENDING for new payments
             paymentDate: paymentItem.paymentDate || new Date(),
@@ -1082,6 +1091,27 @@ const updateOne = (Model, modelName, allowedFields) =>
       console.log("deliveryDate in request:", req.body.deliveryDate);
       console.log("deliveryDate in filtered body:", filteredBody.deliveryDate);
       console.log("Allowed fields:", allowedFields);
+
+      // Rate/qty/slot/delivery and related fields: only OFFICE_ADMIN, SUPER_ADMIN, ACCOUNTANT
+      const jtOrderEdit = req.user?.jobTitle || req.user?.role;
+      const canEditOrderCore = ["OFFICE_ADMIN", "SUPER_ADMIN", "ACCOUNTANT"].includes(jtOrderEdit);
+      const orderCoreEditFields = [
+        "rate",
+        "numberOfPlants",
+        "quantity",
+        "bookingSlot",
+        "deliveryDate",
+        "farmReadyDate",
+        "farmReadyDateChangeReason",
+        "farmReadyDateChangeNotes",
+        "orderPaymentStatus",
+        "notes",
+      ];
+      if (!canEditOrderCore) {
+        for (const key of orderCoreEditFields) {
+          if (filteredBody[key] !== undefined) delete filteredBody[key];
+        }
+      }
 
       // Handle special fields updates
 
