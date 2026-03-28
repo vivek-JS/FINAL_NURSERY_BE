@@ -464,6 +464,85 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
     console.error("ensureFarmerPlantOrderDebit failed:", e);
   }
 
+  // Order status transition: write an immutable adjustment on cancel/re-open.
+  try {
+    const prevStatus = existingDoc?.orderStatus;
+    const nextStatus = updatedDoc?.orderStatus;
+    const isChanged = prevStatus && nextStatus && prevStatus !== nextStatus;
+    if (isChanged) {
+      const oid = updatedDoc?._id;
+      const transitionAt =
+        updatedDoc?.updatedAt instanceof Date
+          ? updatedDoc.updatedAt.getTime()
+          : updatedDoc?.updatedAt
+            ? new Date(updatedDoc.updatedAt).getTime()
+            : Date.now();
+      const orderVersion =
+        typeof updatedDoc?.__v === "number" || typeof updatedDoc?.__v === "string"
+          ? String(updatedDoc.__v)
+          : "0";
+      const transitionKey = `ORDER_STATUS_${oid}_${prevStatus}_${nextStatus}_${transitionAt}_${orderVersion}`;
+
+      if (!(await ledgerTransitionExists(oid, transitionKey, session))) {
+        const { customerMobile, customerName, farmerId } =
+          await resolveFarmerIdentity(updatedDoc);
+
+        if (customerMobile) {
+          const lineTotal = getPlantOrderLineTotal(updatedDoc);
+          const entryDate = Number.isFinite(transitionAt)
+            ? new Date(transitionAt)
+            : new Date();
+
+          // Terminal: cancel or reject — reverse the ORDER debit (same line total as original debit).
+          if (nextStatus === "CANCELLED" || nextStatus === "REJECTED") {
+            const isCancel = nextStatus === "CANCELLED";
+            await createFarmerPlantLedgerEntry({
+              customerMobile,
+              customerName,
+              farmerId,
+              refType: "ADJUSTMENT",
+              refId: oid,
+              orderId: oid,
+              credit: lineTotal,
+              reference: String(updatedDoc.orderId ?? ""),
+              category: isCancel ? "Order Cancel" : "Order Reject",
+              description: isCancel
+                ? `Order ${updatedDoc.orderId ?? ""} cancelled — reverse order debit`
+                : `Order ${updatedDoc.orderId ?? ""} rejected — reverse order debit`,
+              entryDate,
+              createdBy: userId,
+              metadata: { transitionKey, previousStatus: prevStatus, newStatus: nextStatus },
+              session,
+            });
+          } else if (prevStatus === "CANCELLED" || prevStatus === "REJECTED") {
+            // Re-open from CANCELLED or REJECTED: restore order debit so receivable returns.
+            const fromReject = prevStatus === "REJECTED";
+            await createFarmerPlantLedgerEntry({
+              customerMobile,
+              customerName,
+              farmerId,
+              refType: "ADJUSTMENT",
+              refId: oid,
+              orderId: oid,
+              debit: lineTotal,
+              reference: String(updatedDoc.orderId ?? ""),
+              category: "Order Reopen",
+              description: fromReject
+                ? `Order ${updatedDoc.orderId ?? ""} reopened from rejected — restore order debit`
+                : `Order ${updatedDoc.orderId ?? ""} reopened — restore order debit`,
+              entryDate,
+              createdBy: userId,
+              metadata: { transitionKey, previousStatus: prevStatus, newStatus: nextStatus },
+              session,
+            });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Farmer plant ledger status transition failed:", e);
+  }
+
   const beforeMap = {};
   (existingDoc.payment || []).forEach((p) => {
     if (p._id) beforeMap[p._id.toString()] = p.paymentStatus;

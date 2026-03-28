@@ -37,8 +37,9 @@ const farmerPlantOrderLedgerSchema = new mongoose.Schema(
     orderId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Order",
-      required: true,
-      index: true,
+      required: function () {
+        return ["ORDER", "PAYMENT", "REVERSAL"].includes(this.refType);
+      },
     },
     paymentId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -88,7 +89,8 @@ const farmerPlantOrderLedgerSchema = new mongoose.Schema(
 
 farmerPlantOrderLedgerSchema.index({ customerMobile: 1, entryDate: 1 });
 farmerPlantOrderLedgerSchema.index({ farmer: 1, entryDate: 1 });
-farmerPlantOrderLedgerSchema.index({ orderId: 1, entryDate: 1 });
+/** Sparse: ADJUSTMENT rows (e.g. advance transfers) may omit orderId. */
+farmerPlantOrderLedgerSchema.index({ orderId: 1, entryDate: 1 }, { sparse: true });
 farmerPlantOrderLedgerSchema.index(
   { orderId: 1, "metadata.transitionKey": 1 },
   { unique: true, sparse: true }

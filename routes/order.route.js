@@ -26,7 +26,12 @@ import {
   generatePaymentQR,
   sendOrderAcceptedWhatsAppController
 } from "../controllers/order.controller.js";
-import { getFarmerPlantOrderDetails } from "../controllers/farmerPlantOrderLedger.controller.js";
+import {
+  getFarmerPlantOrderDetails,
+  transferFarmerPlantAdvance,
+  searchFarmersForLedgerTransfer,
+  createManualFarmerPlantLedgerEntry,
+} from "../controllers/farmerPlantOrderLedger.controller.js";
 import {
   createBulkPayment,
   getBulkPayments,
@@ -58,6 +63,9 @@ const uploadImages = multer({
 
 router
   .get("/farmer-plant/:orderId/details", getFarmerPlantOrderDetails)
+  .get("/farmer-plant-ledger/search-farmers", requirePaymentAccess, searchFarmersForLedgerTransfer)
+  .post("/farmer-plant-ledger/transfer-advance", requirePaymentAccess, transferFarmerPlantAdvance)
+  .post("/farmer-plant-ledger/manual-entry", requirePaymentAccess, createManualFarmerPlantLedgerEntry)
   .get("/getCSV", getCsv)
   .get("/slots", getOrdersBySlot)
   .get("/getOrders", getOrders)

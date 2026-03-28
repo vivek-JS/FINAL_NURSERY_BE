@@ -26,6 +26,11 @@ import {
   syncFarmerPlantLedgerForOrderUpdate,
   archiveFarmerPlantOrderBeforeDelete,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import {
+  getLastOutstandingAfterForCustomer,
+  resolveFarmerIdentity,
+  roundMoney,
+} from "../utils/farmerPlantOrderLedgerHelper.js";
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
   const wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -1772,8 +1777,43 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
+      let ledgerMessage = null;
+      if (modelName === "Order") {
+        const prevStatus = existingDoc?.orderStatus;
+        const nextStatus = updatedDoc?.orderStatus;
+        const statusChanged = prevStatus && nextStatus && prevStatus !== nextStatus;
+        const isRejectOrCancel = nextStatus === "REJECTED" || nextStatus === "CANCELLED";
+        if (statusChanged && isRejectOrCancel) {
+          try {
+            const { customerMobile } = await resolveFarmerIdentity(updatedDoc);
+            if (customerMobile) {
+              const outstanding = roundMoney(
+                await getLastOutstandingAfterForCustomer(customerMobile, session)
+              );
+              const abs = Math.abs(Number(outstanding) || 0);
+              ledgerMessage =
+                outstanding > 0
+                  ? `Ledger updated: Due ₹${abs.toLocaleString("en-IN")}`
+                  : outstanding < 0
+                    ? `Ledger updated: Advance ₹${abs.toLocaleString("en-IN")}`
+                    : "Ledger updated: Settled ₹0";
+            }
+          } catch (e) {
+            console.error("Failed to compute ledger message:", e);
+          }
+        }
+      }
+
       await session.commitTransaction();
       session.endSession();
+
+      const responseDoc =
+        modelName === "Order" && ledgerMessage
+          ? {
+              ...(updatedDoc?.toObject ? updatedDoc.toObject() : updatedDoc),
+              ledgerMessage,
+            }
+          : updatedDoc;
 
       return res
         .status(200)
@@ -1781,7 +1821,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           generateResponse(
             "Success",
             `${modelName} updated successfully`,
-            updatedDoc
+            responseDoc
           )
         );
     } catch (error) {
