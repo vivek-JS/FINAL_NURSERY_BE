@@ -1,0 +1,7 @@
+{
+  "name": "@icici/eazypay",
+  "version": "1.0.0-stub",
+  "description": "Stub SdkClient — replace entire folder with real @icici/eazypay from ICICI SDK (see sdk-distribution/README.txt)",
+  "main": "index.js",
+  "type": "module"
+}

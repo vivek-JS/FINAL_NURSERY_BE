@@ -1,0 +1,7 @@
+{
+  "name": "@icici/composite",
+  "version": "1.0.0-stub",
+  "description": "Replace with real package from ICICI SDK distribution",
+  "main": "index.js",
+  "type": "module"
+}

@@ -1,10 +1,18 @@
 import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
+import AppError from "../utility/appError.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
 import AgriSalesOrder from "../models/agriSalesOrder.model.js";
 import GRN from "../models/grn.model.js";
 import mongoose from "mongoose";
 import RamAgriCustomerLedgerEntry from "../models/ramAgriCustomerLedger.model.js";
+import Log from "../models/log.model.js";
+import { roundMoney } from "../utils/farmerPlantOrderLedgerHelper.js";
+import {
+  createCustomerLedgerEntry,
+  getRamAgriRunningBalanceAfterMobile,
+  normalizeAgriCustomerMobile,
+} from "../utils/ramAgriLedgerHelper.js";
 
 // ==================== VARIETY/PRODUCT LEDGER ====================
 
@@ -493,6 +501,457 @@ export const getCustomerLedger = catchAsync(async (req, res, next) => {
   );
 
   return res.status(200).json(response);
+});
+
+async function resolveRamAgriStoredMobile(digits10, session) {
+  if (!digits10) return null;
+  const q = (fn) => (session ? fn.session(session) : fn);
+  let doc = await q(
+    RamAgriCustomerLedgerEntry.findOne({ customerMobile: digits10 }).select("customerMobile")
+  ).lean();
+  if (doc?.customerMobile) return doc.customerMobile;
+  doc = await q(
+    RamAgriCustomerLedgerEntry.findOne({
+      customerMobile: new RegExp(`${digits10}$`),
+    }).select("customerMobile")
+  ).lean();
+  if (doc?.customerMobile) return doc.customerMobile;
+  const ord = await q(
+    AgriSalesOrder.findOne({
+      isRamAgriProduct: true,
+      customerMobile: new RegExp(`${digits10}$`),
+    }).select("customerMobile")
+  ).lean();
+  return ord?.customerMobile || digits10;
+}
+
+/** GET — search Ram Agri customers (ledger + orders) for transfer picker */
+export const searchRamAgriCustomersForLedgerTransfer = catchAsync(async (req, res) => {
+  const q = String(req.query?.q || "").trim();
+  const limitNum = Number(req.query?.limit || 20);
+  const limit = Number.isFinite(limitNum)
+    ? Math.min(Math.max(Math.trunc(limitNum), 1), 50)
+    : 20;
+
+  const matchOrder = { isRamAgriProduct: true };
+  if (q.length >= 2) {
+    const mobileDigits = q.replace(/\D/g, "");
+    matchOrder.$or = [
+      { customerName: { $regex: q, $options: "i" } },
+      ...(mobileDigits ? [{ customerMobile: { $regex: mobileDigits, $options: "i" } }] : []),
+    ];
+  }
+
+  const rows = await AgriSalesOrder.aggregate([
+    { $match: matchOrder },
+    { $sort: { createdAt: -1 } },
+    {
+      $group: {
+        _id: "$customerMobile",
+        customerName: { $first: "$customerName" },
+        customerVillage: { $first: "$customerVillage" },
+        customerTaluka: { $first: "$customerTaluka" },
+        customerDistrict: { $first: "$customerDistrict" },
+      },
+    },
+    { $limit: limit },
+  ]);
+
+  const items = (rows || []).map((r) => ({
+    _id: r._id,
+    name: r.customerName || "",
+    mobileNumber: r._id,
+    village: r.customerVillage || "",
+    taluka: r.customerTaluka || "",
+    district: r.customerDistrict || "",
+  }));
+
+  return res.status(200).json(
+    generateResponse("Success", "Customers fetched", { items }, undefined)
+  );
+});
+
+/** POST — transfer advance between Ram Agri customers (same rules as farmer plant ledger) */
+export const transferRamAgriCustomerAdvance = catchAsync(async (req, res, next) => {
+  const { fromMobile, toMobile, amount, reason } = req.body || {};
+  const amt = roundMoney(Math.abs(Number(amount || 0)));
+  if (!(amt > 0)) {
+    return next(new AppError("amount must be > 0", 400));
+  }
+
+  const fromDigits = normalizeAgriCustomerMobile(fromMobile);
+  const toDigits = normalizeAgriCustomerMobile(toMobile);
+  if (!fromDigits || fromDigits.length < 10) {
+    return next(new AppError("Valid fromMobile is required", 400));
+  }
+  if (!toDigits || toDigits.length < 10) {
+    return next(new AppError("Valid toMobile is required", 400));
+  }
+  if (fromDigits === toDigits) {
+    return next(new AppError("from and to must be different customers", 400));
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const fromStored = await resolveRamAgriStoredMobile(fromDigits, session);
+    const toStored = await resolveRamAgriStoredMobile(toDigits, session);
+    if (!fromStored || !toStored) {
+      throw new AppError("Could not resolve customer mobile", 400);
+    }
+    if (fromStored === toStored) {
+      throw new AppError("from and to must be different customers", 400);
+    }
+
+    const beforeFrom = await getRamAgriRunningBalanceAfterMobile(fromStored, session);
+    const availableAdvance = beforeFrom < 0 ? roundMoney(Math.abs(beforeFrom)) : 0;
+    if (!(availableAdvance > 0)) {
+      throw new AppError("Source customer has no advance available to transfer", 400);
+    }
+    if (amt > availableAdvance) {
+      throw new AppError(
+        `Transfer amount exceeds available advance (max ₹${availableAdvance})`,
+        400
+      );
+    }
+
+    const lastFrom = await RamAgriCustomerLedgerEntry.findOne({ customerMobile: fromStored })
+      .sort({ entryDate: -1, createdAt: -1 })
+      .session(session)
+      .select("customerName")
+      .lean();
+    const lastTo = await RamAgriCustomerLedgerEntry.findOne({ customerMobile: toStored })
+      .sort({ entryDate: -1, createdAt: -1 })
+      .session(session)
+      .select("customerName")
+      .lean();
+    const fromName = (lastFrom?.customerName || "").trim();
+    const toName = (lastTo?.customerName || "").trim();
+
+    const transferId = new mongoose.Types.ObjectId();
+    const entryDate = new Date();
+    const performedBy = req.user?._id || undefined;
+    const reasonText =
+      reason != null && String(reason).trim() ? String(reason).trim() : undefined;
+
+    const commonMeta = {
+      transferId,
+      from: { mobile: fromStored, name: fromName },
+      to: { mobile: toStored, name: toName },
+      reason: reasonText || null,
+    };
+
+    await createCustomerLedgerEntry({
+      customerMobile: fromStored,
+      customerName: fromName,
+      refType: "ADJUSTMENT",
+      refId: transferId,
+      debit: amt,
+      category: "Advance Transfer",
+      description: `Advance transferred to ${toName || "customer"} (${toStored})${reasonText ? ` — ${reasonText}` : ""}`,
+      entryDate,
+      createdBy: performedBy,
+      metadata: { ...commonMeta, direction: "OUT" },
+      session,
+    });
+
+    await createCustomerLedgerEntry({
+      customerMobile: toStored,
+      customerName: toName,
+      refType: "ADJUSTMENT",
+      refId: transferId,
+      credit: amt,
+      category: "Advance Transfer",
+      description: `Advance received from ${fromName || "customer"} (${fromStored})${reasonText ? ` — ${reasonText}` : ""}`,
+      entryDate,
+      createdBy: performedBy,
+      metadata: { ...commonMeta, direction: "IN" },
+      session,
+    });
+
+    const afterFrom = await getRamAgriRunningBalanceAfterMobile(fromStored, session);
+    const afterTo = await getRamAgriRunningBalanceAfterMobile(toStored, session);
+
+    await Log.create(
+      [
+        {
+          userId: performedBy,
+          modelName: "RamAgriCustomerLedgerAdvanceTransfer",
+          documentId: transferId,
+          operation: "CREATE",
+          newState: {
+            transferId,
+            amount: amt,
+            from: { mobile: fromStored, name: fromName },
+            to: { mobile: toStored, name: toName },
+            beforeFrom,
+            afterFrom,
+            afterTo,
+            reason: reasonText || null,
+          },
+          changedFields: ["advanceTransfer"],
+          metadata: commonMeta,
+        },
+      ],
+      { session }
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return res.status(200).json(
+      generateResponse(
+        "Success",
+        "Advance transferred",
+        {
+          transferId,
+          amount: amt,
+          from: { mobile: fromStored, name: fromName, outstandingAfter: afterFrom },
+          to: { mobile: toStored, name: toName, outstandingAfter: afterTo },
+        },
+        undefined
+      )
+    );
+  } catch (e) {
+    try {
+      await session.abortTransaction();
+    } catch (_) {}
+    session.endSession();
+    return next(e);
+  }
+});
+
+/** POST — manual ADJUSTMENT on Ram Agri customer ledger */
+export const createManualRamAgriCustomerLedgerEntry = catchAsync(async (req, res, next) => {
+  const {
+    customerMobile: bodyMobile,
+    mobileNumber,
+    entryType,
+    amount,
+    modeOfPayment,
+    remark,
+    bankName,
+    transactionId,
+    chequeNumber,
+    entryDate,
+  } = req.body || {};
+
+  const type = String(entryType || "").trim().toUpperCase();
+  if (!["DEBIT", "CREDIT"].includes(type)) {
+    return next(new AppError("entryType must be DEBIT or CREDIT", 400));
+  }
+
+  const amt = roundMoney(Math.abs(Number(amount || 0)));
+  if (!(amt > 0)) {
+    return next(new AppError("amount must be > 0", 400));
+  }
+
+  const mode = String(modeOfPayment || "").trim();
+  const allowedModes = ["Cash", "UPI", "Cheque", "NEFT/RTGS", "Bank Transfer", "Card"];
+  if (!mode || !allowedModes.includes(mode)) {
+    return next(
+      new AppError(`modeOfPayment is required (${allowedModes.join(", ")})`, 400)
+    );
+  }
+
+  const remarkText = String(remark || "").trim();
+  if (!remarkText) {
+    return next(new AppError("remark is required", 400));
+  }
+
+  const needsBankName = ["UPI", "Cheque", "NEFT/RTGS", "Bank Transfer", "Card"].includes(mode);
+  if (needsBankName && !String(bankName || "").trim()) {
+    return next(new AppError("bankName is required for this mode", 400));
+  }
+
+  const digits = normalizeAgriCustomerMobile(bodyMobile || mobileNumber);
+  if (!digits || digits.length < 10) {
+    return next(new AppError("Valid customerMobile or mobileNumber is required", 400));
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const stored = await resolveRamAgriStoredMobile(digits, session);
+    const last = await RamAgriCustomerLedgerEntry.findOne({ customerMobile: stored })
+      .sort({ entryDate: -1, createdAt: -1 })
+      .session(session)
+      .lean();
+    const ord = await AgriSalesOrder.findOne({
+      isRamAgriProduct: true,
+      customerMobile: stored,
+    })
+      .sort({ createdAt: -1 })
+      .session(session)
+      .select("customerName")
+      .lean();
+    const custName = (last?.customerName || ord?.customerName || "").trim();
+
+    const manualId = new mongoose.Types.ObjectId();
+    const createdBy = req.user?._id || undefined;
+
+    const created = await createCustomerLedgerEntry({
+      customerMobile: stored,
+      customerName: custName,
+      refType: "ADJUSTMENT",
+      refId: manualId,
+      debit: type === "DEBIT" ? amt : 0,
+      credit: type === "CREDIT" ? amt : 0,
+      category: "Manual Entry",
+      description: `Manual ${type.toLowerCase()} entry — ${remarkText}`,
+      entryDate: entryDate ? new Date(entryDate) : new Date(),
+      createdBy,
+      metadata: {
+        manualEntryId: manualId,
+        entryType: type,
+        modeOfPayment: mode,
+        bankName: bankName ? String(bankName).trim() : undefined,
+        transactionId: transactionId ? String(transactionId).trim() : undefined,
+        chequeNumber: chequeNumber ? String(chequeNumber).trim() : undefined,
+        remark: remarkText,
+      },
+      session,
+    });
+
+    const outstandingAfter = await getRamAgriRunningBalanceAfterMobile(stored, session);
+
+    await Log.create(
+      [
+        {
+          userId: createdBy,
+          modelName: "RamAgriCustomerLedgerManualEntry",
+          documentId: manualId,
+          operation: "CREATE",
+          newState: {
+            manualEntryId: manualId,
+            ledgerEntryId: created?._id || null,
+            customerMobile: stored,
+            customerName: custName,
+            entryType: type,
+            amount: amt,
+            modeOfPayment: mode,
+            remark: remarkText,
+            outstandingAfter,
+          },
+          changedFields: ["manualLedgerEntry"],
+          metadata: { manualEntryId: manualId, customerMobile: stored, entryType: type, amount: amt },
+        },
+      ],
+      { session }
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return res.status(200).json(
+      generateResponse(
+        "Success",
+        "Manual ledger entry created",
+        {
+          manualEntryId: manualId,
+          ledgerEntryId: created?._id || null,
+          outstandingAfter: roundMoney(outstandingAfter),
+        },
+        undefined
+      )
+    );
+  } catch (e) {
+    try {
+      await session.abortTransaction();
+    } catch (_) {}
+    session.endSession();
+    return next(e);
+  }
+});
+
+/** GET — paginated list of customer mobiles that have Ram Agri ledger lines */
+export const getRamAgriLedgerParties = catchAsync(async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+  const skip = (page - 1) * limit;
+  const search = String(req.query.search || "").trim();
+
+  const preMatch = {};
+  if (search.length >= 1) {
+    const esc = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    preMatch.$or = [
+      { customerName: { $regex: esc, $options: "i" } },
+      { customerMobile: { $regex: esc, $options: "i" } },
+    ];
+  }
+
+  const pipeline = [
+    ...(Object.keys(preMatch).length ? [{ $match: preMatch }] : []),
+    { $sort: { entryDate: 1, createdAt: 1 } },
+    {
+      $group: {
+        _id: "$customerMobile",
+        customerName: { $last: "$customerName" },
+        lines: {
+          $push: {
+            d: { $ifNull: ["$debit", 0] },
+            c: { $ifNull: ["$credit", 0] },
+          },
+        },
+        lastEntryDate: { $last: "$entryDate" },
+        lineCount: { $sum: 1 },
+      },
+    },
+    {
+      $addFields: {
+        outstanding: {
+          $reduce: {
+            input: "$lines",
+            initialValue: 0,
+            in: {
+              $add: [
+                "$$value",
+                { $subtract: [{ $ifNull: ["$$this.d", 0] }, { $ifNull: ["$$this.c", 0] }] },
+              ],
+            },
+          },
+        },
+      },
+    },
+    { $project: { lines: 0 } },
+    { $sort: { lastEntryDate: -1 } },
+    {
+      $facet: {
+        data: [{ $skip: skip }, { $limit: limit }],
+        total: [{ $count: "count" }],
+      },
+    },
+  ];
+
+  const agg = await RamAgriCustomerLedgerEntry.aggregate(pipeline);
+  const facet = agg[0] || { data: [], total: [] };
+  const data = facet.data || [];
+  const total = facet.total?.[0]?.count ?? 0;
+
+  const items = data.map((r) => ({
+    customerMobile: r._id,
+    customerName: r.customerName || "",
+    outstanding: roundMoney(Number(r.outstanding) || 0),
+    lineCount: r.lineCount,
+    lastEntryDate: r.lastEntryDate,
+  }));
+
+  return res.status(200).json(
+    generateResponse(
+      "Success",
+      "Ledger parties",
+      {
+        items,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit) || 1,
+        },
+      },
+      undefined
+    )
+  );
 });
 
 // ==================== CLEAR CUSTOMER LEDGER ====================

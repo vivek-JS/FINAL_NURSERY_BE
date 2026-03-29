@@ -262,7 +262,8 @@ import watiProxyRoute from "./routes/watiProxy.route.js";
 import exotelRoute from "./routes/exotel.route.js";
 import orderRoute from "./routes/order.route.js";
 import { handleQRPaymentCallback } from "./controllers/order.controller.js";
-import { getFarmerPlantLedger } from "./controllers/farmerPlantOrderLedger.controller.js";
+import { getFarmerPlantLedger, getFarmerPlantLedgerParties } from "./controllers/farmerPlantOrderLedger.controller.js";
+import { getRamAgriLedgerParties } from "./controllers/ramAgriLedger.controller.js";
 import userRoute from "./routes/user.route.js";
 import cmsRoute from "./routes/cms.route.js";
 import employeeRoute from "./routes/employee.route.js";
@@ -288,7 +289,8 @@ import batchRoute from "./routes/batch.route.js";
 import plantOutward from "./routes/plantOutward.route.js";
 import PollyHouse from "./routes/pollyhouse.route.js";
 import DelaerRoutes from "./routes/dealer.route.js";
-import { authenticateToken, optionalAuth } from "./middlewares/auth.middleware.js";
+import { authenticateToken, optionalAuth, requirePaymentAccess } from "./middlewares/auth.middleware.js";
+import generateResponse from "./utility/responseFormat.js";
 import ExcelRoute from "./routes/excel.route.js";
 import pricingRoute from "./routes/pricing.route.js";
 import analyticsRoute from "./routes/analytics.route.js";
@@ -303,6 +305,8 @@ import sowingRoute from "./routes/sowing.route.js";
 import publicFarmerLinkRoute from "./routes/publicFarmerLink.route.js";
 import clearDataRoute from "./routes/clearData.route.js";
 import whatsappBroadcastRoute from "./routes/whatsappBroadcast.route.js";
+import iciciPaymentRoute from "./routes/icici.routes.js";
+import paymentReconciliationRoute from "./routes/payment.routes.js";
 
 // Inventory Management Routes
 import productRoute from "./routes/product.route.js";
@@ -338,7 +342,29 @@ import {
 
 // Health check routes (no authentication required)
 import healthRoute from "./routes/health.route.js";
+import ocrRoute from "./routes/ocr.routes.js";
 server.use("/health", healthRoute);
+
+// UPI receipt OCR (Gemini) — multipart image; no URL storage
+// Mount under /api/v1/ocr so it matches the same prefix as other APIs (proxies, env REACT_APP_BASE_URL).
+server.use("/api/v1/ocr", ocrRoute);
+server.use("/api/ocr", ocrRoute);
+
+// Accountant: ledger directory lists (mounted early so nothing shadows these paths)
+const farmerPlantLedgerPartiesRouter = express.Router();
+farmerPlantLedgerPartiesRouter.get("/", requirePaymentAccess, getFarmerPlantLedgerParties);
+server.use(
+  "/api/v1/order/farmer-plant-ledger/parties",
+  authenticateToken,
+  farmerPlantLedgerPartiesRouter
+);
+const ramAgriLedgerPartiesRouter = express.Router();
+ramAgriLedgerPartiesRouter.get("/", requirePaymentAccess, getRamAgriLedgerParties);
+server.use(
+  "/api/v1/inventory/ram-agri-customer-ledger/parties",
+  authenticateToken,
+  ramAgriLedgerPartiesRouter
+);
 
 // dummy route
 server.get("/api/dummyData", (req, res) => {
@@ -364,6 +390,17 @@ server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
 server.use("/api/v1/whatsapp-broadcast", whatsappBroadcastRoute);
 
 // Protected routes - require authentication
+// Exact GET /api/v1/farmer/get (no :id) — must be before farmer router mount so it is not swallowed by 404
+server.get("/api/v1/farmer/get", authenticateToken, (req, res) => {
+  return res.status(400).json(
+    generateResponse(
+      "Fail",
+      "Farmer id is required in the path. Use GET /api/v1/farmer/get/:id where :id is the farmer MongoDB _id (24 hex characters). Example: /api/v1/farmer/get/507f1f77bcf86cd799439011",
+      null,
+      null
+    )
+  );
+});
 server.use("/api/v1/farmer", authenticateToken, farmerRoute);
 server.use("/api/v1/farmer-list", authenticateToken, farmerListRoute);
 server.use("/api/v1/call-assignment", callAssignmentRoute);
@@ -373,6 +410,10 @@ server.use("/api/v1/wati", watiProxyRoute);
 server.use("/api/v1/assignments", authenticateToken, followupMetricsRoute);
 server.use("/api/v1/exotel", exotelRoute);
 server.post("/api/v1/order/payment/qr-callback", handleQRPaymentCallback);
+// ICICI EazyPay — dynamic QR, statement, status (JWT required; not under /api/v1)
+server.use("/api/payments/icici", authenticateToken, iciciPaymentRoute);
+// ERP payment reconciliation (accountant / super admin on sensitive routes)
+server.use("/api/payments", authenticateToken, paymentReconciliationRoute);
 // Registered here (before order router) so GET /farmer-plant-ledger always resolves — mirrors order.route.js
 server.get("/api/v1/order/farmer-plant-ledger", authenticateToken, getFarmerPlantLedger);
 server.use("/api/v1/order", authenticateToken, orderRoute);

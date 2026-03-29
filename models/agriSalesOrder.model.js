@@ -139,6 +139,31 @@ const paymentSchema = new Schema({
   qrExpiresAt: { type: Date },
   qrImage: { type: String },
   qrPayload: { type: String },
+  customerName: { type: String, trim: true },
+  utrNumber: { type: String, trim: true },
+  merchantTranId: { type: String, trim: true },
+  providerTxnId: { type: String, trim: true },
+  bankVerificationStatus: {
+    type: String,
+    enum: ["PENDING", "BANK_VERIFIED", "VERIFY_FAILED", "NOT_REQUIRED"],
+    default: "PENDING",
+  },
+  bankVerificationSource: {
+    type: String,
+    enum: ["STATEMENT_API", "TXN_STATUS_API", "MANUAL", null],
+    default: null,
+  },
+  bankVerificationMatchedBy: {
+    type: String,
+    enum: ["UTR", "CHEQUE", "TXN_ID", "AMOUNT_DATE", null],
+    default: null,
+  },
+  bankReferenceNumber: { type: String, trim: true },
+  bankNarration: { type: String, trim: true },
+  bankAmount: { type: Number },
+  bankEntryDate: { type: Date },
+  bankRawResponse: { type: Schema.Types.Mixed },
+  bankReconciliationConflict: { type: Boolean, default: false },
 }, {
   timestamps: true,
 });

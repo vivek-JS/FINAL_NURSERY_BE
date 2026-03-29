@@ -21,7 +21,7 @@ import {
 import { sendOrderAcceptedWhatsApp, sendOrderDispatchedWhatsAppDelivery1 } from "../utility/watiMessaging.js";
 import { getUnclearedPayments as getUnclearedPaymentsService, getPaymentsForApproval as getPaymentsForApprovalService, reconcile as reconcileService } from "../services/paymentReconciliationService.js";
 import { generateQR } from "../services/iciciBankService.js";
-import crypto from "crypto";
+import { normalizeIciciError, saveIciciQrAuditRecord } from "../services/iciciQr.service.js";
 import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
@@ -530,6 +530,8 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     remark,
     transactionId,
     chequeNumber,
+    utrNumber,
+    customerName,
   } = req.body;
 
   // Handle uploaded screenshot file with Cloudinary
@@ -629,6 +631,10 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       remark: remark || "",
       transactionId: transactionId || undefined,
       chequeNumber: chequeNumber || undefined,
+      utrNumber: utrNumber?.trim() || undefined,
+      customerName:
+        customerName?.trim() ||
+        (!order.dealerOrder && order.farmer?.name ? order.farmer.name : undefined),
     };
     
     console.log("Created payment object with status:", newPayment.paymentStatus);
@@ -3242,11 +3248,11 @@ const getPaymentsForApproval = catchAsync(async (req, res) => {
 });
 
 const reconcilePayments = catchAsync(async (req, res) => {
-  const { dateFrom, dateTo } = req.body || req.query;
+  const { dateFrom, dateTo, source } = req.body || req.query;
   if (!dateFrom || !dateTo) {
     return res.status(400).json({ success: false, message: "dateFrom and dateTo are required" });
   }
-  const result = await reconcileService(dateFrom, dateTo);
+  const result = await reconcileService(dateFrom, dateTo, source || "all");
   return res.status(200).json({ success: true, ...result });
 });
 
@@ -3276,17 +3282,23 @@ const generatePaymentQR = catchAsync(async (req, res) => {
   if (hasActiveQR) {
     return res.status(400).json({ success: false, message: "An active payment QR already exists for this order" });
   }
-  const qrReferenceId = crypto.randomUUID();
-  const qrExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
   const customerName = order.dealerOrder ? "Dealer Order" : (order.farmer?.name || "Customer");
   const mobileNumber = order.farmer?.mobileNumber ? String(order.farmer.mobileNumber) : "";
-  const qrResult = await generateQR({
-    amount: outstanding,
-    referenceId: qrReferenceId,
-    customerName,
-    mobileNumber,
-    orderId: order.orderId,
-  });
+  let qrResult;
+  try {
+    qrResult = await generateQR({
+      amount: outstanding,
+      orderId: order.orderId,
+      customerName,
+      mobileNumber,
+    });
+  } catch (err) {
+    const n = normalizeIciciError(err);
+    return res.status(n.httpStatus).json({ success: false, message: n.message, code: n.code });
+  }
+  // ICICI merchantTranId must be stored as qrReferenceId so /order/payment/qr-callback can match bank referenceId
+  const qrReferenceId = qrResult.merchantTranId;
+  const qrExpiresAt = new Date(qrResult.expiresAt || Date.now() + 30 * 60 * 1000);
   const qrImageOrString = qrResult.qrImageBase64 || qrResult.qrString || "";
   const newPayment = {
     paidAmount: outstanding,
@@ -3294,12 +3306,25 @@ const generatePaymentQR = catchAsync(async (req, res) => {
     paymentDate: new Date(),
     modeOfPayment: "UPI_QR",
     qrReferenceId,
+    merchantTranId: qrReferenceId,
+    bankVerificationStatus: "PENDING",
     qrExpiresAt,
     qrImage: qrResult.qrImageBase64 || undefined,
     qrPayload: qrResult.qrString || undefined,
   };
   order.payment.push(newPayment);
   await order.save();
+  await saveIciciQrAuditRecord({
+    orderId: order.orderId,
+    merchantTranId: qrReferenceId,
+    amount: outstanding,
+    context: "FARMER_ORDER",
+    linkedOrderMongoId: order._id,
+    qrPayload: { qrString: qrResult.qrString, qrImageBase64: qrResult.qrImageBase64 },
+    requestPayload: qrResult.requestPayload,
+    responsePayload: qrResult.raw,
+    expiresAt: qrExpiresAt,
+  });
   const added = order.payment[order.payment.length - 1];
   return res.status(200).json({
     success: true,
@@ -3317,6 +3342,7 @@ const generatePaymentQR = catchAsync(async (req, res) => {
 /**
  * POST /api/v1/order/payment/qr-callback
  * Webhook for ICICI QR payment notification. Match by referenceId or UTR+amount; set BANK_VERIFIED if PENDING and not expired.
+ * referenceId should be ICICI merchantTranId (same value stored as payment.qrReferenceId when QR was generated).
  * Body: { referenceId?, utr?, amount } (referenceId or utr+amount). Idempotent: already BANK_VERIFIED/COLLECTED returns 200.
  */
 const handleQRPaymentCallback = catchAsync(async (req, res) => {

@@ -23,6 +23,8 @@ const allowedParams = [
   "subDistrictId",
   "startDate",
   "endDate",
+  "dateFrom", // ERP payment reconciliation (unverified / for-approval lists)
+  "dateTo",
   "sortKey",
   "sortOrder",
   "search",
@@ -175,6 +177,12 @@ const parameterWhiteListing = (req, res, next) => {
 
   // Skip parameter validation for WATI proxy (query params: pageSize, pageNumber, channelPhoneNumber)
   if (req.path.startsWith('/api/v1/wati')) {
+    return next();
+  }
+
+  // ERP ICICI / payment reconciliation — mounted at /api/payments (dateFrom, dateTo, source, …)
+  const paymentsPath = stripQuery(req.originalUrl || req.url || "") || req.path || "";
+  if (paymentsPath.startsWith("/api/payments") || (req.path && req.path.startsWith("/api/payments"))) {
     return next();
   }
 

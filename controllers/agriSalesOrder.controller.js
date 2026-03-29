@@ -9,9 +9,9 @@ import Farmer from "../models/farmer.model.js";
 import Vehicle from "../models/vehicleModel.model.js";
 import User from "../models/user.model.js";
 import mongoose from "mongoose";
-import crypto from "crypto";
 import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
 import { generateQR } from "../services/iciciBankService.js";
+import { normalizeIciciError, saveIciciQrAuditRecord } from "../services/iciciQr.service.js";
 
 const shouldLogRamAgriLedger = (order) =>
   Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
@@ -995,6 +995,8 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
     receiptPhoto,
     remark,
     isWalletPayment,
+    utrNumber,
+    customerName,
   } = req.body;
 
   if (!mongoose.isValidObjectId(id)) {
@@ -1027,6 +1029,8 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
     bankName: bankName || "",
     transactionId: transactionId || "",
     chequeNumber: chequeNumber || "",
+    utrNumber: utrNumber?.trim() || undefined,
+    customerName: customerName?.trim() || order.customerName || undefined,
     receiptPhoto: receiptPhoto || [],
     remark: remark || "",
     isWalletPayment: isWalletPayment || false,
@@ -1121,17 +1125,22 @@ const generatePaymentQRAgri = catchAsync(async (req, res, next) => {
   if (hasActiveQR) {
     return next(new AppError("An active payment QR already exists for this order", 400));
   }
-  const qrReferenceId = crypto.randomUUID();
-  const qrExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
   const customerName = order.customerName || "Customer";
   const mobileNumber = order.customerMobile || "";
-  const qrResult = await generateQR({
-    amount: outstanding,
-    referenceId: qrReferenceId,
-    customerName,
-    mobileNumber,
-    orderId: order.orderNumber,
-  });
+  let qrResult;
+  try {
+    qrResult = await generateQR({
+      amount: outstanding,
+      orderId: order.orderNumber,
+      customerName,
+      mobileNumber,
+    });
+  } catch (err) {
+    const n = normalizeIciciError(err);
+    return res.status(n.httpStatus).json({ success: false, message: n.message, code: n.code });
+  }
+  const qrReferenceId = qrResult.merchantTranId;
+  const qrExpiresAt = new Date(qrResult.expiresAt || Date.now() + 30 * 60 * 1000);
   const qrImageOrString = qrResult.qrImageBase64 || qrResult.qrString || "";
   const newPayment = {
     paidAmount: outstanding,
@@ -1139,6 +1148,8 @@ const generatePaymentQRAgri = catchAsync(async (req, res, next) => {
     paymentDate: new Date(),
     modeOfPayment: "UPI_QR",
     qrReferenceId,
+    merchantTranId: qrReferenceId,
+    bankVerificationStatus: "PENDING",
     qrExpiresAt,
     qrImage: qrResult.qrImageBase64 || undefined,
     qrPayload: qrResult.qrString || undefined,
@@ -1146,6 +1157,17 @@ const generatePaymentQRAgri = catchAsync(async (req, res, next) => {
   if (!order.payment) order.payment = [];
   order.payment.push(newPayment);
   await order.save();
+  await saveIciciQrAuditRecord({
+    orderId: order.orderNumber,
+    merchantTranId: qrReferenceId,
+    amount: outstanding,
+    context: "AGRI_ORDER",
+    linkedOrderMongoId: order._id,
+    qrPayload: { qrString: qrResult.qrString, qrImageBase64: qrResult.qrImageBase64 },
+    requestPayload: qrResult.requestPayload,
+    responsePayload: qrResult.raw,
+    expiresAt: qrExpiresAt,
+  });
   const added = order.payment[order.payment.length - 1];
   return res.status(200).json({
     success: true,

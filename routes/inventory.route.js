@@ -2,7 +2,7 @@ import express from "express";
 import { check } from "express-validator";
 import mongoose from "mongoose";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
-import { restrictRamAgriSalesManager } from "../middlewares/auth.middleware.js";
+import { restrictRamAgriSalesManager, requirePaymentAccess } from "../middlewares/auth.middleware.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
@@ -59,7 +59,15 @@ import {
 } from "../controllers/agriSalesOrder.controller.js";
 import { getRamAgriSalesDashboard } from "../controllers/ramAgriSalesDashboard.controller.js";
 import { getRamAgriSalesRankboard } from "../controllers/ramAgriSalesRankboard.controller.js";
-import { getVarietyLedger, getCustomerLedger, clearCustomerLedger } from "../controllers/ramAgriLedger.controller.js";
+import {
+  getVarietyLedger,
+  getCustomerLedger,
+  clearCustomerLedger,
+  searchRamAgriCustomersForLedgerTransfer,
+  transferRamAgriCustomerAdvance,
+  createManualRamAgriCustomerLedgerEntry,
+  getRamAgriLedgerParties,
+} from "../controllers/ramAgriLedger.controller.js";
 import { getMerchantLedger } from "../controllers/ramAgriMerchantLedger.controller.js";
 import { getRamAgriSalesTargets, upsertRamAgriSalesTarget } from "../controllers/ramAgriSalesTarget.controller.js";
 import { generateRamAgriVideoSummary } from "../controllers/ramAgriVideoSummary.controller.js";
@@ -380,6 +388,22 @@ router.get("/ram-agri-video-summary", generateRamAgriVideoSummary);
 
 // ==================== RAM AGRI LEDGERS ====================
 router.get("/ram-agri-variety-ledger", getVarietyLedger);
+router.get(
+  "/ram-agri-customer-ledger/search-customers",
+  requirePaymentAccess,
+  searchRamAgriCustomersForLedgerTransfer
+);
+router.post(
+  "/ram-agri-customer-ledger/transfer-advance",
+  requirePaymentAccess,
+  transferRamAgriCustomerAdvance
+);
+router.post(
+  "/ram-agri-customer-ledger/manual-entry",
+  requirePaymentAccess,
+  createManualRamAgriCustomerLedgerEntry
+);
+router.get("/ram-agri-customer-ledger/parties", requirePaymentAccess, getRamAgriLedgerParties);
 router.get("/ram-agri-customer-ledger", getCustomerLedger);
 router.delete(
   "/ram-agri-customer-ledger",

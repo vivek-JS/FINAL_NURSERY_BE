@@ -1,4 +1,33 @@
 import RamAgriCustomerLedgerEntry from "../models/ramAgriCustomerLedger.model.js";
+import { roundMoney } from "./farmerPlantOrderLedgerHelper.js";
+
+/** Last 10 digits for consistent matching when possible */
+export function normalizeAgriCustomerMobile(m) {
+  const d = String(m || "").replace(/\D/g, "");
+  if (d.length >= 10) return d.slice(-10);
+  return d || "";
+}
+
+/**
+ * Running receivable after all lines (+ = customer owes, − = advance).
+ * Uses exact customerMobile match as stored in DB.
+ */
+export async function getRamAgriRunningBalanceAfterMobile(customerMobile, session) {
+  const m = String(customerMobile || "").trim();
+  if (!m) return 0;
+  const q = RamAgriCustomerLedgerEntry.find({ customerMobile: m })
+    .sort({ entryDate: 1, createdAt: 1 })
+    .lean();
+  if (session) q.session(session);
+  const rows = await q;
+  let running = 0;
+  for (const e of rows) {
+    running = roundMoney(
+      running + (Number(e.debit) || 0) - (Number(e.credit) || 0)
+    );
+  }
+  return running;
+}
 
 export const createCustomerLedgerEntry = async ({
   customerMobile,

@@ -153,8 +153,9 @@ export const getFilterValues = catchAsync(async (req, res) => {
 /** GET /combined - Merge farmers + leads + farmer form, dedupe by phone, apply filters, paginated */
 export const getCombinedList = catchAsync(async (req, res, next) => {
   const { search, district, taluka, village, stateName, opt_in, page = 1, limit = 50, source, linkId, includeAll } = req.query;
-  const pageNum = Math.max(1, parseInt(page, 10));
-  const limitNum = Math.min(100, Math.max(10, parseInt(limit, 10)));
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitParsed = parseInt(limit, 10);
+  const limitNum = Math.min(100, Math.max(5, Number.isFinite(limitParsed) ? limitParsed : 50));
   const skip = (pageNum - 1) * limitNum;
 
   const farmerQuery = { mobileNumber: { $exists: true, $ne: null } };

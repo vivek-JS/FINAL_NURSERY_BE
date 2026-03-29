@@ -4,6 +4,8 @@
  * When credentials are not set, returns empty array (reconciliation will match nothing).
  */
 
+import { generateIciciDynamicQr } from "./iciciQr.service.js";
+
 const normalizeUtr = (str) => (str || "").toString().trim().toUpperCase().replace(/\s+/g, "");
 const normalizeAmount = (n) => Math.round(Number(n) * 100) / 100;
 
@@ -33,27 +35,24 @@ export async function fetchBankTransactions(dateFrom, dateTo) {
 }
 
 /**
- * Generate QR for payment collection (ICICI UPI Collect / QR API).
- * @param {Object} params - { amount, referenceId, customerName, mobileNumber, orderId }
- * @returns {Promise<{ qrString?: string, qrImageBase64?: string, requestId?: string }>}
+ * Generate QR for payment collection via ICICI EazyPay SDK (see iciciQr.service.js).
+ * Uses orderId as billNumber on ICICI; bank returns merchantTranId — use that as qrReferenceId on your order payment row for webhook matching.
+ *
+ * @param {Object} params - { amount, orderId, referenceId?, customerName?, mobileNumber? }
+ * @returns {Promise<{ qrString?: string, qrImageBase64?: string, merchantTranId: string, expiresAt: string, requestPayload?: object, raw?: object }>}
  */
 export async function generateQR(params) {
-  const { amount, referenceId, customerName, mobileNumber, orderId } = params || {};
-  const baseUrl = process.env.ICICI_BASE_URL;
-  const apiKey = process.env.ICICI_API_KEY;
-
-  if (!baseUrl || !apiKey) {
-    console.warn("ICICI_BASE_URL or ICICI_API_KEY not set; returning stub QR.");
-    return { qrString: `upi://pay?pa=stub@icici&pn=${encodeURIComponent(customerName || "Customer")}&am=${amount}&tr=${referenceId}` };
+  const { amount, orderId, referenceId } = params || {};
+  const billOrderId =
+    orderId != null && String(orderId).trim() !== ""
+      ? String(orderId)
+      : referenceId != null
+        ? String(referenceId)
+        : "";
+  if (!billOrderId) {
+    throw new Error("generateQR: orderId (or referenceId) is required for ICICI EazyPay bill number");
   }
-
-  try {
-    // TODO: Replace with actual ICICI QR/Collect API call per their docs.
-    return { qrString: `upi://pay?pa=stub@icici&pn=${encodeURIComponent(customerName || "Customer")}&am=${amount}&tr=${referenceId}` };
-  } catch (err) {
-    console.error("ICICI generateQR error:", err);
-    throw err;
-  }
+  return generateIciciDynamicQr({ orderId: billOrderId, amount });
 }
 
 export { normalizeUtr, normalizeAmount };

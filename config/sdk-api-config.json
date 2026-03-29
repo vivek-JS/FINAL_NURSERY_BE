@@ -1,0 +1,17 @@
+{
+  "_comment": "Replace this file entirely with sdk-api-config.json from your ICICI SDK zip. ENV_TYPE=UAT in .env selects sandbox. Find apiId and requestDtoType/responseDtoType for QR under the eazypay module in that file.",
+  "envType": "UAT",
+  "apiKey": "",
+  "modules": {
+    "eazypay": {
+      "apis": [
+        {
+          "apiId": "SET_EAZYPAY_QR_API_ID_IN_ENV",
+          "description": "QR generation — copy real apiId from bank config",
+          "requestDtoType": "ReplaceWithActualDtoNameFromSdk",
+          "responseDtoType": "ReplaceWithActualDtoNameFromSdk"
+        }
+      ]
+    }
+  }
+}

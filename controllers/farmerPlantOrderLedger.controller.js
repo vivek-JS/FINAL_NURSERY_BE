@@ -344,6 +344,94 @@ export const getFarmerPlantLedger = catchAsync(async (req, res) => {
 });
 
 /**
+ * GET paginated parties (mobiles) that have farmer plant ledger entries.
+ * Query: search, page, limit
+ */
+export const getFarmerPlantLedgerParties = catchAsync(async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+  const skip = (page - 1) * limit;
+  const search = String(req.query.search || "").trim();
+
+  const preMatch = {};
+  if (search.length >= 1) {
+    const esc = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    preMatch.$or = [
+      { customerName: { $regex: esc, $options: "i" } },
+      { customerMobile: { $regex: esc, $options: "i" } },
+    ];
+  }
+
+  const pipeline = [
+    ...(Object.keys(preMatch).length ? [{ $match: preMatch }] : []),
+    { $sort: { entryDate: 1, createdAt: 1 } },
+    {
+      $group: {
+        _id: "$customerMobile",
+        farmerId: { $last: "$farmer" },
+        customerName: { $last: "$customerName" },
+        lastOutstandingAfter: { $last: "$outstandingAfter" },
+        lastEntryDate: { $last: "$entryDate" },
+        lineCount: { $sum: 1 },
+      },
+    },
+    { $sort: { lastEntryDate: -1 } },
+    {
+      $facet: {
+        data: [{ $skip: skip }, { $limit: limit }],
+        total: [{ $count: "count" }],
+      },
+    },
+  ];
+
+  const agg = await FarmerPlantOrderLedgerEntry.aggregate(pipeline);
+  const facet = agg[0] || { data: [], total: [] };
+  const rows = facet.data || [];
+  const total = facet.total?.[0]?.count ?? 0;
+
+  const farmerIds = rows.map((r) => r.farmerId).filter(Boolean);
+  const farmers = await Farmer.find({ _id: { $in: farmerIds } })
+    .select("name mobileNumber village taluka district")
+    .lean();
+  const byId = Object.fromEntries(
+    farmers.map((f) => [f._id.toString(), f])
+  );
+
+  const items = rows.map((r) => {
+    const fid = r.farmerId?.toString();
+    const f = fid ? byId[fid] : null;
+    return {
+      customerMobile: r._id,
+      customerName: r.customerName || f?.name || "",
+      farmerId: r.farmerId || null,
+      outstanding: roundMoney(Number(r.lastOutstandingAfter) || 0),
+      lineCount: r.lineCount,
+      lastEntryDate: r.lastEntryDate,
+      village: f?.village || "",
+      taluka: f?.taluka || "",
+      district: f?.district || "",
+    };
+  });
+
+  return res.status(200).json(
+    generateResponse(
+      "Success",
+      "Ledger parties",
+      {
+        items,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit) || 1,
+        },
+      },
+      undefined
+    )
+  );
+});
+
+/**
  * GET single order details for farmer plant order (live or archived) + ledger lines.
  */
 export const getFarmerPlantOrderDetails = catchAsync(async (req, res, next) => {

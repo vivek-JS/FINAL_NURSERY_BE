@@ -223,6 +223,36 @@ const paymentSchema = new Schema(
     qrExpiresAt: { type: Date },
     qrImage: { type: String },
     qrPayload: { type: String },
+    /** Customer name copy on payment row (ERP / reconciliation reports). */
+    customerName: { type: String, trim: true },
+    /** UTR for UPI/NEFT — often same as transactionId; stored explicitly for bank matching. */
+    utrNumber: { type: String, trim: true },
+    /** ICICI EazyPay QR merchant transaction id */
+    merchantTranId: { type: String, trim: true },
+    /** ICICI provider transaction id after payment */
+    providerTxnId: { type: String, trim: true },
+    bankVerificationStatus: {
+      type: String,
+      enum: ["PENDING", "BANK_VERIFIED", "VERIFY_FAILED", "NOT_REQUIRED"],
+      default: "PENDING",
+    },
+    bankVerificationSource: {
+      type: String,
+      enum: ["STATEMENT_API", "TXN_STATUS_API", "MANUAL", null],
+      default: null,
+    },
+    bankVerificationMatchedBy: {
+      type: String,
+      enum: ["UTR", "CHEQUE", "TXN_ID", "AMOUNT_DATE", null],
+      default: null,
+    },
+    bankReferenceNumber: { type: String, trim: true },
+    bankNarration: { type: String, trim: true },
+    bankAmount: { type: Number },
+    bankEntryDate: { type: Date },
+    bankRawResponse: { type: Schema.Types.Mixed },
+    /** True when more than one bank line matched — do not auto-verify */
+    bankReconciliationConflict: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

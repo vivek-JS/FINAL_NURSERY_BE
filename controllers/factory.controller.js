@@ -657,6 +657,7 @@ const createOne = (Model, modelName) =>
             paymentStatus: "PENDING", // Always PENDING for new payments
             paymentDate: paymentItem.paymentDate || new Date(),
             bankName: paymentItem.bankName || "",
+            transactionId: paymentItem.transactionId || undefined,
             receiptPhoto: paymentItem.receiptPhoto || [],
             modeOfPayment: paymentItem.modeOfPayment || "",
             remark: paymentItem.remark || "",
@@ -2390,10 +2391,13 @@ const getAll = (Model, modelName) =>
       let filter = {};
 
       let query = Model.find(filter);
-      const page = req.query.page * 1 || 1;
-      const limit = req.query.limit * 1 || 50;
+      const pageRaw = parseInt(req.query.page, 10);
+      const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? pageRaw : 1;
+      const limitRaw = parseInt(req.query.limit, 10);
+      const limitUncapped = Number.isFinite(limitRaw) && limitRaw >= 1 ? limitRaw : 50;
+      const limit = Math.min(200, limitUncapped);
 
-      const features = new APIFeatures(query, req.query, modelName)
+      const features = new APIFeatures(query, { ...req.query, page, limit }, modelName)
         .filter()
         .sort()
         .limitFields();
@@ -2411,6 +2415,8 @@ const getAll = (Model, modelName) =>
       const totalPages = Math.ceil(total / limit) || 1;
       const hasNextPage = page < totalPages;
       const nextPage = hasNextPage ? page + 1 : null;
+      const hasPrevPage = page > 1;
+      const prevPage = hasPrevPage ? page - 1 : null;
 
       const payload =
         modelName === "Farmer"
@@ -2423,6 +2429,8 @@ const getAll = (Model, modelName) =>
                 totalPages,
                 hasNextPage,
                 nextPage,
+                hasPrevPage,
+                prevPage,
               },
             }
           : transformedDoc;
