@@ -234,6 +234,32 @@ const orderSchema = new Schema(
       unique: true,
       required: true,
     },
+    /** 4-digit unique code for WhatsApp templates (farmer-facing order id). */
+    publicOrderCode: {
+      type: String,
+      trim: true,
+      match: /^\d{4}$/,
+    },
+    whatsappAcceptedSentAt: {
+      type: Date,
+      default: null,
+    },
+    /** WATI `local_message_id` after accept template send (audit / support). */
+    whatsappAcceptedMessageKey: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    whatsappDispatchSentAt: {
+      type: Date,
+      default: null,
+    },
+    /** WATI `local_message_id` after dispatch template send. */
+    whatsappDispatchMessageKey: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     dealerOrder: {
       type: Boolean,
       default: false,
@@ -575,6 +601,30 @@ orderSchema.index({ returnedPlants: 1 }); // Added index for returnedPlants
 orderSchema.index({ remainingPlants: 1 }); // Added index for remainingPlants
 orderSchema.index({ additionalPlants: 1 }); // Added index for additionalPlants
 orderSchema.index({ totalPlants: 1 }); // Added index for totalPlants
+orderSchema.index({ publicOrderCode: 1 }, { unique: true, sparse: true });
+
+orderSchema.statics.ensurePublicOrderCode = async function ensurePublicOrderCode(doc) {
+  if (doc.publicOrderCode && /^\d{4}$/.test(doc.publicOrderCode)) return doc;
+  const OrderModel = this;
+  const excludeId = doc._id ? { _id: { $ne: doc._id } } : {};
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const code = String(Math.floor(1000 + Math.random() * 9000));
+    const exists = await OrderModel.exists({ publicOrderCode: code, ...excludeId });
+    if (!exists) {
+      doc.publicOrderCode = code;
+      return doc;
+    }
+  }
+  for (let n = 1000; n <= 9999; n += 1) {
+    const code = String(n);
+    const exists = await OrderModel.exists({ publicOrderCode: code, ...excludeId });
+    if (!exists) {
+      doc.publicOrderCode = code;
+      return doc;
+    }
+  }
+  throw new Error("Could not allocate a unique publicOrderCode");
+};
 
 orderSchema.methods.setAdditionalPlantsChangeMeta = function (meta = {}) {
   this._additionalPlantsChangeMeta = {
@@ -595,6 +645,17 @@ orderSchema.pre("save", async function (next) {
       .sort({ orderId: -1 })
       .select("orderId");
     this.orderId = maxOrder ? maxOrder.orderId + 1 : 1;
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Pre-save: assign unique 4-digit publicOrderCode for WhatsApp
+orderSchema.pre("save", async function (next) {
+  if (this.publicOrderCode && /^\d{4}$/.test(this.publicOrderCode)) return next();
+  try {
+    await this.constructor.ensurePublicOrderCode(this);
     next();
   } catch (err) {
     next(err);
@@ -627,18 +688,36 @@ orderSchema.pre("save", function (next) {
 
   this.totalPlants = totalOrderedPlants;
 
-  const shouldRecalculateRemaining =
-    this.isModified("returnedPlants") ||
-    this.isModified("numberOfPlants") ||
-    this.isModified("additionalPlants") ||
-    typeof this.remainingPlants === "undefined";
+  // remainingPlants = plants not yet dispatched from nursery (not order total − returns).
+  const returnedOnlyChange =
+    this.isModified("returnedPlants") &&
+    !this.isModified("numberOfPlants") &&
+    !this.isModified("additionalPlants");
 
-  if (shouldRecalculateRemaining) {
-    const remaining = Math.max(
-      0,
-      totalOrderedPlants - (this.returnedPlants || 0)
-    );
-    this.remainingPlants = remaining;
+  const qtyChanged =
+    this.isModified("numberOfPlants") || this.isModified("additionalPlants");
+
+  if (!returnedOnlyChange) {
+    if (typeof this.remainingPlants === "undefined") {
+      this.remainingPlants = totalOrderedPlants;
+    } else if (qtyChanged) {
+      const prevNum =
+        typeof this._oldNumberOfPlants === "number"
+          ? this._oldNumberOfPlants
+          : this.numberOfPlants || 0;
+      const prevAdd =
+        typeof this._oldAdditionalPlants === "number"
+          ? this._oldAdditionalPlants
+          : this._originalAdditionalPlants ?? 0;
+      const deltaNum = (this.numberOfPlants || 0) - prevNum;
+      const deltaAdd = (this.additionalPlants || 0) - prevAdd;
+      if (deltaNum !== 0 || deltaAdd !== 0) {
+        this.remainingPlants = Math.max(
+          0,
+          (this.remainingPlants || 0) + deltaNum + deltaAdd
+        );
+      }
+    }
   }
 
   if (!this.isNew && this.isModified("additionalPlants")) {
@@ -719,6 +798,7 @@ orderSchema.pre("save", function (next) {
   }
 
   this._oldAdditionalPlants = this.additionalPlants || 0;
+  this._oldNumberOfPlants = this.numberOfPlants || 0;
   if (typeof this._originalAdditionalPlants !== "number") {
     this._originalAdditionalPlants = this.additionalPlants || 0;
   }
@@ -794,7 +874,7 @@ orderSchema.pre("findOneAndUpdate", async function (next) {
   try {
     doc = await this.model
       .findOne(this.getQuery())
-      .select("numberOfPlants additionalPlants returnedPlants")
+      .select("numberOfPlants additionalPlants returnedPlants remainingPlants")
       .lean();
   } catch (error) {
     return next(error);
@@ -804,6 +884,7 @@ orderSchema.pre("findOneAndUpdate", async function (next) {
     numberOfPlants: doc?.numberOfPlants ?? 0,
     additionalPlants: doc?.additionalPlants ?? 0,
     returnedPlants: doc?.returnedPlants ?? 0,
+    remainingPlants: doc?.remainingPlants ?? 0,
   };
 
   const numberOfPlants =
@@ -814,10 +895,32 @@ orderSchema.pre("findOneAndUpdate", async function (next) {
     $set.returnedPlants ?? previous.returnedPlants;
 
   const totalPlants = numberOfPlants + additionalPlants;
-  const remainingPlants = Math.max(0, totalPlants - returnedPlants);
-
   $set.totalPlants = totalPlants;
-  $set.remainingPlants = remainingPlants;
+
+  const hasExplicitRemaining = Object.prototype.hasOwnProperty.call(
+    $set,
+    "remainingPlants"
+  );
+  const hasNumber = Object.prototype.hasOwnProperty.call($set, "numberOfPlants");
+  const hasAdditional = Object.prototype.hasOwnProperty.call(
+    $set,
+    "additionalPlants"
+  );
+  const hasReturned = Object.prototype.hasOwnProperty.call(
+    $set,
+    "returnedPlants"
+  );
+
+  if (hasExplicitRemaining) {
+    // Controller provided remaining (e.g. dispatch completion)
+  } else if (hasNumber || hasAdditional) {
+    const prevRem = Number(previous.remainingPlants) || 0;
+    const deltaNum = numberOfPlants - previous.numberOfPlants;
+    const deltaAdd = additionalPlants - previous.additionalPlants;
+    $set.remainingPlants = Math.max(0, prevRem + deltaNum + deltaAdd);
+  } else if (hasReturned && !hasNumber && !hasAdditional) {
+    delete $set.remainingPlants;
+  }
 
   if (
     doc &&
@@ -953,6 +1056,7 @@ orderSchema.post("init", function() {
   this._originalOrderStatus = this.orderStatus;
   this._originalAdditionalPlants = this.additionalPlants || 0;
   this._oldAdditionalPlants = this.additionalPlants || 0;
+  this._oldNumberOfPlants = this.numberOfPlants || 0;
   this._oldReturnedPlants = this.returnedPlants || 0;
 });
 

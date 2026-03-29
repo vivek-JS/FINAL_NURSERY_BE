@@ -14,6 +14,7 @@ const cmsSchema = new Schema({
       "crop",
       "variety",
       "vendor",
+      "itarKharchCategory",
     ],
   },
 });

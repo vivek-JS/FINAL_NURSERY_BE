@@ -254,29 +254,6 @@ server.options('/api/v1/opt-in/webhook', cors(corsOptions), (req, res) => {
   res.status(200).end();
 });
 
-// Handle CORS preflight for campaigns (run-now, resume-web, etc.)
-server.options('/api/v1/campaigns/:id/run-now', cors(corsOptions), (req, res) => {
-  res.status(200).end();
-});
-server.options('/api/v1/campaigns/:id/resume-web', cors(corsOptions), (req, res) => {
-  res.status(200).end();
-});
-server.options('/api/v1/campaigns/:id/stop', cors(corsOptions), (req, res) => {
-  res.status(200).end();
-});
-server.options('/api/v1/campaigns/:id/reset-targets', cors(corsOptions), (req, res) => {
-  res.status(200).end();
-});
-server.options('/api/v1/campaign-worker/claim', cors(corsOptions), (req, res) => {
-  res.status(200).end();
-});
-server.options('/api/v1/campaign-worker/complete/:id', cors(corsOptions), (req, res) => {
-  res.status(200).end();
-});
-server.options('/api/v1/campaign-worker/download', cors(corsOptions), (req, res) => {
-  res.status(200).end();
-});
-
 // importing routes
 import farmerRoute from "./routes/farmer.route.js";
 import farmerListRoute from "./routes/farmerList.route.js";
@@ -307,7 +284,6 @@ import shadeRoter from "./routes/shades.route.js";
 import trayRouter from "./routes/tray.route.js";
 import dispatchRoute from "./routes/dispatched.route.js";
 import msgRoute from "./routes/msg.route.js";
-import backupRoute from "./routes/backup.route.js";
 import batchRoute from "./routes/batch.route.js";
 import plantOutward from "./routes/plantOutward.route.js";
 import PollyHouse from "./routes/pollyhouse.route.js";
@@ -326,12 +302,6 @@ import whatsappStatusWebhookRoute from "./routes/whatsappStatusWebhook.route.js"
 import sowingRoute from "./routes/sowing.route.js";
 import publicFarmerLinkRoute from "./routes/publicFarmerLink.route.js";
 import clearDataRoute from "./routes/clearData.route.js";
-import automationRoute from "./routes/automation.route.js";
-import mediaRoute from "./routes/media.route.js";
-import profileRoute from "./routes/profile.route.js";
-import campaignRoute from "./routes/campaign.route.js";
-import campaignWorkerRoute from "./routes/campaignWorker.route.js";
-import whatsappCampaignRoute from "./routes/whatsappCampaign.route.js";
 import whatsappBroadcastRoute from "./routes/whatsappBroadcast.route.js";
 
 // Inventory Management Routes
@@ -357,6 +327,7 @@ import mapsRoute from "./routes/maps.route.js";
 import callAssignmentRoute from "./routes/callAssignment.route.js";
 import callListPublicRoute from "./routes/callListPublic.route.js";
 import readyDispatchGroupRoute from "./routes/readyDispatchGroup.route.js";
+import itarKharchRoute from "./routes/itarKharch.route.js";
 import {
   suggestReadyDispatchGroups,
   createReadyDispatchGroups,
@@ -384,18 +355,12 @@ server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
-server.use("/api/v1/automations", authenticateToken, automationRoute);
 server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook (public, no auth required)
 // WATI status webhook (templateMessageSent_v2, delivered, read, failed)
 server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
 server.use("/api/v1/call-list", callListPublicRoute); // Public call list (token-based, no auth)
 server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
-server.use("/api/v1/media", authenticateToken, mediaRoute);
-server.use("/api/v1/profiles", authenticateToken, profileRoute);
-server.use("/api/v1/campaigns", authenticateToken, campaignRoute);
-server.use("/api/v1/whatsapp/campaigns", authenticateToken, whatsappCampaignRoute);
-server.use("/api/v1/campaign-worker", campaignWorkerRoute);
 server.use("/api/v1/whatsapp-broadcast", whatsappBroadcastRoute);
 
 // Protected routes - require authentication
@@ -423,6 +388,7 @@ server.post(
 );
 server.use("/api/v1/ready-dispatch-groups", authenticateToken, readyDispatchGroupRoute);
 server.use("/api/v1/cms", authenticateToken, cmsRoute);
+server.use("/api/v1/itar-kharch", authenticateToken, itarKharchRoute);
 const employeeAuthMiddleware =
   process.env.DISABLE_EMPLOYEE_AUTH === "true" ? optionalAuth : authenticateToken;
 
@@ -450,7 +416,6 @@ server.use("/api/v1/trips", authenticateToken, tripRouter);
 server.use("/api/v1/dispatched", authenticateToken, dispatchRoute);
 server.use("/api/v1/msg", authenticateToken, msgRoute);
 server.use("/api/v1/maps", mapsRoute); // Maps API proxy (requires auth)
-server.use("/api/v1/backup", authenticateToken, backupRoute);
 server.use("/api/v1/batch", authenticateToken, batchRoute);
 server.use("/api/v1/laboutward", authenticateToken, plantOutward);
 server.use("/api/v1/pollyhouse", authenticateToken, PollyHouse);

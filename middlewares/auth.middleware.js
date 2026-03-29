@@ -143,6 +143,12 @@ export const requireOfficeAdmin = authorizeRoles(['OFFICE_ADMIN', 'ADMIN', 'SUPE
 export const requirePaymentAccess = authorizeRoles(['ACCOUNTANT', 'SUPER_ADMIN']);
 
 /**
+ * Middleware to allow creating bulk payment entries (pending only)
+ * CASHIER can create entries but cannot accept/finalize.
+ */
+export const requireBulkPaymentCreateAccess = authorizeRoles(['ACCOUNTANT', 'SUPER_ADMIN', 'CASHIER']);
+
+/**
  * Middleware to check if user can add payments
  * Office Admins can add payments (but only with PENDING status - enforced in controller)
  * Accountants and Super Admins can add payments with any status

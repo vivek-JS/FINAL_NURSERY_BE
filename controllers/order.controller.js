@@ -1,6 +1,7 @@
 import { Parser as CsvParser } from "json2csv";
 import catchAsync from "../utility/catchAsync.js";
 import Order from "../models/order.model.js";
+import PlantCms from "../models/plantCms.model.js";
 import { getAll, createOne, updateOne } from "./factory.controller.js";
 import DealerWallet from "../models/dealerWallet.js";
 import Dispatch from "../models/dispatch.model.js";
@@ -17,7 +18,7 @@ import {
   sendPaymentCollectedNotification,
   sendPaymentPendingNotification,
 } from "../utility/pushNotification.js";
-import { sendOrderAcceptedWhatsApp } from "../utility/watiMessaging.js";
+import { sendOrderAcceptedWhatsApp, sendOrderDispatchedWhatsAppDelivery1 } from "../utility/watiMessaging.js";
 import { getUnclearedPayments as getUnclearedPaymentsService, getPaymentsForApproval as getPaymentsForApprovalService, reconcile as reconcileService } from "../services/paymentReconciliationService.js";
 import { generateQR } from "../services/iciciBankService.js";
 import crypto from "crypto";
@@ -26,6 +27,31 @@ import {
   recordFarmerPlantLedgerPaymentTransition,
   getFarmerPlantPaymentTransitionAction,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+
+function extractWatiLocalMessageId(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  return (
+    payload.local_message_id ||
+    payload.localMessageId ||
+    (payload.data && (payload.data.local_message_id || payload.data.localMessageId)) ||
+    null
+  );
+}
+
+/** Subtype is ObjectId into PlantCms.subtypes (no ref on Order) — resolve name for WATI. */
+async function resolveOrderPlantSubtypeName(order) {
+  const subtypeId = order.plantSubtype;
+  const plantRef = order.plantName;
+  const plantId = plantRef?._id || plantRef;
+  if (!plantId || !subtypeId) return "N/A";
+  const plant = await PlantCms.findById(plantId).select("subtypes");
+  if (!plant?.subtypes?.length) return "N/A";
+  const sub = plant.subtypes.id(subtypeId);
+  if (sub?.name) return sub.name;
+  const sid = String(subtypeId);
+  const found = plant.subtypes.find((s) => String(s._id) === sid);
+  return found?.name || "N/A";
+}
 
 const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
 const DEBUG_SESSION_ID = "69bde0";
@@ -471,6 +497,7 @@ const updateOrder = updateOne(Order, "Order", [
   "dispatchDayKey",
   "dispatchTargetDate",
   "callHistory", // Call history for dispatch managers
+  "cavity", // Tray ref — was omitted from whitelist, so some orders never persisted cavity
 ]);
 /**
  * Add a new payment to an order and update dealer wallet accordingly
@@ -1536,11 +1563,29 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
             name: "$plantSubtypeDetails.name",
           },
           cavity: {
-            id: { $arrayElemAt: ["$cavityDetails._id", 0] },
-            name: { $arrayElemAt: ["$cavityDetails.name", 0] },
-            cavity: { $arrayElemAt: ["$cavityDetails.cavity", 0] },
-            numberPerCrate: {
-              $arrayElemAt: ["$cavityDetails.numberPerCrate", 0],
+            $let: {
+              vars: {
+                trayId: {
+                  $ifNull: [
+                    { $arrayElemAt: ["$cavityDetails._id", 0] },
+                    "$cavity",
+                  ],
+                },
+              },
+              in: {
+                $cond: {
+                  if: { $eq: ["$$trayId", null] },
+                  then: null,
+                  else: {
+                    id: "$$trayId",
+                    name: { $arrayElemAt: ["$cavityDetails.name", 0] },
+                    cavity: { $arrayElemAt: ["$cavityDetails.cavity", 0] },
+                    numberPerCrate: {
+                      $arrayElemAt: ["$cavityDetails.numberPerCrate", 0],
+                    },
+                  },
+                },
+              },
             },
           },
           bookingSlot: "$bookingSlotDetails",
@@ -1715,6 +1760,15 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
               },
             },
           },
+          publicOrderCode: 1,
+          whatsappAcceptedSentAt: 1,
+          whatsappDispatchSentAt: 1,
+          whatsappAcceptedMessageKey: 1,
+          whatsappDispatchMessageKey: 1,
+          deliveryDate: 1,
+          additionalPlants: { $ifNull: ["$additionalPlants", 0] },
+          dispatchDayKey: 1,
+          dispatchTargetDate: 1,
           // Add orderFor field if present
           orderFor: 1,
         },
@@ -3041,24 +3095,42 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
   const { orderId } = req.params;
   const order = await Order.findById(orderId)
     .populate("farmer", "name mobileNumber village")
-    .populate("plantName", "name")
-    .populate("plantSubtype", "name")
-    .populate("plantType", "name");
+    .populate("plantName", "name");
   if (!order) {
     return res.status(404).json({ message: "Order not found" });
+  }
+  if (order.dealerOrder) {
+    return res.status(400).json({ message: "WhatsApp accept message is only for farmer orders" });
+  }
+  if (order.whatsappAcceptedSentAt) {
+    return res.status(200).json(
+      generateResponse("Success", "WhatsApp accept message was already sent for this order", {
+        alreadySent: true,
+        whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
+        whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
+      }, undefined)
+    );
   }
   const farmer = order.farmer;
   if (!farmer || !farmer.mobileNumber) {
     return res.status(400).json({ message: "Order has no farmer with mobile number" });
   }
-  const totalAmount = (order.numberOfPlants || 0) * (order.rate || 0);
-  const paidAmount = order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0;
+  if (!order.publicOrderCode) {
+    await Order.ensurePublicOrderCode(order);
+    await order.save();
+  }
+  const totalPlants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
+  const totalAmount = totalPlants * (order.rate || 0);
+  const paidAmount =
+    order.payment?.filter((p) => p.paymentStatus === "COLLECTED").reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0;
   const remainingAmount = totalAmount - paidAmount;
+  const plantSubtypeName = await resolveOrderPlantSubtypeName(order);
   const orderDetails = {
     orderId: order.orderId || order._id,
-    plantName: order.plantName?.name || order.plantType?.name || "Plants",
-    plantSubtype: order.plantSubtype?.name || order.plantSubtype || "N/A",
-    numberOfPlants: order.numberOfPlants,
+    publicOrderCode: order.publicOrderCode,
+    plantName: order.plantName?.name || "Plants",
+    plantSubtype: plantSubtypeName,
+    numberOfPlants: totalPlants,
     deliveryDate: order.deliveryDate,
     rate: order.rate,
     totalAmount,
@@ -3067,7 +3139,92 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
   };
   const result = await sendOrderAcceptedWhatsApp(farmer, orderDetails);
   if (result.success) {
-    return res.status(200).json(generateResponse("Success", "WhatsApp message sent successfully", result.data, undefined));
+    order.whatsappAcceptedSentAt = new Date();
+    const msgKey = extractWatiLocalMessageId(result.data);
+    if (msgKey) order.whatsappAcceptedMessageKey = String(msgKey);
+    await order.save();
+    return res.status(200).json(
+      generateResponse("Success", "WhatsApp message sent successfully", {
+        ...result.data,
+        stored: {
+          whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
+          whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
+        },
+      }, undefined)
+    );
+  }
+  return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
+});
+
+/**
+ * Send dispatch WhatsApp (WATI template delivery_final_revamp) to farmer after order is dispatched
+ */
+export const sendOrderDispatchWhatsAppController = catchAsync(async (req, res) => {
+  const { orderId } = req.params;
+  const order = await Order.findById(orderId)
+    .populate("farmer", "name mobileNumber village")
+    .populate("plantName", "name");
+  if (!order) {
+    return res.status(404).json({ message: "Order not found" });
+  }
+  if (order.dealerOrder) {
+    return res.status(400).json({ message: "WhatsApp dispatch message is only for farmer orders" });
+  }
+  if (order.whatsappDispatchSentAt) {
+    return res.status(200).json(
+      generateResponse("Success", "WhatsApp dispatch message was already sent for this order", {
+        alreadySent: true,
+        whatsappDispatchSentAt: order.whatsappDispatchSentAt,
+        whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
+      }, undefined)
+    );
+  }
+  const farmer = order.farmer;
+  if (!farmer || !farmer.mobileNumber) {
+    return res.status(400).json({ message: "Order has no farmer with mobile number" });
+  }
+  const history = Array.isArray(order.dispatchHistory) ? order.dispatchHistory : [];
+  const dispatchedSum = history.reduce((s, h) => s + (Number(h.quantity) || 0), 0);
+  const totalPlants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
+  const totalDispatched =
+    dispatchedSum > 0 ? dispatchedSum : order.orderStatus === "DISPATCHED" ? totalPlants : 0;
+  if (totalDispatched <= 0) {
+    return res.status(400).json({ message: "No dispatch recorded for this order yet" });
+  }
+  if (!order.publicOrderCode) {
+    await Order.ensurePublicOrderCode(order);
+    await order.save();
+  }
+  const latest = history.length > 0 ? history[history.length - 1] : null;
+  const dispatchDate = latest?.date || new Date();
+  const plantSubtypeName = await resolveOrderPlantSubtypeName(order);
+  const details = {
+    orderId: order.orderId,
+    publicOrderCode: order.publicOrderCode,
+    plantName: order.plantName?.name || "Plants",
+    plantSubtype: plantSubtypeName,
+    totalDispatched,
+    driverName: latest?.driverName || "N/A",
+    driverNumber: "N/A",
+    vehicleNumber: latest?.vehicleName || "N/A",
+    dispatchDate,
+    deliveryDate: order.deliveryDate,
+  };
+  const result = await sendOrderDispatchedWhatsAppDelivery1(farmer, details);
+  if (result.success) {
+    order.whatsappDispatchSentAt = new Date();
+    const msgKey = extractWatiLocalMessageId(result.data);
+    if (msgKey) order.whatsappDispatchMessageKey = String(msgKey);
+    await order.save();
+    return res.status(200).json(
+      generateResponse("Success", "WhatsApp dispatch message sent successfully", {
+        ...result.data,
+        stored: {
+          whatsappDispatchSentAt: order.whatsappDispatchSentAt,
+          whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
+        },
+      }, undefined)
+    );
   }
   return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
 });

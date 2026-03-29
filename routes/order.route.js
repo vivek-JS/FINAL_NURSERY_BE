@@ -24,7 +24,8 @@ import {
   getPaymentsForApproval,
   reconcilePayments,
   generatePaymentQR,
-  sendOrderAcceptedWhatsAppController
+  sendOrderAcceptedWhatsAppController,
+  sendOrderDispatchWhatsAppController,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -45,7 +46,7 @@ import {
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import multer from "multer";
-import { requirePaymentAccess, authenticateToken } from "../middlewares/auth.middleware.js";
+import { requirePaymentAccess, requireBulkPaymentCreateAccess, authenticateToken } from "../middlewares/auth.middleware.js";
 import { sendPaymentCollectedNotification } from "../utility/pushNotification.js";
 import catchAsync from "../utility/catchAsync.js";
 
@@ -72,7 +73,7 @@ router
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)
   .get("/bulk-payments", getBulkPayments)
-  .post("/bulk-payment", requirePaymentAccess, createBulkPayment)
+  .post("/bulk-payment", requireBulkPaymentCreateAccess, createBulkPayment)
   .patch("/bulk-payment/:id/accept", requirePaymentAccess, acceptBulkPayment)
   .get("/villages", getUniqueVillages)
   .get("/districts", getUniqueDistricts)
@@ -105,6 +106,7 @@ router
     updateOrder
   )
   .post("/:orderId/send-accepted-whatsapp", sendOrderAcceptedWhatsAppController)
+  .post("/:orderId/send-dispatch-whatsapp", sendOrderDispatchWhatsAppController)
   .post("/test-notification", authenticateToken, catchAsync(async (req, res) => {
     // Test endpoint to send a notification to current user
     const User = (await import("../models/user.model.js")).default;

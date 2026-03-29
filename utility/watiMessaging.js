@@ -84,6 +84,9 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       totalAmount,
     } = orderDetails;
 
+    const templateOrderId =
+      orderDetails.publicOrderCode?.toString() || orderId?.toString() || "N/A";
+
     // Format delivery date
     const formattedDate = deliveryDate
       ? new Date(deliveryDate).toLocaleDateString("en-IN", {
@@ -96,7 +99,7 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
     // Parameters for WATI template: order_accpeted_revamped
     const parameters = [
       { name: "name", value: farmer.name || "Farmer" },
-      { name: "id", value: orderId?.toString() || "N/A" },
+      { name: "id", value: templateOrderId },
       { name: "village", value: farmer.village || "N/A" },
       { name: "number", value: farmer.mobileNumber?.toString() || "N/A" },
       { name: "plant", value: plantName || "Plants" },
@@ -124,10 +127,46 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
 }
 
 /**
+ * Dispatch notification — WATI template delivery_final_revamp (regular plant orders)
+ * Placeholders: name, id, village, plant, subtype, total_dispatched, driver_name, vehicle_number, dispatch_date
+ */
+export async function sendOrderDispatchedWhatsAppDelivery1(farmer, details) {
+  try {
+    if (!farmer || !farmer.mobileNumber) {
+      console.warn("⚠️ No farmer mobile number provided");
+      return { success: false, error: "No mobile number" };
+    }
+
+    const formatIn = (d) =>
+      d
+        ? new Date(d).toLocaleDateString("en-IN", {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+          })
+        : "N/A";
+
+    const parameters = [
+      { name: "name", value: farmer.name || "Farmer" },
+      { name: "id", value: details.publicOrderCode?.toString() || details.orderId?.toString() || "N/A" },
+      { name: "village", value: farmer.village || "N/A" },
+      { name: "plant", value: details.plantName || "Plants" },
+      { name: "subtype", value: details.plantSubtype || "N/A" },
+      { name: "total_dispatched", value: (details.totalDispatched ?? "0").toString() },
+      { name: "driver_name", value: details.driverName || "N/A" },
+      { name: "vehicle_number", value: details.vehicleNumber || "N/A" },
+      { name: "dispatch_date", value: formatIn(details.dispatchDate) },
+    ];
+
+    return await sendWatiTemplateMessage(farmer.mobileNumber, "delivery_final_revamp", parameters);
+  } catch (error) {
+    console.error("❌ Error in sendOrderDispatchedWhatsAppDelivery1:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Send order ready for dispatch WhatsApp message to farmer
- * @param {Object} farmer - Farmer details
- * @param {Object} orderDetails - Order details
- * @returns {Promise<Object>} Send result
  */
 export async function sendOrderReadyWhatsApp(farmer, orderDetails) {
   try {

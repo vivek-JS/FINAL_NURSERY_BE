@@ -309,6 +309,42 @@ export const updateSlot = async (
   return updateResult; // Return the update result for reference
 };
 
+/**
+ * Client sends cavity as either (a) Tray MongoDB _id (AddOrderForm uses value: tray._id) or
+ * (b) numeric cavity count (e.g. 8) used by older clients. Old code only did parseInt on strings,
+ * which breaks ObjectIds (parseInt("69c8e1ca...", 10) === 69).
+ */
+const resolveTrayIdFromCavityInput = async (cavity, session) => {
+  if (cavity === undefined || cavity === null || cavity === "") {
+    return null;
+  }
+
+  const str = typeof cavity === "string" ? cavity.trim() : "";
+
+  if (str && /^[a-fA-F0-9]{24}$/.test(str)) {
+    const byId = await Tray.findById(str).session(session);
+    if (byId) {
+      return byId._id;
+    }
+  }
+
+  const cavityNum =
+    typeof cavity === "number" && Number.isFinite(cavity)
+      ? cavity
+      : str !== ""
+        ? parseInt(str, 10)
+        : NaN;
+
+  if (!Number.isNaN(cavityNum) && Number.isFinite(cavityNum)) {
+    const tray = await Tray.findOne({ cavity: cavityNum }).session(session);
+    if (tray) {
+      return tray._id;
+    }
+  }
+
+  return null;
+};
+
 // Modified createOne function to handle componyQuota flag
 const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
@@ -388,23 +424,7 @@ const createOne = (Model, modelName) =>
 
         const orderId = lastOrder ? lastOrder.orderId + 1 : 1;
 
-        // Handle cavity lookup by cavity number
-        let trayId = null;
-        if (cavity) {
-          // Convert to number if it's a string
-          let cavityValue = cavity;
-          if (typeof cavityValue === "string") {
-            cavityValue = parseInt(cavityValue.trim(), 10);
-          }
-
-          // Find matching tray by cavity number
-          const tray = await Tray.findOne({ cavity: cavityValue }).session(
-            session
-          );
-          if (tray) {
-            trayId = tray._id;
-          }
-        }
+        const trayId = await resolveTrayIdFromCavityInput(cavity, session);
 
         // Case 1: If it's a dealer's own order (creating stock)
         let pendingInventoryLedgerEntry = null;
@@ -2440,6 +2460,7 @@ const getAll = (Model, modelName) =>
       plantId, // Filter by plant
       subtypeId, // Filter by plant subtype
       orderIds, // NEW: Filter by specific order IDs
+      includePastDueBeyondRange, // true: delivery in [start,end] OR delivery before start (older past-due backlog)
     } = req.query;
 
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
@@ -2853,15 +2874,27 @@ const getAll = (Model, modelName) =>
       
       console.log(`Dispatched Orders Date Filter: ${startDate} to ${endDate}`);
       console.log(`Parsed dates: ${start.toISOString()} to ${end.toISOString()}`);
-      
-      pipeline.push({
-        $match: {
-          deliveryDate: {
-            $gte: start,
-            $lte: end
-          }
-        }
-      });
+
+      if (includePastDueBeyondRange === "true") {
+        // Deliveries in the requested window OR older backlog (before window start) so past-due still shows.
+        pipeline.push({
+          $match: {
+            $or: [
+              { deliveryDate: { $gte: start, $lte: end } },
+              { deliveryDate: { $lt: start } },
+            ],
+          },
+        });
+      } else {
+        pipeline.push({
+          $match: {
+            deliveryDate: {
+              $gte: start,
+              $lte: end,
+            },
+          },
+        });
+      }
     }
 
     // Enrich plantSubtype details (name and ID)
@@ -2920,11 +2953,29 @@ const getAll = (Model, modelName) =>
             name: "$plantSubtypeDetails.name",
           },
           cavity: {
-            id: { $arrayElemAt: ["$cavityDetails._id", 0] },
-            name: { $arrayElemAt: ["$cavityDetails.name", 0] },
-            cavity: { $arrayElemAt: ["$cavityDetails.cavity", 0] },
-            numberPerCrate: {
-              $arrayElemAt: ["$cavityDetails.numberPerCrate", 0],
+            $let: {
+              vars: {
+                trayId: {
+                  $ifNull: [
+                    { $arrayElemAt: ["$cavityDetails._id", 0] },
+                    "$cavity",
+                  ],
+                },
+              },
+              in: {
+                $cond: {
+                  if: { $eq: ["$$trayId", null] },
+                  then: null,
+                  else: {
+                    id: "$$trayId",
+                    name: { $arrayElemAt: ["$cavityDetails.name", 0] },
+                    cavity: { $arrayElemAt: ["$cavityDetails.cavity", 0] },
+                    numberPerCrate: {
+                      $arrayElemAt: ["$cavityDetails.numberPerCrate", 0],
+                    },
+                  },
+                },
+              },
             },
           },
           bookingSlot: "$bookingSlotDetails",
@@ -3298,6 +3349,13 @@ const getAll = (Model, modelName) =>
               },
             },
           },
+          publicOrderCode: 1,
+          whatsappAcceptedSentAt: 1,
+          whatsappDispatchSentAt: 1,
+          whatsappAcceptedMessageKey: 1,
+          whatsappDispatchMessageKey: 1,
+          dispatchDayKey: 1,
+          dispatchTargetDate: 1,
           // Add orderFor field if present
           orderFor: 1,
         },

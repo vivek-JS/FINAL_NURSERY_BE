@@ -191,6 +191,7 @@ export const getReadyDispatchGroups = catchAsync(async (req, res) => {
         "orderId numberOfPlants totalPlants orderStatus dispatchDayKey dispatchTargetDate deliveryDate farmer",
       populate: { path: "farmer", select: "name village mobileNumber" },
     })
+    .populate({ path: "convertedDispatchId", select: "transportId name" })
     .sort({ createdAt: -1 });
 
   return res

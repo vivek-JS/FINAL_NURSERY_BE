@@ -302,6 +302,12 @@ const recordWhatsappHistory = catchAsync(async (req, res, next) => {
   return res.status(200).json({ status: "success", data: results });
 });
 
+const getFarmerById = catchAsync(async (req, res, next) => {
+  const farmer = await Farmer.findById(req.params.id);
+  if (!farmer) return next(new AppError("Farmer not found", 404));
+  res.status(200).json(generateResponse("Success", "Farmer fetched", farmer));
+});
+
 export {
   createFarmer,
   updateFarmer,
@@ -310,6 +316,7 @@ export {
   getFarmers,
   uploadFarmers,
   getFarmerOrder,
+  getFarmerById,
   getInvalidPhoneFarmers,
   updateFarmerPhone,
   recordWhatsappHistory,

@@ -458,6 +458,8 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
   options = {}
 ) {
   const strict = options?.strict === true;
+  const orderEditSource = options?.orderEditSource;
+  const isDispatchComplete = orderEditSource === "dispatch_complete";
   if (!shouldLogFarmerPlantLedger(updatedDoc)) return;
 
   try {
@@ -502,11 +504,23 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
         const { customerMobile, customerName, farmerId } =
           await resolveFarmerIdentity(updatedDoc);
 
-        if (customerMobile) {
+        if (!customerMobile) {
+          if (strict && shouldLogFarmerPlantLedger(updatedDoc)) {
+            throw new Error(
+              "Cannot record farmer plant ledger for order total change: farmer contact mobile is missing."
+            );
+          }
+        } else {
           const entryDate = Number.isFinite(transitionAt)
             ? new Date(transitionAt)
             : new Date();
           const isIncrease = deltaAmount > 0;
+          const verbPhrase = isDispatchComplete
+            ? "dispatch complete — total"
+            : "edited — total";
+          const description = isIncrease
+            ? `Order ${updatedDoc.orderId ?? ""} ${verbPhrase} ₹${previousLineTotal} -> ₹${nextLineTotal} (debit +₹${Math.abs(deltaAmount)})`
+            : `Order ${updatedDoc.orderId ?? ""} ${verbPhrase} ₹${previousLineTotal} -> ₹${nextLineTotal} (credit -₹${Math.abs(deltaAmount)})`;
 
           await createFarmerPlantLedgerEntry({
             customerMobile,
@@ -519,9 +533,7 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
             credit: isIncrease ? 0 : Math.abs(deltaAmount),
             reference: String(updatedDoc.orderId ?? ""),
             category: isIncrease ? "Order Edit Increase" : "Order Edit Decrease",
-            description: isIncrease
-              ? `Order ${updatedDoc.orderId ?? ""} edited — total ₹${previousLineTotal} -> ₹${nextLineTotal} (debit +₹${Math.abs(deltaAmount)})`
-              : `Order ${updatedDoc.orderId ?? ""} edited — total ₹${previousLineTotal} -> ₹${nextLineTotal} (credit -₹${Math.abs(deltaAmount)})`,
+            description,
             entryDate,
             createdBy: userId,
             metadata: {
@@ -537,6 +549,7 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
               previousLineTotal,
               nextLineTotal,
               deltaAmount,
+              ...(orderEditSource ? { source: orderEditSource } : {}),
             },
             session,
           });

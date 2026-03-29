@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/orderUpdatePermissions.test.mjs",
+    "test": "node --test tests/orderUpdatePermissions.test.mjs tests/dispatchCompleteCalculations.test.mjs",
     "test:order-permissions": "node --test tests/orderUpdatePermissions.test.mjs",
     "test:dispatch-status-patch": "node scripts/test-dispatch-order-status-patch.js",
     "test:cancel-ledger-quota": "node scripts/test-cancel-ledger-and-quota-api.js",
@@ -13,10 +13,8 @@
     "seed:dealers-sales": "node scripts/seed-dealers-sales-ram-biotech.js",
     "dev": "nodemon index.js",
     "start": "node index.js",
-    "whatsapp-bot": "node scripts/whatsapp-selenium-bot.js",
-    "automation-targets": "node scripts/queue/automation-target-processor.js",
-    "run-campaign": "node scripts/run-campaign-now.js",
-    "campaign-runner": "node scripts/campaign-runner-worker.js"
+    "backfill:public-order-code": "node scripts/backfill-public-order-code.js",
+    "order:set-status": "node scripts/set-order-status.js"
   },
   "author": "",
   "license": "ISC",

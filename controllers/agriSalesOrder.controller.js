@@ -187,7 +187,9 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     payment: processedPayments,
     screenshots: screenshots || [],
     createdBy: userId, // Track which employee created this order
-    orderStatus: "PENDING",
+    orderStatus: "ACCEPTED",
+    acceptedBy: userId,
+    acceptedAt: new Date(),
     paymentStatus: initialPaymentStatus,
     totalPaidAmount: initialPaidAmount,
     balanceAmount: totalAmount - initialPaidAmount,
@@ -239,10 +241,10 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     });
   }
 
-  // Add activity log for order creation
+  // Add activity log for order creation (orders are created as ACCEPTED — ready to assign or dispatch)
   order.activityLog = [{
     action: "ORDER_CREATED",
-    description: `Order created for ${customerName} - ${productName} (Qty: ${quantity}, Rate: ₹${rate})`,
+    description: `Order created and auto-accepted for ${customerName} - ${productName} (Qty: ${quantity}, Rate: ₹${rate}). Status: ACCEPTED — ready for assign or dispatch.`,
     performedBy: userId,
     performedByName: req.user?.name || "Unknown",
     newValue: {
@@ -252,6 +254,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
       quantity,
       rate,
       totalAmount,
+      orderStatus: "ACCEPTED",
     },
     metadata: {
       orderNumber: order.orderNumber,
@@ -1378,6 +1381,15 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
       }
     }
   });
+
+  if (filteredData.orderStatus === "CANCELLED") {
+    return next(
+      new AppError(
+        "Cannot set order status to CANCELLED via this endpoint. Use PATCH /inventory/agri-sales-orders/:id/cancel so ledger and stock are updated correctly.",
+        400
+      )
+    );
+  }
 
   // Check if there are any fields to update
   if (Object.keys(filteredData).length === 0) {
@@ -3753,7 +3765,7 @@ const getOrdersForDispatch = catchAsync(async (req, res, next) => {
   } = req.query;
 
   let query = AgriSalesOrder.find({
-    orderStatus: { $in: ["PENDING", "ACCEPTED"] },
+    orderStatus: "ACCEPTED",
     dispatchStatus: "NOT_DISPATCHED",
   });
 

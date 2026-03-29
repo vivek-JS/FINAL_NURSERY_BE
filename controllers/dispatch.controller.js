@@ -3,10 +3,15 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import Dispatch from "../models/dispatch.model.js";
 import Order from "../models/order.model.js";
+import ReadyDispatchGroup from "../models/readyDispatchGroup.model.js";
+import PlantSlot from "../models/slots.model.js";
 import mongoose from "mongoose";
 import PlantCms from "../models/plantCms.model.js";
 import Tray from "../models/tray.model.js";
-import { syncFarmerPlantLedgerForOrderUpdate } from "../utils/farmerPlantOrderLedgerHelper.js";
+import {
+  syncFarmerPlantLedgerForOrderUpdate,
+  roundMoney,
+} from "../utils/farmerPlantOrderLedgerHelper.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -15,6 +20,7 @@ const updateOrderWithLedgerSync = async ({
   userId,
   existingDoc,
   contextLabel = "dispatch_order_update",
+  ledgerSyncOptions = {},
 }) => {
   const previousOrder =
     existingDoc || (await Order.findById(orderId).session(session));
@@ -38,7 +44,7 @@ const updateOrderWithLedgerSync = async ({
       updatedOrder,
       userId,
       session,
-      { strict: true }
+      { strict: true, ...ledgerSyncOptions }
     );
   } catch (ledgerErr) {
     console.error("Dispatch order ledger sync failed", {
@@ -138,6 +144,10 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
   try {
     const dispatchRequest = { ...req.body };
+    const readyDispatchGroupId = dispatchRequest.readyDispatchGroupId;
+    if (readyDispatchGroupId !== undefined) {
+      delete dispatchRequest.readyDispatchGroupId;
+    }
 
     // Modify each plant's details and convert cavity strings to ObjectIds
     dispatchRequest.plantsDetails = dispatchRequest.plantsDetails.map(
@@ -243,6 +253,22 @@ const createDispatch = catchAsync(async (req, res, next) => {
       await Order.updateMany(
         { _id: { $in: dispatchRequest.orderIds }, orderStatus: "FARM_READY" },
         { $set: { orderStatus: "DISPATCH_PROCESS", currentDispatchId: dispatch[0]._id } },
+        { session }
+      );
+    }
+
+    if (
+      readyDispatchGroupId &&
+      mongoose.isValidObjectId(String(readyDispatchGroupId))
+    ) {
+      await ReadyDispatchGroup.findByIdAndUpdate(
+        readyDispatchGroupId,
+        {
+          $set: {
+            convertedDispatchId: dispatch[0]._id,
+            status: "DISPATCHED",
+          },
+        },
         { session }
       );
     }
@@ -815,7 +841,7 @@ const removeTransport = async (req, res) => {
           console.log(`Restoring quantity: ${order.remainingPlants} + ${dispatchHistoryEntry.quantity} = ${restoredRemainingPlants}`);
           
           // Determine new status
-          let newStatus = "FARM_READY";
+          let newStatus = "READY_FOR_DISPATCH";
           
           // If order was partially dispatched (has other dispatch history entries)
           const hasOtherDispatches = order.dispatchHistory?.filter(
@@ -864,7 +890,7 @@ const removeTransport = async (req, res) => {
           // If no dispatch history entry, just update status
           await Order.findByIdAndUpdate(
             orderDispatch.orderId,
-            { $set: { orderStatus: "FARM_READY" } },
+            { $set: { orderStatus: "READY_FOR_DISPATCH" } },
             { session }
           );
         }
@@ -874,7 +900,7 @@ const removeTransport = async (req, res) => {
       // Legacy behavior: just update status
       await Order.updateMany(
         { _id: { $in: dispatch.orderIds } },
-        { $set: { orderStatus: "FARM_READY" } },
+        { $set: { orderStatus: "READY_FOR_DISPATCH" } },
         { session }
       );
     }
@@ -935,10 +961,12 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       { new: true, runValidators: true, session }
     );
 
-    // Create map of order updates
+    // Create map of order updates (normalize keys — orderId may be string or ObjectId)
     const orderUpdatesMap =
       orderUpdates?.reduce((map, update) => {
-        map[update.orderId] = update;
+        if (update?.orderId != null) {
+          map[String(update.orderId)] = update;
+        }
         return map;
       }, {}) || {};
 
@@ -950,7 +978,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       if (!order) return null;
 
       // Get the update data for this order
-      const orderUpdate = orderUpdatesMap[orderId];
+      const orderUpdate = orderUpdatesMap[String(orderId)];
       if (!orderUpdate) {
         // If no update data found for this order, return the original order
         return order;
@@ -976,17 +1004,9 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
           )
         : order.additionalPlants || 0;
 
-      const basePlants =
-        orderUpdate.basePlants === undefined || orderUpdate.basePlants === null
-          ? order.numberOfPlants || 0
-          : Math.max(
-              0,
-              Number.isNaN(Number(orderUpdate.basePlants))
-                ? order.numberOfPlants || 0
-                : Number(orderUpdate.basePlants)
-            );
-
-      const totalOrderedPlants = basePlants + additionalPlantsValue;
+      // Order total always from DB base + (payload additional when editing additional only)
+      const totalOrderedPlants =
+        (order.numberOfPlants || 0) + additionalPlantsValue;
 
       // Calculate the total returnedPlants (existing + new returns)
       const existingReturnedPlants = order.returnedPlants || 0;
@@ -1065,23 +1085,26 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         };
       }
 
-      const remainingAfterAdjustments = Math.max(
-        0,
-        totalOrderedPlants - totalReturnedPlants
-      );
-
-      if (returnsForThisOrder > 0 || hasAdditionalUpdate) {
-        orderUpdateData.remainingPlants = remainingAfterAdjustments;
+      // remainingPlants = undispatched at nursery; returns do not increase it.
+      if (hasAdditionalUpdate) {
+        const prevRem = Number(order.remainingPlants) || 0;
+        const prevAdd = order.additionalPlants || 0;
+        const deltaAdd = additionalPlantsValue - prevAdd;
+        orderUpdateData.remainingPlants = Math.max(0, prevRem + deltaAdd);
       }
 
-      const collectedAmount = (order.payment || []).reduce((sum, payment) => {
-        if (payment?.paymentStatus === "COLLECTED") {
-          return sum + (payment.paidAmount || 0);
-        }
-        return sum;
-      }, 0);
+      const collectedAmount = roundMoney(
+        (order.payment || []).reduce((sum, payment) => {
+          if (payment?.paymentStatus === "COLLECTED") {
+            return sum + (payment.paidAmount || 0);
+          }
+          return sum;
+        }, 0)
+      );
 
-      const recalculatedTotalAmount = (order.rate || 0) * totalOrderedPlants;
+      const recalculatedTotalAmount = roundMoney(
+        (order.rate || 0) * totalOrderedPlants
+      );
       const isPaymentComplete = collectedAmount >= recalculatedTotalAmount;
 
       orderUpdateData.orderPaymentStatus = isPaymentComplete
@@ -1111,21 +1134,49 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         session,
         userId: req.user?._id,
         contextLabel: "complete_dispatch_order_update",
+        ledgerSyncOptions: { orderEditSource: "dispatch_complete" },
       });
 
-      // If order has returns AND addToInventory is true, update the slot's totalPlants
-      if (returnsForThisOrder > 0 && addToInventory) {
-        await mongoose.model("PlantSlot").updateOne(
+      // Return to inventory: reverse booking (totalBookedPlants / availablePlants), not slot capacity totalPlants
+      if (
+        returnsForThisOrder > 0 &&
+        addToInventory &&
+        order.bookingSlot
+      ) {
+        const slotDoc = await PlantSlot.findOne(
+          { "subtypeSlots.slots._id": order.bookingSlot },
+          { "subtypeSlots.$": 1 }
+        )
+          .populate("plantId", "sowingAllowed")
+          .session(session);
+
+        const isSowingAllowed = slotDoc?.plantId?.sowingAllowed || false;
+        const isReadyPlantsOrder = !!(
+          order.productMappingId && order.productName
+        );
+
+        const slotInc = {
+          "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants":
+            -returnsForThisOrder,
+        };
+        if (isReadyPlantsOrder) {
+          slotInc[
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"
+          ] = -returnsForThisOrder;
+        } else if (!isSowingAllowed) {
+          slotInc[
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"
+          ] = returnsForThisOrder;
+        }
+
+        await PlantSlot.updateOne(
+          { "subtypeSlots.slots._id": order.bookingSlot },
+          { $inc: slotInc },
           {
-            "subtypeSlots.slots._id": order.bookingSlot,
-          },
-          {
-            $inc: {
-              "subtypeSlots.$[].slots.$[slot].totalPlants": returnsForThisOrder,
-            },
-          },
-          {
-            arrayFilters: [{ "slot._id": order.bookingSlot }],
+            arrayFilters: [
+              { "subtypeSlot.slots._id": order.bookingSlot },
+              { "slot._id": order.bookingSlot },
+            ],
             session,
           }
         );

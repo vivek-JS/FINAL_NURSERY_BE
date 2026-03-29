@@ -7,6 +7,7 @@ import {
   getFarmerFilterOptions,
   uploadFarmers,
   getFarmerOrder,
+  getFarmerById,
   getInvalidPhoneFarmers,
   updateFarmerPhone,
   recordWhatsappHistory,
@@ -67,6 +68,7 @@ router
   .get("/getFarmers", getFarmers)
   .get("/filter-options", getFarmerFilterOptions)
   .get("/farmers/:farmerId/orders/:orderId?", getFarmerOrder)
+  .get("/get/:id", getFarmerById)
   .post("/uploadFarmers", uploadExcel.single("data"), uploadFarmers)
   .get('/invalid-phones', getInvalidPhoneFarmers)
   .put('/:id/phone', updateFarmerPhone)

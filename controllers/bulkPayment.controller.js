@@ -8,6 +8,10 @@ import AgriSalesOrder from "../models/agriSalesOrder.model.js";
 import DealerWallet from "../models/dealerWallet.js";
 import User from "../models/user.model.js";
 import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
+import {
+  ensureFarmerPlantOrderDebit,
+  recordFarmerPlantLedgerPaymentTransition,
+} from "../utils/farmerPlantOrderLedgerHelper.js";
 
 const shouldLogRamAgriLedger = (order) =>
   Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
@@ -79,11 +83,13 @@ export const createBulkPayment = catchAsync(async (req, res, next) => {
  * List main payment entries with filters. Sub-entries are in allocations.
  */
 export const getBulkPayments = catchAsync(async (req, res, next) => {
-  const { startDate, endDate, paymentStatus, source, page = 1, limit = 50, search } = req.query;
+  const { startDate, endDate, paymentStatus, source, page = 1, limit = 50, search, mine, createdBy } = req.query;
   const skip = (Math.max(1, parseInt(page, 10)) - 1) * Math.min(100, Math.max(1, parseInt(limit, 10)));
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
 
   const filter = {};
+  const requesterId = req.user?._id || req.user?.id;
+  const requesterRole = req.user?.role || req.user?.jobTitle;
 
   if (paymentStatus) {
     const statuses = paymentStatus.split(",").map((s) => s.trim());
@@ -121,7 +127,21 @@ export const getBulkPayments = catchAsync(async (req, res, next) => {
     }
   }
 
-  const [list, total] = await Promise.all([
+  if (mine === "true" && requesterId) {
+    filter.createdBy = new mongoose.Types.ObjectId(requesterId);
+  }
+  if (createdBy) {
+    if (!mongoose.Types.ObjectId.isValid(createdBy)) {
+      return next(new AppError("Invalid createdBy", 400));
+    }
+    const createdById = new mongoose.Types.ObjectId(createdBy);
+    if (requesterRole === "CASHIER" && requesterId && String(createdById) !== String(requesterId)) {
+      return next(new AppError("CASHIER can only access own entries", 403));
+    }
+    filter.createdBy = createdById;
+  }
+
+  const [list, total, totals] = await Promise.all([
     BulkPayment.find(filter)
       .sort({ paymentDate: -1, createdAt: -1 })
       .skip(skip)
@@ -130,6 +150,10 @@ export const getBulkPayments = catchAsync(async (req, res, next) => {
       .populate("acceptedBy", "name phoneNumber")
       .lean(),
     BulkPayment.countDocuments(filter),
+    BulkPayment.aggregate([
+      { $match: filter },
+      { $group: { _id: null, totalAmountSum: { $sum: "$totalAmount" } } },
+    ]),
   ]);
 
   const orderIdsByType = { ORDER: [], AgriSalesOrder: [] };
@@ -171,7 +195,13 @@ export const getBulkPayments = catchAsync(async (req, res, next) => {
   const response = generateResponse(
     "Success",
     "Bulk payments fetched successfully",
-    { data: enriched, total, page: Math.max(1, parseInt(page, 10)), limit: limitNum }
+    {
+      data: enriched,
+      total,
+      page: Math.max(1, parseInt(page, 10)),
+      limit: limitNum,
+      totalAmountSum: totals?.[0]?.totalAmountSum || 0,
+    }
   );
   res.status(200).json(response);
 });
@@ -251,10 +281,21 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
           );
         }
       } else {
-        const order = await Order.findById(alloc.orderId).populate("farmer", "name village").session(session);
+        const order = await Order.findById(alloc.orderId)
+          .populate("farmer", "name village mobileNumber")
+          .session(session);
         if (!order) throw new AppError(`Order not found: ${alloc.orderId}`, 400);
         order.payment.push({ ...paymentPayload });
         await order.save({ session });
+
+        if (!order.dealerOrder && order.farmer) {
+          await ensureFarmerPlantOrderDebit(order, { userId, session });
+          const lastPayment = order.payment[order.payment.length - 1];
+          await recordFarmerPlantLedgerPaymentTransition(order, lastPayment, "PENDING", "COLLECTED", {
+            userId,
+            session,
+          });
+        }
 
         let dealerId = order.dealer;
         if (!dealerId && order.salesPerson) {

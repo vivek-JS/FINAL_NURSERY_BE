@@ -49,6 +49,7 @@ const allowedParams = [
   "date",
   "fromDate",
   "dispatched",
+  "includePastDueBeyondRange",
   "salesPerson",
   "monthName",
   "startDay",
@@ -98,6 +99,7 @@ const allowedParams = [
     "customerId", // For filtering by customer ID
     "isAgriSales", // For filtering products by Agri Sales flag
     "createdBy", // For filtering orders by creator (employee who created)
+  "mine", // For restricting list APIs to current user entries
     "myOrders", // Boolean: show only current user's orders
     "paymentStatus", // For filtering by payment status (PENDING, PARTIAL, COMPLETED)
   // Old sales analytics filters
@@ -145,7 +147,6 @@ const allowedParams = [
   "linkId", // public farmer link id for farmer form filter
   "opt_in", // filter by opt-in status (true/false)
   "includeAll", // include all records (don't exclude those in call lists)
-  "campaignId", // campaigns/targets endpoint
   "upcomingDays", // laboutward primary-mobile-dashboard window
 ];
 
