@@ -104,6 +104,50 @@ async function main() {
       log("GET /api/v1/user/wallet-details/:dealerId", false, e.response?.data?.message || e.message);
     }
 
+    // --- 4b) Wallet details with order-derived reconcile hints (?reconcile=1) ---
+    try {
+      const res = await api.get(`/api/v1/user/wallet-details/${dealerId}`, {
+        params: { reconcile: 1 },
+      });
+      const ok = res.status === 200;
+      const plants = res.data?.data?.plantDetails;
+      log("GET /api/v1/user/wallet-details/:dealerId?reconcile=1", ok);
+      if (ok && Array.isArray(plants) && plants.length > 0) {
+        const firstSlot = plants[0].slotDetails?.[0];
+        const r = firstSlot?.reconcile;
+        if (r) {
+          console.log(
+            `   sample reconcile: bulkFromOrders=${r.bulkFromOrders}, farmerBooked=${r.farmerBookedFromOrders}, inconsistent=${r.inconsistent}`
+          );
+        } else {
+          console.log("   (no reconcile block on first slot — empty wallet line?)");
+        }
+      }
+    } catch (e) {
+      log("GET wallet-details?reconcile=1", false, e.response?.data?.message || e.message);
+    }
+
+    // --- 4c) POST reconcile-wallet (requires SUPER_ADMIN token) ---
+    if (AUTH_TOKEN) {
+      try {
+        const res = await api.post(
+          `/api/v1/user/dealers/${dealerId}/reconcile-wallet`,
+          { dryRun: true }
+        );
+        const ok = res.status === 200 && res.data?.status === "success";
+        log("POST /api/v1/user/dealers/:dealerId/reconcile-wallet (dryRun)", ok);
+        if (ok && res.data?.data?.changes?.length) {
+          console.log(`   proposed changes: ${res.data.data.changes.length} line(s)`);
+        }
+      } catch (e) {
+        log(
+          "POST reconcile-wallet",
+          false,
+          e.response?.status === 403 ? "need SUPER_ADMIN token" : e.response?.data?.message || e.message
+        );
+      }
+    }
+
     // --- 5) Dealer transactions (embedded wallet txns) ---
     try {
       const res = await api.get(`/api/v1/user/dealers/transactions/${dealerId}`, {

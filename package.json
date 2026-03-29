@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/orderUpdatePermissions.test.mjs tests/dispatchCompleteCalculations.test.mjs",
+    "test": "node --test tests/orderUpdatePermissions.test.mjs tests/dispatchCompleteCalculations.test.mjs tests/dealerWalletReconcile.test.mjs",
     "test:order-permissions": "node --test tests/orderUpdatePermissions.test.mjs",
     "test:dispatch-status-patch": "node scripts/test-dispatch-order-status-patch.js",
     "test:cancel-ledger-quota": "node scripts/test-cancel-ledger-and-quota-api.js",

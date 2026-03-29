@@ -45,6 +45,8 @@ const bulkPaymentSchema = new Schema(
     ],
     remark: { type: String },
     transactionId: { type: String, trim: true },
+    /** UPI / NEFT bank reference (separate from app transaction id when both exist). */
+    utrNumber: { type: String, trim: true },
     paymentStatus: {
       type: String,
       enum: ["PENDING", "ACCEPTED"],

@@ -297,13 +297,13 @@ Referenced by dealer.controller for getDealerOrdersByBooking and updateDealerOrd
 6. **Slot/quota branch (all inside transaction):**
    - **Case A – dealerOrder === true (dealer’s own stock):**  
      - `updateSlot(bookingSlot, numberOfPlants, "subtract", session)` → validates slot availability (and sets overflow flags if allowed).  
-     - DealerWallet: find or create by dealer; find or create **entry** (plantType, subType, bookingSlot); set `quantity += numberOfPlants`, bookedQuantity 0, remainingQuantity = quantity; save wallet.  
+     - DealerWallet: find or create by dealer; find or create **entry** (plantType, subType, bookingSlot); set **`quantity += numberOfPlants` only** (`bookedQuantity` stays for farmer consumption via `allocateDealerQuota`; `remainingQuantity` is recomputed on save as `quantity - bookedQuantity`).  
      - No farmer; order has dealer, dealerOrder true.
    - **Case B – salesPerson is DEALER and componyQuota === true (company quota):**  
      - `handleQuantityAllocation(salesPerson, plantName, plantSubtype, bookingSlot, numberOfPlants, session)` → returns { fromWallet, fromSlot }. If fromSlot > 0, `updateSlot(bookingSlot, fromSlot, "subtract", session)`. Set orderData.dealer = salesPerson._id.
    - **Case C – salesPerson is DEALER and componyQuota === false (dealer quota only):**  
      - `validateDealerQuota(...)` → if !isValid, abort 400.  
-     - `allocateDealerQuota(...)` → atomic $inc entry.bookedQuantity, $inc entry.remainingQuantity (negative). Set orderData.quotaUsed, quotaSource "dealer", originalQuotaAllocation, walletEntryId. No updateSlot.
+     - `allocateDealerQuota(...)` → atomic `$set` on the entry: `quantity`, `bookedQuantity`, `remainingQuantity` from order-derived totals (see §5.4). Set orderData.quotaUsed, quotaSource "dealer", originalQuotaAllocation, walletEntryId. No updateSlot.
    - **Case D – orderData.dealer set and componyQuota === false (office selected dealer quota):**  
      - Same as C: validateDealerQuota → allocateDealerQuota; if allocation.fromSlot > 0, updateSlot for that amount. Set quota fields on orderData.
    - **Case E – else (farmer order, no dealer quota):**  
@@ -347,27 +347,22 @@ Referenced by dealer.controller for getDealerOrdersByBooking and updateDealerOrd
 
 **Steps:**
 
-1. DealerWallet.findOne({ dealer: dealerId }).
-2. If !wallet → { isValid: false, message: "Dealer has no quota allocation", availableQuota: 0, allocation: { fromWallet: 0, fromSlot: requestedQuantity } }.
-3. Find entry where entry.plantType/subType/bookingSlot match (equals).
-4. If !entry → { isValid: false, message: "No quota allocation found...", availableQuota: 0, allocation: { fromWallet: 0, fromSlot: requestedQuantity } }.
-5. availableInWallet = entry.quantity − entry.bookedQuantity.
-6. If availableInWallet >= requestedQuantity: fromWallet = min(availableInWallet, requestedQuantity), fromSlot = requestedQuantity − fromWallet; return { isValid: true, availableQuota: availableInWallet, allocation: { fromWallet, fromSlot } }.
-7. Else return { isValid: false, message: "Insufficient quota...", availableQuota: availableInWallet, allocation: { fromWallet: 0, fromSlot: requestedQuantity } }.
+1. `getDealerQuotaLineAvailability` (see `utils/dealerWalletReconcile.js`): loads DealerWallet, finds the entry, runs `aggregateDerivedFromOrders` for that dealer, and computes **sellable headroom for farmer orders** using the same line math as wallet overlay/reconcile (not raw `entry.quantity − entry.bookedQuantity`, which can be wrong when legacy bulk inflated `bookedQuantity`).
+2. If no wallet / no entry → same error shapes as before (availableQuota 0).
+3. Compare **availableForFarmerOrders** to `requestedQuantity` and build `allocation` / `isValid` as before.
 
 ---
 
 ### 5.4 allocateDealerQuota(dealerId, plantType, subType, bookingSlot, requestedQuantity, session) – quota.controller.js
 
-**Returns:** { fromWallet, fromSlot, walletEntryId, success }.
+**Returns:** { fromWallet, fromSlot, walletEntryId, success, ledgerParams }.
 
 **Steps:**
 
-1. DealerWallet.findOne({ dealer }).session(session). If !wallet throw AppError 404.
-2. Find entryIndex for matching plantType, subType, bookingSlot. If -1 throw AppError 404.
-3. entry = wallet.entries[entryIndex]; availableInWallet = entry.quantity − entry.bookedQuantity. If availableInWallet < requestedQuantity throw AppError 400.
-4. DealerWallet.findOneAndUpdate( { _id, entries[entryIndex].bookedQuantity exists }, { $inc: entries[entryIndex].bookedQuantity: +requestedQuantity, entries[entryIndex].remainingQuantity: −requestedQuantity }, { session, new: true } ).
-5. Return { fromWallet: requestedQuantity, fromSlot: 0, walletEntryId: entry._id, success: true }.
+1. Same `getDealerQuotaLineAvailability` as validate (with `session` on the wallet read).
+2. If available headroom < requestedQuantity → AppError 400 (message uses derived available).
+3. `findOneAndUpdate` with **`$set`** on the matching entry: `quantity` = **fixedQty**, `bookedQuantity` = **farmerBookedFromOrders + requestedQuantity**, `remainingQuantity` = **fixedQty − bookedQuantity** (order-derived farmer booked + this booking; aligns stored line with reconcile).
+4. Ledger `balanceBefore` / `balanceAfter` use derived available before/after this booking.
 
 ---
 
@@ -602,10 +597,19 @@ In **factory.controller.js** createOne(Order):
 
 So **dealer quota minus** = allocateDealerQuota increments **bookedQuantity** (and decrements **remainingQuantity**) for the matching wallet entry. **Company quota minus** = **updateSlot(..., "subtract")** on the slot.
 
+**Dealer bulk (`dealerOrder: true`)** increases **sellable** stock only: **`quantity`** (and thus available `quantity - bookedQuantity`). It does **not** increment **`bookedQuantity`**; that field tracks **farmer** orders drawn from the dealer’s quota. Cancelling or rejecting a bulk order removes **`quantity`** for that line; re-opening from cancelled/rejected restores **`quantity`** (not `bookedQuantity`). Status updates that adjust farmer quota (e.g. release on cancel) keep using **`bookedQuantity`** for non-bulk dealer-quota orders.
+
 ### 7.3 Quota validation and allocation – `quota.controller.js`
 
-- **validateDealerQuota(dealerId, plantType, subType, bookingSlot, requestedQuantity):** checks DealerWallet for an entry with that combo and returns whether `(quantity - bookedQuantity) >= requestedQuantity`.
-- **allocateDealerQuota(...):** same combo; does `$inc: bookedQuantity += requestedQuantity`, `remainingQuantity -= requestedQuantity` (atomic).
+- **Farmer-order** dealer quota checks (**validateDealerQuota** / **allocateDealerQuota**) use **order-derived** sums (`bulkFromOrders` + `farmerBookedFromOrders` from orders), consistent with the dealer wallet API overlay and **reconcile-wallet** (`dealerWalletReconcile.js`). Availability is **not** inferred only from stored `quantity − bookedQuantity` when that row was legacy-inconsistent.
+- **validateDealerQuota(...):** uses `getDealerQuotaLineAvailability` → compares derived **availableForFarmerOrders** to `requestedQuantity`.
+- **allocateDealerQuota(...):** same derived baseline; writes **`$set`** `quantity` / `bookedQuantity` / `remainingQuantity` for the line so stored state matches reconcile + this booking (instead of blind `$inc` on a corrupted baseline).
+
+### 7.4 Reconciliation and historical fixes
+
+- **GET `/api/v1/user/wallet-details/:dealerId?reconcile=1`** — response **plantDetails** slot rows include optional **`reconcile`**: `bulkFromOrders` and `farmerBookedFromOrders` (from Order aggregates), `derivedRemainingHint`, and **`inconsistent`** when stored lines disagree with order-derived sums. Uses a single aggregation (no N+1).
+- **POST `/api/v1/user/dealers/:dealerId/reconcile-wallet`** — **SUPER_ADMIN** only. Body: `{ "dryRun": true }` (default) returns proposed per-line diffs; `{ "dryRun": false }` applies corrections. Implementation: `utils/dealerWalletReconcile.js`, `walletController.js`.
+- **Offline:** `node scripts/reconcile-dealer-bulk-wallet.js` with `DRY_RUN=1` (default) to print proposed changes; `DRY_RUN=0` to apply. Optional `DEALER_ID=<mongoId>` scopes to one dealer.
 
 ---
 

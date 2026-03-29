@@ -459,21 +459,21 @@ const createOne = (Model, modelName) =>
               e.bookingSlot?.equals(bookingSlot)
           );
 
+          // Bulk adds sellable allocation only: quantity (and remaining) increase; bookedQuantity is for farmer orders via allocateDealerQuota.
           const balanceBefore = entry ? entry.quantity - (entry.bookedQuantity || 0) : 0;
           if (entry) {
             entry.quantity += numberOfPlants;
-            entry.bookedQuantity = (entry.bookedQuantity || 0) + numberOfPlants;
           } else {
             wallet.entries.push({
               plantType: orderData.plantName,
               subType: orderData.plantSubtype,
               bookingSlot,
               quantity: numberOfPlants,
-              bookedQuantity: numberOfPlants,
-              remainingQuantity: 0,
+              bookedQuantity: 0,
+              remainingQuantity: numberOfPlants,
             });
           }
-          const balanceAfter = balanceBefore; // remaining unchanged (quantity and booked both +N)
+          const balanceAfter = balanceBefore + numberOfPlants;
 
           await wallet.save({ session });
 
@@ -531,6 +531,7 @@ const createOne = (Model, modelName) =>
             orderData.quotaUsed = quotaAllocation.fromWallet;
             orderData.quotaSource = "dealer";
             orderData.originalQuotaAllocation = quotaAllocation;
+            orderData.walletEntryId = quotaAllocation.walletEntryId;
             if (quotaAllocation.ledgerParams) {
               pendingInventoryLedgerEntry = {
                 ...quotaAllocation.ledgerParams,
@@ -1737,118 +1738,213 @@ const updateOne = (Model, modelName, allowedFields) =>
           );
           const entryIdx = findEntryIndex();
           // PENDING → ACCEPTED: do NOT deduct again — quota was already reduced at order creation (book from quota + ledger). No wallet change here.
-          // CANCELLED/REJECTED → PENDING or ACCEPTED (re-open): deduct from dealer quota again (bookedQuantity += n), ledger INVENTORY_BOOK (deduction/red)
+          // CANCELLED/REJECTED → active (re-open): farmer quota → bookedQuantity += n + INVENTORY_BOOK. Dealer bulk → quantity += n + INVENTORY_ADD (sellable allocation restored).
           if (wasCancelledOrRejected && isNowActive) {
             const n = existingDoc.numberOfPlants;
             let balanceBefore = 0;
-            if (entryIdx === -1) {
-              dealerWallet.entries.push({
-                plantType: plantId,
-                subType: existingDoc.plantSubtype,
-                bookingSlot: existingDoc.bookingSlot,
-                quantity: n,
-                bookedQuantity: n,
-                remainingQuantity: 0
-              });
-              balanceBefore = 0;
-            } else {
-              const entry = dealerWallet.entries[entryIdx];
-              balanceBefore = (entry.quantity || 0) - (entry.bookedQuantity || 0);
-              entry.bookedQuantity = (entry.bookedQuantity || 0) + n;
-              entry.remainingQuantity = (entry.quantity || 0) - entry.bookedQuantity;
-            }
-            const balanceAfter = balanceBefore - n;
-            dealerWallet.markModified("entries");
+            let balanceAfter = 0;
             const orderIdDisplay = existingDoc.orderId ?? existingDoc._id?.toString?.() ?? "";
             const farmerName = existingDoc.farmer?.name ?? (existingDoc.dealerOrder ? "Dealer order" : "—");
             const plantNameDisplay = existingDoc.plantName?.name ?? "Plant";
-            const reopenDescription = `Quantity reduced from dealer quota (order re-opened: ${existingDoc.orderStatus} → ${filteredBody.orderStatus}). Order ID: ${orderIdDisplay}, Farmer: ${farmerName}, Plant: ${plantNameDisplay}, Qty: ${n}.`;
-            try {
-              await DealerPlantInventoryLedger.createLedgerEntry(
-                {
-                  transactionType: "INVENTORY_BOOK",
-                  dealer: dealerIdQuery,
+
+            if (existingDoc.dealerOrder) {
+              if (entryIdx === -1) {
+                dealerWallet.entries.push({
                   plantType: plantId,
                   subType: existingDoc.plantSubtype,
                   bookingSlot: existingDoc.bookingSlot,
-                  quantity: -n,
-                  balanceBefore,
-                  balanceAfter,
-                  referenceId: existingDoc._id,
-                  description: reopenDescription,
-                  performedBy: req.user?._id,
-                },
-                session
-              );
-            } catch (ledgerErr) {
-              console.error("DealerPlantInventoryLedger INVENTORY_BOOK (re-open) failed:", ledgerErr);
-            }
-          }
-          // When changing TO CANCELLED/REJECTED: release the booking so plants show in dealer quota again, and record in plant ledger.
-          if (filteredBody.orderStatus === "CANCELLED" || filteredBody.orderStatus === "REJECTED") {
-            const n = existingDoc.numberOfPlants;
-            let balanceBefore = 0;
-            if (entryIdx !== -1) {
-              const entry = dealerWallet.entries[entryIdx];
-              balanceBefore = (entry.quantity || 0) - (entry.bookedQuantity || 0);
-              const currentBooked = entry.bookedQuantity || 0;
-              if (currentBooked >= n) {
-                entry.bookedQuantity = currentBooked - n;
-                entry.remainingQuantity = (entry.quantity || 0) - entry.bookedQuantity;
+                  quantity: n,
+                  bookedQuantity: 0,
+                  remainingQuantity: n,
+                });
+                balanceBefore = 0;
+                balanceAfter = n;
               } else {
+                const entry = dealerWallet.entries[entryIdx];
+                balanceBefore = (entry.quantity || 0) - (entry.bookedQuantity || 0);
                 entry.quantity = (entry.quantity || 0) + n;
-                entry.remainingQuantity = (entry.remainingQuantity || 0) + n;
+                entry.remainingQuantity = (entry.quantity || 0) - (entry.bookedQuantity || 0);
+                balanceAfter = balanceBefore + n;
               }
-            } else {
-              dealerWallet.entries.push({
-                plantType: plantId,
-                subType: existingDoc.plantSubtype,
-                bookingSlot: existingDoc.bookingSlot,
-                quantity: n,
-                bookedQuantity: 0,
-                remainingQuantity: n
-              });
-            }
-            dealerWallet.markModified("entries");
-            const balanceAfter = balanceBefore + n;
-            const actionLabel = filteredBody.orderStatus === "CANCELLED" ? "cancelled" : "rejected";
-            const orderIdDisplay = existingDoc.orderId ?? existingDoc._id?.toString?.() ?? "";
-            const farmerName = existingDoc.farmer?.name ?? (existingDoc.dealerOrder ? "Dealer order" : "—");
-            const plantNameDisplay = existingDoc.plantName?.name ?? "Plant";
-            const releaseDescription = `Release added to dealer quota. Order ID: ${orderIdDisplay}, Farmer: ${farmerName}, Plant: ${plantNameDisplay}, Qty: ${n}, Reason: Order ${actionLabel}.`;
-            // Normalize to ObjectIds so ledger create never fails validation (use same dealer as wallet)
-            const ledgerDealer = dealerIdQuery;
-            const ledgerPlantType = plantId && mongoose.Types.ObjectId.isValid(plantId) ? (typeof plantId === "string" ? new mongoose.Types.ObjectId(plantId) : plantId) : null;
-            const ledgerSubType = existingDoc.plantSubtype && mongoose.Types.ObjectId.isValid(existingDoc.plantSubtype) ? (typeof existingDoc.plantSubtype === "string" ? new mongoose.Types.ObjectId(existingDoc.plantSubtype) : existingDoc.plantSubtype) : null;
-            const ledgerSlot = existingDoc.bookingSlot && mongoose.Types.ObjectId.isValid(existingDoc.bookingSlot) ? (typeof existingDoc.bookingSlot === "string" ? new mongoose.Types.ObjectId(existingDoc.bookingSlot) : existingDoc.bookingSlot) : null;
-            if (ledgerDealer && ledgerPlantType && ledgerSubType && ledgerSlot) {
+              dealerWallet.markModified("entries");
+              const reopenBulkDescription = `Dealer bulk allocation restored (order re-opened: ${existingDoc.orderStatus} → ${filteredBody.orderStatus}). Order ID: ${orderIdDisplay}, ${farmerName}, Plant: ${plantNameDisplay}, Qty: ${n}.`;
               try {
                 await DealerPlantInventoryLedger.createLedgerEntry(
                   {
-                    transactionType: "INVENTORY_RELEASE",
-                    dealer: ledgerDealer,
-                    plantType: ledgerPlantType,
-                    subType: ledgerSubType,
-                    bookingSlot: ledgerSlot,
+                    transactionType: "INVENTORY_ADD",
+                    dealer: dealerIdQuery,
+                    plantType: plantId,
+                    subType: existingDoc.plantSubtype,
+                    bookingSlot: existingDoc.bookingSlot,
                     quantity: n,
                     balanceBefore,
                     balanceAfter,
                     referenceId: existingDoc._id,
-                    description: releaseDescription,
+                    description: reopenBulkDescription,
                     performedBy: req.user?._id,
                   },
                   session
                 );
               } catch (ledgerErr) {
-                console.error("DealerPlantInventoryLedger INVENTORY_RELEASE (cancel/reject) failed:", ledgerErr?.message || ledgerErr, { ledgerDealer, ledgerPlantType, ledgerSubType, ledgerSlot, n });
-                throw ledgerErr;
+                console.error("DealerPlantInventoryLedger INVENTORY_ADD (bulk re-open) failed:", ledgerErr);
               }
             } else {
-              console.warn("Dealer plant ledger skip: missing required ids", { ledgerDealer: !!ledgerDealer, ledgerPlantType: !!ledgerPlantType, ledgerSubType: !!ledgerSubType, ledgerSlot: !!ledgerSlot });
+              if (entryIdx === -1) {
+                dealerWallet.entries.push({
+                  plantType: plantId,
+                  subType: existingDoc.plantSubtype,
+                  bookingSlot: existingDoc.bookingSlot,
+                  quantity: n,
+                  bookedQuantity: n,
+                  remainingQuantity: 0,
+                });
+                balanceBefore = 0;
+              } else {
+                const entry = dealerWallet.entries[entryIdx];
+                balanceBefore = (entry.quantity || 0) - (entry.bookedQuantity || 0);
+                entry.bookedQuantity = (entry.bookedQuantity || 0) + n;
+                entry.remainingQuantity = (entry.quantity || 0) - entry.bookedQuantity;
+              }
+              balanceAfter = balanceBefore - n;
+              dealerWallet.markModified("entries");
+              const reopenDescription = `Quantity reduced from dealer quota (order re-opened: ${existingDoc.orderStatus} → ${filteredBody.orderStatus}). Order ID: ${orderIdDisplay}, Farmer: ${farmerName}, Plant: ${plantNameDisplay}, Qty: ${n}.`;
+              try {
+                await DealerPlantInventoryLedger.createLedgerEntry(
+                  {
+                    transactionType: "INVENTORY_BOOK",
+                    dealer: dealerIdQuery,
+                    plantType: plantId,
+                    subType: existingDoc.plantSubtype,
+                    bookingSlot: existingDoc.bookingSlot,
+                    quantity: -n,
+                    balanceBefore,
+                    balanceAfter,
+                    referenceId: existingDoc._id,
+                    description: reopenDescription,
+                    performedBy: req.user?._id,
+                  },
+                  session
+                );
+              } catch (ledgerErr) {
+                console.error("DealerPlantInventoryLedger INVENTORY_BOOK (re-open) failed:", ledgerErr);
+              }
             }
           }
-          // When changing FROM ACCEPTED to something other than CANCELLED/REJECTED (e.g. PENDING): remove the allocated quantity.
-          if (existingDoc.orderStatus === "ACCEPTED" && filteredBody.orderStatus !== "ACCEPTED" && filteredBody.orderStatus !== "CANCELLED" && filteredBody.orderStatus !== "REJECTED") {
+          // When changing TO CANCELLED/REJECTED: farmer quota → release booked (INVENTORY_RELEASE). Dealer bulk → remove allocation (quantity -= n, INVENTORY_ADD negative).
+          if (filteredBody.orderStatus === "CANCELLED" || filteredBody.orderStatus === "REJECTED") {
+            const n = existingDoc.numberOfPlants;
+            let balanceBefore = 0;
+            let balanceAfter = 0;
+            const actionLabel = filteredBody.orderStatus === "CANCELLED" ? "cancelled" : "rejected";
+            const orderIdDisplay = existingDoc.orderId ?? existingDoc._id?.toString?.() ?? "";
+            const farmerName = existingDoc.farmer?.name ?? (existingDoc.dealerOrder ? "Dealer order" : "—");
+            const plantNameDisplay = existingDoc.plantName?.name ?? "Plant";
+
+            if (existingDoc.dealerOrder) {
+              if (entryIdx !== -1) {
+                const entry = dealerWallet.entries[entryIdx];
+                balanceBefore = (entry.quantity || 0) - (entry.bookedQuantity || 0);
+                entry.quantity = (entry.quantity || 0) - n;
+                entry.remainingQuantity = (entry.quantity || 0) - (entry.bookedQuantity || 0);
+                if (entry.quantity <= 0) {
+                  dealerWallet.entries.splice(entryIdx, 1);
+                }
+                balanceAfter = balanceBefore - n;
+                dealerWallet.markModified("entries");
+                const bulkCancelDescription = `Dealer bulk allocation removed (order ${actionLabel}). Order ID: ${orderIdDisplay}, ${farmerName}, Plant: ${plantNameDisplay}, Qty: ${n}.`;
+                const ledgerDealer = dealerIdQuery;
+                const ledgerPlantType = plantId && mongoose.Types.ObjectId.isValid(plantId) ? (typeof plantId === "string" ? new mongoose.Types.ObjectId(plantId) : plantId) : null;
+                const ledgerSubType = existingDoc.plantSubtype && mongoose.Types.ObjectId.isValid(existingDoc.plantSubtype) ? (typeof existingDoc.plantSubtype === "string" ? new mongoose.Types.ObjectId(existingDoc.plantSubtype) : existingDoc.plantSubtype) : null;
+                const ledgerSlot = existingDoc.bookingSlot && mongoose.Types.ObjectId.isValid(existingDoc.bookingSlot) ? (typeof existingDoc.bookingSlot === "string" ? new mongoose.Types.ObjectId(existingDoc.bookingSlot) : existingDoc.bookingSlot) : null;
+                if (ledgerDealer && ledgerPlantType && ledgerSubType && ledgerSlot) {
+                  try {
+                    await DealerPlantInventoryLedger.createLedgerEntry(
+                      {
+                        transactionType: "INVENTORY_ADD",
+                        dealer: ledgerDealer,
+                        plantType: ledgerPlantType,
+                        subType: ledgerSubType,
+                        bookingSlot: ledgerSlot,
+                        quantity: -n,
+                        balanceBefore,
+                        balanceAfter,
+                        referenceId: existingDoc._id,
+                        description: bulkCancelDescription,
+                        performedBy: req.user?._id,
+                      },
+                      session
+                    );
+                  } catch (ledgerErr) {
+                    console.error("DealerPlantInventoryLedger INVENTORY_ADD reversal (bulk cancel) failed:", ledgerErr?.message || ledgerErr);
+                  }
+                }
+              } else {
+                console.warn("Dealer bulk cancel: no wallet entry for plant/slot line", { orderId: existingDoc._id });
+              }
+            } else {
+              if (entryIdx !== -1) {
+                const entry = dealerWallet.entries[entryIdx];
+                balanceBefore = (entry.quantity || 0) - (entry.bookedQuantity || 0);
+                const currentBooked = entry.bookedQuantity || 0;
+                if (currentBooked >= n) {
+                  entry.bookedQuantity = currentBooked - n;
+                  entry.remainingQuantity = (entry.quantity || 0) - entry.bookedQuantity;
+                } else {
+                  entry.quantity = (entry.quantity || 0) + n;
+                  entry.remainingQuantity = (entry.remainingQuantity || 0) + n;
+                }
+              } else {
+                dealerWallet.entries.push({
+                  plantType: plantId,
+                  subType: existingDoc.plantSubtype,
+                  bookingSlot: existingDoc.bookingSlot,
+                  quantity: n,
+                  bookedQuantity: 0,
+                  remainingQuantity: n,
+                });
+              }
+              dealerWallet.markModified("entries");
+              balanceAfter = balanceBefore + n;
+              const releaseDescription = `Release added to dealer quota. Order ID: ${orderIdDisplay}, Farmer: ${farmerName}, Plant: ${plantNameDisplay}, Qty: ${n}, Reason: Order ${actionLabel}.`;
+              const ledgerDealer = dealerIdQuery;
+              const ledgerPlantType = plantId && mongoose.Types.ObjectId.isValid(plantId) ? (typeof plantId === "string" ? new mongoose.Types.ObjectId(plantId) : plantId) : null;
+              const ledgerSubType = existingDoc.plantSubtype && mongoose.Types.ObjectId.isValid(existingDoc.plantSubtype) ? (typeof existingDoc.plantSubtype === "string" ? new mongoose.Types.ObjectId(existingDoc.plantSubtype) : existingDoc.plantSubtype) : null;
+              const ledgerSlot = existingDoc.bookingSlot && mongoose.Types.ObjectId.isValid(existingDoc.bookingSlot) ? (typeof existingDoc.bookingSlot === "string" ? new mongoose.Types.ObjectId(existingDoc.bookingSlot) : existingDoc.bookingSlot) : null;
+              if (ledgerDealer && ledgerPlantType && ledgerSubType && ledgerSlot) {
+                try {
+                  await DealerPlantInventoryLedger.createLedgerEntry(
+                    {
+                      transactionType: "INVENTORY_RELEASE",
+                      dealer: ledgerDealer,
+                      plantType: ledgerPlantType,
+                      subType: ledgerSubType,
+                      bookingSlot: ledgerSlot,
+                      quantity: n,
+                      balanceBefore,
+                      balanceAfter,
+                      referenceId: existingDoc._id,
+                      description: releaseDescription,
+                      performedBy: req.user?._id,
+                    },
+                    session
+                  );
+                } catch (ledgerErr) {
+                  console.error("DealerPlantInventoryLedger INVENTORY_RELEASE (cancel/reject) failed:", ledgerErr?.message || ledgerErr, { ledgerDealer, ledgerPlantType, ledgerSubType, ledgerSlot, n });
+                  throw ledgerErr;
+                }
+              } else {
+                console.warn("Dealer plant ledger skip: missing required ids", { ledgerDealer: !!ledgerDealer, ledgerPlantType: !!ledgerPlantType, ledgerSubType: !!ledgerSubType, ledgerSlot: !!ledgerSlot });
+              }
+            }
+          }
+          // When changing FROM ACCEPTED to something other than CANCELLED/REJECTED (e.g. PENDING): remove farmer quota allocation — not used for dealer bulk (bulk uses quantity as purchased stock, not this path).
+          if (
+            !existingDoc.dealerOrder &&
+            existingDoc.orderStatus === "ACCEPTED" &&
+            filteredBody.orderStatus !== "ACCEPTED" &&
+            filteredBody.orderStatus !== "CANCELLED" &&
+            filteredBody.orderStatus !== "REJECTED"
+          ) {
             if (entryIdx !== -1) {
               dealerWallet.entries[entryIdx].quantity -= existingDoc.numberOfPlants;
               dealerWallet.entries[entryIdx].remainingQuantity -= existingDoc.numberOfPlants;
@@ -2662,6 +2758,18 @@ const getAll = (Model, modelName) =>
           ],
         },
       });
+      // Optional booking-date range when searching (e.g. bulk payment order picker)
+      if (startDate && endDate && dispatched === "false") {
+        const parseDateSearch = (dateStr, isEnd = false) => {
+          const [day, month, year] = dateStr.split("-");
+          return isEnd
+            ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
+            : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+        };
+        const startR = parseDateSearch(startDate);
+        const endR = parseDateSearch(endDate, true);
+        pipeline.push({ $match: { orderBookingDate: { $gte: startR, $lte: endR } } });
+      }
     } else {
       pipeline.push({
         $lookup: {
@@ -3006,6 +3114,7 @@ const getAll = (Model, modelName) =>
           },
           createdAt: 1,
           orderStatus: 1,
+          assignedVehicle: 1,
           payment: 1,
           numberOfPlants: 1,
           additionalPlants: { $ifNull: ["$additionalPlants", 0] },

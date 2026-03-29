@@ -20,6 +20,7 @@ import DealerWallet from "../models/dealerWallet.js";
 import DealerLedgerEntry from "../models/dealerLedgerEntry.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import mongoose from "mongoose";
+import { getWalletPlantDetailsWithDerivedOverlay } from "../utils/dealerWalletReconcile.js";
 import { uploadImageToCloudinary } from "../utils/cloudinaryUtils.js";
 import axios from "axios";
 import moment from "moment";
@@ -1441,15 +1442,145 @@ const exportDealerWalletTransactionsCSV = async (req, res) => {
 // Updated getDealerInventoryStats function with fixes
 export const getDealerWalletStats = async (req, res) => {
   try {
-    console.log("Fetching dealer wallet stats from orders...");
-    
-    // Get dealer ID from params if provided
     const { dealerId } = req.params;
-    
-    // Build match condition for orders
-    const matchCondition = dealerId ? { salesPerson: dealerId } : {};
-    
-    // Get all orders for dealers (bulk orders)
+
+    if (dealerId && !mongoose.Types.ObjectId.isValid(dealerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid dealer ID format",
+      });
+    }
+
+    // Per-dealer: same plant totals as wallet-details API (DealerWallet + order-derived overlay)
+    if (dealerId) {
+      const plantDetails = await getWalletPlantDetailsWithDerivedOverlay(dealerId);
+      const oid = new mongoose.Types.ObjectId(dealerId);
+
+      const [acceptedOrdersCount, rejectedOrdersCount] = await Promise.all([
+        Order.countDocuments({
+          $or: [{ dealer: oid }, { salesPerson: oid }],
+          orderStatus: "ACCEPTED",
+        }),
+        Order.countDocuments({
+          $or: [{ dealer: oid }, { salesPerson: oid }],
+          orderStatus: "REJECTED",
+        }),
+      ]);
+
+      const dealerOrders = await Order.find({
+        $or: [{ dealer: oid }, { salesPerson: oid }],
+      })
+        .select("orderId plantName plantSubtype numberOfPlants orderStatus quotaUsed quotaSource")
+        .sort({ createdAt: -1 })
+        .limit(300)
+        .lean();
+
+      const allPlantIds = [
+        ...new Set([
+          ...plantDetails.map((r) => r.plantType?.toString()).filter(Boolean),
+          ...dealerOrders.map((o) => o.plantName?.toString()).filter(Boolean),
+        ]),
+      ].filter((id) => mongoose.Types.ObjectId.isValid(id));
+
+      const plants = allPlantIds.length
+        ? await PlantCms.find({ _id: { $in: allPlantIds.map((id) => new mongoose.Types.ObjectId(id)) } })
+            .select("name subtypes")
+            .lean()
+        : [];
+
+      const plantMap = new Map();
+      const subTypeMap = new Map();
+      plants.forEach((p) => {
+        plantMap.set(p._id.toString(), p.name);
+        (p.subtypes || []).forEach((st) => {
+          subTypeMap.set(st._id.toString(), st.name);
+        });
+      });
+
+      const plantTypeMap = new Map();
+      for (const row of plantDetails) {
+        const ptId = row.plantType?.toString?.() ?? String(row.plantType);
+        const plantTypeName = row.plantName || plantMap.get(ptId) || `Plant ${ptId.slice(-6)}`;
+        if (!plantTypeMap.has(ptId)) {
+          plantTypeMap.set(ptId, {
+            plantTypeId: ptId,
+            plantTypeName,
+            dealerCount: 1,
+            totalQuantity: 0,
+            totalBookedQuantity: 0,
+            totalRemainingQuantity: 0,
+            acceptedOrders: 0,
+            rejectedOrders: 0,
+            subtypes: [],
+          });
+        }
+        const agg = plantTypeMap.get(ptId);
+        agg.totalQuantity += row.totalQuantity || 0;
+        agg.totalBookedQuantity += row.totalBookedQuantity || 0;
+        agg.totalRemainingQuantity += row.totalRemainingQuantity || 0;
+        const stId = row.subType?.toString?.() ?? String(row.subType);
+        agg.subtypes.push({
+          subTypeId: stId,
+          subTypeName: row.subtypeName || subTypeMap.get(stId) || `Subtype ${stId.slice(-6)}`,
+          totalQuantity: row.totalQuantity || 0,
+          totalBookedQuantity: row.totalBookedQuantity || 0,
+          totalRemainingQuantity: row.totalRemainingQuantity || 0,
+          bookingPercentage:
+            (row.totalQuantity || 0) > 0
+              ? ((row.totalBookedQuantity || 0) / row.totalQuantity) * 100
+              : 0,
+        });
+      }
+
+      const plantTypeStats = Array.from(plantTypeMap.values()).map((stats) => ({
+        ...stats,
+        bookingPercentage:
+          stats.totalQuantity > 0 ? (stats.totalBookedQuantity / stats.totalQuantity) * 100 : 0,
+      }));
+      plantTypeStats.sort((a, b) => a.plantTypeName.localeCompare(b.plantTypeName));
+
+      const tq = plantDetails.reduce((s, r) => s + (r.totalQuantity || 0), 0);
+      const tb = plantDetails.reduce((s, r) => s + (r.totalBookedQuantity || 0), 0);
+      const tr = plantDetails.reduce((s, r) => s + (r.totalRemainingQuantity || 0), 0);
+
+      const dealerStats = {
+        dealerId: dealerId.toString(),
+        totalQuantity: tq,
+        totalBookedQuantity: tb,
+        totalRemainingQuantity: tr,
+        acceptedOrdersCount,
+        rejectedOrdersCount,
+        orders: dealerOrders.map((order) => ({
+          orderId: order.orderId,
+          plantType: plantMap.get(order.plantName?.toString()) || order.plantName?.toString() || "Unknown",
+          subType: subTypeMap.get(order.plantSubtype?.toString()) || order.plantSubtype?.toString() || "Unknown",
+          quantity: order.numberOfPlants,
+          status: order.orderStatus,
+          quotaUsed: order.quotaUsed || 0,
+          quotaSource: order.quotaSource || "none",
+        })),
+      };
+
+      const overallStats = {
+        dealerCount: 1,
+        totalQuantity: tq,
+        totalBookedQuantity: tb,
+        totalRemainingQuantity: tr,
+        bookingPercentage: tq > 0 ? (tb / tq) * 100 : 0,
+        acceptedOrdersCount,
+        rejectedOrdersCount,
+      };
+
+      return res.json({
+        success: true,
+        overall: overallStats,
+        byPlantType: plantTypeStats,
+        dealerStats,
+      });
+    }
+
+    console.log("Fetching dealer wallet stats from orders (global bulk)...");
+    const matchCondition = {};
     const orders = await Order.find({
       ...matchCondition,
       dealerOrder: true
@@ -1597,47 +1728,13 @@ export const getDealerWalletStats = async (req, res) => {
     
     // Sort by plant type name
     plantTypeStats.sort((a, b) => a.plantTypeName.localeCompare(b.plantTypeName));
-    
-    // Get dealer-specific stats if dealerId is provided
-    let dealerStats = null;
-    if (dealerId) {
-      const dealerOrders = orders.filter(order => order.salesPerson.toString() === dealerId);
-      const acceptedDealerOrders = dealerOrders.filter(order => order.orderStatus === 'ACCEPTED');
-      const rejectedDealerOrders = dealerOrders.filter(order => order.orderStatus === 'REJECTED');
-      
-      // Calculate booked quantity from quotaUsed in ACCEPTED orders
-      const dealerBookedQuantity = acceptedDealerOrders.reduce((sum, order) => {
-        return sum + (order.quotaUsed || 0);
-      }, 0);
-      
-      // Count total quantity from ACCEPTED dealer orders only
-      const totalDealerQuantity = acceptedDealerOrders.reduce((sum, order) => sum + (order.numberOfPlants || 0), 0);
-      
-      dealerStats = {
-        dealerId: dealerId,
-        totalQuantity: totalDealerQuantity,
-        totalBookedQuantity: dealerBookedQuantity,
-        totalRemainingQuantity: totalDealerQuantity - dealerBookedQuantity,
-        acceptedOrdersCount: acceptedDealerOrders.length,
-        rejectedOrdersCount: rejectedDealerOrders.length,
-        orders: dealerOrders.map(order => ({
-          orderId: order.orderId,
-          plantType: plantMap.get(order.plantName?.toString()) || order.plantName?.toString() || 'Unknown',
-          subType: subTypeMap.get(order.plantSubtype?.toString()) || order.plantSubtype?.toString() || 'Unknown',
-          quantity: order.numberOfPlants,
-          status: order.orderStatus,
-          quotaUsed: order.quotaUsed || 0,
-          quotaSource: order.quotaSource || 'none'
-        }))
-      };
-    }
 
-    // Return all stats
+    // Return all stats (global bulk-order view only; per-dealer uses early return above)
     res.json({
       success: true,
       overall: overallStats,
       byPlantType: plantTypeStats,
-      dealerStats: dealerStats
+      dealerStats: null,
     });
   } catch (error) {
     console.error("Error fetching dealer wallet stats:", error);

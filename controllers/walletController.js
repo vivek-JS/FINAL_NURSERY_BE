@@ -3,9 +3,17 @@ import Order from "../models/order.model.js";
 import catchAsync from "../utility/catchAsync.js";
 import mongoose from "mongoose";
 import moment from 'moment';
+import {
+  aggregateDerivedFromOrders,
+  attachReconcileHintsToPlantDetails,
+  getWalletPlantDetailsWithDerivedOverlay,
+  reconcileDealerWalletEntries,
+} from "../utils/dealerWalletReconcile.js";
 
 const getDealerWalletDetails = catchAsync(async (req, res) => {
   const { dealerId } = req.params;
+  const wantReconcile =
+    req.query.reconcile === "1" || req.query.reconcile === "true";
 
   // First get dealer's orders and calculate total order amount
   // totalOrderAmount = rate * (numberOfPlants + additionalPlants) for each order
@@ -46,144 +54,12 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
     }
   ]);
 
-  // Get wallet plant details
-  const walletDetails = await DealerWallet.aggregate([
-    // Match the dealer
-    { 
-      $match: { 
-        dealer: new mongoose.Types.ObjectId(dealerId) 
-      } 
-    },
-
-    // Facet to separate wallet info and plant details
-    {
-      $facet: {
-        walletInfo: [
-          {
-            $project: {
-              availableAmount: 1,
-              _id: 0
-            }
-          }
-        ],
-        plantDetails: [
-          // Unwind entries array
-          { $unwind: "$entries" },
-
-          // Add lookups for plant names
-          {
-            $lookup: {
-              from: "plantcms",
-              localField: "entries.plantType",
-              foreignField: "_id",
-              as: "plantDetails"
-            }
-          },
-          {
-            $lookup: {
-              from: "plantcms",
-              let: { subTypeId: "$entries.subType" },
-              pipeline: [
-                { $unwind: "$subtypes" },
-                {
-                  $match: {
-                    $expr: { $eq: ["$subtypes._id", "$$subTypeId"] }
-                  }
-                }
-              ],
-              as: "subtypeDetails"
-            }
-          },
-
-          // Group by plantType and subType
-          {
-            $group: {
-              _id: {
-                plantType: "$entries.plantType",
-                subType: "$entries.subType"
-              },
-              plantName: { $first: { $arrayElemAt: ["$plantDetails.name", 0] } },
-              subtypeName: { $first: { $arrayElemAt: ["$subtypeDetails.subtypes.name", 0] } },
-              totalQuantity: { $sum: "$entries.quantity" },
-              totalBookedQuantity: { $sum: "$entries.bookedQuantity" },
-              totalRemainingQuantity: { $sum: "$entries.remainingQuantity" },
-              slotDetails: {
-                $push: {
-                  slotId: "$entries.bookingSlot",
-                  quantity: "$entries.quantity",
-                  bookedQuantity: "$entries.bookedQuantity",
-                  remainingQuantity: "$entries.remainingQuantity"
-                }
-              }
-            }
-          },
-
-          // Lookup slot details
-          {
-            $lookup: {
-              from: "plantslots",
-              let: { slots: "$slotDetails" },
-              pipeline: [
-                { $unwind: "$subtypeSlots" },
-                { $unwind: "$subtypeSlots.slots" },
-                {
-                  $match: {
-                    $expr: {
-                      $in: ["$subtypeSlots.slots._id", "$$slots.slotId"]
-                    }
-                  }
-                },
-                {
-                  $project: {
-                    _id: "$subtypeSlots.slots._id",
-                    startDay: "$subtypeSlots.slots.startDay",
-                    endDay: "$subtypeSlots.slots.endDay",
-                    month: "$subtypeSlots.slots.month"
-                  }
-                }
-              ],
-              as: "slotDates"
-            }
-          },
-
-          // Final project for plant details
-          {
-            $project: {
-              _id: 0,
-              plantType: "$_id.plantType",
-              plantName: 1,
-              subType: "$_id.subType",
-              subtypeName: 1,
-              totalQuantity: 1,
-              totalBookedQuantity: 1,
-              totalRemainingQuantity: 1,
-              slotDetails: {
-                $map: {
-                  input: "$slotDetails",
-                  as: "slot",
-                  in: {
-                    slotId: "$$slot.slotId",
-                    quantity: "$$slot.quantity",
-                    bookedQuantity: "$$slot.bookedQuantity",
-                    remainingQuantity: "$$slot.remainingQuantity",
-                    dates: {
-                      $arrayElemAt: [{
-                        $filter: {
-                          input: "$slotDates",
-                          as: "date",
-                          cond: { $eq: ["$$date._id", "$$slot.slotId"] }
-                        }
-                      }, 0]
-                    }
-                  }
-                }
-              }
-            }
-          }
-        ]
-      }
-    }
+  const walletInfoAgg = await DealerWallet.aggregate([
+    { $match: { dealer: new mongoose.Types.ObjectId(dealerId) } },
+    { $project: { availableAmount: 1, _id: 0 } },
+    { $limit: 1 },
   ]);
+  const walletInfo = walletInfoAgg[0] || { availableAmount: 0 };
 
   // Combine all details
   const financialDetails = orderDetails[0] || { 
@@ -191,12 +67,14 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
     totalPaidAmount: 0 
   };
 
-  const walletInfo = walletDetails[0].walletInfo[0] || { 
-    availableAmount: 0 
-  };
-
   // Calculate pending payment (total order amount - total paid amount)
   const pendingPayment = financialDetails.totalOrderAmount - financialDetails.totalPaidAmount;
+
+  let plantDetails = await getWalletPlantDetailsWithDerivedOverlay(dealerId);
+  if (wantReconcile && plantDetails.length > 0) {
+    const derivedMap = await aggregateDerivedFromOrders(dealerId);
+    plantDetails = attachReconcileHintsToPlantDetails(plantDetails, derivedMap);
+  }
 
   // Format response
   return res.status(200).json({
@@ -209,8 +87,22 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
         pendingPayment: pendingPayment,
         remainingAmount: pendingPayment // Keep for backward compatibility
       },
-      plantDetails: walletDetails[0].plantDetails
-    }
+      plantDetails,
+    },
+  });
+});
+
+/**
+ * SUPER_ADMIN: apply Order-derived corrections to wallet entries (bulk vs farmer booked).
+ */
+const postReconcileDealerWallet = catchAsync(async (req, res) => {
+  const { dealerId } = req.params;
+  const dryRun = req.body?.dryRun !== false && req.body?.dryRun !== "false";
+
+  const result = await reconcileDealerWalletEntries(dealerId, { dryRun });
+  return res.status(200).json({
+    status: "success",
+    data: result,
   });
 });
 
@@ -382,4 +274,4 @@ const getDealerWalletSummary = async (req, res) => {
     });
   }
 };
-export { getDealerWalletDetails,getDealerWalletSummary };
+export { getDealerWalletDetails, getDealerWalletSummary, postReconcileDealerWallet };

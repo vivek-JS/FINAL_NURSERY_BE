@@ -30,6 +30,7 @@ export const createBulkPayment = catchAsync(async (req, res, next) => {
     receiptPhoto,
     remark,
     transactionId,
+    utrNumber,
     allocations,
     source,
   } = req.body;
@@ -68,6 +69,7 @@ export const createBulkPayment = catchAsync(async (req, res, next) => {
     receiptPhoto: Array.isArray(receiptPhoto) ? receiptPhoto : receiptPhoto ? [receiptPhoto] : [],
     remark: remark || undefined,
     transactionId: transactionId || undefined,
+    utrNumber: utrNumber?.trim() || undefined,
     allocations: normalizedAllocations,
     source: source || "MIXED",
     createdBy: req.user?._id || req.user?.id,

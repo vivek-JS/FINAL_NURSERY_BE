@@ -28,11 +28,12 @@ import {
 } from "../controllers/user.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
-import { authenticateToken, validateAuthRequest } from "../middlewares/auth.middleware.js";
+import { authenticateToken, validateAuthRequest, authorizeRoles } from "../middlewares/auth.middleware.js";
 import logger from "../middlewares/logger.middleware.js";
 import {
   getDealerWalletDetails,
   getDealerWalletSummary,
+  postReconcileDealerWallet,
 } from "../controllers/walletController.js";
 import { getDealerPlantLedger } from "../controllers/dealerPlantInventoryLedger.controller.js";
 import catchAsync from "../utility/catchAsync.js";
@@ -91,6 +92,12 @@ router
   .get("/allusers", authenticateToken, getUsers)
   .get("/aboutMe", authenticateToken, aboutMe)
   .get("/wallet-details/:dealerId", getDealerWalletDetails)
+  .post(
+    "/dealers/:dealerId/reconcile-wallet",
+    authenticateToken,
+    authorizeRoles(["SUPER_ADMIN"]),
+    postReconcileDealerWallet
+  )
   .get("/wallet-details-summary", getDealerWalletSummary)
   .get("/salespeople", getSalespeople)
   .get("/analytics/sales", getSalesAnalytics)

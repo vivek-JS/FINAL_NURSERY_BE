@@ -5,129 +5,107 @@ import Order from "../models/order.model.js";
 import DealerWallet from "../models/dealerWallet.js";
 import PlantSlot from "../models/slots.model.js";
 import DealerPlantInventoryLedger from "../models/dealerPlantInventoryLedger.model.js";
+import { getDealerQuotaLineAvailability } from "../utils/dealerWalletReconcile.js";
 
-// Function to validate dealer quota before order creation
+// Function to validate dealer quota before order creation (order-derived availability, same as wallet overlay)
 export const validateDealerQuota = async (dealerId, plantType, subType, bookingSlot, requestedQuantity) => {
   try {
-    // Check dealer wallet
-    const wallet = await DealerWallet.findOne({ dealer: dealerId });
-    
-    if (!wallet) {
+    const r = await getDealerQuotaLineAvailability(dealerId, plantType, subType, bookingSlot);
+    if (!r.ok) {
       return {
         isValid: false,
-        message: "Dealer has no quota allocation",
+        message: r.message,
         availableQuota: 0,
-        allocation: { fromWallet: 0, fromSlot: requestedQuantity }
+        allocation: { fromWallet: 0, fromSlot: requestedQuantity },
       };
     }
 
-    // Find exact matching entry
-    const entry = wallet.entries.find(
-      (e) =>
-        e.plantType?.equals(plantType) &&
-        e.subType?.equals(subType) &&
-        e.bookingSlot?.equals(bookingSlot)
-    );
-
-    if (!entry) {
-      return {
-        isValid: false,
-        message: "No quota allocation found for this plant/subtype/slot combination",
-        availableQuota: 0,
-        allocation: { fromWallet: 0, fromSlot: requestedQuantity }
-      };
-    }
-
-    const availableInWallet = entry.quantity - entry.bookedQuantity;
-    const totalAvailable = availableInWallet;
+    const totalAvailable = r.availableForFarmerOrders;
 
     if (totalAvailable >= requestedQuantity) {
-      // Can fulfill from quota
-      const fromWallet = Math.min(availableInWallet, requestedQuantity);
+      const fromWallet = Math.min(totalAvailable, requestedQuantity);
       const fromSlot = requestedQuantity - fromWallet;
 
       return {
         isValid: true,
         message: "Quota validation successful",
         availableQuota: totalAvailable,
-        allocation: { fromWallet, fromSlot }
-      };
-    } else {
-      // Cannot fulfill from quota
-      return {
-        isValid: false,
-        message: `Insufficient quota. Available: ${totalAvailable}, Requested: ${requestedQuantity}`,
-        availableQuota: totalAvailable,
-        allocation: { fromWallet: 0, fromSlot: requestedQuantity }
+        allocation: { fromWallet, fromSlot },
       };
     }
+
+    return {
+      isValid: false,
+      message: `Insufficient quota. Available: ${totalAvailable}, Requested: ${requestedQuantity}`,
+      availableQuota: totalAvailable,
+      allocation: { fromWallet: 0, fromSlot: requestedQuantity },
+    };
   } catch (error) {
     console.error("Error validating dealer quota:", error);
     return {
       isValid: false,
       message: "Error validating quota",
       availableQuota: 0,
-      allocation: { fromWallet: 0, fromSlot: requestedQuantity }
+      allocation: { fromWallet: 0, fromSlot: requestedQuantity },
     };
   }
 };
 
-// Function to allocate dealer quota
+// Function to allocate dealer quota (order-derived baseline + $set; aligns with wallet reconcile)
 export const allocateDealerQuota = async (dealerId, plantType, subType, bookingSlot, requestedQuantity, session) => {
   try {
-    // First, find the wallet and validate quota
-    const wallet = await DealerWallet.findOne({ dealer: dealerId }).session(session);
-    
-    if (!wallet) {
-      throw new AppError("Dealer wallet not found", 404);
+    const r = await getDealerQuotaLineAvailability(dealerId, plantType, subType, bookingSlot, { session });
+
+    if (!r.ok) {
+      throw new AppError(r.message, r.reason === "no_wallet" ? 404 : 400);
     }
 
-    // Find exact matching entry
-    const entryIndex = wallet.entries.findIndex(
-      (e) =>
-        e.plantType?.equals(plantType) &&
-        e.subType?.equals(subType) &&
-        e.bookingSlot?.equals(bookingSlot)
-    );
+    const {
+      wallet,
+      entry,
+      entryIndex,
+      fixedQty,
+      farmerBookedFromOrders,
+      availableForFarmerOrders,
+    } = r;
 
-    if (entryIndex === -1) {
-      throw new AppError("No quota allocation found for this combination", 404);
-    }
+    const balanceBefore = availableForFarmerOrders;
 
-    const entry = wallet.entries[entryIndex];
-    const entryId = entry._id;
-    const availableInWallet = entry.quantity - entry.bookedQuantity;
-    
-    console.log('🔍 Allocating quota from entry:', {
-      entryId: entryId?.toString(),
+    console.log("🔍 Allocating quota from entry (order-derived):", {
+      entryId: entry._id?.toString(),
       plantType: entry.plantType?.toString(),
       subType: entry.subType?.toString(),
       bookingSlot: entry.bookingSlot?.toString(),
-      availableInWallet,
-      requestedQuantity
+      fixedQty,
+      farmerBookedFromOrders,
+      availableForFarmerOrders,
+      requestedQuantity,
     });
-    
-    if (availableInWallet < requestedQuantity) {
-      throw new AppError(`Insufficient quota. Available: ${availableInWallet}, Requested: ${requestedQuantity}`, 400);
+
+    if (availableForFarmerOrders < requestedQuantity) {
+      throw new AppError(
+        `Insufficient quota. Available: ${availableForFarmerOrders}, Requested: ${requestedQuantity}`,
+        400
+      );
     }
 
-    // Use atomic update to avoid write conflicts
-    // Also update remainingQuantity since pre-save middleware doesn't run with findOneAndUpdate
+    const newBooked = farmerBookedFromOrders + requestedQuantity;
+    const newRem = fixedQty - newBooked;
+    const balanceAfter = availableForFarmerOrders - requestedQuantity;
+
     const result = await DealerWallet.findOneAndUpdate(
+      { _id: wallet._id },
       {
-        _id: wallet._id,
-        [`entries.${entryIndex}.bookedQuantity`]: { $exists: true }
-      },
-      {
-        $inc: {
-          [`entries.${entryIndex}.bookedQuantity`]: requestedQuantity,
-          [`entries.${entryIndex}.remainingQuantity`]: -requestedQuantity
-        }
+        $set: {
+          [`entries.${entryIndex}.quantity`]: fixedQty,
+          [`entries.${entryIndex}.bookedQuantity`]: newBooked,
+          [`entries.${entryIndex}.remainingQuantity`]: newRem,
+        },
       },
       {
         session,
         new: true,
-        runValidators: true
+        runValidators: true,
       }
     );
 
@@ -135,17 +113,17 @@ export const allocateDealerQuota = async (dealerId, plantType, subType, bookingS
       throw new AppError("Failed to update dealer quota", 500);
     }
 
-    console.log('✅ Quota allocated, returning:', {
+    console.log("✅ Quota allocated, returning:", {
       fromWallet: requestedQuantity,
       fromSlot: 0,
-      walletEntryId: entryId?.toString(),
-      success: true
+      walletEntryId: entry._id?.toString(),
+      success: true,
     });
 
     return {
       fromWallet: requestedQuantity,
       fromSlot: 0,
-      walletEntryId: entryId, // Return the wallet entry ID
+      walletEntryId: entry._id,
       success: true,
       ledgerParams: {
         transactionType: "INVENTORY_BOOK",
@@ -153,9 +131,9 @@ export const allocateDealerQuota = async (dealerId, plantType, subType, bookingS
         plantType,
         subType,
         bookingSlot,
-        quantity: -requestedQuantity, // Negative = reduces available
-        balanceBefore: availableInWallet,
-        balanceAfter: availableInWallet - requestedQuantity,
+        quantity: -requestedQuantity,
+        balanceBefore,
+        balanceAfter,
         description: `Farmer order from dealer quota: -${requestedQuantity} plants`,
       },
     };

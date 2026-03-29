@@ -964,6 +964,7 @@ const updatePaymentStatus = async (req, res) => {
       bankName, 
       remark,
       transactionId,
+      utrNumber,
       chequeNumber,
     } = req.body;
 
@@ -1020,6 +1021,9 @@ const updatePaymentStatus = async (req, res) => {
     }
     if (transactionId !== undefined) {
       payment.transactionId = transactionId;
+    }
+    if (utrNumber !== undefined) {
+      payment.utrNumber = utrNumber?.trim() || undefined;
     }
     if (chequeNumber !== undefined) {
       payment.chequeNumber = chequeNumber;
