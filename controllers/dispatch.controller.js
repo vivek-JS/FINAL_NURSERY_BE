@@ -11,8 +11,10 @@ import Tray from "../models/tray.model.js";
 import {
   syncFarmerPlantLedgerForOrderUpdate,
   roundMoney,
+  resolveFundingDealerId,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { releaseDealerQuotaPartial } from "./quota.controller.js";
+import DealerWallet from "../models/dealerWallet.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -1139,6 +1141,34 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       let dealerReleaseQty = 0;
       let slotReleaseQty = 0;
 
+      // Dealer cash wallet: credit-back proportional to COLLECTED wallet-funded payments
+      let walletReturnCreditAmount = 0;
+      const totalWalletCollected = roundMoney(
+        (order.payment || []).reduce((sum, p) => {
+          if (p.paymentStatus === "COLLECTED" && p.isWalletPayment) {
+            return sum + (Number(p.paidAmount) || 0);
+          }
+          return sum;
+        }, 0)
+      );
+      if (
+        totalReturnedPlants > 0 &&
+        totalOrderedPlants > 0 &&
+        totalWalletCollected > 0
+      ) {
+        const cumulativeTarget = roundMoney(
+          totalWalletCollected * (totalReturnedPlants / totalOrderedPlants)
+        );
+        const prevApplied = Number(order.walletReturnCreditApplied) || 0;
+        walletReturnCreditAmount = Math.max(
+          0,
+          Math.min(
+            cumulativeTarget - prevApplied,
+            roundMoney(totalWalletCollected - prevApplied)
+          )
+        );
+      }
+
       if (returnsForThisOrder > 0 && addToInventory) {
         if (isDealerQuotaOrder) {
           const dealerCap = Math.max(0, fromWallet - prevDealerReturned);
@@ -1166,13 +1196,20 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       if (returnHistoryEntry) {
         updateOperation.$push = { returnHistory: returnHistoryEntry };
       }
-      if (dealerReleaseQty > 0 || slotReleaseQty > 0) {
+      if (
+        dealerReleaseQty > 0 ||
+        slotReleaseQty > 0 ||
+        walletReturnCreditAmount > 0
+      ) {
         updateOperation.$inc = {};
         if (dealerReleaseQty > 0) {
           updateOperation.$inc.dealerQuotaReturnedPlants = dealerReleaseQty;
         }
         if (slotReleaseQty > 0) {
           updateOperation.$inc.nurserySlotReturnedPlants = slotReleaseQty;
+        }
+        if (walletReturnCreditAmount > 0) {
+          updateOperation.$inc.walletReturnCreditApplied = walletReturnCreditAmount;
         }
       }
 
@@ -1185,6 +1222,24 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         contextLabel: "complete_dispatch_order_update",
         ledgerSyncOptions: { orderEditSource: "dispatch_complete" },
       });
+
+      if (walletReturnCreditAmount > 0) {
+        const dealerId = await resolveFundingDealerId(updatedOrder);
+        if (dealerId) {
+          await DealerWallet.addPayment(
+            dealerId,
+            walletReturnCreditAmount,
+            `Dispatch return credit-back (wallet-funded payment) — Order ${
+              updatedOrder.orderId ?? order._id
+            }`,
+            req.user?._id,
+            "ADJUSTMENT",
+            updatedOrder._id,
+            session,
+            { source: "dispatch_return" }
+          );
+        }
+      }
 
       if (dealerReleaseQty > 0) {
         const orderForRelease =

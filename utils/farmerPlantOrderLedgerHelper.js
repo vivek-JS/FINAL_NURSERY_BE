@@ -665,6 +665,100 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
       if (strict) throw e;
     }
   }
+
+  if (orderEditSource === "dispatch_complete") {
+    try {
+      await recordFarmerPlantLedgerDispatchReturnCredit(
+        existingDoc,
+        updatedDoc,
+        userId,
+        session,
+        { strict }
+      );
+    } catch (e) {
+      console.error("Farmer plant ledger dispatch return credit failed:", e);
+      if (strict) throw e;
+    }
+  }
+}
+
+/**
+ * Credit farmer receivable for plants returned on dispatch (delta returnedPlants × rate).
+ * Idempotent per (oldReturned, newReturned) transition.
+ */
+export async function recordFarmerPlantLedgerDispatchReturnCredit(
+  existingDoc,
+  updatedDoc,
+  userId,
+  session,
+  options = {}
+) {
+  const strict = options.strict === true;
+  if (!shouldLogFarmerPlantLedger(updatedDoc)) return;
+
+  const oldR = Number(existingDoc?.returnedPlants) || 0;
+  const newR = Number(updatedDoc?.returnedPlants) || 0;
+  const delta = newR - oldR;
+  if (delta <= 0) return;
+
+  const rate = roundMoney(Number(updatedDoc?.rate || 0));
+  const creditAmount = roundMoney(delta * rate);
+  if (creditAmount <= 0) return;
+
+  const oid = updatedDoc?._id;
+  if (!oid) return;
+
+  const transitionKey = `DISPATCH_RETURN_FARMER_${oid}_${oldR}_${newR}`;
+
+  if (await ledgerTransitionExists(oid, transitionKey, session)) return;
+
+  const { customerMobile, customerName, farmerId } =
+    await resolveFarmerIdentity(updatedDoc);
+
+  if (!customerMobile) {
+    if (strict) {
+      throw new Error(
+        "Cannot record farmer plant ledger for dispatch return: farmer contact mobile is missing."
+      );
+    }
+    return;
+  }
+
+  const transitionAt =
+    updatedDoc?.updatedAt instanceof Date
+      ? updatedDoc.updatedAt.getTime()
+      : updatedDoc?.updatedAt
+        ? new Date(updatedDoc.updatedAt).getTime()
+        : Date.now();
+
+  const entryDate = Number.isFinite(transitionAt)
+    ? new Date(transitionAt)
+    : new Date();
+
+  await createFarmerPlantLedgerEntry({
+    customerMobile,
+    customerName,
+    farmerId,
+    refType: "ADJUSTMENT",
+    refId: oid,
+    orderId: oid,
+    debit: 0,
+    credit: creditAmount,
+    reference: String(updatedDoc.orderId ?? ""),
+    category: "Dispatch Return",
+    description: `Order ${updatedDoc.orderId ?? ""} dispatch return — ${delta} plants × ₹${rate} (credit receivable)`,
+    entryDate,
+    createdBy: userId,
+    metadata: {
+      transitionKey,
+      oldReturnedPlants: oldR,
+      newReturnedPlants: newR,
+      deltaReturnedPlants: delta,
+      rate,
+      source: "dispatch_complete",
+    },
+    session,
+  });
 }
 
 export async function archiveFarmerPlantOrderBeforeDelete(doc, deletedBy) {

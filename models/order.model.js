@@ -490,6 +490,12 @@ const orderSchema = new Schema(
       default: 0,
       min: 0,
     },
+    /** Cumulative rupees credited back to dealer cash wallet for dispatch returns (wallet-funded COLLECTED payments). */
+    walletReturnCreditApplied: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     returnReason: {
       type: String,
     },
