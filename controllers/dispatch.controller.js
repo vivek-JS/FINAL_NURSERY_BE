@@ -12,6 +12,7 @@ import {
   syncFarmerPlantLedgerForOrderUpdate,
   roundMoney,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { releaseDealerQuotaPartial } from "./quota.controller.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -438,6 +439,9 @@ const getDispatches = catchAsync(async (req, res, next) => {
               paymentCompleted: "$orderDetails.paymentCompleted",
               returnedPlants: "$orderDetails.returnedPlants",
               returnReason: "$orderDetails.returnReason",
+              quotaSource: "$orderDetails.quotaSource",
+              additionalPlants: "$orderDetails.additionalPlants",
+              numberOfPlants: "$orderDetails.numberOfPlants",
               plantDetails: {
                 name: { $arrayElemAt: ["$plantDetails.name", 0] },
                 variety: { $arrayElemAt: ["$plantDetails.variety", 0] },
@@ -457,6 +461,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
                 contact: { $arrayElemAt: ["$farmerDetails.mobileNumber", 0] },
                 orderNotes: "$orderDetails.notes",
                 payment: "$orderDetails.payment",
+                quotaSource: "$orderDetails.quotaSource",
                 orderid: "$orderDetails._id",
                 salesPerson: {
                   name: { $arrayElemAt: ["$salesPersonDetails.name", 0] },
@@ -773,6 +778,8 @@ const getDispatch = catchAsync(async (req, res, next) => {
         orderStatus: order.orderStatus,
         returnedPlants: order.returnedPlants,
         returnReason: order.returnReason,
+        quotaSource: order.quotaSource,
+        additionalPlants: order.additionalPlants,
       })),
       createdAt: dispatch.createdAt,
       updatedAt: dispatch.updatedAt,
@@ -972,8 +979,11 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
 
     // Update all orders and their booking slots
     const orderUpdatePromises = dispatch.orderIds.map(async (orderId) => {
-      // First get the order
-      const order = await Order.findById(orderId).session(session);
+      // First get the order (populate for ledger descriptions / quota release)
+      const order = await Order.findById(orderId)
+        .populate("farmer", "name")
+        .populate("plantName", "name")
+        .session(session);
 
       if (!order) return null;
 
@@ -1058,6 +1068,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       const addToInventory = orderUpdate.actions?.addToInventory === true;
       const finalStatusFromActions = orderUpdate.actions?.finalStatus;
 
+      // Prefer explicit finalStatus from UI (e.g. READY_FOR_DISPATCH when remainingPlants > 0)
       if (finalStatusFromActions) {
         orderUpdateData.orderStatus = finalStatusFromActions;
       } else if (completeOrder) {
@@ -1112,6 +1123,35 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         : "PENDING";
       orderUpdateData.paymentCompleted = isPaymentComplete;
 
+      // Split returns between dealer plant quota vs nursery slot (hybrid orders)
+      const fromWallet =
+        Number(order.originalQuotaAllocation?.fromWallet) ||
+        Number(order.quotaUsed) ||
+        0;
+      const fromSlot =
+        Number(order.originalQuotaAllocation?.fromSlot) || 0;
+      const prevDealerReturned = Number(order.dealerQuotaReturnedPlants) || 0;
+      const prevSlotReturned = Number(order.nurserySlotReturnedPlants) || 0;
+
+      const isDealerQuotaOrder =
+        order.quotaSource === "dealer" && fromWallet > 0;
+
+      let dealerReleaseQty = 0;
+      let slotReleaseQty = 0;
+
+      if (returnsForThisOrder > 0 && addToInventory) {
+        if (isDealerQuotaOrder) {
+          const dealerCap = Math.max(0, fromWallet - prevDealerReturned);
+          dealerReleaseQty = Math.min(returnsForThisOrder, dealerCap);
+          const slotCap = Math.max(0, fromSlot - prevSlotReturned);
+          slotReleaseQty = Math.min(
+            Math.max(0, returnsForThisOrder - dealerReleaseQty),
+            slotCap
+          );
+        } else {
+          slotReleaseQty = returnsForThisOrder;
+        }
+      }
 
       // Skip update if there's nothing to update (which should never happen now
       // since we always set an orderStatus)
@@ -1126,6 +1166,15 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       if (returnHistoryEntry) {
         updateOperation.$push = { returnHistory: returnHistoryEntry };
       }
+      if (dealerReleaseQty > 0 || slotReleaseQty > 0) {
+        updateOperation.$inc = {};
+        if (dealerReleaseQty > 0) {
+          updateOperation.$inc.dealerQuotaReturnedPlants = dealerReleaseQty;
+        }
+        if (slotReleaseQty > 0) {
+          updateOperation.$inc.nurserySlotReturnedPlants = slotReleaseQty;
+        }
+      }
 
       const updatedOrder = await updateOrderWithLedgerSync({
         orderId,
@@ -1137,12 +1186,23 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         ledgerSyncOptions: { orderEditSource: "dispatch_complete" },
       });
 
-      // Return to inventory: reverse booking (totalBookedPlants / availablePlants), not slot capacity totalPlants
-      if (
-        returnsForThisOrder > 0 &&
-        addToInventory &&
-        order.bookingSlot
-      ) {
+      if (dealerReleaseQty > 0) {
+        const orderForRelease =
+          typeof updatedOrder?.toObject === "function"
+            ? updatedOrder.toObject()
+            : { ...updatedOrder };
+        orderForRelease.farmer = order.farmer;
+        orderForRelease.plantName = order.plantName;
+        await releaseDealerQuotaPartial(
+          orderForRelease,
+          dealerReleaseQty,
+          session,
+          req.user?._id
+        );
+      }
+
+      // Return to nursery slot: company / regular orders, or hybrid slot portion only (not dealer-only quota)
+      if (slotReleaseQty > 0 && order.bookingSlot) {
         const slotDoc = await PlantSlot.findOne(
           { "subtypeSlots.slots._id": order.bookingSlot },
           { "subtypeSlots.$": 1 }
@@ -1157,16 +1217,16 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
 
         const slotInc = {
           "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants":
-            -returnsForThisOrder,
+            -slotReleaseQty,
         };
         if (isReadyPlantsOrder) {
           slotInc[
             "subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"
-          ] = -returnsForThisOrder;
+          ] = -slotReleaseQty;
         } else if (!isSowingAllowed) {
           slotInc[
             "subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"
-          ] = returnsForThisOrder;
+          ] = slotReleaseQty;
         }
 
         await PlantSlot.updateOne(

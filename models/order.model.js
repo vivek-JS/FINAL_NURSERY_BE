@@ -478,6 +478,18 @@ const orderSchema = new Schema(
       type: Number,
       default: 0,
     },
+    /** Cumulative plants returned to dealer plant quota (dispatch returns with add-to-inventory on dealer-quota orders). */
+    dealerQuotaReturnedPlants: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    /** Cumulative plants returned to nursery slot inventory (hybrid dealer + slot allocation). */
+    nurserySlotReturnedPlants: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     returnReason: {
       type: String,
     },

@@ -51,11 +51,25 @@ export const createBulkPayment = catchAsync(async (req, res, next) => {
     orderType: a.orderType === "AgriSalesOrder" ? "AgriSalesOrder" : "ORDER",
   }));
 
+  const requesterId = req.user?._id || req.user?.id;
+  const isDealer =
+    req.user?.role === "DEALER" || req.user?.jobTitle === "DEALER";
+
   for (const alloc of normalizedAllocations) {
     if (alloc.orderType === "ORDER") {
-      const order = await Order.findById(alloc.orderId).select("_id");
+      const order = await Order.findById(alloc.orderId).select("_id dealer");
       if (!order) return next(new AppError(`Order not found: ${alloc.orderId}`, 400));
+      if (isDealer) {
+        if (!order.dealer || order.dealer.toString() !== requesterId?.toString()) {
+          return next(
+            new AppError("You can only include plant orders assigned to your dealer account", 403)
+          );
+        }
+      }
     } else {
+      if (isDealer) {
+        return next(new AppError("Dealers cannot use bulk payment for Ram Agri orders", 403));
+      }
       const order = await AgriSalesOrder.findById(alloc.orderId).select("_id");
       if (!order) return next(new AppError(`AgriSalesOrder not found: ${alloc.orderId}`, 400));
     }

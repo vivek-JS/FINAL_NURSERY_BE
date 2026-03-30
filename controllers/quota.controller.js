@@ -143,11 +143,118 @@ export const allocateDealerQuota = async (dealerId, plantType, subType, bookingS
   }
 };
 
+/**
+ * Release part of dealer-sourced plant quota back to the dealer wallet when returns are credited
+ * to dealer quota (dispatch complete), not nursery stock. Writes INVENTORY_RELEASE.
+ * Caller caps releaseQty using order.quotaUsed / originalQuotaAllocation and dealerQuotaReturnedPlants.
+ */
+export const releaseDealerQuotaPartial = async (
+  order,
+  releaseQty,
+  session,
+  performedBy = null
+) => {
+  if (!releaseQty || releaseQty <= 0) {
+    return { success: true, releasedQuantity: 0 };
+  }
+
+  const dealerId =
+    order.dealer?._id || order.dealer || order.salesPerson?._id || order.salesPerson;
+  if (!dealerId) {
+    throw new AppError("Order has no dealer for quota release", 400);
+  }
+
+  const plantType = order.plantName?._id || order.plantName;
+  const subType = order.plantSubtype?._id || order.plantSubtype;
+  const bookingSlot = order.bookingSlot?._id || order.bookingSlot;
+
+  const wallet = await DealerWallet.findOne({ dealer: dealerId }).session(session);
+  if (!wallet) {
+    throw new AppError("Dealer wallet not found", 404);
+  }
+
+  let entryIdx = -1;
+  if (order.walletEntryId) {
+    entryIdx = wallet.entries.findIndex((e) => e._id && e._id.equals(order.walletEntryId));
+  }
+  if (entryIdx === -1) {
+    entryIdx = wallet.entries.findIndex(
+      (e) =>
+        e.plantType?.equals(plantType) &&
+        e.subType?.equals(subType) &&
+        e.bookingSlot?.equals(bookingSlot)
+    );
+  }
+  if (entryIdx === -1) {
+    throw new AppError("Matching dealer wallet entry not found", 404);
+  }
+
+  const entry = wallet.entries[entryIdx];
+  const balanceBefore = (entry.quantity || 0) - (entry.bookedQuantity || 0);
+  const safeQty = Math.min(releaseQty, entry.bookedQuantity || 0);
+  if (safeQty <= 0) {
+    return { success: true, releasedQuantity: 0 };
+  }
+  const balanceAfter = balanceBefore + safeQty;
+
+  const match = {
+    _id: wallet._id,
+    ...(order.walletEntryId
+      ? { "entries._id": order.walletEntryId }
+      : {
+          "entries.plantType": plantType,
+          "entries.subType": subType,
+          "entries.bookingSlot": bookingSlot,
+        }),
+  };
+
+  const updated = await DealerWallet.findOneAndUpdate(
+    match,
+    {
+      $inc: {
+        "entries.$.bookedQuantity": -safeQty,
+        "entries.$.remainingQuantity": safeQty,
+      },
+    },
+    { session, new: true, runValidators: true }
+  );
+
+  if (!updated) {
+    throw new AppError("Failed to update dealer wallet for quota release", 500);
+  }
+
+  const farmerName = order.farmer?.name ?? "—";
+  const orderIdDisplay = order.orderId ?? order._id?.toString?.() ?? "";
+  const plantNameDisplay = order.plantName?.name ?? "Plant";
+  const releaseDescription = `Release to dealer quota from dispatch return. Order ID: ${orderIdDisplay}, Farmer: ${farmerName}, Plant: ${plantNameDisplay}, Qty: ${safeQty}.`;
+
+  await DealerPlantInventoryLedger.createLedgerEntry(
+    {
+      transactionType: "INVENTORY_RELEASE",
+      dealer: dealerId,
+      plantType,
+      subType,
+      bookingSlot,
+      quantity: safeQty,
+      balanceBefore,
+      balanceAfter,
+      referenceId: order._id,
+      description: releaseDescription,
+      performedBy,
+    },
+    session
+  );
+
+  return { success: true, releasedQuantity: safeQty };
+};
+
 // Function to restore dealer quota when order is rejected or cancelled
 export const restoreDealerQuota = async (orderId, session, performedBy = null, reason = "rejected") => {
   try {
     const order = await Order.findById(orderId).populate("farmer", "name").populate("plantName", "name").session(session);
     
+    // Full restore is used for dealer bulk orders (dealerOrder). Farmer orders that used dealer quota
+    // are handled by factory automatic dealer-quota blocks on cancel/reject, not this function.
     if (!order || !order.dealerOrder || order.quotaRestored) {
       return { success: false, message: "Order not found or quota already restored" };
     }

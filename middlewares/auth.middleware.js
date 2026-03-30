@@ -145,8 +145,33 @@ export const requirePaymentAccess = authorizeRoles(['ACCOUNTANT', 'SUPER_ADMIN']
 /**
  * Middleware to allow creating bulk payment entries (pending only)
  * CASHIER can create entries but cannot accept/finalize.
+ * DEALER can create entries for their own plant orders only (enforced in controller).
+ *
+ * Uses role OR jobTitle (either may be DEALER / ACCOUNTANT / etc.) so users with
+ * generic `role` but correct `jobTitle` still pass, matching order flows.
  */
-export const requireBulkPaymentCreateAccess = authorizeRoles(['ACCOUNTANT', 'SUPER_ADMIN', 'CASHIER']);
+export const requireBulkPaymentCreateAccess = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json(
+      generateResponse('error', 'Authentication required', null, null)
+    );
+  }
+  const allowed = new Set([
+    'ACCOUNTANT',
+    'SUPER_ADMIN',
+    'SUPERADMIN',
+    'CASHIER',
+    'DEALER',
+  ]);
+  const candidates = [req.user.role, req.user.jobTitle].filter(Boolean);
+  const ok = candidates.some((c) => allowed.has(c));
+  if (!ok) {
+    return res.status(403).json(
+      generateResponse('error', 'Insufficient permissions', null, null)
+    );
+  }
+  next();
+};
 
 /**
  * Middleware to check if user can add payments
