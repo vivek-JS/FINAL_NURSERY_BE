@@ -190,8 +190,6 @@ export const getAllProducts = async (req, res) => {
       category,
       isActive,
       search,
-      page = 1,
-      limit = 50,
       sortBy = 'name',
       sortOrder = 'asc',
     } = req.query;
@@ -213,18 +211,12 @@ export const getAllProducts = async (req, res) => {
       ];
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
     const sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
 
-    const [products, total] = await Promise.all([
-      Product.find(query)
+    const products = await Product.find(query)
         .populate(['primaryUnit', 'secondaryUnit', 'createdBy', 'plantId'])
         .sort(sort)
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean(), // Use lean for easier manipulation
-      Product.countDocuments(query),
-    ]);
+        .lean(); // Return full filtered list (no pagination)
 
     // Manually populate subtype information for products with plantId and subtypeId
     const { default: PlantCms } = await import('../models/plantCms.model.js');
@@ -253,12 +245,6 @@ export const getAllProducts = async (req, res) => {
     res.json({
       success: true,
       data: productsWithSubtype,
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit)),
-      },
     });
   } catch (error) {
     console.error('Error fetching products:', error);

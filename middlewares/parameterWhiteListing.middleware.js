@@ -52,6 +52,7 @@ const allowedParams = [
   "fromDate",
   "dispatched",
   "includePastDueBeyondRange",
+  "dateRangeField", // getOrders: booking | delivery — which field startDate/endDate apply to
   "salesPerson",
   "monthName",
   "startDay",
@@ -152,6 +153,10 @@ const allowedParams = [
   "upcomingDays", // laboutward primary-mobile-dashboard window
 ];
 
+/** Effective whitelist: array + mandatory extras (survives accidental removal from `allowedParams`). */
+const allowedQueryKeys = new Set(allowedParams);
+allowedQueryKeys.add("dateRangeField"); // GET /order/getOrders — booking | delivery date range
+
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
   if (shouldSkipQueryWhitelist(req)) {
@@ -191,7 +196,7 @@ const parameterWhiteListing = (req, res, next) => {
 
   // Check all query parameter keys (empty string values are still valid parameters)
   const invalidParams = Object.keys(requestParams).filter(
-    (param) => !allowedParams.includes(param)
+    (param) => !allowedQueryKeys.has(param)
   );
 
   if (invalidParams.length > 0) {

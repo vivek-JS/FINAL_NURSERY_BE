@@ -189,7 +189,9 @@ router
     createProduct
   )
   .get("/products/summary", getInventorySummary)
-  .get("/products", getAllProducts)
+  // NOTE: `/inventory/products` list must use `Product` model (product.controller.js),
+  // because `/inventory/products` POST creates products in the Product collection.
+  .get("/products", productController.getAllProducts)
   .get("/products/:id", getProductById)
   .patch(
     "/products/:id",

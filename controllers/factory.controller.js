@@ -2565,7 +2565,24 @@ const getAll = (Model, modelName) =>
       subtypeId, // Filter by plant subtype
       orderIds, // NEW: Filter by specific order IDs
       includePastDueBeyondRange, // true: delivery in [start,end] OR delivery before start (older past-due backlog)
+      dateRangeField, // "booking" | "delivery" — which date field startDate/endDate apply to (defaults: booking when dispatched=false, delivery when dispatched=true)
     } = req.query;
+
+    /** Resolve MongoDB field for order date-range filtering. */
+    const resolveOrderDateRangeField = () => {
+      const f = String(dateRangeField || "")
+        .toLowerCase()
+        .trim();
+      if (f === "booking" || f === "orderbooking" || f === "order_booking") {
+        return "orderBookingDate";
+      }
+      if (f === "delivery") {
+        return "deliveryDate";
+      }
+      // Defaults preserve previous behavior
+      return String(dispatched) === "true" ? "deliveryDate" : "orderBookingDate";
+    };
+    const orderDateRangeMongoField = resolveOrderDateRangeField();
 
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
     const skip = (page - 1) * limit;
@@ -2721,7 +2738,9 @@ const getAll = (Model, modelName) =>
 
         const start = parseDate(startDate);
         const end = parseDate(endDate, true);
-        pipeline.push({ $match: { orderBookingDate: { $gte: start, $lte: end } } });
+        pipeline.push({
+          $match: { [orderDateRangeMongoField]: { $gte: start, $lte: end } },
+        });
       }
     }
 
@@ -2768,7 +2787,9 @@ const getAll = (Model, modelName) =>
         };
         const startR = parseDateSearch(startDate);
         const endR = parseDateSearch(endDate, true);
-        pipeline.push({ $match: { orderBookingDate: { $gte: startR, $lte: endR } } });
+        pipeline.push({
+          $match: { [orderDateRangeMongoField]: { $gte: startR, $lte: endR } },
+        });
       }
     } else {
       pipeline.push({
@@ -2991,7 +3012,11 @@ const getAll = (Model, modelName) =>
       console.log(`Dispatched Orders Date Filter: ${startDate} to ${endDate}`);
       console.log(`Parsed dates: ${start.toISOString()} to ${end.toISOString()}`);
 
-      if (includePastDueBeyondRange === "true") {
+      const usePastDueOr =
+        includePastDueBeyondRange === "true" &&
+        orderDateRangeMongoField === "deliveryDate";
+
+      if (usePastDueOr) {
         // Deliveries in the requested window OR older backlog (before window start) so past-due still shows.
         pipeline.push({
           $match: {
@@ -3004,7 +3029,7 @@ const getAll = (Model, modelName) =>
       } else {
         pipeline.push({
           $match: {
-            deliveryDate: {
+            [orderDateRangeMongoField]: {
               $gte: start,
               $lte: end,
             },

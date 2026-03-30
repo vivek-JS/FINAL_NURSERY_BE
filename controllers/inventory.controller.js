@@ -58,8 +58,6 @@ const getAllProducts = catchAsync(async (req, res, next) => {
     sortKey = "createdAt",
     sortOrder = "desc",
     search,
-    page = 1,
-    limit = 10,
     category,
     status,
     isActive,
@@ -96,25 +94,15 @@ const getAllProducts = catchAsync(async (req, res, next) => {
   sort[sortKey] = sortOrder === "desc" ? -1 : 1;
   query = query.sort(sort);
 
-  const skip = (parseInt(page) - 1) * parseInt(limit);
-  query = query.skip(skip).limit(parseInt(limit));
-
-  const [products, total] = await Promise.all([
-    query.exec(),
-    InventoryProduct.countDocuments(query.getFilter()),
-  ]);
+  // IMPORTANT: No pagination at backend.
+  // This endpoint returns the full filtered/sorted product list to simplify UI.
+  const products = await query.exec();
 
   const response = generateResponse(
     "Success",
     "Products fetched successfully",
     {
       data: products,
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit)),
-      },
     },
     undefined
   );
