@@ -15,12 +15,14 @@ import {
   getCustomerTypeDistribution,
   getRevenueTrends,
   getPlantPerformanceComparison,
+  getDailyStats,
 } from "../controllers/analytics.controller.js";
 
 const router = express.Router();
 
 // Analytics Routes
 router.get("/dashboard", getDashboardAnalytics);
+router.get("/daily-stats", getDailyStats);
 router.get("/profit-loss", getProfitLossAnalysis);
 router.get("/sales-performance", getSalesPerformanceAnalysis);
 router.get("/plant-performance", getPlantPerformanceAnalysis);

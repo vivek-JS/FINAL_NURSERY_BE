@@ -1839,6 +1839,251 @@ export const getPlantPerformanceComparison = catchAsync(async (req, res, next) =
 
 
 
+// Daily stats (acceptance, sell, payment) for a date range.
+export const getDailyStats = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, timeRange } = req.query;
+
+  const now = new Date();
+
+  // Resolve range as inclusive [start..end], using end-of-day for endDate.
+  const resolvedEnd = endDate ? new Date(endDate) : now;
+  resolvedEnd.setHours(23, 59, 59, 999);
+
+  const resolvedStart = (() => {
+    if (startDate) {
+      const d = new Date(startDate);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    }
+
+    const tr = timeRange || "7_days";
+    const daysBack = (() => {
+      switch (tr) {
+        case "weekly":
+        case "7_days":
+          return 6;
+        case "14_days":
+          return 13;
+        case "30_days":
+        case "monthly":
+          return 29;
+        case "quarterly":
+          return 89;
+        case "yearly":
+        case "365_days":
+          return 364;
+        default:
+          return 6;
+      }
+    })();
+
+    const d = new Date(now);
+    d.setDate(d.getDate() - daysBack);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  })();
+
+  const startIso = resolvedStart.toISOString();
+  const endIso = resolvedEnd.toISOString();
+
+  // Generate inclusive daily keys to keep charts continuous.
+  const dateKeys = (() => {
+    const keys = [];
+    const cur = new Date(resolvedStart);
+    cur.setHours(0, 0, 0, 0);
+    while (cur <= resolvedEnd) {
+      const yyyy = cur.getFullYear();
+      const mm = String(cur.getMonth() + 1).padStart(2, "0");
+      const dd = String(cur.getDate()).padStart(2, "0");
+      keys.push(`${yyyy}-${mm}-${dd}`);
+      cur.setDate(cur.getDate() + 1);
+    }
+    return keys;
+  })();
+
+  const acceptanceSeries = await Order.aggregate([
+    {
+      $match: {
+        orderStatus: "ACCEPTED",
+        orderBookingDate: { $gte: resolvedStart, $lte: resolvedEnd },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$orderBookingDate" } },
+        },
+        orders: { $sum: 1 },
+        plants: { $sum: "$numberOfPlants" },
+        revenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        date: "$_id.date",
+        orders: 1,
+        plants: 1,
+        revenue: 1,
+      },
+    },
+    { $sort: { date: 1 } },
+  ]);
+
+  const sellSeries = await Order.aggregate([
+    {
+      $match: {
+        orderStatus: "COMPLETED",
+        orderBookingDate: { $gte: resolvedStart, $lte: resolvedEnd },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$orderBookingDate" } },
+        },
+        orders: { $sum: 1 },
+        plants: { $sum: "$numberOfPlants" },
+        revenue: { $sum: { $multiply: ["$numberOfPlants", "$rate"] } },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        date: "$_id.date",
+        orders: 1,
+        plants: 1,
+        revenue: 1,
+      },
+    },
+    { $sort: { date: 1 } },
+  ]);
+
+  const paymentSeriesRaw = await Order.aggregate([
+    { $unwind: { path: "$payment", preserveNullAndEmptyArrays: false } },
+    { $match: { "payment.paymentDate": { $gte: resolvedStart, $lte: resolvedEnd } } },
+    {
+      $group: {
+        _id: {
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$payment.paymentDate" } },
+          paymentStatus: "$payment.paymentStatus",
+        },
+        count: { $sum: 1 },
+        amount: { $sum: "$payment.paidAmount" },
+      },
+    },
+    {
+      $group: {
+        _id: "$_id.date",
+        collectedAmount: {
+          $sum: { $cond: [{ $eq: ["$_id.paymentStatus", "COLLECTED"] }, "$amount", 0] },
+        },
+        collectedCount: {
+          $sum: { $cond: [{ $eq: ["$_id.paymentStatus", "COLLECTED"] }, "$count", 0] },
+        },
+        pendingAmount: {
+          $sum: {
+            $cond: [
+              { $in: ["$_id.paymentStatus", ["PENDING", "BANK_VERIFIED"]] },
+              "$amount",
+              0,
+            ],
+          },
+        },
+        pendingCount: {
+          $sum: {
+            $cond: [
+              { $in: ["$_id.paymentStatus", ["PENDING", "BANK_VERIFIED"]] },
+              "$count",
+              0,
+            ],
+          },
+        },
+        rejectedAmount: {
+          $sum: { $cond: [{ $eq: ["$_id.paymentStatus", "REJECTED"] }, "$amount", 0] },
+        },
+        rejectedCount: {
+          $sum: { $cond: [{ $eq: ["$_id.paymentStatus", "REJECTED"] }, "$count", 0] },
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        date: "$_id",
+        collectedAmount: 1,
+        collectedCount: 1,
+        pendingAmount: 1,
+        pendingCount: 1,
+        rejectedAmount: 1,
+        rejectedCount: 1,
+      },
+    },
+    { $sort: { date: 1 } },
+  ]);
+
+  const acceptanceMap = acceptanceSeries.reduce((m, v) => {
+    m[v.date] = v;
+    return m;
+  }, {});
+  const sellMap = sellSeries.reduce((m, v) => {
+    m[v.date] = v;
+    return m;
+  }, {});
+  const paymentMap = paymentSeriesRaw.reduce((m, v) => {
+    m[v.date] = v;
+    return m;
+  }, {});
+
+  const acceptanceDaily = dateKeys.map((date) => ({
+    date,
+    orders: acceptanceMap[date]?.orders || 0,
+    plants: acceptanceMap[date]?.plants || 0,
+    revenue: acceptanceMap[date]?.revenue || 0,
+  }));
+
+  const sellDaily = dateKeys.map((date) => ({
+    date,
+    orders: sellMap[date]?.orders || 0,
+    plants: sellMap[date]?.plants || 0,
+    revenue: sellMap[date]?.revenue || 0,
+  }));
+
+  const paymentDaily = dateKeys.map((date) => ({
+    date,
+    collectedAmount: paymentMap[date]?.collectedAmount || 0,
+    collectedCount: paymentMap[date]?.collectedCount || 0,
+    pendingAmount: paymentMap[date]?.pendingAmount || 0,
+    pendingCount: paymentMap[date]?.pendingCount || 0,
+    rejectedAmount: paymentMap[date]?.rejectedAmount || 0,
+    rejectedCount: paymentMap[date]?.rejectedCount || 0,
+  }));
+
+  const summary = {
+    totalAcceptedOrders: acceptanceDaily.reduce((s, d) => s + d.orders, 0),
+    totalSoldOrders: sellDaily.reduce((s, d) => s + d.orders, 0),
+    totalAcceptedRevenue: acceptanceDaily.reduce((s, d) => s + d.revenue, 0),
+    totalSellRevenue: sellDaily.reduce((s, d) => s + d.revenue, 0),
+    totalCollectedAmount: paymentDaily.reduce((s, d) => s + d.collectedAmount, 0),
+    totalPendingAmount: paymentDaily.reduce((s, d) => s + d.pendingAmount, 0),
+    totalRejectedAmount: paymentDaily.reduce((s, d) => s + d.rejectedAmount, 0),
+  };
+
+  res.status(200).json({
+    success: true,
+    data: {
+      dateRange: {
+        startDate: startIso,
+        endDate: endIso,
+      },
+      acceptanceDaily,
+      sellDaily,
+      paymentDaily,
+      summary,
+    },
+  });
+});
+
 // Helper function to calculate profit analysis
 const calculateProfitAnalysis = async (dateFilter) => {
   const profitData = await Order.aggregate([

@@ -2541,6 +2541,10 @@ const getAll = (Model, modelName) =>
       return res.status(200).json(response);
     }
 
+    const hasPaginationParams =
+      Object.prototype.hasOwnProperty.call(req.query || {}, "page") ||
+      Object.prototype.hasOwnProperty.call(req.query || {}, "limit");
+
     const {
       sortKey = "createdAt",
       sortOrder = "desc",
@@ -2552,8 +2556,8 @@ const getAll = (Model, modelName) =>
       dealer, // Added dealer parameter
       village, // Added village parameter
       district, // Added district parameter
-      page = 1,
-      limit = 100,
+      page: pageQuery,
+      limit: limitQuery,
       status,
       slotId, // Add this to handle the slotId filtering case
       monthName, // For slot date validation
@@ -2584,6 +2588,10 @@ const getAll = (Model, modelName) =>
     };
     const orderDateRangeMongoField = resolveOrderDateRangeField();
 
+    const pageParsed = parseInt(pageQuery, 10);
+    const limitParsed = parseInt(limitQuery, 10);
+    const page = Number.isFinite(pageParsed) && pageParsed >= 1 ? pageParsed : 1;
+    const limit = Number.isFinite(limitParsed) && limitParsed >= 1 ? limitParsed : 100;
     const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
     const skip = (page - 1) * limit;
 
@@ -3503,27 +3511,27 @@ const getAll = (Model, modelName) =>
         },
       },
       { $sort: { [sortKey]: order } },
-      { $skip: skip },
-      { $limit: parseInt(limit, 10) }
+      ...(hasPaginationParams ? [{ $skip: skip }, { $limit: parseInt(limit, 10) }] : [])
     );
 
     // Execute the pipeline
     const results = await Model.aggregate(pipeline);
-
-    // Calculate total count for pagination (without skip and limit)
-    const countPipeline = pipeline.slice(0, -3); // Remove sort, skip, and limit stages
-    const totalCount = await Model.aggregate([
-      ...countPipeline,
-      { $count: "total" }
-    ]);
-    const total = totalCount.length > 0 ? totalCount[0].total : 0;
-    const totalPages = Math.ceil(total / parseInt(limit, 10));
 
     // Transform documents for response
     const transformedResults = results.map((item) => {
       const { _id, ...rest } = item;
       return { id: _id, _id, ...rest };
     });
+
+    // Calculate total count for pagination (without sort/skip/limit)
+    let total = transformedResults.length;
+    let totalPages = 1;
+    if (hasPaginationParams) {
+      const countPipeline = pipeline.slice(0, -3); // Remove sort, skip, and limit stages
+      const totalCount = await Model.aggregate([...countPipeline, { $count: "total" }]);
+      total = totalCount.length > 0 ? totalCount[0].total : 0;
+      totalPages = Math.ceil(total / parseInt(limit, 10)) || 1;
+    }
 
     const response = generateResponse(
       "Success",
@@ -3533,7 +3541,8 @@ const getAll = (Model, modelName) =>
         total: total,
         totalPages: totalPages,
         currentPage: parseInt(page, 10),
-        limit: parseInt(limit, 10)
+        limit: hasPaginationParams ? parseInt(limit, 10) : transformedResults.length,
+        hasPaginationParams,
       },
       undefined
     );

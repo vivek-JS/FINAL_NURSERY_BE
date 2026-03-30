@@ -157,7 +157,11 @@ export async function resolveFarmerIdentity(order) {
   if (!farmer) {
     return { customerMobile: null, customerName: "", farmerId };
   }
-  const customerMobile = normalizeFarmerMobile(farmer.mobileNumber);
+  const customerMobile =
+    normalizeFarmerMobile(farmer.mobileNumber) ||
+    normalizeFarmerMobile(farmer.alternateNumber) ||
+    normalizeFarmerMobile(farmer.originalPhoneNumber) ||
+    `FARMER-${String(farmer._id || farmerId)}`;
   const customerName = (farmer.name || "").trim();
   return { customerMobile, customerName, farmerId: farmer._id || farmerId };
 }

@@ -264,6 +264,10 @@ const orderSchema = new Schema(
       unique: true,
       required: true,
     },
+    is_excel: {
+      type: Boolean,
+      default: false,
+    },
     /** 4-digit unique code for WhatsApp templates (farmer-facing order id). */
     publicOrderCode: {
       type: String,

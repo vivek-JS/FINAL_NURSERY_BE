@@ -8,6 +8,15 @@ import mongoose from 'mongoose';
 import XLSX from 'xlsx';
 import path from 'path';
 import fs from 'fs';
+const toBoolean = (value) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return ['true', '1', 'yes', 'y', 'on'].includes(normalized);
+  }
+  if (typeof value === 'number') return value === 1;
+  return false;
+};
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
@@ -258,9 +267,16 @@ export const importExcelData = catchAsync(async (req, res) => {
       try {
         // Generate import batch ID for this import session
         const importBatchId = `import-${Date.now()}`;
+        const dryRun = toBoolean(req.body?.dryRun ?? req.query?.dryRun);
+        const forceFourDigitOrderId = !toBoolean(
+          req.body?.disableFourDigitOrderId ?? req.query?.disableFourDigitOrderId
+        );
+
         results = await importOrdersAndFarmers(req.file.buffer, {
           importBatchId: importBatchId,
           sourceFilename: req.file.originalname || 'unknown.xlsx',
+          dryRun,
+          forceFourDigitOrderId,
         });
         
         // Create unprocessed rows file from failed imports
