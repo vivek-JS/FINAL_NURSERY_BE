@@ -313,7 +313,12 @@ export async function ensureFarmerPlantOrderDebit(order, { userId, session } = {
     reference: String(order.orderId ?? ""),
     category: "Order",
     description: `Order ${order.orderId ?? ""} — plant booking`,
-    entryDate: order.orderBookingDate || order.createdAt,
+    // For Excel-imported orders, use createdAt so entries remain visible in current-period ledger views.
+    // For normal flows, keep booking-date semantics.
+    entryDate:
+      order.is_excel
+        ? (order.createdAt || order.orderBookingDate)
+        : (order.orderBookingDate || order.createdAt),
     createdBy: userId,
     metadata: {
       orderNumericId: order.orderId,
