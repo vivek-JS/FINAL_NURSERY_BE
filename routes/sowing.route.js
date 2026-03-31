@@ -25,6 +25,9 @@ import {
   getSlotOrdersSummary,
   getTodaySowingData,
   getAllPlantsTodaySowingCards,
+  getEasy30DaySowingCards,
+  bulkUpdatePlantReadyDaysForFutureSlots,
+  getSowingInsightsRecords,
 } from "../controllers/sowing.controller.js";
 import {
   createSowingRequest,
@@ -79,6 +82,9 @@ router.get("/plants-gap-summary", getPlantsGapSummary); // Get all plants with s
 router.get("/slot-orders/:slotId", getSlotOrdersSummary); // Get orders summary for a specific slot
 router.get("/today-sowing-data", getTodaySowingData); // Get today's sowing data for all plants (due and current day)
 router.get("/today-sowing-cards", getAllPlantsTodaySowingCards); // Get all plants subtype cards for today and overdue (flat structure, no accordion)
+router.get("/easy-30-days", getEasy30DaySowingCards); // Easy sowing cards for rolling day window
+router.post("/easy-30-days/ready-days", bulkUpdatePlantReadyDaysForFutureSlots); // Update plant ready days for future slots only
+router.get("/insights/records", getSowingInsightsRecords); // Unified sowing insights records for side drawer feed
 
 // Sowing Request routes
 router.post("/request/create", createSowingRequest); // Create sowing request from today's sowing cards

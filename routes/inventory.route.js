@@ -8,12 +8,9 @@ import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import { createReadStream } from "fs";
 import {
-  // Product controllers
+  // Product controllers (legacy / PATCH only; list/detail/CRUD at /inventory/products → app.js + product.route)
   createProduct,
-  getAllProducts,
-  getProductById,
   updateProduct,
-  deleteProduct,
   toggleProductStatus,
   
   // Batch controllers
@@ -30,9 +27,6 @@ import {
   
   // Stock adjustment controllers
   createStockAdjustment,
-  
-  // Summary
-  getInventorySummary,
   
   // Dashboard
   getInventoryDashboard,
@@ -71,8 +65,6 @@ import {
 import { getMerchantLedger } from "../controllers/ramAgriMerchantLedger.controller.js";
 import { getRamAgriSalesTargets, upsertRamAgriSalesTarget } from "../controllers/ramAgriSalesTarget.controller.js";
 import { generateRamAgriVideoSummary } from "../controllers/ramAgriVideoSummary.controller.js";
-// Import product controller for Product model (with code, primaryUnit, secondaryUnit, etc.)
-import * as productController from "../controllers/product.controller.js";
 
 const router = express.Router();
 
@@ -148,28 +140,8 @@ router.use((req, res, next) => {
   restrictRamAgriSalesManager(req, res, next);
 });
 
-// POST /products - Create product using Product model (supports code, primaryUnit, secondaryUnit, plantId, subtypeId, isRamAgriSales)
-// This route handles products with the extended schema (used by frontend ProductForm)
-router.post(
-  "/products",
-  [
-    check("code").notEmpty().withMessage("Product code is required"),
-    check("name").notEmpty().withMessage("Product name is required"),
-    check("category").notEmpty().withMessage("Product category is required"),
-    check("primaryUnit").notEmpty().withMessage("Primary unit is required"),
-    check("secondaryUnit").optional({ nullable: true, checkFalsy: true }).custom((value) => {
-      if (value === null || value === undefined || value === '') return true;
-      return validateObjectId(value);
-    }).withMessage("Invalid secondary unit ID"),
-    check("conversionFactor").optional().isNumeric().withMessage("Conversion factor must be a number"),
-    check("minStockLevel").optional().isNumeric().withMessage("Min stock level must be a number"),
-    check("reorderLevel").optional().isNumeric().withMessage("Reorder level must be a number"),
-    check("gst").optional().isNumeric().withMessage("GST must be a number"),
-    check("isRamAgriSales").optional().isBoolean().withMessage("isRamAgriSales must be a boolean value"),
-  ],
-  checkErrors,
-  productController.createProduct
-);
+// POST /products, GET list/detail, PUT/DELETE — mounted in app.js at /api/v1/inventory/products
+// via product.route.js (product.controller, Product model).
 
 // POST /products/create - Create product using InventoryProduct model (legacy route)
 router
@@ -188,11 +160,6 @@ router
     checkErrors,
     createProduct
   )
-  .get("/products/summary", getInventorySummary)
-  // NOTE: `/inventory/products` list must use `Product` model (product.controller.js),
-  // because `/inventory/products` POST creates products in the Product collection.
-  .get("/products", productController.getAllProducts)
-  .get("/products/:id", getProductById)
   .patch(
     "/products/:id",
     [
@@ -208,7 +175,6 @@ router
     checkErrors,
     updateProduct
   )
-  .delete("/products/:id", deleteProduct)
   .patch(
     "/products/:id/toggle-status",
     [

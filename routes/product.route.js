@@ -1,11 +1,10 @@
 import express from 'express';
 import * as productController from '../controllers/product.controller.js';
-import { authenticateToken } from '../middlewares/auth.middleware.js';
 
 const router = express.Router();
 
-// All routes require authentication
-router.use(authenticateToken);
+// Auth + restrictRamAgriSalesManager are applied by app.js when this router is mounted at
+// /api/v1/inventory/products (same as inventory routes).
 
 // Product routes
 router.post('/', productController.createProduct);

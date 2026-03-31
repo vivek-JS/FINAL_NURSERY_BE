@@ -26,6 +26,22 @@ const sowingSchema = new Schema({
     ref: "PlantSlot",
     index: true,
   },
+  // Original entry slot selected from UI (can differ from target slot used for updates)
+  entrySlotId: {
+    type: Schema.Types.ObjectId,
+    ref: "PlantSlot",
+    index: true,
+  },
+  // Target slot resolved by backend mapping rule
+  targetSlotId: {
+    type: Schema.Types.ObjectId,
+    ref: "PlantSlot",
+    index: true,
+  },
+  mappedByRule: {
+    type: String,
+    default: null,
+  },
   // Sowing details
   sowingDate: {
     type: String, // Format: dd-mm-yyyy
@@ -136,6 +152,10 @@ const sowingSchema = new Schema({
   // Notes and tracking
   notes: {
     type: String,
+  },
+  metadata: {
+    type: Schema.Types.Mixed,
+    default: {},
   },
   sowingLocation: {
     type: String,

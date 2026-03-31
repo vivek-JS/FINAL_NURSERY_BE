@@ -513,6 +513,7 @@ export const createMultipleSowings = async (req, res) => {
           totalQuantityRequired,
           sowedPlant, // For PRIMARY location - plants sowed
           slotId,
+          entrySlotId,
           orderId,
           orderNumber,
           reminderBeforeDays,
@@ -524,6 +525,7 @@ export const createMultipleSowings = async (req, res) => {
           packets, // Array of packets from outward entries
           packetsUsed, // Explicit packets used count for in-progress sowings
           packetsToReturn, // Explicit packets to return (calculated by frontend)
+          sourceType,
         } = sowingData;
 
         // Validate batchNumber (mandatory)
@@ -576,14 +578,15 @@ export const createMultipleSowings = async (req, res) => {
           .add(plantReadyDays, "days")
           .format("DD-MM-YYYY");
 
-        // Validate slot if provided
+        // Validate entry slot if provided
+        const requestedEntrySlotId = entrySlotId || slotId || null;
         let slotObjectId = null;
-        if (slotId) {
-          if (!mongoose.Types.ObjectId.isValid(slotId)) {
+        if (requestedEntrySlotId) {
+          if (!mongoose.Types.ObjectId.isValid(requestedEntrySlotId)) {
             errors.push({ index: i, error: "Invalid slotId provided" });
             continue;
           }
-          slotObjectId = new mongoose.Types.ObjectId(slotId);
+          slotObjectId = new mongoose.Types.ObjectId(requestedEntrySlotId);
 
           const slotDoc = await PlantSlot.findOne(
             { "subtypeSlots.slots._id": slotObjectId },
@@ -621,10 +624,12 @@ export const createMultipleSowings = async (req, res) => {
         }
 
         // Determine actual slotId (provided or found) before creating sowing record
-        let actualSlotIdForSowing = slotId;
+        // For admin day-wise flow, always map updates to expected-ready-date slot.
+        const shouldMapByReadyDate = sourceType === "admin_daywise";
+        let actualSlotIdForSowing = requestedEntrySlotId;
         let actualSlotObjectIdForSowing = slotObjectId;
         
-        if (!slotId) {
+        if (!requestedEntrySlotId || shouldMapByReadyDate) {
           try {
             // Extract year from plantReadyDate (format: DD-MM-YYYY)
             // Slot should match based on plantReadyDate = sowingDate + plantReadyDays
@@ -634,44 +639,69 @@ export const createMultipleSowings = async (req, res) => {
             } else {
               const year = plantReadyMoment.year();
               
-              // Find the slot for this plant, subtype, and year
-              const plantSlotDoc = await PlantSlot.findOne({
-                plantId: new mongoose.Types.ObjectId(plantId),
-                year: year,
-                "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(subtypeId)
-              }).lean();
+              // Find candidate slot documents for this plant/subtype (strict for daywise mapping)
+              const plantSlotDocs = shouldMapByReadyDate
+                ? await PlantSlot.find({
+                    plantId: new mongoose.Types.ObjectId(plantId),
+                    "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(subtypeId),
+                  }).lean()
+                : await PlantSlot.find({
+                    plantId: new mongoose.Types.ObjectId(plantId),
+                    year: year,
+                    "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(subtypeId),
+                  }).lean();
 
-              if (plantSlotDoc) {
+              let matchedSlot = null;
+              for (const plantSlotDoc of plantSlotDocs || []) {
                 const subtypeSlot = plantSlotDoc.subtypeSlots.find(
                   st => st.subtypeId?.toString() === subtypeId.toString()
                 );
-
-                if (subtypeSlot && subtypeSlot.slots && subtypeSlot.slots.length > 0) {
-                  // Find a slot where plantReadyDate (sowingDate + plantReadyDays) falls within the slot's date range
-                  const matchingSlot = subtypeSlot.slots.find(slot => {
-                    if (!slot.startDay || !slot.endDay) return false;
-                    const startDate = moment(slot.startDay, "DD-MM-YYYY");
-                    const endDate = moment(slot.endDay, "DD-MM-YYYY");
-                    return plantReadyMoment.isBetween(startDate, endDate, null, '[]'); // inclusive
-                  });
-
-                  if (matchingSlot) {
-                    // Use the matching slot
-                    actualSlotIdForSowing = matchingSlot._id.toString();
-                    actualSlotObjectIdForSowing = matchingSlot._id;
-                    console.log(`✅ Found matching slot for plantReadyDate ${plantReadyDate} (sowingDate: ${sowingDate} + ${plantReadyDays} days): slot ${actualSlotIdForSowing} (${matchingSlot.startDay} to ${matchingSlot.endDay})`);
-                  } else {
-                    // Fallback: Use the first slot for this subtype if no match found
-                    actualSlotIdForSowing = subtypeSlot.slots[0]._id.toString();
-                    actualSlotObjectIdForSowing = subtypeSlot.slots[0]._id;
-                    console.log(`⚠️  No slot found matching plantReadyDate ${plantReadyDate} (sowingDate: ${sowingDate} + ${plantReadyDays} days), using first slot: ${actualSlotIdForSowing} (${subtypeSlot.slots[0].startDay} to ${subtypeSlot.slots[0].endDay})`);
-                  }
+                if (!subtypeSlot?.slots?.length) continue;
+                const maybe = subtypeSlot.slots.find(slot => {
+                  if (!slot.startDay || !slot.endDay) return false;
+                  const startDate = moment(slot.startDay, "DD-MM-YYYY");
+                  const endDate = moment(slot.endDay, "DD-MM-YYYY");
+                  return plantReadyMoment.isBetween(startDate, endDate, null, "[]");
+                });
+                if (maybe) {
+                  matchedSlot = maybe;
+                  break;
                 }
+              }
+
+              if (matchedSlot) {
+                actualSlotIdForSowing = matchedSlot._id.toString();
+                actualSlotObjectIdForSowing = matchedSlot._id;
+                console.log(`✅ Found matching slot for plantReadyDate ${plantReadyDate} (sowingDate: ${sowingDate} + ${plantReadyDays} days): slot ${actualSlotIdForSowing} (${matchedSlot.startDay} to ${matchedSlot.endDay})`);
+              } else if (!shouldMapByReadyDate && plantSlotDocs?.[0]?.subtypeSlots?.length) {
+                const fallbackSubtype = plantSlotDocs[0].subtypeSlots.find(
+                  st => st.subtypeId?.toString() === subtypeId.toString()
+                );
+                if (fallbackSubtype?.slots?.[0]) {
+                  actualSlotIdForSowing = fallbackSubtype.slots[0]._id.toString();
+                  actualSlotObjectIdForSowing = fallbackSubtype.slots[0]._id;
+                  console.log(`⚠️  No slot found matching plantReadyDate ${plantReadyDate}; using fallback slot ${actualSlotIdForSowing}`);
+                }
+              } else {
+                errors.push({
+                  index: i,
+                  error: `No target slot found for expected ready date ${plantReadyDate}`,
+                });
+                actualSlotIdForSowing = null;
+                actualSlotObjectIdForSowing = null;
               }
             }
           } catch (findSlotError) {
             console.error("Error finding slot for sowing record:", findSlotError);
           }
+        }
+
+        if (!actualSlotIdForSowing || !actualSlotObjectIdForSowing) {
+          errors.push({
+            index: i,
+            error: `Target slot resolution failed for expected ready date ${plantReadyDate}`,
+          });
+          continue;
         }
 
         const dispatchBatchRefMulti =
@@ -686,6 +716,9 @@ export const createMultipleSowings = async (req, res) => {
           subtypeId,
           subtypeName: subtype.name,
           slotId: actualSlotIdForSowing,
+          entrySlotId: requestedEntrySlotId || actualSlotIdForSowing,
+          targetSlotId: actualSlotIdForSowing,
+          mappedByRule: shouldMapByReadyDate ? "expectedReadyDate" : null,
           sowingDate,
           plantReadyDays: plantReadyDays,
           expectedReadyDate: plantReadyDate,
@@ -698,9 +731,61 @@ export const createMultipleSowings = async (req, res) => {
           batchNumber: batchNumber.trim(), // Store batch number (mandatory)
           ...(dispatchBatchRefMulti ? { dispatchBatchId: dispatchBatchRefMulti } : {}),
           createdBy,
+          metadata: {
+            sourceType: sourceType || null,
+            entrySlotId: requestedEntrySlotId || actualSlotIdForSowing,
+            targetSlotId: actualSlotIdForSowing,
+            sowingDate,
+            plantReadyDays,
+            expectedReadyDate: plantReadyDate,
+            mappedByRule: shouldMapByReadyDate ? "expectedReadyDate" : null,
+            performedBy: createdBy || req.user?._id || null,
+            timestamp: new Date().toISOString(),
+            reason: notes || "Sowing entry submitted",
+          },
         });
 
         const savedSowing = await sowing.save();
+
+        // Write explicit mapping audit event on target slot trail for traceability
+        if (shouldMapByReadyDate && actualSlotIdForSowing) {
+          try {
+            const targetSlotDoc = await PlantSlot.findOne({ "subtypeSlots.slots._id": actualSlotObjectIdForSowing });
+            if (targetSlotDoc) {
+              const subtypeSlot = targetSlotDoc.subtypeSlots.find(st =>
+                st.slots.some(s => s._id.toString() === actualSlotIdForSowing.toString())
+              );
+              const slotForTrail = subtypeSlot?.slots?.find(s => s._id.toString() === actualSlotIdForSowing.toString());
+              if (slotForTrail) {
+                slotForTrail.logSowingActivity({
+                  action: "SOWING_READY_DATE_MAPPED",
+                  activityName: "Sowing Mapped To Ready-Date Slot",
+                  sowingId: savedSowing._id,
+                  sowingDate,
+                  plantReadyDate: plantReadyDate,
+                  batchNumber,
+                  performedBy: createdBy || req.user?._id,
+                  reason: notes || "Mapped by expectedReadyDate rule",
+                  metadata: {
+                    sowingDate,
+                    plantReadyDays,
+                    expectedReadyDate: plantReadyDate,
+                    entrySlotId: requestedEntrySlotId || null,
+                    targetSlotId: actualSlotIdForSowing,
+                    mappedByRule: "expectedReadyDate",
+                    performedBy: createdBy || req.user?._id || null,
+                    timestamp: new Date().toISOString(),
+                    notes: notes || null,
+                  },
+                });
+                targetSlotDoc.markModified("subtypeSlots");
+                await targetSlotDoc.save();
+              }
+            }
+          } catch (mappingLogError) {
+            console.error("Error writing ready-date mapping trail:", mappingLogError);
+          }
+        }
 
         // Handle packets if provided (for PRIMARY or OFFICE location)
         if (packets && Array.isArray(packets) && packets.length > 0) {
@@ -1064,6 +1149,12 @@ export const createMultipleSowings = async (req, res) => {
                             sowedPlant: sowedPlantValue,
                             officeQuantity,
                           },
+                          mapping: {
+                            entrySlotId: requestedEntrySlotId || actualSlotIdForSowing,
+                            targetSlotId: actualSlotIdForSowing,
+                            mappedByRule: shouldMapByReadyDate ? "expectedReadyDate" : null,
+                            expectedReadyDate: plantReadyDate,
+                          },
                         },
                       });
                       
@@ -1139,6 +1230,12 @@ export const createMultipleSowings = async (req, res) => {
                             totalQuantityRequired,
                             sowedPlant: sowedPlantValue,
                             officeQuantity,
+                            mapping: {
+                              entrySlotId: requestedEntrySlotId || actualSlotIdForSowing,
+                              targetSlotId: actualSlotIdForSowing,
+                              mappedByRule: shouldMapByReadyDate ? "expectedReadyDate" : null,
+                              expectedReadyDate: plantReadyDate,
+                            },
                           },
                         });
                       } else {
@@ -5493,7 +5590,7 @@ export const getPlantReminders = async (req, res) => {
           const product = await Product.findOne({
             plantId: new mongoose.Types.ObjectId(plantId),
             subtypeId: new mongoose.Types.ObjectId(subtype._id),
-            category: "seeds",
+            category: { $regex: /^seeds$/i },
             isActive: true,
           })
             .select("conversionFactor secondaryUnit primaryUnit _id")
@@ -6825,7 +6922,7 @@ export const getPlantsGapSummary = async (req, res) => {
     // Batch fetch all products for all plants at once
     const products = await Product.find({
       plantId: { $in: plantIds },
-      category: "seeds",
+      category: { $regex: /^seeds$/i },
       isActive: true,
     })
       .select("plantId subtypeId conversionFactor secondaryUnit primaryUnit _id")
@@ -7187,7 +7284,7 @@ export const getPlantsGapSummary = async (req, res) => {
     });
 
     // Process each plant and enrich with product/batch data
-    const plantsWithGaps = plants.map((plant) => {
+    let plantsWithGaps = plants.map((plant) => {
       const plantIdStr = plant._id.toString();
       const sowingBuffer = plant.sowingBuffer || 0;
       const subtypes = plant.subtypes || [];
@@ -7873,6 +7970,8 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       return res.status(200).json({
         success: true,
         subtypeCards: [],
+        inProgressCards: [],
+        availablePackets: [],
         summary: {
           totalPlants: 0,
           totalSubtypes: 0,
@@ -7891,7 +7990,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
     // Batch fetch all products for all plants at once
     const products = await Product.find({
       plantId: { $in: plantIds },
-      category: "seeds",
+      category: { $regex: /^seeds$/i },
       isActive: true,
     })
       .select("plantId subtypeId conversionFactor secondaryUnit primaryUnit _id")
@@ -8107,13 +8206,29 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       const slotIdStr = slotData.slotId.toString();
       const plantIdStr = slotData.plantId?.toString();
       const subtypeIdStr = slotData.subtypeId?.toString();
-      const progressDetails = (slotData.sowingInProgress || []).map(prog => ({
-        packetsIssued: prog.packetsIssued || 0,
-        remainingPlants: prog.plantsExpected || 0, // Use plantsExpected from slot
-        isExcessiveSowing: prog.isExcessiveSowing || false,
-        requestNumber: prog.requestNumber,
-        sowingRequestId: prog.sowingRequestId, // Include request ID for cancellation
-      }));
+      const productKeyForProgress = `${plantIdStr}-${subtypeIdStr}`;
+      const productForProgress = productMap.get(productKeyForProgress);
+      const cfProgress = productForProgress?.conversionFactor || 1;
+      const progressDetails = (slotData.sowingInProgress || []).map((prog) => {
+        const packetsIssued = prog.packetsIssued || 0;
+        const plantsExpected = prog.plantsExpected || 0;
+        // If plantsExpected is 0 but packets were issued (e.g. gap math), derive expected plants for UI / inProgressCards
+        const remainingPlants =
+          plantsExpected > 0
+            ? plantsExpected
+            : packetsIssued > 0
+              ? packetsIssued * cfProgress
+              : 0;
+        return {
+          packetsIssued,
+          remainingPlants,
+          plantsExpected,
+          outwardId: prog.outwardId || null,
+          isExcessiveSowing: prog.isExcessiveSowing || false,
+          requestNumber: prog.requestNumber,
+          sowingRequestId: prog.sowingRequestId,
+        };
+      });
       if (progressDetails.length > 0) {
         sowingInProgressMap.set(slotIdStr, progressDetails);
         console.log(`[getAllPlantsTodaySowingCards] ✅ Slot ${slotIdStr} (plant=${plantIdStr}, subtype=${subtypeIdStr}) has ${progressDetails.length} sowingInProgress entry/entries, packetsIssued=${progressDetails[0]?.packetsIssued || 0}`);
@@ -8263,9 +8378,15 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       let totalPlantsInProgress = 0;
       
       if (sowingProgress && sowingProgress.length > 0) {
-        // Sum up all plants that are in progress
-        totalPlantsInProgress = sowingProgress.reduce((sum, prog) => sum + prog.remainingPlants, 0);
-        totalPacketsIssued = sowingProgress.reduce((sum, prog) => sum + prog.packetsIssued, 0);
+        // Sum up all plants that are in progress (coerce — avoid NaN if a field is missing)
+        totalPlantsInProgress = sowingProgress.reduce(
+          (sum, prog) => sum + (Number(prog.remainingPlants) || 0),
+          0
+        );
+        totalPacketsIssued = sowingProgress.reduce(
+          (sum, prog) => sum + (Number(prog.packetsIssued) || 0),
+          0
+        );
         
         // Reduce the booking gap by plants that have stock issued
         adjustedBookingGap = Math.max(0, bookingGap - totalPlantsInProgress);
@@ -8402,10 +8523,14 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         return false;
       }
       // ✅ EXCLUDE slots that are in progress (they'll be shown in inProgressCards instead)
-      // If sowingInProgress = true and totalPlantsInProgress > 0, show only in inProgressCards
-      if (slot.sowingInProgress && (slot.totalPlantsInProgress || 0) > 0) {
-        console.log(`[getAllPlantsTodaySowingCards] 🔄 Excluding in-progress slot ${slot.slotId} from main cards (will show in inProgressCards): totalPlantsInProgress=${slot.totalPlantsInProgress}`);
-        return false;
+      // Count either plants or issued packets (gap math can yield 0 plants with packets > 0)
+      if (slot.sowingInProgress) {
+        const pip = Number(slot.totalPlantsInProgress) || 0;
+        const pkt = Number(slot.totalPacketsIssued) || 0;
+        if (pip > 0 || pkt > 0) {
+          console.log(`[getAllPlantsTodaySowingCards] 🔄 Excluding in-progress slot ${slot.slotId} from main cards (inProgressCards): plants=${pip}, packets=${pkt}`);
+          return false;
+        }
       }
       // ✅ Filter: Show slots where plantsToSowWithBuffer > 0
       // Must still be urgent/overdue (already checked above) AND not in progress (checked above)
@@ -8436,18 +8561,16 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
     });
 
     const slotsInProgressOnly = allTodaySlots.filter(slot => {
-      // ✅ Show slots with sowingInProgress AND totalPlantsInProgress > 0
-      // These slots are actively being sown and will only appear in inProgressCards (not in main cards)
+      // Slots with sowingInProgress: show if either plants or issued packets remain (gap math can yield 0 plants)
       if (!slot.sowingInProgress) {
-        return false; // No progress, just ignore
-      }
-      // Only include if there are plants still in progress (remaining work)
-      const plantsInProgress = (slot.totalPlantsInProgress || 0);
-      if (plantsInProgress <= 0) {
-        console.log(`[getAllPlantsTodaySowingCards] 🔄 Excluding in-progress slot ${slot.slotId} from inProgressCards (totalPlantsInProgress=${plantsInProgress} <= 0)`);
         return false;
       }
-      // Include slots with sowingInProgress and totalPlantsInProgress > 0
+      const plantsInProgress = Number(slot.totalPlantsInProgress) || 0;
+      const packetsIssued = Number(slot.totalPacketsIssued) || 0;
+      if (plantsInProgress <= 0 && packetsIssued <= 0) {
+        console.log(`[getAllPlantsTodaySowingCards] 🔄 Excluding in-progress slot ${slot.slotId} from inProgressCards (plants=${plantsInProgress}, packets=${packetsIssued})`);
+        return false;
+      }
       return true;
     });
     console.log(`[getAllPlantsTodaySowingCards] ✅ Found ${slotsInProgressOnly.length} slots in progress only (has sowingInProgress, regardless of gap/date)`);
@@ -8842,20 +8965,73 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         });
       }
 
-      console.log(`[availablePackets] Found ${inProgressOutwardIds.size} in-progress outward entries to INCLUDE (show only these)`);
+      console.log(`[availablePackets] ${inProgressOutwardIds.size} outward(s) linked to active sowing-in-progress (flagged on packets)`);
 
-      // Get all seeds products
-      const seedsProducts = await Product.find({
-        category: 'seeds',
+      // Seeds category: DBs may use "Seeds"/"SEEDS" — match case-insensitively (same idea as product.controller)
+      const SEEDS_CATEGORY_REGEX = /^seeds$/i;
+
+      let seedsProducts = await Product.find({
+        category: { $regex: SEEDS_CATEGORY_REGEX },
         isActive: true,
-      }).select('_id name code plantId subtypeId conversionFactor').populate('plantId', 'name');
+      })
+        .select('_id name code plantId subtypeId conversionFactor')
+        .populate('plantId', 'name')
+        .lean();
+
+      // In-progress sowing always references outwardId on slots — include those products even if isActive is false or product was missing from the query above
+      const progressOutwardIdsRaw = [];
+      slotsWithProgress.forEach((slotData) => {
+        (slotData.sowingInProgress || []).forEach((prog) => {
+          if (prog.outwardId) progressOutwardIdsRaw.push(prog.outwardId);
+        });
+      });
+      const uniqueProgressOutwardIds = [...new Set(progressOutwardIdsRaw.map((id) => id.toString()))];
+
+      if (uniqueProgressOutwardIds.length > 0) {
+        // Include production OR sowing-linked outwards so legacy rows without purpose still merge products
+        const progressOutwardsForProducts = await InventoryOutward.find({
+          _id: { $in: uniqueProgressOutwardIds },
+          status: 'issued',
+          $or: [
+            { purpose: 'production' },
+            { sowingRequestId: { $exists: true, $ne: null } },
+          ],
+        })
+          .select('items.product')
+          .lean();
+        const seenProduct = new Set(seedsProducts.map((p) => p._id.toString()));
+        const extraProductIds = [];
+        progressOutwardsForProducts.forEach((ow) => {
+          ow.items?.forEach((item) => {
+            const pid = item.product?.toString();
+            if (pid && !seenProduct.has(pid)) {
+              seenProduct.add(pid);
+              extraProductIds.push(item.product);
+            }
+          });
+        });
+        if (extraProductIds.length > 0) {
+          const extraProducts = await Product.find({
+            _id: { $in: extraProductIds },
+            category: { $regex: SEEDS_CATEGORY_REGEX },
+          })
+            .select('_id name code plantId subtypeId conversionFactor')
+            .populate('plantId', 'name')
+            .lean();
+          const merged = [...seedsProducts, ...extraProducts];
+          const dedup = new Map();
+          merged.forEach((p) => dedup.set(p._id.toString(), p));
+          seedsProducts = [...dedup.values()];
+        }
+      }
 
       if (seedsProducts && seedsProducts.length > 0) {
-        const productIds = seedsProducts.map(p => p._id);
+        const productIds = seedsProducts.map((p) => p._id);
 
-        // Find all issued outward entries with seeds products
+        // Primary sowing: only production-purpose issued outwards (sales/transfer seed lines excluded).
         const outwards = await InventoryOutward.find({
           status: 'issued',
+          purpose: 'production',
           'items.product': { $in: productIds },
         })
           .populate([
@@ -8910,14 +9086,9 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         const allPackets = [];
 
         outwards.forEach((outward) => {
-          // ONLY include outwards that are in progress (need to be completed)
           const outwardIdStr = outward._id.toString();
-          if (!inProgressOutwardIds.has(outwardIdStr)) {
-            // Skip outwards that are NOT in progress (only show in-progress ones)
-            return;
-          }
-          
-          console.log(`[availablePackets] Including in-progress outward ${outwardIdStr}`);
+          const isInProgressOutward = inProgressOutwardIds.has(outwardIdStr);
+          // Include all issued seed outwards with remaining quantity (Primary Sowing Entry).
 
           outward.items.forEach((item) => {
             const productIdStr = item.product?._id?.toString() || item.product?.toString();
@@ -8960,6 +9131,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
                   conversionFactor: finalConversionFactor,
                   isExcessiveSowing: isExcessiveSowing || false,
                   purpose: outward.purpose,
+                  isInProgressOutward,
                 });
               }
             }
@@ -9115,6 +9287,549 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Error fetching today's sowing cards",
+      error: error.message,
+    });
+  }
+};
+
+// Easy sowing cards for rolling window (default: today + 30 days)
+export const getEasy30DaySowingCards = async (req, res) => {
+  try {
+    const {
+      startDate,
+      days = 30,
+      plantId,
+      subtypeId,
+    } = req.query;
+
+    const parsedDays = Math.max(1, Math.min(90, Number(days) || 30));
+    const rangeStart = startDate
+      ? moment(startDate, "DD-MM-YYYY", true)
+      : moment().startOf("day");
+
+    if (!rangeStart.isValid()) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid startDate. Expected DD-MM-YYYY",
+      });
+    }
+
+    const rangeEnd = rangeStart.clone().add(parsedDays - 1, "days").endOf("day");
+
+    const plantQuery = { sowingAllowed: true };
+    if (plantId && mongoose.Types.ObjectId.isValid(String(plantId))) {
+      plantQuery._id = new mongoose.Types.ObjectId(String(plantId));
+    }
+
+    const plants = await PlantCms.find(plantQuery)
+      .select("_id name subtypes sowingBuffer")
+      .lean();
+
+    if (!plants.length) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        summary: {
+          totalPlants: 0,
+          totalSubtypes: 0,
+          totalSlots: 0,
+          totalGap: 0,
+        },
+        window: {
+          startDate: rangeStart.format("DD-MM-YYYY"),
+          endDate: rangeEnd.format("DD-MM-YYYY"),
+          days: parsedDays,
+        },
+      });
+    }
+
+    const plantMap = new Map(plants.map((p) => [p._id.toString(), p]));
+    const plantIds = plants.map((p) => p._id);
+
+    const slotDocs = await PlantSlot.find({ plantId: { $in: plantIds } })
+      .select("plantId year subtypeSlots")
+      .lean();
+
+    const slotRows = [];
+    for (const doc of slotDocs) {
+      const plant = plantMap.get(doc.plantId.toString());
+      if (!plant) continue;
+      for (const subtypeSlot of doc.subtypeSlots || []) {
+        if (subtypeId && subtypeSlot.subtypeId?.toString() !== String(subtypeId)) continue;
+        const subtypeDetails = (plant.subtypes || []).find(
+          (st) => st._id.toString() === subtypeSlot.subtypeId?.toString()
+        );
+        for (const slot of subtypeSlot.slots || []) {
+          const slotStart = moment(slot.startDay, "DD-MM-YYYY", true);
+          const slotEnd = moment(slot.endDay, "DD-MM-YYYY", true);
+          if (!slotStart.isValid() || !slotEnd.isValid()) continue;
+          if (slotEnd.isBefore(rangeStart, "day") || slotStart.isAfter(rangeEnd, "day")) continue;
+
+          const readyDaysEffective =
+            Number(slot.plantReadyDays) > 0
+              ? Number(slot.plantReadyDays)
+              : Number(subtypeDetails?.plantReadyDays) || 0;
+
+          slotRows.push({
+            slotId: slot._id,
+            slotStartDay: slot.startDay,
+            slotEndDay: slot.endDay,
+            month: slot.month,
+            plantId: doc.plantId,
+            plantName: plant.name,
+            subtypeId: subtypeSlot.subtypeId,
+            subtypeName: subtypeDetails?.name || "Unknown Subtype",
+            plantReadyDaysEffective: readyDaysEffective,
+            plantReadyDaysDefault: Number(subtypeDetails?.plantReadyDays) || 0,
+            isReadyDaysOverride: Number(slot.plantReadyDays) > 0,
+            primarySowed: Number(slot.primarySowed) || 0,
+            officeSowed: Number(slot.officeSowed) || 0,
+            totalPlants: Number(slot.totalPlants) || 0,
+            availablePlants: Number(slot.availablePlants) || 0,
+            totalBookedPlantsCached: Number(slot.totalBookedPlants) || 0,
+            slotBuffer: Number(slot.buffer) || Number(subtypeDetails?.buffer) || 0,
+            sowingInProgress: slot.sowingInProgress || [],
+            gapCovered: slot.gapCovered || [],
+            gapFullyCovered: Boolean(slot.gapFullyCovered),
+          });
+        }
+      }
+    }
+
+    const slotIds = slotRows.map((s) => s.slotId);
+    const bookingMap = new Map();
+    if (slotIds.length) {
+      const orderBookings = await Order.aggregate([
+        {
+          $match: {
+            bookingSlot: { $in: slotIds },
+            orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+            $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }, { quotaSource: null }],
+          },
+        },
+        { $group: { _id: "$bookingSlot", totalBookedPlants: { $sum: "$numberOfPlants" } } },
+      ]);
+      orderBookings.forEach((ob) => bookingMap.set(ob._id.toString(), Number(ob.totalBookedPlants) || 0));
+    }
+
+    const groupedMap = new Map();
+    let totalGap = 0;
+
+    for (const row of slotRows) {
+      const slotIdStr = row.slotId.toString();
+      const totalBookedPlants = bookingMap.get(slotIdStr) || row.totalBookedPlantsCached || 0;
+      const gapCoveredAmount = (row.gapCovered || []).reduce(
+        (sum, g) => sum + (Number(g?.plantsCovered) || 0),
+        0
+      );
+      const inProgressPlants = (row.sowingInProgress || []).reduce(
+        (sum, p) => sum + (Number(p?.plantsExpected) || 0),
+        0
+      );
+      const packetsInProgress = (row.sowingInProgress || []).reduce(
+        (sum, p) => sum + (Number(p?.packetsIssued) || 0),
+        0
+      );
+      const rawGap = totalBookedPlants - row.primarySowed;
+      const effectiveGap = Math.max(0, rawGap - gapCoveredAmount - inProgressPlants);
+      totalGap += effectiveGap;
+
+      const sowByDate = moment(row.slotEndDay, "DD-MM-YYYY", true).isValid()
+        ? moment(row.slotEndDay, "DD-MM-YYYY", true)
+            .subtract(row.plantReadyDaysEffective || 0, "days")
+            .format("DD-MM-YYYY")
+        : null;
+
+      const groupKey = `${row.plantId.toString()}-${row.subtypeId?.toString() || "no-subtype"}`;
+      if (!groupedMap.has(groupKey)) {
+        groupedMap.set(groupKey, {
+          plantId: row.plantId,
+          plantName: row.plantName,
+          subtypeId: row.subtypeId,
+          subtypeName: row.subtypeName,
+          plantReadyDaysDefault: row.plantReadyDaysDefault,
+          slots: [],
+        });
+      }
+
+      groupedMap.get(groupKey).slots.push({
+        slotId: row.slotId,
+        slotStartDay: row.slotStartDay,
+        slotEndDay: row.slotEndDay,
+        month: row.month,
+        plantReadyDaysEffective: row.plantReadyDaysEffective,
+        isReadyDaysOverride: row.isReadyDaysOverride,
+        plantReadyDaysDefault: row.plantReadyDaysDefault,
+        sowByDate,
+        totalBookedPlants,
+        primarySowed: row.primarySowed,
+        officeSowed: row.officeSowed,
+        totalPlants: row.totalPlants,
+        availablePlants: row.availablePlants,
+        bookingGap: effectiveGap,
+        rawGap,
+        gapCoveredAmount,
+        inProgress: row.sowingInProgress.length > 0,
+        packetContext: {
+          packetsInProgress,
+          plantsInProgress: inProgressPlants,
+          progressEntries: row.sowingInProgress.length,
+        },
+        slotBuffer: row.slotBuffer || 0,
+      });
+    }
+
+    const data = Array.from(groupedMap.values()).map((group) => {
+      const monthMap = new Map();
+      for (const slot of group.slots) {
+        const monthKey =
+          moment(slot.slotStartDay, "DD-MM-YYYY", true).isValid()
+            ? moment(slot.slotStartDay, "DD-MM-YYYY").format("MMM YYYY")
+            : slot.month || "Unknown";
+        if (!monthMap.has(monthKey)) monthMap.set(monthKey, []);
+        monthMap.get(monthKey).push(slot);
+      }
+      const months = Array.from(monthMap.entries()).map(([monthKey, slots]) => ({
+        monthKey,
+        totalSlots: slots.length,
+        totalGap: slots.reduce((sum, s) => sum + (s.bookingGap || 0), 0),
+        slots: slots.sort((a, b) =>
+          moment(a.slotStartDay, "DD-MM-YYYY").valueOf() - moment(b.slotStartDay, "DD-MM-YYYY").valueOf()
+        ),
+      }));
+      return {
+        ...group,
+        totalGap: group.slots.reduce((sum, s) => sum + (s.bookingGap || 0), 0),
+        totalSlots: group.slots.length,
+        months,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data,
+      summary: {
+        totalPlants: new Set(data.map((d) => d.plantId.toString())).size,
+        totalSubtypes: data.length,
+        totalSlots: slotRows.length,
+        totalGap,
+      },
+      window: {
+        startDate: rangeStart.format("DD-MM-YYYY"),
+        endDate: rangeEnd.format("DD-MM-YYYY"),
+        days: parsedDays,
+      },
+      generatedAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Error fetching easy 30-day sowing cards:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching easy 30-day sowing cards",
+      error: error.message,
+    });
+  }
+};
+
+// Update plantReadyDays for future slots only and store audit metadata
+export const bulkUpdatePlantReadyDaysForFutureSlots = async (req, res) => {
+  try {
+    const { slotIds = [], plantReadyDays, reason = "" } = req.body || {};
+    const requestedBy = req.user?._id || null;
+    const requestedByName = req.user?.name || req.user?.phoneNumber || "Unknown";
+
+    const parsedReadyDays = Number(plantReadyDays);
+    if (!Array.isArray(slotIds) || slotIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "slotIds array is required",
+      });
+    }
+    if (!Number.isFinite(parsedReadyDays) || parsedReadyDays < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "plantReadyDays must be a valid non-negative number",
+      });
+    }
+
+    const today = moment().startOf("day");
+    const updated = [];
+    const skippedPast = [];
+    const skippedNoChange = [];
+    const notFound = [];
+
+    for (const id of slotIds) {
+      if (!mongoose.Types.ObjectId.isValid(String(id))) {
+        notFound.push({ slotId: id, reason: "Invalid slotId" });
+        continue;
+      }
+      const slotObjectId = new mongoose.Types.ObjectId(String(id));
+      const slotDoc = await PlantSlot.findOne({ "subtypeSlots.slots._id": slotObjectId });
+      if (!slotDoc) {
+        notFound.push({ slotId: id, reason: "Slot not found" });
+        continue;
+      }
+
+      let slotToUpdate = null;
+      let subtypeId = null;
+      for (const st of slotDoc.subtypeSlots || []) {
+        const slot = (st.slots || []).find((s) => s._id.toString() === slotObjectId.toString());
+        if (slot) {
+          slotToUpdate = slot;
+          subtypeId = st.subtypeId;
+          break;
+        }
+      }
+
+      if (!slotToUpdate) {
+        notFound.push({ slotId: id, reason: "Slot structure missing" });
+        continue;
+      }
+
+      const slotEnd = moment(slotToUpdate.endDay, "DD-MM-YYYY", true);
+      if (!slotEnd.isValid() || slotEnd.isBefore(today, "day")) {
+        skippedPast.push({ slotId: id, endDay: slotToUpdate.endDay });
+        continue;
+      }
+
+      const oldReadyDays = Number(slotToUpdate.plantReadyDays) || 0;
+      if (oldReadyDays === parsedReadyDays) {
+        skippedNoChange.push({ slotId: id, plantReadyDays: oldReadyDays });
+        continue;
+      }
+
+      let plantName = "Unknown Plant";
+      let subtypeName = "Unknown Subtype";
+      const plant = await PlantCms.findById(slotDoc.plantId).select("name subtypes").lean();
+      if (plant) {
+        plantName = plant.name;
+        const st = (plant.subtypes || []).find((s) => s._id.toString() === subtypeId?.toString());
+        if (st?.name) subtypeName = st.name;
+      }
+
+      slotToUpdate.plantReadyDays = parsedReadyDays;
+      slotToUpdate.logSowingActivity({
+        action: "READY_DAYS_UPDATED",
+        activityName: "Plant Ready Days Updated",
+        quantity: parsedReadyDays,
+        before: { plantReadyDays: oldReadyDays },
+        after: { plantReadyDays: parsedReadyDays },
+        performedBy: requestedBy,
+        reason: reason || "Updated from easy sowing admin cards portal",
+        notes: `Plant ready days changed from ${oldReadyDays} to ${parsedReadyDays}`,
+        metadata: {
+          changedByUserId: requestedBy ? String(requestedBy) : null,
+          changedByName: requestedByName,
+          changedAt: new Date().toISOString(),
+          plantId: String(slotDoc.plantId),
+          plantName,
+          subtypeId: subtypeId ? String(subtypeId) : null,
+          subtypeName,
+          slotId: String(slotObjectId),
+          slotStartDay: slotToUpdate.startDay,
+          slotEndDay: slotToUpdate.endDay,
+          oldPlantReadyDays: oldReadyDays,
+          newPlantReadyDays: parsedReadyDays,
+          changeScope: "month_bulk_future_only",
+          changeReason: reason || null,
+        },
+      });
+
+      slotDoc.markModified("subtypeSlots");
+      await slotDoc.save();
+
+      updated.push({
+        slotId: String(slotObjectId),
+        slotStartDay: slotToUpdate.startDay,
+        slotEndDay: slotToUpdate.endDay,
+        oldPlantReadyDays: oldReadyDays,
+        newPlantReadyDays: parsedReadyDays,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Updated ${updated.length} future slot(s), skipped ${skippedPast.length} past slot(s), ${skippedNoChange.length} unchanged.`,
+      data: {
+        updatedCount: updated.length,
+        skippedPastCount: skippedPast.length,
+        skippedNoChangeCount: skippedNoChange.length,
+        notFoundCount: notFound.length,
+        updated,
+        skippedPast,
+        skippedNoChange,
+        notFound,
+      },
+    });
+  } catch (error) {
+    console.error("Error updating plant ready days for future slots:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error updating plant ready days for future slots",
+      error: error.message,
+    });
+  }
+};
+
+// Unified sowing insights records feed for side drawer timeline
+export const getSowingInsightsRecords = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      plantId,
+      subtypeId,
+      slotId,
+      userId,
+      actionType,
+      startDate,
+      endDate,
+    } = req.query;
+
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+    const skip = (safePage - 1) * safeLimit;
+
+    const sowingQuery = {};
+    if (plantId && mongoose.Types.ObjectId.isValid(String(plantId))) {
+      sowingQuery.plantId = new mongoose.Types.ObjectId(String(plantId));
+    }
+    if (subtypeId && mongoose.Types.ObjectId.isValid(String(subtypeId))) {
+      sowingQuery.subtypeId = new mongoose.Types.ObjectId(String(subtypeId));
+    }
+    if (slotId && mongoose.Types.ObjectId.isValid(String(slotId))) {
+      sowingQuery.$or = [
+        { slotId: new mongoose.Types.ObjectId(String(slotId)) },
+        { entrySlotId: new mongoose.Types.ObjectId(String(slotId)) },
+        { targetSlotId: new mongoose.Types.ObjectId(String(slotId)) },
+      ];
+    }
+    if (userId && mongoose.Types.ObjectId.isValid(String(userId))) {
+      sowingQuery.$or = [...(sowingQuery.$or || []), { createdBy: new mongoose.Types.ObjectId(String(userId)) }];
+    }
+
+    if (startDate || endDate) {
+      sowingQuery.createdAt = {};
+      if (startDate) sowingQuery.createdAt.$gte = new Date(startDate);
+      if (endDate) sowingQuery.createdAt.$lte = new Date(endDate);
+    }
+
+    const sowings = await Sowing.find(sowingQuery)
+      .select(
+        "_id plantId plantName subtypeId subtypeName sowingDate expectedReadyDate plantReadyDays batchNumber createdBy createdAt metadata entrySlotId targetSlotId mappedByRule slotId notes"
+      )
+      .sort({ createdAt: -1 })
+      .limit(safeLimit)
+      .skip(skip)
+      .lean();
+
+    const slotTrailPipeline = [
+      { $unwind: "$subtypeSlots" },
+      { $unwind: "$subtypeSlots.slots" },
+      { $unwind: "$subtypeSlots.slots.slotTrail" },
+      {
+        $project: {
+          plantId: 1,
+          slotId: "$subtypeSlots.slots._id",
+          slotStartDay: "$subtypeSlots.slots.startDay",
+          slotEndDay: "$subtypeSlots.slots.endDay",
+          subtypeId: "$subtypeSlots.subtypeId",
+          trail: "$subtypeSlots.slots.slotTrail",
+        },
+      },
+    ];
+    if (slotId && mongoose.Types.ObjectId.isValid(String(slotId))) {
+      slotTrailPipeline.push({
+        $match: { slotId: new mongoose.Types.ObjectId(String(slotId)) },
+      });
+    }
+    if (actionType) {
+      slotTrailPipeline.push({
+        $match: { "trail.action": actionType },
+      });
+    }
+    slotTrailPipeline.push({ $sort: { "trail.timestamp": -1 } }, { $limit: safeLimit });
+    const trailRows = await PlantSlot.aggregate(slotTrailPipeline);
+
+    const records = [];
+
+    for (const s of sowings) {
+      records.push({
+        recordId: `sowing-${s._id}`,
+        eventType: "SOWING_CREATED",
+        timestamp: s.createdAt,
+        performedBy: s.createdBy || null,
+        performedByName: s.metadata?.changedByName || null,
+        plantId: s.plantId,
+        plantName: s.plantName,
+        subtypeId: s.subtypeId,
+        subtypeName: s.subtypeName,
+        entrySlotId: s.entrySlotId || s.metadata?.entrySlotId || null,
+        targetSlotId: s.targetSlotId || s.metadata?.targetSlotId || s.slotId || null,
+        slotStartDay: null,
+        slotEndDay: null,
+        sowingDate: s.sowingDate,
+        expectedReadyDate: s.expectedReadyDate,
+        batchNumber: s.batchNumber,
+        before: null,
+        after: null,
+        reason: s.notes || null,
+        metadata: s.metadata || {},
+      });
+    }
+
+    for (const row of trailRows) {
+      const t = row.trail || {};
+      if (userId && mongoose.Types.ObjectId.isValid(String(userId))) {
+        if (!t.performedBy || t.performedBy.toString() !== String(userId)) continue;
+      }
+      if (startDate || endDate) {
+        const ts = t.timestamp ? new Date(t.timestamp) : null;
+        if (startDate && ts && ts < new Date(startDate)) continue;
+        if (endDate && ts && ts > new Date(endDate)) continue;
+      }
+      records.push({
+        recordId: `trail-${row.slotId}-${t.timestamp || Date.now()}-${t.action || "UNKNOWN"}`,
+        eventType: t.action || "SLOT_TRAIL_EVENT",
+        timestamp: t.timestamp || null,
+        performedBy: t.performedBy || null,
+        performedByName: t.metadata?.changedByName || null,
+        plantId: row.plantId,
+        plantName: t.metadata?.plantName || null,
+        subtypeId: row.subtypeId || null,
+        subtypeName: t.metadata?.subtypeName || null,
+        entrySlotId: t.metadata?.entrySlotId || null,
+        targetSlotId: t.metadata?.targetSlotId || row.slotId || null,
+        slotStartDay: row.slotStartDay || null,
+        slotEndDay: row.slotEndDay || null,
+        sowingDate: t.sowingDate || null,
+        expectedReadyDate: t.metadata?.expectedReadyDate || null,
+        batchNumber: t.batchNumber || null,
+        before: t.before || null,
+        after: t.after || null,
+        reason: t.reason || null,
+        metadata: t.metadata || {},
+      });
+    }
+
+    const sorted = records
+      .sort((a, b) => new Date(b.timestamp || 0).valueOf() - new Date(a.timestamp || 0).valueOf())
+      .slice(0, safeLimit);
+
+    return res.status(200).json({
+      success: true,
+      data: sorted,
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        returned: sorted.length,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching sowing insights records:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching sowing insights records",
       error: error.message,
     });
   }

@@ -32,6 +32,7 @@ const slotTrailSchema = new Schema({
       "SOWING_IN_PROGRESS_CLEARED", // Clearing in-progress entries
       "PACKETS_RETURNED", // Packets returned after sowing
       "PACKETS_USED", // Packets marked as used
+      "SOWING_READY_DATE_MAPPED", // Entry slot mapped to expected ready-date slot
     ],
     required: true,
   },

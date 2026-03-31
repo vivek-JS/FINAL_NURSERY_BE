@@ -313,11 +313,18 @@ export const getSowingRequestById = async (req, res) => {
       }
     });
 
-    // Get issued but unused packets (issued from inventory but not fully used in sowing)
-    const outwardRecords = await InventoryOutward.find({
-      type: 'sowing',
-      status: 'approved',
-    })
+    // Issued production outwards use purpose=production and status=issued (no InventoryOutward.type field).
+    const outwardQuery = {
+      purpose: 'production',
+      status: 'issued',
+    };
+    if (request.outwardId) {
+      outwardQuery._id = request.outwardId;
+    } else {
+      outwardQuery.sowingRequestId = request._id;
+    }
+
+    const outwardRecords = await InventoryOutward.find(outwardQuery)
       .populate({
         path: 'items.product',
         select: '_id',
@@ -365,6 +372,8 @@ export const getSowingRequestById = async (req, res) => {
       success: true,
       data: {
         ...request,
+        /** Outward purpose used when issuing stock from this dialog (always production for sowing). */
+        issuePurpose: 'production',
         availablePackets: Math.floor(availablePackets),
         availablePacketsFromBatches: Math.floor(availablePacketsFromBatches),
         availablePacketsFromOutward: Math.floor(availablePacketsFromOutward),
@@ -440,7 +449,14 @@ export const updateSowingRequest = async (req, res) => {
 export const issueStockFromRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const { batchAllocations, notes } = req.body;
+    const { batchAllocations, notes, purpose = 'production' } = req.body;
+
+    if (purpose !== 'production') {
+      return res.status(400).json({
+        success: false,
+        message: 'Sowing stock issue must use purpose "production" only.',
+      });
+    }
 
     const request = await SowingRequest.findById(id);
     if (!request) {
@@ -545,7 +561,7 @@ export const issueStockFromRequest = async (req, res) => {
     const outward = new InventoryOutward({
       outwardNumber,
       outwardDate: new Date(),
-      purpose: 'production',
+      purpose,
       purposeDetails: `Sowing request: ${request.requestNumber} - ${request.plantName} ${request.subtypeName}${excessPackets > 0 ? ` (Excess: ${excessPackets.toFixed(2)} packets)` : ''}`,
       department: 'Sowing',
       destination: 'Sowing Department',
@@ -653,6 +669,8 @@ export const issueStockFromRequest = async (req, res) => {
     await request.save();
 
     // Update slots' sowingInProgress array - DISTRIBUTE BASED ON EACH SLOT'S GAP
+    /** @type {{ slotsWritten: number, plantSlotDocsSaved: number, fallbackUsed: boolean }} */
+    const slotLinkage = { slotsWritten: 0, plantSlotDocsSaved: 0, fallbackUsed: false };
     if (request.linkedSlotIds && request.linkedSlotIds.length > 0) {
       const conversionFactor = request.conversionFactor || 1;
       
@@ -761,6 +779,44 @@ export const issueStockFromRequest = async (req, res) => {
       if (!isExcessiveSowing) {
         console.log(`[IssueStock] Total gap across all slots: ${totalGap} plants`);
       }
+
+      // Fallback: linkedSlotIds present but no slot resolved into slotGaps (ID mismatch / not found).
+      // Attach full issue to first linked slot so sowingInProgress + today-sowing-cards stay in sync.
+      if (slotGaps.length === 0 && request.linkedSlotIds && request.linkedSlotIds.length > 0) {
+        const fallbackSlotId = request.linkedSlotIds[0];
+        try {
+          const plantSlotDoc = await PlantSlot.findOne({
+            'subtypeSlots.slots._id': fallbackSlotId,
+          });
+          if (plantSlotDoc) {
+            for (const subtypeSlot of plantSlotDoc.subtypeSlots || []) {
+              const slot = (subtypeSlot.slots || []).find(
+                (s) => s._id.toString() === fallbackSlotId.toString()
+              );
+              if (slot) {
+                slotGaps.push({
+                  slotId: fallbackSlotId,
+                  slot,
+                  plantSlot: plantSlotDoc,
+                  subtypeSlot,
+                  gap: Math.max(1, packetsRequested * conversionFactor),
+                  rawGap: 0,
+                  isExcessiveSowing: isExcessiveSowing,
+                });
+                slotLinkage.fallbackUsed = true;
+                console.warn(
+                  `[IssueStock] Fallback: single slot ${fallbackSlotId} — full ${packetsRequested} pkt for today-sowing linkage`
+                );
+                break;
+              }
+            }
+          } else {
+            console.error(`[IssueStock] Fallback failed: no PlantSlot for slot ${fallbackSlotId}`);
+          }
+        } catch (fbErr) {
+          console.error('[IssueStock] Fallback slot attach error:', fbErr);
+        }
+      }
       
       // Step 2: Distribute packets/plants based on slot gaps (or allocate all to specific slot for excessive sowing)
       let remainingPackets = packetsRequested;
@@ -792,8 +848,11 @@ export const issueStockFromRequest = async (req, res) => {
             // Proportional distribution: (slot gap / total gap) × total packets
             const proportion = totalGap > 0 ? slotData.gap / totalGap : 1 / slotGaps.length;
             slotPackets = packetsRequested * proportion;
-            slotPlants = slotData.gap; // Actual gap for this slot
-            
+            slotPlants = slotData.gap; // Booking-gap plants for this slot
+            // If gap is 0 but this slot still got a packet share, expected plants must come from packets × CF
+            if (slotPackets > 0 && (!slotPlants || slotPlants <= 0)) {
+              slotPlants = slotPackets * conversionFactor;
+            }
             remainingPackets -= slotPackets;
             remainingPlants -= slotPlants;
           }
@@ -802,6 +861,10 @@ export const issueStockFromRequest = async (req, res) => {
         
         // Round packets to 2 decimal places
         slotPackets = Math.round(slotPackets * 100) / 100;
+        // After rounding, re-sync plants if gap was 0
+        if (!slotData.isExcessiveSowing && slotPackets > 0 && (!slotPlants || slotPlants <= 0)) {
+          slotPlants = Math.round(slotPackets * conversionFactor * 100) / 100;
+        }
         
         // Group by plantSlot document
         const plantSlotId = slotData.plantSlot._id.toString();
@@ -840,10 +903,13 @@ export const issueStockFromRequest = async (req, res) => {
           
           const previousProgressLength = slot.sowingInProgress.length;
           
+          const impliedPlantsFromPackets =
+            slotPackets > 0 ? Math.round(slotPackets * conversionFactor * 100) / 100 : 0;
           const sowingProgressEntry = {
             requestNumber: request.requestNumber,
             packetsIssued: slotPackets,
-            plantsExpected: slotPlants,
+            plantsExpected:
+              slotPlants > 0 ? slotPlants : impliedPlantsFromPackets,
             outwardId: outward._id,
             sowingRequestId: request._id,
             isExcessiveSowing: request.isExcessiveSowing || false,
@@ -881,6 +947,8 @@ export const issueStockFromRequest = async (req, res) => {
           
           plantSlot.markModified('subtypeSlots');
           await plantSlot.save();
+          slotLinkage.plantSlotDocsSaved += 1;
+          slotLinkage.slotsWritten += slotsToUpdate.length;
           
           console.log(`[IssueStock] ✅ PlantSlot ${plantSlotId} saved successfully with ${slotsToUpdate.length} slot(s) updated`);
           
@@ -928,6 +996,14 @@ export const issueStockFromRequest = async (req, res) => {
       data: {
         request,
         outward,
+        slotLinkage: {
+          linkedSlotIdsCount: request.linkedSlotIds?.length || 0,
+          ...slotLinkage,
+          note:
+            request.linkedSlotIds?.length && slotLinkage.slotsWritten === 0
+              ? 'No slot.sowingInProgress rows written — check server logs (slot IDs must exist under PlantSlot.subtypeSlots.slots). Today-sowing-cards inProgressCards may be empty until fixed.'
+              : undefined,
+        },
       },
     });
   } catch (error) {

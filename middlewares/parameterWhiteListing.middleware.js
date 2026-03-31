@@ -23,6 +23,7 @@ const allowedParams = [
   "subDistrictId",
   "startDate",
   "endDate",
+  "days", // Rolling-day window for easy sowing cards API
   "dateFrom", // ERP payment reconciliation (unverified / for-approval lists)
   "dateTo",
   "sortKey",
@@ -45,6 +46,7 @@ const allowedParams = [
   "mobileNumber",
   "phone",
   "slotId",
+  "actionType",
   "orderId",
   "orderIds",
   "userId",

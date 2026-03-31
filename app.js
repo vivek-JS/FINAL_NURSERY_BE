@@ -289,7 +289,12 @@ import batchRoute from "./routes/batch.route.js";
 import plantOutward from "./routes/plantOutward.route.js";
 import PollyHouse from "./routes/pollyhouse.route.js";
 import DelaerRoutes from "./routes/dealer.route.js";
-import { authenticateToken, optionalAuth, requirePaymentAccess } from "./middlewares/auth.middleware.js";
+import {
+  authenticateToken,
+  optionalAuth,
+  requirePaymentAccess,
+  restrictRamAgriSalesManager,
+} from "./middlewares/auth.middleware.js";
 import generateResponse from "./utility/responseFormat.js";
 import ExcelRoute from "./routes/excel.route.js";
 import pricingRoute from "./routes/pricing.route.js";
@@ -471,11 +476,14 @@ server.use("/api/v1/sowing", authenticateToken, sowingRoute); // Sowing manageme
 server.use("/api/v1/clear-data", authenticateToken, clearDataRoute); // Data clearing routes
 
 // Inventory Management Routes (all require authentication)
-// IMPORTANT: More specific routes must be registered BEFORE general routes
-// to avoid route conflicts (e.g., /api/v1/inventory/products must come before /api/v1/inventory)
-// NOTE: /api/v1/inventory/products is now handled by inventoryRoute, not productRoute
-// The old productRoute (for nursery products) uses a different model and doesn't support isAgriSales
-// server.use("/api/v1/inventory/products", authenticateToken, productRoute); // REMOVED - now using inventoryRoute
+// IMPORTANT: Mount /api/v1/inventory/products BEFORE /api/v1/inventory so list/detail/PUT/DELETE
+// use product.controller (Product model). Otherwise nested inventory routes can miss GET :id.
+server.use(
+  "/api/v1/inventory/products",
+  authenticateToken,
+  restrictRamAgriSalesManager,
+  productRoute
+);
 server.use("/api/v1/inventory/suppliers", authenticateToken, supplierRoute);
 server.use("/api/v1/inventory/merchants", authenticateToken, merchantRoute);
 server.use("/api/v1/inventory/units", authenticateToken, measurementUnitRoute);

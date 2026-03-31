@@ -117,6 +117,17 @@ const getProductById = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid product ID format", 400));
   }
 
+  // List + create for the nursery app use the Product model (product.controller).
+  // Legacy InventoryProduct IDs are still supported below.
+  const { default: Product } = await import("../models/product.model.js");
+  const existsInProduct = await Product.exists({ _id: id });
+  if (existsInProduct) {
+    const { getProductById: getProductByIdFromProduct } = await import(
+      "./product.controller.js"
+    );
+    return getProductByIdFromProduct(req, res);
+  }
+
   const product = await InventoryProduct.findById(id);
   if (!product) {
     return next(new AppError("No product found with that ID", 404));

@@ -3516,6 +3516,13 @@ export const getOrdersTransferTargets = async (req, res) => {
       });
     }
 
+    if (!mongoose.Types.ObjectId.isValid(slotId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid slotId",
+      });
+    }
+
     const sourceDetails = await findSlotDetails(slotId);
     if (!sourceDetails) {
       return res.status(404).json({
@@ -3529,7 +3536,8 @@ export const getOrdersTransferTargets = async (req, res) => {
       orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
       $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
     })
-      .select("_id orderId numberOfPlants")
+      .select("_id orderId numberOfPlants farmer")
+      .populate({ path: "farmer", select: "name mobileNumber" })
       .lean();
 
     const totalPlantsToTransfer = orders.reduce((sum, o) => sum + (Number(o.numberOfPlants) || 0), 0);
@@ -3604,7 +3612,8 @@ export const getOrdersTransferTargets = async (req, res) => {
           const bufferAmount = Number(slot.bufferAmount) || 0;
           const effectiveAvailable = Math.max(0, totalPlants - totalBooked - bufferAmount);
 
-          if (effectiveAvailable < totalPlantsToTransfer) return;
+          // Any positive free capacity can be a target (subset transfers use less plants).
+          if (effectiveAvailable <= 0) return;
 
           options.push({
             slotId: slot._id.toString(),
@@ -3638,6 +3647,13 @@ export const getOrdersTransferTargets = async (req, res) => {
           ordersCount: orders.length,
           totalPlantsToTransfer,
         },
+        orders: orders.map((order) => ({
+          _id: order._id?.toString(),
+          orderId: order.orderId ?? "",
+          numberOfPlants: Number(order.numberOfPlants) || 0,
+          farmerName: order.farmer?.name || "",
+          farmerMobileNumber: order.farmer?.mobileNumber || "",
+        })),
         options,
       },
     });
@@ -3652,9 +3668,6 @@ export const getOrdersTransferTargets = async (req, res) => {
 };
 
 export const transferOrders = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
     const { sourceSlotId, targetSlotId, orderIds, reason = "" } = req.body;
 
@@ -3665,10 +3678,27 @@ export const transferOrders = async (req, res) => {
       });
     }
 
+    if (
+      !mongoose.Types.ObjectId.isValid(sourceSlotId) ||
+      !mongoose.Types.ObjectId.isValid(targetSlotId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid sourceSlotId or targetSlotId",
+      });
+    }
+
     if (sourceSlotId === targetSlotId) {
       return res.status(400).json({
         success: false,
         message: "Cannot transfer to the same slot",
+      });
+    }
+
+    if (orderIds !== undefined && !Array.isArray(orderIds)) {
+      return res.status(400).json({
+        success: false,
+        message: "orderIds must be an array when provided",
       });
     }
 
@@ -3703,8 +3733,18 @@ export const transferOrders = async (req, res) => {
       orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
       $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
     };
-    if (orderIds && Array.isArray(orderIds) && orderIds.length > 0) {
-      orderFilter._id = { $in: orderIds.map((id) => new mongoose.Types.ObjectId(id)) };
+
+    let uniqueOrderIds = [];
+    if (Array.isArray(orderIds) && orderIds.length > 0) {
+      const invalidOrderId = orderIds.find((id) => !mongoose.Types.ObjectId.isValid(id));
+      if (invalidOrderId) {
+        return res.status(400).json({
+          success: false,
+          message: "orderIds contains an invalid order id",
+        });
+      }
+      uniqueOrderIds = [...new Set(orderIds.map((id) => String(id)))];
+      orderFilter._id = { $in: uniqueOrderIds.map((id) => new mongoose.Types.ObjectId(id)) };
     }
 
     const orders = await Order.find(orderFilter).select("_id orderId numberOfPlants").lean();
@@ -3734,7 +3774,11 @@ export const transferOrders = async (req, res) => {
       safeArray(plantInfo?.subtypes).map((s) => [s._id.toString(), s.name])
     );
 
-    const sourceSlotObjectId = new mongoose.Types.ObjectId(sourceSlotId);
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+
+      const sourceSlotObjectId = new mongoose.Types.ObjectId(sourceSlotId);
     const targetSlotObjectId = new mongoose.Types.ObjectId(targetSlotId);
     const performedBy = req.user?._id || null;
 
@@ -3801,7 +3845,7 @@ export const transferOrders = async (req, res) => {
         },
         previousSlot: sourceSlotObjectId,
         newSlot: targetSlotObjectId,
-        reasonForChange: "Mass order transfer from SlotsView",
+        reasonForChange: reason?.trim() || "Mass order transfer from SlotsView",
         changedBy: performedBy,
       };
 
@@ -3810,7 +3854,9 @@ export const transferOrders = async (req, res) => {
         previousValue: sourceSlotObjectId,
         newValue: targetSlotObjectId,
         changedBy: performedBy,
-        notes: `Slot transfer: ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay} to ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`,
+        notes: reason?.trim()
+          ? `${reason.trim()} — ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay} to ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`
+          : `Slot transfer: ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay} to ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`,
       };
 
       await Order.updateOne(
@@ -3991,28 +4037,31 @@ export const transferOrders = async (req, res) => {
       { session }
     );
 
-    await session.commitTransaction();
+      await session.commitTransaction();
 
-    return res.status(200).json({
-      success: true,
-      message: "Orders transferred successfully",
-      data: {
-        ordersCount: orders.length,
-        totalPlants: totalPlantsToTransfer,
-        source: { slotId: sourceSlotId },
-        target: { slotId: targetSlotId },
-      },
-    });
+      return res.status(200).json({
+        success: true,
+        message: "Orders transferred successfully",
+        data: {
+          ordersCount: orders.length,
+          totalPlants: totalPlantsToTransfer,
+          source: { slotId: sourceSlotId },
+          target: { slotId: targetSlotId },
+        },
+      });
+    } catch (innerErr) {
+      await session.abortTransaction();
+      throw innerErr;
+    } finally {
+      session.endSession();
+    }
   } catch (error) {
     console.error("Error transferring orders:", error);
-    await session.abortTransaction();
     return res.status(500).json({
       success: false,
       message: "Failed to transfer orders",
       error: error.message,
     });
-  } finally {
-    session.endSession();
   }
 };
 
