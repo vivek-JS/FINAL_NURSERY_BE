@@ -13,6 +13,7 @@ export const createChangeLog = async (data) => {
       description: data.description || '',
       ipAddress: data.ipAddress,
       userAgent: data.userAgent,
+      
     });
     return changeLog;
   } catch (error) {
