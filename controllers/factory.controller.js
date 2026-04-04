@@ -1139,6 +1139,23 @@ const updateOne = (Model, modelName, allowedFields) =>
       /** Fields requested but not applied (permissions); returned on success for client visibility */
       const rejectedFields = [];
 
+      const orderUpdateHintFields = ["salesPerson", "dealer"];
+      for (const k of orderUpdateHintFields) {
+        if (
+          Object.prototype.hasOwnProperty.call(req.body, k) &&
+          req.body[k] !== undefined &&
+          !allowedFields.includes(k)
+        ) {
+          rejectedFields.push({
+            field: k,
+            reason: "FIELD_NOT_IN_ALLOWLIST",
+            detail:
+              "This server build does not accept this field on updateOrder; deploy a current API or remove it from the payload.",
+            value: req.body[k],
+          });
+        }
+      }
+
       console.log("=== UPDATE ORDER DEBUG ===");
       console.log("Received body:", req.body);
       console.log("Filtered body:", filteredBody);
@@ -2664,10 +2681,12 @@ const getAll = (Model, modelName) =>
       : "createdAt";
     const sortOrderNorm = String(sortOrderRaw || "desc").toLowerCase();
 
+    const ORDER_GET_MAX_LIMIT = 500;
     const pageParsed = parseInt(pageQuery, 10);
     const limitParsed = parseInt(limitQuery, 10);
     const page = Number.isFinite(pageParsed) && pageParsed >= 1 ? pageParsed : 1;
-    const limit = Number.isFinite(limitParsed) && limitParsed >= 1 ? limitParsed : 100;
+    const limitUncapped = Number.isFinite(limitParsed) && limitParsed >= 1 ? limitParsed : 100;
+    const limit = Math.min(limitUncapped, ORDER_GET_MAX_LIMIT);
     const order = sortOrderNorm === "desc" ? -1 : 1;
     const skip = (page - 1) * limit;
 
@@ -3622,14 +3641,14 @@ const getAll = (Model, modelName) =>
         matchOnlyStages.push(st);
       }
       const [countAgg, resultsAgg] = await Promise.all([
-        Model.aggregate([...matchOnlyStages, { $count: "total" }]),
-        Model.aggregate(pipeline),
+        Model.aggregate([...matchOnlyStages, { $count: "total" }]).allowDiskUse(true),
+        Model.aggregate(pipeline).allowDiskUse(true),
       ]);
       total = countAgg[0]?.total ?? 0;
       totalPages = Math.ceil(total / parseInt(limit, 10)) || 1;
       results = resultsAgg;
     } else {
-      results = await Model.aggregate(pipeline);
+      results = await Model.aggregate(pipeline).allowDiskUse(true);
     }
 
     // Transform documents for response
@@ -3641,7 +3660,7 @@ const getAll = (Model, modelName) =>
     if (!(hasPaginationParams && earlyPaginateInserted)) {
       if (hasPaginationParams) {
         const countPipeline = pipeline.slice(0, -3);
-        const totalCount = await Model.aggregate([...countPipeline, { $count: "total" }]);
+        const totalCount = await Model.aggregate([...countPipeline, { $count: "total" }]).allowDiskUse(true);
         total = totalCount.length > 0 ? totalCount[0].total : 0;
         totalPages = Math.ceil(total / parseInt(limit, 10)) || 1;
       } else {

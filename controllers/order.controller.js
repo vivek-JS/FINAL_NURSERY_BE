@@ -28,6 +28,53 @@ import {
   getFarmerPlantPaymentTransitionAction,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 
+function watiDigitsOk(n) {
+  return n != null && String(n).replace(/\D/g, "").length >= 10;
+}
+
+function watiPhoneKey(n) {
+  const d = String(n).replace(/\D/g, "");
+  if (d.length >= 12 && d.startsWith("91")) return d.slice(-10);
+  return d.slice(-10);
+}
+
+function watiPhonesDiffer(a, b) {
+  if (!watiDigitsOk(a) || !watiDigitsOk(b)) return true;
+  return watiPhoneKey(a) !== watiPhoneKey(b);
+}
+
+/** Farmer — required for WhatsApp on non–dealer orders. */
+function farmerWhatsAppRecipient(order) {
+  if (!order || order.dealerOrder) return null;
+  const farmer = order.farmer;
+  if (!farmer || !watiDigitsOk(farmer.mobileNumber)) return null;
+  return farmer;
+}
+
+/**
+ * Dealer / salesperson copy: dealer orders → salesperson; farmer orders → same when jobTitle is DEALER.
+ */
+function dealerWhatsAppRecipient(order) {
+  if (!order) return null;
+  const sp = order.salesPerson;
+  if (!sp || !watiDigitsOk(sp.phoneNumber)) return null;
+  if (order.dealerOrder) {
+    return {
+      name: sp.name || "Dealer",
+      mobileNumber: sp.phoneNumber,
+      village: "—",
+    };
+  }
+  if (String(sp.jobTitle || "").toUpperCase() === "DEALER") {
+    return {
+      name: sp.name || "Dealer",
+      mobileNumber: sp.phoneNumber,
+      village: "—",
+    };
+  }
+  return null;
+}
+
 function extractWatiLocalMessageId(payload) {
   if (!payload || typeof payload !== "object") return null;
   return (
@@ -3093,12 +3140,10 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
   const { orderId } = req.params;
   const order = await Order.findById(orderId)
     .populate("farmer", "name mobileNumber village")
+    .populate("salesPerson", "name phoneNumber jobTitle")
     .populate("plantName", "name");
   if (!order) {
     return res.status(404).json({ message: "Order not found" });
-  }
-  if (order.dealerOrder) {
-    return res.status(400).json({ message: "WhatsApp accept message is only for farmer orders" });
   }
   if (order.whatsappAcceptedSentAt) {
     return res.status(200).json(
@@ -3108,10 +3153,6 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
         whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
       }, undefined)
     );
-  }
-  const farmer = order.farmer;
-  if (!farmer || !farmer.mobileNumber) {
-    return res.status(400).json({ message: "Order has no farmer with mobile number" });
   }
   if (!order.publicOrderCode) {
     await Order.ensurePublicOrderCode(order);
@@ -3135,23 +3176,79 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
     advanceAmount: paidAmount,
     remainingAmount,
   };
-  const result = await sendOrderAcceptedWhatsApp(farmer, orderDetails);
-  if (result.success) {
-    order.whatsappAcceptedSentAt = new Date();
-    const msgKey = extractWatiLocalMessageId(result.data);
-    if (msgKey) order.whatsappAcceptedMessageKey = String(msgKey);
-    await order.save();
-    return res.status(200).json(
-      generateResponse("Success", "WhatsApp message sent successfully", {
-        ...result.data,
-        stored: {
-          whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
-          whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
-        },
-      }, undefined)
+
+  // Dealer-only order: WhatsApp to salesperson only.
+  if (order.dealerOrder) {
+    const dealerRec = dealerWhatsAppRecipient(order);
+    if (!dealerRec) {
+      return res.status(400).json({
+        message: "Dealer order has no salesperson with a valid mobile number for WhatsApp",
+      });
+    }
+    const result = await sendOrderAcceptedWhatsApp(dealerRec, orderDetails);
+    if (result.success) {
+      order.whatsappAcceptedSentAt = new Date();
+      const msgKey = extractWatiLocalMessageId(result.data);
+      if (msgKey) order.whatsappAcceptedMessageKey = String(msgKey);
+      await order.save();
+      return res.status(200).json(
+        generateResponse("Success", "WhatsApp message sent successfully", {
+          ...result.data,
+          stored: {
+            whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
+            whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
+          },
+          farmerSent: false,
+          dealerSent: true,
+        }, undefined)
+      );
+    }
+    return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
+  }
+
+  // Farmer order: farmer is mandatory; also send to dealer salesperson when applicable.
+  const farmerRec = farmerWhatsAppRecipient(order);
+  if (!farmerRec) {
+    return res.status(400).json({
+      message: "Order has no farmer with mobile number — farmer WhatsApp is required for this order",
+    });
+  }
+  const farmerResult = await sendOrderAcceptedWhatsApp(farmerRec, orderDetails);
+  if (!farmerResult.success) {
+    return res.status(500).json(
+      generateResponse("Error", farmerResult.error?.message || "Failed to send message", null, farmerResult.error)
     );
   }
-  return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
+  order.whatsappAcceptedSentAt = new Date();
+  const farmerMsgKey = extractWatiLocalMessageId(farmerResult.data);
+  if (farmerMsgKey) order.whatsappAcceptedMessageKey = String(farmerMsgKey);
+  await order.save();
+
+  let dealerAlsoSent = false;
+  let dealerSendNote = null;
+  const dealerRec = dealerWhatsAppRecipient(order);
+  if (dealerRec && watiPhonesDiffer(farmerRec.mobileNumber, dealerRec.mobileNumber)) {
+    const dealerResult = await sendOrderAcceptedWhatsApp(dealerRec, orderDetails);
+    dealerAlsoSent = Boolean(dealerResult.success);
+    if (!dealerResult.success) {
+      dealerSendNote =
+        dealerResult.error?.message ||
+        (typeof dealerResult.error === "string" ? dealerResult.error : "Dealer copy failed");
+    }
+  }
+
+  return res.status(200).json(
+    generateResponse("Success", "WhatsApp message sent successfully", {
+      ...farmerResult.data,
+      stored: {
+        whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
+        whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
+      },
+      farmerSent: true,
+      dealerAlsoSent,
+      ...(dealerSendNote ? { dealerSendWarning: dealerSendNote } : {}),
+    }, undefined)
+  );
 });
 
 /**
@@ -3161,12 +3258,10 @@ export const sendOrderDispatchWhatsAppController = catchAsync(async (req, res) =
   const { orderId } = req.params;
   const order = await Order.findById(orderId)
     .populate("farmer", "name mobileNumber village")
+    .populate("salesPerson", "name phoneNumber jobTitle")
     .populate("plantName", "name");
   if (!order) {
     return res.status(404).json({ message: "Order not found" });
-  }
-  if (order.dealerOrder) {
-    return res.status(400).json({ message: "WhatsApp dispatch message is only for farmer orders" });
   }
   if (order.whatsappDispatchSentAt) {
     return res.status(200).json(
@@ -3176,10 +3271,6 @@ export const sendOrderDispatchWhatsAppController = catchAsync(async (req, res) =
         whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
       }, undefined)
     );
-  }
-  const farmer = order.farmer;
-  if (!farmer || !farmer.mobileNumber) {
-    return res.status(400).json({ message: "Order has no farmer with mobile number" });
   }
   const history = Array.isArray(order.dispatchHistory) ? order.dispatchHistory : [];
   const dispatchedSum = history.reduce((s, h) => s + (Number(h.quantity) || 0), 0);
@@ -3208,23 +3299,77 @@ export const sendOrderDispatchWhatsAppController = catchAsync(async (req, res) =
     dispatchDate,
     deliveryDate: order.deliveryDate,
   };
-  const result = await sendOrderDispatchedWhatsAppDelivery1(farmer, details);
-  if (result.success) {
-    order.whatsappDispatchSentAt = new Date();
-    const msgKey = extractWatiLocalMessageId(result.data);
-    if (msgKey) order.whatsappDispatchMessageKey = String(msgKey);
-    await order.save();
-    return res.status(200).json(
-      generateResponse("Success", "WhatsApp dispatch message sent successfully", {
-        ...result.data,
-        stored: {
-          whatsappDispatchSentAt: order.whatsappDispatchSentAt,
-          whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
-        },
-      }, undefined)
+
+  if (order.dealerOrder) {
+    const dealerRec = dealerWhatsAppRecipient(order);
+    if (!dealerRec) {
+      return res.status(400).json({
+        message: "Dealer order has no salesperson with a valid mobile number for WhatsApp",
+      });
+    }
+    const result = await sendOrderDispatchedWhatsAppDelivery1(dealerRec, details);
+    if (result.success) {
+      order.whatsappDispatchSentAt = new Date();
+      const msgKey = extractWatiLocalMessageId(result.data);
+      if (msgKey) order.whatsappDispatchMessageKey = String(msgKey);
+      await order.save();
+      return res.status(200).json(
+        generateResponse("Success", "WhatsApp dispatch message sent successfully", {
+          ...result.data,
+          stored: {
+            whatsappDispatchSentAt: order.whatsappDispatchSentAt,
+            whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
+          },
+          farmerSent: false,
+          dealerSent: true,
+        }, undefined)
+      );
+    }
+    return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
+  }
+
+  const farmerRec = farmerWhatsAppRecipient(order);
+  if (!farmerRec) {
+    return res.status(400).json({
+      message: "Order has no farmer with mobile number — farmer WhatsApp is required for this order",
+    });
+  }
+  const farmerResult = await sendOrderDispatchedWhatsAppDelivery1(farmerRec, details);
+  if (!farmerResult.success) {
+    return res.status(500).json(
+      generateResponse("Error", farmerResult.error?.message || "Failed to send message", null, farmerResult.error)
     );
   }
-  return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
+  order.whatsappDispatchSentAt = new Date();
+  const farmerMsgKey = extractWatiLocalMessageId(farmerResult.data);
+  if (farmerMsgKey) order.whatsappDispatchMessageKey = String(farmerMsgKey);
+  await order.save();
+
+  let dealerAlsoSent = false;
+  let dealerSendNote = null;
+  const dealerRec = dealerWhatsAppRecipient(order);
+  if (dealerRec && watiPhonesDiffer(farmerRec.mobileNumber, dealerRec.mobileNumber)) {
+    const dealerResult = await sendOrderDispatchedWhatsAppDelivery1(dealerRec, details);
+    dealerAlsoSent = Boolean(dealerResult.success);
+    if (!dealerResult.success) {
+      dealerSendNote =
+        dealerResult.error?.message ||
+        (typeof dealerResult.error === "string" ? dealerResult.error : "Dealer copy failed");
+    }
+  }
+
+  return res.status(200).json(
+    generateResponse("Success", "WhatsApp dispatch message sent successfully", {
+      ...farmerResult.data,
+      stored: {
+        whatsappDispatchSentAt: order.whatsappDispatchSentAt,
+        whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
+      },
+      farmerSent: true,
+      dealerAlsoSent,
+      ...(dealerSendNote ? { dealerSendWarning: dealerSendNote } : {}),
+    }, undefined)
+  );
 });
 
 const getUnclearedPayments = catchAsync(async (req, res) => {

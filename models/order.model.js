@@ -643,6 +643,8 @@ orderSchema.index({ plantName: 1 });
 orderSchema.index({ bookingSlot: 1 });
 orderSchema.index({ orderStatus: 1 });
 orderSchema.index({ orderStatus: 1, deliveryDate: 1 });
+// Ascending delivery sorts (dispatch queue / mobile list)
+orderSchema.index({ deliveryDate: 1, orderStatus: 1 });
 orderSchema.index({ createdAt: 1 });
 orderSchema.index({ orderPaymentStatus: 1 });
 orderSchema.index({ createdAt: 1, orderStatus: 1 });

@@ -50,9 +50,33 @@ export function isDispatchManagerAllowedStatus(orderStatus) {
   return DISPATCH_MANAGER_ALLOWED_STATUSES.has(orderStatus);
 }
 
+/** Roles that may change order status / reassign sales (must match getOrderUpdateUserContext). */
+const JWT_PRIV_ORDER_STATUS_FULL = new Set([
+  "SUPERADMIN",
+  "SUPER_ADMIN",
+  "OFFICE_ADMIN",
+  "OFFICEADMIN",
+]);
+
+/** Roles that may edit rate, qty, delivery, etc. */
+const JWT_PRIV_ORDER_CORE = new Set([
+  "OFFICE_ADMIN",
+  "OFFICEADMIN",
+  "SUPER_ADMIN",
+  "SUPERADMIN",
+  "ACCOUNTANT",
+]);
+
+function tokenHasAnyRoleClaim(d, roleSet) {
+  return [d.role, d.jobTitle].filter(Boolean).some((r) => roleSet.has(r));
+}
+
 /**
  * Plain user object for permission checks. If the JWT says DISPATCH_MANAGER but the DB user
  * document does not (stale profile), align to dispatch so PATCH matches the signed session.
+ *
+ * Same for OFFICE_ADMIN / SUPER_ADMIN / ACCOUNTANT: trust signed JWT when the DB profile is
+ * stale, so salesPerson reassignment and status changes match what the user logged in as.
  *
  * @param {{ user?: import("mongoose").Document & { role?: string; jobTitle?: string }; token?: string } | null} req
  */
@@ -64,14 +88,29 @@ export function resolveUserForOrderUpdatePermissions(req) {
   if (!req?.token) return plain;
   try {
     const d = verifyAccessToken(req.token);
+    const ctx = getOrderUpdateUserContext(plain);
+
     const tokenSaysDispatch =
       d.role === "DISPATCH_MANAGER" || d.jobTitle === "DISPATCH_MANAGER";
-    const ctx = getOrderUpdateUserContext(plain);
     if (tokenSaysDispatch && !ctx.isDispatchManagerUser) {
       return {
         ...plain,
         role: "DISPATCH_MANAGER",
         jobTitle: "DISPATCH_MANAGER",
+      };
+    }
+
+    const tokenGrantsStatusFull = tokenHasAnyRoleClaim(d, JWT_PRIV_ORDER_STATUS_FULL);
+    const tokenGrantsCore = tokenHasAnyRoleClaim(d, JWT_PRIV_ORDER_CORE);
+    const needMergeFromJwt =
+      (tokenGrantsStatusFull && !ctx.canChangeOrderStatusFull) ||
+      (tokenGrantsCore && !ctx.canEditOrderCore);
+
+    if (needMergeFromJwt) {
+      return {
+        ...plain,
+        role: d.role || plain.role,
+        jobTitle: d.jobTitle || plain.jobTitle,
       };
     }
   } catch {
