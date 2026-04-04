@@ -16,6 +16,10 @@ import {
   getRevenueTrends,
   getPlantPerformanceComparison,
   getDailyStats,
+  getShortReport,
+  getShortReportByPlant,
+  getShortReportOrderDetail,
+  getShortReportPayments,
 } from "../controllers/analytics.controller.js";
 
 const router = express.Router();
@@ -41,5 +45,11 @@ router.get("/order-status-distribution", getOrderStatusDistribution);
 router.get("/customer-type-distribution", getCustomerTypeDistribution);
 router.get("/revenue-trends", getRevenueTrends);
 router.get("/plant-performance-comparison", getPlantPerformanceComparison);
+
+// Static `/short-report/payments` before `/short-report/order/:orderId` so "payments" is never captured as an order id.
+router.get("/short-report/payments", getShortReportPayments);
+router.get("/short-report/plant/:plantId", getShortReportByPlant);
+router.get("/short-report/order/:orderId", getShortReportOrderDetail);
+router.get("/short-report", getShortReport);
 
 export default router; 

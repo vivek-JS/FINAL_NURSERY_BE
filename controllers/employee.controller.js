@@ -1,15 +1,101 @@
+import mongoose from "mongoose";
 import Employee from "../models/user.model.js"; //not employee its user
-import {
-  createOne,
-  updateOne,
-  deleteOne,
-  getOne,
-} from "./factory.controller.js";
+import { deleteOne, getOne } from "./factory.controller.js";
 import catchAsync from "../utility/catchAsync.js";
+import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
+import { createChangeLog, generateChangesArray } from "../utils/changeLogHelper.js";
 
-const createEmployee = createOne(Employee, "Employee");
-const updateEmployee = updateOne(Employee, "Employee");
+const EMPLOYEE_PATCH_FIELDS = ["name", "phoneNumber", "jobTitle", "birthDate"];
+
+const createEmployee = catchAsync(async (req, res, next) => {
+  const doc = await Employee.create(req.body);
+  const safe = doc.toObject();
+  if (safe.password) delete safe.password;
+
+  if (req.user?._id) {
+    await createChangeLog({
+      entityType: "employee",
+      entityId: doc._id,
+      action: "create",
+      changedBy: req.user._id,
+      changes: [
+        { field: "name", oldValue: null, newValue: doc.name },
+        { field: "phoneNumber", oldValue: null, newValue: doc.phoneNumber },
+        { field: "jobTitle", oldValue: null, newValue: doc.jobTitle },
+      ],
+      description: `Employee "${doc.name}" created`,
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+  }
+
+  return res
+    .status(201)
+    .json(
+      generateResponse("Success", "Employee created successfully", safe, undefined)
+    );
+});
+
+const updateEmployee = catchAsync(async (req, res, next) => {
+  let { id, _id, ...rest } = req.body;
+  if (_id && !id) id = _id;
+
+  if (!mongoose.isValidObjectId(id)) {
+    return next(new AppError("Invalid ID format", 400));
+  }
+
+  const before = await Employee.findById(id).lean();
+  if (!before) {
+    return next(new AppError("No document found with that ID", 404));
+  }
+
+  const updates = {};
+  for (const k of EMPLOYEE_PATCH_FIELDS) {
+    if (rest[k] !== undefined) updates[k] = rest[k];
+  }
+  if (updates.phoneNumber !== undefined) {
+    updates.phoneNumber = Number(updates.phoneNumber);
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return next(new AppError("No valid fields to update", 400));
+  }
+
+  const doc = await Employee.findByIdAndUpdate(id, updates, {
+    new: true,
+    runValidators: true,
+  }).select("-password -__v");
+
+  if (!doc) {
+    return next(new AppError("No document found with that ID", 404));
+  }
+
+  const beforePick = {};
+  const afterPick = {};
+  for (const k of EMPLOYEE_PATCH_FIELDS) {
+    beforePick[k] = before[k];
+    afterPick[k] = doc[k];
+  }
+  const changes = generateChangesArray(beforePick, afterPick, EMPLOYEE_PATCH_FIELDS);
+  if (changes.length > 0 && req.user?._id) {
+    await createChangeLog({
+      entityType: "employee",
+      entityId: doc._id,
+      action: "update",
+      changedBy: req.user._id,
+      changes,
+      description: `Employee "${doc.name}" updated`,
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+  }
+
+  return res
+    .status(200)
+    .json(generateResponse("Success", "Employee updated successfully", doc));
+});
+
 const deleteEmployee = deleteOne(Employee, "Employee");
 const getEmployee = getOne(Employee, "Employee");
 

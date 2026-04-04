@@ -2,6 +2,10 @@ import express from "express";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import {
+  requireEmployeeManager,
+  requireSuperAdminForEmployeeDelete,
+} from "../middlewares/employeeRole.middleware.js";
+import {
   createEmployee,
   deleteEmployee,
   updateEmployee,
@@ -38,6 +42,7 @@ router
   .get("/getEmployee", getEmployee)
   .post(
     "/createEmployee",
+    requireEmployeeManager,
     [
       check("name").notEmpty().withMessage("Name of employee is required"),
       check("phoneNumber")
@@ -56,11 +61,13 @@ router
   )
   .patch(
     "/updateEmployee",
+    requireEmployeeManager,
     validateEmployeeId,
     updateEmployee
   )
   .delete(
     "/deleteEmployee",
+    requireSuperAdminForEmployeeDelete,
     [check("id").notEmpty().withMessage("Employee Id is required")],
     checkErrors,
     deleteEmployee

@@ -28,13 +28,15 @@ export function getOrderUpdateUserContext(user) {
     user.role === "DISPATCH_MANAGER" || user.jobTitle === "DISPATCH_MANAGER";
 
   const canEditOrderCore =
-    ["OFFICE_ADMIN", "SUPER_ADMIN", "ACCOUNTANT"].includes(userRole) ||
-    isDispatchManagerUser;
+    ["OFFICE_ADMIN", "OFFICEADMIN", "SUPER_ADMIN", "SUPERADMIN", "ACCOUNTANT"].includes(
+      userRole
+    ) || isDispatchManagerUser;
 
   const canChangeOrderStatusFull =
     userRole === "SUPERADMIN" ||
     userRole === "SUPER_ADMIN" ||
-    userRole === "OFFICE_ADMIN";
+    userRole === "OFFICE_ADMIN" ||
+    userRole === "OFFICEADMIN";
 
   return {
     userRole,

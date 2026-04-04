@@ -153,6 +153,7 @@ const allowedParams = [
   "opt_in", // filter by opt-in status (true/false)
   "includeAll", // include all records (don't exclude those in call lists)
   "upcomingDays", // laboutward primary-mobile-dashboard window
+  "orderLimit", // analytics short-report: max orders in list (cap 500)
 ];
 
 /** Effective whitelist: array + mandatory extras (survives accidental removal from `allowedParams`). */

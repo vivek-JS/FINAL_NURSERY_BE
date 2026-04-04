@@ -1519,6 +1519,65 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
+      // Reassign sales person: SUPER_ADMIN / OFFICE_ADMIN only (same gate as full status changes)
+      if (filteredBody.salesPerson !== undefined) {
+        if (!canChangeOrderStatusFull) {
+          rejectedFields.push({
+            field: "salesPerson",
+            reason: "INSUFFICIENT_PERMISSION",
+            detail: "Only SUPER_ADMIN or OFFICE_ADMIN may change sales person",
+            value: filteredBody.salesPerson,
+          });
+          delete filteredBody.salesPerson;
+        } else {
+          const newSpId = filteredBody.salesPerson;
+          const oldSpId = existingDoc.salesPerson?._id || existingDoc.salesPerson;
+          if (!newSpId || String(newSpId) === String(oldSpId || "")) {
+            delete filteredBody.salesPerson;
+          } else if (!mongoose.isValidObjectId(newSpId)) {
+            rejectedFields.push({
+              field: "salesPerson",
+              reason: "INVALID_ID",
+              detail: "Invalid sales person id",
+              value: filteredBody.salesPerson,
+            });
+            delete filteredBody.salesPerson;
+          } else {
+            const newUser = await User.findById(newSpId).session(session);
+            if (!newUser) {
+              rejectedFields.push({
+                field: "salesPerson",
+                reason: "USER_NOT_FOUND",
+                detail: "Sales person user not found",
+                value: filteredBody.salesPerson,
+              });
+              delete filteredBody.salesPerson;
+            } else {
+              const oldName = existingDoc.salesPerson?.name || String(oldSpId);
+              const newName = newUser.name || String(newSpId);
+              editHistoryEntries.push({
+                field: "salesPerson",
+                previousValue: oldSpId || null,
+                newValue: newSpId,
+                changedBy: req.user ? req.user._id : null,
+                notes: `Sales person changed from ${oldName} to ${newName}`,
+              });
+              if (!existingDoc.dealerOrder) {
+                if (newUser.jobTitle === "DEALER") {
+                  filteredBody.dealer = newSpId;
+                } else if (
+                  existingDoc.salesPerson?.jobTitle === "DEALER" &&
+                  existingDoc.dealer &&
+                  String(existingDoc.dealer) === String(oldSpId)
+                ) {
+                  filteredBody.dealer = null;
+                }
+              }
+            }
+          }
+        }
+      }
+
       // Add all edit history entries
       if (editHistoryEntries.length > 0) {
         if (!filteredBody.$push) filteredBody.$push = {};

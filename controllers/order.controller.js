@@ -296,183 +296,170 @@ const getOrdersBySlot = catchAsync(async (req, res, next) => {
 
 const getCsv = catchAsync(async (req, res, next) => {
   try {
-    // extracting data
     const { startDate, endDate, orderStatus, paymentStatus } = req.query;
 
-    // Build query
     let query = {};
-    
+
     if (startDate && endDate) {
-      query.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate),
-      };
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      query.$or = [
+        { orderBookingDate: { $gte: start, $lte: end } },
+        {
+          $and: [
+            {
+              $or: [
+                { orderBookingDate: null },
+                { orderBookingDate: { $exists: false } },
+              ],
+            },
+            { createdAt: { $gte: start, $lte: end } },
+          ],
+        },
+      ];
     }
-    
+
     if (orderStatus) {
       query.orderStatus = orderStatus;
     }
-    
+
     if (paymentStatus) {
       query.orderPaymentStatus = paymentStatus;
     }
 
-    let jsonData = await Order.find(query)
-      .populate("farmer", "name mobileNumber village taluka district")
+    const ordersLean = await Order.find(query)
       .populate("salesPerson", "name phoneNumber")
       .populate("plantName", "name subtypes")
       .populate("dealer", "name")
-      .sort({ createdAt: -1 });
+      .sort({ orderBookingDate: -1, createdAt: -1 })
+      .lean();
 
-    // if data not found
-    if (!jsonData || jsonData.length === 0) {
+    if (!ordersLean || ordersLean.length === 0) {
       return next(new AppError("No orders found for the specified criteria", 404));
     }
 
-    // preparing data
-    let srNo = 0;
-    let csvData = [];
-      let csvFields = [
-    "Sr No",
-    "Order ID",
-    "Order Date",
-    "Customer Name",
-    "Mobile Number",
-    "Village",
-    "Taluka",
-    "District",
-    "State",
-    "Plant Name",
-    "Plant Subtype",
-    "Number of Plants",
-    "Rate per Plant",
-    "Total Amount",
-    "Order Status",
-    "Payment Status",
-    "Total Paid Amount",
-    "Balance Amount",
-    "Sales Person",
-    "Sales Person Mobile",
-    "Dealer Name",
-    "Booking Slot",
-    "Delivery Period",
-    "Order Type",
-    "Payment Count",
-    "Payment Number",
-    "Payment Amount",
-    "Payment Mode",
-    "Payment Status",
-    "Payment Date",
-    "Bank Name",
-    "Payment Remark",
-    "Remarks",
-    "Order For Name",
-    "Order For Mobile",
-    "Order For Address"
-  ];
+    const farmerIdStrings = [
+      ...new Set(
+        ordersLean
+          .map((o) => o.farmer)
+          .filter((id) => id != null)
+          .map((id) => String(id))
+      ),
+    ];
+    const farmerDocs =
+      farmerIdStrings.length > 0
+        ? await Farmer.find({ _id: { $in: farmerIdStrings } })
+            .select(
+              "name mobileNumber village taluka district districtName talukaName state stateName"
+            )
+            .lean()
+        : [];
+    const farmerById = new Map(farmerDocs.map((fr) => [String(fr._id), fr]));
 
-    // Process data synchronously to avoid Promise.all issues
+    const jsonData = ordersLean;
+
+    const csvFields = [
+      "Sr No",
+      "Booking date",
+      "Farmer name",
+      "Mobile No",
+      "District",
+      "Taluka",
+      "Village",
+      "Variety",
+      "Plant",
+      "Rate",
+      "Delivery date",
+      "Reference",
+    ];
+
+    let srNo = 0;
+    const csvData = [];
+
+    const formatInDate = (d) =>
+      d ? new Date(d).toLocaleDateString("en-IN") : "N/A";
+
+    const deliverySource = (obj) =>
+      obj.deliveryDate || obj.farmReadyDate || null;
+
+    const csvMobile = (farmerDoc, orderFor) => {
+      const n =
+        farmerDoc?.mobileNumber ??
+        orderFor?.mobileNumber ??
+        undefined;
+      if (n === undefined || n === null || n === "") return "N/A";
+      return String(n);
+    };
+
     jsonData.forEach((obj) => {
       try {
-        // Calculate payment details
-        const totalPaidAmount = obj.payment && obj.payment.length > 0 
-          ? obj.payment.reduce((sum, payment) => sum + (payment.paidAmount || 0), 0)
-          : 0;
-        
-        const totalAmount = (obj.rate || 0) * (obj.numberOfPlants || 0);
-        const balanceAmount = totalAmount - totalPaidAmount;
-        
-        // Enhanced payment details for multiple payments
-        const paymentCount = obj.payment ? obj.payment.length : 0;
-        
-        // Format delivery period - bookingSlot is just an ID, not populated
-        const deliveryPeriod = obj.bookingSlot ? `Slot ID: ${obj.bookingSlot}` : 'N/A';
+        const farmerId = obj.farmer != null ? String(obj.farmer) : null;
+        const f = farmerId ? farmerById.get(farmerId) : null;
+        const of = obj.orderFor;
+        const bookingRef = obj.orderBookingDate || obj.createdAt;
+        const subtypeName = obj.plantSubtype
+          ? obj.plantName?.subtypes?.find(
+              (st) => st._id.toString() === obj.plantSubtype.toString()
+            )?.name || "N/A"
+          : "N/A";
 
-        // Determine order type
-        const orderType = obj.dealerOrder ? 'Dealer Order' : 'Farmer Order';
+        const refParts = [];
+        if (obj.dealer?.name) refParts.push(obj.dealer.name);
+        if (obj.salesPerson?.name) refParts.push(obj.salesPerson.name);
+        const reference = refParts.length ? refParts.join(" / ") : "N/A";
 
-        // Base order data
-        const baseOrderData = {
-          "Sr No": ++srNo,
-          "Order ID": obj.orderId || obj._id,
-          "Order Date": obj.createdAt ? new Date(obj.createdAt).toLocaleDateString('en-IN') : 'N/A',
-          "Customer Name": obj.farmer?.name || obj.name || 'N/A',
-          "Mobile Number": obj.farmer?.mobileNumber || obj.mobileNumber || 'N/A',
-          "Village": obj.farmer?.village || obj.village || 'N/A',
-          "Taluka": obj.farmer?.taluka || obj.taluka || 'N/A',
-          "District": obj.farmer?.district || obj.district || 'N/A',
-          "State": obj.farmer?.state || obj.state || 'N/A',
-          "Plant Name": obj.plantName?.name || 'N/A',
-          "Plant Subtype": obj.plantSubtype ? 
-            (obj.plantName?.subtypes?.find(subtype => subtype._id.toString() === obj.plantSubtype.toString())?.name || 'N/A') 
-            : 'N/A',
-          "Number of Plants": obj.numberOfPlants || 0,
-          "Rate per Plant": obj.rate || 0,
-          "Total Amount": totalAmount,
-          "Order Status": obj.orderStatus || 'N/A',
-          "Payment Status": obj.orderPaymentStatus || 'N/A',
-          "Total Paid Amount": totalPaidAmount,
-          "Balance Amount": balanceAmount,
-          "Sales Person": obj.salesPerson?.name || 'N/A',
-          "Sales Person Mobile": obj.salesPerson?.phoneNumber || 'N/A',
-          "Dealer Name": obj.dealer?.name || 'N/A',
-          "Booking Slot": obj.bookingSlot || 'N/A',
-          "Delivery Period": deliveryPeriod,
-          "Order Type": orderType,
-          "Payment Count": paymentCount,
-          "Remarks": obj.orderRemarks && obj.orderRemarks.length > 0 
-            ? obj.orderRemarks.join('; ') 
-            : 'N/A',
-          "Order For Name": obj.orderFor?.name || 'N/A',
-          "Order For Mobile": obj.orderFor?.mobileNumber || 'N/A',
-          "Order For Address": obj.orderFor?.address || 'N/A'
-        };
+        // Farmer may be unset (dealer / legacy rows); use orderFor for customer + address fallback.
+        const addr =
+          typeof of?.address === "string" && of.address.trim()
+            ? of.address.trim()
+            : "";
 
-        // Handle multiple payments - create separate rows for each payment
-        if (obj.payment && obj.payment.length > 0) {
-          obj.payment.forEach((payment, paymentIndex) => {
-            const paymentData = {
-              ...baseOrderData,
-              "Payment Number": paymentIndex + 1,
-              "Payment Amount": payment.paidAmount || 0,
-              "Payment Mode": payment.modeOfPayment || 'N/A',
-              "Payment Status": payment.paymentStatus || 'PENDING',
-              "Payment Date": payment.paymentDate ? new Date(payment.paymentDate).toLocaleDateString('en-IN') : 'N/A',
-              "Bank Name": payment.bankName || 'N/A',
-              "Payment Remark": payment.remark || 'N/A'
-            };
-            csvData.push(paymentData);
-          });
-        } else {
-          // No payments - add single row with empty payment fields
-          const noPaymentData = {
-            ...baseOrderData,
-            "Payment Number": 'N/A',
-            "Payment Amount": 0,
-            "Payment Mode": 'N/A',
-            "Payment Status": 'N/A',
-            "Payment Date": 'N/A',
-            "Bank Name": 'N/A',
-            "Payment Remark": 'N/A'
-          };
-          csvData.push(noPaymentData);
+        let district = "N/A";
+        let taluka = "N/A";
+        let village = "N/A";
+        if (f) {
+          district = f.districtName || f.district || "N/A";
+          taluka = f.talukaName || f.taluka || "N/A";
+          village = f.village || (addr || "N/A");
+        } else if (addr) {
+          village = addr;
         }
+
+        csvData.push({
+          "Sr No": ++srNo,
+          "Booking date": formatInDate(bookingRef),
+          "Farmer name": f?.name || of?.name || "N/A",
+          "Mobile No": csvMobile(f, of),
+          District: district,
+          Taluka: taluka,
+          Village: village,
+          Variety: obj.plantName?.name || "N/A",
+          Plant: subtypeName,
+          Rate: obj.rate ?? 0,
+          "Delivery date": formatInDate(deliverySource(obj)),
+          Reference: reference,
+        });
       } catch (error) {
         console.error("Error processing order:", obj._id, error);
-        // Continue with next order
       }
     });
 
-  // Generate filename with date range
-  const filename = `orders_export_${startDate ? startDate.split('T')[0] : 'all'}_${endDate ? endDate.split('T')[0] : 'data'}.csv`;
+    const norm = (d) => (d ? String(d).split("T")[0] : "");
+    const rangePart =
+      startDate && endDate
+        ? `${norm(startDate)}_to_${norm(endDate)}`
+        : "all_dates";
+    const exportedOn = new Date().toISOString().split("T")[0];
+    const filename = `farmer_orders_${rangePart}_exported_${exportedOn}.csv`;
 
-  // sending response
-  const csvParse = new CsvParser({ fields: csvFields });
-  const csvDataParsed = csvParse.parse(csvData);
-  
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  res.status(200).end(csvDataParsed);
+    const csvParse = new CsvParser({ fields: csvFields });
+    const csvDataParsed = csvParse.parse(csvData);
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.status(200).end(csvDataParsed);
   } catch (error) {
     console.error("CSV Export - Error:", error);
     return next(new AppError("Error generating CSV: " + error.message, 500));
@@ -486,6 +473,7 @@ const updateOrder = updateOne(Order, "Order", [
   "numberOfPlants",
   "quantity", // Alias for numberOfPlants
   "rate",
+  "salesPerson",
   "orderPaymentStatus",
   "notes",
   "farmReadyDate",

@@ -2084,6 +2084,586 @@ export const getDailyStats = catchAsync(async (req, res, next) => {
   });
 });
 
+/** orderBookingDate filter for short report (inclusive end). */
+const shortReportOrderDateMatch = (startDate, endDate) => {
+  if (!startDate || !endDate) return null;
+  return {
+    orderBookingDate: {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate),
+    },
+  };
+};
+
+/**
+ * Billable plant count per order — same as order model pre-save (totalOrderedPlants).
+ * Uses numberOfPlants + additionalPlants (not remainingPlants / dispatch leftovers).
+ */
+const billablePlantQtyExpr = {
+  $add: [
+    { $ifNull: ["$numberOfPlants", 0] },
+    { $ifNull: ["$additionalPlants", 0] },
+  ],
+};
+
+const orderValueExpr = {
+  $multiply: [billablePlantQtyExpr, { $ifNull: ["$rate", 0] }],
+};
+
+/** Sum paid amounts on lines counted as received: COLLECTED + BANK_VERIFIED. */
+const totalCollectedOnOrderExpr = {
+  $reduce: {
+    input: { $ifNull: ["$payment", []] },
+    initialValue: 0,
+    in: {
+      $add: [
+        "$$value",
+        {
+          $cond: [
+            {
+              $in: [
+                "$$this.paymentStatus",
+                ["COLLECTED", "BANK_VERIFIED"],
+              ],
+            },
+            { $ifNull: ["$$this.paidAmount", 0] },
+            0,
+          ],
+        },
+      ],
+    },
+  },
+};
+
+/** Compact CEO short report: orders + plant totals + payment rollups for a booking-date range. */
+export const getShortReport = catchAsync(async (req, res) => {
+  const { startDate, endDate, limit: limitQuery, orderLimit: orderLimitQuery } =
+    req.query;
+  const match = shortReportOrderDateMatch(startDate, endDate);
+  if (!match) {
+    return res.status(400).json({
+      success: false,
+      message: "startDate and endDate are required (ISO strings).",
+    });
+  }
+
+  // `limit` is on the global query whitelist; `orderLimit` is optional alias.
+  const limitRaw = parseInt(limitQuery ?? orderLimitQuery, 10);
+  const ordersCap = Number.isFinite(limitRaw)
+    ? Math.min(Math.max(limitRaw, 1), 500)
+    : 300;
+
+  const baseStages = [
+    { $match: match },
+    {
+      $addFields: {
+        orderValue: orderValueExpr,
+        plantQty: billablePlantQtyExpr,
+        totalPaidCollected: totalCollectedOnOrderExpr,
+      },
+    },
+  ];
+
+  const [summaryAgg] = await Order.aggregate([
+    ...baseStages,
+    {
+      $group: {
+        _id: null,
+        orderCount: { $sum: 1 },
+        totalPlantUnits: { $sum: "$plantQty" },
+        totalOrderValue: { $sum: "$orderValue" },
+        totalCollected: { $sum: "$totalPaidCollected" },
+        ordersPaymentCompleted: {
+          $sum: { $cond: [{ $eq: ["$orderPaymentStatus", "COMPLETED"] }, 1, 0] },
+        },
+        ordersPaymentPending: {
+          $sum: { $cond: [{ $eq: ["$orderPaymentStatus", "PENDING"] }, 1, 0] },
+        },
+      },
+    },
+  ]);
+
+  const summary = summaryAgg || {
+    orderCount: 0,
+    totalPlantUnits: 0,
+    totalOrderValue: 0,
+    totalCollected: 0,
+    ordersPaymentCompleted: 0,
+    ordersPaymentPending: 0,
+  };
+  summary.totalPendingAmount = Math.max(
+    0,
+    (summary.totalOrderValue || 0) - (summary.totalCollected || 0)
+  );
+
+  const byPlant = await Order.aggregate([
+    ...baseStages,
+    {
+      $group: {
+        _id: {
+          plantId: "$plantName",
+          subtypeId: "$plantSubtype",
+        },
+        orderCount: { $sum: 1 },
+        plantUnits: { $sum: "$plantQty" },
+        orderValue: { $sum: "$orderValue" },
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "_id.plantId",
+        foreignField: "_id",
+        as: "plantDoc",
+      },
+    },
+    {
+      $addFields: {
+        subtypeDoc: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: {
+                  $ifNull: [{ $arrayElemAt: ["$plantDoc.subtypes", 0] }, []],
+                },
+                cond: { $eq: ["$$this._id", "$_id.subtypeId"] },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    },
+    { $sort: { orderValue: -1 } },
+    {
+      $project: {
+        plantId: "$_id.plantId",
+        subtypeId: "$_id.subtypeId",
+        plantName: { $arrayElemAt: ["$plantDoc.name", 0] },
+        subtypeName: "$subtypeDoc.name",
+        displayName: {
+          $concat: [
+            { $ifNull: [{ $arrayElemAt: ["$plantDoc.name", 0] }, "Unknown plant"] },
+            " · ",
+            { $ifNull: ["$subtypeDoc.name", "—"] },
+          ],
+        },
+        orderCount: 1,
+        plantUnits: 1,
+        orderValue: 1,
+      },
+    },
+  ]);
+
+  const orders = await Order.aggregate([
+    ...baseStages,
+    {
+      $lookup: {
+        from: "farmers",
+        localField: "farmer",
+        foreignField: "_id",
+        as: "farmerDoc",
+      },
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "dealer",
+        foreignField: "_id",
+        as: "dealerDoc",
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "plantName",
+        foreignField: "_id",
+        as: "plantDoc",
+      },
+    },
+    {
+      $addFields: {
+        subtypeDoc: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: {
+                  $ifNull: [{ $arrayElemAt: ["$plantDoc.subtypes", 0] }, []],
+                },
+                cond: { $eq: ["$$this._id", "$plantSubtype"] },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    },
+    { $sort: { orderBookingDate: -1 } },
+    { $limit: ordersCap },
+    {
+      $project: {
+        _id: 1,
+        orderId: 1,
+        publicOrderCode: 1,
+        orderBookingDate: 1,
+        orderStatus: 1,
+        orderPaymentStatus: 1,
+        dealerOrder: 1,
+        plantNameId: "$plantName",
+        plantSubtype: 1,
+        plantNameLabel: { $arrayElemAt: ["$plantDoc.name", 0] },
+        subtypeName: "$subtypeDoc.name",
+        plantSubtypeLabel: {
+          $concat: [
+            { $ifNull: [{ $arrayElemAt: ["$plantDoc.name", 0] }, ""] },
+            " · ",
+            { $ifNull: ["$subtypeDoc.name", "—"] },
+          ],
+        },
+        numberOfPlants: 1,
+        additionalPlants: 1,
+        totalPlants: "$plantQty",
+        rate: 1,
+        orderValue: 1,
+        totalPaidCollected: 1,
+        customerName: {
+          $cond: {
+            if: "$dealerOrder",
+            then: { $arrayElemAt: ["$dealerDoc.name", 0] },
+            else: { $arrayElemAt: ["$farmerDoc.name", 0] },
+          },
+        },
+      },
+    },
+  ]);
+
+  const listTruncated = (summary.orderCount || 0) > orders.length;
+
+  res.status(200).json({
+    success: true,
+    data: {
+      dateRange: { startDate, endDate },
+      summary,
+      ordersListMeta: {
+        totalOrdersInRange: summary.orderCount || 0,
+        ordersReturned: orders.length,
+        limit: ordersCap,
+        truncated: listTruncated,
+      },
+      calculationNotes: {
+        orderValue:
+          "Per order: (numberOfPlants + additionalPlants) × rate — same as ERP order total.",
+        plantUnits:
+          "Sum of (numberOfPlants + additionalPlants) across orders in range (not remaining/dispatch qty).",
+        summaryScope:
+          "Summary cards sum every order with orderBookingDate in range; the orders table is capped by limit.",
+      },
+      byPlant: byPlant.map((p) => ({
+        ...p,
+        plantName: p.plantName || "Unknown plant",
+        subtypeName: p.subtypeName || "—",
+        displayName:
+          p.displayName ||
+          `${p.plantName || "Unknown plant"} · ${p.subtypeName || "—"}`,
+      })),
+      orders,
+      ordersTruncatedTo: ordersCap,
+    },
+  });
+});
+
+/** Orders for one plant in the same booking-date window. */
+export const getShortReportByPlant = catchAsync(async (req, res) => {
+  const { plantId } = req.params;
+  const { startDate, endDate, subtypeId } = req.query;
+  if (!mongoose.Types.ObjectId.isValid(plantId)) {
+    return res.status(400).json({ success: false, message: "Invalid plant id." });
+  }
+  const match = shortReportOrderDateMatch(startDate, endDate);
+  if (!match) {
+    return res.status(400).json({
+      success: false,
+      message: "startDate and endDate are required.",
+    });
+  }
+  match.plantName = new mongoose.Types.ObjectId(plantId);
+  if (subtypeId && mongoose.Types.ObjectId.isValid(subtypeId)) {
+    match.plantSubtype = new mongoose.Types.ObjectId(subtypeId);
+  }
+
+  const plant = await PlantCms.findById(plantId).select("name subtypes").lean();
+  let subtypeLabel = null;
+  if (subtypeId && plant?.subtypes?.length) {
+    const st = plant.subtypes.find((s) => String(s._id) === String(subtypeId));
+    subtypeLabel = st?.name || null;
+  }
+
+  const orders = await Order.aggregate([
+    { $match: match },
+    {
+      $addFields: {
+        orderValue: orderValueExpr,
+        plantQty: billablePlantQtyExpr,
+        totalPaidCollected: totalCollectedOnOrderExpr,
+      },
+    },
+    {
+      $lookup: {
+        from: "farmers",
+        localField: "farmer",
+        foreignField: "_id",
+        as: "farmerDoc",
+      },
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "dealer",
+        foreignField: "_id",
+        as: "dealerDoc",
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "plantName",
+        foreignField: "_id",
+        as: "plantDoc",
+      },
+    },
+    {
+      $addFields: {
+        subtypeDoc: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: {
+                  $ifNull: [{ $arrayElemAt: ["$plantDoc.subtypes", 0] }, []],
+                },
+                cond: { $eq: ["$$this._id", "$plantSubtype"] },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    },
+    { $sort: { orderBookingDate: -1 } },
+    {
+      $project: {
+        _id: 1,
+        orderId: 1,
+        publicOrderCode: 1,
+        orderBookingDate: 1,
+        orderStatus: 1,
+        orderPaymentStatus: 1,
+        dealerOrder: 1,
+        numberOfPlants: 1,
+        additionalPlants: 1,
+        plantSubtype: 1,
+        subtypeName: "$subtypeDoc.name",
+        totalPlants: "$plantQty",
+        rate: 1,
+        orderValue: 1,
+        totalPaidCollected: 1,
+        customerName: {
+          $cond: {
+            if: "$dealerOrder",
+            then: { $arrayElemAt: ["$dealerDoc.name", 0] },
+            else: { $arrayElemAt: ["$farmerDoc.name", 0] },
+          },
+        },
+      },
+    },
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      dateRange: { startDate, endDate },
+      plant: {
+        _id: plantId,
+        name: plant?.name || "Unknown plant",
+      },
+      subtype: subtypeId
+        ? { _id: subtypeId, name: subtypeLabel || "—" }
+        : null,
+      orders,
+    },
+  });
+});
+
+/** Single order with populates for detail drawer. */
+export const getShortReportOrderDetail = catchAsync(async (req, res, next) => {
+  const { orderId } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(orderId)) {
+    return next(new AppError("Invalid order id.", 400));
+  }
+  const order = await Order.findById(orderId)
+    .populate("farmer", "name mobileNumber village taluka district")
+    .populate("dealer", "name phoneNumber")
+    .populate("salesPerson", "name phoneNumber")
+    .populate("plantName", "name subtypes")
+    .lean();
+
+  if (!order) {
+    return next(new AppError("Order not found.", 404));
+  }
+
+  let subtypeName = null;
+  const subtypes = order.plantName?.subtypes;
+  if (Array.isArray(subtypes) && order.plantSubtype) {
+    const sid = String(order.plantSubtype);
+    const hit = subtypes.find((s) => String(s._id) === sid);
+    subtypeName = hit?.name || null;
+  }
+
+  const plantQty =
+    (order.numberOfPlants || 0) + (order.additionalPlants || 0);
+  const orderValue = plantQty * (Number(order.rate) || 0);
+  const totalPaidCollected = (order.payment || []).reduce((sum, p) => {
+    if (p.paymentStatus === "COLLECTED" || p.paymentStatus === "BANK_VERIFIED") {
+      return sum + (p.paidAmount || 0);
+    }
+    return sum;
+  }, 0);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      order,
+      computed: {
+        plantQty,
+        orderValue,
+        totalPaidCollected,
+        pendingAmount: Math.max(0, orderValue - totalPaidCollected),
+        subtypeName,
+      },
+    },
+  });
+});
+
+/** Payment lines for orders booked in range (all statuses; summary splits collected vs rest). */
+export const getShortReportPayments = catchAsync(async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const match = shortReportOrderDateMatch(startDate, endDate);
+  if (!match) {
+    return res.status(400).json({
+      success: false,
+      message: "startDate and endDate are required.",
+    });
+  }
+
+  const rows = await Order.aggregate([
+    { $match: match },
+    { $unwind: "$payment" },
+    {
+      $lookup: {
+        from: "farmers",
+        localField: "farmer",
+        foreignField: "_id",
+        as: "farmerDoc",
+      },
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "dealer",
+        foreignField: "_id",
+        as: "dealerDoc",
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "plantName",
+        foreignField: "_id",
+        as: "plantDoc",
+      },
+    },
+    {
+      $addFields: {
+        subtypeDoc: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: {
+                  $ifNull: [{ $arrayElemAt: ["$plantDoc.subtypes", 0] }, []],
+                },
+                cond: { $eq: ["$$this._id", "$plantSubtype"] },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    },
+    { $sort: { "payment.paymentDate": -1 } },
+    {
+      $project: {
+        order_id: "$_id",
+        orderId: 1,
+        publicOrderCode: 1,
+        orderBookingDate: 1,
+        plantSubtypeLabel: {
+          $concat: [
+            { $ifNull: [{ $arrayElemAt: ["$plantDoc.name", 0] }, ""] },
+            " · ",
+            { $ifNull: ["$subtypeDoc.name", "—"] },
+          ],
+        },
+        customerName: {
+          $cond: {
+            if: "$dealerOrder",
+            then: { $arrayElemAt: ["$dealerDoc.name", 0] },
+            else: { $arrayElemAt: ["$farmerDoc.name", 0] },
+          },
+        },
+        paidAmount: "$payment.paidAmount",
+        paymentDate: "$payment.paymentDate",
+        modeOfPayment: "$payment.modeOfPayment",
+        paymentStatus: "$payment.paymentStatus",
+        transactionId: "$payment.transactionId",
+        utrNumber: "$payment.utrNumber",
+        isWalletPayment: "$payment.isWalletPayment",
+        bankVerificationStatus: "$payment.bankVerificationStatus",
+        payment_id: "$payment._id",
+      },
+    },
+  ]);
+
+  const acceptedStatuses = new Set(["COLLECTED", "BANK_VERIFIED"]);
+  let totalAccepted = 0;
+  let acceptedLineCount = 0;
+  const byStatus = {};
+
+  for (const r of rows) {
+    const st = r.paymentStatus || "UNKNOWN";
+    byStatus[st] = (byStatus[st] || 0) + 1;
+    if (acceptedStatuses.has(st)) {
+      totalAccepted += r.paidAmount || 0;
+      acceptedLineCount += 1;
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      dateRange: { startDate, endDate },
+      summary: {
+        paymentLineCount: rows.length,
+        /** Collected / bank-verified (money in). */
+        acceptedLineCount,
+        totalAcceptedAmount: totalAccepted,
+        byStatus,
+        note:
+          "Accepted = COLLECTED + BANK_VERIFIED. All rows include PENDING and REJECTED too.",
+      },
+      payments: rows,
+    },
+  });
+});
+
 // Helper function to calculate profit analysis
 const calculateProfitAnalysis = async (dateFilter) => {
   const profitData = await Order.aggregate([

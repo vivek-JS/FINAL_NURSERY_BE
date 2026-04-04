@@ -17,6 +17,7 @@ const inventoryChangeLogSchema = new mongoose.Schema(
         'purchase_order',
         'grn',
         'sell_order',
+        'employee',
       ],
       index: true,
     },
