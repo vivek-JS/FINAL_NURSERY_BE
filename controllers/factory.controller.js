@@ -2728,9 +2728,14 @@ const getAll = (Model, modelName) =>
             $match: { salesPerson: userId }
           });
         } else if (userJobTitle === 'DEALER') {
-          // DEALER users can only see orders assigned to them
+          // DEALER users: rows may be tied as dealer and/or salesPerson (legacy / hybrid accounts)
           pipeline.push({
-            $match: { dealer: userId }
+            $match: {
+              $or: [
+                { dealer: userId },
+                { salesPerson: userId },
+              ],
+            },
           });
         }
         // SUPER_ADMIN, ADMIN, OFFICE_ADMIN, DISPATCH_MANAGER can see all orders (no filtering)
@@ -2743,11 +2748,19 @@ const getAll = (Model, modelName) =>
         });
       }
 
-      // Apply dealer filter if present (for admin users)
+      // Apply dealer filter if present (for admin users). DEALER role often sends dealer=<self>
+      // from mobile; an extra { dealer } match would drop orders where they are only salesPerson.
       if (dealer) {
-        pipeline.push({
-          $match: { dealer: new mongoose.Types.ObjectId(dealer) },
-        });
+        const dealerOid = new mongoose.Types.ObjectId(dealer);
+        const dealerSelfOnly =
+          req.user?.jobTitle === "DEALER" &&
+          req.user?._id &&
+          String(dealerOid) === String(req.user._id);
+        if (!dealerSelfOnly) {
+          pipeline.push({
+            $match: { dealer: dealerOid },
+          });
+        }
       }
 
       if (plantId) {
