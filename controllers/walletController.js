@@ -1,8 +1,10 @@
 import DealerWallet from "../models/dealerWallet.js";
 import Order from "../models/order.model.js";
+import User from "../models/user.model.js";
 import catchAsync from "../utility/catchAsync.js";
 import mongoose from "mongoose";
 import moment from 'moment';
+import generateResponse from "../utility/responseFormat.js";
 import {
   aggregateDerivedFromOrders,
   attachReconcileHintsToPlantDetails,
@@ -104,6 +106,76 @@ const postReconcileDealerWallet = catchAsync(async (req, res) => {
     status: "success",
     data: result,
   });
+});
+
+/**
+ * Accountant / Super Admin: credit dealer cash wallet without creating an order
+ * (same balance effect as collected bulk payment, audit trail via ADJUSTMENT).
+ */
+const postCreditDealerWallet = catchAsync(async (req, res) => {
+  const { dealerId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(dealerId)) {
+    return res.status(400).json(generateResponse("error", "Invalid dealer id", null, null));
+  }
+
+  const amount = Number(req.body?.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json(generateResponse("error", "Amount must be a positive number", null, null));
+  }
+
+  const dealer = await User.findById(dealerId).select("jobTitle role isDisabled name");
+  if (!dealer || dealer.isDisabled) {
+    return res.status(404).json(generateResponse("error", "Dealer not found", null, null));
+  }
+
+  const isDealer = dealer.jobTitle === "DEALER" || dealer.role === "DEALER";
+  if (!isDealer) {
+    return res.status(400).json(generateResponse("error", "User is not a dealer", null, null));
+  }
+
+  const {
+    remark = "",
+    paymentDate,
+    modeOfPayment = "",
+    bankName = "",
+    transactionId = "",
+  } = req.body || {};
+
+  const metaParts = [];
+  if (modeOfPayment) metaParts.push(`Mode: ${modeOfPayment}`);
+  if (paymentDate) metaParts.push(`Payment date: ${paymentDate}`);
+  if (bankName) metaParts.push(`Bank: ${bankName}`);
+  if (transactionId) metaParts.push(`Txn: ${transactionId}`);
+  const tail = remark?.trim() ? ` — ${remark.trim()}` : "";
+  const description = `Manual wallet credit (no order)${metaParts.length ? ` (${metaParts.join(", ")})` : ""}${tail}`;
+
+  const metadata = {
+    source: "ACCOUNTANT_DASHBOARD_MANUAL_CREDIT",
+    modeOfPayment: modeOfPayment || undefined,
+    paymentDate: paymentDate || undefined,
+    bankName: bankName || undefined,
+    transactionId: transactionId || undefined,
+  };
+
+  await DealerWallet.addPayment(
+    dealerId,
+    amount,
+    description,
+    req.user?._id,
+    "ADJUSTMENT",
+    null,
+    null,
+    metadata
+  );
+
+  const wallet = await DealerWallet.findOne({ dealer: dealerId }).select("availableAmount");
+
+  return res.status(200).json(
+    generateResponse("success", "Dealer wallet credited", {
+      availableAmount: wallet?.availableAmount ?? 0,
+    }, null)
+  );
 });
 
 const getDealerWalletSummary = async (req, res) => {
@@ -274,4 +346,4 @@ const getDealerWalletSummary = async (req, res) => {
     });
   }
 };
-export { getDealerWalletDetails, getDealerWalletSummary, postReconcileDealerWallet };
+export { getDealerWalletDetails, getDealerWalletSummary, postReconcileDealerWallet, postCreditDealerWallet };

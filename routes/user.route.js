@@ -28,12 +28,13 @@ import {
 } from "../controllers/user.controller.js";
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
-import { authenticateToken, validateAuthRequest, authorizeRoles } from "../middlewares/auth.middleware.js";
+import { authenticateToken, validateAuthRequest, authorizeRoles, requirePaymentAccess } from "../middlewares/auth.middleware.js";
 import logger from "../middlewares/logger.middleware.js";
 import {
   getDealerWalletDetails,
   getDealerWalletSummary,
   postReconcileDealerWallet,
+  postCreditDealerWallet,
 } from "../controllers/walletController.js";
 import { getDealerPlantLedger } from "../controllers/dealerPlantInventoryLedger.controller.js";
 import catchAsync from "../utility/catchAsync.js";
@@ -108,6 +109,12 @@ router
   .get("/dealers/transactions/:dealerId/csv", exportDealerWalletTransactionsCSV)
   .get("/dealers/:dealerId/ledger", getDealerLedger)
   .get("/dealers/:dealerId/plant-ledger", getDealerPlantLedger)
+  .post(
+    "/dealers/:dealerId/wallet/credit",
+    authenticateToken,
+    requirePaymentAccess,
+    postCreditDealerWallet
+  )
   .get("/dealers/:dealerId", getDealerWalletDetails)
   .post("/push-token", authenticateToken, savePushToken)
   .post("/media/", authenticateToken, uploadMediaFile.single("media_key"), uploadMedia)

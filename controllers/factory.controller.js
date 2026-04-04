@@ -393,9 +393,15 @@ const createOne = (Model, modelName) =>
         }
       }
 
-      if (!bookingSlot || !numberOfPlants) {
+      const numPlants = Number(numberOfPlants);
+      if (!bookingSlot || !Number.isFinite(numPlants) || numPlants < 0) {
         return res.status(400).json({
-          message: "bookingSlot and numberOfPlants are required",
+          message: "bookingSlot and a valid non-negative numberOfPlants are required",
+        });
+      }
+      if (!orderData.dealerOrder && numPlants <= 0) {
+        return res.status(400).json({
+          message: "numberOfPlants must be greater than 0 for farmer orders",
         });
       }
 
@@ -429,72 +435,70 @@ const createOne = (Model, modelName) =>
         // Case 1: If it's a dealer's own order (creating stock)
         let pendingInventoryLedgerEntry = null;
         if (orderData.dealerOrder) {
-          // Update slot first
-          try {
-            await updateSlot(bookingSlot, numberOfPlants, "subtract", session);
-          } catch (slotError) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({
-              message: slotError.message || "Failed to update slot",
-            });
-          }
+          // Dealer bulk: >0 plants deduct slot + add wallet inventory; 0 plants = payment-only shell (no slot / no quota)
+          if (numPlants > 0) {
+            try {
+              await updateSlot(bookingSlot, numPlants, "subtract", session);
+            } catch (slotError) {
+              await session.abortTransaction();
+              session.endSession();
+              return res.status(400).json({
+                message: slotError.message || "Failed to update slot",
+              });
+            }
 
-          // Add to dealer wallet
-          let wallet = await DealerWallet.findOne({
-            dealer: orderData.dealer,
-          }).session(session);
-          if (!wallet) {
-            wallet = new DealerWallet({
+            let wallet = await DealerWallet.findOne({
               dealer: orderData.dealer,
-              entries: [],
-            });
-          }
+            }).session(session);
+            if (!wallet) {
+              wallet = new DealerWallet({
+                dealer: orderData.dealer,
+                entries: [],
+              });
+            }
 
-          // Find or create entry for this slot
-          const entry = wallet.entries.find(
-            (e) =>
-              e.plantType?.equals(orderData.plantName) &&
-              e.subType?.equals(orderData.plantSubtype) &&
-              e.bookingSlot?.equals(bookingSlot)
-          );
+            const entry = wallet.entries.find(
+              (e) =>
+                e.plantType?.equals(orderData.plantName) &&
+                e.subType?.equals(orderData.plantSubtype) &&
+                e.bookingSlot?.equals(bookingSlot)
+            );
 
-          // Bulk adds sellable allocation only: quantity (and remaining) increase; bookedQuantity is for farmer orders via allocateDealerQuota.
-          const balanceBefore = entry ? entry.quantity - (entry.bookedQuantity || 0) : 0;
-          if (entry) {
-            entry.quantity += numberOfPlants;
-          } else {
-            wallet.entries.push({
+            const balanceBefore = entry ? entry.quantity - (entry.bookedQuantity || 0) : 0;
+            if (entry) {
+              entry.quantity += numPlants;
+            } else {
+              wallet.entries.push({
+                plantType: orderData.plantName,
+                subType: orderData.plantSubtype,
+                bookingSlot,
+                quantity: numPlants,
+                bookedQuantity: 0,
+                remainingQuantity: numPlants,
+              });
+            }
+            const balanceAfter = balanceBefore + numPlants;
+
+            await wallet.save({ session });
+
+            pendingInventoryLedgerEntry = {
+              transactionType: "INVENTORY_ADD",
+              dealer: orderData.dealer,
               plantType: orderData.plantName,
               subType: orderData.plantSubtype,
               bookingSlot,
-              quantity: numberOfPlants,
-              bookedQuantity: 0,
-              remainingQuantity: numberOfPlants,
-            });
+              quantity: numPlants,
+              balanceBefore,
+              balanceAfter,
+              description: `Dealer bulk order: +${numPlants} plants`,
+              performedBy: req.user?._id || orderData.dealer,
+            };
           }
-          const balanceAfter = balanceBefore + numberOfPlants;
-
-          await wallet.save({ session });
-
-          // Queue ledger entry (created after order is saved so we have referenceId)
-          pendingInventoryLedgerEntry = {
-            transactionType: "INVENTORY_ADD",
-            dealer: orderData.dealer,
-            plantType: orderData.plantName,
-            subType: orderData.plantSubtype,
-            bookingSlot,
-            quantity: numberOfPlants,
-            balanceBefore,
-            balanceAfter,
-            description: `Dealer bulk order: +${numberOfPlants} plants`,
-            performedBy: req.user?._id || orderData.dealer,
-          };
         }
         // Case 1.5: If it's a dealer order with componyQuota=true (new case)
         else if (salesPerson.jobTitle === "DEALER" && normalizedComponyQuota === true) {
           // Execute this code when DEALER selects company quota option
-          await updateSlot(bookingSlot, numberOfPlants, "subtract", session);
+          await updateSlot(bookingSlot, numPlants, "subtract", session);
         }
         // Case 2: If it's a farmer order through a dealer
         else if (salesPerson.jobTitle === "DEALER") {
@@ -506,7 +510,7 @@ const createOne = (Model, modelName) =>
               orderData.plantName,
               orderData.plantSubtype,
               bookingSlot,
-              numberOfPlants
+              numPlants
             );
 
             if (!quotaValidation.isValid) {
@@ -523,7 +527,7 @@ const createOne = (Model, modelName) =>
               orderData.plantName,
               orderData.plantSubtype,
               bookingSlot,
-              numberOfPlants,
+              numPlants,
               session
             );
 
@@ -547,7 +551,7 @@ const createOne = (Model, modelName) =>
               orderData.plantName,
               orderData.plantSubtype,
               bookingSlot,
-              numberOfPlants,
+              numPlants,
               session
             );
 
@@ -572,7 +576,7 @@ const createOne = (Model, modelName) =>
             orderData.plantName,
             orderData.plantSubtype,
             bookingSlot,
-            numberOfPlants
+            numPlants
           );
 
           if (!quotaValidation.isValid) {
@@ -585,7 +589,7 @@ const createOne = (Model, modelName) =>
             orderData.plantName,
             orderData.plantSubtype,
             bookingSlot,
-            numberOfPlants,
+            numPlants,
             session
           );
 
@@ -620,7 +624,7 @@ const createOne = (Model, modelName) =>
         }
         // Case 3: Regular farmer order
         else {
-          await updateSlot(bookingSlot, numberOfPlants, "subtract", session);
+          await updateSlot(bookingSlot, numPlants, "subtract", session);
         }
 
         // Prepare initial status change record if provided
@@ -648,7 +652,7 @@ const createOne = (Model, modelName) =>
         }
 
         // Initialize remaining plants
-        const remainingPlants = numberOfPlants;
+        const remainingPlants = numPlants;
 
         // Process payment data if provided
         let paymentArray = [];
@@ -694,7 +698,7 @@ const createOne = (Model, modelName) =>
         const orderDocument = {
           ...orderData,
           bookingSlot,
-          numberOfPlants,
+          numberOfPlants: numPlants,
           remainingPlants, // Initialize with same as numberOfPlants
           orderId,
           cavity: trayId, // Use the looked up tray ID
@@ -756,7 +760,7 @@ const createOne = (Model, modelName) =>
           },
           $inc: {
             // Always increment totalBookedPlants
-            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": numberOfPlants
+            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": numPlants
           }
         };
 
@@ -766,13 +770,13 @@ const createOne = (Model, modelName) =>
         if (isReadyPlantsOrder) {
           // Ready plants are already grown and available from other nursery
           // So we INCREASE availablePlants in the slot
-          slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = numberOfPlants;
-          console.log(`📦 Ready Plants Order: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numberOfPlants}, INCREMENTING availablePlants by ${numberOfPlants} (plants already available from other nursery)`);
+          slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = numPlants;
+          console.log(`📦 Ready Plants Order: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numPlants}, INCREMENTING availablePlants by ${numPlants} (plants already available from other nursery)`);
         } else if (!isSowingAllowed) {
-          console.log(`📊 Regular plant: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numberOfPlants}, decrementing availablePlants by ${numberOfPlants}`);
-          slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = -numberOfPlants;
+          console.log(`📊 Regular plant: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numPlants}, decrementing availablePlants by ${numPlants}`);
+          slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = -numPlants;
         } else {
-          console.log(`📊 Sowing-allowed plant: Updating slot ${bookingSlot} - ONLY incrementing totalBookedPlants by ${numberOfPlants} (availablePlants unchanged)`);
+          console.log(`📊 Sowing-allowed plant: Updating slot ${bookingSlot} - ONLY incrementing totalBookedPlants by ${numPlants} (availablePlants unchanged)`);
         }
 
         // Update PlantProductMapping and slot productStock if productMappingId is provided
@@ -804,18 +808,18 @@ const createOne = (Model, modelName) =>
                     
                     if (productStock) {
                       // Ready plants are already available, so increment both available and booked
-                      productStock.available = (productStock.available || 0) + numberOfPlants;
-                      productStock.booked = (productStock.booked || 0) + numberOfPlants;
-                      productStock.poQuantity = (productStock.poQuantity || 0) + numberOfPlants;
+                      productStock.available = (productStock.available || 0) + numPlants;
+                      productStock.booked = (productStock.booked || 0) + numPlants;
+                      productStock.poQuantity = (productStock.poQuantity || 0) + numPlants;
                       
-                      console.log(`✅ Updated productStock for "${orderData.productName}": available +${numberOfPlants}, booked +${numberOfPlants}`);
+                      console.log(`✅ Updated productStock for "${orderData.productName}": available +${numPlants}, booked +${numPlants}`);
                     } else {
                       // Create new productStock entry when first order is placed for this slot
                       slot.productStock.push({
                         productName: orderData.productName,
-                        available: numberOfPlants, // Ready plants are already available
-                        booked: numberOfPlants, // Booked quantity from this order
-                        poQuantity: numberOfPlants, // Tracks total allocated to this slot
+                        available: numPlants, // Ready plants are already available
+                        booked: numPlants, // Booked quantity from this order
+                        poQuantity: numPlants, // Tracks total allocated to this slot
                         received: true, // Ready plants are already received (from other nursery)
                         startDate: mapping.dateRange.startDate,
                         endDate: mapping.dateRange.endDate,
@@ -823,7 +827,7 @@ const createOne = (Model, modelName) =>
                         productMappingId: mapping._id,
                       });
                       
-                      console.log(`✅ Created productStock entry for "${orderData.productName}" in slot ${bookingSlot} with available: ${numberOfPlants}, booked: ${numberOfPlants}`);
+                      console.log(`✅ Created productStock entry for "${orderData.productName}" in slot ${bookingSlot} with available: ${numPlants}, booked: ${numPlants}`);
                     }
                     
                     // Mark as modified and save
@@ -835,7 +839,7 @@ const createOne = (Model, modelName) =>
               }
               
               // Increment mapping's allocated quantity (reduces available quantity in mapping)
-              mapping.allocatedQuantity = (mapping.allocatedQuantity || 0) + numberOfPlants;
+              mapping.allocatedQuantity = (mapping.allocatedQuantity || 0) + numPlants;
               
               // Store slot reference for dynamic calculation (if slotReferences array doesn't exist, initialize it)
               if (!mapping.slotReferences) {
@@ -850,7 +854,7 @@ const createOne = (Model, modelName) =>
               if (!slotRefExists) {
                 mapping.slotReferences.push({
                   slotId: bookingSlot,
-                  bookedQuantity: numberOfPlants
+                  bookedQuantity: numPlants
                 });
               } else {
                 // Update existing slot reference
@@ -858,15 +862,15 @@ const createOne = (Model, modelName) =>
                   ref => ref.slotId && ref.slotId.toString() === bookingSlot.toString()
                 );
                 if (slotRef) {
-                  slotRef.bookedQuantity = (slotRef.bookedQuantity || 0) + numberOfPlants;
+                  slotRef.bookedQuantity = (slotRef.bookedQuantity || 0) + numPlants;
                 }
               }
               
               await mapping.save({ session });
               
               console.log(`📦 Ready Plants Product Order: "${orderData.productName}" (productMappingId: ${orderData.productMappingId})`);
-              console.log(`✅ Updated mapping allocatedQuantity: ${mapping.allocatedQuantity} (added ${numberOfPlants})`);
-              console.log(`✅ Updated slot productStock: available +${numberOfPlants}, booked +${numberOfPlants}`);
+              console.log(`✅ Updated mapping allocatedQuantity: ${mapping.allocatedQuantity} (added ${numPlants})`);
+              console.log(`✅ Updated slot productStock: available +${numPlants}, booked +${numPlants}`);
               console.log(`ℹ️  Mapping Available quantity: ${(mapping.totalQuantity || 0) - mapping.allocatedQuantity}`);
             } else {
               console.warn(`⚠️  PlantProductMapping not found for productMappingId: ${orderData.productMappingId}`);
@@ -2546,8 +2550,8 @@ const getAll = (Model, modelName) =>
       Object.prototype.hasOwnProperty.call(req.query || {}, "limit");
 
     const {
-      sortKey = "createdAt",
-      sortOrder = "desc",
+      sortKey: sortKeyRaw = "createdAt",
+      sortOrder: sortOrderRaw = "desc",
       search,
       startDate,
       endDate,
@@ -2588,11 +2592,24 @@ const getAll = (Model, modelName) =>
     };
     const orderDateRangeMongoField = resolveOrderDateRangeField();
 
+    const ORDER_LIST_SORT_FIELDS = new Set([
+      "createdAt",
+      "updatedAt",
+      "deliveryDate",
+      "orderBookingDate",
+      "orderId",
+      "orderStatus",
+    ]);
+    const sortKey = ORDER_LIST_SORT_FIELDS.has(String(sortKeyRaw))
+      ? String(sortKeyRaw)
+      : "createdAt";
+    const sortOrderNorm = String(sortOrderRaw || "desc").toLowerCase();
+
     const pageParsed = parseInt(pageQuery, 10);
     const limitParsed = parseInt(limitQuery, 10);
     const page = Number.isFinite(pageParsed) && pageParsed >= 1 ? pageParsed : 1;
     const limit = Number.isFinite(limitParsed) && limitParsed >= 1 ? limitParsed : 100;
-    const order = sortOrder.toLowerCase() === "desc" ? -1 : 1;
+    const order = sortOrderNorm === "desc" ? -1 : 1;
     const skip = (page - 1) * limit;
 
     // Build the aggregation pipeline
