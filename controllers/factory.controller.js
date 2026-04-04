@@ -2748,8 +2748,8 @@ const getAll = (Model, modelName) =>
         });
       }
 
-      // Apply dealer filter if present (for admin users). DEALER role often sends dealer=<self>
-      // from mobile; an extra { dealer } match would drop orders where they are only salesPerson.
+      // `dealer` query param: id from dealer/agency picker — applied as salesperson filter (`salesPerson` only).
+      // DEALER role sending dealer=<self> is skipped — role-based $or (dealer|salesPerson) already applies.
       if (dealer) {
         const dealerOid = new mongoose.Types.ObjectId(dealer);
         const dealerSelfOnly =
@@ -2758,7 +2758,7 @@ const getAll = (Model, modelName) =>
           String(dealerOid) === String(req.user._id);
         if (!dealerSelfOnly) {
           pipeline.push({
-            $match: { dealer: dealerOid },
+            $match: { salesPerson: dealerOid },
           });
         }
       }
