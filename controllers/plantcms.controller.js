@@ -234,8 +234,11 @@ export const updatePlant = async (req, res) => {
       return res.status(404).json({ message: "Plant not found" });
     }
 
-    // Track existing subtype IDs before update
+    // Track existing subtype IDs + ready days before update
     const existingSubtypeIds = plant.subtypes.map(st => st._id.toString());
+    const previousSubtypeReadyDays = new Map(
+      (plant.subtypes || []).map((st) => [st._id.toString(), Number(st.plantReadyDays) || 0])
+    );
 
     // Update plant fields
     plant.name = name || plant.name;
@@ -307,12 +310,72 @@ export const updatePlant = async (req, res) => {
       console.log('No new subtypes detected - skipping slot creation');
     }
 
+    // For existing subtypes, if plantReadyDays changed from this PUT call,
+    // propagate to future slots so today/easy sowing calculations stay consistent.
+    const changedExistingSubtypeReadyDays = [];
+    for (const st of updatedPlant.subtypes || []) {
+      const subtypeId = st._id.toString();
+      if (!existingSubtypeIds.includes(subtypeId)) continue; // new subtype handled above
+      const oldReadyDays = previousSubtypeReadyDays.get(subtypeId);
+      const newReadyDays = Number(st.plantReadyDays) || 0;
+      if (oldReadyDays !== newReadyDays) {
+        changedExistingSubtypeReadyDays.push({ subtypeId, oldReadyDays, newReadyDays });
+      }
+    }
+
+    const parseDdMmYyyy = (value) => {
+      if (!value || typeof value !== "string") return null;
+      const m = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (!m) return null;
+      const dt = new Date(`${m[3]}-${m[2]}-${m[1]}T00:00:00.000Z`);
+      return Number.isNaN(dt.getTime()) ? null : dt;
+    };
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const readyDaysSync = [];
+
+    if (changedExistingSubtypeReadyDays.length > 0) {
+      const slotDocs = await PlantSlot.find({ plantId: updatedPlant._id });
+      for (const slotDoc of slotDocs) {
+        let modified = false;
+        for (const subtypeSlot of slotDoc.subtypeSlots || []) {
+          const change = changedExistingSubtypeReadyDays.find(
+            (x) => x.subtypeId === subtypeSlot.subtypeId?.toString()
+          );
+          if (!change) continue;
+
+          for (const slot of subtypeSlot.slots || []) {
+            const slotEnd = parseDdMmYyyy(slot.endDay);
+            if (!slotEnd || slotEnd < today) continue; // future (and today) only
+            if ((Number(slot.plantReadyDays) || 0) === change.newReadyDays) continue;
+            slot.plantReadyDays = change.newReadyDays;
+            modified = true;
+            readyDaysSync.push({
+              slotId: slot._id.toString(),
+              subtypeId: change.subtypeId,
+              oldPlantReadyDays: change.oldReadyDays,
+              newPlantReadyDays: change.newReadyDays,
+              slotStartDay: slot.startDay,
+              slotEndDay: slot.endDay,
+            });
+          }
+        }
+        if (modified) {
+          slotDoc.markModified("subtypeSlots");
+          await slotDoc.save();
+        }
+      }
+    }
+
     return res
       .status(200)
       .json({ 
         message: "Plant updated successfully", 
         data: updatedPlant,
-        slotsCreated: newSubtypes.length > 0 ? `Slots created for ${newSubtypes.length} new subtype(s)` : 'No new subtypes added'
+        slotsCreated: newSubtypes.length > 0 ? `Slots created for ${newSubtypes.length} new subtype(s)` : 'No new subtypes added',
+        readyDaysSyncedCount: readyDaysSync.length,
+        readyDaysSynced: readyDaysSync,
       });
   } catch (error) {
     return res

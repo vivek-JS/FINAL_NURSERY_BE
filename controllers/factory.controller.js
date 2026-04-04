@@ -2597,6 +2597,8 @@ const getAll = (Model, modelName) =>
 
     // Build the aggregation pipeline
     const pipeline = [];
+    /** When true, $sort/$skip/$limit run before $lookups so joins only touch one page of orders. */
+    let earlyPaginateInserted = false;
 
     // Filter by specific order IDs if provided
     if (orderIds) {
@@ -2750,6 +2752,63 @@ const getAll = (Model, modelName) =>
           $match: { [orderDateRangeMongoField]: { $gte: start, $lte: end } },
         });
       }
+    }
+
+    // Dispatched orders: date range on order document (apply before heavy $lookups; same logic as legacy late-stage match)
+    if (dispatched === "true" && startDate && endDate && ready_for_dispatch !== "true") {
+      const parseDateDispatched = (dateStr, isEnd = false) => {
+        const [day, month, year] = dateStr.split("-");
+        const date = new Date(
+          Date.UTC(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10), 0, 0, 0, 0)
+        );
+        if (isEnd) {
+          date.setUTCHours(23, 59, 59, 999);
+        }
+        return date;
+      };
+
+      const startD = parseDateDispatched(startDate);
+      const endD = parseDateDispatched(endDate, true);
+
+      const usePastDueOr =
+        includePastDueBeyondRange === "true" &&
+        orderDateRangeMongoField === "deliveryDate";
+
+      if (usePastDueOr) {
+        pipeline.push({
+          $match: {
+            $or: [
+              { deliveryDate: { $gte: startD, $lte: endD } },
+              { deliveryDate: { $lt: startD } },
+            ],
+          },
+        });
+      } else {
+        pipeline.push({
+          $match: {
+            [orderDateRangeMongoField]: {
+              $gte: startD,
+              $lte: endD,
+            },
+          },
+        });
+      }
+    }
+
+    const canEarlyPaginate =
+      hasPaginationParams &&
+      !search &&
+      !village &&
+      !district &&
+      !(slotId && monthName && startDay && endDay);
+
+    if (canEarlyPaginate) {
+      pipeline.push(
+        { $sort: { [sortKey]: order } },
+        { $skip: skip },
+        { $limit: parseInt(limit, 10) }
+      );
+      earlyPaginateInserted = true;
     }
 
     // Search filtering
@@ -2999,51 +3058,6 @@ const getAll = (Model, modelName) =>
           as: "bookingSlotDetails",
         },
       });
-    }
-
-    // Add condition for dispatched = true
-    // For dispatched orders, filter by deliveryDate instead of slot dates
-    if (dispatched === "true" && startDate && endDate && ready_for_dispatch !== "true") {
-      const parseDate = (dateStr, isEnd = false) => {
-        const [day, month, year] = dateStr.split("-");
-        // Create date in UTC to avoid timezone issues
-        const date = new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), 0, 0, 0, 0));
-        if (isEnd) {
-          date.setUTCHours(23, 59, 59, 999);
-        }
-        return date;
-      };
-
-      const start = parseDate(startDate);
-      const end = parseDate(endDate, true);
-      
-      console.log(`Dispatched Orders Date Filter: ${startDate} to ${endDate}`);
-      console.log(`Parsed dates: ${start.toISOString()} to ${end.toISOString()}`);
-
-      const usePastDueOr =
-        includePastDueBeyondRange === "true" &&
-        orderDateRangeMongoField === "deliveryDate";
-
-      if (usePastDueOr) {
-        // Deliveries in the requested window OR older backlog (before window start) so past-due still shows.
-        pipeline.push({
-          $match: {
-            $or: [
-              { deliveryDate: { $gte: start, $lte: end } },
-              { deliveryDate: { $lt: start } },
-            ],
-          },
-        });
-      } else {
-        pipeline.push({
-          $match: {
-            [orderDateRangeMongoField]: {
-              $gte: start,
-              $lte: end,
-            },
-          },
-        });
-      }
     }
 
     // Enrich plantSubtype details (name and ID)
@@ -3510,12 +3524,37 @@ const getAll = (Model, modelName) =>
           orderFor: 1,
         },
       },
-      { $sort: { [sortKey]: order } },
-      ...(hasPaginationParams ? [{ $skip: skip }, { $limit: parseInt(limit, 10) }] : [])
+      ...(hasPaginationParams && !earlyPaginateInserted
+        ? [
+            { $sort: { [sortKey]: order } },
+            { $skip: skip },
+            { $limit: parseInt(limit, 10) },
+          ]
+        : [])
     );
 
-    // Execute the pipeline
-    const results = await Model.aggregate(pipeline);
+    let results;
+    let total;
+    let totalPages;
+
+    if (hasPaginationParams && earlyPaginateInserted) {
+      const matchOnlyStages = [];
+      for (const st of pipeline) {
+        if (Object.prototype.hasOwnProperty.call(st, "$sort")) break;
+        if (Object.prototype.hasOwnProperty.call(st, "$skip")) break;
+        if (Object.prototype.hasOwnProperty.call(st, "$limit")) break;
+        matchOnlyStages.push(st);
+      }
+      const [countAgg, resultsAgg] = await Promise.all([
+        Model.aggregate([...matchOnlyStages, { $count: "total" }]),
+        Model.aggregate(pipeline),
+      ]);
+      total = countAgg[0]?.total ?? 0;
+      totalPages = Math.ceil(total / parseInt(limit, 10)) || 1;
+      results = resultsAgg;
+    } else {
+      results = await Model.aggregate(pipeline);
+    }
 
     // Transform documents for response
     const transformedResults = results.map((item) => {
@@ -3523,14 +3562,16 @@ const getAll = (Model, modelName) =>
       return { id: _id, _id, ...rest };
     });
 
-    // Calculate total count for pagination (without sort/skip/limit)
-    let total = transformedResults.length;
-    let totalPages = 1;
-    if (hasPaginationParams) {
-      const countPipeline = pipeline.slice(0, -3); // Remove sort, skip, and limit stages
-      const totalCount = await Model.aggregate([...countPipeline, { $count: "total" }]);
-      total = totalCount.length > 0 ? totalCount[0].total : 0;
-      totalPages = Math.ceil(total / parseInt(limit, 10)) || 1;
+    if (!(hasPaginationParams && earlyPaginateInserted)) {
+      if (hasPaginationParams) {
+        const countPipeline = pipeline.slice(0, -3);
+        const totalCount = await Model.aggregate([...countPipeline, { $count: "total" }]);
+        total = totalCount.length > 0 ? totalCount[0].total : 0;
+        totalPages = Math.ceil(total / parseInt(limit, 10)) || 1;
+      } else {
+        total = transformedResults.length;
+        totalPages = 1;
+      }
     }
 
     const response = generateResponse(

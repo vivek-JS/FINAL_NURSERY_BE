@@ -264,8 +264,17 @@ sowingSchema.pre('save', function(next) {
     }
   }
 
-  // Calculate total sowed
-  this.totalSowed = this.officeSowed + this.primarySowed;
+  // Calculate total sowed in the SAME unit as `totalQuantityRequired`
+  // - OFFICE: `totalQuantityRequired` represents packet count, so `totalSowed` must be packet-based.
+  // - PRIMARY: `totalQuantityRequired` represents plant count, so `totalSowed` must be primary-based.
+  // - BOTH: treat as both counters being same unit, so sum.
+  if (this.sowingLocation === "OFFICE") {
+    this.totalSowed = this.officeSowed || 0;
+  } else if (this.sowingLocation === "PRIMARY") {
+    this.totalSowed = this.primarySowed || 0;
+  } else {
+    this.totalSowed = (this.officeSowed || 0) + (this.primarySowed || 0);
+  }
   
   // Calculate remaining to sow
   this.remainingToSow = this.totalQuantityRequired - this.totalSowed;

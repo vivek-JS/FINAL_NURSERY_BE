@@ -654,6 +654,11 @@ orderSchema.index({ remainingPlants: 1 }); // Added index for remainingPlants
 orderSchema.index({ additionalPlants: 1 }); // Added index for additionalPlants
 orderSchema.index({ totalPlants: 1 }); // Added index for totalPlants
 orderSchema.index({ publicOrderCode: 1 }, { unique: true, sparse: true });
+// List/getOrders: date filters + sort (early pagination uses these fields heavily)
+orderSchema.index({ orderBookingDate: -1 });
+orderSchema.index({ deliveryDate: -1 });
+orderSchema.index({ salesPerson: 1, orderBookingDate: -1 });
+orderSchema.index({ dealer: 1, orderBookingDate: -1 });
 
 orderSchema.statics.ensurePublicOrderCode = async function ensurePublicOrderCode(doc) {
   if (doc.publicOrderCode && /^\d{4}$/.test(doc.publicOrderCode)) return doc;

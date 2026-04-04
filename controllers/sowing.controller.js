@@ -179,6 +179,13 @@ export const createSowing = async (req, res) => {
         : undefined;
 
     // Create sowing record
+    const location = sowingLocation || "OFFICE";
+    const officeSowedValue = location === "OFFICE" ? Number(totalQuantityRequired) || 0 : 0;
+    const primarySowedValue =
+      location === "PRIMARY"
+        ? Number(sowedPlant ?? totalQuantityRequired) || 0
+        : Number(sowedPlant) || 0;
+
     const sowing = new Sowing({
       plantId,
       plantName: plant.name,
@@ -197,6 +204,9 @@ export const createSowing = async (req, res) => {
       batchNumber: batchNumber.trim(), // Store batch number
       ...(dispatchBatchRef ? { dispatchBatchId: dispatchBatchRef } : {}),
       createdBy,
+      // Keep sowing record counters consistent with how UI/cards interpret office vs primary.
+      officeSowed: officeSowedValue,
+      primarySowed: primarySowedValue,
     });
 
     const savedSowing = await sowing.save();
@@ -408,15 +418,18 @@ export const createSowing = async (req, res) => {
           updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].officeSowed'] = officeQuantity;
         }
         
-        // If sowedPlant is provided, update primarySowed and totalPlants with that value
+        // If sowedPlant is provided, always update primarySowed with sowed plants.
+        // Temporary business rule: availablePlants should also increase by sowed plants in every case.
         if (sowedPlantValue !== null && sowedPlantValue > 0) {
           updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = sowedPlantValue;
           updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = sowedPlantValue;
+          updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants'] = sowedPlantValue;
           console.log(`📊 Will update primarySowed and totalPlants with sowedPlant: ${sowedPlantValue}`);
         } else if (location === "PRIMARY") {
           // Fallback: For PRIMARY location without sowedPlant, use totalQuantityRequired
           updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = totalQuantityRequired;
           updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = totalQuantityRequired;
+          updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants'] = totalQuantityRequired;
         }
         
         // Use updateOne with arrayFilters for reliable nested updates
@@ -436,12 +449,13 @@ export const createSowing = async (req, res) => {
           if (sowedPlantValue) {
             console.log(`   - primarySowed += ${sowedPlantValue} (from sowedPlant)`);
             console.log(`   - totalPlants += ${sowedPlantValue} (from sowedPlant)`);
+            console.log(`   - availablePlants += ${sowedPlantValue} (from sowedPlant)`);
           }
           if (officeQuantity > 0) {
             console.log(`   - officeSowed += ${officeQuantity}`);
           }
           
-          // Update plantsSowed separately if primarySowed was updated
+          // Update plantsSowed only when PRIMARY sowing changed primarySowed.
           if (sowedPlantValue !== null && sowedPlantValue > 0) {
             const slot = await PlantSlot.findOne({ "subtypeSlots.slots._id": searchSlotId });
             if (slot) {
@@ -512,6 +526,8 @@ export const createMultipleSowings = async (req, res) => {
           sowingDate,
           totalQuantityRequired,
           sowedPlant, // For PRIMARY location - plants sowed
+          baseSowedPlant, // Base qty before buffer (slot update qty)
+          displaySowedPlant, // Buffered/display qty shown to user
           slotId,
           entrySlotId,
           orderId,
@@ -704,12 +720,31 @@ export const createMultipleSowings = async (req, res) => {
           continue;
         }
 
+        const parsedSowedPlant = (sowedPlant !== undefined && sowedPlant !== null) ? Number(sowedPlant) : null;
+        const parsedBaseSowedPlant =
+          (baseSowedPlant !== undefined && baseSowedPlant !== null) ? Number(baseSowedPlant) : null;
+        const parsedDisplaySowedPlant =
+          (displaySowedPlant !== undefined && displaySowedPlant !== null) ? Number(displaySowedPlant) : null;
+        const effectiveSlotPlants =
+          parsedBaseSowedPlant !== null && parsedBaseSowedPlant > 0
+            ? parsedBaseSowedPlant
+            : parsedSowedPlant;
+        const bufferedInputPlants =
+          parsedDisplaySowedPlant !== null && parsedDisplaySowedPlant > 0
+            ? parsedDisplaySowedPlant
+            : parsedSowedPlant;
+
         const dispatchBatchRefMulti =
           dispatchBatchId && mongoose.Types.ObjectId.isValid(String(dispatchBatchId))
             ? new mongoose.Types.ObjectId(String(dispatchBatchId))
             : undefined;
 
         // Create sowing record
+        const location = sowingLocation || "OFFICE";
+        const officeSowedValue = location === "OFFICE" ? Number(totalQuantityRequired) || 0 : 0;
+        // `effectiveSlotPlants` is the base qty used for slot updates (buffer already removed).
+        const primarySowedValue = Number(effectiveSlotPlants) || 0;
+
         const sowing = new Sowing({
           plantId,
           plantName: plant.name,
@@ -731,6 +766,11 @@ export const createMultipleSowings = async (req, res) => {
           batchNumber: batchNumber.trim(), // Store batch number (mandatory)
           ...(dispatchBatchRefMulti ? { dispatchBatchId: dispatchBatchRefMulti } : {}),
           createdBy,
+          // Keep sowing record counters consistent with UI/cards:
+          // - OFFICE: officeSowed = packet count
+          // - PRIMARY (and OFFICE produced plants): primarySowed = base slot qty (buffer removed)
+          officeSowed: officeSowedValue,
+          primarySowed: primarySowedValue,
           metadata: {
             sourceType: sourceType || null,
             entrySlotId: requestedEntrySlotId || actualSlotIdForSowing,
@@ -739,6 +779,9 @@ export const createMultipleSowings = async (req, res) => {
             plantReadyDays,
             expectedReadyDate: plantReadyDate,
             mappedByRule: shouldMapByReadyDate ? "expectedReadyDate" : null,
+            bufferedSowingQty: bufferedInputPlants,
+            baseSowingQty: effectiveSlotPlants,
+            slotUpdateQty: effectiveSlotPlants,
             performedBy: createdBy || req.user?._id || null,
             timestamp: new Date().toISOString(),
             reason: notes || "Sowing entry submitted",
@@ -773,6 +816,9 @@ export const createMultipleSowings = async (req, res) => {
                     entrySlotId: requestedEntrySlotId || null,
                     targetSlotId: actualSlotIdForSowing,
                     mappedByRule: "expectedReadyDate",
+                    bufferedSowingQty: bufferedInputPlants,
+                    baseSowingQty: effectiveSlotPlants,
+                    slotUpdateQty: effectiveSlotPlants,
                     performedBy: createdBy || req.user?._id || null,
                     timestamp: new Date().toISOString(),
                     notes: notes || null,
@@ -968,7 +1014,7 @@ export const createMultipleSowings = async (req, res) => {
             // Determine quantities:
             // - If sowedPlant is provided, use it for primarySowed and totalPlants
             // - For officeSowed, use totalQuantityRequired based on location
-            const sowedPlantValue = (sowedPlant !== undefined && sowedPlant !== null) ? Number(sowedPlant) : null;
+            const sowedPlantValue = effectiveSlotPlants;
             const officeQuantity = location === "OFFICE" ? totalQuantityRequired : 0;
             
             // Get slot document BEFORE update for logging (capture before state)
@@ -1031,36 +1077,33 @@ export const createMultipleSowings = async (req, res) => {
               console.log(`📦 Will update officeSowed with ${packetsCount} packets (from packets array)`);
             }
             
-            // If sowedPlant is provided, update plants based on excessive sowing flag
+            const shouldIncrementPrimarySowed = location === "PRIMARY";
+
+            // If sowedPlant is provided, always increment primarySowed with sowed plants.
+            // Temporary business rule: availablePlants should also increase by sowed plants in every case.
             if (sowedPlantValue !== null && sowedPlantValue > 0) {
-              // For excessive sowing: update BOTH excessiveSowing.plants AND primarySowed
-              // - excessiveSowing.plants: tracks excessive plants separately
-              // - primarySowed: ensures totalPlants and availablePlants are updated correctly
+              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = sowedPlantValue;
+              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants'] = sowedPlantValue;
               if (isExcessiveSowing) {
-                // Update primarySowed (for totalPlants and availablePlants calculation)
-                updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = sowedPlantValue;
-                console.log(`📊 [EXCESSIVE] Will update primarySowed with sowedPlant: ${sowedPlantValue} (for totalPlants/availablePlants)`);
-                // Note: excessiveSowing.plants will be updated separately after MongoDB update (handles nested object initialization)
+                console.log(`📊 [EXCESSIVE] Will update primarySowed with sowedPlant: ${sowedPlantValue} (base slot counters)`);
                 console.log(`📊 [EXCESSIVE] Will also update excessiveSowing.plants with sowedPlant: ${sowedPlantValue} (separate tracking)`);
               } else {
-                // Regular sowing: update primarySowed as before
-                updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = sowedPlantValue;
                 console.log(`📊 Will update primarySowed with sowedPlant: ${sowedPlantValue}`);
               }
               
-              // Always update totalPlants and availablePlants (both regular and excessive)
+              // Update totalPlants once here. availablePlants is handled later after gap coverage.
               updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = sowedPlantValue;
-              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants'] = sowedPlantValue;
-              console.log(`📊 Will update totalPlants and availablePlants with sowedPlant: ${sowedPlantValue}`);
+              console.log(`📊 Will update totalPlants with sowedPlant: ${sowedPlantValue}; availablePlants will be set after gap coverage`);
             } else if (totalQuantityRequired > 0) {
-              // Fallback: Use totalQuantityRequired
-              // Update primarySowed for both excessive and regular (for totalPlants/availablePlants)
-              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = totalQuantityRequired;
-              if (isExcessiveSowing) {
-                console.log(`📊 [EXCESSIVE] Fallback: Will update primarySowed AND excessiveSowing.plants with totalQuantityRequired: ${totalQuantityRequired}`);
+              // Fallback: only PRIMARY sowing can affect primarySowed.
+              if (shouldIncrementPrimarySowed) {
+                updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].primarySowed'] = totalQuantityRequired;
+                updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants'] = totalQuantityRequired;
+                if (isExcessiveSowing) {
+                  console.log(`📊 [EXCESSIVE] Fallback: Will update primarySowed and track excessive plants separately with totalQuantityRequired: ${totalQuantityRequired}`);
+                }
               }
               updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].totalPlants'] = totalQuantityRequired;
-              updateOperation.$inc['subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants'] = totalQuantityRequired;
             }
             
             // Use updateOne with arrayFilters for reliable nested updates
@@ -1148,12 +1191,18 @@ export const createMultipleSowings = async (req, res) => {
                             totalQuantityRequired,
                             sowedPlant: sowedPlantValue,
                             officeQuantity,
+                            bufferedSowingQty: bufferedInputPlants,
+                            baseSowingQty: effectiveSlotPlants,
+                            slotUpdateQty: effectiveSlotPlants,
                           },
                           mapping: {
                             entrySlotId: requestedEntrySlotId || actualSlotIdForSowing,
                             targetSlotId: actualSlotIdForSowing,
                             mappedByRule: shouldMapByReadyDate ? "expectedReadyDate" : null,
                             expectedReadyDate: plantReadyDate,
+                            bufferedSowingQty: bufferedInputPlants,
+                            baseSowingQty: effectiveSlotPlants,
+                            slotUpdateQty: effectiveSlotPlants,
                           },
                         },
                       });
@@ -1165,7 +1214,7 @@ export const createMultipleSowings = async (req, res) => {
                 }
               }
               
-              // Update plantsSowed separately if primarySowed was updated (for both regular and excessive)
+              // Update plantsSowed when we incremented primarySowed.
               if (sowedPlantValue !== null && sowedPlantValue > 0) {
                 const slotDoc = await PlantSlot.findOne({ "subtypeSlots.slots._id": searchSlotId });
                 if (slotDoc) {
@@ -1230,11 +1279,17 @@ export const createMultipleSowings = async (req, res) => {
                             totalQuantityRequired,
                             sowedPlant: sowedPlantValue,
                             officeQuantity,
+                            bufferedSowingQty: bufferedInputPlants,
+                            baseSowingQty: effectiveSlotPlants,
+                            slotUpdateQty: effectiveSlotPlants,
                             mapping: {
                               entrySlotId: requestedEntrySlotId || actualSlotIdForSowing,
                               targetSlotId: actualSlotIdForSowing,
                               mappedByRule: shouldMapByReadyDate ? "expectedReadyDate" : null,
                               expectedReadyDate: plantReadyDate,
+                              bufferedSowingQty: bufferedInputPlants,
+                              baseSowingQty: effectiveSlotPlants,
+                              slotUpdateQty: effectiveSlotPlants,
                             },
                           },
                         });
@@ -1576,7 +1631,7 @@ export const createMultipleSowings = async (req, res) => {
           
           try {
             const searchSlotId = actualSlotObjectIdForSowing || new mongoose.Types.ObjectId(actualSlotIdForSowing);
-            const sowedPlantValue = (sowedPlant !== undefined && sowedPlant !== null) ? Number(sowedPlant) : 0;
+            const sowedPlantValue = Number(effectiveSlotPlants) || 0;
             const location = sowingLocation || "OFFICE";
             // ✅ Extract packetsUsed and packetsToReturn from payload for in-progress cleanup
             const packetsUsedValue = (packetsUsed !== undefined && packetsUsed !== null) ? Number(packetsUsed) : 0;
@@ -1761,15 +1816,25 @@ export const createMultipleSowings = async (req, res) => {
                       }
                       
                       // Distribute plants to cover gaps in previous slots (oldest first)
+                      // IMPORTANT: do NOT over-cover. If a previous slot already has `gapCovered`,
+                      // only the remaining uncovered gap should be covered.
                       for (const prevSlot of allSlots) {
                         if (remainingPlants <= 0) break;
-                        
-                        const gap = (prevSlot.totalBookedPlants || 0) - (prevSlot.primarySowed || 0);
-                        
-                        if (gap > 0) {
-                          const toCover = Math.min(remainingPlants, gap);
+
+                        const totalGapForSlot = Math.max(
+                          0,
+                          (prevSlot.totalBookedPlants || 0) - (prevSlot.primarySowed || 0)
+                        );
+                        const alreadyCoveredForSlot = (prevSlot.gapCovered || []).reduce(
+                          (sum, g) => sum + (g.plantsCovered || 0),
+                          0
+                        );
+                        const uncoveredGapForSlot = Math.max(0, totalGapForSlot - alreadyCoveredForSlot);
+
+                        if (uncoveredGapForSlot > 0) {
+                          const toCover = Math.min(remainingPlants, uncoveredGapForSlot);
                           
-                          console.log(`[GapCoverage] 📍 Slot ${prevSlot.startDay}: Gap=${gap}, Covering=${toCover}`);
+                          console.log(`[GapCoverage] 📍 Slot ${prevSlot.startDay}: UncoveredGap=${uncoveredGapForSlot}, Covering=${toCover}`);
                           
                           // Initialize gapCovered array if not exists
                           if (!prevSlot.gapCovered) {
@@ -1791,7 +1856,7 @@ export const createMultipleSowings = async (req, res) => {
                           
                           // Check if gap is fully covered
                           const totalCovered = prevSlot.gapCovered.reduce((sum, g) => sum + (g.plantsCovered || 0), 0);
-                          if (totalCovered >= gap) {
+                          if (totalCovered >= totalGapForSlot) {
                             prevSlot.gapFullyCovered = true;
                           }
                           
@@ -1824,7 +1889,7 @@ export const createMultipleSowings = async (req, res) => {
                             plantReadyDate: plantReadyDate,
                             performedBy: createdBy || req.user?._id,
                             reason: `Gap covered from later slot (${slotToUpdate.startDay}) sowing`,
-                            notes: `Covered ${toCover} plants. Total covered: ${totalCovered}/${gap}. Fully covered: ${prevSlot.gapFullyCovered}`,
+                            notes: `Covered ${toCover} plants. Total covered: ${totalCovered}/${totalGapForSlot}. Fully covered: ${prevSlot.gapFullyCovered}`,
                             gapCoverageDetails: {
                               fromSlotId: slotToUpdate._id,
                               fromSlotDate: slotToUpdate.startDay,
@@ -1833,7 +1898,7 @@ export const createMultipleSowings = async (req, res) => {
                               toSlotDate: prevSlot.startDay,
                             },
                             metadata: {
-                              gapBeforeCoverage: gap,
+                              gapBeforeCoverage: uncoveredGapForSlot,
                               totalCovered,
                               isFullyCovered: prevSlot.gapFullyCovered,
                             },
@@ -1841,14 +1906,9 @@ export const createMultipleSowings = async (req, res) => {
                         }
                       }
                       
-                      // Add remaining plants to current slot (for regular sowing)
-                      if (remainingPlants > 0) {
-                        const currentAvailable = slotToUpdate.availablePlants || 0;
-                        slotToUpdate.availablePlants = currentAvailable + remainingPlants;
-                        console.log(`[GapCoverage] ✅ Added ${remainingPlants} to current slot availablePlants (was ${currentAvailable}, now ${slotToUpdate.availablePlants})`);
-                      } else {
-                        console.log(`[GapCoverage] ⚠️ All ${sowedPlantValue} plants used to cover previous gaps`);
-                      }
+                      // availablePlants is already incremented by the full sowedPlantValue above.
+                      // Keep gap coverage separate from immediate availability increment.
+                      console.log(`[GapCoverage] ℹ️ availablePlants already increased by full sowedPlantValue=${sowedPlantValue}`);
                       
                       console.log(`[GapCoverage] 🎯 Distribution complete: ${sowedPlantValue} plants total, ${sowedPlantValue - remainingPlants} to gaps, ${remainingPlants} to current slot`);
                     } else {
@@ -1856,24 +1916,18 @@ export const createMultipleSowings = async (req, res) => {
                       console.log(`[ExcessiveSowing] ⏭️ Skipping gap coverage - all plants go to excessiveSowing.plants AND primarySowed`);
                       
                       if (remainingPlants > 0) {
-                        // For excessive sowing: update BOTH excessiveSowing.plants (separate tracking) AND primarySowed (for calculations)
+                      // For excessive sowing: keep separate tracking and add ready plants to availability.
                         if (!slotToUpdate.excessiveSowing) {
                           slotToUpdate.excessiveSowing = { packets: 0, plants: 0 };
                         }
                         slotToUpdate.excessiveSowing.plants = (slotToUpdate.excessiveSowing.plants || 0) + remainingPlants;
-                        
-                        // Also update primarySowed (so totalPlants and availablePlants are updated correctly)
-                        slotToUpdate.primarySowed = (slotToUpdate.primarySowed || 0) + remainingPlants;
-                        
-                        // Update totalPlants and availablePlants
-                        slotToUpdate.totalPlants = (slotToUpdate.totalPlants || 0) + remainingPlants;
-                        slotToUpdate.availablePlants = (slotToUpdate.availablePlants || 0) + remainingPlants;
-                        
+
+                      // totalPlants/primarySowed/availablePlants were already incremented in the initial slot update.
                         console.log(`[ExcessiveSowing] ✅ Added ${remainingPlants} to excessiveSowing.plants (now ${slotToUpdate.excessiveSowing.plants})`);
-                        console.log(`[ExcessiveSowing] ✅ Updated primarySowed: ${slotToUpdate.primarySowed}, totalPlants: ${slotToUpdate.totalPlants}, availablePlants: ${slotToUpdate.availablePlants}`);
+                      console.log(`[ExcessiveSowing] ✅ Updated availability only after base slot increment. primarySowed: ${slotToUpdate.primarySowed}, totalPlants: ${slotToUpdate.totalPlants}, availablePlants: ${slotToUpdate.availablePlants}`);
                       }
                       
-                      console.log(`[ExcessiveSowing] 🎯 Excessive sowing complete: ${remainingPlants} plants added to excessiveSowing.plants AND primarySowed`);
+                      console.log(`[ExcessiveSowing] 🎯 Excessive sowing complete: ${remainingPlants} plants added to excessiveSowing.plants and availablePlants`);
                     }
                   }
                   
@@ -1937,8 +1991,8 @@ export const createMultipleSowings = async (req, res) => {
                     // Note: Since this is Step 3, availablePlants may have been updated by gap coverage
                     // For SOWING_COMPLETED, we're just recording the completion, not tracking plant changes
                     // The actual plant changes are tracked separately in gap coverage
-                    const previousTotalPlants = slotToUpdate.totalPlants || 0;
-                    const previousAvailablePlants = slotToUpdate.availablePlants || 0;
+                    const previousTotalPlants = slotToUpdateBefore?.totalPlants || 0;
+                    const previousAvailablePlants = slotToUpdateBefore?.availablePlants || 0;
                     const newTotalPlants = slotToUpdate.totalPlants || 0; // No change to totalPlants from this action
                     const newAvailablePlants = slotToUpdate.availablePlants || 0; // Current value after gap coverage
                     
@@ -1997,8 +2051,8 @@ export const createMultipleSowings = async (req, res) => {
                         slotToUpdate.slotTrail = [];
                       }
                       
-                      const previousTotalPlants = slotToUpdate.totalPlants || 0;
-                      const previousAvailablePlants = slotToUpdate.availablePlants || 0;
+                      const previousTotalPlants = slotToUpdateBefore?.totalPlants || 0;
+                      const previousAvailablePlants = slotToUpdateBefore?.availablePlants || 0;
                       const newTotalPlants = slotToUpdate.totalPlants || 0;
                       const newAvailablePlants = slotToUpdate.availablePlants || 0;
                       
@@ -7211,7 +7265,9 @@ export const getPlantsGapSummary = async (req, res) => {
           totalPrimarySowed: 0,
           slotCount: 0,
           overdueSlotCount: 0,
-          plantReadyDays: slot.plantReadyDays || 0, // Store plantReadyDays from first slot
+          plantReadyDays: slot.plantReadyDays || 0,
+          minPlantReadyDays: slot.plantReadyDays || 0,
+          maxPlantReadyDays: slot.plantReadyDays || 0,
           slots: available === "true" ? [] : undefined, // Store slot details for available mode
         });
       }
@@ -7222,12 +7278,19 @@ export const getPlantsGapSummary = async (req, res) => {
       if (slot.isOverdue) {
         group.overdueSlotCount += 1;
       }
+      const readyDaysValue = Number(slot.plantReadyDays) || 0;
+      group.minPlantReadyDays = Math.min(group.minPlantReadyDays, readyDaysValue);
+      group.maxPlantReadyDays = Math.max(group.maxPlantReadyDays, readyDaysValue);
+      if (group.minPlantReadyDays === group.maxPlantReadyDays) {
+        group.plantReadyDays = group.maxPlantReadyDays;
+      }
       // Store slot details for available mode (for grouping on frontend)
       if (available === "true" && group.slots) {
         group.slots.push({
           slotId: slot.slotId,
           slotStartDay: slot.slotStartDay,
           slotEndDay: slot.slotEndDay,
+          plantReadyDays: slot.plantReadyDays || 0,
           availablePlants: slot.availablePlants,
           totalBookedPlants: slot.totalBookedPlants,
           primarySowed: slot.primarySowed,
@@ -7252,6 +7315,9 @@ export const getPlantsGapSummary = async (req, res) => {
         slotCount: item.slotCount,
         overdueSlotCount: item.overdueSlotCount || 0,
         plantReadyDays: item.plantReadyDays || 0,
+        minPlantReadyDays: item.minPlantReadyDays || 0,
+        maxPlantReadyDays: item.maxPlantReadyDays || 0,
+        hasMixedPlantReadyDays: (item.minPlantReadyDays || 0) !== (item.maxPlantReadyDays || 0),
         totalBookingGap,
         totalAvailableGap,
         rawGap,
@@ -7343,6 +7409,8 @@ export const getPlantsGapSummary = async (req, res) => {
         return {
           _id: subtype._id,
           subtypeName: subtypeName,
+          displaySowingQty: bookingGapWithBuffer,
+          baseSowingQty: subtype.totalBookingGap,
           totalBookingGap: bookingGapWithBuffer,
           totalBookingGapRaw: subtype.totalBookingGap,
           totalAvailableGap: subtype.totalAvailableGap || 0,
@@ -8318,10 +8386,10 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       const rawBookingGap = totalBookedPlants - primarySowed;
       const bookingGap = Math.max(0, rawBookingGap - gapCoveredAmount); // Gap after coverage
       
-      // Parse slot end date
-      const endDayParts = slot.slotEndDay.match(/(\d{2})-(\d{2})-(\d{4})/);
-      const slotEndISO = endDayParts 
-        ? new Date(`${endDayParts[3]}-${endDayParts[2]}-${endDayParts[1]}`)
+      // Parse slot start date (countdown is now based on slot start)
+      const startDayParts = slot.slotStartDay?.match(/(\d{2})-(\d{2})-(\d{4})/);
+      const slotStartISO = startDayParts
+        ? new Date(`${startDayParts[3]}-${startDayParts[2]}-${startDayParts[1]}`)
         : null;
       
       // Calculate sowByDateISO
@@ -8329,13 +8397,13 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       const slotReadyDays = slot.slotReadyDays || 0;
       
       let sowByDateISO = null;
-      if (slotEndISO) {
+      if (slotStartISO) {
         if (slotReadyDays > 0) {
-          // Calculate: sowByDate = slotEndDate - plantReadyDays
-          sowByDateISO = new Date(slotEndISO.getTime() - slotReadyDays * 24 * 60 * 60 * 1000);
+          // Calculate: sowByDate = slotStartDate - plantReadyDays
+          sowByDateISO = new Date(slotStartISO.getTime() - slotReadyDays * 24 * 60 * 60 * 1000);
         } else {
-          // If no plantReadyDays configured, use slotEndDate as sowByDate (fallback)
-          sowByDateISO = slotEndISO;
+          // If no plantReadyDays configured, use slotStartDate as sowByDate (fallback)
+          sowByDateISO = slotStartISO;
         }
       }
       
@@ -8365,7 +8433,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         const subtypeName = subtypeDetails?.name?.toLowerCase() || "";
         
         if (subtypeName.includes("twinkle") || (plantName.includes("muskmelon") && (subtypeName.includes("vijay") || subtypeName.includes("vivek")))) {
-          console.log(`[getAllPlantsTodaySowingCards] ${plantName}/${subtypeName}: slotEndDay=${slot.slotEndDay}, plantReadyDays=${slotReadyDays}, sowByDate=${sowByDate}, daysUntilSow=${daysUntilSow}, priority=${priority}, bookingGap=${bookingGap}, sowByDateISO=${sowByDateISO}, todayDate=${todayDate}`);
+          console.log(`[getAllPlantsTodaySowingCards] ${plantName}/${subtypeName}: slotStartDay=${slot.slotStartDay}, plantReadyDays=${slotReadyDays}, sowByDate=${sowByDate}, daysUntilSow=${daysUntilSow}, priority=${priority}, bookingGap=${bookingGap}, sowByDateISO=${sowByDateISO}, todayDate=${todayDate}`);
         }
       }
       
@@ -8392,20 +8460,24 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         adjustedBookingGap = Math.max(0, bookingGap - totalPlantsInProgress);
       }
       
-      // Get slotBuffer from slot data (from PlantCMS subtype buffer)
-      const slotBuffer = slot.slotBuffer || 0;
+      // Buffer priority for today-sowing counts:
+      // 1) subtype/slot buffer when configured
+      // 2) plant-level sowingBuffer fallback
+      const plantLevelSowingBuffer = plantMap.get(slot.plantId?.toString())?.sowingBuffer || 0;
+      const slotBuffer = Number(slot.slotBuffer) || 0;
+      const effectiveSowingBuffer = slotBuffer > 0 ? slotBuffer : plantLevelSowingBuffer;
       
-      // Apply slot buffer to the adjusted booking gap
-      const bookingGapWithBuffer = slotBuffer > 0 && adjustedBookingGap > 0
-        ? Math.round(adjustedBookingGap * (1 + slotBuffer / 100))
+      // Apply effective sowing buffer to the adjusted booking gap
+      const bookingGapWithBuffer = effectiveSowingBuffer > 0 && adjustedBookingGap > 0
+        ? Math.round(adjustedBookingGap * (1 + effectiveSowingBuffer / 100))
         : adjustedBookingGap;
       
       // Calculate buffer count (additional plants added by slot buffer)
       const slotBufferCount = bookingGapWithBuffer - adjustedBookingGap;
       
-      // Apply slot buffer to totalBookedPlants
-      const totalBookedPlantsWithBuffer = slotBuffer > 0 && totalBookedPlants > 0
-        ? Math.round(totalBookedPlants * (1 + slotBuffer / 100))
+      // Apply effective sowing buffer to totalBookedPlants
+      const totalBookedPlantsWithBuffer = effectiveSowingBuffer > 0 && totalBookedPlants > 0
+        ? Math.round(totalBookedPlants * (1 + effectiveSowingBuffer / 100))
         : totalBookedPlants;
       
       // Calculate buffer amount for totalBookedPlants
@@ -8434,6 +8506,8 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         console.log(`[getAllPlantsTodaySowingCards] Total Booked Plants: ${totalBookedPlants}`);
         console.log(`[getAllPlantsTodaySowingCards] Primary Sowed (from DB): ${primarySowed}`);
         console.log(`[getAllPlantsTodaySowingCards] Slot Buffer: ${slotBuffer}%`);
+        console.log(`[getAllPlantsTodaySowingCards] Plant Sowing Buffer: ${plantLevelSowingBuffer}%`);
+        console.log(`[getAllPlantsTodaySowingCards] Effective Sowing Buffer: ${effectiveSowingBuffer}%`);
         console.log(`[getAllPlantsTodaySowingCards] ---`);
         console.log(`[getAllPlantsTodaySowingCards] Total Booked Plants With Buffer: ${totalBookedPlantsWithBuffer}`);
         console.log(`[getAllPlantsTodaySowingCards] Total Booked Plants Buffer Count: ${totalBookedPlantsBufferCount}`);
@@ -8484,13 +8558,15 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         totalBookedPlantsWithBuffer, // Total booked plants with slot buffer applied
         totalBookedPlantsBufferCount, // Additional plants added by slot buffer to totalBookedPlants
         primarySowed,
+        displaySowingQty: plantsToSowWithBuffer,
+        baseSowingQty: adjustedBookingGap,
         plantsToSowWithBuffer, // Plants to sow with buffer (totalBookedPlantsWithBuffer - primarySowed)
         totalPlants: slot.totalPlants,
         bookingGap: bookingGapWithBuffer, // Show gap with slot buffer applied
         bookingGapRaw: rawBookingGap, // Original gap before coverage
         bookingGapEffective: bookingGap, // Gap after gapCovered (before in-progress)
         bookingGapBeforeBuffer: adjustedBookingGap, // Gap after in-progress but before buffer
-        slotBuffer: slotBuffer, // Slot buffer percentage from PlantCMS subtype
+        slotBuffer: effectiveSowingBuffer, // Effective sowing buffer (subtype buffer, else plant sowingBuffer)
         slotBufferCount: slotBufferCount, // Additional plants added by slot buffer
         gapCovered: slot.gapCovered || [], // Gap coverage details
         gapCoveredAmount, // Total covered by later slots

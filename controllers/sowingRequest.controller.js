@@ -7,6 +7,36 @@ import InventoryTransaction from '../models/inventoryTransaction.model.js';
 import PlantSlot from '../models/slots.model.js';
 import mongoose from 'mongoose';
 
+const applySowingBuffer = (baseValue, bufferPercent) => {
+  const qty = Number(baseValue) || 0;
+  const buffer = Number(bufferPercent) || 0;
+  return buffer > 0 ? Math.round(qty * (1 + buffer / 100)) : qty;
+};
+
+const enrichRequestsWithBufferContext = async (requests) => {
+  const plantIds = [...new Set((requests || []).map((r) => String(r.plantId)).filter(Boolean))]
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  const plants = await PlantCms.find({ _id: { $in: plantIds } })
+    .select("_id sowingBuffer")
+    .lean();
+  const plantBufferMap = new Map(plants.map((p) => [String(p._id), Number(p.sowingBuffer) || 0]));
+
+  return (requests || []).map((request) => {
+    const sowingBuffer = plantBufferMap.get(String(request.plantId)) || 0;
+    const baseSowingQty = Number(request.remainingSowingNeeded || request.packetsNeeded || 0) || 0;
+    const displaySowingQty = applySowingBuffer(baseSowingQty, sowingBuffer);
+    return {
+      ...request,
+      sowingBuffer,
+      bufferPercent: sowingBuffer,
+      baseSowingQty,
+      displaySowingQty,
+    };
+  });
+};
+
 // Create Sowing Request from today's sowing cards
 export const createSowingRequest = async (req, res) => {
   try {
@@ -182,10 +212,12 @@ export const getAllSowingRequests = async (req, res) => {
       })
     );
 
+    const requestsWithBuffer = await enrichRequestsWithBufferContext(requestsWithStock);
+
     res.json({
       success: true,
-      data: requestsWithStock,
-      count: requestsWithStock.length,
+      data: requestsWithBuffer,
+      count: requestsWithBuffer.length,
     });
   } catch (error) {
     console.error('Error fetching sowing requests:', error);
@@ -249,10 +281,12 @@ export const getPendingSowingRequests = async (req, res) => {
       })
     );
 
+    const requestsWithBuffer = await enrichRequestsWithBufferContext(requestsWithStock);
+
     res.json({
       success: true,
-      data: requestsWithStock,
-      count: requestsWithStock.length,
+      data: requestsWithBuffer,
+      count: requestsWithBuffer.length,
     });
   } catch (error) {
     console.error('Error fetching pending sowing requests:', error);
@@ -1361,12 +1395,16 @@ export const checkRequestExists = async (req, res) => {
       const issuedDate = request.issuedDate ? new Date(request.issuedDate) : null;
       const isIssuedToday = issuedDate && issuedDate >= today;
 
+      const [requestWithBuffer] = await enrichRequestsWithBufferContext([{
+        ...request,
+        isIssuedToday,
+      }]);
+
       return res.json({
         success: true,
         exists: true,
         data: {
-          ...request,
-          isIssuedToday,
+          ...requestWithBuffer,
         },
       });
     }

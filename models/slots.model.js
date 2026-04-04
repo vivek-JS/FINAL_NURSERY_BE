@@ -33,6 +33,7 @@ const slotTrailSchema = new Schema({
       "PACKETS_RETURNED", // Packets returned after sowing
       "PACKETS_USED", // Packets marked as used
       "SOWING_READY_DATE_MAPPED", // Entry slot mapped to expected ready-date slot
+      "READY_DAYS_UPDATED", // Plant ready days changed for slot timing
     ],
     required: true,
   },
