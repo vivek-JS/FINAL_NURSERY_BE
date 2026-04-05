@@ -14,7 +14,8 @@
     "dev": "nodemon index.js",
     "start": "node index.js",
     "backfill:public-order-code": "node scripts/backfill-public-order-code.js",
-    "order:set-status": "node scripts/set-order-status.js"
+    "order:set-status": "node scripts/set-order-status.js",
+    "script:advance-collected-xlsx": "node scripts/mark-collected-from-advance-match-xlsx.js"
   },
   "author": "",
   "license": "ISC",
