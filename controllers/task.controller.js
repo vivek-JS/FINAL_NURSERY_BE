@@ -273,6 +273,7 @@ export const getTaskStats = async (req, res) => {
 
     const tasks = await Task.find(base).lean();
     const today = new Date().toISOString().slice(0, 10);
+    const uidStr = req.user._id.toString();
 
     let total = 0;
     let todo = 0;
@@ -280,6 +281,7 @@ export const getTaskStats = async (req, res) => {
     let completed = 0;
     let urgent = 0;
     let overdue = 0;
+    let pendingForMe = 0;
 
     for (const t of tasks) {
       ensureAssignmentsArray(t);
@@ -290,13 +292,21 @@ export const getTaskStats = async (req, res) => {
       else todo += 1;
 
       if (t.status !== "completed" && t.dueDate && t.dueDate < today) overdue += 1;
+
+      if (t.status !== "cancelled") {
+        const row = (t.assignments || []).find((a) => {
+          const eid = a.employeeId?.toString?.() || String(a.employeeId);
+          return eid === uidStr;
+        });
+        if (row?.status === "pending") pendingForMe += 1;
+      }
     }
 
     return res.status(200).json(
       generateResponse(
         "success",
         "Stats",
-        { total, todo, inProgress, completed, urgent, overdue },
+        { total, todo, inProgress, completed, urgent, overdue, pendingForMe },
         null
       )
     );

@@ -1170,6 +1170,13 @@ const updateOne = (Model, modelName, allowedFields) =>
         canEditOrderCore,
         canChangeOrderStatusFull,
       } = getOrderUpdateUserContext(resolveUserForOrderUpdatePermissions(req));
+      const isSalesUser =
+        userRole === "SALES" || req.user?.jobTitle === "SALES";
+      const salesPersonOnOrder =
+        existingDoc.salesPerson?._id || existingDoc.salesPerson;
+      const salesOwnsOrder =
+        Boolean(isSalesUser && req.user && salesPersonOnOrder) &&
+        String(salesPersonOnOrder) === String(req.user._id);
       const orderCoreEditFields = [
         "rate",
         "numberOfPlants",
@@ -1186,14 +1193,20 @@ const updateOne = (Model, modelName, allowedFields) =>
       ];
       if (!canEditOrderCore) {
         for (const key of orderCoreEditFields) {
-          if (filteredBody[key] !== undefined) {
-            rejectedFields.push({
-              field: key,
-              reason: "INSUFFICIENT_PERMISSION",
-              detail: "Only OFFICE_ADMIN, SUPER_ADMIN, ACCOUNTANT, or DISPATCH_MANAGER can change this field",
-            });
-            delete filteredBody[key];
+          if (filteredBody[key] === undefined) continue;
+          if (
+            salesOwnsOrder &&
+            (key === "numberOfPlants" || key === "quantity")
+          ) {
+            continue;
           }
+          rejectedFields.push({
+            field: key,
+            reason: "INSUFFICIENT_PERMISSION",
+            detail:
+              "Only OFFICE_ADMIN, SUPER_ADMIN, ACCOUNTANT, or DISPATCH_MANAGER can change this field (sales may only change plant quantity on their own orders)",
+          });
+          delete filteredBody[key];
         }
       }
 
@@ -1203,6 +1216,27 @@ const updateOne = (Model, modelName, allowedFields) =>
       }
       if (filteredBody.quantity !== undefined) {
         delete filteredBody.quantity;
+      }
+
+      // Plant quantity is locked once the order is in the ready-for-dispatch queue or a terminal state.
+      const statusesBlockingQuantityEdit = new Set([
+        "READY_FOR_DISPATCH",
+        "DISPATCH_PROCESS",
+        "DISPATCHED",
+        "COMPLETED",
+        "PARTIALLY_COMPLETED",
+        "CANCELLED",
+        "REJECTED",
+      ]);
+      if (
+        filteredBody.numberOfPlants !== undefined &&
+        Number(filteredBody.numberOfPlants) !== Number(existingDoc.numberOfPlants) &&
+        statusesBlockingQuantityEdit.has(String(existingDoc.orderStatus || ""))
+      ) {
+        throw new AppError(
+          "Plant quantity cannot be changed after the order is ready for dispatch or in a completed/cancelled state.",
+          400
+        );
       }
 
       // Handle special fields updates
@@ -1257,6 +1291,26 @@ const updateOne = (Model, modelName, allowedFields) =>
           DISPATCH_MANAGER_ALLOWED_STATUSES.has(filteredBody.orderStatus)
         ) {
           // keep orderStatus (dispatch queue)
+        } else if (
+          salesOwnsOrder &&
+          filteredBody.orderStatus === "FARM_READY"
+        ) {
+          const prev = String(existingDoc.orderStatus || "");
+          const allowedPrevForSalesFarmReady = new Set([
+            "PENDING",
+            "ACCEPTED",
+            "ASSIGNED",
+          ]);
+          if (!allowedPrevForSalesFarmReady.has(prev)) {
+            rejectedFields.push({
+              field: "orderStatus",
+              reason: "SALES_STATUS_NOT_ALLOWED",
+              detail:
+                "Sales can set Ready to farm only when the order is Pending, Accepted, or Assigned.",
+              value: filteredBody.orderStatus,
+            });
+            delete filteredBody.orderStatus;
+          }
         } else {
           rejectedFields.push({
             field: "orderStatus",
@@ -2919,9 +2973,10 @@ const getAll = (Model, modelName) =>
       earlyPaginateInserted = true;
     }
 
-    // Search filtering
-    if (search) {
-      const searchRegex = new RegExp(search, "i");
+    // Search filtering (ignore whitespace-only `search`)
+    const searchTrimmed = search ? String(search).trim() : "";
+    if (searchTrimmed) {
+      const searchRegex = new RegExp(searchTrimmed, "i");
 
       pipeline.push({
         $lookup: {
@@ -2940,18 +2995,37 @@ const getAll = (Model, modelName) =>
         },
       });
 
-      const isNumeric = /^\d+$/.test(search);
-      const searchAsNumber = isNumeric ? Number(search) : NaN;
+      const isNumericOrderIdQuery = /^\d+$/.test(searchTrimmed);
+      const orderIdExact = isNumericOrderIdQuery ? Number(searchTrimmed) : NaN;
 
-      pipeline.push({
-        $match: {
-          $or: [
-            { orderId: isNumeric ? searchAsNumber : search },
-            { "farmer.name": searchRegex },
-            { "farmer.mobileNumberStr": searchRegex },
-          ],
-        },
-      });
+      // All-digit search: exact orderId (e.g. 1357). No substring on name/mobile for short numeric queries.
+      // 10+ digits: also allow exact mobile match (common full-phone search) alongside orderId exact.
+      // Non-numeric → substring on farmer name and mobile (unchanged).
+      if (isNumericOrderIdQuery) {
+        if (searchTrimmed.length >= 10) {
+          pipeline.push({
+            $match: {
+              $or: [
+                { orderId: orderIdExact },
+                { "farmer.mobileNumberStr": searchTrimmed },
+              ],
+            },
+          });
+        } else {
+          pipeline.push({
+            $match: { orderId: orderIdExact },
+          });
+        }
+      } else {
+        pipeline.push({
+          $match: {
+            $or: [
+              { "farmer.name": searchRegex },
+              { "farmer.mobileNumberStr": searchRegex },
+            ],
+          },
+        });
+      }
       // Optional booking-date range when searching (e.g. bulk payment order picker)
       if (startDate && endDate && dispatched === "false") {
         const parseDateSearch = (dateStr, isEnd = false) => {

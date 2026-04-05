@@ -1,0 +1,388 @@
+excel_line	status	farmer_parse	village_parse	plant_parse	score_farmer	score_village_parse_vs_db_village	score_village_parse_vs_farmer_village	score_plant	matched_farmer_name	matched_village_db	orderId	order_plant	order_subtype	numberOfPlants	orderStatus	weighted_total	note
+Aabaji Tanaji Patil Vikharan Banana Adv	MATCHED	Aabaji Tanaji Patil	Vikharan	Banana	100.0	100.0	100.0	100.0	Aabaji Tanaji Patil	Vikharan	1415	Banana	G9	6000	ACCEPTED	100.0	
+Adhikar Bhagvan Patil Sonawad 15 No. Adv	MATCHED	Adhikar Bhagvan Patil	Sonawad	15 No.	92.7	100.0	100.0	100.0	Adhikar Bhawan Patil	Sonawad	1614	Papaya	15 no	1500	ACCEPTED	97.07	
+Adhikar Bhikan Patil Balvant Taiwan Adv	MATCHED	Adhikar Bhikan Patil	Balvant	Taiwan	100.0	100.0	100.0	100.0	Adhikar Bhikan Patil	Balvant	1709	Papaya	Taiwan	9000	ACCEPTED	100.0	
+Ajay Hukumchand Patil Pilode Banana Adv	MATCHED	Ajay Hukumchand Patil	Pilode	Banana	100.0	83.3	90.9	100.0	Ajay hukumchand Patil	Piloda	1733	Banana	G9	3700	ACCEPTED	96.82	
+Ajay Santosh Chaudhari Jhurkhda 15 No. Adv	MATCHED	Ajay Santosh Chaudhari	Jhurkhda	15 No.	100.0	75.0	85.7	100.0	Ajay Santosh Chaudhari	Zurkheda	1610	Papaya	15 no	5000	ACCEPTED	95.0	
+Akash Kantilal Patel Velavad Taiwan Adv	MATCHED	Akash Kantilal Patel	Velavad	Taiwan	95.0	100.0	100.0	100.0	akash Kantilal Patil	Velavad	1197	Papaya	Taiwan	4500	ACCEPTED	98.0	
+Alkabai Dipak Shinde Nibhel Superson Adv	MATCHED	Alkabai Dipak Shinde	Nibhel	Superson	91.9	92.3	92.3	100.0	Alka Dipak Shinde	Nimbhel	1560	Papaya	Superson	3000	ACCEPTED	94.06	
+Alkabai Dipak Shinde Nibhel Taiwan Adv	MATCHED	Alkabai Dipak Shinde	Nibhel	Taiwan	95.0	92.3	92.3	100.0	Akkabai Dipak Shinde	Nimbhel	1378	Papaya	Taiwan	2000	ACCEPTED	95.31	
+Ambadas Mangal Chaudhari Thorgavhan Banana Adv	MATCHED	Ambadas Mangal Chaudhari	Thorgavhan	Banana	100.0	100.0	94.7	100.0	Ambadas Mangal Chaudhari	Thorgvhan	1740	Banana	G9	2500	ACCEPTED	98.16	
+Ambalal Gurudyal Patel Pachorabari W-46 Adv	MATCHED	Ambalal Gurudyal Patel	Pachorabari	W-46	95.7	100.0	100.0	100.0	amabalal gurudayal Patel	Pachorabari	1673	Papaya	W-46	3100	ACCEPTED	98.26	
+Ambalal Morsing Naik Kothali Taiwan Advv	MATCHED	Ambalal Morsing Naik	Kothali	Taiwan	92.7	100.0	83.3	100.0	Ambalal morsing Nayak	Kothada	1296	Papaya	Taiwan	6500	ACCEPTED	91.24	
+Ambalal Patil Ujlod 15 No. Adv	MATCHED	Ambalal Patil	Ujlod	15 No.	92.3	83.3	83.3	100.0	Aabalal Patil	Ujoload	1130	Papaya	15 no	3000	ACCEPTED	91.09	
+Amol Jitendrasing Girase Osali Taiwan Adv	MATCHED	Amol Jitendrasing Girase	Osali	Taiwan	87.5	100.0	100.0	100.0	Amol narendrasing Girase	Osali	1252	Papaya	Taiwan	4500	ACCEPTED	95.0	
+Amol Khemchand Patil Patil Manvel 15 No. Adv	MATCHED	Amol Khemchand Patil	Patil Manvel	15 No.	100.0	66.7	100.0	100.0	Amol Khemchand Patil	Manvel	1624	Papaya	15 no	2000	ACCEPTED	100.0	
+Anil Arun Mahajan Phopnar 15 No. Adv	MATCHED	Anil Arun Mahajan	Phopnar	15 No.	100.0	76.9	90.9	100.0	anil Arun Mahajan	fopnar	1594	Papaya	15 no	3850	ACCEPTED	96.82	
+Anil Tarachand Patil Ranale Superson Adv	MATCHED	Anil Tarachand Patil	Ranale	Superson	97.4	100.0	100.0	100.0	Anil Trachand Patil	hol trf Ranale	1179	Papaya	Superson	2000	ACCEPTED	98.97	
+Arjun Vikram Nikumbhe Kolda Superson Adv	MATCHED	Arjun Vikram Nikumbhe	Kolda	Superson	91.3	90.9	90.9	100.0	Dr. Arjun vikram nikumbhe	Kolada	1638	Papaya	Superson	3500	ACCEPTED	93.34	
+Arun Tarachand Chaudhari Dhanvadi Banana Adv	MATCHED	Arun Tarachand Chaudhari	Dhanvadi	Banana	97.9	87.5	70.6	100.0	Arun Trachand chaudhari	Dhankwali	1221	Banana	G9	4300	ACCEPTED	88.85	
+Arvind Pandit Patil Babhulgaon Papaya Adv	MATCHED	Arvind Pandit Patil	Babhulgaon	Papaya	100.0	94.7	94.7	100.0	Arvind Pandit Patil	Bbhulgaon	1490	Papaya	15 no	5000	ACCEPTED	98.16	
+Ashabai Bharat Salunkhe Bhatane Taiwan Adv	MATCHED	Ashabai Bharat Salunkhe	Bhatane	Taiwan	95.5	100.0	100.0	100.0	Ashabai Bhart Salunke	Bhatane	1453	Papaya	Taiwan	2300	ACCEPTED	98.18	
+Ashok Jayram Mahajan Yawal 15 No. Adv	MATCHED	Ashok Jayram Mahajan	Yawal 15	No.	100.0	76.9	100.0	50.0	Ashok Jayram Mahajan	Yawal	1463	Muskmelon	Layalpur	3500	ACCEPTED	87.5	
+Atul Totaram Mahajan Ambilhol Banana Advv	MATCHED	Atul Totaram Mahajan	Ambilhol	Banana	100.0	100.0	100.0	100.0	Atul Totaram Mahajan	Ambilhol	1442	Banana	G9	6700	ACCEPTED	100.0	
+Atul Vaman Dhangar Manur 15 No. Adv	MATCHED	Atul Vaman Dhangar	Manur	15 No.	94.4	100.0	100.0	100.0	Atul Waman Dhangar	Manur	1040	Papaya	15 no	1500	ACCEPTED	97.78	
+Balasaheb Devram Patil Japora 15 No. Adv	MATCHED	Balasaheb Devram Patil	Japora	15 No.	100.0	100.0	100.0	100.0	Balasaheb Devram Patil	Japora	1652	Papaya	15 no	2000	ACCEPTED	100.0	
+Balasaheb Subhash Patil Gadhoda 15 No. Adv	MATCHED	Balasaheb Subhash Patil	Gadhoda	15 No.	100.0	100.0	100.0	100.0	Balasaheb Subhash Patil	Gadhoda	1565	Papaya	15 no	2000	ACCEPTED	100.0	
+Balkrushna Dhansing Patil Dhanwadi Banana Advv	MATCHED	Balkrushna Dhansing Patil	Dhanwadi	Banana	100.0	100.0	100.0	100.0	Balkrushna Dhansing Patil	Dhanwadi	1110	Banana	G9	5500	ACCEPTED	100.0	
+Balu Anant Kolhe Thorgavhan Banana Adv	MATCHED	Balu Anant Kolhe	Thorgavhan	Banana	97.0	100.0	94.7	100.0	Balu Ananta Kolhe	Thorgvhan	1312	Banana	G9	4400	ACCEPTED	96.95	
+Bhagvan Banesing Girase Bhatane Taiwan Adv	MATCHED	Bhagvan Banesing Girase	Bhatane	Taiwan	95.7	100.0	100.0	100.0	Bhagwan Banesing Girase	Bhatane	1231	Papaya	Taiwan	2300	ACCEPTED	98.26	
+Bhagvan Tanaku Kumbhar Gorgavale Banana Adv	MATCHED	Bhagvan Tanaku Kumbhar	Gorgavale	Banana	93.0	88.9	88.9	100.0	Bhagwan Tanku Kumbhar	Gorgawale	1306	Banana	G9	2100	ACCEPTED	93.32	
+Bhagvat Shivaji Patil Bharadi Banana Adv	MATCHED	Bhagvat Shivaji Patil	Bharadi	Banana	95.2	100.0	100.0	100.0	Bhagwat Shivaji Patil	Bharadi	1005	Banana	G9	7500	ACCEPTED	98.1	
+Bhaiya Dhudku Patil Bhatane Taiwan Adv	MATCHED	Bhaiya Dhudku	Patil Bhatane	Taiwan	96.3	70.0	100.0	100.0	Bhaiyya Dhudku	Bhatane	1208	Papaya	Taiwan	2900	ACCEPTED	98.52	
+Bhalchandra Natu Patil Mandane Taiwan Advv	MATCHED	Bhalchandra Natu Patil	Mandane	Taiwan	95.2	100.0	100.0	100.0	Bhalchand Natu Patil	Mandane	1243	Papaya	Taiwan	3000	ACCEPTED	98.1	
+Bharat Kashinath Patil Kakrda Papaya Adv	MATCHED	Bharat Kashinath Patil	Kakrda	Papaya	97.7	85.7	66.7	54.5	Bhart Kashinath Patil	Khairave	1149	Banana	G9	4000	ACCEPTED	76.04	
+Bharat Ratilal Patil Alkhed Taiwan Adv	MATCHED	Bharat Ratilal Patil	Alkhed	Taiwan	100.0	100.0	100.0	100.0	Bharat Ratilal Patil	alkhed	1277	Papaya	Taiwan	4000	ACCEPTED	100.0	
+Bharat Tapiram Chaudhari Khadgaon Banana Adv	MATCHED	Bharat Tapiram Chaudhari	Khadgaon	Banana	100.0	100.0	100.0	100.0	Bharat Tapiram Chaudhari	Khadgaon	1114	Banana	G9	3900	ACCEPTED	100.0	
+Bhaurao Bhagvat Patil Utkheda Banana Adv	MATCHED	Bhaurao Bhagvat Patil	Utkheda	Banana	95.2	100.0	87.5	100.0	Bhavrao Bhagvat Patil	Untakheda	1524	Banana	G9	8000	ACCEPTED	93.72	
+Bhaurao Chaudhari Shirsoda Banana Adv	MATCHED	Bhaurao Chaudhari	Shirsoda	Banana	100.0	93.3	93.3	100.0	Bhaurao Chaudhari	Sirsoda	1092	Banana	G9	20000	ACCEPTED	97.67	
+Bhavesh Ambalal Patil Damalda Banana Adv	MATCHED	Bhavesh Ambalal Patil	Damalda	Banana	100.0	100.0	100.0	100.0	Bhavesh Ambalal Patil	Damalda	1153	Banana	G9	2000	ACCEPTED	100.0	
+Bhimrao Supadu Chaudhari Sulvade Banana Adv	MATCHED	Bhimrao Supadu Chaudhari	Sulvade	Banana	100.0	85.7	85.7	100.0	Bhimrao Supadu chaudhari	Sulwade	1185	Banana	G9	4000	ACCEPTED	95.0	
+Bhimrao Supadu Chaudhari Sulvade Taiwan Adv	MATCHED	Bhimrao Supadu Chaudhari	Sulvade	Taiwan	100.0	85.7	85.7	100.0	Bhimrao Supadu chaudhari	Sulwade	1184	Papaya	Taiwan	3500	ACCEPTED	95.0	
+Bhupendra Kishor Patil Untavad 15 No. Adv	MATCHED	Bhupendra Kishor Patil	Untavad	15 No.	100.0	100.0	85.7	100.0	Bhupendra Kishor Patil	Untawad	1387	Papaya	15 no	4500	ACCEPTED	95.0	
+Bhushan Ashok Salunkhe Bhatane Taiwan Adv	MATCHED	Bhushan Ashok Salunkhe	Bhatane	Taiwan	100.0	100.0	100.0	100.0	Bhushan Ashok Salunkhe	Bhatane	1214	Papaya	Taiwan	2700	ACCEPTED	100.0	
+Chagan Shana Patil Nimbhel Superson Adv	MATCHED	Chagan Shana Patil	Nimbhel	Superson	100.0	100.0	100.0	100.0	Chagan Shana Patil	Nimbhel	1167	Papaya	Superson	4000	ACCEPTED	100.0	
+Chagan Vedu Patil Patalda Taiwan Adv	MATCHED	Chagan Vedu Patil	Patalda	Taiwan	94.1	100.0	100.0	100.0	Chagan Velu Patil	Patalda	1273	Papaya	Taiwan	3800	ACCEPTED	97.65	
+Chaitram Kisan Naik Kothada Taiwan Adv	MATCHED	Chaitram Kisan Naik	Kothada	Taiwan	92.3	100.0	100.0	100.0	Chaitram Kisan Nayak	Kothada	1298	Papaya	Taiwan	2600	ACCEPTED	96.92	
+Chandrakant Manilal Patil Kalmadi Superson Adv	MATCHED	Chandrakant Manilal Patil	Kalmadi	Superson	100.0	100.0	100.0	100.0	Chandrakant Manilal Patil	Kalmadi	1486	Papaya	Superson	3500	ACCEPTED	100.0	
+Chandralekha Ravindra Patil Chunchale Banana Adv	MATCHED	Chandralekha Ravindra Patil	Chunchale	Banana	100.0	100.0	100.0	100.0	Chandralekha Ravindra Patil	Chunchale	1556	Banana	G9	4000	ACCEPTED	100.0	
+Chetan Lotan Marathe Velavad Superson Adv	MATCHED	Chetan Lotan Marathe	Velavad	Superson	100.0	100.0	100.0	100.0	Chetan Lotan Marathe	Velavad	1259	Papaya	Superson	2500	ACCEPTED	100.0	
+Chetan Onkar Patil Ranale Superson Adv	MATCHED	Chetan Onkar Patil	Ranale	Superson	94.4	100.0	100.0	100.0	Chetan omkar Patil	hol trf Ranale	1191	Papaya	Superson	4500	ACCEPTED	97.78	
+Chhalubai Khushal Chavhan Umarde Superson Adv	MATCHED	Chhalubai Khushal Chavhan	Umarde	Superson	93.9	100.0	100.0	100.0	Chhlobai Khushal Chavhan	Umarde	1513	Papaya	Superson	4000	ACCEPTED	97.55	
+Chintaman Shravan Chaudhari Dhanora Papaya Adv	MATCHED	Chintaman Shravan Chaudhari	Dhanora	Papaya	96.3	100.0	100.0	100.0	Chintaman Sharavn Chaudhari	Dhanora	1469	Papaya	15 no	2500	ACCEPTED	98.52	
+Chotu Khatik Shanimandal Superson Adv	MATCHED	Chotu Khatik	Shanimandal	Superson	100.0	100.0	100.0	100.0	Chotu Khatik	Shanimandal	1668	Papaya	Superson	2500	ACCEPTED	100.0	
+Dagadu Reva Nagare Ranale Superson Adv	MATCHED	Dagadu Reva Nagare	Ranale	Superson	85.7	100.0	100.0	100.0	Dagdu Reva Navade	Ranale	1580	Papaya	Superson	2500	ACCEPTED	94.29	
+Dattatraya Shivram Chaudhari Jhurkheda Banana Adv	MATCHED	Dattatraya Shivram Chaudhari	Jhurkheda	Banana	94.5	82.4	93.3	100.0	dattatrey Shivram Chaudhari	Zurkheda	1704	Banana	G9	2100	ACCEPTED	95.48	
+Dattatraya Shrihari Patil Kothali Taiwan Adv	MATCHED	Dattatraya Shrihari Patil	Kothali	Taiwan	93.9	100.0	100.0	100.0	Dattatrey Shrihari Patil	Kothali	1242	Papaya	Taiwan	2700	ACCEPTED	97.55	
+Dattu Supdu Patil Damalda Banana Adv	MATCHED	Dattu Supdu Patil	Damalda	Banana	97.1	100.0	100.0	100.0	Dattu Supadu Patil	Damalda	1109	Banana	G9	3500	ACCEPTED	98.86	
+Devidas Khushal Chavhan Umarde Superson Adv	MATCHED	Devidas Khushal Chavhan	Umarde	Superson	100.0	100.0	100.0	100.0	Devidas Khushal Chavhan	Umarde	1512	Papaya	Superson	2500	ACCEPTED	100.0	
+Devkabai Narayan Marathe Vikharan Taiwan Adv	MATCHED	Devkabai Narayan Marathe	Vikharan	Taiwan	100.0	100.0	100.0	100.0	Devkabai Narayan Marathe	Vikharan	1193	Papaya	Taiwan	9000	ACCEPTED	100.0	
+Dhanraj Gangaram Patil Ngaon W46 Adv	MATCHED	Dhanraj Gangaram Patil	Ngaon	W46	100.0	100.0	90.9	85.7	dhanraj Gangaram Patil	Nagaon	1700	Papaya	W-46	1500	ACCEPTED	93.25	
+Dhanraj Murlidhar Patil Babhulgaon Papaya Adv	MATCHED	Dhanraj Murlidhar Patil	Babhulgaon	Papaya	100.0	94.7	94.7	100.0	Dhanraj Murlidhar Patil	bahulgaon	1235	Papaya	15 no	3500	ACCEPTED	98.16	
+Dhanraj Ramesh Patil Babhude 15 No. Adv	MATCHED	Dhanraj Ramesh Patil	Babhude	15 No.	100.0	66.7	66.7	100.0	dhanraj Ramesh Patil	Balde	1646	Papaya	15 no	1500	ACCEPTED	88.33	
+Dhanraj Ramrao Patil Padalsare W-46 Adv	MATCHED	Dhanraj Ramrao Patil	Padalsare	W-46	100.0	75.0	75.0	100.0	Dhanraj Ramrao Patil	Padse	1394	Papaya	W-46	2000	ACCEPTED	91.25	
+Dhansing Rubji Gavit Tokartalav Banana Adv	MATCHED	Dhansing Rubji Gavit	Tokartalav	Banana	97.6	100.0	100.0	100.0	Dhansing Rubaji Gavit	Tokartalav	1042	Banana	G9	4000	ACCEPTED	99.02	
+Dharma Sonu Marathe Mohida Taiwan Adv	MATCHED	Dharma Sonu Marathe	Mohida	Taiwan	100.0	100.0	100.0	100.0	Dharma Sonu Marathe	Mohida	1373	Papaya	Taiwan	3000	ACCEPTED	100.0	
+Dharmendra Hiralal Patil Machala 15 No. Adv	MATCHED	Dharmendra Hiralal Patil	Machala	15 No.	100.0	71.4	80.0	100.0	Dharmendra Hiralal Patil	Malche	1470	Papaya	15 no	2700	ACCEPTED	93.0	
+Dhiraj Ashok Patil Utkheda Banana Adv	MATCHED	Dhiraj Ashok Patil	Utkheda	Banana	100.0	100.0	100.0	100.0	Dhiraj ashok Patil	Utkheda	1181	Banana	G9	5000	ACCEPTED	100.0	
+Dhiraj Suresh Hivarale Mangalwadi 15 No. Adv	MATCHED	Dhiraj Suresh Hivarale	Mangalwadi	15 No.	97.7	100.0	100.0	100.0	Dhiraj Suresh Hivrale	Mangalwadi	1171	Papaya	15 no	5000	ACCEPTED	99.07	
+Dhudku Shivdas Koli Chunchale Banana Adv	MATCHED	Dhudku Shivdas Koli	Chunchale	Banana	100.0	100.0	88.9	100.0	Dhudku Shivdas Koli	Chanchale	1010	Banana	G9	3500	ACCEPTED	96.11	
+Dilip Baburao Patil Borad Superson Adv	MATCHED	Dilip Baburao Patil	Borad	Superson	100.0	100.0	100.0	100.0	Dilip Baburao Patil	Borad	1454	Papaya	Superson	4500	ACCEPTED	100.0	
+Dilip Bhataji Kadambade Umarde Taiwan Adv	MATCHED	Dilip Bhataji Kadambade	Umarde	Taiwan	97.9	100.0	100.0	100.0	Dilip Bhataji Kadambande	Umarde	1375	Papaya	Taiwan	3200	ACCEPTED	99.15	
+Dilip Narayansing Pardeshi Tokartalav Banana Adv	MATCHED	Dilip Narayansing Pardeshi	Tokartalav	Banana	100.0	100.0	100.0	100.0	Dilip Narayansing Pardeshi	Tokartalav	1401	Banana	G9	4000	ACCEPTED	100.0	
+Dilipsing Divansing Girase Dongargaon Taiwan Advv	MATCHED	Dilipsing Divansing Girase	Dongargaon	Taiwan	96.2	100.0	100.0	100.0	Dilipsing Diwansing Girase	Dongargaon	1302	Papaya	Taiwan	4000	ACCEPTED	98.46	
+Dilip Tongal Patil Kanthare Taiwan Adv	MATCHED	Dilip Tongal Patil	Kanthare	Taiwan	100.0	87.5	87.5	100.0	Dilip Tongal Patil	Kandhare	1357	Papaya	Taiwan	3000	ACCEPTED	95.62	
+Dilip Tulshiram Patil Balade 15 No. Adv	MATCHED	Dilip Tulshiram Patil	Balade	15 No.	97.7	90.9	90.9	100.0	Dilip Tulshiram Patil`	Balde	1133	Papaya	15 no	2500	ACCEPTED	95.89	
+Dimplebai Yogesh Rajput Bhatane Taiwan Adv	MATCHED	Dimplebai Yogesh Rajput	Bhatane	Taiwan	95.7	100.0	100.0	100.0	Dimpalbai Yogesh Rajput	Bhatane	1215	Papaya	Taiwan	2000	ACCEPTED	98.26	
+Dipak Champalal Patil Japora 15 No. Adv	MATCHED	Dipak Champalal Patil	Japora	15 No.	100.0	100.0	100.0	100.0	dipak Champalal Patil	Japora	1630	Papaya	15 no	2200	ACCEPTED	100.0	
+Dipak Nehete Korpavali W-46 Adv	MATCHED	Dipak Nehete	Korpavali	W-46	91.7	88.9	88.9	100.0	Dipak Nehate	Korpawali	1017	Papaya	W-46	5000	ACCEPTED	92.78	
+Dipak Pandurang Patil Kalali Taiwan Adv	MATCHED	Dipak Pandurang Patil	Kalali	Taiwan	100.0	100.0	100.0	100.0	Dipak Pandurang Patil	Kalali	1099	Papaya	Taiwan	5200	ACCEPTED	100.0	
+Dipak Purushottam Patil Hingani 15 No. Adv	MATCHED	Dipak Purushottam Patil	Hingani	15 No.	97.8	100.0	100.0	100.0	Dipak Purshottam Patil	Hingani	1386	Papaya	15 no	3000	ACCEPTED	99.11	
+Dipak Rajaram Patil Ranale Superson Adv	MATCHED	Dipak Rajaram Patil	Ranale	Superson	94.7	100.0	100.0	100.0	Dipak Rajaram Patel	hol trf Ranale	1190	Papaya	Superson	5500	ACCEPTED	97.89	
+Dnyaneshwar Hiraman Patil Thorgavhan Banana Adv	MATCHED	Dnyaneshwar Hiraman Patil	Thorgavhan	Banana	100.0	100.0	94.7	100.0	dnyaneshwar Hiraman Patil	Thorgvhan	1741	Banana	G9	3500	ACCEPTED	98.16	
+Dnyaneshwar Jadhav Vadali Taiwan Adv	MATCHED	Dnyaneshwar Jadhav	Vadali	Taiwan	97.1	100.0	100.0	100.0	Dnyaeshwar Jadhav	Vadali	1505	Papaya	Taiwan	5000	ACCEPTED	98.86	
+Dnyaneshwar Ramchandra Bhangale Untkheda 15 No. Adv	MATCHED	Dnyaneshwar Ramchandra Bhangale	Untkheda	15 No.	100.0	100.0	100.0	100.0	Dnyaneshwar Ramchandra Bhangale	Untkheda	1328	Papaya	15 no	2500	ACCEPTED	100.0	
+Dnyaneshwar Ramchandra Bhangale Untkheda Banana Ad	MATCHED	Dnyaneshwar Ramchandra Bhangale	Untkheda	Banana Ad	100.0	100.0	100.0	100.0	Dnyaneshwar Ramchandra Bhangale	Untkheda	1326	Banana	G9	5700	ACCEPTED	100.0	
+Dnyaneshwar Tahanu Patil Devadi 15 No. Adv	MATCHED	Dnyaneshwar Tahanu Patil	Devadi 15	No.	100.0	80.0	100.0	50.0	dnyaneshwar Tahanu Patil	Devadi	1136	Papaya	Taiwan	1800	ACCEPTED	87.5	
+Dnyaneshwar Tahanu Patil Devadi Taiwan Adv	MATCHED	Dnyaneshwar Tahanu Patil	Devadi	Taiwan	100.0	100.0	100.0	100.0	dnyaneshwar Tahanu Patil	Devadi	1136	Papaya	Taiwan	1800	ACCEPTED	100.0	
+Gaindhal Devram Patil Vikharan W-46 Adv	MATCHED	Gaindhal Devram Patil	Vikharan	W-46	100.0	100.0	100.0	100.0	Gaindhal Devram Patil	Vikharan	1347	Papaya	W-46	2100	ACCEPTED	100.0	
+Gajanan Dattatraya Mahajan Tandalwadi Banana Adv	MATCHED	Gajanan Dattatraya Mahajan	Tandalwadi	Banana	98.0	100.0	100.0	100.0	Gajanan dattatray mahajan	chinchol Tandalwadi	1745	Banana	G9	9000	ACCEPTED	99.22	
+Gajanan Prakash Patil Chinchol 15 No. Adv	MATCHED	Gajanan Prakash Patil	Chinchol	15 No.	100.0	100.0	100.0	100.0	Gajanan Prakash Patil	Chinchol	1498	Papaya	15 no	3000	ACCEPTED	100.0	
+Ganesh Ashok Chaudhari Nalva Superson Adv	MATCHED	Ganesh Ashok Chaudhari	Nalva	Superson	100.0	100.0	100.0	100.0	Ganesh Ashok Chaudhari	Nalva	1257	Papaya	Superson	4600	ACCEPTED	100.0	
+Ganesh Ashok Marathe Dahidule Taiwan Adv	MATCHED	Ganesh Ashok Marathe	Dahidule	Taiwan	100.0	94.1	94.1	100.0	Ganesh Ashok Marathe	Dahindule	1284	Papaya	Taiwan	5000	ACCEPTED	97.94	
+Ganesh Manga Patil Kanthare Taiwan Adv	MATCHED	Ganesh Manga Patil	Kanthare	Taiwan	100.0	87.5	87.5	100.0	Ganesh Manga Patil	Kandhare	1359	Papaya	Taiwan	2000	ACCEPTED	95.62	
+Gaurav Ganeshgir Gosavi Ngaon W-46 Adv	MATCHED	Gaurav Ganeshgir Gosavi	Ngaon	W-46	95.7	100.0	100.0	100.0	Gauvra Ganeshgir Gosavi	Ngaon	1566	Papaya	W-46	2500	ACCEPTED	98.26	
+Gayatri Vinod Gaikwad Waki Banana Adv	MATCHED	Gayatri Vinod Gaikwad	Waki	Banana	97.7	100.0	100.0	100.0	Gayatri Vinod Gaikawad	waki	1446	Banana	G9	6000	ACCEPTED	99.07	
+Ghansham Dattatray Patil Gartad Banana Adv	MATCHED	Ghansham Dattatray Patil	Gartad	Banana	100.0	100.0	100.0	100.0	Ghansham Dattatray Patil	Gartad	1737	Banana	G9	3200	ACCEPTED	100.0	
+Goba Yashvant Patil Thorgavhan Banana Adv	MATCHED	Goba Yashvant Patil	Thorgavhan	Banana	92.3	100.0	94.7	100.0	Gobha Yashwant Patil	Thorgvhan	1738	Banana	G9	4000	ACCEPTED	95.08	
+Gokul Tukaram Mali Kondhavad Superson Adv	MATCHED	Gokul Tukaram Mali	Kondhavad	Superson	100.0	88.9	88.9	100.0	Gokul Tukaram Mali	Kondhawad	1606	Papaya	Superson	2500	ACCEPTED	96.11	
+Gopal Nina Sapkal Hartale Banana Adv	MATCHED	Gopal Nina Sapkal	Hartale	Banana	100.0	100.0	100.0	100.0	Gopal Nina Sapkal	Hartale	1595	Banana	G9	2700	ACCEPTED	100.0	
+Gopal Raman Chaudhari Jhurkheda 15 No. Adv	MATCHED	Gopal Raman Chaudhari	Jhurkheda	15 No.	100.0	82.4	93.3	100.0	gopal Raman chaudhari	Zurkheda	1631	Papaya	15 no	8000	ACCEPTED	97.67	
+Gopal Vishram Patil Kurvel 15 No. Adv	MATCHED	Gopal Vishram Patil	Kurvel	15 No.	100.0	100.0	100.0	100.0	Gopal Vishram Patil	Kurvel	1703	Papaya	15 no	2000	ACCEPTED	100.0	
+Gopichand Dangal Wagh Mandane Taiwan Adv	MATCHED	Gopichand Dangal Wagh	Mandane	Taiwan	100.0	100.0	100.0	100.0	Gopichand Dangal Wagh	Mandane	1502	Papaya	Taiwan	4000	ACCEPTED	100.0	
+Gulabsing Daulatsing Rajput Borad Superson Adv	MATCHED	Gulabsing Daulatsing Rajput	Borad	Superson	98.1	100.0	100.0	100.0	Gulbsing Daulatsing Rajput	Borad	1455	Papaya	Superson	4000	ACCEPTED	99.25	
+Gunvant Pradip Patil Amoda 15 No. Adv	MATCHED	Gunvant Pradip Patil	Amoda	15 No.	100.0	100.0	100.0	100.0	Gunvant Pradip Patil	amoda	1172	Papaya	15 no	2000	ACCEPTED	100.0	
+Gunvant Vyankat Patil Vavad Taiwan Adv	MATCHED	Gunvant Vyankat Patil	Vavad	Taiwan	97.6	100.0	100.0	100.0	Gunvant Vankat Patil	Vavad	1349	Papaya	Taiwan	10000	ACCEPTED	99.02	
+Hanuman Yograj Patil Vadhoda 15 No. Adv	MATCHED	Hanuman Yograj Patil	Vadhoda	15 No.	100.0	100.0	92.3	100.0	Hanuman Yograj Patil	Vadhoad	1644	Papaya	15 no	2200	ACCEPTED	97.31	
+Harshal Suresh Patil Manvel 15 No. Adv	MATCHED	Harshal Suresh Patil	Manvel	15 No.	90.9	100.0	100.0	100.0	dr. Harshal Suresh Patil	Manvel	1061	Papaya	15 no	3500	ACCEPTED	96.36	
+Harshvardhan Chandrakant Bhange Kandar Banana Adv	MATCHED	Harshvardhan Chandrakant Bhange	Kandar	Banana	96.8	92.3	100.0	100.0	Harshavrdhan Chandrakant Bhange	Kandari	1633	Banana	G9	6800	ACCEPTED	98.71	
+Hemant Prabhakar Patil Mohadi W-46 Adv	MATCHED	Hemant Prabhakar Patil	Mohadi	W-46	100.0	100.0	83.3	100.0	Hemant Prabhakar Patil	Mohali	1555	Papaya	W-46	3200	ACCEPTED	94.17	
+Hemraj Morsing Naik Kothali Taiwan Adv	MATCHED	Hemraj Morsing Naik	Kothali	Taiwan	89.5	100.0	100.0	100.0	hemraj Mosing nayak	Kothali	1210	Papaya	Taiwan	6000	ACCEPTED	95.79	
+Himmat Patil Dongargaon Taiwan Adv	MATCHED	Himmat Patil	Dongargaon	Taiwan	100.0	100.0	100.0	100.0	himmat Patil	Dongargaon	1246	Papaya	Taiwan	3000	ACCEPTED	100.0	
+Himmatrao Madhavrao Patil Dhamlai Superson Adv	MATCHED	Himmatrao Madhavrao Patil	Dhamlai	Superson	100.0	85.7	85.7	100.0	Himmatrao Madhavrao Patil	Dhamdai	1533	Papaya	Superson	2200	ACCEPTED	95.0	
+Indrasen Deshmukh Shahapur Banana Adv	MATCHED	Indrasen Deshmukh	Shahapur	Banana	100.0	100.0	100.0	100.0	Indrasen Deshmukh	shahapur	1339	Banana	G9	14000	ACCEPTED	100.0	
+Ishvar Onkar Patil Avhane Papaya Adv	MATCHED	Ishvar Onkar Patil	Avhane	Papaya	88.9	100.0	100.0	100.0	Ishwar omkar Patil	Avhane	1098	Papaya	15 no	3000	ACCEPTED	95.56	
+Jagdish Namdeo Patil Manvel Banana Adv	MATCHED	Jagdish Namdeo Patil	Manvel	Banana	95.0	100.0	100.0	100.0	Jagdish Namdev Patil	Manvel	1622	Banana	G9	5000	ACCEPTED	98.0	
+Jagdish Namdeo Thakare Hatmohida Taiwan Adv	MATCHED	Jagdish Namdeo Thakare	Hatmohida	Taiwan	95.5	100.0	100.0	100.0	Jagdish Namdev Thakare	Hatmohida	1372	Papaya	Taiwan	2500	ACCEPTED	98.18	
+Jagdish Nana Shirsath Bhatane Taiwan Adv	MATCHED	Jagdish Nana Shirsath	Bhatane	Taiwan	100.0	100.0	100.0	100.0	Jagdish Nana Shirsath	Bhatane	1195	Papaya	Taiwan	4000	ACCEPTED	100.0	
+Jagdish Raghunath Patil Rotawad Taiwan Adv	MATCHED	Jagdish Raghunath Patil	Rotawad	Taiwan	100.0	100.0	100.0	100.0	Jagdish Raghunath Patil	Rotawad	1037	Papaya	Taiwan	2200	ACCEPTED	100.0	
+Javansing Shivdas Naik Kothali Taiwan Adv	MATCHED	Javansing Shivdas Naik	Kothali	Taiwan	91.3	100.0	100.0	100.0	Javansing Shivadas Nayak	Kothali	1207	Papaya	Taiwan	6000	ACCEPTED	96.52	
+Jayvant Ramrao Patil Shingave Taiwan Adv	MATCHED	Jayvant Ramrao Patil	Shingave	Taiwan	93.0	100.0	100.0	100.0	Jayvantrao Ramrao Patil	Shingave	1134	Papaya	Taiwan	3000	ACCEPTED	97.21	
+Jitendra Narottam Patil Hatmohida Superson Adv	MATCHED	Jitendra Narottam Patil	Hatmohida	Superson	100.0	100.0	100.0	100.0	Jitendra Narottam Patil	Hatmohida	1658	Papaya	Superson	6000	ACCEPTED	100.0	
+Jitendra Raghunath Patil Borad Superson Adv	MATCHED	Jitendra Raghunath Patil	Borad	Superson	100.0	100.0	90.9	100.0	Jitendra Raghunath Patil	boarad	1499	Papaya	Superson	6000	ACCEPTED	96.82	
+Kadu Vishwanath Chaudhari Vitva Banana Adv	MATCHED	Kadu Vishwanath Chaudhari	Vitva	Banana	98.0	90.9	90.9	100.0	Kadu Vishwanth Chaudhari	Vitava	1144	Banana	G9	6000	ACCEPTED	96.0	
+Kashinathpuri Makharanpuri Gosavi Tarhadi Banana Ad	MATCHED	Kashinathpuri Makharanpuri Gosavi	Tarhadi	Banana Ad	96.9	100.0	100.0	100.0	Kashinathpuri Makhanpuri Gosavi	Tarhadi	1072	Banana	G9	5200	ACCEPTED	98.75	
+Khandu Pandit Thelari Vatbare Superson Adv	MATCHED	Khandu Pandit Thelari	Vatbare	Superson	100.0	80.0	80.0	100.0	Khandu Pandit Thelari	Vadhbare	1169	Papaya	Superson	3000	ACCEPTED	93.0	
+Kishor Aabaji Patil Nimbhel Taiwan Advv	MATCHED	Kishor Aabaji Patil	Nimbhel	Taiwan	100.0	100.0	100.0	100.0	Kishor Aabaji Patil	Nimbhel	1379	Papaya	Taiwan	3000	ACCEPTED	100.0	
+Kishor Bhata Mali Kondhavad Taiwan Adv	MATCHED	Kishor Bhata Mali	Kondhavad	Taiwan	100.0	88.9	88.9	100.0	Kishor Bhata Mali	Kondhawad	1241	Papaya	Taiwan	3500	ACCEPTED	96.11	
+Kishor Namdeo Patil Valkheda W-46 Adv	MATCHED	Kishor Namdeo Patil	Valkheda	W-46	94.7	87.5	93.3	100.0	Kishor Namdev Patil	Walkheda	1025	Papaya	W-46	3000	ACCEPTED	95.56	
+Kishor Sitaram Patil Satod 15 No. Adv	MATCHED	Kishor Sitaram Patil	Satod	15 No.	100.0	100.0	100.0	100.0	Kishor Sitaram Patil	Satod	1599	Papaya	15 no	3000	ACCEPTED	100.0	
+Komal Nathesing Girase Bhatane Taiwan Adv	MATCHED	Komal Nathesing Girase	Bhatane	Taiwan	91.7	100.0	100.0	100.0	Komalsing Nathesing Girase	Bhatane	1212	Papaya	Taiwan	2000	ACCEPTED	96.67	
+Komalsing Nathesing Rajput Borad Taiwan Adv	MATCHED	Komalsing Nathesing Rajput	Borad	Taiwan	100.0	100.0	100.0	100.0	Komalsing Nathesing Rajput	Borad	1301	Papaya	Taiwan	4200	ACCEPTED	100.0	
+Krushna Hilal Patil Kanthare Taiwan Adv	MATCHED	Krushna Hilal Patil	Kanthare	Taiwan	100.0	87.5	87.5	100.0	Krushna Hilal Patil	Kandhare	1352	Papaya	Taiwan	10000	ACCEPTED	95.62	
+Kunal Dadusing Girase Osali Taiwan Adv	MATCHED	Kunal Dadusing Girase	Osali	Taiwan	100.0	100.0	100.0	100.0	Kunal dadusing Girase	Osali	1250	Papaya	Taiwan	3500	ACCEPTED	100.0	
+Kundan Bapu Tavade Chirane 15 No. Adv	MATCHED	Kundan Bapu Tavade	Chirane	15 No.	100.0	71.4	92.3	100.0	Bapu Kundan Tavade	Chirne Kadane	1567	Papaya	15 no	6000	ACCEPTED	97.31	
+Lahu Bhagvat Chaudhari Vadri 15 No. Adv	MATCHED	Lahu Bhagvat Chaudhari	Vadri	15 No.	95.5	100.0	100.0	100.0	Lahu Bhagwat Chaudhari	Vadri	1219	Papaya	15 no	8500	ACCEPTED	98.18	
+Laxman Dipak Tamachekar Fulsare Taiwan Adv	MATCHED	Laxman Dipak Tamachekar	Fulsare	Taiwan	97.9	100.0	100.0	100.0	Laxmaan Dipak Tamachekar	Fulsare	1282	Papaya	Taiwan	4200	ACCEPTED	99.15	
+Laxman Sitaram Patil Manjare Taiwan Adv	MATCHED	Laxman Sitaram Patil	Manjare	Taiwan	100.0	100.0	100.0	100.0	Laxman Sitaram Patil	Manjare	1356	Papaya	Taiwan	2200	ACCEPTED	100.0	
+Lotan Pandit Patil Sanrne 15 No. Adv	MATCHED	Lotan Pandit Patil	Sanrne	15 No.	100.0	71.4	72.7	100.0	Lotan Pandit Patil	Satarane	1057	Papaya	15 no	1400	ACCEPTED	90.45	
+Mahendra Devidas Patil Kanthare Taiwan Adv	MATCHED	Mahendra Devidas Patil	Kanthare	Taiwan	97.7	87.5	87.5	100.0	Mahendra Devdas Patil	Kandhare	1403	Papaya	Taiwan	1500	ACCEPTED	94.69	
+Mahendra Jatansing Girase Bhatane Taiwan Adv	MATCHED	Mahendra Jatansing Girase	Bhatane	Taiwan	98.0	100.0	100.0	100.0	Mahendra Jantansing Girase	Bhatane	1266	Papaya	Taiwan	3000	ACCEPTED	99.22	
+Mahendra Sambhaji Patil Ajang 15 No. Adv	MATCHED	Mahendra Sambhaji Patil	Ajang	15 No.	100.0	66.7	75.0	100.0	mahendra Sambhaji Patil	angaj	1157	Papaya	15 no	4000	ACCEPTED	91.25	
+Mahesh Dhanraj Marathe Osarli Superson Adv	MATCHED	Mahesh Dhanraj Marathe	Osarli	Superson	95.5	100.0	100.0	100.0	Mahesh Dhanaji Marathe	Osarli	1590	Papaya	Superson	2700	ACCEPTED	98.18	
+Mahesh Gokulsing Girase Bhavade 15 No. Adv	MATCHED	Mahesh Gokulsing Girase	Bhavade	15 No.	100.0	100.0	100.0	100.0	Mahesh Gokulsing Girase	Bhavade	1588	Papaya	15 no	4500	ACCEPTED	100.0	
+Mahesh Kedareshwar Patil Kalali Taiwan Adv	MATCHED	Mahesh Kedareshwar Patil	Kalali	Taiwan	97.9	100.0	100.0	100.0	Mahesh Kedareswar Patil	Kalali	1106	Papaya	Taiwan	3500	ACCEPTED	99.15	
+Manaklal Hiraji Patil Bhade Banana Adv	MATCHED	Manaklal Hiraji Patil	Bhade	Banana	100.0	100.0	100.0	100.0	Manaklal Hiraji Patil	Bhade	1125	Banana	G9	8500	ACCEPTED	100.0	
+Manish Narayan Chaudhari Hatmohida Superson Adv	MATCHED	Manish Narayan Chaudhari	Hatmohida	Superson	98.0	100.0	100.0	100.0	Manisha Narayan Chaudhari	Hatmohida	1437	Papaya	Superson	2500	ACCEPTED	99.18	
+Manish Sudham Patel Karankheda Superson Adv	MATCHED	Manish Sudham Patel	Karankheda	Superson	97.3	100.0	100.0	100.0	Manish Sudam Patel	Karankheda	1279	Papaya	Superson	3000	ACCEPTED	98.92	
+Manish Sudham Patel Karankheda Taiwan Adv	MATCHED	Manish Sudham Patel	Karankheda	Taiwan	97.3	100.0	100.0	100.0	Manish Sudam Patel	Karankheda	1278	Papaya	Taiwan	5000	ACCEPTED	98.92	
+Manohar Mansing Patil Piloda 15 No. Adv	MATCHED	Manohar Mansing Patil	Piloda	15 No.	100.0	100.0	100.0	100.0	Manohar Mansing Patil	Piloda	1649	Papaya	15 no	5000	ACCEPTED	100.0	
+Manoj Kruparam Badgujar Muli 15 No. Adv	MATCHED	Manoj Kruparam Badgujar	Muli	15 No.	100.0	100.0	100.0	100.0	Manoj Kruparam Badgujar	Muli	1039	Papaya	15 no	2500	ACCEPTED	100.0	
+Manoj Naik Kothali Taiwan Adv	MATCHED	Manoj Naik	Kothali	Taiwan	85.7	100.0	100.0	100.0	Manoj Nayak	Kothali	1360	Papaya	Taiwan	10000	ACCEPTED	94.29	
+Manoj Purushottam Patil Kalali Taiwan Adv	MATCHED	Manoj Purushottam Patil	Kalali	Taiwan	97.8	100.0	100.0	100.0	Manoj purshottam Patil	Kalali	1102	Papaya	Taiwan	2500	ACCEPTED	99.11	
+Manoj Ramdas Patil Aurangapur 15 No. Adv	MATCHED	Manoj Ramdas Patil	Aurangapur	15 No.	100.0	94.7	94.7	100.0	Manoj Ramdas Patil	Aurangpur	1482	Papaya	15 no	6500	ACCEPTED	98.16	
+Manoj Yuvraj Patil Jhadi W-46 Adv	MATCHED	Manoj Yuvraj Patil	Jhadi	W-46	100.0	72.7	85.7	100.0	Manoj Yuvraj Patil	Zadi	1578	Papaya	W-46	1450	ACCEPTED	95.0	
+Manubai Mitharam Patil Therola Banana Adv	MATCHED	Manubai Mitharam Patil	Therola	Banana	100.0	100.0	85.7	100.0	manubai Mitharam Patil	Theroda	1206	Banana	G9	5000	ACCEPTED	95.0	
+Mayur Rajendra Patil Kokade Banana Adv	MATCHED	Mayur Rajendra Patil	Kokade	Banana	100.0	66.7	66.7	100.0	Mayur Rajendra Patil	Kakarda kh	1177	Banana	G9	4000	ACCEPTED	88.33	
+Milind Govind Patil Hingani 15 No. Adv	MATCHED	Milind Govind Patil	Hingani	15 No.	100.0	100.0	100.0	100.0	Milind Govind Patil	Hingani	1464	Papaya	15 no	1700	ACCEPTED	100.0	
+Mohamad Saddam Shabi Bagban Dharangaon Banana Adv	MATCHED	Mohamad Saddam Shabi Bagban	Dharangaon	Banana	92.6	100.0	100.0	100.0	Mohammad Saddam Shbi Bagwan	Dharangaon	1097	Banana	G9	6000	ACCEPTED	97.04	
+Mohan Chagan Patil Velavad Taiwan Adv	MATCHED	Mohan Chagan Patil	Velavad	Taiwan	100.0	100.0	100.0	100.0	Mohan Chagan Patil	Velavad	1237	Papaya	Taiwan	2000	ACCEPTED	100.0	
+Mohan Krushnaji Kulkarni Hingona 15 No. Adv	MATCHED	Mohan Krushnaji Kulkarni	Hingona	15 No.	100.0	100.0	100.0	100.0	Mohan Krushnaji Kulkarni	Hingona	1249	Papaya	15 no	6000	ACCEPTED	100.0	
+Mohan Tukaram Patil Damalda Banana Adv	MATCHED	Mohan Tukaram Patil	Damalda	Banana	100.0	100.0	100.0	100.0	Mohan Tukaram Patil	Damalda	1107	Banana	G9	3000	ACCEPTED	100.0	
+Motilal Devidas Kumbhar Ridhur Banana Adv	MATCHED	Motilal Devidas Kumbhar	Ridhur	Banana	97.9	100.0	100.0	100.0	Motiilal Devidas Kumbhar	Ridhur	1305	Banana	G9	2100	ACCEPTED	99.15	
+Mukesh Ashok Chaudhari Hatmohida Superson Adv	MATCHED	Mukesh Ashok Chaudhari	Hatmohida	Superson	100.0	100.0	100.0	100.0	Mukesh Ashok Chaudhari	Hatmohida	1436	Papaya	Superson	4700	ACCEPTED	100.0	
+Mukesh Prabhakar Mahajan Khirdi Banana Adv	MATCHED	Mukesh Prabhakar Mahajan	Khirdi	Banana	100.0	100.0	100.0	100.0	Mukesh Prabhakar Mahajan	Khirdi	1329	Banana	G9	4500	ACCEPTED	100.0	
+Namdeo Baburao Patil Kanthare Taiwan Adv	MATCHED	Namdeo Baburao Patil	Kanthare	Taiwan	95.0	87.5	87.5	100.0	Namdev Baburao Patil	Kandhare	1354	Papaya	Taiwan	2000	ACCEPTED	93.62	
+Nana Chunilal Koli Bhatane Banana Adv	MATCHED	Nana Chunilal Koli	Bhatane	Banana	87.8	100.0	100.0	100.0	Nanasaheb Chunilal Koli	Bhatane	1391	Banana	G9	2500	ACCEPTED	95.12	
+Nandkishor Devesing Patil Vikharan W-46 Adv	MATCHED	Nandkishor Devesing Patil	Vikharan	W-46	94.1	100.0	100.0	100.0	Nandakishor Devasing Patil	Vikharan	1371	Papaya	W-46	3000	ACCEPTED	97.65	
+Nandlal Dhondu Patil Navra-Navri 15 No. Adv	MATCHED	Nandlal Dhondu Patil	Navra-Navri	15 No.	95.0	66.7	100.0	100.0	Nandala Dhondu Patil	Navri	1035	Papaya	15 no	6000	ACCEPTED	98.0	
+Narayan Mangesing Girase Bhatane Taiwan Adv	MATCHED	Narayan Mangesing Girase	Bhatane	Taiwan	95.8	100.0	100.0	100.0	Narayan Mangosing Girase	Bhatane	1213	Papaya	Taiwan	2700	ACCEPTED	98.33	
+Narayan Vitthal Kumbhar Dambhurni Banana Adv	MATCHED	Narayan Vitthal Kumbhar	Dambhurni	Banana	95.7	100.0	100.0	100.0	Narayan Vittahl Kumbhar	Dambhurni	1593	Banana	G9	5000	ACCEPTED	98.26	
+Narendra Rajaram Chaudhari L-Shahada Superson Adv	MATCHED	Narendra Rajaram Chaudhari	L-Shahada	Superson	100.0	87.5	87.5	100.0	Narendra Rajaram Chaudhari	Lahan Shahada	1531	Papaya	Superson	5000	ACCEPTED	95.62	
+Narendra Vishwas Saner Kukawal Taiwan Advv	MATCHED	Narendra Vishwas Saner	Kukawal	Taiwan	95.2	100.0	100.0	100.0	Narendra Viwas Saner	Kukawal	1239	Papaya	Taiwan	8000	ACCEPTED	98.1	
+Naresh Ramesh Baviskar Ringangaon Papaya Adv	MATCHED	Naresh Ramesh Baviskar	Ringangaon	Papaya	100.0	100.0	100.0	100.0	Naresh Ramesh Baviskar	Ringangaon	1021	Papaya	15 no	2500	ACCEPTED	100.0	
+Natthu Bhagvan Patil Damalda Banana Adv	MATCHED	Natthu Bhagvan Patil	Damalda	Banana	89.5	100.0	100.0	100.0	Nthu Bhagwan Patil	Damalda	1154	Banana	G9	2000	ACCEPTED	95.79	
+Naval Chaitram Patil Chaupdai 15 No. Adv	MATCHED	Naval Chaitram Patil	Chaupdai	15 No.	100.0	75.0	75.0	100.0	Naval chaitram Patil	Chopadai	1608	Papaya	15 no	2500	ACCEPTED	91.25	
+Navnath Hilal Patil Shindgavhan 15 No. Adv	MATCHED	Navnath Hilal Patil	Shindgavhan	15 No.	97.4	100.0	100.0	100.0	Navnath Hillal Patil	shindgavhan	1731	Papaya	15 no	6400	ACCEPTED	98.97	
+New Agro Agency Shahada Banana Advv	MATCHED	New Agro Agency	Shahada	Banana	100.0	100.0	100.0	100.0	New Agro Agency	Shahada	1093	Banana	G9	25000	ACCEPTED	100.0	
+Nikhil Kadu Bhangale Hingona 15 No. Adv	MATCHED	Nikhil Kadu Bhangale	Hingona	15 No.	100.0	100.0	100.0	100.0	Nikhil Kadu Bhangale	Hingona	1671	Papaya	15 no	3000	ACCEPTED	100.0	
+Nilesh Chagan Patil Palashi Superson Adv	MATCHED	Nilesh Chagan Patil	Palashi	Superson	100.0	100.0	100.0	100.0	Nilesh Chagan Patil	Palashi	1450	Papaya	Superson	3000	ACCEPTED	100.0	
+Nilesh Devidas Patil Dhanur Taiwan Adv	MATCHED	Nilesh Devidas Patil	Dhanur	Taiwan	100.0	100.0	100.0	100.0	Nilesh Devidas Patil	Dhanur	1180	Papaya	Taiwan	3500	ACCEPTED	100.0	
+Nilesh Hanumant Suryavanshi Vadhoda 15 No. Adv	MATCHED	Nilesh Hanumant Suryavanshi	Vadhoda	15 No.	96.3	100.0	100.0	100.0	Nilesh Hanumant Suryawanshi	Vadhoda	1632	Papaya	15 no	3500	ACCEPTED	98.52	
+Nilesh Laxman Solankhe Chincholi 15 No. Adv	MATCHED	Nilesh Laxman Solankhe	Chincholi	15 No.	90.9	100.0	100.0	100.0	nilesh Laxman Salunkhe	Chincholi	1710	Papaya	15 no	1500	ACCEPTED	96.36	
+Nilkanth Bhaurao Nikam Hingoni Taiwan Adv	MATCHED	Nilkanth Bhaurao Nikam	Hingoni	Taiwan	97.8	85.7	85.7	100.0	Nilkantha Bhaurao Nikam	Hingani	1135	Papaya	Taiwan	6000	ACCEPTED	94.11	
+Nilkanth Shankar Patil Babhulgaon 15 No. Adv	MATCHED	Nilkanth Shankar Patil	Babhulgaon	15 No.	97.8	94.7	94.7	100.0	Nilkantha Shankar Patil	bahulgaon	1529	Papaya	15 no	2000	ACCEPTED	97.27	
+Nimba Jagannath Patil Nibhel Taiwan Adv	MATCHED	Nimba Jagannath Patil	Nibhel	Taiwan	100.0	92.3	92.3	100.0	Nimba Jagannath Patil	Nimbhel	1358	Papaya	Taiwan	4500	ACCEPTED	97.31	
+Nirmala Arjun Petkar Umarde Taiwan Adv	MATCHED	Nirmala Arjun Petkar	Umarde	Taiwan	100.0	100.0	100.0	100.0	Nirmala Arjun Petkar	Umarde	1377	Papaya	Taiwan	13000	ACCEPTED	100.0	
+Niruti Bhimaji Dhatrak Sukvad Taiwan Adv	MATCHED	Niruti Bhimaji Dhatrak	Sukvad	Taiwan	95.7	83.3	83.3	100.0	Nivrutti Bhimaji Dhatrak	Sukwad	1164	Papaya	Taiwan	4500	ACCEPTED	92.43	
+Pandurang Namdeo Patil Vadhoda 15 No. Adv	MATCHED	Pandurang Namdeo Patil	Vadhoda	15 No.	95.5	100.0	92.3	100.0	Pandurang Namdev Patil	Vadhoad	1645	Papaya	15 no	3000	ACCEPTED	95.49	
+Pankaj Arvind Tilenge Umarde Taiwan Adv	MATCHED	Pankaj Arvind Tilenge	Umarde	Taiwan	95.2	100.0	100.0	100.0	Pankaj Arvind Telenge	Umarde	1374	Papaya	Taiwan	11000	ACCEPTED	98.1	
+Pankaj Ganesh Mahajan Savkheda Banana Adv	MATCHED	Pankaj Ganesh Mahajan	Savkheda	Banana	100.0	100.0	100.0	100.0	Pankaj Ganesh Mahajan	Savkheda	1316	Banana	G9	10000	ACCEPTED	100.0	
+Pankaj Govinda Pawar Rajale Taiwan Adv	MATCHED	Pankaj Govinda Pawar	Rajale	Taiwan	97.4	100.0	100.0	100.0	Pankaj Govind Pawar	Rajale	1412	Papaya	Taiwan	3500	ACCEPTED	98.97	
+Paresh Suresh Atre Fufnagari Banana Adv	MATCHED	Paresh Suresh Atre	Fufnagari	Banana	100.0	88.9	88.9	100.0	Paresh Suresh Atre	Fuknagari	1750	Banana	G9	2500	ACCEPTED	96.11	
+Parshuram Bhagvan Patil Damalda Banana Adv	MATCHED	Parshuram Bhagvan Patil	Damalda	Banana	95.7	100.0	100.0	100.0	Parshuram Bhagwan Patil	Damalda	1108	Banana	G9	3000	ACCEPTED	98.26	
+Prabhakar Patil Dhamlod Taiwan Adv	MATCHED	Prabhakar Patil	Dhamlod	Taiwan	93.3	85.7	85.7	100.0	Prabhakar Patel	Dhamold	1398	Papaya	Taiwan	4000	ACCEPTED	92.33	
+Prabhakar Popat Patil Kanthare Taiwan Adv	MATCHED	Prabhakar Popat Patil	Kanthare	Taiwan	100.0	87.5	87.5	100.0	Prabhakar Popat Patil	Kandhare	1402	Papaya	Taiwan	6000	ACCEPTED	95.62	
+Prabhu Dipchand Pardeshi Tandali Taiwan Adv	MATCHED	Prabhu Dipchand Pardeshi	Tandali	Taiwan	100.0	100.0	100.0	100.0	Prabhu Dipchand Pardeshi	Tandali	1332	Papaya	Taiwan	3000	ACCEPTED	100.0	
+Pradip Ananda Patil Javkheda Taiwan Adv	MATCHED	Pradip Ananda Patil	Javkheda	Taiwan	100.0	87.5	100.0	100.0	Pradip Ananda Patil	Javkheda Bk	1079	Papaya	Taiwan	2000	ACCEPTED	100.0	
+Pradip Dharma Patil Arthe 15 No. Adv	MATCHED	Pradip Dharma Patil	Arthe	15 No.	100.0	100.0	100.0	100.0	Pradip Dharma Patil	arthe	1636	Papaya	15 no	3000	ACCEPTED	100.0	
+Prafull Bhagvan Patil Damalda Banana Adv	MATCHED	Prafull Bhagvan Patil	Damalda	Banana	87.8	100.0	100.0	100.0	Praful bhagwat Patil	Damalda	1344	Banana	G9	2500	ACCEPTED	95.12	
+Prakash Bhagvat Patil Kalali Taiwan Adv	MATCHED	Prakash Bhagvat Patil	Kalali	Taiwan	90.5	100.0	100.0	100.0	Prakash Bhagwan Patil	Kalali	1101	Papaya	Taiwan	3500	ACCEPTED	96.19	
+Prakash Dashrath Patil Alkhed Taiwan Advv	MATCHED	Prakash Dashrath Patil	Alkhed	Taiwan	97.8	100.0	100.0	100.0	Prakash Dashrath Patill	alkhed	1270	Papaya	Taiwan	10000	ACCEPTED	99.11	
+Prakash Hari Gavande Shelvad Banana Adv	MATCHED	Prakash Hari Gavande	Shelvad	Banana	100.0	71.4	80.0	100.0	Prakash Hari Gavande	Selav	1002	Banana	G9	4000	ACCEPTED	93.0	
+Prakash Lahu Dhangar Jatoda Banana Adv	MATCHED	Prakash Lahu Dhangar	Jatoda	Banana	100.0	100.0	100.0	100.0	Lahu Prakash Dhangar	Jatoda	1511	Banana	G9	2500	ACCEPTED	100.0	
+Prakash Pandurang Patil Junmohida Superson Adv	MATCHED	Prakash Pandurang Patil	Junmohida	Superson	100.0	100.0	100.0	100.0	Prakash Pandurang Patil	junmohida	1530	Papaya	Superson	2100	ACCEPTED	100.0	
+Prakash Punju Patil Kokade Banana Adv	MATCHED	Prakash Punju Patil	Kokade	Banana	100.0	66.7	66.7	100.0	Prakash Punju Patil	Kakarda kh	1176	Banana	G9	4000	ACCEPTED	88.33	
+Prakash Rajdhar Patil Sukvad Taiwan Adv	MATCHED	Prakash Rajdhar Patil	Sukvad	Taiwan	100.0	83.3	83.3	100.0	Prakash Rajdhar Patil	Sukwad	1161	Papaya	Taiwan	3600	ACCEPTED	94.17	
+Prakash Uttam Patil Shinda Superson Adv	MATCHED	Prakash Uttam Patil	Shinda	Superson	100.0	100.0	100.0	100.0	Prakash uttam Patil	Shinda	1275	Papaya	Superson	3000	ACCEPTED	100.0	
+Prakash Uttam Patil Shinda Taiwan Adv	MATCHED	Prakash Uttam Patil	Shinda	Taiwan	100.0	100.0	100.0	100.0	Prakash uttam Patil	Shinda	1276	Papaya	Taiwan	3000	ACCEPTED	100.0	
+Pralhad Chagan Patel Velavad Taiwan Adv	MATCHED	Pralhad Chagan Patel	Velavad	Taiwan	95.0	100.0	100.0	100.0	Pralhad Chagan Patil	Velavad	1236	Papaya	Taiwan	2000	ACCEPTED	98.0	
+Pralhad Chainsing Rathod Nandrkhede Banana Adv	MATCHED	Pralhad Chainsing Rathod	Nandrkhede	Banana	100.0	84.2	94.1	100.0	Pralhad Chainsing Rathod	Nandarkhe	1661	Banana	G9	3000	ACCEPTED	97.94	
+Pralhad Dattu Patil Dambarkheda Superson Adv	MATCHED	Pralhad Dattu Patil	Dambarkheda	Superson	100.0	100.0	100.0	100.0	Pralhad Dattu Patil	Dambarkheda	1397	Papaya	Superson	9000	ACCEPTED	100.0	
+Pralhad Dattu Patil Dambarkheda Taiwan Adv	MATCHED	Pralhad Dattu Patil	Dambarkheda	Taiwan	100.0	100.0	100.0	100.0	Pralhad Dattu Patil	Dambarkheda	1396	Papaya	Taiwan	9000	ACCEPTED	100.0	
+Pralhad Narottam Patil Kothali Taiwan Adv	MATCHED	Pralhad Narottam Patil	Kothali	Taiwan	100.0	100.0	100.0	100.0	Pralhad Narottam Patil	Kothali	1299	Papaya	Taiwan	4000	ACCEPTED	100.0	
+Pramila Vasudeo Dhake Mamurabad Banana Adv	MATCHED	Pramila Vasudeo Dhake	Mamurabad	Banana	95.2	82.4	93.3	100.0	Pramila Vasudev Dhake	Mumrabad	1056	Banana	G9	4500	ACCEPTED	95.76	
+Pramod Devidas Chaudhari Sunoda Banana Adv	MATCHED	Pramod Devidas Chaudhari	Sunoda	Banana	100.0	90.9	100.0	100.0	Pramod Devidas Chaudhari	Sunod	1628	Banana	G9	9500	ACCEPTED	100.0	
+Pramod Pundlik Firake Nhavi Papaya Adv	MATCHED	Pramod Pundlik Firake	Nhavi	Papaya	95.2	80.0	80.0	100.0	Pramod Pundalik Firke	Navhi	1116	Papaya	Shabnam	2600	ACCEPTED	91.1	
+Pramod Vasant Joshi Kothali Taiwan Adv	MATCHED	Pramod Vasant Joshi	Kothali	Taiwan	100.0	100.0	100.0	100.0	Pramod Vasant Joshi	Kothali	1411	Papaya	Taiwan	1800	ACCEPTED	100.0	
+Pranav Gulab Patil Rajale Superson Adv	MATCHED	Pranav Gulab Patil	Rajale	Superson	100.0	100.0	100.0	100.0	Pranav Gulab Patil	Rajale	1601	Papaya	Superson	4000	ACCEPTED	100.0	
+Prashant Tulshidas Patil Borad Superson Adv	MATCHED	Prashant Tulshidas Patil	Borad	Superson	97.9	100.0	100.0	100.0	Prashant Tulsidas Patil	Borad	1441	Papaya	Superson	2700	ACCEPTED	99.15	
+Prashant Vijay Patil Vadhoda 15 No. Adv	MATCHED	Prashant Vijay Patil	Vadhoda	15 No.	100.0	100.0	92.3	100.0	Prashant Vijay Patil	Vadhoad	1642	Papaya	15 no	2000	ACCEPTED	97.31	
+Pravin Nilkanth Badhe Khedi Banana Adv	MATCHED	Pravin Nilkanth Badhe	Khedi	Banana	97.7	100.0	75.0	100.0	Pravin Nilkantha Badhe	Khirdi kh	1736	Banana	G9	4800	ACCEPTED	90.32	
+Prem Kashinath Patil Damalda Banana Adv	MATCHED	Prem Kashinath Patil	Damalda	Banana	100.0	100.0	100.0	100.0	Prem Kashinath Patil	Damalda	1563	Banana	G9	4000	ACCEPTED	100.0	
+Pritam Dilip Patil Gorgavale Banana Adv	MATCHED	Pritam Dilip Patil	Gorgavale	Banana	100.0	88.9	88.9	100.0	Pritam Dilip Patil	Gorgawale	1089	Banana	G9	3100	ACCEPTED	96.11	
+Priyanka Gautam Borale Rajale Banana Adv	MATCHED	Priyanka Gautam Borale	Rajale	Banana	100.0	100.0	100.0	100.0	Priyanka Gautam Borale	Rajale	1343	Banana	G9	5800	ACCEPTED	100.0	
+Pundlik Ramdas Pawar Gondegaon Banana Adv	MATCHED	Pundlik Ramdas Pawar	Gondegaon	Banana	97.6	100.0	100.0	100.0	Pundalik Ramdas Pawar	Gondegaon	1016	Banana	G9	2500	ACCEPTED	99.02	
+Raghunath Channu Patil Nimgavhan 15 No. Adv	MATCHED	Raghunath Channu Patil	Nimgavhan	15 No.	97.7	94.1	94.1	100.0	Raghunath Chnnu Patil	Nimgvhan	1071	Papaya	15 no	3800	ACCEPTED	97.01	
+Rahul Bhaidas More Bhatane Taiwan Adv	MATCHED	Rahul Bhaidas More	Bhatane	Taiwan	100.0	100.0	100.0	100.0	Rahul Bhaidas More	Bhatane	1229	Papaya	Taiwan	2000	ACCEPTED	100.0	
+Rahul Dilip Patil Babhulgaon 15 No. Adv	MATCHED	Rahul Dilip Patil	Babhulgaon	15 No.	100.0	94.7	94.7	100.0	Rahul dilip Patil	bahulgaon	1650	Papaya	15 no	4000	ACCEPTED	98.16	
+Rahul Rathod Chaupale Superson Adv	MATCHED	Rahul Rathod	Chaupale	Superson	100.0	100.0	100.0	100.0	Rahul Rathod	Chaupale	1581	Papaya	Superson	3500	ACCEPTED	100.0	
+Rahul Suresh Patil Arthe 15 No. Adv	MATCHED	Rahul Suresh Patil	Arthe	15 No.	100.0	100.0	100.0	100.0	Rahul suresh Patil	Arthe	1140	Papaya	15 no	1700	ACCEPTED	100.0	
+Rahul Vasant Nafade Korpavali 15 No. Adv	MATCHED	Rahul Vasant Nafade	Korpavali	15 No.	100.0	88.9	88.9	100.0	Rahul Vasant Nafade	Korpawali	1616	Papaya	15 no	3000	ACCEPTED	96.11	
+Rajendra Bhika Patil Vitner Banana Adv	MATCHED	Rajendra Bhika Patil	Vitner	Banana	100.0	100.0	100.0	100.0	Rajendra bhika Patil	Vitner	1489	Banana	G9	3500	ACCEPTED	100.0	
+Rajendra Nana Patil Kalamsara Banana Advv	MATCHED	Rajendra Nana Patil	Kalamsara	Banana	100.0	77.8	80.0	100.0	Rajendra Nana Patil	Kamalsara	1014	Banana	G9	3000	ACCEPTED	93.0	
+Rajesh Motising Naik Kotali Taiwan Adv	MATCHED	Rajesh Motising Naik	Kotali	Taiwan	92.7	92.3	92.3	100.0	Rajesh Motising nayak	Kothali	1574	Papaya	Taiwan	5000	ACCEPTED	94.38	
+Rajesh Vinayak Patil Sukvad Taiwan Adv	MATCHED	Rajesh Vinayak Patil	Sukvad	Taiwan	100.0	83.3	83.3	100.0	Rajesh Vinayak Patil	Sukwad	1163	Papaya	Taiwan	3600	ACCEPTED	94.17	
+Rajubhai Patel Pachorabari Superson Adv	MATCHED	Rajubhai Patel	Pachorabari	Superson	100.0	100.0	100.0	100.0	Rajubhai Patel	Pachorabari	1449	Papaya	Superson	9000	ACCEPTED	100.0	
+Raju Daga Pawar Hol Superson Adv	MATCHED	Raju Daga Pawar	Hol	Superson	100.0	100.0	100.0	100.0	Raju Daga Pawar	hol trf Ranale	1168	Papaya	Superson	3200	ACCEPTED	100.0	
+Raju Tarachand Patil Ranale Superson Adv	MATCHED	Raju Tarachand Patil	Ranale	Superson	100.0	100.0	100.0	100.0	Raju Tarachand Patil	hol trf Ranale	1317	Papaya	Superson	3500	ACCEPTED	100.0	
+Rakesh Vijay Chaudhari Dhanwadi Banana Adv	MATCHED	Rakesh Vijay Chaudhari	Dhanwadi	Banana	100.0	100.0	82.4	100.0	Rakesh Vijay Chaudhari	Dhnakwadi	1363	Banana	G9	3200	ACCEPTED	93.82	
+Ramakant Tukaram Chaudhari Gujarjambholi Taiwan Adv	MATCHED	Ramakant Tukaram Chaudhari	Gujarjambholi	Taiwan	98.0	96.3	96.3	100.0	Ramakant Tukaram chudhari	Gujar Jambholi	1204	Papaya	Taiwan	3500	ACCEPTED	97.92	
+Raman Vaman Patil Vadhoda 15 No. Adv	MATCHED	Raman Vaman Patil	Vadhoda	15 No.	88.2	100.0	100.0	100.0	Raman wanan Patil	Vadhoda	1629	Papaya	15 no	2200	ACCEPTED	95.29	
+Ramdas Narayan Mahajan Ainpur Banana Adv	MATCHED	Ramdas Narayan Mahajan	Ainpur	Banana	100.0	100.0	100.0	100.0	Ramdas Narayan Mahajan	Ainpur	1262	Banana	G9	15000	ACCEPTED	100.0	
+Ramesh Bhausing Patil Tokartalav Banana Adv	MATCHED	Ramesh Bhausing Patil	Tokartalav	Banana	100.0	100.0	100.0	100.0	Ramesh Bhausing Patil	Tokartalav	1043	Banana	G9	7500	ACCEPTED	100.0	
+Ramesh Chaudhari Changdeo Banana Adv	MATCHED	Ramesh Chaudhari	Changdeo	Banana	100.0	87.5	93.3	100.0	Ramesh Chaudhari	Changdev	1020	Banana	G9	5500	ACCEPTED	97.67	
+Ramesh Paulad Chaudhari Thorgavhan Banana Adv	MATCHED	Ramesh Paulad Chaudhari	Thorgavhan	Banana	100.0	100.0	94.7	54.5	Ramesh Paulad Chaudhari	Thorgvhan	1702	Papaya	15 no	3000	ACCEPTED	86.79	
+Rameshwar Julalsing Patil Ravla Banana Adv	MATCHED	Rameshwar Julalsing Patil	Ravla	Banana	92.0	80.0	80.0	100.0	Rameshwar Gulabsing Patil	Rvala	1165	Banana	G9	2000	ACCEPTED	89.8	
+Rameshwar Krushi Kendra Padsod 15 No. Adv	MATCHED	Rameshwar Krushi Kendra	Padsod	15 No.	100.0	100.0	100.0	100.0	Rameshwar Krushi Kendra	Padsod	1087	Papaya	15 no	5000	ACCEPTED	100.0	
+Ramkrushna Vitthal Sonawane Khedibhokari 15 No. Adv	MATCHED	Ramkrushna Vitthal Sonawane	Khedibhokari	15 No.	98.1	66.7	96.0	100.0	Ramkrushna Vitthal Sonwane	Khedi Bhokari	1609	Papaya	15 no	5000	ACCEPTED	97.85	
+Raosaheb Vishwanath Mali Kondhavad Superson Adv	MATCHED	Raosaheb Vishwanath Mali	Kondhavad	Superson	95.8	88.9	88.9	100.0	Ravsaheb Vishwanath Mali	Kondhawad	1187	Papaya	Superson	2000	ACCEPTED	94.44	
+Raosaheb Vishwanath Mali Kondhavad Taiwan Adv	MATCHED	Raosaheb Vishwanath Mali	Kondhavad	Taiwan	95.8	88.9	88.9	100.0	Ravsaheb Vishwanath Mali	Kondhawad	1186	Papaya	Taiwan	4000	ACCEPTED	94.44	
+Ravindra Ambar Patil Balade 15 No. Adv	MATCHED	Ravindra Ambar Patil	Balade	15 No.	100.0	90.9	90.9	100.0	Ravindra Ambar Patil	Balde	1131	Papaya	15 no	3500	ACCEPTED	96.82	
+Ravindra Daga Gujar Nimjhari Superson Adv	MATCHED	Ravindra Daga Gujar	Nimjhari	Superson	100.0	80.0	80.0	100.0	Ravindra Daga Gujar	Nimzari	1456	Papaya	Superson	3500	ACCEPTED	93.0	
+Ravindra Laxman Chavhan K-Mohida Taiwan Adv	MATCHED	Ravindra Laxman Chavhan	K-Mohida	Taiwan	100.0	87.5	87.5	100.0	Ravindra laxman chavhan	k Mohida	1281	Papaya	Taiwan	2300	ACCEPTED	95.62	
+Ravindra Rajaram Marathe Vikharan W-46 Adv	MATCHED	Ravindra Rajaram Marathe	Vikharan	W-46	100.0	100.0	100.0	100.0	Ravindra Rajaram Marathe	Vikharan	1182	Papaya	W-46	1600	ACCEPTED	100.0	
+Ritesh Bapu Hadap Palaskheda 15 No. Adv	MATCHED	Ritesh Bapu Hadap	Palaskheda	15 No.	94.1	100.0	100.0	100.0	Ritesh bapu Halap	Palaskheda M.	1166	Papaya	15 no	2100	ACCEPTED	97.65	
+Rohidas Dayaram Jadhav Vadavad Banana Adv	MATCHED	Rohidas Dayaram Jadhav	Vadavad	Banana	100.0	92.3	92.3	100.0	Rohidas Dayaram Jadhav	Vdavad	1217	Banana	G9	3600	ACCEPTED	97.31	
+Rohidas Jaddu Patil Damdalda Banana Adv	MATCHED	Rohidas Jaddu Patil	Damdalda	Banana	94.7	93.3	93.3	100.0	Roahidas Jadu Patil	Damalda	1080	Banana	G9	4000	ACCEPTED	95.56	
+Rupali Rajendra Patil Gadhoda Banana Adv	MATCHED	Rupali Rajendra Patil	Gadhoda	Banana	100.0	100.0	100.0	100.0	Rupali Rajendra Patil	Gadhoda	1064	Banana	G9	4000	ACCEPTED	100.0	
+Rupchand Ishvar Beldar Chaupale Banana Adv	MATCHED	Rupchand Ishvar Beldar	Chaupale	Banana	95.5	100.0	100.0	100.0	Rupchand Ishwar Beldar	Chaupale	1283	Banana	G9	4700	ACCEPTED	98.18	
+Rupesh Pravin Lokhande Rajora W46 Adv	MATCHED	Rupesh Pravin Lokhande	Rajora	W46	100.0	100.0	100.0	85.7	Rupesh Pravin Lokhande	Rajora	1044	Papaya	W-46	900	ACCEPTED	96.43	
+Rupesh Pundlik Shirsath Hol Superson Adv	MATCHED	Rupesh Pundlik Shirsath	Hol	Superson	87.0	100.0	100.0	100.0	Rakesh pundalik Sirsath	hol trf Ranale	1159	Papaya	Superson	3500	ACCEPTED	94.78	
+Sachin Devram Thorat Kalamsara Banana Adv	MATCHED	Sachin Devram Thorat	Kalamsara	Banana	100.0	77.8	80.0	100.0	Sachin Devram Thorat	Kamalsara	1015	Banana	G9	3000	ACCEPTED	93.0	
+Sachin Dnyaneshwar Patil Gorgavale Banana Adv	MATCHED	Sachin Dnyaneshwar Patil	Gorgavale	Banana	100.0	88.9	88.9	100.0	Sachin Dnyaneshwar Patil	Goargavle	1492	Banana	G9	3000	ACCEPTED	96.11	
+Sachin Jivan Patel Hingani P & B Adv	MATCHED	Sachin Jivan Patel	Hingani P &	B	100.0	77.8	100.0	100.0	sachin jivan Patel	Hingani	1178	Banana	G9	6500	ACCEPTED	100.0	
+Sachin Raghunath Chaudhari Koparli Taiwan Adv	MATCHED	Sachin Raghunath Chaudhari	Koparli	Taiwan	100.0	100.0	75.0	100.0	Sachin Raghunath Chaudhari	Korpawali	1264	Papaya	Taiwan	7500	ACCEPTED	91.25	
+Sachin Saichanran Patil Ranale Superson Adv	MATCHED	Sachin Saichanran Patil	Ranale	Superson	86.4	100.0	100.0	100.0	Sachin sakharam Patil	hol trf Ranale	1174	Papaya	Superson	5500	ACCEPTED	94.55	
+Sachin Vilas Rajput Sundarde Superson Adv	MATCHED	Sachin Vilas Rajput	Sundarde	Superson	100.0	100.0	100.0	100.0	Sachin Vilas Rajput	Sundarde	1559	Papaya	Superson	7500	ACCEPTED	100.0	
+Sadashiv Asaram Patil Ranale Superson Adv	MATCHED	Sadashiv Asaram Patil	Ranale	Superson	100.0	100.0	100.0	100.0	Sadashiv Asaram Patil	hol trf Ranale	1189	Papaya	Superson	4000	ACCEPTED	100.0	
+Sagar Ratilal Patil Bhatane Taiwan Adv	MATCHED	Sagar Ratilal Patil	Bhatane	Taiwan	100.0	100.0	100.0	100.0	Sagar ratilal Patil	Bhatane	1211	Papaya	Taiwan	3500	ACCEPTED	100.0	
+Sahebrao Wagh Mandane Taiwan Adv	MATCHED	Sahebrao Wagh	Mandane	Taiwan	100.0	100.0	100.0	100.0	Sahebrao Wagh	Mandane	1300	Papaya	Taiwan	4000	ACCEPTED	100.0	
+Sajan Sitaram Patil Manjare Taiwan Adv	MATCHED	Sajan Sitaram Patil	Manjare	Taiwan	97.4	100.0	100.0	100.0	Sajjan Sitaram Patil	Manjare	1355	Papaya	Taiwan	3000	ACCEPTED	98.97	
+Samadhan Lala Patil Shanimandal Superson Adv	MATCHED	Samadhan Lala Patil	Shanimandal	Superson	100.0	100.0	100.0	100.0	Samadhan Lala Patil	Shanimandal	1287	Papaya	Superson	2000	ACCEPTED	100.0	
+Samadhan Macchindra Patil Piloda Banana Adv	MATCHED	Samadhan Macchindra Patil	Piloda	Banana	96.0	100.0	90.9	100.0	Samadhan Machhindra Patil	Piload	1743	Banana	G9	4500	ACCEPTED	95.22	
+Samadhan Rambhau Mose Pangari 15 No. Adv	MATCHED	Samadhan Rambhau Mose	Pangari	15 No.	92.7	100.0	100.0	100.0	Samdhan Rambahu Mose	Pangari	1516	Papaya	15 no	2200	ACCEPTED	97.07	
+Samadhan Ramdas Patil Pimparkhed Taiwan Adv	MATCHED	Samadhan Ramdas Patil	Pimparkhed	Taiwan	97.6	95.2	100.0	100.0	Samdhan Ramdas Patil	Pimparkheda	1059	Papaya	Taiwan	2500	ACCEPTED	99.02	
+Sambhaji Bhikan Patil Arthe 15 No. Adv	MATCHED	Sambhaji Bhikan Patil	Arthe	15 No.	97.6	100.0	100.0	100.0	Smbhaji Bhikan Patil	Arthe	1069	Papaya	15 no	3200	ACCEPTED	99.02	
+Sambhaji Kesharsing Chavhan Rajale Taiwan Adv	MATCHED	Sambhaji Kesharsing Chavhan	Rajale	Taiwan	98.1	100.0	100.0	100.0	sambhaji kesarsing Chavhan	Rajale	1271	Papaya	Taiwan	2000	ACCEPTED	99.25	
+Sanchit Samadhan Ingole Kinod Banana Adv	MATCHED	Sanchit Samadhan Ingole	Kinod	Banana	97.8	100.0	100.0	100.0	Sanchit Samdhan ingole	Kinoda	1160	Banana	G9	6000	ACCEPTED	99.11	
+Sandhyabai Tukaram Patil Sulvade Banana Adv	MATCHED	Sandhyabai Tukaram Patil	Sulvade	Banana	100.0	85.7	85.7	100.0	Sandhyabai Tukaram Patil	Sulwade	1322	Banana	G9	12700	ACCEPTED	95.0	
+Sandip Bhaurao Patil Kondhavad 15 No. Adv	MATCHED	Sandip Bhaurao Patil	Kondhavad	15 No.	100.0	88.9	94.1	100.0	Sandip bhaurao Patil	Kondhaval	1139	Papaya	15 no	2200	ACCEPTED	97.94	
+Sandip Chauksey Balvada W-46 Adv	MATCHED	Sandip Chauksey	Balvada	W-46	96.6	85.7	85.7	100.0	Sandip Chaukse	Balwada	1413	Papaya	W-46	2300	ACCEPTED	93.62	
+Sanjay Ananda Chaudhari Bhatpura 15 No. Adv	MATCHED	Sanjay Ananda Chaudhari	Bhatpura	15 No.	100.0	100.0	100.0	100.0	Sanjay Ananda chaudhari	Bhatpura	1105	Papaya	15 no	2700	ACCEPTED	100.0	
+Sanjay Puna Patil Pimpale W-46 Adv	MATCHED	Sanjay Puna Patil	Pimpale	W-46	100.0	100.0	100.0	100.0	Sanjay Puna Patil	Pimpale	1653	Papaya	W-46	3700	ACCEPTED	100.0	
+Sanjay Raghunath Bhagat Rajani Banana Adv	MATCHED	Sanjay Raghunath Bhagat	Rajani	Banana	100.0	92.3	92.3	100.0	Sanjay Raghunath Bhagat	Ranjani	1000	Banana	G9	4500	ACCEPTED	97.31	
+Sanjay Rajaram Chaudhari Ahirwadi Banana Adv	MATCHED	Sanjay Rajaram Chaudhari	Ahirwadi	Banana	100.0	100.0	100.0	100.0	Sanjay rajaram chaudhari	Ahirwadi	1063	Banana	G9	10000	ACCEPTED	100.0	
+Sanjay Rajaram Patil Vikhran Taiwan Adv	MATCHED	Sanjay Rajaram Patil	Vikhran	Taiwan	100.0	93.3	93.3	100.0	Sanjay Rajaram Patil	Vikharan	1194	Papaya	Taiwan	6000	ACCEPTED	97.67	
+Sanjiv Sudham Mirge Kalmadi Superson Adv	MATCHED	Sanjiv Sudham Mirge	Kalmadi	Superson	94.7	100.0	100.0	100.0	Sanjiv Sudam Mirghe	Kalmadi	1602	Papaya	Superson	5800	ACCEPTED	97.89	
+Santosh Jain Shahada Banana Adv	MATCHED	Santosh Jain	Shahada	Banana	100.0	100.0	100.0	100.0	Santosh Jain	Shahada	1346	Banana	G9	4000	ACCEPTED	100.0	
+Santosh Nimba Patil Dahivad Taiwan Adv	MATCHED	Santosh Nimba Patil	Dahivad	Taiwan	100.0	100.0	76.9	100.0	Santosh Nimba Patil	Dahigaon	1100	Papaya	Taiwan	2100	ACCEPTED	91.92	
+Satish Chango Talele Sangavi 15 No. Adv	MATCHED	Satish Chango Talele	Sangavi	15 No.	100.0	100.0	100.0	100.0	Satish Chango Talele	Sangavi	1621	Papaya	15 no	3300	ACCEPTED	100.0	
+Satish Shivaji Bhonde Kekatnimbhora Banana Adv	MATCHED	Satish Shivaji Bhonde	Kekatnimbhora	Banana	97.6	96.3	88.9	100.0	Satish Shivaji Bhond	Kakat Nimbhora	1045	Banana	G9	3200	ACCEPTED	95.14	
+Sham Bhika Patil Aurangapur Banana Adv	MATCHED	Sham Bhika Patil	Aurangapur	Banana	100.0	94.7	94.7	100.0	Sham Bhika Patil	Aurangpur	1334	Banana	G9	14000	ACCEPTED	98.16	
+Shamkant Ramrao Thakare Thalner P&B Adv	MATCHED	Shamkant Ramrao Thakare	Thalner	P&B	97.8	100.0	100.0	50.0	shamkant Ramao Thakare	Thalner	1170	Papaya	15 no	4000	ACCEPTED	86.61	
+Shamkant Vikram Thakare Padhavad 15 No. Adv	MATCHED	Shamkant Vikram Thakare	Padhavad	15 No.	97.9	87.5	83.3	100.0	shamakant Vikram Thakare	Padhawd	1253	Papaya	15 no	6500	ACCEPTED	93.32	
+Shankar Natthu Patil Damalda Banana Adv	MATCHED	Shankar Natthu Patil	Damalda	Banana	100.0	100.0	100.0	100.0	Shankar Natthu Patil	Damalda	1345	Banana	G9	3800	ACCEPTED	100.0	
+Shantanu Dhulichand Birla Kopali Taiwan Adv	MATCHED	Shantanu Dhulichand Birla	Kopali	Taiwan	89.3	92.3	92.3	100.0	Shantanu Kumar Dhulichand birla	Koparli	1251	Papaya	Taiwan	5000	ACCEPTED	93.02	
+Shantaram Namdeo Chaudhari Dhanwadi 15 No. Adv	MATCHED	Shantaram Namdeo Chaudhari	Dhanwadi	15 No.	96.2	100.0	100.0	100.0	Shantaram Namdev Chaudhari	Dhanwadi	1341	Papaya	15 no	2000	ACCEPTED	98.46	
+Shantaram Namdeo Chaudhari Dhanwadi Banana Adv	MATCHED	Shantaram Namdeo Chaudhari	Dhanwadi	Banana	96.2	100.0	100.0	100.0	Shantaram Namdev Chaudhari	Dhanwadi	1342	Banana	G9	4000	ACCEPTED	98.46	
+Shantaram Patil Sir Sanfule 15 No. Adv	MATCHED	Shantaram Patil	Sir Sanfule	15 No.	100.0	77.8	100.0	100.0	Shantaram Patil	Sanfule	1205	Papaya	15 no	4000	ACCEPTED	100.0	
+Shantilal Devidas Chuadhari Hatmohida Superson Adv	MATCHED	Shantilal Devidas Chuadhari	Hatmohida	Superson	96.3	100.0	100.0	100.0	Shantilal Devidas chaudhari	Hatmohida	1365	Papaya	Superson	3700	ACCEPTED	98.52	
+Sharad Bhika Patil Bhadvad Taiwan Adv	MATCHED	Sharad Bhika Patil	Bhadvad	Taiwan	100.0	85.7	85.7	100.0	sharad Bhika Patil	Bhadwad	1183	Papaya	Taiwan	6000	ACCEPTED	95.0	
+Sharad Hiraji Patil Damalda Banana Adv	MATCHED	Sharad Hiraji Patil	Damalda	Banana	100.0	100.0	100.0	100.0	Sharad Hiraji patil	Damalda	1324	Banana	G9	6000	ACCEPTED	100.0	
+Sharad Madhavrao Patil Mhalsar 15 No. Adv	MATCHED	Sharad Madhavrao Patil	Mhalsar	15 No.	100.0	100.0	100.0	100.0	Sharad Madhavrao Patil	Mhalsar	1400	Papaya	15 no	1800	ACCEPTED	100.0	
+Shashikant Sitaram Patil Mhalsar 15 No. Adv	MATCHED	Shashikant Sitaram Patil	Mhalsar	15 No.	100.0	100.0	100.0	100.0	Shashikant Sitaram Patil	Mhalsar	1395	Papaya	15 no	1800	ACCEPTED	100.0	
+Shekhar Gokul Patil Vedhoda Taiwan Adv	MATCHED	Shekhar Gokul Patil	Vedhoda	Taiwan	100.0	92.3	85.7	100.0	Shekhar Gokul Patil	vadhoda	1230	Papaya	Taiwan	2800	ACCEPTED	95.0	
+Shital Yogesh Patil Kalmadi Superson Adv	MATCHED	Shital Yogesh Patil	Kalmadi	Superson	85.0	100.0	100.0	100.0	smitabai Yogesh Patil	Kalmadi	1488	Papaya	Superson	8000	ACCEPTED	94.0	
+Shivaji Shriram Chaudhari Khedi 15 No. Adv	MATCHED	Shivaji Shriram Chaudhari	Khedi	15 No.	100.0	100.0	100.0	100.0	Shivaji Shriram Chaudhari	Khedi	1030	Papaya	15 no	4000	ACCEPTED	100.0	
+Siddhesh Kishor Patil Chinchol Banana Adv	MATCHED	Siddhesh Kishor Patil	Chinchol	Banana	97.6	100.0	100.0	100.0	Siddesh Kishor Patil	Chinchol	1073	Banana	G9	3000	ACCEPTED	99.02	
+Subhash Chintaman Mali Kalamsara Taiwan Adv	MATCHED	Subhash Chintaman Mali	Kalamsara	Taiwan	100.0	77.8	75.0	100.0	Subhash Chintaman mali	Kamlsare	1696	Papaya	Taiwan	2400	ACCEPTED	91.25	
+Subhash Devchand Patil Dongargaon Taiwan Adv	MATCHED	Subhash Devchand Patil	Dongargaon	Taiwan	100.0	100.0	100.0	100.0	Subhash Devchand Patil	Dongargaon	1200	Papaya	Taiwan	7500	ACCEPTED	100.0	
+Subhash Namdeo Pardeshi Tandali Taiwan Adv	MATCHED	Subhash Namdeo Pardeshi	Tandali	Taiwan	95.7	100.0	100.0	100.0	Subhash Namdev Pardeshi	Tandali	1698	Papaya	Taiwan	1700	ACCEPTED	98.26	
+Subhash Raman Patil Sanfula 15 No. Adv	MATCHED	Subhash Raman Patil	Sanfula	15 No.	100.0	85.7	92.3	100.0	Subhash Raman Patil	Sanfule	1111	Papaya	15 no	2000	ACCEPTED	97.31	
+Subhash Shivdas Naik Kothali Taiwan Adv	MATCHED	Subhash Shivdas Naik	Kothali	Taiwan	95.0	100.0	100.0	100.0	Subhash Shivdas Nayk	Kothali	1209	Papaya	Taiwan	6500	ACCEPTED	98.0	
+Subhash Traymbak Saner Kukawal Superson Adv	MATCHED	Subhash Traymbak Saner	Kukawal	Superson	97.7	100.0	100.0	100.0	Subhash Trambak Saner	Kukawal	1248	Papaya	Superson	2000	ACCEPTED	99.07	
+Subhash Traymbak Saner Kukawal Taiwan Adv	MATCHED	Subhash Traymbak Saner	Kukawal	Taiwan	97.7	100.0	100.0	100.0	Subhash Trambak Saner	Kukawal	1247	Papaya	Taiwan	4000	ACCEPTED	99.07	
+Sudam Santosh Patil Vadaki Banana Adv	MATCHED	Sudam Santosh Patil	Vadaki	Banana	100.0	83.3	90.9	100.0	Sudam Santosh Patil	Wadaki	1117	Banana	G9	4000	ACCEPTED	96.82	
+Sudhakar Laxman Wagh R. Bambhrud Banana Adv	MATCHED	Sudhakar Laxman Wagh	R. Bambhrud	Banana	100.0	64.0	77.8	100.0	Sudhakar Laxman Wagh	Raniche Bamrud	1258	Banana	G9	4500	ACCEPTED	92.22	
+Sudham Kalu Patil Gujar Bhavali Supersun Adv	MATCHED	Sudham Kalu Patil	Gujar	Bhavali Supersun	97.0	60.0	100.0	87.5	Sudam Kalu Patil	Gujar Jambholi	1143	Papaya	Superson	7500	ACCEPTED	95.66	
+Sudhir Bhagvat Patil Khirdi Banana Adv	MATCHED	Sudhir Bhagvat Patil	Khirdi	Banana	86.4	100.0	100.0	100.0	Dr. Sudhir Bhagwat Patil	Khirdi	1090	Banana	G9	7500	ACCEPTED	94.55	
+Sunanda Prakash Bhamare Tarhadi Banana Adv	MATCHED	Sunanda Prakash Bhamare	Tarhadi	Banana	93.9	100.0	92.3	100.0	Sunandabai Prakash Bhamare	Trhadi	1367	Banana	G9	2800	ACCEPTED	94.86	
+Sunil Ashok Patil Nimjhari W-46 Adv	MATCHED	Sunil Ashok Patil	Nimjhari	W-46	100.0	80.0	80.0	100.0	Sunil Ashok Patil	Nimzari	1364	Papaya	W-46	2400	ACCEPTED	93.0	
+Sunil Bansilal Patil Sukvad Taiwan Adv	MATCHED	Sunil Bansilal Patil	Sukvad	Taiwan	100.0	83.3	83.3	100.0	Sunil Bansilal Patil	Sukwad	1162	Papaya	Taiwan	4000	ACCEPTED	94.17	
+Sunil Bhagvan Patil Hingani 15 No. Adv	MATCHED	Sunil Bhagvan Patil	Hingani	15 No.	94.7	100.0	100.0	100.0	Sunil Bhagwan Patil	Hingani	1389	Papaya	15 no	10000	ACCEPTED	97.89	
+Sunil Dagadu Chaudhari Thorgavhan 15 No. Adv	MATCHED	Sunil Dagadu Chaudhari	Thorgavhan	15 No.	100.0	100.0	94.7	100.0	Sunil Dagadu Chaudhari	Thorgvhan	1188	Papaya	15 no	1000	ACCEPTED	98.16	
+Sunil Hiralal Chaudhari Chaupale Superson Adv	MATCHED	Sunil Hiralal Chaudhari	Chaupale	Superson	100.0	100.0	100.0	100.0	Sunil hiralal Chaudhari	Chaupale	1451	Papaya	Superson	3500	ACCEPTED	100.0	
+Sunil Mathur Patil Borad Superson Adv	MATCHED	Sunil Mathur Patil	Borad	Superson	100.0	100.0	100.0	100.0	Sunil Mathur Patil	Borad	1438	Papaya	Superson	6300	ACCEPTED	100.0	
+Sunil Motiram Chaudhari Hingona Banana Adv	MATCHED	Sunil Motiram Chaudhari	Hingona	Banana	97.9	100.0	100.0	100.0	Sunil Motioram chaudhari	Hingona	1518	Banana	G9	5000	ACCEPTED	99.15	
+Sunil Shaligram Patil Dahiwad W-46 Adv	MATCHED	Sunil Shaligram Patil	Dahiwad	W-46	100.0	85.7	85.7	100.0	Sunil Shaligram Patil	Dahivad	1466	Papaya	W-46	2500	ACCEPTED	95.0	
+Sunita Mahendra Patil Rameshwar Banana Adv	MATCHED	Sunita Mahendra Patil	Rameshwar	Banana	100.0	100.0	100.0	100.0	Sunita Mahendra Patil	Rameshwar	1520	Banana	G9	1000	ACCEPTED	100.0	
+Sunita Mohan Patil Damalda Banana Adv	MATCHED	Sunita Mohan Patil	Damalda	Banana	100.0	100.0	100.0	100.0	Sunita Mohan Patil	Damalda	1094	Banana	G9	3800	ACCEPTED	100.0	
+Sunita Vinod Chaudhari Korit Banana Adv	MATCHED	Sunita Vinod Chaudhari	Korit	Banana	100.0	100.0	100.0	100.0	Sunita Vinod chaudhari	Korit	1404	Banana	G9	6500	ACCEPTED	100.0	
+Surendra Dnyaneshwar Patil Sulvade Superson Adv	MATCHED	Surendra Dnyaneshwar Patil	Sulvade	Superson	96.0	85.7	85.7	100.0	Surendra dyneshwar patil	Sulwade	1576	Papaya	Superson	5000	ACCEPTED	93.4	
+Suresh Bharat Patil Kandhare Taiwan Adv	MATCHED	Suresh Bharat Patil	Kandhare	Taiwan	100.0	100.0	100.0	100.0	Suresh Bharat Patil	Kandhare	1510	Papaya	Taiwan	3000	ACCEPTED	100.0	
+Suresh Daga Chaudhari Arthe 15 No. Adv	MATCHED	Suresh Daga Chaudhari	Arthe	15 No.	100.0	100.0	100.0	100.0	Suresh daga Chaudhari	Arthe	1307	Papaya	15 no	1300	ACCEPTED	100.0	
+Suresh Girdhar Patel Chaupale Banana Adv	MATCHED	Suresh Girdhar Patel	Chaupale	Banana	100.0	100.0	100.0	100.0	Suresh Girdhar Patel	Chaupale	1123	Banana	G9	4000	ACCEPTED	100.0	
+Suresh Harchand Patil Bhatane Taiwan Adv	MATCHED	Suresh Harchand Patil	Bhatane	Taiwan	100.0	100.0	100.0	100.0	Suresh Harchand Patil	Bhatane	1220	Papaya	Taiwan	3400	ACCEPTED	100.0	
+Suresh Yashvant Saner Kukawal Taiwan Adv	MATCHED	Suresh Yashvant Saner	Kukawal	Taiwan	95.2	100.0	100.0	100.0	Suresh Yashwant Saner	Kukawal	1240	Papaya	Taiwan	3000	ACCEPTED	98.1	
+Suryakant Govindarao Patil Devgaon Taiwan Adv	MATCHED	Suryakant Govindarao Patil	Devgaon	Taiwan	98.0	100.0	100.0	100.0	Suryakant Govindrao Patil	Devgaon	1265	Papaya	Taiwan	3500	ACCEPTED	99.22	
+Sushila Vaman Patil Sonala Banana Adv	MATCHED	Sushila Vaman Patil	Sonala	Banana	92.7	100.0	100.0	100.0	Sushilabai Vaman Patil	Sonala	1012	Banana	G9	5000	ACCEPTED	97.07	
+Suvas Nandlal Jagtap R. Bambhrud 15 No. Adv	MATCHED	Suvas Nandlal Jagtap R.	Bambhrud	15 No.	88.4	66.7	85.7	100.0	Suvas Nanadal Jagtap	Raniche Bamrud	1591	Papaya	15 no	1300	ACCEPTED	90.35	
+Swaroop Uttam Patil Sarangkheda Banana Adv	MATCHED	Swaroop Uttam Patil	Sarangkheda	Banana	100.0	100.0	100.0	100.0	Swaroop Uttam Patil	Sarangkheda	1313	Banana	G9	4800	ACCEPTED	100.0	
+Tarachand Julal Patil Rameshwar Banana Adv	MATCHED	Tarachand Julal Patil	Rameshwar	Banana	100.0	100.0	100.0	100.0	Tarachand Julal Patil	Rameshwar	1522	Banana	G9	1000	ACCEPTED	100.0	
+Tukaram Shantilal Patkar Bhatpura Banana Adv	MATCHED	Tukaram Shantilal Patkar	Bhatpura	Banana	100.0	100.0	100.0	54.5	Tukaram Shantilal Patkar	Bhatpura	1120	Papaya	15 no	4300	ACCEPTED	88.64	
+Tushar Ambar Dhangar Boraval Banana Adv	MATCHED	Tushar Ambar Dhangar	Boraval	Banana	100.0	85.7	85.7	100.0	Tushar Ambar Dhangar	Borawal	1088	Banana	G9	3000	ACCEPTED	95.0	
+Ujwala Kalu Mali Chaupale Banana Adv	MATCHED	Ujwala Kalu Mali	Chaupale	Banana	100.0	100.0	100.0	100.0	Ujwala kalu Mali	Chaupale	1196	Banana	G9	6200	ACCEPTED	100.0	
+Umesh Bangesh Patil Khaire Superson Adv	MATCHED	Umesh Bangesh Patil	Khaire	Superson	97.3	92.3	90.9	100.0	Umesh Banesh Patil	Khairave	1504	Papaya	Superson	5000	ACCEPTED	95.74	
+Umesh Bangesh Patil Khaire Taiwan Adv	MATCHED	Umesh Bangesh Patil	Khaire	Taiwan	97.3	92.3	90.9	100.0	Umesh Banesh Patil	Khairave	1503	Papaya	Taiwan	6000	ACCEPTED	95.74	
+Ushabai Purushottam Patil Damalda Banana Adv	MATCHED	Ushabai Purushottam Patil	Damalda	Banana	98.0	100.0	100.0	100.0	Ushabai purshottam Patil	Damalda	1155	Banana	G9	5000	ACCEPTED	99.18	
+Usman Abbas Patel Garkheda 15 No. Adv	MATCHED	Usman Abbas Patel	Garkheda	15 No.	100.0	100.0	100.0	100.0	Usman Abbas Patel	Garkheda	1557	Papaya	15 no	2600	ACCEPTED	100.0	
+Uttam Shravan Patil Ranale Superson Adv	MATCHED	Uttam Shravan Patil	Ranale	Superson	100.0	100.0	100.0	100.0	Uttam Shravan Patil	hol trf Ranale	1173	Papaya	Superson	5500	ACCEPTED	100.0	
+Vaibhav Nimba Patil Khodasgaon Superson Adv	MATCHED	Vaibhav Nimba Patil	Khodasgaon	Superson	100.0	90.0	94.7	100.0	Vaibhav Nimba Patil	Ghodasgaon	1532	Papaya	Superson	3100	ACCEPTED	98.16	
+Vaishali Suresh Gosavi Tarhadi Banana Advv	MATCHED	Vaishali Suresh Gosavi	Tarhadi	Banana	100.0	100.0	92.3	100.0	Vaishali Suresh Gosavi	Trhadi	1058	Banana	G9	4200	ACCEPTED	97.31	
+Vandana Ravindra Patil Bhadli Bannana Advv	MATCHED	Vandana Ravindra Patil	Bhadli	Bannana	100.0	100.0	100.0	92.3	Vandana Ravindra patil	Bhadli	1007	Banana	G9	5200	ACCEPTED	98.08	
+Vasant Harchand Patil Pashtane W-46 Adv	MATCHED	Vasant Harchand Patil	Pashtane	W-46	97.7	100.0	100.0	100.0	Vasanta Harchand Patil	Pashtane	1047	Papaya	W-46	2000	ACCEPTED	99.07	
+Vasant Pitambar Patil Bhatane Taiwan Adv	MATCHED	Vasant Pitambar Patil	Bhatane	Taiwan	100.0	100.0	100.0	100.0	Vasant pitambar Patil	Bhatane	1232	Papaya	Taiwan	2400	ACCEPTED	100.0	
+Vasudeo Shankar Devare Shirpur Taiwan Adv	MATCHED	Vasudeo Shankar Devare	Shirpur	Taiwan	95.5	100.0	100.0	100.0	Vasudev Shankar Devare	Shirpur	1082	Papaya	Taiwan	4000	ACCEPTED	98.18	
+Vijaya Dnyaneshwar Jadhav Sanfule Banana Adv	MATCHED	Vijaya Dnyaneshwar Jadhav	Sanfule	Banana	98.0	100.0	100.0	100.0	Vijaya Dhnyaneshwar Jadhav	Sanfule	1018	Banana	G9	4000	ACCEPTED	99.22	
+Vijay Babusing Patil Manvel Papaya Adv	MATCHED	Vijay Babusing Patil	Manvel	Papaya	97.6	100.0	100.0	100.0	Vijay Babubsing Patil	Manvel	1048	Papaya	15 no	2500	ACCEPTED	99.02	
+Vijay Bilkar Ujlod 15 No. Adv	MATCHED	Vijay Bilkar	Ujlod	15 No.	100.0	83.3	83.3	100.0	Vijay Bilkar	Ujoload	1128	Papaya	15 no	3000	ACCEPTED	94.17	
+Vijay Gokul Patil Kanthare Taiwan Adv	MATCHED	Vijay Gokul Patil	Kanthare	Taiwan	100.0	87.5	87.5	100.0	Vijay Gokul Patil	Kandhare	1369	Papaya	Taiwan	3000	ACCEPTED	95.62	
+Vijay Murlidhar Patil Dhanwadi Banana Adv	MATCHED	Vijay Murlidhar Patil	Dhanwadi	Banana	100.0	100.0	100.0	100.0	Vijay Murlidhar Patil	Dhanwadi	1084	Banana	G9	8000	ACCEPTED	100.0	
+Vijay Onkar Patel Takarkheda Superson Adv	MATCHED	Vijay Onkar Patel	Takarkheda	Superson	94.1	100.0	100.0	100.0	Vijay Omkar patel	Takarkheda	1582	Papaya	Superson	7500	ACCEPTED	97.65	
+Vijay Ramdas Bhadane Chhalvel Superson Adv	MATCHED	Vijay Ramdas Bhadane	Chhalvel	Superson	100.0	87.5	87.5	100.0	Vijay Ramdas Bhadane	chhadvel	1515	Papaya	Superson	3000	ACCEPTED	95.62	
+Vijay Tukaram Patil Aurangapur Taiwan Adv	MATCHED	Vijay Tukaram Patil	Aurangapur	Taiwan	100.0	94.7	94.7	100.0	Vijay Tukaram Patil	Aurangpur	1500	Papaya	Taiwan	6000	ACCEPTED	98.16	
+Vijay Vishwas Saner Kukawal Taiwan Adv	MATCHED	Vijay Vishwas Saner	Kukawal	Taiwan	94.4	100.0	100.0	100.0	Vijay Viwas Saner	Kukawal	1238	Papaya	Taiwan	10000	ACCEPTED	97.78	
+Vikas Raghunath Teli Kapuswadi Banana Adv	MATCHED	Vikas Raghunath Teli	Kapuswadi	Banana	97.4	100.0	100.0	100.0	Vikas Rghunath Teli	Kapuswadi	1596	Banana	G9	3500	ACCEPTED	98.97	
+Vilas Sakharam Patil Vadhoda 15 No. Adv	MATCHED	Vilas Sakharam Patil	Vadhoda	15 No.	97.4	100.0	92.3	100.0	Vilas Skharam Patil	Vadhoad	1643	Papaya	15 no	2700	ACCEPTED	96.28	
+Vinod Dhirsing Naik Kothada Taiwan Advv	MATCHED	Vinod Dhirsing Naik	Kothada	Taiwan	92.3	100.0	100.0	100.0	vinod Dhirsing Nayak	Kothada	1297	Papaya	Taiwan	6000	ACCEPTED	96.92	
+Vinod Nimba Patil Kanthare Papaya Adv	MATCHED	Vinod Nimba Patil	Kanthare	Papaya	100.0	87.5	87.5	100.0	vinod Nimba Patil	Kandhare	1350	Papaya	Taiwan	5000	ACCEPTED	95.62	
+Vinod Uttam Patil K-Mohida Taiwan Adv	MATCHED	Vinod Uttam Patil	K-Mohida	Taiwan	100.0	87.5	87.5	100.0	Vinod Uttam Patil	k Mohida	1202	Papaya	Taiwan	2300	ACCEPTED	95.62	
+Vishal Yuvraj Suryavanshi Matkut Taiwan Adv	MATCHED	Vishal Yuvraj Suryavanshi	Matkut	Taiwan	96.0	83.3	83.3	100.0	Vishal Yuvraj Suryawanshi	Markut	1272	Papaya	Taiwan	4000	ACCEPTED	92.57	
+Vishwas Bilkar Ujlod 15 No. Adv	MATCHED	Vishwas Bilkar	Ujlod	15 No.	96.3	83.3	83.3	100.0	Viswas Bilkar	Ujoload	1129	Papaya	15 no	2300	ACCEPTED	92.69	
+Vitthal Murar Patil Sulvade Taiwan Adv	MATCHED	Vitthal Murar Patil	Sulvade	Taiwan	100.0	85.7	85.7	100.0	Vitthal Murar Patil	Sulwade	1245	Papaya	Taiwan	7500	ACCEPTED	95.0	
+Vivek Ravindra Chaudhari Pimpri-Nandu Banana Adv	MATCHED	Vivek Ravindra Chaudhari	Pimpri-Nandu	Banana	100.0	66.7	91.7	100.0	Vivek Ravindra Chaudhari	Pimpri Nandu	1484	Banana	G9	4000	ACCEPTED	97.08	
+Yogesh Nivrutti Suralkar Avha Banana Adv	MATCHED	Yogesh Nivrutti Suralkar	Avha	Banana	100.0	100.0	100.0	100.0	Yogesh Nivrutti Suralkar	avha	1156	Banana	G9	5000	ACCEPTED	100.0	
+Yogesh Shripad Chaudhari Chaupale Banana Adv	MATCHED	Yogesh Shripad Chaudhari	Chaupale	Banana	95.8	100.0	100.0	100.0	Yogesh Shripat Chaudhari	Chaupale	1255	Banana	G9	6200	ACCEPTED	98.33	
+Yogesh Subhash Patel Velavad Taiwan Advv	MATCHED	Yogesh Subhash Patel	Velavad	Taiwan	95.0	100.0	100.0	100.0	Yogesh Subhash Patil	velavad	1201	Papaya	Taiwan	4500	ACCEPTED	98.0	
+Yogesh Thobandas Patil Kalmadi Superson Adv	MATCHED	Yogesh Thobandas Patil	Kalmadi	Superson	100.0	100.0	100.0	100.0	Yogesh Thobandas Patil	Kalmadi	1485	Papaya	Superson	5600	ACCEPTED	100.0	
+Yogesh Tumba Chaudhari Samsherpur Superson Adv	MATCHED	Yogesh Tumba Chaudhari	Samsherpur	Superson	100.0	100.0	100.0	100.0	Yogesh Tumba Chaudhari	Samsherpur	1304	Papaya	Superson	5000	ACCEPTED	100.0	
+Yogesh Tumba Chaudhari Samsherpur Taiwan Adv	MATCHED	Yogesh Tumba Chaudhari	Samsherpur	Taiwan	100.0	100.0	100.0	100.0	Yogesh Tumba Chaudhari	Samsherpur	1303	Papaya	Taiwan	5000	ACCEPTED	100.0	
+Yogeshwar Satish Jadhav Fufnagari Banana Adv	MATCHED	Yogeshwar Satish Jadhav	Fufnagari	Banana	100.0	88.9	88.9	100.0	Yogeshwar Satish Jadhav	Fuknagari	1009	Banana	G9	3000	ACCEPTED	96.11	
+Yograj Laxman Patil Pashtane W-46 Adv	MATCHED	Yograj Laxman Patil	Pashtane	W-46	100.0	100.0	100.0	100.0	Yograj Laxman Patil	Pashtane	1127	Papaya	W-46	1600	ACCEPTED	100.0	
+Yograj Motilal Patel Kalmadi Superson Adv	MATCHED	Yograj Motilal Patel	Kalmadi	Superson	100.0	100.0	100.0	100.0	Yograj Motilal Patel	Kalmadi	1487	Papaya	Superson	5500	ACCEPTED	100.0	
+Yusuf Abbas Patel Garkheda 15 No. Adv	MATCHED	Yusuf Abbas Patel	Garkheda	15 No.	100.0	100.0	100.0	100.0	Yusuf Abbas Patel	Garkheda	1558	Papaya	15 no	1800	ACCEPTED	100.0	
+Yuvraj Kadu Patil Padmoda 15 No. Adv	MATCHED	Yuvraj Kadu Patil	Padmoda	15 No.	100.0	100.0	100.0	100.0	Yuvraj Kadu Patil	Padmoda	1370	Papaya	15 no	3000	ACCEPTED	100.0	
+Yuvraj Ratan Tayade Chinchol 15 No. Adv	MATCHED	Yuvraj Ratan Tayade	Chinchol	15 No.	100.0	100.0	100.0	100.0	Yuvraj Ratan Tayade	Chinchol	1619	Papaya	15 no	2500	ACCEPTED	100.0	
+Avinash Gopal Patil Gadhoda Banana Adv	MATCHED	Avinash Gopal Patil	Gadhoda	Banana	100.0	100.0	100.0	100.0	Avinash Gopal Patil	Gadhoda	1148	Banana	G9	5000	ACCEPTED	100.0	
+Gajanan Pundlik Patil Babhulgaon Papaya Adv	MATCHED	Gajanan Pundlik Patil	Babhulgaon	Papaya	97.7	94.7	94.7	100.0	Gajanan Pundalik Patil	bahulgaon	1234	Papaya	15 no	3500	ACCEPTED	97.23	
