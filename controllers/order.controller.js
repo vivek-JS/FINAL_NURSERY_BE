@@ -3538,7 +3538,7 @@ const handleQRPaymentCallback = catchAsync(async (req, res) => {
   return res.status(200).json({ success: true, updated });
 });
 
-// ─── Delivery Analytics: fast summary grouped by status → taluka ─────────────
+// ─── Delivery Analytics: summary status → subtype → taluka → village ─────────
 const getDeliverySummary = catchAsync(async (req, res, next) => {
   const { startDate, endDate, plantId } = req.query;
 
@@ -3551,28 +3551,40 @@ const getDeliverySummary = catchAsync(async (req, res, next) => {
 
   const matchFilter = {};
   if (startDate && endDate) {
-    matchFilter.orderBookingDate = {
-      $gte: parseDate(startDate),
-      $lte: parseDate(endDate, true),
-    };
+    matchFilter.orderBookingDate = { $gte: parseDate(startDate), $lte: parseDate(endDate, true) };
   }
   if (plantId) {
     try { matchFilter.plantName = new mongoose.Types.ObjectId(plantId); } catch (_) {}
   }
 
+  // Single extra query — much faster than per-order lookup
+  let subtypeNameMap = {};
+  if (plantId) {
+    try {
+      const plant = await PlantCms.findById(plantId).select("subtypes").lean();
+      if (plant?.subtypes) {
+        plant.subtypes.forEach(st => { subtypeNameMap[String(st._id)] = st.name; });
+      }
+    } catch (_) {}
+  }
+
   const pipeline = [
     { $match: matchFilter },
+
+    // Farmer lookup — include village now
     {
       $lookup: {
         from: "farmers",
         localField: "farmer",
         foreignField: "_id",
-        pipeline: [{ $project: { _id: 0, taluka: 1, talukaName: 1, district: 1, districtName: 1 } }],
+        pipeline: [{ $project: { _id: 0, village: 1, taluka: 1, talukaName: 1, district: 1, districtName: 1 } }],
         as: "farmerData",
       },
     },
+
     {
       $set: {
+        _village:  { $ifNull: [{ $arrayElemAt: ["$farmerData.village", 0] }, "Unknown"] },
         _taluka: {
           $ifNull: [
             { $arrayElemAt: ["$farmerData.talukaName", 0] },
@@ -3585,72 +3597,103 @@ const getDeliverySummary = catchAsync(async (req, res, next) => {
             { $ifNull: [{ $arrayElemAt: ["$farmerData.district", 0] }, "Unknown"] },
           ],
         },
+        _subtypeId:      { $ifNull: [{ $toString: "$plantSubtype" }, "general"] },
         _paymentPending: { $eq: [{ $ifNull: ["$orderPaymentStatus", "PENDING"] }, "PENDING"] },
-        _paymentDone: { $eq: ["$orderPaymentStatus", "COMPLETED"] },
-        _totalAmount: { $multiply: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$rate", 0] }] },
+        _totalAmount:    { $multiply: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$rate", 0] }] },
       },
     },
-    // Group by status + paymentStatus + taluka
+
+    // Deepest group: status + subtypeId + taluka + village + paymentPending
     {
       $group: {
         _id: {
-          status: "$orderStatus",
-          taluka: "$_taluka",
-          district: "$_district",
+          status: "$orderStatus", subtypeId: "$_subtypeId",
+          taluka: "$_taluka", district: "$_district", village: "$_village",
           paymentPending: "$_paymentPending",
         },
-        count: { $sum: 1 },
+        count:       { $sum: 1 },
         totalPlants: { $sum: { $ifNull: ["$numberOfPlants", 0] } },
         totalAmount: { $sum: "$_totalAmount" },
       },
     },
-    // Roll up to status+taluka level
+
+    // Roll up to status + subtypeId + taluka + village
     {
       $group: {
-        _id: { status: "$_id.status", taluka: "$_id.taluka", district: "$_id.district" },
-        count: { $sum: "$count" },
-        totalPlants: { $sum: "$totalPlants" },
-        totalAmount: { $sum: "$totalAmount" },
-        paymentPendingCount: {
-          $sum: { $cond: ["$_id.paymentPending", "$count", 0] },
-        },
-        paymentPendingAmount: {
-          $sum: { $cond: ["$_id.paymentPending", "$totalAmount", 0] },
-        },
+        _id: { status: "$_id.status", subtypeId: "$_id.subtypeId", taluka: "$_id.taluka", district: "$_id.district", village: "$_id.village" },
+        count:               { $sum: "$count" },
+        totalPlants:         { $sum: "$totalPlants" },
+        totalAmount:         { $sum: "$totalAmount" },
+        paymentPendingCount: { $sum: { $cond: ["$_id.paymentPending", "$count", 0] } },
+        paymentPendingAmount:{ $sum: { $cond: ["$_id.paymentPending", "$totalAmount", 0] } },
       },
     },
-    // Roll up to status level
+
+    // Roll up to status + subtypeId + taluka  (push villages)
     {
       $group: {
-        _id: "$_id.status",
-        count: { $sum: "$count" },
-        totalPlants: { $sum: "$totalPlants" },
-        totalAmount: { $sum: "$totalAmount" },
+        _id: { status: "$_id.status", subtypeId: "$_id.subtypeId", taluka: "$_id.taluka", district: "$_id.district" },
+        count:               { $sum: "$count" },
+        totalPlants:         { $sum: "$totalPlants" },
+        totalAmount:         { $sum: "$totalAmount" },
         paymentPendingCount: { $sum: "$paymentPendingCount" },
-        paymentPendingAmount: { $sum: "$paymentPendingAmount" },
-        talukas: {
+        paymentPendingAmount:{ $sum: "$paymentPendingAmount" },
+        villages: {
           $push: {
-            taluka: "$_id.taluka",
-            district: "$_id.district",
-            count: "$count",
-            plants: "$totalPlants",
-            amount: "$totalAmount",
-            paymentPendingCount: "$paymentPendingCount",
-            paymentPendingAmount: "$paymentPendingAmount",
+            village: "$_id.village",
+            count: "$count", plants: "$totalPlants", amount: "$totalAmount",
+            paymentPendingCount: "$paymentPendingCount", paymentPendingAmount: "$paymentPendingAmount",
           },
         },
       },
     },
+
+    // Roll up to status + subtypeId  (push talukas)
+    {
+      $group: {
+        _id: { status: "$_id.status", subtypeId: "$_id.subtypeId" },
+        count:               { $sum: "$count" },
+        totalPlants:         { $sum: "$totalPlants" },
+        totalAmount:         { $sum: "$totalAmount" },
+        paymentPendingCount: { $sum: "$paymentPendingCount" },
+        paymentPendingAmount:{ $sum: "$paymentPendingAmount" },
+        talukas: {
+          $push: {
+            taluka: "$_id.taluka", district: "$_id.district",
+            count: "$count", plants: "$totalPlants", amount: "$totalAmount",
+            paymentPendingCount: "$paymentPendingCount", paymentPendingAmount: "$paymentPendingAmount",
+            villages: { $sortArray: { input: "$villages", sortBy: { count: -1 } } },
+          },
+        },
+      },
+    },
+
+    // Roll up to status  (push subtypes)
+    {
+      $group: {
+        _id: "$_id.status",
+        count:               { $sum: "$count" },
+        totalPlants:         { $sum: "$totalPlants" },
+        totalAmount:         { $sum: "$totalAmount" },
+        paymentPendingCount: { $sum: "$paymentPendingCount" },
+        paymentPendingAmount:{ $sum: "$paymentPendingAmount" },
+        subtypes: {
+          $push: {
+            subtypeId: "$_id.subtypeId",
+            count: "$count", plants: "$totalPlants", amount: "$totalAmount",
+            paymentPendingCount: "$paymentPendingCount", paymentPendingAmount: "$paymentPendingAmount",
+            talukas: { $sortArray: { input: "$talukas", sortBy: { count: -1 } } },
+          },
+        },
+      },
+    },
+
     {
       $project: {
-        _id: 0,
-        status: "$_id",
-        count: 1,
-        totalPlants: 1,
-        totalAmount: 1,
-        paymentPendingCount: 1,
-        paymentPendingAmount: 1,
-        talukas: { $sortArray: { input: "$talukas", sortBy: { count: -1 } } },
+        _id: 0, status: "$_id",
+        count: 1, totalPlants: 1, totalAmount: 1,
+        paymentPendingCount: 1, paymentPendingAmount: 1,
+        subtypes: { $sortArray: { input: "$subtypes", sortBy: { count: -1 } } },
       },
     },
     { $sort: { count: -1 } },
@@ -3658,11 +3701,18 @@ const getDeliverySummary = catchAsync(async (req, res, next) => {
 
   const statusSummary = await Order.aggregate(pipeline).allowDiskUse(false);
 
-  const total = statusSummary.reduce((a, s) => a + s.count, 0);
+  // Attach subtype names from pre-fetched map
+  statusSummary.forEach(row => {
+    row.subtypes = (row.subtypes || []).map(st => ({
+      ...st,
+      subtypeName: subtypeNameMap[st.subtypeId] || "General",
+    }));
+  });
+
+  const total       = statusSummary.reduce((a, s) => a + s.count, 0);
   const totalPlants = statusSummary.reduce((a, s) => a + s.totalPlants, 0);
   const totalAmount = statusSummary.reduce((a, s) => a + (s.totalAmount || 0), 0);
 
-  // Pre-compute key insights
   const dispatchedStatuses = ["DISPATCHED", "COMPLETED", "PARTIALLY_COMPLETED"];
   const dispatchedPaymentPending = statusSummary
     .filter(s => dispatchedStatuses.includes(s.status))
@@ -3671,32 +3721,26 @@ const getDeliverySummary = catchAsync(async (req, res, next) => {
     .filter(s => dispatchedStatuses.includes(s.status))
     .reduce((a, s) => a + (s.paymentPendingAmount || 0), 0);
 
-  const readyForDispatch = statusSummary.find(s => s.status === "READY_FOR_DISPATCH");
-  const acceptedCount = statusSummary.find(s => s.status === "ACCEPTED");
-  const completedCount = statusSummary.find(s => s.status === "COMPLETED");
-
   return res.status(200).json({
     success: true,
     data: {
       statusSummary,
-      total,
-      totalPlants,
-      totalAmount,
+      total, totalPlants, totalAmount,
       insights: {
         dispatchedPaymentPending,
         dispatchedPaymentPendingAmount,
-        readyForDispatch: readyForDispatch?.count || 0,
-        accepted: acceptedCount?.count || 0,
-        completed: completedCount?.count || 0,
-        completedPaymentPending: completedCount?.paymentPendingCount || 0,
+        readyForDispatch:        statusSummary.find(s => s.status === "READY_FOR_DISPATCH")?.count || 0,
+        accepted:                statusSummary.find(s => s.status === "ACCEPTED")?.count || 0,
+        completed:               statusSummary.find(s => s.status === "COMPLETED")?.count || 0,
+        completedPaymentPending: statusSummary.find(s => s.status === "COMPLETED")?.paymentPendingCount || 0,
       },
     },
   });
 });
 
-// ─── Delivery Analytics: lean order list for one status+plant slice ───────────
+// ─── Delivery Analytics: lean paginated order list ────────────────────────────
 const getDeliveryOrders = catchAsync(async (req, res, next) => {
-  const { startDate, endDate, plantId, status, paymentStatus, page = 1, limit = 100 } = req.query;
+  const { startDate, endDate, plantId, status, subtypeId, village, paymentStatus, page = 1, limit = 100 } = req.query;
 
   const parseDate = (dateStr, isEnd = false) => {
     const [day, month, year] = dateStr.split("-");
@@ -3707,81 +3751,58 @@ const getDeliveryOrders = catchAsync(async (req, res, next) => {
 
   const matchFilter = {};
   if (startDate && endDate) {
-    matchFilter.orderBookingDate = {
-      $gte: parseDate(startDate),
-      $lte: parseDate(endDate, true),
-    };
+    matchFilter.orderBookingDate = { $gte: parseDate(startDate), $lte: parseDate(endDate, true) };
   }
-  if (plantId) {
-    try { matchFilter.plantName = new mongoose.Types.ObjectId(plantId); } catch (_) {}
+  if (plantId) { try { matchFilter.plantName = new mongoose.Types.ObjectId(plantId); } catch (_) {} }
+  if (status)  { matchFilter.orderStatus = { $in: status.split(",").map(s => s.trim()) }; }
+  if (subtypeId && subtypeId !== "general") {
+    try { matchFilter.plantSubtype = new mongoose.Types.ObjectId(subtypeId); } catch (_) {}
   }
-  if (status) {
-    const statuses = status.split(",").map(s => s.trim());
-    matchFilter.orderStatus = { $in: statuses };
+  // Village filter: pre-query matching farmer IDs (single fast indexed query)
+  if (village) {
+    try {
+      const farmerIds = await Farmer.find({ village: village.trim() }).select("_id").lean();
+      matchFilter.farmer = { $in: farmerIds.map(f => f._id) };
+    } catch (_) {}
   }
-  if (paymentStatus) {
-    matchFilter.orderPaymentStatus = paymentStatus.trim();
-  }
+  if (paymentStatus) { matchFilter.orderPaymentStatus = paymentStatus.trim(); }
 
   const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
   const limitNum = parseInt(limit, 10);
 
-  const pipeline = [
+  const [result] = await Order.aggregate([
     { $match: matchFilter },
     { $sort: { orderBookingDate: -1 } },
     {
       $facet: {
         totalCount: [{ $count: "count" }],
         orders: [
-          { $skip: skip },
-          { $limit: limitNum },
+          { $skip: skip }, { $limit: limitNum },
           {
             $lookup: {
-              from: "farmers",
-              localField: "farmer",
-              foreignField: "_id",
-              pipeline: [{
-                $project: { _id: 0, name: 1, mobileNumber: 1, village: 1, taluka: 1, talukaName: 1, district: 1, districtName: 1 },
-              }],
+              from: "farmers", localField: "farmer", foreignField: "_id",
+              pipeline: [{ $project: { _id: 0, name: 1, mobileNumber: 1, village: 1, taluka: 1, talukaName: 1, district: 1, districtName: 1 } }],
               as: "farmerData",
             },
           },
           {
             $lookup: {
-              from: "plantcms",
-              localField: "plantName",
-              foreignField: "_id",
+              from: "plantcms", localField: "plantName", foreignField: "_id",
               pipeline: [{ $project: { name: 1 } }],
               as: "plantData",
             },
           },
           {
             $project: {
-              orderId: 1,
-              orderStatus: 1,
-              numberOfPlants: 1,
-              remainingPlants: 1,
-              rate: 1,
-              orderBookingDate: 1,
-              deliveryDate: 1,
-              orderPaymentStatus: 1,
-              paymentCompleted: 1,
+              orderId: 1, orderStatus: 1, numberOfPlants: 1, remainingPlants: 1,
+              rate: 1, orderBookingDate: 1, deliveryDate: 1,
+              orderPaymentStatus: 1, paymentCompleted: 1,
               farmer: {
                 name: { $arrayElemAt: ["$farmerData.name", 0] },
                 mobileNumber: { $arrayElemAt: ["$farmerData.mobileNumber", 0] },
                 village: { $arrayElemAt: ["$farmerData.village", 0] },
-                taluka: {
-                  $ifNull: [
-                    { $arrayElemAt: ["$farmerData.talukaName", 0] },
-                    { $arrayElemAt: ["$farmerData.taluka", 0] },
-                  ],
-                },
-                district: {
-                  $ifNull: [
-                    { $arrayElemAt: ["$farmerData.districtName", 0] },
-                    { $arrayElemAt: ["$farmerData.district", 0] },
-                  ],
-                },
+                taluka: { $ifNull: [{ $arrayElemAt: ["$farmerData.talukaName", 0] }, { $arrayElemAt: ["$farmerData.taluka", 0] }] },
+                district: { $ifNull: [{ $arrayElemAt: ["$farmerData.districtName", 0] }, { $arrayElemAt: ["$farmerData.district", 0] }] },
               },
               plantType: {
                 id: { $arrayElemAt: ["$plantData._id", 0] },
@@ -3792,21 +3813,12 @@ const getDeliveryOrders = catchAsync(async (req, res, next) => {
         ],
       },
     },
-  ];
+  ]).allowDiskUse(false);
 
-  const [result] = await Order.aggregate(pipeline).allowDiskUse(false);
   const total = result?.totalCount?.[0]?.count || 0;
-  const orders = result?.orders || [];
-
   return res.status(200).json({
     success: true,
-    data: {
-      orders,
-      total,
-      page: parseInt(page, 10),
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum),
-    },
+    data: { orders: result?.orders || [], total, page: parseInt(page, 10), limit: limitNum, totalPages: Math.ceil(total / limitNum) },
   });
 });
 
