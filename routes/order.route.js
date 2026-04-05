@@ -26,6 +26,8 @@ import {
   generatePaymentQR,
   sendOrderAcceptedWhatsAppController,
   sendOrderDispatchWhatsAppController,
+  getDeliverySummary,
+  getDeliveryOrders,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -84,6 +86,8 @@ router
   .get("/salesmen-bucketing", getSalesmenBucketing)
   .get("/dealer-wallet/:orderId", getDealerWalletBalanceForOrder)
   .get("/to-be-dispatched", getOrdersToBeDispatched)
+  .get("/delivery-summary", getDeliverySummary)
+  .get("/delivery-orders", getDeliveryOrders)
   .get("/dispatch-details/:orderId", getOrderDispatchDetails)
   .get("/by-dispatch/:transportId", getOrdersByDispatch)
   .get("/dispatch-summary", getDispatchSummary)

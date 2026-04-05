@@ -3538,6 +3538,278 @@ const handleQRPaymentCallback = catchAsync(async (req, res) => {
   return res.status(200).json({ success: true, updated });
 });
 
+// ─── Delivery Analytics: fast summary grouped by status → taluka ─────────────
+const getDeliverySummary = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, plantId } = req.query;
+
+  const parseDate = (dateStr, isEnd = false) => {
+    const [day, month, year] = dateStr.split("-");
+    return isEnd
+      ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
+      : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+  };
+
+  const matchFilter = {};
+  if (startDate && endDate) {
+    matchFilter.orderBookingDate = {
+      $gte: parseDate(startDate),
+      $lte: parseDate(endDate, true),
+    };
+  }
+  if (plantId) {
+    try { matchFilter.plantName = new mongoose.Types.ObjectId(plantId); } catch (_) {}
+  }
+
+  const pipeline = [
+    { $match: matchFilter },
+    {
+      $lookup: {
+        from: "farmers",
+        localField: "farmer",
+        foreignField: "_id",
+        pipeline: [{ $project: { _id: 0, taluka: 1, talukaName: 1, district: 1, districtName: 1 } }],
+        as: "farmerData",
+      },
+    },
+    {
+      $set: {
+        _taluka: {
+          $ifNull: [
+            { $arrayElemAt: ["$farmerData.talukaName", 0] },
+            { $ifNull: [{ $arrayElemAt: ["$farmerData.taluka", 0] }, "Unknown"] },
+          ],
+        },
+        _district: {
+          $ifNull: [
+            { $arrayElemAt: ["$farmerData.districtName", 0] },
+            { $ifNull: [{ $arrayElemAt: ["$farmerData.district", 0] }, "Unknown"] },
+          ],
+        },
+        _paymentPending: { $eq: [{ $ifNull: ["$orderPaymentStatus", "PENDING"] }, "PENDING"] },
+        _paymentDone: { $eq: ["$orderPaymentStatus", "COMPLETED"] },
+        _totalAmount: { $multiply: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$rate", 0] }] },
+      },
+    },
+    // Group by status + paymentStatus + taluka
+    {
+      $group: {
+        _id: {
+          status: "$orderStatus",
+          taluka: "$_taluka",
+          district: "$_district",
+          paymentPending: "$_paymentPending",
+        },
+        count: { $sum: 1 },
+        totalPlants: { $sum: { $ifNull: ["$numberOfPlants", 0] } },
+        totalAmount: { $sum: "$_totalAmount" },
+      },
+    },
+    // Roll up to status+taluka level
+    {
+      $group: {
+        _id: { status: "$_id.status", taluka: "$_id.taluka", district: "$_id.district" },
+        count: { $sum: "$count" },
+        totalPlants: { $sum: "$totalPlants" },
+        totalAmount: { $sum: "$totalAmount" },
+        paymentPendingCount: {
+          $sum: { $cond: ["$_id.paymentPending", "$count", 0] },
+        },
+        paymentPendingAmount: {
+          $sum: { $cond: ["$_id.paymentPending", "$totalAmount", 0] },
+        },
+      },
+    },
+    // Roll up to status level
+    {
+      $group: {
+        _id: "$_id.status",
+        count: { $sum: "$count" },
+        totalPlants: { $sum: "$totalPlants" },
+        totalAmount: { $sum: "$totalAmount" },
+        paymentPendingCount: { $sum: "$paymentPendingCount" },
+        paymentPendingAmount: { $sum: "$paymentPendingAmount" },
+        talukas: {
+          $push: {
+            taluka: "$_id.taluka",
+            district: "$_id.district",
+            count: "$count",
+            plants: "$totalPlants",
+            amount: "$totalAmount",
+            paymentPendingCount: "$paymentPendingCount",
+            paymentPendingAmount: "$paymentPendingAmount",
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        status: "$_id",
+        count: 1,
+        totalPlants: 1,
+        totalAmount: 1,
+        paymentPendingCount: 1,
+        paymentPendingAmount: 1,
+        talukas: { $sortArray: { input: "$talukas", sortBy: { count: -1 } } },
+      },
+    },
+    { $sort: { count: -1 } },
+  ];
+
+  const statusSummary = await Order.aggregate(pipeline).allowDiskUse(false);
+
+  const total = statusSummary.reduce((a, s) => a + s.count, 0);
+  const totalPlants = statusSummary.reduce((a, s) => a + s.totalPlants, 0);
+  const totalAmount = statusSummary.reduce((a, s) => a + (s.totalAmount || 0), 0);
+
+  // Pre-compute key insights
+  const dispatchedStatuses = ["DISPATCHED", "COMPLETED", "PARTIALLY_COMPLETED"];
+  const dispatchedPaymentPending = statusSummary
+    .filter(s => dispatchedStatuses.includes(s.status))
+    .reduce((a, s) => a + (s.paymentPendingCount || 0), 0);
+  const dispatchedPaymentPendingAmount = statusSummary
+    .filter(s => dispatchedStatuses.includes(s.status))
+    .reduce((a, s) => a + (s.paymentPendingAmount || 0), 0);
+
+  const readyForDispatch = statusSummary.find(s => s.status === "READY_FOR_DISPATCH");
+  const acceptedCount = statusSummary.find(s => s.status === "ACCEPTED");
+  const completedCount = statusSummary.find(s => s.status === "COMPLETED");
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      statusSummary,
+      total,
+      totalPlants,
+      totalAmount,
+      insights: {
+        dispatchedPaymentPending,
+        dispatchedPaymentPendingAmount,
+        readyForDispatch: readyForDispatch?.count || 0,
+        accepted: acceptedCount?.count || 0,
+        completed: completedCount?.count || 0,
+        completedPaymentPending: completedCount?.paymentPendingCount || 0,
+      },
+    },
+  });
+});
+
+// ─── Delivery Analytics: lean order list for one status+plant slice ───────────
+const getDeliveryOrders = catchAsync(async (req, res, next) => {
+  const { startDate, endDate, plantId, status, paymentStatus, page = 1, limit = 100 } = req.query;
+
+  const parseDate = (dateStr, isEnd = false) => {
+    const [day, month, year] = dateStr.split("-");
+    return isEnd
+      ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
+      : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+  };
+
+  const matchFilter = {};
+  if (startDate && endDate) {
+    matchFilter.orderBookingDate = {
+      $gte: parseDate(startDate),
+      $lte: parseDate(endDate, true),
+    };
+  }
+  if (plantId) {
+    try { matchFilter.plantName = new mongoose.Types.ObjectId(plantId); } catch (_) {}
+  }
+  if (status) {
+    const statuses = status.split(",").map(s => s.trim());
+    matchFilter.orderStatus = { $in: statuses };
+  }
+  if (paymentStatus) {
+    matchFilter.orderPaymentStatus = paymentStatus.trim();
+  }
+
+  const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+  const limitNum = parseInt(limit, 10);
+
+  const pipeline = [
+    { $match: matchFilter },
+    { $sort: { orderBookingDate: -1 } },
+    {
+      $facet: {
+        totalCount: [{ $count: "count" }],
+        orders: [
+          { $skip: skip },
+          { $limit: limitNum },
+          {
+            $lookup: {
+              from: "farmers",
+              localField: "farmer",
+              foreignField: "_id",
+              pipeline: [{
+                $project: { _id: 0, name: 1, mobileNumber: 1, village: 1, taluka: 1, talukaName: 1, district: 1, districtName: 1 },
+              }],
+              as: "farmerData",
+            },
+          },
+          {
+            $lookup: {
+              from: "plantcms",
+              localField: "plantName",
+              foreignField: "_id",
+              pipeline: [{ $project: { name: 1 } }],
+              as: "plantData",
+            },
+          },
+          {
+            $project: {
+              orderId: 1,
+              orderStatus: 1,
+              numberOfPlants: 1,
+              remainingPlants: 1,
+              rate: 1,
+              orderBookingDate: 1,
+              deliveryDate: 1,
+              orderPaymentStatus: 1,
+              paymentCompleted: 1,
+              farmer: {
+                name: { $arrayElemAt: ["$farmerData.name", 0] },
+                mobileNumber: { $arrayElemAt: ["$farmerData.mobileNumber", 0] },
+                village: { $arrayElemAt: ["$farmerData.village", 0] },
+                taluka: {
+                  $ifNull: [
+                    { $arrayElemAt: ["$farmerData.talukaName", 0] },
+                    { $arrayElemAt: ["$farmerData.taluka", 0] },
+                  ],
+                },
+                district: {
+                  $ifNull: [
+                    { $arrayElemAt: ["$farmerData.districtName", 0] },
+                    { $arrayElemAt: ["$farmerData.district", 0] },
+                  ],
+                },
+              },
+              plantType: {
+                id: { $arrayElemAt: ["$plantData._id", 0] },
+                name: { $arrayElemAt: ["$plantData.name", 0] },
+              },
+            },
+          },
+        ],
+      },
+    },
+  ];
+
+  const [result] = await Order.aggregate(pipeline).allowDiskUse(false);
+  const total = result?.totalCount?.[0]?.count || 0;
+  const orders = result?.orders || [];
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      orders,
+      total,
+      page: parseInt(page, 10),
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    },
+  });
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -3565,4 +3837,6 @@ export {
   reconcilePayments,
   generatePaymentQR,
   handleQRPaymentCallback,
+  getDeliverySummary,
+  getDeliveryOrders,
 };
