@@ -1195,12 +1195,25 @@ const updateOne = (Model, modelName, allowedFields) =>
         canChangeOrderStatusFull,
       } = getOrderUpdateUserContext(resolveUserForOrderUpdatePermissions(req));
       const isSalesUser =
-        userRole === "SALES" || req.user?.jobTitle === "SALES";
+        userRole === "SALES" ||
+        req.user?.jobTitle === "SALES" ||
+        userRole === "RAM_AGRI_SALES" ||
+        req.user?.jobTitle === "RAM_AGRI_SALES";
+      const isDealerUser =
+        userRole === "DEALER" || req.user?.jobTitle === "DEALER";
       const salesPersonOnOrder =
         existingDoc.salesPerson?._id || existingDoc.salesPerson;
+      const dealerIdOnOrder = existingDoc.dealer?._id || existingDoc.dealer;
       const salesOwnsOrder =
         Boolean(isSalesUser && req.user && salesPersonOnOrder) &&
         String(salesPersonOnOrder) === String(req.user._id);
+      /** Dealer’s own order: dealer field and/or salesPerson matches logged-in dealer. */
+      const dealerOwnsOrder =
+        Boolean(isDealerUser && req.user) &&
+        ((dealerIdOnOrder &&
+          String(dealerIdOnOrder) === String(req.user._id)) ||
+          (salesPersonOnOrder &&
+            String(salesPersonOnOrder) === String(req.user._id)));
       const orderCoreEditFields = [
         "rate",
         "numberOfPlants",
@@ -1308,33 +1321,39 @@ const updateOne = (Model, modelName, allowedFields) =>
       const isDispatchManager = isDispatchManagerUser;
 
       if (filteredBody.orderStatus !== undefined) {
-        if (req.user && canChangeOrderStatusFull) {
-          // keep orderStatus
+        const allowedPrevForFarmReady = new Set([
+          "PENDING",
+          "ACCEPTED",
+          "ASSIGNED",
+        ]);
+        const canSetFarmReady =
+          filteredBody.orderStatus === "FARM_READY" &&
+          allowedPrevForFarmReady.has(
+            String(existingDoc.orderStatus || "")
+          ) &&
+          ((salesOwnsOrder && isSalesUser) ||
+            (dealerOwnsOrder && isDealerUser));
+
+        if (filteredBody.orderStatus === "FARM_READY") {
+          if (canSetFarmReady) {
+            // keep — only sales or dealer on this order
+          } else {
+            rejectedFields.push({
+              field: "orderStatus",
+              reason: "FARM_READY_RESTRICTED",
+              detail:
+                "Only the sales person or dealer who owns the order can set Ready to farm (from Pending, Accepted, or Assigned).",
+              value: filteredBody.orderStatus,
+            });
+            delete filteredBody.orderStatus;
+          }
+        } else if (req.user && canChangeOrderStatusFull) {
+          // keep orderStatus (non–farm-ready transitions for office/super admin)
         } else if (
           isDispatchManager &&
           DISPATCH_MANAGER_ALLOWED_STATUSES.has(filteredBody.orderStatus)
         ) {
           // keep orderStatus (dispatch queue)
-        } else if (
-          salesOwnsOrder &&
-          filteredBody.orderStatus === "FARM_READY"
-        ) {
-          const prev = String(existingDoc.orderStatus || "");
-          const allowedPrevForSalesFarmReady = new Set([
-            "PENDING",
-            "ACCEPTED",
-            "ASSIGNED",
-          ]);
-          if (!allowedPrevForSalesFarmReady.has(prev)) {
-            rejectedFields.push({
-              field: "orderStatus",
-              reason: "SALES_STATUS_NOT_ALLOWED",
-              detail:
-                "Sales can set Ready to farm only when the order is Pending, Accepted, or Assigned.",
-              value: filteredBody.orderStatus,
-            });
-            delete filteredBody.orderStatus;
-          }
         } else {
           rejectedFields.push({
             field: "orderStatus",
@@ -2811,6 +2830,9 @@ const getAll = (Model, modelName) =>
     const deferFarmReadyFilterAfterSearch =
       searchTrimmedEarly.length > 0 && farmReady === "true";
 
+    /** `farmReady=true`: ignore start/end & dispatched/undispatched/search date windows (still apply farm-ready $match). */
+    const farmReadyParamIgnoresOrderDateFilters = farmReady === "true";
+
     const ORDER_LIST_SORT_FIELDS = new Set([
       "createdAt",
       "updatedAt",
@@ -2950,47 +2972,20 @@ const getAll = (Model, modelName) =>
       }
 
       // Apply farm ready filter if present
-      // When status is only FARM_READY, skip: `farmReady=true` would require farmReadyDate and/or
-      // a farmReadyDate window and would hide FARM_READY rows that never got farmReadyDate set.
+      // When status is only FARM_READY, skip this block (status filter already applies).
+      // `farmReady=true`: always relaxed OR — orderStatus FARM_READY OR farmReadyDate set — no date windows here.
       if (
         farmReady === "true" &&
         !skipOrderDateRangeForFarmReadyOnlyStatus &&
         !deferFarmReadyFilterAfterSearch
       ) {
-        const farmReadyMatch = {
-          farmReadyDate: { $exists: true, $ne: null },
-        };
-
-        // Add date range filtering for farmReadyDate if startDate and endDate are provided
-        if (startDate && endDate) {
-          const parseDate = (dateStr, isEnd = false) => {
-            const [day, month, year] = dateStr.split("-");
-            // Use local timezone instead of UTC to avoid timezone issues
-            const date = new Date(`${year}-${month}-${day}`);
-            if (isEnd) {
-              date.setHours(23, 59, 59, 999);
-            } else {
-              date.setHours(0, 0, 0, 0);
-            }
-            return date;
-          };
-
-          const start = parseDate(startDate);
-          const end = parseDate(endDate, true);
-          
-          console.log(`Farm Ready Date Range Filter: ${startDate} to ${endDate}`);
-          console.log(`Parsed dates: ${start.toISOString()} to ${end.toISOString()}`);
-          
-          farmReadyMatch.farmReadyDate = {
-            $exists: true,
-            $ne: null,
-            $gte: start,
-            $lte: end
-          };
-        }
-
         pipeline.push({
-          $match: farmReadyMatch,
+          $match: {
+            $or: [
+              { orderStatus: "FARM_READY" },
+              { farmReadyDate: { $exists: true, $ne: null } },
+            ],
+          },
         });
       }
 
@@ -3000,7 +2995,8 @@ const getAll = (Model, modelName) =>
         startDate &&
         endDate &&
         dispatched === "false" &&
-        !skipOrderDateRangeForFarmReadyOnlyStatus
+        !skipOrderDateRangeForFarmReadyOnlyStatus &&
+        !farmReadyParamIgnoresOrderDateFilters
       ) {
         const parseDate = (dateStr, isEnd = false) => {
           const [day, month, year] = dateStr.split("-");
@@ -3023,7 +3019,8 @@ const getAll = (Model, modelName) =>
       startDate &&
       endDate &&
       ready_for_dispatch !== "true" &&
-      !skipOrderDateRangeForFarmReadyOnlyStatus
+      !skipOrderDateRangeForFarmReadyOnlyStatus &&
+      !farmReadyParamIgnoresOrderDateFilters
     ) {
       const parseDateDispatched = (dateStr, isEnd = false) => {
         const [day, month, year] = dateStr.split("-");
@@ -3149,7 +3146,8 @@ const getAll = (Model, modelName) =>
         startDate &&
         endDate &&
         dispatched === "false" &&
-        !skipOrderDateRangeForFarmReadyOnlyStatus
+        !skipOrderDateRangeForFarmReadyOnlyStatus &&
+        !farmReadyParamIgnoresOrderDateFilters
       ) {
         const parseDateSearch = (dateStr, isEnd = false) => {
           const [day, month, year] = dateStr.split("-");
