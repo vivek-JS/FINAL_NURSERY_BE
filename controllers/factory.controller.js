@@ -2757,7 +2757,7 @@ const getAll = (Model, modelName) =>
       district, // Added district parameter
       page: pageQuery,
       limit: limitQuery,
-      status,
+      status: statusRaw,
       slotId, // Add this to handle the slotId filtering case
       monthName, // For slot date validation
       startDay, // For slot date validation
@@ -2770,6 +2770,14 @@ const getAll = (Model, modelName) =>
       includePastDueBeyondRange, // true: delivery in [start,end] OR delivery before start (older past-due backlog)
       dateRangeField, // "booking" | "delivery" — which date field startDate/endDate apply to (defaults: booking when dispatched=false, delivery when dispatched=true)
     } = req.query;
+
+    /** Express may pass repeated keys as an array; normalize to one comma-separated string. */
+    const status =
+      statusRaw == null
+        ? ""
+        : Array.isArray(statusRaw)
+          ? statusRaw.map((s) => String(s).trim()).filter(Boolean).join(",")
+          : String(statusRaw);
 
     /** Resolve MongoDB field for order date-range filtering. */
     const resolveOrderDateRangeField = () => {
@@ -2789,7 +2797,7 @@ const getAll = (Model, modelName) =>
 
     /** FARM_READY pipeline list: return all matching rows regardless of booking/delivery date window. */
     const statusTokensUpper = status
-      ? String(status)
+      ? status
           .split(",")
           .map((s) => s.trim().toUpperCase())
           .filter(Boolean)
@@ -2937,7 +2945,9 @@ const getAll = (Model, modelName) =>
       }
 
       // Apply farm ready filter if present
-      if (farmReady === "true") {
+      // When status is only FARM_READY, skip: `farmReady=true` would require farmReadyDate and/or
+      // a farmReadyDate window and would hide FARM_READY rows that never got farmReadyDate set.
+      if (farmReady === "true" && !skipOrderDateRangeForFarmReadyOnlyStatus) {
         const farmReadyMatch = {
           farmReadyDate: { $exists: true, $ne: null },
         };
