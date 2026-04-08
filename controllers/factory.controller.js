@@ -2664,7 +2664,6 @@ const getAll = (Model, modelName) =>
           "endDate",
           "dateRangeField",
           "ready_for_dispatch",
-          "farmReady",
           "plantId",
           "subtypeId",
           "slotId",
@@ -2805,6 +2804,12 @@ const getAll = (Model, modelName) =>
     const skipOrderDateRangeForFarmReadyOnlyStatus =
       statusTokensUpper.length > 0 &&
       statusTokensUpper.every((s) => s === "FARM_READY");
+
+    /** When searching, farm-ready filter must run *after* orderId/name match (see deferred $match below). */
+    const searchTrimmedEarly =
+      search != null ? String(search).trim() : "";
+    const deferFarmReadyFilterAfterSearch =
+      searchTrimmedEarly.length > 0 && farmReady === "true";
 
     const ORDER_LIST_SORT_FIELDS = new Set([
       "createdAt",
@@ -2947,7 +2952,11 @@ const getAll = (Model, modelName) =>
       // Apply farm ready filter if present
       // When status is only FARM_READY, skip: `farmReady=true` would require farmReadyDate and/or
       // a farmReadyDate window and would hide FARM_READY rows that never got farmReadyDate set.
-      if (farmReady === "true" && !skipOrderDateRangeForFarmReadyOnlyStatus) {
+      if (
+        farmReady === "true" &&
+        !skipOrderDateRangeForFarmReadyOnlyStatus &&
+        !deferFarmReadyFilterAfterSearch
+      ) {
         const farmReadyMatch = {
           farmReadyDate: { $exists: true, $ne: null },
         };
@@ -3120,6 +3129,17 @@ const getAll = (Model, modelName) =>
             $or: [
               { "farmer.name": searchRegex },
               { "farmer.mobileNumberStr": searchRegex },
+            ],
+          },
+        });
+      }
+      // Search + farmReady: match "farm ready" in UI sense (status or dated), after orderId/name match
+      if (deferFarmReadyFilterAfterSearch) {
+        pipeline.push({
+          $match: {
+            $or: [
+              { orderStatus: "FARM_READY" },
+              { farmReadyDate: { $exists: true, $ne: null } },
             ],
           },
         });
