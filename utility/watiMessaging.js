@@ -1,5 +1,6 @@
 import fetch from "node-fetch";
 import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
+import { watiPlantAndSubtypeParams } from "./watiPlantText.js";
 
 /**
  * Send WhatsApp template message via WATI API
@@ -84,6 +85,11 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       totalAmount,
     } = orderDetails;
 
+    const { plantParam, subtypeParam } = watiPlantAndSubtypeParams(
+      plantName,
+      orderDetails.plantSubtype
+    );
+
     const templateOrderId =
       orderDetails.publicOrderCode?.toString() || orderId?.toString() || "N/A";
 
@@ -102,8 +108,8 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       { name: "id", value: templateOrderId },
       { name: "village", value: farmer.village || "N/A" },
       { name: "number", value: farmer.mobileNumber?.toString() || "N/A" },
-      { name: "plant", value: plantName || "Plants" },
-      { name: "subtype", value: orderDetails.plantSubtype || "N/A" },
+      { name: "plant", value: plantParam },
+      { name: "subtype", value: subtypeParam },
       { name: "total_booked", value: numberOfPlants?.toString() || "0" },
       { name: "rate", value: rate?.toString() || "0" },
       { name: "total", value: totalAmount?.toString() || "0" },
@@ -146,12 +152,17 @@ export async function sendOrderDispatchedWhatsAppDelivery1(farmer, details) {
           })
         : "N/A";
 
+    const { plantParam, subtypeParam } = watiPlantAndSubtypeParams(
+      details.plantName,
+      details.plantSubtype
+    );
+
     const parameters = [
       { name: "name", value: farmer.name || "Farmer" },
       { name: "id", value: details.publicOrderCode?.toString() || details.orderId?.toString() || "N/A" },
       { name: "village", value: farmer.village || "N/A" },
-      { name: "plant", value: details.plantName || "Plants" },
-      { name: "subtype", value: details.plantSubtype || "N/A" },
+      { name: "plant", value: plantParam },
+      { name: "subtype", value: subtypeParam },
       { name: "total_dispatched", value: (details.totalDispatched ?? "0").toString() },
       { name: "driver_name", value: details.driverName || "N/A" },
       { name: "vehicle_number", value: details.vehicleNumber || "N/A" },

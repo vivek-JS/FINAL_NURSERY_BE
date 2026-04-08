@@ -56,6 +56,21 @@ const getDispatchTargetDateFromKey = (dispatchDayKey) => {
   base.setDate(base.getDate() + offset);
   return base;
 };
+
+/** Office / super admin: new orders are created as ACCEPTED (instant orders stay DISPATCHED). */
+const userCanCreateOrderAsAccepted = (user) => {
+  if (!user) return false;
+  const jt = String(user.jobTitle || "").toUpperCase().trim();
+  const role = String(user.role || "").toUpperCase().trim();
+  return (
+    jt === "OFFICE_ADMIN" ||
+    jt === "SUPERADMIN" ||
+    jt === "SUPER_ADMIN" ||
+    role === "OFFICE_ADMIN" ||
+    role === "SUPERADMIN" ||
+    role === "SUPER_ADMIN"
+  );
+};
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
   const wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -627,13 +642,27 @@ const createOne = (Model, modelName) =>
           await updateSlot(bookingSlot, numPlants, "subtract", session);
         }
 
-        // Prepare initial status change record if provided
+        const resolvedOrderStatus =
+          req.body.orderStatus === "DISPATCHED"
+            ? "DISPATCHED"
+            : userCanCreateOrderAsAccepted(req.user)
+              ? "ACCEPTED"
+              : "PENDING";
+
         const statusChanges = [];
-        if (orderData.orderStatus) {
+        if (resolvedOrderStatus === "DISPATCHED") {
           statusChanges.push({
-            previousStatus: "PENDING", // Use the actual default status
-            newStatus: orderData.orderStatus,
-            reason: orderData.statusChangeReason || "Initial order creation",
+            previousStatus: "PENDING",
+            newStatus: "DISPATCHED",
+            reason: orderData.statusChangeReason || "Instant order",
+            changedBy: req.user ? req.user._id : null,
+            notes: orderData.statusChangeNotes || "",
+          });
+        } else if (resolvedOrderStatus === "ACCEPTED") {
+          statusChanges.push({
+            previousStatus: "PENDING",
+            newStatus: "ACCEPTED",
+            reason: orderData.statusChangeReason || "Created as accepted (office/super admin)",
             changedBy: req.user ? req.user._id : null,
             notes: orderData.statusChangeNotes || "",
           });
@@ -714,12 +743,7 @@ const createOne = (Model, modelName) =>
           screenshots: screenshots, // Include uploaded screenshots
         };
         
-        // Order status: default PENDING. Only DISPATCHED for instant orders. Check backend - enforce PENDING by default.
-        if (req.body.orderStatus === "DISPATCHED") {
-          orderDocument.orderStatus = "DISPATCHED"; // Instant order
-        } else {
-          orderDocument.orderStatus = "PENDING"; // Default - only SUPERADMIN/OFFICE_ADMIN can change via update
-        }
+        orderDocument.orderStatus = resolvedOrderStatus;
         
         console.log('🎯 Final order document orderStatus:', orderDocument.orderStatus);
         
@@ -1562,16 +1586,19 @@ const updateOne = (Model, modelName, allowedFields) =>
         });
       }
 
-      // Track quantity changes.
-      const newQuantity = filteredBody.numberOfPlants;
-      if (newQuantity !== undefined && newQuantity !== existingDoc.numberOfPlants) {
-        editHistoryEntries.push({
-          field: "numberOfPlants",
-          previousValue: existingDoc.numberOfPlants,
-          newValue: newQuantity,
-          changedBy: req.user ? req.user._id : null,
-          notes: `Quantity changed from ${existingDoc.numberOfPlants} to ${newQuantity} plants`,
-        });
+      // Track quantity changes (numeric compare so "500" vs 500 does not double-log or miss).
+      if (filteredBody.numberOfPlants !== undefined) {
+        const prevQty = Number(existingDoc.numberOfPlants);
+        const nextQty = Number(filteredBody.numberOfPlants);
+        if (Number.isFinite(nextQty) && nextQty !== prevQty) {
+          editHistoryEntries.push({
+            field: "numberOfPlants",
+            previousValue: prevQty,
+            newValue: nextQty,
+            changedBy: req.user ? req.user._id : null,
+            notes: `Quantity changed from ${prevQty} to ${nextQty} plants`,
+          });
+        }
       }
 
       // Track deliveryDate changes (specific delivery date)
@@ -1649,11 +1676,18 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
-      // Add all edit history entries
+      // Add all edit history entries (merge with any existing $push.orderEditHistory from this request)
       if (editHistoryEntries.length > 0) {
         if (!filteredBody.$push) filteredBody.$push = {};
         if (!filteredBody.$push.orderEditHistory) {
-          filteredBody.$push.orderEditHistory = { $each: editHistoryEntries };
+          filteredBody.$push.orderEditHistory = { $each: [...editHistoryEntries] };
+        } else if (filteredBody.$push.orderEditHistory.$each) {
+          filteredBody.$push.orderEditHistory.$each.push(...editHistoryEntries);
+        } else {
+          const first = filteredBody.$push.orderEditHistory;
+          filteredBody.$push.orderEditHistory = {
+            $each: [first, ...editHistoryEntries],
+          };
         }
       }
 
@@ -2617,6 +2651,37 @@ const getAll = (Model, modelName) =>
         if (req.query[k] === "") delete req.query[k];
       });
     }
+    // GET /order/getOrders: when searching, use search-only mode — drop list filters so results
+    // are not over-constrained (e.g. status + dispatched + search rarely matches farmer name).
+    if (modelName === "Order" && req.query) {
+      const searchTrimmed =
+        req.query.search != null ? String(req.query.search).trim() : "";
+      if (searchTrimmed) {
+        [
+          "status",
+          "dispatched",
+          "startDate",
+          "endDate",
+          "dateRangeField",
+          "ready_for_dispatch",
+          "farmReady",
+          "plantId",
+          "subtypeId",
+          "slotId",
+          "monthName",
+          "startDay",
+          "endDay",
+          "salesPerson",
+          "dealer",
+          "village",
+          "district",
+          "includePastDueBeyondRange",
+          "orderIds",
+        ].forEach((k) => {
+          delete req.query[k];
+        });
+      }
+    }
     if (modelName !== "Order") {
       let filter = {};
 
@@ -2721,6 +2786,17 @@ const getAll = (Model, modelName) =>
       return String(dispatched) === "true" ? "deliveryDate" : "orderBookingDate";
     };
     const orderDateRangeMongoField = resolveOrderDateRangeField();
+
+    /** FARM_READY pipeline list: return all matching rows regardless of booking/delivery date window. */
+    const statusTokensUpper = status
+      ? String(status)
+          .split(",")
+          .map((s) => s.trim().toUpperCase())
+          .filter(Boolean)
+      : [];
+    const skipOrderDateRangeForFarmReadyOnlyStatus =
+      statusTokensUpper.length > 0 &&
+      statusTokensUpper.every((s) => s === "FARM_READY");
 
     const ORDER_LIST_SORT_FIELDS = new Set([
       "createdAt",
@@ -2900,7 +2976,13 @@ const getAll = (Model, modelName) =>
       }
 
       // Apply Date range filtering only when `search` is NOT present
-      if (!search && startDate && endDate && dispatched === "false") {
+      if (
+        !search &&
+        startDate &&
+        endDate &&
+        dispatched === "false" &&
+        !skipOrderDateRangeForFarmReadyOnlyStatus
+      ) {
         const parseDate = (dateStr, isEnd = false) => {
           const [day, month, year] = dateStr.split("-");
           return isEnd
@@ -2917,7 +2999,13 @@ const getAll = (Model, modelName) =>
     }
 
     // Dispatched orders: date range on order document (apply before heavy $lookups; same logic as legacy late-stage match)
-    if (dispatched === "true" && startDate && endDate && ready_for_dispatch !== "true") {
+    if (
+      dispatched === "true" &&
+      startDate &&
+      endDate &&
+      ready_for_dispatch !== "true" &&
+      !skipOrderDateRangeForFarmReadyOnlyStatus
+    ) {
       const parseDateDispatched = (dateStr, isEnd = false) => {
         const [day, month, year] = dateStr.split("-");
         const date = new Date(
@@ -3027,7 +3115,12 @@ const getAll = (Model, modelName) =>
         });
       }
       // Optional booking-date range when searching (e.g. bulk payment order picker)
-      if (startDate && endDate && dispatched === "false") {
+      if (
+        startDate &&
+        endDate &&
+        dispatched === "false" &&
+        !skipOrderDateRangeForFarmReadyOnlyStatus
+      ) {
         const parseDateSearch = (dateStr, isEnd = false) => {
           const [day, month, year] = dateStr.split("-");
           return isEnd

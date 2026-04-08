@@ -1038,6 +1038,36 @@ orderSchema.pre("findOneAndUpdate", async function (next) {
     }
   }
 
+  // Base quantity (numberOfPlants): log to orderEditHistory when it changes — backup if controller
+  // did not push (and merge safely with controller-provided $each).
+  if (
+    Object.prototype.hasOwnProperty.call($set, "numberOfPlants") &&
+    Number($set.numberOfPlants) !== Number(previous.numberOfPlants)
+  ) {
+    const existingEach = update.$push?.orderEditHistory?.$each;
+    const alreadyHasNumberOfPlantsEntry =
+      Array.isArray(existingEach) &&
+      existingEach.some((e) => e && e.field === "numberOfPlants");
+    if (!alreadyHasNumberOfPlantsEntry) {
+      update.$push = update.$push || {};
+      const entry = {
+        field: "numberOfPlants",
+        previousValue: previous.numberOfPlants,
+        newValue: $set.numberOfPlants,
+        notes: `Quantity changed from ${previous.numberOfPlants} to ${$set.numberOfPlants} plants`,
+      };
+      if (!update.$push.orderEditHistory) {
+        update.$push.orderEditHistory = { $each: [entry] };
+      } else if (update.$push.orderEditHistory.$each) {
+        update.$push.orderEditHistory.$each.push(entry);
+      } else {
+        update.$push.orderEditHistory = {
+          $each: [update.$push.orderEditHistory, entry],
+        };
+      }
+    }
+  }
+
   update.$set = $set;
 
   if ($unset) {
