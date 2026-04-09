@@ -2670,19 +2670,17 @@ const getAll = (Model, modelName) =>
         if (req.query[k] === "") delete req.query[k];
       });
     }
-    // GET /order/getOrders: when searching, use search-only mode — drop list filters so results
-    // are not over-constrained (e.g. status + dispatched + search rarely matches farmer name).
+    // GET /order/getOrders: when searching, relax date/slot/location filters so matches aren't
+    // over-constrained — but keep tab-scoping params (ready_for_dispatch, status, dispatched)
+    // so mobile dispatch tabs (Queue / Ready / Dispatched / Completed) still filter correctly.
     if (modelName === "Order" && req.query) {
       const searchTrimmed =
         req.query.search != null ? String(req.query.search).trim() : "";
       if (searchTrimmed) {
         [
-          "status",
-          "dispatched",
           "startDate",
           "endDate",
           "dateRangeField",
-          "ready_for_dispatch",
           "plantId",
           "subtypeId",
           "slotId",
