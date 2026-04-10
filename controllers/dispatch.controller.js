@@ -309,9 +309,13 @@ const updateDispatch = catchAsync(async (req, res, next) => {
     delete req.body.transportId;
   }
 
+  // Use runValidators only when doing a full replacement (not $push/$pull operators),
+  // because Mongoose calls array validators on individual pushed elements rather than
+  // the full resulting array, which would wrongly fail the "length >= 1" check on orderIds.
+  const isOperatorUpdate = Object.keys(req.body).some((k) => k.startsWith("$"));
   const dispatch = await Dispatch.findByIdAndUpdate(id, req.body, {
     new: true,
-    runValidators: true,
+    runValidators: !isOperatorUpdate,
   });
 
   if (!dispatch) {
@@ -321,6 +325,70 @@ const updateDispatch = catchAsync(async (req, res, next) => {
   const response = generateResponse(
     "Success",
     "Dispatch updated successfully",
+    dispatch
+  );
+
+  res.status(200).json(response);
+});
+
+// Dedicated endpoint to add a post-dispatch (quick) order to an existing dispatch vehicle.
+// Uses $push internally so it is safe behind express-mongo-sanitize.
+const addOrderToDispatch = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const { orderId, dispatchQuantity } = req.body;
+
+  if (!orderId) {
+    return next(new AppError("orderId is required", 400));
+  }
+
+  const qty = Number(dispatchQuantity) || 0;
+
+  // Fetch the dispatch first so we can copy vehicle/driver info to the order's dispatchHistory
+  const existingDispatch = await Dispatch.findById(id).lean();
+  if (!existingDispatch) {
+    return next(new AppError("No dispatch found with that ID", 404));
+  }
+
+  // 1. Add order to the dispatch record
+  const dispatch = await Dispatch.findByIdAndUpdate(
+    id,
+    {
+      $push: {
+        orderIds: orderId,
+        afterDispatchedOrderIds: orderId,
+        orderDispatchDetails: {
+          orderId,
+          dispatchQuantity: qty,
+          remainingAfterDispatch: 0,
+          additionalPlants: qty,
+          totalPlantsAfterAdjustments: qty,
+        },
+      },
+    },
+    { new: true, runValidators: false }
+  );
+
+  // 2. Write the dispatch trail back onto the Order so it shows up in order views
+  await Order.findByIdAndUpdate(
+    orderId,
+    {
+      $push: {
+        dispatchHistory: {
+          date: new Date(),
+          quantity: qty,
+          dispatchId: id,
+          remainingAfterDispatch: 0,
+          driverName: existingDispatch.driverName || "",
+          vehicleName: existingDispatch.vehicleName || "",
+        },
+      },
+    },
+    { runValidators: false }
+  );
+
+  const response = generateResponse(
+    "Success",
+    "Order added to dispatch successfully",
     dispatch
   );
 
@@ -1389,6 +1457,7 @@ Example payload:
 export {
   createDispatch,
   updateDispatch,
+  addOrderToDispatch,
   getDispatches,
   getDispatch,
   removeTransport,

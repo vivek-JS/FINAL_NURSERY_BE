@@ -573,20 +573,21 @@ const addNewPayment = catchAsync(async (req, res, next) => {
   let screenshotUrl = null;
   if (req.file) {
     try {
-      const { uploadImageToCloudinary } = await import('../utils/cloudinaryUtils.js');
-      const uploadResult = await uploadImageToCloudinary(
+      const { uploadImageToLocalStorage } = await import('../utils/localStorageUtils.js');
+      const uploadResult = await uploadImageToLocalStorage(
         req.file.buffer,
-        'nursery-orders/payments'
+        'nursery-orders/payments',
+        { mimetype: req.file.mimetype }
       );
       
       if (uploadResult.success) {
         screenshotUrl = uploadResult.url;
-        console.log("Screenshot uploaded to Cloudinary:", screenshotUrl);
+        console.log("Screenshot uploaded to local storage:", screenshotUrl);
       } else {
-        console.error("Failed to upload screenshot to Cloudinary:", uploadResult.error);
+        console.error("Failed to upload screenshot to local storage:", uploadResult.error);
       }
     } catch (error) {
-      console.error("Error uploading screenshot to Cloudinary:", error);
+      console.error("Error uploading screenshot to local storage:", error);
     }
   }
 

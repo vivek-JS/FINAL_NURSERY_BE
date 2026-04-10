@@ -21,7 +21,7 @@ import DealerLedgerEntry from "../models/dealerLedgerEntry.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import mongoose from "mongoose";
 import { getWalletPlantDetailsWithDerivedOverlay } from "../utils/dealerWalletReconcile.js";
-import { uploadImageToCloudinary } from "../utils/cloudinaryUtils.js";
+import { uploadImageToLocalStorage } from "../utils/localStorageUtils.js";
 import axios from "axios";
 import moment from "moment";
 import { ImageAnnotatorClient } from "@google-cloud/vision";
@@ -2002,13 +2002,11 @@ const uploadMedia = async (req, res, next) => {
       }
     }
 
-    // Upload to Cloudinary
-    const uploadResult = await uploadImageToCloudinary(
+    // Upload to local storage
+    const uploadResult = await uploadImageToLocalStorage(
       req.file.buffer,
       `nursery-${media_type.toLowerCase()}s`,
-      {
-        resource_type: media_type === "IMAGE" ? "image" : "auto",
-      }
+      { mimetype: req.file.mimetype }
     );
 
     if (!uploadResult.success) {

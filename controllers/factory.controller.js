@@ -702,11 +702,11 @@ const createOne = (Model, modelName) =>
         // Handle uploaded screenshots with Cloudinary
         let screenshots = [];
         if (req.files && req.files.length > 0) {
-          const { uploadMultipleImagesToCloudinary } = await import('../utils/cloudinaryUtils.js');
+          const { uploadMultipleImagesToLocalStorage } = await import('../utils/localStorageUtils.js');
           
           try {
-            // Upload all files to Cloudinary
-            const uploadResults = await uploadMultipleImagesToCloudinary(
+            // Upload all files to local storage
+            const uploadResults = await uploadMultipleImagesToLocalStorage(
               req.files.map(file => file.buffer),
               `nursery-orders/order-${orderId}`
             );
@@ -716,9 +716,9 @@ const createOne = (Model, modelName) =>
               .filter(result => result.success)
               .map(result => result.url);
               
-            console.log('📸 Screenshots uploaded to Cloudinary:', screenshots);
+            console.log('📸 Screenshots uploaded to local storage:', screenshots);
           } catch (error) {
-            console.error('Error uploading files to Cloudinary:', error);
+            console.error('Error uploading files to local storage:', error);
             // Continue with order creation even if image upload fails
           }
         }
@@ -2857,6 +2857,8 @@ const getAll = (Model, modelName) =>
     const pipeline = [];
     /** When true, $sort/$skip/$limit run before $lookups so joins only touch one page of orders. */
     let earlyPaginateInserted = false;
+    /** Search + page/limit: paginate after farmer/text $match, before plant/user lookups (same idea). */
+    let searchEarlyPaginateInserted = false;
 
     // Filter by specific order IDs if provided
     if (orderIds) {
@@ -3195,6 +3197,21 @@ const getAll = (Model, modelName) =>
           as: "farmer",
         },
       });
+    }
+
+    // Search + pagination: paginate here so plant/users/dispatch $lookups and $project run on ~`limit` docs only.
+    // (Previously $sort/$skip/$limit ran after all joins — very slow on large status sets e.g. DISPATCHED + name search.)
+    if (
+      searchTrimmed &&
+      hasPaginationParams &&
+      !(slotId && monthName && startDay && endDay)
+    ) {
+      pipeline.push(
+        { $sort: { [sortKey]: order } },
+        { $skip: skip },
+        { $limit: parseInt(limit, 10) }
+      );
+      searchEarlyPaginateInserted = true;
     }
 
     // Lookup related data
@@ -3825,7 +3842,7 @@ const getAll = (Model, modelName) =>
           orderFor: 1,
         },
       },
-      ...(hasPaginationParams && !earlyPaginateInserted
+      ...(hasPaginationParams && !earlyPaginateInserted && !searchEarlyPaginateInserted
         ? [
             { $sort: { [sortKey]: order } },
             { $skip: skip },
@@ -3838,7 +3855,7 @@ const getAll = (Model, modelName) =>
     let total;
     let totalPages;
 
-    if (hasPaginationParams && earlyPaginateInserted) {
+    if (hasPaginationParams && (earlyPaginateInserted || searchEarlyPaginateInserted)) {
       const matchOnlyStages = [];
       for (const st of pipeline) {
         if (Object.prototype.hasOwnProperty.call(st, "$sort")) break;
@@ -3863,7 +3880,7 @@ const getAll = (Model, modelName) =>
       return { id: _id, _id, ...rest };
     });
 
-    if (!(hasPaginationParams && earlyPaginateInserted)) {
+    if (!(hasPaginationParams && (earlyPaginateInserted || searchEarlyPaginateInserted))) {
       if (hasPaginationParams) {
         const countPipeline = pipeline.slice(0, -3);
         const totalCount = await Model.aggregate([...countPipeline, { $count: "total" }]).allowDiskUse(true);

@@ -1,6 +1,11 @@
 import express from "express";
 import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
 const server = express();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Trust proxy for cloud deployments (Render, Heroku, etc.)
 server.set('trust proxy', 1);
@@ -499,6 +504,9 @@ server.use("/api/v1/inventory", authenticateToken, inventoryRoute); // General i
 server.use("/api/v1/plant-product-mappings", plantProductMappingRoute); // Plant product mapping routes (has built-in auth)
 server.use("/api/v1/purchase", authenticateToken, purchaseRoute);
 
+
+// Serve locally uploaded media files
+server.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 server.use(errorHandler);
 

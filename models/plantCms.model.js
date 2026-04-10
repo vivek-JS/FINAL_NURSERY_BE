@@ -5,7 +5,7 @@ const plantSubtypeSchema = new Schema({
   name: { type: String, required: true },
   description: { type: String },
   characteristics: { type: Map, of: String },
-  rates: { type: [Number], default: [] }, // Array of rates for each subtype
+  rates: { type: [Number], default: [] }, // Per-subtype list prices in DB; callers often use rates[0] as the active rate
   dailyDispatch: { type: Number, default: 0 }, // Daily dispatch capacity for this subtype
   buffer: { type: Number, default: 0 }, // Buffer at plant subtype level
   plantReadyDays: { type: Number, default: 0 }, // Number of days for plant to be ready from sowing

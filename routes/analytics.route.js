@@ -20,6 +20,9 @@ import {
   getShortReportByPlant,
   getShortReportOrderDetail,
   getShortReportPayments,
+  getTodayYesterdayVarietyReport,
+  getDispatchDailyPulse,
+  getLciSnapshot,
 } from "../controllers/analytics.controller.js";
 
 const router = express.Router();
@@ -27,6 +30,9 @@ const router = express.Router();
 // Analytics Routes
 router.get("/dashboard", getDashboardAnalytics);
 router.get("/daily-stats", getDailyStats);
+router.get("/today-yesterday-variety", getTodayYesterdayVarietyReport);
+router.get("/dispatch-daily-pulse", getDispatchDailyPulse);
+router.get("/lci", getLciSnapshot);
 router.get("/profit-loss", getProfitLossAnalysis);
 router.get("/sales-performance", getSalesPerformanceAnalysis);
 router.get("/plant-performance", getPlantPerformanceAnalysis);

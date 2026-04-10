@@ -1,4 +1,5 @@
 import Order from "../models/order.model.js";
+import Dispatch from "../models/dispatch.model.js";
 import User from "../models/user.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
@@ -6,6 +7,7 @@ import Pricing from "../models/pricing.model.js";
 import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import mongoose from "mongoose";
+import moment from "moment";
 
 // Dashboard Overview Analytics - Enhanced with order date
 export const getDashboardAnalytics = catchAsync(async (req, res, next) => {
@@ -2660,6 +2662,536 @@ export const getShortReportPayments = catchAsync(async (req, res) => {
           "Accepted = COLLECTED + BANK_VERIFIED. All rows include PENDING and REJECTED too.",
       },
       payments: rows,
+    },
+  });
+});
+
+const VARIETY_REPORT_DATE_FIELDS = new Set([
+  "orderBookingDate",
+  "deliveryDate",
+  "createdAt",
+]);
+
+const VARIETY_REPORT_EXCLUDED_STATUSES = [
+  "CANCELLED",
+  "REJECTED",
+  "TEMPORARY_CANCELLED",
+];
+
+function istDayBoundsFromYmd(dateKey) {
+  const start = new Date(`${dateKey}T00:00:00+05:30`);
+  const end = new Date(`${dateKey}T23:59:59.999+05:30`);
+  return { start, end };
+}
+
+function getIstTodayAndYesterdayYmd() {
+  const todayKey = moment().utcOffset(330).format("YYYY-MM-DD");
+  const yesterdayKey = moment()
+    .utcOffset(330)
+    .subtract(1, "day")
+    .format("YYYY-MM-DD");
+  return { todayKey, yesterdayKey };
+}
+
+async function aggregateVarietyForDay({ dateKey, dateField, excludeStatuses }) {
+  const { start, end } = istDayBoundsFromYmd(dateKey);
+
+  const match = {
+    [dateField]: { $gte: start, $lte: end },
+  };
+  if (excludeStatuses.length > 0) {
+    match.orderStatus = { $nin: excludeStatuses };
+  }
+
+  const byVariety = await Order.aggregate([
+    { $match: match },
+    {
+      $addFields: {
+        linePlantTotal: {
+          $add: [
+            { $ifNull: ["$numberOfPlants", 0] },
+            { $ifNull: ["$additionalPlants", 0] },
+          ],
+        },
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "plantName",
+        foreignField: "_id",
+        as: "plantDetails",
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        let: { plantId: "$plantName", subtypeId: "$plantSubtype" },
+        pipeline: [
+          { $match: { $expr: { $eq: ["$_id", "$$plantId"] } } },
+          { $unwind: "$subtypes" },
+          { $match: { $expr: { $eq: ["$subtypes._id", "$$subtypeId"] } } },
+          { $project: { subtypeName: "$subtypes.name" } },
+        ],
+        as: "subtypeDetails",
+      },
+    },
+    {
+      $group: {
+        _id: {
+          plantId: "$plantName",
+          subtypeId: "$plantSubtype",
+        },
+        plantName: { $first: { $arrayElemAt: ["$plantDetails.name", 0] } },
+        subtypeName: { $first: { $arrayElemAt: ["$subtypeDetails.subtypeName", 0] } },
+        orderCount: { $sum: 1 },
+        plantCount: { $sum: "$linePlantTotal" },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        plantId: "$_id.plantId",
+        subtypeId: "$_id.subtypeId",
+        plantName: { $ifNull: ["$plantName", "Unknown"] },
+        subtypeName: { $ifNull: ["$subtypeName", "Unknown"] },
+        varietyLabel: {
+          $concat: [
+            { $ifNull: ["$plantName", "?"] },
+            " — ",
+            { $ifNull: ["$subtypeName", "?"] },
+          ],
+        },
+        orderCount: 1,
+        plantCount: 1,
+      },
+    },
+    { $sort: { plantCount: -1, varietyLabel: 1 } },
+  ]);
+
+  const totalsAgg = await Order.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        totalOrders: { $sum: 1 },
+        totalPlants: {
+          $sum: {
+            $add: [
+              { $ifNull: ["$numberOfPlants", 0] },
+              { $ifNull: ["$additionalPlants", 0] },
+            ],
+          },
+        },
+      },
+    },
+  ]);
+
+  return {
+    date: dateKey,
+    rangeUtc: { start: start.toISOString(), end: end.toISOString() },
+    totalOrders: totalsAgg[0]?.totalOrders ?? 0,
+    totalPlants: totalsAgg[0]?.totalPlants ?? 0,
+    byVariety,
+  };
+}
+
+/** Today vs yesterday: order counts and plant totals by plant + subtype (IST calendar days). */
+export const getTodayYesterdayVarietyReport = catchAsync(
+  async (req, res, next) => {
+    const { dateField = "orderBookingDate", includeCancelled } = req.query;
+
+    if (!VARIETY_REPORT_DATE_FIELDS.has(dateField)) {
+      return next(
+        new AppError(
+          `Invalid dateField. Use one of: ${[...VARIETY_REPORT_DATE_FIELDS].join(", ")}`,
+          400
+        )
+      );
+    }
+
+    const excludeStatuses =
+      includeCancelled === "true" || includeCancelled === "1"
+        ? []
+        : VARIETY_REPORT_EXCLUDED_STATUSES;
+
+    const { todayKey, yesterdayKey } = getIstTodayAndYesterdayYmd();
+
+    const [today, yesterday] = await Promise.all([
+      aggregateVarietyForDay({
+        dateKey: todayKey,
+        dateField,
+        excludeStatuses,
+      }),
+      aggregateVarietyForDay({
+        dateKey: yesterdayKey,
+        dateField,
+        excludeStatuses,
+      }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        timezone: "Asia/Kolkata",
+        dateField,
+        note:
+          "totalPlants = numberOfPlants + additionalPlants per order line. " +
+          "Default dateField is orderBookingDate (booking day in IST). " +
+          "Use dateField=deliveryDate for delivery-day grouping. " +
+          "Cancelled/rejected/temporary-cancelled orders are excluded unless includeCancelled=true.",
+        today,
+        yesterday,
+      },
+    });
+  }
+);
+
+function normalizeDispatchBucket(doc, { includeRemaining = false } = {}) {
+  if (!doc) {
+    return {
+      orders: 0,
+      plantsOnOrder: 0,
+      ...(includeRemaining ? { plantsRemaining: 0 } : {}),
+    };
+  }
+  const base = {
+    orders: doc.orders ?? 0,
+    plantsOnOrder: doc.plantsOnOrder ?? doc.plants ?? 0,
+  };
+  if (includeRemaining) {
+    base.plantsRemaining = doc.plantsRemaining ?? 0;
+  }
+  return base;
+}
+
+/** Orders whose scheduled deliveryDate falls on the IST day — dispatch pipeline counts + variety mix. */
+async function aggregateDeliveryDayPulse(dateKey, excludeStatuses) {
+  const { start, end } = istDayBoundsFromYmd(dateKey);
+  const match = {
+    deliveryDate: { $gte: start, $lte: end },
+  };
+  if (excludeStatuses.length > 0) {
+    match.orderStatus = { $nin: excludeStatuses };
+  }
+
+  const [row] = await Order.aggregate([
+    { $match: match },
+    {
+      $addFields: {
+        linePlantTotal: {
+          $add: [
+            { $ifNull: ["$numberOfPlants", 0] },
+            { $ifNull: ["$additionalPlants", 0] },
+          ],
+        },
+      },
+    },
+    {
+      $facet: {
+        overall: [
+          {
+            $group: {
+              _id: null,
+              orders: { $sum: 1 },
+              plantsOnOrder: { $sum: "$linePlantTotal" },
+            },
+          },
+        ],
+        readyForDispatch: [
+          { $match: { orderStatus: "READY_FOR_DISPATCH" } },
+          {
+            $group: {
+              _id: null,
+              orders: { $sum: 1 },
+              plantsRemaining: { $sum: { $ifNull: ["$remainingPlants", 0] } },
+              plantsOnOrder: { $sum: "$linePlantTotal" },
+            },
+          },
+        ],
+        inDispatchProcess: [
+          { $match: { orderStatus: "DISPATCH_PROCESS" } },
+          {
+            $group: {
+              _id: null,
+              orders: { $sum: 1 },
+              plantsRemaining: { $sum: { $ifNull: ["$remainingPlants", 0] } },
+              plantsOnOrder: { $sum: "$linePlantTotal" },
+            },
+          },
+        ],
+        dispatched: [
+          { $match: { orderStatus: "DISPATCHED" } },
+          {
+            $group: {
+              _id: null,
+              orders: { $sum: 1 },
+              plantsOnOrder: { $sum: "$linePlantTotal" },
+            },
+          },
+        ],
+        farmReady: [
+          { $match: { orderStatus: "FARM_READY" } },
+          {
+            $group: {
+              _id: null,
+              orders: { $sum: 1 },
+              plantsOnOrder: { $sum: "$linePlantTotal" },
+            },
+          },
+        ],
+        partiallyCompleted: [
+          { $match: { orderStatus: "PARTIALLY_COMPLETED" } },
+          {
+            $group: {
+              _id: null,
+              orders: { $sum: 1 },
+              plantsRemaining: { $sum: { $ifNull: ["$remainingPlants", 0] } },
+              plantsOnOrder: { $sum: "$linePlantTotal" },
+            },
+          },
+        ],
+      },
+    },
+    {
+      $project: {
+        overall: { $arrayElemAt: ["$overall", 0] },
+        readyForDispatch: { $arrayElemAt: ["$readyForDispatch", 0] },
+        inDispatchProcess: { $arrayElemAt: ["$inDispatchProcess", 0] },
+        dispatched: { $arrayElemAt: ["$dispatched", 0] },
+        farmReady: { $arrayElemAt: ["$farmReady", 0] },
+        partiallyCompleted: { $arrayElemAt: ["$partiallyCompleted", 0] },
+      },
+    },
+  ]);
+
+  const o = row || {};
+  return {
+    date: dateKey,
+    rangeUtc: { start: start.toISOString(), end: end.toISOString() },
+    allScheduledDeliveries: normalizeDispatchBucket(o.overall),
+    readyForDispatch: normalizeDispatchBucket(o.readyForDispatch, {
+      includeRemaining: true,
+    }),
+    inDispatchProcess: normalizeDispatchBucket(o.inDispatchProcess, {
+      includeRemaining: true,
+    }),
+    dispatched: normalizeDispatchBucket(o.dispatched),
+    farmReady: normalizeDispatchBucket(o.farmReady),
+    partiallyCompleted: normalizeDispatchBucket(o.partiallyCompleted, {
+      includeRemaining: true,
+    }),
+  };
+}
+
+async function buildDispatchDailyPulsePayload() {
+  const excludeStatuses = VARIETY_REPORT_EXCLUDED_STATUSES;
+  const { todayKey, yesterdayKey } = getIstTodayAndYesterdayYmd();
+
+  const [todayPulse, yesterdayPulse, todayVariety, yesterdayVariety] =
+    await Promise.all([
+      aggregateDeliveryDayPulse(todayKey, excludeStatuses),
+      aggregateDeliveryDayPulse(yesterdayKey, excludeStatuses),
+      aggregateVarietyForDay({
+        dateKey: todayKey,
+        dateField: "deliveryDate",
+        excludeStatuses,
+      }),
+      aggregateVarietyForDay({
+        dateKey: yesterdayKey,
+        dateField: "deliveryDate",
+        excludeStatuses,
+      }),
+    ]);
+
+  return {
+    timezone: "Asia/Kolkata",
+    note:
+      "All figures use scheduled deliveryDate in IST (orders without a delivery date are omitted). " +
+      "Ready / In process / Partial show plants remaining to ship when tracked. " +
+      "Variety rows sum ordered plant units (base + add-on) per plant · subtype.",
+    today: {
+      ...todayPulse,
+      variety: {
+        totalOrders: todayVariety.totalOrders,
+        totalPlants: todayVariety.totalPlants,
+        byVariety: todayVariety.byVariety,
+      },
+    },
+    yesterday: {
+      ...yesterdayPulse,
+      variety: {
+        totalOrders: yesterdayVariety.totalOrders,
+        totalPlants: yesterdayVariety.totalPlants,
+        byVariety: yesterdayVariety.byVariety,
+      },
+    },
+  };
+}
+
+/** IST today vs yesterday: delivery-day dispatch pipeline + plant variety mix (deliveryDate). */
+export const getDispatchDailyPulse = catchAsync(async (req, res) => {
+  const data = await buildDispatchDailyPulsePayload();
+  res.status(200).json({
+    success: true,
+    data,
+  });
+});
+
+/**
+ * Live Command Intelligence — consolidated IST snapshot for dashboards:
+ * dispatch pulse, bookings today, status mix, dispatch runs, pipeline plants, payment exposure, upcoming deliveries.
+ */
+export const getLciSnapshot = catchAsync(async (req, res) => {
+  const excluded = VARIETY_REPORT_EXCLUDED_STATUSES;
+  const todayKey = moment().utcOffset(330).format("YYYY-MM-DD");
+  const { start: todayStart, end: todayEnd } = istDayBoundsFromYmd(todayKey);
+  const windowEndYmd = moment(todayKey, "YYYY-MM-DD")
+    .utcOffset(330)
+    .add(3, "days")
+    .format("YYYY-MM-DD");
+  const { end: windowEnd } = istDayBoundsFromYmd(windowEndYmd);
+
+  const pipelineStatusMatch = {
+    orderStatus: {
+      $in: [
+        "READY_FOR_DISPATCH",
+        "DISPATCH_PROCESS",
+        "FARM_READY",
+        "PARTIALLY_COMPLETED",
+      ],
+    },
+  };
+
+  const openPipelineStatuses = [
+    "PENDING",
+    "ACCEPTED",
+    "PROCESSING",
+    "FARM_READY",
+    "READY_FOR_DISPATCH",
+    "DISPATCH_PROCESS",
+    "PARTIALLY_COMPLETED",
+  ];
+
+  const [
+    dispatchDaily,
+    orderStatusMix,
+    bookedToday,
+    dispatchRunsCreatedToday,
+    deliveriesInNext3Days,
+    pipelineRemaining,
+    paymentExposure,
+    dealerPipelineOrders,
+    farmerPipelineOrders,
+    activeOrdersTotal,
+  ] = await Promise.all([
+    buildDispatchDailyPulsePayload(),
+    Order.aggregate([
+      { $match: { orderStatus: { $nin: excluded } } },
+      {
+        $group: {
+          _id: "$orderStatus",
+          orders: { $sum: 1 },
+        },
+      },
+      { $sort: { orders: -1 } },
+    ]),
+    Order.countDocuments({
+      orderBookingDate: { $gte: todayStart, $lte: todayEnd },
+      orderStatus: { $nin: excluded },
+    }),
+    Dispatch.countDocuments({
+      createdAt: { $gte: todayStart, $lte: todayEnd },
+      isDeleted: { $ne: true },
+    }),
+    Order.countDocuments({
+      deliveryDate: { $gte: todayStart, $lte: windowEnd },
+      orderStatus: { $nin: excluded },
+    }),
+    Order.aggregate([
+      { $match: pipelineStatusMatch },
+      {
+        $group: {
+          _id: null,
+          remainingPlants: { $sum: { $ifNull: ["$remainingPlants", 0] } },
+          orders: { $sum: 1 },
+        },
+      },
+    ]),
+    Order.aggregate([
+      {
+        $match: {
+          orderPaymentStatus: "PENDING",
+          orderStatus: { $nin: excluded },
+        },
+      },
+      {
+        $addFields: {
+          lineQty: {
+            $add: [
+              { $ifNull: ["$numberOfPlants", 0] },
+              { $ifNull: ["$additionalPlants", 0] },
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          orders: { $sum: 1 },
+          /** Upper-bound order value (rate × qty); not net of partial payments. */
+          grossOpenValue: {
+            $sum: { $multiply: ["$rate", "$lineQty"] },
+          },
+        },
+      },
+    ]),
+    Order.countDocuments({
+      dealerOrder: true,
+      orderStatus: { $in: openPipelineStatuses },
+    }),
+    Order.countDocuments({
+      $or: [{ dealerOrder: false }, { dealerOrder: { $exists: false } }],
+      orderStatus: { $in: openPipelineStatuses },
+    }),
+    Order.countDocuments({ orderStatus: { $nin: excluded } }),
+  ]);
+
+  const pr = pipelineRemaining[0] || {};
+  const pe = paymentExposure[0] || {};
+
+  res.status(200).json({
+    success: true,
+    data: {
+      title: "Live command intelligence",
+      timezone: "Asia/Kolkata",
+      generatedAt: new Date().toISOString(),
+      istCalendarDate: todayKey,
+      summary: {
+        activeOrdersTotal: activeOrdersTotal ?? 0,
+        bookedTodayIST: bookedToday,
+        dispatchManifestsLoggedToday: dispatchRunsCreatedToday,
+        scheduledDeliveriesNext3Days: deliveriesInNext3Days,
+        pipelineOrders: pr.orders ?? 0,
+        pipelineRemainingPlants: pr.remainingPlants ?? 0,
+        paymentPendingOrders: pe.orders ?? 0,
+        paymentPendingGrossValueInr: pe.grossOpenValue ?? 0,
+        dealerOrdersInPipeline: dealerPipelineOrders,
+        farmerOrdersInPipeline: farmerPipelineOrders,
+      },
+      orderStatusMix: orderStatusMix.map((r) => ({
+        orderStatus: r._id,
+        orders: r.orders,
+      })),
+      dispatchDaily,
+      hints: {
+        paymentPendingGrossValueInr:
+          "Sum of rate × (base + add-on) plants for orders still marked payment PENDING — upper bound, not net of partial collections.",
+        scheduledDeliveriesNext3Days:
+          "Count of orders with deliveryDate from start of today IST through end of the third day ahead (inclusive).",
+        pipelineRemainingPlants:
+          "Sum of remainingPlants on orders in READY_FOR_DISPATCH, DISPATCH_PROCESS, FARM_READY, or PARTIALLY_COMPLETED.",
+      },
     },
   });
 });
