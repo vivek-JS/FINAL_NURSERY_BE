@@ -285,6 +285,8 @@ import distrctRoutes from "./routes/districts.route.js";
 import slotRouter from "./routes/slots.route.js";
 import plantCmsRouter from "./routes/plantCms.route.js";
 import vheicleRouter from "./routes/vheicle.route.js";
+import vehicleOwnerRouter from "./routes/vehicleOwner.route.js";
+import vehicleDriverRouter from "./routes/vehicleDriver.route.js";
 import tripRouter from "./routes/trip.route.js";
 import shadeRoter from "./routes/shades.route.js";
 import trayRouter from "./routes/tray.route.js";
@@ -304,6 +306,7 @@ import generateResponse from "./utility/responseFormat.js";
 import ExcelRoute from "./routes/excel.route.js";
 import pricingRoute from "./routes/pricing.route.js";
 import analyticsRoute from "./routes/analytics.route.js";
+import { getLciSnapshot } from "./controllers/analytics.controller.js";
 import oldSalesRoute from "./routes/oldSales.route.js";
 import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
@@ -458,11 +461,28 @@ server.use("/api/v1/seed", authenticateToken, seedRoute);
 server.use("/api/v1/vegetable", authenticateToken, vegetableRoute);
 server.use("/api/v1/chemical", authenticateToken, chemicalRoute);
 server.use("/api/v1/districts", authenticateToken, distrctRoutes);
-server.use("/api/v1", authenticateToken, slotRouter);
+// Analytics before slot API. Explicit /lci so it always resolves even if router order changes.
+server.get("/api/v1/analytics/lci", authenticateToken, getLciSnapshot);
+server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
+// Slots router was mounted at `/api/v1`, which shadowed unrelated paths (e.g. /analytics). Only forward slot APIs.
+function slotRouterGate(req, res, next) {
+  const pathname = (req.originalUrl || "").split("?")[0] || "";
+  if (
+    /^\/api\/v1\/slots(\/|$)/.test(pathname) ||
+    /^\/api\/v1\/salesmen-access(\/|$)/.test(pathname) ||
+    /^\/api\/v1\/slot-trail(\/|$)/.test(pathname)
+  ) {
+    return slotRouter(req, res, next);
+  }
+  return next();
+}
+server.use("/api/v1", authenticateToken, slotRouterGate);
 server.use("/api/v1/plantcms", authenticateToken, plantCmsRouter);
 server.use("/api/v1/shade", authenticateToken, shadeRoter);
 server.use("/api/v1/tray", authenticateToken, trayRouter);
 server.use("/api/v1/vehicles", authenticateToken, vheicleRouter);
+server.use("/api/v1/vehicle-owners", authenticateToken, vehicleOwnerRouter);
+server.use("/api/v1/vehicle-drivers", authenticateToken, vehicleDriverRouter);
 server.use("/api/v1/trips", authenticateToken, tripRouter);
 server.use("/api/v1/dispatched", authenticateToken, dispatchRoute);
 server.use("/api/v1/msg", authenticateToken, msgRoute);
@@ -473,7 +493,6 @@ server.use("/api/v1/pollyhouse", authenticateToken, PollyHouse);
 server.use("/api/v1/dealer", authenticateToken, DelaerRoutes);
 // Excel route moved to PUBLIC ROUTES section above (download endpoint needs to be public)
 server.use("/api/v1/pricing", authenticateToken, pricingRoute);
-server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
 server.use("/api/v1/old-sales", authenticateToken, oldSalesRoute);
 server.use("/api/v1/state", authenticateToken, stateRoute);
 server.use("/api/v1/notifications", notificationRoute); // Notification routes (has built-in auth)

@@ -3,6 +3,15 @@ import { Schema, model } from "mongoose";
 
 const vehicleSchema = new Schema(
   {
+    ownerId: {
+      type: Schema.Types.ObjectId,
+      ref: "VehicleOwner",
+      index: true,
+    },
+    defaultDriverId: {
+      type: Schema.Types.ObjectId,
+      ref: "VehicleDriver",
+    },
     name: {
       type: String,
       required: true,

@@ -122,6 +122,7 @@ const allowedParams = [
   "shadeNo",
   "vehicleNo",
   "driverName",
+  "ownerId", // GET /vehicles/all — filter vehicles by VehicleOwner
   // Old sales data quality parameters
   "field",
   "minSimilarity",

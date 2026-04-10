@@ -3196,6 +3196,251 @@ export const getLciSnapshot = catchAsync(async (req, res) => {
   });
 });
 
+/** Statuses that moved from the dispatch queue into DISPATCHED (excludes direct jumps from ACCEPTED etc.). */
+const TO_DISPATCH_PREVIOUS_STATUSES = [
+  "READY_FOR_DISPATCH",
+  "DISPATCH_PROCESS",
+  "PARTIALLY_COMPLETED",
+];
+
+/**
+ * Full dispatch report: (1) order status transition counts from statusChanges in the date window,
+ * (2) plant-wise physical units from dispatchHistory.quantity by dispatch date.
+ * Query: startDate, endDate — ISO strings, same contract as short-report.
+ */
+export const getDispatchPipelineReport = catchAsync(async (req, res, next) => {
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate) {
+    return next(
+      new AppError("startDate and endDate are required (ISO strings).", 400)
+    );
+  }
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return next(new AppError("Invalid startDate or endDate.", 400));
+  }
+
+  const scTimeMatch = {
+    "statusChanges.createdAt": { $gte: start, $lte: end },
+  };
+
+  const [facetRow] = await Order.aggregate([
+    { $match: { "statusChanges.0": { $exists: true } } },
+    { $unwind: "$statusChanges" },
+    { $match: scTimeMatch },
+    {
+      $addFields: {
+        linePlantTotal: {
+          $add: [
+            { $ifNull: ["$numberOfPlants", 0] },
+            { $ifNull: ["$additionalPlants", 0] },
+          ],
+        },
+      },
+    },
+    {
+      $facet: {
+        acceptedToReady: [
+          {
+            $match: {
+              "statusChanges.previousStatus": "ACCEPTED",
+              "statusChanges.newStatus": "READY_FOR_DISPATCH",
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              transitionCount: { $sum: 1 },
+              orderIds: { $addToSet: "$_id" },
+              plantUnits: { $sum: "$linePlantTotal" },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              transitionCount: 1,
+              distinctOrders: { $size: "$orderIds" },
+              plantUnits: 1,
+            },
+          },
+        ],
+        toDispatched: [
+          {
+            $match: {
+              "statusChanges.newStatus": "DISPATCHED",
+              "statusChanges.previousStatus": {
+                $in: TO_DISPATCH_PREVIOUS_STATUSES,
+              },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              transitionCount: { $sum: 1 },
+              orderIds: { $addToSet: "$_id" },
+              plantUnits: { $sum: "$linePlantTotal" },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              transitionCount: 1,
+              distinctOrders: { $size: "$orderIds" },
+              plantUnits: 1,
+            },
+          },
+        ],
+        byPreviousStatus: [
+          {
+            $match: {
+              "statusChanges.newStatus": "DISPATCHED",
+              "statusChanges.previousStatus": {
+                $in: TO_DISPATCH_PREVIOUS_STATUSES,
+              },
+            },
+          },
+          {
+            $group: {
+              _id: "$statusChanges.previousStatus",
+              transitionCount: { $sum: 1 },
+              orderIds: { $addToSet: "$_id" },
+              plantUnits: { $sum: "$linePlantTotal" },
+            },
+          },
+          {
+            $project: {
+              fromStatus: "$_id",
+              transitionCount: 1,
+              distinctOrders: { $size: "$orderIds" },
+              plantUnits: 1,
+            },
+          },
+          { $sort: { fromStatus: 1 } },
+        ],
+      },
+    },
+  ]);
+
+  const f = facetRow || {};
+  const acceptedToReady = f.acceptedToReady?.[0] || {
+    transitionCount: 0,
+    distinctOrders: 0,
+    plantUnits: 0,
+  };
+  const toDispatched = f.toDispatched?.[0] || {
+    transitionCount: 0,
+    distinctOrders: 0,
+    plantUnits: 0,
+  };
+  const byPreviousStatus = f.byPreviousStatus || [];
+
+  const plantWiseFromHistory = await Order.aggregate([
+    { $match: { "dispatchHistory.0": { $exists: true } } },
+    { $unwind: "$dispatchHistory" },
+    {
+      $match: {
+        "dispatchHistory.date": { $gte: start, $lte: end },
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "plantName",
+        foreignField: "_id",
+        as: "plantDetails",
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        let: { plantId: "$plantName", subtypeId: "$plantSubtype" },
+        pipeline: [
+          { $match: { $expr: { $eq: ["$_id", "$$plantId"] } } },
+          { $unwind: "$subtypes" },
+          { $match: { $expr: { $eq: ["$subtypes._id", "$$subtypeId"] } } },
+          { $project: { subtypeName: "$subtypes.name" } },
+        ],
+        as: "subtypeDetails",
+      },
+    },
+    {
+      $group: {
+        _id: {
+          plantId: "$plantName",
+          subtypeId: "$plantSubtype",
+        },
+        plantName: { $first: { $arrayElemAt: ["$plantDetails.name", 0] } },
+        subtypeName: {
+          $first: { $arrayElemAt: ["$subtypeDetails.subtypeName", 0] },
+        },
+        plantsDispatched: { $sum: "$dispatchHistory.quantity" },
+        dispatchLegs: { $sum: 1 },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        plantId: "$_id.plantId",
+        subtypeId: "$_id.subtypeId",
+        plantName: { $ifNull: ["$plantName", "Unknown"] },
+        subtypeName: { $ifNull: ["$subtypeName", "Unknown"] },
+        varietyLabel: {
+          $concat: [
+            { $ifNull: ["$plantName", "?"] },
+            " — ",
+            { $ifNull: ["$subtypeName", "?"] },
+          ],
+        },
+        plantsDispatched: 1,
+        dispatchLegs: 1,
+      },
+    },
+    { $sort: { plantsDispatched: -1, varietyLabel: 1 } },
+  ]);
+
+  const historyTotals = await Order.aggregate([
+    { $match: { "dispatchHistory.0": { $exists: true } } },
+    { $unwind: "$dispatchHistory" },
+    {
+      $match: {
+        "dispatchHistory.date": { $gte: start, $lte: end },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        totalPlants: { $sum: "$dispatchHistory.quantity" },
+        dispatchLegs: { $sum: 1 },
+      },
+    },
+  ]);
+  const ht = historyTotals[0] || {};
+
+  res.status(200).json({
+    success: true,
+    data: {
+      title: "Dispatch pipeline & plant dispatch report",
+      timezone: "Asia/Kolkata",
+      dateRange: { startDate, endDate },
+      note:
+        "Status counts use order.statusChanges when each change was logged. " +
+        "Plant units on those rows follow the order line (base + add-on) at query time. " +
+        "Plant-wise physical dispatch uses dispatchHistory.quantity by dispatch date.",
+      statusTransitions: {
+        acceptedToReadyForDispatch: acceptedToReady,
+        queueToDispatched: toDispatched,
+        breakdownByPreviousStatus: byPreviousStatus,
+      },
+      dispatchHistorySummary: {
+        totalPlantsDispatched: ht.totalPlants ?? 0,
+        dispatchLegs: ht.dispatchLegs ?? 0,
+      },
+      plantsDispatchedByVariety: plantWiseFromHistory,
+    },
+  });
+});
+
 // Helper function to calculate profit analysis
 const calculateProfitAnalysis = async (dateFilter) => {
   const profitData = await Order.aggregate([
