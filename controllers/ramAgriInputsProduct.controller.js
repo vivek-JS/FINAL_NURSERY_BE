@@ -273,7 +273,7 @@ export const addVariety = catchAsync(async (req, res, next) => {
     return next(new AppError('Primary unit is required', 400));
   }
 
-  const crop = await RamAgriInputsProduct.findById(id);
+  const crop = await RamAgriInputsProduct.findById(id).select('varieties');
 
   if (!crop) {
     return next(new AppError('Crop not found', 404));
@@ -313,15 +313,30 @@ export const addVariety = catchAsync(async (req, res, next) => {
     varietyData.purchasePrice = priceValue;
   }
 
-  crop.varieties.push(varietyData);
+  const updatedCrop = await RamAgriInputsProduct.findByIdAndUpdate(
+    id,
+    {
+      $push: { varieties: varietyData },
+      $set: { updatedBy: req.user._id },
+    },
+    {
+      new: true,
+      runValidators: true,
+    }
+  )
+    .populate('createdBy', 'name email')
+    .populate('updatedBy', 'name email')
+    .populate('varieties.primaryUnit', 'name abbreviation type')
+    .populate('varieties.secondaryUnit', 'name abbreviation type');
 
-  crop.updatedBy = req.user._id;
-  await crop.save();
+  if (!updatedCrop) {
+    return next(new AppError('Crop not found', 404));
+  }
 
   const response = generateResponse(
     'Success',
     'Variety added successfully',
-    crop,
+    updatedCrop,
     undefined
   );
 

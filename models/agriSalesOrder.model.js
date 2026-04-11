@@ -312,6 +312,30 @@ const agriSalesOrderSchema = new Schema(
     deliveryDate: {
       type: Date,
     },
+    linkedNurseryOrderId: {
+      type: Schema.Types.ObjectId,
+      ref: "Order",
+      default: null,
+    },
+    linkedNurseryOrderCode: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    agriLoadStatus: {
+      type: String,
+      enum: ["PENDING_LOAD", "LOADED"],
+      default: "PENDING_LOAD",
+    },
+    loadedAt: {
+      type: Date,
+      default: null,
+    },
+    loadedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     // Employee who created the order
     createdBy: {
       type: Schema.Types.ObjectId,
@@ -525,6 +549,8 @@ agriSalesOrderSchema.index({ paymentStatus: 1 }); // For payment filtering
 agriSalesOrderSchema.index({ stockDeducted: 1 }); // For stock deduction tracking
 agriSalesOrderSchema.index({ createdAt: -1 }); // For creation time sorting
 agriSalesOrderSchema.index({ dispatchStatus: 1 }); // For dispatch filtering
+agriSalesOrderSchema.index({ linkedNurseryOrderId: 1 });
+agriSalesOrderSchema.index({ linkedNurseryOrderId: 1, agriLoadStatus: 1 });
 
 // Compound indexes for common queries
 agriSalesOrderSchema.index({ createdBy: 1, orderStatus: 1 }); // User's orders by status

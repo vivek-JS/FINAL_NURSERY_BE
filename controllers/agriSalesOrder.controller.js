@@ -5,6 +5,7 @@ import APIFeatures from "../utility/apiFeatures.js";
 import AgriSalesOrder from "../models/agriSalesOrder.model.js";
 import { InventoryProduct, InventoryOutwardTransaction, StockAdjustment } from "../models/inventory.model.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
+import Order from "../models/order.model.js";
 import Farmer from "../models/farmer.model.js";
 import Vehicle from "../models/vehicleModel.model.js";
 import User from "../models/user.model.js";
@@ -15,6 +16,43 @@ import { normalizeIciciError, saveIciciQrAuditRecord } from "../services/iciciQr
 
 const shouldLogRamAgriLedger = (order) =>
   Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
+
+const resolveRamAgriRateForDate = (variety, dateValue = new Date()) => {
+  if (!variety) return 0;
+  const defaultRate = Number(variety.defaultRate || 0);
+  const now = new Date(dateValue || new Date());
+  const rates = Array.isArray(variety.rates) ? variety.rates : [];
+
+  const activeRate = rates.find((rateEntry) => {
+    if (!rateEntry?.startDate || !rateEntry?.endDate) return false;
+    const start = new Date(rateEntry.startDate);
+    const end = new Date(rateEntry.endDate);
+    return now >= start && now <= end;
+  });
+
+  if (!activeRate) return defaultRate;
+
+  const minRate = Number(activeRate.minRate);
+  const maxRate = Number(activeRate.maxRate);
+  if (!Number.isNaN(minRate) && !Number.isNaN(maxRate) && minRate >= 0 && maxRate >= 0) {
+    return (minRate + maxRate) / 2;
+  }
+
+  const directRate = Number(activeRate.rate);
+  if (!Number.isNaN(directRate) && directRate >= 0) return directRate;
+  return defaultRate;
+};
+
+const isRamAgriLoadAdmin = (user) => {
+  const role = String(user?.role || "").toUpperCase();
+  const jobTitle = String(user?.jobTitle || "").toUpperCase();
+  return (
+    role === "SUPER_ADMIN" ||
+    role === "ADMIN" ||
+    role === "RAM_AGRI_SALES_MANAGER" ||
+    jobTitle === "RAM_AGRI_SALES_MANAGER"
+  );
+};
 
 // ==================== CREATE AGRI SALES ORDER ====================
 
@@ -47,8 +85,8 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
   } = req.body;
 
   // Validate required fields
-  if (!customerName || !customerMobile || !quantity || !rate) {
-    return next(new AppError("Customer name, mobile, quantity, and rate are required", 400));
+  if (!customerName || !customerMobile || !quantity) {
+    return next(new AppError("Customer name, mobile, and quantity are required", 400));
   }
 
   // Validate mobile number (10 digits)
@@ -62,6 +100,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
   let productName = "";
   let unit = "";
   let currentStock = 0;
+  let resolvedRate = Number(rate);
 
   // Handle Ram Agri products
   if (isRamAgriProduct) {
@@ -97,6 +136,9 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     // Set product name and unit
     productName = `${crop.cropName} - ${variety.name}`;
     unit = variety.primaryUnit?.abbreviation || variety.primaryUnit?.name || "N/A";
+    if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+      resolvedRate = resolveRamAgriRateForDate(variety, orderDate);
+    }
   } else {
     // Handle regular products
     if (!productId) {
@@ -121,10 +163,17 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
 
     productName = product.name;
     unit = product.unit || "N/A";
+    if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+      return next(new AppError("Rate is required for regular products", 400));
+    }
+  }
+
+  if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+    return next(new AppError("Unable to resolve valid rate for selected product", 400));
   }
 
   // Calculate total amount
-  const totalAmount = quantity * rate;
+  const totalAmount = quantity * resolvedRate;
 
   // Process payment array - ensure paymentStatus is set for each payment
   let processedPayments = [];
@@ -179,7 +228,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     isRamAgriProduct: isRamAgriProduct || false,
     productName,
     quantity,
-    rate,
+    rate: resolvedRate,
     totalAmount,
     orderDate: orderDate ? new Date(orderDate) : new Date(),
     deliveryDate: deliveryDate && deliveryDate !== 'null' && deliveryDate !== null ? new Date(deliveryDate) : undefined,
@@ -244,7 +293,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
   // Add activity log for order creation (orders are created as ACCEPTED — ready to assign or dispatch)
   order.activityLog = [{
     action: "ORDER_CREATED",
-    description: `Order created and auto-accepted for ${customerName} - ${productName} (Qty: ${quantity}, Rate: ₹${rate}). Status: ACCEPTED — ready for assign or dispatch.`,
+    description: `Order created and auto-accepted for ${customerName} - ${productName} (Qty: ${quantity}, Rate: ₹${resolvedRate}). Status: ACCEPTED — ready for assign or dispatch.`,
     performedBy: userId,
     performedByName: req.user?.name || "Unknown",
     newValue: {
@@ -252,7 +301,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
       customerMobile,
       productName,
       quantity,
-      rate,
+      rate: resolvedRate,
       totalAmount,
       orderStatus: "ACCEPTED",
     },
@@ -364,6 +413,236 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
   );
 
   return res.status(201).json(response);
+});
+
+const createLinkedAgriOrderFromNurseryOrder = catchAsync(async (req, res, next) => {
+  const {
+    linkedNurseryOrderId,
+    ramAgriCropId,
+    ramAgriVarietyId,
+    quantity,
+    rate,
+    notes,
+  } = req.body;
+
+  if (!mongoose.isValidObjectId(linkedNurseryOrderId)) {
+    return next(new AppError("Valid linked nursery order ID is required", 400));
+  }
+  if (!mongoose.isValidObjectId(ramAgriCropId) || !mongoose.isValidObjectId(ramAgriVarietyId)) {
+    return next(new AppError("Valid crop and variety IDs are required", 400));
+  }
+  const numericQuantity = Number(quantity);
+  if (Number.isNaN(numericQuantity) || numericQuantity <= 0) {
+    return next(new AppError("Quantity must be greater than 0", 400));
+  }
+
+  const nurseryOrder = await Order.findById(linkedNurseryOrderId)
+    .populate("farmer", "name mobileNumber village taluka district state");
+  if (!nurseryOrder) {
+    return next(new AppError("Linked nursery order not found", 404));
+  }
+
+  const crop = await RamAgriInputsProduct.findById(ramAgriCropId)
+    .populate("varieties.primaryUnit", "name abbreviation")
+    .populate("varieties.secondaryUnit", "name abbreviation");
+  if (!crop) return next(new AppError("Crop not found", 404));
+
+  const variety = crop.varieties.id(ramAgriVarietyId);
+  if (!variety || variety.isActive === false) {
+    return next(new AppError("Selected variety not found or inactive", 400));
+  }
+
+  let resolvedRate = Number(rate);
+  if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+    resolvedRate = resolveRamAgriRateForDate(variety, nurseryOrder.deliveryDate || new Date());
+  }
+  if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+    return next(new AppError("Unable to resolve valid rate for selected variety", 400));
+  }
+
+  const farmer = nurseryOrder.farmer || {};
+  const userId = req.user?._id || req.user?.id;
+  if (!userId) return next(new AppError("User authentication required", 401));
+
+  const totalAmount = numericQuantity * resolvedRate;
+  const linkedOrderCode = String(nurseryOrder.orderId || nurseryOrder._id);
+
+  const order = await AgriSalesOrder.create({
+    customerName: String(farmer.name || "").trim() || "Nursery Customer",
+    customerMobile: String(farmer.mobileNumber || "").trim(),
+    customerVillage: String(farmer.village || "").trim(),
+    customerTaluka: String(farmer.taluka || "").trim(),
+    customerDistrict: String(farmer.district || "").trim(),
+    customerState: String(farmer.state || "Maharashtra").trim(),
+    isRamAgriProduct: true,
+    ramAgriCropId,
+    ramAgriVarietyId,
+    ramAgriCropName: crop.cropName,
+    ramAgriVarietyName: variety.name,
+    primaryUnit: variety.primaryUnit?._id || null,
+    secondaryUnit: variety.secondaryUnit?._id || null,
+    conversionFactor: variety.conversionFactor || 1,
+    productName: `${crop.cropName} - ${variety.name}`,
+    quantity: numericQuantity,
+    rate: resolvedRate,
+    totalAmount,
+    orderDate: new Date(),
+    deliveryDate: nurseryOrder.deliveryDate || null,
+    notes: notes || "",
+    createdBy: userId,
+    orderStatus: "ACCEPTED",
+    acceptedBy: userId,
+    acceptedAt: new Date(),
+    linkedNurseryOrderId: nurseryOrder._id,
+    linkedNurseryOrderCode: linkedOrderCode,
+    agriLoadStatus: "PENDING_LOAD",
+  });
+
+  if (!order.activityLog) order.activityLog = [];
+  order.activityLog.push({
+    action: "ORDER_CREATED",
+    description: `Linked agri order created for nursery order #${linkedOrderCode} (${order.productName}).`,
+    performedBy: userId,
+    performedByName: req.user?.name || "Unknown",
+    metadata: {
+      linkedNurseryOrderId: nurseryOrder._id,
+      linkedNurseryOrderCode: linkedOrderCode,
+      agriLoadStatus: "PENDING_LOAD",
+    },
+  });
+  await order.save();
+
+  await createCustomerLedgerEntry({
+    customerMobile: order.customerMobile,
+    customerName: order.customerName,
+    refType: "ORDER",
+    refId: order._id,
+    orderId: order._id,
+    debit: order.totalAmount || totalAmount,
+    reference: order.orderNumber,
+    category: "Order",
+    description: `Linked order for nursery order #${linkedOrderCode}`,
+    entryDate: order.orderDate || order.createdAt,
+    createdBy: userId,
+    metadata: {
+      linkedNurseryOrderId: nurseryOrder._id,
+      linkedNurseryOrderCode: linkedOrderCode,
+      cropId: order.ramAgriCropId,
+      varietyId: order.ramAgriVarietyId,
+    },
+  });
+
+  const response = generateResponse(
+    "Success",
+    "Linked Agri order created successfully",
+    order,
+    undefined
+  );
+  return res.status(201).json(response);
+});
+
+const markLinkedAgriLoaded = catchAsync(async (req, res, next) => {
+  if (!isRamAgriLoadAdmin(req.user)) {
+    return next(new AppError("Only Agri Input admin can mark as loaded", 403));
+  }
+
+  const { id } = req.params;
+  if (!mongoose.isValidObjectId(id)) {
+    return next(new AppError("Invalid agri order ID format", 400));
+  }
+
+  const order = await AgriSalesOrder.findById(id);
+  if (!order) return next(new AppError("Agri order not found", 404));
+  if (!order.linkedNurseryOrderId) {
+    return next(new AppError("This agri order is not linked to a nursery order", 400));
+  }
+
+  order.agriLoadStatus = "LOADED";
+  order.loadedAt = new Date();
+  order.loadedBy = req.user?._id || req.user?.id || null;
+  if (!order.activityLog) order.activityLog = [];
+  order.activityLog.push({
+    action: "DISPATCH_UPDATED",
+    description: `Agri load marked as LOADED by ${req.user?.name || "admin"}.`,
+    performedBy: req.user?._id || req.user?.id,
+    performedByName: req.user?.name || "Unknown",
+    metadata: { agriLoadStatus: "LOADED", loadedAt: order.loadedAt },
+  });
+  await order.save();
+
+  return res.status(200).json(
+    generateResponse("Success", "Linked agri order marked as loaded", order, undefined)
+  );
+});
+
+const getLinkedOrdersByNurseryOrder = catchAsync(async (req, res, next) => {
+  const { orderId } = req.params;
+  if (!mongoose.isValidObjectId(orderId)) {
+    return next(new AppError("Invalid nursery order ID format", 400));
+  }
+  const orders = await AgriSalesOrder.find({ linkedNurseryOrderId: orderId })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  return res.status(200).json(
+    generateResponse("Success", "Linked agri orders fetched successfully", orders, undefined)
+  );
+});
+
+const getTodayPendingLinkedLoads = catchAsync(async (req, res) => {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+
+  const orders = await AgriSalesOrder.find({
+    linkedNurseryOrderId: { $ne: null },
+    agriLoadStatus: "PENDING_LOAD",
+    orderDate: { $gte: start, $lte: end },
+  })
+    .sort({ createdAt: -1 })
+    .populate("linkedNurseryOrderId", "orderId deliveryDate farmer")
+    .lean();
+
+  return res.status(200).json(
+    generateResponse("Success", "Today's pending linked agri loads fetched", orders, undefined)
+  );
+});
+
+const getDispatchLoadStatus = catchAsync(async (req, res, next) => {
+  const orderIds = Array.isArray(req.body?.orderIds) ? req.body.orderIds : [];
+  if (!orderIds.length) {
+    return next(new AppError("orderIds array is required", 400));
+  }
+  const normalizedIds = orderIds
+    .filter((id) => mongoose.isValidObjectId(String(id)))
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
+  if (!normalizedIds.length) {
+    return next(new AppError("No valid order IDs provided", 400));
+  }
+
+  const linkedOrders = await AgriSalesOrder.find({
+    linkedNurseryOrderId: { $in: normalizedIds },
+    orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+  }).lean();
+
+  const blocking = linkedOrders.filter((order) => order.agriLoadStatus !== "LOADED");
+  const responseData = {
+    isBlocked: blocking.length > 0,
+    blockedBy: blocking.map((order) => ({
+      agriOrderId: order._id,
+      agriOrderNumber: order.orderNumber,
+      linkedNurseryOrderId: order.linkedNurseryOrderId,
+      agriLoadStatus: order.agriLoadStatus || "PENDING_LOAD",
+      customerName: order.customerName,
+      productName: order.productName,
+      quantity: order.quantity,
+    })),
+  };
+
+  return res.status(200).json(
+    generateResponse("Success", "Dispatch load status fetched", responseData, undefined)
+  );
 });
 
 // ==================== ACCEPT ORDER (NO STOCK CHECK - Stock checked/deducted only on direct admin dispatch) ====================
@@ -3958,6 +4237,7 @@ const getDispatchedOrders = catchAsync(async (req, res, next) => {
 
 export {
   createAgriSalesOrder,
+  createLinkedAgriOrderFromNurseryOrder,
   updateAgriSalesOrder,
   acceptAgriSalesOrder,
   rejectAgriSalesOrder,
@@ -3983,5 +4263,9 @@ export {
   processSalesReturn,
   getOrdersForDispatch,
   getDispatchedOrders,
+  markLinkedAgriLoaded,
+  getLinkedOrdersByNurseryOrder,
+  getTodayPendingLinkedLoads,
+  getDispatchLoadStatus,
 };
 

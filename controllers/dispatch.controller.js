@@ -3,6 +3,7 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import Dispatch from "../models/dispatch.model.js";
 import Order from "../models/order.model.js";
+import AgriSalesOrder from "../models/agriSalesOrder.model.js";
 import ReadyDispatchGroup from "../models/readyDispatchGroup.model.js";
 import PlantSlot from "../models/slots.model.js";
 import mongoose from "mongoose";
@@ -153,6 +154,34 @@ const generateTransportId = async (attempts = 0) => {
   return newTransportId;
 };
 
+const ensureLinkedAgriLoadComplete = async (orderIds = []) => {
+  const normalizedOrderIds = (Array.isArray(orderIds) ? orderIds : [])
+    .filter((id) => mongoose.isValidObjectId(String(id)))
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
+  if (!normalizedOrderIds.length) {
+    return;
+  }
+
+  const blockingAgriOrders = await AgriSalesOrder.find({
+    linkedNurseryOrderId: { $in: normalizedOrderIds },
+    orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+    agriLoadStatus: { $ne: "LOADED" },
+  })
+    .select("orderNumber linkedNurseryOrderCode customerName productName quantity agriLoadStatus")
+    .lean();
+
+  if (blockingAgriOrders.length > 0) {
+    const orderRefs = blockingAgriOrders
+      .map((o) => o.linkedNurseryOrderCode || String(o.linkedNurseryOrderId || ""))
+      .filter(Boolean)
+      .join(", ");
+    throw new AppError(
+      `AGRI_LOAD_PENDING: Linked Agri Inputs not loaded for nursery order(s): ${orderRefs}`,
+      409
+    );
+  }
+};
+
 const createDispatch = catchAsync(async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -218,6 +247,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
     );
 
     validateQuantities(dispatchRequest.plantsDetails);
+    await ensureLinkedAgriLoadComplete(dispatchRequest.orderIds);
     dispatchRequest.transportId = await generateTransportId();
 
     const dispatch = await Dispatch.create([dispatchRequest], { session });

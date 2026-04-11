@@ -5,6 +5,7 @@ import multer from "multer";
 import mongoose from "mongoose";
 import {
   createAgriSalesOrder,
+  createLinkedAgriOrderFromNurseryOrder,
   updateAgriSalesOrder,
   acceptAgriSalesOrder,
   rejectAgriSalesOrder,
@@ -29,6 +30,10 @@ import {
   processSalesReturn,
   getOrdersForDispatch,
   getDispatchedOrders,
+  markLinkedAgriLoaded,
+  getLinkedOrdersByNurseryOrder,
+  getTodayPendingLinkedLoads,
+  getDispatchLoadStatus,
 } from "../controllers/agriSalesOrder.controller.js";
 
 const router = express.Router();
@@ -80,6 +85,7 @@ router.patch(
 // ==================== DISPATCH ROUTES ====================
 router.get("/dispatch/pending", getOrdersForDispatch); // Get orders ready for dispatch
 router.get("/dispatch/history", getDispatchedOrders); // Get dispatched orders
+router.post("/linked/dispatch-load-status", getDispatchLoadStatus);
 router.patch(
   "/dispatch",
   [
@@ -145,6 +151,26 @@ router.patch(
 // ==================== ORDER ROUTES ====================
 router
   .post(
+    "/linked/create",
+    [
+      check("linkedNurseryOrderId").isMongoId().withMessage("Valid linked nursery order ID is required"),
+      check("ramAgriCropId").isMongoId().withMessage("Valid crop ID is required"),
+      check("ramAgriVarietyId").isMongoId().withMessage("Valid variety ID is required"),
+      check("quantity").isNumeric().withMessage("Quantity must be numeric").isFloat({ min: 0.01 }).withMessage("Quantity must be > 0"),
+      check("rate").optional().isNumeric().withMessage("Rate must be numeric"),
+    ],
+    checkErrors,
+    createLinkedAgriOrderFromNurseryOrder
+  )
+  .get("/linked/by-nursery-order/:orderId", getLinkedOrdersByNurseryOrder)
+  .get("/linked/today-pending-load", getTodayPendingLinkedLoads)
+  .patch(
+    "/linked/:id/mark-loaded",
+    [check("id").isMongoId().withMessage("Valid agri order ID is required")],
+    checkErrors,
+    markLinkedAgriLoaded
+  )
+  .post(
     "/create",
     [
       check("customerName").notEmpty().withMessage("Customer name is required"),
@@ -195,7 +221,20 @@ router
           return true;
         }),
       check("quantity").isNumeric().withMessage("Quantity must be a number").isFloat({ min: 0.01 }).withMessage("Quantity must be greater than 0"),
-      check("rate").isNumeric().withMessage("Rate must be a number").isFloat({ min: 0 }).withMessage("Rate must be greater than or equal to 0"),
+      check("rate")
+        .custom((value, { req }) => {
+          if (req.body.isRamAgriProduct === true && (value === undefined || value === null || value === "")) {
+            return true;
+          }
+          if (value === undefined || value === null || value === "") {
+            throw new Error("Rate is required");
+          }
+          const numeric = Number(value);
+          if (Number.isNaN(numeric) || numeric < 0) {
+            throw new Error("Rate must be a non-negative number");
+          }
+          return true;
+        }),
       check("orderDate").optional().isISO8601().withMessage("Invalid order date format"),
       check("deliveryDate")
         .optional({ nullable: true, checkFalsy: false })
