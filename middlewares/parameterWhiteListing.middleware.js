@@ -93,6 +93,7 @@ const allowedParams = [
   "day", // For bucketing endpoints (day-level grouping)
   "salesPersonId", // For salesmen bucketing endpoints
   "taluka", // For salesmen bucketing endpoints (geographical grouping)
+  "groupBy", // For geo-summary endpoint (taluka | village aggregation)
     // Agri Sales Order parameters
     "orderStatus", // For filtering by order status (PENDING, ACCEPTED, REJECTED, etc.)
     "dispatchStatus", // For filtering by dispatch status (DISPATCHED, IN_TRANSIT, DELIVERED, etc.)
@@ -106,6 +107,7 @@ const allowedParams = [
     "createdBy", // For filtering orders by creator (employee who created)
   "mine", // For restricting list APIs to current user entries
     "myOrders", // Boolean: show only current user's orders
+    "showonly", // For restricting getOrders to the logged-in user's own orders (overrides role-based access for admins)
     "paymentStatus", // For filtering by payment status (PENDING, PARTIAL, COMPLETED)
   // Old sales analytics filters
   "plant",

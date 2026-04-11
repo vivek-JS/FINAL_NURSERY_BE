@@ -2789,6 +2789,7 @@ const getAll = (Model, modelName) =>
       orderIds, // NEW: Filter by specific order IDs
       includePastDueBeyondRange, // true: delivery in [start,end] OR delivery before start (older past-due backlog)
       dateRangeField, // "booking" | "delivery" — which date field startDate/endDate apply to (defaults: booking when dispatched=false, delivery when dispatched=true)
+      showonly, // When truthy: restrict ANY role (incl. DISPATCH_MANAGER/ADMIN) to only orders where salesPerson === req.user._id
     } = req.query;
 
     /** Express may pass repeated keys as an array; normalize to one comma-separated string. */
@@ -2888,26 +2889,32 @@ const getAll = (Model, modelName) =>
         const userRole = req.user.role;
         const userJobTitle = req.user.jobTitle;
         const userId = req.user._id;
-        
-        // Apply role-based filtering based on jobTitle (not role)
-        // Exception: DISPATCH_MANAGER can see all orders (especially for ready_for_dispatch view)
-        if (userJobTitle === 'SALES') {
-          // SALES users can only see orders assigned to them
-          pipeline.push({
-            $match: { salesPerson: userId }
-          });
-        } else if (userJobTitle === 'DEALER') {
-          // DEALER users: rows may be tied as dealer and/or salesPerson (legacy / hybrid accounts)
-          pipeline.push({
-            $match: {
-              $or: [
-                { dealer: userId },
-                { salesPerson: userId },
-              ],
-            },
-          });
+
+        // showonly=true: caller explicitly requests "my orders only" — applies to every role,
+        // including DISPATCH_MANAGER / ADMIN who would otherwise see all orders.
+        if (showonly === "true" || showonly === true) {
+          pipeline.push({ $match: { salesPerson: userId } });
+        } else {
+          // Apply role-based filtering based on jobTitle (not role)
+          // Exception: DISPATCH_MANAGER can see all orders (especially for ready_for_dispatch view)
+          if (userJobTitle === 'SALES') {
+            // SALES users can only see orders assigned to them
+            pipeline.push({
+              $match: { salesPerson: userId }
+            });
+          } else if (userJobTitle === 'DEALER') {
+            // DEALER users: rows may be tied as dealer and/or salesPerson (legacy / hybrid accounts)
+            pipeline.push({
+              $match: {
+                $or: [
+                  { dealer: userId },
+                  { salesPerson: userId },
+                ],
+              },
+            });
+          }
+          // SUPER_ADMIN, ADMIN, OFFICE_ADMIN, DISPATCH_MANAGER can see all orders (no filtering)
         }
-        // SUPER_ADMIN, ADMIN, OFFICE_ADMIN, DISPATCH_MANAGER can see all orders (no filtering)
       }
 
       // Apply salesPerson filter if present (for admin users)

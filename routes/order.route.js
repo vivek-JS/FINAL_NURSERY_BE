@@ -30,6 +30,7 @@ import {
   getDeliverySummary,
   getDeliveryOrders,
   splitOrder,
+  getGeoSummary,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -91,6 +92,7 @@ router
   .get("/to-be-dispatched", getOrdersToBeDispatched)
   .get("/delivery-summary", getDeliverySummary)
   .get("/delivery-orders", getDeliveryOrders)
+  .get("/geo-summary", authenticateToken, getGeoSummary)
   .get("/dispatch-details/:orderId", getOrderDispatchDetails)
   .get("/by-dispatch/:transportId", getOrdersByDispatch)
   .get("/dispatch-summary", getDispatchSummary)

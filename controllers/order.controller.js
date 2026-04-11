@@ -4065,6 +4065,276 @@ const splitOrder = catchAsync(async (req, res, next) => {
   }
 });
 
+/**
+ * GET /order/geo-summary
+ * Server-side taluka/village aggregation for dispatch geo drill-down.
+ * Mirrors the EXACT same filter logic as getAll (factory.controller.js) so counts
+ * match the order list on each tab (queue=dispatched+dateRangeField, ready=ready_for_dispatch).
+ */
+const getGeoSummary = catchAsync(async (req, res) => {
+  const {
+    groupBy = "taluka",
+    taluka: talukaFilter,
+    ready_for_dispatch,
+    status: statusRaw,
+    startDate,
+    endDate,
+    dispatched = false,          // same default as getAll
+    dateRangeField,              // "delivery" | "booking" — mirrors getAll
+    dealer,
+    salesPerson,
+    plantId,
+    subtypeId,
+    includePastDueBeyondRange,
+  } = req.query;
+
+  /* ── Resolve date-range field (same logic as resolveOrderDateRangeField in factory) ── */
+  const resolveField = () => {
+    const f = String(dateRangeField || "").toLowerCase().trim();
+    if (f === "booking" || f === "orderbooking" || f === "order_booking") return "orderBookingDate";
+    if (f === "delivery") return "deliveryDate";
+    return String(dispatched) === "true" ? "deliveryDate" : "orderBookingDate";
+  };
+  const dateMongoField = resolveField();
+
+  /* ── FARM_READY-only shortcut (skip date window, same as getAll) ── */
+  const statusTokens = statusRaw
+    ? statusRaw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
+    : [];
+  const skipDateForFarmReadyOnly =
+    statusTokens.length > 0 && statusTokens.every((s) => s === "FARM_READY");
+
+  const pipeline = [];
+
+  /* ── Role-based filter (mirrors getAll exactly) ── */
+  if (req.user) {
+    const { jobTitle, _id: userId } = req.user;
+    if (jobTitle === "SALES") {
+      pipeline.push({ $match: { salesPerson: userId } });
+    } else if (jobTitle === "DEALER") {
+      pipeline.push({ $match: { $or: [{ dealer: userId }, { salesPerson: userId }] } });
+    }
+  }
+
+  /* salesPerson / dealer query params (admin overrides — same as getAll) */
+  if (salesPerson) {
+    pipeline.push({ $match: { salesPerson: new mongoose.Types.ObjectId(salesPerson) } });
+  }
+  if (dealer) {
+    const dealerOid = new mongoose.Types.ObjectId(dealer);
+    const dealerSelfOnly =
+      req.user?.jobTitle === "DEALER" &&
+      req.user?._id &&
+      String(dealerOid) === String(req.user._id);
+    if (!dealerSelfOnly) {
+      // Same as getAll: dealer filter is applied on salesPerson field
+      pipeline.push({ $match: { salesPerson: dealerOid } });
+    }
+  }
+
+  /* plantId / subtypeId filters */
+  if (plantId && mongoose.Types.ObjectId.isValid(plantId)) {
+    pipeline.push({ $match: { plantName: new mongoose.Types.ObjectId(plantId) } });
+  }
+  if (subtypeId && mongoose.Types.ObjectId.isValid(subtypeId)) {
+    pipeline.push({ $match: { plantSubtype: new mongoose.Types.ObjectId(subtypeId) } });
+  }
+
+  /* ── Status filter (same precedence as getAll) ── */
+  if (ready_for_dispatch === "true") {
+    pipeline.push({ $match: { orderStatus: "READY_FOR_DISPATCH" } });
+  } else if (statusRaw) {
+    const statusArr = statusRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    if (statusArr.length) pipeline.push({ $match: { orderStatus: { $in: statusArr } } });
+  }
+
+  /* ── Date range — dispatched=false branch (mirrors getAll lines 2996-3017) ── */
+  if (
+    startDate &&
+    endDate &&
+    String(dispatched) === "false" &&
+    !skipDateForFarmReadyOnly
+  ) {
+    const parseDate = (s, isEnd = false) => {
+      const [d, m, y] = s.split("-");
+      const dt = new Date(Date.UTC(+y, +m - 1, +d, 0, 0, 0, 0));
+      if (isEnd) dt.setUTCHours(23, 59, 59, 999);
+      return dt;
+    };
+    const start = parseDate(startDate);
+    const end = parseDate(endDate, true);
+    // Support includePastDueBeyondRange for both dispatched=false and dispatched=true
+    // (the queue tab uses dispatched=false but still wants past-due orders included)
+    if (includePastDueBeyondRange === "true" && dateMongoField === "deliveryDate") {
+      pipeline.push({
+        $match: {
+          $or: [
+            { deliveryDate: { $gte: start, $lte: end } },
+            { deliveryDate: { $lt: start } },
+          ],
+        },
+      });
+    } else {
+      pipeline.push({
+        $match: { [dateMongoField]: { $gte: start, $lte: end } },
+      });
+    }
+  }
+
+  /* ── Date range — dispatched=true branch with includePastDueBeyondRange (mirrors getAll lines 3020-3066) ── */
+  if (
+    startDate &&
+    endDate &&
+    String(dispatched) === "true" &&
+    ready_for_dispatch !== "true" &&
+    !skipDateForFarmReadyOnly
+  ) {
+    const parseDt = (s, isEnd = false) => {
+      const [d, m, y] = s.split("-");
+      const dt = new Date(Date.UTC(+y, +m - 1, +d, 0, 0, 0, 0));
+      if (isEnd) dt.setUTCHours(23, 59, 59, 999);
+      return dt;
+    };
+    const startD = parseDt(startDate);
+    const endD = parseDt(endDate, true);
+    if (includePastDueBeyondRange === "true" && dateMongoField === "deliveryDate") {
+      pipeline.push({
+        $match: {
+          $or: [
+            { deliveryDate: { $gte: startD, $lte: endD } },
+            { deliveryDate: { $lt: startD } },
+          ],
+        },
+      });
+    } else {
+      pipeline.push({ $match: { [dateMongoField]: { $gte: startD, $lte: endD } } });
+    }
+  }
+
+  /* ── Farmer lookup + geo field extraction ── */
+  pipeline.push({
+    $lookup: { from: "farmers", localField: "farmer", foreignField: "_id", as: "_farmerData" },
+  });
+  /* Skip orders that have no linked farmer (can't be geo-grouped) */
+  pipeline.push({ $match: { "_farmerData.0": { $exists: true } } });
+  pipeline.push({
+    $addFields: {
+      _geoTaluka: {
+        $trim: {
+          input: {
+            $toLower: {
+              $ifNull: [
+                { $arrayElemAt: ["$_farmerData.talukaName", 0] },
+                { $arrayElemAt: ["$_farmerData.taluka", 0] },
+                "Unknown",
+              ],
+            },
+          },
+        },
+      },
+      _geoVillage: {
+        $trim: {
+          input: {
+            $toLower: {
+              $ifNull: [
+                { $arrayElemAt: ["$_farmerData.village", 0] },
+                { $arrayElemAt: ["$_farmerData.villageName", 0] },
+                "Unknown",
+              ],
+            },
+          },
+        },
+      },
+      _geoTalukaDisplay: {
+        $ifNull: [
+          { $arrayElemAt: ["$_farmerData.talukaName", 0] },
+          { $arrayElemAt: ["$_farmerData.taluka", 0] },
+          "Unknown",
+        ],
+      },
+      _geoVillageDisplay: {
+        $ifNull: [
+          { $arrayElemAt: ["$_farmerData.village", 0] },
+          { $arrayElemAt: ["$_farmerData.villageName", 0] },
+          "Unknown",
+        ],
+      },
+    },
+  });
+
+  /* ── Filter to specific taluka when grouping by village ── */
+  if (groupBy === "village" && talukaFilter) {
+    pipeline.push({
+      $match: {
+        $or: [
+          { _geoTaluka: new RegExp(`^${talukaFilter.trim()}$`, "i") },
+          { _geoTalukaDisplay: new RegExp(`^${talukaFilter.trim()}$`, "i") },
+        ],
+      },
+    });
+  }
+
+  /* ── Plant lookup for plant-type breakdown ── */
+  pipeline.push({
+    $lookup: { from: "plantcms", localField: "plantName", foreignField: "_id", as: "_plantData" },
+  });
+  pipeline.push({
+    $addFields: {
+      _plantDisplayName: { $ifNull: [{ $arrayElemAt: ["$_plantData.name", 0] }, "Unknown"] },
+      _qty: { $ifNull: ["$remainingPlants", "$numberOfPlants", 0] },
+    },
+  });
+
+  /* ── Stage 1: group by (geo + plant) ── */
+  const geoDisplayField = groupBy === "village" ? "$_geoVillageDisplay" : "$_geoTalukaDisplay";
+  const geoKeyField     = groupBy === "village" ? "$_geoVillage"        : "$_geoTaluka";
+  pipeline.push({
+    $group: {
+      _id: { geo: geoDisplayField, geoKey: geoKeyField, plant: "$_plantDisplayName" },
+      plantQty: { $sum: "$_qty" },
+      orderCount: { $sum: 1 },
+      splitCount: {
+        $sum: {
+          $cond: [
+            { $or: [
+              { $eq: ["$isSplit", true] },
+              { $gt: [{ $size: { $ifNull: ["$splitOrderIds", []] } }, 0] },
+            ]},
+            1, 0,
+          ],
+        },
+      },
+    },
+  });
+
+  /* ── Stage 2: group by geo, collect plants ── */
+  pipeline.push({
+    $group: {
+      _id: { geo: "$_id.geo", geoKey: "$_id.geoKey" },
+      orderCount: { $sum: "$orderCount" },
+      splitCount: { $sum: "$splitCount" },
+      plants: { $push: { name: "$_id.plant", total: "$plantQty" } },
+    },
+  });
+
+  pipeline.push({ $sort: { orderCount: -1 } });
+
+  const results = await Order.aggregate(pipeline);
+
+  const key = groupBy === "village" ? "village" : "taluka";
+  const data = results.map((r) => ({
+    [key]: r._id.geo,
+    orderCount: r.orderCount,
+    splitCount: r.splitCount,
+    plantTotals: r.plants
+      .filter((p) => p.total > 0)
+      .sort((a, b) => b.total - a.total)
+      .map((p) => [p.name, p.total]),
+  }));
+
+  return res.status(200).json({ success: true, data });
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -4096,4 +4366,5 @@ export {
   getDeliverySummary,
   getDeliveryOrders,
   splitOrder,
+  getGeoSummary,
 };
