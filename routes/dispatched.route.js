@@ -7,11 +7,11 @@ import {
   getDispatch,
   removeTransport,
   handleDispatchReturns,
+  assignRoute,
+  bulkMarkReady,
 } from "../controllers/dispatch.controller.js";
 
 const router = express.Router();
-
-// Protected routes (require authentication)
 
 // GET all dispatches
 router.get("/", getDispatches);
@@ -21,6 +21,12 @@ router.get("/:id", getDispatch);
 
 // POST create new dispatch
 router.post("/", createDispatch);
+
+// PATCH pre-dispatch: assign vehicle + driver to orders from the map planner
+router.patch("/assign-route", assignRoute);
+
+// PATCH bulk move orders to READY_FOR_DISPATCH
+router.patch("/bulk-mark-ready", bulkMarkReady);
 
 // PATCH update dispatch
 router.patch("/:id", updateDispatch);

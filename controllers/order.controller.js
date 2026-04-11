@@ -27,6 +27,7 @@ import {
   recordFarmerPlantLedgerPaymentTransition,
   getFarmerPlantPaymentTransitionAction,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
 
 function watiDigitsOk(n) {
   return n != null && String(n).replace(/\D/g, "").length >= 10;
@@ -2020,13 +2021,15 @@ const getAllPayments = catchAsync(async (req, res, next) => {
         screenshots: 1,
         orderBookingDate: 1,
         createdAt: 1,
+        updatedAt: 1,
         dealerOrder: 1,
       },
     });
 
-    // Sort by payment date with fallback to createdAt
+    // Keep most recently changed orders first so recent payment edits surface immediately.
     pipeline.push({ 
       $sort: { 
+        "updatedAt": order,
         "payment.paymentDate": order,
         "createdAt": order 
       } 
@@ -2166,6 +2169,56 @@ const getUniqueDistricts = catchAsync(async (req, res, next) => {
     res.status(500).json({
       success: false,
       message: "An error occurred while fetching districts.",
+      error: error.message,
+    });
+  }
+});
+
+// Get unique talukas from orders (talukaName preferred, else taluka)
+const getUniqueTalukas = catchAsync(async (req, res, next) => {
+  try {
+    const talukas = await Order.aggregate([
+      {
+        $lookup: {
+          from: "farmers",
+          localField: "farmer",
+          foreignField: "_id",
+          as: "farmer",
+        },
+      },
+      { $unwind: "$farmer" },
+      {
+        $addFields: {
+          _talukaLabel: {
+            $trim: {
+              input: {
+                $ifNull: [
+                  "$farmer.talukaName",
+                  { $ifNull: ["$farmer.taluka", ""] },
+                ],
+              },
+            },
+          },
+        },
+      },
+      {
+        $match: {
+          _talukaLabel: { $nin: [null, ""] },
+        },
+      },
+      { $group: { _id: "$_talukaLabel" } },
+      { $sort: { _id: 1 } },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: talukas.map((t) => t._id),
+    });
+  } catch (error) {
+    console.error("Error fetching unique talukas:", error);
+    res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching talukas.",
       error: error.message,
     });
   }
@@ -3823,6 +3876,195 @@ const getDeliveryOrders = catchAsync(async (req, res, next) => {
   });
 });
 
+/**
+ * Split an order into two separate orders.
+ *
+ * The caller specifies how many plants to "split off" into a new child order.
+ * The parent order's `numberOfPlants` and `remainingPlants` are reduced by
+ * `splitQuantity`. A new child order is created with the split quantity,
+ * inheriting all dispatch-relevant fields from the parent.
+ *
+ * Both orders receive a `splitHistory` entry and the parent's `orderEditHistory`
+ * records the quantity change.
+ *
+ * POST /order/:orderId/split
+ * Body: { splitQuantity: Number, notes?: String }
+ */
+const splitOrder = catchAsync(async (req, res, next) => {
+  const { orderId } = req.params;
+  const { splitQuantity, notes } = req.body;
+
+  if (!splitQuantity || isNaN(Number(splitQuantity)) || Number(splitQuantity) < 1) {
+    return next(new AppError("splitQuantity must be a positive number", 400));
+  }
+  const qty = Number(splitQuantity);
+
+  const SPLITTABLE_STATUSES = ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH"];
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const parent = await Order.findById(orderId).session(session);
+    if (!parent) {
+      await session.abortTransaction();
+      return next(new AppError("Order not found", 404));
+    }
+
+    if (!SPLITTABLE_STATUSES.includes(parent.orderStatus)) {
+      await session.abortTransaction();
+      return next(
+        new AppError(
+          `Cannot split an order with status "${parent.orderStatus}". Only ${SPLITTABLE_STATUSES.join(", ")} orders can be split.`,
+          400
+        )
+      );
+    }
+
+    const effectiveRemaining = parent.remainingPlants ?? parent.numberOfPlants;
+    if (qty >= effectiveRemaining) {
+      await session.abortTransaction();
+      return next(
+        new AppError(
+          `splitQuantity (${qty}) must be less than the order's remaining plants (${effectiveRemaining})`,
+          400
+        )
+      );
+    }
+
+    const performedBy = req.user?._id ?? null;
+    const parentOriginalQty = parent.numberOfPlants;
+    const parentOriginalRemaining = effectiveRemaining;
+    const parentNewRemaining = parentOriginalRemaining - qty;
+    const parentNewQty = parent.numberOfPlants - qty;
+
+    // Compute the next orderId (same pattern as factory.controller.js)
+    const lastOrder = await Order.findOne()
+      .sort({ orderId: -1 })
+      .select("orderId")
+      .session(session);
+    const lastOrderId = Number(lastOrder?.orderId || 0);
+    const nextOrderId = lastOrderId < 1000 ? 1000 : lastOrderId + 1;
+
+    // Build child order — clone all dispatch-relevant fields from the parent
+    const childData = {
+      orderId: nextOrderId,
+      farmer: parent.farmer,
+      dealer: parent.dealer,
+      dealerOrder: parent.dealerOrder,
+      salesPerson: parent.salesPerson,
+      plantName: parent.plantName,
+      plantSubtype: parent.plantSubtype,
+      bookingSlot: parent.bookingSlot,
+      cavity: parent.cavity,
+      rate: parent.rate,
+      orderStatus: parent.orderStatus,
+      orderPaymentStatus: "PENDING",
+      paymentCompleted: false,
+      notes: parent.notes,
+      orderRemarks: parent.orderRemarks,
+      productName: parent.productName,
+      productMappingId: parent.productMappingId,
+      productOrderSnapshot: parent.productOrderSnapshot,
+      orderBookingDate: parent.orderBookingDate,
+      deliveryDate: parent.deliveryDate,
+      dispatchDayKey: parent.dispatchDayKey,
+      dispatchTargetDate: parent.dispatchTargetDate,
+      farmReadyDate: parent.farmReadyDate,
+      orderFor: parent.orderFor,
+      expectedNursery: parent.expectedNursery,
+      reference: parent.reference,
+      quotaSource: parent.quotaSource,
+      numberOfPlants: qty,
+      additionalPlants: 0,
+      totalPlants: qty,
+      remainingPlants: qty,
+      returnedPlants: 0,
+      // Split tracking
+      parentOrderId: parent._id,
+      isSplit: true,
+      splitHistory: [
+        {
+          action: "SPLIT_CREATED",
+          relatedOrderId: parent._id,
+          relatedOrderCode: parent.publicOrderCode,
+          relatedOrderNumber: parent.orderId,
+          originalQuantity: parentOriginalQty,
+          quantityAfterSplit: qty,
+          splitQuantity: qty,
+          performedBy,
+          notes: notes || null,
+        },
+      ],
+      statusChanges: [
+        {
+          previousStatus: parent.orderStatus,
+          newStatus: parent.orderStatus,
+          reason: `Created via order split from order #${parent.orderId}`,
+          changedBy: performedBy,
+        },
+      ],
+    };
+
+    const [childOrder] = await Order.create([childData], { session });
+
+    // Update parent: reduce quantity, record split child, push audit entries
+    const splitHistoryEntry = {
+      action: "SPLIT_SOURCE",
+      relatedOrderId: childOrder._id,
+      relatedOrderCode: childOrder.publicOrderCode,
+      relatedOrderNumber: childOrder.orderId,
+      originalQuantity: parentOriginalQty,
+      quantityAfterSplit: parentNewQty,
+      splitQuantity: qty,
+      performedBy,
+      notes: notes || null,
+    };
+
+    const editHistoryEntry = {
+      field: "numberOfPlants",
+      previousValue: parentOriginalQty,
+      newValue: parentNewQty,
+      changedBy: performedBy,
+      notes: `Split ${qty} plants into new order #${childOrder.orderId}`,
+    };
+
+    await Order.findByIdAndUpdate(
+      parent._id,
+      {
+        $set: {
+          numberOfPlants: parentNewQty,
+          remainingPlants: parentNewRemaining,
+          totalPlants: parentNewQty + (parent.additionalPlants ?? 0),
+        },
+        $push: {
+          splitOrderIds: childOrder._id,
+          splitHistory: splitHistoryEntry,
+          orderEditHistory: editHistoryEntry,
+        },
+      },
+      { session, new: true }
+    );
+
+    await session.commitTransaction();
+
+    const updatedParent = await Order.findById(parent._id).lean();
+    const populatedChild = await Order.findById(childOrder._id).lean();
+
+    return res.status(201).json(
+      generateResponse(true, "Order split successfully", {
+        parentOrder: updatedParent,
+        childOrder: populatedChild,
+      })
+    );
+  } catch (err) {
+    await session.abortTransaction();
+    throw err;
+  } finally {
+    session.endSession();
+  }
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -3837,6 +4079,7 @@ export {
   getAllPayments,
   getUniqueVillages,
   getUniqueDistricts,
+  getUniqueTalukas,
   getDealerWalletBalanceForOrder,
   getOrdersToBeDispatched,
   getAllCavitiesFromOrders,
@@ -3852,4 +4095,5 @@ export {
   handleQRPaymentCallback,
   getDeliverySummary,
   getDeliveryOrders,
+  splitOrder,
 };

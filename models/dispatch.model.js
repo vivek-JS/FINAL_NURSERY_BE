@@ -238,6 +238,34 @@ const dispatchSchema = new Schema(
       type: String,
       required: true,
     },
+    // CMS references — optional for backward-compat, filled when dispatch is created from the map planner
+    driverId: {
+      type: Schema.Types.ObjectId,
+      ref: "VehicleDriver",
+      default: null,
+    },
+    vehicleId: {
+      type: Schema.Types.ObjectId,
+      ref: "Vehicle",
+      default: null,
+    },
+    driverMobile: {
+      type: String,
+      default: "",
+    },
+    vehicleNumber: {
+      type: String,
+      default: "",
+    },
+    // Route-planner metadata (set when dispatch is created from OrderMapView)
+    routeId: {
+      type: String,
+      default: "",
+    },
+    routeNotes: {
+      type: String,
+      default: "",
+    },
     isDeleted: {
       type: Boolean,
       default: false, // This ensures new documents start as not deleted

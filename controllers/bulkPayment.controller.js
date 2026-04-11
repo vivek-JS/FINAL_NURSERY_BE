@@ -159,7 +159,8 @@ export const getBulkPayments = catchAsync(async (req, res, next) => {
 
   const [list, total, totals] = await Promise.all([
     BulkPayment.find(filter)
-      .sort({ paymentDate: -1, createdAt: -1 })
+      // Prioritize recently edited rows (e.g. accepted/updated entries) on top.
+      .sort({ updatedAt: -1, paymentDate: -1, createdAt: -1 })
       .skip(skip)
       .limit(limitNum)
       .populate("createdBy", "name phoneNumber")

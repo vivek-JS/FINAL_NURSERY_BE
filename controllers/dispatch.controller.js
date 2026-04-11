@@ -8,6 +8,8 @@ import PlantSlot from "../models/slots.model.js";
 import mongoose from "mongoose";
 import PlantCms from "../models/plantCms.model.js";
 import Tray from "../models/tray.model.js";
+import Vehicle from "../models/vehicleModel.model.js";
+import VehicleDriver from "../models/vehicleDriver.model.js";
 import {
   syncFarmerPlantLedgerForOrderUpdate,
   roundMoney,
@@ -15,6 +17,7 @@ import {
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { releaseDealerQuotaPartial } from "./quota.controller.js";
 import DealerWallet from "../models/dealerWallet.js";
+import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -31,7 +34,16 @@ const updateOrderWithLedgerSync = async ({
     throw new AppError(`Order not found: ${orderId}`, 404);
   }
 
-  const updatedOrder = await Order.findByIdAndUpdate(orderId, updateOperation, {
+  const opWithAudit = appendStatusChangeToUpdate(
+    updateOperation,
+    previousOrder.orderStatus,
+    {
+      userId,
+      reason: contextLabel ? `dispatch:${contextLabel}` : "dispatch:order_update",
+    }
+  );
+
+  const updatedOrder = await Order.findByIdAndUpdate(orderId, opWithAudit, {
     new: true,
     runValidators: true,
     session,
@@ -152,6 +164,27 @@ const createDispatch = catchAsync(async (req, res, next) => {
       delete dispatchRequest.readyDispatchGroupId;
     }
 
+    // ── Auto-populate driverName / vehicleName from CMS when IDs are provided ──
+    if (dispatchRequest.vehicleId && mongoose.isValidObjectId(String(dispatchRequest.vehicleId))) {
+      const vehicle = await Vehicle.findById(dispatchRequest.vehicleId).lean();
+      if (vehicle) {
+        dispatchRequest.vehicleName = dispatchRequest.vehicleName || vehicle.name || "";
+        dispatchRequest.vehicleNumber = dispatchRequest.vehicleNumber || vehicle.number || "";
+        if (!dispatchRequest.driverName) {
+          dispatchRequest.driverName = vehicle.driverName || "";
+          dispatchRequest.driverMobile = dispatchRequest.driverMobile || vehicle.driverMobile || "";
+        }
+      }
+    }
+    if (dispatchRequest.driverId && mongoose.isValidObjectId(String(dispatchRequest.driverId))) {
+      const driver = await VehicleDriver.findById(dispatchRequest.driverId).lean();
+      if (driver) {
+        dispatchRequest.driverName = dispatchRequest.driverName || driver.name || "";
+        dispatchRequest.driverMobile = dispatchRequest.driverMobile || driver.mobile || "";
+      }
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     // Modify each plant's details and convert cavity strings to ObjectIds
     dispatchRequest.plantsDetails = dispatchRequest.plantsDetails.map(
       (plant) => ({
@@ -252,10 +285,23 @@ const createDispatch = catchAsync(async (req, res, next) => {
         });
       }
     } else {
-      // Legacy behavior: update all orders to DISPATCH_PROCESS
+      // Legacy behavior: update all orders to DISPATCH_PROCESS (filter fixes previous status)
       await Order.updateMany(
         { _id: { $in: dispatchRequest.orderIds }, orderStatus: "FARM_READY" },
-        { $set: { orderStatus: "DISPATCH_PROCESS", currentDispatchId: dispatch[0]._id } },
+        {
+          $set: {
+            orderStatus: "DISPATCH_PROCESS",
+            currentDispatchId: dispatch[0]._id,
+          },
+          $push: {
+            statusChanges: {
+              previousStatus: "FARM_READY",
+              newStatus: "DISPATCH_PROCESS",
+              ...(req.user?._id && { changedBy: req.user._id }),
+              reason: "dispatch:create_dispatch_legacy_farm_ready_bulk",
+            },
+          },
+        },
         { session }
       );
     }
@@ -932,15 +978,22 @@ const removeTransport = async (req, res) => {
             console.log(`Setting order status to ${newStatus}`);
           }
 
-          // Update order: restore quantity and update status
+          // Update order: restore quantity and update status (+ audit trail for reports)
           await Order.findByIdAndUpdate(
             orderDispatch.orderId,
-            {
-              $set: {
-                remainingPlants: restoredRemainingPlants,
-                orderStatus: newStatus,
+            appendStatusChangeToUpdate(
+              {
+                $set: {
+                  remainingPlants: restoredRemainingPlants,
+                  orderStatus: newStatus,
+                },
               },
-            },
+              order.orderStatus,
+              {
+                userId: req.user?._id,
+                reason: "dispatch:remove_transport_restore",
+              }
+            ),
             { session }
           );
 
@@ -964,22 +1017,39 @@ const removeTransport = async (req, res) => {
           });
         } else {
           console.log(`No dispatch history entry found for this dispatch`);
-          // If no dispatch history entry, just update status
           await Order.findByIdAndUpdate(
             orderDispatch.orderId,
-            { $set: { orderStatus: "READY_FOR_DISPATCH" } },
+            appendStatusChangeToUpdate(
+              { $set: { orderStatus: "READY_FOR_DISPATCH" } },
+              order.orderStatus,
+              {
+                userId: req.user?._id,
+                reason: "dispatch:remove_transport_no_history",
+              }
+            ),
             { session }
           );
         }
       }
     } else {
-      console.log(`No orderDispatchDetails found, using legacy update`);
-      // Legacy behavior: just update status
-      await Order.updateMany(
-        { _id: { $in: dispatch.orderIds } },
-        { $set: { orderStatus: "READY_FOR_DISPATCH" } },
-        { session }
-      );
+      console.log(`No orderDispatchDetails found, using legacy per-order update`);
+      const ids = dispatch.orderIds || [];
+      for (const oid of ids) {
+        const o = await Order.findById(oid).session(session);
+        if (!o) continue;
+        await Order.findByIdAndUpdate(
+          oid,
+          appendStatusChangeToUpdate(
+            { $set: { orderStatus: "READY_FOR_DISPATCH" } },
+            o.orderStatus,
+            {
+              userId: req.user?._id,
+              reason: "dispatch:remove_transport_legacy_bulk",
+            }
+          ),
+          { session }
+        );
+      }
     }
 
     // Delete the dispatch document
@@ -1428,6 +1498,200 @@ Example payload:
 */
 
 export { handleDispatchReturns };
+
+// ── assignRoute ───────────────────────────────────────────────────────────────
+// PATCH /dispatch/assign-route
+// Pre-dispatch step: assign a vehicle + driver to a planned set of orders.
+// Also optionally marks those orders as READY_FOR_DISPATCH.
+// ─────────────────────────────────────────────────────────────────────────────
+const assignRoute = catchAsync(async (req, res, next) => {
+  const {
+    orderIds,          // required: array of Order ObjectIds
+    vehicleId,         // optional: Vehicle CMS ObjectId
+    driverId,          // optional: VehicleDriver ObjectId
+    driverName: bodyDriverName,
+    driverMobile: bodyDriverMobile,
+    vehicleName: bodyVehicleName,
+    vehicleNumber: bodyVehicleNumber,
+    routeId,
+    routeNotes,
+    markReady = false, // if true → set READY_FOR_DISPATCH on FARM_READY orders
+  } = req.body;
+
+  if (!Array.isArray(orderIds) || orderIds.length === 0) {
+    return next(new AppError("orderIds array is required", 400));
+  }
+
+  // Resolve vehicle + driver details from CMS when IDs are provided
+  let resolvedDriverName = bodyDriverName || "";
+  let resolvedDriverMobile = bodyDriverMobile || "";
+  let resolvedVehicleName = bodyVehicleName || "";
+  let resolvedVehicleNumber = bodyVehicleNumber || "";
+  let resolvedVehicleId = null;
+  let resolvedDriverId = null;
+
+  if (vehicleId && mongoose.isValidObjectId(String(vehicleId))) {
+    const vehicle = await Vehicle.findById(vehicleId).lean();
+    if (vehicle) {
+      resolvedVehicleId = vehicle._id;
+      resolvedVehicleName = resolvedVehicleName || vehicle.name || "";
+      resolvedVehicleNumber = resolvedVehicleNumber || vehicle.number || "";
+      // If no explicit driverName, fall back to vehicle's default driver info
+      if (!resolvedDriverName) {
+        resolvedDriverName = vehicle.driverName || "";
+        resolvedDriverMobile = resolvedDriverMobile || vehicle.driverMobile || "";
+      }
+    }
+  }
+
+  if (driverId && mongoose.isValidObjectId(String(driverId))) {
+    const driver = await VehicleDriver.findById(driverId).lean();
+    if (driver) {
+      resolvedDriverId = driver._id;
+      resolvedDriverName = resolvedDriverName || driver.name || "";
+      resolvedDriverMobile = resolvedDriverMobile || driver.mobile || "";
+    }
+  }
+
+  const assignedAt = new Date();
+  const assignedBy = req.user?._id || null;
+
+  // Bulk update all orders
+  const updateOp = {
+    $set: {
+      assignedVehicle: resolvedVehicleNumber || resolvedVehicleName,
+      ...(resolvedDriverName && { routeId: routeId || "" }),
+      ...(routeId && { routeId }),
+      assignedAt,
+      ...(assignedBy && { assignedBy }),
+    },
+  };
+
+  // When markReady=true, also move FARM_READY → READY_FOR_DISPATCH
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const validIds = orderIds
+      .filter((id) => mongoose.isValidObjectId(String(id)))
+      .map((id) => new mongoose.Types.ObjectId(String(id)));
+
+    if (validIds.length === 0) {
+      await session.abortTransaction();
+      return next(new AppError("No valid order IDs provided", 400));
+    }
+
+    // Apply assignment to all orders
+    await Order.updateMany(
+      { _id: { $in: validIds } },
+      updateOp,
+      { session }
+    );
+
+    // Mark FARM_READY orders as READY_FOR_DISPATCH if requested
+    let readyCount = 0;
+    if (markReady) {
+      const farmReadyOrders = await Order.find(
+        { _id: { $in: validIds }, orderStatus: "FARM_READY" },
+        "_id orderStatus"
+      ).session(session).lean();
+
+      for (const ord of farmReadyOrders) {
+        await Order.findByIdAndUpdate(
+          ord._id,
+          appendStatusChangeToUpdate(
+            { $set: { orderStatus: "READY_FOR_DISPATCH" } },
+            ord.orderStatus,
+            { userId: assignedBy, reason: "dispatch:assign_route_mark_ready" }
+          ),
+          { session }
+        );
+        readyCount++;
+      }
+    }
+
+    await session.commitTransaction();
+
+    res.status(200).json(
+      generateResponse("Success", "Route assigned successfully", {
+        assignedOrderCount: validIds.length,
+        readyForDispatchCount: readyCount,
+        vehicleName: resolvedVehicleName,
+        vehicleNumber: resolvedVehicleNumber,
+        driverName: resolvedDriverName,
+        driverMobile: resolvedDriverMobile,
+        vehicleId: resolvedVehicleId,
+        driverId: resolvedDriverId,
+        routeId: routeId || null,
+      })
+    );
+  } catch (err) {
+    await session.abortTransaction();
+    next(err);
+  } finally {
+    session.endSession();
+  }
+});
+
+// ── bulkMarkReady ─────────────────────────────────────────────────────────────
+// PATCH /dispatch/bulk-mark-ready
+// Move a batch of orders to READY_FOR_DISPATCH (from FARM_READY or any pre-dispatch status).
+// ─────────────────────────────────────────────────────────────────────────────
+const bulkMarkReady = catchAsync(async (req, res, next) => {
+  const { orderIds } = req.body;
+
+  if (!Array.isArray(orderIds) || orderIds.length === 0) {
+    return next(new AppError("orderIds array is required", 400));
+  }
+
+  const validIds = orderIds
+    .filter((id) => mongoose.isValidObjectId(String(id)))
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
+
+  if (validIds.length === 0) {
+    return next(new AppError("No valid order IDs provided", 400));
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const eligibleOrders = await Order.find(
+      { _id: { $in: validIds }, orderStatus: { $in: ["FARM_READY", "PROCESSING", "ACCEPTED"] } },
+      "_id orderStatus"
+    ).session(session).lean();
+
+    let updatedCount = 0;
+    for (const ord of eligibleOrders) {
+      await Order.findByIdAndUpdate(
+        ord._id,
+        appendStatusChangeToUpdate(
+          { $set: { orderStatus: "READY_FOR_DISPATCH" } },
+          ord.orderStatus,
+          { userId: req.user?._id, reason: "dispatch:bulk_mark_ready" }
+        ),
+        { session }
+      );
+      updatedCount++;
+    }
+
+    await session.commitTransaction();
+
+    res.status(200).json(
+      generateResponse("Success", "Orders marked as Ready for Dispatch", {
+        requestedCount: validIds.length,
+        updatedCount,
+        skippedCount: validIds.length - eligibleOrders.length,
+      })
+    );
+  } catch (err) {
+    await session.abortTransaction();
+    next(err);
+  } finally {
+    session.endSession();
+  }
+});
+
 /*
 Example payload:
 {
@@ -1461,4 +1725,6 @@ export {
   getDispatches,
   getDispatch,
   removeTransport,
+  assignRoute,
+  bulkMarkReady,
 };

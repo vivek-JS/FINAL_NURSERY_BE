@@ -3206,19 +3206,44 @@ const TO_DISPATCH_PREVIOUS_STATUSES = [
 /**
  * Full dispatch report: (1) order status transition counts from statusChanges in the date window,
  * (2) plant-wise physical units from dispatchHistory.quantity by dispatch date.
- * Query: startDate, endDate — ISO strings, same contract as short-report.
+ *
+ * Query (either):
+ * - `date=YYYY-MM-DD` — one **Asia/Kolkata calendar day** (best for daily extract).
+ * - `startDate` + `endDate` — ISO strings (same idea as short-report).
+ * Optional: `format=csv` — download plant-wise + summary as CSV.
  */
 export const getDispatchPipelineReport = catchAsync(async (req, res, next) => {
-  const { startDate, endDate } = req.query;
-  if (!startDate || !endDate) {
+  const { startDate, endDate, date: dateParam } = req.query;
+
+  let start;
+  let end;
+  /** @type {{ mode: string, istDate?: string, startDate?: string, endDate?: string }} */
+  let rangeMeta = { mode: "custom" };
+
+  if (
+    dateParam &&
+    typeof dateParam === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(dateParam.trim())
+  ) {
+    const istDate = dateParam.trim();
+    const bounds = istDayBoundsFromYmd(istDate);
+    start = bounds.start;
+    end = bounds.end;
+    rangeMeta = { mode: "single_ist_day", istDate };
+  } else if (startDate && endDate) {
+    start = new Date(startDate);
+    end = new Date(endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      return next(new AppError("Invalid startDate or endDate.", 400));
+    }
+    rangeMeta = { mode: "custom_range", startDate, endDate };
+  } else {
     return next(
-      new AppError("startDate and endDate are required (ISO strings).", 400)
+      new AppError(
+        "Provide either date=YYYY-MM-DD (one IST day) or both startDate and endDate (ISO).",
+        400
+      )
     );
-  }
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-    return next(new AppError("Invalid startDate or endDate.", 400));
   }
 
   const scTimeMatch = {
@@ -3417,16 +3442,74 @@ export const getDispatchPipelineReport = catchAsync(async (req, res, next) => {
   ]);
   const ht = historyTotals[0] || {};
 
+  const extractSummary = {
+    purpose: "Daily / period export — key figures",
+    timezone: "Asia/Kolkata",
+    physicalPlantsDispatched: ht.totalPlants ?? 0,
+    dispatchLegCount: ht.dispatchLegs ?? 0,
+    statusChangeTransitions: {
+      acceptedToReadyForDispatch: acceptedToReady.transitionCount ?? 0,
+      queueToDispatched: toDispatched.transitionCount ?? 0,
+    },
+    varietyLineCount: plantWiseFromHistory.length,
+  };
+
+  const wantsCsv =
+    String(req.query.format || "").toLowerCase() === "csv" ||
+    String(req.query.export || "").toLowerCase() === "csv";
+
+  if (wantsCsv) {
+    const esc = (v) => {
+      const s = v == null ? "" : String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const label =
+      rangeMeta.mode === "single_ist_day"
+        ? rangeMeta.istDate
+        : `${rangeMeta.startDate || ""}_${rangeMeta.endDate || ""}`;
+    const rows = [
+      "section,key,value",
+      `summary,physical_plants_dispatched,${ht.totalPlants ?? 0}`,
+      `summary,dispatch_legs,${ht.dispatchLegs ?? 0}`,
+      `summary,transitions_accepted_to_ready,${acceptedToReady.transitionCount ?? 0}`,
+      `summary,transitions_queue_to_dispatched,${toDispatched.transitionCount ?? 0}`,
+      "plant_wise,variety_label,plants_dispatched,dispatch_legs",
+    ];
+    for (const r of plantWiseFromHistory) {
+      rows.push(
+        [
+          "plant_wise",
+          esc(r.varietyLabel),
+          r.plantsDispatched ?? 0,
+          r.dispatchLegs ?? 0,
+        ].join(",")
+      );
+    }
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="dispatch-extract-${label}.csv"`
+    );
+    return res.status(200).send(rows.join("\n"));
+  }
+
   res.status(200).json({
     success: true,
     data: {
       title: "Dispatch pipeline & plant dispatch report",
       timezone: "Asia/Kolkata",
-      dateRange: { startDate, endDate },
+      dateRange: {
+        ...rangeMeta,
+        rangeUtc: { start: start.toISOString(), end: end.toISOString() },
+      },
+      extractSummary,
       note:
+        "For one calendar day in IST, prefer query ?date=YYYY-MM-DD. " +
         "Status counts use order.statusChanges when each change was logged. " +
-        "Plant units on those rows follow the order line (base + add-on) at query time. " +
-        "Plant-wise physical dispatch uses dispatchHistory.quantity by dispatch date.",
+        "Dispatch API updates append statusChanges; older data may have gaps. " +
+        "Plant units on transition rows use order line (base + add-on) at query time. " +
+        "Physical plants dispatched = sum of dispatchHistory.quantity in the window (use extractSummary + CSV).",
       statusTransitions: {
         acceptedToReadyForDispatch: acceptedToReady,
         queueToDispatched: toDispatched,

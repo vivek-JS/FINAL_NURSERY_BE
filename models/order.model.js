@@ -257,6 +257,45 @@ const paymentSchema = new Schema(
   { timestamps: true }
 );
 
+// Track split history on both the parent and child orders
+const splitHistorySchema = new Schema(
+  {
+    action: {
+      type: String,
+      enum: ["SPLIT_SOURCE", "SPLIT_CREATED"],
+      required: true,
+    },
+    relatedOrderId: {
+      type: Schema.Types.ObjectId,
+      ref: "Order",
+    },
+    relatedOrderCode: {
+      type: String,
+    },
+    relatedOrderNumber: {
+      type: Number,
+      // Human-readable sequential orderId of the related order (parent for SPLIT_CREATED, child for SPLIT_SOURCE)
+    },
+    originalQuantity: {
+      type: Number,
+    },
+    quantityAfterSplit: {
+      type: Number,
+    },
+    splitQuantity: {
+      type: Number,
+    },
+    performedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    notes: {
+      type: String,
+    },
+  },
+  { timestamps: true }
+);
+
 const orderSchema = new Schema(
   {
     orderId: {
@@ -631,6 +670,28 @@ const orderSchema = new Schema(
       ref: "User",
       // User who assigned the order to the route
     },
+
+    // --- Order Split tracking ---
+    /** Set on child orders created by a split. Points to the original parent order. */
+    parentOrderId: {
+      type: Schema.Types.ObjectId,
+      ref: "Order",
+      default: null,
+    },
+    /** Set on the parent order. Lists all child orders produced by splits of this order. */
+    splitOrderIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "Order",
+      },
+    ],
+    /** True when this order was produced by splitting another order. */
+    isSplit: {
+      type: Boolean,
+      default: false,
+    },
+    /** Full audit trail of every split action that touched this order. */
+    splitHistory: [splitHistorySchema],
   },
   { timestamps: true }
 );
@@ -662,6 +723,8 @@ orderSchema.index({ orderBookingDate: -1 });
 orderSchema.index({ deliveryDate: -1 });
 orderSchema.index({ salesPerson: 1, orderBookingDate: -1 });
 orderSchema.index({ dealer: 1, orderBookingDate: -1 });
+// Daily pipeline / transition reports filter on statusChanges timestamps
+orderSchema.index({ "statusChanges.createdAt": 1 }, { sparse: true });
 
 orderSchema.statics.ensurePublicOrderCode = async function ensurePublicOrderCode(doc) {
   if (doc.publicOrderCode && /^\d{4}$/.test(doc.publicOrderCode)) return doc;
@@ -704,7 +767,10 @@ orderSchema.pre("save", async function (next) {
       .findOne()
       .sort({ orderId: -1 })
       .select("orderId");
-    this.orderId = maxOrder ? maxOrder.orderId + 1 : 1;
+    // Keep business order ids 4-digit first (1000-9999), then continue 5+ digits.
+    // If legacy rows exist below 1000, start from 1000.
+    const maxOrderId = Number(maxOrder?.orderId || 0);
+    this.orderId = maxOrderId < 1000 ? 1000 : maxOrderId + 1;
     next();
   } catch (err) {
     next(err);

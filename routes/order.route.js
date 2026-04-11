@@ -12,6 +12,7 @@ import {
   getAllPayments,
   getUniqueVillages,
   getUniqueDistricts,
+  getUniqueTalukas,
   getDealerWalletBalanceForOrder,
   getOrdersToBeDispatched,
   getAllCavitiesFromOrders,
@@ -28,6 +29,7 @@ import {
   sendOrderDispatchWhatsAppController,
   getDeliverySummary,
   getDeliveryOrders,
+  splitOrder,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -81,6 +83,7 @@ router
   .patch("/bulk-payment/:id/accept", requirePaymentAccess, acceptBulkPayment)
   .get("/villages", getUniqueVillages)
   .get("/districts", getUniqueDistricts)
+  .get("/talukas", getUniqueTalukas)
   .get("/cavities", getAllCavitiesFromOrders)
   .get("/bucketing", getOrderBucketing)
   .get("/salesmen-bucketing", getSalesmenBucketing)
@@ -145,5 +148,6 @@ router
   }))
   .post("/dealer-order", uploadImages.array('screenshots', 10), createDealerOrder)
   .patch("/afterOrder",addAfterDispatchedOrderIds)
+  .post("/:orderId/split", authenticateToken, splitOrder)
 
 export default router;

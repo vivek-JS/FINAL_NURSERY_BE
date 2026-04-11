@@ -507,11 +507,12 @@ export const getFarmerPlantOrderDetails = catchAsync(async (req, res, next) => {
 
 /**
  * POST transfer farmer plant advance between two farmers.
- * Body: { fromFarmerId|fromMobile, toFarmerId|toMobile, amount, reason }
+ * Body: { fromFarmerId|fromMobile, toFarmerId|toMobile, amount, reason, orderId? }
  *
  * Rules:
  * - Only allowed if source has advance (outstanding < 0)
  * - amount must be <= |advance|
+ * - if orderId is provided, destination farmer/mobile must match that order's farmer
  * - Writes two immutable ADJUSTMENT rows linked by transferId + creates an audit Log entry.
  */
 export const transferFarmerPlantAdvance = catchAsync(async (req, res, next) => {
@@ -522,6 +523,7 @@ export const transferFarmerPlantAdvance = catchAsync(async (req, res, next) => {
     toMobile,
     amount,
     reason,
+    orderId,
   } = req.body || {};
 
   const amt = roundMoney(Math.abs(Number(amount || 0)));
@@ -561,13 +563,59 @@ export const transferFarmerPlantAdvance = catchAsync(async (req, res, next) => {
       { farmerId: fromFarmerId, mobile: fromMobile },
       session
     );
-    const to = await resolveParty(
+    let to = await resolveParty(
       { farmerId: toFarmerId, mobile: toMobile },
       session
     );
 
     if (!from?.mobile) {
       throw new AppError("Valid from farmerId or fromMobile is required", 400);
+    }
+    const orderIdRaw = orderId != null ? String(orderId).trim() : "";
+    let linkedOrder = null;
+    let linkedOrderMobile = null;
+    let linkedOrderFarmer = null;
+    if (orderIdRaw) {
+      if (!mongoose.isValidObjectId(orderIdRaw)) {
+        throw new AppError("Invalid orderId", 400);
+      }
+      linkedOrder = await Order.findById(orderIdRaw)
+        .select("_id orderId farmer dealerOrder")
+        .session(session)
+        .lean();
+      if (!linkedOrder) {
+        throw new AppError("Order not found for provided orderId", 404);
+      }
+      if (linkedOrder.dealerOrder) {
+        throw new AppError("Only farmer plant orders can be linked to transfer", 400);
+      }
+      if (!linkedOrder.farmer) {
+        throw new AppError("Selected order has no farmer mapping", 400);
+      }
+      linkedOrderFarmer = await Farmer.findById(linkedOrder.farmer)
+        .select("name mobileNumber village taluka district")
+        .session(session)
+        .lean();
+      linkedOrderMobile = linkedOrderFarmer
+        ? normalizeFarmerMobile(linkedOrderFarmer.mobileNumber)
+        : null;
+      if (!linkedOrderMobile) {
+        throw new AppError("Selected order farmer has no valid mobile", 400);
+      }
+      if (!to?.mobile) {
+        to = {
+          farmerId: linkedOrderFarmer?._id || linkedOrder.farmer,
+          name: (linkedOrderFarmer?.name || "").trim(),
+          mobile: linkedOrderMobile,
+        };
+      } else {
+        if (linkedOrderMobile !== to.mobile) {
+          throw new AppError("Selected order does not belong to selected target farmer", 400);
+        }
+        if (to.farmerId && String(to.farmerId) !== String(linkedOrder.farmer)) {
+          throw new AppError("Selected order does not belong to selected target farmer", 400);
+        }
+      }
     }
     if (!to?.mobile) {
       throw new AppError("Valid to farmerId or toMobile is required", 400);
@@ -600,6 +648,14 @@ export const transferFarmerPlantAdvance = catchAsync(async (req, res, next) => {
       from: { farmerId: from.farmerId, mobile: from.mobile, name: from.name || "" },
       to: { farmerId: to.farmerId, mobile: to.mobile, name: to.name || "" },
       reason: reasonText || null,
+      order: linkedOrder
+        ? {
+            orderObjectId: linkedOrder._id,
+            orderNumericId: linkedOrder.orderId ?? null,
+            farmerId: linkedOrder.farmer || null,
+            mobile: linkedOrderMobile,
+          }
+        : null,
     };
 
     const fromEntry = await createFarmerPlantLedgerEntry({
@@ -623,9 +679,11 @@ export const transferFarmerPlantAdvance = catchAsync(async (req, res, next) => {
       farmerId: to.farmerId,
       refType: "ADJUSTMENT",
       refId: transferId,
+      orderId: linkedOrder?._id || undefined,
       credit: amt,
+      reference: linkedOrder ? String(linkedOrder.orderId ?? "") : undefined,
       category: "Advance Transfer",
-      description: `Advance received from ${from.name || "farmer"} (${from.mobile})${reasonText ? ` — ${reasonText}` : ""}`,
+      description: `Advance received from ${from.name || "farmer"} (${from.mobile})${linkedOrder ? ` · order #${linkedOrder.orderId ?? ""}` : ""}${reasonText ? ` — ${reasonText}` : ""}`,
       entryDate,
       createdBy: performedBy,
       metadata: { ...commonMeta, direction: "IN" },
@@ -654,6 +712,12 @@ export const transferFarmerPlantAdvance = catchAsync(async (req, res, next) => {
             beforeTo: null,
             afterTo,
             reason: reasonText || null,
+            order: linkedOrder
+              ? {
+                  orderObjectId: linkedOrder._id,
+                  orderNumericId: linkedOrder.orderId ?? null,
+                }
+              : null,
           },
           changedFields: ["advanceTransfer"],
           metadata: commonMeta,
@@ -672,6 +736,12 @@ export const transferFarmerPlantAdvance = catchAsync(async (req, res, next) => {
         {
           transferId,
           amount: amt,
+          order: linkedOrder
+            ? {
+                orderObjectId: linkedOrder._id,
+                orderNumericId: linkedOrder.orderId ?? null,
+              }
+            : null,
           from: { mobile: from.mobile, farmerId: from.farmerId, name: from.name, outstandingAfter: afterFrom },
           to: { mobile: to.mobile, farmerId: to.farmerId, name: to.name, outstandingAfter: afterTo },
         },

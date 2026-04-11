@@ -437,13 +437,15 @@ const createOne = (Model, modelName) =>
           });
         }
 
-        // Get the highest orderId
+        // Keep business order ids 4-digit first (1000-9999), then continue 5+ digits.
+        // If legacy data has ids below 1000, jump directly to 1000.
         const lastOrder = await Model.findOne()
           .sort({ orderId: -1 })
           .select("orderId")
           .session(session);
 
-        const orderId = lastOrder ? lastOrder.orderId + 1 : 1;
+        const lastOrderId = Number(lastOrder?.orderId || 0);
+        const orderId = lastOrderId < 1000 ? 1000 : lastOrderId + 1;
 
         const trayId = await resolveTrayIdFromCavityInput(cavity, session);
 
@@ -2691,6 +2693,7 @@ const getAll = (Model, modelName) =>
           "dealer",
           "village",
           "district",
+          "taluka",
           "includePastDueBeyondRange",
           "orderIds",
         ].forEach((k) => {
@@ -2771,6 +2774,7 @@ const getAll = (Model, modelName) =>
       dealer, // Added dealer parameter
       village, // Added village parameter
       district, // Added district parameter
+      taluka, // Taluka filter (matches farmer.taluka / farmer.talukaName)
       page: pageQuery,
       limit: limitQuery,
       status: statusRaw,
@@ -3066,6 +3070,7 @@ const getAll = (Model, modelName) =>
       !search &&
       !village &&
       !district &&
+      !taluka &&
       !(slotId && monthName && startDay && endDay);
 
     if (canEarlyPaginate) {
@@ -3172,17 +3177,32 @@ const getAll = (Model, modelName) =>
       });
     }
 
-    // Apply village and district filters after farmer lookup
-    if (village || district) {
-      const locationMatch = {};
+    // Apply village / district / taluka filters after farmer lookup (same as FarmerOrdersTable params)
+    if (village || district || taluka) {
+      const locClauses = [];
       if (village) {
-        locationMatch["farmer.village"] = new RegExp(village, "i");
+        locClauses.push({ "farmer.village": new RegExp(village, "i") });
       }
       if (district) {
-        locationMatch["farmer.district"] = new RegExp(district, "i");
+        const dr = new RegExp(district, "i");
+        locClauses.push({
+          $or: [
+            { "farmer.district": dr },
+            { "farmer.districtName": dr },
+          ],
+        });
+      }
+      if (taluka) {
+        const tr = new RegExp(taluka, "i");
+        locClauses.push({
+          $or: [
+            { "farmer.taluka": tr },
+            { "farmer.talukaName": tr },
+          ],
+        });
       }
       pipeline.push({
-        $match: locationMatch,
+        $match: locClauses.length === 1 ? locClauses[0] : { $and: locClauses },
       });
     }
 

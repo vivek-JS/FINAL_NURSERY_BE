@@ -17,7 +17,9 @@
     "order:set-status": "node scripts/set-order-status.js",
     "script:advance-collected-xlsx": "node scripts/mark-collected-from-advance-match-xlsx.js",
     "script:fix-sales-person-xlsx": "node scripts/fix-sales-person-from-refer-by-xlsx.js",
-    "script:transfer-chhtrapati-sales-to-sandip-sir": "node scripts/transfer-salesperson-chhtrapati-sales-to-sandip-sir.js"
+    "script:transfer-chhtrapati-sales-to-sandip-sir": "node scripts/transfer-salesperson-chhtrapati-sales-to-sandip-sir.js",
+    "seed:gadi-fleet:stage": "node scripts/seed-gadi-fleet-from-xlsx.js --stage",
+    "seed:gadi-fleet:prod": "node scripts/seed-gadi-fleet-from-xlsx.js --prod"
   },
   "author": "",
   "license": "ISC",
