@@ -156,6 +156,20 @@ export async function sendOrderDispatchedWhatsAppDelivery1(farmer, details) {
       details.plantName,
       details.plantSubtype
     );
+    const isPapayaDispatch = /papaya/i.test(
+      `${details.plantName || ""} ${details.plantSubtype || ""} ${plantParam || ""} ${subtypeParam || ""}`
+    );
+
+    if (isPapayaDispatch) {
+      // Papaya dispatch uses dedicated template requested by operations team.
+      // The message uses {{3}} for driver number.
+      const papayaParams = [
+        { name: "name", value: farmer.name || "Farmer" },
+        { name: "id", value: details.publicOrderCode?.toString() || details.orderId?.toString() || "N/A" },
+        { name: "driver_number", value: details.driverNumber || "N/A" },
+      ];
+      return await sendWatiTemplateMessage(farmer.mobileNumber, "driver_fianl", papayaParams);
+    }
 
     const parameters = [
       { name: "name", value: farmer.name || "Farmer" },

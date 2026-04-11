@@ -521,6 +521,11 @@ const orderSchema = new Schema(
       type: Number,
       default: 0,
     },
+    damagedPlants: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     /** Cumulative plants returned to dealer plant quota (dispatch returns with add-to-inventory on dealer-quota orders). */
     dealerQuotaReturnedPlants: {
       type: Number,
@@ -1197,10 +1202,15 @@ orderSchema.pre("validate", function (next) {
     return next(error);
   }
 
-  // Ensure returnedPlants doesn't exceed total ordered plants
-  if (this.returnedPlants > totalOrderedPlants) {
+  if ((this.damagedPlants || 0) < 0) {
+    const error = new Error("Damaged plants cannot be negative");
+    return next(error);
+  }
+
+  // Ensure total resolved quantities don't exceed ordered plants.
+  if ((this.returnedPlants || 0) + (this.damagedPlants || 0) > totalOrderedPlants) {
     const error = new Error(
-      "Returned plants cannot exceed the total number of plants in the order"
+      "Returned plus damaged plants cannot exceed the total number of plants in the order"
     );
     return next(error);
   }

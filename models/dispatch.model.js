@@ -275,6 +275,11 @@ const dispatchSchema = new Schema(
       type: Number,
       default: 0,
     },
+    damagedPlants: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     plantsDetails: {
       type: [plantDetailSchema],
       validate: {

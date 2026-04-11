@@ -72,6 +72,28 @@ const varietySchema = new mongoose.Schema({
     min: 0,
     comment: "Default rate for this variety (can be overridden by seasonal rates)",
   },
+  sellerRate: {
+    type: Number,
+    min: 0,
+    comment: "Seller-facing rate (from Ram Agri chemical master sheet)",
+  },
+  dealerRate: {
+    type: Number,
+    min: 0,
+    comment: "Dealer rate (from Ram Agri chemical master sheet)",
+  },
+  points: {
+    type: Number,
+    default: 0,
+    min: 0,
+    comment: "Seller points for the variety/package",
+  },
+  dealerPoints: {
+    type: Number,
+    default: 0,
+    min: 0,
+    comment: "Dealer points for the variety/package",
+  },
   purchasePrice: {
     type: Number,
     min: 0,

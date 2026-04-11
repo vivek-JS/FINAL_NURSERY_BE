@@ -182,12 +182,63 @@ const ensureLinkedAgriLoadComplete = async (orderIds = []) => {
   }
 };
 
+const markLinkedAgriLoadedForDispatch = async ({
+  orderIds = [],
+  user = null,
+  dispatchRequest = {},
+  dispatchId = null,
+  session = null,
+}) => {
+  const normalizedOrderIds = (Array.isArray(orderIds) ? orderIds : [])
+    .filter((id) => mongoose.isValidObjectId(String(id)))
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
+  if (!normalizedOrderIds.length) return;
+
+  const linkedOrders = await AgriSalesOrder.find({
+    linkedNurseryOrderId: { $in: normalizedOrderIds },
+    orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+    agriLoadStatus: { $ne: "LOADED" },
+  }).session(session);
+
+  if (!linkedOrders.length) return;
+
+  const performedBy = user?._id || user?.id || null;
+  const performedByName = user?.name || "Unknown";
+
+  for (const linkedOrder of linkedOrders) {
+    linkedOrder.agriLoadStatus = "LOADED";
+    linkedOrder.loadedAt = new Date();
+    linkedOrder.loadedBy = performedBy;
+    if (!Array.isArray(linkedOrder.activityLog)) linkedOrder.activityLog = [];
+    linkedOrder.activityLog.push({
+      action: "DISPATCH_UPDATED",
+      description: `Auto-marked LOADED from plant dispatch${dispatchId ? ` #${dispatchId}` : ""}.`,
+      performedBy,
+      performedByName,
+      metadata: {
+        agriLoadStatus: "LOADED",
+        loadedAt: linkedOrder.loadedAt,
+        source: "PLANT_DISPATCH",
+        dispatchId: dispatchId || null,
+        driverName: dispatchRequest?.driverName || "",
+        driverMobile: dispatchRequest?.driverMobile || "",
+        vehicleName: dispatchRequest?.vehicleName || "",
+      },
+    });
+    await linkedOrder.save({ session });
+  }
+};
+
 const createDispatch = catchAsync(async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const dispatchRequest = { ...req.body };
+    const autoMarkLinkedAgriLoaded = Boolean(dispatchRequest.autoMarkLinkedAgriLoaded);
+    if (dispatchRequest.autoMarkLinkedAgriLoaded !== undefined) {
+      delete dispatchRequest.autoMarkLinkedAgriLoaded;
+    }
     const readyDispatchGroupId = dispatchRequest.readyDispatchGroupId;
     if (readyDispatchGroupId !== undefined) {
       delete dispatchRequest.readyDispatchGroupId;
@@ -247,7 +298,9 @@ const createDispatch = catchAsync(async (req, res, next) => {
     );
 
     validateQuantities(dispatchRequest.plantsDetails);
-    await ensureLinkedAgriLoadComplete(dispatchRequest.orderIds);
+    if (!autoMarkLinkedAgriLoaded) {
+      await ensureLinkedAgriLoadComplete(dispatchRequest.orderIds);
+    }
     dispatchRequest.transportId = await generateTransportId();
 
     const dispatch = await Dispatch.create([dispatchRequest], { session });
@@ -350,6 +403,16 @@ const createDispatch = catchAsync(async (req, res, next) => {
         },
         { session }
       );
+    }
+
+    if (autoMarkLinkedAgriLoaded) {
+      await markLinkedAgriLoadedForDispatch({
+        orderIds: dispatchRequest.orderIds,
+        user: req.user,
+        dispatchRequest,
+        dispatchId: dispatch[0]?._id || null,
+        session,
+      });
     }
 
     await session.commitTransaction();
@@ -569,6 +632,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
           plantsDetails: { $first: "$plantsDetails" },
           orderDispatchDetails: { $first: "$orderDispatchDetails" },
           returnedPlants: { $first: "$returnedPlants" },
+          damagedPlants: { $first: "$damagedPlants" },
           transportStatus: { $first: "$transportStatus" },
           createdAt: { $first: "$createdAt" }, // Keep as Date object
           updatedAt: { $first: "$updatedAt" }, // Keep as Date object
@@ -584,6 +648,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
               orderStatus: "$orderDetails.orderStatus",
               paymentCompleted: "$orderDetails.paymentCompleted",
               returnedPlants: "$orderDetails.returnedPlants",
+              damagedPlants: "$orderDetails.damagedPlants",
               returnReason: "$orderDetails.returnReason",
               quotaSource: "$orderDetails.quotaSource",
               additionalPlants: "$orderDetails.additionalPlants",
@@ -609,6 +674,8 @@ const getDispatches = catchAsync(async (req, res, next) => {
                 payment: "$orderDetails.payment",
                 quotaSource: "$orderDetails.quotaSource",
                 orderid: "$orderDetails._id",
+                returnedPlants: "$orderDetails.returnedPlants",
+                damagedPlants: "$orderDetails.damagedPlants",
                 salesPerson: {
                   name: { $arrayElemAt: ["$salesPersonDetails.name", 0] },
                   phoneNumber: {
@@ -923,6 +990,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
         payment: order.payment,
         orderStatus: order.orderStatus,
         returnedPlants: order.returnedPlants,
+        damagedPlants: order.damagedPlants,
         returnReason: order.returnReason,
         quotaSource: order.quotaSource,
         additionalPlants: order.additionalPlants,
@@ -1121,10 +1189,15 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       return next(new AppError("No dispatch found with that ID", 404));
     }
 
-    // Calculate total returned plants
+    // Calculate total returned and damaged plants for this completion submit.
     const totalReturnedPlants =
       orderUpdates?.reduce(
         (sum, order) => sum + (Number(order.returnedPlants) || 0),
+        0
+      ) || 0;
+    const totalDamagedPlants =
+      orderUpdates?.reduce(
+        (sum, order) => sum + (Number(order.damagedPlants) || 0),
         0
       ) || 0;
 
@@ -1133,6 +1206,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       id,
       {
         returnedPlants: totalReturnedPlants,
+        damagedPlants: totalDamagedPlants,
         transportStatus: "DELIVERED", // Update transport status to DELIVERED
       },
       { new: true, runValidators: true, session }
@@ -1171,6 +1245,12 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
           ? 0
           : Number(orderUpdate.returnedPlants)
       );
+      const damagedForThisOrder = Math.max(
+        0,
+        Number.isNaN(Number(orderUpdate.damagedPlants))
+          ? 0
+          : Number(orderUpdate.damagedPlants)
+      );
 
       const hasAdditionalUpdate =
         orderUpdate.additionalPlants !== undefined &&
@@ -1191,11 +1271,13 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       // Calculate the total returnedPlants (existing + new returns)
       const existingReturnedPlants = order.returnedPlants || 0;
       const totalReturnedPlants = existingReturnedPlants + returnsForThisOrder;
+      const existingDamagedPlants = order.damagedPlants || 0;
+      const totalDamagedPlants = existingDamagedPlants + damagedForThisOrder;
 
-      if (totalReturnedPlants > totalOrderedPlants) {
+      if (totalReturnedPlants + totalDamagedPlants > totalOrderedPlants) {
         const orderDisplayId = order.orderId || order._id?.toString();
         throw new AppError(
-          `Returned plants cannot exceed the total plants for Order #${orderDisplayId}`,
+          `Returned + damaged plants cannot exceed the total plants for Order #${orderDisplayId}`,
           400
         );
       }
@@ -1235,7 +1317,6 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
 
       // Check if action properties exist with updated format from frontend
       const completeOrder = orderUpdate.actions?.completeOrder === true;
-      const addToInventory = orderUpdate.actions?.addToInventory === true;
       const finalStatusFromActions = orderUpdate.actions?.finalStatus;
 
       // Prefer explicit finalStatus from UI (e.g. READY_FOR_DISPATCH when remainingPlants > 0)
@@ -1256,7 +1337,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
           orderUpdateData.returnReason = orderUpdate.returnReason;
         }
 
-        // Add to return history regardless of whether adding to inventory.
+        // Return history tracks only the quantity that came back to stock.
         returnHistoryEntry = {
           date: new Date(),
           quantity: returnsForThisOrder,
@@ -1264,6 +1345,10 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
           dispatchId: dispatch._id,
           processedBy: req.user ? req.user._id : undefined,
         };
+      }
+
+      if (damagedForThisOrder > 0) {
+        orderUpdateData.damagedPlants = totalDamagedPlants;
       }
 
       // remainingPlants = undispatched at nursery; returns do not increase it.
@@ -1337,7 +1422,8 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         );
       }
 
-      if (returnsForThisOrder > 0 && addToInventory) {
+      // Returns always go back to quota/slot inventory. Damaged qty is recorded separately.
+      if (returnsForThisOrder > 0) {
         if (isDealerQuotaOrder) {
           const dealerCap = Math.max(0, fromWallet - prevDealerReturned);
           dealerReleaseQty = Math.min(returnsForThisOrder, dealerCap);

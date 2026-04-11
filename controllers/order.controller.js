@@ -3348,7 +3348,7 @@ export const sendOrderDispatchWhatsAppController = catchAsync(async (req, res) =
     plantSubtype: plantSubtypeName,
     totalDispatched,
     driverName: latest?.driverName || "N/A",
-    driverNumber: "N/A",
+    driverNumber: latest?.driverMobile || latest?.dispatch?.driverMobile || "N/A",
     vehicleNumber: latest?.vehicleName || "N/A",
     dispatchDate,
     deliveryDate: order.deliveryDate,

@@ -633,6 +633,7 @@ const getDispatchLoadStatus = catchAsync(async (req, res, next) => {
       agriOrderId: order._id,
       agriOrderNumber: order.orderNumber,
       linkedNurseryOrderId: order.linkedNurseryOrderId,
+      linkedNurseryOrderCode: order.linkedNurseryOrderCode || "",
       agriLoadStatus: order.agriLoadStatus || "PENDING_LOAD",
       customerName: order.customerName,
       productName: order.productName,

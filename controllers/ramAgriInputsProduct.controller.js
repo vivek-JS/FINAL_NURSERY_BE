@@ -259,7 +259,20 @@ export const deleteCrop = catchAsync(async (req, res, next) => {
 // Add variety
 export const addVariety = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-  const { name, description, primaryUnit, secondaryUnit, conversionFactor, defaultRate, purchasePrice, isActive } = req.body;
+  const {
+    name,
+    description,
+    primaryUnit,
+    secondaryUnit,
+    conversionFactor,
+    defaultRate,
+    sellerRate,
+    dealerRate,
+    points,
+    dealerPoints,
+    purchasePrice,
+    isActive,
+  } = req.body;
 
   if (!mongoose.isValidObjectId(id)) {
     return next(new AppError('Invalid ID format', 400));
@@ -304,6 +317,38 @@ export const addVariety = catchAsync(async (req, res, next) => {
     }
     varietyData.defaultRate = rateValue;
   }
+
+  if (sellerRate !== undefined && sellerRate !== null && sellerRate !== '') {
+    const sellerValue = Number(sellerRate);
+    if (isNaN(sellerValue) || sellerValue < 0) {
+      return next(new AppError('Seller rate must be a positive number', 400));
+    }
+    varietyData.sellerRate = sellerValue;
+  }
+
+  if (dealerRate !== undefined && dealerRate !== null && dealerRate !== '') {
+    const dealerValue = Number(dealerRate);
+    if (isNaN(dealerValue) || dealerValue < 0) {
+      return next(new AppError('Dealer rate must be a positive number', 400));
+    }
+    varietyData.dealerRate = dealerValue;
+  }
+
+  if (points !== undefined && points !== null && points !== '') {
+    const pointsValue = Number(points);
+    if (isNaN(pointsValue) || pointsValue < 0) {
+      return next(new AppError('Points must be 0 or greater', 400));
+    }
+    varietyData.points = pointsValue;
+  }
+
+  if (dealerPoints !== undefined && dealerPoints !== null && dealerPoints !== '') {
+    const dealerPointsValue = Number(dealerPoints);
+    if (isNaN(dealerPointsValue) || dealerPointsValue < 0) {
+      return next(new AppError('Dealer points must be 0 or greater', 400));
+    }
+    varietyData.dealerPoints = dealerPointsValue;
+  }
   
   if (purchasePrice !== undefined && purchasePrice !== null && purchasePrice !== '') {
     const priceValue = Number(purchasePrice);
@@ -346,7 +391,20 @@ export const addVariety = catchAsync(async (req, res, next) => {
 // Update variety
 export const updateVariety = catchAsync(async (req, res, next) => {
   const { id, varietyId } = req.params;
-  const { name, description, primaryUnit, secondaryUnit, conversionFactor, defaultRate, purchasePrice, isActive } = req.body;
+  const {
+    name,
+    description,
+    primaryUnit,
+    secondaryUnit,
+    conversionFactor,
+    defaultRate,
+    sellerRate,
+    dealerRate,
+    points,
+    dealerPoints,
+    purchasePrice,
+    isActive,
+  } = req.body;
 
   if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(varietyId)) {
     return next(new AppError('Invalid ID format', 400));
@@ -372,6 +430,10 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     secondaryUnit: variety.secondaryUnit,
     conversionFactor: variety.conversionFactor,
     defaultRate: variety.defaultRate,
+    sellerRate: variety.sellerRate,
+    dealerRate: variety.dealerRate,
+    points: variety.points,
+    dealerPoints: variety.dealerPoints,
     purchasePrice: variety.purchasePrice,
     isActive: variety.isActive,
   };
@@ -405,6 +467,46 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     // Allow clearing the default rate
     variety.defaultRate = undefined;
   }
+
+  if (sellerRate !== undefined && sellerRate !== null && sellerRate !== '') {
+    const sellerValue = Number(sellerRate);
+    if (isNaN(sellerValue) || sellerValue < 0) {
+      return next(new AppError('Seller rate must be a positive number', 400));
+    }
+    variety.sellerRate = sellerValue;
+  } else if (sellerRate === null || sellerRate === '') {
+    variety.sellerRate = undefined;
+  }
+
+  if (dealerRate !== undefined && dealerRate !== null && dealerRate !== '') {
+    const dealerValue = Number(dealerRate);
+    if (isNaN(dealerValue) || dealerValue < 0) {
+      return next(new AppError('Dealer rate must be a positive number', 400));
+    }
+    variety.dealerRate = dealerValue;
+  } else if (dealerRate === null || dealerRate === '') {
+    variety.dealerRate = undefined;
+  }
+
+  if (points !== undefined && points !== null && points !== '') {
+    const pointsValue = Number(points);
+    if (isNaN(pointsValue) || pointsValue < 0) {
+      return next(new AppError('Points must be 0 or greater', 400));
+    }
+    variety.points = pointsValue;
+  } else if (points === null || points === '') {
+    variety.points = 0;
+  }
+
+  if (dealerPoints !== undefined && dealerPoints !== null && dealerPoints !== '') {
+    const dealerPointsValue = Number(dealerPoints);
+    if (isNaN(dealerPointsValue) || dealerPointsValue < 0) {
+      return next(new AppError('Dealer points must be 0 or greater', 400));
+    }
+    variety.dealerPoints = dealerPointsValue;
+  } else if (dealerPoints === null || dealerPoints === '') {
+    variety.dealerPoints = 0;
+  }
   
   if (purchasePrice !== undefined && purchasePrice !== null && purchasePrice !== '') {
     const priceValue = Number(purchasePrice);
@@ -428,6 +530,10 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     secondaryUnit: variety.secondaryUnit,
     conversionFactor: variety.conversionFactor,
     defaultRate: variety.defaultRate,
+    sellerRate: variety.sellerRate,
+    dealerRate: variety.dealerRate,
+    points: variety.points,
+    dealerPoints: variety.dealerPoints,
     purchasePrice: variety.purchasePrice,
     isActive: variety.isActive,
   };
