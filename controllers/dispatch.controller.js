@@ -226,7 +226,6 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
   try {
     const dispatchRequest = { ...req.body };
-    const autoMarkLinkedAgriLoaded = Boolean(dispatchRequest.autoMarkLinkedAgriLoaded);
     if (dispatchRequest.autoMarkLinkedAgriLoaded !== undefined) {
       delete dispatchRequest.autoMarkLinkedAgriLoaded;
     }
@@ -289,9 +288,9 @@ const createDispatch = catchAsync(async (req, res, next) => {
     );
 
     validateQuantities(dispatchRequest.plantsDetails);
-    const pendingLinkedAgriOrders = autoMarkLinkedAgriLoaded
-      ? []
-      : await getPendingLinkedAgriLoads(dispatchRequest.orderIds);
+    // Strict flow: plant dispatch never auto-marks linked Agri loads.
+    // Linked Agri must be loaded from Ram Agri dispatch flow.
+    const pendingLinkedAgriOrders = await getPendingLinkedAgriLoads(dispatchRequest.orderIds);
     dispatchRequest.transportId = await generateTransportId();
 
     const dispatch = await Dispatch.create([dispatchRequest], { session });
@@ -396,16 +395,6 @@ const createDispatch = catchAsync(async (req, res, next) => {
       );
     }
 
-    if (autoMarkLinkedAgriLoaded) {
-      await markLinkedAgriLoadedForDispatch({
-        orderIds: dispatchRequest.orderIds,
-        user: req.user,
-        dispatchRequest,
-        dispatchId: dispatch[0]?._id || null,
-        session,
-      });
-    }
-
     await session.commitTransaction();
 
     const dispatchDoc = dispatch[0]?.toObject ? dispatch[0].toObject() : dispatch[0];
@@ -419,13 +408,13 @@ const createDispatch = catchAsync(async (req, res, next) => {
     const responsePayload = {
       ...dispatchDoc,
       linkedAgriLoadWarning:
-        !autoMarkLinkedAgriLoaded && pendingLinkedAgriOrders.length > 0
+        pendingLinkedAgriOrders.length > 0
           ? {
               isPending: true,
               pendingCount: pendingLinkedAgriOrders.length,
               linkedNurseryOrderRefs: warningOrderRefs,
               message:
-                "Dispatch created. Linked Agri Inputs are still pending load; resolve from Agri Inputs dashboard.",
+                "Dispatch created. Linked Agri Inputs are still pending load from Ram Agri dispatch flow; resolve from Agri Inputs dashboard.",
             }
           : {
               isPending: false,

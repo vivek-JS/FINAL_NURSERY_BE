@@ -2787,7 +2787,7 @@ const cancelAssignment = catchAsync(async (req, res, next) => {
 const dispatchOrders = catchAsync(async (req, res, next) => {
   const {
     orderIds, // Array of order IDs to dispatch
-    dispatchMode = "VEHICLE", // VEHICLE or COURIER
+    dispatchMode = "VEHICLE", // VEHICLE or COURIER or WITH_ORDER
     // Vehicle mode fields
     vehicleId,
     vehicleNumber,
@@ -2807,8 +2807,8 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
   }
 
   // Validate dispatch mode (vehicle fields are validated after linked-order prefill resolution).
-  if (dispatchMode !== "VEHICLE" && dispatchMode !== "COURIER") {
-    return next(new AppError("Invalid dispatch mode. Must be VEHICLE or COURIER", 400));
+  if (!["VEHICLE", "COURIER", "WITH_ORDER"].includes(dispatchMode)) {
+    return next(new AppError("Invalid dispatch mode. Must be VEHICLE, COURIER, or WITH_ORDER", 400));
   }
   if (dispatchMode === "COURIER" && !courierName) {
     return next(new AppError("Courier service name is required for courier dispatch", 400));
@@ -2829,7 +2829,7 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
   let finalCourierTrackingId = courierTrackingId || "";
   let finalCourierContact = courierContact || "";
 
-  // Get vehicle details if vehicleId is provided (for VEHICLE mode)
+  // Get vehicle details if vehicleId is provided (for direct VEHICLE mode)
   if (dispatchMode === "VEHICLE" && vehicleId && mongoose.isValidObjectId(vehicleId)) {
     const vehicleDetails = await Vehicle.findById(vehicleId);
     if (vehicleDetails) {
@@ -2866,33 +2866,43 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     return next(new AppError("No valid orders found for dispatch. Orders must be in ACCEPTED or ASSIGNED status.", 404));
   }
 
-  // Try to prefill missing vehicle/driver details from the latest linked nursery dispatch.
-  // This supports the "same-vehicle" linked dispatch flow from Ram Agri tab.
+  const linkedDispatchTrailByAgriOrderId = new Map();
+  // Resolve linked nursery dispatch trail when needed (vehicle prefill / WITH_ORDER mode).
   if (
-    dispatchMode === "VEHICLE" &&
-    (!finalVehicleNumber || !finalDriverName || !finalDriverMobile)
+    dispatchMode === "WITH_ORDER" ||
+    (dispatchMode === "VEHICLE" && (!finalVehicleNumber || !finalDriverName || !finalDriverMobile))
   ) {
-    const linkedNurseryOrderIds = Array.from(
-      new Set(
-        orders
-          .map((o) => o.linkedNurseryOrderId)
-          .filter((id) => id && mongoose.isValidObjectId(id))
-          .map((id) => String(id))
-      )
-    );
-    if (linkedNurseryOrderIds.length > 0) {
-      const linkedOrders = await Order.find({ _id: { $in: linkedNurseryOrderIds } })
+    const linkedOrderIdByAgriOrderId = new Map();
+    const linkedNurseryOrderIds = [];
+    for (const agriOrder of orders) {
+      const linkedId = agriOrder?.linkedNurseryOrderId;
+      if (!linkedId || !mongoose.isValidObjectId(String(linkedId))) continue;
+      const linkedOrderId = String(linkedId);
+      linkedOrderIdByAgriOrderId.set(String(agriOrder._id), linkedOrderId);
+      linkedNurseryOrderIds.push(linkedOrderId);
+    }
+    const uniqLinkedNurseryOrderIds = Array.from(new Set(linkedNurseryOrderIds));
+    if (dispatchMode === "WITH_ORDER" && !uniqLinkedNurseryOrderIds.length) {
+      return next(
+        new AppError(
+          "WITH_ORDER dispatch requires linked regular nursery orders with dispatch history.",
+          400
+        )
+      );
+    }
+    if (uniqLinkedNurseryOrderIds.length > 0) {
+      const linkedOrders = await Order.find({ _id: { $in: uniqLinkedNurseryOrderIds } })
         .populate({
           path: "dispatchHistory.dispatchId",
-          select: "driverName driverMobile vehicleName vehicleNumber createdAt updatedAt",
+          select: "transportId driverName driverMobile vehicleName vehicleNumber createdAt updatedAt",
         })
         .select("dispatchHistory")
         .lean();
+      const latestByLinkedOrderId = new Map();
       const candidates = [];
       for (const linkedOrder of linkedOrders) {
-        const hist = Array.isArray(linkedOrder?.dispatchHistory)
-          ? linkedOrder.dispatchHistory
-          : [];
+        const linkedOrderId = String(linkedOrder?._id || "");
+        const hist = Array.isArray(linkedOrder?.dispatchHistory) ? linkedOrder.dispatchHistory : [];
         if (!hist.length) continue;
         const latest = hist[hist.length - 1];
         const dispatchDoc = latest?.dispatchId || null;
@@ -2905,16 +2915,31 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
           dispatchDoc?.driverName ||
           latest?.driverName ||
           "";
-        const mobile =
-          dispatchDoc?.driverMobile ||
-          "";
+        const mobile = dispatchDoc?.driverMobile || "";
         const sortDate = new Date(
-          latest?.date ||
-            dispatchDoc?.updatedAt ||
-            dispatchDoc?.createdAt ||
-            Date.now()
+          latest?.date || dispatchDoc?.updatedAt || dispatchDoc?.createdAt || Date.now()
         ).getTime();
-        candidates.push({ vehicle, driver, mobile, sortDate });
+        const trail = {
+          linkedNurseryDispatchId: dispatchDoc?._id || null,
+          linkedNurseryTransportId: dispatchDoc?.transportId
+            ? String(dispatchDoc.transportId)
+            : "",
+          linkedNurseryDispatchDate: latest?.date || dispatchDoc?.createdAt || null,
+          vehicle,
+          driver,
+          mobile,
+          sortDate,
+        };
+        latestByLinkedOrderId.set(linkedOrderId, trail);
+        candidates.push(trail);
+      }
+      for (const agriOrder of orders) {
+        const linkedOrderId = linkedOrderIdByAgriOrderId.get(String(agriOrder._id));
+        if (!linkedOrderId) continue;
+        const linkedTrail = latestByLinkedOrderId.get(linkedOrderId);
+        if (linkedTrail) {
+          linkedDispatchTrailByAgriOrderId.set(String(agriOrder._id), linkedTrail);
+        }
       }
       if (candidates.length > 0) {
         candidates.sort((a, b) => b.sortDate - a.sortDate);
@@ -2923,10 +2948,23 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
         if (!finalDriverName && best.driver) finalDriverName = best.driver;
         if (!finalDriverMobile && best.mobile) finalDriverMobile = best.mobile;
       }
+      if (dispatchMode === "WITH_ORDER") {
+        const missingTrailOrders = orders
+          .filter((agriOrder) => !linkedDispatchTrailByAgriOrderId.has(String(agriOrder._id)))
+          .map((agriOrder) => agriOrder.orderNumber);
+        if (missingTrailOrders.length > 0) {
+          return next(
+            new AppError(
+              `Linked regular dispatch not found for Agri order(s): ${missingTrailOrders.join(", ")}`,
+              400
+            )
+          );
+        }
+      }
     }
   }
 
-  if (dispatchMode === "VEHICLE") {
+  if (dispatchMode === "VEHICLE" || dispatchMode === "WITH_ORDER") {
     if (!finalVehicleNumber) {
       return next(
         new AppError(
@@ -3086,11 +3124,15 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     order.dispatchNotes = dispatchNotes || "";
 
     // Update mode-specific fields
-    if (dispatchMode === "VEHICLE") {
+    if (dispatchMode === "VEHICLE" || dispatchMode === "WITH_ORDER") {
+      const linkedTrail = linkedDispatchTrailByAgriOrderId.get(String(order._id));
       order.vehicleId = vehicleId || null;
-      order.vehicleNumber = finalVehicleNumber;
-      order.driverName = finalDriverName;
-      order.driverMobile = finalDriverMobile;
+      order.vehicleNumber = finalVehicleNumber || linkedTrail?.vehicle || "";
+      order.driverName = finalDriverName || linkedTrail?.driver || "";
+      order.driverMobile = finalDriverMobile || linkedTrail?.mobile || "";
+      order.linkedNurseryDispatchId = linkedTrail?.linkedNurseryDispatchId || null;
+      order.linkedNurseryTransportId = linkedTrail?.linkedNurseryTransportId || "";
+      order.linkedNurseryDispatchDate = linkedTrail?.linkedNurseryDispatchDate || null;
       // Clear courier fields
       order.courierName = "";
       order.courierTrackingId = "";
@@ -3104,6 +3146,9 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
       order.vehicleNumber = "";
       order.driverName = "";
       order.driverMobile = "";
+      order.linkedNurseryDispatchId = null;
+      order.linkedNurseryTransportId = "";
+      order.linkedNurseryDispatchDate = null;
     }
 
     // Dispatch implies physically loaded for Ram Agri flow.
@@ -3130,13 +3175,23 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
       loadedBy: userId,
     };
 
-    if (dispatchMode === "VEHICLE") {
-      activityDescription = `Order dispatched via vehicle ${finalVehicleNumber} (Driver: ${finalDriverName}). Status: ${previousOrderStatus} → DISPATCHED${stockInfo}`;
+    if (dispatchMode === "VEHICLE" || dispatchMode === "WITH_ORDER") {
+      const linkedTrail = linkedDispatchTrailByAgriOrderId.get(String(order._id));
+      const vehicleLabel = order.vehicleNumber || finalVehicleNumber || "-";
+      const driverLabel = order.driverName || finalDriverName || "-";
+      const linkedTransportNote =
+        dispatchMode === "WITH_ORDER" && linkedTrail?.linkedNurseryTransportId
+          ? ` Linked regular dispatch #${linkedTrail.linkedNurseryTransportId}.`
+          : "";
+      activityDescription = `Order dispatched via vehicle ${vehicleLabel} (Driver: ${driverLabel}).${linkedTransportNote} Status: ${previousOrderStatus} → DISPATCHED${stockInfo}`;
       newValueData = {
         ...newValueData,
-        vehicleNumber: finalVehicleNumber,
-        driverName: finalDriverName,
-        driverMobile: finalDriverMobile,
+        vehicleNumber: order.vehicleNumber || finalVehicleNumber,
+        driverName: order.driverName || finalDriverName,
+        driverMobile: order.driverMobile || finalDriverMobile,
+        linkedNurseryDispatchId: linkedTrail?.linkedNurseryDispatchId || null,
+        linkedNurseryTransportId: linkedTrail?.linkedNurseryTransportId || "",
+        linkedNurseryDispatchDate: linkedTrail?.linkedNurseryDispatchDate || null,
         stockBefore,
         stockAfter,
       };
@@ -3163,7 +3218,13 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
       newValue: newValueData,
       metadata: {
         dispatchMode,
-        vehicleId: dispatchMode === "VEHICLE" ? vehicleId : null,
+        vehicleId:
+          dispatchMode === "VEHICLE" || dispatchMode === "WITH_ORDER"
+            ? vehicleId || null
+            : null,
+        linkedNurseryDispatchId: order.linkedNurseryDispatchId || null,
+        linkedNurseryTransportId: order.linkedNurseryTransportId || "",
+        linkedNurseryDispatchDate: order.linkedNurseryDispatchDate || null,
         dispatchNotes,
         dispatchedAt,
         agriLoadStatus: "LOADED",
@@ -3194,10 +3255,13 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     totalOrders: updatedOrders.length,
   };
 
-  if (dispatchMode === "VEHICLE") {
+  if (dispatchMode === "VEHICLE" || dispatchMode === "WITH_ORDER") {
     dispatchDetails.vehicleNumber = finalVehicleNumber;
     dispatchDetails.driverName = finalDriverName;
     dispatchDetails.driverMobile = finalDriverMobile;
+    if (dispatchMode === "WITH_ORDER") {
+      dispatchDetails.linkedWithRegularDispatch = true;
+    }
   } else {
     dispatchDetails.courierName = finalCourierName;
     dispatchDetails.courierTrackingId = finalCourierTrackingId;
@@ -3206,7 +3270,9 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
 
   const response = generateResponse(
     "Success",
-    `${updatedOrders.length} order(s) dispatched successfully via ${dispatchMode === "VEHICLE" ? "vehicle" : "courier"}`,
+    `${updatedOrders.length} order(s) dispatched successfully via ${
+      dispatchMode === "COURIER" ? "courier" : dispatchMode === "WITH_ORDER" ? "with linked regular order" : "vehicle"
+    }`,
     {
       dispatchedOrders: updatedOrders,
       dispatchDetails,

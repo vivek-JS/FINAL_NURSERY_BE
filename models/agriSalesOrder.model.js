@@ -397,8 +397,23 @@ const agriSalesOrderSchema = new Schema(
     // Dispatch Mode: VEHICLE or COURIER
     dispatchMode: {
       type: String,
-      enum: ["VEHICLE", "COURIER"],
+      enum: ["VEHICLE", "COURIER", "WITH_ORDER"],
       default: "VEHICLE",
+    },
+    // Link trail to the regular nursery dispatch used in WITH_ORDER mode
+    linkedNurseryDispatchId: {
+      type: Schema.Types.ObjectId,
+      ref: "Dispatch",
+      default: null,
+    },
+    linkedNurseryTransportId: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    linkedNurseryDispatchDate: {
+      type: Date,
+      default: null,
     },
     // Courier fields (when dispatchMode is COURIER)
     courierName: {

@@ -3018,9 +3018,24 @@ const getAll = (Model, modelName) =>
 
         const start = parseDate(startDate);
         const end = parseDate(endDate, true);
-        pipeline.push({
-          $match: { [orderDateRangeMongoField]: { $gte: start, $lte: end } },
-        });
+        const usePastDueOr =
+          includePastDueBeyondRange === "true" &&
+          orderDateRangeMongoField === "deliveryDate";
+
+        if (usePastDueOr) {
+          pipeline.push({
+            $match: {
+              $or: [
+                { deliveryDate: { $gte: start, $lte: end } },
+                { deliveryDate: { $lt: start } },
+              ],
+            },
+          });
+        } else {
+          pipeline.push({
+            $match: { [orderDateRangeMongoField]: { $gte: start, $lte: end } },
+          });
+        }
       }
     }
 
