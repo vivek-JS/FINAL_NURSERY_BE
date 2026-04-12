@@ -2806,23 +2806,12 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     return next(new AppError("At least one order ID is required", 400));
   }
 
-  // Validate based on dispatch mode
-  if (dispatchMode === "VEHICLE") {
-    if (!vehicleNumber && !vehicleId) {
-      return next(new AppError("Vehicle number or vehicle ID is required for vehicle dispatch", 400));
-    }
-    if (!driverName) {
-      return next(new AppError("Driver name is required for vehicle dispatch", 400));
-    }
-    if (!driverMobile) {
-      return next(new AppError("Driver mobile is required for vehicle dispatch", 400));
-    }
-  } else if (dispatchMode === "COURIER") {
-    if (!courierName) {
-      return next(new AppError("Courier service name is required for courier dispatch", 400));
-    }
-  } else {
+  // Validate dispatch mode (vehicle fields are validated after linked-order prefill resolution).
+  if (dispatchMode !== "VEHICLE" && dispatchMode !== "COURIER") {
     return next(new AppError("Invalid dispatch mode. Must be VEHICLE or COURIER", 400));
+  }
+  if (dispatchMode === "COURIER" && !courierName) {
+    return next(new AppError("Courier service name is required for courier dispatch", 400));
   }
 
   // Validate all order IDs
@@ -2877,6 +2866,93 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     return next(new AppError("No valid orders found for dispatch. Orders must be in ACCEPTED or ASSIGNED status.", 404));
   }
 
+  // Try to prefill missing vehicle/driver details from the latest linked nursery dispatch.
+  // This supports the "same-vehicle" linked dispatch flow from Ram Agri tab.
+  if (
+    dispatchMode === "VEHICLE" &&
+    (!finalVehicleNumber || !finalDriverName || !finalDriverMobile)
+  ) {
+    const linkedNurseryOrderIds = Array.from(
+      new Set(
+        orders
+          .map((o) => o.linkedNurseryOrderId)
+          .filter((id) => id && mongoose.isValidObjectId(id))
+          .map((id) => String(id))
+      )
+    );
+    if (linkedNurseryOrderIds.length > 0) {
+      const linkedOrders = await Order.find({ _id: { $in: linkedNurseryOrderIds } })
+        .populate({
+          path: "dispatchHistory.dispatchId",
+          select: "driverName driverMobile vehicleName vehicleNumber createdAt updatedAt",
+        })
+        .select("dispatchHistory")
+        .lean();
+      const candidates = [];
+      for (const linkedOrder of linkedOrders) {
+        const hist = Array.isArray(linkedOrder?.dispatchHistory)
+          ? linkedOrder.dispatchHistory
+          : [];
+        if (!hist.length) continue;
+        const latest = hist[hist.length - 1];
+        const dispatchDoc = latest?.dispatchId || null;
+        const vehicle =
+          dispatchDoc?.vehicleNumber ||
+          dispatchDoc?.vehicleName ||
+          latest?.vehicleName ||
+          "";
+        const driver =
+          dispatchDoc?.driverName ||
+          latest?.driverName ||
+          "";
+        const mobile =
+          dispatchDoc?.driverMobile ||
+          "";
+        const sortDate = new Date(
+          latest?.date ||
+            dispatchDoc?.updatedAt ||
+            dispatchDoc?.createdAt ||
+            Date.now()
+        ).getTime();
+        candidates.push({ vehicle, driver, mobile, sortDate });
+      }
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => b.sortDate - a.sortDate);
+        const best = candidates[0];
+        if (!finalVehicleNumber && best.vehicle) finalVehicleNumber = best.vehicle;
+        if (!finalDriverName && best.driver) finalDriverName = best.driver;
+        if (!finalDriverMobile && best.mobile) finalDriverMobile = best.mobile;
+      }
+    }
+  }
+
+  if (dispatchMode === "VEHICLE") {
+    if (!finalVehicleNumber) {
+      return next(
+        new AppError(
+          "Vehicle number is required for vehicle dispatch (or must be available from linked regular dispatch)",
+          400
+        )
+      );
+    }
+    if (!finalDriverName) {
+      return next(
+        new AppError(
+          "Driver name is required for vehicle dispatch (or must be available from linked regular dispatch)",
+          400
+        )
+      );
+    }
+    if (!finalDriverMobile) {
+      return next(
+        new AppError(
+          "Driver mobile is required for vehicle dispatch (or must be available from linked regular dispatch)",
+          400
+        )
+      );
+    }
+  }
+
   // For sales person, verify they are dispatching their own assigned orders
   const isSalesPersonDispatchingAssigned = !isAdmin && (userJobTitle === "RAM_AGRI_SALES" || userJobTitle === "RAM_AGRI_SALES_MANAGER");
   
@@ -2896,6 +2972,7 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
 
   for (const order of orders) {
     const previousDispatchStatus = order.dispatchStatus;
+    const previousOrderStatus = order.orderStatus;
     let stockBefore = 0;
     let stockAfter = 0;
     let stockDeductionSuccess = false;
@@ -3029,8 +3106,12 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
       order.driverMobile = "";
     }
 
+    // Dispatch implies physically loaded for Ram Agri flow.
+    order.agriLoadStatus = "LOADED";
+    order.loadedAt = dispatchedAt;
+    order.loadedBy = userId;
+
     // Build activity log description
-    const previousOrderStatus = order.orderStatus;
     let stockInfo = "";
     if (shouldDeductStock && stockDeductionSuccess) {
       stockInfo = `. Stock deducted: ${stockBefore} → ${stockAfter}`;
@@ -3043,7 +3124,10 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
       orderStatus: "DISPATCHED",
       dispatchStatus: "DISPATCHED", 
       dispatchMode, 
-      stockDeducted: stockDeductionSuccess 
+      stockDeducted: stockDeductionSuccess,
+      agriLoadStatus: "LOADED",
+      loadedAt: dispatchedAt,
+      loadedBy: userId,
     };
 
     if (dispatchMode === "VEHICLE") {
@@ -3082,6 +3166,9 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
         vehicleId: dispatchMode === "VEHICLE" ? vehicleId : null,
         dispatchNotes,
         dispatchedAt,
+        agriLoadStatus: "LOADED",
+        loadedAt: dispatchedAt,
+        loadedBy: userId,
         wasAssignedOrder: isAssignedOrder,
         stockDeductedOnDispatch: shouldDeductStock && stockDeductionSuccess,
         stockDeduction: { stockBefore, stockAfter, quantityDeducted: order.quantity },

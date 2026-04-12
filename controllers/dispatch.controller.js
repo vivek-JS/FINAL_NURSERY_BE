@@ -154,15 +154,15 @@ const generateTransportId = async (attempts = 0) => {
   return newTransportId;
 };
 
-const ensureLinkedAgriLoadComplete = async (orderIds = []) => {
+const getPendingLinkedAgriLoads = async (orderIds = []) => {
   const normalizedOrderIds = (Array.isArray(orderIds) ? orderIds : [])
     .filter((id) => mongoose.isValidObjectId(String(id)))
     .map((id) => new mongoose.Types.ObjectId(String(id)));
   if (!normalizedOrderIds.length) {
-    return;
+    return [];
   }
 
-  const blockingAgriOrders = await AgriSalesOrder.find({
+  const pendingAgriOrders = await AgriSalesOrder.find({
     linkedNurseryOrderId: { $in: normalizedOrderIds },
     orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
     agriLoadStatus: { $ne: "LOADED" },
@@ -170,16 +170,7 @@ const ensureLinkedAgriLoadComplete = async (orderIds = []) => {
     .select("orderNumber linkedNurseryOrderCode customerName productName quantity agriLoadStatus")
     .lean();
 
-  if (blockingAgriOrders.length > 0) {
-    const orderRefs = blockingAgriOrders
-      .map((o) => o.linkedNurseryOrderCode || String(o.linkedNurseryOrderId || ""))
-      .filter(Boolean)
-      .join(", ");
-    throw new AppError(
-      `AGRI_LOAD_PENDING: Linked Agri Inputs not loaded for nursery order(s): ${orderRefs}`,
-      409
-    );
-  }
+  return pendingAgriOrders;
 };
 
 const markLinkedAgriLoadedForDispatch = async ({
@@ -298,9 +289,9 @@ const createDispatch = catchAsync(async (req, res, next) => {
     );
 
     validateQuantities(dispatchRequest.plantsDetails);
-    if (!autoMarkLinkedAgriLoaded) {
-      await ensureLinkedAgriLoadComplete(dispatchRequest.orderIds);
-    }
+    const pendingLinkedAgriOrders = autoMarkLinkedAgriLoaded
+      ? []
+      : await getPendingLinkedAgriLoads(dispatchRequest.orderIds);
     dispatchRequest.transportId = await generateTransportId();
 
     const dispatch = await Dispatch.create([dispatchRequest], { session });
@@ -417,15 +408,39 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
     await session.commitTransaction();
 
-    res
-      .status(201)
-      .json(
-        generateResponse(
-          "Success",
-          "Dispatch created successfully and orders updated",
-          dispatch[0]
-        )
-      );
+    const dispatchDoc = dispatch[0]?.toObject ? dispatch[0].toObject() : dispatch[0];
+    const warningOrderRefs = Array.from(
+      new Set(
+        pendingLinkedAgriOrders
+          .map((o) => String(o?.linkedNurseryOrderCode || o?.linkedNurseryOrderId || "").trim())
+          .filter(Boolean)
+      )
+    );
+    const responsePayload = {
+      ...dispatchDoc,
+      linkedAgriLoadWarning:
+        !autoMarkLinkedAgriLoaded && pendingLinkedAgriOrders.length > 0
+          ? {
+              isPending: true,
+              pendingCount: pendingLinkedAgriOrders.length,
+              linkedNurseryOrderRefs: warningOrderRefs,
+              message:
+                "Dispatch created. Linked Agri Inputs are still pending load; resolve from Agri Inputs dashboard.",
+            }
+          : {
+              isPending: false,
+              pendingCount: 0,
+              linkedNurseryOrderRefs: [],
+            },
+    };
+
+    res.status(201).json(
+      generateResponse(
+        "Success",
+        "Dispatch created successfully and orders updated",
+        responsePayload
+      )
+    );
   } catch (error) {
     await session.abortTransaction();
     next(error);

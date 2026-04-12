@@ -22,7 +22,8 @@ export const getOrderDispatchDetails = catchAsync(async (req, res) => {
   const order = await Order.findById(orderId)
     .populate({
       path: "dispatchHistory.dispatchId",
-      select: "driverName vehicleName transportId transportStatus createdAt updatedAt",
+      select:
+        "driverName driverMobile vehicleName vehicleNumber transportId transportStatus createdAt updatedAt",
     })
     .select("orderId orderStatus dispatchHistory numberOfPlants remainingPlants farmer salesPerson");
 
@@ -38,7 +39,9 @@ export const getOrderDispatchDetails = catchAsync(async (req, res) => {
     orderIds: orderId,
     isDeleted: false,
   })
-    .select("driverName vehicleName transportId transportStatus orderDispatchDetails createdAt updatedAt")
+    .select(
+      "driverName driverMobile vehicleName vehicleNumber transportId transportStatus orderDispatchDetails createdAt updatedAt"
+    )
     .sort({ createdAt: -1 });
 
   // Format the response
@@ -52,7 +55,9 @@ export const getOrderDispatchDetails = catchAsync(async (req, res) => {
       dispatchId: dispatch._id,
       transportId: dispatch.transportId,
       driverName: dispatch.driverName,
+      driverMobile: dispatch.driverMobile || "",
       vehicleName: dispatch.vehicleName,
+      vehicleNumber: dispatch.vehicleNumber || "",
       transportStatus: dispatch.transportStatus,
       dispatchDate: dispatch.createdAt,
       lastUpdated: dispatch.updatedAt,
@@ -71,7 +76,9 @@ export const getOrderDispatchDetails = catchAsync(async (req, res) => {
     dispatch: history.dispatchId
       ? {
           driverName: history.dispatchId.driverName,
+          driverMobile: history.dispatchId.driverMobile || "",
           vehicleName: history.dispatchId.vehicleName,
+          vehicleNumber: history.dispatchId.vehicleNumber || "",
           transportId: history.dispatchId.transportId,
           transportStatus: history.dispatchId.transportStatus,
         }
