@@ -4,6 +4,7 @@ import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import { getAll, createOne, updateOne } from "./factory.controller.js";
 import DealerWallet from "../models/dealerWallet.js";
+import { resolveDealerCashBalance } from "../utils/dealerWalletBalance.js";
 import Dispatch from "../models/dispatch.model.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
@@ -2258,9 +2259,12 @@ const getDealerWalletBalanceForOrder = catchAsync(async (req, res, next) => {
       });
     }
 
-    // Get wallet information
-    const wallet = await DealerWallet.findOne({ dealer: order.dealer });
-    
+    // Get wallet information (resolve cash from tx chain / ledger — not raw availableAmount alone)
+    const wallet = await DealerWallet.findOne({ dealer: order.dealer })
+      .select("availableAmount transactions entries")
+      .lean();
+    const availableResolved = await resolveDealerCashBalance(order.dealer, wallet);
+
     // Calculate order total
     const orderTotal = order.numberOfPlants * order.rate;
     
@@ -2291,7 +2295,7 @@ const getDealerWalletBalanceForOrder = catchAsync(async (req, res, next) => {
         },
         wallet: wallet ? {
           _id: wallet._id,
-          availableAmount: wallet.availableAmount || 0,
+          availableAmount: availableResolved,
           totalQuantity: wallet.entries ? wallet.entries.reduce((sum, entry) => sum + (entry.quantity || 0), 0) : 0,
           totalBookedQuantity: wallet.entries ? wallet.entries.reduce((sum, entry) => sum + (entry.bookedQuantity || 0), 0) : 0,
           totalRemainingQuantity: wallet.entries ? wallet.entries.reduce((sum, entry) => sum + (entry.remainingQuantity || 0), 0) : 0,

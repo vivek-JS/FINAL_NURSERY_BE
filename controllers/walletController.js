@@ -11,11 +11,19 @@ import {
   getWalletPlantDetailsWithDerivedOverlay,
   reconcileDealerWalletEntries,
 } from "../utils/dealerWalletReconcile.js";
+import { resolveDealerCashBalance } from "../utils/dealerWalletBalance.js";
 
 const getDealerWalletDetails = catchAsync(async (req, res) => {
   const { dealerId } = req.params;
   const wantReconcile =
     req.query.reconcile === "1" || req.query.reconcile === "true";
+
+  if (!mongoose.Types.ObjectId.isValid(dealerId)) {
+    return res.status(400).json({
+      status: "error",
+      message: "Invalid dealer id",
+    });
+  }
 
   // First get dealer's orders and calculate total order amount
   // totalOrderAmount = rate * (numberOfPlants + additionalPlants) for each order
@@ -56,12 +64,13 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
     }
   ]);
 
-  const walletInfoAgg = await DealerWallet.aggregate([
-    { $match: { dealer: new mongoose.Types.ObjectId(dealerId) } },
-    { $project: { availableAmount: 1, _id: 0 } },
-    { $limit: 1 },
-  ]);
-  const walletInfo = walletInfoAgg[0] || { availableAmount: 0 };
+  const walletLean = await DealerWallet.findOne({
+    dealer: new mongoose.Types.ObjectId(dealerId),
+  })
+    .select("availableAmount transactions")
+    .lean();
+
+  const resolvedAvailable = await resolveDealerCashBalance(dealerId, walletLean);
 
   // Combine all details
   const financialDetails = orderDetails[0] || { 
@@ -83,7 +92,7 @@ const getDealerWalletDetails = catchAsync(async (req, res) => {
     status: "success",
     data: {
       financial: {
-        availableAmount: walletInfo.availableAmount,
+        availableAmount: resolvedAvailable,
         totalOrderAmount: financialDetails.totalOrderAmount,
         totalPaidAmount: financialDetails.totalPaidAmount,
         pendingPayment: pendingPayment,
