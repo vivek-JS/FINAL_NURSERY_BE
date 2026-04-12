@@ -31,6 +31,10 @@ import {
   getDeliveryOrders,
   splitOrder,
   getGeoSummary,
+  getRemainingDispatchAggregate,
+  getRemainingDispatchOrdersByCell,
+  getRemainingDispatchMatrix,
+  getRemainingDispatchMatrixOrders,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -92,6 +96,10 @@ router
   .get("/to-be-dispatched", getOrdersToBeDispatched)
   .get("/delivery-summary", getDeliverySummary)
   .get("/delivery-orders", getDeliveryOrders)
+  .get("/remaining-dispatch-aggregate", getRemainingDispatchAggregate)
+  .get("/remaining-dispatch-orders", getRemainingDispatchOrdersByCell)
+  .get("/remaining-dispatch-matrix", getRemainingDispatchMatrix)
+  .get("/remaining-dispatch-matrix-orders", getRemainingDispatchMatrixOrders)
   .get("/geo-summary", authenticateToken, getGeoSummary)
   .get("/dispatch-details/:orderId", getOrderDispatchDetails)
   .get("/by-dispatch/:transportId", getOrdersByDispatch)

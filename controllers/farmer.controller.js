@@ -164,21 +164,33 @@ const uploadFarmers = catchAsync(async (req, res, next) => {
 });
 
 // Get orders of particular farmer
-const getFarmerOrder = catchAsync(async(req, res, next) => {
-  const {farmerId, orderId} = req.params;
+const getFarmerOrder = catchAsync(async (req, res, next) => {
+  const { farmerId, orderId } = req.params;
+  const limitRaw = req.query?.limit;
+  const parsedLimit = parseInt(String(limitRaw ?? ""), 10);
+  const limit =
+    limitRaw !== undefined && limitRaw !== "" && Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(parsedLimit, 1), 200)
+      : null;
 
   const farmer = await Farmer.findById(farmerId);
 
-  if(!farmer){
+  if (!farmer) {
     return next(new AppError("Farmer not found", 404));
   }
 
   let farmerOrders;
 
-  if(!orderId){
-    farmerOrders = await Order.find({ farmer: farmerId})
-  } else {
+  if (orderId) {
     farmerOrders = await Order.find({ orderId, farmer: farmerId });
+  } else {
+    let q = Order.find({ farmer: farmerId })
+      .sort({ orderBookingDate: -1, createdAt: -1 })
+      .populate("plantName", "name");
+    if (limit != null) {
+      q = q.limit(limit);
+    }
+    farmerOrders = await q;
   }
 
   if (!farmerOrders || farmerOrders.length === 0) {

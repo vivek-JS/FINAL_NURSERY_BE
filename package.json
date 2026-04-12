@@ -19,7 +19,9 @@
     "script:fix-sales-person-xlsx": "node scripts/fix-sales-person-from-refer-by-xlsx.js",
     "script:transfer-chhtrapati-sales-to-sandip-sir": "node scripts/transfer-salesperson-chhtrapati-sales-to-sandip-sir.js",
     "seed:gadi-fleet:stage": "node scripts/seed-gadi-fleet-from-xlsx.js --stage",
-    "seed:gadi-fleet:prod": "node scripts/seed-gadi-fleet-from-xlsx.js --prod"
+    "seed:gadi-fleet:prod": "node scripts/seed-gadi-fleet-from-xlsx.js --prod",
+    "report:dealer-subtype-xlsx": "node scripts/export-dealers-subtype-quantity-xlsx.js",
+    "report:papaya-taiwan-xlsx": "node scripts/export-papaya-taiwan-xlsx.js"
   },
   "author": "",
   "license": "ISC",

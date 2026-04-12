@@ -19,6 +19,7 @@ import {
 import { releaseDealerQuotaPartial } from "./quota.controller.js";
 import DealerWallet from "../models/dealerWallet.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
+import Shade from "../models/shadeSchema.model.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -474,68 +475,356 @@ const updateDispatch = catchAsync(async (req, res, next) => {
   res.status(200).json(response);
 });
 
+const calculateDispatchCrates = ({ dispatchQuantity, cavityId, cavityName, cavitySize, numberPerCrate }) => {
+  const qty = Number(dispatchQuantity) || 0;
+  const traySize = Number(cavitySize) || 0;
+  const traysPerCrate = Number(numberPerCrate) || 0;
+
+  if (qty <= 0 || traySize <= 0 || traysPerCrate <= 0) {
+    return [];
+  }
+
+  const numberOfTrays = Math.floor(qty / traySize);
+  const fullCrates = Math.floor(numberOfTrays / traysPerCrate);
+  const plantsInFullCrates = fullCrates * traysPerCrate * traySize;
+  const remainingPlants = Math.max(0, qty - plantsInFullCrates);
+
+  const crateDetails = [];
+  if (fullCrates > 0) {
+    crateDetails.push({
+      crateCount: fullCrates,
+      plantCount: plantsInFullCrates,
+    });
+  }
+  if (remainingPlants > 0) {
+    crateDetails.push({
+      crateCount: 1,
+      plantCount: remainingPlants,
+    });
+  }
+  if (!crateDetails.length) {
+    return [];
+  }
+
+  return [
+    {
+      cavity: cavityId ? String(cavityId) : "",
+      cavityName: cavityName || "",
+      crateCount: crateDetails.reduce((sum, row) => sum + Number(row.crateCount || 0), 0),
+      plantCount: crateDetails.reduce((sum, row) => sum + Number(row.plantCount || 0), 0),
+      crateDetails,
+    },
+  ];
+};
+
+const buildPlantDispatchLabel = (plantCmsDoc, subtypeId) => {
+  if (!plantCmsDoc || !plantCmsDoc.name) return "Plant";
+  const st = plantCmsDoc.subtypes?.find(
+    (s) => String(s?._id) === String(subtypeId)
+  );
+  const sub = st?.name?.trim();
+  return sub ? `${plantCmsDoc.name} -> ${sub}` : plantCmsDoc.name;
+};
+
+const mergeCrateRow = (existingCrates, incoming) => {
+  if (!incoming || !incoming.cavity) {
+    existingCrates.push(incoming);
+    return;
+  }
+  const idx = existingCrates.findIndex(
+    (c) => String(c.cavity) === String(incoming.cavity)
+  );
+  if (idx < 0) {
+    existingCrates.push({ ...incoming });
+    return;
+  }
+  const cur = existingCrates[idx];
+  cur.crateCount = Number(cur.crateCount || 0) + Number(incoming.crateCount || 0);
+  cur.plantCount = Number(cur.plantCount || 0) + Number(incoming.plantCount || 0);
+  cur.crateDetails = [
+    ...(Array.isArray(cur.crateDetails) ? cur.crateDetails : []),
+    ...(Array.isArray(incoming.crateDetails) ? incoming.crateDetails : []),
+  ];
+};
+
+const mergePlantsDetailsForQuickAdd = (
+  plantsDetails,
+  {
+    plantId,
+    subTypeId,
+    displayName,
+    qty,
+    tray,
+    shadeId,
+    shadeName,
+    newCrates,
+  }
+) => {
+  const list = JSON.parse(JSON.stringify(plantsDetails || []));
+  const shadeOid = new mongoose.Types.ObjectId(String(shadeId));
+  const pickupLine = {
+    shade: shadeOid,
+    shadeName: shadeName || "",
+    quantity: Number(qty),
+    cavity: new mongoose.Types.ObjectId(String(tray._id)),
+    cavityName: tray.name || "",
+  };
+
+  const matchIdx = list.findIndex(
+    (p) =>
+      String(p.plantId) === String(plantId) &&
+      String(p.subTypeId) === String(subTypeId)
+  );
+
+  const cratesToMerge = Array.isArray(newCrates) ? newCrates : [];
+
+  if (matchIdx >= 0) {
+    const p = list[matchIdx];
+    p.pickupDetails = Array.isArray(p.pickupDetails) ? p.pickupDetails : [];
+    p.pickupDetails.push(pickupLine);
+    const pickupTotal = p.pickupDetails.reduce(
+      (s, d) => s + Number(d.quantity || 0),
+      0
+    );
+    p.quantity = pickupTotal;
+    p.totalPlants = pickupTotal;
+    p.crates = Array.isArray(p.crates) ? p.crates : [];
+    cratesToMerge.forEach((nc) => mergeCrateRow(p.crates, nc));
+  } else {
+    list.push({
+      name: displayName,
+      id: String(plantId),
+      plantId,
+      subTypeId,
+      quantity: Number(qty),
+      totalPlants: Number(qty),
+      pickupDetails: [pickupLine],
+      crates: cratesToMerge.length ? [...cratesToMerge] : [],
+      driverName: "",
+      driverMobile: "",
+      vehicleName: "",
+    });
+  }
+
+  return list;
+};
+
 // Dedicated endpoint to add a post-dispatch (quick) order to an existing dispatch vehicle.
 // Uses $push internally so it is safe behind express-mongo-sanitize.
 const addOrderToDispatch = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-  const { orderId, dispatchQuantity } = req.body;
+  const {
+    orderId,
+    dispatchQuantity,
+    crates: cratesFromRequest = [],
+    cavityId: cavityIdRaw,
+    trayId: trayIdRaw,
+    shadeId: shadeIdRaw,
+    shadeName: shadeNameBody,
+  } = req.body;
 
   if (!orderId) {
     return next(new AppError("orderId is required", 400));
   }
 
   const qty = Number(dispatchQuantity) || 0;
-
-  // Fetch the dispatch first so we can copy vehicle/driver info to the order's dispatchHistory
-  const existingDispatch = await Dispatch.findById(id).lean();
-  if (!existingDispatch) {
-    return next(new AppError("No dispatch found with that ID", 404));
+  if (qty <= 0) {
+    return next(new AppError("dispatchQuantity must be greater than 0", 400));
   }
 
-  // 1. Add order to the dispatch record
-  const dispatch = await Dispatch.findByIdAndUpdate(
-    id,
-    {
-      $push: {
-        orderIds: orderId,
-        afterDispatchedOrderIds: orderId,
-        orderDispatchDetails: {
-          orderId,
-          dispatchQuantity: qty,
-          remainingAfterDispatch: 0,
-          additionalPlants: qty,
-          totalPlantsAfterAdjustments: qty,
+  const explicitCavityId = cavityIdRaw || trayIdRaw;
+  if (!explicitCavityId || !mongoose.isValidObjectId(String(explicitCavityId))) {
+    return next(new AppError("cavityId (tray _id) is required for quick add to dispatch", 400));
+  }
+  if (!shadeIdRaw || !mongoose.isValidObjectId(String(shadeIdRaw))) {
+    return next(new AppError("shadeId is required for quick add to dispatch", 400));
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const existingDispatch = await Dispatch.findById(id).session(session).lean();
+    if (!existingDispatch) {
+      throw new AppError("No dispatch found with that ID", 404);
+    }
+
+    const order = await Order.findById(orderId).session(session);
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+
+    const orderPopulated = await Order.findById(orderId)
+      .populate({ path: "plantName", select: "name subtypes" })
+      .session(session);
+
+    const currentRemaining = Number(order.remainingPlants ?? order.numberOfPlants ?? 0);
+    if (qty > currentRemaining) {
+      throw new AppError(
+        `Dispatch quantity (${qty}) exceeds remaining plants (${currentRemaining}) for this order`,
+        400
+      );
+    }
+
+    const trayLean = await Tray.findById(explicitCavityId)
+      .select("_id name cavity numberPerCrate")
+      .session(session)
+      .lean();
+    if (!trayLean) {
+      throw new AppError("Invalid cavity (tray) id", 400);
+    }
+
+    const shadeDoc = await Shade.findById(shadeIdRaw).session(session).lean();
+    if (!shadeDoc) {
+      throw new AppError("Invalid shade id", 400);
+    }
+    const shadeDisplayName = shadeDoc.name || shadeNameBody || "";
+
+    const trayForOrder = {
+      id: trayLean._id,
+      name: trayLean.name || "",
+      cavity: Number(trayLean.cavity || 0),
+      numberPerCrate: Number(trayLean.numberPerCrate || 0),
+    };
+
+    const inferredCrates = calculateDispatchCrates({
+      dispatchQuantity: qty,
+      cavityId: trayForOrder.id || "",
+      cavityName: trayForOrder.name || "",
+      cavitySize: trayForOrder.cavity || 0,
+      numberPerCrate: trayForOrder.numberPerCrate || 0,
+    });
+
+    const sanitizedCrates = Array.isArray(cratesFromRequest)
+      ? cratesFromRequest.filter(
+          (row) =>
+            row &&
+            (Number(row.plantCount) > 0 ||
+              (Array.isArray(row.crateDetails) && row.crateDetails.length > 0))
+        )
+      : [];
+    const fallbackCrates = [
+      {
+        cavity: String(trayLean._id),
+        cavityName: trayLean.name || "N/A",
+        crateCount: 0,
+        plantCount: qty,
+        crateDetails: [
+          {
+            crateCount: 0,
+            plantCount: qty,
+          },
+        ],
+      },
+    ];
+    const cratesForOrder =
+      sanitizedCrates.length > 0
+        ? sanitizedCrates
+        : inferredCrates.length > 0
+        ? inferredCrates
+        : fallbackCrates;
+
+    const plantId = orderPopulated?.plantName?._id || order.plantName;
+    const subTypeId = order.plantSubtype;
+    const displayName = buildPlantDispatchLabel(orderPopulated?.plantName, subTypeId);
+
+    const mergedPlantsDetails = mergePlantsDetailsForQuickAdd(
+      existingDispatch.plantsDetails,
+      {
+        plantId,
+        subTypeId,
+        displayName,
+        qty,
+        tray: trayLean,
+        shadeId: shadeIdRaw,
+        shadeName: shadeDisplayName,
+        newCrates: cratesForOrder,
+      }
+    );
+
+    const newRemainingPlants = Math.max(0, currentRemaining - qty);
+    const newStatus =
+      newRemainingPlants === 0
+        ? "DISPATCHED"
+        : newRemainingPlants < currentRemaining
+        ? "DISPATCH_PROCESS"
+        : order.orderStatus;
+
+    const dispatch = await Dispatch.findByIdAndUpdate(
+      id,
+      {
+        $addToSet: {
+          orderIds: orderId,
+          afterDispatchedOrderIds: orderId,
+        },
+        $push: {
+          orderDispatchDetails: {
+            orderId,
+            dispatchQuantity: qty,
+            remainingAfterDispatch: newRemainingPlants,
+            additionalPlants: 0,
+            totalPlantsAfterAdjustments: qty,
+            isPartialDispatch: newRemainingPlants > 0,
+            driverName: existingDispatch.driverName || "",
+            driverMobile: existingDispatch.driverMobile || "",
+            vehicleName: existingDispatch.vehicleName || "",
+            crates: cratesForOrder,
+          },
+        },
+        $set: {
+          plantsDetails: mergedPlantsDetails,
         },
       },
-    },
-    { new: true, runValidators: false }
-  );
+      { new: true, runValidators: false, session }
+    );
 
-  // 2. Write the dispatch trail back onto the Order so it shows up in order views
-  await Order.findByIdAndUpdate(
-    orderId,
-    {
-      $push: {
-        dispatchHistory: {
-          date: new Date(),
-          quantity: qty,
-          dispatchId: id,
-          remainingAfterDispatch: 0,
-          driverName: existingDispatch.driverName || "",
-          vehicleName: existingDispatch.vehicleName || "",
+    if (!dispatch) {
+      throw new AppError("No dispatch found with that ID", 404);
+    }
+
+    const dispatchHistoryEntry = {
+      date: new Date(),
+      quantity: qty,
+      dispatchId: id,
+      remainingAfterDispatch: newRemainingPlants,
+      processedBy: req.user ? req.user._id : null,
+      driverName: existingDispatch.driverName || "",
+      vehicleName: existingDispatch.vehicleName || "",
+    };
+
+    await updateOrderWithLedgerSync({
+      orderId,
+      existingDoc: order,
+      updateOperation: {
+        $set: {
+          remainingPlants: newRemainingPlants,
+          orderStatus: newStatus,
+          currentDispatchId: id,
+          cavity: trayLean._id,
+        },
+        $push: {
+          dispatchHistory: dispatchHistoryEntry,
         },
       },
-    },
-    { runValidators: false }
-  );
+      session,
+      userId: req.user?._id,
+      contextLabel: "quick_add_to_dispatch",
+    });
 
-  const response = generateResponse(
-    "Success",
-    "Order added to dispatch successfully",
-    dispatch
-  );
+    await session.commitTransaction();
 
-  res.status(200).json(response);
+    const response = generateResponse(
+      "Success",
+      "Order added to dispatch successfully",
+      dispatch
+    );
+    res.status(200).json(response);
+  } catch (error) {
+    await session.abortTransaction();
+    next(error);
+  } finally {
+    session.endSession();
+  }
 });
 
 // Get dispatches controller

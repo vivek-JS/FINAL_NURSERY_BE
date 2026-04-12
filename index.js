@@ -3,6 +3,31 @@ dotenv.config();
 import mongoose from "mongoose";
 import server from "./app.js";
 
+/**
+ * Resolve Mongo URI for the running environment.
+ * - production: PROD_MONGO_URL (preferred), then MONGO_URL / MONGODB_URI
+ * - non-production: MONGO_URL, then STAGE_MONGO_URL, then MONGODB_URI
+ *
+ * On the prod host, set NODE_ENV=production and PROD_MONGO_URL (or a single MONGO_URL to prod).
+ */
+function resolveMongoUrl() {
+  const isProd = process.env.NODE_ENV === "production";
+  if (isProd) {
+    return (
+      process.env.PROD_MONGO_URL ||
+      process.env.MONGO_URL ||
+      process.env.MONGODB_URI ||
+      ""
+    );
+  }
+  return (
+    process.env.MONGO_URL ||
+    process.env.STAGE_MONGO_URL ||
+    process.env.MONGODB_URI ||
+    ""
+  );
+}
+
 // Production-ready MongoDB connection options
 const mongoOptions = {
   serverSelectionTimeoutMS: 10000, // 10 seconds timeout
@@ -15,10 +40,10 @@ const mongoOptions = {
   retryReads: true,
 };
 
-const mongoUrl = process.env.MONGO_URL;
+const mongoUrl = resolveMongoUrl();
 if (!mongoUrl || typeof mongoUrl !== "string") {
   console.error(
-    "Missing MONGO_URL. Set it in .env (e.g. your stage Atlas URI from STAGE_MONGO_URL)."
+    "Missing MongoDB URI. Set PROD_MONGO_URL or MONGO_URL when NODE_ENV=production; otherwise MONGO_URL or STAGE_MONGO_URL (or MONGODB_URI)."
   );
   process.exit(1);
 }

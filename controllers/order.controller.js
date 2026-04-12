@@ -4335,6 +4335,706 @@ const getGeoSummary = catchAsync(async (req, res) => {
   return res.status(200).json({ success: true, data });
 });
 
+// ─── Remaining dispatch queue: aggregate + cell orders (sales × dealer × status) ─
+const REMAINING_DISPATCH_STATUSES = ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH", "DISPATCH_PROCESS"];
+
+function pushOrderListRoleScopeForRemainingDispatch(pipeline, req) {
+  if (!req.user) return;
+  const showonly = req.query?.showonly;
+  const userId = req.user._id;
+  const jt = req.user.jobTitle;
+  if (showonly === "true" || showonly === true) {
+    pipeline.push({ $match: { salesPerson: userId } });
+    return;
+  }
+  if (jt === "SALES") {
+    pipeline.push({ $match: { salesPerson: userId } });
+  } else if (jt === "DEALER") {
+    pipeline.push({
+      $match: {
+        $or: [{ dealer: userId }, { salesPerson: userId }],
+      },
+    });
+  }
+}
+
+function parseDdMmYyyyUtcRemaining(dateStr, isEnd = false) {
+  if (!dateStr || typeof dateStr !== "string") return null;
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return null;
+  const [day, month, year] = parts;
+  const d = isEnd
+    ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
+    : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function pushRemainingDispatchDateRangeMatch(pipeline, req) {
+  const { startDate, endDate, dateRangeField, includePastDueBeyondRange } = req.query || {};
+  if (!startDate || !endDate) return;
+
+  const start = parseDdMmYyyyUtcRemaining(startDate, false);
+  const end = parseDdMmYyyyUtcRemaining(endDate, true);
+  if (!start || !end) return;
+
+  const f = String(dateRangeField || "").toLowerCase().trim();
+  const rangeField =
+    f === "booking" || f === "orderbooking" || f === "order_booking" ? "orderBookingDate" : "deliveryDate";
+
+  if (includePastDueBeyondRange === "true" && rangeField === "deliveryDate") {
+    pipeline.push({
+      $match: {
+        $or: [{ deliveryDate: { $gte: start, $lte: end } }, { deliveryDate: { $lt: start } }],
+      },
+    });
+  } else {
+    pipeline.push({
+      $match: { [rangeField]: { $gte: start, $lte: end } },
+    });
+  }
+}
+
+const getRemainingDispatchAggregate = catchAsync(async (req, res) => {
+  const pipeline = [];
+  pushOrderListRoleScopeForRemainingDispatch(pipeline, req);
+  pipeline.push({
+    $match: { orderStatus: { $in: REMAINING_DISPATCH_STATUSES } },
+  });
+  pushRemainingDispatchDateRangeMatch(pipeline, req);
+
+  pipeline.push(
+    {
+      $lookup: {
+        from: "users",
+        localField: "salesPerson",
+        foreignField: "_id",
+        as: "spDoc",
+        pipeline: [{ $project: { name: 1 } }],
+      },
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "dealer",
+        foreignField: "_id",
+        as: "dlDoc",
+        pipeline: [{ $project: { name: 1, companyName: 1 } }],
+      },
+    },
+    {
+      $addFields: {
+        salesName: { $ifNull: [{ $arrayElemAt: ["$spDoc.name", 0] }, "—"] },
+        dealerName: {
+          $let: {
+            vars: {
+              cn: { $ifNull: [{ $arrayElemAt: ["$dlDoc.companyName", 0] }, ""] },
+              nm: { $ifNull: [{ $arrayElemAt: ["$dlDoc.name", 0] }, ""] },
+            },
+            in: {
+              $cond: [
+                { $gt: [{ $strLenCP: { $trim: { input: "$$cn" } } }, 0] },
+                "$$cn",
+                {
+                  $cond: [
+                    { $gt: [{ $strLenCP: { $trim: { input: "$$nm" } } }, 0] },
+                    "$$nm",
+                    "—",
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          salesPerson: "$salesPerson",
+          dealer: "$dealer",
+          orderStatus: "$orderStatus",
+        },
+        orderCount: { $sum: 1 },
+        totalPlants: { $sum: { $ifNull: ["$numberOfPlants", 0] } },
+        salesName: { $first: "$salesName" },
+        dealerName: { $first: "$dealerName" },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        salesPersonId: "$_id.salesPerson",
+        dealerId: "$_id.dealer",
+        orderStatus: "$_id.orderStatus",
+        orderCount: 1,
+        totalPlants: 1,
+        salesName: 1,
+        dealerName: 1,
+      },
+    },
+    { $sort: { totalPlants: -1, orderCount: -1 } }
+  );
+
+  const rows = await Order.aggregate(pipeline).allowDiskUse(true);
+  const grandTotalPlants = rows.reduce((a, r) => a + (r.totalPlants || 0), 0);
+  const grandOrderCount = rows.reduce((a, r) => a + (r.orderCount || 0), 0);
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      rows,
+      grandTotalPlants,
+      grandOrderCount,
+    },
+  });
+});
+
+const getRemainingDispatchOrdersByCell = catchAsync(async (req, res) => {
+  const { status, salesPerson, dealer } = req.query || {};
+  if (!status || String(status).trim() === "") {
+    return res.status(400).json({ success: false, message: "status is required" });
+  }
+
+  const pipeline = [];
+  pushOrderListRoleScopeForRemainingDispatch(pipeline, req);
+
+  const st = String(status).trim();
+  const and = [{ orderStatus: st }];
+
+  const spQ = salesPerson == null ? "" : String(salesPerson).trim();
+  if (!spQ || spQ === "none") {
+    and.push({ $or: [{ salesPerson: null }, { salesPerson: { $exists: false } }] });
+  } else if (mongoose.Types.ObjectId.isValid(spQ)) {
+    and.push({ salesPerson: new mongoose.Types.ObjectId(spQ) });
+  } else {
+    return res.status(400).json({ success: false, message: "Invalid salesPerson id" });
+  }
+
+  const dlQ = dealer == null ? "" : String(dealer).trim();
+  if (!dlQ || dlQ === "none") {
+    and.push({ $or: [{ dealer: null }, { dealer: { $exists: false } }] });
+  } else if (mongoose.Types.ObjectId.isValid(dlQ)) {
+    and.push({ dealer: new mongoose.Types.ObjectId(dlQ) });
+  } else {
+    return res.status(400).json({ success: false, message: "Invalid dealer id" });
+  }
+
+  pipeline.push({ $match: { $and: and } });
+  pushRemainingDispatchDateRangeMatch(pipeline, req);
+
+  pipeline.push(
+    { $sort: { deliveryDate: 1, orderBookingDate: 1 } },
+    {
+      $lookup: {
+        from: "farmers",
+        localField: "farmer",
+        foreignField: "_id",
+        as: "farmerData",
+        pipeline: [
+          {
+            $project: {
+              name: 1,
+              mobileNumber: 1,
+              village: 1,
+              taluka: 1,
+              district: 1,
+            },
+          },
+        ],
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "plantName",
+        foreignField: "_id",
+        as: "plantData",
+        pipeline: [{ $project: { name: 1, subtypes: 1 } }],
+      },
+    },
+    {
+      $addFields: {
+        farmer: { $arrayElemAt: ["$farmerData", 0] },
+        plantRow: { $arrayElemAt: ["$plantData", 0] },
+        plantTypeName: { $arrayElemAt: ["$plantData.name", 0] },
+      },
+    },
+    {
+      $addFields: {
+        matchedSubtype: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: { $ifNull: ["$plantRow.subtypes", []] },
+                as: "st",
+                cond: { $eq: ["$$st._id", "$plantSubtype"] },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+        orderId: 1,
+        orderStatus: 1,
+        numberOfPlants: 1,
+        rate: 1,
+        totalAmount: { $multiply: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$rate", 0] }] },
+        deliveryDate: 1,
+        orderBookingDate: 1,
+        farmer: 1,
+        plantTypeName: 1,
+        plantSubtypeName: "$matchedSubtype.name",
+      },
+    },
+    { $limit: 2000 }
+  );
+
+  const orders = await Order.aggregate(pipeline);
+
+  return res.status(200).json({ success: true, data: { orders } });
+});
+
+/** Resolve dealer display name (same logic as remaining-dispatch aggregate). */
+function addFieldsDealerNameForRemainingDispatch() {
+  return {
+    $addFields: {
+      dealerName: {
+        $let: {
+          vars: {
+            cn: { $ifNull: [{ $arrayElemAt: ["$dlDoc.companyName", 0] }, ""] },
+            nm: { $ifNull: [{ $arrayElemAt: ["$dlDoc.name", 0] }, ""] },
+            em: { $ifNull: [{ $arrayElemAt: ["$dlDoc.email", 0] }, ""] },
+            phStr: {
+              $cond: [
+                { $eq: [{ $ifNull: [{ $arrayElemAt: ["$dlDoc.phoneNumber", 0] }, null] }, null] },
+                "",
+                { $toString: { $arrayElemAt: ["$dlDoc.phoneNumber", 0] } },
+              ],
+            },
+          },
+          in: {
+            $cond: [
+              { $gt: [{ $strLenCP: { $trim: { input: "$$cn" } } }, 0] },
+              "$$cn",
+              {
+                $cond: [
+                  { $gt: [{ $strLenCP: { $trim: { input: "$$nm" } } }, 0] },
+                  "$$nm",
+                  {
+                    $cond: [
+                      { $gt: [{ $strLenCP: { $trim: { input: "$$em" } } }, 0] },
+                      "$$em",
+                      {
+                        $cond: [
+                          { $gt: [{ $strLenCP: { $trim: { input: "$$phStr" } } }, 0] },
+                          { $trim: { input: "$$phStr" } },
+                          "—",
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
+/** Pivot long cells into rows: cells = order counts, plantCells = sum(numberOfPlants). */
+function buildMatrixRowsFromLongCells(longCells) {
+  const colSet = new Set();
+  const byRow = new Map();
+  for (const x of longCells || []) {
+    const ck = x.columnKey || "Other";
+    colSet.add(ck);
+    const rawId = x.rowId;
+    const rid =
+      rawId == null || rawId === undefined || rawId === ""
+        ? "none"
+        : typeof rawId === "object" && rawId !== null && rawId.toString
+          ? String(rawId)
+          : String(rawId);
+    if (!byRow.has(rid)) {
+      byRow.set(rid, { id: rid, name: null, cells: {}, plantCells: {} });
+    }
+    const row = byRow.get(rid);
+    row.cells[ck] = (row.cells[ck] || 0) + (x.orderCount || 0);
+    row.plantCells[ck] = (row.plantCells[ck] || 0) + (x.plantQty || 0);
+    const rn = x.rowName != null ? String(x.rowName).trim() : "";
+    if (rn && rn !== "—" && !row.name) {
+      row.name = rn;
+    }
+    if (rn && rn !== "—" && row.name === "—") {
+      row.name = rn;
+    }
+  }
+  const columnKeys = [...colSet].sort((a, b) =>
+    String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" })
+  );
+  const rows = [...byRow.values()].map((r) => {
+    const cells = {};
+    const plantCells = {};
+    let rowTotal = 0;
+    let plantRowTotal = 0;
+    columnKeys.forEach((c) => {
+      cells[c] = r.cells[c] || 0;
+      plantCells[c] = r.plantCells[c] || 0;
+      rowTotal += cells[c] || 0;
+      plantRowTotal += plantCells[c] || 0;
+    });
+    let displayName = r.name && String(r.name).trim() && r.name !== "—" ? String(r.name).trim() : null;
+    if (!displayName) {
+      displayName =
+        r.id === "none" ? "Unassigned" : `No profile (…${String(r.id).slice(-6)})`;
+    }
+    return { id: r.id, name: displayName, cells, plantCells, rowTotal, plantRowTotal };
+  });
+  rows.sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" }));
+  return { columnKeys, rows };
+}
+
+function mergeColumnKeys(a, b) {
+  return [...new Set([...(a || []), ...(b || [])])].sort((x, y) =>
+    String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: "base" })
+  );
+}
+
+/**
+ * Plant subtype columns × rows = salesperson OR dealer; cell = order count + plant qty.
+ */
+const getRemainingDispatchMatrix = catchAsync(async (req, res) => {
+  const pipeline = [];
+  pushOrderListRoleScopeForRemainingDispatch(pipeline, req);
+  pipeline.push({
+    $match: { orderStatus: { $in: REMAINING_DISPATCH_STATUSES } },
+  });
+
+  pipeline.push(
+    {
+      $lookup: {
+        from: "users",
+        localField: "salesPerson",
+        foreignField: "_id",
+        as: "spDoc",
+        pipeline: [{ $project: { name: 1, email: 1, phoneNumber: 1 } }],
+      },
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "dealer",
+        foreignField: "_id",
+        as: "dlDoc",
+        pipeline: [{ $project: { name: 1, companyName: 1, email: 1, phoneNumber: 1 } }],
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "plantName",
+        foreignField: "_id",
+        as: "plantData",
+        pipeline: [{ $project: { name: 1, subtypes: 1 } }],
+      },
+    },
+    {
+      $addFields: {
+        plantRow: { $arrayElemAt: ["$plantData", 0] },
+        salesName: {
+          $let: {
+            vars: {
+              n: { $trim: { input: { $ifNull: [{ $arrayElemAt: ["$spDoc.name", 0] }, ""] } } },
+              e: { $trim: { input: { $ifNull: [{ $arrayElemAt: ["$spDoc.email", 0] }, ""] } } },
+              phStr: {
+                $cond: [
+                  { $eq: [{ $ifNull: [{ $arrayElemAt: ["$spDoc.phoneNumber", 0] }, null] }, null] },
+                  "",
+                  { $toString: { $arrayElemAt: ["$spDoc.phoneNumber", 0] } },
+                ],
+              },
+            },
+            in: {
+              $cond: [
+                { $gt: [{ $strLenCP: "$$n" }, 0] },
+                "$$n",
+                {
+                  $cond: [
+                    { $gt: [{ $strLenCP: "$$e" }, 0] },
+                    "$$e",
+                    {
+                      $cond: [
+                        { $gt: [{ $strLenCP: { $trim: { input: "$$phStr" } } }, 0] },
+                        { $trim: { input: "$$phStr" } },
+                        "—",
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+    addFieldsDealerNameForRemainingDispatch(),
+    {
+      $addFields: {
+        matchedSubtype: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: { $ifNull: ["$plantRow.subtypes", []] },
+                as: "st",
+                cond: { $eq: ["$$st._id", "$plantSubtype"] },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    },
+    {
+      $addFields: {
+        columnKey: { $ifNull: ["$matchedSubtype.name", "Other"] },
+      },
+    },
+    {
+      $facet: {
+        salesCells: [
+          {
+            $group: {
+              _id: { rowId: "$salesPerson", columnKey: "$columnKey" },
+              orderCount: { $sum: 1 },
+              plantQty: { $sum: { $ifNull: ["$numberOfPlants", 0] } },
+              rowName: { $last: "$salesName" },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              rowId: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ["$_id.rowId", null] },
+                      { $eq: [{ $type: "$_id.rowId" }, "missing"] },
+                    ],
+                  },
+                  "none",
+                  { $toString: "$_id.rowId" },
+                ],
+              },
+              columnKey: "$_id.columnKey",
+              orderCount: 1,
+              plantQty: 1,
+              rowName: { $ifNull: ["$rowName", ""] },
+            },
+          },
+        ],
+        dealerCells: [
+          {
+            $group: {
+              _id: { rowId: "$dealer", columnKey: "$columnKey" },
+              orderCount: { $sum: 1 },
+              plantQty: { $sum: { $ifNull: ["$numberOfPlants", 0] } },
+              rowName: { $last: "$dealerName" },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              rowId: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ["$_id.rowId", null] },
+                      { $eq: [{ $type: "$_id.rowId" }, "missing"] },
+                    ],
+                  },
+                  "none",
+                  { $toString: "$_id.rowId" },
+                ],
+              },
+              columnKey: "$_id.columnKey",
+              orderCount: 1,
+              plantQty: 1,
+              rowName: { $ifNull: ["$rowName", ""] },
+            },
+          },
+        ],
+      },
+    }
+  );
+
+  const pack = (await Order.aggregate(pipeline).allowDiskUse(true))[0] || {
+    salesCells: [],
+    dealerCells: [],
+  };
+
+  const salesBuilt = buildMatrixRowsFromLongCells(pack.salesCells);
+  const dealerBuilt = buildMatrixRowsFromLongCells(pack.dealerCells);
+  const columnKeys = mergeColumnKeys(salesBuilt.columnKeys, dealerBuilt.columnKeys);
+
+  const fillCols = (rows) =>
+    rows.map((r) => {
+      const cells = {};
+      const plantCells = {};
+      let rowTotal = 0;
+      let plantRowTotal = 0;
+      columnKeys.forEach((c) => {
+        cells[c] = r.cells[c] || 0;
+        plantCells[c] = r.plantCells[c] || 0;
+        rowTotal += cells[c];
+        plantRowTotal += plantCells[c];
+      });
+      return { id: r.id, name: r.name, cells, plantCells, rowTotal, plantRowTotal };
+    });
+
+  const salesRows = fillCols(salesBuilt.rows);
+  const dealerRows = fillCols(dealerBuilt.rows);
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      columnKeys,
+      salesRows,
+      dealerRows,
+    },
+  });
+});
+
+/** Orders for matrix cell: sales|dealer row + plant subtype column. */
+const getRemainingDispatchMatrixOrders = catchAsync(async (req, res) => {
+  const { matrixRole, rowId, columnKey } = req.query || {};
+  const role = String(matrixRole || "").toLowerCase();
+  if (role !== "sales" && role !== "dealer") {
+    return res.status(400).json({ success: false, message: "matrixRole must be sales or dealer" });
+  }
+  if (columnKey == null || String(columnKey).trim() === "") {
+    return res.status(400).json({ success: false, message: "columnKey is required" });
+  }
+
+  const col = String(columnKey).trim();
+  const rid = rowId == null ? "" : String(rowId).trim();
+
+  const pipeline = [];
+  pushOrderListRoleScopeForRemainingDispatch(pipeline, req);
+
+  const and = [{ orderStatus: { $in: REMAINING_DISPATCH_STATUSES } }];
+
+  if (role === "sales") {
+    if (!rid || rid === "none") {
+      and.push({ $or: [{ salesPerson: null }, { salesPerson: { $exists: false } }] });
+    } else if (mongoose.Types.ObjectId.isValid(rid)) {
+      and.push({ salesPerson: new mongoose.Types.ObjectId(rid) });
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid rowId" });
+    }
+  } else {
+    if (!rid || rid === "none") {
+      and.push({ $or: [{ dealer: null }, { dealer: { $exists: false } }] });
+    } else if (mongoose.Types.ObjectId.isValid(rid)) {
+      and.push({ dealer: new mongoose.Types.ObjectId(rid) });
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid rowId" });
+    }
+  }
+
+  pipeline.push({ $match: { $and: and } });
+
+  pipeline.push(
+    { $sort: { deliveryDate: 1, orderBookingDate: 1 } },
+    {
+      $lookup: {
+        from: "farmers",
+        localField: "farmer",
+        foreignField: "_id",
+        as: "farmerData",
+        pipeline: [
+          {
+            $project: {
+              name: 1,
+              mobileNumber: 1,
+              village: 1,
+              taluka: 1,
+              district: 1,
+            },
+          },
+        ],
+      },
+    },
+    {
+      $lookup: {
+        from: "plantcms",
+        localField: "plantName",
+        foreignField: "_id",
+        as: "plantData",
+        pipeline: [{ $project: { name: 1, subtypes: 1 } }],
+      },
+    },
+    {
+      $addFields: {
+        farmer: { $arrayElemAt: ["$farmerData", 0] },
+        plantRow: { $arrayElemAt: ["$plantData", 0] },
+        plantTypeName: { $arrayElemAt: ["$plantData.name", 0] },
+      },
+    },
+    {
+      $addFields: {
+        matchedSubtype: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: { $ifNull: ["$plantRow.subtypes", []] },
+                as: "st",
+                cond: { $eq: ["$$st._id", "$plantSubtype"] },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    },
+    {
+      $addFields: {
+        plantSubtypeName: { $ifNull: ["$matchedSubtype.name", "Other"] },
+      },
+    },
+    {
+      $match: {
+        plantSubtypeName: col,
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+        orderId: 1,
+        orderStatus: 1,
+        numberOfPlants: 1,
+        rate: 1,
+        totalAmount: { $multiply: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$rate", 0] }] },
+        deliveryDate: 1,
+        orderBookingDate: 1,
+        farmer: 1,
+        plantTypeName: 1,
+        plantSubtypeName: 1,
+      },
+    },
+    { $limit: 2000 }
+  );
+
+  const orders = await Order.aggregate(pipeline);
+
+  return res.status(200).json({ success: true, data: { orders } });
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -4367,4 +5067,8 @@ export {
   getDeliveryOrders,
   splitOrder,
   getGeoSummary,
+  getRemainingDispatchAggregate,
+  getRemainingDispatchOrdersByCell,
+  getRemainingDispatchMatrix,
+  getRemainingDispatchMatrixOrders,
 };

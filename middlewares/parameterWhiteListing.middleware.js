@@ -55,6 +55,7 @@ const allowedParams = [
   "dispatched",
   "includePastDueBeyondRange",
   "dateRangeField", // getOrders: booking | delivery — which field startDate/endDate apply to
+  "exportAll", // getOrders: "true" = full export (high limit, no early pagination)
   "salesPerson",
   "monthName",
   "startDay",
@@ -100,6 +101,10 @@ const allowedParams = [
     "productId", // For filtering by product ID
     "customerMobile", // For filtering by customer mobile number
     "farmer", // Farmer plant ledger (ObjectId)
+  "farmerId", // remaining-dispatch-matrix-orders
+  "columnKey", // remaining-dispatch-matrix-orders (plant subtype label)
+  "matrixRole", // sales | dealer
+  "rowId", // matrix row (salesPerson or dealer id, or none)
     "linesOnly", // Farmer plant ledger: include line entries
     "customerName", // For filtering by customer name
     "customerId", // For filtering by customer ID

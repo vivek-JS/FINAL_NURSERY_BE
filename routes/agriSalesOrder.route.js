@@ -91,7 +91,10 @@ router.patch(
   [
     check("orderIds").isArray({ min: 1 }).withMessage("At least one order ID is required"),
     check("orderIds.*").isMongoId().withMessage("All order IDs must be valid"),
-    check("dispatchMode").optional().isIn(["VEHICLE", "COURIER"]).withMessage("Dispatch mode must be VEHICLE or COURIER"),
+    check("dispatchMode")
+      .optional()
+      .isIn(["VEHICLE", "COURIER", "WITH_ORDER"])
+      .withMessage("Dispatch mode must be VEHICLE, COURIER, or WITH_ORDER"),
     // Vehicle mode validations (optional - validated in controller based on mode)
     check("driverName").optional(),
     check("driverMobile").optional(),

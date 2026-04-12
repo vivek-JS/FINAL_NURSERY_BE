@@ -1,6 +1,9 @@
 import fetch from "node-fetch";
 import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
-import { watiPlantAndSubtypeParams } from "./watiPlantText.js";
+import {
+  watiPlantAndSubtypeParams,
+  WATI_MERGED_SUBTYPE_PLACEHOLDER,
+} from "./watiPlantText.js";
 
 /**
  * Send WhatsApp template message via WATI API
@@ -89,6 +92,11 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       plantName,
       orderDetails.plantSubtype
     );
+    const isPapayaAccept = /papaya/i.test(
+      `${plantName || ""} ${orderDetails.plantSubtype || ""}`
+    );
+    const acceptPlant = isPapayaAccept ? "Papaya" : plantParam;
+    const acceptSubtype = isPapayaAccept ? WATI_MERGED_SUBTYPE_PLACEHOLDER : subtypeParam;
 
     const templateOrderId =
       orderDetails.publicOrderCode?.toString() || orderId?.toString() || "N/A";
@@ -108,8 +116,8 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       { name: "id", value: templateOrderId },
       { name: "village", value: farmer.village || "N/A" },
       { name: "number", value: farmer.mobileNumber?.toString() || "N/A" },
-      { name: "plant", value: plantParam },
-      { name: "subtype", value: subtypeParam },
+      { name: "plant", value: acceptPlant },
+      { name: "subtype", value: acceptSubtype },
       { name: "total_booked", value: numberOfPlants?.toString() || "0" },
       { name: "rate", value: rate?.toString() || "0" },
       { name: "total", value: totalAmount?.toString() || "0" },

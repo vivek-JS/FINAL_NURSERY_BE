@@ -2790,7 +2790,10 @@ const getAll = (Model, modelName) =>
       includePastDueBeyondRange, // true: delivery in [start,end] OR delivery before start (older past-due backlog)
       dateRangeField, // "booking" | "delivery" — which date field startDate/endDate apply to (defaults: booking when dispatched=false, delivery when dispatched=true)
       showonly, // When truthy: restrict ANY role (incl. DISPATCH_MANAGER/ADMIN) to only orders where salesPerson === req.user._id
+      exportAll: exportAllRaw, // "true" = full export (no 500 cap; skip early pagination)
     } = req.query;
+
+    const exportAll = String(exportAllRaw ?? "") === "true";
 
     /** Express may pass repeated keys as an array; normalize to one comma-separated string. */
     const status =
@@ -2849,7 +2852,7 @@ const getAll = (Model, modelName) =>
       : "createdAt";
     const sortOrderNorm = String(sortOrderRaw || "desc").toLowerCase();
 
-    const ORDER_GET_MAX_LIMIT = 500;
+    const ORDER_GET_MAX_LIMIT = exportAll ? 200000 : 500;
     const pageParsed = parseInt(pageQuery, 10);
     const limitParsed = parseInt(limitQuery, 10);
     const page = Number.isFinite(pageParsed) && pageParsed >= 1 ? pageParsed : 1;
@@ -3088,6 +3091,7 @@ const getAll = (Model, modelName) =>
     }
 
     const canEarlyPaginate =
+      !exportAll &&
       hasPaginationParams &&
       !search &&
       !village &&
@@ -3244,6 +3248,7 @@ const getAll = (Model, modelName) =>
     // Search + pagination: paginate here so plant/users/dispatch $lookups and $project run on ~`limit` docs only.
     // (Previously $sort/$skip/$limit ran after all joins — very slow on large status sets e.g. DISPATCHED + name search.)
     if (
+      !exportAll &&
       searchTrimmed &&
       hasPaginationParams &&
       !(slotId && monthName && startDay && endDay)
