@@ -21,7 +21,9 @@
     "seed:gadi-fleet:stage": "node scripts/seed-gadi-fleet-from-xlsx.js --stage",
     "seed:gadi-fleet:prod": "node scripts/seed-gadi-fleet-from-xlsx.js --prod",
     "report:dealer-subtype-xlsx": "node scripts/export-dealers-subtype-quantity-xlsx.js",
-    "report:papaya-taiwan-xlsx": "node scripts/export-papaya-taiwan-xlsx.js"
+    "report:papaya-taiwan-xlsx": "node scripts/export-papaya-taiwan-xlsx.js",
+    "script:remove-wallet-tx": "node scripts/remove-dealer-wallet-embedded-transaction.js",
+    "script:remove-order-payments-ledger": "node scripts/remove-order-payments-and-dealer-ledger.js"
   },
   "author": "",
   "license": "ISC",

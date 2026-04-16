@@ -15,6 +15,10 @@ import {
   roundMoney,
   getLastOutstandingAfterForCustomer,
   createFarmerPlantLedgerEntry,
+  ensureFarmerPlantOrderDebit,
+  recordFarmerPlantLedgerPaymentTransition,
+  resolveFarmerIdentity,
+  getFarmerPlantPaymentTransitionAction,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 
 const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
@@ -503,6 +507,226 @@ export const getFarmerPlantOrderDetails = catchAsync(async (req, res, next) => {
   return res
     .status(200)
     .json(generateResponse("Success", "Order details", payload, undefined));
+});
+
+function findPaymentSubdocument(order, paymentId) {
+  if (!order?.payment?.length) return null;
+  if (paymentId == null || paymentId === "") return null;
+  let p = order.payment.id(paymentId);
+  if (p) return p;
+  const s = String(paymentId).trim();
+  if (mongoose.Types.ObjectId.isValid(s)) {
+    const oid = new mongoose.Types.ObjectId(s);
+    p = order.payment.id(oid);
+    if (p) return p;
+  }
+  return order.payment.find((x) => x?._id && String(x._id) === s);
+}
+
+/**
+ * POST move one COLLECTED payment from a farmer plant order to another (same farmer).
+ * Body: { sourceOrderId, targetOrderId, paymentId, message? }
+ *
+ * - Source payment → REJECTED + farmer-plant REVERSAL ledger line
+ * - Target order → new payment PENDING then COLLECTED + PAYMENT ledger credit
+ * - Excludes wallet payments and bulk-linked payments (mainPaymentId)
+ */
+export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next) => {
+  const { sourceOrderId, targetOrderId, paymentId, message } = req.body || {};
+  const msg = message != null && String(message).trim() ? String(message).trim() : "";
+
+  const sid = sourceOrderId != null ? String(sourceOrderId).trim() : "";
+  const tid = targetOrderId != null ? String(targetOrderId).trim() : "";
+  const pid = paymentId != null ? String(paymentId).trim() : "";
+
+  if (!mongoose.isValidObjectId(sid) || !mongoose.isValidObjectId(tid) || !mongoose.isValidObjectId(pid)) {
+    return next(new AppError("Valid sourceOrderId, targetOrderId, and paymentId are required", 400));
+  }
+  if (sid === tid) {
+    return next(new AppError("Source and target orders must be different", 400));
+  }
+
+  const performedBy = req.user?._id || req.user?.id;
+  const transferId = new mongoose.Types.ObjectId();
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  let reversalEntryId = null;
+  let paymentEntryId = null;
+
+  try {
+    const sourceOrder = await Order.findById(sid).populate(orderDetailsPopulate).session(session);
+    const targetOrder = await Order.findById(tid).populate(orderDetailsPopulate).session(session);
+
+    if (!sourceOrder || !targetOrder) {
+      throw new AppError("Source or target order not found", 404);
+    }
+    if (sourceOrder.dealerOrder || targetOrder.dealerOrder) {
+      throw new AppError("Payment transfer applies to farmer plant orders only", 400);
+    }
+    if (!shouldLogFarmerPlantLedger(sourceOrder) || !shouldLogFarmerPlantLedger(targetOrder)) {
+      throw new AppError("Both orders must have a farmer for plant ledger", 400);
+    }
+
+    const fromParty = await resolveFarmerIdentity(sourceOrder);
+    const toParty = await resolveFarmerIdentity(targetOrder);
+    if (!fromParty.customerMobile || !toParty.customerMobile) {
+      throw new AppError("Could not resolve farmer identity for one or both orders", 400);
+    }
+    if (fromParty.customerMobile !== toParty.customerMobile) {
+      throw new AppError("Both orders must belong to the same farmer (mobile)", 400);
+    }
+
+    const sourcePayment = findPaymentSubdocument(sourceOrder, pid);
+    if (!sourcePayment) {
+      throw new AppError("Payment not found on source order", 404);
+    }
+    if (sourcePayment.paymentStatus !== "COLLECTED") {
+      throw new AppError("Only COLLECTED payments can be transferred", 400);
+    }
+    if (sourcePayment.isWalletPayment) {
+      throw new AppError("Wallet payments cannot be transferred in this flow", 400);
+    }
+    if (sourcePayment.mainPaymentId) {
+      throw new AppError("Bulk-linked payments cannot be transferred", 400);
+    }
+
+    const amount = roundMoney(Math.abs(Number(sourcePayment.paidAmount || 0)));
+    if (!(amount > 0)) {
+      throw new AppError("Payment amount must be greater than zero", 400);
+    }
+
+    const targetNumericId = targetOrder.orderId ?? "";
+    const sourceNumericId = sourceOrder.orderId ?? "";
+    const transferNote = `[Transferred to order #${targetNumericId}${msg ? ` — ${msg}` : ""}]`;
+    const prevRemark = sourcePayment.remark ? String(sourcePayment.remark).trim() : "";
+    sourcePayment.remark = prevRemark ? `${prevRemark}\n${transferNote}` : transferNote;
+    const prevSourceStatus = sourcePayment.paymentStatus;
+    sourcePayment.paymentStatus = "REJECTED";
+
+    await sourceOrder.save({ session });
+
+    await ensureFarmerPlantOrderDebit(sourceOrder, { userId: performedBy, session });
+    const sourceReversal = await recordFarmerPlantLedgerPaymentTransition(
+      sourceOrder,
+      sourcePayment,
+      prevSourceStatus,
+      "REJECTED",
+      { userId: performedBy, session }
+    );
+    const revAction = getFarmerPlantPaymentTransitionAction(prevSourceStatus, "REJECTED");
+    if (revAction === "REVERSAL" && !sourceReversal) {
+      throw new AppError("Farmer ledger reversal was not recorded (duplicate or conflict)", 409);
+    }
+    reversalEntryId = sourceReversal?._id || null;
+
+    const mode = sourcePayment.modeOfPayment || "Cash";
+    const incomingNote = `[Transferred from order #${sourceNumericId}${msg ? ` — ${msg}` : ""}]`;
+    const newPaymentPayload = {
+      paidAmount: amount,
+      paymentStatus: "PENDING",
+      paymentDate: sourcePayment.paymentDate || new Date(),
+      bankName: sourcePayment.bankName || "",
+      receiptPhoto: Array.isArray(sourcePayment.receiptPhoto) ? [...sourcePayment.receiptPhoto] : [],
+      modeOfPayment: mode,
+      remark: incomingNote,
+      chequeNumber: sourcePayment.chequeNumber || undefined,
+      transactionId: sourcePayment.transactionId || undefined,
+      utrNumber: sourcePayment.utrNumber || undefined,
+      customerName: sourcePayment.customerName || undefined,
+      isWalletPayment: false,
+    };
+
+    targetOrder.payment.push(newPaymentPayload);
+    await targetOrder.save({ session });
+
+    const newPayment = targetOrder.payment[targetOrder.payment.length - 1];
+    if (!newPayment?._id) {
+      throw new AppError("Failed to create payment on target order", 500);
+    }
+
+    const prevTargetPayStatus = newPayment.paymentStatus;
+    newPayment.paymentStatus = "COLLECTED";
+    await targetOrder.save({ session });
+
+    await ensureFarmerPlantOrderDebit(targetOrder, { userId: performedBy, session });
+    const targetCredit = await recordFarmerPlantLedgerPaymentTransition(
+      targetOrder,
+      newPayment,
+      prevTargetPayStatus,
+      "COLLECTED",
+      { userId: performedBy, session }
+    );
+    const creditAction = getFarmerPlantPaymentTransitionAction(prevTargetPayStatus, "COLLECTED");
+    if (creditAction === "CREDIT" && !targetCredit) {
+      throw new AppError("Farmer ledger credit was not recorded (duplicate or conflict)", 409);
+    }
+    paymentEntryId = targetCredit?._id || null;
+
+    const outstandingAfter = await getLastOutstandingAfterForCustomer(fromParty.customerMobile, session);
+
+    await Log.create(
+      [
+        {
+          userId: performedBy,
+          modelName: "FarmerPlantOrderPaymentTransfer",
+          documentId: transferId,
+          operation: "CREATE",
+          newState: {
+            transferId,
+            amount,
+            message: msg || null,
+            sourceOrderMongoId: sid,
+            targetOrderMongoId: tid,
+            sourceOrderNumericId: sourceNumericId,
+            targetOrderNumericId: targetNumericId,
+            originalPaymentId: pid,
+            newPaymentId: newPayment._id ? String(newPayment._id) : null,
+            reversalLedgerEntryId: reversalEntryId ? String(reversalEntryId) : null,
+            paymentLedgerEntryId: paymentEntryId ? String(paymentEntryId) : null,
+            customerMobile: fromParty.customerMobile,
+            outstandingAfter: roundMoney(outstandingAfter),
+          },
+          changedFields: ["orderPaymentTransfer"],
+          metadata: {
+            transferId,
+            sourceOrderId: sid,
+            targetOrderId: tid,
+            paymentId: pid,
+          },
+        },
+      ],
+      { session }
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return res.status(200).json(
+      generateResponse(
+        "Success",
+        "Payment transferred between orders",
+        {
+          transferId,
+          amount,
+          sourceOrder: { _id: sourceOrder._id, orderId: sourceOrder.orderId },
+          targetOrder: { _id: targetOrder._id, orderId: targetOrder.orderId },
+          reversalLedgerEntryId: reversalEntryId,
+          paymentLedgerEntryId: paymentEntryId,
+          outstandingAfter: roundMoney(outstandingAfter),
+        },
+        undefined
+      )
+    );
+  } catch (e) {
+    try {
+      await session.abortTransaction();
+    } catch (_) {}
+    try {
+      session.endSession();
+    } catch (_) {}
+    return next(e instanceof AppError ? e : new AppError(e.message || "Transfer failed", 500));
+  }
 });
 
 /**

@@ -99,6 +99,68 @@ const updateEmployee = catchAsync(async (req, res, next) => {
 const deleteEmployee = deleteOne(Employee, "Employee");
 const getEmployee = getOne(Employee, "Employee");
 
+/** Clears profile password flag so the user must set a new password after next login (same login flow as first-time). */
+const requireEmployeePasswordChange = catchAsync(async (req, res, next) => {
+  let { id, _id } = req.body;
+  if (_id && !id) id = _id;
+
+  if (!mongoose.isValidObjectId(id)) {
+    return next(new AppError("Invalid ID format", 400));
+  }
+
+  const before = await Employee.findById(id).lean();
+  if (!before) {
+    return next(new AppError("No document found with that ID", 404));
+  }
+
+  if (before.role === "FARMER" || !before.jobTitle) {
+    return next(new AppError("This action is only available for employee accounts", 400));
+  }
+
+  const isTargetSuperAdmin =
+    before.jobTitle === "SUPER_ADMIN" ||
+    before.role === "SUPER_ADMIN";
+  if (isTargetSuperAdmin) {
+    return next(new AppError("Cannot require password change for Super Admin", 403));
+  }
+
+  const doc = await Employee.findByIdAndUpdate(
+    id,
+    { isPasswordSet: false },
+    { new: true, runValidators: true }
+  ).select("-password -__v");
+
+  if (!doc) {
+    return next(new AppError("No document found with that ID", 404));
+  }
+
+  if (req.user?._id) {
+    await createChangeLog({
+      entityType: "employee",
+      entityId: doc._id,
+      action: "update",
+      changedBy: req.user._id,
+      changes: [
+        { field: "isPasswordSet", oldValue: before.isPasswordSet, newValue: false },
+      ],
+      description: `Password change required on next login for "${doc.name}"`,
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+  }
+
+  return res
+    .status(200)
+    .json(
+      generateResponse(
+        "Success",
+        "User will be asked to set a new password on next login.",
+        doc,
+        undefined
+      )
+    );
+});
+
 const getEmployees = catchAsync(async (req, res) => {
   const { search = "", jobTitle, page = 1, limit = 500 } = req.query;
   const pageNum = Math.max(1, Number(page) || 1);
@@ -139,4 +201,5 @@ export {
   deleteEmployee,
   getEmployees,
   getEmployee,
+  requireEmployeePasswordChange,
 };

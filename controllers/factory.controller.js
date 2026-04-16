@@ -1323,32 +1323,27 @@ const updateOne = (Model, modelName, allowedFields) =>
       const isDispatchManager = isDispatchManagerUser;
 
       if (filteredBody.orderStatus !== undefined) {
-        const allowedPrevForFarmReady = new Set([
-          "PENDING",
-          "ACCEPTED",
-          "ASSIGNED",
-        ]);
-        const canSetFarmReady =
-          filteredBody.orderStatus === "FARM_READY" &&
-          allowedPrevForFarmReady.has(
-            String(existingDoc.orderStatus || "")
-          ) &&
-          ((salesOwnsOrder && isSalesUser) ||
-            (dealerOwnsOrder && isDealerUser));
+        const prevOrderStatus = String(existingDoc.orderStatus || "").toUpperCase();
+        const farmReadyOwnerOk =
+          (salesOwnsOrder && isSalesUser) || (dealerOwnsOrder && isDealerUser);
 
         if (filteredBody.orderStatus === "FARM_READY") {
-          if (canSetFarmReady) {
-            // keep — only sales or dealer on this order
-          } else {
+          if (!farmReadyOwnerOk) {
             rejectedFields.push({
               field: "orderStatus",
               reason: "FARM_READY_RESTRICTED",
               detail:
-                "Only the sales person or dealer who owns the order can set Ready to farm (from Pending, Accepted, or Assigned).",
+                "Only the sales person or dealer who owns the order can set Ready to farm (Accepted orders only).",
               value: filteredBody.orderStatus,
             });
             delete filteredBody.orderStatus;
+          } else if (prevOrderStatus !== "ACCEPTED") {
+            throw new AppError(
+              "अजून ऑर्डर स्वीकार झालेली नाही।",
+              400
+            );
           }
+          // else: sales/dealer on own order, current status ACCEPTED — allow FARM_READY
         } else if (req.user && canChangeOrderStatusFull) {
           // keep orderStatus (non–farm-ready transitions for office/super admin)
         } else if (
@@ -2846,6 +2841,7 @@ const getAll = (Model, modelName) =>
       "orderBookingDate",
       "orderId",
       "orderStatus",
+      "farmReadyEnteredAt",
     ]);
     const sortKey = ORDER_LIST_SORT_FIELDS.has(String(sortKeyRaw))
       ? String(sortKeyRaw)
@@ -2860,6 +2856,90 @@ const getAll = (Model, modelName) =>
     const limit = Math.min(limitUncapped, ORDER_GET_MAX_LIMIT);
     const order = sortOrderNorm === "desc" ? -1 : 1;
     const skip = (page - 1) * limit;
+
+    /** FIFO: when listing only FARM_READY, legacy clients send delivery/booking sort — use first transition time instead. */
+    let effectiveSortKey = sortKey;
+    let effectiveOrder = order;
+    if (
+      skipOrderDateRangeForFarmReadyOnlyStatus &&
+      (sortKey === "deliveryDate" || sortKey === "orderBookingDate")
+    ) {
+      effectiveSortKey = "farmReadyEnteredAt";
+      effectiveOrder = 1;
+    }
+
+    /** Far-future sentinel so ascending sort places rows with no usable timestamp last. */
+    const farmReadyFifoUnknownDate = new Date("9999-12-31T23:59:59.999Z");
+    const farmReadyEnteredAtExpr = {
+      $ifNull: [
+        {
+          $let: {
+            vars: {
+              dates: {
+                $filter: {
+                  input: {
+                    $map: {
+                      input: {
+                        $filter: {
+                          input: { $ifNull: ["$statusChanges", []] },
+                          as: "sc",
+                          cond: { $eq: ["$$sc.newStatus", "FARM_READY"] },
+                        },
+                      },
+                      as: "fr",
+                      in: {
+                        $ifNull: [
+                          "$$fr.createdAt",
+                          { $toDate: "$$fr._id" },
+                        ],
+                      },
+                    },
+                  },
+                  as: "d",
+                  cond: { $ne: [{ $ifNull: ["$$d", null] }, null] },
+                },
+              },
+            },
+            in: {
+              $ifNull: [
+                {
+                  $cond: [
+                    { $gt: [{ $size: "$$dates" }, 0] },
+                    {
+                      $reduce: {
+                        input: "$$dates",
+                        initialValue: null,
+                        in: {
+                          $cond: [
+                            { $eq: ["$$value", null] },
+                            "$$this",
+                            {
+                              $cond: [
+                                { $lt: ["$$this", "$$value"] },
+                                "$$this",
+                                "$$value",
+                              ],
+                            },
+                          ],
+                        },
+                      },
+                    },
+                    null,
+                  ],
+                },
+                {
+                  $ifNull: [
+                    "$farmReadyDate",
+                    { $ifNull: ["$updatedAt", "$createdAt"] },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        { $literal: farmReadyFifoUnknownDate },
+      ],
+    };
 
     // Build the aggregation pipeline
     const pipeline = [];
@@ -3099,9 +3179,15 @@ const getAll = (Model, modelName) =>
       !taluka &&
       !(slotId && monthName && startDay && endDay);
 
+    if (effectiveSortKey === "farmReadyEnteredAt") {
+      pipeline.push({
+        $addFields: { farmReadyEnteredAt: farmReadyEnteredAtExpr },
+      });
+    }
+
     if (canEarlyPaginate) {
       pipeline.push(
-        { $sort: { [sortKey]: order } },
+        { $sort: { [effectiveSortKey]: effectiveOrder } },
         { $skip: skip },
         { $limit: parseInt(limit, 10) }
       );
@@ -3254,7 +3340,7 @@ const getAll = (Model, modelName) =>
       !(slotId && monthName && startDay && endDay)
     ) {
       pipeline.push(
-        { $sort: { [sortKey]: order } },
+        { $sort: { [effectiveSortKey]: effectiveOrder } },
         { $skip: skip },
         { $limit: parseInt(limit, 10) }
       );
@@ -3891,7 +3977,7 @@ const getAll = (Model, modelName) =>
       },
       ...(hasPaginationParams && !earlyPaginateInserted && !searchEarlyPaginateInserted
         ? [
-            { $sort: { [sortKey]: order } },
+            { $sort: { [effectiveSortKey]: effectiveOrder } },
             { $skip: skip },
             { $limit: parseInt(limit, 10) },
           ]

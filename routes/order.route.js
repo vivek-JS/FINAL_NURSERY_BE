@@ -40,6 +40,7 @@ import {
   getFarmerPlantOrderDetails,
   getFarmerPlantLedgerParties,
   transferFarmerPlantAdvance,
+  transferFarmerPlantOrderPayment,
   searchFarmersForLedgerTransfer,
   createManualFarmerPlantLedgerEntry,
 } from "../controllers/farmerPlantOrderLedger.controller.js";
@@ -77,6 +78,7 @@ router
   .get("/farmer-plant-ledger/parties", requirePaymentAccess, getFarmerPlantLedgerParties)
   .get("/farmer-plant-ledger/search-farmers", requirePaymentAccess, searchFarmersForLedgerTransfer)
   .post("/farmer-plant-ledger/transfer-advance", requirePaymentAccess, transferFarmerPlantAdvance)
+  .post("/farmer-plant-ledger/transfer-order-payment", requirePaymentAccess, transferFarmerPlantOrderPayment)
   .post("/farmer-plant-ledger/manual-entry", requirePaymentAccess, createManualFarmerPlantLedgerEntry)
   .get("/getCSV", getCsv)
   .get("/slots", getOrdersBySlot)
