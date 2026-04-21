@@ -411,6 +411,7 @@ const getCsv = catchAsync(async (req, res, next) => {
 
     const csvFields = [
       "Sr No",
+      "Order ID",
       "Booking date",
       "Farmer name",
       "Mobile No",
@@ -419,8 +420,13 @@ const getCsv = catchAsync(async (req, res, next) => {
       "Village",
       "Variety",
       "Plant",
+      "Booked plants",
+      "Returned plants",
+      "Damaged plants",
+      "Billable plants (net)",
       "Rate",
       "Delivery date",
+      "Order status",
       "Reference",
     ];
 
@@ -438,7 +444,7 @@ const getCsv = catchAsync(async (req, res, next) => {
         farmerDoc?.mobileNumber ??
         orderFor?.mobileNumber ??
         undefined;
-      if (n === undefined || n === null || n === "") return "N/A";
+      if (n === undefined || n === null || n === "" || n === 0) return "N/A";
       return String(n);
     };
 
@@ -459,6 +465,16 @@ const getCsv = catchAsync(async (req, res, next) => {
         if (obj.salesPerson?.name) refParts.push(obj.salesPerson.name);
         const reference = refParts.length ? refParts.join(" / ") : "N/A";
 
+        const basePlants = Number(obj.numberOfPlants) || 0;
+        const extraPlants = Number(obj.additionalPlants) || 0;
+        const bookedTotal =
+          obj.totalPlants != null && obj.totalPlants !== ""
+            ? Number(obj.totalPlants)
+            : basePlants + extraPlants;
+        const ret = Number(obj.returnedPlants) || 0;
+        const dmg = Number(obj.damagedPlants) || 0;
+        const billable = Math.max(0, (Number.isFinite(bookedTotal) ? bookedTotal : 0) - ret - dmg);
+
         // Farmer may be unset (dealer / legacy rows); use orderFor for customer + address fallback.
         const addr =
           typeof of?.address === "string" && of.address.trim()
@@ -472,12 +488,17 @@ const getCsv = catchAsync(async (req, res, next) => {
           district = f.districtName || f.district || "N/A";
           taluka = f.talukaName || f.taluka || "N/A";
           village = f.village || (addr || "N/A");
+        } else if (of?.districtName || of?.district || of?.village) {
+          district = of.districtName || of.district || "N/A";
+          taluka = of.talukaName || of.taluka || "N/A";
+          village = of.village || addr || "N/A";
         } else if (addr) {
           village = addr;
         }
 
         csvData.push({
           "Sr No": ++srNo,
+          "Order ID": obj.orderId != null ? obj.orderId : "",
           "Booking date": formatInDate(bookingRef),
           "Farmer name": f?.name || of?.name || "N/A",
           "Mobile No": csvMobile(f, of),
@@ -486,8 +507,13 @@ const getCsv = catchAsync(async (req, res, next) => {
           Village: village,
           Variety: obj.plantName?.name || "N/A",
           Plant: subtypeName,
+          "Booked plants": Number.isFinite(bookedTotal) ? bookedTotal : "",
+          "Returned plants": ret,
+          "Damaged plants": dmg,
+          "Billable plants (net)": billable,
           Rate: obj.rate ?? 0,
           "Delivery date": formatInDate(deliverySource(obj)),
+          "Order status": obj.orderStatus ?? "",
           Reference: reference,
         });
       } catch (error) {
@@ -516,9 +542,168 @@ const getCsv = catchAsync(async (req, res, next) => {
 });
 
 const getOrders = getAll(Order, "Order");
+
+/** Allowed query keys copied onto each internal getOrders tab count (mirrors dashboard filters). */
+function pickDashboardCountBaseQuery(q) {
+  const allow = new Set([
+    "search",
+    "startDate",
+    "endDate",
+    "dateRangeField",
+    "salesPerson",
+    "dealer",
+    "village",
+    "district",
+    "taluka",
+    "plantId",
+    "subtypeId",
+    "includePastDueBeyondRange",
+    "showonly",
+  ]);
+  const base = {};
+  for (const [k, v] of Object.entries(q || {})) {
+    if (!allow.has(k) || v === "" || v === undefined || v === null) continue;
+    base[k] = v;
+  }
+  if (q?.q && !base.search) base.search = q.q;
+  return base;
+}
+
+function mergeDashboardTabQuery(base, tab, queueFarmReadyOnly) {
+  const q = { ...base, page: "1", limit: "1" };
+  delete q.ready_for_dispatch;
+  delete q.farmReady;
+  delete q.status;
+  delete q.dispatched;
+  delete q.sortKey;
+  delete q.sortOrder;
+
+  const isCancelledTab = tab === "cancelled";
+  const isBookingLikeTab =
+    tab === "booking" ||
+    tab === "pending" ||
+    tab === "accepted" ||
+    isCancelledTab;
+  const isReadyForDispatchTab = tab === "ready_for_dispatch";
+  const isDispatchedVehicleTab = tab === "dispatched_vehicle";
+
+  q.dispatched = isBookingLikeTab ? "false" : "true";
+
+  const searchTrimmed = String(q.search ?? "").trim();
+
+  if (isCancelledTab) {
+    q.status = "CANCELLED";
+  } else if (tab === "pending") {
+    q.status = "PENDING";
+  } else if (tab === "accepted") {
+    q.status = "ACCEPTED,ASSIGNED";
+  }
+
+  if (tab === "farmready") {
+    q.farmReady = "true";
+    delete q.status;
+  }
+
+  if (isReadyForDispatchTab) {
+    q.ready_for_dispatch = "true";
+    delete q.startDate;
+    delete q.endDate;
+    delete q.status;
+    if (queueFarmReadyOnly && !searchTrimmed) {
+      q.farmReady = "true";
+      q.sortKey = "farmReadyEnteredAt";
+      q.sortOrder = "asc";
+    }
+  }
+
+  if (tab === "dispatch_process") {
+    delete q.startDate;
+    delete q.endDate;
+    q.status = "DISPATCH_PROCESS";
+    q.dispatched = "false";
+  }
+
+  if (isDispatchedVehicleTab) {
+    q.dispatched = "true";
+    q.status = "DISPATCHED";
+    delete q.startDate;
+    delete q.endDate;
+  }
+
+  Object.keys(q).forEach((k) => {
+    if (q[k] === "" || q[k] === undefined || q[k] === null) delete q[k];
+  });
+  return q;
+}
+
+function invokeGetOrdersForDashboardCount(req, query) {
+  return new Promise((resolve, reject) => {
+    const mockReq = { query, user: req.user };
+    const mockRes = {
+      status() {
+        return this;
+      },
+      json(payload) {
+        const inner = payload?.data;
+        const total =
+          inner && typeof inner.total === "number"
+            ? inner.total
+            : Array.isArray(inner?.data)
+              ? inner.data.length
+              : 0;
+        resolve(total);
+      },
+    };
+    getOrders(mockReq, mockRes, (err) => {
+      if (err) reject(err);
+    });
+  });
+}
+
+/**
+ * GET /order/dashboard-tab-counts — non-paginated tab badge totals for FarmerOrdersTable.
+ * Reuses getOrders filter logic via internal count-only calls (page/limit=1).
+ */
+const getFarmerOrdersDashboardTabCounts = catchAsync(async (req, res, next) => {
+  const base = pickDashboardCountBaseQuery(req.query);
+  const queueFarmReadyOnly = String(req.query.queueFarmReadyOnly ?? "") === "true";
+
+  const tabs = [
+    "booking",
+    "pending",
+    "accepted",
+    "cancelled",
+    "farmready",
+    "ready_for_dispatch",
+    "dispatched_vehicle",
+  ];
+
+  const counts = {};
+  for (const tab of tabs) {
+    const q = mergeDashboardTabQuery(base, tab, queueFarmReadyOnly);
+    counts[tab] = await invokeGetOrdersForDashboardCount(req, q);
+  }
+
+  const qIn = mergeDashboardTabQuery(base, "dispatch_process", queueFarmReadyOnly);
+  const qDisp = { ...qIn, dispatched: "true", status: "ACCEPTED,FARM_READY" };
+  delete qDisp.startDate;
+  delete qDisp.endDate;
+
+  const [nIn, nDisp] = await Promise.all([
+    invokeGetOrdersForDashboardCount(req, qIn),
+    invokeGetOrdersForDashboardCount(req, qDisp),
+  ]);
+  counts.dispatch_process = nIn + nDisp;
+
+  return res
+    .status(200)
+    .json(generateResponse("Success", "Dashboard tab counts", counts, undefined));
+});
+
 const createOrder = createOne(Order, "Order");
 const updateOrder = updateOne(Order, "Order", [
   "bookingSlot",
+  "plantSubtype",
   "numberOfPlants",
   "quantity", // Alias for numberOfPlants
   "rate",
@@ -1429,7 +1614,8 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
 
     // Search filtering
     if (search) {
-      const searchRegex = new RegExp(search, "i");
+      const searchTrimmed = String(search).trim();
+      const searchRegex = new RegExp(searchTrimmed, "i");
 
       pipeline.push({
         $lookup: {
@@ -1445,19 +1631,47 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
           "farmer.mobileNumberStr": {
             $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
           },
+          orderForMobileStr: {
+            $let: {
+              vars: { raw: "$orderFor.mobileNumber" },
+              in: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ["$$raw", null] },
+                      { $eq: ["$$raw", ""] },
+                      { $eq: ["$$raw", 0] },
+                    ],
+                  },
+                  "",
+                  { $toString: "$$raw" },
+                ],
+              },
+            },
+          },
         },
       });
 
-      const isNumeric = /^\d+$/.test(search);
-      const searchAsNumber = isNumeric ? Number(search) : NaN;
+      const isNumeric = /^\d+$/.test(searchTrimmed);
+      const searchAsNumber = isNumeric ? Number(searchTrimmed) : NaN;
+
+      const searchOr = [
+        { orderId: isNumeric ? searchAsNumber : search },
+        { "farmer.name": searchRegex },
+        { "farmer.mobileNumberStr": searchRegex },
+        { "orderFor.name": searchRegex },
+        { "orderFor.village": searchRegex },
+        { "orderFor.talukaName": searchRegex },
+        { "orderFor.districtName": searchRegex },
+        { "orderFor.district": searchRegex },
+      ];
+      if (isNumeric && searchTrimmed.length >= 10) {
+        searchOr.push({ orderForMobileStr: searchTrimmed });
+      }
 
       pipeline.push({
         $match: {
-          $or: [
-            { orderId: isNumeric ? searchAsNumber : search },
-            { "farmer.name": searchRegex },
-            { "farmer.mobileNumberStr": searchRegex },
-          ],
+          $or: searchOr,
         },
       });
     } else {
@@ -1658,6 +1872,18 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
           numberOfPlants: 1,
           remainingPlants: 1,
           returnedPlants: 1,
+          damagedPlants: { $ifNull: ["$damagedPlants", 0] },
+          totalPlants: {
+            $ifNull: [
+              "$totalPlants",
+              {
+                $add: [
+                  { $ifNull: ["$numberOfPlants", 0] },
+                  { $ifNull: ["$additionalPlants", 0] }
+                ]
+              }
+            ]
+          },
           returnReason: 1,
           returnHistory: 1,
           dispatchHistory: 1,
@@ -1863,6 +2089,69 @@ const getAllPayments = catchAsync(async (req, res, next) => {
     // Build the aggregation pipeline
     const pipeline = [];
 
+    /** Plants billed after return + damage (same as order payment gross). */
+    const billablePlantsExpr = {
+      $max: [
+        0,
+        {
+          $subtract: [
+            {
+              $ifNull: [
+                "$totalPlants",
+                {
+                  $add: [
+                    { $ifNull: ["$numberOfPlants", 0] },
+                    { $ifNull: ["$additionalPlants", 0] },
+                  ],
+                },
+              ],
+            },
+            {
+              $add: [
+                { $ifNull: ["$returnedPlants", 0] },
+                { $ifNull: ["$damagedPlants", 0] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    // Before $unwind: billable qty/amount + sum of COLLECTED payments on the order (for correct balance per row)
+    pipeline.push({
+      $addFields: {
+        _billablePlantsForPayment: billablePlantsExpr,
+        _totalCollectedPayments: {
+          $reduce: {
+            input: { $ifNull: ["$payment", []] },
+            initialValue: 0,
+            in: {
+              $add: [
+                "$$value",
+                {
+                  $cond: [
+                    { $eq: ["$$this.paymentStatus", "COLLECTED"] },
+                    { $toDouble: { $ifNull: ["$$this.paidAmount", 0] } },
+                    0,
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    pipeline.push({
+      $addFields: {
+        _billableOrderAmount: {
+          $multiply: [
+            { $toDouble: { $ifNull: ["$rate", 0] } },
+            "$_billablePlantsForPayment",
+          ],
+        },
+      },
+    });
+
     // Unwind payments to work with individual payment records
     pipeline.push({
       $unwind: {
@@ -1910,7 +2199,8 @@ const getAllPayments = catchAsync(async (req, res, next) => {
 
     // Search filtering
     if (search) {
-      const searchRegex = new RegExp(search, "i");
+      const searchTrimmed = String(search).trim();
+      const searchRegex = new RegExp(searchTrimmed, "i");
 
       pipeline.push({
         $lookup: {
@@ -1926,19 +2216,47 @@ const getAllPayments = catchAsync(async (req, res, next) => {
           "farmer.mobileNumberStr": {
             $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
           },
+          orderForMobileStr: {
+            $let: {
+              vars: { raw: "$orderFor.mobileNumber" },
+              in: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ["$$raw", null] },
+                      { $eq: ["$$raw", ""] },
+                      { $eq: ["$$raw", 0] },
+                    ],
+                  },
+                  "",
+                  { $toString: "$$raw" },
+                ],
+              },
+            },
+          },
         },
       });
 
-      const isNumeric = /^\d+$/.test(search);
-      const searchAsNumber = isNumeric ? Number(search) : NaN;
+      const isNumeric = /^\d+$/.test(searchTrimmed);
+      const searchAsNumber = isNumeric ? Number(searchTrimmed) : NaN;
+
+      const searchOr = [
+        { orderId: isNumeric ? searchAsNumber : search },
+        { "farmer.name": searchRegex },
+        { "farmer.mobileNumberStr": searchRegex },
+        { "orderFor.name": searchRegex },
+        { "orderFor.village": searchRegex },
+        { "orderFor.talukaName": searchRegex },
+        { "orderFor.districtName": searchRegex },
+        { "orderFor.district": searchRegex },
+      ];
+      if (isNumeric && searchTrimmed.length >= 10) {
+        searchOr.push({ orderForMobileStr: searchTrimmed });
+      }
 
       pipeline.push({
         $match: {
-          $or: [
-            { orderId: isNumeric ? searchAsNumber : search },
-            { "farmer.name": searchRegex },
-            { "farmer.mobileNumberStr": searchRegex },
-          ],
+          $or: searchOr,
         },
       });
     } else {
@@ -1979,8 +2297,16 @@ const getAllPayments = catchAsync(async (req, res, next) => {
         orderStatus: 1,
         orderPaymentStatus: 1,
         numberOfPlants: 1,
+        additionalPlants: { $ifNull: ["$additionalPlants", 0] },
+        returnedPlants: { $ifNull: ["$returnedPlants", 0] },
+        damagedPlants: { $ifNull: ["$damagedPlants", 0] },
         rate: 1,
-        totalOrderAmount: { $multiply: ["$rate", "$numberOfPlants"] },
+        billablePlants: "$_billablePlantsForPayment",
+        totalOrderAmount: "$_billableOrderAmount",
+        totalCollectedOnOrder: "$_totalCollectedPayments",
+        orderOutstandingBalance: {
+          $subtract: ["$_billableOrderAmount", "$_totalCollectedPayments"],
+        },
         farmer: {
           $arrayElemAt: [
             {
@@ -5075,4 +5401,5 @@ export {
   getRemainingDispatchOrdersByCell,
   getRemainingDispatchMatrix,
   getRemainingDispatchMatrixOrders,
+  getFarmerOrdersDashboardTabCounts,
 };

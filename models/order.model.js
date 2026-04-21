@@ -253,6 +253,9 @@ const paymentSchema = new Schema(
     bankRawResponse: { type: Schema.Types.Mixed },
     /** True when more than one bank line matched — do not auto-verify */
     bankReconciliationConflict: { type: Boolean, default: false },
+    /** Set when this payment row was created by transferFarmerPlantOrderPayment (audit / UI). */
+    transferredFromOrderId: { type: Schema.Types.ObjectId, ref: "Order", default: null },
+    transferredFromPaymentId: { type: Schema.Types.ObjectId, default: null },
   },
   { timestamps: true }
 );
@@ -606,17 +609,27 @@ const orderSchema = new Schema(
         },
       },
     ],
-    // Order for field - optional field with address and mobile number
+    // Book-for-someone-else: beneficiary identity + optional mobile + structured location
     orderFor: {
       name: {
         type: String,
+        trim: true,
       },
       address: {
         type: String,
+        trim: true,
       },
       mobileNumber: {
         type: Number,
+        default: undefined,
       },
+      village: { type: String, trim: true },
+      taluka: { type: String, trim: true },
+      district: { type: String, trim: true },
+      state: { type: String, trim: true },
+      stateName: { type: String, trim: true },
+      talukaName: { type: String, trim: true },
+      districtName: { type: String, trim: true },
     },
     // Expected nursery field - for tracking expected nursery source
     expectedNursery: {

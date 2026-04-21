@@ -35,6 +35,7 @@ import {
   getRemainingDispatchOrdersByCell,
   getRemainingDispatchMatrix,
   getRemainingDispatchMatrixOrders,
+  getFarmerOrdersDashboardTabCounts,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -83,6 +84,7 @@ router
   .get("/getCSV", getCsv)
   .get("/slots", getOrdersBySlot)
   .get("/getOrders", getOrders)
+  .get("/dashboard-tab-counts", getFarmerOrdersDashboardTabCounts)
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)
   .get("/bulk-payments", getBulkPayments)

@@ -266,7 +266,10 @@ import whatsappContactListRoute from "./routes/whatsappContactList.route.js";
 import watiProxyRoute from "./routes/watiProxy.route.js";
 import exotelRoute from "./routes/exotel.route.js";
 import orderRoute from "./routes/order.route.js";
-import { handleQRPaymentCallback } from "./controllers/order.controller.js";
+import {
+  handleQRPaymentCallback,
+  getFarmerOrdersDashboardTabCounts,
+} from "./controllers/order.controller.js";
 import { getFarmerPlantLedger, getFarmerPlantLedgerParties } from "./controllers/farmerPlantOrderLedger.controller.js";
 import { getRamAgriLedgerParties } from "./controllers/ramAgriLedger.controller.js";
 import userRoute from "./routes/user.route.js";
@@ -343,6 +346,7 @@ import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
 import mapsRoute from "./routes/maps.route.js";
 import callAssignmentRoute from "./routes/callAssignment.route.js";
 import callListPublicRoute from "./routes/callListPublic.route.js";
+import voiceFeedbackRoute from "./routes/voiceFeedback.route.js";
 import readyDispatchGroupRoute from "./routes/readyDispatchGroup.route.js";
 import itarKharchRoute from "./routes/itarKharch.route.js";
 import {
@@ -399,6 +403,7 @@ server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook (publ
 server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
 server.use("/api/v1/call-list", callListPublicRoute); // Public call list (token-based, no auth)
+server.use("/api/v1/voice-feedback", voiceFeedbackRoute); // Post-dispatch Marathi feedback (Exotel webhook public; admin routes JWT)
 server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
 server.use("/api/v1/whatsapp-broadcast", whatsappBroadcastRoute);
 
@@ -429,6 +434,12 @@ server.use("/api/payments/icici", authenticateToken, iciciPaymentRoute);
 server.use("/api/payments", authenticateToken, paymentReconciliationRoute);
 // Registered here (before order router) so GET /farmer-plant-ledger always resolves — mirrors order.route.js
 server.get("/api/v1/order/farmer-plant-ledger", authenticateToken, getFarmerPlantLedger);
+// Farmer dashboard tab totals — bound on app so stale order.route.js mounts never yield Cannot GET.
+server.get(
+  "/api/v1/order/dashboard-tab-counts",
+  authenticateToken,
+  getFarmerOrdersDashboardTabCounts
+);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 // Direct bindings for reliability in environments with stale router mounts.
 server.get("/api/v1/ready-dispatch-groups", authenticateToken, getReadyDispatchGroups);

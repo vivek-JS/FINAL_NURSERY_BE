@@ -67,6 +67,8 @@ const allowedParams = [
   "dealer",
   "farmReady",
   "ready_for_dispatch",
+  "queueFarmReadyOnly", // FarmerOrdersTable: ready-for-dispatch "Farm-ready on file" queue filter
+  "plantTotals", // GET /order/getOrders — include totalPlantsSum for all matching rows (with pagination)
   "isActive",
   "category",
   "sortBy",
@@ -167,6 +169,8 @@ const allowedParams = [
 /** Effective whitelist: array + mandatory extras (survives accidental removal from `allowedParams`). */
 const allowedQueryKeys = new Set(allowedParams);
 allowedQueryKeys.add("dateRangeField"); // GET /order/getOrders — booking | delivery date range
+allowedQueryKeys.add("plantTotals"); // GET /order/getOrders — totalPlantsSum envelope (must survive merges)
+allowedQueryKeys.add("queueFarmReadyOnly"); // GET /order/dashboard-tab-counts + ready tab queue filter
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
@@ -199,6 +203,21 @@ const parameterWhiteListing = (req, res, next) => {
   // ERP ICICI / payment reconciliation — mounted at /api/payments (dateFrom, dateTo, source, …)
   const paymentsPath = stripQuery(req.originalUrl || req.url || "") || req.path || "";
   if (paymentsPath.startsWith("/api/payments") || (req.path && req.path.startsWith("/api/payments"))) {
+    return next();
+  }
+
+  /**
+   * Farmer order list + dashboard tab counts evolve new filter flags often (e.g. plantTotals).
+   * getOrders / dashboard-tab-counts only read a fixed set of query keys in the controller;
+   * unknown keys are ignored, so skipping the global whitelist here avoids false 400s when
+   * clients are ahead of this allowlist or multiple BE copies exist.
+   */
+  const orderListPath = stripQuery(req.originalUrl || req.url || "") || req.path || "";
+  if (
+    req.method === "GET" &&
+    (orderListPath.includes("/order/getOrders") ||
+      orderListPath.includes("/order/dashboard-tab-counts"))
+  ) {
     return next();
   }
 

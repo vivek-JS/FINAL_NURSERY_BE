@@ -408,6 +408,29 @@ const createOne = (Model, modelName) =>
         }
       }
 
+      // Parse orderFor when multipart sends a single JSON string field (browser FormData)
+      if (orderData.orderFor != null && typeof orderData.orderFor === "string") {
+        const raw = orderData.orderFor.trim();
+        if (raw === "" || raw === "null" || raw === "undefined") {
+          delete orderData.orderFor;
+        } else {
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              orderData.orderFor = parsed;
+            } else {
+              delete orderData.orderFor;
+            }
+          } catch (e) {
+            delete orderData.orderFor;
+          }
+        }
+      }
+
+      if (orderData.orderFor != null) {
+        req.body.orderFor = orderData.orderFor;
+      }
+
       const numPlants = Number(numberOfPlants);
       if (!bookingSlot || !Number.isFinite(numPlants) || numPlants < 0) {
         return res.status(400).json({
@@ -740,8 +763,14 @@ const createOne = (Model, modelName) =>
           deliveryChanges: [], // Initialize with empty delivery changes history
           componyQuota: normalizedComponyQuota, // Include the normalized componyQuota flag in the order document
           payment: paymentArray, // Include payment data if provided
-          // Include orderFor field if provided
-          orderFor: req.body.orderFor || undefined,
+          // Persist parsed orderFor from orderData — booking farmer is saved with new Farmer(req.body),
+          // which can strip non-schema keys like orderFor from req.body before we build this document.
+          orderFor:
+            orderData.orderFor &&
+            typeof orderData.orderFor === "object" &&
+            !Array.isArray(orderData.orderFor)
+              ? orderData.orderFor
+              : undefined,
           screenshots: screenshots, // Include uploaded screenshots
         };
         
@@ -920,41 +949,47 @@ const createOne = (Model, modelName) =>
         );
         console.log(`✅ Slot update result: matched=${slotUpdateResult.matchedCount}, modified=${slotUpdateResult.modifiedCount}`);
 
-        // Create farmer from orderFor if name and mobileNumber are present
+        // Create farmer from orderFor only when name + usable 10-digit mobile (optional book-for flow has no mobile)
+        // Use orderData.orderFor (parsed object) — multipart may leave req.body.orderFor as a JSON string.
+        const of = orderData.orderFor;
+        const ofMobileDigits =
+          of?.mobileNumber != null && of.mobileNumber !== ""
+            ? String(of.mobileNumber).replace(/\D/g, "")
+            : "";
+        const hasUsableOrderForMobile = ofMobileDigits.length >= 10;
+        const orderForMobileNum = hasUsableOrderForMobile
+          ? Number(ofMobileDigits.slice(-10))
+          : null;
+
         console.log("🔍 Checking orderFor data:", {
-          hasOrderFor: !!req.body.orderFor,
-          hasName: req.body.orderFor?.name,
-          hasMobile: req.body.orderFor?.mobileNumber,
-          orderForData: req.body.orderFor
+          hasOrderFor: !!of,
+          hasName: of?.name,
+          hasUsableOrderForMobile,
+          orderForData: of,
         });
-        
-        if (req.body.orderFor && req.body.orderFor.name && req.body.orderFor.mobileNumber) {
+
+        if (of && of.name && hasUsableOrderForMobile && orderForMobileNum != null) {
           try {
-            console.log("✅ OrderFor validation passed - Creating farmer from orderFor data:", req.body.orderFor);
-            
-            // Check if farmer already exists with this mobile number
-            let orderForFarmer = await Farmer.findOne({ 
-              mobileNumber: req.body.orderFor.mobileNumber 
+            console.log("✅ OrderFor validation passed - Creating farmer from orderFor data:", of);
+
+            let orderForFarmer = await Farmer.findOne({
+              mobileNumber: orderForMobileNum,
             }).session(session);
-            
+
             console.log("🔍 Existing farmer check result:", orderForFarmer ? "FOUND" : "NOT FOUND");
-            
+
             if (!orderForFarmer) {
-              // Create new farmer with orderFor data
-              // For required location fields, use the address or default values
-              const address = req.body.orderFor.address || "To be updated";
-              
+              const addressFallback = (of.address && String(of.address).trim()) || "To be updated";
               const farmerData = {
-                name: req.body.orderFor.name,
-                mobileNumber: req.body.orderFor.mobileNumber,
-                // Required fields - use address or defaults
-                village: address,
-                taluka: "To be updated",
-                district: "To be updated",
-                state: "To be updated",
-                stateName: "To be updated",
-                talukaName: "To be updated",
-                districtName: "To be updated",
+                name: of.name,
+                mobileNumber: orderForMobileNum,
+                village: (of.village && String(of.village).trim()) || addressFallback,
+                taluka: (of.taluka && String(of.taluka).trim()) || "To be updated",
+                district: (of.district && String(of.district).trim()) || "To be updated",
+                state: (of.state && String(of.state).trim()) || "To be updated",
+                stateName: (of.stateName && String(of.stateName).trim()) || "To be updated",
+                talukaName: (of.talukaName && String(of.talukaName).trim()) || "To be updated",
+                districtName: (of.districtName && String(of.districtName).trim()) || "To be updated",
               };
               
               console.log("📝 Creating new farmer with data:", farmerData);
@@ -965,7 +1000,7 @@ const createOne = (Model, modelName) =>
               
               console.log("✅ Successfully created new farmer from orderFor! ID:", orderForFarmer._id, "Name:", orderForFarmer.name);
             } else {
-              console.log("ℹ️ Farmer already exists with mobile number:", req.body.orderFor.mobileNumber, "- Skipping creation");
+              console.log("ℹ️ Farmer already exists with mobile number:", orderForMobileNum, "- Skipping creation");
             }
           } catch (error) {
             console.error("❌ Error creating farmer from orderFor:", error.message);
@@ -1071,6 +1106,17 @@ const createOne = (Model, modelName) =>
 
         await session.commitTransaction();
         session.endSession();
+
+        if (modelName === "Order" && order[0]?.orderStatus === "DISPATCHED") {
+          (async () => {
+            try {
+              const { ensureFeedbackCallForOrder } = await import("../services/feedbackCallScheduling.js");
+              await ensureFeedbackCallForOrder(order[0], { isInstantDispatch: true });
+            } catch (e) {
+              console.error("voice-feedback ensure (order create):", e?.message || e);
+            }
+          })();
+        }
 
         const response = generateResponse(
           "Success",
@@ -1692,6 +1738,75 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
+      // Plant subtype: SUPER_ADMIN / OFFICE_ADMIN only; changing subtype requires a new booking slot
+      if (filteredBody.plantSubtype !== undefined) {
+        if (!canChangeOrderStatusFull) {
+          rejectedFields.push({
+            field: "plantSubtype",
+            reason: "INSUFFICIENT_PERMISSION",
+            detail:
+              "Only SUPER_ADMIN or OFFICE_ADMIN may change plant subtype",
+            value: filteredBody.plantSubtype,
+          });
+          delete filteredBody.plantSubtype;
+        } else {
+          const newStRaw = filteredBody.plantSubtype;
+          if (!mongoose.isValidObjectId(newStRaw)) {
+            rejectedFields.push({
+              field: "plantSubtype",
+              reason: "INVALID_ID",
+              detail: "Invalid plant subtype id",
+              value: newStRaw,
+            });
+            delete filteredBody.plantSubtype;
+          } else {
+            const newStId = new mongoose.Types.ObjectId(newStRaw);
+            const prevSt = existingDoc.plantSubtype;
+            if (String(newStId) === String(prevSt)) {
+              delete filteredBody.plantSubtype;
+            } else {
+              const plantDoc = existingDoc.plantName;
+              const okSubtype = plantDoc?.subtypes?.some(
+                (s) => String(s._id) === String(newStId)
+              );
+              if (!okSubtype) {
+                throw new AppError(
+                  "Plant subtype does not belong to this plant",
+                  400
+                );
+              }
+              if (
+                !filteredBody.bookingSlot ||
+                String(filteredBody.bookingSlot) ===
+                  String(existingDoc.bookingSlot)
+              ) {
+                throw new AppError(
+                  "When changing plant subtype, select a new delivery slot (bookingSlot) for the new subtype.",
+                  400
+                );
+              }
+              filteredBody.plantSubtype = newStId;
+              const prevName =
+                plantSubtypeData?.name ||
+                existingDoc.plantName?.subtypes?.find(
+                  (s) => String(s._id) === String(prevSt)
+                )?.name ||
+                String(prevSt);
+              const nextName =
+                plantDoc.subtypes.find((s) => String(s._id) === String(newStId))
+                  ?.name || String(newStId);
+              editHistoryEntries.push({
+                field: "plantSubtype",
+                previousValue: prevSt,
+                newValue: newStId,
+                changedBy: req.user ? req.user._id : null,
+                notes: `Plant subtype changed from ${prevName} to ${nextName}`,
+              });
+            }
+          }
+        }
+      }
+
       // Add all edit history entries (merge with any existing $push.orderEditHistory from this request)
       if (editHistoryEntries.length > 0) {
         if (!filteredBody.$push) filteredBody.$push = {};
@@ -2265,6 +2380,22 @@ const updateOne = (Model, modelName, allowedFields) =>
 
       await session.commitTransaction();
       session.endSession();
+
+      if (modelName === "Order") {
+        const prevStatus = existingDoc?.orderStatus;
+        const nextStatus = updatedDoc?.orderStatus;
+        if (prevStatus !== "DISPATCHED" && nextStatus === "DISPATCHED") {
+          (async () => {
+            try {
+              const { ensureFeedbackCallForOrder } = await import("../services/feedbackCallScheduling.js");
+              const plain = updatedDoc?.toObject ? updatedDoc.toObject() : updatedDoc;
+              await ensureFeedbackCallForOrder(plain, { isInstantDispatch: false });
+            } catch (e) {
+              console.error("voice-feedback ensure (order update):", e?.message || e);
+            }
+          })();
+        }
+      }
 
       const responseDoc =
         modelName === "Order" && ledgerMessage
@@ -3083,9 +3214,9 @@ const getAll = (Model, modelName) =>
         });
       }
 
-      // Apply Date range filtering only when `search` is NOT present
+      // Apply Date range filtering only when there is no active search text (search ignores date params)
       if (
-        !search &&
+        searchTrimmedEarly.length === 0 &&
         startDate &&
         endDate &&
         dispatched === "false" &&
@@ -3125,6 +3256,7 @@ const getAll = (Model, modelName) =>
     // Dispatched orders: date range on order document (apply before heavy $lookups; same logic as legacy late-stage match)
     if (
       dispatched === "true" &&
+      searchTrimmedEarly.length === 0 &&
       startDate &&
       endDate &&
       ready_for_dispatch !== "true" &&
@@ -3173,7 +3305,7 @@ const getAll = (Model, modelName) =>
     const canEarlyPaginate =
       !exportAll &&
       hasPaginationParams &&
-      !search &&
+      searchTrimmedEarly.length === 0 &&
       !village &&
       !district &&
       !taluka &&
@@ -3213,6 +3345,24 @@ const getAll = (Model, modelName) =>
           "farmer.mobileNumberStr": {
             $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
           },
+          orderForMobileStr: {
+            $let: {
+              vars: { raw: "$orderFor.mobileNumber" },
+              in: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ["$$raw", null] },
+                      { $eq: ["$$raw", ""] },
+                      { $eq: ["$$raw", 0] },
+                    ],
+                  },
+                  "",
+                  { $toString: "$$raw" },
+                ],
+              },
+            },
+          },
         },
       });
 
@@ -3221,7 +3371,7 @@ const getAll = (Model, modelName) =>
 
       // All-digit search: exact orderId (e.g. 1357). No substring on name/mobile for short numeric queries.
       // 10+ digits: also allow exact mobile match (common full-phone search) alongside orderId exact.
-      // Non-numeric → substring on farmer name and mobile (unchanged).
+      // Non-numeric → substring on farmer name, mobile, book-for name/location.
       if (isNumericOrderIdQuery) {
         if (searchTrimmed.length >= 10) {
           pipeline.push({
@@ -3229,6 +3379,7 @@ const getAll = (Model, modelName) =>
               $or: [
                 { orderId: orderIdExact },
                 { "farmer.mobileNumberStr": searchTrimmed },
+                { orderForMobileStr: searchTrimmed },
               ],
             },
           });
@@ -3243,6 +3394,11 @@ const getAll = (Model, modelName) =>
             $or: [
               { "farmer.name": searchRegex },
               { "farmer.mobileNumberStr": searchRegex },
+              { "orderFor.name": searchRegex },
+              { "orderFor.village": searchRegex },
+              { "orderFor.talukaName": searchRegex },
+              { "orderFor.districtName": searchRegex },
+              { "orderFor.district": searchRegex },
             ],
           },
         });
@@ -3256,26 +3412,6 @@ const getAll = (Model, modelName) =>
               { farmReadyDate: { $exists: true, $ne: null } },
             ],
           },
-        });
-      }
-      // Optional booking-date range when searching (e.g. bulk payment order picker)
-      if (
-        startDate &&
-        endDate &&
-        dispatched === "false" &&
-        !skipOrderDateRangeForFarmReadyOnlyStatus &&
-        !farmReadyParamIgnoresOrderDateFilters
-      ) {
-        const parseDateSearch = (dateStr, isEnd = false) => {
-          const [day, month, year] = dateStr.split("-");
-          return isEnd
-            ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
-            : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-        };
-        const startR = parseDateSearch(startDate);
-        const endR = parseDateSearch(endDate, true);
-        pipeline.push({
-          $match: { [orderDateRangeMongoField]: { $gte: startR, $lte: endR } },
         });
       }
     } else {
@@ -3529,7 +3665,21 @@ const getAll = (Model, modelName) =>
       },
     });
 
-
+    /**
+     * After $project: normal list uses sort + skip + limit; exportAll uses sort only (no pagination cap).
+     */
+    const lateListStages =
+      !earlyPaginateInserted && !searchEarlyPaginateInserted
+        ? exportAll
+          ? [{ $sort: { [effectiveSortKey]: effectiveOrder } }]
+          : hasPaginationParams
+            ? [
+                { $sort: { [effectiveSortKey]: effectiveOrder } },
+                { $skip: skip },
+                { $limit: parseInt(limit, 10) },
+              ]
+            : []
+        : [];
 
     // Select required fields at the end
     pipeline.push(
@@ -3629,6 +3779,7 @@ const getAll = (Model, modelName) =>
           },
           remainingPlants: 1, // Added field: remaining plants
           returnedPlants: 1, // Return tracking field
+          damagedPlants: { $ifNull: ["$damagedPlants", 0] },
           returnReason: 1, // Return reason field
           returnHistory: 1, // Return history field
           currentDispatchId: 1, // Reference to current dispatch
@@ -3975,18 +4126,30 @@ const getAll = (Model, modelName) =>
           orderFor: 1,
         },
       },
-      ...(hasPaginationParams && !earlyPaginateInserted && !searchEarlyPaginateInserted
-        ? [
-            { $sort: { [effectiveSortKey]: effectiveOrder } },
-            { $skip: skip },
-            { $limit: parseInt(limit, 10) },
-          ]
-        : [])
+      ...lateListStages
     );
 
     let results;
     let total;
     let totalPages;
+    let totalPlantsSum = null;
+
+    const plantTotalsFlag =
+      modelName === "Order" &&
+      String(req.query?.plantTotals ?? "") === "true" &&
+      !req.query?.slotId;
+
+    const orderPlantSumExpr = {
+      $ifNull: [
+        "$totalPlants",
+        {
+          $add: [
+            { $ifNull: ["$numberOfPlants", 0] },
+            { $ifNull: ["$additionalPlants", 0] },
+          ],
+        },
+      ],
+    };
 
     if (hasPaginationParams && (earlyPaginateInserted || searchEarlyPaginateInserted)) {
       const matchOnlyStages = [];
@@ -3996,11 +4159,35 @@ const getAll = (Model, modelName) =>
         if (Object.prototype.hasOwnProperty.call(st, "$limit")) break;
         matchOnlyStages.push(st);
       }
+      const countAggPipeline = plantTotalsFlag
+        ? [
+            ...matchOnlyStages,
+            {
+              $facet: {
+                count: [{ $count: "total" }],
+                plants: [
+                  {
+                    $group: {
+                      _id: null,
+                      totalPlants: { $sum: orderPlantSumExpr },
+                    },
+                  },
+                ],
+              },
+            },
+          ]
+        : [...matchOnlyStages, { $count: "total" }];
       const [countAgg, resultsAgg] = await Promise.all([
-        Model.aggregate([...matchOnlyStages, { $count: "total" }]).allowDiskUse(true),
+        Model.aggregate(countAggPipeline).allowDiskUse(true),
         Model.aggregate(pipeline).allowDiskUse(true),
       ]);
-      total = countAgg[0]?.total ?? 0;
+      if (plantTotalsFlag) {
+        const row = countAgg[0];
+        total = row?.count?.[0]?.total ?? 0;
+        totalPlantsSum = row?.plants?.[0]?.totalPlants ?? 0;
+      } else {
+        total = countAgg[0]?.total ?? 0;
+      }
       totalPages = Math.ceil(total / parseInt(limit, 10)) || 1;
       results = resultsAgg;
     } else {
@@ -4014,28 +4201,65 @@ const getAll = (Model, modelName) =>
     });
 
     if (!(hasPaginationParams && (earlyPaginateInserted || searchEarlyPaginateInserted))) {
-      if (hasPaginationParams) {
-        const countPipeline = pipeline.slice(0, -3);
-        const totalCount = await Model.aggregate([...countPipeline, { $count: "total" }]).allowDiskUse(true);
-        total = totalCount.length > 0 ? totalCount[0].total : 0;
-        totalPages = Math.ceil(total / parseInt(limit, 10)) || 1;
+      if (hasPaginationParams && lateListStages.length > 0) {
+        const countPipeline = pipeline.slice(0, -lateListStages.length);
+        if (plantTotalsFlag) {
+          const [row] = await Model.aggregate([
+            ...countPipeline,
+            {
+              $facet: {
+                count: [{ $count: "total" }],
+                plants: [
+                  {
+                    $group: {
+                      _id: null,
+                      totalPlants: { $sum: orderPlantSumExpr },
+                    },
+                  },
+                ],
+              },
+            },
+          ]).allowDiskUse(true);
+          total = row?.count?.[0]?.total ?? 0;
+          totalPlantsSum = row?.plants?.[0]?.totalPlants ?? 0;
+        } else {
+          const totalCount = await Model.aggregate([...countPipeline, { $count: "total" }]).allowDiskUse(true);
+          total = totalCount.length > 0 ? totalCount[0].total : 0;
+        }
+        totalPages = exportAll
+          ? 1
+          : Math.ceil(total / parseInt(limit, 10)) || 1;
       } else {
         total = transformedResults.length;
         totalPages = 1;
+        if (plantTotalsFlag && modelName === "Order") {
+          totalPlantsSum = transformedResults.reduce((sum, item) => {
+            const tp =
+              item.totalPlants != null
+                ? Number(item.totalPlants)
+                : Number(item.numberOfPlants || 0) + Number(item.additionalPlants || 0);
+            return sum + (Number.isFinite(tp) ? tp : 0);
+          }, 0);
+        }
       }
+    }
+
+    const listPayload = {
+      data: transformedResults,
+      total: total,
+      totalPages: totalPages,
+      currentPage: parseInt(page, 10),
+      limit: hasPaginationParams ? parseInt(limit, 10) : transformedResults.length,
+      hasPaginationParams,
+    };
+    if (plantTotalsFlag && totalPlantsSum != null) {
+      listPayload.totalPlantsSum = totalPlantsSum;
     }
 
     const response = generateResponse(
       "Success",
       `${modelName} found successfully`,
-      {
-        data: transformedResults,
-        total: total,
-        totalPages: totalPages,
-        currentPage: parseInt(page, 10),
-        limit: hasPaginationParams ? parseInt(limit, 10) : transformedResults.length,
-        hasPaginationParams,
-      },
+      listPayload,
       undefined
     );
 

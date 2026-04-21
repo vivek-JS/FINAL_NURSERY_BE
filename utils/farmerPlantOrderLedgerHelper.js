@@ -334,13 +334,14 @@ export async function ensureFarmerPlantOrderDebit(order, { userId, session } = {
 
 /**
  * Record payment status transition for farmer ledger (COLLECTED = credit; leaving COLLECTED = REVERSAL debit).
+ * Optional: descriptionOverride, metadataExtra (merged into row metadata).
  */
 export async function recordFarmerPlantLedgerPaymentTransition(
   order,
   payment,
   previousStatus,
   newStatus,
-  { userId, session } = {}
+  { userId, session, descriptionOverride, metadataExtra } = {}
 ) {
   if (!shouldLogFarmerPlantLedger(order)) return null;
   const action = getFarmerPlantPaymentTransitionAction(previousStatus, newStatus);
@@ -407,12 +408,16 @@ export async function recordFarmerPlantLedgerPaymentTransition(
           ? new mongoose.Types.ObjectId(fundingDealerId)
           : fundingDealerId
         : undefined,
+    ...(metadataExtra && typeof metadataExtra === "object" ? metadataExtra : {}),
   };
   const transitionOccurredAt = Number.isFinite(eventAt)
     ? new Date(eventAt)
     : new Date();
 
   if (action === "CREDIT") {
+    const defaultCreditDesc = payment.isWalletPayment
+      ? `Payment collected (dealer wallet) — ${payment.modeOfPayment || "wallet"}`
+      : `Payment collected — ${payment.modeOfPayment || "—"}`;
     return createFarmerPlantLedgerEntry({
       customerMobile,
       customerName,
@@ -424,9 +429,10 @@ export async function recordFarmerPlantLedgerPaymentTransition(
       credit: amount,
       reference: String(order.orderId ?? ""),
       category: "Payment",
-      description: payment.isWalletPayment
-        ? `Payment collected (dealer wallet) — ${payment.modeOfPayment || "wallet"}`
-        : `Payment collected — ${payment.modeOfPayment || "—"}`,
+      description:
+        descriptionOverride != null && String(descriptionOverride).trim()
+          ? String(descriptionOverride).trim()
+          : defaultCreditDesc,
       entryDate: transitionOccurredAt,
       createdBy: userId,
       metadata: baseMeta,
@@ -435,6 +441,7 @@ export async function recordFarmerPlantLedgerPaymentTransition(
   }
 
   // action === "REVERSAL"
+  const defaultReversalDesc = `Payment no longer collected (${previousStatus} → ${newStatus})`;
   return createFarmerPlantLedgerEntry({
     customerMobile,
     customerName,
@@ -446,7 +453,10 @@ export async function recordFarmerPlantLedgerPaymentTransition(
     debit: amount,
     reference: String(order.orderId ?? ""),
     category: "Reversal",
-    description: `Payment no longer collected (${previousStatus} → ${newStatus})`,
+    description:
+      descriptionOverride != null && String(descriptionOverride).trim()
+        ? String(descriptionOverride).trim()
+        : defaultReversalDesc,
     entryDate: transitionOccurredAt,
     createdBy: userId,
     metadata: baseMeta,
@@ -688,6 +698,18 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
       console.error("Farmer plant ledger dispatch return credit failed:", e);
       if (strict) throw e;
     }
+    try {
+      await recordFarmerPlantLedgerDispatchDamagedCredit(
+        existingDoc,
+        updatedDoc,
+        userId,
+        session,
+        { strict }
+      );
+    } catch (e) {
+      console.error("Farmer plant ledger dispatch damaged credit failed:", e);
+      if (strict) throw e;
+    }
   }
 }
 
@@ -763,6 +785,85 @@ export async function recordFarmerPlantLedgerDispatchReturnCredit(
       oldReturnedPlants: oldR,
       newReturnedPlants: newR,
       deltaReturnedPlants: delta,
+      rate,
+      source: "dispatch_complete",
+    },
+    session,
+  });
+}
+
+/**
+ * Credit farmer receivable for plants marked damaged on dispatch (delta damagedPlants × rate).
+ * Same monetary treatment as returns; idempotent per (oldDamaged, newDamaged).
+ */
+export async function recordFarmerPlantLedgerDispatchDamagedCredit(
+  existingDoc,
+  updatedDoc,
+  userId,
+  session,
+  options = {}
+) {
+  const strict = options.strict === true;
+  if (!shouldLogFarmerPlantLedger(updatedDoc)) return;
+
+  const oldD = Number(existingDoc?.damagedPlants) || 0;
+  const newD = Number(updatedDoc?.damagedPlants) || 0;
+  const delta = newD - oldD;
+  if (delta <= 0) return;
+
+  const rate = roundMoney(Number(updatedDoc?.rate || 0));
+  const creditAmount = roundMoney(delta * rate);
+  if (creditAmount <= 0) return;
+
+  const oid = updatedDoc?._id;
+  if (!oid) return;
+
+  const transitionKey = `DISPATCH_DAMAGED_FARMER_${oid}_${oldD}_${newD}`;
+
+  if (await ledgerTransitionExists(oid, transitionKey, session)) return;
+
+  const { customerMobile, customerName, farmerId } =
+    await resolveFarmerIdentity(updatedDoc);
+
+  if (!customerMobile) {
+    if (strict) {
+      throw new Error(
+        "Cannot record farmer plant ledger for dispatch damaged: farmer contact mobile is missing."
+      );
+    }
+    return;
+  }
+
+  const transitionAt =
+    updatedDoc?.updatedAt instanceof Date
+      ? updatedDoc.updatedAt.getTime()
+      : updatedDoc?.updatedAt
+        ? new Date(updatedDoc.updatedAt).getTime()
+        : Date.now();
+
+  const entryDate = Number.isFinite(transitionAt)
+    ? new Date(transitionAt)
+    : new Date();
+
+  await createFarmerPlantLedgerEntry({
+    customerMobile,
+    customerName,
+    farmerId,
+    refType: "ADJUSTMENT",
+    refId: oid,
+    orderId: oid,
+    debit: 0,
+    credit: creditAmount,
+    reference: String(updatedDoc.orderId ?? ""),
+    category: "Dispatch Damaged",
+    description: `Order ${updatedDoc.orderId ?? ""} dispatch damaged — ${delta} plants × ₹${rate} (credit receivable)`,
+    entryDate,
+    createdBy: userId,
+    metadata: {
+      transitionKey,
+      oldDamagedPlants: oldD,
+      newDamagedPlants: newD,
+      deltaDamagedPlants: delta,
       rate,
       source: "dispatch_complete",
     },

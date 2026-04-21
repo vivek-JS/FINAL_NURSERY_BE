@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 dotenv.config();
 import mongoose from "mongoose";
 import server from "./app.js";
+import { attachVoiceFeedbackWebSocket } from "./services/voiceFeedback/voiceBridge.ws.js";
 
 /**
  * Resolve Mongo URI for the running environment.
@@ -65,6 +66,12 @@ mongoose
         console.log(`Accountant ledger directory (GET, Bearer + ACCOUNTANT/SUPER_ADMIN):`);
         console.log(`  - /api/v1/order/farmer-plant-ledger/parties`);
         console.log(`  - /api/v1/inventory/ram-agri-customer-ledger/parties`);
+        try {
+          attachVoiceFeedbackWebSocket(httpServer);
+          console.log("Voice feedback WebSocket (Exotel / tests): ws + same host path /api/v1/voice-feedback/media");
+        } catch (e) {
+          console.error("Voice feedback WebSocket attach failed:", e?.message || e);
+        }
       });
       
       // Set server timeout (10 minutes)

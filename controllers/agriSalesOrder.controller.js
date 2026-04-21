@@ -14,6 +14,8 @@ import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
 import { generateQR } from "../services/iciciBankService.js";
 import { normalizeIciciError, saveIciciQrAuditRecord } from "../services/iciciQr.service.js";
 
+/** Ram Agri: customer ledger exists, but there is no order-to-order payment transfer API (farmer plant only). */
+
 const shouldLogRamAgriLedger = (order) =>
   Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
 

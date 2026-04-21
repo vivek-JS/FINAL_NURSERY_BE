@@ -20,6 +20,12 @@ import { releaseDealerQuotaPartial } from "./quota.controller.js";
 import DealerWallet from "../models/dealerWallet.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
 import Shade from "../models/shadeSchema.model.js";
+import {
+  applyWalletForDispatchNewPayments,
+  buildDispatchCompletePaymentSubdocs,
+  formatOrderWalletDescriptionContext,
+  sumCollectedFromNewPaymentSubdocs,
+} from "../utils/dispatchCompleteOrderPayments.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -29,6 +35,8 @@ const updateOrderWithLedgerSync = async ({
   existingDoc,
   contextLabel = "dispatch_order_update",
   ledgerSyncOptions = {},
+  /** Extra options for `findByIdAndUpdate` (e.g. `arrayFilters`). */
+  mongooseUpdateOptions = {},
 }) => {
   const previousOrder =
     existingDoc || (await Order.findById(orderId).session(session));
@@ -49,6 +57,7 @@ const updateOrderWithLedgerSync = async ({
     new: true,
     runValidators: true,
     session,
+    ...mongooseUpdateOptions,
   });
 
   if (!updatedOrder) {
@@ -225,6 +234,8 @@ const createDispatch = catchAsync(async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
+  const voiceFeedbackOrderIds = [];
+
   try {
     const dispatchRequest = { ...req.body };
     if (dispatchRequest.autoMarkLinkedAgriLoaded !== undefined) {
@@ -323,6 +334,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
         if (newRemainingPlants === 0) {
           // Fully dispatched
           newStatus = "DISPATCHED";
+          voiceFeedbackOrderIds.push(orderDispatch.orderId);
         } else if (newRemainingPlants < currentRemaining) {
           // Partially dispatched
           newStatus = "DISPATCH_PROCESS";
@@ -398,6 +410,20 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
     await session.commitTransaction();
 
+    if (voiceFeedbackOrderIds.length > 0) {
+      (async () => {
+        try {
+          const { ensureFeedbackCallForOrder } = await import("../services/feedbackCallScheduling.js");
+          for (const oid of voiceFeedbackOrderIds) {
+            const o = await Order.findById(oid).lean();
+            if (o) await ensureFeedbackCallForOrder(o, { isInstantDispatch: false });
+          }
+        } catch (e) {
+          console.error("voice-feedback dispatch createDispatch:", e?.message || e);
+        }
+      })();
+    }
+
     const dispatchDoc = dispatch[0]?.toObject ? dispatch[0].toObject() : dispatch[0];
     const warningOrderRefs = Array.from(
       new Set(
@@ -438,41 +464,484 @@ const createDispatch = catchAsync(async (req, res, next) => {
     session.endSession();
   }
 });
-// Update dispatch controller
 
+const bookablePlantsTotal = (order) =>
+  Number(order?.numberOfPlants || 0) + Number(order?.additionalPlants || 0);
+
+const orderRemainingOrBookable = (order) => {
+  const rem = order?.remainingPlants;
+  if (rem != null && Number.isFinite(Number(rem))) return Number(rem);
+  return bookablePlantsTotal(order);
+};
+
+/** Remaining plants after nursery dispatch leg: 0 = fully out, full bookable = ready queue. */
+const orderStatusFromRemaining = (order, remaining) => {
+  const r = Number(remaining);
+  if (!Number.isFinite(r) || r < 0) {
+    throw new AppError("Invalid remaining plants on order after dispatch update", 400);
+  }
+  if (r === 0) return "DISPATCHED";
+  const total = bookablePlantsTotal(order);
+  if (r > total) {
+    throw new AppError(
+      `Remaining plants (${r}) exceeds bookable total (${total}) for order ${order?.orderId ?? ""}`,
+      400
+    );
+  }
+  if (r >= total) return "READY_FOR_DISPATCH";
+  return "DISPATCH_PROCESS";
+};
+
+const computeCurrentDispatchIdAfterHistoryChange = (historyArray, dispatchOid) => {
+  const hist = Array.isArray(historyArray)
+    ? historyArray.filter(
+        (e) => e?.dispatchId && String(e.dispatchId) !== String(dispatchOid)
+      )
+    : [];
+  if (!hist.length) return null;
+  const latest = hist.reduce((best, cur) => {
+    const bd = new Date(best?.date || 0).getTime();
+    const cd = new Date(cur?.date || 0).getTime();
+    return cd >= bd ? cur : best;
+  });
+  return latest?.dispatchId || null;
+};
+
+const normalizePlantsDetailsBody = (plantsDetailsRaw) => {
+  if (!Array.isArray(plantsDetailsRaw)) return null;
+  return plantsDetailsRaw.map((plant) => ({
+    ...plant,
+    totalPlants: plant.pickupDetails.reduce(
+      (sum, detail) => sum + detail.quantity,
+      0
+    ),
+    pickupDetails: plant.pickupDetails.map((pickup) => ({
+      ...pickup,
+      cavity:
+        typeof pickup.cavity === "string"
+          ? new mongoose.Types.ObjectId(pickup.cavity)
+          : pickup.cavity,
+    })),
+    crates: plant.crates.map((crate) => ({
+      ...crate,
+      cavity:
+        typeof crate.cavity === "string"
+          ? new mongoose.Types.ObjectId(crate.cavity)
+          : crate.cavity,
+      cavityName: crate.cavityName,
+      crateCount: crate.crateDetails.reduce(
+        (sum, detail) => sum + detail.crateCount,
+        0
+      ),
+      plantCount: crate.crateDetails.reduce(
+        (sum, detail) => sum + detail.plantCount,
+        0
+      ),
+      crateDetails: crate.crateDetails,
+    })),
+  }));
+};
+
+const normalizeCellToOrderIdString = (cell) => {
+  if (cell == null) return "";
+  if (typeof cell === "object" && cell._id != null) return String(cell._id);
+  return String(cell);
+};
+
+// Update dispatch controller — keeps Order docs in sync (remaining, history, status, ledger).
 const updateDispatch = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-
-  // If plants details are being updated, validate quantities
-  if (req.body.plantsDetails) {
-    validateQuantities(req.body.plantsDetails);
+  const dispatchOid = mongoose.isValidObjectId(String(id))
+    ? new mongoose.Types.ObjectId(String(id))
+    : null;
+  if (!dispatchOid) {
+    return next(new AppError("Invalid dispatch id", 400));
   }
 
-  // Prevent updating transportId
-  if (req.body.transportId) {
-    delete req.body.transportId;
+  const rawBody = { ...req.body };
+  if (rawBody.transportId) {
+    delete rawBody.transportId;
   }
 
-  // Use runValidators only when doing a full replacement (not $push/$pull operators),
-  // because Mongoose calls array validators on individual pushed elements rather than
-  // the full resulting array, which would wrongly fail the "length >= 1" check on orderIds.
-  const isOperatorUpdate = Object.keys(req.body).some((k) => k.startsWith("$"));
-  const dispatch = await Dispatch.findByIdAndUpdate(id, req.body, {
-    new: true,
-    runValidators: !isOperatorUpdate,
-  });
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-  if (!dispatch) {
-    return next(new AppError("No dispatch found with that ID", 404));
+  try {
+    const existing = await Dispatch.findById(dispatchOid).session(session);
+    if (!existing) {
+      throw new AppError("No dispatch found with that ID", 404);
+    }
+
+    if (existing.transportStatus === "DELIVERED") {
+      const risky = ["orderIds", "orderDispatchDetails", "plantsDetails", "afterDispatchedOrderIds"];
+      const touched = risky.filter((k) => rawBody[k] !== undefined);
+      if (touched.length) {
+        throw new AppError(
+          "Cannot change orders or plant loads on a delivered dispatch. Only metadata (name / driver / vehicle) is allowed.",
+          400
+        );
+      }
+    }
+
+    const raw = { ...rawBody };
+    if (raw.plantsDetails) {
+      raw.plantsDetails = normalizePlantsDetailsBody(raw.plantsDetails);
+      validateQuantities(raw.plantsDetails);
+    }
+
+    const oldOrderIds = (existing.orderIds || []).map((x) => String(x));
+
+    const oldDetailsByOrder = new Map();
+    (existing.orderDispatchDetails || []).forEach((row) => {
+      if (row?.orderId) {
+        oldDetailsByOrder.set(String(row.orderId), Number(row.dispatchQuantity) || 0);
+      }
+    });
+
+    if (!oldDetailsByOrder.size && oldOrderIds.length) {
+      for (const oidStr of oldOrderIds) {
+        const o = await Order.findById(oidStr).session(session);
+        if (!o) continue;
+        const entry = (o.dispatchHistory || []).find(
+          (h) => h?.dispatchId && String(h.dispatchId) === String(dispatchOid)
+        );
+        if (entry) {
+          oldDetailsByOrder.set(oidStr, Number(entry.quantity) || 0);
+        }
+      }
+    }
+
+    const inferredFromDetails = Array.isArray(raw.orderDispatchDetails)
+      ? [
+          ...new Set(
+            raw.orderDispatchDetails
+              .map((r) => (r?.orderId != null ? String(r.orderId) : ""))
+              .filter((s) => mongoose.isValidObjectId(s))
+          ),
+        ]
+      : [];
+
+    const normalizedFromBody = Array.isArray(raw.orderIds)
+      ? raw.orderIds
+          .map(normalizeCellToOrderIdString)
+          .filter((s) => mongoose.isValidObjectId(s))
+      : null;
+
+    const effectiveNewIds =
+      normalizedFromBody !== null
+        ? normalizedFromBody
+        : inferredFromDetails.length
+        ? inferredFromDetails
+        : [...oldOrderIds];
+
+    const newDetailsByOrder = new Map();
+    if (Array.isArray(raw.orderDispatchDetails)) {
+      raw.orderDispatchDetails.forEach((row) => {
+        if (row?.orderId != null) {
+          newDetailsByOrder.set(
+            String(row.orderId),
+            Number(row.dispatchQuantity) || 0
+          );
+        }
+      });
+    }
+
+    const newIdSet = new Set(effectiveNewIds);
+    const oldIdSet = new Set(oldOrderIds);
+
+    // --- Empty roster: delete dispatch and revert all orders tied to it ---
+    if (!effectiveNewIds.length) {
+      const revertIds = [...new Set([...oldOrderIds])];
+      for (const oidStr of revertIds) {
+        const order = await Order.findById(oidStr).session(session);
+        if (!order) continue;
+        const entry = (order.dispatchHistory || []).find(
+          (h) => h?.dispatchId && String(h.dispatchId) === String(dispatchOid)
+        );
+        if (entry) {
+          const restored =
+            orderRemainingOrBookable(order) + (Number(entry.quantity) || 0);
+          const nextStatus = orderStatusFromRemaining(order, restored);
+          const histAfter = (order.dispatchHistory || []).filter(
+            (h) =>
+              !h?.dispatchId || String(h.dispatchId) !== String(dispatchOid)
+          );
+          const nextCurrent =
+            String(order.currentDispatchId || "") === String(dispatchOid)
+              ? computeCurrentDispatchIdAfterHistoryChange(histAfter, dispatchOid)
+              : order.currentDispatchId;
+
+          await updateOrderWithLedgerSync({
+            orderId: oidStr,
+            existingDoc: order,
+            session,
+            userId: req.user?._id,
+            contextLabel: "update_dispatch_delete_all_revert",
+            updateOperation: {
+              $set: {
+                remainingPlants: restored,
+                orderStatus: nextStatus,
+                currentDispatchId: nextCurrent,
+              },
+              $pull: { dispatchHistory: { dispatchId: dispatchOid } },
+            },
+          });
+        } else if (String(order.currentDispatchId || "") === String(dispatchOid)) {
+          await updateOrderWithLedgerSync({
+            orderId: oidStr,
+            existingDoc: order,
+            session,
+            userId: req.user?._id,
+            contextLabel: "update_dispatch_delete_all_clear_current",
+            updateOperation: {
+              $set: {
+                currentDispatchId: null,
+                orderStatus: "READY_FOR_DISPATCH",
+              },
+            },
+          });
+        }
+      }
+
+      await Dispatch.deleteOne({ _id: dispatchOid }).session(session);
+      await session.commitTransaction();
+      return res.status(200).json(
+        generateResponse("Success", "Dispatch removed (no orders left)", {
+          deleted: true,
+          dispatchId: String(dispatchOid),
+        })
+      );
+    }
+
+    // --- Removed orders ---
+    for (const oldId of oldOrderIds) {
+      if (newIdSet.has(oldId)) continue;
+      const order = await Order.findById(oldId).session(session);
+      if (!order) continue;
+      const entry = (order.dispatchHistory || []).find(
+        (h) => h?.dispatchId && String(h.dispatchId) === String(dispatchOid)
+      );
+      const fallbackQty = oldDetailsByOrder.get(oldId) || 0;
+      const qty = entry ? Number(entry.quantity) || 0 : fallbackQty;
+
+      if (!entry && !qty) {
+        if (String(order.currentDispatchId || "") === String(dispatchOid)) {
+          await updateOrderWithLedgerSync({
+            orderId: oldId,
+            existingDoc: order,
+            session,
+            userId: req.user?._id,
+            contextLabel: "update_dispatch_remove_order_no_hist",
+            updateOperation: {
+              $set: {
+                currentDispatchId: null,
+                orderStatus: "READY_FOR_DISPATCH",
+              },
+            },
+          });
+        }
+        continue;
+      }
+
+      const restored = orderRemainingOrBookable(order) + qty;
+      const nextStatus = orderStatusFromRemaining(order, restored);
+      const histAfter = (order.dispatchHistory || []).filter(
+        (h) => !h?.dispatchId || String(h.dispatchId) !== String(dispatchOid)
+      );
+      const nextCurrent =
+        String(order.currentDispatchId || "") === String(dispatchOid)
+          ? computeCurrentDispatchIdAfterHistoryChange(histAfter, dispatchOid)
+          : order.currentDispatchId;
+
+      await updateOrderWithLedgerSync({
+        orderId: oldId,
+        existingDoc: order,
+        session,
+        userId: req.user?._id,
+        contextLabel: "update_dispatch_remove_order",
+        updateOperation: entry
+          ? {
+              $set: {
+                remainingPlants: restored,
+                orderStatus: nextStatus,
+                currentDispatchId: nextCurrent,
+              },
+              $pull: { dispatchHistory: { dispatchId: dispatchOid } },
+            }
+          : {
+              $set: {
+                remainingPlants: restored,
+                orderStatus: nextStatus,
+                currentDispatchId: nextCurrent,
+              },
+            },
+      });
+    }
+
+    // --- New orders added on edit ---
+    for (const newId of effectiveNewIds) {
+      if (oldIdSet.has(newId)) continue;
+      const newQty = newDetailsByOrder.get(newId);
+      if (!newQty || newQty <= 0) {
+        throw new AppError(
+          `dispatchQuantity is required for newly added order ${newId}`,
+          400
+        );
+      }
+      const order = await Order.findById(newId).session(session);
+      if (!order) throw new AppError(`Order not found: ${newId}`, 404);
+      const currentRemaining = orderRemainingOrBookable(order);
+      if (newQty > currentRemaining) {
+        throw new AppError(
+          `Dispatch quantity (${newQty}) exceeds remaining plants (${currentRemaining}) for order ${order.orderId}`,
+          400
+        );
+      }
+      const newRemaining = currentRemaining - newQty;
+      const newStatus = orderStatusFromRemaining(order, newRemaining);
+      const dispatchHistoryEntry = {
+        date: new Date(),
+        quantity: newQty,
+        dispatchId: dispatchOid,
+        remainingAfterDispatch: newRemaining,
+        processedBy: req.user ? req.user._id : null,
+        driverName: raw.driverName ?? existing.driverName ?? "",
+        vehicleName: raw.vehicleName ?? existing.vehicleName ?? "",
+      };
+      await updateOrderWithLedgerSync({
+        orderId: newId,
+        existingDoc: order,
+        session,
+        userId: req.user?._id,
+        contextLabel: "update_dispatch_add_order",
+        updateOperation: {
+          $set: {
+            remainingPlants: newRemaining,
+            orderStatus: newStatus,
+            currentDispatchId: dispatchOid,
+          },
+          $push: { dispatchHistory: dispatchHistoryEntry },
+        },
+      });
+    }
+
+    // --- Kept orders: quantity adjustments for this dispatch ---
+    for (const oidStr of effectiveNewIds) {
+      if (!oldIdSet.has(oidStr)) continue;
+      const newQty = newDetailsByOrder.get(oidStr);
+      if (newQty == null) continue;
+      const oldQty = oldDetailsByOrder.get(oidStr) ?? 0;
+      const delta = newQty - oldQty;
+      if (delta === 0) continue;
+
+      const order = await Order.findById(oidStr).session(session);
+      if (!order) throw new AppError(`Order not found: ${oidStr}`, 404);
+      const entry = (order.dispatchHistory || []).find(
+        (h) => h?.dispatchId && String(h.dispatchId) === String(dispatchOid)
+      );
+      if (!entry) {
+        throw new AppError(
+          `Cannot adjust dispatch quantity: no dispatch history for order ${oidStr} on this dispatch`,
+          400
+        );
+      }
+
+      const currentRemaining = orderRemainingOrBookable(order);
+      if (delta > 0 && delta > currentRemaining) {
+        throw new AppError(
+          `Increase of ${delta} exceeds remaining plants (${currentRemaining}) for order ${order.orderId}`,
+          400
+        );
+      }
+      const newRemaining = currentRemaining - delta;
+      const newStatus = orderStatusFromRemaining(order, newRemaining);
+
+      const nextHist = (order.dispatchHistory || []).map((h) => {
+        const plain = h?.toObject ? h.toObject() : { ...h };
+        if (String(plain.dispatchId) !== String(dispatchOid)) return plain;
+        return {
+          ...plain,
+          quantity: newQty,
+          remainingAfterDispatch: newRemaining,
+          driverName:
+            raw.driverName ?? existing.driverName ?? plain.driverName ?? "",
+          vehicleName:
+            raw.vehicleName ?? existing.vehicleName ?? plain.vehicleName ?? "",
+        };
+      });
+
+      const nextCurrent =
+        String(order.currentDispatchId || "") === String(dispatchOid)
+          ? dispatchOid
+          : order.currentDispatchId;
+
+      await updateOrderWithLedgerSync({
+        orderId: oidStr,
+        existingDoc: order,
+        session,
+        userId: req.user?._id,
+        contextLabel: "update_dispatch_qty_change",
+        updateOperation: {
+          $set: {
+            dispatchHistory: nextHist,
+            remainingPlants: newRemaining,
+            orderStatus: newStatus,
+            currentDispatchId: nextCurrent,
+          },
+        },
+      });
+    }
+
+    const nextOrderDispatchDetails =
+      raw.orderDispatchDetails != null
+        ? raw.orderDispatchDetails.filter((d) => newIdSet.has(String(d.orderId)))
+        : (existing.orderDispatchDetails || []).filter((d) =>
+            newIdSet.has(String(d.orderId))
+          );
+
+    const setPayload = {
+      orderIds: effectiveNewIds.map((s) => new mongoose.Types.ObjectId(s)),
+      orderDispatchDetails: nextOrderDispatchDetails,
+      ...(raw.name !== undefined ? { name: raw.name } : {}),
+      ...(raw.driverName !== undefined ? { driverName: raw.driverName } : {}),
+      ...(raw.driverMobile !== undefined ? { driverMobile: raw.driverMobile } : {}),
+      ...(raw.vehicleName !== undefined ? { vehicleName: raw.vehicleName } : {}),
+      ...(raw.vehicleNumber !== undefined ? { vehicleNumber: raw.vehicleNumber } : {}),
+      ...(raw.vehicleId !== undefined ? { vehicleId: raw.vehicleId } : {}),
+      ...(raw.driverId !== undefined ? { driverId: raw.driverId } : {}),
+      ...(raw.plantsDetails ? { plantsDetails: raw.plantsDetails } : {}),
+      ...(raw.afterDispatchedOrderIds !== undefined
+        ? { afterDispatchedOrderIds: raw.afterDispatchedOrderIds }
+        : {}),
+    };
+
+    const updated = await Dispatch.findByIdAndUpdate(
+      dispatchOid,
+      { $set: setPayload },
+      { new: true, runValidators: true, session }
+    );
+
+    if (!updated) {
+      throw new AppError("Failed to update dispatch", 500);
+    }
+
+    await session.commitTransaction();
+
+    const response = generateResponse(
+      "Success",
+      "Dispatch updated successfully",
+      {
+        ...updated.toObject(),
+        deleted: false,
+      }
+    );
+    res.status(200).json(response);
+  } catch (error) {
+    await session.abortTransaction();
+    next(error);
+  } finally {
+    session.endSession();
   }
-
-  const response = generateResponse(
-    "Success",
-    "Dispatch updated successfully",
-    dispatch
-  );
-
-  res.status(200).json(response);
 });
 
 const calculateDispatchCrates = ({ dispatchQuantity, cavityId, cavityName, cavitySize, numberPerCrate }) => {
@@ -812,6 +1281,18 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     });
 
     await session.commitTransaction();
+
+    if (newStatus === "DISPATCHED") {
+      (async () => {
+        try {
+          const { ensureFeedbackCallForOrder } = await import("../services/feedbackCallScheduling.js");
+          const o = await Order.findById(orderId).lean();
+          if (o) await ensureFeedbackCallForOrder(o, { isInstantDispatch: false });
+        } catch (e) {
+          console.error("voice-feedback addOrderToDispatch:", e?.message || e);
+        }
+      })();
+    }
 
     const response = generateResponse(
       "Success",
@@ -1154,7 +1635,11 @@ const getDispatch = catchAsync(async (req, res, next) => {
           },
           {
             path: "plantName",
-            select: "name variety type subtype",
+            select: "name variety type subtypes",
+          },
+          {
+            path: "cavity",
+            select: "name cavity numberPerCrate",
           },
           {
             path: "bookingSlot",
@@ -1276,6 +1761,8 @@ const getDispatch = catchAsync(async (req, res, next) => {
         farmer: order.farmer,
         salesPerson: order.salesPerson,
         plantName: order.plantName,
+        plantSubtype: order.plantSubtype,
+        cavity: order.cavity,
         bookingSlot: order.bookingSlot,
         numberOfPlants: order.numberOfPlants,
         remainingPlants: order.remainingPlants || order.numberOfPlants, // Include remainingPlants
@@ -1287,6 +1774,9 @@ const getDispatch = catchAsync(async (req, res, next) => {
         returnReason: order.returnReason,
         quotaSource: order.quotaSource,
         additionalPlants: order.additionalPlants,
+        dealerOrder: order.dealerOrder,
+        orderBookingDate: order.orderBookingDate,
+        deliveryDate: order.deliveryDate,
       })),
       createdAt: dispatch.createdAt,
       updatedAt: dispatch.updatedAt,
@@ -1325,121 +1815,101 @@ const removeTransport = async (req, res) => {
 
     const ordersUpdated = [];
 
-    // Update orders to restore quantities
+    // Update orders to restore quantities (ledger-safe)
     if (dispatch.orderDispatchDetails && dispatch.orderDispatchDetails.length > 0) {
       for (const orderDispatch of dispatch.orderDispatchDetails) {
         const order = await Order.findById(orderDispatch.orderId).session(session);
-        
+
         if (!order) {
           console.log(`Order not found: ${orderDispatch.orderId}`);
           continue;
         }
 
-        console.log(`Processing order ${order.orderId}, current remainingPlants: ${order.remainingPlants}`);
-        console.log(`Dispatch history count: ${order.dispatchHistory?.length || 0}`);
-
-        // Get the dispatch history entry for this dispatch
         const dispatchHistoryEntry = order.dispatchHistory?.find(
-          entry => {
-            if (!entry.dispatchId) return false;
-            return entry.dispatchId.toString() === dispatch._id.toString();
-          }
+          (entry) =>
+            entry?.dispatchId &&
+            String(entry.dispatchId) === String(dispatch._id)
         );
 
         if (dispatchHistoryEntry) {
-          console.log(`Found dispatch history entry with quantity: ${dispatchHistoryEntry.quantity}`);
-          
-          // Restore the quantity
-          const restoredRemainingPlants = order.remainingPlants + dispatchHistoryEntry.quantity;
-          
-          console.log(`Restoring quantity: ${order.remainingPlants} + ${dispatchHistoryEntry.quantity} = ${restoredRemainingPlants}`);
-          
-          // Determine new status
-          let newStatus = "READY_FOR_DISPATCH";
-          
-          // If order was partially dispatched (has other dispatch history entries)
-          const hasOtherDispatches = order.dispatchHistory?.filter(
-            entry => entry._id && entry._id.toString() !== dispatchHistoryEntry._id.toString()
-          ).length > 0;
-          
-          if (hasOtherDispatches && order.numberOfPlants !== restoredRemainingPlants) {
-            newStatus = "DISPATCH_PROCESS";
-            console.log(`Order has other dispatches, setting status to DISPATCH_PROCESS`);
-          } else {
-            console.log(`Setting order status to ${newStatus}`);
-          }
-
-          // Update order: restore quantity and update status (+ audit trail for reports)
-          await Order.findByIdAndUpdate(
-            orderDispatch.orderId,
-            appendStatusChangeToUpdate(
-              {
-                $set: {
-                  remainingPlants: restoredRemainingPlants,
-                  orderStatus: newStatus,
-                },
-              },
-              order.orderStatus,
-              {
-                userId: req.user?._id,
-                reason: "dispatch:remove_transport_restore",
-              }
-            ),
-            { session }
+          const restoredRemainingPlants =
+            orderRemainingOrBookable(order) +
+            (Number(dispatchHistoryEntry.quantity) || 0);
+          const nextHist = (order.dispatchHistory || []).filter(
+            (h) =>
+              !(
+                h?.dispatchId &&
+                String(h.dispatchId) === String(dispatch._id)
+              )
+          );
+          const nextCurrent =
+            String(order.currentDispatchId || "") === String(dispatch._id)
+              ? computeCurrentDispatchIdAfterHistoryChange(nextHist, dispatch._id)
+              : order.currentDispatchId;
+          const newStatus = orderStatusFromRemaining(
+            order,
+            restoredRemainingPlants
           );
 
-          // Remove dispatch history entry separately
-          await Order.findByIdAndUpdate(
-            orderDispatch.orderId,
-            {
+          await updateOrderWithLedgerSync({
+            orderId: orderDispatch.orderId,
+            existingDoc: order,
+            session,
+            userId: req.user?._id,
+            contextLabel: "remove_transport_restore",
+            updateOperation: {
+              $set: {
+                remainingPlants: restoredRemainingPlants,
+                orderStatus: newStatus,
+                currentDispatchId: nextCurrent,
+              },
               $pull: {
-                dispatchHistory: {
-                  _id: dispatchHistoryEntry._id,
-                },
+                dispatchHistory: { dispatchId: dispatch._id },
               },
             },
-            { session }
-          );
+          });
 
           ordersUpdated.push({
             orderId: order.orderId,
             restoredQuantity: dispatchHistoryEntry.quantity,
             newRemainingPlants: restoredRemainingPlants,
           });
-        } else {
-          console.log(`No dispatch history entry found for this dispatch`);
-          await Order.findByIdAndUpdate(
-            orderDispatch.orderId,
-            appendStatusChangeToUpdate(
-              { $set: { orderStatus: "READY_FOR_DISPATCH" } },
-              order.orderStatus,
-              {
-                userId: req.user?._id,
-                reason: "dispatch:remove_transport_no_history",
-              }
-            ),
-            { session }
-          );
+        } else if (String(order.currentDispatchId || "") === String(dispatch._id)) {
+          await updateOrderWithLedgerSync({
+            orderId: orderDispatch.orderId,
+            existingDoc: order,
+            session,
+            userId: req.user?._id,
+            contextLabel: "remove_transport_no_history",
+            updateOperation: {
+              $set: {
+                currentDispatchId: null,
+                orderStatus: "READY_FOR_DISPATCH",
+              },
+            },
+          });
         }
       }
     } else {
-      console.log(`No orderDispatchDetails found, using legacy per-order update`);
       const ids = dispatch.orderIds || [];
       for (const oid of ids) {
         const o = await Order.findById(oid).session(session);
         if (!o) continue;
-        await Order.findByIdAndUpdate(
-          oid,
-          appendStatusChangeToUpdate(
-            { $set: { orderStatus: "READY_FOR_DISPATCH" } },
-            o.orderStatus,
-            {
-              userId: req.user?._id,
-              reason: "dispatch:remove_transport_legacy_bulk",
-            }
-          ),
-          { session }
-        );
+        const patch =
+          String(o.currentDispatchId || "") === String(dispatch._id)
+            ? {
+                currentDispatchId: null,
+                orderStatus: "READY_FOR_DISPATCH",
+              }
+            : { orderStatus: "READY_FOR_DISPATCH" };
+        await updateOrderWithLedgerSync({
+          orderId: oid,
+          existingDoc: o,
+          session,
+          userId: req.user?._id,
+          contextLabel: "remove_transport_legacy_bulk",
+          updateOperation: { $set: patch },
+        });
       }
     }
 
@@ -1518,7 +1988,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
     const orderUpdatePromises = dispatch.orderIds.map(async (orderId) => {
       // First get the order (populate for ledger descriptions / quota release)
       const order = await Order.findById(orderId)
-        .populate("farmer", "name")
+        .populate("farmer", "name village")
         .populate("plantName", "name")
         .session(session);
 
@@ -1577,6 +2047,8 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
 
       // Prepare update object for the order - initially empty
       const orderUpdateData = {};
+      // findByIdAndUpdate does not run mongoose save hooks — keep gross booked count on the order in sync
+      orderUpdateData.totalPlants = totalOrderedPlants;
 
       if (hasAdditionalUpdate) {
         orderUpdateData.additionalPlants = additionalPlantsValue;
@@ -1652,13 +2124,19 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         orderUpdateData.remainingPlants = Math.max(0, prevRem + deltaAdd);
       }
 
+      const newPaymentSubdocs = buildDispatchCompletePaymentSubdocs(
+        orderUpdate.newPayments,
+        req.user,
+        order
+      );
+
       const collectedAmount = roundMoney(
         (order.payment || []).reduce((sum, payment) => {
           if (payment?.paymentStatus === "COLLECTED") {
             return sum + (payment.paidAmount || 0);
           }
           return sum;
-        }, 0)
+        }, 0) + sumCollectedFromNewPaymentSubdocs(newPaymentSubdocs)
       );
 
       const recalculatedTotalAmount = roundMoney(
@@ -1740,8 +2218,15 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       const updateOperation = {
         $set: orderUpdateData,
       };
+      const pushPayload = {};
       if (returnHistoryEntry) {
-        updateOperation.$push = { returnHistory: returnHistoryEntry };
+        pushPayload.returnHistory = returnHistoryEntry;
+      }
+      if (newPaymentSubdocs.length > 0) {
+        pushPayload.payment = { $each: newPaymentSubdocs };
+      }
+      if (Object.keys(pushPayload).length > 0) {
+        updateOperation.$push = pushPayload;
       }
       if (
         dealerReleaseQty > 0 ||
@@ -1769,6 +2254,17 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         contextLabel: "complete_dispatch_order_update",
         ledgerSyncOptions: { orderEditSource: "dispatch_complete" },
       });
+
+      if (newPaymentSubdocs.length > 0) {
+        const farmerInfo = formatOrderWalletDescriptionContext(order);
+        await applyWalletForDispatchNewPayments(
+          updatedOrder,
+          newPaymentSubdocs,
+          farmerInfo,
+          req.user?._id,
+          session
+        );
+      }
 
       if (walletReturnCreditAmount > 0) {
         const dealerId = await resolveFundingDealerId(updatedOrder);

@@ -524,12 +524,15 @@ function findPaymentSubdocument(order, paymentId) {
 }
 
 /**
- * POST move one COLLECTED payment from a farmer plant order to another (same farmer).
+ * POST move one COLLECTED payment from a farmer plant order to another (any eligible farmer plant target).
  * Body: { sourceOrderId, targetOrderId, paymentId, message? }
  *
  * - Source payment → REJECTED + farmer-plant REVERSAL ledger line
  * - Target order → new payment PENDING then COLLECTED + PAYMENT ledger credit
  * - Excludes wallet payments and bulk-linked payments (mainPaymentId)
+ *
+ * Source order may be CANCELLED (or any status): cancellation reverses order principal in the ledger,
+ * but payment rows often stay COLLECTED until explicitly moved here.
  */
 export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next) => {
   const { sourceOrderId, targetOrderId, paymentId, message } = req.body || {};
@@ -573,9 +576,7 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     if (!fromParty.customerMobile || !toParty.customerMobile) {
       throw new AppError("Could not resolve farmer identity for one or both orders", 400);
     }
-    if (fromParty.customerMobile !== toParty.customerMobile) {
-      throw new AppError("Both orders must belong to the same farmer (mobile)", 400);
-    }
+    // No same-mobile check: source and target may be different farmers; ledger reversal + target credit still apply.
 
     const sourcePayment = findPaymentSubdocument(sourceOrder, pid);
     if (!sourcePayment) {
@@ -606,13 +607,33 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
 
     await sourceOrder.save({ session });
 
+    const mode = sourcePayment.modeOfPayment || "Cash";
     await ensureFarmerPlantOrderDebit(sourceOrder, { userId: performedBy, session });
+    const rupeeLabel = `₹${amount.toLocaleString("en-IN")}`;
+    const ledgerDescReversal =
+      `Order transfer (out): order #${sourceNumericId} → target order #${targetNumericId}. ` +
+      `पेमेंट दुसऱ्या ऑर्डरला transfer — लेजर reversal (${prevSourceStatus} → REJECTED). ` +
+      `${mode} ${rupeeLabel}.${msg ? ` Msg: ${msg}` : ""}`;
+    const transferLedgerMetaBase = {
+      kind: "order_payment_transfer",
+      transferId: String(transferId),
+    };
     const sourceReversal = await recordFarmerPlantLedgerPaymentTransition(
       sourceOrder,
       sourcePayment,
       prevSourceStatus,
       "REJECTED",
-      { userId: performedBy, session }
+      {
+        userId: performedBy,
+        session,
+        descriptionOverride: ledgerDescReversal,
+        metadataExtra: {
+          ...transferLedgerMetaBase,
+          direction: "out",
+          peerOrderMongoId: String(tid),
+          peerOrderNumber: targetNumericId,
+        },
+      }
     );
     const revAction = getFarmerPlantPaymentTransitionAction(prevSourceStatus, "REJECTED");
     if (revAction === "REVERSAL" && !sourceReversal) {
@@ -620,7 +641,6 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     }
     reversalEntryId = sourceReversal?._id || null;
 
-    const mode = sourcePayment.modeOfPayment || "Cash";
     const incomingNote = `[Transferred from order #${sourceNumericId}${msg ? ` — ${msg}` : ""}]`;
     const newPaymentPayload = {
       paidAmount: amount,
@@ -635,6 +655,8 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
       utrNumber: sourcePayment.utrNumber || undefined,
       customerName: sourcePayment.customerName || undefined,
       isWalletPayment: false,
+      transferredFromOrderId: new mongoose.Types.ObjectId(sid),
+      transferredFromPaymentId: new mongoose.Types.ObjectId(pid),
     };
 
     targetOrder.payment.push(newPaymentPayload);
@@ -650,12 +672,26 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     await targetOrder.save({ session });
 
     await ensureFarmerPlantOrderDebit(targetOrder, { userId: performedBy, session });
+    const ledgerDescCredit =
+      `Order transfer (in): order #${targetNumericId} ← source order #${sourceNumericId}. ` +
+      `पेमेंट स्रोत ऑर्डरवरून transfer — लेजर credit (${prevTargetPayStatus} → COLLECTED). ` +
+      `${mode} ${rupeeLabel}.${msg ? ` Msg: ${msg}` : ""}`;
     const targetCredit = await recordFarmerPlantLedgerPaymentTransition(
       targetOrder,
       newPayment,
       prevTargetPayStatus,
       "COLLECTED",
-      { userId: performedBy, session }
+      {
+        userId: performedBy,
+        session,
+        descriptionOverride: ledgerDescCredit,
+        metadataExtra: {
+          ...transferLedgerMetaBase,
+          direction: "in",
+          peerOrderMongoId: String(sid),
+          peerOrderNumber: sourceNumericId,
+        },
+      }
     );
     const creditAction = getFarmerPlantPaymentTransitionAction(prevTargetPayStatus, "COLLECTED");
     if (creditAction === "CREDIT" && !targetCredit) {
@@ -663,7 +699,61 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     }
     paymentEntryId = targetCredit?._id || null;
 
-    const outstandingAfter = await getLastOutstandingAfterForCustomer(fromParty.customerMobile, session);
+    const transferHistoryPayload = {
+      transferId: String(transferId),
+      amount: roundMoney(amount),
+      message: msg || null,
+    };
+    if (!Array.isArray(sourceOrder.orderEditHistory)) {
+      sourceOrder.orderEditHistory = [];
+    }
+    sourceOrder.orderEditHistory.push({
+      field: "paymentTransferOut",
+      previousValue: {
+        paymentId: String(pid),
+        paymentStatus: prevSourceStatus,
+        paidAmount: amount,
+      },
+      newValue: {
+        ...transferHistoryPayload,
+        direction: "out",
+        paymentId: String(pid),
+        paymentStatus: "REJECTED",
+        targetOrderMongoId: String(tid),
+        targetOrderNumber: targetNumericId,
+      },
+      changedBy: performedBy,
+      notes: `Payment transfer out → order #${targetNumericId}${msg ? ` — ${msg}` : ""}`,
+    });
+    if (!Array.isArray(targetOrder.orderEditHistory)) {
+      targetOrder.orderEditHistory = [];
+    }
+    targetOrder.orderEditHistory.push({
+      field: "paymentTransferIn",
+      previousValue: {},
+      newValue: {
+        ...transferHistoryPayload,
+        direction: "in",
+        paymentId: String(newPayment._id),
+        paymentStatus: "COLLECTED",
+        sourceOrderMongoId: String(sid),
+        sourceOrderNumber: sourceNumericId,
+        originalSourcePaymentId: String(pid),
+      },
+      changedBy: performedBy,
+      notes: `Payment transfer in ← order #${sourceNumericId}${msg ? ` — ${msg}` : ""}`,
+    });
+    await sourceOrder.save({ session });
+    await targetOrder.save({ session });
+
+    const outstandingAfterSource = await getLastOutstandingAfterForCustomer(
+      fromParty.customerMobile,
+      session
+    );
+    const outstandingAfterTarget = await getLastOutstandingAfterForCustomer(
+      toParty.customerMobile,
+      session
+    );
 
     await Log.create(
       [
@@ -684,8 +774,12 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
             newPaymentId: newPayment._id ? String(newPayment._id) : null,
             reversalLedgerEntryId: reversalEntryId ? String(reversalEntryId) : null,
             paymentLedgerEntryId: paymentEntryId ? String(paymentEntryId) : null,
+            sourceCustomerMobile: fromParty.customerMobile,
+            targetCustomerMobile: toParty.customerMobile,
+            outstandingAfterSource: roundMoney(outstandingAfterSource),
+            outstandingAfterTarget: roundMoney(outstandingAfterTarget),
             customerMobile: fromParty.customerMobile,
-            outstandingAfter: roundMoney(outstandingAfter),
+            outstandingAfter: roundMoney(outstandingAfterSource),
           },
           changedFields: ["orderPaymentTransfer"],
           metadata: {
@@ -693,6 +787,7 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
             sourceOrderId: sid,
             targetOrderId: tid,
             paymentId: pid,
+            orderEditHistory: ["paymentTransferOut", "paymentTransferIn"],
           },
         },
       ],
@@ -713,7 +808,9 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
           targetOrder: { _id: targetOrder._id, orderId: targetOrder.orderId },
           reversalLedgerEntryId: reversalEntryId,
           paymentLedgerEntryId: paymentEntryId,
-          outstandingAfter: roundMoney(outstandingAfter),
+          outstandingAfterSource: roundMoney(outstandingAfterSource),
+          outstandingAfterTarget: roundMoney(outstandingAfterTarget),
+          outstandingAfter: roundMoney(outstandingAfterSource),
         },
         undefined
       )

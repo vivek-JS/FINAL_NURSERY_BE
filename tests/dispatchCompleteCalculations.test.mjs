@@ -38,3 +38,54 @@ describe("dispatch complete — cumulative returns (FE rule mirror)", () => {
     assert.equal(maxReturnThisBatch(100, 95), 5);
   });
 });
+
+/**
+ * Mirrors recordFarmerPlantLedgerDispatchReturnCredit / DispatchDamagedCredit:
+ * credit only when cumulative qty increases (delta > 0).
+ */
+describe("dispatch complete — ledger plant credits (return & damaged)", () => {
+  function ledgerCreditForIncreasedPlants(oldQty, newQty, rateRaw) {
+    const oldQ = Number(oldQty) || 0;
+    const newQ = Number(newQty) || 0;
+    const delta = newQ - oldQ;
+    if (delta <= 0) return 0;
+    const rate = roundMoney(Number(rateRaw || 0));
+    return roundMoney(delta * rate);
+  }
+
+  it("credits delta × rate for returns (e.g. 100 plants @ ₹10)", () => {
+    assert.equal(ledgerCreditForIncreasedPlants(0, 100, 10), 1000);
+  });
+
+  it("uses same formula for damaged deltas", () => {
+    assert.equal(ledgerCreditForIncreasedPlants(5, 25, 10), 200);
+  });
+
+  it("returns 0 when quantity does not increase", () => {
+    assert.equal(ledgerCreditForIncreasedPlants(10, 10, 10), 0);
+    assert.equal(ledgerCreditForIncreasedPlants(20, 10, 10), 0);
+  });
+
+  it("uses roundMoney on rate and product (controller parity)", () => {
+    assert.equal(ledgerCreditForIncreasedPlants(0, 3, 10.1), 30.3);
+  });
+});
+
+describe("dispatch complete — returned + damaged cap (controller parity)", () => {
+  function assertWithinTotal(totalOrdered, existingReturned, existingDamaged, batchReturn, batchDamaged) {
+    const totalReturned = existingReturned + batchReturn;
+    const totalDamaged = existingDamaged + batchDamaged;
+    assert.ok(
+      totalReturned + totalDamaged <= totalOrdered,
+      `${totalReturned}+${totalDamaged} must not exceed ${totalOrdered}`
+    );
+  }
+
+  it("allows batch when sum stays at cap", () => {
+    assertWithinTotal(100, 30, 20, 40, 10);
+  });
+
+  it("rejects over-cap combination", () => {
+    assert.throws(() => assertWithinTotal(100, 30, 20, 50, 10));
+  });
+});
