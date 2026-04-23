@@ -359,6 +359,17 @@ const orderSchema = new Schema(
       ref: "User",
       required: true,
     },
+    /** True when the authenticated user who created the order was office admin (booking on behalf). */
+    placedByOfficeAdmin: {
+      type: Boolean,
+      default: false,
+    },
+    /** User who actually submitted the create request (for usage / audit); salesPerson remains the attributed rep. */
+    orderSubmittedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     // Quota management fields for dealer orders
     quotaUsed: {
       type: Number,
@@ -718,6 +729,8 @@ const orderSchema = new Schema(
 orderSchema.index({ farmer: 1 });
 orderSchema.index({ dealer: 1 });
 orderSchema.index({ salesPerson: 1 });
+orderSchema.index({ orderSubmittedBy: 1, createdAt: -1 });
+orderSchema.index({ placedByOfficeAdmin: 1 });
 orderSchema.index({ plantName: 1 });
 orderSchema.index({ bookingSlot: 1 });
 orderSchema.index({ orderStatus: 1 });

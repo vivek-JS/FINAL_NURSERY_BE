@@ -4304,6 +4304,8 @@ const splitOrder = catchAsync(async (req, res, next) => {
       orderFor: parent.orderFor,
       expectedNursery: parent.expectedNursery,
       reference: parent.reference,
+      placedByOfficeAdmin: parent.placedByOfficeAdmin,
+      orderSubmittedBy: parent.orderSubmittedBy,
       quotaSource: parent.quotaSource,
       numberOfPlants: qty,
       additionalPlants: 0,

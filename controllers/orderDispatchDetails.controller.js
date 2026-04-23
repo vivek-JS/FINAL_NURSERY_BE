@@ -25,7 +25,9 @@ export const getOrderDispatchDetails = catchAsync(async (req, res) => {
       select:
         "driverName driverMobile vehicleName vehicleNumber transportId transportStatus createdAt updatedAt",
     })
-    .select("orderId orderStatus dispatchHistory numberOfPlants remainingPlants farmer salesPerson");
+    .select(
+      "orderId orderStatus dispatchHistory numberOfPlants remainingPlants farmer salesPerson deliveryDate"
+    );
 
   if (!order) {
     return res.status(404).json({
@@ -95,6 +97,7 @@ export const getOrderDispatchDetails = catchAsync(async (req, res) => {
         orderStatus: order.orderStatus,
         numberOfPlants: order.numberOfPlants,
         remainingPlants: order.remainingPlants,
+        deliveryDate: order.deliveryDate || null,
       },
       dispatches: dispatchDetails,
       dispatchHistory: dispatchHistoryDetails,

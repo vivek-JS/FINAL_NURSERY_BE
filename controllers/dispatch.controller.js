@@ -238,6 +238,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
   try {
     const dispatchRequest = { ...req.body };
+    const autoMarkLinkedAgriLoaded = Boolean(dispatchRequest.autoMarkLinkedAgriLoaded);
     if (dispatchRequest.autoMarkLinkedAgriLoaded !== undefined) {
       delete dispatchRequest.autoMarkLinkedAgriLoaded;
     }
@@ -300,8 +301,6 @@ const createDispatch = catchAsync(async (req, res, next) => {
     );
 
     validateQuantities(dispatchRequest.plantsDetails);
-    // Strict flow: plant dispatch never auto-marks linked Agri loads.
-    // Linked Agri must be loaded from Ram Agri dispatch flow.
     const pendingLinkedAgriOrders = await getPendingLinkedAgriLoads(dispatchRequest.orderIds);
     dispatchRequest.transportId = await generateTransportId();
 
@@ -408,6 +407,16 @@ const createDispatch = catchAsync(async (req, res, next) => {
       );
     }
 
+    if (autoMarkLinkedAgriLoaded && pendingLinkedAgriOrders.length > 0) {
+      await markLinkedAgriLoadedForDispatch({
+        orderIds: dispatchRequest.orderIds,
+        user: req.user,
+        dispatchRequest,
+        dispatchId: dispatch[0]._id,
+        session,
+      });
+    }
+
     await session.commitTransaction();
 
     if (voiceFeedbackOrderIds.length > 0) {
@@ -425,9 +434,11 @@ const createDispatch = catchAsync(async (req, res, next) => {
     }
 
     const dispatchDoc = dispatch[0]?.toObject ? dispatch[0].toObject() : dispatch[0];
+    const stillPendingLinkedAgri =
+      pendingLinkedAgriOrders.length > 0 && !autoMarkLinkedAgriLoaded;
     const warningOrderRefs = Array.from(
       new Set(
-        pendingLinkedAgriOrders
+        (stillPendingLinkedAgri ? pendingLinkedAgriOrders : [])
           .map((o) => String(o?.linkedNurseryOrderCode || o?.linkedNurseryOrderId || "").trim())
           .filter(Boolean)
       )
@@ -435,7 +446,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
     const responsePayload = {
       ...dispatchDoc,
       linkedAgriLoadWarning:
-        pendingLinkedAgriOrders.length > 0
+        stillPendingLinkedAgri
           ? {
               isPending: true,
               pendingCount: pendingLinkedAgriOrders.length,

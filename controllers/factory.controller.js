@@ -71,6 +71,20 @@ const userCanCreateOrderAsAccepted = (user) => {
     role === "SUPER_ADMIN"
   );
 };
+
+const authUserObjectIdForOrderAudit = (user) => {
+  if (!user) return null;
+  const raw = user._id ?? user.id;
+  if (raw == null || raw === "") return null;
+  return raw;
+};
+
+const isOfficeAdminActor = (user) => {
+  if (!user) return false;
+  const jt = String(user.jobTitle || "").toUpperCase().trim();
+  const role = String(user.role || "").toUpperCase().trim();
+  return jt === "OFFICE_ADMIN" || role === "OFFICE_ADMIN";
+};
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
   const wallet = await DealerWallet.findOne({ dealer: dealerId });
@@ -775,6 +789,11 @@ const createOne = (Model, modelName) =>
         };
         
         orderDocument.orderStatus = resolvedOrderStatus;
+
+        // Who placed the order (API user) vs attributed salesPerson — set server-side so clients cannot spoof
+        orderDocument.orderSubmittedBy =
+          authUserObjectIdForOrderAudit(req.user) ?? null;
+        orderDocument.placedByOfficeAdmin = isOfficeAdminActor(req.user);
         
         console.log('🎯 Final order document orderStatus:', orderDocument.orderStatus);
         
