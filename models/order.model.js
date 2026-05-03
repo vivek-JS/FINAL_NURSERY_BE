@@ -633,6 +633,11 @@ const orderSchema = new Schema(
           type: Schema.Types.ObjectId,
           ref: "DispatchBatch",
         },
+        /** Immutable formatted invoice id for this dispatch leg (e.g. R640). Issued at dispatch time. */
+        invoiceNumber: {
+          type: String,
+          trim: true,
+        },
         productSnapshot: {
           type: Schema.Types.Mixed,
         },
@@ -666,6 +671,14 @@ const orderSchema = new Schema(
     },
     /** Lot / batch reference captured at delivery completion (complete dispatch form). */
     batchNumber: {
+      type: String,
+      trim: true,
+    },
+    /**
+     * Delivery challan invoice label reserved at instant sale (order created as DISPATCHED)
+     * or reused when the order is first loaded on a vehicle dispatch.
+     */
+    deliveryChallanInvoiceNumber: {
       type: String,
       trim: true,
     },

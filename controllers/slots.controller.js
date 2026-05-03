@@ -66,6 +66,23 @@ const findSlotDetails = async (slotId) => {
 
 const safeArray = (value) => (Array.isArray(value) ? value : []);
 
+/**
+ * Stored `availablePlants` on a slot is often missing in older data. `Number(undefined)` is NaN
+ * and `??` does not fall back for NaN, which breaks transfer UIs (max qty 0, confirm disabled).
+ */
+const getSlotEffectiveAvailablePlants = (slot) => {
+  if (!slot) return 0;
+  const stored = slot.availablePlants;
+  if (stored !== undefined && stored !== null && stored !== "") {
+    const n = Number(stored);
+    if (Number.isFinite(n)) return n;
+  }
+  const total = Number(slot.totalPlants) || 0;
+  const booked = Number(slot.totalBookedPlants) || 0;
+  const bufferAmount = Number(slot.bufferAmount) || 0;
+  return Math.max(0, total - booked - bufferAmount);
+};
+
 export const createSlotsForYear = async (year) => {
   try {
     // Fetch all plants from PlantCms
@@ -417,9 +434,32 @@ export const getSubtypesByPlant = async (req, res) => {
     ]);
 
     if (stats.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No slots found for the specified plant and year." });
+      const plant = await PlantCms.findById(plantObjectId)
+        .select("subtypes")
+        .lean();
+      if (!plant) {
+        return res.status(404).json({ message: "Plant not found." });
+      }
+      const cmsSubtypes = plant.subtypes || [];
+      if (cmsSubtypes.length === 0) {
+        return res.status(404).json({
+          message:
+            "No slots for this year and no subtypes are configured for this plant.",
+        });
+      }
+      stats.push(
+        ...cmsSubtypes
+          .map((s) => ({
+            subtypeId: s._id,
+            subtypeName: s.name,
+            rate: s.rates,
+            totalPlants: 0,
+            totalBookedPlants: 0,
+          }))
+          .sort((a, b) =>
+            String(a.subtypeName).localeCompare(String(b.subtypeName))
+          )
+      );
     }
 
     // Calculate the overall totals for all subtypes
@@ -3100,7 +3140,7 @@ export const getTransferCapacityOptions = async (req, res) => {
       });
     }
 
-    const sourceAvailable = Number(sourceDetails.slot.availablePlants) ?? Number(sourceDetails.slot.totalPlants) ?? 0;
+    const sourceAvailable = getSlotEffectiveAvailablePlants(sourceDetails.slot);
     if (sourceAvailable <= 0) {
       return res.status(400).json({
         success: false,
@@ -3272,7 +3312,7 @@ export const transferCapacity = async (req, res) => {
     }
 
     const sourceTotal = Number(sourceDetails.slot.totalPlants) || 0;
-    const sourceAvailable = Number(sourceDetails.slot.availablePlants) ?? sourceTotal;
+    const sourceAvailable = getSlotEffectiveAvailablePlants(sourceDetails.slot);
     const sourceBooked = Number(sourceDetails.slot.totalBookedPlants) || 0;
     const sourceBuffer = Number(sourceDetails.slot.effectiveBuffer || sourceDetails.slot.buffer) || 0;
     const sourceBufferAmount = Number(sourceDetails.slot.bufferAmount) || 0;
@@ -3783,7 +3823,7 @@ export const transferOrders = async (req, res) => {
     const performedBy = req.user?._id || null;
 
     let sourceTotalBooked = Number(sourceDetails.slot.totalBookedPlants) || 0;
-    let sourceAvailable = Number(sourceDetails.slot.availablePlants) ?? Number(sourceDetails.slot.totalPlants) ?? 0;
+    let sourceAvailable = getSlotEffectiveAvailablePlants(sourceDetails.slot);
     let targetTotalBooked = targetBooked;
 
     for (const order of orders) {

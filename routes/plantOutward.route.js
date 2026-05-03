@@ -32,6 +32,7 @@ import {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
+  getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,
 } from "../controllers/plantOutward.controller.js";
 
@@ -92,6 +93,10 @@ router.get("/secondary/vehicle-dispatches", getSecondaryVehicleDispatches);
 router.get(
   "/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
   getVehicleDispatchAllocationSuggestions
+);
+router.get(
+  "/secondary/farmer-dispatch/pickup-batch-suggestions",
+  getFarmerDispatchPickupBatchSuggestions
 );
 router.get(
   "/secondary/:batchId/orders-ready-for-dispatch",

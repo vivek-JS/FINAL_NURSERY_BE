@@ -26,6 +26,7 @@ import {
 import Order from "../models/order.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import { updateOrderWithLedgerSync } from "./dispatch.controller.js";
+import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
 
 const BATCH_SELECT_FIELDS =
   "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
@@ -109,6 +110,146 @@ const computeSecondaryDispatchEligibility = (si, secondaryPlantReadyDays, todayS
     dispatchEligible,
     secondaryPlantReadyDaysUsed: days,
   };
+};
+
+/**
+ * FIFO-sorted secondary inward candidates for plant CMS + subtype (shared by vehicle allocation + farmer dispatch shade picker).
+ */
+const collectSecondaryInwardSuggestionsForPlantSubtype = async (plantCmsId, plantSubtypeId) => {
+  if (!plantCmsId || !plantSubtypeId) {
+    return { suggestions: [], batchDocs: [] };
+  }
+
+  const active = { isActive: { $ne: false } };
+
+  /** Strict: CMS plant + subtype (current batches). */
+  const strictBatches = await DispatchBatch.find({
+    plantCmsId,
+    plantSubtypeId,
+    ...active,
+  })
+    .select(BATCH_SELECT_FIELDS)
+    .populate("plantCmsId", "name subtypes")
+    .lean();
+
+  /**
+   * Legacy: subtype set but plantCmsId never backfilled — those rows were invisible to vehicle
+   * shed pickup (same G9 stock as strict match). Exclude docs that set plantCmsId to another id.
+   */
+  const legacySubtypeOnly = await DispatchBatch.find({
+    plantSubtypeId,
+    ...active,
+    $or: [{ plantCmsId: null }, { plantCmsId: { $exists: false } }],
+  })
+    .select(BATCH_SELECT_FIELDS)
+    .populate("plantCmsId", "name subtypes")
+    .lean();
+
+  const seen = new Set(strictBatches.map((b) => String(b._id)));
+  const batchDocs = [...strictBatches];
+  for (const b of legacySubtypeOnly) {
+    if (!seen.has(String(b._id))) {
+      batchDocs.push(b);
+      seen.add(String(b._id));
+    }
+  }
+
+  const batchIds = batchDocs.map((b) => b._id);
+  const batchMap = new Map(batchDocs.map((b) => [String(b._id), b]));
+
+  const pos =
+    batchIds.length === 0
+      ? []
+      : await PlantOutward.find({ batchId: { $in: batchIds } }).lean();
+
+  const todayStart = moment().startOf("day");
+  const suggestions = [];
+
+  for (const po of pos) {
+    const batchLean = batchMap.get(String(po.batchId));
+    if (!batchLean) continue;
+    const labels = plantSubtypeLabelsFromLeanBatch(batchLean);
+    const secDays = Number(safeMongooseNumber(batchLean.secondaryPlantReadyDays)) || 0;
+
+    for (const si of po.secondaryInward || []) {
+      const avail = safeNonNegativeInt(safeMongooseNumber(si.availableQuantity), 0);
+      if (avail < 1) continue;
+      if ((si.transferStatus ?? "available") === "fully_transferred") continue;
+
+      const siPlain = typeof si.toObject === "function" ? si.toObject() : si;
+      const elig = computeSecondaryDispatchEligibility(siPlain, secDays, todayStart);
+      const bypassAt = siPlain.readinessBypassAt;
+      let readyMoment = null;
+      if (bypassAt != null && moment(bypassAt).isValid()) {
+        readyMoment = moment(bypassAt).startOf("day");
+      } else if (elig.expectedReadyByCalendar) {
+        readyMoment = moment(elig.expectedReadyByCalendar).startOf("day");
+      } else if (siPlain.secondaryInwardDate) {
+        readyMoment = moment(siPlain.secondaryInwardDate).add(secDays, "days").startOf("day");
+      } else {
+        readyMoment = moment().add(365, "days");
+      }
+
+      const sortReady = readyMoment.valueOf();
+      const sortInward = moment(siPlain.secondaryInwardDate || 0).valueOf();
+
+      let daysUntilReady = null;
+      if (elig.dispatchEligible) {
+        daysUntilReady = 0;
+      } else if (bypassAt != null && moment(bypassAt).isValid()) {
+        daysUntilReady = 0;
+      } else if (elig.expectedReadyByCalendar) {
+        const readyDay = moment(elig.expectedReadyByCalendar).startOf("day");
+        daysUntilReady = Math.max(0, readyDay.diff(todayStart, "days"));
+      } else {
+        const effectiveReady = moment(readyMoment).startOf("day");
+        daysUntilReady = Math.max(0, effectiveReady.diff(todayStart, "days"));
+      }
+
+      suggestions.push({
+        batchId: po.batchId,
+        batchNumber: batchLean.batchNumber,
+        plantOutwardId: po._id,
+        secondaryInwardId: si._id,
+        availableQuantity: avail,
+        dispatchEligible: elig.dispatchEligible,
+        expectedReadyByCalendar: elig.expectedReadyByCalendar,
+        secondaryInwardDate: siPlain.secondaryInwardDate,
+        plantLabel: labels.plantLabel,
+        subtypeLabel: labels.subtypeLabel,
+        size: siPlain.size,
+        cavity: siPlain.cavity,
+        numberOfBottles: siPlain.numberOfBottles,
+        numberOfTrays: siPlain.numberOfTrays,
+        pollyhouse: String(siPlain.pollyhouse || "").trim(),
+        secondaryPlantReadyDays: secDays,
+        daysUntilReady,
+        sortReady,
+        sortInward,
+      });
+    }
+  }
+
+  suggestions.sort((a, b) => {
+    if (a.sortReady !== b.sortReady) return a.sortReady - b.sortReady;
+    return a.sortInward - b.sortInward;
+  });
+
+  const stripped = suggestions.map(({ sortReady, sortInward, ...rest }) => rest);
+
+  return { suggestions: stripped, batchDocs };
+};
+
+const shadeMatchesPollyhouse = (pollyhouseRaw, shadeName, shadeNumber) => {
+  const ph = String(pollyhouseRaw || "").trim().toLowerCase();
+  if (!ph) return false;
+  const name = String(shadeName || "").trim().toLowerCase();
+  const num = String(shadeNumber || "").trim().toLowerCase();
+  if (name && ph === name) return true;
+  if (num && ph === num) return true;
+  if (name && ph.includes(name)) return true;
+  if (num && ph.includes(num)) return true;
+  return false;
 };
 
 /** Batch summary for Dispatch tab: only dispatch-eligible stock — split calendar vs Mark ready (bypass). */
@@ -2069,6 +2210,7 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
     linkedDispatchId,
     linkedDispatchPlantRowIndex,
     evidencePhotoUrls,
+    dispatchFulfillmentSequence,
   } = req.body;
 
   const session = await mongoose.startSession();
@@ -2077,27 +2219,29 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
   try {
     if (
       !secondaryInwardId ||
-      !secondaryOutwardDate ||
       numberOfBottles == null ||
       !size ||
       cavity == null ||
-      numberOfTrays == null ||
-      !pollyhouse ||
-      laboursEngaged == null ||
-      !linkedOrderId
+      numberOfTrays == null
     ) {
       throw new AppError(
-        "Missing required fields (including linkedOrderId for farmer order)",
+        "Missing required fields for secondary outward (secondaryInwardId, numberOfBottles, size, cavity, numberOfTrays)",
         400
       );
-    }
-    if (!mongoose.isValidObjectId(String(linkedOrderId))) {
-      throw new AppError("linkedOrderId must be a valid order id", 400);
     }
 
     const photoList = Array.isArray(evidencePhotoUrls)
       ? evidencePhotoUrls.filter((u) => typeof u === "string" && u.trim().length > 0)
       : [];
+
+    let fulfillmentSeq = null;
+    if (dispatchFulfillmentSequence != null && dispatchFulfillmentSequence !== "") {
+      const n = Number(dispatchFulfillmentSequence);
+      if (!Number.isFinite(n) || n < 1 || Math.floor(n) !== n) {
+        throw new AppError("dispatchFulfillmentSequence must be a positive integer", 400);
+      }
+      fulfillmentSeq = n;
+    }
 
     let linkedDispatchDoc = null;
     const dispatchPlantRowIdx = Math.max(
@@ -2115,6 +2259,12 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
       if (!["PENDING", "IN_TRANSIT"].includes(linkedDispatchDoc.transportStatus)) {
         throw new AppError(
           "Vehicle dispatch must be PENDING or IN_TRANSIT to record shed pickup",
+          400
+        );
+      }
+      if (fulfillmentSeq == null) {
+        throw new AppError(
+          "dispatchFulfillmentSequence is required when recording vehicle-linked shed pickup",
           400
         );
       }
@@ -2141,6 +2291,41 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
       typeof secondaryInward.toObject === "function"
         ? secondaryInward.toObject()
         : secondaryInward;
+
+    const resolvedPollyhouse =
+      (typeof pollyhouse === "string" && pollyhouse.trim()) ||
+      String(siPlain.pollyhouse || "").trim();
+    if (!resolvedPollyhouse) {
+      throw new AppError(
+        "Polly house / shade is required — choose recording location or ensure the inward line has pollyhouse set",
+        400
+      );
+    }
+    let resolvedLabours =
+      laboursEngaged != null && laboursEngaged !== ""
+        ? Number(laboursEngaged)
+        : 1;
+    if (!Number.isFinite(resolvedLabours) || resolvedLabours < 1) {
+      resolvedLabours = 1;
+    }
+    const resolvedOutDate = secondaryOutwardDate
+      ? new Date(secondaryOutwardDate)
+      : new Date();
+    if (!Number.isFinite(resolvedOutDate.getTime())) {
+      throw new AppError("Invalid secondary outward date", 400);
+    }
+
+    let linkedOrderDoc = null;
+    if (linkedOrderId != null && String(linkedOrderId).trim() !== "") {
+      if (!mongoose.isValidObjectId(String(linkedOrderId))) {
+        throw new AppError("linkedOrderId must be a valid order id", 400);
+      }
+      linkedOrderDoc = await Order.findById(linkedOrderId).session(session);
+      if (!linkedOrderDoc) {
+        throw new AppError("Linked order not found", 404);
+      }
+    }
+
     const dispatchElig = computeSecondaryDispatchEligibility(
       siPlain,
       secondaryDaysForElig,
@@ -2150,17 +2335,16 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
     let skipReadinessBecauseVehicle = false;
     if (linkedDispatchDoc) {
       const row = linkedDispatchDoc.plantsDetails?.[dispatchPlantRowIdx];
-      if (!row) {
-        throw new AppError("Invalid linkedDispatchPlantRowIndex for this dispatch", 400);
-      }
-      if (
-        String(batchDoc?.plantCmsId) !== String(row.plantId) ||
-        String(batchDoc?.plantSubtypeId) !== String(row.subTypeId)
-      ) {
-        throw new AppError(
-          "Batch plant/subtype must match the vehicle dispatch plant row",
-          400
-        );
+      if (row) {
+        if (
+          String(batchDoc?.plantCmsId) !== String(row.plantId) ||
+          String(batchDoc?.plantSubtypeId) !== String(row.subTypeId)
+        ) {
+          throw new AppError(
+            "Batch plant/subtype must match the vehicle dispatch plant row",
+            400
+          );
+        }
       }
       skipReadinessBecauseVehicle = true;
     }
@@ -2187,79 +2371,84 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
       );
     }
 
-    const linkedOrderDoc = await Order.findById(linkedOrderId).session(session);
-    if (!linkedOrderDoc) {
-      throw new AppError("Linked order not found", 404);
-    }
-
-    const orderOk =
-      linkedOrderDoc.orderStatus === "READY_FOR_DISPATCH" ||
-      linkedOrderDoc.orderStatus === "DISPATCH_PROCESS";
-    if (!orderOk) {
-      throw new AppError(
-        "Order must be READY_FOR_DISPATCH or DISPATCH_PROCESS for secondary outward",
-        400
-      );
-    }
-    if (!orderMatchesDispatchBatch(linkedOrderDoc, batchDoc)) {
-      throw new AppError(
-        "Order plant/subtype does not match this dispatch batch",
-        400
-      );
-    }
-
-    const currentOrderRemaining = orderRemainingPlantsValue(linkedOrderDoc);
-    if (calculatedTotalQuantity > currentOrderRemaining) {
-      throw new AppError(
-        `Secondary outward quantity (${calculatedTotalQuantity}) exceeds remaining plants (${currentOrderRemaining}) on the order`,
-        400
-      );
-    }
-
-    if (linkedDispatchDoc) {
-      const onVehicle = (linkedDispatchDoc.orderIds || []).some(
-        (oid) => String(oid) === String(linkedOrderId)
-      );
-      if (!onVehicle) {
-        throw new AppError("linkedOrderId must be on the linked vehicle dispatch", 400);
-      }
-      const row = linkedDispatchDoc.plantsDetails[dispatchPlantRowIdx];
-      if (
-        String(linkedOrderDoc.plantName) !== String(row.plantId) ||
-        String(linkedOrderDoc.plantSubtype) !== String(row.subTypeId)
-      ) {
+    if (linkedOrderDoc) {
+      const orderOk =
+        linkedOrderDoc.orderStatus === "READY_FOR_DISPATCH" ||
+        linkedOrderDoc.orderStatus === "DISPATCH_PROCESS";
+      if (!orderOk) {
         throw new AppError(
-          "Order plant/subtype does not match linked dispatch plant row",
+          "Order must be READY_FOR_DISPATCH or DISPATCH_PROCESS for secondary outward",
           400
         );
       }
+      if (!orderMatchesDispatchBatch(linkedOrderDoc, batchDoc)) {
+        throw new AppError(
+          "Order plant/subtype does not match this dispatch batch",
+          400
+        );
+      }
+
+      const currentOrderRemaining = orderRemainingPlantsValue(linkedOrderDoc);
+      if (calculatedTotalQuantity > currentOrderRemaining) {
+        throw new AppError(
+          `Secondary outward quantity (${calculatedTotalQuantity}) exceeds remaining plants (${currentOrderRemaining}) on the order`,
+          400
+        );
+      }
+
+      if (linkedDispatchDoc) {
+        const onVehicle = unionDispatchOrderObjectIds(linkedDispatchDoc).some(
+          (oid) => String(oid) === String(linkedOrderId)
+        );
+        if (!onVehicle) {
+          throw new AppError("linkedOrderId must be on the linked vehicle dispatch", 400);
+        }
+        const row = linkedDispatchDoc.plantsDetails?.[dispatchPlantRowIdx];
+        if (row) {
+          if (
+            String(linkedOrderDoc.plantName) !== String(row.plantId) ||
+            String(linkedOrderDoc.plantSubtype) !== String(row.subTypeId)
+          ) {
+            throw new AppError(
+              "Order plant/subtype does not match linked dispatch plant row",
+              400
+            );
+          }
+        }
+      }
     }
 
-    const orderLinkSnapshot = buildSecondaryOrderLinkSnapshot(linkedOrderDoc, batchDoc);
+    const orderLinkSnapshot =
+      linkedOrderDoc != null ? buildSecondaryOrderLinkSnapshot(linkedOrderDoc, batchDoc) : undefined;
 
     const transferHistory = {
-      transferDate: secondaryOutwardDate,
+      transferDate: resolvedOutDate,
       quantityTransferred: calculatedTotalQuantity,
       remarks,
     };
 
     const secondaryOutwardEntry = {
-      secondaryOutwardDate,
+      secondaryOutwardDate: resolvedOutDate,
       numberOfBottles,
       size,
       cavity,
       numberOfTrays,
       totalQuantity: calculatedTotalQuantity,
       availableQuantity: calculatedTotalQuantity,
-      pollyhouse,
-      laboursEngaged,
+      pollyhouse: resolvedPollyhouse,
+      laboursEngaged: resolvedLabours,
       transferStatus: "available",
       sourceSecondaryInwardId: secondaryInwardId,
-      linkedOrderId,
-      orderLinkSnapshot,
+      ...(linkedOrderDoc != null && linkedOrderId
+        ? {
+            linkedOrderId,
+            orderLinkSnapshot,
+          }
+        : {}),
       ...(linkedDispatchDoc && {
         linkedDispatchId: linkedDispatchDoc._id,
         linkedDispatchPlantRowIndex: dispatchPlantRowIdx,
+        ...(fulfillmentSeq != null ? { dispatchFulfillmentSequence: fulfillmentSeq } : {}),
         dispatchFulfillmentSnapshot: {
           transportId: linkedDispatchDoc.transportId,
           driverName: linkedDispatchDoc.driverName,
@@ -2306,52 +2495,72 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
       quantity: calculatedTotalQuantity,
       performedBy: mongoose.isValidObjectId(String(outPerformedBy)) ? outPerformedBy : undefined,
       metadata: {
-        orderId: linkedOrderId,
-        orderNumber: linkedOrderDoc.orderId,
+        ...(linkedOrderDoc != null
+          ? {
+              orderId: linkedOrderId,
+              orderNumber: linkedOrderDoc.orderId,
+            }
+          : {}),
         ...(linkedDispatchDoc && { dispatchId: linkedDispatchDoc._id }),
       },
     });
 
-    const newRemaining = currentOrderRemaining - calculatedTotalQuantity;
-    let newOrderStatus = linkedOrderDoc.orderStatus;
-    if (newRemaining === 0) {
-      newOrderStatus = "DISPATCHED";
-    } else if (newRemaining < currentOrderRemaining) {
-      newOrderStatus = "DISPATCH_PROCESS";
-    }
+    if (linkedOrderDoc) {
+      const currentOrderRemaining = orderRemainingPlantsValue(linkedOrderDoc);
+      const newRemaining = currentOrderRemaining - calculatedTotalQuantity;
+      let newOrderStatus = linkedOrderDoc.orderStatus;
+      if (newRemaining === 0) {
+        newOrderStatus = "DISPATCHED";
+      } else if (newRemaining < currentOrderRemaining) {
+        newOrderStatus = "DISPATCH_PROCESS";
+      }
 
-    const processedByRaw = req.user?._id || req.user?.id;
-    const dispatchHistoryEntry = {
-      date: new Date(),
-      quantity: calculatedTotalQuantity,
-      remainingAfterDispatch: newRemaining,
-      processedBy: mongoose.isValidObjectId(String(processedByRaw))
-        ? processedByRaw
-        : undefined,
-      driverName: linkedDispatchDoc?.driverName || "",
-      vehicleName: linkedDispatchDoc?.vehicleName || "",
-      dispatchId: linkedDispatchDoc ? linkedDispatchDoc._id : undefined,
-      source: "SECONDARY_SHED",
-      secondaryOutwardId: newSo._id,
-      plantOutwardId: updatedDoc._id,
-      dispatchBatchId: plantOutward.batchId,
-      productSnapshot: orderLinkSnapshot,
-    };
+      const processedByRaw = req.user?._id || req.user?.id;
+      const preAssignedSecondary = String(linkedOrderDoc?.deliveryChallanInvoiceNumber || "").trim();
+      let secondaryInvoiceLabel = preAssignedSecondary;
+      if (!secondaryInvoiceLabel) {
+        const [freshSec] = await allocateNextInvoiceNumbers(session, 1);
+        secondaryInvoiceLabel = freshSec || "";
+      }
 
-    await updateOrderWithLedgerSync({
-      orderId: linkedOrderId,
-      existingDoc: linkedOrderDoc,
-      session,
-      userId: processedByRaw,
-      contextLabel: "secondary_shed_outward",
-      updateOperation: {
-        $set: {
-          remainingPlants: newRemaining,
-          orderStatus: newOrderStatus,
+      const dispatchHistoryEntry = {
+        date: new Date(),
+        quantity: calculatedTotalQuantity,
+        remainingAfterDispatch: newRemaining,
+        processedBy: mongoose.isValidObjectId(String(processedByRaw))
+          ? processedByRaw
+          : undefined,
+        driverName: linkedDispatchDoc?.driverName || "",
+        vehicleName: linkedDispatchDoc?.vehicleName || "",
+        dispatchId: linkedDispatchDoc ? linkedDispatchDoc._id : undefined,
+        source: "SECONDARY_SHED",
+        secondaryOutwardId: newSo._id,
+        plantOutwardId: updatedDoc._id,
+        dispatchBatchId: plantOutward.batchId,
+        productSnapshot: orderLinkSnapshot,
+        ...(secondaryInvoiceLabel ? { invoiceNumber: secondaryInvoiceLabel } : {}),
+      };
+
+      const secondaryOrderSet = {
+        remainingPlants: newRemaining,
+        orderStatus: newOrderStatus,
+      };
+      if (!preAssignedSecondary && secondaryInvoiceLabel) {
+        secondaryOrderSet.deliveryChallanInvoiceNumber = secondaryInvoiceLabel;
+      }
+
+      await updateOrderWithLedgerSync({
+        orderId: linkedOrderId,
+        existingDoc: linkedOrderDoc,
+        session,
+        userId: processedByRaw,
+        contextLabel: "secondary_shed_outward",
+        updateOperation: {
+          $set: secondaryOrderSet,
+          $push: { dispatchHistory: dispatchHistoryEntry },
         },
-        $push: { dispatchHistory: dispatchHistoryEntry },
-      },
-    });
+      });
+    }
 
     await session.commitTransaction();
 
@@ -2817,6 +3026,21 @@ async function findDispatchActiveByIdOrTransport(idParam) {
   return Dispatch.findOne({ transportId: raw, isDeleted: { $ne: true } });
 }
 
+/** All order ObjectIds tied to a dispatch (top-level list + per-line orderDispatchDetails). */
+function unionDispatchOrderObjectIds(dispatchDoc) {
+  const plain = dispatchDoc?.toObject?.() ?? dispatchDoc;
+  const ids = new Set();
+  for (const id of plain.orderIds || []) {
+    if (id) ids.add(String(id));
+  }
+  for (const ord of plain.orderDispatchDetails || []) {
+    if (ord?.orderId) ids.add(String(ord.orderId));
+  }
+  return [...ids]
+    .filter((id) => mongoose.isValidObjectId(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+}
+
 /** PENDING / IN_TRANSIT vehicle dispatches for secondary shed fulfillment UI (paginated). */
 const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
   const ALLOWED = ["PENDING", "IN_TRANSIT"];
@@ -2847,9 +3071,26 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
     )
     .lean();
 
+  const previewOrderIdSet = new Set();
+  for (const d of docs) {
+    for (const ord of d.orderDispatchDetails || []) {
+      if (ord.orderId && mongoose.isValidObjectId(String(ord.orderId))) {
+        previewOrderIdSet.add(String(ord.orderId));
+      }
+    }
+  }
+  const previewOrderOids = [...previewOrderIdSet].map((id) => new mongoose.Types.ObjectId(id));
+  const previewOrderLabels =
+    previewOrderOids.length > 0
+      ? await Order.find({ _id: { $in: previewOrderOids } })
+          .select("_id orderId publicOrderCode")
+          .lean()
+      : [];
+  const orderLabelById = new Map(previewOrderLabels.map((o) => [String(o._id), o]));
+
   const items = docs.map((d) => {
     let totalQty = 0;
-    const plantRows = (d.plantsDetails || []).map((p) => {
+    let plantRows = (d.plantsDetails || []).map((p) => {
       const q = Number(p.quantity ?? p.totalPlants ?? 0) || 0;
       totalQty += q;
       let cratePieces = 0;
@@ -2863,6 +3104,75 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
         cratePieces,
       };
     });
+
+    const plantsDetailPreview = (d.plantsDetails || []).map((p) => {
+      const q = Number(p.quantity ?? p.totalPlants ?? 0) || 0;
+      const crates = (p.crates || []).map((c) => ({
+        cavityName: String(c.cavityName || "").trim(),
+        crateCount: Number(c.crateCount || 0) || 0,
+        plantCount: Number(c.plantCount || 0) || 0,
+      }));
+      const shadeMap = new Map();
+      for (const pd of p.pickupDetails || []) {
+        const label = String(pd.shadeName || pd.shade || "").trim() || "—";
+        const qty = Number(pd.quantity || 0) || 0;
+        shadeMap.set(label, (shadeMap.get(label) || 0) + qty);
+      }
+      const pickupByShade = [...shadeMap.entries()].map(([shadeName, quantity]) => ({
+        shadeName,
+        quantity,
+      }));
+      return {
+        name: p.name,
+        quantity: q,
+        crates,
+        pickupByShade,
+      };
+    });
+
+    const orderDispatchPreview = (d.orderDispatchDetails || []).map((row) => {
+      const oid = String(row.orderId || "");
+      const label = orderLabelById.get(oid);
+      let lineCratePieces = 0;
+      const crates = (row.crates || []).map((c) => {
+        const cc = Number(c.crateCount || 0) || 0;
+        lineCratePieces += cc;
+        return {
+          cavityName: String(c.cavityName || c.cavity || "").trim() || "—",
+          crateCount: cc,
+          plantCount: Number(c.plantCount || 0) || 0,
+        };
+      });
+      return {
+        orderId: row.orderId,
+        orderIdNumeric: label?.orderId ?? null,
+        publicOrderCode: label?.publicOrderCode ?? "",
+        dispatchQuantity: Number(row.dispatchQuantity || 0) || 0,
+        crates,
+        cratePiecesOnLine: lineCratePieces,
+      };
+    });
+
+    const odPlantTotal = orderDispatchPreview.reduce((s, r) => s + r.dispatchQuantity, 0);
+    let odCratePieces = 0;
+    for (const line of orderDispatchPreview) {
+      odCratePieces += line.cratePiecesOnLine;
+    }
+
+    if (plantRows.length === 0 && odPlantTotal > 0) {
+      plantRows = [
+        {
+          name: "Orders on vehicle (collection slip)",
+          id: "orderLines",
+          quantity: odPlantTotal,
+          cratePieces: odCratePieces,
+        },
+      ];
+      totalQty = odPlantTotal;
+    }
+
+    const unionCount = unionDispatchOrderObjectIds(d).length;
+
     return {
       _id: d._id,
       transportId: d.transportId,
@@ -2873,9 +3183,11 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
       vehicleNumber: d.vehicleNumber,
       createdAt: d.createdAt,
       updatedAt: d.updatedAt,
-      totalPlantQty: totalQty,
+      totalPlantQty: totalQty || odPlantTotal,
       plantRowsSummary: plantRows,
-      orderCount: (d.orderIds || []).length,
+      plantsDetailPreview,
+      orderDispatchPreview,
+      orderCount: unionCount || (d.orderIds || []).length,
     };
   });
 
@@ -2914,9 +3226,30 @@ const getVehicleDispatchAllocationSuggestions = catchAsync(async (req, res, next
     );
   }
 
-  const row = dispatchDoc.plantsDetails?.[plantRowIndex];
+  let row = dispatchDoc.plantsDetails?.[plantRowIndex];
   if (!row) {
-    return next(new AppError("Invalid plant row index for this dispatch", 400));
+    const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
+    if (!unionIds.length) {
+      return next(new AppError("Invalid plant row index for this dispatch (no plant rows and no orders)", 400));
+    }
+    const inferOrder = await Order.findById(unionIds[0]).select("plantName plantSubtype").lean();
+    if (!inferOrder?.plantName || !inferOrder?.plantSubtype) {
+      return next(
+        new AppError("Cannot infer plant/subtype for this vehicle — add plant rows to the dispatch or fix orders", 400)
+      );
+    }
+    const qtyFromDetails = (dispatchDoc.orderDispatchDetails || []).reduce(
+      (s, r) => s + (Number(r.dispatchQuantity) || 0),
+      0
+    );
+    const fallbackQty = qtyFromDetails || 1;
+    row = {
+      name: "Vehicle load",
+      plantId: inferOrder.plantName,
+      subTypeId: inferOrder.plantSubtype,
+      quantity: fallbackQty,
+      totalPlants: fallbackQty,
+    };
   }
 
   const plantCmsId = row.plantId;
@@ -2925,98 +3258,54 @@ const getVehicleDispatchAllocationSuggestions = catchAsync(async (req, res, next
     return next(new AppError("Dispatch plant row missing plant/subtype ids", 400));
   }
 
-  const batchDocs = await DispatchBatch.find({
-    plantCmsId,
-    plantSubtypeId,
-    isActive: { $ne: false },
-  })
-    .select(BATCH_SELECT_FIELDS)
-    .populate("plantCmsId", "name subtypes")
-    .lean();
+  const { suggestions: stripped, batchDocs } =
+    await collectSecondaryInwardSuggestionsForPlantSubtype(plantCmsId, plantSubtypeId);
 
-  const batchIds = batchDocs.map((b) => b._id);
-  const batchMap = new Map(batchDocs.map((b) => [String(b._id), b]));
+  const batches = batchDocs.map((b) => ({
+    batchId: b._id,
+    batchNumber: b.batchNumber ?? "",
+  }));
 
-  const pos =
-    batchIds.length === 0
-      ? []
-      : await PlantOutward.find({ batchId: { $in: batchIds } }).lean();
-
-  const todayStart = moment().startOf("day");
-  const suggestions = [];
-
-  for (const po of pos) {
-    const batchLean = batchMap.get(String(po.batchId));
-    if (!batchLean) continue;
-    const labels = plantSubtypeLabelsFromLeanBatch(batchLean);
-    const secDays = Number(safeMongooseNumber(batchLean.secondaryPlantReadyDays)) || 0;
-
-    for (const si of po.secondaryInward || []) {
-      const avail = safeNonNegativeInt(safeMongooseNumber(si.availableQuantity), 0);
-      if (avail < 1) continue;
-      if ((si.transferStatus ?? "available") === "fully_transferred") continue;
-
-      const siPlain = typeof si.toObject === "function" ? si.toObject() : si;
-      const elig = computeSecondaryDispatchEligibility(siPlain, secDays, todayStart);
-      const bypassAt = siPlain.readinessBypassAt;
-      let readyMoment = null;
-      if (bypassAt != null && moment(bypassAt).isValid()) {
-        readyMoment = moment(bypassAt).startOf("day");
-      } else if (elig.expectedReadyByCalendar) {
-        readyMoment = moment(elig.expectedReadyByCalendar).startOf("day");
-      } else if (siPlain.secondaryInwardDate) {
-        readyMoment = moment(siPlain.secondaryInwardDate).add(secDays, "days").startOf("day");
-      } else {
-        readyMoment = moment().add(365, "days");
-      }
-
-      const sortReady = readyMoment.valueOf();
-      const sortInward = moment(siPlain.secondaryInwardDate || 0).valueOf();
-
-      suggestions.push({
-        batchId: po.batchId,
-        batchNumber: batchLean.batchNumber,
-        plantOutwardId: po._id,
-        secondaryInwardId: si._id,
-        availableQuantity: avail,
-        dispatchEligible: elig.dispatchEligible,
-        expectedReadyByCalendar: elig.expectedReadyByCalendar,
-        secondaryInwardDate: siPlain.secondaryInwardDate,
-        plantLabel: labels.plantLabel,
-        subtypeLabel: labels.subtypeLabel,
-        size: siPlain.size,
-        cavity: siPlain.cavity,
-        numberOfBottles: siPlain.numberOfBottles,
-        numberOfTrays: siPlain.numberOfTrays,
-        sortReady,
-        sortInward,
-      });
+  let suggestionsOut = stripped;
+  const batchIdRaw = req.query.batchId ?? req.query.batch;
+  if (batchIdRaw != null && String(batchIdRaw).trim() !== "") {
+    const bid = String(batchIdRaw).trim();
+    if (mongoose.isValidObjectId(bid)) {
+      suggestionsOut = stripped.filter((s) => String(s.batchId) === bid);
     }
   }
 
-  suggestions.sort((a, b) => {
-    if (a.sortReady !== b.sortReady) return a.sortReady - b.sortReady;
-    return a.sortInward - b.sortInward;
-  });
+  const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
+  const statusIn = { $in: ["READY_FOR_DISPATCH", "DISPATCH_PROCESS"] };
 
-  const stripped = suggestions.map(
-    ({ sortReady, sortInward, ...rest }) => rest
-  );
+  const orderSelect = "_id orderId publicOrderCode remainingPlants orderStatus plantName plantSubtype";
+  const orderPop = { path: "farmer", select: "name firstName lastName mobileNumber" };
 
-  const oidSet = (dispatchDoc.orderIds || []).map((id) =>
-    mongoose.isValidObjectId(id) ? id : null
-  ).filter(Boolean);
-  const matchingOrders = await Order.find({
-    _id: { $in: oidSet },
+  let matchingOrders = await Order.find({
+    _id: { $in: unionIds },
     plantName: plantCmsId,
     plantSubtype: plantSubtypeId,
     remainingPlants: { $gt: 0 },
-    orderStatus: { $in: ["READY_FOR_DISPATCH", "DISPATCH_PROCESS"] },
+    orderStatus: statusIn,
   })
-    .select("_id orderId publicOrderCode remainingPlants orderStatus")
+    .select(orderSelect)
+    .populate(orderPop)
     .sort({ orderId: -1 })
     .limit(100)
     .lean();
+
+  if (!matchingOrders.length && unionIds.length > 0) {
+    matchingOrders = await Order.find({
+      _id: { $in: unionIds },
+      remainingPlants: { $gt: 0 },
+      orderStatus: statusIn,
+    })
+      .select(orderSelect)
+      .populate(orderPop)
+      .sort({ orderId: -1 })
+      .limit(100)
+      .lean();
+  }
 
   const response = generateResponse(
     "Success",
@@ -3029,7 +3318,69 @@ const getVehicleDispatchAllocationSuggestions = catchAsync(async (req, res, next
       plantRowName: row.name,
       plantRowQuantity: Number(row.quantity ?? row.totalPlants ?? 0) || 0,
       matchingOrders,
-      suggestions: stripped,
+      suggestions: suggestionsOut,
+      batches,
+      otherBatchesWithSamePlant: batchDocs.map((b) => b.batchNumber).filter(Boolean),
+    },
+    undefined
+  );
+  res.status(200).json(response);
+});
+
+/**
+ * FIFO secondary inward lines for farmer dispatch shade picker — matches nursery `pollyhouse` to shade name/number.
+ */
+const getFarmerDispatchPickupBatchSuggestions = catchAsync(async (req, res, next) => {
+  const plantCmsId = req.query.plantCmsId ?? req.query.plantName;
+  const plantSubtypeId = req.query.plantSubtypeId ?? req.query.plantSubtype;
+  if (!plantCmsId || !plantSubtypeId) {
+    return next(new AppError("Query plantCmsId and plantSubtypeId are required", 400));
+  }
+  if (
+    !mongoose.isValidObjectId(String(plantCmsId)) ||
+    !mongoose.isValidObjectId(String(plantSubtypeId))
+  ) {
+    return next(new AppError("plantCmsId and plantSubtypeId must be valid ObjectIds", 400));
+  }
+
+  const shadeName = req.query.shadeName != null ? String(req.query.shadeName) : "";
+  const shadeNumber = req.query.shadeNumber != null ? String(req.query.shadeNumber) : "";
+  const trayCavityRaw = req.query.trayCavity;
+  const trayCavity =
+    trayCavityRaw != null && String(trayCavityRaw).trim() !== ""
+      ? Number(trayCavityRaw)
+      : null;
+
+  const { suggestions: all, batchDocs } = await collectSecondaryInwardSuggestionsForPlantSubtype(
+    plantCmsId,
+    plantSubtypeId
+  );
+
+  let inShed = all;
+  if (shadeName.trim() || shadeNumber.trim()) {
+    inShed = all.filter((s) => shadeMatchesPollyhouse(s.pollyhouse, shadeName, shadeNumber));
+  }
+
+  let filtered = inShed;
+  if (trayCavity != null && Number.isFinite(trayCavity) && trayCavity > 0) {
+    const byCav = filtered.filter((s) => Number(s.cavity) === Number(trayCavity));
+    if (byCav.length) filtered = byCav;
+  }
+
+  const firstReady = filtered.find((s) => s.dispatchEligible);
+  const recommended = firstReady || filtered[0] || null;
+
+  const response = generateResponse(
+    "Success",
+    "Pickup batch suggestions for farmer dispatch (shade + cavity)",
+    {
+      plantCmsId,
+      plantSubtypeId,
+      shadeName,
+      shadeNumber,
+      trayCavity: trayCavity != null && Number.isFinite(trayCavity) ? trayCavity : null,
+      suggestions: filtered,
+      recommended,
       otherBatchesWithSamePlant: batchDocs.map((b) => b.batchNumber).filter(Boolean),
     },
     undefined
@@ -3162,5 +3513,6 @@ export {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
+  getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,
 };

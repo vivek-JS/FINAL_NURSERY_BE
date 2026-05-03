@@ -295,6 +295,10 @@ import tripRouter from "./routes/trip.route.js";
 import shadeRoter from "./routes/shades.route.js";
 import trayRouter from "./routes/tray.route.js";
 import dispatchRoute from "./routes/dispatched.route.js";
+import {
+  getDeliveryChallanInvoiceSequence,
+  putDeliveryChallanInvoiceSequence,
+} from "./controllers/invoiceSequence.controller.js";
 import msgRoute from "./routes/msg.route.js";
 import batchRoute from "./routes/batch.route.js";
 import plantOutward from "./routes/plantOutward.route.js";
@@ -303,6 +307,7 @@ import {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
+  getFarmerDispatchPickupBatchSuggestions,
   recordSecondaryPrimaryOutwardMortality,
   markSecondaryPrimaryOutwardSowingComplete,
   patchSecondaryInwardReadinessBypass,
@@ -314,6 +319,7 @@ import {
   optionalAuth,
   requirePaymentAccess,
   restrictRamAgriSalesManager,
+  authorizeRoles,
 } from "./middlewares/auth.middleware.js";
 import generateResponse from "./utility/responseFormat.js";
 import ExcelRoute from "./routes/excel.route.js";
@@ -409,7 +415,7 @@ server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
-server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook (public, no auth required)
+server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook + today's booking PDF report (same POST URL)
 // WATI status webhook (templateMessageSent_v2, delivered, read, failed)
 server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
@@ -509,6 +515,14 @@ server.use("/api/v1/vehicle-drivers", authenticateToken, vehicleDriverRouter);
 server.use("/api/v1/nursery-sites", authenticateToken, nurserySiteRouter);
 server.use("/api/v1/trips", authenticateToken, tripRouter);
 server.use("/api/v1/dispatched", authenticateToken, dispatchRoute);
+/** Explicit bindings — same pattern as dashboard-tab-counts / laboutward (always resolves). */
+server.get("/api/v1/invoice-sequence", authenticateToken, getDeliveryChallanInvoiceSequence);
+server.put(
+  "/api/v1/invoice-sequence",
+  authenticateToken,
+  authorizeRoles(["SUPER_ADMIN", "ADMIN", "ACCOUNTANT"]),
+  putDeliveryChallanInvoiceSequence
+);
 server.use("/api/v1/msg", authenticateToken, msgRoute);
 server.use("/api/v1/maps", mapsRoute); // Maps API proxy (requires auth)
 server.use("/api/v1/batch", authenticateToken, batchRoute);
@@ -544,6 +558,11 @@ server.get(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
   authenticateToken,
   getVehicleDispatchAllocationSuggestions
+);
+server.get(
+  "/api/v1/laboutward/secondary/farmer-dispatch/pickup-batch-suggestions",
+  authenticateToken,
+  getFarmerDispatchPickupBatchSuggestions
 );
 /** Explicit GET — same pattern as readiness-bypass (always resolves on nested laboutward paths). */
 server.get(

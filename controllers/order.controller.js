@@ -723,6 +723,7 @@ const updateOrder = updateOne(Order, "Order", [
   "orderFor", // Book-for-someone-else (editable until order is terminal)
   "expectedNursery", // Nursery site code from CMS (RB, GH, …)
   "batchNumber", // Lot / batch from complete-delivery form or manual edit
+  "deliveryChallanInvoiceNumber", // Legacy / manual DC label when dispatch legs have no sequenced invoice #
 ]);
 /**
  * Add a new payment to an order and update dealer wallet accordingly

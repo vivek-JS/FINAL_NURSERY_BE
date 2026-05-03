@@ -409,6 +409,11 @@ const secondaryOutwardSchema = new Schema({
     type: Number,
     min: 0,
   },
+  /** 1-based order when recording multiple secondary outwards for one vehicle pickup session (FIFO). */
+  dispatchFulfillmentSequence: {
+    type: Number,
+    min: 1,
+  },
   evidencePhotoUrls: {
     type: [String],
     default: undefined,

@@ -2,6 +2,7 @@ import catchAsync from "../utility/catchAsync.js";
 import Farmer from "../models/farmer.model.js";
 import FarmerLead from "../models/farmerLead.model.js";
 import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
+import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
 
 /**
  * Parse webhook timestamp to valid Date.
@@ -117,6 +118,11 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
       });
     }
   }
+
+  // Today's booking PDF on same URL — non-blocking; only sends if message matches triggers
+  void runTodayBookingPdfJob(req.body).catch((err) => {
+    console.error("[booking report] Failed:", err?.message || err);
+  });
 
   // Extract event type and phone number from webhook payload
   let eventType = null;

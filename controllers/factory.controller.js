@@ -31,6 +31,7 @@ import {
   resolveFarmerIdentity,
   roundMoney,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
 import {
   getOrderUpdateUserContext,
   DISPATCH_MANAGER_ALLOWED_STATUSES,
@@ -794,6 +795,14 @@ const createOne = (Model, modelName) =>
         };
         
         orderDocument.orderStatus = resolvedOrderStatus;
+
+        // Instant sale / walk-away dispatch: reserve DC invoice number immediately (same sequence as vehicle dispatch).
+        if (resolvedOrderStatus === "DISPATCHED") {
+          const [instantInv] = await allocateNextInvoiceNumbers(session, 1);
+          if (instantInv) {
+            orderDocument.deliveryChallanInvoiceNumber = instantInv;
+          }
+        }
 
         // Who placed the order (API user) vs attributed salesPerson — set server-side so clients cannot spoof
         orderDocument.orderSubmittedBy =
@@ -1854,6 +1863,61 @@ const updateOne = (Model, modelName, allowedFields) =>
                 notes: `Plant subtype changed from ${prevName} to ${nextName}`,
               });
             }
+          }
+        }
+      }
+
+      // Delivery challan invoice label (legacy backfill or correction). Same roles as core order edits.
+      // If dispatch legs already store sequenced invoice numbers, only SUPER_ADMIN / OFFICE_ADMIN may change this field.
+      if (filteredBody.deliveryChallanInvoiceNumber !== undefined) {
+        if (!canEditOrderCore) {
+          rejectedFields.push({
+            field: "deliveryChallanInvoiceNumber",
+            reason: "INSUFFICIENT_PERMISSION",
+            detail:
+              "Only OFFICE_ADMIN, SUPER_ADMIN, ACCOUNTANT, or DISPATCH_MANAGER may change the DC invoice label.",
+            value: filteredBody.deliveryChallanInvoiceNumber,
+          });
+          delete filteredBody.deliveryChallanInvoiceNumber;
+        } else {
+          const raw = filteredBody.deliveryChallanInvoiceNumber;
+          const normalized =
+            raw === null || raw === undefined || raw === ""
+              ? null
+              : String(raw).trim() || null;
+          const prevRaw = existingDoc.deliveryChallanInvoiceNumber;
+          const prev =
+            prevRaw === null || prevRaw === undefined || prevRaw === ""
+              ? null
+              : String(prevRaw).trim() || null;
+          const hist = Array.isArray(existingDoc.dispatchHistory)
+            ? existingDoc.dispatchHistory
+            : [];
+          const hasLegInvoice = hist.some(
+            (h) => h?.invoiceNumber && String(h.invoiceNumber).trim() !== ""
+          );
+          if (hasLegInvoice && !canChangeOrderStatusFull) {
+            rejectedFields.push({
+              field: "deliveryChallanInvoiceNumber",
+              reason: "DISPATCH_INVOICE_LOCKED",
+              detail:
+                "DC label cannot be changed when dispatch legs already have invoice numbers (SUPER_ADMIN / OFFICE_ADMIN may override).",
+              value: filteredBody.deliveryChallanInvoiceNumber,
+            });
+            delete filteredBody.deliveryChallanInvoiceNumber;
+          } else if (normalized === prev) {
+            delete filteredBody.deliveryChallanInvoiceNumber;
+          } else {
+            filteredBody.deliveryChallanInvoiceNumber = normalized;
+            editHistoryEntries.push({
+              field: "deliveryChallanInvoiceNumber",
+              previousValue: prev,
+              newValue: normalized,
+              changedBy: req.user ? req.user._id : null,
+              notes: `Delivery challan invoice label changed from ${prev ?? "—"} to ${
+                normalized ?? "—"
+              }`,
+            });
           }
         }
       }

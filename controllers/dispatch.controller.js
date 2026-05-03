@@ -26,6 +26,7 @@ import {
   formatOrderWalletDescriptionContext,
   sumCollectedFromNewPaymentSubdocs,
 } from "../utils/dispatchCompleteOrderPayments.js";
+import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -325,12 +326,31 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
     const dispatch = await Dispatch.create([dispatchRequest], { session });
 
+    const splitDetails = Array.isArray(dispatchRequest.orderDispatchDetails)
+      ? dispatchRequest.orderDispatchDetails
+      : [];
+
+    const ordersForSplit = [];
+    for (const od of splitDetails) {
+      ordersForSplit.push(await Order.findById(od.orderId).session(session));
+    }
+
+    const needFreshInvoices = ordersForSplit.filter(
+      (o) => o && !String(o.deliveryChallanInvoiceNumber || "").trim()
+    ).length;
+    const freshInvoiceLabels =
+      splitDetails.length > 0 && needFreshInvoices > 0
+        ? await allocateNextInvoiceNumbers(session, needFreshInvoices)
+        : [];
+    let freshInvoiceIdx = 0;
+
     // Handle partial/split dispatches if orderDispatchDetails is provided
-    if (dispatchRequest.orderDispatchDetails && dispatchRequest.orderDispatchDetails.length > 0) {
+    if (splitDetails.length > 0) {
       // Update each order individually with dispatch details
-      for (const orderDispatch of dispatchRequest.orderDispatchDetails) {
-        const order = await Order.findById(orderDispatch.orderId).session(session);
-        
+      for (let i = 0; i < splitDetails.length; i++) {
+        const orderDispatch = splitDetails[i];
+        const order = ordersForSplit[i];
+
         if (!order) {
           throw new AppError(`Order not found: ${orderDispatch.orderId}`, 404);
         }
@@ -358,6 +378,10 @@ const createDispatch = catchAsync(async (req, res, next) => {
           newStatus = "DISPATCH_PROCESS";
         }
 
+        const preAssigned = String(order.deliveryChallanInvoiceNumber || "").trim();
+        const invoiceLabel =
+          preAssigned || freshInvoiceLabels[freshInvoiceIdx++] || "";
+
         // Add dispatch history entry
         const dispatchHistoryEntry = {
           date: new Date(),
@@ -367,19 +391,25 @@ const createDispatch = catchAsync(async (req, res, next) => {
           processedBy: req.user ? req.user._id : null,
           driverName: dispatchRequest.driverName || "",
           vehicleName: dispatchRequest.vehicleName || "",
+          ...(invoiceLabel ? { invoiceNumber: invoiceLabel } : {}),
         };
+
+        const setFields = {
+          remainingPlants: newRemainingPlants,
+          orderStatus: newStatus,
+          currentDispatchId: dispatch[0]._id, // Set the current dispatch reference
+          ...(expectedNurseryGlobal ? { expectedNursery: expectedNurseryGlobal } : {}),
+        };
+        if (!preAssigned && invoiceLabel) {
+          setFields.deliveryChallanInvoiceNumber = invoiceLabel;
+        }
 
         // Update the order
         await updateOrderWithLedgerSync({
           orderId: orderDispatch.orderId,
           existingDoc: order,
           updateOperation: {
-            $set: {
-              remainingPlants: newRemainingPlants,
-              orderStatus: newStatus,
-              currentDispatchId: dispatch[0]._id, // Set the current dispatch reference
-              ...(expectedNurseryGlobal ? { expectedNursery: expectedNurseryGlobal } : {}),
-            },
+            $set: setFields,
             $push: {
               dispatchHistory: dispatchHistoryEntry,
             },
@@ -859,6 +889,22 @@ const updateDispatch = catchAsync(async (req, res, next) => {
     }
 
     // --- New orders added on edit ---
+    const newlyAddedOrderIds = effectiveNewIds.filter((id) => !oldIdSet.has(id));
+    const newOrderDocs = await Promise.all(
+      newlyAddedOrderIds.map((nid) => Order.findById(nid).session(session))
+    );
+    const newOrderById = new Map(
+      newlyAddedOrderIds.map((id, idx) => [String(id), newOrderDocs[idx]])
+    );
+    const needFreshInvoiceCount = newOrderDocs.filter(
+      (o) => o && !String(o.deliveryChallanInvoiceNumber || "").trim()
+    ).length;
+    const newOrderInvoiceLabels =
+      needFreshInvoiceCount > 0
+        ? await allocateNextInvoiceNumbers(session, needFreshInvoiceCount)
+        : [];
+    let newOrderInvoiceIdx = 0;
+
     for (const newId of effectiveNewIds) {
       if (oldIdSet.has(newId)) continue;
       const newQty = newDetailsByOrder.get(newId);
@@ -868,7 +914,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
           400
         );
       }
-      const order = await Order.findById(newId).session(session);
+      const order = newOrderById.get(String(newId));
       if (!order) throw new AppError(`Order not found: ${newId}`, 404);
       const currentRemaining = orderRemainingOrBookable(order);
       if (newQty > currentRemaining) {
@@ -879,6 +925,9 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       }
       const newRemaining = currentRemaining - newQty;
       const newStatus = orderStatusFromRemaining(order, newRemaining);
+      const preAssignedInv = String(order.deliveryChallanInvoiceNumber || "").trim();
+      const nextInvoiceLabel =
+        preAssignedInv || newOrderInvoiceLabels[newOrderInvoiceIdx++] || "";
       const dispatchHistoryEntry = {
         date: new Date(),
         quantity: newQty,
@@ -887,7 +936,16 @@ const updateDispatch = catchAsync(async (req, res, next) => {
         processedBy: req.user ? req.user._id : null,
         driverName: raw.driverName ?? existing.driverName ?? "",
         vehicleName: raw.vehicleName ?? existing.vehicleName ?? "",
+        ...(nextInvoiceLabel ? { invoiceNumber: nextInvoiceLabel } : {}),
       };
+      const setUpdateDispatchAdd = {
+        remainingPlants: newRemaining,
+        orderStatus: newStatus,
+        currentDispatchId: dispatchOid,
+      };
+      if (!preAssignedInv && nextInvoiceLabel) {
+        setUpdateDispatchAdd.deliveryChallanInvoiceNumber = nextInvoiceLabel;
+      }
       await updateOrderWithLedgerSync({
         orderId: newId,
         existingDoc: order,
@@ -895,11 +953,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
         userId: req.user?._id,
         contextLabel: "update_dispatch_add_order",
         updateOperation: {
-          $set: {
-            remainingPlants: newRemaining,
-            orderStatus: newStatus,
-            currentDispatchId: dispatchOid,
-          },
+          $set: setUpdateDispatchAdd,
           $push: { dispatchHistory: dispatchHistoryEntry },
         },
       });
@@ -1619,6 +1673,13 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
       throw new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404);
     }
 
+    const preAssignedQuick = String(order.deliveryChallanInvoiceNumber || "").trim();
+    let quickInvoiceLabel = preAssignedQuick;
+    if (!quickInvoiceLabel) {
+      const [freshQuick] = await allocateNextInvoiceNumbers(session, 1);
+      quickInvoiceLabel = freshQuick || "";
+    }
+
     const dispatchHistoryEntry = {
       date: new Date(),
       quantity: qty,
@@ -1627,18 +1688,24 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
       processedBy: req.user ? req.user._id : null,
       driverName: existingDispatch.driverName || "",
       vehicleName: existingDispatch.vehicleName || "",
+      ...(quickInvoiceLabel ? { invoiceNumber: quickInvoiceLabel } : {}),
     };
+
+    const quickAddSet = {
+      remainingPlants: newRemainingPlants,
+      orderStatus: newStatus,
+      currentDispatchId: dispatchOid,
+      cavity: trayLean._id,
+    };
+    if (!preAssignedQuick && quickInvoiceLabel) {
+      quickAddSet.deliveryChallanInvoiceNumber = quickInvoiceLabel;
+    }
 
     await updateOrderWithLedgerSync({
       orderId,
       existingDoc: order,
       updateOperation: {
-        $set: {
-          remainingPlants: newRemainingPlants,
-          orderStatus: newStatus,
-          currentDispatchId: dispatchOid,
-          cavity: trayLean._id,
-        },
+        $set: quickAddSet,
         $push: {
           dispatchHistory: dispatchHistoryEntry,
         },
@@ -1874,6 +1941,9 @@ const getDispatches = catchAsync(async (req, res, next) => {
                     $arrayElemAt: ["$salesPersonDetails.phoneNumber", 0],
                   },
                 },
+                dispatchHistory: "$orderDetails.dispatchHistory",
+                deliveryChallanInvoiceNumber:
+                  "$orderDetails.deliveryChallanInvoiceNumber",
                 bookingSlot: {
                   startDay: {
                     $arrayElemAt: ["$bookingSlotDetails.startDay", 0],
@@ -2188,6 +2258,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
       orderIds: dispatch.orderIds.map((order) => ({
         _id: order._id,
         orderId: order.orderId,
+        deliveryChallanInvoiceNumber: order.deliveryChallanInvoiceNumber || "",
         farmer: order.farmer,
         salesPerson: order.salesPerson,
         plantName: order.plantName,

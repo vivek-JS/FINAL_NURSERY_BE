@@ -22,7 +22,20 @@ const pickupDetailSchema = new Schema({
   cavityName: {
     type: String,
     required: true,
-  }
+  },
+  /** Optional — nursery batch / secondary inward line picked when shade was chosen (farmer dispatch traceability). */
+  batchId: {
+    type: Schema.Types.ObjectId,
+    ref: "DispatchBatch",
+  },
+  batchNumber: { type: String, default: "" },
+  plantOutwardId: {
+    type: Schema.Types.ObjectId,
+    ref: "PlantOutward",
+  },
+  secondaryInwardId: { type: Schema.Types.ObjectId },
+  secondaryInwardDate: { type: Date },
+  pollyhouseMatched: { type: String, default: "" },
 });
 
 const crateSchema = new Schema({
