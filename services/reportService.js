@@ -1,5 +1,16 @@
 import moment from "moment";
 import Booking from "../models/Booking.js";
+import Order from "../models/order.model.js";
+
+/**
+ * `orders` (default) = real farmer plant orders for today (IST) from `orders` + PlantCms.
+ * `bookings` = legacy standalone `bookings` collection.
+ */
+function getBookingReportSource() {
+  return (process.env.BOOKING_REPORT_SOURCE || "orders")
+    .trim()
+    .toLowerCase();
+}
 
 /** @type {readonly string[]} */
 const REPORT_TRIGGER_PHRASES_EN = ["today booking", "booking report"];
@@ -50,10 +61,109 @@ export function formatPlantCell(plantName, plantType) {
   return type ? `${name} (${type})` : name;
 }
 
+function subtypeLabelFromPlantDoc(plantDoc, subtypeId) {
+  if (!plantDoc?.subtypes?.length || !subtypeId) {
+    return "—";
+  }
+  const sid = String(subtypeId);
+  const m = plantDoc.subtypes.find((s) => String(s._id) === sid);
+  return m?.name ? String(m.name).trim() : "—";
+}
+
+function orderQuantity(order) {
+  const t = Number(order.totalPlants);
+  if (!Number.isNaN(t) && t > 0) {
+    return t;
+  }
+  return (
+    (Number(order.numberOfPlants) || 0) + (Number(order.additionalPlants) || 0)
+  );
+}
+
 /**
- * Today's bookings for PDF: detail lines + aggregate summary + headline figures.
+ * Today's data from `orders` + PlantCms + Farmer (production bookings).
  */
-export async function fetchTodayBookingReportData() {
+async function fetchTodayBookingReportDataFromOrders() {
+  const { start, end } = getTodayRangeIST();
+
+  const orders = await Order.find({
+    orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+    $or: [
+      { orderBookingDate: { $gte: start, $lte: end } },
+      {
+        $and: [
+          {
+            $or: [
+              { orderBookingDate: null },
+              { orderBookingDate: { $exists: false } },
+            ],
+          },
+          { createdAt: { $gte: start, $lte: end } },
+        ],
+      },
+    ],
+  })
+    .populate("farmer", "name mobileNumber")
+    .populate("plantName", "name subtypes")
+    .sort({ orderBookingDate: 1, createdAt: 1 })
+    .lean();
+
+  /** @type {{ farmerName: string, plantName: string, plantType: string, subtype: string, quantity: number }[]} */
+  const lineRows = [];
+
+  /** @type {Record<string, Record<string, number>>} */
+  const grouped = {};
+  let grandTotal = 0;
+  const farmerKeySet = new Set();
+
+  for (const row of orders) {
+    const farmerName =
+      (row.farmer?.name && String(row.farmer.name).trim()) || "—";
+    const plantDoc = row.plantName;
+    const plantDisplay =
+      (plantDoc?.name && String(plantDoc.name).trim()) || "Unknown";
+    const sub = subtypeLabelFromPlantDoc(plantDoc, row.plantSubtype);
+    const qty = orderQuantity(row);
+
+    lineRows.push({
+      farmerName,
+      plantName: plantDisplay,
+      plantType: "",
+      subtype: sub,
+      quantity: qty,
+    });
+
+    if (!grouped[plantDisplay]) {
+      grouped[plantDisplay] = {};
+    }
+    grouped[plantDisplay][sub] = (grouped[plantDisplay][sub] || 0) + qty;
+    grandTotal += qty;
+
+    if (farmerName && farmerName !== "—") {
+      farmerKeySet.add(farmerName.toLowerCase());
+    }
+  }
+
+  const summaryRows = groupedToTableRows(grouped);
+
+  return {
+    lineRows,
+    summaryRows,
+    grouped,
+    stats: {
+      grandTotal,
+      bookingLines: orders.length,
+      uniqueFarmers: farmerKeySet.size,
+    },
+    range: { start, end },
+    source: "orders",
+  };
+}
+
+/**
+ * Legacy: standalone `bookings` collection only.
+ */
+async function fetchTodayBookingReportDataFromBookingsCollection() {
   const { start, end } = getTodayRangeIST();
 
   const docs = await Booking.find({
@@ -115,7 +225,20 @@ export async function fetchTodayBookingReportData() {
       uniqueFarmers: farmerKeySet.size,
     },
     range: { start, end },
+    source: "bookings",
   };
+}
+
+/**
+ * Today's bookings for PDF: detail lines + aggregate summary + headline figures.
+ * Default: farmer **orders** for today (IST). Set `BOOKING_REPORT_SOURCE=bookings` for legacy collection.
+ */
+export async function fetchTodayBookingReportData() {
+  const src = getBookingReportSource();
+  if (src === "bookings") {
+    return fetchTodayBookingReportDataFromBookingsCollection();
+  }
+  return fetchTodayBookingReportDataFromOrders();
 }
 
 /**
@@ -205,13 +328,19 @@ export function formatBookingFiguresWhatsApp(
     lines.push("Plant-wise → Subtype & qty", "");
     lines.push(...formatPlantSubtypeBlocksForWhatsApp(summaryRows));
   } else {
-    lines.push(
-      "Plant-wise: no entries yet.",
-      "",
-      "There are no booking rows stored for today (India date).",
-      "Enter today’s bookings in the bookings collection or sync from orders.",
-      ""
-    );
+    lines.push("Plant-wise: no entries yet.", "");
+    if (getBookingReportSource() === "bookings") {
+      lines.push(
+        "No rows in the standalone bookings collection for today (IST).",
+        ""
+      );
+    } else {
+      lines.push(
+        "No farmer orders for today (IST): we match orderBookingDate today,",
+        "or createdAt today if booking date is empty (cancelled/rejected excluded).",
+        ""
+      );
+    }
   }
 
   lines.push("──────────", "PDF file comes in the next message (when upload is configured).");
