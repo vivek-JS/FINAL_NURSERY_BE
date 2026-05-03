@@ -6,6 +6,7 @@ import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
 import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
+import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
 
 const WATI_BASE_URL = getWatiBaseUrl();
 const WATI_TOKEN = getWatiToken();
@@ -451,6 +452,11 @@ function clearConversationState(mobileNumber) {
  * Handle incoming WhatsApp webhook from Wati
  */
 export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
+  // Today’s booking report (same triggers as /api/v1/opt-in/webhook) — WATI often points "Message Received" here
+  void runTodayBookingPdfJob(req.body).catch((err) => {
+    console.error("[booking report] Failed (whatsapp-order webhook):", err?.message || err);
+  });
+
   // 🔥 RAW WATI WEBHOOK LOGGER
   console.log("\n🔥🔥🔥 RAW WATI WEBHOOK RECEIVED 🔥🔥🔥\n");
   console.log("📋 REQUEST INFO:");
