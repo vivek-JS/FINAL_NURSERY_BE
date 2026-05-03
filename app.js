@@ -72,7 +72,11 @@ const staticFallbackOrigins = [
   'http://localhost:8085',
   'http://127.0.0.1:8085',
   'exp://localhost:8081',
-  'exp://127.0.0.1:8081'
+  'exp://127.0.0.1:8081',
+  // Production web app (browser Origin must match; explicit list avoids deploy drift)
+  'https://erp.rambiotechplants.com',
+  'https://www.rambiotechplants.com',
+  'https://rambiotechplants.com',
 ].map(normalizeOrigin);
 
 const dynamicEnvOrigins = [
@@ -142,10 +146,31 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Version', 'Origin', 'Accept', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'User-Agent', 'Referer', 'Cookie'],
+  // Browsers preflight with Access-Control-Request-Headers; missing entries → CORS failure on iOS Safari / Chrome mobile.
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'X-API-Version',
+    'Origin',
+    'Accept',
+    'Accept-Language',
+    'sec-ch-ua',
+    'sec-ch-ua-mobile',
+    'sec-ch-ua-platform',
+    'User-Agent',
+    'Referer',
+    'Cookie',
+    'Sec-Fetch-Mode',
+    'Sec-Fetch-Site',
+    'Sec-Fetch-Dest',
+    'Sec-Fetch-Storage-Access',
+    'Priority',
+  ],
   exposedHeaders: ['X-Total-Count', 'X-Page-Count'],
   optionsSuccessStatus: 200,
-  preflightContinue: false
+  preflightContinue: false,
+  maxAge: 24 * 60 * 60,
 };
 server.use(cors(corsOptions));
 

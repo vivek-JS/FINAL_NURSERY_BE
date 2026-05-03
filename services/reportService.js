@@ -152,7 +152,36 @@ export function groupedToTableRows(grouped) {
 }
 
 /**
- * Short WhatsApp text with headline figures + plant×subtype breakdown (for WATI session message).
+ * Group summary rows under plant name for readable WhatsApp text.
+ * @param {{ plant: string, subtype: string, quantity: number }[]} summaryRows
+ */
+function formatPlantSubtypeBlocksForWhatsApp(summaryRows) {
+  /** @type {Record<string, { subtype: string, quantity: number }[]>} */
+  const byPlant = {};
+  for (const r of summaryRows) {
+    const p = r.plant || "—";
+    if (!byPlant[p]) {
+      byPlant[p] = [];
+    }
+    byPlant[p].push({ subtype: r.subtype || "—", quantity: r.quantity });
+  }
+  const plants = Object.keys(byPlant).sort((a, b) => a.localeCompare(b));
+  const lines = [];
+  for (const plant of plants) {
+    lines.push(`${plant}`);
+    const subs = byPlant[plant].sort((a, b) =>
+      a.subtype.localeCompare(b.subtype)
+    );
+    for (const { subtype, quantity } of subs) {
+      lines.push(`  • ${subtype}: ${quantity}`);
+    }
+    lines.push("");
+  }
+  return lines;
+}
+
+/**
+ * Short WhatsApp text with headline figures + plant→subtype breakdown (for WATI session message).
  * @param {string} reportDateLabel
  * @param {{ grandTotal: number, bookingLines: number, uniqueFarmers: number }} stats
  * @param {{ plant: string, subtype: string, quantity: number }[]} summaryRows
@@ -165,26 +194,29 @@ export function formatBookingFiguresWhatsApp(
   const lines = [
     `Today's booking — ${reportDateLabel}`,
     "",
-    `Total qty: ${stats.grandTotal}`,
-    `Lines: ${stats.bookingLines}`,
+    "Summary",
+    `Total qty (plants): ${stats.grandTotal}`,
+    `Booking lines: ${stats.bookingLines}`,
     `Farmers (named): ${stats.uniqueFarmers}`,
     "",
   ];
+
   if (summaryRows.length) {
-    lines.push("Plant × subtype:");
-    const maxLines = 40;
-    const slice = summaryRows.slice(0, maxLines);
-    for (const r of slice) {
-      lines.push(`• ${r.plant} / ${r.subtype}: ${r.quantity}`);
-    }
-    if (summaryRows.length > maxLines) {
-      lines.push(`… +${summaryRows.length - maxLines} more (see PDF)`);
-    }
+    lines.push("Plant-wise → Subtype & qty", "");
+    lines.push(...formatPlantSubtypeBlocksForWhatsApp(summaryRows));
   } else {
-    lines.push("No bookings today.");
+    lines.push(
+      "Plant-wise: no entries yet.",
+      "",
+      "There are no booking rows stored for today (India date).",
+      "Enter today’s bookings in the bookings collection or sync from orders.",
+      ""
+    );
   }
-  lines.push("", "Detailed PDF follows.");
-  let text = lines.join("\n");
+
+  lines.push("──────────", "PDF file comes in the next message (when upload is configured).");
+
+  let text = lines.join("\n").trimEnd();
   if (text.length > 3800) {
     text = `${text.slice(0, 3770)}…`;
   }
