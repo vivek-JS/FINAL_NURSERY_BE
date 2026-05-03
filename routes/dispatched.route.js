@@ -9,6 +9,7 @@ import {
   handleDispatchReturns,
   assignRoute,
   bulkMarkReady,
+  detachOrderFromDispatch,
 } from "../controllers/dispatch.controller.js";
 
 const router = express.Router();
@@ -32,6 +33,7 @@ router.patch("/bulk-mark-ready", bulkMarkReady);
 router.patch("/:id", updateDispatch);
 // PATCH add a post-dispatch (quick) order to a vehicle — safe from mongo-sanitize
 router.patch("/:id/add-order", addOrderToDispatch);
+router.patch("/:id/detach-order", detachOrderFromDispatch);
 router.delete("/transport/:transportId", removeTransport);
 router.patch("/complete/:id", handleDispatchReturns);
 

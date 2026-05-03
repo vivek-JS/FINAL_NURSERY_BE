@@ -125,6 +125,12 @@ const varietySchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  /** Sort order within this crop’s variety / pack dropdown (lower = earlier). */
+  displayOrder: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
 }, {
   _id: true,
   timestamps: false,
@@ -166,6 +172,16 @@ const ramAgriInputsProductSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     },
+    /**
+     * Sort order for master list + all product (crop) dropdowns — seed/chemical lists are ordered separately.
+     * Lower numbers appear first. Defaults to 0 for legacy rows; set explicitly from master UI.
+     */
+    displayOrder: {
+      type: Number,
+      default: 0,
+      min: 0,
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -174,6 +190,7 @@ const ramAgriInputsProductSchema = new mongoose.Schema(
 
 // Indexes for better query performance
 ramAgriInputsProductSchema.index({ productType: 1, cropName: 1 });
+ramAgriInputsProductSchema.index({ productType: 1, displayOrder: 1, cropName: 1 });
 ramAgriInputsProductSchema.index({ cropName: 1 });
 ramAgriInputsProductSchema.index({ isActive: 1 });
 ramAgriInputsProductSchema.index({ createdAt: -1 });

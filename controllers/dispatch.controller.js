@@ -164,6 +164,16 @@ const generateTransportId = async (attempts = 0) => {
   return newTransportId;
 };
 
+/** Same rules as `getDispatchLoadStatus` in agriSalesOrder.controller — LOADED or already shipped from Ram Agri. */
+const linkedAgriLoadSatisfiedForNursery = (order) => {
+  const load = String(order?.agriLoadStatus || "").toUpperCase();
+  if (load === "LOADED") return true;
+  const ds = String(order?.dispatchStatus || "").toUpperCase();
+  const os = String(order?.orderStatus || "").toUpperCase();
+  if (ds === "DISPATCHED" || os === "DISPATCHED") return true;
+  return false;
+};
+
 const getPendingLinkedAgriLoads = async (orderIds = []) => {
   const normalizedOrderIds = (Array.isArray(orderIds) ? orderIds : [])
     .filter((id) => mongoose.isValidObjectId(String(id)))
@@ -172,15 +182,16 @@ const getPendingLinkedAgriLoads = async (orderIds = []) => {
     return [];
   }
 
-  const pendingAgriOrders = await AgriSalesOrder.find({
+  const candidates = await AgriSalesOrder.find({
     linkedNurseryOrderId: { $in: normalizedOrderIds },
     orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
-    agriLoadStatus: { $ne: "LOADED" },
   })
-    .select("orderNumber linkedNurseryOrderCode customerName productName quantity agriLoadStatus")
+    .select(
+      "orderNumber linkedNurseryOrderCode customerName productName quantity agriLoadStatus dispatchStatus orderStatus"
+    )
     .lean();
 
-  return pendingAgriOrders;
+  return candidates.filter((o) => !linkedAgriLoadSatisfiedForNursery(o));
 };
 
 const markLinkedAgriLoadedForDispatch = async ({
@@ -198,7 +209,6 @@ const markLinkedAgriLoadedForDispatch = async ({
   const linkedOrders = await AgriSalesOrder.find({
     linkedNurseryOrderId: { $in: normalizedOrderIds },
     orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
-    agriLoadStatus: { $ne: "LOADED" },
   }).session(session);
 
   if (!linkedOrders.length) return;
@@ -207,6 +217,7 @@ const markLinkedAgriLoadedForDispatch = async ({
   const performedByName = user?.name || "Unknown";
 
   for (const linkedOrder of linkedOrders) {
+    if (linkedAgriLoadSatisfiedForNursery(linkedOrder)) continue;
     linkedOrder.agriLoadStatus = "LOADED";
     linkedOrder.loadedAt = new Date();
     linkedOrder.loadedBy = performedBy;
@@ -238,6 +249,14 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
   try {
     const dispatchRequest = { ...req.body };
+    const expectedNurseryGlobal =
+      dispatchRequest.expectedNursery != null &&
+      String(dispatchRequest.expectedNursery).trim() !== ""
+        ? String(dispatchRequest.expectedNursery).trim()
+        : "";
+    if (dispatchRequest.expectedNursery !== undefined) {
+      delete dispatchRequest.expectedNursery;
+    }
     const autoMarkLinkedAgriLoaded = Boolean(dispatchRequest.autoMarkLinkedAgriLoaded);
     if (dispatchRequest.autoMarkLinkedAgriLoaded !== undefined) {
       delete dispatchRequest.autoMarkLinkedAgriLoaded;
@@ -359,6 +378,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
               remainingPlants: newRemainingPlants,
               orderStatus: newStatus,
               currentDispatchId: dispatch[0]._id, // Set the current dispatch reference
+              ...(expectedNurseryGlobal ? { expectedNursery: expectedNurseryGlobal } : {}),
             },
             $push: {
               dispatchHistory: dispatchHistoryEntry,
@@ -377,6 +397,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
           $set: {
             orderStatus: "DISPATCH_PROCESS",
             currentDispatchId: dispatch[0]._id,
+            ...(expectedNurseryGlobal ? { expectedNursery: expectedNurseryGlobal } : {}),
           },
           $push: {
             statusChanges: {
@@ -559,15 +580,62 @@ const normalizeCellToOrderIdString = (cell) => {
   return String(cell);
 };
 
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Shown when :id does not resolve to an active dispatch document. */
+const DISPATCH_LOOKUP_NOT_FOUND =
+  "No active dispatch matches this id. Use the dispatch _id or transportId from the vehicles list, or an order id on that vehicle. Removed vehicles are not available.";
+
+/**
+ * Resolve a dispatch by Mongo `_id`, `transportId`, or an order `_id` on that vehicle
+ * (clients sometimes pass order id). Excludes soft-deleted rows — same scope as GET list.
+ */
+const findDispatchDocumentFlexible = async (idParam, session = null) => {
+  let raw = String(idParam ?? "").trim();
+  if (!raw) return null;
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    /* ignore */
+  }
+
+  const withSession = (q) => (session ? q.session(session) : q);
+  const active = { isDeleted: { $ne: true } };
+
+  let doc = await withSession(Dispatch.findById(raw));
+  if (doc?.isDeleted) doc = null;
+  if (doc) return doc;
+
+  doc = await withSession(Dispatch.findOne({ transportId: raw, ...active }));
+  if (doc) return doc;
+
+  doc = await withSession(
+    Dispatch.findOne({
+      transportId: new RegExp(`^${escapeRegex(raw)}$`, "i"),
+      ...active,
+    })
+  );
+  if (doc) return doc;
+
+  doc = await withSession(Dispatch.findOne({ routeId: raw, ...active }));
+  if (doc) return doc;
+
+  if (mongoose.isValidObjectId(raw)) {
+    const oid = new mongoose.Types.ObjectId(raw);
+    doc = await withSession(
+      Dispatch.findOne({
+        ...active,
+        $or: [{ orderIds: oid }, { afterDispatchedOrderIds: oid }],
+      })
+    );
+  }
+
+  return doc || null;
+};
+
 // Update dispatch controller — keeps Order docs in sync (remaining, history, status, ledger).
 const updateDispatch = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-  const dispatchOid = mongoose.isValidObjectId(String(id))
-    ? new mongoose.Types.ObjectId(String(id))
-    : null;
-  if (!dispatchOid) {
-    return next(new AppError("Invalid dispatch id", 400));
-  }
 
   const rawBody = { ...req.body };
   if (rawBody.transportId) {
@@ -578,10 +646,11 @@ const updateDispatch = catchAsync(async (req, res, next) => {
   session.startTransaction();
 
   try {
-    const existing = await Dispatch.findById(dispatchOid).session(session);
+    const existing = await findDispatchDocumentFlexible(id, session);
     if (!existing) {
-      throw new AppError("No dispatch found with that ID", 404);
+      throw new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404);
     }
+    const dispatchOid = existing._id;
 
     if (existing.transportStatus === "DELIVERED") {
       const risky = ["orderIds", "orderDispatchDetails", "plantsDetails", "afterDispatchedOrderIds"];
@@ -936,6 +1005,34 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       throw new AppError("Failed to update dispatch", 500);
     }
 
+    const expectedNurseryPatch =
+      raw.expectedNursery != null && String(raw.expectedNursery).trim() !== ""
+        ? String(raw.expectedNursery).trim()
+        : "";
+    const terminalStatuses = new Set([
+      "COMPLETED",
+      "PARTIALLY_COMPLETED",
+      "CANCELLED",
+      "REJECTED",
+    ]);
+    if (expectedNurseryPatch && effectiveNewIds.length) {
+      for (const oidStr of effectiveNewIds) {
+        const order = await Order.findById(oidStr).session(session);
+        if (!order) continue;
+        if (terminalStatuses.has(String(order.orderStatus || ""))) continue;
+        await updateOrderWithLedgerSync({
+          orderId: oidStr,
+          existingDoc: order,
+          session,
+          userId: req.user?._id,
+          contextLabel: "update_dispatch_expected_nursery",
+          updateOperation: {
+            $set: { expectedNursery: expectedNurseryPatch },
+          },
+        });
+      }
+    }
+
     await session.commitTransaction();
 
     const response = generateResponse(
@@ -1089,6 +1186,262 @@ const mergePlantsDetailsForQuickAdd = (
   return list;
 };
 
+/**
+ * When removing one order from a dispatch, reduce plantsDetails aggregates so PATCH payloads stay consistent.
+ */
+const prunePlantsDetailsForRemovedOrder = (plantsDetails, removalRow, orderLean) => {
+  const list = JSON.parse(JSON.stringify(plantsDetails || []));
+  if (!removalRow || !orderLean) return list;
+  const qty = Math.max(0, Number(removalRow.dispatchQuantity || 0));
+  if (qty <= 0) return list;
+  const plantId = orderLean.plantName?._id || orderLean.plantName;
+  const subTypeId = orderLean.plantSubtype;
+  if (!plantId || !subTypeId) return list;
+  const idx = list.findIndex(
+    (p) => String(p.plantId) === String(plantId) && String(p.subTypeId) === String(subTypeId)
+  );
+  if (idx < 0) return list;
+  const p = list[idx];
+  const prevQ = Number(p.quantity || 0);
+  const nextQ = Math.max(0, prevQ - qty);
+  p.quantity = nextQ;
+  p.totalPlants = nextQ;
+  let left = qty;
+  const pickups = Array.isArray(p.pickupDetails) ? p.pickupDetails : [];
+  for (let i = pickups.length - 1; i >= 0 && left > 0; i--) {
+    const cur = Number(pickups[i].quantity || 0);
+    const take = Math.min(left, cur);
+    pickups[i].quantity = cur - take;
+    left -= take;
+  }
+  p.pickupDetails = pickups.filter((x) => Number(x.quantity) > 0);
+  const remCrates = Array.isArray(removalRow.crates) ? removalRow.crates : [];
+  if (remCrates.length && Array.isArray(p.crates)) {
+    for (const rc of remCrates) {
+      const cidx = p.crates.findIndex((c) => String(c.cavity) === String(rc.cavity));
+      if (cidx < 0) continue;
+      const c = p.crates[cidx];
+      c.plantCount = Math.max(0, Number(c.plantCount || 0) - Number(rc.plantCount || 0));
+      c.crateCount = Math.max(0, Number(c.crateCount || 0) - Number(rc.crateCount || 0));
+    }
+    p.crates = p.crates.filter((c) => Number(c.plantCount) > 0 || Number(c.crateCount) > 0);
+  }
+  if (nextQ <= 0 || !p.pickupDetails.length) {
+    list.splice(idx, 1);
+  }
+  return list;
+};
+
+/** Remove one order from an in-flight dispatch (e.g. farmer refused); restores order to ready queue when appropriate. */
+const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const { orderId } = req.body || {};
+  if (!orderId || !mongoose.isValidObjectId(String(orderId))) {
+    return next(new AppError("orderId is required", 400));
+  }
+  const targetOrderStr = String(orderId);
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const existing = await findDispatchDocumentFlexible(id, session);
+    if (!existing) {
+      throw new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404);
+    }
+    const dispatchOid = existing._id;
+    const oldOrderIds = (existing.orderIds || []).map((x) => String(x));
+    if (!oldOrderIds.includes(targetOrderStr)) {
+      throw new AppError("Order is not on this dispatch", 400);
+    }
+
+    const oldDetailsByOrder = new Map();
+    (existing.orderDispatchDetails || []).forEach((row) => {
+      if (row?.orderId) {
+        oldDetailsByOrder.set(String(row.orderId), Number(row.dispatchQuantity) || 0);
+      }
+    });
+
+    const removalRow = (existing.orderDispatchDetails || []).find(
+      (r) => r?.orderId && String(r.orderId) === targetOrderStr
+    );
+
+    const orderLean = await Order.findById(targetOrderStr)
+      .populate({ path: "plantName", select: "name subtypes" })
+      .session(session)
+      .lean();
+    if (!orderLean) {
+      throw new AppError("Order not found", 404);
+    }
+
+    const newIdSet = new Set(oldOrderIds.filter((oid) => oid !== targetOrderStr));
+
+    if (newIdSet.size === 0) {
+      const revertIds = [...new Set([...oldOrderIds])];
+      for (const oidStr of revertIds) {
+        const ord = await Order.findById(oidStr).session(session);
+        if (!ord) continue;
+        const entry = (ord.dispatchHistory || []).find(
+          (h) => h?.dispatchId && String(h.dispatchId) === String(dispatchOid)
+        );
+        if (entry) {
+          const restored =
+            orderRemainingOrBookable(ord) + (Number(entry.quantity) || 0);
+          const nextStatus = orderStatusFromRemaining(ord, restored);
+          const histAfter = (ord.dispatchHistory || []).filter(
+            (h) => !h?.dispatchId || String(h.dispatchId) !== String(dispatchOid)
+          );
+          const nextCurrent =
+            String(ord.currentDispatchId || "") === String(dispatchOid)
+              ? computeCurrentDispatchIdAfterHistoryChange(histAfter, dispatchOid)
+              : ord.currentDispatchId;
+          await updateOrderWithLedgerSync({
+            orderId: oidStr,
+            existingDoc: ord,
+            session,
+            userId: req.user?._id,
+            contextLabel: "detach_last_order_revert",
+            updateOperation: {
+              $set: {
+                remainingPlants: restored,
+                orderStatus: nextStatus,
+                currentDispatchId: nextCurrent,
+              },
+              $pull: { dispatchHistory: { dispatchId: dispatchOid } },
+            },
+          });
+        } else if (String(ord.currentDispatchId || "") === String(dispatchOid)) {
+          await updateOrderWithLedgerSync({
+            orderId: oidStr,
+            existingDoc: ord,
+            session,
+            userId: req.user?._id,
+            contextLabel: "detach_last_order_clear",
+            updateOperation: {
+              $set: {
+                currentDispatchId: null,
+                orderStatus: "READY_FOR_DISPATCH",
+              },
+            },
+          });
+        }
+      }
+      await Dispatch.deleteOne({ _id: dispatchOid }).session(session);
+      await session.commitTransaction();
+      return res.status(200).json(
+        generateResponse("Success", "Dispatch removed (no orders left)", {
+          deleted: true,
+          dispatchId: String(dispatchOid),
+        })
+      );
+    }
+
+    // Reuse removal loop for this single id (same as updateDispatch)
+    for (const oldId of oldOrderIds) {
+      if (newIdSet.has(oldId)) continue;
+      if (oldId !== targetOrderStr) continue;
+      const o = await Order.findById(oldId).session(session);
+      if (!o) continue;
+      const entry = (o.dispatchHistory || []).find(
+        (h) => h?.dispatchId && String(h.dispatchId) === String(dispatchOid)
+      );
+      const fallbackQty = oldDetailsByOrder.get(oldId) || 0;
+      const q = entry ? Number(entry.quantity) || 0 : fallbackQty;
+
+      if (!entry && !q) {
+        if (String(o.currentDispatchId || "") === String(dispatchOid)) {
+          await updateOrderWithLedgerSync({
+            orderId: oldId,
+            existingDoc: o,
+            session,
+            userId: req.user?._id,
+            contextLabel: "detach_order_no_hist",
+            updateOperation: {
+              $set: {
+                currentDispatchId: null,
+                orderStatus: "READY_FOR_DISPATCH",
+              },
+            },
+          });
+        }
+        continue;
+      }
+
+      const restored = orderRemainingOrBookable(o) + q;
+      const nextStatus = orderStatusFromRemaining(o, restored);
+      const histAfter = (o.dispatchHistory || []).filter(
+        (h) => !h?.dispatchId || String(h.dispatchId) !== String(dispatchOid)
+      );
+      const nextCurrent =
+        String(o.currentDispatchId || "") === String(dispatchOid)
+          ? computeCurrentDispatchIdAfterHistoryChange(histAfter, dispatchOid)
+          : o.currentDispatchId;
+
+      await updateOrderWithLedgerSync({
+        orderId: oldId,
+        existingDoc: o,
+        session,
+        userId: req.user?._id,
+        contextLabel: "detach_order_from_dispatch",
+        updateOperation: entry
+          ? {
+              $set: {
+                remainingPlants: restored,
+                orderStatus: nextStatus,
+                currentDispatchId: nextCurrent,
+              },
+              $pull: { dispatchHistory: { dispatchId: dispatchOid } },
+            }
+          : {
+              $set: {
+                remainingPlants: restored,
+                orderStatus: nextStatus,
+                currentDispatchId: nextCurrent,
+              },
+            },
+      });
+    }
+
+    const nextOrderDispatchDetails = (existing.orderDispatchDetails || []).filter(
+      (d) => d?.orderId && String(d.orderId) !== targetOrderStr
+    );
+
+    const prunedPlants = prunePlantsDetailsForRemovedOrder(
+      existing.plantsDetails,
+      removalRow || {
+        dispatchQuantity: oldDetailsByOrder.get(targetOrderStr) || 0,
+        crates: [],
+      },
+      orderLean
+    );
+    const finalPlants =
+      Array.isArray(prunedPlants) && prunedPlants.length > 0
+        ? prunedPlants
+        : existing.plantsDetails || [];
+
+    const updated = await Dispatch.findByIdAndUpdate(
+      dispatchOid,
+      {
+        $set: {
+          orderIds: [...newIdSet].map((s) => new mongoose.Types.ObjectId(s)),
+          orderDispatchDetails: nextOrderDispatchDetails,
+          plantsDetails: finalPlants,
+        },
+      },
+      { new: true, runValidators: true, session }
+    );
+
+    await session.commitTransaction();
+    return res.status(200).json(
+      generateResponse("Success", "Order removed from dispatch", updated, undefined)
+    );
+  } catch (err) {
+    await session.abortTransaction();
+    return next(err);
+  } finally {
+    session.endSession();
+  }
+});
+
 // Dedicated endpoint to add a post-dispatch (quick) order to an existing dispatch vehicle.
 // Uses $push internally so it is safe behind express-mongo-sanitize.
 const addOrderToDispatch = catchAsync(async (req, res, next) => {
@@ -1124,10 +1477,14 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
   session.startTransaction();
 
   try {
-    const existingDispatch = await Dispatch.findById(id).session(session).lean();
-    if (!existingDispatch) {
-      throw new AppError("No dispatch found with that ID", 404);
+    const existingDispatchDoc = await findDispatchDocumentFlexible(id, session);
+    if (!existingDispatchDoc) {
+      throw new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404);
     }
+    const existingDispatch = existingDispatchDoc.toObject
+      ? existingDispatchDoc.toObject()
+      : existingDispatchDoc;
+    const dispatchOid = existingDispatchDoc._id;
 
     const order = await Order.findById(orderId).session(session);
     if (!order) {
@@ -1231,7 +1588,7 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
         : order.orderStatus;
 
     const dispatch = await Dispatch.findByIdAndUpdate(
-      id,
+      dispatchOid,
       {
         $addToSet: {
           orderIds: orderId,
@@ -1259,13 +1616,13 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     );
 
     if (!dispatch) {
-      throw new AppError("No dispatch found with that ID", 404);
+      throw new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404);
     }
 
     const dispatchHistoryEntry = {
       date: new Date(),
       quantity: qty,
-      dispatchId: id,
+      dispatchId: dispatchOid,
       remainingAfterDispatch: newRemainingPlants,
       processedBy: req.user ? req.user._id : null,
       driverName: existingDispatch.driverName || "",
@@ -1279,7 +1636,7 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
         $set: {
           remainingPlants: newRemainingPlants,
           orderStatus: newStatus,
-          currentDispatchId: id,
+          currentDispatchId: dispatchOid,
           cavity: trayLean._id,
         },
         $push: {
@@ -1322,11 +1679,61 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
 // Get dispatches controller
 const getDispatches = catchAsync(async (req, res, next) => {
   try {
-    // Perform the initial aggregation pipeline
+    const hasPaging =
+      req.query.page != null ||
+      req.query.limit != null ||
+      String(req.query.paged || "") === "1";
+
+    const listFilter = { isDeleted: false };
+    if (req.query.transportStatus) {
+      listFilter.transportStatus = String(req.query.transportStatus);
+    }
+    const searchTrim = String(req.query.search || "").trim();
+    if (searchTrim) {
+      const esc = searchTrim.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const rx = new RegExp(esc, "i");
+      listFilter.$or = [
+        { transportId: rx },
+        { driverName: rx },
+        { vehicleName: rx },
+        { vehicleNumber: rx },
+      ];
+    }
+
+    let pagination = null;
+    let idSortHint = null;
+    let matchStage = { isDeleted: false };
+
+    if (hasPaging) {
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+      const total = await Dispatch.countDocuments(listFilter);
+      const pages = Math.max(1, Math.ceil(total / limit) || 1);
+      pagination = { total, page, limit, pages };
+      const slice = await Dispatch.find(listFilter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select("_id")
+        .lean();
+      const ids = slice.map((d) => d._id);
+      idSortHint = ids.map((x) => String(x));
+      if (!ids.length) {
+        return res
+          .status(200)
+          .json(
+            generateResponse("Success", "Dispatches fetched successfully", [], undefined, {
+              pagination,
+            })
+          );
+      }
+      matchStage = { isDeleted: false, _id: { $in: ids } };
+    }
+
+    // Perform the initial aggregation pipeline (optionally scoped to a page of dispatch ids)
     const dispatches = await Dispatch.aggregate([
-      // Filter out deleted documents
       {
-        $match: { isDeleted: false },
+        $match: matchStage,
       },
       // Initial sort by createdAt
       {
@@ -1613,15 +2020,23 @@ const getDispatches = catchAsync(async (req, res, next) => {
       };
     });
 
-    res
-      .status(200)
-      .json(
-        generateResponse(
-          "Success",
-          "Dispatches fetched successfully",
-          transformedDispatches
-        )
+    let ordered = transformedDispatches;
+    if (idSortHint?.length) {
+      const rank = new Map(idSortHint.map((id, i) => [id, i]));
+      ordered = [...transformedDispatches].sort(
+        (a, b) => (rank.get(String(a._id)) ?? 0) - (rank.get(String(b._id)) ?? 0)
       );
+    }
+
+    res.status(200).json(
+      generateResponse(
+        "Success",
+        "Dispatches fetched successfully",
+        ordered,
+        undefined,
+        pagination || undefined
+      )
+    );
   } catch (error) {
     console.error("Error in getDispatches:", error);
     next(error);
@@ -1632,7 +2047,11 @@ const getDispatch = catchAsync(async (req, res, next) => {
   const { id } = req.params;
   console.log("hiii");
   try {
-    const dispatch = await Dispatch.findById(id)
+    const resolved = await findDispatchDocumentFlexible(id);
+    if (!resolved) {
+      return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
+    }
+    const dispatch = await Dispatch.findById(resolved._id)
       .populate({
         path: "orderIds",
         populate: [
@@ -1661,7 +2080,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
       .lean(); // Using lean() for better performance
 
     if (!dispatch) {
-      return next(new AppError("No dispatch found with that ID", 404));
+      return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
     }
 
     // Separately get all relevant tray data to ensure we have the info
@@ -1951,17 +2370,18 @@ const removeTransport = async (req, res) => {
 };
 const handleDispatchReturns = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-  const { orderUpdates } = req.body;
+  const { orderUpdates, expectedNursery: bodyExpectedNursery } = req.body || {};
 
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const dispatch = await Dispatch.findById(id);
+    const dispatch = await findDispatchDocumentFlexible(id, session);
 
     if (!dispatch) {
-      return next(new AppError("No dispatch found with that ID", 404));
+      return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
     }
+    const dispatchOid = dispatch._id;
 
     // Calculate total returned and damaged plants for this completion submit.
     const totalReturnedPlants =
@@ -1977,7 +2397,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
 
     // Update dispatch with returned plants and transport status
     const updatedDispatch = await Dispatch.findByIdAndUpdate(
-      id,
+      dispatchOid,
       {
         returnedPlants: totalReturnedPlants,
         damagedPlants: totalDamagedPlants,
@@ -2159,6 +2579,24 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         ? "COMPLETED"
         : "PENDING";
       orderUpdateData.paymentCompleted = isPaymentComplete;
+
+      const globalNursery =
+        bodyExpectedNursery != null && String(bodyExpectedNursery).trim() !== ""
+          ? String(bodyExpectedNursery).trim()
+          : null;
+      const perOrderNursery =
+        orderUpdate?.expectedNursery != null &&
+        String(orderUpdate.expectedNursery).trim() !== ""
+          ? String(orderUpdate.expectedNursery).trim()
+          : null;
+      const nurseryToSet = perOrderNursery || globalNursery;
+      if (nurseryToSet) {
+        orderUpdateData.expectedNursery = nurseryToSet;
+      }
+
+      if (orderUpdate.batchNumber !== undefined) {
+        orderUpdateData.batchNumber = String(orderUpdate.batchNumber ?? "").trim();
+      }
 
       // Split returns between dealer plant quota vs nursery slot (hybrid orders)
       const fromWallet =
@@ -2643,4 +3081,6 @@ export {
   removeTransport,
   assignRoute,
   bulkMarkReady,
+  detachOrderFromDispatch,
+  updateOrderWithLedgerSync,
 };

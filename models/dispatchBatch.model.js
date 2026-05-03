@@ -23,6 +23,15 @@ const dispatchBatchSchema = new Schema(
       required: true,
       min: 1,
     },
+    /** CMS plant master — optional for legacy batches; required for new creates via CMS. */
+    plantCmsId: {
+      type: Schema.Types.ObjectId,
+      ref: "PlantCms",
+    },
+    /** Subtype subdocument _id within PlantCms.subtypes (embedded array). */
+    plantSubtypeId: {
+      type: Schema.Types.ObjectId,
+    },
     isActive: {
       type: Boolean,
       default: true,

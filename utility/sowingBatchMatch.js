@@ -1,5 +1,54 @@
 import mongoose from "mongoose";
 
+/**
+ * Aggregation expression: digits-only form of batchNumber. Uses $reduce + $substrCP
+ * (avoids operators that some hosted MongoDB-compatible engines omit).
+ */
+const digitsOnlyExprFromBatchNumberField = {
+  $reduce: {
+    input: {
+      $range: [
+        0,
+        {
+          $strLenCP: {
+            $toString: { $ifNull: ["$batchNumber", ""] },
+          },
+        },
+      ],
+    },
+    initialValue: "",
+    in: {
+      $concat: [
+        "$$value",
+        {
+          $cond: [
+            {
+              $in: [
+                {
+                  $substrCP: [
+                    { $toString: { $ifNull: ["$batchNumber", ""] } },
+                    "$$this",
+                    1,
+                  ],
+                },
+                ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+              ],
+            },
+            {
+              $substrCP: [
+                { $toString: { $ifNull: ["$batchNumber", ""] } },
+                "$$this",
+                1,
+              ],
+            },
+            "",
+          ],
+        },
+      ],
+    },
+  },
+};
+
 /** Strip non-digits from a batch label (e.g. "BATCH-100" → "100"). */
 export const digitsOnly = (s) => String(s ?? "").replace(/\D/g, "");
 
@@ -52,25 +101,9 @@ export const buildSowingMatchForSingleBatch = (batchId, bn) => {
       or.push({
         $expr: {
           $and: [
+            { $gt: [{ $strLenCP: digitsOnlyExprFromBatchNumberField }, 0] },
             {
-              $regexMatch: {
-                input: { $toString: { $ifNull: ["$batchNumber", ""] } },
-                regex: "[0-9]",
-              },
-            },
-            {
-              $eq: [
-                {
-                  $toInt: {
-                    $regexReplace: {
-                      input: { $toString: { $ifNull: ["$batchNumber", ""] } },
-                      regex: "[^0-9]",
-                      replacement: "",
-                    },
-                  },
-                },
-                n,
-              ],
+              $eq: [{ $toInt: digitsOnlyExprFromBatchNumberField }, n],
             },
           ],
         },
@@ -139,25 +172,9 @@ export const buildSowingMatchForBatchList = (batchObjectIds, batchNumberStrings)
     or.push({
       $expr: {
         $and: [
+          { $gt: [{ $strLenCP: digitsOnlyExprFromBatchNumberField }, 0] },
           {
-            $regexMatch: {
-              input: { $toString: { $ifNull: ["$batchNumber", ""] } },
-              regex: "[0-9]",
-            },
-          },
-          {
-            $in: [
-              {
-                $toInt: {
-                  $regexReplace: {
-                    input: { $toString: { $ifNull: ["$batchNumber", ""] } },
-                    regex: "[^0-9]",
-                    replacement: "",
-                  },
-                },
-              },
-              numericIds,
-            ],
+            $in: [{ $toInt: digitsOnlyExprFromBatchNumberField }, numericIds],
           },
         ],
       },

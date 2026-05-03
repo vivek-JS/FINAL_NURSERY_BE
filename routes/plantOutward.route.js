@@ -14,17 +14,25 @@ import {
   getPrimaryInwardByBatchId,
   labToPrimaryInward,
   primaryToSecondaryInward,
+  acknowledgePrimaryOutwardForSecondary,
+  recordSecondaryPrimaryOutwardMortality,
+  markSecondaryPrimaryOutwardSowingComplete,
   getTransferHistory,
   primaryInwardToPrimaryOutward,
   secondaryInwardToSecondaryOutward,
   getPrimaryInwards,
+  getPrimaryInwardLinesPaginated,
   getPrimaryOutwards,
   getSecondaryInwards,
   getSecondaryOutwards,
   getPrimaryInwardById,
   getPrimaryOutwardById,
   getSecondaryInwardById,
-  getSecondaryOutwardById
+  getSecondaryOutwardById,
+  getSecondaryOrdersReadyForDispatch,
+  getSecondaryVehicleDispatches,
+  getVehicleDispatchAllocationSuggestions,
+  patchSecondaryInwardReadinessBypass,
 } from "../controllers/plantOutward.controller.js";
 
 const router = express.Router();
@@ -65,12 +73,38 @@ router.post(
 );
 router.post("/secondary/from-primary-outward/:batchId", primaryToSecondaryInward);
 router.post(
+  "/secondary/acknowledge-primary-outward/:batchId/:primaryOutwardId",
+  acknowledgePrimaryOutwardForSecondary
+);
+router.post(
+  "/secondary/primary-outward/:batchId/:primaryOutwardId/mortality",
+  recordSecondaryPrimaryOutwardMortality
+);
+router.post(
+  "/secondary/primary-outward/:batchId/:primaryOutwardId/sowing-complete",
+  markSecondaryPrimaryOutwardSowingComplete
+);
+router.post(
   "/secondary/secondary-inward-to-outward/:batchId",
   secondaryInwardToSecondaryOutward
+);
+router.get("/secondary/vehicle-dispatches", getSecondaryVehicleDispatches);
+router.get(
+  "/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
+  getVehicleDispatchAllocationSuggestions
+);
+router.get(
+  "/secondary/:batchId/orders-ready-for-dispatch",
+  getSecondaryOrdersReadyForDispatch
+);
+router.patch(
+  "/secondary/:batchId/secondary-inward/:secondaryInwardId/readiness-bypass",
+  patchSecondaryInwardReadinessBypass
 );
 router.get("/transfers/:batchId", getTransferHistory);
 
 router.get("/primary-inwards", getPrimaryInwards);
+router.get("/primary-inward-lines", getPrimaryInwardLinesPaginated);
 router.get("/primary-outwards", getPrimaryOutwards);
 router.get("/secondary-inwards", getSecondaryInwards);
 router.get("/secondary-outwards", getSecondaryOutwards);

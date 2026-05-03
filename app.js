@@ -290,6 +290,7 @@ import plantCmsRouter from "./routes/plantCms.route.js";
 import vheicleRouter from "./routes/vheicle.route.js";
 import vehicleOwnerRouter from "./routes/vehicleOwner.route.js";
 import vehicleDriverRouter from "./routes/vehicleDriver.route.js";
+import nurserySiteRouter from "./routes/nurserySite.route.js";
 import tripRouter from "./routes/trip.route.js";
 import shadeRoter from "./routes/shades.route.js";
 import trayRouter from "./routes/tray.route.js";
@@ -297,6 +298,15 @@ import dispatchRoute from "./routes/dispatched.route.js";
 import msgRoute from "./routes/msg.route.js";
 import batchRoute from "./routes/batch.route.js";
 import plantOutward from "./routes/plantOutward.route.js";
+import {
+  getPrimaryInwardLinesPaginated,
+  getSecondaryOrdersReadyForDispatch,
+  getSecondaryVehicleDispatches,
+  getVehicleDispatchAllocationSuggestions,
+  recordSecondaryPrimaryOutwardMortality,
+  markSecondaryPrimaryOutwardSowingComplete,
+  patchSecondaryInwardReadinessBypass,
+} from "./controllers/plantOutward.controller.js";
 import PollyHouse from "./routes/pollyhouse.route.js";
 import DelaerRoutes from "./routes/dealer.route.js";
 import {
@@ -309,6 +319,7 @@ import generateResponse from "./utility/responseFormat.js";
 import ExcelRoute from "./routes/excel.route.js";
 import pricingRoute from "./routes/pricing.route.js";
 import analyticsRoute from "./routes/analytics.route.js";
+import insightsRoute from "./routes/insights.route.js";
 import { getLciSnapshot } from "./controllers/analytics.controller.js";
 import oldSalesRoute from "./routes/oldSales.route.js";
 import stateRoute from "./routes/state.route.js";
@@ -475,6 +486,7 @@ server.use("/api/v1/districts", authenticateToken, distrctRoutes);
 // Analytics before slot API. Explicit /lci so it always resolves even if router order changes.
 server.get("/api/v1/analytics/lci", authenticateToken, getLciSnapshot);
 server.use("/api/v1/analytics", authenticateToken, analyticsRoute);
+server.use("/api/v1/insights", authenticateToken, insightsRoute);
 // Slots router was mounted at `/api/v1`, which shadowed unrelated paths (e.g. /analytics). Only forward slot APIs.
 function slotRouterGate(req, res, next) {
   const pathname = (req.originalUrl || "").split("?")[0] || "";
@@ -494,11 +506,51 @@ server.use("/api/v1/tray", authenticateToken, trayRouter);
 server.use("/api/v1/vehicles", authenticateToken, vheicleRouter);
 server.use("/api/v1/vehicle-owners", authenticateToken, vehicleOwnerRouter);
 server.use("/api/v1/vehicle-drivers", authenticateToken, vehicleDriverRouter);
+server.use("/api/v1/nursery-sites", authenticateToken, nurserySiteRouter);
 server.use("/api/v1/trips", authenticateToken, tripRouter);
 server.use("/api/v1/dispatched", authenticateToken, dispatchRoute);
 server.use("/api/v1/msg", authenticateToken, msgRoute);
 server.use("/api/v1/maps", mapsRoute); // Maps API proxy (requires auth)
 server.use("/api/v1/batch", authenticateToken, batchRoute);
+// Bound on app so GET always resolves (same pattern as ready-dispatch-groups / farmer-plant-ledger).
+server.get(
+  "/api/v1/laboutward/primary-inward-lines",
+  authenticateToken,
+  getPrimaryInwardLinesPaginated
+);
+/** Explicit POSTs so secondary mortality / sowing-complete always resolve (same handlers as plantOutward.route). */
+server.post(
+  "/api/v1/laboutward/secondary/primary-outward/:batchId/:primaryOutwardId/mortality",
+  authenticateToken,
+  recordSecondaryPrimaryOutwardMortality
+);
+server.post(
+  "/api/v1/laboutward/secondary/primary-outward/:batchId/:primaryOutwardId/sowing-complete",
+  authenticateToken,
+  markSecondaryPrimaryOutwardSowingComplete
+);
+server.patch(
+  "/api/v1/laboutward/secondary/:batchId/secondary-inward/:secondaryInwardId/readiness-bypass",
+  authenticateToken,
+  patchSecondaryInwardReadinessBypass
+);
+/** Static paths before :batchId routes — avoids param routes swallowing fixed segments on some proxies. */
+server.get(
+  "/api/v1/laboutward/secondary/vehicle-dispatches",
+  authenticateToken,
+  getSecondaryVehicleDispatches
+);
+server.get(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
+  authenticateToken,
+  getVehicleDispatchAllocationSuggestions
+);
+/** Explicit GET — same pattern as readiness-bypass (always resolves on nested laboutward paths). */
+server.get(
+  "/api/v1/laboutward/secondary/:batchId/orders-ready-for-dispatch",
+  authenticateToken,
+  getSecondaryOrdersReadyForDispatch
+);
 server.use("/api/v1/laboutward", authenticateToken, plantOutward);
 server.use("/api/v1/pollyhouse", authenticateToken, PollyHouse);
 server.use("/api/v1/dealer", authenticateToken, DelaerRoutes);

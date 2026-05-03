@@ -79,11 +79,16 @@ const authUserObjectIdForOrderAudit = (user) => {
   return raw;
 };
 
-const isOfficeAdminActor = (user) => {
+/**
+ * Staff / internal user placing an order on behalf of a farmer (nursery-mgmt, dealer app, etc.).
+ * Farmer self-service orders use role FARMER — those must stay false for analytics "mobile" vs "office".
+ * Previously only OFFICE_ADMIN was true, so SALES, OFFICE_STAFF, etc. were wrongly stored as false.
+ */
+const isInternalStaffPlacingOrder = (user) => {
   if (!user) return false;
-  const jt = String(user.jobTitle || "").toUpperCase().trim();
   const role = String(user.role || "").toUpperCase().trim();
-  return jt === "OFFICE_ADMIN" || role === "OFFICE_ADMIN";
+  if (!role) return false;
+  return role !== "FARMER";
 };
 const updateDealerWalletBalance = async (dealerId, amount, description = "Manual wallet adjustment", performedBy = null) => {
   console.log(dealerId);
@@ -793,7 +798,7 @@ const createOne = (Model, modelName) =>
         // Who placed the order (API user) vs attributed salesPerson — set server-side so clients cannot spoof
         orderDocument.orderSubmittedBy =
           authUserObjectIdForOrderAudit(req.user) ?? null;
-        orderDocument.placedByOfficeAdmin = isOfficeAdminActor(req.user);
+        orderDocument.placedByOfficeAdmin = isInternalStaffPlacingOrder(req.user);
         
         console.log('🎯 Final order document orderStatus:', orderDocument.orderStatus);
         
@@ -1229,6 +1234,33 @@ const updateOne = (Model, modelName, allowedFields) =>
 
       /** Fields requested but not applied (permissions); returned on success for client visibility */
       const rejectedFields = [];
+
+      const terminalOrderMetaLock = new Set([
+        "COMPLETED",
+        "PARTIALLY_COMPLETED",
+        "CANCELLED",
+        "REJECTED",
+      ]);
+      if (terminalOrderMetaLock.has(String(existingDoc.orderStatus || "").toUpperCase())) {
+        if (filteredBody.orderFor !== undefined) {
+          rejectedFields.push({
+            field: "orderFor",
+            reason: "ORDER_TERMINAL",
+            detail:
+              "orderFor cannot be changed after the order is completed, partially completed, cancelled, or rejected.",
+          });
+          delete filteredBody.orderFor;
+        }
+        if (filteredBody.expectedNursery !== undefined) {
+          rejectedFields.push({
+            field: "expectedNursery",
+            reason: "ORDER_TERMINAL",
+            detail:
+              "expectedNursery cannot be changed after the order is completed, partially completed, cancelled, or rejected.",
+          });
+          delete filteredBody.expectedNursery;
+        }
+      }
 
       const orderUpdateHintFields = ["salesPerson", "dealer"];
       for (const k of orderUpdateHintFields) {

@@ -41,6 +41,16 @@ router
         .isInt({ min: 1 })
         .withMessage("Secondary plant ready days must be a positive integer")
         .toInt(),
+      check("plantCmsId")
+        .exists()
+        .withMessage("Plant is required")
+        .bail()
+        .custom(validateObjectId),
+      check("plantSubtypeId")
+        .exists()
+        .withMessage("Plant subtype is required")
+        .bail()
+        .custom(validateObjectId),
     ],
     checkErrors,
     createBatch

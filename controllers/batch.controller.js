@@ -1,153 +1,102 @@
+import mongoose from "mongoose";
 import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
-import APIFeatures from "../utility/apiFeatures.js";
 import DispatchBatch from "../models/dispatchBatch.model.js";
-import mongoose from "mongoose";
+import PlantCms from "../models/plantCms.model.js";
 import PlantOutward from "../models/plantOutward.model.js";
 
-const createBatch = catchAsync(async (req, res, next) => {
+async function assertSubtypeBelongsToPlant(plantCmsId, plantSubtypeId) {
+  if (!plantCmsId || !plantSubtypeId) return;
+  const plant = await PlantCms.findById(plantCmsId).select("subtypes").lean();
+  if (!plant) throw new AppError("Plant not found", 400);
+  const ok = (plant.subtypes || []).some((s) => String(s._id) === String(plantSubtypeId));
+  if (!ok) throw new AppError("Subtype does not belong to selected plant", 400);
+}
+
+export const createBatch = catchAsync(async (req, res, next) => {
   const {
     batchNumber,
     dateAdded,
     primaryPlantReadyDays,
     secondaryPlantReadyDays,
+    plantCmsId,
+    plantSubtypeId,
   } = req.body;
 
-  if (!primaryPlantReadyDays || !secondaryPlantReadyDays) {
-    return next(
-      new AppError("Primary and secondary plant ready days are required", 400)
-    );
+  if (!plantCmsId || !plantSubtypeId) {
+    return next(new AppError("Plant and subtype are required", 400));
   }
-
-  const normalizedBatchNumber = batchNumber?.trim();
-
-  if (!normalizedBatchNumber) {
-    return next(new AppError("Batch number is required", 400));
+  if (!mongoose.isValidObjectId(plantCmsId) || !mongoose.isValidObjectId(plantSubtypeId)) {
+    return next(new AppError("Invalid plant or subtype id", 400));
   }
+  await assertSubtypeBelongsToPlant(plantCmsId, plantSubtypeId);
 
-  const parsedPrimaryDays = Number(primaryPlantReadyDays);
-  const parsedSecondaryDays = Number(secondaryPlantReadyDays);
-
-  if (!Number.isInteger(parsedPrimaryDays) || parsedPrimaryDays <= 0) {
-    return next(
-      new AppError(
-        "Primary plant ready days must be a positive integer",
-        400
-      )
-    );
-  }
-
-  if (!Number.isInteger(parsedSecondaryDays) || parsedSecondaryDays <= 0) {
-    return next(
-      new AppError(
-        "Secondary plant ready days must be a positive integer",
-        400
-      )
-    );
-  }
-
-  const normalizedDate = dateAdded ? new Date(dateAdded) : new Date();
-  if (Number.isNaN(normalizedDate.getTime())) {
-    return next(new AppError("Invalid date format", 400));
-  }
-
-  const existingBatch = await DispatchBatch.findOne({
-    batchNumber: normalizedBatchNumber,
+  const dup = await DispatchBatch.findOne({
+    batchNumber: String(batchNumber).trim(),
   });
-  if (existingBatch) {
-    return next(new AppError("Batch number already exists", 409));
-  }
+  if (dup) return next(new AppError("Batch number already exists", 400));
 
-  const batch = await DispatchBatch.create({
-    batchNumber: normalizedBatchNumber,
-    dateAdded: normalizedDate,
-    primaryPlantReadyDays: parsedPrimaryDays,
-    secondaryPlantReadyDays: parsedSecondaryDays,
-  }); 
-
-  await PlantOutward.create({
-    batchId: batch._id,
-    outward: [],
+  const doc = await DispatchBatch.create({
+    batchNumber: String(batchNumber).trim(),
+    dateAdded: dateAdded ? new Date(dateAdded) : new Date(),
+    primaryPlantReadyDays: Number(primaryPlantReadyDays),
+    secondaryPlantReadyDays: Number(secondaryPlantReadyDays),
+    plantCmsId,
+    plantSubtypeId,
   });
 
-  const response = generateResponse(
-    "Success",
-    "Batch created successfully",
-    batch,
-    undefined
-  );
-
-  return res.status(201).json(response);
-});
-
-const getAllBatches = catchAsync(async (req, res, next) => {
-  const {
-    sortKey = "createdAt",
-    sortOrder = "desc",
-    search,
-    page = 1,
-    limit = 10,
-    status,
-    startDate,
-    endDate,
-  } = req.query;
-
-  let query = DispatchBatch.find();
-
-  if (search) {
-    const searchRegex = new RegExp(search, "i");
-    query = query.or([{ batchNumber: searchRegex }]);
-  }
-
-  if (status !== undefined) {
-    query = query.where("isActive").equals(status === "true");
-  }
-
-  if (startDate && endDate) {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-      end.setHours(23, 59, 59, 999);
-      query = query.where("dateAdded").gte(start).lte(end);
+  /** One PlantOutward shell per dispatch batch — lab/primary/secondary flows key off this doc */
+  let poShell = await PlantOutward.findOne({ batchId: doc._id });
+  if (!poShell) {
+    try {
+      poShell = await PlantOutward.create({
+        batchId: doc._id,
+        dateAdded: doc.dateAdded || new Date(),
+      });
+    } catch (e) {
+      await DispatchBatch.findByIdAndDelete(doc._id);
+      throw e;
     }
   }
 
-  const sort = {};
-  sort[sortKey] = sortOrder === "desc" ? -1 : 1;
-  query = query.sort(sort);
+  const populated = await DispatchBatch.findById(doc._id)
+    .populate("plantCmsId", "name subtypes")
+    .lean();
 
-  const skip = (parseInt(page) - 1) * parseInt(limit);
-  query = query.skip(skip).limit(parseInt(limit));
+  return res
+    .status(201)
+    .json(generateResponse("Success", "Batch created", populated, undefined));
+});
 
-  const [batches, total] = await Promise.all([
-    query.exec(),
-    DispatchBatch.countDocuments(query.getFilter()),
+export const getAllBatches = catchAsync(async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+  const search = String(req.query.search || "").trim();
+  const q = {};
+  if (search) {
+    q.batchNumber = { $regex: search, $options: "i" };
+  }
+  const skip = (page - 1) * limit;
+  const [rows, total] = await Promise.all([
+    DispatchBatch.find(q)
+      .populate("plantCmsId", "name subtypes")
+      .sort({ dateAdded: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    DispatchBatch.countDocuments(q),
   ]);
 
-  const transformedBatches = batches.map((batch) => {
-    const { _id, ...rest } = batch.toObject();
-    return { id: _id, _id, ...rest };
-  });
-
-  const response = generateResponse(
-    "Success",
-    "Batches fetched successfully",
-    {
-      data: transformedBatches,
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit)),
-      },
-    },
-    undefined
+  return res.status(200).json(
+    generateResponse("Success", "Batches loaded", {
+      data: rows,
+      pagination: { total, page, limit },
+    })
   );
-
-  return res.status(200).json(response);
 });
-const updateBatch = catchAsync(async (req, res, next) => {
+
+export const updateBatch = catchAsync(async (req, res, next) => {
   const {
     id,
     batchNumber,
@@ -155,173 +104,91 @@ const updateBatch = catchAsync(async (req, res, next) => {
     primaryPlantReadyDays,
     secondaryPlantReadyDays,
     plantReadyDaysChangeReason,
+    plantCmsId,
+    plantSubtypeId,
   } = req.body;
 
-  if (!mongoose.isValidObjectId(id)) {
-    return next(new AppError("Invalid ID format", 400));
+  if (!id || !mongoose.isValidObjectId(id)) {
+    return next(new AppError("Valid batch id is required", 400));
   }
 
-  const existingBatch = await DispatchBatch.findById(id);
-  if (!existingBatch) {
-    return next(new AppError("No batch found with that ID", 404));
-  }
+  const existing = await DispatchBatch.findById(id);
+  if (!existing) return next(new AppError("Batch not found", 404));
 
-  if (batchNumber && batchNumber !== existingBatch.batchNumber) {
-    const duplicateBatch = await DispatchBatch.findOne({
-      batchNumber: batchNumber.trim(),
-      _id: { $ne: id },
-    });
-    if (duplicateBatch) {
-      return next(new AppError("Batch number already exists", 409));
+  const patch = {};
+  if (batchNumber != null) patch.batchNumber = String(batchNumber).trim();
+  if (dateAdded != null) patch.dateAdded = new Date(dateAdded);
+  if (primaryPlantReadyDays != null) patch.primaryPlantReadyDays = Number(primaryPlantReadyDays);
+  if (secondaryPlantReadyDays != null) patch.secondaryPlantReadyDays = Number(secondaryPlantReadyDays);
+
+  const nextPlant = plantCmsId ?? existing.plantCmsId;
+  const nextSubtype = plantSubtypeId ?? existing.plantSubtypeId;
+  if (plantCmsId != null || plantSubtypeId != null) {
+    if (!nextPlant || !nextSubtype) {
+      return next(new AppError("Plant and subtype must both be set when updating either", 400));
     }
-  }
-
-  // Validate plant ready days if they are being updated
-  if (
-    primaryPlantReadyDays !== undefined &&
-    (!Number.isInteger(Number(primaryPlantReadyDays)) ||
-      Number(primaryPlantReadyDays) <= 0)
-  ) {
-    return next(
-      new AppError("Primary plant ready days must be a positive number", 400)
-    );
-  }
-  if (
-    secondaryPlantReadyDays !== undefined &&
-    (!Number.isInteger(Number(secondaryPlantReadyDays)) ||
-      Number(secondaryPlantReadyDays) <= 0)
-  ) {
-    return next(
-      new AppError("Secondary plant ready days must be a positive number", 400)
-    );
-  }
-
-  const updatePayload = { ...req.body };
-
-  delete updatePayload.id;
-  delete updatePayload._id;
-  delete updatePayload.plantReadyDaysChangeReason;
-
-  if (batchNumber !== undefined) {
-    updatePayload.batchNumber = batchNumber.trim();
-  }
-
-  if (dateAdded !== undefined) {
-    const updatedDate = new Date(dateAdded);
-    if (Number.isNaN(updatedDate.getTime())) {
-      return next(new AppError("Invalid date format", 400));
+    if (!mongoose.isValidObjectId(nextPlant) || !mongoose.isValidObjectId(nextSubtype)) {
+      return next(new AppError("Invalid plant or subtype id", 400));
     }
-    updatePayload.dateAdded = updatedDate;
+    await assertSubtypeBelongsToPlant(nextPlant, nextSubtype);
+    patch.plantCmsId = nextPlant;
+    patch.plantSubtypeId = nextSubtype;
   }
 
-  if (primaryPlantReadyDays !== undefined) {
-    updatePayload.primaryPlantReadyDays = Number(primaryPlantReadyDays);
+  const pChanged =
+    primaryPlantReadyDays != null &&
+    Number(primaryPlantReadyDays) !== Number(existing.primaryPlantReadyDays);
+  const sChanged =
+    secondaryPlantReadyDays != null &&
+    Number(secondaryPlantReadyDays) !== Number(existing.secondaryPlantReadyDays);
+
+  if ((pChanged || sChanged) && !String(plantReadyDaysChangeReason || "").trim()) {
+    return next(new AppError("Reason required when changing plant ready days", 400));
   }
 
-  if (secondaryPlantReadyDays !== undefined) {
-    updatePayload.secondaryPlantReadyDays = Number(secondaryPlantReadyDays);
-  }
-
-  const auditEntries = [];
-  const reasonTrim =
-    plantReadyDaysChangeReason && String(plantReadyDaysChangeReason).trim();
-
-  if (
-    primaryPlantReadyDays !== undefined &&
-    Number(primaryPlantReadyDays) !== existingBatch.primaryPlantReadyDays
-  ) {
-    if (!reasonTrim) {
-      return next(
-        new AppError(
-          "plantReadyDaysChangeReason is required when changing primary or secondary plant ready days",
-          400
-        )
-      );
+  if ((pChanged || sChanged) && String(plantReadyDaysChangeReason || "").trim()) {
+    const audit = [...(existing.plantReadyDaysAudit || [])];
+    const reason = String(plantReadyDaysChangeReason).trim();
+    if (pChanged) {
+      audit.push({
+        field: "primaryPlantReadyDays",
+        oldValue: existing.primaryPlantReadyDays,
+        newValue: Number(primaryPlantReadyDays),
+        reason,
+      });
     }
-    auditEntries.push({
-      field: "primaryPlantReadyDays",
-      oldValue: existingBatch.primaryPlantReadyDays,
-      newValue: Number(primaryPlantReadyDays),
-      changedBy: req.user?._id,
-      reason: reasonTrim,
-      changedAt: new Date(),
-    });
-  }
-
-  if (
-    secondaryPlantReadyDays !== undefined &&
-    Number(secondaryPlantReadyDays) !== existingBatch.secondaryPlantReadyDays
-  ) {
-    if (!reasonTrim) {
-      return next(
-        new AppError(
-          "plantReadyDaysChangeReason is required when changing primary or secondary plant ready days",
-          400
-        )
-      );
+    if (sChanged) {
+      audit.push({
+        field: "secondaryPlantReadyDays",
+        oldValue: existing.secondaryPlantReadyDays,
+        newValue: Number(secondaryPlantReadyDays),
+        reason,
+      });
     }
-    auditEntries.push({
-      field: "secondaryPlantReadyDays",
-      oldValue: existingBatch.secondaryPlantReadyDays,
-      newValue: Number(secondaryPlantReadyDays),
-      reason: reasonTrim,
-      changedBy: req.user?._id,
-      changedAt: new Date(),
-    });
+    patch.plantReadyDaysAudit = audit;
   }
 
-  const mongoUpdate = { $set: updatePayload };
-  if (auditEntries.length > 0) {
-    mongoUpdate.$push = { plantReadyDaysAudit: { $each: auditEntries } };
-  }
-
-  const doc = await DispatchBatch.findByIdAndUpdate(id, mongoUpdate, {
+  const doc = await DispatchBatch.findByIdAndUpdate(id, patch, {
     new: true,
     runValidators: true,
-  });
+  })
+    .populate("plantCmsId", "name subtypes")
+    .lean();
 
-  const response = generateResponse(
-    "Success",
-    "Batch updated successfully",
-    doc,
-    undefined
-  );
-
-  return res.status(200).json(response);
+  return res.status(200).json(generateResponse("Success", "Batch updated", doc, undefined));
 });
 
-const toggleBatchStatus = catchAsync(async (req, res, next) => {
+export const toggleBatchStatus = catchAsync(async (req, res, next) => {
   const { id, isActive } = req.body;
-
-  if (!mongoose.isValidObjectId(id)) {
-    return next(new AppError("Invalid ID format", 400));
+  if (!id || !mongoose.isValidObjectId(id)) {
+    return next(new AppError("Valid batch id is required", 400));
   }
-
-  if (typeof isActive !== "boolean") {
-    return next(new AppError("isActive must be a boolean value", 400));
-  }
-
   const doc = await DispatchBatch.findByIdAndUpdate(
     id,
-    { isActive },
-    {
-      new: true,
-      runValidators: true,
-    }
-  );
+    { isActive: Boolean(isActive) },
+    { new: true }
+  ).populate("plantCmsId", "name subtypes");
 
-  if (!doc) {
-    return next(new AppError("No batch found with that ID", 404));
-  }
-
-  const response = generateResponse(
-    "Success",
-    `Batch ${isActive ? "activated" : "deactivated"} successfully`,
-    doc,
-    undefined
-  );
-
-  return res.status(200).json(response);
+  if (!doc) return next(new AppError("Batch not found", 404));
+  return res.status(200).json(generateResponse("Success", "Batch status updated", doc, undefined));
 });
-
-export { createBatch, getAllBatches, updateBatch, toggleBatchStatus };

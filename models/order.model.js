@@ -359,7 +359,7 @@ const orderSchema = new Schema(
       ref: "User",
       required: true,
     },
-    /** True when the authenticated user who created the order was office admin (booking on behalf). */
+    /** True when the authenticated user who created the order was internal staff (not farmer self-service). See isInternalStaffPlacingOrder in factory.controller. */
     placedByOfficeAdmin: {
       type: Boolean,
       default: false,
@@ -618,6 +618,24 @@ const orderSchema = new Schema(
         vehicleName: {
           type: String,
         },
+        source: {
+          type: String,
+          enum: ["VEHICLE", "SECONDARY_SHED"],
+        },
+        secondaryOutwardId: {
+          type: Schema.Types.ObjectId,
+        },
+        plantOutwardId: {
+          type: Schema.Types.ObjectId,
+          ref: "PlantOutward",
+        },
+        dispatchBatchId: {
+          type: Schema.Types.ObjectId,
+          ref: "DispatchBatch",
+        },
+        productSnapshot: {
+          type: Schema.Types.Mixed,
+        },
       },
     ],
     // Book-for-someone-else: beneficiary identity + optional mobile + structured location
@@ -645,6 +663,11 @@ const orderSchema = new Schema(
     // Expected nursery field - for tracking expected nursery source
     expectedNursery: {
       type: String,
+    },
+    /** Lot / batch reference captured at delivery completion (complete dispatch form). */
+    batchNumber: {
+      type: String,
+      trim: true,
     },
     // Reference field - reference to user/employee
     reference: {

@@ -173,6 +173,11 @@ const primaryOutwardSchema = new Schema({
     required: true,
     min: 1,
   },
+  /** Plants moved this outward (matches totalQuantity; persisted explicitly for capped transfers). */
+  numberOfPlants: {
+    type: Number,
+    min: 1,
+  },
   availableQuantity: {
     type: Number,
     min: 0,
@@ -206,7 +211,33 @@ const primaryOutwardSchema = new Schema({
   numberOfDaysTaken:{
     type: Number,
     required: true,
-  }, 
+  },
+  remarks: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+  /** Secondary shed acknowledged this line (Accept tab) before recording secondary inward. */
+  secondaryAcknowledgedAt: {
+    type: Date,
+  },
+  secondaryAcknowledgedBy: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+  },
+  /** Secondary shed: no further sowing from this primary outward line */
+  secondarySowingCompletedAt: {
+    type: Date,
+  },
+  /** Loss recorded against remaining primary-outward plants (reduces availableQuantity) */
+  secondaryMortalityLog: [
+    {
+      quantity: { type: Number, required: true, min: 1 },
+      recordedAt: { type: Date, default: Date.now },
+      remarks: { type: String, trim: true, default: "" },
+      recordedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    },
+  ],
   transferHistory: [
     {
       transferDate: Date,
@@ -273,6 +304,10 @@ const secondaryInwardSchema = new Schema({
     type: Date,
     required: true
   },
+  /** Which primary outward row this secondary inward came from (set on transfer). */
+  sourcePrimaryOutwardId: {
+    type: Schema.Types.ObjectId,
+  },
   transferHistory: [
     {
       transferDate: Date,
@@ -281,6 +316,22 @@ const secondaryInwardSchema = new Schema({
       remarks: String,
     },
   ],
+  /** Manual override: treat line as dispatch-eligible before calendar rule (audit). */
+  readinessBypassAt: {
+    type: Date,
+    default: null,
+  },
+  readinessBypassBy: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
+  readinessBypassReason: {
+    type: String,
+    trim: true,
+    maxlength: 500,
+    default: "",
+  },
 });
 
 // Secondary Outward Schema
@@ -339,6 +390,33 @@ const secondaryOutwardSchema = new Schema({
       remarks: String,
     },
   ],
+  sourceSecondaryInwardId: {
+    type: Schema.Types.ObjectId,
+  },
+  linkedOrderId: {
+    type: Schema.Types.ObjectId,
+    ref: "Order",
+  },
+  orderLinkSnapshot: {
+    type: Schema.Types.Mixed,
+    default: undefined,
+  },
+  linkedDispatchId: {
+    type: Schema.Types.ObjectId,
+    ref: "Dispatch",
+  },
+  linkedDispatchPlantRowIndex: {
+    type: Number,
+    min: 0,
+  },
+  evidencePhotoUrls: {
+    type: [String],
+    default: undefined,
+  },
+  dispatchFulfillmentSnapshot: {
+    type: Schema.Types.Mixed,
+    default: undefined,
+  },
 });
 
 // Update summary schema to include all stages
@@ -595,7 +673,10 @@ function calculateSecondaryOutwardSummary(secondaryOutwardArray) {
 function calculatePrimaryOutwardSummary(primaryOutwardArray) {
   return primaryOutwardArray.reduce(
     (summary, item) => {
-      const totalPlants = item.cavity * item.numberOfTrays;
+      const totalPlants =
+        item.numberOfPlants != null && item.numberOfPlants >= 1
+          ? item.numberOfPlants
+          : item.cavity * item.numberOfTrays;
       summary[item.size].primaryOutwardBottles += item.numberOfBottles;
       summary[item.size].primaryOutwardPlants += totalPlants;
       summary[item.size].primaryInwardBottles -= item.numberOfBottles;

@@ -22,9 +22,55 @@ const normalizeProductType = (value, { allowAll = false } = {}) => {
   return null;
 };
 
+/** Non-negative integer for master list / dropdown ordering */
+const parseDisplayOrder = (value) => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n);
+};
+
+function sortVarietiesByDisplayOrder(varieties) {
+  if (!Array.isArray(varieties) || varieties.length <= 1) return;
+  varieties.sort((a, b) => {
+    const ao = a.displayOrder ?? 0;
+    const bo = b.displayOrder ?? 0;
+    if (ao !== bo) return ao - bo;
+    return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+  });
+}
+
+function sortProductsForApi(crops) {
+  if (!Array.isArray(crops) || crops.length <= 1) {
+    if (crops?.length === 1) sortVarietiesByDisplayOrder(crops[0].varieties);
+    return crops;
+  }
+  const sorted = [...crops].sort((a, b) => {
+    const ao = a.displayOrder ?? 0;
+    const bo = b.displayOrder ?? 0;
+    if (ao !== bo) return ao - bo;
+    return String(a.cropName || '').localeCompare(String(b.cropName || ''), undefined, { sensitivity: 'base' });
+  });
+  sorted.forEach((c) => sortVarietiesByDisplayOrder(c.varieties));
+  return sorted;
+}
+
+async function nextProductDisplayOrder(productType) {
+  const match =
+    productType === 'seed'
+      ? { $or: [{ productType: 'seed' }, { productType: { $exists: false } }] }
+      : { productType: 'chemical' };
+  const agg = await RamAgriInputsProduct.aggregate([
+    { $match: match },
+    { $group: { _id: null, maxOrder: { $max: { $ifNull: ['$displayOrder', 0] } } } },
+  ]);
+  const maxOrder = agg[0]?.maxOrder ?? -1;
+  return maxOrder + 1;
+}
+
 // Create crop
 export const createCrop = catchAsync(async (req, res, next) => {
-  const { cropName, description, varieties, productType } = req.body;
+  const { cropName, description, varieties, productType, displayOrder } = req.body;
 
   if (!cropName || !cropName.trim()) {
     return next(new AppError('Crop name is required', 400));
@@ -35,6 +81,11 @@ export const createCrop = catchAsync(async (req, res, next) => {
     return next(new AppError('Invalid product type. Use "seed" or "chemical"', 400));
   }
   const finalProductType = normalizedType || 'seed';
+
+  const parsedOrder = parseDisplayOrder(displayOrder);
+  if (parsedOrder === null) {
+    return next(new AppError('displayOrder must be a non-negative integer', 400));
+  }
 
   // Check if crop already exists
   const existingQuery = { cropName: cropName.trim() };
@@ -50,13 +101,18 @@ export const createCrop = catchAsync(async (req, res, next) => {
     return next(new AppError('Crop with this name already exists', 409));
   }
 
+  const orderValue = parsedOrder !== undefined ? parsedOrder : await nextProductDisplayOrder(finalProductType);
+
   const crop = await RamAgriInputsProduct.create({
     productType: finalProductType,
     cropName: cropName.trim(),
     description: description?.trim() || '',
     varieties: varieties || [],
+    displayOrder: orderValue,
     createdBy: req.user._id,
   });
+
+  sortVarietiesByDisplayOrder(crop.varieties);
 
   const response = generateResponse(
     'Success',
@@ -113,13 +169,14 @@ export const getAllCrops = catchAsync(async (req, res, next) => {
     .populate('createdBy', 'name email')
     .populate('updatedBy', 'name email')
     .populate('varieties.primaryUnit', 'name abbreviation type')
-    .populate('varieties.secondaryUnit', 'name abbreviation type')
-    .sort({ createdAt: -1 });
+    .populate('varieties.secondaryUnit', 'name abbreviation type');
+
+  const ordered = sortProductsForApi(crops);
 
   const response = generateResponse(
     'Success',
     'Crops fetched successfully',
-    crops,
+    ordered,
     undefined
   );
 
@@ -144,6 +201,8 @@ export const getCropById = catchAsync(async (req, res, next) => {
     return next(new AppError('Crop not found', 404));
   }
 
+  sortVarietiesByDisplayOrder(crop.varieties);
+
   const response = generateResponse(
     'Success',
     'Crop fetched successfully',
@@ -157,7 +216,7 @@ export const getCropById = catchAsync(async (req, res, next) => {
 // Update crop
 export const updateCrop = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-  const { cropName, description, isActive, productType } = req.body;
+  const { cropName, description, isActive, productType, displayOrder } = req.body;
 
   if (!mongoose.isValidObjectId(id)) {
     return next(new AppError('Invalid ID format', 400));
@@ -200,8 +259,16 @@ export const updateCrop = catchAsync(async (req, res, next) => {
   if (isActive !== undefined) crop.isActive = isActive;
   if (normalizedType) crop.productType = normalizedType;
 
+  const parsedOrder = parseDisplayOrder(displayOrder);
+  if (displayOrder !== undefined && parsedOrder === null) {
+    return next(new AppError('displayOrder must be a non-negative integer', 400));
+  }
+  if (parsedOrder !== undefined) crop.displayOrder = parsedOrder;
+
   crop.updatedBy = req.user._id;
   await crop.save();
+
+  sortVarietiesByDisplayOrder(crop.varieties);
 
   const response = generateResponse(
     'Success',
@@ -272,6 +339,7 @@ export const addVariety = catchAsync(async (req, res, next) => {
     dealerPoints,
     purchasePrice,
     isActive,
+    displayOrder,
   } = req.body;
 
   if (!mongoose.isValidObjectId(id)) {
@@ -358,6 +426,13 @@ export const addVariety = catchAsync(async (req, res, next) => {
     varietyData.purchasePrice = priceValue;
   }
 
+  const parsedVOrder = parseDisplayOrder(displayOrder);
+  if (displayOrder !== undefined && parsedVOrder === null) {
+    return next(new AppError('displayOrder must be a non-negative integer', 400));
+  }
+  const maxVarOrder = crop.varieties.reduce((m, v) => Math.max(m, v.displayOrder ?? 0), -1);
+  varietyData.displayOrder = parsedVOrder !== undefined ? parsedVOrder : maxVarOrder + 1;
+
   const updatedCrop = await RamAgriInputsProduct.findByIdAndUpdate(
     id,
     {
@@ -377,6 +452,8 @@ export const addVariety = catchAsync(async (req, res, next) => {
   if (!updatedCrop) {
     return next(new AppError('Crop not found', 404));
   }
+
+  sortVarietiesByDisplayOrder(updatedCrop.varieties);
 
   const response = generateResponse(
     'Success',
@@ -404,6 +481,7 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     dealerPoints,
     purchasePrice,
     isActive,
+    displayOrder,
   } = req.body;
 
   if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(varietyId)) {
@@ -436,6 +514,7 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     dealerPoints: variety.dealerPoints,
     purchasePrice: variety.purchasePrice,
     isActive: variety.isActive,
+    displayOrder: variety.displayOrder,
   };
 
   // Check if variety name is being changed and if it already exists
@@ -519,8 +598,18 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     variety.purchasePrice = undefined;
   }
 
+  if (displayOrder !== undefined) {
+    const parsedV = parseDisplayOrder(displayOrder);
+    if (parsedV === null) {
+      return next(new AppError('displayOrder must be a non-negative integer', 400));
+    }
+    variety.displayOrder = parsedV;
+  }
+
   crop.updatedBy = req.user._id;
   await crop.save();
+
+  sortVarietiesByDisplayOrder(crop.varieties);
 
   // Log the change
   const newData = {
@@ -536,6 +625,7 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     dealerPoints: variety.dealerPoints,
     purchasePrice: variety.purchasePrice,
     isActive: variety.isActive,
+    displayOrder: variety.displayOrder,
   };
   const changes = generateChangesArray(oldData, newData);
   if (changes.length > 0) {
@@ -602,6 +692,8 @@ export const deleteVariety = catchAsync(async (req, res, next) => {
   crop.varieties.pull(varietyId);
   crop.updatedBy = req.user._id;
   await crop.save();
+
+  sortVarietiesByDisplayOrder(crop.varieties);
 
   const response = generateResponse(
     'Success',
@@ -731,6 +823,8 @@ export const addRate = catchAsync(async (req, res, next) => {
     ipAddress: req.ip,
     userAgent: req.get('user-agent'),
   });
+
+  sortVarietiesByDisplayOrder(crop.varieties);
 
   const response = generateResponse(
     'Success',
@@ -865,6 +959,8 @@ export const updateRate = catchAsync(async (req, res, next) => {
     });
   }
 
+  sortVarietiesByDisplayOrder(crop.varieties);
+
   const response = generateResponse(
     'Success',
     'Rate updated successfully',
@@ -904,6 +1000,8 @@ export const deleteRate = catchAsync(async (req, res, next) => {
   variety.rates.pull(rateId);
   crop.updatedBy = req.user._id;
   await crop.save();
+
+  sortVarietiesByDisplayOrder(crop.varieties);
 
   const response = generateResponse(
     'Success',

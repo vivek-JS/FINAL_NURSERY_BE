@@ -279,6 +279,10 @@ router
     [
       check("cropName").notEmpty().withMessage("Crop name is required"),
       check("varieties").optional().isArray().withMessage("Varieties must be an array"),
+      check("displayOrder")
+        .optional()
+        .isInt({ min: 0 })
+        .withMessage("displayOrder must be a non-negative integer"),
     ],
     checkErrors,
     createCrop
@@ -289,6 +293,10 @@ router
     "/ram-agri-inputs/:id",
     [
       check("cropName").optional().notEmpty().withMessage("Crop name cannot be empty"),
+      check("displayOrder")
+        .optional()
+        .isInt({ min: 0 })
+        .withMessage("displayOrder must be a non-negative integer"),
     ],
     checkErrors,
     updateCrop
@@ -298,6 +306,10 @@ router
     "/ram-agri-inputs/:id/varieties",
     [
       check("name").notEmpty().withMessage("Variety name is required"),
+      check("displayOrder")
+        .optional()
+        .isInt({ min: 0 })
+        .withMessage("displayOrder must be a non-negative integer"),
     ],
     checkErrors,
     addVariety
@@ -306,6 +318,10 @@ router
     "/ram-agri-inputs/:id/varieties/:varietyId",
     [
       check("name").optional().notEmpty().withMessage("Variety name cannot be empty"),
+      check("displayOrder")
+        .optional()
+        .isInt({ min: 0 })
+        .withMessage("displayOrder must be a non-negative integer"),
     ],
     checkErrors,
     updateVariety

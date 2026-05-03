@@ -21,6 +21,28 @@ const vehicleDriverSchema = new Schema(
       type: String,
       trim: true,
     },
+    /** Payout / bank details for driver settlements */
+    bankName: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    accountNumber: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    ifscCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+    },
+    paymentAccountPhotoUrl: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     isActive: {
       type: Boolean,
       default: true,

@@ -41,6 +41,8 @@ const allowedParams = [
   "jobTitle",
   "id",
   "transportId",
+  "transportStatus", // GET /api/v1/dispatched — filter by vehicle status
+  "paged", // GET /api/v1/dispatched — "1" enables paged list + pagination metadata
   "name",
   "entity",
   "mobileNumber",
@@ -70,6 +72,7 @@ const allowedParams = [
   "queueFarmReadyOnly", // FarmerOrdersTable: ready-for-dispatch "Farm-ready on file" queue filter
   "plantTotals", // GET /order/getOrders — include totalPlantsSum for all matching rows (with pagination)
   "isActive",
+  "activeOnly", // GET /api/v1/nursery-sites — "true" filters to active sites only
   "category",
   "sortBy",
   "sortOrder",
@@ -164,6 +167,8 @@ const allowedParams = [
   "includeAll", // include all records (don't exclude those in call lists)
   "upcomingDays", // laboutward primary-mobile-dashboard window
   "orderLimit", // analytics short-report: max orders in list (cap 500)
+  "dueOnly", // GET /insights/dashboard — overdue open orders only
+  "varietyName", // GET /insights/dashboard — plant subtype name with plantId
 ];
 
 /** Effective whitelist: array + mandatory extras (survives accidental removal from `allowedParams`). */
@@ -171,6 +176,8 @@ const allowedQueryKeys = new Set(allowedParams);
 allowedQueryKeys.add("dateRangeField"); // GET /order/getOrders — booking | delivery date range
 allowedQueryKeys.add("plantTotals"); // GET /order/getOrders — totalPlantsSum envelope (must survive merges)
 allowedQueryKeys.add("queueFarmReadyOnly"); // GET /order/dashboard-tab-counts + ready tab queue filter
+allowedQueryKeys.add("paged"); // GET /dispatched — pagination toggle (also in allowedParams; duplicate for safety)
+allowedQueryKeys.add("transportStatus"); // GET /dispatched filter
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
@@ -217,6 +224,19 @@ const parameterWhiteListing = (req, res, next) => {
     req.method === "GET" &&
     (orderListPath.includes("/order/getOrders") ||
       orderListPath.includes("/order/dashboard-tab-counts"))
+  ) {
+    return next();
+  }
+
+  /**
+   * Dispatch list (`GET /api/v1/dispatched`) gains query flags often (`paged`, filters).
+   * Same rationale as getOrders — controller ignores unknown keys; skip global whitelist for the list URL only.
+   */
+  const dispatchListOnly =
+    stripQuery(req.originalUrl || req.url || req.path || "") || "";
+  if (
+    req.method === "GET" &&
+    (dispatchListOnly === "/api/v1/dispatched" || dispatchListOnly === "/api/v1/dispatched/")
   ) {
     return next();
   }

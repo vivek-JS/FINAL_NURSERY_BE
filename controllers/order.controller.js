@@ -720,6 +720,9 @@ const updateOrder = updateOne(Order, "Order", [
   "dispatchTargetDate",
   "callHistory", // Call history for dispatch managers
   "cavity", // Tray ref — was omitted from whitelist, so some orders never persisted cavity
+  "orderFor", // Book-for-someone-else (editable until order is terminal)
+  "expectedNursery", // Nursery site code from CMS (RB, GH, …)
+  "batchNumber", // Lot / batch from complete-delivery form or manual edit
 ]);
 /**
  * Add a new payment to an order and update dealer wallet accordingly

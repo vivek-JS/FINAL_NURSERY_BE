@@ -19,9 +19,154 @@ import {
   buildSowingMatchForBatchList,
   buildSowingMatchForSingleBatch,
 } from "../utility/sowingBatchMatch.js";
+import {
+  recordSecondaryInwardOnLedger,
+  recordSecondaryOutwardOnLedger,
+} from "../services/secondaryDispatchAvailability.service.js";
+import Order from "../models/order.model.js";
+import Dispatch from "../models/dispatch.model.js";
+import { updateOrderWithLedgerSync } from "./dispatch.controller.js";
 
-const BATCH_PROJECTION =
-  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive";
+const BATCH_SELECT_FIELDS =
+  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
+
+const BATCH_POPULATE = {
+  path: "batchId",
+  select: BATCH_SELECT_FIELDS,
+  populate: { path: "plantCmsId", select: "name subtypes" },
+};
+
+const orderBookablePlantsTotal = (doc) =>
+  Number(doc?.numberOfPlants || 0) + Number(doc?.additionalPlants || 0);
+
+const orderRemainingPlantsValue = (doc) => {
+  const rem = doc?.remainingPlants;
+  if (rem != null && Number.isFinite(Number(rem))) return Number(rem);
+  return orderBookablePlantsTotal(doc);
+};
+
+const orderMatchesDispatchBatch = (orderDoc, batchLean) => {
+  if (!batchLean?.plantCmsId || !batchLean?.plantSubtypeId) return false;
+  return (
+    String(orderDoc.plantName) === String(batchLean.plantCmsId) &&
+    String(orderDoc.plantSubtype) === String(batchLean.plantSubtypeId)
+  );
+};
+
+const buildSecondaryOrderLinkSnapshot = (orderDoc, batchLean) => {
+  let pos = orderDoc.productOrderSnapshot;
+  if (pos && typeof pos.toObject === "function") pos = pos.toObject();
+  return {
+    orderIdNumeric: orderDoc.orderId,
+    publicOrderCode: orderDoc.publicOrderCode ?? null,
+    batchNumber: batchLean?.batchNumber ?? null,
+    plantNameId: orderDoc.plantName,
+    plantSubtypeId: orderDoc.plantSubtype,
+    productOrderSnapshot: pos || undefined,
+    productName: orderDoc.productName,
+    productMappingId: orderDoc.productMappingId,
+  };
+};
+
+/** Human labels for mobile UI (lean batch with populated plantCmsId from buildPlantReadyBundle). */
+const plantSubtypeLabelsFromLeanBatch = (b) => {
+  if (!b) return { plantLabel: "—", subtypeLabel: "—" };
+  const plant = b.plantCmsId;
+  const sid = b.plantSubtypeId;
+  if (!plant || typeof plant === "string" || !plant.name) {
+    return { plantLabel: "—", subtypeLabel: "—" };
+  }
+  const sub = (plant.subtypes || []).find((s) => String(s._id) === String(sid));
+  return {
+    plantLabel: plant.name || "—",
+    subtypeLabel: sub?.name || "—",
+  };
+};
+
+/**
+ * Secondary dispatch eligibility: calendar rule (secondary inward date + batch.secondaryPlantReadyDays)
+ * OR readiness bypass on the secondary inward line.
+ */
+const computeSecondaryDispatchEligibility = (si, secondaryPlantReadyDays, todayStart) => {
+  const days = Number(safeMongooseNumber(secondaryPlantReadyDays)) || 0;
+  const rawInward = si?.secondaryInwardDate;
+  const inward = rawInward ? moment(rawInward).startOf("day") : null;
+  const expectedReadyByCalendar = inward ? inward.clone().add(days, "days") : null;
+  const calendarDispatchEligible = Boolean(
+    expectedReadyByCalendar && todayStart.isSameOrAfter(expectedReadyByCalendar, "day")
+  );
+  const bypassAt = si?.readinessBypassAt;
+  const bypass = bypassAt != null && moment(bypassAt).isValid();
+  const dispatchEligible = calendarDispatchEligible || bypass;
+  return {
+    expectedReadyByCalendar: expectedReadyByCalendar
+      ? expectedReadyByCalendar.toISOString()
+      : null,
+    calendarDispatchEligible,
+    readinessBypassAt: bypassAt ?? null,
+    readinessBypassBy: si?.readinessBypassBy ?? null,
+    readinessBypassReason: si?.readinessBypassReason ?? "",
+    dispatchEligible,
+    secondaryPlantReadyDaysUsed: days,
+  };
+};
+
+/** Batch summary for Dispatch tab: only dispatch-eligible stock — split calendar vs Mark ready (bypass). */
+const buildDispatchReadyByBatch = (enrichedLines) => {
+  const map = new Map();
+  for (const line of enrichedLines) {
+    if (!line.dispatchEligible) continue;
+    const si = line.secondaryInward;
+    const avail = safeNonNegativeInt(
+      safeMongooseNumber(si?.availableQuantity),
+      0
+    );
+    if (avail < 1) continue;
+    const bid = String(line.batchId);
+    const bypassAt = line.readinessBypassAt ?? si?.readinessBypassAt;
+    const viaBypass = bypassAt != null;
+    if (!map.has(bid)) {
+      map.set(bid, {
+        batchId: line.batchId,
+        batchNumber: line.batchNumber,
+        plantLabel: line.plantLabel,
+        subtypeLabel: line.subtypeLabel,
+        totalAvailPlants: 0,
+        /** Eligible by planting date + secondary-ready days (no bypass on line) */
+        plantsCalendarReady: 0,
+        /** Eligible after Mark ready (override) on Inward */
+        plantsMarkReady: 0,
+        linesCount: 0,
+        linesCalendarReady: 0,
+        linesMarkReady: 0,
+        nextReadyDate: null,
+        hasEligibleLine: true,
+      });
+    }
+    const agg = map.get(bid);
+    agg.totalAvailPlants += avail;
+    agg.linesCount += 1;
+    if (viaBypass) {
+      agg.plantsMarkReady += avail;
+      agg.linesMarkReady += 1;
+    } else {
+      agg.plantsCalendarReady += avail;
+      agg.linesCalendarReady += 1;
+    }
+    const rd = line.expectedReadyByCalendar;
+    if (rd) {
+      const m = moment(rd);
+      if (!agg.nextReadyDate || m.isBefore(moment(agg.nextReadyDate))) {
+        agg.nextReadyDate = rd;
+      }
+    }
+  }
+  return [...map.values()].sort((a, b) =>
+    String(a.batchNumber || "").localeCompare(String(b.batchNumber || ""), undefined, {
+      numeric: true,
+    })
+  );
+};
 
 /** Align DispatchBatch.batchNumber with Sowing.batchNumber (trim, string, legacy types). */
 const normBatchNumber = (v) => {
@@ -42,7 +187,8 @@ const parseSowingDateToMoment = (raw) => {
 /** Days remaining until primary / secondary plant-ready targets (sowing anchor + batch ready days). */
 const buildPlantReadyMeta = async (batchId) => {
   const batch = await DispatchBatch.findById(batchId)
-    .select("batchNumber primaryPlantReadyDays secondaryPlantReadyDays")
+    .select(BATCH_SELECT_FIELDS)
+    .populate("plantCmsId", "name subtypes")
     .lean();
   if (!batch) {
     return {
@@ -174,9 +320,16 @@ const addLabEntry = catchAsync(async (req, res, next) => {
 
   // console.log("Received payload:", { batchId, labData });
 
-  const plantOutward = await PlantOutward.findOne({ batchId });
+  let plantOutward = await PlantOutward.findOne({ batchId });
   if (!plantOutward) {
-    return next(new AppError("No plant outward found with that batch ID", 404));
+    const batch = await DispatchBatch.findById(batchId);
+    if (!batch) {
+      return next(new AppError("No dispatch batch found with that batch ID", 404));
+    }
+    plantOutward = await PlantOutward.create({
+      batchId: batch._id,
+      dateAdded: batch.dateAdded || new Date(),
+    });
   }
 
   // Create a proper lab entry object with exact schema match
@@ -383,9 +536,7 @@ const getAllPlantOutwards = catchAsync(async (req, res, next) => {
   }
 
   // Build and execute query
-  const query = PlantOutward.find(queryObj)
-    .populate("batchId", BATCH_PROJECTION)
-    .sort("-createdAt");
+  const query = PlantOutward.find(queryObj).populate(BATCH_POPULATE).sort("-createdAt");
 
   const outwards = await query;
 
@@ -409,10 +560,7 @@ const getAllPlantOutwards = catchAsync(async (req, res, next) => {
 const getPlantOutwardByBatchId = catchAsync(async (req, res, next) => {
   const { batchId } = req.params;
 
-  const outward = await PlantOutward.findOne({ batchId }).populate(
-    "batchId",
-    BATCH_PROJECTION
-  );
+  const outward = await PlantOutward.findOne({ batchId }).populate(BATCH_POPULATE);
 
   if (!outward) {
     return next(new AppError("No plant outward found for this batch", 404));
@@ -435,7 +583,7 @@ const buildPlantReadyBundleForMobile = async (upcomingDays) => {
   const windowEnd = today.clone().add(windowDays, "days").endOf("day");
 
   const plantOutwards = await PlantOutward.find({})
-    .populate("batchId", BATCH_PROJECTION)
+    .populate(BATCH_POPULATE)
     .sort("-updatedAt");
 
   const batchIdRefs = plantOutwards
@@ -453,7 +601,8 @@ const buildPlantReadyBundleForMobile = async (upcomingDays) => {
   const batchesFromDb =
     uniqueBatchIds.length > 0
       ? await DispatchBatch.find({ _id: { $in: uniqueBatchIds } })
-          .select(BATCH_PROJECTION)
+          .select(BATCH_SELECT_FIELDS)
+          .populate("plantCmsId", "name subtypes")
           .lean()
       : [];
 
@@ -755,6 +904,9 @@ const getSecondaryMobileDashboard = catchAsync(async (req, res, next) => {
           batchId: resolvedBatchId,
           batchNumber: batchNum ?? String(resolvedBatchId),
           primaryOutward: pout,
+          secondaryAcknowledgedAt: pout.secondaryAcknowledgedAt ?? null,
+          needsSecondaryAccept: pout.secondaryAcknowledgedAt == null,
+          ...plantSubtypeLabelsFromLeanBatch(b),
         });
       }
     }
@@ -772,6 +924,7 @@ const getSecondaryMobileDashboard = catchAsync(async (req, res, next) => {
           daysToSecondary: Math.max(0, secondaryReadyAt.diff(today, "days")),
           primaryPlantReadyDays: primaryDays,
           secondaryPlantReadyDays: secondaryDays,
+          ...plantSubtypeLabelsFromLeanBatch(b),
         });
       }
     }
@@ -789,6 +942,7 @@ const getSecondaryMobileDashboard = catchAsync(async (req, res, next) => {
             batchNumber: batchNum ?? "—",
             secondaryInward: si,
             expectedDate: expM.toISOString(),
+            ...plantSubtypeLabelsFromLeanBatch(b),
           });
         }
       }
@@ -800,11 +954,18 @@ const getSecondaryMobileDashboard = catchAsync(async (req, res, next) => {
         availSi > 0 &&
         (si.transferStatus ?? "available") !== "fully_transferred"
       ) {
+        const elig = computeSecondaryDispatchEligibility(
+          typeof si.toObject === "function" ? si.toObject() : si,
+          secondaryDays,
+          today
+        );
         availableSecondaryInwardLines.push({
           plantOutwardId: po._id,
           batchId: resolvedBatchId,
           batchNumber: batchNum ?? String(resolvedBatchId),
           secondaryInward: si,
+          ...plantSubtypeLabelsFromLeanBatch(b),
+          ...elig,
         });
       }
     }
@@ -819,10 +980,15 @@ const getSecondaryMobileDashboard = catchAsync(async (req, res, next) => {
           batchNumber: batchNum ?? "—",
           secondaryOutward: so,
           expectedDate: d.toISOString(),
+          ...plantSubtypeLabelsFromLeanBatch(b),
         });
       }
     }
   }
+
+  const dispatchReadyByBatch = buildDispatchReadyByBatch(
+    availableSecondaryInwardLines
+  );
 
   const response = generateResponse(
     "Success",
@@ -833,6 +999,7 @@ const getSecondaryMobileDashboard = catchAsync(async (req, res, next) => {
       upcomingSecondaryInwardExpected,
       upcomingSecondaryOutwardExpected,
       availableSecondaryInwardLines,
+      dispatchReadyByBatch,
       plantReadyByBatchNumber,
       windowDays,
     },
@@ -842,10 +1009,84 @@ const getSecondaryMobileDashboard = catchAsync(async (req, res, next) => {
   return res.status(200).json(response);
 });
 
+/** PATCH readiness bypass on a secondary inward line (secondary mobile ops). */
+const patchSecondaryInwardReadinessBypass = catchAsync(
+  async (req, res, next) => {
+    const { batchId, secondaryInwardId } = req.params;
+    const { reason, clear } = req.body || {};
+    const userId = req.user?._id || req.user?.id;
+
+    const plantOutward = await PlantOutward.findOne({ batchId }).populate(
+      BATCH_POPULATE
+    );
+    if (!plantOutward) {
+      return next(
+        new AppError("No plant outward found with this batch ID", 404)
+      );
+    }
+
+    const siSub = plantOutward.secondaryInward.id(secondaryInwardId);
+    if (!siSub) {
+      return next(new AppError("Secondary inward entry not found", 404));
+    }
+
+    let b = plantOutward.batchId;
+    if (b && typeof b !== "object") {
+      b = await DispatchBatch.findById(b).select(BATCH_SELECT_FIELDS).lean();
+    }
+    const secondaryDays = b
+      ? Number(safeMongooseNumber(b.secondaryPlantReadyDays)) || 0
+      : 0;
+
+    if (clear) {
+      siSub.readinessBypassAt = null;
+      siSub.readinessBypassBy = null;
+      siSub.readinessBypassReason = "";
+    } else {
+      siSub.readinessBypassAt = new Date();
+      if (userId && mongoose.isValidObjectId(String(userId))) {
+        siSub.readinessBypassBy = userId;
+      }
+      siSub.readinessBypassReason = String(reason ?? "")
+        .trim()
+        .slice(0, 500);
+    }
+
+    await plantOutward.save({ validateBeforeSave: true });
+
+    const siObj =
+      typeof siSub.toObject === "function"
+        ? siSub.toObject()
+        : { ...siSub };
+    const today = moment().startOf("day");
+    const elig = computeSecondaryDispatchEligibility(
+      siObj,
+      secondaryDays,
+      today
+    );
+
+    return res.status(200).json(
+      generateResponse(
+        "Success",
+        clear
+          ? "Readiness bypass cleared"
+          : "Readiness bypass recorded",
+        {
+          batchId: String(batchId),
+          secondaryInwardId: String(secondaryInwardId),
+          ...elig,
+          secondaryInward: siSub,
+        },
+        undefined
+      )
+    );
+  }
+);
+
 /** Dedicated list of accepted lab lines (same payload as dashboard.acceptedLabLines) */
 const getAcceptedLabLines = catchAsync(async (req, res, next) => {
   const plantOutwards = await PlantOutward.find({})
-    .populate("batchId", BATCH_PROJECTION)
+    .populate(BATCH_POPULATE)
     .sort("-updatedAt");
 
   const acceptedLabLines = collectAcceptedLabLines(plantOutwards);
@@ -1118,10 +1359,7 @@ const deletePrimaryInward = catchAsync(async (req, res, next) => {
 const getPrimaryInwardByBatchId = catchAsync(async (req, res, next) => {
   const { batchId } = req.params;
 
-  const outward = await PlantOutward.findOne({ batchId }).populate(
-    "batchId",
-    BATCH_PROJECTION
-  );
+  const outward = await PlantOutward.findOne({ batchId }).populate(BATCH_POPULATE);
 
   if (!outward) {
     return next(new AppError("No plant outward found for this batch", 404));
@@ -1261,6 +1499,19 @@ const labToPrimaryInward = catchAsync(async (req, res, next) => {
       );
     }
 
+    // Expected primary outward date: sowing-anchored primary stage when available; else inward + batch primary days
+    const plantReadyCountdown = await buildPlantReadyMeta(batchId);
+    let primaryOutwardExpectedDate;
+    if (plantReadyCountdown.hasAnchor && plantReadyCountdown.primaryStageReadyAt) {
+      primaryOutwardExpectedDate = new Date(plantReadyCountdown.primaryStageReadyAt);
+    } else {
+      const pd = Number(safeMongooseNumber(plantReadyCountdown.primaryPlantReadyDays)) || 0;
+      const m = moment(primaryInwardDate);
+      if (pd > 0 && m.isValid()) {
+        primaryOutwardExpectedDate = m.clone().startOf("day").add(pd, "days").toDate();
+      }
+    }
+
     // Create transfer history entry for lab
     const labTransferHistory = {
       transferDate: primaryInwardDate,
@@ -1283,6 +1534,9 @@ const labToPrimaryInward = catchAsync(async (req, res, next) => {
       transferStatus: "available",
       sourceLabId: labEntryId,
       remarks: remarks || undefined,
+      ...(primaryOutwardExpectedDate && {
+        primaryOutwardExpectedDate,
+      }),
     };
 
     const newAvailableBottles = clampUintForDb(
@@ -1314,7 +1568,6 @@ const labToPrimaryInward = catchAsync(async (req, res, next) => {
 
     await session.commitTransaction();
 
-    const plantReadyCountdown = await buildPlantReadyMeta(batchId);
     const docPlain =
       typeof updatedDoc.toObject === "function"
         ? updatedDoc.toObject({ virtuals: false })
@@ -1361,9 +1614,72 @@ const primaryInwardToPrimaryOutward = catchAsync(async (req, res, next) => {
   session.startTransaction();
 
   try {
-    // Validate required fields
-    if (!primaryInwardId || !primaryOutwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse || !laboursEngaged || !remarks || !qualityOfDispatch || !isReceived || !dateOfPlantation || !numberOfDaysTaken) {
-      throw new AppError("Missing required fields", 400);
+    const bottlesNum = Number(numberOfBottles);
+    const cavityNum = Number(cavity);
+    const traysNum = Number(numberOfTrays);
+    const laboursNum = Number(laboursEngaged);
+    const daysTakenNum =
+      numberOfDaysTaken === undefined || numberOfDaysTaken === null || numberOfDaysTaken === ""
+        ? NaN
+        : Number(numberOfDaysTaken);
+    const remarksStr =
+      remarks === undefined || remarks === null ? "" : String(remarks).trim();
+    const receivedBool =
+      isReceived === true ||
+      isReceived === "true" ||
+      isReceived === "yes" ||
+      isReceived === 1 ||
+      isReceived === "1";
+
+    /**
+     * POST body requirements for primaryInward-to-primaryOutward:
+     * - primaryInwardId (Mongo id string), primaryOutwardDate, dateOfPlantation (non-empty date strings or ISO)
+     * - size: R1 | R2 | R3
+     * - pollyhouse: non-empty string
+     * - qualityOfDispatch: non-empty string
+     * - numberOfBottles, cavity, numberOfTrays, laboursEngaged: numbers ≥ 1
+     * - numberOfDaysTaken: number ≥ 0 (0 is valid — same calendar day)
+     * - remarks / isReceived optional
+     */
+    const issues = [];
+    if (!primaryInwardId || String(primaryInwardId).trim() === "")
+      issues.push("primaryInwardId");
+    if (
+      primaryOutwardDate == null ||
+      primaryOutwardDate === "" ||
+      (typeof primaryOutwardDate === "string" && primaryOutwardDate.trim() === "")
+    )
+      issues.push("primaryOutwardDate");
+    if (size == null || String(size).trim() === "") issues.push("size");
+    if (
+      pollyhouse === undefined ||
+      pollyhouse === null ||
+      String(pollyhouse).trim() === ""
+    )
+      issues.push("pollyhouse");
+    if (
+      qualityOfDispatch === undefined ||
+      qualityOfDispatch === null ||
+      String(qualityOfDispatch).trim() === ""
+    )
+      issues.push("qualityOfDispatch");
+    if (
+      dateOfPlantation == null ||
+      dateOfPlantation === "" ||
+      (typeof dateOfPlantation === "string" && dateOfPlantation.trim() === "")
+    )
+      issues.push("dateOfPlantation");
+    if (Number.isNaN(bottlesNum) || bottlesNum < 1) issues.push("numberOfBottles (≥1)");
+    if (Number.isNaN(cavityNum) || cavityNum < 1) issues.push("cavity (≥1)");
+    if (Number.isNaN(traysNum) || traysNum < 1) issues.push("numberOfTrays (≥1)");
+    if (Number.isNaN(laboursNum) || laboursNum < 1) issues.push("laboursEngaged (≥1)");
+    if (Number.isNaN(daysTakenNum) || daysTakenNum < 0)
+      issues.push("numberOfDaysTaken (≥0, number — 0 allowed)");
+    if (issues.length) {
+      throw new AppError(
+        `Invalid primary outward payload: ${issues.join("; ")}`,
+        400
+      );
     }
 
     const plantOutward = await PlantOutward.findOne({ batchId }).session(session);
@@ -1377,11 +1693,23 @@ const primaryInwardToPrimaryOutward = catchAsync(async (req, res, next) => {
       throw new AppError("Primary inward entry not found", 404);
     }
 
-    const calculatedTotalQuantity = cavity * numberOfTrays;
+    const rawPlants = cavityNum * traysNum;
+    const plantsToTransfer = Math.min(
+      rawPlants,
+      safeNonNegativeInt(primaryInward.availableQuantity),
+      bottlesNum
+    );
+
+    if (plantsToTransfer < 1) {
+      throw new AppError(
+        "Plants to transfer must be at least 1 (check cavity × trays, available stock, and quantity).",
+        400
+      );
+    }
 
     // Validate transfer
     try {
-      plantOutward.validateTransfer('primaryInward', primaryInwardId, calculatedTotalQuantity);
+      plantOutward.validateTransfer('primaryInward', primaryInwardId, plantsToTransfer);
     } catch (error) {
       throw new AppError(error.message, 400);
     }
@@ -1389,31 +1717,33 @@ const primaryInwardToPrimaryOutward = catchAsync(async (req, res, next) => {
     // Create transfer history for primary inward
     const transferHistory = {
       transferDate: primaryOutwardDate,
-      quantityTransferred: calculatedTotalQuantity,
-      remarks
+      quantityTransferred: plantsToTransfer,
+      remarks: remarksStr || "Primary outward",
     };
 
     // Create primary outward entry
     const primaryOutwardEntry = {
       primaryOutwardDate,
-      numberOfBottles,
+      numberOfBottles: bottlesNum,
       size,
-      cavity,
-      numberOfTrays,
-      totalQuantity: calculatedTotalQuantity,
-      availableQuantity: calculatedTotalQuantity,
-      pollyhouse,
-      laboursEngaged,
+      cavity: cavityNum,
+      numberOfTrays: traysNum,
+      totalQuantity: plantsToTransfer,
+      numberOfPlants: plantsToTransfer,
+      availableQuantity: plantsToTransfer,
+      pollyhouse: String(pollyhouse).trim(),
+      laboursEngaged: laboursNum,
       transferStatus: 'available',
-      remarks,
-      qualityOfDispatch,
-      isReceived,
+      remarks: remarksStr,
+      qualityOfDispatch: String(qualityOfDispatch).trim(),
+      isReceived: receivedBool,
       dateOfPlantation,
-      numberOfDaysTaken
+      numberOfDaysTaken: daysTakenNum,
+      secondaryAcknowledgedAt: null,
     };
 
     const newPrimaryInwardStatus = 
-      primaryInward.availableQuantity - calculatedTotalQuantity === 0 ? 
+      primaryInward.availableQuantity - plantsToTransfer === 0 ? 
       'fully_transferred' : 'partially_transferred';
 
     const updatedDoc = await PlantOutward.findOneAndUpdate(
@@ -1425,7 +1755,7 @@ const primaryInwardToPrimaryOutward = catchAsync(async (req, res, next) => {
         },
         $set: {
           "primaryInward.$.transferStatus": newPrimaryInwardStatus,
-          "primaryInward.$.availableQuantity": primaryInward.availableQuantity - calculatedTotalQuantity
+          "primaryInward.$.availableQuantity": primaryInward.availableQuantity - plantsToTransfer
         }
       },
       { new: true, session, runValidators: true }
@@ -1446,6 +1776,154 @@ const primaryInwardToPrimaryOutward = catchAsync(async (req, res, next) => {
   } finally {
     session.endSession();
   }
+});
+
+/** Secondary Accept tab — acknowledge primary outward line before recording secondary inward (no stock movement). */
+const acknowledgePrimaryOutwardForSecondary = catchAsync(async (req, res, next) => {
+  const { batchId, primaryOutwardId } = req.params;
+  const userId = req.user?._id || req.user?.id;
+
+  const plantOutward = await PlantOutward.findOne({ batchId });
+  if (!plantOutward) {
+    return next(new AppError("No plant outward found with this batch ID", 404));
+  }
+
+  const primaryOutward = plantOutward.primaryOutward.id(primaryOutwardId);
+  if (!primaryOutward) {
+    return next(new AppError("Primary outward entry not found", 404));
+  }
+
+  const avail = safeNonNegativeInt(
+    safeMongooseNumber(primaryOutward.availableQuantity),
+    0
+  );
+  if (avail < 1 || (primaryOutward.transferStatus ?? "available") === "fully_transferred") {
+    return next(new AppError("No stock available to acknowledge", 400));
+  }
+
+  if (primaryOutward.secondaryAcknowledgedAt) {
+    return res.status(200).json(
+      generateResponse("Success", "Already acknowledged", {
+        batchId: String(batchId),
+        primaryOutwardId: String(primaryOutwardId),
+        secondaryAcknowledgedAt: primaryOutward.secondaryAcknowledgedAt,
+      })
+    );
+  }
+
+  const now = new Date();
+  const setDoc = {
+    "primaryOutward.$.secondaryAcknowledgedAt": now,
+  };
+  if (userId && mongoose.isValidObjectId(String(userId))) {
+    setDoc["primaryOutward.$.secondaryAcknowledgedBy"] = userId;
+  }
+
+  const updated = await PlantOutward.findOneAndUpdate(
+    { batchId, "primaryOutward._id": primaryOutwardId },
+    { $set: setDoc },
+    { new: true, runValidators: true }
+  ).populate(BATCH_POPULATE);
+
+  return res.status(200).json(
+    generateResponse(
+      "Success",
+      "Secondary acknowledgement recorded",
+      {
+        batchId: String(batchId),
+        primaryOutwardId: String(primaryOutwardId),
+        secondaryAcknowledgedAt: now,
+        plantOutward: updated,
+      },
+      undefined
+    )
+  );
+});
+
+/** Record mortality against remaining plants on a primary outward line (secondary ops). */
+const recordSecondaryPrimaryOutwardMortality = catchAsync(async (req, res, next) => {
+  const { batchId, primaryOutwardId } = req.params;
+  const { quantity, remarks } = req.body;
+  const qty = Number(quantity);
+  if (!Number.isFinite(qty) || qty < 1 || !Number.isInteger(qty)) {
+    return next(new AppError("quantity must be a positive integer", 400));
+  }
+
+  const plantOutward = await PlantOutward.findOne({ batchId });
+  if (!plantOutward) {
+    return next(new AppError("No plant outward found with this batch ID", 404));
+  }
+
+  const primaryOutward = plantOutward.primaryOutward.id(primaryOutwardId);
+  if (!primaryOutward) {
+    return next(new AppError("Primary outward entry not found", 404));
+  }
+
+  const avail = safeNonNegativeInt(safeMongooseNumber(primaryOutward.availableQuantity), 0);
+  if (qty > avail) {
+    return next(new AppError(`Mortality cannot exceed remaining plants (${avail})`, 400));
+  }
+
+  const newAvail = avail - qty;
+  const uid = req.user?._id || req.user?.id;
+  const pushEntry = {
+    quantity: qty,
+    recordedAt: new Date(),
+    remarks: String(remarks ?? "").trim(),
+    ...(mongoose.isValidObjectId(String(uid)) ? { recordedBy: uid } : {}),
+  };
+
+  const updated = await PlantOutward.findOneAndUpdate(
+    { batchId, "primaryOutward._id": primaryOutwardId },
+    {
+      $set: { "primaryOutward.$.availableQuantity": newAvail },
+      $push: { "primaryOutward.$.secondaryMortalityLog": pushEntry },
+    },
+    { new: true, runValidators: true }
+  ).populate(BATCH_POPULATE);
+
+  if (!updated) {
+    return next(new AppError("Failed to record mortality", 400));
+  }
+
+  return res.status(200).json(generateResponse("Success", "Mortality recorded", updated, undefined));
+});
+
+/** Mark secondary sowing finished for this line — only when no plants remain on the line. */
+const markSecondaryPrimaryOutwardSowingComplete = catchAsync(async (req, res, next) => {
+  const { batchId, primaryOutwardId } = req.params;
+
+  const plantOutward = await PlantOutward.findOne({ batchId });
+  if (!plantOutward) {
+    return next(new AppError("No plant outward found with this batch ID", 404));
+  }
+
+  const primaryOutward = plantOutward.primaryOutward.id(primaryOutwardId);
+  if (!primaryOutward) {
+    return next(new AppError("Primary outward entry not found", 404));
+  }
+
+  const avail = safeNonNegativeInt(safeMongooseNumber(primaryOutward.availableQuantity), 0);
+  if (avail > 0) {
+    return next(
+      new AppError(
+        "Sowing complete only when no plants remain — sow, transfer, or record mortality first",
+        400
+      )
+    );
+  }
+
+  const updated = await PlantOutward.findOneAndUpdate(
+    { batchId, "primaryOutward._id": primaryOutwardId },
+    { $set: { "primaryOutward.$.secondarySowingCompletedAt": new Date() } },
+    { new: true, runValidators: true }
+  ).populate(BATCH_POPULATE);
+
+  if (!updated) {
+    return next(new AppError("Failed to update", 400));
+  }
+
+  return res.status(200).json(generateResponse("Success", "Sowing marked complete", updated, undefined));
 });
 
 const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
@@ -1481,6 +1959,13 @@ const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
     const primaryOutward = plantOutward.primaryOutward.id(primaryOutwardId);
     if (!primaryOutward) {
       throw new AppError("Primary outward entry not found", 404);
+    }
+
+    if (primaryOutward.secondaryAcknowledgedAt === null) {
+      throw new AppError(
+        "secondary_accept_required",
+        400
+      );
     }
 
     const calculatedTotalQuantity = cavity * numberOfTrays;
@@ -1534,6 +2019,23 @@ const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
       { new: true, session, runValidators: true }
     );
 
+    const sis = updatedDoc?.secondaryInward || [];
+    const newSi = sis[sis.length - 1];
+    if (!newSi?._id) {
+      throw new AppError("Could not resolve new secondary inward id for availability ledger", 500);
+    }
+
+    const performedBy = req.user?._id || req.user?.id;
+    await recordSecondaryInwardOnLedger(session, {
+      dispatchBatchId: batchId,
+      plantOutwardId: updatedDoc._id,
+      secondaryInwardId: newSi._id,
+      secondaryInwardDate: newSi.secondaryInwardDate,
+      plants: calculatedTotalQuantity,
+      size: newSi.size,
+      performedBy: mongoose.isValidObjectId(String(performedBy)) ? performedBy : undefined,
+    });
+
     await session.commitTransaction();
 
     const response = generateResponse(
@@ -1554,7 +2056,7 @@ const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
 const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
   const { batchId } = req.params;
   const {
-    secondaryInwardId,  // Added source ID
+    secondaryInwardId,
     secondaryOutwardDate,
     numberOfBottles,
     size,
@@ -1562,16 +2064,60 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
     numberOfTrays,
     pollyhouse,
     laboursEngaged,
-    remarks
+    remarks,
+    linkedOrderId,
+    linkedDispatchId,
+    linkedDispatchPlantRowIndex,
+    evidencePhotoUrls,
   } = req.body;
 
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    // Validate required fields
-    if (!secondaryInwardId || !secondaryOutwardDate || !numberOfBottles || !size || !cavity || !numberOfTrays || !pollyhouse) {
-      throw new AppError("Missing required fields", 400);
+    if (
+      !secondaryInwardId ||
+      !secondaryOutwardDate ||
+      numberOfBottles == null ||
+      !size ||
+      cavity == null ||
+      numberOfTrays == null ||
+      !pollyhouse ||
+      laboursEngaged == null ||
+      !linkedOrderId
+    ) {
+      throw new AppError(
+        "Missing required fields (including linkedOrderId for farmer order)",
+        400
+      );
+    }
+    if (!mongoose.isValidObjectId(String(linkedOrderId))) {
+      throw new AppError("linkedOrderId must be a valid order id", 400);
+    }
+
+    const photoList = Array.isArray(evidencePhotoUrls)
+      ? evidencePhotoUrls.filter((u) => typeof u === "string" && u.trim().length > 0)
+      : [];
+
+    let linkedDispatchDoc = null;
+    const dispatchPlantRowIdx = Math.max(
+      0,
+      Number(linkedDispatchPlantRowIndex ?? 0) || 0
+    );
+    if (linkedDispatchId != null && linkedDispatchId !== "") {
+      if (!mongoose.isValidObjectId(String(linkedDispatchId))) {
+        throw new AppError("linkedDispatchId must be a valid dispatch id", 400);
+      }
+      linkedDispatchDoc = await Dispatch.findById(linkedDispatchId).session(session);
+      if (!linkedDispatchDoc || linkedDispatchDoc.isDeleted) {
+        throw new AppError("Linked vehicle dispatch not found", 404);
+      }
+      if (!["PENDING", "IN_TRANSIT"].includes(linkedDispatchDoc.transportStatus)) {
+        throw new AppError(
+          "Vehicle dispatch must be PENDING or IN_TRANSIT to record shed pickup",
+          400
+        );
+      }
     }
 
     const plantOutward = await PlantOutward.findOne({ batchId }).session(session);
@@ -1579,29 +2125,124 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
       throw new AppError("No plant outward found with this batch ID", 404);
     }
 
-    // Find and validate secondary inward entry
     const secondaryInward = plantOutward.secondaryInward.id(secondaryInwardId);
     if (!secondaryInward) {
       throw new AppError("Secondary inward entry not found", 404);
     }
 
+    const batchDoc = await DispatchBatch.findById(plantOutward.batchId)
+      .select(BATCH_SELECT_FIELDS)
+      .session(session)
+      .lean();
+    const secondaryDaysForElig = batchDoc
+      ? Number(safeMongooseNumber(batchDoc.secondaryPlantReadyDays)) || 0
+      : 0;
+    const siPlain =
+      typeof secondaryInward.toObject === "function"
+        ? secondaryInward.toObject()
+        : secondaryInward;
+    const dispatchElig = computeSecondaryDispatchEligibility(
+      siPlain,
+      secondaryDaysForElig,
+      moment().startOf("day")
+    );
+
+    let skipReadinessBecauseVehicle = false;
+    if (linkedDispatchDoc) {
+      const row = linkedDispatchDoc.plantsDetails?.[dispatchPlantRowIdx];
+      if (!row) {
+        throw new AppError("Invalid linkedDispatchPlantRowIndex for this dispatch", 400);
+      }
+      if (
+        String(batchDoc?.plantCmsId) !== String(row.plantId) ||
+        String(batchDoc?.plantSubtypeId) !== String(row.subTypeId)
+      ) {
+        throw new AppError(
+          "Batch plant/subtype must match the vehicle dispatch plant row",
+          400
+        );
+      }
+      skipReadinessBecauseVehicle = true;
+    }
+
+    if (!dispatchElig.dispatchEligible && !skipReadinessBecauseVehicle) {
+      throw new AppError(
+        "Stock is not ready for secondary dispatch yet — wait until the expected date or record a readiness bypass on Inward.",
+        400
+      );
+    }
+
     const calculatedTotalQuantity = cavity * numberOfTrays;
 
-    // Validate transfer
     try {
-      plantOutward.validateTransfer('secondaryInward', secondaryInwardId, calculatedTotalQuantity);
+      plantOutward.validateTransfer("secondaryInward", secondaryInwardId, calculatedTotalQuantity);
     } catch (error) {
       throw new AppError(error.message, 400);
     }
 
-    // Create transfer history for secondary inward
+    if (!batchDoc?.plantCmsId || !batchDoc?.plantSubtypeId) {
+      throw new AppError(
+        "Dispatch batch must have plant CMS and subtype set before linking farmer orders",
+        400
+      );
+    }
+
+    const linkedOrderDoc = await Order.findById(linkedOrderId).session(session);
+    if (!linkedOrderDoc) {
+      throw new AppError("Linked order not found", 404);
+    }
+
+    const orderOk =
+      linkedOrderDoc.orderStatus === "READY_FOR_DISPATCH" ||
+      linkedOrderDoc.orderStatus === "DISPATCH_PROCESS";
+    if (!orderOk) {
+      throw new AppError(
+        "Order must be READY_FOR_DISPATCH or DISPATCH_PROCESS for secondary outward",
+        400
+      );
+    }
+    if (!orderMatchesDispatchBatch(linkedOrderDoc, batchDoc)) {
+      throw new AppError(
+        "Order plant/subtype does not match this dispatch batch",
+        400
+      );
+    }
+
+    const currentOrderRemaining = orderRemainingPlantsValue(linkedOrderDoc);
+    if (calculatedTotalQuantity > currentOrderRemaining) {
+      throw new AppError(
+        `Secondary outward quantity (${calculatedTotalQuantity}) exceeds remaining plants (${currentOrderRemaining}) on the order`,
+        400
+      );
+    }
+
+    if (linkedDispatchDoc) {
+      const onVehicle = (linkedDispatchDoc.orderIds || []).some(
+        (oid) => String(oid) === String(linkedOrderId)
+      );
+      if (!onVehicle) {
+        throw new AppError("linkedOrderId must be on the linked vehicle dispatch", 400);
+      }
+      const row = linkedDispatchDoc.plantsDetails[dispatchPlantRowIdx];
+      if (
+        String(linkedOrderDoc.plantName) !== String(row.plantId) ||
+        String(linkedOrderDoc.plantSubtype) !== String(row.subTypeId)
+      ) {
+        throw new AppError(
+          "Order plant/subtype does not match linked dispatch plant row",
+          400
+        );
+      }
+    }
+
+    const orderLinkSnapshot = buildSecondaryOrderLinkSnapshot(linkedOrderDoc, batchDoc);
+
     const transferHistory = {
       transferDate: secondaryOutwardDate,
       quantityTransferred: calculatedTotalQuantity,
-      remarks
+      remarks,
     };
 
-    // Create secondary outward entry
     const secondaryOutwardEntry = {
       secondaryOutwardDate,
       numberOfBottles,
@@ -1612,28 +2253,105 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
       availableQuantity: calculatedTotalQuantity,
       pollyhouse,
       laboursEngaged,
-      transferStatus: 'available',
-      sourceSecondaryInwardId: secondaryInwardId
+      transferStatus: "available",
+      sourceSecondaryInwardId: secondaryInwardId,
+      linkedOrderId,
+      orderLinkSnapshot,
+      ...(linkedDispatchDoc && {
+        linkedDispatchId: linkedDispatchDoc._id,
+        linkedDispatchPlantRowIndex: dispatchPlantRowIdx,
+        dispatchFulfillmentSnapshot: {
+          transportId: linkedDispatchDoc.transportId,
+          driverName: linkedDispatchDoc.driverName,
+          vehicleName: linkedDispatchDoc.vehicleName,
+          vehicleNumber: linkedDispatchDoc.vehicleNumber,
+        },
+      }),
+      ...(photoList.length > 0 ? { evidencePhotoUrls: photoList } : {}),
     };
 
-    const newSecondaryInwardStatus = 
-      secondaryInward.availableQuantity - calculatedTotalQuantity === 0 ? 
-      'fully_transferred' : 'partially_transferred';
+    const newSecondaryInwardStatus =
+      secondaryInward.availableQuantity - calculatedTotalQuantity === 0
+        ? "fully_transferred"
+        : "partially_transferred";
 
     const updatedDoc = await PlantOutward.findOneAndUpdate(
       { batchId, "secondaryInward._id": secondaryInwardId },
       {
         $push: {
           secondaryOutward: secondaryOutwardEntry,
-          "secondaryInward.$.transferHistory": transferHistory
+          "secondaryInward.$.transferHistory": transferHistory,
         },
         $set: {
           "secondaryInward.$.transferStatus": newSecondaryInwardStatus,
-          "secondaryInward.$.availableQuantity": secondaryInward.availableQuantity - calculatedTotalQuantity
-        }
+          "secondaryInward.$.availableQuantity":
+            secondaryInward.availableQuantity - calculatedTotalQuantity,
+        },
       },
       { new: true, session, runValidators: true }
     );
+
+    const outArr = updatedDoc?.secondaryOutward || [];
+    const newSo = outArr[outArr.length - 1];
+    if (!newSo?._id) {
+      throw new AppError("Could not resolve new secondary outward id for availability ledger", 500);
+    }
+
+    const outPerformedBy = req.user?._id || req.user?.id;
+    await recordSecondaryOutwardOnLedger(session, {
+      dispatchBatchId: batchId,
+      plantOutwardId: updatedDoc._id,
+      secondaryInwardId,
+      secondaryOutwardId: newSo._id,
+      quantity: calculatedTotalQuantity,
+      performedBy: mongoose.isValidObjectId(String(outPerformedBy)) ? outPerformedBy : undefined,
+      metadata: {
+        orderId: linkedOrderId,
+        orderNumber: linkedOrderDoc.orderId,
+        ...(linkedDispatchDoc && { dispatchId: linkedDispatchDoc._id }),
+      },
+    });
+
+    const newRemaining = currentOrderRemaining - calculatedTotalQuantity;
+    let newOrderStatus = linkedOrderDoc.orderStatus;
+    if (newRemaining === 0) {
+      newOrderStatus = "DISPATCHED";
+    } else if (newRemaining < currentOrderRemaining) {
+      newOrderStatus = "DISPATCH_PROCESS";
+    }
+
+    const processedByRaw = req.user?._id || req.user?.id;
+    const dispatchHistoryEntry = {
+      date: new Date(),
+      quantity: calculatedTotalQuantity,
+      remainingAfterDispatch: newRemaining,
+      processedBy: mongoose.isValidObjectId(String(processedByRaw))
+        ? processedByRaw
+        : undefined,
+      driverName: linkedDispatchDoc?.driverName || "",
+      vehicleName: linkedDispatchDoc?.vehicleName || "",
+      dispatchId: linkedDispatchDoc ? linkedDispatchDoc._id : undefined,
+      source: "SECONDARY_SHED",
+      secondaryOutwardId: newSo._id,
+      plantOutwardId: updatedDoc._id,
+      dispatchBatchId: plantOutward.batchId,
+      productSnapshot: orderLinkSnapshot,
+    };
+
+    await updateOrderWithLedgerSync({
+      orderId: linkedOrderId,
+      existingDoc: linkedOrderDoc,
+      session,
+      userId: processedByRaw,
+      contextLabel: "secondary_shed_outward",
+      updateOperation: {
+        $set: {
+          remainingPlants: newRemaining,
+          orderStatus: newOrderStatus,
+        },
+        $push: { dispatchHistory: dispatchHistoryEntry },
+      },
+    });
 
     await session.commitTransaction();
 
@@ -1760,7 +2478,7 @@ const getPrimaryInwards = catchAsync(async (req, res, next) => {
   }
 
   const plantOutwards = await PlantOutward.find(queryObj)
-    .populate("batchId", BATCH_PROJECTION)
+    .populate(BATCH_POPULATE)
     .select("primaryInward")
     .sort("-createdAt");
 
@@ -1771,6 +2489,109 @@ const getPrimaryInwards = catchAsync(async (req, res, next) => {
     "Success",
     "Primary inward entries retrieved successfully",
     primaryInwards,
+    undefined
+  );
+
+  res.status(200).json(response);
+});
+
+/**
+ * Paginated primary inward lines for mobile (one row per primary inward subdocument).
+ * Query: filter=all|remaining|partial|complete, page (≥1), limit (1–100), optional batchId
+ */
+const getPrimaryInwardLinesPaginated = catchAsync(async (req, res, next) => {
+  const rawFilter = String(req.query.filter || "all").toLowerCase();
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+  const skip = (page - 1) * limit;
+
+  const allowed = ["all", "remaining", "partial", "complete"];
+  const f = allowed.includes(rawFilter) ? rawFilter : "all";
+
+  const batchIdRaw = req.query.batchId;
+  const batchObjectId =
+    batchIdRaw && mongoose.Types.ObjectId.isValid(String(batchIdRaw))
+      ? new mongoose.Types.ObjectId(String(batchIdRaw))
+      : null;
+
+  /** After $unwind primaryInward — filter by transfer stage */
+  const transferMatch =
+    f === "remaining"
+      ? { "primaryInward.transferStatus": { $ne: "fully_transferred" } }
+      : f === "partial"
+        ? { "primaryInward.transferStatus": "partially_transferred" }
+        : f === "complete"
+          ? { "primaryInward.transferStatus": "fully_transferred" }
+          : {};
+
+  const batchColl = DispatchBatch.collection.collectionName;
+
+  const pipeline = [
+    {
+      $match: {
+        ...(batchObjectId ? { batchId: batchObjectId } : {}),
+        primaryInward: { $exists: true, $type: "array", $not: { $size: 0 } },
+      },
+    },
+    { $unwind: "$primaryInward" },
+    ...(Object.keys(transferMatch).length ? [{ $match: transferMatch }] : []),
+    {
+      $sort: {
+        "primaryInward.primaryInwardDate": -1,
+        "primaryInward._id": -1,
+      },
+    },
+    {
+      $facet: {
+        meta: [{ $count: "total" }],
+        data: [
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $lookup: {
+              from: batchColl,
+              localField: "batchId",
+              foreignField: "_id",
+              as: "_batchArr",
+            },
+          },
+          {
+            $replaceRoot: {
+              newRoot: {
+                $mergeObjects: [
+                  "$primaryInward",
+                  {
+                    _batchId: "$batchId",
+                    batchNumber: {
+                      $arrayElemAt: ["$_batchArr.batchNumber", 0],
+                    },
+                    plantOutwardDocumentId: "$_id",
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    },
+  ];
+
+  const agg = await PlantOutward.aggregate(pipeline).allowDiskUse(true);
+  const facet = agg[0] || { meta: [], data: [] };
+  const total = facet.meta[0]?.total ?? 0;
+  const rows = facet.data || [];
+  const hasMore = skip + rows.length < total;
+
+  const response = generateResponse(
+    "Success",
+    "Primary inward lines",
+    {
+      rows,
+      page,
+      limit,
+      total,
+      hasMore,
+    },
     undefined
   );
 
@@ -1806,7 +2627,7 @@ const getPrimaryOutwards = catchAsync(async (req, res, next) => {
   }
 
   const plantOutwards = await PlantOutward.find(queryObj)
-    .populate("batchId", BATCH_PROJECTION)
+    .populate(BATCH_POPULATE)
     .select("primaryOutward")
     .sort("-createdAt");
 
@@ -1847,7 +2668,7 @@ const getSecondaryInwards = catchAsync(async (req, res, next) => {
   }
 
   const plantOutwards = await PlantOutward.find(queryObj)
-    .populate("batchId", BATCH_PROJECTION)
+    .populate(BATCH_POPULATE)
     .select("secondaryInward")
     .sort("-createdAt");
 
@@ -1888,7 +2709,7 @@ const getSecondaryOutwards = catchAsync(async (req, res, next) => {
   }
 
   const plantOutwards = await PlantOutward.find(queryObj)
-    .populate("batchId", BATCH_PROJECTION)
+    .populate(BATCH_POPULATE)
     .select("secondaryOutward")
     .sort("-createdAt");
 
@@ -1911,7 +2732,7 @@ const getPrimaryInwardById = catchAsync(async (req, res, next) => {
   const plantOutward = await PlantOutward.findOne({
     batchId,
     "primaryInward._id": primaryInwardId
-  }).populate("batchId", BATCH_PROJECTION);
+  }).populate(BATCH_POPULATE);
 
   if (!plantOutward) {
     return next(new AppError("No plant outward found with this batch ID", 404));
@@ -1938,7 +2759,7 @@ const getPrimaryOutwardById = catchAsync(async (req, res, next) => {
   const plantOutward = await PlantOutward.findOne({
     batchId,
     "primaryOutward._id": primaryOutwardId
-  }).populate("batchId", BATCH_PROJECTION);
+  }).populate(BATCH_POPULATE);
 
   if (!plantOutward) {
     return next(new AppError("No plant outward found with this batch ID", 404));
@@ -1965,7 +2786,7 @@ const getSecondaryInwardById = catchAsync(async (req, res, next) => {
   const plantOutward = await PlantOutward.findOne({
     batchId,
     "secondaryInward._id": secondaryInwardId
-  }).populate("batchId", BATCH_PROJECTION);
+  }).populate(BATCH_POPULATE);
 
   if (!plantOutward) {
     return next(new AppError("No plant outward found with this batch ID", 404));
@@ -1986,13 +2807,308 @@ const getSecondaryInwardById = catchAsync(async (req, res, next) => {
   res.status(200).json(response);
 });
 
+async function findDispatchActiveByIdOrTransport(idParam) {
+  const raw = String(idParam ?? "").trim();
+  if (!raw) return null;
+  if (mongoose.isValidObjectId(raw)) {
+    const d = await Dispatch.findOne({ _id: raw, isDeleted: { $ne: true } });
+    if (d) return d;
+  }
+  return Dispatch.findOne({ transportId: raw, isDeleted: { $ne: true } });
+}
+
+/** PENDING / IN_TRANSIT vehicle dispatches for secondary shed fulfillment UI (paginated). */
+const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
+  const ALLOWED = ["PENDING", "IN_TRANSIT"];
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+  const skip = (page - 1) * limit;
+  const qSearch = String(req.query.search || "").trim();
+
+  const filter = {
+    isDeleted: { $ne: true },
+    transportStatus: { $in: ALLOWED },
+  };
+  if (qSearch) {
+    filter.$or = [
+      { transportId: new RegExp(qSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") },
+      { driverName: new RegExp(qSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") },
+      { vehicleName: new RegExp(qSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") },
+    ];
+  }
+
+  const total = await Dispatch.countDocuments(filter);
+  const docs = await Dispatch.find(filter)
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .select(
+      "transportId transportStatus driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds createdAt updatedAt"
+    )
+    .lean();
+
+  const items = docs.map((d) => {
+    let totalQty = 0;
+    const plantRows = (d.plantsDetails || []).map((p) => {
+      const q = Number(p.quantity ?? p.totalPlants ?? 0) || 0;
+      totalQty += q;
+      let cratePieces = 0;
+      for (const c of p.crates || []) {
+        cratePieces += Number(c.crateCount || 0) || 0;
+      }
+      return {
+        name: p.name,
+        id: p.id,
+        quantity: q,
+        cratePieces,
+      };
+    });
+    return {
+      _id: d._id,
+      transportId: d.transportId,
+      transportStatus: d.transportStatus,
+      driverName: d.driverName,
+      driverMobile: d.driverMobile,
+      vehicleName: d.vehicleName,
+      vehicleNumber: d.vehicleNumber,
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+      totalPlantQty: totalQty,
+      plantRowsSummary: plantRows,
+      orderCount: (d.orderIds || []).length,
+    };
+  });
+
+  const response = generateResponse(
+    "Success",
+    "Vehicle dispatches for secondary ops",
+    {
+      items,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit) || 1,
+    },
+    undefined
+  );
+  res.status(200).json(response);
+});
+
+/**
+ * FIFO-sorted secondary inward candidates for a dispatch plant row + matching orders on that vehicle.
+ */
+const getVehicleDispatchAllocationSuggestions = catchAsync(async (req, res, next) => {
+  const { dispatchId } = req.params;
+  const plantRowIndex = Math.max(
+    0,
+    Number(req.query.plantRowIndex ?? req.query.plantRow ?? 0) || 0
+  );
+
+  const dispatchDoc = await findDispatchActiveByIdOrTransport(dispatchId);
+  if (!dispatchDoc) {
+    return next(
+      new AppError(
+        "No active dispatch matches this id — use dispatch _id or transportId",
+        404
+      )
+    );
+  }
+
+  const row = dispatchDoc.plantsDetails?.[plantRowIndex];
+  if (!row) {
+    return next(new AppError("Invalid plant row index for this dispatch", 400));
+  }
+
+  const plantCmsId = row.plantId;
+  const plantSubtypeId = row.subTypeId;
+  if (!plantCmsId || !plantSubtypeId) {
+    return next(new AppError("Dispatch plant row missing plant/subtype ids", 400));
+  }
+
+  const batchDocs = await DispatchBatch.find({
+    plantCmsId,
+    plantSubtypeId,
+    isActive: { $ne: false },
+  })
+    .select(BATCH_SELECT_FIELDS)
+    .populate("plantCmsId", "name subtypes")
+    .lean();
+
+  const batchIds = batchDocs.map((b) => b._id);
+  const batchMap = new Map(batchDocs.map((b) => [String(b._id), b]));
+
+  const pos =
+    batchIds.length === 0
+      ? []
+      : await PlantOutward.find({ batchId: { $in: batchIds } }).lean();
+
+  const todayStart = moment().startOf("day");
+  const suggestions = [];
+
+  for (const po of pos) {
+    const batchLean = batchMap.get(String(po.batchId));
+    if (!batchLean) continue;
+    const labels = plantSubtypeLabelsFromLeanBatch(batchLean);
+    const secDays = Number(safeMongooseNumber(batchLean.secondaryPlantReadyDays)) || 0;
+
+    for (const si of po.secondaryInward || []) {
+      const avail = safeNonNegativeInt(safeMongooseNumber(si.availableQuantity), 0);
+      if (avail < 1) continue;
+      if ((si.transferStatus ?? "available") === "fully_transferred") continue;
+
+      const siPlain = typeof si.toObject === "function" ? si.toObject() : si;
+      const elig = computeSecondaryDispatchEligibility(siPlain, secDays, todayStart);
+      const bypassAt = siPlain.readinessBypassAt;
+      let readyMoment = null;
+      if (bypassAt != null && moment(bypassAt).isValid()) {
+        readyMoment = moment(bypassAt).startOf("day");
+      } else if (elig.expectedReadyByCalendar) {
+        readyMoment = moment(elig.expectedReadyByCalendar).startOf("day");
+      } else if (siPlain.secondaryInwardDate) {
+        readyMoment = moment(siPlain.secondaryInwardDate).add(secDays, "days").startOf("day");
+      } else {
+        readyMoment = moment().add(365, "days");
+      }
+
+      const sortReady = readyMoment.valueOf();
+      const sortInward = moment(siPlain.secondaryInwardDate || 0).valueOf();
+
+      suggestions.push({
+        batchId: po.batchId,
+        batchNumber: batchLean.batchNumber,
+        plantOutwardId: po._id,
+        secondaryInwardId: si._id,
+        availableQuantity: avail,
+        dispatchEligible: elig.dispatchEligible,
+        expectedReadyByCalendar: elig.expectedReadyByCalendar,
+        secondaryInwardDate: siPlain.secondaryInwardDate,
+        plantLabel: labels.plantLabel,
+        subtypeLabel: labels.subtypeLabel,
+        size: siPlain.size,
+        cavity: siPlain.cavity,
+        numberOfBottles: siPlain.numberOfBottles,
+        numberOfTrays: siPlain.numberOfTrays,
+        sortReady,
+        sortInward,
+      });
+    }
+  }
+
+  suggestions.sort((a, b) => {
+    if (a.sortReady !== b.sortReady) return a.sortReady - b.sortReady;
+    return a.sortInward - b.sortInward;
+  });
+
+  const stripped = suggestions.map(
+    ({ sortReady, sortInward, ...rest }) => rest
+  );
+
+  const oidSet = (dispatchDoc.orderIds || []).map((id) =>
+    mongoose.isValidObjectId(id) ? id : null
+  ).filter(Boolean);
+  const matchingOrders = await Order.find({
+    _id: { $in: oidSet },
+    plantName: plantCmsId,
+    plantSubtype: plantSubtypeId,
+    remainingPlants: { $gt: 0 },
+    orderStatus: { $in: ["READY_FOR_DISPATCH", "DISPATCH_PROCESS"] },
+  })
+    .select("_id orderId publicOrderCode remainingPlants orderStatus")
+    .sort({ orderId: -1 })
+    .limit(100)
+    .lean();
+
+  const response = generateResponse(
+    "Success",
+    "Allocation suggestions for vehicle dispatch plant row",
+    {
+      dispatchId: dispatchDoc._id,
+      transportId: dispatchDoc.transportId,
+      transportStatus: dispatchDoc.transportStatus,
+      plantRowIndex,
+      plantRowName: row.name,
+      plantRowQuantity: Number(row.quantity ?? row.totalPlants ?? 0) || 0,
+      matchingOrders,
+      suggestions: stripped,
+      otherBatchesWithSamePlant: batchDocs.map((b) => b.batchNumber).filter(Boolean),
+    },
+    undefined
+  );
+  res.status(200).json(response);
+});
+
+/**
+ * Farmer orders READY_FOR_DISPATCH matching the batch plant/subtype (for secondary shed dispatch UI).
+ */
+const getSecondaryOrdersReadyForDispatch = catchAsync(async (req, res, next) => {
+  const { batchId } = req.params;
+  if (!mongoose.isValidObjectId(String(batchId))) {
+    return next(new AppError("Invalid batch id", 400));
+  }
+
+  const batchDoc = await DispatchBatch.findById(batchId).select(BATCH_SELECT_FIELDS).lean();
+  if (!batchDoc) {
+    return next(new AppError("Dispatch batch not found", 404));
+  }
+
+  if (!batchDoc.plantCmsId || !batchDoc.plantSubtypeId) {
+    const response = generateResponse(
+      "Success",
+      "Batch has no plant CMS / subtype — configure the batch to list matching orders",
+      {
+        orders: [],
+        batchSummary: {
+          batchNumber: batchDoc.batchNumber,
+          plantConfigured: false,
+        },
+      },
+      undefined
+    );
+    return res.status(200).json(response);
+  }
+
+  const orders = await Order.find({
+    orderStatus: { $in: ["READY_FOR_DISPATCH", "DISPATCH_PROCESS"] },
+    remainingPlants: { $gt: 0 },
+    plantName: batchDoc.plantCmsId,
+    plantSubtype: batchDoc.plantSubtypeId,
+  })
+    .select("_id orderId publicOrderCode remainingPlants orderStatus farmer")
+    .populate("farmer", "name firstName lastName mobileNumber")
+    .sort({ orderId: -1 })
+    .limit(300)
+    .lean();
+
+  const response = generateResponse(
+    "Success",
+    "Orders ready for dispatch for this batch",
+    {
+      orders: orders.map((o) => ({
+        _id: o._id,
+        orderId: o.orderId,
+        publicOrderCode: o.publicOrderCode,
+        remainingPlants: o.remainingPlants,
+        farmer: o.farmer,
+      })),
+      batchSummary: {
+        batchNumber: batchDoc.batchNumber,
+        plantConfigured: true,
+        plantCmsId: batchDoc.plantCmsId,
+        plantSubtypeId: batchDoc.plantSubtypeId,
+      },
+    },
+    undefined
+  );
+  res.status(200).json(response);
+});
+
 const getSecondaryOutwardById = catchAsync(async (req, res, next) => {
   const { batchId, secondaryOutwardId } = req.params;
 
   const plantOutward = await PlantOutward.findOne({
     batchId,
     "secondaryOutward._id": secondaryOutwardId
-  }).populate("batchId", BATCH_PROJECTION);
+  }).populate(BATCH_POPULATE);
 
   if (!plantOutward) {
     return next(new AppError("No plant outward found with this batch ID", 404));
@@ -2028,15 +3144,23 @@ export {
   getPrimaryInwardByBatchId,
   labToPrimaryInward,
   primaryInwardToPrimaryOutward,
+  acknowledgePrimaryOutwardForSecondary,
+  recordSecondaryPrimaryOutwardMortality,
+  markSecondaryPrimaryOutwardSowingComplete,
   primaryToSecondaryInward,
   secondaryInwardToSecondaryOutward,
   getTransferHistory,
   getPrimaryInwards,
+  getPrimaryInwardLinesPaginated,
   getPrimaryOutwards,
   getSecondaryInwards,
   getSecondaryOutwards,
   getPrimaryInwardById,
   getPrimaryOutwardById,
   getSecondaryInwardById,
-  getSecondaryOutwardById
+  getSecondaryOutwardById,
+  getSecondaryOrdersReadyForDispatch,
+  getSecondaryVehicleDispatches,
+  getVehicleDispatchAllocationSuggestions,
+  patchSecondaryInwardReadinessBypass,
 };

@@ -611,6 +611,16 @@ const getTodayPendingLinkedLoads = catchAsync(async (req, res) => {
   );
 });
 
+/** Ram Agri row is "cleared" for nursery DC if marked LOADED or already shipped from Agri side. */
+const isLinkedAgriLoadSatisfied = (order) => {
+  const load = String(order?.agriLoadStatus || "").toUpperCase();
+  if (load === "LOADED") return true;
+  const ds = String(order?.dispatchStatus || "").toUpperCase();
+  const os = String(order?.orderStatus || "").toUpperCase();
+  if (ds === "DISPATCHED" || os === "DISPATCHED") return true;
+  return false;
+};
+
 const getDispatchLoadStatus = catchAsync(async (req, res, next) => {
   const orderIds = Array.isArray(req.body?.orderIds) ? req.body.orderIds : [];
   if (!orderIds.length) {
@@ -628,7 +638,7 @@ const getDispatchLoadStatus = catchAsync(async (req, res, next) => {
     orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
   }).lean();
 
-  const blocking = linkedOrders.filter((order) => order.agriLoadStatus !== "LOADED");
+  const blocking = linkedOrders.filter((order) => !isLinkedAgriLoadSatisfied(order));
   const responseData = {
     isBlocked: blocking.length > 0,
     blockedBy: blocking.map((order) => ({
@@ -637,6 +647,8 @@ const getDispatchLoadStatus = catchAsync(async (req, res, next) => {
       linkedNurseryOrderId: order.linkedNurseryOrderId,
       linkedNurseryOrderCode: order.linkedNurseryOrderCode || "",
       agriLoadStatus: order.agriLoadStatus || "PENDING_LOAD",
+      dispatchStatus: order.dispatchStatus,
+      orderStatus: order.orderStatus,
       customerName: order.customerName,
       productName: order.productName,
       quantity: order.quantity,

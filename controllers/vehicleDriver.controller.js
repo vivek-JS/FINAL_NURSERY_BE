@@ -11,13 +11,57 @@ const toRow = (doc) => {
   return { id: _id, _id, ...rest };
 };
 
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+
+const pickDriverPayload = (body) => {
+  const allowed = [
+    "ownerId",
+    "name",
+    "mobile",
+    "licenseNumber",
+    "bankName",
+    "accountNumber",
+    "ifscCode",
+    "paymentAccountPhotoUrl",
+    "isActive",
+  ];
+  const out = {};
+  for (const k of allowed) {
+    if (body[k] !== undefined) out[k] = body[k];
+  }
+  if (out.ifscCode != null && String(out.ifscCode).trim() !== "") {
+    const u = String(out.ifscCode).trim().toUpperCase().replace(/\s/g, "");
+    if (!IFSC_RE.test(u)) {
+      throw new AppError("Invalid IFSC code format", 400);
+    }
+    out.ifscCode = u;
+  }
+  if (out.accountNumber != null) {
+    out.accountNumber = String(out.accountNumber).trim();
+  }
+  if (out.bankName != null) {
+    out.bankName = String(out.bankName).trim();
+  }
+  if (out.paymentAccountPhotoUrl != null) {
+    out.paymentAccountPhotoUrl = String(out.paymentAccountPhotoUrl).trim();
+  }
+  return out;
+};
+
 export const createVehicleDriver = catchAsync(async (req, res, next) => {
   const owner = await VehicleOwner.findById(req.body.ownerId);
   if (!owner) {
     return next(new AppError("Owner not found", 404));
   }
 
-  const doc = await VehicleDriver.create(req.body);
+  let payload;
+  try {
+    payload = pickDriverPayload(req.body);
+  } catch (e) {
+    return next(e);
+  }
+
+  const doc = await VehicleDriver.create(payload);
   return res.status(201).json(
     generateResponse("Success", "Driver created successfully", toRow(doc), undefined)
   );
@@ -47,7 +91,13 @@ export const getAllVehicleDrivers = catchAsync(async (req, res) => {
 
   if (search) {
     const searchRegex = new RegExp(search, "i");
-    query = query.or([{ name: searchRegex }, { mobile: searchRegex }]);
+    query = query.or([
+      { name: searchRegex },
+      { mobile: searchRegex },
+      { bankName: searchRegex },
+      { accountNumber: searchRegex },
+      { ifscCode: searchRegex },
+    ]);
   }
 
   query = query.sort({ name: 1 });
@@ -85,14 +135,21 @@ export const updateVehicleDriver = catchAsync(async (req, res, next) => {
     return next(new AppError("Valid ID is required", 400));
   }
 
-  if (req.body.ownerId) {
-    const owner = await VehicleOwner.findById(req.body.ownerId);
+  let patch;
+  try {
+    patch = pickDriverPayload(req.body);
+  } catch (e) {
+    return next(e);
+  }
+
+  if (patch.ownerId) {
+    const owner = await VehicleOwner.findById(patch.ownerId);
     if (!owner) {
       return next(new AppError("Owner not found", 404));
     }
   }
 
-  const doc = await VehicleDriver.findByIdAndUpdate(id, req.body, {
+  const doc = await VehicleDriver.findByIdAndUpdate(id, patch, {
     new: true,
     runValidators: true,
   });
