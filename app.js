@@ -77,11 +77,13 @@ const staticFallbackOrigins = [
 
 const dynamicEnvOrigins = [
   process.env.ALLOWED_ORIGINS,
+  process.env.EXTRA_ALLOWED_ORIGINS,
+  process.env.CORS_ORIGINS,
   process.env.FRONTEND_URL,
   process.env.FRONTEND_URLS,
   process.env.CLIENT_URL,
   process.env.DASHBOARD_URL,
-  process.env.MOBILE_APP_URL
+  process.env.MOBILE_APP_URL,
 ]
   .filter(Boolean)
   .flatMap((value) => value.split(','))
@@ -98,11 +100,14 @@ const allowedOriginSet = new Set([
   renderServiceUrl
 ].filter(Boolean));
 
+/** Production browser origins that match these regexes are allowed (see also ALLOWED_ORIGINS env). */
 const allowedOriginPatterns = [
   /^https:\/\/.*\.onrender\.com$/,
   /^https:\/\/.*\.vercel\.app$/,
   /^https:\/\/.*\.netlify\.app$/,
-  /^https:\/\/.*\.rambiotechplants\.com$/
+  /^https:\/\/.*\.pages\.dev$/,
+  // Apex + any subdomain (frontend often on www or app — apex did not match old .*\.domain rule)
+  /^https:\/\/([a-zA-Z0-9-]+\.)*rambiotechplants\.com$/,
 ];
 
 const resolvedAllowedOrigins = Array.from(allowedOriginSet);
@@ -130,6 +135,9 @@ const corsOptions = {
       return callback(null, true);
     }
 
+    console.warn(
+      `[CORS] Blocked origin: ${normalizedOrigin}. Set ALLOWED_ORIGINS or EXTRA_ALLOWED_ORIGINS (comma-separated) on the API.`
+    );
     callback(new Error(`Not allowed by CORS: ${normalizedOrigin}`));
   },
   credentials: true,
