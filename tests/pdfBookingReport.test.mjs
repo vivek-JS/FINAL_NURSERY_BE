@@ -6,7 +6,11 @@ import assert from "node:assert/strict";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { generateTodayBookingPdf } from "../services/pdfService.js";
+import {
+  generateTodayBookingPdf,
+  generateDeliveryQueuePdf,
+  generateSlotsOutlookPdf,
+} from "../services/pdfService.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outDir = join(__dirname, "output");
@@ -62,4 +66,48 @@ test("optional: write sample PDF to tests/output for manual open", async () => {
   const outPath = join(outDir, "sample-booking-report.pdf");
   writeFileSync(outPath, buf);
   assert.ok(true, `wrote ${outPath}`);
+});
+
+test("generateDeliveryQueuePdf produces a valid PDF buffer", async () => {
+  const buf = await generateDeliveryQueuePdf({
+    reportDateLabel: "2026-05-03 → 2026-05-03 (IST)",
+    byPlant: {
+      Tomato: {
+        accepted: { orders: 2, plantsQty: 80 },
+        farmReady: { orders: 1, plantsQty: 40 },
+      },
+    },
+    totals: {
+      acceptedOrders: 2,
+      farmReadyOrders: 1,
+      acceptedPlants: 80,
+      farmReadyPlants: 40,
+    },
+    paymentSnapshot: {
+      totalDue: 10000,
+      totalCollected: 5000,
+      totalOutstanding: 5000,
+      pendingPaymentOrders: 1,
+      completedPaymentOrders: 0,
+    },
+  });
+  assert.ok(Buffer.isBuffer(buf));
+  assert.equal(buf.subarray(0, 5).toString("utf8"), "%PDF-");
+});
+
+test("generateSlotsOutlookPdf produces a valid PDF buffer", async () => {
+  const buf = await generateSlotsOutlookPdf({
+    reportDateLabel: "2026-05-03 (IST)",
+    slotRows: [
+      {
+        plantName: "Tomato",
+        subtypeName: "Hybrid",
+        label: "01-05-2026–07-05-2026 May 2026",
+        cap: 5000,
+        booked: 1200,
+      },
+    ],
+  });
+  assert.ok(Buffer.isBuffer(buf));
+  assert.equal(buf.subarray(0, 5).toString("utf8"), "%PDF-");
 });

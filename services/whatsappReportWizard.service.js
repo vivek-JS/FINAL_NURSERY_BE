@@ -2,8 +2,14 @@ import moment from "moment";
 import {
   fetchBookingReportDataForDateRange,
   formatISTRangeLabel,
+  formatPlantSubtypeBlocksForWhatsApp,
 } from "./reportService.js";
-import { generateTodayBookingPdf, plantTotalsForBarChart } from "./pdfService.js";
+import {
+  generateTodayBookingPdf,
+  generateDeliveryQueuePdf,
+  generateSlotsOutlookPdf,
+  plantTotalsForBarChart,
+} from "./pdfService.js";
 import { sendSessionFileMessage, sendSessionTextMessage } from "./watiService.js";
 import { uploadToS3 } from "./uploadService.js";
 import {
@@ -40,8 +46,8 @@ const reportWizardState = new Map();
 const MENU_TEXT = `📋 *Nursery reports*
 Reply with a number:
 *1* — Booking (PDF + charts, date range)
-*2* — Delivery queue (ACCEPTED + FARM_READY)
-*3* — Slots (future windows; busiest / lightest)
+*2* — Delivery queue (PDF + live ACCEPTED + FARM_READY)
+*3* — Slots (PDF + future windows, busiest table)
 *4* — Payments (pending, collected, by plant)
 *5* — Dispatch / completed (orders touched in date range)
 
@@ -111,7 +117,18 @@ function formatBookingText(data) {
     );
   }
 
-  lines.push("", "🌿 *Plant → subtype* (summary) — see attached PDF.");
+  lines.push(
+    "",
+    "🌿 *Plant → subtype (booking qty)*",
+    "_Same totals as the PDF summary table._",
+    ""
+  );
+  if ((data.summaryRows || []).length) {
+    lines.push(...formatPlantSubtypeBlocksForWhatsApp(data.summaryRows));
+  } else {
+    lines.push("— No plant/subtype lines in this range.", "");
+  }
+  lines.push("📎 *PDF attached* — full line-level detail + charts.");
   return lines.join("\n");
 }
 
@@ -124,9 +141,50 @@ async function sendCompositeOpsAddOn(phone) {
   await sendChunks(phone, `${slots.text}\n\n${alerts.text}`);
 }
 
-async function runSlotsReport(phone) {
-  const { text } = await fetchFutureSlotHighlights();
-  await sendChunks(phone, text);
+async function runSlotsReportWithPdf(phone, range) {
+  const slotsData = await fetchFutureSlotHighlights();
+  await sendChunks(phone, slotsData.text);
+  await sendChunks(
+    phone,
+    "_Detailed PDF (charts + busiest windows table) is attached below._"
+  );
+
+  const rangeLabel = formatISTRangeLabel(range.start, range.end);
+  const sessionLabel = `${rangeLabel} · wizard session anchor (slot list is not filtered by these dates)`;
+
+  if (isWatiConfigured()) {
+    try {
+      const pdfBuffer = await generateSlotsOutlookPdf({
+        reportDateLabel: sessionLabel,
+        slotRows: slotsData.slotRows || [],
+      });
+      const filename = `slots-${moment()
+        .utcOffset(330)
+        .format("YYYYMMDD-HHmmss")}.pdf`;
+      await sendSessionFileMessage({
+        whatsappNumber: phone,
+        fileBuffer: pdfBuffer,
+        filename,
+        caption: `Slots outlook · ${rangeLabel}`,
+      });
+      if (process.env.DO_SPACES_KEY) {
+        void uploadToS3(pdfBuffer, filename).catch((e) =>
+          console.warn("[report wizard] optional Spaces copy failed:", e?.message || e)
+        );
+      }
+    } catch (e) {
+      console.error("[report wizard] slots PDF failed:", e?.message || e);
+      try {
+        await sendSessionTextMessage({
+          whatsappNumber: phone,
+          messageText: `⚠️ Slots PDF could not be sent: ${(e && e.message) || String(e)}`,
+        });
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+
   const { text: alertText } = await fetchSystemAlertsSnapshot();
   await sendChunks(phone, alertText);
 }
@@ -236,13 +294,14 @@ async function runBookingWithPdf(phone, data) {
   }
 }
 
-async function runDeliveryText(phone) {
+async function runDeliveryWithPdf(phone, range) {
   const [d, payQueue] = await Promise.all([
     fetchDeliveryPipelineByPlant(),
     fetchPaymentStatsForMatch({
       orderStatus: { $in: ["ACCEPTED", "FARM_READY"] },
     }),
   ]);
+  const rangeLabel = formatISTRangeLabel(range.start, range.end);
   const body = [
     "_Delivery queue is a *live snapshot* (not filtered by the dates you picked — dates only anchor this session)._",
     "",
@@ -252,8 +311,47 @@ async function runDeliveryText(phone) {
       payQueue,
       "Payments — delivery queue (ACCEPTED + FARM_READY only)"
     ),
+    "",
+    "_A PDF with charts, definitions, and the plant-wise table is attached._",
   ].join("\n");
   await sendChunks(phone, body);
+
+  if (isWatiConfigured()) {
+    try {
+      const sessionLabel = `${rangeLabel} · live queue (not date-filtered)`;
+      const pdfBuffer = await generateDeliveryQueuePdf({
+        reportDateLabel: sessionLabel,
+        byPlant: d.byPlant,
+        totals: d.totals,
+        paymentSnapshot: payQueue.summary,
+      });
+      const filename = `delivery-${moment()
+        .utcOffset(330)
+        .format("YYYYMMDD-HHmmss")}.pdf`;
+      await sendSessionFileMessage({
+        whatsappNumber: phone,
+        fileBuffer: pdfBuffer,
+        filename,
+        caption: `Delivery queue · ${rangeLabel}`,
+      });
+      if (process.env.DO_SPACES_KEY) {
+        void uploadToS3(pdfBuffer, filename).catch((e) =>
+          console.warn("[report wizard] optional Spaces copy failed:", e?.message || e)
+        );
+      }
+    } catch (e) {
+      console.error("[report wizard] delivery PDF failed:", e?.message || e);
+      try {
+        await sendSessionTextMessage({
+          whatsappNumber: phone,
+          messageText: `⚠️ Delivery PDF could not be sent: ${(e && e.message) || String(e)}`,
+        });
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+
   await sendCompositeOpsAddOn(phone);
 }
 
@@ -262,14 +360,13 @@ async function executeReportForRange(phone, reportType, range) {
     case "booking": {
       const data = await fetchBookingReportDataForDateRange(range);
       await runBookingWithPdf(phone, data);
-      await sendCompositeOpsAddOn(phone);
       break;
     }
     case "delivery":
-      await runDeliveryText(phone);
+      await runDeliveryWithPdf(phone, range);
       break;
     case "slots":
-      await runSlotsReport(phone);
+      await runSlotsReportWithPdf(phone, range);
       break;
     case "payment":
       await runPaymentReport(phone, range);

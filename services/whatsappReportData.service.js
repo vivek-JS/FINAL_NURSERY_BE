@@ -573,7 +573,13 @@ export async function fetchFutureSlotHighlights() {
     sections.push("— No upcoming slot windows found in PlantSlot for this year.");
   }
 
-  return { text: sections.join("\n").trimEnd(), slotCount: slotRows.length };
+  return {
+    text: sections.join("\n").trimEnd(),
+    slotCount: slotRows.length,
+    /** Full future slot rows (for PDF / exports). */
+    slotRows,
+    byPlant,
+  };
 }
 
 /**

@@ -402,12 +402,28 @@ export function groupedToTableRows(grouped) {
 /**
  * Group summary rows under plant name for readable WhatsApp text.
  * @param {{ plant: string, subtype: string, quantity: number }[]} summaryRows
+ * @param {{ maxPlants?: number }} [opts] — limit plants shown (by total qty desc); rest → PDF note
  */
-function formatPlantSubtypeBlocksForWhatsApp(summaryRows) {
+export function formatPlantSubtypeBlocksForWhatsApp(summaryRows, opts = {}) {
+  const maxPlants = opts.maxPlants ?? 22;
+  const rows = summaryRows || [];
+
+  const plantTotals = new Map();
+  for (const r of rows) {
+    const p = r.plant || "—";
+    plantTotals.set(p, (plantTotals.get(p) || 0) + (Number(r.quantity) || 0));
+  }
+  const byTotal = [...plantTotals.entries()].sort((a, b) => b[1] - a[1]);
+  const allow = new Set(byTotal.slice(0, maxPlants).map(([p]) => p));
+  const hiddenPlants = Math.max(0, byTotal.length - allow.size);
+
   /** @type {Record<string, { subtype: string, quantity: number }[]>} */
   const byPlant = {};
-  for (const r of summaryRows) {
+  for (const r of rows) {
     const p = r.plant || "—";
+    if (!allow.has(p)) {
+      continue;
+    }
     if (!byPlant[p]) {
       byPlant[p] = [];
     }
@@ -416,14 +432,20 @@ function formatPlantSubtypeBlocksForWhatsApp(summaryRows) {
   const plants = Object.keys(byPlant).sort((a, b) => a.localeCompare(b));
   const lines = [];
   for (const plant of plants) {
-    lines.push(`${plant}`);
+    lines.push(`*${plant}*`);
     const subs = byPlant[plant].sort((a, b) =>
       a.subtype.localeCompare(b.subtype)
     );
     for (const { subtype, quantity } of subs) {
-      lines.push(`  • ${subtype}: ${quantity}`);
+      lines.push(`  • ${subtype}: *${quantity}*`);
     }
     lines.push("");
+  }
+  if (hiddenPlants > 0) {
+    lines.push(
+      `_…and ${hiddenPlants} more plant line(s) — full list in PDF._`,
+      ""
+    );
   }
   return lines;
 }
