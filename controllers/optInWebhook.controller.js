@@ -3,6 +3,7 @@ import Farmer from "../models/farmer.model.js";
 import FarmerLead from "../models/farmerLead.model.js";
 import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
 import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
+import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
 
 /**
  * Parse webhook timestamp to valid Date.
@@ -119,10 +120,19 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
     }
   }
 
-  // Today's booking PDF on same URL — non-blocking; only sends if message matches triggers
-  void runTodayBookingPdfJob(req.body).catch((err) => {
-    console.error("[booking report] Failed:", err?.message || err);
-  });
+  // Interactive report wizard + optional legacy one-shot PDF
+  void (async () => {
+    try {
+      const w = await runWhatsappReportWizardFromWebhookBody(req.body);
+      if (!w.handled && process.env.WHATSAPP_LEGACY_INSTANT_BOOKING_PDF === "true") {
+        void runTodayBookingPdfJob(req.body).catch((err) => {
+          console.error("[opt-in legacy PDF]", err?.message || err);
+        });
+      }
+    } catch (err) {
+      console.error("[opt-in webhook] report wizard:", err?.message || err);
+    }
+  })();
 
   // Extract event type and phone number from webhook payload
   let eventType = null;

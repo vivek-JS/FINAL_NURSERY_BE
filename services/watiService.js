@@ -1,19 +1,28 @@
 import axios from "axios";
+import FormData from "form-data";
 import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
 
 /**
- * Send a session file message (PDF URL) via WATI.
- * POST {base}/api/v1/sendSessionFileMessage
+ * Send a file in an open WhatsApp session.
+ * Official WATI v1: POST {base}/api/v1/sendSessionFile/{whatsappNumber} (multipart `file`, optional `caption` query).
+ * https://docs.wati.io/reference/post_api-v1-sendsessionfile-whatsappnumber
+ *
+ * Prefer `fileBuffer` (no public URL / Spaces required). If only `fileUrl` is set, falls back to JSON
+ * `sendSessionFileMessage` (works on some tenants; may 404 or fail if URL is not public).
  *
  * @param {object} params
- * @param {string} params.whatsappNumber - Recipient WA id / phone as required by WATI
- * @param {string} params.fileUrl - Public HTTPS URL of the PDF
- * @param {string} params.caption
+ * @param {string} params.whatsappNumber - Digits, e.g. 919876543210
+ * @param {string} [params.caption]
+ * @param {Buffer} [params.fileBuffer] - PDF bytes (recommended)
+ * @param {string} [params.filename] - e.g. booking-20260103.pdf
+ * @param {string} [params.fileUrl] - Public HTTPS URL (legacy fallback)
  */
 export async function sendSessionFileMessage({
   whatsappNumber,
   fileUrl,
   caption,
+  fileBuffer,
+  filename = "document.pdf",
 }) {
   const baseUrl = getWatiBaseUrl();
   const token = getWatiToken();
@@ -26,32 +35,72 @@ export async function sendSessionFileMessage({
   }
 
   const authHeader = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
-  const url = `${baseUrl.replace(/\/+$/, "")}/api/v1/sendSessionFileMessage`;
-
-  const { data, status } = await axios.post(
-    url,
-    {
-      whatsappNumber,
-      fileUrl,
-      caption,
-    },
-    {
-      headers: {
-        Authorization: authHeader,
-        "Content-Type": "application/json",
-      },
-      timeout: 120000,
-      validateStatus: () => true,
-    }
-  );
-
-  if (status < 200 || status >= 300) {
-    const detail =
-      typeof data === "object" ? JSON.stringify(data) : String(data);
-    throw new Error(`WATI sendSessionFileMessage failed (${status}): ${detail}`);
+  const root = baseUrl.replace(/\/+$/, "");
+  const digits = String(whatsappNumber || "").replace(/\D/g, "");
+  if (!digits) {
+    throw new Error("sendSessionFileMessage: whatsappNumber is empty");
   }
 
-  return data;
+  if (fileBuffer && Buffer.isBuffer(fileBuffer)) {
+    const form = new FormData();
+    form.append("file", fileBuffer, {
+      filename: String(filename || "report.pdf").replace(/[^\w.\-]/g, "_") || "report.pdf",
+      contentType: "application/pdf",
+    });
+    const q = caption != null && caption !== "" ? `?caption=${encodeURIComponent(caption)}` : "";
+    const url = `${root}/api/v1/sendSessionFile/${digits}${q}`;
+
+    const { data, status } = await axios.post(url, form, {
+      headers: {
+        Authorization: authHeader,
+        ...form.getHeaders(),
+      },
+      timeout: 120000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      validateStatus: () => true,
+    });
+
+    if (status < 200 || status >= 300) {
+      const detail =
+        typeof data === "object" ? JSON.stringify(data) : String(data);
+      throw new Error(`WATI sendSessionFile failed (${status}): ${detail}`);
+    }
+
+    return data;
+  }
+
+  if (fileUrl) {
+    const url = `${root}/api/v1/sendSessionFileMessage`;
+    const { data, status } = await axios.post(
+      url,
+      {
+        whatsappNumber: digits,
+        fileUrl,
+        caption,
+      },
+      {
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/json",
+        },
+        timeout: 120000,
+        validateStatus: () => true,
+      }
+    );
+
+    if (status < 200 || status >= 300) {
+      const detail =
+        typeof data === "object" ? JSON.stringify(data) : String(data);
+      throw new Error(`WATI sendSessionFileMessage failed (${status}): ${detail}`);
+    }
+
+    return data;
+  }
+
+  throw new Error(
+    "sendSessionFileMessage: provide fileBuffer (recommended) or fileUrl"
+  );
 }
 
 /**

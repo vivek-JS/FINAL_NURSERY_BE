@@ -13,8 +13,21 @@ function getBookingReportSource() {
 }
 
 /** @type {readonly string[]} */
-const REPORT_TRIGGER_PHRASES_EN = ["today booking", "booking report"];
-const REPORT_TRIGGER_MARATHI = "आजचा बुकिंग रिपोर्ट";
+const REPORT_TRIGGER_PHRASES_EN = [
+  "today booking",
+  "todays booking",
+  "today's booking",
+  "booking report",
+  "booking summary",
+  "daily booking",
+];
+
+/** @type {readonly string[]} */
+const REPORT_TRIGGER_MARATHI = [
+  "आजचा बुकिंग रिपोर्ट",
+  "आजची बुकिंग",
+  "बुकिंग रिपोर्ट",
+];
 
 /**
  * Whether the inbound WhatsApp text should trigger today's booking PDF flow.
@@ -25,7 +38,7 @@ export function shouldGenerateTodayBookingReport(messageText) {
     return false;
   }
   const raw = messageText.trim();
-  if (raw.includes(REPORT_TRIGGER_MARATHI)) {
+  if (REPORT_TRIGGER_MARATHI.some((phrase) => raw.includes(phrase))) {
     return true;
   }
   const lower = raw.toLowerCase();
@@ -37,7 +50,14 @@ export function shouldGenerateTodayBookingReport(messageText) {
  * @param {string} [originalMessage]
  */
 export function pickReportCaption(originalMessage) {
-  if (originalMessage && originalMessage.includes(REPORT_TRIGGER_MARATHI)) {
+  const raw = originalMessage || "";
+  if (raw.includes("आजचा बुकिंग रिपोर्ट")) {
+    return "आजचा बुकिंग रिपोर्ट तयार आहे";
+  }
+  if (
+    raw.includes("आजची बुकिंग") ||
+    raw.includes("बुकिंग रिपोर्ट")
+  ) {
     return "आजचा बुकिंग रिपोर्ट तयार आहे";
   }
   return "Today Booking Report";
@@ -50,6 +70,26 @@ export function getTodayRangeIST() {
   const start = moment().utcOffset(330).startOf("day").toDate();
   const end = moment().utcOffset(330).endOf("day").toDate();
   return { start, end };
+}
+
+/**
+ * IST calendar-day range (inclusive start, inclusive end-of-day end).
+ * @param {Date|string|moment.Moment} startDay first day
+ * @param {Date|string|moment.Moment} endDay last day
+ */
+export function getISTRangeInclusive(startDay, endDay) {
+  const s = moment(startDay).utcOffset(330).startOf("day").toDate();
+  const e = moment(endDay).utcOffset(330).endOf("day").toDate();
+  if (e < s) {
+    return { start: e, end: s };
+  }
+  return { start: s, end: e };
+}
+
+export function formatISTRangeLabel(start, end) {
+  const a = moment(start).utcOffset(330).format("YYYY-MM-DD");
+  const b = moment(end).utcOffset(330).format("YYYY-MM-DD");
+  return a === b ? `${a} (IST)` : `${a} → ${b} (IST)`;
 }
 
 /**
@@ -80,11 +120,24 @@ function orderQuantity(order) {
   );
 }
 
+function villageDisplayLabel(farmer) {
+  if (!farmer) {
+    return "—";
+  }
+  const v = String(farmer.village || "").trim();
+  const taluka = String(farmer.talukaName || farmer.taluka || "").trim();
+  if (v && taluka) {
+    return `${v} (${taluka})`;
+  }
+  return v || taluka || "—";
+}
+
 /**
- * Today's data from `orders` + PlantCms + Farmer (production bookings).
+ * Bookings from `orders` in date range (IST): orderBookingDate in range, or missing booking date + createdAt in range.
+ * @param {{ start: Date, end: Date }} range
  */
-async function fetchTodayBookingReportDataFromOrders() {
-  const { start, end } = getTodayRangeIST();
+async function fetchBookingReportDataFromOrdersForRange(range) {
+  const { start, end } = range;
 
   const orders = await Order.find({
     orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
@@ -103,7 +156,10 @@ async function fetchTodayBookingReportDataFromOrders() {
       },
     ],
   })
-    .populate("farmer", "name mobileNumber")
+    .populate(
+      "farmer",
+      "name mobileNumber village talukaName districtName district taluka"
+    )
     .populate("plantName", "name subtypes")
     .sort({ orderBookingDate: 1, createdAt: 1 })
     .lean();
@@ -115,6 +171,10 @@ async function fetchTodayBookingReportDataFromOrders() {
   const grouped = {};
   let grandTotal = 0;
   const farmerKeySet = new Set();
+  /** @type {Map<string, { display: string, qty: number }>} */
+  const farmerAgg = new Map();
+  /** @type {Map<string, number>} */
+  const villageQty = new Map();
 
   for (const row of orders) {
     const farmerName =
@@ -141,10 +201,32 @@ async function fetchTodayBookingReportDataFromOrders() {
 
     if (farmerName && farmerName !== "—") {
       farmerKeySet.add(farmerName.toLowerCase());
+      const fk = farmerName.toLowerCase();
+      const prev = farmerAgg.get(fk);
+      if (prev) {
+        prev.qty += qty;
+      } else {
+        farmerAgg.set(fk, { display: farmerName, qty });
+      }
+    }
+
+    const vLabel = villageDisplayLabel(row.farmer);
+    if (vLabel && vLabel !== "—") {
+      villageQty.set(vLabel, (villageQty.get(vLabel) || 0) + qty);
     }
   }
 
   const summaryRows = groupedToTableRows(grouped);
+
+  const topFarmers = [...farmerAgg.values()]
+    .sort((a, b) => b.qty - a.qty)
+    .slice(0, 3)
+    .map(({ display, qty }) => ({ name: display, quantity: qty }));
+
+  const topVillages = [...villageQty.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([name, quantity]) => ({ name, quantity }));
 
   return {
     lineRows,
@@ -157,14 +239,24 @@ async function fetchTodayBookingReportDataFromOrders() {
     },
     range: { start, end },
     source: "orders",
+    topFarmers,
+    topVillages,
   };
+}
+
+/**
+ * Today's data from `orders` + PlantCms + Farmer (production bookings).
+ */
+async function fetchTodayBookingReportDataFromOrders() {
+  const { start, end } = getTodayRangeIST();
+  return fetchBookingReportDataFromOrdersForRange({ start, end });
 }
 
 /**
  * Legacy: standalone `bookings` collection only.
  */
-async function fetchTodayBookingReportDataFromBookingsCollection() {
-  const { start, end } = getTodayRangeIST();
+async function fetchBookingReportDataFromBookingsCollectionForRange(range) {
+  const { start, end } = range;
 
   const docs = await Booking.find({
     createdAt: { $gte: start, $lte: end },
@@ -186,6 +278,8 @@ async function fetchTodayBookingReportDataFromBookingsCollection() {
   const grouped = {};
   let grandTotal = 0;
   const farmerKeySet = new Set();
+  /** @type {Map<string, { display: string, qty: number }>} */
+  const farmerAgg = new Map();
 
   for (const row of docs) {
     const farmerName = (row.farmerName || "").trim() || "—";
@@ -210,10 +304,22 @@ async function fetchTodayBookingReportDataFromBookingsCollection() {
 
     if (farmerName && farmerName !== "—") {
       farmerKeySet.add(farmerName.toLowerCase());
+      const fk = farmerName.toLowerCase();
+      const prev = farmerAgg.get(fk);
+      if (prev) {
+        prev.qty += qty;
+      } else {
+        farmerAgg.set(fk, { display: farmerName, qty });
+      }
     }
   }
 
   const summaryRows = groupedToTableRows(grouped);
+
+  const topFarmers = [...farmerAgg.values()]
+    .sort((a, b) => b.qty - a.qty)
+    .slice(0, 3)
+    .map(({ display, qty }) => ({ name: display, quantity: qty }));
 
   return {
     lineRows,
@@ -226,7 +332,26 @@ async function fetchTodayBookingReportDataFromBookingsCollection() {
     },
     range: { start, end },
     source: "bookings",
+    topFarmers,
+    topVillages: [],
   };
+}
+
+async function fetchTodayBookingReportDataFromBookingsCollection() {
+  const { start, end } = getTodayRangeIST();
+  return fetchBookingReportDataFromBookingsCollectionForRange({ start, end });
+}
+
+/**
+ * Bookings for an arbitrary IST-inclusive date range (same rules as today).
+ * @param {{ start: Date, end: Date }} range
+ */
+export async function fetchBookingReportDataForDateRange(range) {
+  const src = getBookingReportSource();
+  if (src === "bookings") {
+    return fetchBookingReportDataFromBookingsCollectionForRange(range);
+  }
+  return fetchBookingReportDataFromOrdersForRange(range);
 }
 
 /**
@@ -312,10 +437,16 @@ function formatPlantSubtypeBlocksForWhatsApp(summaryRows) {
 export function formatBookingFiguresWhatsApp(
   reportDateLabel,
   stats,
-  summaryRows
+  summaryRows,
+  dataSource = "orders"
 ) {
+  const sourceNote =
+    dataSource === "bookings"
+      ? "Data: standalone bookings collection"
+      : "Data: farmer orders (today IST · booking date or created date)";
   const lines = [
     `Today's booking — ${reportDateLabel}`,
+    sourceNote,
     "",
     "Summary",
     `Total qty (plants): ${stats.grandTotal}`,

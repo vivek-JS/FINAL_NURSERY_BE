@@ -2,17 +2,27 @@ import moment from "moment";
 import {
   shouldGenerateTodayBookingReport,
   fetchTodayBookingReportData,
+  getTodayRangeIST,
   pickReportCaption,
   formatBookingFiguresWhatsApp,
 } from "./reportService.js";
+import {
+  fetchPaymentStatsForMatch,
+  formatPaymentStatsWhatsApp,
+  matchOrdersInBookingRangeIST,
+} from "./whatsappReportData.service.js";
 import { generateTodayBookingPdf } from "./pdfService.js";
-import { uploadToS3 } from "./uploadService.js";
 import { sendSessionFileMessage, sendSessionTextMessage } from "./watiService.js";
+import { uploadToS3 } from "./uploadService.js";
 import {
   extractInboundMessage,
   normalizeWhatsAppNumberForWati,
 } from "../utility/watiInboundPayload.js";
 import { isWatiConfigured } from "../config/wati.config.js";
+import {
+  shouldSkipDuplicateBookingReport,
+  recordBookingReportSuccessfullySent,
+} from "./bookingReportDedupe.service.js";
 
 /**
  * If the inbound message asks for today's booking report, build PDF, upload, send via WATI.
@@ -29,6 +39,10 @@ export async function runTodayBookingPdfJob(body) {
   const { text, waId } = extractInboundMessage(body);
   if (!shouldGenerateTodayBookingReport(text)) {
     return { skipped: "no_trigger" };
+  }
+
+  if (shouldSkipDuplicateBookingReport(body)) {
+    return { skipped: "duplicate_webhook" };
   }
 
   const phone = normalizeWhatsAppNumberForWati(waId);
@@ -52,12 +66,19 @@ export async function runTodayBookingPdfJob(body) {
   }
 
   const reportDateLabel = moment().utcOffset(330).format("YYYY-MM-DD [(IST)]");
-  const { lineRows, summaryRows, stats } = await fetchTodayBookingReportData();
+  const { lineRows, summaryRows, stats, source: dataSource } =
+    await fetchTodayBookingReportData();
+  const dataSourceKey = dataSource === "bookings" ? "bookings" : "orders";
+  const dataSourceLabel =
+    dataSourceKey === "bookings"
+      ? "Bookings collection (legacy)"
+      : "Farmer orders (IST)";
 
   const figuresText = formatBookingFiguresWhatsApp(
     reportDateLabel,
     stats,
-    summaryRows
+    summaryRows,
+    dataSourceKey
   );
   let textOk = false;
   try {
@@ -71,29 +92,55 @@ export async function runTodayBookingPdfJob(body) {
     console.error("[booking report] Figures text failed:", err?.message || err);
   }
 
+  if (dataSourceKey === "orders") {
+    try {
+      const range = getTodayRangeIST();
+      const pay = await fetchPaymentStatsForMatch(
+        matchOrdersInBookingRangeIST(range)
+      );
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText: formatPaymentStatsWhatsApp(
+          pay,
+          "Payments (today IST — same scope as this booking report)"
+        ),
+      });
+    } catch (e) {
+      console.error("[booking report] payment summary failed:", e?.message || e);
+    }
+  }
+
   try {
     const pdfBuffer = await generateTodayBookingPdf({
       reportDateLabel,
       lineRows,
       summaryRows,
       stats,
+      dataSourceLabel,
     });
 
     const filename = `today-booking-${moment()
       .utcOffset(330)
       .format("YYYYMMDD-HHmmss")}.pdf`;
-    const fileUrl = await uploadToS3(pdfBuffer, filename);
     const caption = pickReportCaption(text);
 
     await sendSessionFileMessage({
       whatsappNumber: phone,
-      fileUrl,
+      fileBuffer: pdfBuffer,
+      filename,
       caption,
     });
+
+    if (process.env.DO_SPACES_KEY) {
+      void uploadToS3(pdfBuffer, filename).catch((e) =>
+        console.warn("[booking report] optional Spaces copy failed:", e?.message || e)
+      );
+    }
 
     console.log(
       `[booking report] Sent PDF to ${phone} (${stats.bookingLines} lines, total qty ${stats.grandTotal})`
     );
+    recordBookingReportSuccessfullySent(body);
     return { sent: true };
   } catch (err) {
     console.error(

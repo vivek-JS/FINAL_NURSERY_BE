@@ -7,6 +7,8 @@ import PlantSlot from "../models/slots.model.js";
 import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
 import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
 import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
+import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
+import { isWhatsappOrderFlowDisabled } from "../utility/whatsappOrderFlowFlags.js";
 
 const WATI_BASE_URL = getWatiBaseUrl();
 const WATI_TOKEN = getWatiToken();
@@ -452,25 +454,29 @@ function clearConversationState(mobileNumber) {
  * Handle incoming WhatsApp webhook from Wati
  */
 export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
-  // Today’s booking report (same triggers as /api/v1/opt-in/webhook) — WATI often points "Message Received" here
-  void runTodayBookingPdfJob(req.body).catch((err) => {
-    console.error("[booking report] Failed (whatsapp-order webhook):", err?.message || err);
-  });
+  const orderFlowOff = isWhatsappOrderFlowDisabled();
 
-  // 🔥 RAW WATI WEBHOOK LOGGER
-  console.log("\n🔥🔥🔥 RAW WATI WEBHOOK RECEIVED 🔥🔥🔥\n");
-  console.log("📋 REQUEST INFO:");
-  console.log(`   Method: ${req.method}`);
-  console.log(`   URL: ${req.originalUrl || req.url}`);
-  console.log(`   Timestamp: ${new Date().toISOString()}\n`);
-  
-  console.log("📦 REQUEST BODY:");
-  if (req.body && Object.keys(req.body).length > 0) {
-    console.log(JSON.stringify(req.body, null, 2));
+  if (!orderFlowOff) {
+    // 🔥 RAW WATI WEBHOOK LOGGER
+    console.log("\n🔥🔥🔥 RAW WATI WEBHOOK RECEIVED 🔥🔥🔥\n");
+    console.log("📋 REQUEST INFO:");
+    console.log(`   Method: ${req.method}`);
+    console.log(`   URL: ${req.originalUrl || req.url}`);
+    console.log(`   Timestamp: ${new Date().toISOString()}\n`);
+
+    console.log("📦 REQUEST BODY:");
+    if (req.body && Object.keys(req.body).length > 0) {
+      console.log(JSON.stringify(req.body, null, 2));
+    } else {
+      console.log("   ⚠️  EMPTY BODY");
+    }
+    console.log("");
   } else {
-    console.log("   ⚠️  EMPTY BODY");
+    const keys = req.body && typeof req.body === "object" ? Object.keys(req.body) : [];
+    console.log(
+      `[WATI] Webhook (order bot off; booking report still active) — ${req.method} ${req.originalUrl || req.url} keys=[${keys.join(", ")}]`
+    );
   }
-  console.log("");
 
   // Support multiple webhook formats
   let message = null;
@@ -513,27 +519,53 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
   // If no message or phone, return success (webhook received but not a message)
   if (!message || !phone) {
     console.log("⚠️  No message or phone found in webhook payload");
-    return res.status(200).json({ success: true });
+    return res
+      .status(200)
+      .json({ success: true, orderFlow: orderFlowOff ? "disabled" : "enabled" });
   }
 
-  console.log("\n" + "=".repeat(60));
-  console.log("📩 [WEBHOOK] Incoming WhatsApp Message");
-  console.log("=".repeat(60));
-  console.log(`   📱 Phone: ${phone}`);
-  console.log(`   📝 Message: "${message}"`);
-  console.log(`   👤 Sender: ${senderName || "Unknown"}`);
-  console.log(`   🔢 Clean Mobile: ${mobileNumber}`);
-  console.log("=".repeat(60) + "\n");
+  if (!orderFlowOff) {
+    console.log("\n" + "=".repeat(60));
+    console.log("📩 [WEBHOOK] Incoming WhatsApp Message");
+    console.log("=".repeat(60));
+    console.log(`   📱 Phone: ${phone}`);
+    console.log(`   📝 Message: "${message}"`);
+    console.log(`   👤 Sender: ${senderName || "Unknown"}`);
+    console.log(`   🔢 Clean Mobile: ${mobileNumber}`);
+    console.log("=".repeat(60) + "\n");
+  } else {
+    console.log(
+      `[WATI] Message (order bot off): ${phone} — "${String(message).slice(0, 80)}${String(message).length > 80 ? "…" : ""}"`
+    );
+  }
 
   // Respond immediately to WATI (avoid timeout)
-  // Process message asynchronously
   console.log("📤 [RESPONSE] Sending 200 OK to WATI immediately");
-  res.status(200).json({ success: true, message: "Webhook received, processing..." });
+  res.status(200).json({
+    success: true,
+    message: orderFlowOff
+      ? "Webhook received (order bot disabled)."
+      : "Webhook received, processing...",
+    orderFlow: orderFlowOff ? "disabled" : "enabled",
+  });
 
-  // Process the message through order flow asynchronously
-  // This prevents Render timeout issues
-  (async () => {
+  void (async () => {
     try {
+      const wizard = await runWhatsappReportWizardFromWebhookBody(req.body);
+      if (wizard.handled) {
+        return;
+      }
+      if (process.env.WHATSAPP_LEGACY_INSTANT_BOOKING_PDF === "true") {
+        void runTodayBookingPdfJob(req.body).catch((err) => {
+          console.error(
+            "[booking report] Legacy instant PDF failed:",
+            err?.message || err
+          );
+        });
+      }
+      if (orderFlowOff) {
+        return;
+      }
       console.log("🔄 [FLOW] Starting order flow processing (async)...");
       const state = getConversationState(mobileNumber);
       await processOrderFlow(mobileNumber, message, state, senderName);
@@ -546,7 +578,7 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
       console.error("   Message:", message);
       console.error("   Error Name:", error.name);
       console.error("   Error Code:", error.code);
-      console.error("   Environment:", process.env.NODE_ENV || 'development');
+      console.error("   Environment:", process.env.NODE_ENV || "development");
       console.error("❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n");
     }
   })();
@@ -556,6 +588,10 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
  * Main order flow processor
  */
 async function processOrderFlow(mobileNumber, userMessage, state, senderName = "") {
+  if (isWhatsappOrderFlowDisabled()) {
+    return;
+  }
+
   const message = userMessage.trim().toLowerCase();
 
   console.log("\n" + "─".repeat(60));

@@ -18,12 +18,16 @@ const COLORS = {
  * @param {{ farmerName: string, plantName: string, plantType: string, subtype: string, quantity: number }[]} opts.lineRows
  * @param {{ plant: string, subtype: string, quantity: number }[]} opts.summaryRows
  * @param {{ grandTotal: number, bookingLines: number, uniqueFarmers: number }} opts.stats
+ * @param {string} [opts.dataSourceLabel] - Shown in footer (e.g. orders vs legacy bookings)
+ * @param {string} [opts.bannerTitle] - Main PDF title (default: Today’s booking)
  */
 export function generateTodayBookingPdf({
   reportDateLabel,
   lineRows,
   summaryRows,
   stats,
+  dataSourceLabel = "Farmer orders (IST)",
+  bannerTitle = "Today's Booking Report",
 }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -54,7 +58,7 @@ export function generateTodayBookingPdf({
     doc.save();
     doc.rect(ml, y, usableW, 52).fill(COLORS.headerBar);
     doc.fillColor(COLORS.headerText).font("Helvetica-Bold").fontSize(20);
-    doc.text("Today's Booking Report", ml + 16, y + 10, {
+    doc.text(bannerTitle, ml + 16, y + 10, {
       width: usableW - 32,
       align: "center",
     });
@@ -252,7 +256,7 @@ export function generateTodayBookingPdf({
     y += 44;
     doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
     doc.text(
-      `Generated ${new Date().toISOString()} · IST date ${reportDateLabel}`,
+      `Generated ${new Date().toISOString()} · ${dataSourceLabel} · ${reportDateLabel}`,
       ml,
       y,
       { width: usableW, align: "center" }
