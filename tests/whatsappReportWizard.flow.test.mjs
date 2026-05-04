@@ -12,6 +12,21 @@ import {
 } from "../utility/whatsappReportWizardParsers.js";
 import { extractInboundMessage } from "../utility/watiInboundPayload.js";
 import { formatPaymentStatsWhatsApp } from "../services/whatsappReportData.service.js";
+import { isPhoneAllowedForReportWizard } from "../utility/whatsappReportWizardAllowlist.js";
+import { normalizeWhatsAppNumberForWati } from "../utility/watiInboundPayload.js";
+
+test("report wizard allowlist (default two numbers)", () => {
+  assert.equal(isPhoneAllowedForReportWizard("7588686453"), true);
+  assert.equal(isPhoneAllowedForReportWizard("7588686452"), true);
+  assert.equal(isPhoneAllowedForReportWizard("917588686453"), true);
+  assert.equal(isPhoneAllowedForReportWizard("917588686452"), true);
+  assert.equal(
+    isPhoneAllowedForReportWizard(normalizeWhatsAppNumberForWati("7588686453")),
+    true
+  );
+  assert.equal(isPhoneAllowedForReportWizard("9999999999"), false);
+  assert.equal(isPhoneAllowedForReportWizard("7588686450"), false);
+});
 
 test("isReportEntry recognises starter phrases", () => {
   assert.equal(isReportEntry("get report"), true);

@@ -37,6 +37,7 @@ import {
   parseDateChoice,
   parseCustomRangeText,
 } from "../utility/whatsappReportWizardParsers.js";
+import { isPhoneAllowedForReportWizard } from "../utility/whatsappReportWizardAllowlist.js";
 
 const STATE_TTL_MS = 15 * 60 * 1000;
 
@@ -389,6 +390,9 @@ async function executeReportForRange(phone, reportType, range) {
 export async function processWhatsappReportWizard({ message, waId }) {
   const phone = normalizeWhatsAppNumberForWati(waId);
   if (!phone) {
+    return { handled: false };
+  }
+  if (!isPhoneAllowedForReportWizard(phone)) {
     return { handled: false };
   }
 
