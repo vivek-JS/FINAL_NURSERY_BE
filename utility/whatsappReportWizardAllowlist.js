@@ -3,7 +3,7 @@
  * Override with env: WHATSAPP_REPORT_WIZARD_ALLOWLIST=7588686453,7588686452,...
  */
 
-const DEFAULT_LAST10 = ["7588686453", "7588686452"];
+const DEFAULT_LAST10 = ["7588686453", "7588686452", "9595996452"];
 
 export function getReportWizardAllowlistLast10() {
   const env = process.env.WHATSAPP_REPORT_WIZARD_ALLOWLIST;

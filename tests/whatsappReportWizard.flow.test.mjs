@@ -15,13 +15,19 @@ import { formatPaymentStatsWhatsApp } from "../services/whatsappReportData.servi
 import { isPhoneAllowedForReportWizard } from "../utility/whatsappReportWizardAllowlist.js";
 import { normalizeWhatsAppNumberForWati } from "../utility/watiInboundPayload.js";
 
-test("report wizard allowlist (default two numbers)", () => {
+test("report wizard allowlist (default numbers)", () => {
   assert.equal(isPhoneAllowedForReportWizard("7588686453"), true);
   assert.equal(isPhoneAllowedForReportWizard("7588686452"), true);
+  assert.equal(isPhoneAllowedForReportWizard("9595996452"), true);
+  assert.equal(isPhoneAllowedForReportWizard("919595996452"), true);
   assert.equal(isPhoneAllowedForReportWizard("917588686453"), true);
   assert.equal(isPhoneAllowedForReportWizard("917588686452"), true);
   assert.equal(
     isPhoneAllowedForReportWizard(normalizeWhatsAppNumberForWati("7588686453")),
+    true
+  );
+  assert.equal(
+    isPhoneAllowedForReportWizard(normalizeWhatsAppNumberForWati("9595996452")),
     true
   );
   assert.equal(isPhoneAllowedForReportWizard("9999999999"), false);
