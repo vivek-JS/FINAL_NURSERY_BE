@@ -3,7 +3,7 @@ import {
   fetchBookingReportDataForDateRange,
   formatISTRangeLabel,
 } from "./reportService.js";
-import { generateTodayBookingPdf } from "./pdfService.js";
+import { generateTodayBookingPdf, plantTotalsForBarChart } from "./pdfService.js";
 import { sendSessionFileMessage, sendSessionTextMessage } from "./watiService.js";
 import { uploadToS3 } from "./uploadService.js";
 import {
@@ -13,12 +13,14 @@ import {
 import { isWatiConfigured } from "../config/wati.config.js";
 import {
   fetchDeliveryPipelineByPlant,
-  formatDeliveryWhatsApp,
+  fetchDispatchCompletedForRange,
   fetchFutureSlotHighlights,
-  fetchSystemAlertsSnapshot,
-  fetchActiveOrdersPaymentSnapshot,
   fetchPaymentStatsForMatch,
+  fetchSystemAlertsSnapshot,
+  formatDeliveryWhatsApp,
+  formatDispatchReportWhatsApp,
   formatPaymentStatsWhatsApp,
+  fetchActiveOrdersPaymentSnapshot,
   matchOrdersInBookingRangeIST,
   splitForWhatsApp,
 } from "./whatsappReportData.service.js";
@@ -37,22 +39,34 @@ const reportWizardState = new Map();
 
 const MENU_TEXT = `📋 *Nursery reports*
 Reply with a number:
-*1* — Booking (farmer orders in a date range)
-*2* — Delivery queue (ACCEPTED + FARM_READY, plant-wise)
-*3* — Sowing (coming soon)
+*1* — Booking (PDF + charts, date range)
+*2* — Delivery queue (ACCEPTED + FARM_READY)
+*3* — Slots (future windows; busiest / lightest)
+*4* — Payments (pending, collected, by plant)
+*5* — Dispatch / completed (orders touched in date range)
 
-Or *cancel* to stop.`;
+_Type *cancel* anytime._`;
 
-const DATE_PROMPT = (typeLabel) => `📅 *Date range* — ${typeLabel}
-*1* — Today (IST)
+function datePromptTitle(reportType) {
+  const m = {
+    booking: "Booking",
+    delivery: "Delivery queue",
+    slots: "Slots",
+    payment: "Payments",
+    dispatch: "Dispatch / completed",
+  };
+  return m[reportType] || "Report";
+}
+
+const DATE_PROMPT = (reportType) => `📅 *Pick dates (IST)* — ${datePromptTitle(reportType)}
+*1* — Today
 *2* — Yesterday
-*3* — Last 7 days (rolling, ends today)
-*4* — Custom (you will be asked to type two dates)
+*3* — Last 7 days (rolling)
+*4* — Custom (you’ll type two dates next)
 
-Reply with 1–4, or *cancel*.`;
+Note: *2 Delivery* uses live queue (dates only pick your session); *3 Slots* shows future slots regardless of dates.
 
-const SOWING_PLACEHOLDER = `🌱 *Sowing report* is not automated yet.
-We will add batch / slot sowing stats here. For now use *1* (Booking) or *2* (Delivery).`;
+Reply *1–4*, or *cancel*.`;
 
 async function sendChunks(whatsappNumber, messageText) {
   const parts = splitForWhatsApp(messageText);
@@ -101,17 +115,47 @@ function formatBookingText(data) {
   return lines.join("\n");
 }
 
+/** Slots + ops alerts (org-wide payment is menu *4*). */
 async function sendCompositeOpsAddOn(phone) {
-  const [slots, alerts, payOrg] = await Promise.all([
+  const [slots, alerts] = await Promise.all([
     fetchFutureSlotHighlights(),
     fetchSystemAlertsSnapshot(),
-    fetchActiveOrdersPaymentSnapshot(),
   ]);
-  const payText = formatPaymentStatsWhatsApp(
-    payOrg,
-    "All active orders — full payment snapshot"
+  await sendChunks(phone, `${slots.text}\n\n${alerts.text}`);
+}
+
+async function runSlotsReport(phone) {
+  const { text } = await fetchFutureSlotHighlights();
+  await sendChunks(phone, text);
+  const { text: alertText } = await fetchSystemAlertsSnapshot();
+  await sendChunks(phone, alertText);
+}
+
+async function runPaymentReport(phone, range) {
+  const payRange = await fetchPaymentStatsForMatch(
+    matchOrdersInBookingRangeIST(range)
   );
-  await sendChunks(phone, `${payText}\n\n${slots.text}\n\n${alerts.text}`);
+  await sendChunks(
+    phone,
+    formatPaymentStatsWhatsApp(
+      payRange,
+      "Payments — orders booked in selected period"
+    )
+  );
+  const payOrg = await fetchActiveOrdersPaymentSnapshot();
+  await sendChunks(
+    phone,
+    formatPaymentStatsWhatsApp(payOrg, "All active orders — full snapshot")
+  );
+  const { text: alertText } = await fetchSystemAlertsSnapshot();
+  await sendChunks(phone, alertText);
+}
+
+async function runDispatchReport(phone, range) {
+  const d = await fetchDispatchCompletedForRange(range);
+  await sendChunks(phone, formatDispatchReportWhatsApp(d));
+  const { text: alertText } = await fetchSystemAlertsSnapshot();
+  await sendChunks(phone, alertText);
 }
 
 async function runBookingWithPdf(phone, data) {
@@ -144,6 +188,12 @@ async function runBookingWithPdf(phone, data) {
       data.source === "bookings"
         ? "Bookings collection (legacy)"
         : "Farmer orders (IST range)";
+    let payAgg = null;
+    if (data.source !== "bookings") {
+      payAgg = await fetchPaymentStatsForMatch(
+        matchOrdersInBookingRangeIST(data.range)
+      );
+    }
     const pdfBuffer = await generateTodayBookingPdf({
       reportDateLabel: rangeLabel,
       lineRows: data.lineRows,
@@ -151,6 +201,13 @@ async function runBookingWithPdf(phone, data) {
       stats: data.stats,
       dataSourceLabel,
       bannerTitle: "Booking Report",
+      topFarmers: data.topFarmers || [],
+      topVillages: (data.topVillages || []).map((v) => ({
+        name: v.name,
+        quantity: v.quantity,
+      })),
+      paymentSnapshot: payAgg ? payAgg.summary : null,
+      plantBarChart: plantTotalsForBarChart(data.summaryRows, 6),
     });
     const filename = `booking-${moment()
       .utcOffset(330)
@@ -187,7 +244,7 @@ async function runDeliveryText(phone) {
     }),
   ]);
   const body = [
-    "_Delivery queue is always a *live snapshot* (not filtered by date). The date menu applies to **Booking** reports only._",
+    "_Delivery queue is a *live snapshot* (not filtered by the dates you picked — dates only anchor this session)._",
     "",
     formatDeliveryWhatsApp(d),
     "",
@@ -198,6 +255,31 @@ async function runDeliveryText(phone) {
   ].join("\n");
   await sendChunks(phone, body);
   await sendCompositeOpsAddOn(phone);
+}
+
+async function executeReportForRange(phone, reportType, range) {
+  switch (reportType) {
+    case "booking": {
+      const data = await fetchBookingReportDataForDateRange(range);
+      await runBookingWithPdf(phone, data);
+      await sendCompositeOpsAddOn(phone);
+      break;
+    }
+    case "delivery":
+      await runDeliveryText(phone);
+      break;
+    case "slots":
+      await runSlotsReport(phone);
+      break;
+    case "payment":
+      await runPaymentReport(phone, range);
+      break;
+    case "dispatch":
+      await runDispatchReport(phone, range);
+      break;
+    default:
+      break;
+  }
 }
 
 /**
@@ -258,14 +340,7 @@ export async function processWhatsappReportWizard({ message, waId }) {
 
   if (entry) {
     const guessed = guessReportTypeFromText(text);
-    if (guessed === "sowing") {
-      await sendSessionTextMessage({
-        whatsappNumber: phone,
-        messageText: SOWING_PLACEHOLDER,
-      });
-      return { handled: true };
-    }
-    if (guessed === "booking" || guessed === "delivery") {
+    if (guessed) {
       reportWizardState.set(key, {
         step: "pick_date",
         reportType: guessed,
@@ -273,9 +348,7 @@ export async function processWhatsappReportWizard({ message, waId }) {
       });
       await sendSessionTextMessage({
         whatsappNumber: phone,
-        messageText: DATE_PROMPT(
-          guessed === "booking" ? "Booking" : "Delivery snapshot"
-        ),
+        messageText: DATE_PROMPT(guessed),
       });
       return { handled: true };
     }
@@ -292,15 +365,7 @@ export async function processWhatsappReportWizard({ message, waId }) {
       await sendSessionTextMessage({
         whatsappNumber: phone,
         messageText:
-          "Please reply *1*, *2*, or *3* — or *cancel*.\n\n" + MENU_TEXT,
-      });
-      return { handled: true };
-    }
-    if (choice === "sowing") {
-      reportWizardState.delete(key);
-      await sendSessionTextMessage({
-        whatsappNumber: phone,
-        messageText: SOWING_PLACEHOLDER,
+          "Reply *1*–*5* using the menu below, or *cancel*.\n\n" + MENU_TEXT,
       });
       return { handled: true };
     }
@@ -308,9 +373,7 @@ export async function processWhatsappReportWizard({ message, waId }) {
     state.step = "pick_date";
     await sendSessionTextMessage({
       whatsappNumber: phone,
-      messageText: DATE_PROMPT(
-        choice === "booking" ? "Booking" : "Delivery snapshot"
-      ),
+      messageText: DATE_PROMPT(choice),
     });
     return { handled: true };
   }
@@ -321,8 +384,8 @@ export async function processWhatsappReportWizard({ message, waId }) {
       await sendSessionTextMessage({
         whatsappNumber: phone,
         messageText:
-          "Could not understand. Reply *1–4*, or type `YYYY-MM-DD to YYYY-MM-DD`.\n\n" +
-          DATE_PROMPT(state.reportType === "booking" ? "Booking" : "Delivery"),
+          "Reply *1–4*, or type `YYYY-MM-DD to YYYY-MM-DD` on one line.\n\n" +
+          DATE_PROMPT(state.reportType),
       });
       return { handled: true };
     }
@@ -331,18 +394,12 @@ export async function processWhatsappReportWizard({ message, waId }) {
       await sendSessionTextMessage({
         whatsappNumber: phone,
         messageText:
-          "✏️ Send *one line* with start and end date:\n`2026-01-01 to 2026-01-20`\n(or DD-MM-YYYY to DD-MM-YYYY)",
+          "✏️ One line, for example:\n`2026-01-01 to 2026-01-20`\n(or DD-MM-YYYY to DD-MM-YYYY)",
       });
       return { handled: true };
     }
     reportWizardState.delete(key);
-    if (state.reportType === "booking") {
-      const data = await fetchBookingReportDataForDateRange(dr.range);
-      await runBookingWithPdf(phone, data);
-      await sendCompositeOpsAddOn(phone);
-    } else {
-      await runDeliveryText(phone);
-    }
+    await executeReportForRange(phone, state.reportType, dr.range);
     return { handled: true };
   }
 
@@ -352,18 +409,12 @@ export async function processWhatsappReportWizard({ message, waId }) {
       await sendSessionTextMessage({
         whatsappNumber: phone,
         messageText:
-          "❗ Use format `YYYY-MM-DD to YYYY-MM-DD` (IST calendar days). Try again or *cancel*.",
+          "❗ Use `YYYY-MM-DD to YYYY-MM-DD` (IST days). Try again or *cancel*.",
       });
       return { handled: true };
     }
     reportWizardState.delete(key);
-    if (state.reportType === "booking") {
-      const data = await fetchBookingReportDataForDateRange(range);
-      await runBookingWithPdf(phone, data);
-      await sendCompositeOpsAddOn(phone);
-    } else {
-      await runDeliveryText(phone);
-    }
+    await executeReportForRange(phone, state.reportType, range);
     return { handled: true };
   }
 

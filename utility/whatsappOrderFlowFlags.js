@@ -1,14 +1,18 @@
 /**
- * Temporarily turn off the WhatsApp **order bot** conversation (`processOrderFlow`).
- * Interactive report wizard runs on the same webhooks. Optional legacy one-shot
- * PDF: set `WHATSAPP_LEGACY_INSTANT_BOOKING_PDF=true` (old "today booking" instant PDF).
+ * WhatsApp **order bot** (plant list / banana–chili style ordering) is **off by default**.
+ * Reports wizard handles inbound messages instead.
  *
- * Set on server: DISABLE_WHATSAPP_ORDER_FLOW=true
- * Alternative: WHATSAPP_ORDER_FLOW_ENABLED=false
+ * Opt in to the legacy order conversation: `WHATSAPP_ORDER_FLOW_ENABLED=true`
+ * Force off regardless: `DISABLE_WHATSAPP_ORDER_FLOW=true`
+ *
+ * Legacy one-shot booking PDF: `WHATSAPP_LEGACY_INSTANT_BOOKING_PDF=true`
  */
 export function isWhatsappOrderFlowDisabled() {
-  return (
-    process.env.DISABLE_WHATSAPP_ORDER_FLOW === "true" ||
-    process.env.WHATSAPP_ORDER_FLOW_ENABLED === "false"
-  );
+  if (process.env.DISABLE_WHATSAPP_ORDER_FLOW === "true") {
+    return true;
+  }
+  if (process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true") {
+    return false;
+  }
+  return true;
 }

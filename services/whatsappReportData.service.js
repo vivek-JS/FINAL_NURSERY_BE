@@ -360,6 +360,99 @@ export function formatDeliveryWhatsApp(data) {
   return lines.join("\n");
 }
 
+const DISPATCH_LIKE_STATUSES = [
+  "DISPATCHED",
+  "COMPLETED",
+  "PARTIALLY_COMPLETED",
+  "DISPATCH_PROCESS",
+];
+
+/**
+ * Dispatched / completed activity in IST range: transition recorded on `statusChanges`
+ * in the window, or legacy rows matched by `updatedAt` in range.
+ */
+export async function fetchDispatchCompletedForRange(range) {
+  const { start, end } = range;
+  const match = {
+    orderStatus: { $in: DISPATCH_LIKE_STATUSES },
+    $or: [
+      {
+        statusChanges: {
+          $elemMatch: {
+            newStatus: { $in: DISPATCH_LIKE_STATUSES },
+            createdAt: { $gte: start, $lte: end },
+          },
+        },
+      },
+      {
+        updatedAt: { $gte: start, $lte: end },
+      },
+    ],
+  };
+
+  const [byPlant, totalOrders] = await Promise.all([
+    Order.aggregate([
+      { $match: match },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantName",
+          foreignField: "_id",
+          as: "p",
+        },
+      },
+      {
+        $addFields: {
+          plantLabel: { $ifNull: [{ $arrayElemAt: ["$p.name", 0] }, "Unknown"] },
+          qty: {
+            $cond: [
+              { $gt: [{ $ifNull: ["$totalPlants", 0] }, 0] },
+              "$totalPlants",
+              {
+                $add: [
+                  { $ifNull: ["$numberOfPlants", 0] },
+                  { $ifNull: ["$additionalPlants", 0] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$plantLabel",
+          orders: { $sum: 1 },
+          plantsQty: { $sum: "$qty" },
+        },
+      },
+      { $sort: { plantsQty: -1 } },
+    ]),
+    Order.countDocuments(match),
+  ]);
+
+  return { byPlant, totalOrders, range };
+}
+
+export function formatDispatchReportWhatsApp(data) {
+  const { byPlant, totalOrders, range } = data;
+  const label = `${moment(range.start).utcOffset(330).format("YYYY-MM-DD")} → ${moment(range.end).utcOffset(330).format("YYYY-MM-DD")} (IST)`;
+  const lines = [
+    "✅ *Dispatch / completed (selected period)*",
+    `_Includes orders whose **status change** to dispatch/completed falls in the period, or **updated** in the period (older data without history)._`,
+    `Period: _${label}_`,
+    `Orders in scope: *${totalOrders}*`,
+    "",
+    "*By plant (plants / orders):*",
+  ];
+  for (const r of byPlant) {
+    lines.push(`• *${r._id}* — ${r.plantsQty} plants, ${r.orders} orders`);
+  }
+  if (!byPlant.length) {
+    lines.push("— No matching dispatch/completed orders in this period.");
+  }
+  return lines.join("\n");
+}
+
 /**
  * Future slots only (end date ≥ start of today IST). Per plant: top 3 & bottom 3 by booked plants.
  */

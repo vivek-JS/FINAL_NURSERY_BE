@@ -12,6 +12,24 @@ const COLORS = {
   kpiBorder: "#40916c",
 };
 
+function formatInr(n) {
+  const x = Math.round(Number(n) || 0);
+  return `₹${x.toLocaleString("en-IN")}`;
+}
+
+/** @param {{ plant: string, subtype: string, quantity: number }[]} summaryRows */
+export function plantTotalsForBarChart(summaryRows, limit = 6) {
+  const m = new Map();
+  for (const r of summaryRows || []) {
+    const p = r.plant || "—";
+    m.set(p, (m.get(p) || 0) + (Number(r.quantity) || 0));
+  }
+  return [...m.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([label, value]) => ({ label, value }));
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.reportDateLabel
@@ -20,6 +38,10 @@ const COLORS = {
  * @param {{ grandTotal: number, bookingLines: number, uniqueFarmers: number }} opts.stats
  * @param {string} [opts.dataSourceLabel] - Shown in footer (e.g. orders vs legacy bookings)
  * @param {string} [opts.bannerTitle] - Main PDF title (default: Today’s booking)
+ * @param {{ name: string, quantity: number }[]} [opts.topFarmers]
+ * @param {{ name: string, quantity: number }[]} [opts.topVillages]
+ * @param {{ totalDue?: number, totalCollected?: number, totalOutstanding?: number, pendingPaymentOrders?: number, completedPaymentOrders?: number } | null} [opts.paymentSnapshot]
+ * @param {{ label: string, value: number }[]} [opts.plantBarChart] - Horizontal bars by plant qty
  */
 export function generateTodayBookingPdf({
   reportDateLabel,
@@ -28,6 +50,10 @@ export function generateTodayBookingPdf({
   stats,
   dataSourceLabel = "Farmer orders (IST)",
   bannerTitle = "Today's Booking Report",
+  topFarmers = [],
+  topVillages = [],
+  paymentSnapshot = null,
+  plantBarChart = null,
 }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -106,6 +132,115 @@ export function generateTodayBookingPdf({
       kx += kpiW + gap;
     }
     y += kpiH + 18;
+
+    const bars =
+      plantBarChart && plantBarChart.length
+        ? plantBarChart
+        : plantTotalsForBarChart(summaryRows, 6);
+    if (bars.length) {
+      const maxV = Math.max(...bars.map((x) => x.value), 1);
+      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
+      doc.text("Plant booking volume (horizontal bars)", ml, y);
+      y += 14;
+      const rowH = 18;
+      const labelW = usableW * 0.34;
+      const barMax = usableW * 0.48;
+      bars.forEach((row) => {
+        if (y > pageH - doc.page.margins.bottom - 50) {
+          doc.addPage();
+          y = mt;
+        }
+        const frac = row.value / maxV;
+        doc.font("Helvetica").fontSize(8).fillColor("#212529");
+        doc.text(String(row.label).slice(0, 34), ml, y + 4, {
+          width: labelW - 6,
+        });
+        doc.save();
+        doc
+          .rect(ml + labelW, y + 2, Math.max(4, barMax * frac), rowH - 6)
+          .fillAndStroke("#d8f3dc", COLORS.kpiBorder);
+        doc.restore();
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .fillColor(COLORS.accent)
+          .text(String(row.value), ml + labelW + barMax + 6, y + 4, {
+            width: 80,
+            align: "right",
+          });
+        y += rowH;
+      });
+      y += 12;
+    }
+
+    if (topFarmers && topFarmers.length) {
+      if (y > pageH - doc.page.margins.bottom - 120) {
+        doc.addPage();
+        y = mt;
+      }
+      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
+      doc.text("Top farmers (by plant quantity)", ml, y);
+      y += 14;
+      doc.font("Helvetica").fontSize(9).fillColor("#212529");
+      topFarmers.forEach((f, i) => {
+        doc.text(
+          `${i + 1}. ${f.name} — ${f.quantity} plants`,
+          ml,
+          y,
+          { width: usableW }
+        );
+        y += 13;
+      });
+      y += 8;
+    }
+
+    if (topVillages && topVillages.length) {
+      if (y > pageH - doc.page.margins.bottom - 100) {
+        doc.addPage();
+        y = mt;
+      }
+      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
+      doc.text("Top villages / areas (by quantity)", ml, y);
+      y += 14;
+      doc.font("Helvetica").fontSize(9).fillColor("#212529");
+      topVillages.forEach((v, i) => {
+        doc.text(
+          `${i + 1}. ${v.name} — ${v.quantity} plants`,
+          ml,
+          y,
+          { width: usableW }
+        );
+        y += 13;
+      });
+      y += 8;
+    }
+
+    if (paymentSnapshot && paymentSnapshot.totalDue != null) {
+      if (y > pageH - doc.page.margins.bottom - 80) {
+        doc.addPage();
+        y = mt;
+      }
+      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
+      doc.text("Payment summary (same order set)", ml, y);
+      y += 14;
+      doc.font("Helvetica").fontSize(9).fillColor("#212529");
+      doc.text(
+        `Billable: ${formatInr(paymentSnapshot.totalDue)} | Collected: ${formatInr(
+          paymentSnapshot.totalCollected
+        )} | Outstanding: ${formatInr(paymentSnapshot.totalOutstanding)}`,
+        ml,
+        y,
+        { width: usableW }
+      );
+      y += 12;
+      doc.text(
+        `Order flags — PENDING: ${paymentSnapshot.pendingPaymentOrders ?? "—"} | COMPLETED: ${paymentSnapshot.completedPaymentOrders ?? "—"}`,
+        ml,
+        y,
+        { width: usableW }
+      );
+      y += 18;
+    }
 
     doc.fillColor("#212529").font("Helvetica-Bold").fontSize(11);
     doc.text("Detail — Farmer · Plant · Subtype · Quantity", ml, y);

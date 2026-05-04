@@ -25,14 +25,19 @@ test("isReportEntry recognises starter phrases", () => {
 test("guessReportTypeFromText", () => {
   assert.equal(guessReportTypeFromText("booking report"), "booking");
   assert.equal(guessReportTypeFromText("delivery summary"), "delivery");
-  assert.equal(guessReportTypeFromText("sowing stats"), "sowing");
+  assert.equal(guessReportTypeFromText("slot report"), "slots");
+  assert.equal(guessReportTypeFromText("payment report"), "payment");
+  assert.equal(guessReportTypeFromText("dispatch report"), "dispatch");
+  assert.equal(guessReportTypeFromText("flow report"), null);
   assert.equal(guessReportTypeFromText("get report"), null);
 });
 
 test("parseReportTypeChoice", () => {
   assert.equal(parseReportTypeChoice("1"), "booking");
   assert.equal(parseReportTypeChoice("2"), "delivery");
-  assert.equal(parseReportTypeChoice("3"), "sowing");
+  assert.equal(parseReportTypeChoice("3"), "slots");
+  assert.equal(parseReportTypeChoice("4"), "payment");
+  assert.equal(parseReportTypeChoice("5"), "dispatch");
   assert.equal(parseReportTypeChoice("maybe"), null);
 });
 
