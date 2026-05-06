@@ -120,6 +120,67 @@ export function parseDateChoice(text) {
   return { ok: false };
 }
 
+/**
+ * Delivery planning window (IST): today, next 7 / 14 calendar days from today, or custom.
+ * @returns {{ ok: boolean, range?: { start: Date, end: Date }, pendingCustom?: boolean }}
+ */
+export function parseDeliveryWindowChoice(text) {
+  const t = String(text || "").trim().toLowerCase();
+  const today = moment().utcOffset(330);
+  if (["1", "1.", "one", "today", "today only", "आज"].includes(t)) {
+    const start = today.clone().startOf("day").toDate();
+    const end = today.clone().endOf("day").toDate();
+    return { ok: true, range: { start, end } };
+  }
+  if (
+    ["2", "2.", "two", "7", "7 days", "next 7", "next seven"].includes(t)
+  ) {
+    const start = today.clone().startOf("day").toDate();
+    const end = today.clone().add(6, "day").endOf("day").toDate();
+    return { ok: true, range: { start, end } };
+  }
+  if (
+    ["3", "3.", "three", "14", "14 days", "next 14", "next fourteen"].includes(
+      t
+    )
+  ) {
+    const start = today.clone().startOf("day").toDate();
+    const end = today.clone().add(13, "day").endOf("day").toDate();
+    return { ok: true, range: { start, end } };
+  }
+  if (["4", "4.", "four", "custom", "range", "दिनांक"].includes(t)) {
+    return { ok: true, pendingCustom: true };
+  }
+
+  const custom = parseCustomRangeText(text);
+  if (custom) {
+    return { ok: true, range: custom };
+  }
+
+  return { ok: false };
+}
+
+/**
+ * @returns {{ ok: boolean, mode?: 'due_in_window'|'no_due'|'both' }}
+ */
+export function parseDeliveryDueFilterChoice(text) {
+  const t = String(text || "").trim().toLowerCase();
+  if (
+    ["1", "1.", "one", "due", "with due", "scheduled", "a"].includes(t)
+  ) {
+    return { ok: true, mode: "due_in_window" };
+  }
+  if (
+    ["2", "2.", "two", "no due", "without due", "not set", "b"].includes(t)
+  ) {
+    return { ok: true, mode: "no_due" };
+  }
+  if (["3", "3.", "three", "both", "all", "c"].includes(t)) {
+    return { ok: true, mode: "both" };
+  }
+  return { ok: false };
+}
+
 export function parseCustomRangeText(text) {
   const raw = String(text || "").trim();
   const isoRange =

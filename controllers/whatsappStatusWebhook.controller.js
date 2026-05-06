@@ -2,9 +2,6 @@ import catchAsync from "../utility/catchAsync.js";
 import Farmer from "../models/farmer.model.js";
 import FarmerLead from "../models/farmerLead.model.js";
 import WhatsAppBroadcast from "../models/whatsappBroadcast.model.js";
-import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
-import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
-
 // Normalize phone helper (expects 10-digit or 91-prefixed)
 function normalizeWaId(waId) {
   if (!waId) return null;
@@ -24,19 +21,8 @@ function parseTimestamp(ts) {
 }
 
 export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
-  // Inbound "Message Received" is sometimes misconfigured to this URL; status handler used to ignore it.
-  void (async () => {
-    try {
-      const w = await runWhatsappReportWizardFromWebhookBody(req.body);
-      if (!w.handled && process.env.WHATSAPP_LEGACY_INSTANT_BOOKING_PDF === "true") {
-        void runTodayBookingPdfJob(req.body).catch((err) => {
-          console.error("[whatsapp-status legacy PDF]", err?.message || err);
-        });
-      }
-    } catch (err) {
-      console.error("[whatsapp-status] report wizard:", err?.message || err);
-    }
-  })();
+  // Report wizard runs only from the inbound message webhook (order bot / opt-in).
+  // Do not attach it here — duplicate delivery caused double menus / double "1" steps.
 
   const userAgent = req.headers['user-agent'] || '';
   const isWati = userAgent.toLowerCase().includes('wati');

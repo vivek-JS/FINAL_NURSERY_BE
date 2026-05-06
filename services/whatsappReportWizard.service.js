@@ -7,6 +7,7 @@ import {
 import {
   generateTodayBookingPdf,
   generateDeliveryQueuePdf,
+  generateOrderTransitionInsightsPdf,
   generateSlotsOutlookPdf,
   plantTotalsForBarChart,
 } from "./pdfService.js";
@@ -15,16 +16,20 @@ import { uploadToS3 } from "./uploadService.js";
 import {
   normalizeWhatsAppNumberForWati,
   extractInboundMessage,
+  extractInboundMessageId,
 } from "../utility/watiInboundPayload.js";
 import { isWatiConfigured } from "../config/wati.config.js";
 import {
-  fetchDeliveryPipelineByPlant,
+  buildDeliveryPaymentMatchForWizard,
+  fetchDeliveryPipelineForWizard,
   fetchDispatchCompletedForRange,
   fetchFutureSlotHighlights,
+  fetchOrderTransitionInsights,
   fetchPaymentStatsForMatch,
   fetchSystemAlertsSnapshot,
   formatDeliveryWhatsApp,
   formatDispatchReportWhatsApp,
+  formatOrderTransitionInsightsWhatsApp,
   formatPaymentStatsWhatsApp,
   fetchActiveOrdersPaymentSnapshot,
   matchOrdersInBookingRangeIST,
@@ -36,6 +41,8 @@ import {
   parseReportTypeChoice,
   parseDateChoice,
   parseCustomRangeText,
+  parseDeliveryWindowChoice,
+  parseDeliveryDueFilterChoice,
 } from "../utility/whatsappReportWizardParsers.js";
 import { isPhoneAllowedForReportWizard } from "../utility/whatsappReportWizardAllowlist.js";
 
@@ -47,12 +54,33 @@ const reportWizardState = new Map();
 const MENU_TEXT = `📋 *Nursery reports*
 Reply with a number:
 *1* — Booking (PDF + charts, date range)
-*2* — Delivery queue (PDF + live ACCEPTED + FARM_READY)
+*2* — Delivery (due window: today / 7 / 14 days / custom + with/without due)
 *3* — Slots (PDF + future windows, busiest table)
 *4* — Payments (pending, collected, by plant)
 *5* — Dispatch / completed (orders touched in date range)
 
 _Type *cancel* anytime._`;
+
+const DELIVERY_WINDOW_PROMPT = `📅 *Delivery — pick planning window (IST)*
+*1* — Today
+*2* — Next 7 days (today through +6 days)
+*3* — Next 14 days (today through +13 days)
+*4* — Custom (you’ll type two dates next)
+
+Reply *1–4*, or *cancel*.`;
+
+const DELIVERY_FILTER_PROMPT = `📦 *Which orders include?* (still *ACCEPTED* + *FARM_READY* only)
+*1* — *With due* — delivery date falls inside the window you picked
+*2* — *Without due* — no delivery date on the order yet
+*3* — *Both* — two sections in the report
+
+Reply *1–3*, or *cancel*.`;
+
+const DELIVERY_MODE_CAPTION = {
+  due_in_window: "With due date in window",
+  no_due: "Without delivery date",
+  both: "With due + without due",
+};
 
 function datePromptTitle(reportType) {
   const m = {
@@ -71,7 +99,7 @@ const DATE_PROMPT = (reportType) => `📅 *Pick dates (IST)* — ${datePromptTit
 *3* — Last 7 days (rolling)
 *4* — Custom (you’ll type two dates next)
 
-Note: *2 Delivery* uses live queue (dates only pick your session); *3 Slots* shows future slots regardless of dates.
+_Note: menu *3 Slots* is not filtered by these dates._
 
 Reply *1–4*, or *cancel*.`;
 
@@ -211,8 +239,41 @@ async function runPaymentReport(phone, range) {
 }
 
 async function runDispatchReport(phone, range) {
-  const d = await fetchDispatchCompletedForRange(range);
+  const [d, insights] = await Promise.all([
+    fetchDispatchCompletedForRange(range),
+    fetchOrderTransitionInsights(range),
+  ]);
   await sendChunks(phone, formatDispatchReportWhatsApp(d));
+  await sendChunks(phone, formatOrderTransitionInsightsWhatsApp(insights));
+
+  if (isWatiConfigured()) {
+    try {
+      const rangeLabel = formatISTRangeLabel(range.start, range.end);
+      const pdfBuffer = await generateOrderTransitionInsightsPdf({
+        reportDateLabel: rangeLabel,
+        bookedOrders: insights.bookedOrders,
+        todayKey: insights.todayKey,
+        currentStatuses: insights.currentStatuses,
+        transitionMatrix: insights.transitionMatrix,
+      });
+      const filename = `transitions-${moment()
+        .utcOffset(330)
+        .format("YYYYMMDD-HHmmss")}.pdf`;
+      await sendSessionFileMessage({
+        whatsappNumber: phone,
+        fileBuffer: pdfBuffer,
+        filename,
+        caption: `Order transitions · ${rangeLabel}`,
+      });
+      if (process.env.DO_SPACES_KEY) {
+        void uploadToS3(pdfBuffer, filename).catch((e) =>
+          console.warn("[report wizard] optional Spaces copy failed:", e?.message || e)
+        );
+      }
+    } catch (e) {
+      console.error("[report wizard] transitions PDF failed:", e?.message || e);
+    }
+  }
   const { text: alertText } = await fetchSystemAlertsSnapshot();
   await sendChunks(phone, alertText);
 }
@@ -295,35 +356,55 @@ async function runBookingWithPdf(phone, data) {
   }
 }
 
-async function runDeliveryWithPdf(phone, range) {
-  const [d, payQueue] = await Promise.all([
-    fetchDeliveryPipelineByPlant(),
-    fetchPaymentStatsForMatch({
-      orderStatus: { $in: ["ACCEPTED", "FARM_READY"] },
-    }),
-  ]);
+async function runDeliveryWithPdf(phone, range, deliveryFilterMode) {
   const rangeLabel = formatISTRangeLabel(range.start, range.end);
-  const body = [
-    "_Delivery queue is a *live snapshot* (not filtered by the dates you picked — dates only anchor this session)._",
+  const modeKey =
+    deliveryFilterMode && DELIVERY_MODE_CAPTION[deliveryFilterMode]
+      ? deliveryFilterMode
+      : "due_in_window";
+  const modeHuman = DELIVERY_MODE_CAPTION[modeKey];
+
+  const { segments } = await fetchDeliveryPipelineForWizard(range, modeKey);
+  const payMatch = buildDeliveryPaymentMatchForWizard(range, modeKey);
+  const payQueue = await fetchPaymentStatsForMatch(payMatch);
+
+  const bodyParts = [
+    "🚚 *Delivery report*",
+    `_IST window: ${rangeLabel}_`,
+    `_Scope: ${modeHuman}_`,
     "",
-    formatDeliveryWhatsApp(d),
-    "",
+  ];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    bodyParts.push(`*${i + 1}. ${seg.title}*`, "");
+    bodyParts.push(
+      formatDeliveryWhatsApp(
+        { byPlant: seg.byPlant, totals: seg.totals },
+        { skipBanner: true }
+      )
+    );
+    bodyParts.push("", "──────────────", "");
+  }
+  bodyParts.push(
     formatPaymentStatsWhatsApp(
       payQueue,
-      "Payments — delivery queue (ACCEPTED + FARM_READY only)"
+      "Payments — same filter (ACCEPTED + FARM_READY)"
     ),
     "",
-    "_A PDF with charts, definitions, and the plant-wise table is attached._",
-  ].join("\n");
-  await sendChunks(phone, body);
+    "_PDF attached (one file; multiple sections if you chose “both”)._"
+  );
+  await sendChunks(phone, bodyParts.join("\n"));
 
   if (isWatiConfigured()) {
     try {
-      const sessionLabel = `${rangeLabel} · live queue (not date-filtered)`;
+      const sessionLabel = `${rangeLabel} · ${modeHuman}`;
       const pdfBuffer = await generateDeliveryQueuePdf({
         reportDateLabel: sessionLabel,
-        byPlant: d.byPlant,
-        totals: d.totals,
+        segments: segments.map((s) => ({
+          title: s.title,
+          byPlant: s.byPlant,
+          totals: s.totals,
+        })),
         paymentSnapshot: payQueue.summary,
       });
       const filename = `delivery-${moment()
@@ -356,7 +437,7 @@ async function runDeliveryWithPdf(phone, range) {
   await sendCompositeOpsAddOn(phone);
 }
 
-async function executeReportForRange(phone, reportType, range) {
+async function executeReportForRange(phone, reportType, range, extra = {}) {
   switch (reportType) {
     case "booking": {
       const data = await fetchBookingReportDataForDateRange(range);
@@ -364,7 +445,7 @@ async function executeReportForRange(phone, reportType, range) {
       break;
     }
     case "delivery":
-      await runDeliveryWithPdf(phone, range);
+      await runDeliveryWithPdf(phone, range, extra.deliveryFilter);
       break;
     case "slots":
       await runSlotsReportWithPdf(phone, range);
@@ -442,14 +523,15 @@ export async function processWhatsappReportWizard({ message, waId }) {
   if (entry) {
     const guessed = guessReportTypeFromText(text);
     if (guessed) {
+      const isDel = guessed === "delivery";
       reportWizardState.set(key, {
-        step: "pick_date",
+        step: isDel ? "pick_delivery_window" : "pick_date",
         reportType: guessed,
         lastAt: Date.now(),
       });
       await sendSessionTextMessage({
         whatsappNumber: phone,
-        messageText: DATE_PROMPT(guessed),
+        messageText: isDel ? DELIVERY_WINDOW_PROMPT : DATE_PROMPT(guessed),
       });
       return { handled: true };
     }
@@ -471,10 +553,85 @@ export async function processWhatsappReportWizard({ message, waId }) {
       return { handled: true };
     }
     state.reportType = choice;
-    state.step = "pick_date";
+    if (choice === "delivery") {
+      state.step = "pick_delivery_window";
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText: DELIVERY_WINDOW_PROMPT,
+      });
+    } else {
+      state.step = "pick_date";
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText: DATE_PROMPT(choice),
+      });
+    }
+    return { handled: true };
+  }
+
+  if (state.step === "pick_delivery_window") {
+    const dr = parseDeliveryWindowChoice(text);
+    if (!dr.ok) {
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText:
+          "Reply *1–4*, or type a date range on one line.\n\n" +
+          DELIVERY_WINDOW_PROMPT,
+      });
+      return { handled: true };
+    }
+    if (dr.pendingCustom) {
+      state.step = "delivery_custom_range";
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText:
+          "✏️ One line, for example:\n`2026-01-01 to 2026-01-20`\n(or DD-MM-YYYY to DD-MM-YYYY)",
+      });
+      return { handled: true };
+    }
+    state.pendingDeliveryRange = dr.range;
+    state.step = "pick_delivery_filter";
     await sendSessionTextMessage({
       whatsappNumber: phone,
-      messageText: DATE_PROMPT(choice),
+      messageText: DELIVERY_FILTER_PROMPT,
+    });
+    return { handled: true };
+  }
+
+  if (state.step === "delivery_custom_range") {
+    const range = parseCustomRangeText(text);
+    if (!range) {
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText:
+          "❗ Use `YYYY-MM-DD to YYYY-MM-DD` (IST days). Try again or *cancel*.",
+      });
+      return { handled: true };
+    }
+    state.pendingDeliveryRange = range;
+    state.step = "pick_delivery_filter";
+    await sendSessionTextMessage({
+      whatsappNumber: phone,
+      messageText: DELIVERY_FILTER_PROMPT,
+    });
+    return { handled: true };
+  }
+
+  if (state.step === "pick_delivery_filter") {
+    const fl = parseDeliveryDueFilterChoice(text);
+    if (!fl.ok) {
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText:
+          "Reply *1* (with due), *2* (without due), or *3* (both).\n\n" +
+          DELIVERY_FILTER_PROMPT,
+      });
+      return { handled: true };
+    }
+    const range = state.pendingDeliveryRange;
+    reportWizardState.delete(key);
+    await executeReportForRange(phone, "delivery", range, {
+      deliveryFilter: fl.mode,
     });
     return { handled: true };
   }
@@ -525,7 +682,41 @@ export async function processWhatsappReportWizard({ message, waId }) {
 /**
  * Used from webhooks: parse body and run wizard (same triggers as handleWhatsAppWebhook message).
  */
+const wizardProcessingIds = new Set();
+const wizardSeenMessageIds = new Map();
+const WIZARD_MSG_ID_TTL_MS = 25 * 60 * 1000;
+
+function pruneWizardMessageIds() {
+  const now = Date.now();
+  for (const [id, t] of wizardSeenMessageIds) {
+    if (now - t > WIZARD_MSG_ID_TTL_MS) {
+      wizardSeenMessageIds.delete(id);
+    }
+  }
+}
+
 export async function runWhatsappReportWizardFromWebhookBody(body) {
-  const { text, waId } = extractInboundMessage(body);
-  return processWhatsappReportWizard({ message: text, waId });
+  const msgId = extractInboundMessageId(body);
+  if (msgId) {
+    pruneWizardMessageIds();
+    if (
+      wizardSeenMessageIds.has(msgId) ||
+      wizardProcessingIds.has(msgId)
+    ) {
+      return { handled: true, duplicate: true };
+    }
+    wizardProcessingIds.add(msgId);
+  }
+  try {
+    const { text, waId } = extractInboundMessage(body);
+    const result = await processWhatsappReportWizard({ message: text, waId });
+    if (msgId && result.handled) {
+      wizardSeenMessageIds.set(msgId, Date.now());
+    }
+    return result;
+  } finally {
+    if (msgId) {
+      wizardProcessingIds.delete(msgId);
+    }
+  }
 }

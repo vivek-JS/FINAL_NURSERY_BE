@@ -2,14 +2,15 @@ import PDFDocument from "pdfkit";
 import { formatPlantCell } from "./reportService.js";
 
 const COLORS = {
-  headerBar: "#1b4332",
+  headerBar: "#0f172a",
+  headerAccent: "#2563eb",
   headerText: "#ffffff",
-  accent: "#2d6a4f",
-  muted: "#6c757d",
-  border: "#95d5b2",
-  rowAlt: "#f8f9fa",
-  kpiBg: "#d8f3dc",
-  kpiBorder: "#40916c",
+  accent: "#1e3a8a",
+  muted: "#64748b",
+  border: "#cbd5e1",
+  rowAlt: "#f1f5f9",
+  kpiBg: "#f8fafc",
+  kpiBorder: "#94a3b8",
 };
 
 function formatInr(n) {
@@ -95,19 +96,20 @@ export function generateTodayBookingPdf({
 
     // --- Top banner ---
     doc.save();
-    doc.rect(ml, y, usableW, 52).fill(COLORS.headerBar);
-    doc.fillColor(COLORS.headerText).font("Helvetica-Bold").fontSize(20);
-    doc.text(bannerTitle, ml + 16, y + 10, {
+    doc.rect(ml, y, usableW, 56).fill(COLORS.headerBar);
+    doc.rect(ml, y + 53, usableW, 3).fill(COLORS.headerAccent);
+    doc.fillColor(COLORS.headerText).font("Helvetica-Bold").fontSize(22);
+    doc.text(bannerTitle, ml + 16, y + 12, {
       width: usableW - 32,
       align: "center",
     });
-    doc.font("Helvetica").fontSize(11).opacity(0.95);
-    doc.text(reportDateLabel, ml + 16, y + 32, {
+    doc.font("Helvetica").fontSize(10).opacity(0.92);
+    doc.text(reportDateLabel, ml + 16, y + 34, {
       width: usableW - 32,
       align: "center",
     });
     doc.opacity(1).restore();
-    y += 62;
+    y += 66;
 
     // --- KPI figures ---
     const kpiH = 58;
@@ -131,7 +133,7 @@ export function generateTodayBookingPdf({
     for (let i = 0; i < kpis.length; i++) {
       doc.save();
       doc.rect(kx, y, kpiW, kpiH).fillAndStroke(COLORS.kpiBg, COLORS.kpiBorder);
-      doc.fillColor(COLORS.accent).font("Helvetica-Bold").fontSize(22);
+      doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(22);
       doc.text(kpis[i].value, kx + 8, y + 10, {
         width: kpiW - 16,
         align: "center",
@@ -415,11 +417,12 @@ export function generateTodayBookingPdf({
 }
 
 /**
- * Delivery queue: ACCEPTED + FARM_READY live snapshot (not filtered by booking dates).
+ * Delivery planning: ACCEPTED + FARM_READY, optional multiple segments (due / no due / both).
  * @param {object} opts
- * @param {string} opts.reportDateLabel - Usually session / “generated at” IST label
- * @param {Record<string, { accepted: { orders: number, plantsQty: number }, farmReady: { orders: number, plantsQty: number } }>} opts.byPlant
- * @param {{ acceptedOrders: number, farmReadyOrders: number, acceptedPlants: number, farmReadyPlants: number }} opts.totals
+ * @param {string} opts.reportDateLabel
+ * @param {Record<string, { accepted: { orders: number, plantsQty: number }, farmReady: { orders: number, plantsQty: number } }>} [opts.byPlant]
+ * @param {{ acceptedOrders: number, farmReadyOrders: number, acceptedPlants: number, farmReadyPlants: number }} [opts.totals]
+ * @param {{ title: string, byPlant: object, totals: object }[]} [opts.segments]
  * @param {null | { totalDue?: number, totalCollected?: number, totalOutstanding?: number, pendingPaymentOrders?: number, completedPaymentOrders?: number }} [opts.paymentSnapshot]
  */
 export function generateDeliveryQueuePdf({
@@ -427,6 +430,7 @@ export function generateDeliveryQueuePdf({
   byPlant = {},
   totals,
   paymentSnapshot = null,
+  segments = null,
 }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -452,13 +456,22 @@ export function generateDeliveryQueuePdf({
     const usableW = pageW - ml - mr;
     let y = mt;
 
-    const totalOrders = totals.acceptedOrders + totals.farmReadyOrders;
-    const totalPlants = totals.acceptedPlants + totals.farmReadyPlants;
+    const segs =
+      segments && segments.length > 0
+        ? segments
+        : [
+            {
+              title: "Delivery queue",
+              byPlant,
+              totals,
+            },
+          ];
 
     const EXPLAIN = [
-      "ACCEPTED = order approved but plants not yet marked ready at the farm.",
-      "FARM_READY = stock is ready; these lines are usually next in line for dispatch.",
-      "This list is a live snapshot: it is not cut by the date range you picked in the wizard (the range only anchors the report session).",
+      "ACCEPTED = approved booking; FARM_READY = plants ready at farm — both await dispatch.",
+      segs.length > 1
+        ? "Separate sections: orders with a delivery date in your window vs orders with no date set yet."
+        : "Rows are filtered by the due / no-due choice you picked in WhatsApp.",
     ];
 
     doc.save();
@@ -492,37 +505,13 @@ export function generateDeliveryQueuePdf({
     const gap = 10;
     const kpiW = (usableW - gap) / 2;
     const kpiH = 50;
-    const kpiRow = [
-      {
-        label: "Total orders in queue",
-        value: String(totalOrders),
-        sub: "ACCEPTED + FARM_READY",
-      },
-      {
-        label: "Total plants in queue",
-        value: String(totalPlants),
-        sub: "sum of plant quantities",
-      },
-    ];
-    const kpiRow2 = [
-      {
-        label: "ACCEPTED",
-        value: `${totals.acceptedOrders} ord`,
-        sub: `${totals.acceptedPlants} plants`,
-      },
-      {
-        label: "FARM_READY",
-        value: `${totals.farmReadyOrders} ord`,
-        sub: `${totals.farmReadyPlants} plants`,
-      },
-    ];
 
     const drawKpi2 = (row) => {
       let kx = ml;
       for (let i = 0; i < row.length; i++) {
         doc.save();
         doc.rect(kx, y, kpiW, kpiH).fillAndStroke(COLORS.kpiBg, COLORS.kpiBorder);
-        doc.fillColor(COLORS.accent).font("Helvetica-Bold").fontSize(20);
+        doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(20);
         doc.text(row[i].value, kx + 8, y + 8, {
           width: kpiW - 16,
           align: "center",
@@ -542,57 +531,179 @@ export function generateDeliveryQueuePdf({
         kx += kpiW + gap;
       }
     };
-    drawKpi2(kpiRow);
-    y += kpiH + 8;
-    drawKpi2(kpiRow2);
-    y += kpiH + 16;
 
-    const barSource = Object.keys(byPlant)
-      .sort((a, b) => a.localeCompare(b))
-      .map((name) => {
-        const b = byPlant[name];
-        const q =
-          (b.accepted?.plantsQty || 0) + (b.farmReady?.plantsQty || 0);
-        return { label: name, value: q };
-      })
-      .filter((x) => x.value > 0)
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 8);
+    for (let si = 0; si < segs.length; si++) {
+      const seg = segs[si];
+      if (y > pageH - doc.page.margins.bottom - 140) {
+        doc.addPage();
+        y = mt;
+      }
 
-    const maxV = Math.max(...barSource.map((x) => x.value), 1);
-    if (barSource.length) {
-      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-      doc.text("Plants in delivery queue by crop (horizontal bars)", ml, y);
-      y += 14;
-      const rowH = 18;
-      const labelW = usableW * 0.32;
-      const barMax = usableW * 0.5;
-      barSource.forEach((row) => {
-        if (y > pageH - doc.page.margins.bottom - 50) {
-          doc.addPage();
-          y = mt;
-        }
-        const frac = row.value / maxV;
-        doc.font("Helvetica").fontSize(8).fillColor("#212529");
-        doc.text(String(row.label).slice(0, 40), ml, y + 4, {
-          width: labelW - 6,
+      doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(12);
+      doc.text(seg.title, ml, y, { width: usableW });
+      y += 18;
+
+      const st = seg.totals;
+      const totalOrders = st.acceptedOrders + st.farmReadyOrders;
+      const totalPlants = st.acceptedPlants + st.farmReadyPlants;
+      const kpiRow = [
+        {
+          label: "Orders in this section",
+          value: String(totalOrders),
+          sub: "ACCEPTED + FARM_READY",
+        },
+        {
+          label: "Plants in this section",
+          value: String(totalPlants),
+          sub: "sum of quantities",
+        },
+      ];
+      const kpiRow2 = [
+        {
+          label: "ACCEPTED",
+          value: `${st.acceptedOrders} ord`,
+          sub: `${st.acceptedPlants} plants`,
+        },
+        {
+          label: "FARM_READY",
+          value: `${st.farmReadyOrders} ord`,
+          sub: `${st.farmReadyPlants} plants`,
+        },
+      ];
+      drawKpi2(kpiRow);
+      y += kpiH + 8;
+      drawKpi2(kpiRow2);
+      y += kpiH + 16;
+
+      const barSource = Object.keys(seg.byPlant || {})
+        .sort((a, b) => a.localeCompare(b))
+        .map((name) => {
+          const b = seg.byPlant[name];
+          const q =
+            (b.accepted?.plantsQty || 0) + (b.farmReady?.plantsQty || 0);
+          return { label: name, value: q };
+        })
+        .filter((x) => x.value > 0)
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 8);
+
+      const maxV = Math.max(...barSource.map((x) => x.value), 1);
+      if (barSource.length) {
+        doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
+        doc.text("Plants by crop (this section)", ml, y);
+        y += 14;
+        const rowH = 18;
+        const labelW = usableW * 0.32;
+        const barMax = usableW * 0.5;
+        barSource.forEach((row) => {
+          if (y > pageH - doc.page.margins.bottom - 50) {
+            doc.addPage();
+            y = mt;
+          }
+          const frac = row.value / maxV;
+          doc.font("Helvetica").fontSize(8).fillColor("#212529");
+          doc.text(String(row.label).slice(0, 40), ml, y + 4, {
+            width: labelW - 6,
+          });
+          doc.save();
+          doc
+            .rect(ml + labelW, y + 2, Math.max(4, barMax * frac), rowH - 6)
+            .fillAndStroke("#e0e7ff", COLORS.kpiBorder);
+          doc.restore();
+          doc
+            .font("Helvetica-Bold")
+            .fontSize(9)
+            .fillColor(COLORS.accent)
+            .text(String(row.value), ml + labelW + barMax + 6, y + 4, {
+              width: 80,
+              align: "right",
+            });
+          y += rowH;
         });
-        doc.save();
+        y += 12;
+      }
+
+      doc.fillColor("#212529").font("Helvetica-Bold").fontSize(11);
+      doc.text("Detail — by plant", ml, y);
+      y += 14;
+
+      const plants = Object.keys(seg.byPlant || {}).sort((a, b) =>
+        a.localeCompare(b)
+      );
+      const col = {
+        plant: ml,
+        ao: ml + usableW * 0.22,
+        ap: ml + usableW * 0.34,
+        fo: ml + usableW * 0.46,
+        fp: ml + usableW * 0.58,
+        tp: ml + usableW * 0.72,
+      };
+      const headerH = 22;
+      doc.save();
+      doc.rect(ml, y, usableW, headerH).fill(COLORS.accent);
+      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
+      doc.text("Plant", col.plant + 4, y + 7, { width: usableW * 0.18 });
+      doc.text("ACC orders", col.ao, y + 7, { width: usableW * 0.11 });
+      doc.text("ACC plants", col.ap, y + 7, { width: usableW * 0.11 });
+      doc.text("FR orders", col.fo, y + 7, { width: usableW * 0.11 });
+      doc.text("FR plants", col.fp, y + 7, { width: usableW * 0.13 });
+      doc.text("Total plants", col.tp, y + 7, {
+        width: usableW * 0.2,
+        align: "right",
+      });
+      doc.restore();
+      y += headerH;
+
+      doc.font("Helvetica").fontSize(8.5).fillColor("#212529");
+      if (!plants.length) {
+        doc.rect(ml, y, usableW, 28).fill("#fff3cd").stroke(COLORS.border);
         doc
-          .rect(ml + labelW, y + 2, Math.max(4, barMax * frac), rowH - 6)
-          .fillAndStroke("#d8f3dc", COLORS.kpiBorder);
-        doc.restore();
-        doc
-          .font("Helvetica-Bold")
-          .fontSize(9)
-          .fillColor(COLORS.accent)
-          .text(String(row.value), ml + labelW + barMax + 6, y + 4, {
-            width: 80,
+          .fillColor("#856404")
+          .text("No rows in this section.", ml + 8, y + 8, {
+            width: usableW - 16,
+          });
+        y += 36;
+      } else {
+        plants.forEach((p, idx) => {
+          if (y > pageH - doc.page.margins.bottom - 40) {
+            doc.addPage();
+            y = mt;
+          }
+          const b = seg.byPlant[p];
+          const rowH = 22;
+          if (idx % 2 === 0) {
+            doc.save();
+            doc.rect(ml, y, usableW, rowH).fill(COLORS.rowAlt);
+            doc.restore();
+          }
+          const totP =
+            (b.accepted?.plantsQty || 0) + (b.farmReady?.plantsQty || 0);
+          doc.fillColor("#212529");
+          doc.text(p.slice(0, 36), col.plant + 4, y + 5, {
+            width: usableW * 0.18,
+          });
+          doc.text(String(b.accepted?.orders ?? 0), col.ao, y + 5, {
+            width: usableW * 0.11,
+          });
+          doc.text(String(b.accepted?.plantsQty ?? 0), col.ap, y + 5, {
+            width: usableW * 0.11,
+          });
+          doc.text(String(b.farmReady?.orders ?? 0), col.fo, y + 5, {
+            width: usableW * 0.11,
+          });
+          doc.text(String(b.farmReady?.plantsQty ?? 0), col.fp, y + 5, {
+            width: usableW * 0.11,
+          });
+          doc.font("Helvetica-Bold").text(String(totP), col.tp, y + 5, {
+            width: usableW * 0.22,
             align: "right",
           });
-        y += rowH;
-      });
-      y += 12;
+          doc.font("Helvetica");
+          y += rowH;
+        });
+      }
+
+      y += 20;
     }
 
     if (paymentSnapshot && paymentSnapshot.totalDue != null) {
@@ -601,7 +712,11 @@ export function generateDeliveryQueuePdf({
         y = mt;
       }
       doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-      doc.text("Payment summary (only orders in ACCEPTED + FARM_READY)", ml, y);
+      doc.text(
+        "Payment summary (orders matching your filter)",
+        ml,
+        y
+      );
       y += 14;
       doc.font("Helvetica").fontSize(9).fillColor("#212529");
       doc.text(
@@ -622,84 +737,10 @@ export function generateDeliveryQueuePdf({
       y += 18;
     }
 
-    doc.fillColor("#212529").font("Helvetica-Bold").fontSize(11);
-    doc.text("Detail — by plant (queue breakdown)", ml, y);
-    y += 14;
-
-    const plants = Object.keys(byPlant).sort((a, b) => a.localeCompare(b));
-    const col = {
-      plant: ml,
-      ao: ml + usableW * 0.22,
-      ap: ml + usableW * 0.34,
-      fo: ml + usableW * 0.46,
-      fp: ml + usableW * 0.58,
-      tp: ml + usableW * 0.72,
-    };
-    const headerH = 22;
-    doc.save();
-    doc.rect(ml, y, usableW, headerH).fill(COLORS.accent);
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
-    doc.text("Plant", col.plant + 4, y + 7, { width: usableW * 0.18 });
-    doc.text("ACC orders", col.ao, y + 7, { width: usableW * 0.11 });
-    doc.text("ACC plants", col.ap, y + 7, { width: usableW * 0.11 });
-    doc.text("FR orders", col.fo, y + 7, { width: usableW * 0.11 });
-    doc.text("FR plants", col.fp, y + 7, { width: usableW * 0.13 });
-    doc.text("Total plants", col.tp, y + 7, {
-      width: usableW * 0.2,
-      align: "right",
-    });
-    doc.restore();
-    y += headerH;
-
-    doc.font("Helvetica").fontSize(8.5).fillColor("#212529");
-    if (!plants.length) {
-      doc.rect(ml, y, usableW, 28).fill("#fff3cd").stroke(COLORS.border);
-      doc.fillColor("#856404").text("No orders in ACCEPTED or FARM_READY right now.", ml + 8, y + 8, {
-        width: usableW - 16,
-      });
-      y += 36;
-    } else {
-      plants.forEach((p, idx) => {
-        if (y > pageH - doc.page.margins.bottom - 40) {
-          doc.addPage();
-          y = mt;
-        }
-        const b = byPlant[p];
-        const rowH = 22;
-        if (idx % 2 === 0) {
-          doc.save();
-          doc.rect(ml, y, usableW, rowH).fill(COLORS.rowAlt);
-          doc.restore();
-        }
-        const totP =
-          (b.accepted?.plantsQty || 0) + (b.farmReady?.plantsQty || 0);
-        doc.fillColor("#212529");
-        doc.text(p.slice(0, 36), col.plant + 4, y + 5, { width: usableW * 0.18 });
-        doc.text(String(b.accepted?.orders ?? 0), col.ao, y + 5, {
-          width: usableW * 0.11,
-        });
-        doc.text(String(b.accepted?.plantsQty ?? 0), col.ap, y + 5, {
-          width: usableW * 0.11,
-        });
-        doc.text(String(b.farmReady?.orders ?? 0), col.fo, y + 5, {
-          width: usableW * 0.11,
-        });
-        doc.text(String(b.farmReady?.plantsQty ?? 0), col.fp, y + 5, {
-          width: usableW * 0.11,
-        });
-        doc.font("Helvetica-Bold").text(String(totP), col.tp, y + 5, {
-          width: usableW * 0.22,
-          align: "right",
-        });
-        doc.font("Helvetica");
-        y += rowH;
-      });
-    }
-
-    y += 14;
+    y += 6;
     doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
     doc.text(
-      `Generated ${new Date().toISOString()} · Live queue · ${reportDateLabel}`,
+      `Generated ${new Date().toISOString()} · Delivery planning · ${reportDateLabel}`,
       ml,
       y,
       { width: usableW, align: "center" }
@@ -958,6 +999,159 @@ export function generateSlotsOutlookPdf({
     doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
     doc.text(
       `Generated ${new Date().toISOString()} · PlantSlot future windows · ${reportDateLabel}`,
+      ml,
+      y,
+      { width: usableW, align: "center" }
+    );
+
+    doc.end();
+  });
+}
+
+/**
+ * Overall order transition insight report.
+ * @param {object} opts
+ * @param {string} opts.reportDateLabel
+ * @param {number} opts.bookedOrders
+ * @param {{ acceptedToDispatched: number, dispatchedToCompleted: number, farmReadyToDispatch: number, acceptedToFarmReady: number }} opts.todayKey
+ * @param {{ _id: string, count: number }[]} opts.currentStatuses
+ * @param {{ _id: { from: string, to: string }, count: number }[]} opts.transitionMatrix
+ */
+export function generateOrderTransitionInsightsPdf({
+  reportDateLabel,
+  bookedOrders = 0,
+  todayKey = {},
+  currentStatuses = [],
+  transitionMatrix = [],
+}) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margin: 36,
+      info: {
+        Title: "Order transition insights",
+        Author: "Nursery Management",
+      },
+    });
+    const chunks = [];
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const pageW = doc.page.width;
+    const ml = doc.page.margins.left;
+    const mr = doc.page.margins.right;
+    const mt = doc.page.margins.top;
+    const usableW = pageW - ml - mr;
+    let y = mt;
+
+    doc.rect(ml, y, usableW, 56).fill(COLORS.headerBar);
+    doc.rect(ml, y + 53, usableW, 3).fill(COLORS.headerAccent);
+    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(21);
+    doc.text("Order Status Transition Insights", ml + 12, y + 12, {
+      width: usableW - 24,
+      align: "center",
+    });
+    doc.font("Helvetica").fontSize(10).opacity(0.9);
+    doc.text(reportDateLabel, ml + 12, y + 34, {
+      width: usableW - 24,
+      align: "center",
+    });
+    doc.opacity(1);
+    y += 66;
+
+    const kpiH = 56;
+    const gap = 10;
+    const kpiW = (usableW - gap * 4) / 5;
+    const kpis = [
+      { label: "Booked orders", value: String(bookedOrders) },
+      {
+        label: "Today ACC→DISP",
+        value: String(todayKey.acceptedToDispatched || 0),
+      },
+      {
+        label: "Today DISP→COMP",
+        value: String(todayKey.dispatchedToCompleted || 0),
+      },
+      {
+        label: "Today FR→DISP",
+        value: String(todayKey.farmReadyToDispatch || 0),
+      },
+      {
+        label: "Today ACC→FR",
+        value: String(todayKey.acceptedToFarmReady || 0),
+      },
+    ];
+    let x = ml;
+    for (const k of kpis) {
+      doc.rect(x, y, kpiW, kpiH).fillAndStroke(COLORS.kpiBg, COLORS.kpiBorder);
+      doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(18);
+      doc.text(k.value, x + 6, y + 10, { width: kpiW - 12, align: "center" });
+      doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
+      doc.text(k.label, x + 6, y + 34, { width: kpiW - 12, align: "center" });
+      x += kpiW + gap;
+    }
+    y += kpiH + 18;
+
+    doc.fillColor(COLORS.accent).font("Helvetica-Bold").fontSize(12);
+    doc.text("Current status mix (for booked orders in selected period)", ml, y);
+    y += 14;
+    doc.font("Helvetica").fontSize(9).fillColor("#212529");
+    for (const row of currentStatuses.slice(0, 10)) {
+      doc.text(`• ${row._id}: ${row.count}`, ml, y, { width: usableW });
+      y += 12;
+    }
+    if (!currentStatuses.length) {
+      doc.text("— no booked orders in selected period.", ml, y, { width: usableW });
+      y += 12;
+    }
+    y += 10;
+
+    doc.fillColor(COLORS.accent).font("Helvetica-Bold").fontSize(12);
+    doc.text("Top status transitions (selected period)", ml, y);
+    y += 14;
+
+    const c1 = ml;
+    const c2 = ml + usableW * 0.4;
+    const c3 = ml + usableW * 0.78;
+    doc.rect(ml, y, usableW, 22).fill(COLORS.accent);
+    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(9);
+    doc.text("Transition", c1 + 6, y + 7, { width: usableW * 0.6 });
+    doc.text("Count", c3, y + 7, { width: usableW * 0.2, align: "right" });
+    y += 22;
+
+    doc.font("Helvetica").fontSize(9).fillColor("#212529");
+    const top = transitionMatrix.slice(0, 16);
+    if (!top.length) {
+      doc.text("— no status transition rows in selected period.", ml + 6, y + 6, {
+        width: usableW - 12,
+      });
+      y += 20;
+    } else {
+      top.forEach((r, i) => {
+        if (i % 2 === 0) {
+          doc.rect(ml, y, usableW, 20).fill(COLORS.rowAlt);
+        }
+        doc.fillColor("#212529");
+        doc.text(`${r._id?.from || "—"} → ${r._id?.to || "—"}`, c1 + 6, y + 6, {
+          width: usableW * 0.6,
+        });
+        doc
+          .font("Helvetica-Bold")
+          .text(String(r.count || 0), c3, y + 6, {
+            width: usableW * 0.2,
+            align: "right",
+          });
+        doc.font("Helvetica");
+        y += 20;
+      });
+    }
+
+    y += 12;
+    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
+    doc.text(
+      `Generated ${new Date().toISOString()} · ${reportDateLabel}`,
       ml,
       y,
       { width: usableW, align: "center" }

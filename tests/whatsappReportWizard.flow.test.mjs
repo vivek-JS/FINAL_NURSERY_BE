@@ -9,8 +9,13 @@ import {
   parseReportTypeChoice,
   parseDateChoice,
   parseCustomRangeText,
+  parseDeliveryWindowChoice,
+  parseDeliveryDueFilterChoice,
 } from "../utility/whatsappReportWizardParsers.js";
-import { extractInboundMessage } from "../utility/watiInboundPayload.js";
+import {
+  extractInboundMessage,
+  extractInboundMessageId,
+} from "../utility/watiInboundPayload.js";
 import { formatPaymentStatsWhatsApp } from "../services/whatsappReportData.service.js";
 import { isPhoneAllowedForReportWizard } from "../utility/whatsappReportWizardAllowlist.js";
 import { normalizeWhatsAppNumberForWati } from "../utility/watiInboundPayload.js";
@@ -36,11 +41,46 @@ test("report wizard allowlist (default numbers)", () => {
 
 test("isReportEntry recognises starter phrases", () => {
   assert.equal(isReportEntry("get report"), true);
+  assert.equal(isReportEntry("Report"), true);
   assert.equal(isReportEntry("nursery report"), true);
   assert.equal(isReportEntry("booking report"), true);
   assert.equal(isReportEntry("delivery report"), true);
   assert.equal(isReportEntry("random hello"), false);
   assert.equal(isReportEntry("x".repeat(101)), false);
+});
+
+test("parseDeliveryWindowChoice — presets", () => {
+  const t = parseDeliveryWindowChoice("1");
+  assert.equal(t.ok, true);
+  assert.ok(t.range?.start instanceof Date);
+  const w7 = parseDeliveryWindowChoice("2");
+  assert.equal(w7.ok, true);
+  assert.ok(w7.range?.start <= w7.range?.end);
+  const w14 = parseDeliveryWindowChoice("3");
+  assert.equal(w14.ok, true);
+  const c = parseDeliveryWindowChoice("4");
+  assert.equal(c.pendingCustom, true);
+});
+
+test("parseDeliveryDueFilterChoice", () => {
+  const a = parseDeliveryDueFilterChoice("1");
+  assert.equal(a.ok, true);
+  assert.equal(a.mode, "due_in_window");
+  const b = parseDeliveryDueFilterChoice("2");
+  assert.equal(b.ok, true);
+  assert.equal(b.mode, "no_due");
+  const c = parseDeliveryDueFilterChoice("3");
+  assert.equal(c.ok, true);
+  assert.equal(c.mode, "both");
+  assert.equal(parseDeliveryDueFilterChoice("maybe").ok, false);
+});
+
+test("extractInboundMessageId", () => {
+  assert.equal(
+    extractInboundMessageId({ whatsappMessageId: "wamid.HBgM..." }),
+    "wamid.HBgM..."
+  );
+  assert.equal(extractInboundMessageId({}), "");
 });
 
 test("guessReportTypeFromText", () => {

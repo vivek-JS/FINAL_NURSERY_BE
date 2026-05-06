@@ -249,12 +249,18 @@ export function chunkWhatsAppText(text, maxLen = 3500) {
 }
 
 /**
- * Delivery pipeline: orders accepted + farm-ready (not yet dispatched), plant-wise qty + counts.
- * Live snapshot — not filtered by the wizard date range (booking-only).
+ * Delivery pipeline with optional Mongo match (AND with ACCEPTED + FARM_READY).
+ * @param {Record<string, unknown>} [extraMatch] - e.g. deliveryDate window or null checks
  */
-export async function fetchDeliveryPipelineByPlant() {
+export async function fetchDeliveryPipelineByPlantWithMatch(extraMatch = {}) {
+  const base = { orderStatus: { $in: ["ACCEPTED", "FARM_READY"] } };
+  const match =
+    extraMatch && Object.keys(extraMatch).length
+      ? { $and: [base, extraMatch] }
+      : base;
+
   const rows = await Order.aggregate([
-    { $match: { orderStatus: { $in: ["ACCEPTED", "FARM_READY"] } } },
+    { $match: match },
     {
       $lookup: {
         from: "plantcms",
@@ -333,18 +339,117 @@ export async function fetchDeliveryPipelineByPlant() {
   };
 }
 
-export function formatDeliveryWhatsApp(data) {
+/**
+ * Full pending queue (no date filter) — same as legacy behaviour.
+ */
+export async function fetchDeliveryPipelineByPlant() {
+  return fetchDeliveryPipelineByPlantWithMatch({});
+}
+
+/**
+ * @param {{ start: Date, end: Date }} range - IST window for “due” rows
+ * @param {'due_in_window'|'no_due'|'both'} mode
+ */
+export async function fetchDeliveryPipelineForWizard(range, mode) {
+  if (mode === "due_in_window") {
+    const data = await fetchDeliveryPipelineByPlantWithMatch({
+      deliveryDate: { $gte: range.start, $lte: range.end },
+    });
+    return {
+      segments: [
+        {
+          title: "With delivery date in window",
+          ...data,
+        },
+      ],
+    };
+  }
+  if (mode === "no_due") {
+    const data = await fetchDeliveryPipelineByPlantWithMatch({
+      $or: [{ deliveryDate: null }, { deliveryDate: { $exists: false } }],
+    });
+    return {
+      segments: [
+        {
+          title: "Without delivery date (not scheduled yet)",
+          ...data,
+        },
+      ],
+    };
+  }
+  if (mode === "both") {
+    const [dueData, noDueData] = await Promise.all([
+      fetchDeliveryPipelineByPlantWithMatch({
+        deliveryDate: { $gte: range.start, $lte: range.end },
+      }),
+      fetchDeliveryPipelineByPlantWithMatch({
+        $or: [{ deliveryDate: null }, { deliveryDate: { $exists: false } }],
+      }),
+    ]);
+    return {
+      segments: [
+        { title: "With delivery date in window", ...dueData },
+        { title: "Without delivery date (not scheduled yet)", ...noDueData },
+      ],
+    };
+  }
+  const data = await fetchDeliveryPipelineByPlant();
+  return { segments: [{ title: "All pending queue", ...data }] };
+}
+
+/**
+ * Payment aggregate scope matching delivery wizard filters.
+ */
+export function buildDeliveryPaymentMatchForWizard(range, mode) {
+  const base = { orderStatus: { $in: ["ACCEPTED", "FARM_READY"] } };
+  if (mode === "due_in_window") {
+    return {
+      ...base,
+      deliveryDate: { $gte: range.start, $lte: range.end },
+    };
+  }
+  if (mode === "no_due") {
+    return {
+      ...base,
+      $or: [{ deliveryDate: null }, { deliveryDate: { $exists: false } }],
+    };
+  }
+  if (mode === "both") {
+    return {
+      ...base,
+      $or: [
+        { deliveryDate: { $gte: range.start, $lte: range.end } },
+        { deliveryDate: null },
+        { deliveryDate: { $exists: false } },
+      ],
+    };
+  }
+  return base;
+}
+
+export function formatDeliveryWhatsApp(data, opts = {}) {
   const { byPlant, totals } = data;
-  const lines = [
-    "🚚 *Delivery queue (pending dispatch)*",
-    "Statuses: *ACCEPTED* (booked, not ready) + *FARM_READY* (ready at farm).",
-    "",
+  const { skipBanner = false } = opts;
+  const lines = [];
+  if (!skipBanner) {
+    lines.push(
+      "🚚 *Delivery queue (pending dispatch)*",
+      "Statuses: *ACCEPTED* (booked, not ready) + *FARM_READY* (ready at farm).",
+      ""
+    );
+  } else {
+    lines.push(
+      "_Statuses: ACCEPTED + FARM_READY (not dispatched)._",
+      ""
+    );
+  }
+  lines.push(
     `Total lines: *${totals.acceptedOrders + totals.farmReadyOrders}* orders | plants: *${totals.acceptedPlants + totals.farmReadyPlants}*`,
     `  • ACCEPTED: ${totals.acceptedOrders} orders, ${totals.acceptedPlants} plants`,
     `  • FARM_READY: ${totals.farmReadyOrders} orders, ${totals.farmReadyPlants} plants`,
     "",
-    "*Plant-wise* (orders / plants):",
-  ];
+    "*Plant-wise* (orders / plants):"
+  );
 
   const plants = Object.keys(byPlant).sort((a, b) => a.localeCompare(b));
   for (const p of plants) {
@@ -449,6 +554,119 @@ export function formatDispatchReportWhatsApp(data) {
   }
   if (!byPlant.length) {
     lines.push("— No matching dispatch/completed orders in this period.");
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Overall order transition insights from Order + statusChanges in the selected IST range.
+ * Includes booking volume for the same range and key today transition counters.
+ * @param {{ start: Date, end: Date }} range
+ */
+export async function fetchOrderTransitionInsights(range) {
+  const bookingMatch = matchOrdersInBookingRangeIST(range);
+  const todayStart = moment().utcOffset(330).startOf("day").toDate();
+  const todayEnd = moment().utcOffset(330).endOf("day").toDate();
+
+  const [bookedOrders, currentStatuses, transitionMatrix, todayPairs] =
+    await Promise.all([
+      Order.countDocuments(bookingMatch),
+      Order.aggregate([
+        { $match: bookingMatch },
+        {
+          $group: {
+            _id: "$orderStatus",
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { count: -1 } },
+      ]),
+      Order.aggregate([
+        { $unwind: "$statusChanges" },
+        {
+          $match: {
+            "statusChanges.createdAt": { $gte: range.start, $lte: range.end },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              from: "$statusChanges.previousStatus",
+              to: "$statusChanges.newStatus",
+            },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { count: -1 } },
+      ]),
+      Order.aggregate([
+        { $unwind: "$statusChanges" },
+        {
+          $match: {
+            "statusChanges.createdAt": { $gte: todayStart, $lte: todayEnd },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              from: "$statusChanges.previousStatus",
+              to: "$statusChanges.newStatus",
+            },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+    ]);
+
+  const findPair = (from, to) =>
+    todayPairs.find((x) => x?._id?.from === from && x?._id?.to === to)?.count ||
+    0;
+
+  return {
+    range,
+    bookedOrders,
+    currentStatuses,
+    transitionMatrix,
+    todayKey: {
+      acceptedToDispatched: findPair("ACCEPTED", "DISPATCHED"),
+      dispatchedToCompleted: findPair("DISPATCHED", "COMPLETED"),
+      farmReadyToDispatch: findPair("FARM_READY", "DISPATCHED"),
+      acceptedToFarmReady: findPair("ACCEPTED", "FARM_READY"),
+    },
+  };
+}
+
+export function formatOrderTransitionInsightsWhatsApp(data) {
+  const label = `${moment(data.range.start)
+    .utcOffset(330)
+    .format("YYYY-MM-DD")} → ${moment(data.range.end)
+    .utcOffset(330)
+    .format("YYYY-MM-DD")} (IST)`;
+  const lines = [
+    "📈 *Order transitions overview*",
+    `Period: _${label}_`,
+    `Booked orders in period: *${data.bookedOrders}*`,
+    "",
+    "*Today — key transitions:*",
+    `• ACCEPTED → DISPATCHED: *${data.todayKey.acceptedToDispatched}*`,
+    `• DISPATCHED → COMPLETED: *${data.todayKey.dispatchedToCompleted}*`,
+    `• FARM_READY → DISPATCHED: *${data.todayKey.farmReadyToDispatch}*`,
+    `• ACCEPTED → FARM_READY: *${data.todayKey.acceptedToFarmReady}*`,
+    "",
+    "*Current status mix (orders booked in selected period):*",
+  ];
+  for (const r of (data.currentStatuses || []).slice(0, 8)) {
+    lines.push(`• ${r._id}: *${r.count}*`);
+  }
+  if (!data.currentStatuses?.length) {
+    lines.push("— no booked orders in selected period.");
+  }
+  lines.push("", "*Top status transitions in selected period:*");
+  for (const r of (data.transitionMatrix || []).slice(0, 10)) {
+    lines.push(`• ${r._id?.from} → ${r._id?.to}: *${r.count}*`);
+  }
+  if (!data.transitionMatrix?.length) {
+    lines.push("— no status change rows in selected period.");
   }
   return lines.join("\n");
 }

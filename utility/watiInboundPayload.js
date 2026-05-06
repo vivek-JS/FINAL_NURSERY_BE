@@ -35,6 +35,32 @@ export function extractInboundMessage(body) {
   };
 }
 
+/**
+ * Best-effort WATI / Meta message id for deduping duplicate webhook deliveries.
+ */
+export function extractInboundMessageId(body) {
+  const b = body || {};
+  const candidates = [
+    b.whatsappMessageId,
+    b.messageId,
+    b.id,
+    b.localMessageId,
+    b.data?.whatsappMessageId,
+    b.data?.id,
+    b.data?.messageId,
+    b.whatsappMessage?.id,
+    b.event?.message?.id,
+    b.payload?.id,
+    b.message?.id,
+  ];
+  for (const c of candidates) {
+    if (c != null && String(c).trim()) {
+      return String(c).trim();
+    }
+  }
+  return "";
+}
+
 /** E.164-style digits for WATI sendSessionFileMessage / sendSessionMessage */
 export function normalizeWhatsAppNumberForWati(waId) {
   const digits = String(waId || "").replace(/\D/g, "");
