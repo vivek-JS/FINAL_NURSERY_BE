@@ -1899,6 +1899,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
             $push: {
               _id: "$orderDetails._id",
               order: "$orderDetails.orderId",
+              deliveryChallanInvoiceNumber: "$orderDetails.deliveryChallanInvoiceNumber",
               quantity: "$orderDetails.numberOfPlants",
               remainingPlants: "$orderDetails.remainingPlants",
               deliveryDate: "$orderDetails.deliveryDate", // Delivery date from order

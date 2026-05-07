@@ -56,6 +56,61 @@ const isRamAgriLoadAdmin = (user) => {
   );
 };
 
+const isRamAgriSalesRep = (user) => {
+  const jt = String(user?.jobTitle || "").toUpperCase().trim();
+  const role = String(user?.role || "").toUpperCase().trim();
+  return jt === "RAM_AGRI_SALES" || role === "RAM_AGRI_SALES" || jt === "SALES" || role === "SALES";
+};
+
+const isEligibleAgriSalesPerson = (userLike) => {
+  const jt = String(userLike?.jobTitle || "").toUpperCase().trim();
+  const role = String(userLike?.role || "").toUpperCase().trim();
+  return jt === "RAM_AGRI_SALES" || role === "RAM_AGRI_SALES" || jt === "SALES" || role === "SALES";
+};
+
+/** Field rep → always self; others → body.salesPerson must be RAM_AGRI_SALES or SALES user. */
+const resolveAgriOrderSalesPersonId = async (req, bodySalesPerson) => {
+  const user = req.user;
+  const userId = user?._id || user?.id;
+  if (!userId) {
+    throw new AppError("User authentication required", 401);
+  }
+  if (isRamAgriSalesRep(user)) {
+    return userId;
+  }
+  const spRaw = bodySalesPerson;
+  if (!spRaw || !mongoose.isValidObjectId(spRaw)) {
+    throw new AppError("Sales person is required", 400);
+  }
+  const spUser = await User.findById(spRaw).select("jobTitle role");
+  if (!spUser) {
+    throw new AppError("Sales person not found", 404);
+  }
+  const spJt = String(spUser.jobTitle || "").toUpperCase().trim();
+  const spRole = String(spUser.role || "").toUpperCase().trim();
+  if (!isEligibleAgriSalesPerson({ jobTitle: spJt, role: spRole })) {
+    throw new AppError("Selected user must be Ram Agri sales or Sales", 400);
+  }
+  return spRaw;
+};
+
+const normalizeAgriOrderSalesPerson = (orderDoc) => {
+  if (!orderDoc) return orderDoc;
+  const order = typeof orderDoc.toObject === "function" ? orderDoc.toObject() : { ...orderDoc };
+  if (!Object.prototype.hasOwnProperty.call(order, "salesPerson")) {
+    order.salesPerson = null;
+  }
+  if (
+    !order.salesPerson &&
+    order.createdBy &&
+    typeof order.createdBy === "object" &&
+    ["RAM_AGRI_SALES", "SALES"].includes(String(order.createdBy.jobTitle || order.createdBy.role || "").toUpperCase())
+  ) {
+    order.salesPerson = order.createdBy;
+  }
+  return order;
+};
+
 // ==================== CREATE AGRI SALES ORDER ====================
 
 const createAgriSalesOrder = catchAsync(async (req, res, next) => {
@@ -84,6 +139,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     notes,
     payment,
     screenshots,
+    salesPerson: salesPersonBody,
   } = req.body;
 
   // Validate required fields
@@ -219,6 +275,8 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     return next(new AppError("User authentication required. Please login to create orders.", 401));
   }
 
+  const salesPersonId = await resolveAgriOrderSalesPersonId(req, salesPersonBody);
+
   // Create order with proper user tracking
   const orderData = {
     customerName: customerName.trim(),
@@ -238,6 +296,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     payment: processedPayments,
     screenshots: screenshots || [],
     createdBy: userId, // Track which employee created this order
+    salesPerson: salesPersonId,
     orderStatus: "ACCEPTED",
     acceptedBy: userId,
     acceptedAt: new Date(),
@@ -406,6 +465,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     await order.populate("secondaryUnit");
   }
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
 
   const response = generateResponse(
     "Success",
@@ -425,6 +485,7 @@ const createLinkedAgriOrderFromNurseryOrder = catchAsync(async (req, res, next) 
     quantity,
     rate,
     notes,
+    salesPerson: linkedSalesPersonBody,
   } = req.body;
 
   if (!mongoose.isValidObjectId(linkedNurseryOrderId)) {
@@ -466,6 +527,8 @@ const createLinkedAgriOrderFromNurseryOrder = catchAsync(async (req, res, next) 
   const userId = req.user?._id || req.user?.id;
   if (!userId) return next(new AppError("User authentication required", 401));
 
+  const salesPersonId = await resolveAgriOrderSalesPersonId(req, linkedSalesPersonBody);
+
   const totalAmount = numericQuantity * resolvedRate;
   const linkedOrderCode = String(nurseryOrder.orderId || nurseryOrder._id);
 
@@ -492,6 +555,7 @@ const createLinkedAgriOrderFromNurseryOrder = catchAsync(async (req, res, next) 
     deliveryDate: nurseryOrder.deliveryDate || null,
     notes: notes || "",
     createdBy: userId,
+    salesPerson: salesPersonId,
     orderStatus: "ACCEPTED",
     acceptedBy: userId,
     acceptedAt: new Date(),
@@ -513,6 +577,9 @@ const createLinkedAgriOrderFromNurseryOrder = catchAsync(async (req, res, next) 
     },
   });
   await order.save();
+
+  await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
 
   await createCustomerLedgerEntry({
     customerMobile: order.customerMobile,
@@ -752,6 +819,7 @@ const acceptAgriSalesOrder = catchAsync(async (req, res, next) => {
     await order.populate("secondaryUnit");
   }
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
   await order.populate("acceptedBy");
 
   const response = generateResponse(
@@ -866,6 +934,7 @@ const rejectAgriSalesOrder = catchAsync(async (req, res, next) => {
     await order.populate("secondaryUnit");
   }
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
 
   const response = generateResponse(
     "Success",
@@ -955,6 +1024,7 @@ const cancelAgriSalesOrder = catchAsync(async (req, res, next) => {
   // Populate fields
   await order.populate("productId");
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
   await order.populate("acceptedBy");
 
   const response = generateResponse(
@@ -982,6 +1052,7 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
     productId,
     customerMobile,
     createdBy, // Filter by employee who created the order
+    salesPerson, // Filter by attributed Ram Agri sales rep
     startDate,
     endDate,
     myOrders, // Boolean: if true, show only orders created by current user
@@ -1003,6 +1074,10 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
   // Filter by specific createdBy (employee ID) - for admin/manager view
   if (createdBy && mongoose.isValidObjectId(createdBy)) {
     query = query.where("createdBy").equals(createdBy);
+  }
+
+  if (salesPerson && mongoose.isValidObjectId(salesPerson)) {
+    query = query.where("salesPerson").equals(salesPerson);
   }
 
   // Search by customer name, mobile, or order number
@@ -1084,16 +1159,18 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
   query = query
     .populate("productId")
     .populate("createdBy")
+    .populate("salesPerson", "name phoneNumber jobTitle")
     .populate("acceptedBy")
     .populate("dispatchedBy")
     .populate("vehicleId")
     .populate("assignedTo", "name phoneNumber jobTitle")
     .populate("assignedBy", "name phoneNumber");
 
-  const [orders, total] = await Promise.all([
+  const [ordersRaw, total] = await Promise.all([
     query.exec(),
     AgriSalesOrder.countDocuments(query.getFilter()),
   ]);
+  const orders = (ordersRaw || []).map(normalizeAgriOrderSalesPerson);
 
   const response = generateResponse(
     "Success",
@@ -1257,6 +1334,7 @@ const getAgriSalesOrderById = catchAsync(async (req, res, next) => {
   const order = await AgriSalesOrder.findById(id)
     .populate("productId")
     .populate("createdBy")
+    .populate("salesPerson", "name phoneNumber jobTitle")
     .populate("acceptedBy")
     .populate("dispatchedBy")
     .populate("vehicleId");
@@ -1265,10 +1343,11 @@ const getAgriSalesOrderById = catchAsync(async (req, res, next) => {
     return next(new AppError("Order not found", 404));
   }
 
+  const normalizedOrder = normalizeAgriOrderSalesPerson(order);
   const response = generateResponse(
     "Success",
     "Agri Sales Order fetched successfully",
-    order,
+    normalizedOrder,
     undefined
   );
 
@@ -1379,6 +1458,7 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
   // Populate fields
   await order.populate("productId");
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
   await order.populate("acceptedBy");
 
   const response = generateResponse(
@@ -1590,6 +1670,7 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
   // Populate fields
   await order.populate("productId");
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
   await order.populate("acceptedBy");
 
   const response = generateResponse(
@@ -1957,6 +2038,7 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
   // Populate references
   await order.populate("productId");
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
   await order.populate("acceptedBy");
 
   const response = generateResponse(
@@ -2591,6 +2673,7 @@ const assignOrdersToSalesPerson = catchAsync(async (req, res, next) => {
   await AgriSalesOrder.populate(updatedOrders, [
     { path: "productId" },
     { path: "createdBy" },
+    { path: "salesPerson", select: "name phoneNumber jobTitle" },
     { path: "assignedTo", select: "name phoneNumber jobTitle" },
     { path: "assignedBy", select: "name phoneNumber" },
   ]);
@@ -2667,6 +2750,7 @@ const getAssignedOrders = catchAsync(async (req, res, next) => {
     AgriSalesOrder.find(query)
       .populate("productId")
       .populate("createdBy", "name phoneNumber")
+      .populate("salesPerson", "name phoneNumber jobTitle")
       .populate("assignedTo", "name phoneNumber jobTitle")
       .populate("assignedBy", "name phoneNumber")
       .populate("ramAgriCropId")
@@ -2784,6 +2868,7 @@ const cancelAssignment = catchAsync(async (req, res, next) => {
   // Populate fields
   await order.populate("productId");
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
 
   const response = generateResponse(
     "Success",
@@ -3258,6 +3343,7 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
   await AgriSalesOrder.populate(updatedOrders, [
     { path: "productId" },
     { path: "createdBy" },
+    { path: "salesPerson", select: "name phoneNumber jobTitle" },
     { path: "dispatchedBy" },
     { path: "vehicleId" },
   ]);
@@ -3359,6 +3445,7 @@ const updateDispatchStatus = catchAsync(async (req, res, next) => {
   // Populate fields
   await order.populate("productId");
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
   await order.populate("dispatchedBy");
   await order.populate("vehicleId");
 
@@ -3938,6 +4025,7 @@ const completeOrders = catchAsync(async (req, res, next) => {
   await AgriSalesOrder.populate(updatedOrders, [
     { path: "productId" },
     { path: "createdBy" },
+    { path: "salesPerson", select: "name phoneNumber jobTitle" },
     { path: "dispatchedBy" },
     { path: "completedBy" },
     { path: "vehicleId" },
@@ -4194,6 +4282,7 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
   // Populate fields for response
   await order.populate("productId");
   await order.populate("createdBy");
+  await order.populate("salesPerson", "name phoneNumber jobTitle");
   await order.populate("dispatchedBy");
   await order.populate("assignedTo");
   await order.populate("salesReturnedBy");
@@ -4287,7 +4376,10 @@ const getOrdersForDispatch = catchAsync(async (req, res, next) => {
   query = query.skip(skip).limit(parseInt(limit));
 
   // Populate references
-  query = query.populate("productId").populate("createdBy");
+  query = query
+    .populate("productId")
+    .populate("createdBy")
+    .populate("salesPerson", "name phoneNumber jobTitle");
 
   const [orders, total] = await Promise.all([
     query.exec(),
@@ -4377,6 +4469,7 @@ const getDispatchedOrders = catchAsync(async (req, res, next) => {
   query = query
     .populate("productId")
     .populate("createdBy")
+    .populate("salesPerson", "name phoneNumber jobTitle")
     .populate("dispatchedBy")
     .populate("vehicleId");
 

@@ -585,7 +585,7 @@ function mergeDashboardTabQuery(base, tab, queueFarmReadyOnly) {
     tab === "accepted" ||
     isCancelledTab;
   const isReadyForDispatchTab = tab === "ready_for_dispatch";
-  const isDispatchedVehicleTab = tab === "dispatched_vehicle";
+  const isCompletedTab = tab === "completed";
 
   q.dispatched = isBookingLikeTab ? "false" : "true";
 
@@ -623,11 +623,9 @@ function mergeDashboardTabQuery(base, tab, queueFarmReadyOnly) {
     q.dispatched = "false";
   }
 
-  if (isDispatchedVehicleTab) {
+  if (isCompletedTab) {
     q.dispatched = "true";
-    q.status = "DISPATCHED";
-    delete q.startDate;
-    delete q.endDate;
+    q.status = "COMPLETED,PARTIALLY_COMPLETED";
   }
 
   Object.keys(q).forEach((k) => {
@@ -675,7 +673,7 @@ const getFarmerOrdersDashboardTabCounts = catchAsync(async (req, res, next) => {
     "cancelled",
     "farmready",
     "ready_for_dispatch",
-    "dispatched_vehicle",
+    "completed",
   ];
 
   const counts = {};
@@ -1891,6 +1889,7 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
           returnReason: 1,
           returnHistory: 1,
           dispatchHistory: 1,
+          deliveryChallanInvoiceNumber: 1,
           orderId: 1,
           rate: 1,
           farmReadyDate: 1,

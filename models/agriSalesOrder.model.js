@@ -342,6 +342,11 @@ const agriSalesOrderSchema = new Schema(
       ref: "User",
       required: true,
     },
+    /** Attributed Ram Agri sales rep (may differ from createdBy when office/manager books for field). */
+    salesPerson: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
     // Employee who accepted the order (for stock deduction)
     acceptedBy: {
       type: Schema.Types.ObjectId,
@@ -558,6 +563,7 @@ agriSalesOrderSchema.index({ customerMobile: 1 }); // For customer lookup
 agriSalesOrderSchema.index({ productId: 1 }); // For product-based queries
 agriSalesOrderSchema.index({ orderStatus: 1 }); // For status filtering
 agriSalesOrderSchema.index({ createdBy: 1 }); // For user-wise filtering (employee who created)
+agriSalesOrderSchema.index({ salesPerson: 1 }); // Attributed Ram Agri sales rep
 agriSalesOrderSchema.index({ acceptedBy: 1 }); // For user who accepted
 agriSalesOrderSchema.index({ orderDate: -1 }); // For date-based sorting
 agriSalesOrderSchema.index({ paymentStatus: 1 }); // For payment filtering

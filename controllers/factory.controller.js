@@ -3898,6 +3898,8 @@ const getAll = (Model, modelName) =>
           returnReason: 1, // Return reason field
           returnHistory: 1, // Return history field
           currentDispatchId: 1, // Reference to current dispatch
+          /** Manual / legacy DC label; also used when challan PDF should match edited number */
+          deliveryChallanInvoiceNumber: 1,
           orderId: 1,
           rate: 1,
           farmReadyDate: 1,
@@ -4155,6 +4157,7 @@ const getAll = (Model, modelName) =>
                 dispatchId: "$$dispatchEntry.dispatchId",
                 driverName: "$$dispatchEntry.driverName",
                 vehicleName: "$$dispatchEntry.vehicleName",
+                invoiceNumber: "$$dispatchEntry.invoiceNumber",
                 dispatch: {
                   $let: {
                     vars: {
