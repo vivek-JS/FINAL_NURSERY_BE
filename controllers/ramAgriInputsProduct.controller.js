@@ -30,6 +30,12 @@ const parseDisplayOrder = (value) => {
   return Math.floor(n);
 };
 
+const isSuperAdminUser = (user) => {
+  const role = String(user?.role || '').toUpperCase().trim();
+  const jobTitle = String(user?.jobTitle || '').toUpperCase().trim();
+  return role === 'SUPER_ADMIN' || role === 'SUPERADMIN' || jobTitle === 'SUPER_ADMIN' || jobTitle === 'SUPERADMIN';
+};
+
 function sortVarietiesByDisplayOrder(varieties) {
   if (!Array.isArray(varieties) || varieties.length <= 1) return;
   varieties.sort((a, b) => {
@@ -266,7 +272,7 @@ export const updateCrop = catchAsync(async (req, res, next) => {
   if (parsedOrder !== undefined) crop.displayOrder = parsedOrder;
 
   crop.updatedBy = req.user._id;
-  await crop.save();
+  await crop.save({ validateModifiedOnly: true });
 
   sortVarietiesByDisplayOrder(crop.varieties);
 
@@ -482,6 +488,7 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     purchasePrice,
     isActive,
     displayOrder,
+    currentStock,
   } = req.body;
 
   if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(varietyId)) {
@@ -500,6 +507,92 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     return next(new AppError('Variety not found', 404));
   }
 
+  const hasCurrentStockInBody = Object.prototype.hasOwnProperty.call(req.body, 'currentStock');
+  const isStockOnlyUpdate =
+    hasCurrentStockInBody &&
+    Object.keys(req.body).every((k) => k === 'currentStock');
+
+  if (isStockOnlyUpdate) {
+    if (!isSuperAdminUser(req.user)) {
+      return next(new AppError('Only SUPER_ADMIN can directly update stock', 403));
+    }
+
+    const parsedStock = Number(currentStock);
+    if (!Number.isFinite(parsedStock) || parsedStock < 0) {
+      return next(new AppError('currentStock must be a non-negative number', 400));
+    }
+
+    const oldAveragePrice = Number(variety.averagePrice || 0);
+    const fallbackPrice = Number(variety.purchasePrice || variety.defaultRate || 0);
+    const effectiveAveragePrice =
+      oldAveragePrice > 0 ? oldAveragePrice : fallbackPrice > 0 ? fallbackPrice : 0;
+    const nextAveragePrice =
+      parsedStock > 0 && effectiveAveragePrice > 0
+        ? effectiveAveragePrice
+        : oldAveragePrice > 0
+          ? oldAveragePrice
+          : effectiveAveragePrice;
+    const nextStockValue =
+      parsedStock === 0
+        ? 0
+        : Number((parsedStock * Number(nextAveragePrice || 0)).toFixed(2));
+
+    await RamAgriInputsProduct.findOneAndUpdate(
+      { _id: id, 'varieties._id': varietyId },
+      {
+        $set: {
+          'varieties.$.currentStock': parsedStock,
+          'varieties.$.stockValue': nextStockValue,
+          'varieties.$.averagePrice': Number(nextAveragePrice || 0),
+          updatedBy: req.user._id,
+        },
+      },
+      { new: true, runValidators: false }
+    );
+
+    const changes = generateChangesArray(
+      {
+        currentStock: variety.currentStock,
+        stockValue: variety.stockValue,
+        averagePrice: variety.averagePrice,
+      },
+      {
+        currentStock: parsedStock,
+        stockValue: nextStockValue,
+        averagePrice: Number(nextAveragePrice || 0),
+      }
+    );
+    if (changes.length > 0) {
+      await createChangeLog({
+        entityType: 'variety',
+        entityId: variety._id,
+        action: 'update',
+        changedBy: req.user._id,
+        changes,
+        metadata: { cropId: crop._id, cropName: crop.cropName },
+        description: `Stock updated for variety "${variety.name}" in crop "${crop.cropName}"`,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      });
+    }
+
+    const refreshedCrop = await RamAgriInputsProduct.findById(id)
+      .populate('createdBy', 'name email')
+      .populate('updatedBy', 'name email')
+      .populate('varieties.primaryUnit', 'name abbreviation type')
+      .populate('varieties.secondaryUnit', 'name abbreviation type');
+
+    sortVarietiesByDisplayOrder(refreshedCrop?.varieties);
+
+    const response = generateResponse(
+      'Success',
+      'Variety stock updated successfully',
+      refreshedCrop,
+      undefined
+    );
+    return res.status(200).json(response);
+  }
+
   // Store old values for change log
   const oldData = {
     name: variety.name,
@@ -513,6 +606,9 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     points: variety.points,
     dealerPoints: variety.dealerPoints,
     purchasePrice: variety.purchasePrice,
+    currentStock: variety.currentStock,
+    stockValue: variety.stockValue,
+    averagePrice: variety.averagePrice,
     isActive: variety.isActive,
     displayOrder: variety.displayOrder,
   };
@@ -598,6 +694,36 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     variety.purchasePrice = undefined;
   }
 
+  if (currentStock !== undefined) {
+    if (!isSuperAdminUser(req.user)) {
+      return next(new AppError('Only SUPER_ADMIN can directly update stock', 403));
+    }
+
+    const parsedStock = Number(currentStock);
+    if (!Number.isFinite(parsedStock) || parsedStock < 0) {
+      return next(new AppError('currentStock must be a non-negative number', 400));
+    }
+
+    const oldAveragePrice = Number(variety.averagePrice || 0);
+    const fallbackPrice = Number(variety.purchasePrice || variety.defaultRate || 0);
+    const effectiveAveragePrice =
+      oldAveragePrice > 0 ? oldAveragePrice : fallbackPrice > 0 ? fallbackPrice : 0;
+
+    variety.currentStock = parsedStock;
+    if (parsedStock === 0) {
+      variety.stockValue = 0;
+      if (oldAveragePrice <= 0 && effectiveAveragePrice > 0) {
+        variety.averagePrice = effectiveAveragePrice;
+      }
+    } else {
+      if (effectiveAveragePrice > 0) {
+        variety.averagePrice = effectiveAveragePrice;
+      }
+      const unitPriceForValue = Number(variety.averagePrice || effectiveAveragePrice || 0);
+      variety.stockValue = Number((parsedStock * unitPriceForValue).toFixed(2));
+    }
+  }
+
   if (displayOrder !== undefined) {
     const parsedV = parseDisplayOrder(displayOrder);
     if (parsedV === null) {
@@ -607,7 +733,7 @@ export const updateVariety = catchAsync(async (req, res, next) => {
   }
 
   crop.updatedBy = req.user._id;
-  await crop.save();
+  await crop.save({ validateModifiedOnly: true });
 
   sortVarietiesByDisplayOrder(crop.varieties);
 
@@ -624,6 +750,9 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     points: variety.points,
     dealerPoints: variety.dealerPoints,
     purchasePrice: variety.purchasePrice,
+    currentStock: variety.currentStock,
+    stockValue: variety.stockValue,
+    averagePrice: variety.averagePrice,
     isActive: variety.isActive,
     displayOrder: variety.displayOrder,
   };

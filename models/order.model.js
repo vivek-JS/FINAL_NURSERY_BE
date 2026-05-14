@@ -682,6 +682,14 @@ const orderSchema = new Schema(
       type: String,
       trim: true,
     },
+    /**
+     * Immutable system DC (plant+subtype scoped sequence). Set once when the order
+     * first reaches fully DISPATCHED (remainingPlants === 0). Not user-editable.
+     */
+    officialDeliveryChallanNumber: {
+      type: String,
+      trim: true,
+    },
     // Reference field - reference to user/employee
     reference: {
       type: Schema.Types.ObjectId,
@@ -785,6 +793,10 @@ orderSchema.index({ remainingPlants: 1 }); // Added index for remainingPlants
 orderSchema.index({ additionalPlants: 1 }); // Added index for additionalPlants
 orderSchema.index({ totalPlants: 1 }); // Added index for totalPlants
 orderSchema.index({ publicOrderCode: 1 }, { unique: true, sparse: true });
+orderSchema.index(
+  { officialDeliveryChallanNumber: 1 },
+  { unique: true, sparse: true }
+);
 // List/getOrders: date filters + sort (early pagination uses these fields heavily)
 orderSchema.index({ orderBookingDate: -1 });
 orderSchema.index({ deliveryDate: -1 });

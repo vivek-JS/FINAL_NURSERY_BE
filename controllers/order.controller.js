@@ -1890,6 +1890,7 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
           returnHistory: 1,
           dispatchHistory: 1,
           deliveryChallanInvoiceNumber: 1,
+          officialDeliveryChallanNumber: 1,
           orderId: 1,
           rate: 1,
           farmReadyDate: 1,
@@ -2293,6 +2294,16 @@ const getAllPayments = catchAsync(async (req, res, next) => {
       }
     );
 
+    // Lookup current dispatch for vehicle/driver details
+    pipeline.push({
+      $lookup: {
+        from: "dispatches",
+        localField: "currentDispatchId",
+        foreignField: "_id",
+        as: "_dispatch",
+      },
+    });
+
     // Project payment-focused fields
     pipeline.push({
       $project: {
@@ -2353,6 +2364,13 @@ const getAllPayments = catchAsync(async (req, res, next) => {
         createdAt: 1,
         updatedAt: 1,
         dealerOrder: 1,
+        currentDispatchId: 1,
+        dispatch: {
+          vehicleName:   { $arrayElemAt: ["$_dispatch.vehicleName", 0] },
+          vehicleNumber: { $arrayElemAt: ["$_dispatch.vehicleNumber", 0] },
+          driverName:    { $arrayElemAt: ["$_dispatch.driverName", 0] },
+          driverMobile:  { $arrayElemAt: ["$_dispatch.driverMobile", 0] },
+        },
       },
     });
 

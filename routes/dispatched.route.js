@@ -5,6 +5,7 @@ import {
   addOrderToDispatch,
   getDispatches,
   getDispatch,
+  regenerateDispatchPdfs,
   removeTransport,
   handleDispatchReturns,
   assignRoute,
@@ -16,6 +17,9 @@ const router = express.Router();
 
 // GET all dispatches
 router.get("/", getDispatches);
+
+// POST generate PDFs (before GET /:id so "generate-pdfs" is never captured as :id)
+router.post("/:id/generate-pdfs", regenerateDispatchPdfs);
 
 // GET single dispatch
 router.get("/:id", getDispatch);

@@ -32,6 +32,7 @@ import {
   roundMoney,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
+import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
 import {
   getOrderUpdateUserContext,
   DISPATCH_MANAGER_ALLOWED_STATUSES,
@@ -796,11 +797,19 @@ const createOne = (Model, modelName) =>
         
         orderDocument.orderStatus = resolvedOrderStatus;
 
-        // Instant sale / walk-away dispatch: reserve DC invoice number immediately (same sequence as vehicle dispatch).
+        // Instant sale / walk-away dispatch: immutable plant+subtype official DC when fully DISPATCHED at create.
         if (resolvedOrderStatus === "DISPATCHED") {
-          const [instantInv] = await allocateNextInvoiceNumbers(session, 1);
-          if (instantInv) {
-            orderDocument.deliveryChallanInvoiceNumber = instantInv;
+          const official = await ensureOfficialDeliveryChallanForOrder(
+            orderDocument,
+            session
+          );
+          if (official) {
+            orderDocument.officialDeliveryChallanNumber = official;
+          } else {
+            const [instantInv] = await allocateNextInvoiceNumbers(session, 1);
+            if (instantInv) {
+              orderDocument.deliveryChallanInvoiceNumber = instantInv;
+            }
           }
         }
 
@@ -1151,6 +1160,17 @@ const createOne = (Model, modelName) =>
           })();
         }
 
+        if (modelName === "Order" && order[0]) {
+          (async () => {
+            try {
+              const { sendOrderPlacedAlert } = await import("../services/whatsappAlertService.js");
+              await sendOrderPlacedAlert(order[0]);
+            } catch (e) {
+              console.error("whatsapp-alert (order create):", e?.message || e);
+            }
+          })();
+        }
+
         const response = generateResponse(
           "Success",
           `${modelName} created successfully with ${paymentArray.length} payment(s)`,
@@ -1243,6 +1263,15 @@ const updateOne = (Model, modelName, allowedFields) =>
 
       /** Fields requested but not applied (permissions); returned on success for client visibility */
       const rejectedFields = [];
+
+      if (Object.prototype.hasOwnProperty.call(req.body, "officialDeliveryChallanNumber")) {
+        rejectedFields.push({
+          field: "officialDeliveryChallanNumber",
+          reason: "NOT_EDITABLE",
+          detail: "Official delivery challan number is system-generated and cannot be set via API.",
+          value: req.body.officialDeliveryChallanNumber,
+        });
+      }
 
       const terminalOrderMetaLock = new Set([
         "COMPLETED",
@@ -1867,8 +1896,8 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
-      // Delivery challan invoice label (legacy backfill or correction). Same roles as core order edits.
-      // If dispatch legs already store sequenced invoice numbers, only SUPER_ADMIN / OFFICE_ADMIN may change this field.
+      // Optional manual DC label (`deliveryChallanInvoiceNumber`). May coexist with system
+      // `officialDeliveryChallanNumber`; challan display order is official → manual → history leg.
       if (filteredBody.deliveryChallanInvoiceNumber !== undefined) {
         if (!canEditOrderCore) {
           rejectedFields.push({
@@ -1890,29 +1919,15 @@ const updateOne = (Model, modelName, allowedFields) =>
             prevRaw === null || prevRaw === undefined || prevRaw === ""
               ? null
               : String(prevRaw).trim() || null;
-          const hist = Array.isArray(existingDoc.dispatchHistory)
-            ? existingDoc.dispatchHistory
-            : [];
-          const hasLegInvoice = hist.some(
-            (h) => h?.invoiceNumber && String(h.invoiceNumber).trim() !== ""
-          );
-          if (hasLegInvoice && !canChangeOrderStatusFull) {
-            rejectedFields.push({
-              field: "deliveryChallanInvoiceNumber",
-              reason: "DISPATCH_INVOICE_LOCKED",
-              detail:
-                "DC label cannot be changed when dispatch legs already have invoice numbers (SUPER_ADMIN / OFFICE_ADMIN may override).",
-              value: filteredBody.deliveryChallanInvoiceNumber,
-            });
-            delete filteredBody.deliveryChallanInvoiceNumber;
-          } else if (normalized === prev) {
-            delete filteredBody.deliveryChallanInvoiceNumber;
-          } else {
-            filteredBody.deliveryChallanInvoiceNumber = normalized;
+          // Always keep normalized in $set when the client sent this field. Dropping it on
+          // "no-op" made PATCH look successful while Mongo applied only $inc __v (no $set),
+          // which breaks expectations and PDFs if any path was out of sync with `prev`.
+          filteredBody.deliveryChallanInvoiceNumber = normalized;
+          if (normalized !== prev) {
             editHistoryEntries.push({
               field: "deliveryChallanInvoiceNumber",
               previousValue: prev,
-              newValue: normalized,
+              newValue: normalized === null ? "" : normalized,
               changedBy: req.user ? req.user._id : null,
               notes: `Delivery challan invoice label changed from ${prev ?? "—"} to ${
                 normalized ?? "—"
@@ -2510,6 +2525,30 @@ const updateOne = (Model, modelName, allowedFields) =>
             }
           })();
         }
+      }
+
+      if (modelName === "Order" && updatedDoc) {
+        (async () => {
+          try {
+            const {
+              sendOrderEditedAlert,
+              sendOrderDispatchedAlert,
+            } = await import("../services/whatsappAlertService.js");
+            const plain = updatedDoc?.toObject ? updatedDoc.toObject() : updatedDoc;
+            await sendOrderEditedAlert(plain, req.user?.name || req.user?.email || "Unknown");
+
+            const prevStatus = String(existingDoc?.orderStatus || "").toUpperCase();
+            const nextStatus = String(plain?.orderStatus || "").toUpperCase();
+            if (prevStatus !== "DISPATCHED" && nextStatus === "DISPATCHED") {
+              await sendOrderDispatchedAlert(
+                plain,
+                req.user?.name || req.user?.email || "Unknown"
+              );
+            }
+          } catch (e) {
+            console.error("whatsapp-alert (order update):", e?.message || e);
+          }
+        })();
       }
 
       const responseDoc =
@@ -3900,6 +3939,8 @@ const getAll = (Model, modelName) =>
           currentDispatchId: 1, // Reference to current dispatch
           /** Manual / legacy DC label; also used when challan PDF should match edited number */
           deliveryChallanInvoiceNumber: 1,
+          /** Immutable plant+subtype system DC when fully DISPATCHED */
+          officialDeliveryChallanNumber: 1,
           orderId: 1,
           rate: 1,
           farmReadyDate: 1,

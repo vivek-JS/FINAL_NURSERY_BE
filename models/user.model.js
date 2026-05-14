@@ -37,6 +37,7 @@ const userSchema = new Schema({
       "DISPATCH_MANAGER",
       "RAM_AGRI_SALES",
       "RAM_AGRI_SALES_MANAGER",
+      "RAM_AGRI_SALES_OFFICE_MANAGER",
       "AGRI_INPUT_DEALER",
       "SUPER_ADMIN",
     ],
@@ -61,6 +62,7 @@ const userSchema = new Schema({
       "LABORATORY_MANAGER",
       "RAM_AGRI_SALES",
       "RAM_AGRI_SALES_MANAGER",
+      "RAM_AGRI_SALES_OFFICE_MANAGER",
       "AGRI_INPUT_DEALER",
     ],
     default: "FARMER"
@@ -91,6 +93,12 @@ const userSchema = new Schema({
   expoPushToken: {
     type: String,
     default: null,
+  },
+  /** Ram Agri: max allowed sales outstanding (₹); null/omit → use global default from RamAgriSalesConfig */
+  ramAgriOutstandingLimitRupees: {
+    type: Number,
+    default: null,
+    min: 0,
   },
 }, { timestamps: true });
 

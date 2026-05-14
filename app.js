@@ -373,6 +373,7 @@ import clearDataRoute from "./routes/clearData.route.js";
 import whatsappBroadcastRoute from "./routes/whatsappBroadcast.route.js";
 import iciciPaymentRoute from "./routes/icici.routes.js";
 import paymentReconciliationRoute from "./routes/payment.routes.js";
+import whatsappAlertRoute from "./routes/whatsappAlert.route.js";
 
 // Inventory Management Routes
 import productRoute from "./routes/product.route.js";
@@ -390,6 +391,7 @@ import sellOrderRoute from "./routes/sellOrder.route.js";
 import returnRequestRoute from "./routes/returnRequest.route.js";
 import agriSalesOrderRoute from "./routes/agriSalesOrder.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
+import agriLoadLinkRoute from "./routes/agriLoadLink.route.js";
 import followupMetricsRoute from "./routes/followupMetrics.route.js";
 import taskRoute from "./routes/task.route.js";
 import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
@@ -452,6 +454,7 @@ server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook + tod
 // WATI status webhook (templateMessageSent_v2, delivered, read, failed)
 server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
+server.use("/api/v1/agri-load-link", agriLoadLinkRoute); // Public one-click agri load link
 server.use("/api/v1/call-list", callListPublicRoute); // Public call list (token-based, no auth)
 server.use("/api/v1/voice-feedback", voiceFeedbackRoute); // Post-dispatch Marathi feedback (Exotel webhook public; admin routes JWT)
 server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
@@ -631,6 +634,8 @@ server.use("/api/v1/inventory/purchase-orders", authenticateToken, purchaseOrder
 server.use("/api/v1/inventory/grn", authenticateToken, grnRoute);
 server.use("/api/v1/inventory/sell-orders", authenticateToken, sellOrderRoute);
 server.use("/api/v1/inventory/agri-sales-orders", authenticateToken, agriSalesOrderRoute);
+// Proxy compatibility: some gateways strip `/api/v1` before forwarding.
+server.use("/inventory/agri-sales-orders", authenticateToken, agriSalesOrderRoute);
 server.use("/api/v1/inventory/outward", authenticateToken, inventoryOutwardRoute);
 server.use("/api/v1/inventory/transactions", authenticateToken, inventoryTransactionRoute);
 server.use("/api/v1/inventory/return-requests", authenticateToken, returnRequestRoute);
@@ -639,9 +644,22 @@ server.use("/api/v1/plant-product-mappings", plantProductMappingRoute); // Plant
 server.use("/api/v1/purchase", authenticateToken, purchaseRoute);
 
 
+// WhatsApp internal alert routes (test endpoint + status check)
+server.use("/api/v1/whatsapp-alert", authenticateToken, whatsappAlertRoute);
+
 // Serve locally uploaded media files
 server.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 server.use(errorHandler);
+
+// Schedule WhatsApp alert cron jobs (daily summary at 8 PM IST)
+(async () => {
+  try {
+    const { initAlertCronJobs } = await import("./jobs/alertCronJobs.js");
+    initAlertCronJobs();
+  } catch (e) {
+    console.error("[WhatsApp Cron] Failed to init cron jobs:", e?.message || e);
+  }
+})();
 
 export default server;

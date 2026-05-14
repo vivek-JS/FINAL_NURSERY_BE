@@ -3,6 +3,10 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 /**
  * Upload PDF bytes to DigitalOcean Spaces (S3-compatible) or fallback mock URL.
  *
+ * For dispatch DC / invoice PDFs, pass the third argument `{ folder: "dispatch-pdfs/<dispatchId>" }`
+ * so objects are grouped under `dispatch-pdfs/…` (same env vars: `DO_SPACES_*`; dev fallback uses
+ * `PUBLIC_REPORT_BASE_URL` when Spaces is not configured).
+ *
  * Required for Spaces (set all of these):
  * - DO_SPACES_KEY          — Spaces access key
  * - DO_SPACES_SECRET       — Spaces secret key
@@ -17,15 +21,25 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
  *
  * @param {Buffer} fileBuffer
  * @param {string} [filename]
+ * @param {{ folder?: string }} [options] - `folder` replaces default `booking-reports` (no leading/trailing slashes).
  * @returns {Promise<string>} HTTPS URL WATI can GET
  */
-export async function uploadToS3(fileBuffer, filename = "today-booking-report.pdf") {
+export async function uploadToS3(
+  fileBuffer,
+  filename = "today-booking-report.pdf",
+  options = {}
+) {
   if (!fileBuffer || !Buffer.isBuffer(fileBuffer)) {
     throw new Error("uploadToS3: fileBuffer must be a Buffer");
   }
 
   const safeName = String(filename).replace(/[^a-zA-Z0-9._-]/g, "_") || "report.pdf";
-  const key = `booking-reports/${Date.now()}-${safeName}`;
+  const folderRaw =
+    options && typeof options.folder === "string" && options.folder.trim() !== ""
+      ? options.folder.trim().replace(/^\/+|\/+$/g, "")
+      : "booking-reports";
+  const folder = folderRaw || "booking-reports";
+  const key = `${folder}/${Date.now()}-${safeName}`;
 
   const accessKey = process.env.DO_SPACES_KEY;
   const secretKey = process.env.DO_SPACES_SECRET;
@@ -76,7 +90,7 @@ export async function uploadToS3(fileBuffer, filename = "today-booking-report.pd
   const base =
     process.env.PUBLIC_REPORT_BASE_URL?.replace(/\/+$/, "") ||
     "https://mock-reports.example.com";
-  const url = `${base}/${Date.now()}-${safeName}`;
+  const url = `${base}/${encodeURI(key)}`;
   if (process.env.NODE_ENV !== "production") {
     console.warn(
       `[uploadService] Spaces not configured (set DO_SPACES_*); mock URL: ${url}`

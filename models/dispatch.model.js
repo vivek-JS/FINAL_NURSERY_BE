@@ -303,6 +303,14 @@ const dispatchSchema = new Schema(
       },
       required: true,
     },
+    /** Single Trip document created when completing this dispatch. */
+    tripId: { type: Schema.Types.ObjectId, ref: "Trip", default: null },
+    /** Public URL of server-generated delivery challan PDF (DigitalOcean Spaces or mock). */
+    deliveryChallanPdfUrl: { type: String, default: "" },
+    deliveryChallanPdfGeneratedAt: { type: Date, default: null },
+    /** Public URL of server-generated complete invoice PDF (only meaningful when DELIVERED). */
+    completeInvoicePdfUrl: { type: String, default: "" },
+    completeInvoicePdfGeneratedAt: { type: Date, default: null },
   },
   {
     timestamps: true,

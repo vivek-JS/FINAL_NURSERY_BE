@@ -168,6 +168,151 @@ const paymentSchema = new Schema({
   timestamps: true,
 });
 
+/** One product line on an Agri Sales order (multi-product orders). Legacy orders omit this and use root-level product fields only. */
+const agriLineItemSchema = new Schema(
+  {
+    sortOrder: { type: Number, default: 0 },
+    isRamAgriProduct: { type: Boolean, default: false },
+    productId: {
+      type: Schema.Types.ObjectId,
+      ref: "InventoryProduct",
+      default: null,
+    },
+    ramAgriCropId: {
+      type: Schema.Types.ObjectId,
+      ref: "RamAgriInputsProduct",
+      default: null,
+    },
+    ramAgriVarietyId: {
+      type: Schema.Types.ObjectId,
+      default: null,
+    },
+    ramAgriCropName: { type: String, trim: true },
+    ramAgriVarietyName: { type: String, trim: true },
+    primaryUnit: {
+      type: Schema.Types.ObjectId,
+      ref: "MeasurementUnit",
+      default: null,
+    },
+    secondaryUnit: {
+      type: Schema.Types.ObjectId,
+      ref: "MeasurementUnit",
+      default: null,
+    },
+    conversionFactor: { type: Number, default: 1 },
+    productName: { type: String, required: true, trim: true },
+    quantity: {
+      type: Number,
+      required: true,
+      validate: {
+        validator(v) {
+          return typeof v === "number" && !Number.isNaN(v) && v > 0;
+        },
+        message: "Line quantity must be greater than 0",
+      },
+    },
+    unit: {
+      type: String,
+      enum: ["kg", "g", "l", "ml", "pieces", "packets", "bottles", "bags"],
+    },
+    rate: { type: Number, required: true, min: 0 },
+    lineTotal: { type: Number, min: 0 },
+  },
+  { _id: true }
+);
+
+function hasLineItems(doc) {
+  return Array.isArray(doc.lineItems) && doc.lineItems.length > 0;
+}
+
+/** Sync root-level product fields from `lineItems` for validation, payments, and legacy readers. */
+export function rollupAgriLineItemsToRoot(doc) {
+  const lines = doc.lineItems;
+  if (!lines || !lines.length) return;
+
+  let totalQty = 0;
+  let totalAmt = 0;
+  lines.forEach((line, idx) => {
+    line.sortOrder = line.sortOrder ?? idx;
+    const q = Number(line.quantity) || 0;
+    const r = Number(line.rate) || 0;
+    let lt = line.lineTotal != null ? Number(line.lineTotal) : q * r;
+    if (Number.isNaN(lt)) lt = q * r;
+    line.lineTotal = lt;
+    totalQty += q;
+    totalAmt += lt;
+  });
+
+  doc.quantity = totalQty;
+  doc.totalAmount = totalAmt;
+  doc.rate = totalQty > 0 ? totalAmt / totalQty : 0;
+  doc.productName =
+    lines.length === 1
+      ? String(lines[0].productName || "").trim() || "Item"
+      : `Multiple items (${lines.length})`;
+
+  const anyRam = lines.some((l) => l.isRamAgriProduct);
+  const allRam = lines.every((l) => l.isRamAgriProduct);
+  doc.isRamAgriProduct = anyRam;
+
+  const firstRam = lines.find((l) => l.isRamAgriProduct);
+  const firstInv = lines.find((l) => !l.isRamAgriProduct);
+
+  if (firstRam) {
+    doc.ramAgriCropId = firstRam.ramAgriCropId;
+    doc.ramAgriVarietyId = firstRam.ramAgriVarietyId;
+    doc.ramAgriCropName = firstRam.ramAgriCropName;
+    doc.ramAgriVarietyName = firstRam.ramAgriVarietyName;
+    doc.primaryUnit = firstRam.primaryUnit;
+    doc.secondaryUnit = firstRam.secondaryUnit ?? null;
+    doc.conversionFactor = firstRam.conversionFactor ?? 1;
+  } else {
+    doc.ramAgriCropId = null;
+    doc.ramAgriVarietyId = null;
+    doc.ramAgriCropName = "";
+    doc.ramAgriVarietyName = "";
+  }
+
+  if (firstInv) {
+    doc.productId = firstInv.productId;
+    doc.unit = firstInv.unit || "pieces";
+  } else if (allRam) {
+    doc.productId = null;
+    doc.unit = undefined;
+  }
+
+  if (!anyRam && firstInv) {
+    doc.ramAgriCropId = null;
+    doc.ramAgriVarietyId = null;
+  }
+}
+
+/** Normalize one logical line for stock / ledger (legacy docs have a single implicit line). */
+export function getAgriOrderLines(orderLike) {
+  const o = orderLike?.toObject ? orderLike.toObject() : orderLike || {};
+  if (Array.isArray(o.lineItems) && o.lineItems.length > 0) {
+    return o.lineItems.map((line) => ({ ...line }));
+  }
+  return [
+    {
+      isRamAgriProduct: Boolean(o.isRamAgriProduct),
+      productId: o.productId,
+      ramAgriCropId: o.ramAgriCropId,
+      ramAgriVarietyId: o.ramAgriVarietyId,
+      ramAgriCropName: o.ramAgriCropName,
+      ramAgriVarietyName: o.ramAgriVarietyName,
+      primaryUnit: o.primaryUnit,
+      secondaryUnit: o.secondaryUnit,
+      conversionFactor: o.conversionFactor,
+      productName: o.productName,
+      quantity: o.quantity,
+      unit: o.unit,
+      rate: o.rate,
+      lineTotal: (o.quantity || 0) * (o.rate || 0),
+    },
+  ];
+}
+
 // Agri Sales Order Schema
 const agriSalesOrderSchema = new Schema(
   {
@@ -204,6 +349,11 @@ const agriSalesOrderSchema = new Schema(
       type: String,
       default: "Maharashtra",
     },
+    /** Multiple products per order; when set, root product fields are rolled up from lines in pre-validate. */
+    lineItems: {
+      type: [agriLineItemSchema],
+      default: undefined,
+    },
     // Product Information - Support both regular products and Ram Agri products
     isRamAgriProduct: {
       type: Boolean,
@@ -213,7 +363,7 @@ const agriSalesOrderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "InventoryProduct",
       required: function() {
-        // Only required if isRamAgriProduct is explicitly false or undefined
+        if (hasLineItems(this)) return false;
         return this.isRamAgriProduct !== true;
       },
     },
@@ -222,14 +372,14 @@ const agriSalesOrderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "RamAgriInputsProduct",
       required: function() {
-        // Only required if isRamAgriProduct is explicitly true
+        if (hasLineItems(this)) return false;
         return this.isRamAgriProduct === true;
       },
     },
     ramAgriVarietyId: {
       type: Schema.Types.ObjectId,
       required: function() {
-        // Only required if isRamAgriProduct is explicitly true
+        if (hasLineItems(this)) return false;
         return this.isRamAgriProduct === true;
       },
     },
@@ -256,28 +406,43 @@ const agriSalesOrderSchema = new Schema(
     },
     productName: {
       type: String,
-      required: true,
+      required: function () {
+        return !hasLineItems(this);
+      },
     },
     quantity: {
       type: Number,
-      required: true,
-      min: 1,
+      required: function () {
+        return !hasLineItems(this);
+      },
+      validate: {
+        validator(v) {
+          if (v === undefined || v === null) return true;
+          return typeof v === "number" && !Number.isNaN(v) && v > 0;
+        },
+        message: "Quantity must be greater than 0",
+      },
     },
     unit: {
       type: String,
       required: function() {
+        if (hasLineItems(this)) return false;
         return !this.isRamAgriProduct;
       },
       enum: ["kg", "g", "l", "ml", "pieces", "packets", "bottles", "bags"],
     },
     rate: {
       type: Number,
-      required: true,
+      required: function () {
+        return !hasLineItems(this);
+      },
       min: 0,
     },
     totalAmount: {
       type: Number,
-      required: true,
+      required: function () {
+        return !hasLineItems(this);
+      },
       min: 0,
     },
     // Order Status
@@ -402,7 +567,7 @@ const agriSalesOrderSchema = new Schema(
     // Dispatch Mode: VEHICLE or COURIER
     dispatchMode: {
       type: String,
-      enum: ["VEHICLE", "COURIER", "WITH_ORDER"],
+      enum: ["VEHICLE", "COURIER", "WITH_ORDER", "OFFICE"],
       default: "VEHICLE",
     },
     // Link trail to the regular nursery dispatch used in WITH_ORDER mode
@@ -577,9 +742,19 @@ agriSalesOrderSchema.index({ linkedNurseryOrderId: 1, agriLoadStatus: 1 });
 agriSalesOrderSchema.index({ createdBy: 1, orderStatus: 1 }); // User's orders by status
 agriSalesOrderSchema.index({ orderDate: 1, orderStatus: 1 }); // Date and status filtering
 agriSalesOrderSchema.index({ customerMobile: 1, orderDate: -1 }); // Customer orders by date
+agriSalesOrderSchema.index({ "lineItems.productId": 1 });
+agriSalesOrderSchema.index({ "lineItems.ramAgriVarietyId": 1 });
 
 // Generate order number before validation (runs before schema validation)
 agriSalesOrderSchema.pre("validate", async function (next) {
+  try {
+    if (hasLineItems(this)) {
+      rollupAgriLineItemsToRoot(this);
+    }
+  } catch (err) {
+    return next(err);
+  }
+
   // Only generate order number for new documents that don't have one
   if (!this.isNew || (this.orderNumber && this.orderNumber.trim())) {
     return next();
@@ -654,16 +829,34 @@ agriSalesOrderSchema.pre("validate", async function (next) {
 
 // Calculate total amount and balance before save
 agriSalesOrderSchema.pre("save", function (next) {
+  if (hasLineItems(this)) {
+    rollupAgriLineItemsToRoot(this);
+  }
+
   // Recalculate total amount if quantity, rate, or deliveredQuantity changes
   // For completed orders, use deliveredQuantity; otherwise use quantity
-  if (this.isModified("quantity") || this.isModified("rate") || this.isModified("deliveredQuantity") || this.isModified("orderStatus")) {
-    // If order is completed and has deliveredQuantity, use that for payment calculation
-    // Otherwise use original quantity
-    const quantityForAmount = (this.orderStatus === "COMPLETED" && this.deliveredQuantity > 0) 
-      ? this.deliveredQuantity 
-      : (this.quantity || 0);
-    
+  if (
+    !hasLineItems(this) &&
+    (this.isModified("quantity") ||
+      this.isModified("rate") ||
+      this.isModified("deliveredQuantity") ||
+      this.isModified("orderStatus"))
+  ) {
+    const quantityForAmount =
+      this.orderStatus === "COMPLETED" && this.deliveredQuantity > 0
+        ? this.deliveredQuantity
+        : this.quantity || 0;
+
     this.totalAmount = quantityForAmount * (this.rate || 0);
+  }
+
+  if (
+    hasLineItems(this) &&
+    this.orderStatus === "COMPLETED" &&
+    this.deliveredQuantity > 0 &&
+    (this.isModified("deliveredQuantity") || this.isModified("orderStatus"))
+  ) {
+    this.totalAmount = this.deliveredQuantity * (this.rate || 0);
   }
 
   // Recalculate payment status and balance if payment changes

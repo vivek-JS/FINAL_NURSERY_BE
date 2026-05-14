@@ -2,7 +2,7 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
-import AgriSalesOrder from "../models/agriSalesOrder.model.js";
+import AgriSalesOrder, { getAgriOrderLines } from "../models/agriSalesOrder.model.js";
 import { InventoryProduct, InventoryOutwardTransaction, StockAdjustment } from "../models/inventory.model.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
 import Order from "../models/order.model.js";
@@ -13,11 +13,157 @@ import mongoose from "mongoose";
 import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
 import { generateQR } from "../services/iciciBankService.js";
 import { normalizeIciciError, saveIciciQrAuditRecord } from "../services/iciciQr.service.js";
+import {
+  assertOutstandingAllowsNewExposure,
+  assertOutstandingAllowsOrderUpdate,
+  getEffectiveOutstandingLimitRupees,
+  getOrCreateRamAgriSalesConfig,
+  getOutstandingSummaryForSalesUser,
+  orderRequiresRamAgriOutstandingLimit,
+  projectProvisionalBalanceAmount,
+  setGlobalDefaultOutstandingLimitRupees,
+} from "../services/ramAgriOutstanding.service.js";
+import {
+  getAgriLoadWhitelist,
+  normalizePhoneForWhitelist,
+} from "../utils/agriLoadLinkSigner.js";
 
 /** Ram Agri: customer ledger exists, but there is no order-to-order payment transfer API (farmer plant only). */
 
-const shouldLogRamAgriLedger = (order) =>
-  Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
+const shouldLogRamAgriLedger = (order) => {
+  const lines = order?.lineItems;
+  if (Array.isArray(lines) && lines.length > 0) {
+    return lines.some((l) => l?.isRamAgriProduct || l?.ramAgriCropId || l?.ramAgriVarietyId);
+  }
+  return Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
+};
+
+/** Populate product refs on root and on each `lineItems` entry when present. */
+async function populateAgriSalesOrderProductRefs(order) {
+  if (!order) return;
+  const hasLines = Array.isArray(order.lineItems) && order.lineItems.length > 0;
+  if (hasLines) {
+    await order.populate([
+      { path: "lineItems.productId" },
+      { path: "lineItems.ramAgriCropId" },
+      { path: "lineItems.primaryUnit" },
+      { path: "lineItems.secondaryUnit" },
+    ]);
+  }
+  if (!order.isRamAgriProduct) {
+    await order.populate("productId");
+  } else {
+    await order.populate("ramAgriCropId");
+    await order.populate("primaryUnit");
+    await order.populate("secondaryUnit");
+  }
+}
+
+/** Proportional split of total return units across order lines (integer parts). */
+function distributeReturnQtyAcrossLines(lines, returnQty) {
+  const n = lines.length;
+  if (!n || returnQty <= 0) return new Array(n).fill(0);
+  const qtys = lines.map((l) => Number(l.quantity) || 0);
+  const total = qtys.reduce((a, b) => a + b, 0);
+  if (total <= 0) return new Array(n).fill(0);
+  const out = qtys.map((q) => Math.floor((returnQty * q) / total));
+  let s = out.reduce((a, b) => a + b, 0);
+  let diff = returnQty - s;
+  for (let i = n - 1; i >= 0 && diff > 0; i--) {
+    const canAdd = Math.min(diff, qtys[i] - out[i]);
+    out[i] += canAdd;
+    diff -= canAdd;
+  }
+  return out;
+}
+
+/** Build validated line item documents for create (throws AppError). */
+async function buildAgriLineItemsForCreate(rawLines, orderDate) {
+  const od = orderDate ? new Date(orderDate) : new Date();
+  const normalized = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    const row = rawLines[i] || {};
+    const isRam = Boolean(row.isRamAgriProduct);
+    const qty = Number(row.quantity);
+    if (Number.isNaN(qty) || qty <= 0) {
+      throw new AppError(`Line ${i + 1}: quantity must be greater than 0`, 400);
+    }
+    let rate = Number(row.rate);
+    if (isRam) {
+      const ramAgriCropId = row.ramAgriCropId;
+      const ramAgriVarietyId = row.ramAgriVarietyId;
+      if (!ramAgriCropId || !ramAgriVarietyId) {
+        throw new AppError(`Line ${i + 1}: Crop ID and Variety ID are required for Ram Agri products`, 400);
+      }
+      if (!mongoose.isValidObjectId(ramAgriCropId) || !mongoose.isValidObjectId(ramAgriVarietyId)) {
+        throw new AppError(`Line ${i + 1}: Invalid Crop ID or Variety ID format`, 400);
+      }
+      const crop = await RamAgriInputsProduct.findById(ramAgriCropId)
+        .populate("varieties.primaryUnit", "name abbreviation")
+        .populate("varieties.secondaryUnit", "name abbreviation");
+      if (!crop) throw new AppError(`Line ${i + 1}: Crop not found`, 404);
+      const variety = crop.varieties.id(ramAgriVarietyId);
+      if (!variety) throw new AppError(`Line ${i + 1}: Variety not found`, 404);
+      if (!variety.isActive) throw new AppError(`Line ${i + 1}: This variety is not active`, 400);
+      let resolvedRate = rate;
+      if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+        resolvedRate = resolveRamAgriRateForDate(variety, od);
+      }
+      if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+        throw new AppError(`Line ${i + 1}: Unable to resolve valid rate`, 400);
+      }
+      const secondaryUnitValue = variety.secondaryUnit?._id || row.secondaryUnit;
+      normalized.push({
+        sortOrder: i,
+        isRamAgriProduct: true,
+        productId: null,
+        ramAgriCropId,
+        ramAgriVarietyId,
+        ramAgriCropName: row.ramAgriCropName || crop.cropName,
+        ramAgriVarietyName: row.ramAgriVarietyName || variety.name,
+        primaryUnit: variety.primaryUnit?._id || row.primaryUnit,
+        secondaryUnit: secondaryUnitValue && secondaryUnitValue !== "" ? secondaryUnitValue : null,
+        conversionFactor: variety.conversionFactor || row.conversionFactor || 1,
+        productName: `${crop.cropName} - ${variety.name}`,
+        quantity: qty,
+        rate: resolvedRate,
+        lineTotal: qty * resolvedRate,
+      });
+    } else {
+      const productId = row.productId;
+      if (!productId || !mongoose.isValidObjectId(productId)) {
+        throw new AppError(`Line ${i + 1}: Product ID is required for regular products`, 400);
+      }
+      const product = await InventoryProduct.findById(productId);
+      if (!product) throw new AppError(`Line ${i + 1}: Product not found`, 404);
+      if (!product.isAgriSales) {
+        throw new AppError(`Line ${i + 1}: Product is not available for Agri Sales orders`, 400);
+      }
+      if (Number.isNaN(rate) || rate <= 0) {
+        throw new AppError(`Line ${i + 1}: Rate is required for regular products`, 400);
+      }
+      const unit = row.unit || product.unit || "pieces";
+      normalized.push({
+        sortOrder: i,
+        isRamAgriProduct: false,
+        productId,
+        ramAgriCropId: null,
+        ramAgriVarietyId: null,
+        ramAgriCropName: "",
+        ramAgriVarietyName: "",
+        primaryUnit: null,
+        secondaryUnit: null,
+        conversionFactor: 1,
+        productName: product.name,
+        quantity: qty,
+        unit,
+        rate,
+        lineTotal: qty * rate,
+      });
+    }
+  }
+  return normalized;
+}
 
 const resolveRamAgriRateForDate = (variety, dateValue = new Date()) => {
   if (!variety) return 0;
@@ -45,6 +191,26 @@ const resolveRamAgriRateForDate = (variety, dateValue = new Date()) => {
   return defaultRate;
 };
 
+/** Ram Agri back-office (credit limits, linked load, etc.) — scoped to Ram Agri, not full nursery OFFICE_ADMIN. */
+const RAM_AGRI_SALES_OFFICE_MANAGER = "RAM_AGRI_SALES_OFFICE_MANAGER";
+
+const isRamAgriSalesOfficeManager = (user) => {
+  const jt = String(user?.jobTitle || "").toUpperCase().trim();
+  const r = String(user?.role || "").toUpperCase().trim();
+  return jt === RAM_AGRI_SALES_OFFICE_MANAGER || r === RAM_AGRI_SALES_OFFICE_MANAGER;
+};
+
+/** Same wide Ram Agri views/filters as RAM_AGRI_SALES_MANAGER (analytics, assigned list). */
+const isRamAgriSalesProgramLead = (user) => {
+  const jt = String(user?.jobTitle || "").toUpperCase().trim();
+  const r = String(user?.role || "").toUpperCase().trim();
+  return (
+    jt === "RAM_AGRI_SALES_MANAGER" ||
+    r === "RAM_AGRI_SALES_MANAGER" ||
+    isRamAgriSalesOfficeManager(user)
+  );
+};
+
 const isRamAgriLoadAdmin = (user) => {
   const role = String(user?.role || "").toUpperCase();
   const jobTitle = String(user?.jobTitle || "").toUpperCase();
@@ -52,7 +218,8 @@ const isRamAgriLoadAdmin = (user) => {
     role === "SUPER_ADMIN" ||
     role === "ADMIN" ||
     role === "RAM_AGRI_SALES_MANAGER" ||
-    jobTitle === "RAM_AGRI_SALES_MANAGER"
+    jobTitle === "RAM_AGRI_SALES_MANAGER" ||
+    isRamAgriSalesOfficeManager(user)
   );
 };
 
@@ -94,6 +261,119 @@ const resolveAgriOrderSalesPersonId = async (req, bodySalesPerson) => {
   return spRaw;
 };
 
+/** Restore Ram Agri / inventory stock for every line (reject/cancel after dispatch deduction). */
+async function restoreStockForAgriOrder(order, notesSuffix, userId) {
+  const lines = getAgriOrderLines(order);
+  for (const line of lines) {
+    const qty = Number(line.quantity) || 0;
+    const rate = Number(line.rate) || 0;
+    if (qty <= 0) continue;
+
+    if (line.isRamAgriProduct || line.ramAgriCropId) {
+      const crop = await RamAgriInputsProduct.findById(line.ramAgriCropId);
+      if (!crop) continue;
+      const variety = crop.varieties.id(line.ramAgriVarietyId);
+      if (!variety) continue;
+      variety.currentStock = (variety.currentStock || 0) + qty;
+      variety.stockValue = (variety.stockValue || 0) + qty * rate;
+      if (variety.currentStock > 0) {
+        variety.averagePrice = variety.stockValue / variety.currentStock;
+      } else {
+        variety.averagePrice = 0;
+      }
+      await crop.save();
+    } else if (line.productId) {
+      await StockAdjustment.create({
+        productId: line.productId,
+        adjustmentType: "addition",
+        quantity: qty,
+        reason: "other",
+        adjustedBy: userId,
+        notes: `${notesSuffix}`,
+      });
+      const product = await InventoryProduct.findById(line.productId);
+      if (product) {
+        product.currentStock += qty;
+        await product.save();
+      }
+    }
+  }
+}
+
+/**
+ * Deduct warehouse stock for each line on dispatch (admin direct only).
+ * Returns { ok: true } or { ok: false, error: AppError }
+ */
+async function deductStockForAgriOrderLines(order, orderNumber, userId) {
+  const lines = getAgriOrderLines(order);
+  for (const line of lines) {
+    const qty = Number(line.quantity) || 0;
+    const rate = Number(line.rate) || 0;
+    if (qty <= 0) continue;
+
+    if (line.isRamAgriProduct || line.ramAgriCropId) {
+      const crop = await RamAgriInputsProduct.findById(line.ramAgriCropId);
+      if (!crop) continue;
+      const variety = crop.varieties.id(line.ramAgriVarietyId);
+      if (!variety) continue;
+      const stockBefore = variety.currentStock || 0;
+      if (stockBefore < qty) {
+        return {
+          ok: false,
+          error: new AppError(
+            `Insufficient stock for order ${orderNumber} (${line.productName || "item"}). Available: ${stockBefore}, Required: ${qty}`,
+            400
+          ),
+        };
+      }
+      const svBefore = Number(variety.stockValue) || 0;
+      variety.currentStock = stockBefore - qty;
+      // Reduce carrying value by the same fraction of units removed — do not use qty×sale rate,
+      // or stockValue can go negative when DB value is out of sync with units (legacy / manual stock).
+      variety.stockValue =
+        stockBefore > 0 ? Math.max(0, (svBefore * variety.currentStock) / stockBefore) : 0;
+      if (variety.currentStock > 0) {
+        variety.averagePrice = Math.max(0, variety.stockValue / variety.currentStock);
+      } else {
+        variety.averagePrice = 0;
+      }
+      await crop.save();
+    } else if (line.productId) {
+      const product = await InventoryProduct.findById(line.productId);
+      if (!product) continue;
+      const stockBefore = product.currentStock || 0;
+      if (stockBefore < qty) {
+        return {
+          ok: false,
+          error: new AppError(
+            `Insufficient stock for order ${orderNumber} (${line.productName || "item"}). Available: ${stockBefore}, Required: ${qty}`,
+            400
+          ),
+        };
+      }
+      product.currentStock = stockBefore - qty;
+      await product.save();
+      await InventoryOutwardTransaction.create({
+        productId: line.productId,
+        quantity: qty,
+        sellingPrice: rate,
+        totalAmount: qty * rate,
+        customer: {
+          name: order.customerName,
+          contact: order.customerMobile,
+        },
+        purpose: "sale",
+        destination: "customer",
+        outwardDate: new Date(),
+        issuedBy: userId,
+        notes: `Ram Agri Sales Order: ${orderNumber} (Dispatched)`,
+        status: "issued",
+      });
+    }
+  }
+  return { ok: true };
+}
+
 const normalizeAgriOrderSalesPerson = (orderDoc) => {
   if (!orderDoc) return orderDoc;
   const order = typeof orderDoc.toObject === "function" ? orderDoc.toObject() : { ...orderDoc };
@@ -121,9 +401,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     customerTaluka,
     customerDistrict,
     customerState,
-    // Regular product fields
     productId,
-    // Ram Agri product fields
     isRamAgriProduct,
     ramAgriCropId,
     ramAgriVarietyId,
@@ -140,103 +418,108 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     payment,
     screenshots,
     salesPerson: salesPersonBody,
+    lineItems: rawLineItems,
   } = req.body;
 
-  // Validate required fields
-  if (!customerName || !customerMobile || !quantity) {
+  const useMultiLine = Array.isArray(rawLineItems) && rawLineItems.length > 0;
+
+  if (!customerName || !customerMobile) {
+    return next(new AppError("Customer name and mobile are required", 400));
+  }
+
+  if (!useMultiLine && (quantity === undefined || quantity === null || quantity === "")) {
     return next(new AppError("Customer name, mobile, and quantity are required", 400));
   }
 
-  // Validate mobile number (10 digits)
   if (customerMobile.length !== 10 || !/^\d{10}$/.test(customerMobile)) {
     return next(new AppError("Mobile number must be exactly 10 digits", 400));
   }
 
-  let product = null;
-  let variety = null;
-  let crop = null;
+  let normalizedLines = null;
   let productName = "";
-  let unit = "";
-  let currentStock = 0;
   let resolvedRate = Number(rate);
+  let totalAmount = 0;
+  let crop = null;
+  let variety = null;
 
-  // Handle Ram Agri products
-  if (isRamAgriProduct) {
-    if (!ramAgriCropId || !ramAgriVarietyId) {
-      return next(new AppError("Crop ID and Variety ID are required for Ram Agri products", 400));
+  if (useMultiLine) {
+    try {
+      normalizedLines = await buildAgriLineItemsForCreate(rawLineItems, orderDate);
+    } catch (e) {
+      return next(e instanceof AppError ? e : new AppError(e.message || "Invalid line items", 400));
     }
-
-    if (!mongoose.isValidObjectId(ramAgriCropId) || !mongoose.isValidObjectId(ramAgriVarietyId)) {
-      return next(new AppError("Invalid Crop ID or Variety ID format", 400));
-    }
-
-    // Get crop and variety
-    crop = await RamAgriInputsProduct.findById(ramAgriCropId)
-      .populate("varieties.primaryUnit", "name abbreviation")
-      .populate("varieties.secondaryUnit", "name abbreviation");
-    
-    if (!crop) {
-      return next(new AppError("Crop not found", 404));
-    }
-
-    variety = crop.varieties.id(ramAgriVarietyId);
-    if (!variety) {
-      return next(new AppError("Variety not found", 404));
-    }
-
-    if (!variety.isActive) {
-      return next(new AppError("This variety is not active", 400));
-    }
-
-    // NOTE: Stock check removed - stock is only checked/deducted at dispatch time
-    currentStock = variety.currentStock || 0;
-
-    // Set product name and unit
-    productName = `${crop.cropName} - ${variety.name}`;
-    unit = variety.primaryUnit?.abbreviation || variety.primaryUnit?.name || "N/A";
-    if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
-      resolvedRate = resolveRamAgriRateForDate(variety, orderDate);
-    }
+    totalAmount = normalizedLines.reduce((s, l) => s + (l.lineTotal || 0), 0);
+    productName = normalizedLines.map((l) => l.productName).join("; ");
   } else {
-    // Handle regular products
-    if (!productId) {
-      return next(new AppError("Product ID is required for regular products", 400));
+    let product = null;
+    let unit = "";
+
+    if (isRamAgriProduct) {
+      if (!ramAgriCropId || !ramAgriVarietyId) {
+        return next(new AppError("Crop ID and Variety ID are required for Ram Agri products", 400));
+      }
+
+      if (!mongoose.isValidObjectId(ramAgriCropId) || !mongoose.isValidObjectId(ramAgriVarietyId)) {
+        return next(new AppError("Invalid Crop ID or Variety ID format", 400));
+      }
+
+      crop = await RamAgriInputsProduct.findById(ramAgriCropId)
+        .populate("varieties.primaryUnit", "name abbreviation")
+        .populate("varieties.secondaryUnit", "name abbreviation");
+
+      if (!crop) {
+        return next(new AppError("Crop not found", 404));
+      }
+
+      variety = crop.varieties.id(ramAgriVarietyId);
+      if (!variety) {
+        return next(new AppError("Variety not found", 404));
+      }
+
+      if (!variety.isActive) {
+        return next(new AppError("This variety is not active", 400));
+      }
+
+      productName = `${crop.cropName} - ${variety.name}`;
+      unit = variety.primaryUnit?.abbreviation || variety.primaryUnit?.name || "N/A";
+      if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+        resolvedRate = resolveRamAgriRateForDate(variety, orderDate);
+      }
+    } else {
+      if (!productId) {
+        return next(new AppError("Product ID is required for regular products", 400));
+      }
+
+      if (!mongoose.isValidObjectId(productId)) {
+        return next(new AppError("Invalid product ID format", 400));
+      }
+
+      product = await InventoryProduct.findById(productId);
+      if (!product) {
+        return next(new AppError("Product not found", 404));
+      }
+
+      if (!product.isAgriSales) {
+        return next(new AppError("This product is not available for Agri Sales orders", 400));
+      }
+
+      productName = product.name;
+      unit = product.unit || "N/A";
+      if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+        return next(new AppError("Rate is required for regular products", 400));
+      }
     }
 
-    if (!mongoose.isValidObjectId(productId)) {
-      return next(new AppError("Invalid product ID format", 400));
-    }
-
-    product = await InventoryProduct.findById(productId);
-    if (!product) {
-      return next(new AppError("Product not found", 404));
-    }
-
-    if (!product.isAgriSales) {
-      return next(new AppError("This product is not available for Agri Sales orders", 400));
-    }
-
-    // NOTE: Stock check removed - stock is only checked/deducted at dispatch time
-    currentStock = product.currentStock || 0;
-
-    productName = product.name;
-    unit = product.unit || "N/A";
     if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
-      return next(new AppError("Rate is required for regular products", 400));
+      return next(new AppError("Unable to resolve valid rate for selected product", 400));
     }
+
+    totalAmount = quantity * resolvedRate;
   }
 
-  if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
-    return next(new AppError("Unable to resolve valid rate for selected product", 400));
-  }
-
-  // Calculate total amount
-  const totalAmount = quantity * resolvedRate;
-
-  // Process payment array - ensure paymentStatus is set for each payment
   let processedPayments = [];
   let initialPaidAmount = 0;
-  
+
   if (payment && Array.isArray(payment) && payment.length > 0) {
     processedPayments = payment.map((p) => ({
       paidAmount: p.paidAmount || 0,
@@ -249,14 +532,12 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
       remark: p.remark || "",
       isWalletPayment: p.isWalletPayment || false,
     }));
-    
-    // Calculate total paid amount (only from COLLECTED payments)
+
     initialPaidAmount = processedPayments
       .filter((p) => p.paymentStatus === "COLLECTED")
       .reduce((sum, p) => sum + (p.paidAmount || 0), 0);
   }
 
-  // Calculate initial payment status
   let initialPaymentStatus = "PENDING";
   if (processedPayments.length > 0) {
     const totalPending = processedPayments.reduce((sum, p) => sum + (p.paidAmount || 0), 0);
@@ -269,7 +550,6 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     }
   }
 
-  // Get user ID from request (employee who created the order)
   const userId = req.user?._id || req.user?.id;
   if (!userId) {
     return next(new AppError("User authentication required. Please login to create orders.", 401));
@@ -277,53 +557,88 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   const salesPersonId = await resolveAgriOrderSalesPersonId(req, salesPersonBody);
 
-  // Create order with proper user tracking
-  const orderData = {
-    customerName: customerName.trim(),
-    customerMobile: customerMobile.trim(),
-    customerVillage: customerVillage?.trim() || "",
-    customerTaluka: customerTaluka?.trim() || "",
-    customerDistrict: customerDistrict?.trim() || "",
-    customerState: (customerState || "Maharashtra").trim(),
-    isRamAgriProduct: isRamAgriProduct || false,
-    productName,
-    quantity,
-    rate: resolvedRate,
-    totalAmount,
-    orderDate: orderDate ? new Date(orderDate) : new Date(),
-    deliveryDate: deliveryDate && deliveryDate !== 'null' && deliveryDate !== null ? new Date(deliveryDate) : undefined,
-    notes: notes?.trim() || "",
-    payment: processedPayments,
-    screenshots: screenshots || [],
-    createdBy: userId, // Track which employee created this order
-    salesPerson: salesPersonId,
-    orderStatus: "ACCEPTED",
-    acceptedBy: userId,
-    acceptedAt: new Date(),
-    paymentStatus: initialPaymentStatus,
-    totalPaidAmount: initialPaidAmount,
-    balanceAmount: totalAmount - initialPaidAmount,
-  };
+  const newExposure = Math.max(0, Math.round((totalAmount - initialPaidAmount) * 100) / 100);
+  const needsRamAgriOutstandingLimit = useMultiLine
+    ? normalizedLines.some((l) => l.isRamAgriProduct || l.ramAgriCropId)
+    : Boolean(isRamAgriProduct);
+  if (needsRamAgriOutstandingLimit && newExposure > 0) {
+    await assertOutstandingAllowsNewExposure({
+      salesPersonId,
+      additionalExposureRupees: newExposure,
+    });
+  }
 
-  // Add product-specific fields
-  if (isRamAgriProduct) {
-    orderData.ramAgriCropId = ramAgriCropId;
-    orderData.ramAgriVarietyId = ramAgriVarietyId;
-    orderData.ramAgriCropName = ramAgriCropName || crop.cropName;
-    orderData.ramAgriVarietyName = ramAgriVarietyName || variety.name;
-    orderData.primaryUnit = variety.primaryUnit?._id || primaryUnit;
-    // Convert empty string to null for secondaryUnit (MongoDB ObjectId fields don't accept empty strings)
-    const secondaryUnitValue = variety.secondaryUnit?._id || secondaryUnit;
-    orderData.secondaryUnit = secondaryUnitValue && secondaryUnitValue !== "" ? secondaryUnitValue : null;
-    orderData.conversionFactor = variety.conversionFactor || conversionFactor || 1;
-    // Explicitly set productId to null for Ram Agri products to avoid validation errors
-    orderData.productId = null;
+  let orderData;
+
+  if (useMultiLine) {
+    orderData = {
+      customerName: customerName.trim(),
+      customerMobile: customerMobile.trim(),
+      customerVillage: customerVillage?.trim() || "",
+      customerTaluka: customerTaluka?.trim() || "",
+      customerDistrict: customerDistrict?.trim() || "",
+      customerState: (customerState || "Maharashtra").trim(),
+      lineItems: normalizedLines,
+      orderDate: orderDate ? new Date(orderDate) : new Date(),
+      deliveryDate:
+        deliveryDate && deliveryDate !== "null" && deliveryDate !== null ? new Date(deliveryDate) : undefined,
+      notes: notes?.trim() || "",
+      payment: processedPayments,
+      screenshots: screenshots || [],
+      createdBy: userId,
+      salesPerson: salesPersonId,
+      orderStatus: "ACCEPTED",
+      acceptedBy: userId,
+      acceptedAt: new Date(),
+      paymentStatus: initialPaymentStatus,
+      totalPaidAmount: initialPaidAmount,
+      balanceAmount: totalAmount - initialPaidAmount,
+    };
   } else {
-    orderData.productId = productId;
-    orderData.unit = unit;
-    // Explicitly set Ram Agri fields to null/undefined for regular products
-    orderData.ramAgriCropId = null;
-    orderData.ramAgriVarietyId = null;
+    orderData = {
+      customerName: customerName.trim(),
+      customerMobile: customerMobile.trim(),
+      customerVillage: customerVillage?.trim() || "",
+      customerTaluka: customerTaluka?.trim() || "",
+      customerDistrict: customerDistrict?.trim() || "",
+      customerState: (customerState || "Maharashtra").trim(),
+      isRamAgriProduct: isRamAgriProduct || false,
+      productName,
+      quantity,
+      rate: resolvedRate,
+      totalAmount,
+      orderDate: orderDate ? new Date(orderDate) : new Date(),
+      deliveryDate:
+        deliveryDate && deliveryDate !== "null" && deliveryDate !== null ? new Date(deliveryDate) : undefined,
+      notes: notes?.trim() || "",
+      payment: processedPayments,
+      screenshots: screenshots || [],
+      createdBy: userId,
+      salesPerson: salesPersonId,
+      orderStatus: "ACCEPTED",
+      acceptedBy: userId,
+      acceptedAt: new Date(),
+      paymentStatus: initialPaymentStatus,
+      totalPaidAmount: initialPaidAmount,
+      balanceAmount: totalAmount - initialPaidAmount,
+    };
+
+    if (isRamAgriProduct) {
+      orderData.ramAgriCropId = ramAgriCropId;
+      orderData.ramAgriVarietyId = ramAgriVarietyId;
+      orderData.ramAgriCropName = ramAgriCropName || crop.cropName;
+      orderData.ramAgriVarietyName = ramAgriVarietyName || variety.name;
+      orderData.primaryUnit = variety.primaryUnit?._id || primaryUnit;
+      const secondaryUnitValue = variety.secondaryUnit?._id || secondaryUnit;
+      orderData.secondaryUnit = secondaryUnitValue && secondaryUnitValue !== "" ? secondaryUnitValue : null;
+      orderData.conversionFactor = variety.conversionFactor || conversionFactor || 1;
+      orderData.productId = null;
+    } else {
+      orderData.productId = productId;
+      orderData.unit = unit;
+      orderData.ramAgriCropId = null;
+      orderData.ramAgriVarietyId = null;
+    }
   }
 
   const order = await AgriSalesOrder.create(orderData);
@@ -338,12 +653,13 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
       debit: order.totalAmount || totalAmount,
       reference: order.orderNumber,
       category: "Order",
-      description: `Order created for ${order.ramAgriCropName || productName}`,
+      description: `Order created for ${useMultiLine ? productName : order.ramAgriCropName || productName}`,
       entryDate: order.orderDate || order.createdAt,
       createdBy: userId,
       metadata: {
         cropId: order.ramAgriCropId,
         varietyId: order.ramAgriVarietyId,
+        lineCount: useMultiLine ? normalizedLines.length : 1,
         customerVillage: order.customerVillage,
         customerTaluka: order.customerTaluka,
         customerDistrict: order.customerDistrict,
@@ -351,29 +667,35 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     });
   }
 
-  // Add activity log for order creation (orders are created as ACCEPTED — ready to assign or dispatch)
-  order.activityLog = [{
-    action: "ORDER_CREATED",
-    description: `Order created and auto-accepted for ${customerName} - ${productName} (Qty: ${quantity}, Rate: ₹${resolvedRate}). Status: ACCEPTED — ready for assign or dispatch.`,
-    performedBy: userId,
-    performedByName: req.user?.name || "Unknown",
-    newValue: {
-      customerName,
-      customerMobile,
-      productName,
-      quantity,
-      rate: resolvedRate,
-      totalAmount,
-      orderStatus: "ACCEPTED",
-    },
-    metadata: {
-      orderNumber: order.orderNumber,
-    },
-  }];
+  const qtyLabel = useMultiLine ? normalizedLines.reduce((s, l) => s + l.quantity, 0) : quantity;
+  const rateLabel = useMultiLine ? "multiple" : resolvedRate;
 
-  // Add payment activity if payment was added during creation
+  order.activityLog = [
+    {
+      action: "ORDER_CREATED",
+      description: useMultiLine
+        ? `Order created and auto-accepted for ${customerName} — ${normalizedLines.length} product line(s): ${productName}. Status: ACCEPTED — ready for assign or dispatch.`
+        : `Order created and auto-accepted for ${customerName} - ${productName} (Qty: ${quantity}, Rate: ₹${resolvedRate}). Status: ACCEPTED — ready for assign or dispatch.`,
+      performedBy: userId,
+      performedByName: req.user?.name || "Unknown",
+      newValue: {
+        customerName,
+        customerMobile,
+        productName: order.productName,
+        quantity: qtyLabel,
+        rate: rateLabel,
+        totalAmount: order.totalAmount,
+        orderStatus: "ACCEPTED",
+        lineCount: useMultiLine ? normalizedLines.length : 1,
+      },
+      metadata: {
+        orderNumber: order.orderNumber,
+      },
+    },
+  ];
+
   if (processedPayments.length > 0) {
-    processedPayments.forEach((p, index) => {
+    processedPayments.forEach((p) => {
       order.activityLog.push({
         action: "PAYMENT_ADDED",
         description: `Payment of ₹${p.paidAmount} added via ${p.modeOfPayment}`,
@@ -456,8 +778,14 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     }
   }
 
-  // Populate fields
-  if (!isRamAgriProduct) {
+  if (useMultiLine) {
+    await order.populate([
+      { path: "lineItems.productId" },
+      { path: "lineItems.ramAgriCropId" },
+      { path: "lineItems.primaryUnit" },
+      { path: "lineItems.secondaryUnit" },
+    ]);
+  } else if (!isRamAgriProduct) {
     await order.populate("productId");
   } else {
     await order.populate("ramAgriCropId");
@@ -644,6 +972,76 @@ const markLinkedAgriLoaded = catchAsync(async (req, res, next) => {
   );
 });
 
+const markLinkedAgriLoadedViaLink = catchAsync(async (req, res, next) => {
+  const { orderNumber, actorPhone } = req.query || {};
+  const normalizedOrderNumber = String(orderNumber || "").trim().toUpperCase();
+  const normalizedActorPhone = normalizePhoneForWhitelist(actorPhone || "");
+
+  if (!normalizedOrderNumber) {
+    return next(new AppError("orderNumber is required", 400));
+  }
+  const whitelist = new Set(getAgriLoadWhitelist());
+  if (!normalizedActorPhone || !whitelist.has(normalizedActorPhone)) {
+    console.warn("[Agri Load Link] denied (whitelist):", {
+      orderNumber: normalizedOrderNumber,
+      actorPhone: normalizedActorPhone,
+      whitelistCount: whitelist.size,
+    });
+    return res
+      .status(403)
+      .type("text/html")
+      .send("<h3>Not authorized for this action.</h3>");
+  }
+
+  const order = await AgriSalesOrder.findOne({ orderNumber: normalizedOrderNumber });
+  if (!order) {
+    return res.status(404).type("text/html").send("<h3>Agri order not found.</h3>");
+  }
+  if (!order.linkedNurseryOrderId) {
+    return res
+      .status(400)
+      .type("text/html")
+      .send("<h3>This agri order is not linked to nursery order.</h3>");
+  }
+
+  if (String(order.agriLoadStatus || "").toUpperCase() !== "LOADED") {
+    const fallbackUser = await User.findOne({
+      $or: [{ role: "SUPER_ADMIN" }, { jobTitle: "SUPER_ADMIN" }],
+    })
+      .select("_id name")
+      .lean();
+    if (!fallbackUser?._id) {
+      return res
+        .status(500)
+        .type("text/html")
+        .send("<h3>Cannot resolve audit user for one-click action.</h3>");
+    }
+
+    order.agriLoadStatus = "LOADED";
+    order.loadedAt = new Date();
+    order.loadedBy = fallbackUser._id;
+    if (!order.activityLog) order.activityLog = [];
+    order.activityLog.push({
+      action: "DISPATCH_UPDATED",
+      description: `Agri load marked as LOADED via one-click link by ${normalizedActorPhone}.`,
+      performedBy: fallbackUser._id,
+      performedByName: fallbackUser?.name || `LINK:${normalizedActorPhone}`,
+      metadata: {
+        agriLoadStatus: "LOADED",
+        loadedAt: order.loadedAt,
+        source: "WHATSAPP_ONE_CLICK",
+        actorPhone: normalizedActorPhone,
+      },
+    });
+    await order.save();
+  }
+
+  return res
+    .status(200)
+    .type("text/html")
+    .send(`<h3>Success: ${order.orderNumber} marked as LOADED.</h3>`);
+});
+
 const getLinkedOrdersByNurseryOrder = catchAsync(async (req, res, next) => {
   const { orderId } = req.params;
   if (!mongoose.isValidObjectId(orderId)) {
@@ -678,14 +1076,10 @@ const getTodayPendingLinkedLoads = catchAsync(async (req, res) => {
   );
 });
 
-/** Ram Agri row is "cleared" for nursery DC if marked LOADED or already shipped from Agri side. */
+/** Ram Agri row is "cleared" for nursery DC only when explicitly marked LOADED. */
 const isLinkedAgriLoadSatisfied = (order) => {
   const load = String(order?.agriLoadStatus || "").toUpperCase();
-  if (load === "LOADED") return true;
-  const ds = String(order?.dispatchStatus || "").toUpperCase();
-  const os = String(order?.orderStatus || "").toUpperCase();
-  if (ds === "DISPATCHED" || os === "DISPATCHED") return true;
-  return false;
+  return load === "LOADED";
 };
 
 const getDispatchLoadStatus = catchAsync(async (req, res, next) => {
@@ -811,13 +1205,7 @@ const acceptAgriSalesOrder = catchAsync(async (req, res, next) => {
   await order.save();
 
   // Populate fields
-  if (!order.isRamAgriProduct) {
-    await order.populate("productId");
-  } else {
-    await order.populate("ramAgriCropId");
-    await order.populate("primaryUnit");
-    await order.populate("secondaryUnit");
-  }
+  await populateAgriSalesOrderProductRefs(order);
   await order.populate("createdBy");
   await order.populate("salesPerson", "name phoneNumber jobTitle");
   await order.populate("acceptedBy");
@@ -857,45 +1245,14 @@ const rejectAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   // If order was ACCEPTED and stock was deducted, add stock back
   if (stockWasDeducted) {
-    if (order.isRamAgriProduct) {
-      // Handle Ram Agri variety stock restoration
-      const crop = await RamAgriInputsProduct.findById(order.ramAgriCropId);
-      if (!crop) {
-        return next(new AppError("Crop not found", 404));
-      }
-
-      const variety = crop.varieties.id(order.ramAgriVarietyId);
-      if (!variety) {
-        return next(new AppError("Variety not found", 404));
-      }
-
-      // Restore variety stock
-      variety.currentStock = (variety.currentStock || 0) + order.quantity;
-      variety.stockValue = (variety.stockValue || 0) + (order.quantity * order.rate);
-      if (variety.currentStock > 0) {
-        variety.averagePrice = variety.stockValue / variety.currentStock;
-      }
-      await crop.save();
-    } else {
-      // Handle regular product stock restoration
-      const product = await InventoryProduct.findById(order.productId);
-      if (!product) {
-        return next(new AppError("Product not found", 404));
-      }
-
-      // Add stock back using StockAdjustment (for ledger tracking)
-      await StockAdjustment.create({
-        productId: order.productId,
-        adjustmentType: "addition",
-        quantity: order.quantity,
-        reason: "other",
-        adjustedBy: req.user?._id || req.user?.id,
-        notes: `Ram Agri Sales Order Rejected: ${order.orderNumber}. ${reason || "Order rejected"}`,
-      });
-
-      // Update product stock
-      product.currentStock += order.quantity;
-      await product.save();
+    try {
+      await restoreStockForAgriOrder(
+        order,
+        `Ram Agri Sales Order Rejected: ${order.orderNumber}. ${reason || "Order rejected"}`,
+        req.user?._id || req.user?.id
+      );
+    } catch (stockErr) {
+      return next(new AppError(`Failed to restore stock: ${stockErr.message}`, 500));
     }
   }
 
@@ -971,25 +1328,15 @@ const cancelAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   // If stock was deducted, add stock back
   if (stockWasDeducted) {
-    // Get product
-    const product = await InventoryProduct.findById(order.productId);
-    if (!product) {
-      return next(new AppError("Product not found", 404));
+    try {
+      await restoreStockForAgriOrder(
+        order,
+        `Ram Agri Sales Order Cancelled: ${order.orderNumber}. ${reason || "Order cancelled"}`,
+        req.user?._id || req.user?.id
+      );
+    } catch (stockErr) {
+      return next(new AppError(`Failed to restore stock: ${stockErr.message}`, 500));
     }
-
-    // Add stock back using StockAdjustment (for ledger tracking)
-    await StockAdjustment.create({
-      productId: order.productId,
-      adjustmentType: "addition",
-      quantity: order.quantity,
-      reason: "other",
-      adjustedBy: req.user?._id || req.user?.id,
-      notes: `Ram Agri Sales Order Cancelled: ${order.orderNumber}. ${reason || "Order cancelled"}`,
-    });
-
-    // Update product stock
-    product.currentStock += order.quantity;
-    await product.save();
   }
 
   // Update order status
@@ -1106,9 +1453,12 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
     query = query.where("paymentStatus").equals(paymentStatus);
   }
 
-  // Filter by product
+  // Filter by product (root or multi-line)
   if (productId && mongoose.isValidObjectId(productId)) {
-    query = query.where("productId").equals(productId);
+    query = query.or([
+      { productId },
+      { "lineItems.productId": productId },
+    ]);
   }
 
   // Filter by customer mobile
@@ -1158,6 +1508,8 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
   // Populate references
   query = query
     .populate("productId")
+    .populate("lineItems.productId")
+    .populate("lineItems.ramAgriCropId")
     .populate("createdBy")
     .populate("salesPerson", "name phoneNumber jobTitle")
     .populate("acceptedBy")
@@ -1733,6 +2085,8 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
     return next(new AppError("Order not found", 404));
   }
 
+  const previousBalanceForRamAgriLimit = Math.round((Number(order.balanceAmount) || 0) * 100) / 100;
+
   // Don't allow updates if order is completed or cancelled (unless updating status)
   if (updateData.orderStatus) {
     // Allow status updates except to COMPLETED or CANCELLED from COMPLETED/CANCELLED
@@ -1778,6 +2132,20 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
       }
     }
   });
+
+  if (updateData.lineItems !== undefined) {
+    if (!Array.isArray(updateData.lineItems) || updateData.lineItems.length === 0) {
+      return next(new AppError("lineItems must be a non-empty array", 400));
+    }
+    try {
+      filteredData.lineItems = await buildAgriLineItemsForCreate(
+        updateData.lineItems,
+        updateData.orderDate || order.orderDate
+      );
+    } catch (e) {
+      return next(e instanceof AppError ? e : new AppError(e.message || "Invalid line items", 400));
+    }
+  }
 
   if (filteredData.orderStatus === "CANCELLED") {
     return next(
@@ -1913,6 +2281,18 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
   Object.keys(filteredData).forEach((key) => {
     order[key] = filteredData[key];
   });
+
+  if (orderRequiresRamAgriOutstandingLimit(order)) {
+    const salesAttribution = order.salesPerson || order.createdBy;
+    if (salesAttribution) {
+      const newBal = projectProvisionalBalanceAmount(order);
+      await assertOutstandingAllowsOrderUpdate({
+        salesPersonId: salesAttribution,
+        previousBalanceAmount: previousBalanceForRamAgriLimit,
+        provisionalNewBalanceAmount: newBal,
+      });
+    }
+  }
 
   // Determine action type based on what was updated
   let actionType = "ORDER_UPDATED";
@@ -2243,8 +2623,8 @@ const getOutstandingAnalysis = catchAsync(async (req, res, next) => {
     // Otherwise, use the createdBy query parameter if provided
     if (req.user && req.user.jobTitle === "RAM_AGRI_SALES") {
       matchQuery.createdBy = req.user._id;
-    } else if (req.user && req.user.jobTitle === "RAM_AGRI_SALES_MANAGER") {
-      // RAM_AGRI_SALES_MANAGER can see all orders, but can filter by createdBy if provided
+    } else if (req.user && isRamAgriSalesProgramLead(req.user)) {
+      // Manager / Ram Agri office manager: all orders; optional createdBy filter
       if (createdBy && mongoose.isValidObjectId(createdBy)) {
         matchQuery.createdBy = new mongoose.Types.ObjectId(createdBy);
       }
@@ -2723,8 +3103,8 @@ const getAssignedOrders = catchAsync(async (req, res, next) => {
   // If admin, can view all or filter by assignedTo
   if (userJobTitle === "RAM_AGRI_SALES" && userRole !== "SUPER_ADMIN") {
     query.assignedTo = userId;
-  } else if (userJobTitle === "RAM_AGRI_SALES_MANAGER" && userRole !== "SUPER_ADMIN") {
-    // RAM_AGRI_SALES_MANAGER can see all orders, but can filter by assignedTo if provided
+  } else if (isRamAgriSalesProgramLead({ jobTitle: userJobTitle, role: userRole }) && userRole !== "SUPER_ADMIN") {
+    // Program lead / Ram Agri office manager: all assigned orders; optional assignedTo filter
     if (assignedTo && mongoose.isValidObjectId(assignedTo)) {
       query.assignedTo = assignedTo;
     }
@@ -2906,11 +3286,18 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
   }
 
   // Validate dispatch mode (vehicle fields are validated after linked-order prefill resolution).
-  if (!["VEHICLE", "COURIER", "WITH_ORDER"].includes(dispatchMode)) {
-    return next(new AppError("Invalid dispatch mode. Must be VEHICLE, COURIER, or WITH_ORDER", 400));
+  if (!["VEHICLE", "COURIER", "WITH_ORDER", "OFFICE"].includes(dispatchMode)) {
+    return next(
+      new AppError("Invalid dispatch mode. Must be VEHICLE, COURIER, WITH_ORDER, or OFFICE", 400)
+    );
   }
   if (dispatchMode === "COURIER" && !courierName) {
     return next(new AppError("Courier service name is required for courier dispatch", 400));
+  }
+  if (dispatchMode === "OFFICE" && (!dispatchNotes || !String(dispatchNotes).trim())) {
+    return next(
+      new AppError("Dispatch remark/notes are required when dispatching from office (OFFICE mode)", 400)
+    );
   }
 
   // Validate all order IDs
@@ -2953,7 +3340,11 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
   // or sales person (dispatching their assigned orders - stock should be deducted)
   // Prioritize jobTitle over role
   const effectiveRole = userJobTitle || userRole;
-  const isAdmin = effectiveRole === "SUPER_ADMIN" || effectiveRole === "ADMIN" || effectiveRole === "OFFICE_ADMIN";
+  const isAdmin =
+    effectiveRole === "SUPER_ADMIN" ||
+    effectiveRole === "ADMIN" ||
+    effectiveRole === "OFFICE_ADMIN" ||
+    effectiveRole === RAM_AGRI_SALES_OFFICE_MANAGER;
 
   // Find and update all orders - ACCEPTED or ASSIGNED orders can be dispatched
   const orders = await AgriSalesOrder.find({
@@ -3124,77 +3515,19 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     
     if (shouldDeductStock && !order.stockDeducted) {
       try {
-  if (shouldLogRamAgriLedger(order)) {
-          // Handle Ram Agri products
-          const crop = await RamAgriInputsProduct.findById(order.ramAgriCropId);
-          if (crop) {
-            const variety = crop.varieties.id(order.ramAgriVarietyId);
-            if (variety) {
-              stockBefore = variety.currentStock || 0;
-              
-              // CHECK stock availability before deducting
-              if (stockBefore < order.quantity) {
-                return next(new AppError(`Insufficient stock for order ${order.orderNumber}. Available: ${stockBefore}, Required: ${order.quantity}`, 400));
-              }
-              
-              // Deduct variety stock
-              variety.currentStock = (variety.currentStock || 0) - order.quantity;
-              variety.stockValue = (variety.stockValue || 0) - (order.quantity * order.rate);
-              if (variety.currentStock > 0) {
-                variety.averagePrice = variety.stockValue / variety.currentStock;
-              } else {
-                variety.averagePrice = 0;
-              }
-              stockAfter = variety.currentStock;
-              await crop.save();
-              stockDeductionSuccess = true;
-            }
-          }
-        } else {
-          // Handle regular products
-          const product = await InventoryProduct.findById(order.productId);
-          if (product) {
-            stockBefore = product.currentStock || 0;
-            
-            // CHECK stock availability before deducting
-            if (stockBefore < order.quantity) {
-              return next(new AppError(`Insufficient stock for order ${order.orderNumber}. Available: ${stockBefore}, Required: ${order.quantity}`, 400));
-            }
-            
-            // Deduct stock
-            product.currentStock = (product.currentStock || 0) - order.quantity;
-            stockAfter = product.currentStock;
-            await product.save();
-
-            // Create inventory outward transaction log
-            await InventoryOutwardTransaction.create({
-              productId: order.productId,
-              quantity: order.quantity,
-              sellingPrice: order.rate,
-              totalAmount: order.totalAmount || order.quantity * order.rate,
-              customer: {
-                name: order.customerName,
-                contact: order.customerMobile,
-              },
-              purpose: "sale",
-              destination: "customer",
-              outwardDate: new Date(),
-              issuedBy: userId,
-              notes: `Ram Agri Sales Order: ${order.orderNumber} (Dispatched)`,
-              status: "issued",
-            });
-            stockDeductionSuccess = true;
-          }
+        const ded = await deductStockForAgriOrderLines(order, order.orderNumber, userId);
+        if (!ded.ok) {
+          return next(ded.error);
         }
-
-        // Mark stock as deducted
-        if (stockDeductionSuccess) {
-          order.stockDeducted = true;
-          order.stockDeductedAt = new Date();
-        }
+        stockDeductionSuccess = true;
       } catch (stockError) {
         console.error(`Error deducting stock for order ${order.orderNumber}:`, stockError);
         return next(new AppError(`Failed to deduct stock for order ${order.orderNumber}: ${stockError.message}`, 500));
+      }
+
+      if (stockDeductionSuccess) {
+        order.stockDeducted = true;
+        order.stockDeductedAt = new Date();
       }
     } else if (isAssignedOrder) {
       // Assigned order - no stock deduction, just mark as success for logging
@@ -3248,6 +3581,17 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
       order.linkedNurseryDispatchId = null;
       order.linkedNurseryTransportId = "";
       order.linkedNurseryDispatchDate = null;
+    } else if (dispatchMode === "OFFICE") {
+      order.vehicleId = null;
+      order.vehicleNumber = "";
+      order.driverName = "";
+      order.driverMobile = "";
+      order.linkedNurseryDispatchId = null;
+      order.linkedNurseryTransportId = "";
+      order.linkedNurseryDispatchDate = null;
+      order.courierName = "";
+      order.courierTrackingId = "";
+      order.courierContact = "";
     }
 
     // Dispatch implies physically loaded for Ram Agri flow.
@@ -3294,13 +3638,22 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
         stockBefore,
         stockAfter,
       };
-    } else {
+    } else if (dispatchMode === "COURIER") {
       activityDescription = `Order dispatched via courier ${finalCourierName}${finalCourierTrackingId ? ` (Tracking: ${finalCourierTrackingId})` : ""}. Status: ${previousOrderStatus} → DISPATCHED${stockInfo}`;
       newValueData = {
         ...newValueData,
         courierName: finalCourierName,
         courierTrackingId: finalCourierTrackingId,
         courierContact: finalCourierContact,
+        stockBefore,
+        stockAfter,
+      };
+    } else if (dispatchMode === "OFFICE") {
+      const remark = String(dispatchNotes || "").trim();
+      activityDescription = `Order dispatched from office.${remark ? ` Remark: ${remark}.` : ""} Status: ${previousOrderStatus} → DISPATCHED${stockInfo}`;
+      newValueData = {
+        ...newValueData,
+        dispatchNotes: remark,
         stockBefore,
         stockAfter,
       };
@@ -3342,6 +3695,8 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
   // Populate fields for response
   await AgriSalesOrder.populate(updatedOrders, [
     { path: "productId" },
+    { path: "lineItems.productId" },
+    { path: "lineItems.ramAgriCropId" },
     { path: "createdBy" },
     { path: "salesPerson", select: "name phoneNumber jobTitle" },
     { path: "dispatchedBy" },
@@ -3362,16 +3717,25 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     if (dispatchMode === "WITH_ORDER") {
       dispatchDetails.linkedWithRegularDispatch = true;
     }
-  } else {
+  } else if (dispatchMode === "COURIER") {
     dispatchDetails.courierName = finalCourierName;
     dispatchDetails.courierTrackingId = finalCourierTrackingId;
     dispatchDetails.courierContact = finalCourierContact;
+  } else if (dispatchMode === "OFFICE") {
+    dispatchDetails.dispatchNotes = dispatchNotes || "";
+    dispatchDetails.officeDispatch = true;
   }
 
   const response = generateResponse(
     "Success",
     `${updatedOrders.length} order(s) dispatched successfully via ${
-      dispatchMode === "COURIER" ? "courier" : dispatchMode === "WITH_ORDER" ? "with linked regular order" : "vehicle"
+      dispatchMode === "COURIER"
+        ? "courier"
+        : dispatchMode === "WITH_ORDER"
+          ? "with linked regular order"
+          : dispatchMode === "OFFICE"
+            ? "office"
+            : "vehicle"
     }`,
     {
       dispatchedOrders: updatedOrders,
@@ -3491,7 +3855,12 @@ const completeOrders = catchAsync(async (req, res, next) => {
   // Determine if user is manager/admin (can return stock to warehouse)
   // Prioritize jobTitle over role
   const effectiveRole = userJobTitle || userRole;
-  const isManager = effectiveRole === "SUPER_ADMIN" || effectiveRole === "ADMIN" || effectiveRole === "OFFICE_ADMIN" || effectiveRole === "RAM_AGRI_SALES_MANAGER";
+  const isManager =
+    effectiveRole === "SUPER_ADMIN" ||
+    effectiveRole === "ADMIN" ||
+    effectiveRole === "OFFICE_ADMIN" ||
+    effectiveRole === "RAM_AGRI_SALES_MANAGER" ||
+    effectiveRole === RAM_AGRI_SALES_OFFICE_MANAGER;
 
   // Find all orders that can be completed (must be dispatched)
   const orders = await AgriSalesOrder.find({
@@ -3546,43 +3915,42 @@ const completeOrders = catchAsync(async (req, res, next) => {
     
     if (shouldAddStockBack) {
       try {
-        if (order.isRamAgriProduct) {
-          // Handle Ram Agri products
-          const crop = await RamAgriInputsProduct.findById(order.ramAgriCropId);
-          if (crop) {
-            const variety = crop.varieties.id(order.ramAgriVarietyId);
-            if (variety) {
-              stockBefore = variety.currentStock || 0;
-              
-              // Add returned stock back
-              variety.currentStock = (variety.currentStock || 0) + returnQty;
-              // Recalculate stock value and average price
-              variety.stockValue = (variety.stockValue || 0) + (returnQty * order.rate);
-              if (variety.currentStock > 0) {
-                variety.averagePrice = variety.stockValue / variety.currentStock;
-              }
-              stockAfter = variety.currentStock;
-              await crop.save();
-              stockReturnSuccess = true;
+        const lines = getAgriOrderLines(order);
+        const perLineReturns = distributeReturnQtyAcrossLines(lines, returnQty);
+        for (let li = 0; li < lines.length; li++) {
+          const line = lines[li];
+          const rq = perLineReturns[li] || 0;
+          if (rq <= 0) continue;
+          const rate = Number(line.rate) || 0;
+          if (line.isRamAgriProduct || line.ramAgriCropId) {
+            const crop = await RamAgriInputsProduct.findById(line.ramAgriCropId);
+            if (!crop) continue;
+            const variety = crop.varieties.id(line.ramAgriVarietyId);
+            if (!variety) continue;
+            stockBefore = variety.currentStock || 0;
+            variety.currentStock = (variety.currentStock || 0) + rq;
+            variety.stockValue = (variety.stockValue || 0) + rq * rate;
+            if (variety.currentStock > 0) {
+              variety.averagePrice = variety.stockValue / variety.currentStock;
+            } else {
+              variety.averagePrice = 0;
             }
-          }
-        } else {
-          // Handle regular products
-          const product = await InventoryProduct.findById(order.productId);
-          if (product) {
+            stockAfter = variety.currentStock;
+            await crop.save();
+            stockReturnSuccess = true;
+          } else if (line.productId) {
+            const product = await InventoryProduct.findById(line.productId);
+            if (!product) continue;
             stockBefore = product.currentStock || 0;
-            
-            // Add returned stock back
-            product.currentStock = (product.currentStock || 0) + returnQty;
+            product.currentStock = (product.currentStock || 0) + rq;
             stockAfter = product.currentStock;
             await product.save();
 
-            // Create inventory inward transaction log for returned stock
             await InventoryOutwardTransaction.create({
-              productId: order.productId,
-              quantity: returnQty,
-              sellingPrice: order.rate,
-              totalAmount: returnQty * order.rate,
+              productId: line.productId,
+              quantity: rq,
+              sellingPrice: rate,
+              totalAmount: rq * rate,
               customer: {
                 name: order.customerName,
                 contact: order.customerMobile,
@@ -3598,7 +3966,6 @@ const completeOrders = catchAsync(async (req, res, next) => {
           }
         }
 
-        // Mark stock as returned (only if stock was actually added back by manager)
         if (stockReturnSuccess) {
           order.stockReturned = true;
           order.stockReturnedAt = new Date();
@@ -4074,7 +4441,11 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
   const userId = req.user?._id || req.user?.id;
   const userName = req.user?.name || "Unknown";
   const effectiveRole = req.user?.jobTitle || req.user?.role;
-  const isAdmin = effectiveRole === "SUPER_ADMIN" || effectiveRole === "ADMIN" || effectiveRole === "OFFICE_ADMIN";
+  const isAdmin =
+    effectiveRole === "SUPER_ADMIN" ||
+    effectiveRole === "ADMIN" ||
+    effectiveRole === "OFFICE_ADMIN" ||
+    effectiveRole === RAM_AGRI_SALES_OFFICE_MANAGER;
   const isAssignedOrder = order.assignedTo != null;
   const wasDispatchedBySalesPerson = order.dispatchedBy && order.dispatchedBy.toString() === userId.toString();
 
@@ -4496,6 +4867,119 @@ const getDispatchedOrders = catchAsync(async (req, res, next) => {
   return res.status(200).json(response);
 });
 
+function isRamAgriOutstandingLimitAdmin(user) {
+  const j = String(user?.jobTitle || "")
+    .toUpperCase()
+    .trim();
+  const r = String(user?.role || "")
+    .toUpperCase()
+    .trim();
+  const set = new Set([
+    "SUPER_ADMIN",
+    "ADMIN",
+    "OFFICE_ADMIN",
+    "RAM_AGRI_SALES_MANAGER",
+    RAM_AGRI_SALES_OFFICE_MANAGER,
+  ]);
+  return set.has(j) || set.has(r);
+}
+
+const getRamAgriOutstandingLimitSummary = catchAsync(async (req, res, next) => {
+  let targetId = req.user._id || req.user.id;
+  const q = req.query?.userId;
+  if (q && String(q).trim()) {
+    if (!isRamAgriOutstandingLimitAdmin(req.user)) {
+      return next(new AppError("Only admins can view another user's outstanding summary", 403));
+    }
+    if (!mongoose.isValidObjectId(q)) {
+      return next(new AppError("Invalid userId", 400));
+    }
+    targetId = q;
+  }
+  const summary = await getOutstandingSummaryForSalesUser(targetId);
+  const u = await User.findById(targetId).select("ramAgriOutstandingLimitRupees name jobTitle").lean();
+  return res.status(200).json(
+    generateResponse("Success", "Outstanding limit summary", {
+      ...summary,
+      userId: targetId,
+      userName: u?.name,
+      limitOverrideRupees: u?.ramAgriOutstandingLimitRupees ?? null,
+    })
+  );
+});
+
+const getRamAgriOutstandingLimitSettings = catchAsync(async (req, res, next) => {
+  if (!isRamAgriOutstandingLimitAdmin(req.user)) {
+    return next(new AppError("Forbidden", 403));
+  }
+  const cfg = await getOrCreateRamAgriSalesConfig();
+  const salesUsers = await User.find({
+    $or: [{ jobTitle: "RAM_AGRI_SALES" }, { role: "RAM_AGRI_SALES" }],
+    isDisabled: { $ne: true },
+  })
+    .select("name phoneNumber jobTitle role ramAgriOutstandingLimitRupees")
+    .sort({ name: 1 })
+    .lean();
+  const globalDefault = Number(cfg.defaultOutstandingLimitRupees) || 10000;
+  const withEffective = await Promise.all(
+    salesUsers.map(async (u) => ({
+      ...u,
+      effectiveLimitRupees: await getEffectiveOutstandingLimitRupees(u._id),
+    }))
+  );
+  return res.status(200).json(
+    generateResponse("Success", "Ram Agri outstanding limit settings", {
+      defaultOutstandingLimitRupees: globalDefault,
+      salesUsers: withEffective,
+    })
+  );
+});
+
+const patchRamAgriOutstandingLimitGlobal = catchAsync(async (req, res, next) => {
+  if (!isRamAgriOutstandingLimitAdmin(req.user)) {
+    return next(new AppError("Forbidden", 403));
+  }
+  const v = req.body?.defaultOutstandingLimitRupees;
+  await setGlobalDefaultOutstandingLimitRupees(v, req.user?._id || req.user?.id);
+  const cfg = await getOrCreateRamAgriSalesConfig();
+  return res.status(200).json(generateResponse("Success", "Global limit updated", cfg));
+});
+
+const patchRamAgriOutstandingLimitUser = catchAsync(async (req, res, next) => {
+  if (!isRamAgriOutstandingLimitAdmin(req.user)) {
+    return next(new AppError("Forbidden", 403));
+  }
+  const { userId } = req.params;
+  if (!mongoose.isValidObjectId(userId)) {
+    return next(new AppError("Invalid user ID", 400));
+  }
+  if (!Object.prototype.hasOwnProperty.call(req.body || {}, "ramAgriOutstandingLimitRupees")) {
+    return next(new AppError("Body must include ramAgriOutstandingLimitRupees (number or null to clear)", 400));
+  }
+  const userBefore = await User.findById(userId).select("_id");
+  if (!userBefore) return next(new AppError("User not found", 404));
+  const raw = req.body.ramAgriOutstandingLimitRupees;
+  if (raw === null || raw === undefined || raw === "") {
+    await User.findByIdAndUpdate(userId, { $set: { ramAgriOutstandingLimitRupees: null } });
+  } else {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) {
+      return next(
+        new AppError("ramAgriOutstandingLimitRupees must be a non-negative number or null to clear", 400)
+      );
+    }
+    await User.findByIdAndUpdate(userId, { $set: { ramAgriOutstandingLimitRupees: n } });
+  }
+  const user = await User.findById(userId).select("name ramAgriOutstandingLimitRupees jobTitle role");
+  const effectiveLimitRupees = await getEffectiveOutstandingLimitRupees(user._id);
+  return res.status(200).json(
+    generateResponse("Success", "User limit updated", {
+      ...user.toObject(),
+      effectiveLimitRupees,
+    })
+  );
+});
+
 export {
   createAgriSalesOrder,
   createLinkedAgriOrderFromNurseryOrder,
@@ -4525,8 +5009,13 @@ export {
   getOrdersForDispatch,
   getDispatchedOrders,
   markLinkedAgriLoaded,
+  markLinkedAgriLoadedViaLink,
   getLinkedOrdersByNurseryOrder,
   getTodayPendingLinkedLoads,
   getDispatchLoadStatus,
+  getRamAgriOutstandingLimitSummary,
+  getRamAgriOutstandingLimitSettings,
+  patchRamAgriOutstandingLimitGlobal,
+  patchRamAgriOutstandingLimitUser,
 };
 

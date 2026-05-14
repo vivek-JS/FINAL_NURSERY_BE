@@ -46,6 +46,16 @@ This document describes the complete flow for **Ram Agri Sales Orders** - a simp
 }
 ```
 
+#### Multi-product (`lineItems`)
+
+- Orders may include **`lineItems`**: an array of Ram Agri and/or inventory product lines. Root fields (`productName`, `quantity`, `rate`, `totalAmount`) are **rolled up** from lines for backward compatibility and reporting.
+- Create/update payloads can send **`lineItems`** (non-empty array); legacy single-field payloads still work.
+- Stock dispatch and returns iterate **each line** (Ram Agri variety stock or `InventoryProduct`).
+
+#### Dispatch mode `OFFICE`
+
+- **`dispatchMode`: `"OFFICE"`** — material handed out from the office (not vehicle/courier). **`dispatchNotes`** is required when using this mode. Vehicle and courier fields are cleared.
+
 ### 2. **API Endpoints**
 
 All endpoints are under `/api/v1/inventory/agri-sales-orders`:

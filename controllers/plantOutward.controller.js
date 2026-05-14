@@ -27,6 +27,7 @@ import Order from "../models/order.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import { updateOrderWithLedgerSync } from "./dispatch.controller.js";
 import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
+import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
 
 const BATCH_SELECT_FIELDS =
   "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
@@ -2517,8 +2518,14 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
 
       const processedByRaw = req.user?._id || req.user?.id;
       const preAssignedSecondary = String(linkedOrderDoc?.deliveryChallanInvoiceNumber || "").trim();
+      let official = null;
       let secondaryInvoiceLabel = preAssignedSecondary;
-      if (!secondaryInvoiceLabel) {
+      if (newOrderStatus === "DISPATCHED" && newRemaining === 0) {
+        official = await ensureOfficialDeliveryChallanForOrder(linkedOrderDoc, session);
+      }
+      if (official) {
+        secondaryInvoiceLabel = official;
+      } else if (!secondaryInvoiceLabel) {
         const [freshSec] = await allocateNextInvoiceNumbers(session, 1);
         secondaryInvoiceLabel = freshSec || "";
       }
@@ -2545,7 +2552,10 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
         remainingPlants: newRemaining,
         orderStatus: newOrderStatus,
       };
-      if (!preAssignedSecondary && secondaryInvoiceLabel) {
+      if (official) {
+        secondaryOrderSet.officialDeliveryChallanNumber = official;
+      }
+      if (!preAssignedSecondary && secondaryInvoiceLabel && !official) {
         secondaryOrderSet.deliveryChallanInvoiceNumber = secondaryInvoiceLabel;
       }
 

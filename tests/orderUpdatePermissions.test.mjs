@@ -45,6 +45,15 @@ describe("orderUpdatePermissions", () => {
     assert.equal(ctx.canChangeOrderStatusFull, true);
   });
 
+  it("normalizes role casing for permissions (e.g. super_admin)", () => {
+    const ctx = getOrderUpdateUserContext({
+      role: "super_admin",
+      jobTitle: "Staff",
+    });
+    assert.equal(ctx.canEditOrderCore, true);
+    assert.equal(ctx.canChangeOrderStatusFull, true);
+  });
+
   it("accountant can edit core but not full status", () => {
     const ctx = getOrderUpdateUserContext({
       role: "ACCOUNTANT",

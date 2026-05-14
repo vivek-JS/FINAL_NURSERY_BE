@@ -5,15 +5,12 @@ const tripSchema = new Schema(
     vehicleId: {
       type: Schema.Types.ObjectId,
       ref: "Vehicle",
-      required: true,
     },
     vehicleName: {
       type: String,
-      required: true,
     },
     vehicleNumber: {
       type: String,
-      required: true,
     },
     tripNumber: {
       type: String,
@@ -73,6 +70,10 @@ const tripSchema = new Schema(
       default: 0,
     },
     notes: String,
+    kmRun: { type: Number, default: null },
+    rent: { type: Number, default: null },
+    otherCharges: { type: Number, default: null },
+    tripRemark: { type: String, default: "" },
     createdBy: {
       type: Schema.Types.ObjectId,
       ref: "User",

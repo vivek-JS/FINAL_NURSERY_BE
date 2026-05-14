@@ -34,9 +34,18 @@ import {
   getLinkedOrdersByNurseryOrder,
   getTodayPendingLinkedLoads,
   getDispatchLoadStatus,
+  getRamAgriOutstandingLimitSummary,
+  getRamAgriOutstandingLimitSettings,
+  patchRamAgriOutstandingLimitGlobal,
+  patchRamAgriOutstandingLimitUser,
 } from "../controllers/agriSalesOrder.controller.js";
 
 const router = express.Router();
+
+/** POST /create — multi-line payloads put qty/rate/product on each `lineItems[]` entry, not on the root body. */
+function agriCreateHasLineItems(req) {
+  return Array.isArray(req.body?.lineItems) && req.body.lineItems.length > 0;
+}
 
 // Multer for images (memory storage for Cloudinary)
 const uploadImages = multer({
@@ -93,8 +102,8 @@ router.patch(
     check("orderIds.*").isMongoId().withMessage("All order IDs must be valid"),
     check("dispatchMode")
       .optional()
-      .isIn(["VEHICLE", "COURIER", "WITH_ORDER"])
-      .withMessage("Dispatch mode must be VEHICLE, COURIER, or WITH_ORDER"),
+      .isIn(["VEHICLE", "COURIER", "WITH_ORDER", "OFFICE"])
+      .withMessage("Dispatch mode must be VEHICLE, COURIER, WITH_ORDER, or OFFICE"),
     // Vehicle mode validations (optional - validated in controller based on mode)
     check("driverName").optional(),
     check("driverMobile").optional(),
@@ -182,9 +191,10 @@ router
         .withMessage("Mobile number must be exactly 10 digits")
         .matches(/^\d{10}$/)
         .withMessage("Mobile number must contain only digits"),
-      // productId is only required for regular products (not Ram Agri products)
+      // productId is only required for regular single-line creates (not Ram Agri, not multi-line).
       check("productId")
         .custom((value, { req }) => {
+          if (agriCreateHasLineItems(req)) return true;
           // If isRamAgriProduct is true, productId is not required
           if (req.body.isRamAgriProduct === true) {
             return true; // Skip validation for Ram Agri products
@@ -198,9 +208,10 @@ router
           }
           return true;
         }),
-      // Ram Agri product fields - required if isRamAgriProduct is true
+      // Ram Agri product fields - required on root only for single-line Ram Agri creates
       check("ramAgriCropId")
         .custom((value, { req }) => {
+          if (agriCreateHasLineItems(req)) return true;
           if (req.body.isRamAgriProduct === true) {
             if (!value) {
               throw new Error("Crop ID is required for Ram Agri products");
@@ -213,6 +224,7 @@ router
         }),
       check("ramAgriVarietyId")
         .custom((value, { req }) => {
+          if (agriCreateHasLineItems(req)) return true;
           if (req.body.isRamAgriProduct === true) {
             if (!value) {
               throw new Error("Variety ID is required for Ram Agri products");
@@ -223,9 +235,21 @@ router
           }
           return true;
         }),
-      check("quantity").isNumeric().withMessage("Quantity must be a number").isFloat({ min: 0.01 }).withMessage("Quantity must be greater than 0"),
+      check("quantity")
+        .custom((value, { req }) => {
+          if (agriCreateHasLineItems(req)) return true;
+          if (value === undefined || value === null || value === "") {
+            throw new Error("Quantity is required");
+          }
+          const qty = Number(value);
+          if (Number.isNaN(qty) || qty <= 0) {
+            throw new Error("Quantity must be greater than 0");
+          }
+          return true;
+        }),
       check("rate")
         .custom((value, { req }) => {
+          if (agriCreateHasLineItems(req)) return true;
           if (req.body.isRamAgriProduct === true && (value === undefined || value === null || value === "")) {
             return true;
           }
@@ -259,6 +283,38 @@ router
     createAgriSalesOrder
   )
   .get("/outstanding", getOutstandingAgriSalesOrders)
+  .get("/outstanding-limit/summary", getRamAgriOutstandingLimitSummary)
+  .get("/outstanding-limit/settings", getRamAgriOutstandingLimitSettings)
+  .patch(
+    "/outstanding-limit/global",
+    [
+      check("defaultOutstandingLimitRupees")
+        .isNumeric()
+        .withMessage("defaultOutstandingLimitRupees must be numeric")
+        .isFloat({ min: 0 })
+        .withMessage("defaultOutstandingLimitRupees must be >= 0"),
+    ],
+    checkErrors,
+    patchRamAgriOutstandingLimitGlobal
+  )
+  .patch(
+    "/outstanding-limit/user/:userId",
+    [
+      check("userId").isMongoId().withMessage("Valid user ID is required"),
+      check("ramAgriOutstandingLimitRupees")
+        .optional({ nullable: true })
+        .custom((value) => {
+          if (value === null || value === undefined || value === "") return true;
+          const n = Number(value);
+          if (!Number.isFinite(n) || n < 0) {
+            throw new Error("ramAgriOutstandingLimitRupees must be null or a non-negative number");
+          }
+          return true;
+        }),
+    ],
+    checkErrors,
+    patchRamAgriOutstandingLimitUser
+  )
   .get("/", getAllAgriSalesOrders)
   .get("/:id", getAgriSalesOrderById)
   .patch(

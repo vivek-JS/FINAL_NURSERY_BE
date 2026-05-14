@@ -11,6 +11,7 @@ import PlantCms from "../models/plantCms.model.js";
 import Tray from "../models/tray.model.js";
 import Vehicle from "../models/vehicleModel.model.js";
 import VehicleDriver from "../models/vehicleDriver.model.js";
+import Trip from "../models/trip.model.js";
 import {
   syncFarmerPlantLedgerForOrderUpdate,
   roundMoney,
@@ -27,6 +28,16 @@ import {
   sumCollectedFromNewPaymentSubdocs,
 } from "../utils/dispatchCompleteOrderPayments.js";
 import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
+import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
+import { uploadToS3 } from "../services/uploadService.js";
+import {
+  buildDeliveryChallanPdfBuffer,
+  buildCompleteInvoicePdfBuffer,
+} from "../services/dispatchPdfDocuments.service.js";
+import {
+  getOrderUpdateUserContext,
+  resolveUserForOrderUpdatePermissions,
+} from "../utils/orderUpdatePermissions.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -102,6 +113,44 @@ const updateOrderWithLedgerSync = async ({
 
   return updatedOrder;
 };
+
+const isDispatchedTransition = (previousStatus, nextStatus) =>
+  String(previousStatus || "").toUpperCase() !== "DISPATCHED" &&
+  String(nextStatus || "").toUpperCase() === "DISPATCHED";
+
+const queueDispatchedOrderAlert = ({
+  queue,
+  previousOrder,
+  updatedOrder,
+  changedBy,
+  allowedOrderIds = null,
+}) => {
+  if (!queue || !previousOrder || !updatedOrder) return;
+  if (!isDispatchedTransition(previousOrder?.orderStatus, updatedOrder?.orderStatus)) return;
+  const oid = String(updatedOrder?._id || previousOrder?._id || "").trim();
+  if (!oid || queue.has(oid)) return;
+  if (allowedOrderIds && !allowedOrderIds.has(oid)) return;
+  const plain = updatedOrder?.toObject ? updatedOrder.toObject() : updatedOrder;
+  queue.set(oid, {
+    order: plain,
+    changedBy: changedBy || "Unknown",
+  });
+};
+
+const fireQueuedDispatchedOrderAlerts = (queue) => {
+  if (!queue || queue.size === 0) return;
+  const items = Array.from(queue.values());
+  (async () => {
+    try {
+      const { sendOrderDispatchedAlert } = await import("../services/whatsappAlertService.js");
+      for (const item of items) {
+        await sendOrderDispatchedAlert(item.order, item.changedBy);
+      }
+    } catch (e) {
+      console.error("whatsapp-alert dispatch DISPATCHED transition:", e?.message || e);
+    }
+  })();
+};
 // Helper to validate quantities
 const validateQuantities = (plantsDetails) => {
   for (const plant of plantsDetails) {
@@ -165,14 +214,10 @@ const generateTransportId = async (attempts = 0) => {
   return newTransportId;
 };
 
-/** Same rules as `getDispatchLoadStatus` in agriSalesOrder.controller — LOADED or already shipped from Ram Agri. */
+/** Same rules as `getDispatchLoadStatus` in agriSalesOrder.controller — clear only when LOADED. */
 const linkedAgriLoadSatisfiedForNursery = (order) => {
   const load = String(order?.agriLoadStatus || "").toUpperCase();
-  if (load === "LOADED") return true;
-  const ds = String(order?.dispatchStatus || "").toUpperCase();
-  const os = String(order?.orderStatus || "").toUpperCase();
-  if (ds === "DISPATCHED" || os === "DISPATCHED") return true;
-  return false;
+  return load === "LOADED";
 };
 
 const getPendingLinkedAgriLoads = async (orderIds = []) => {
@@ -188,7 +233,7 @@ const getPendingLinkedAgriLoads = async (orderIds = []) => {
     orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
   })
     .select(
-      "orderNumber linkedNurseryOrderCode customerName productName quantity agriLoadStatus dispatchStatus orderStatus"
+      "orderNumber linkedNurseryOrderCode customerName productName quantity lineItems agriLoadStatus dispatchStatus orderStatus"
     )
     .lean();
 
@@ -247,6 +292,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
   session.startTransaction();
 
   const voiceFeedbackOrderIds = [];
+  const dispatchedAlertQueue = new Map();
 
   try {
     const dispatchRequest = { ...req.body };
@@ -258,7 +304,9 @@ const createDispatch = catchAsync(async (req, res, next) => {
     if (dispatchRequest.expectedNursery !== undefined) {
       delete dispatchRequest.expectedNursery;
     }
-    const autoMarkLinkedAgriLoaded = Boolean(dispatchRequest.autoMarkLinkedAgriLoaded);
+    // Always keep linked Ram Agri loading as an explicit/manual step.
+    // Plant dispatch must not auto-flip agriLoadStatus to LOADED.
+    const autoMarkLinkedAgriLoaded = false;
     if (dispatchRequest.autoMarkLinkedAgriLoaded !== undefined) {
       delete dispatchRequest.autoMarkLinkedAgriLoaded;
     }
@@ -322,6 +370,11 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
     validateQuantities(dispatchRequest.plantsDetails);
     const pendingLinkedAgriOrders = await getPendingLinkedAgriLoads(dispatchRequest.orderIds);
+    const pendingLinkedNurseryOrderIds = new Set(
+      pendingLinkedAgriOrders
+        .map((o) => String(o?.linkedNurseryOrderId || "").trim())
+        .filter(Boolean)
+    );
     dispatchRequest.transportId = await generateTransportId();
 
     const dispatch = await Dispatch.create([dispatchRequest], { session });
@@ -334,15 +387,6 @@ const createDispatch = catchAsync(async (req, res, next) => {
     for (const od of splitDetails) {
       ordersForSplit.push(await Order.findById(od.orderId).session(session));
     }
-
-    const needFreshInvoices = ordersForSplit.filter(
-      (o) => o && !String(o.deliveryChallanInvoiceNumber || "").trim()
-    ).length;
-    const freshInvoiceLabels =
-      splitDetails.length > 0 && needFreshInvoices > 0
-        ? await allocateNextInvoiceNumbers(session, needFreshInvoices)
-        : [];
-    let freshInvoiceIdx = 0;
 
     // Handle partial/split dispatches if orderDispatchDetails is provided
     if (splitDetails.length > 0) {
@@ -379,8 +423,20 @@ const createDispatch = catchAsync(async (req, res, next) => {
         }
 
         const preAssigned = String(order.deliveryChallanInvoiceNumber || "").trim();
-        const invoiceLabel =
-          preAssigned || freshInvoiceLabels[freshInvoiceIdx++] || "";
+        let official = null;
+        let legInvoice = "";
+        if (newStatus === "DISPATCHED" && newRemainingPlants === 0) {
+          official = await ensureOfficialDeliveryChallanForOrder(order, session);
+        }
+        if (official) {
+          legInvoice = official;
+        } else {
+          legInvoice = preAssigned;
+          if (!legInvoice) {
+            const [g] = await allocateNextInvoiceNumbers(session, 1);
+            legInvoice = g || "";
+          }
+        }
 
         // Add dispatch history entry
         const dispatchHistoryEntry = {
@@ -391,7 +447,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
           processedBy: req.user ? req.user._id : null,
           driverName: dispatchRequest.driverName || "",
           vehicleName: dispatchRequest.vehicleName || "",
-          ...(invoiceLabel ? { invoiceNumber: invoiceLabel } : {}),
+          ...(legInvoice ? { invoiceNumber: legInvoice } : {}),
         };
 
         const setFields = {
@@ -400,12 +456,15 @@ const createDispatch = catchAsync(async (req, res, next) => {
           currentDispatchId: dispatch[0]._id, // Set the current dispatch reference
           ...(expectedNurseryGlobal ? { expectedNursery: expectedNurseryGlobal } : {}),
         };
-        if (!preAssigned && invoiceLabel) {
-          setFields.deliveryChallanInvoiceNumber = invoiceLabel;
+        if (official) {
+          setFields.officialDeliveryChallanNumber = official;
+        }
+        if (!preAssigned && legInvoice && !official) {
+          setFields.deliveryChallanInvoiceNumber = legInvoice;
         }
 
         // Update the order
-        await updateOrderWithLedgerSync({
+        const updatedOrder = await updateOrderWithLedgerSync({
           orderId: orderDispatch.orderId,
           existingDoc: order,
           updateOperation: {
@@ -417,6 +476,13 @@ const createDispatch = catchAsync(async (req, res, next) => {
           session,
           userId: req.user?._id,
           contextLabel: "create_dispatch_split_update",
+        });
+        queueDispatchedOrderAlert({
+          queue: dispatchedAlertQueue,
+          previousOrder: order,
+          updatedOrder,
+          changedBy: req.user?.name || req.user?.email || "Unknown",
+          allowedOrderIds: pendingLinkedNurseryOrderIds,
         });
       }
     } else {
@@ -469,6 +535,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
     }
 
     await session.commitTransaction();
+    fireQueuedDispatchedOrderAlerts(dispatchedAlertQueue);
 
     if (voiceFeedbackOrderIds.length > 0) {
       (async () => {
@@ -483,6 +550,85 @@ const createDispatch = catchAsync(async (req, res, next) => {
         }
       })();
     }
+
+    // WhatsApp dispatch alert — fire-and-forget, never blocks the API response
+    (async () => {
+      try {
+        const { sendLinkedAgriAlert } = await import("../services/whatsappAlertService.js");
+
+        // Resolve farmer / customer names from the dispatched order IDs
+        const allOrderIds = dispatchRequest.orderIds || [];
+        const farmerNames = [];
+        for (const oid of allOrderIds) {
+          try {
+            const o = await Order.findById(oid)
+              .populate("farmer", "name")
+              .populate("salesPerson", "name")
+              .lean();
+            if (!o) continue;
+            const name =
+              o?.farmer?.name ||
+              o?.orderFor?.name ||
+              o?.salesPerson?.name ||
+              String(oid);
+            if (name) farmerNames.push(name);
+          } catch (_) { /* skip individual lookup failure */ }
+        }
+
+        const dispatchDocForAlert = dispatch[0]?.toObject ? dispatch[0].toObject() : dispatch[0];
+        const resolvedVehicleName =
+          dispatchRequest.vehicleName || dispatchDocForAlert?.vehicleName || "";
+        const resolvedVehicleNumber =
+          dispatchRequest.vehicleNumber || dispatchDocForAlert?.vehicleNumber || "";
+        const resolvedDriverName =
+          dispatchRequest.driverName || dispatchDocForAlert?.driverName || "";
+        const resolvedDriverMobile =
+          dispatchRequest.driverMobile || dispatchDocForAlert?.driverMobile || "";
+
+        // Linked Ram Agri inputs are manual: send one-click "mark loaded" alert while pending.
+        if (pendingLinkedAgriOrders.length > 0) {
+          const products = [
+            ...new Set(
+              pendingLinkedAgriOrders
+                .map((o) => o?.productName || o?.lineItems?.[0]?.name || "")
+                .filter(Boolean)
+            ),
+          ];
+          const linkedOrders = pendingLinkedAgriOrders.map((o) => ({
+            orderNumber: o?.orderNumber,
+            linkedNurseryOrderCode: o?.linkedNurseryOrderCode,
+            linkedNurseryOrderId: o?.linkedNurseryOrderId,
+            productName: o?.productName,
+            ramAgriVarietyName: o?.ramAgriVarietyName,
+            subtypeName: o?.subtypeName,
+            quantity: o?.quantity,
+            deliveredQuantity: o?.deliveredQuantity,
+            lineItems: Array.isArray(o?.lineItems)
+              ? o.lineItems.map((li) => ({
+                  name: li?.name,
+                productName: li?.productName,
+                ramAgriVarietyName: li?.ramAgriVarietyName,
+                subtypeName: li?.subtypeName,
+                subtype: li?.subtype,
+                type: li?.type,
+                  quantity: li?.quantity ?? li?.qty ?? li?.requestedQuantity,
+                }))
+              : [],
+          }));
+          await sendLinkedAgriAlert({
+            linkedCount: pendingLinkedAgriOrders.length,
+            products,
+            linkedOrders,
+            vehicleName: resolvedVehicleName,
+            vehicleNumber: resolvedVehicleNumber,
+            driverName: resolvedDriverName,
+            loadedBy: req.user?.name || req.user?.email || "Unknown",
+          });
+        }
+      } catch (e) {
+        console.error("whatsapp-alert dispatch createDispatch:", e?.message || e);
+      }
+    })();
 
     const dispatchDoc = dispatch[0]?.toObject ? dispatch[0].toObject() : dispatch[0];
     const stillPendingLinkedAgri =
@@ -674,6 +820,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
 
   const session = await mongoose.startSession();
   session.startTransaction();
+  const dispatchedAlertQueue = new Map();
 
   try {
     const existing = await findDispatchDocumentFlexible(id, session);
@@ -681,6 +828,12 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       throw new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404);
     }
     const dispatchOid = existing._id;
+    const pendingLinkedAgriOrders = await getPendingLinkedAgriLoads(existing.orderIds || []);
+    const pendingLinkedNurseryOrderIds = new Set(
+      pendingLinkedAgriOrders
+        .map((o) => String(o?.linkedNurseryOrderId || "").trim())
+        .filter(Boolean)
+    );
 
     if (existing.transportStatus === "DELIVERED") {
       const risky = ["orderIds", "orderDispatchDetails", "plantsDetails", "afterDispatchedOrderIds"];
@@ -896,14 +1049,6 @@ const updateDispatch = catchAsync(async (req, res, next) => {
     const newOrderById = new Map(
       newlyAddedOrderIds.map((id, idx) => [String(id), newOrderDocs[idx]])
     );
-    const needFreshInvoiceCount = newOrderDocs.filter(
-      (o) => o && !String(o.deliveryChallanInvoiceNumber || "").trim()
-    ).length;
-    const newOrderInvoiceLabels =
-      needFreshInvoiceCount > 0
-        ? await allocateNextInvoiceNumbers(session, needFreshInvoiceCount)
-        : [];
-    let newOrderInvoiceIdx = 0;
 
     for (const newId of effectiveNewIds) {
       if (oldIdSet.has(newId)) continue;
@@ -926,8 +1071,20 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       const newRemaining = currentRemaining - newQty;
       const newStatus = orderStatusFromRemaining(order, newRemaining);
       const preAssignedInv = String(order.deliveryChallanInvoiceNumber || "").trim();
-      const nextInvoiceLabel =
-        preAssignedInv || newOrderInvoiceLabels[newOrderInvoiceIdx++] || "";
+      let official = null;
+      let legInvoice = "";
+      if (newStatus === "DISPATCHED" && newRemaining === 0) {
+        official = await ensureOfficialDeliveryChallanForOrder(order, session);
+      }
+      if (official) {
+        legInvoice = official;
+      } else {
+        legInvoice = preAssignedInv;
+        if (!legInvoice) {
+          const [g] = await allocateNextInvoiceNumbers(session, 1);
+          legInvoice = g || "";
+        }
+      }
       const dispatchHistoryEntry = {
         date: new Date(),
         quantity: newQty,
@@ -936,17 +1093,20 @@ const updateDispatch = catchAsync(async (req, res, next) => {
         processedBy: req.user ? req.user._id : null,
         driverName: raw.driverName ?? existing.driverName ?? "",
         vehicleName: raw.vehicleName ?? existing.vehicleName ?? "",
-        ...(nextInvoiceLabel ? { invoiceNumber: nextInvoiceLabel } : {}),
+        ...(legInvoice ? { invoiceNumber: legInvoice } : {}),
       };
       const setUpdateDispatchAdd = {
         remainingPlants: newRemaining,
         orderStatus: newStatus,
         currentDispatchId: dispatchOid,
       };
-      if (!preAssignedInv && nextInvoiceLabel) {
-        setUpdateDispatchAdd.deliveryChallanInvoiceNumber = nextInvoiceLabel;
+      if (official) {
+        setUpdateDispatchAdd.officialDeliveryChallanNumber = official;
       }
-      await updateOrderWithLedgerSync({
+      if (!preAssignedInv && legInvoice && !official) {
+        setUpdateDispatchAdd.deliveryChallanInvoiceNumber = legInvoice;
+      }
+      const updatedOrder = await updateOrderWithLedgerSync({
         orderId: newId,
         existingDoc: order,
         session,
@@ -956,6 +1116,13 @@ const updateDispatch = catchAsync(async (req, res, next) => {
           $set: setUpdateDispatchAdd,
           $push: { dispatchHistory: dispatchHistoryEntry },
         },
+      });
+      queueDispatchedOrderAlert({
+        queue: dispatchedAlertQueue,
+        previousOrder: order,
+        updatedOrder,
+        changedBy: req.user?.name || req.user?.email || "Unknown",
+        allowedOrderIds: pendingLinkedNurseryOrderIds,
       });
     }
 
@@ -990,9 +1157,25 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       const newRemaining = currentRemaining - delta;
       const newStatus = orderStatusFromRemaining(order, newRemaining);
 
+      let official = null;
+      if (newStatus === "DISPATCHED" && newRemaining === 0) {
+        official = await ensureOfficialDeliveryChallanForOrder(order, session);
+      }
+      let fallbackLegInvoice = "";
+      if (newStatus === "DISPATCHED" && newRemaining === 0 && !official) {
+        const [g] = await allocateNextInvoiceNumbers(session, 1);
+        fallbackLegInvoice = g || "";
+      }
+
       const nextHist = (order.dispatchHistory || []).map((h) => {
         const plain = h?.toObject ? h.toObject() : { ...h };
         if (String(plain.dispatchId) !== String(dispatchOid)) return plain;
+        const inv =
+          official ||
+          plain.invoiceNumber ||
+          String(order.deliveryChallanInvoiceNumber || "").trim() ||
+          fallbackLegInvoice ||
+          "";
         return {
           ...plain,
           quantity: newQty,
@@ -1001,6 +1184,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
             raw.driverName ?? existing.driverName ?? plain.driverName ?? "",
           vehicleName:
             raw.vehicleName ?? existing.vehicleName ?? plain.vehicleName ?? "",
+          ...(inv ? { invoiceNumber: inv } : {}),
         };
       });
 
@@ -1009,20 +1193,39 @@ const updateDispatch = catchAsync(async (req, res, next) => {
           ? dispatchOid
           : order.currentDispatchId;
 
-      await updateOrderWithLedgerSync({
+      const setPayload = {
+        dispatchHistory: nextHist,
+        remainingPlants: newRemaining,
+        orderStatus: newStatus,
+        currentDispatchId: nextCurrent,
+      };
+      if (official) {
+        setPayload.officialDeliveryChallanNumber = official;
+      }
+      if (
+        !official &&
+        fallbackLegInvoice &&
+        !String(order.deliveryChallanInvoiceNumber || "").trim()
+      ) {
+        setPayload.deliveryChallanInvoiceNumber = fallbackLegInvoice;
+      }
+
+      const updatedOrder = await updateOrderWithLedgerSync({
         orderId: oidStr,
         existingDoc: order,
         session,
         userId: req.user?._id,
         contextLabel: "update_dispatch_qty_change",
         updateOperation: {
-          $set: {
-            dispatchHistory: nextHist,
-            remainingPlants: newRemaining,
-            orderStatus: newStatus,
-            currentDispatchId: nextCurrent,
-          },
+          $set: setPayload,
         },
+      });
+      queueDispatchedOrderAlert({
+        queue: dispatchedAlertQueue,
+        previousOrder: order,
+        updatedOrder,
+        changedBy: req.user?.name || req.user?.email || "Unknown",
+        allowedOrderIds: pendingLinkedNurseryOrderIds,
       });
     }
 
@@ -1088,6 +1291,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
     }
 
     await session.commitTransaction();
+    fireQueuedDispatchedOrderAlerts(dispatchedAlertQueue);
 
     const response = generateResponse(
       "Success",
@@ -1529,6 +1733,7 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
 
   const session = await mongoose.startSession();
   session.startTransaction();
+  const dispatchedAlertQueue = new Map();
 
   try {
     const existingDispatchDoc = await findDispatchDocumentFlexible(id, session);
@@ -1541,6 +1746,13 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     const dispatchOid = existingDispatchDoc._id;
 
     const order = await Order.findById(orderId).session(session);
+    const pendingLinkedAgriForOrder = await getPendingLinkedAgriLoads([orderId]);
+    const pendingLinkedNurseryOrderIds = new Set(
+      pendingLinkedAgriForOrder
+        .map((o) => String(o?.linkedNurseryOrderId || "").trim())
+        .filter(Boolean)
+    );
+
     if (!order) {
       throw new AppError("Order not found", 404);
     }
@@ -1674,8 +1886,14 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     }
 
     const preAssignedQuick = String(order.deliveryChallanInvoiceNumber || "").trim();
+    let official = null;
     let quickInvoiceLabel = preAssignedQuick;
-    if (!quickInvoiceLabel) {
+    if (newStatus === "DISPATCHED" && newRemainingPlants === 0) {
+      official = await ensureOfficialDeliveryChallanForOrder(order, session);
+    }
+    if (official) {
+      quickInvoiceLabel = official;
+    } else if (!quickInvoiceLabel) {
       const [freshQuick] = await allocateNextInvoiceNumbers(session, 1);
       quickInvoiceLabel = freshQuick || "";
     }
@@ -1697,11 +1915,14 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
       currentDispatchId: dispatchOid,
       cavity: trayLean._id,
     };
-    if (!preAssignedQuick && quickInvoiceLabel) {
+    if (official) {
+      quickAddSet.officialDeliveryChallanNumber = official;
+    }
+    if (!preAssignedQuick && quickInvoiceLabel && !official) {
       quickAddSet.deliveryChallanInvoiceNumber = quickInvoiceLabel;
     }
 
-    await updateOrderWithLedgerSync({
+    const updatedOrder = await updateOrderWithLedgerSync({
       orderId,
       existingDoc: order,
       updateOperation: {
@@ -1714,8 +1935,16 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
       userId: req.user?._id,
       contextLabel: "quick_add_to_dispatch",
     });
+    queueDispatchedOrderAlert({
+      queue: dispatchedAlertQueue,
+      previousOrder: order,
+      updatedOrder,
+      changedBy: req.user?.name || req.user?.email || "Unknown",
+      allowedOrderIds: pendingLinkedNurseryOrderIds,
+    });
 
     await session.commitTransaction();
+    fireQueuedDispatchedOrderAlerts(dispatchedAlertQueue);
 
     if (newStatus === "DISPATCHED") {
       (async () => {
@@ -1893,6 +2122,10 @@ const getDispatches = catchAsync(async (req, res, next) => {
           returnedPlants: { $first: "$returnedPlants" },
           damagedPlants: { $first: "$damagedPlants" },
           transportStatus: { $first: "$transportStatus" },
+          deliveryChallanPdfUrl: { $first: "$deliveryChallanPdfUrl" },
+          deliveryChallanPdfGeneratedAt: { $first: "$deliveryChallanPdfGeneratedAt" },
+          completeInvoicePdfUrl: { $first: "$completeInvoicePdfUrl" },
+          completeInvoicePdfGeneratedAt: { $first: "$completeInvoicePdfGeneratedAt" },
           createdAt: { $first: "$createdAt" }, // Keep as Date object
           updatedAt: { $first: "$updatedAt" }, // Keep as Date object
           orderIds: {
@@ -1900,6 +2133,8 @@ const getDispatches = catchAsync(async (req, res, next) => {
               _id: "$orderDetails._id",
               order: "$orderDetails.orderId",
               deliveryChallanInvoiceNumber: "$orderDetails.deliveryChallanInvoiceNumber",
+              officialDeliveryChallanNumber:
+                "$orderDetails.officialDeliveryChallanNumber",
               quantity: "$orderDetails.numberOfPlants",
               remainingPlants: "$orderDetails.remainingPlants",
               deliveryDate: "$orderDetails.deliveryDate", // Delivery date from order
@@ -1945,6 +2180,8 @@ const getDispatches = catchAsync(async (req, res, next) => {
                 dispatchHistory: "$orderDetails.dispatchHistory",
                 deliveryChallanInvoiceNumber:
                   "$orderDetails.deliveryChallanInvoiceNumber",
+                officialDeliveryChallanNumber:
+                  "$orderDetails.officialDeliveryChallanNumber",
                 bookingSlot: {
                   startDay: {
                     $arrayElemAt: ["$bookingSlotDetails.startDay", 0],
@@ -2067,6 +2304,14 @@ const getDispatches = catchAsync(async (req, res, next) => {
         ...dispatch,
         plantsDetails: plantDetailsWithCavity,
         orderDispatchDetails: dispatch.orderDispatchDetails || [], // Include dispatch details
+        deliveryChallanPdfUrl: dispatch.deliveryChallanPdfUrl || "",
+        completeInvoicePdfUrl: dispatch.completeInvoicePdfUrl || "",
+        deliveryChallanPdfGeneratedAt: dispatch.deliveryChallanPdfGeneratedAt
+          ? new Date(dispatch.deliveryChallanPdfGeneratedAt).toISOString()
+          : null,
+        completeInvoicePdfGeneratedAt: dispatch.completeInvoicePdfGeneratedAt
+          ? new Date(dispatch.completeInvoicePdfGeneratedAt).toISOString()
+          : null,
         // Format dates for display
         createdAt: dispatch.createdAt.toISOString(),
         updatedAt: dispatch.updatedAt.toISOString(),
@@ -2196,8 +2441,14 @@ const getDispatch = catchAsync(async (req, res, next) => {
       transportId: dispatch.transportId,
       driverName: dispatch.driverName,
       vehicleName: dispatch.vehicleName,
+      vehicleNumber: dispatch.vehicleNumber || "",
       isDeleted: dispatch.isDeleted || false,
       returnedPlants: dispatch.returnedPlants || 0,
+      damagedPlants: dispatch.damagedPlants || 0,
+      deliveryChallanPdfUrl: dispatch.deliveryChallanPdfUrl || "",
+      deliveryChallanPdfGeneratedAt: dispatch.deliveryChallanPdfGeneratedAt || null,
+      completeInvoicePdfUrl: dispatch.completeInvoicePdfUrl || "",
+      completeInvoicePdfGeneratedAt: dispatch.completeInvoicePdfGeneratedAt || null,
       transportStatus: dispatch.transportStatus || "PENDING",
       orderDispatchDetails: dispatch.orderDispatchDetails || [], // Include dispatch details
       plantsDetails: dispatch.plantsDetails.map((plant) => {
@@ -2260,6 +2511,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
         _id: order._id,
         orderId: order.orderId,
         deliveryChallanInvoiceNumber: order.deliveryChallanInvoiceNumber || "",
+        officialDeliveryChallanNumber: order.officialDeliveryChallanNumber || "",
         farmer: order.farmer,
         salesPerson: order.salesPerson,
         plantName: order.plantName,
@@ -2279,6 +2531,8 @@ const getDispatch = catchAsync(async (req, res, next) => {
         dealerOrder: order.dealerOrder,
         orderBookingDate: order.orderBookingDate,
         deliveryDate: order.deliveryDate,
+        notes: order.notes,
+        dispatchHistory: order.dispatchHistory || [],
       })),
       createdAt: dispatch.createdAt,
       updatedAt: dispatch.updatedAt,
@@ -2295,6 +2549,145 @@ const getDispatch = catchAsync(async (req, res, next) => {
     console.error("Error in getDispatch:", error);
     next(error);
   }
+});
+
+/** Lean dispatch + tray map for server-side PDFs (same populate as getDispatch). */
+async function loadDispatchLeanForPdfGeneration(dispatchObjectId) {
+  const dispatch = await Dispatch.findById(dispatchObjectId)
+    .populate({ path: "tripId" })
+    .populate({
+      path: "orderIds",
+      populate: [
+        {
+          path: "farmer",
+          select: "name mobileNumber village",
+        },
+        {
+          path: "salesPerson",
+          select: "name phoneNumber",
+        },
+        {
+          path: "plantName",
+          select: "name variety type subtypes",
+        },
+        {
+          path: "cavity",
+          select: "name cavity numberPerCrate",
+        },
+        {
+          path: "bookingSlot",
+          select: "startDay endDay month",
+        },
+      ],
+    })
+    .lean();
+
+  if (!dispatch) return null;
+
+  const trayIds = [];
+  (dispatch.plantsDetails || []).forEach((plant) => {
+    if (Array.isArray(plant.pickupDetails)) {
+      plant.pickupDetails.forEach((pickup) => {
+        if (pickup.cavity) trayIds.push(pickup.cavity);
+      });
+    }
+    if (Array.isArray(plant.crates)) {
+      plant.crates.forEach((crate) => {
+        if (crate.cavity) trayIds.push(crate.cavity);
+      });
+    }
+  });
+  const uniqueTrayIds = [...new Set(trayIds.map((id) => id.toString()))];
+  const trays = await Tray.find({ _id: { $in: uniqueTrayIds } }).lean();
+  const trayMap = trays.reduce((map, tray) => {
+    map[tray._id.toString()] = tray;
+    return map;
+  }, {});
+  return { dispatch, trayMap };
+}
+
+const regenerateDispatchPdfs = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const perm = getOrderUpdateUserContext(
+    resolveUserForOrderUpdatePermissions(req) || req.user
+  );
+  if (!perm.canEditOrderCore) {
+    return next(new AppError("You are not allowed to generate dispatch PDFs", 403));
+  }
+
+  const resolved = await findDispatchDocumentFlexible(id);
+  if (!resolved) {
+    return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
+  }
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const allowedTypes = new Set(["delivery_challan", "complete_invoice"]);
+  let types = ["delivery_challan", "complete_invoice"];
+  if (Array.isArray(body.types) && body.types.length > 0) {
+    types = body.types
+      .map((t) => String(t).trim().toLowerCase())
+      .filter((t) => allowedTypes.has(t));
+  }
+  if (!types.length) {
+    types = ["delivery_challan", "complete_invoice"];
+  }
+
+  const loaded = await loadDispatchLeanForPdfGeneration(resolved._id);
+  if (!loaded) {
+    return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
+  }
+
+  const { dispatch } = loaded;
+
+  if (types.includes("complete_invoice") && dispatch.transportStatus !== "DELIVERED") {
+    return next(
+      new AppError(
+        "Complete invoice PDF is only available when transport status is DELIVERED",
+        400
+      )
+    );
+  }
+
+  const dispatchObjectId = String(dispatch._id);
+  const now = new Date();
+  const $set = {};
+
+  if (types.includes("delivery_challan")) {
+    const buf = await buildDeliveryChallanPdfBuffer(dispatch);
+    const url = await uploadToS3(buf, `delivery-challan-${dispatchObjectId}.pdf`, {
+      folder: `dispatch-pdfs/${dispatchObjectId}`,
+    });
+    $set.deliveryChallanPdfUrl = url;
+    $set.deliveryChallanPdfGeneratedAt = now;
+  }
+
+  if (types.includes("complete_invoice")) {
+    const buf = await buildCompleteInvoicePdfBuffer(dispatch);
+    const url = await uploadToS3(buf, `complete-invoice-${dispatchObjectId}.pdf`, {
+      folder: `dispatch-pdfs/${dispatchObjectId}`,
+    });
+    $set.completeInvoicePdfUrl = url;
+    $set.completeInvoicePdfGeneratedAt = now;
+  }
+
+  const updated = await Dispatch.findByIdAndUpdate(dispatch._id, { $set }, { new: true })
+    .select(
+      "deliveryChallanPdfUrl deliveryChallanPdfGeneratedAt completeInvoicePdfUrl completeInvoicePdfGeneratedAt"
+    )
+    .lean();
+
+  if (!updated) {
+    return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
+  }
+
+  res.status(200).json(
+    generateResponse("Success", "Dispatch PDFs generated", {
+      deliveryChallanPdfUrl: updated.deliveryChallanPdfUrl || "",
+      deliveryChallanPdfGeneratedAt: updated.deliveryChallanPdfGeneratedAt || null,
+      completeInvoicePdfUrl: updated.completeInvoicePdfUrl || "",
+      completeInvoicePdfGeneratedAt: updated.completeInvoicePdfGeneratedAt || null,
+    })
+  );
 });
 
 const removeTransport = async (req, res) => {
@@ -2415,6 +2808,45 @@ const removeTransport = async (req, res) => {
       }
     }
 
+    const affectedOrderIds = Array.from(
+      new Set(
+        (dispatch.orderDispatchDetails && dispatch.orderDispatchDetails.length > 0
+          ? dispatch.orderDispatchDetails.map((od) => String(od?.orderId || "").trim())
+          : (dispatch.orderIds || []).map((oid) => String(oid || "").trim())
+        ).filter(Boolean)
+      )
+    )
+      .filter((id) => mongoose.isValidObjectId(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    if (affectedOrderIds.length > 0) {
+      const linkedAgriRows = await AgriSalesOrder.find({
+        linkedNurseryOrderId: { $in: affectedOrderIds },
+        agriLoadStatus: "LOADED",
+        orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+      }).session(session);
+
+      for (const row of linkedAgriRows) {
+        row.agriLoadStatus = "PENDING_LOAD";
+        row.loadedAt = null;
+        row.loadedBy = null;
+        if (!Array.isArray(row.activityLog)) row.activityLog = [];
+        row.activityLog.push({
+          action: "DISPATCH_UPDATED",
+          description: `Reset to PENDING_LOAD because dispatch ${dispatch.transportId} was removed.`,
+          performedBy: req.user?._id || req.user?.id || null,
+          performedByName: req.user?.name || "System",
+          metadata: {
+            agriLoadStatus: "PENDING_LOAD",
+            source: "DISPATCH_DELETE_ROLLBACK",
+            dispatchId: dispatch._id,
+            transportId: dispatch.transportId,
+          },
+        });
+        await row.save({ session });
+      }
+    }
+
     // Delete the dispatch document
     await Dispatch.deleteOne({ _id: dispatch._id }, { session });
 
@@ -2442,7 +2874,7 @@ const removeTransport = async (req, res) => {
 };
 const handleDispatchReturns = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-  const { orderUpdates, expectedNursery: bodyExpectedNursery } = req.body || {};
+  const { orderUpdates, expectedNursery: bodyExpectedNursery, tripData } = req.body || {};
 
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -2477,6 +2909,34 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       },
       { new: true, runValidators: true, session }
     );
+
+    // Upsert Trip document with vehicle trip details if provided
+    if (
+      tripData &&
+      (tripData.kmRun != null || tripData.rent != null || tripData.otherCharges != null || tripData.remark)
+    ) {
+      const tripSet = {
+        vehicleId: dispatch.vehicleId || undefined,
+        vehicleName: dispatch.vehicleName || "",
+        vehicleNumber: dispatch.vehicleNumber || "",
+        driverName: dispatch.driverName || "",
+        driverContact: dispatch.driverMobile || "",
+        dispatchId: dispatchOid,
+        orderIds: dispatch.orderIds,
+        status: "delivered",
+        endDate: new Date(),
+      };
+      if (tripData.kmRun != null && tripData.kmRun !== "") tripSet.kmRun = Number(tripData.kmRun);
+      if (tripData.rent != null && tripData.rent !== "") tripSet.rent = Number(tripData.rent);
+      if (tripData.otherCharges != null && tripData.otherCharges !== "") tripSet.otherCharges = Number(tripData.otherCharges);
+      if (tripData.remark) tripSet.tripRemark = String(tripData.remark);
+      const trip = await Trip.findOneAndUpdate(
+        { dispatchId: dispatchOid },
+        { $set: tripSet },
+        { new: true, upsert: true, session, setDefaultsOnInsert: true }
+      );
+      await Dispatch.findByIdAndUpdate(dispatchOid, { tripId: trip._id }, { session });
+    }
 
     // Create map of order updates (normalize keys — orderId may be string or ObjectId)
     const orderUpdatesMap =
@@ -3150,6 +3610,7 @@ export {
   addOrderToDispatch,
   getDispatches,
   getDispatch,
+  regenerateDispatchPdfs,
   removeTransport,
   assignRoute,
   bulkMarkReady,

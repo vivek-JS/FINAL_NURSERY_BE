@@ -169,6 +169,9 @@ const allowedParams = [
   "orderLimit", // analytics short-report: max orders in list (cap 500)
   "dueOnly", // GET /insights/dashboard — overdue open orders only
   "varietyName", // GET /insights/dashboard — plant subtype name with plantId
+  // One-click agri load link params
+  "orderNumber",
+  "actorPhone",
 ];
 
 /** Effective whitelist: array + mandatory extras (survives accidental removal from `allowedParams`). */
