@@ -765,6 +765,13 @@ const orderSchema = new Schema(
     },
     /** Full audit trail of every split action that touched this order. */
     splitHistory: [splitHistorySchema],
+
+    /** If an office admin has requested a rate change pending SUPER_ADMIN approval, ref is stored here. Cleared on approve/reject. */
+    pendingRateChangeRequestId: {
+      type: Schema.Types.ObjectId,
+      ref: "RateChangeRequest",
+      default: null,
+    },
   },
   { timestamps: true }
 );

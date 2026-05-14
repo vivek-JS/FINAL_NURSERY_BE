@@ -125,10 +125,9 @@ const varietySchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
-  /** Sort order within this crop’s variety / pack dropdown (lower = earlier). */
+  /** Sort order within this crop’s variety / pack dropdown (lower = earlier). Unset = no explicit order (sorts to end). */
   displayOrder: {
     type: Number,
-    default: 0,
     min: 0,
   },
 }, {
@@ -174,11 +173,10 @@ const ramAgriInputsProductSchema = new mongoose.Schema(
     },
     /**
      * Sort order for master list + all product (crop) dropdowns — seed/chemical lists are ordered separately.
-     * Lower numbers appear first. Defaults to 0 for legacy rows; set explicitly from master UI.
+     * Lower numbers appear first. Explicitly set from master UI; unset rows sort to end.
      */
     displayOrder: {
       type: Number,
-      default: 0,
       min: 0,
       index: true,
     },

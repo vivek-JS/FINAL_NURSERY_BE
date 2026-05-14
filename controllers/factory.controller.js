@@ -38,6 +38,7 @@ import {
   DISPATCH_MANAGER_ALLOWED_STATUSES,
   resolveUserForOrderUpdatePermissions,
 } from "../utils/orderUpdatePermissions.js";
+import { createRateChangeRequest } from "./rateChangeRequest.controller.js";
 
 const DISPATCH_DAY_KEY_TO_OFFSET = {
   TODAY: 0,
@@ -72,6 +73,13 @@ const userCanCreateOrderAsAccepted = (user) => {
     role === "SUPERADMIN" ||
     role === "SUPER_ADMIN"
   );
+};
+
+const isSuperAdminUser = (user) => {
+  if (!user) return false;
+  const role = String(user.role || "").toUpperCase().trim();
+  const jt = String(user.jobTitle || "").toUpperCase().trim();
+  return role === "SUPER_ADMIN" || role === "SUPERADMIN" || jt === "SUPER_ADMIN" || jt === "SUPERADMIN";
 };
 
 const authUserObjectIdForOrderAudit = (user) => {
@@ -1725,8 +1733,34 @@ const updateOne = (Model, modelName, allowedFields) =>
 
       // Track general order field edits (rate, numberOfPlants, deliveryDate)
       const editHistoryEntries = [];
-      
-      // Track rate changes
+
+      // Rate change approval gate: non-super-admins trigger a pending approval request
+      // instead of applying the rate immediately. Super admins bypass this and apply directly.
+      let pendingRateApprovalCreated = false;
+      if (
+        filteredBody.rate !== undefined &&
+        Number(filteredBody.rate) !== Number(existingDoc.rate) &&
+        !isSuperAdminUser(req.user)
+      ) {
+        try {
+          await createRateChangeRequest({
+            orderId: existingDoc._id,
+            previousRate: Number(existingDoc.rate),
+            requestedRate: Number(filteredBody.rate),
+            requestedBy: req.user?._id,
+            notes: req.body.rateChangeNotes || "",
+            session,
+          });
+          pendingRateApprovalCreated = true;
+        } catch (rateReqErr) {
+          console.error("[updateOne] Failed to create rate change request:", rateReqErr?.message || rateReqErr);
+          throw new AppError("Failed to submit rate change request. Please try again.", 500);
+        }
+        // Remove rate from filteredBody so it is NOT applied now
+        delete filteredBody.rate;
+      }
+
+      // Super admin applying rate directly: track in edit history
       if (filteredBody.rate && filteredBody.rate !== existingDoc.rate) {
         editHistoryEntries.push({
           field: "rate",
@@ -2560,12 +2594,15 @@ const updateOne = (Model, modelName, allowedFields) =>
           : updatedDoc;
 
       const msg =
-        modelName === "Order" && rejectedFields.length > 0
+        modelName === "Order" && pendingRateApprovalCreated
+          ? `${modelName} updated successfully; rate change is pending Super Admin approval`
+          : modelName === "Order" && rejectedFields.length > 0
           ? `${modelName} updated successfully; ${rejectedFields.length} field(s) were not applied (see rejectedFields)`
           : `${modelName} updated successfully`;
 
-      return res.status(200).json(
+      return res.status(pendingRateApprovalCreated ? 202 : 200).json(
         generateResponse("Success", msg, responseDoc, undefined, {
+          ...(pendingRateApprovalCreated ? { pendingRateApproval: true } : {}),
           ...(modelName === "Order" && rejectedFields.length > 0
             ? { rejectedFields }
             : {}),

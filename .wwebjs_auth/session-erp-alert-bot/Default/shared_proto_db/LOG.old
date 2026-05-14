@@ -1,2 +1,3 @@
-2026/05/14-10:25:04.879 4202bb Creating DB /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/shared_proto_db since it was missing.
-2026/05/14-10:25:04.881 4202bb Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/shared_proto_db/MANIFEST-000001
+2026/05/14-12:08:08.492 45d266 Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/shared_proto_db/MANIFEST-000001
+2026/05/14-12:08:08.492 45d266 Recovering log #3
+2026/05/14-12:08:08.493 45d266 Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/shared_proto_db/000003.log 

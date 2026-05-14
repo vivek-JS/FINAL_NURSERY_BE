@@ -392,6 +392,7 @@ import returnRequestRoute from "./routes/returnRequest.route.js";
 import agriSalesOrderRoute from "./routes/agriSalesOrder.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
 import agriLoadLinkRoute from "./routes/agriLoadLink.route.js";
+import rateChangeRequestRoute from "./routes/rateChangeRequest.route.js";
 import followupMetricsRoute from "./routes/followupMetrics.route.js";
 import taskRoute from "./routes/task.route.js";
 import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
@@ -455,6 +456,7 @@ server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook + tod
 server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
 server.use("/api/v1/agri-load-link", agriLoadLinkRoute); // Public one-click agri load link
+server.use("/api/v1/rate-change-requests", authenticateToken, rateChangeRequestRoute); // Rate change approval flow (by-token + approve-via-link are in publicPaths)
 server.use("/api/v1/call-list", callListPublicRoute); // Public call list (token-based, no auth)
 server.use("/api/v1/voice-feedback", voiceFeedbackRoute); // Post-dispatch Marathi feedback (Exotel webhook public; admin routes JWT)
 server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)

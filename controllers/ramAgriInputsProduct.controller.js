@@ -36,11 +36,14 @@ const isSuperAdminUser = (user) => {
   return role === 'SUPER_ADMIN' || role === 'SUPERADMIN' || jobTitle === 'SUPER_ADMIN' || jobTitle === 'SUPERADMIN';
 };
 
+/** 0 and null/undefined both mean "no explicit order" → sort to end */
+const effectiveOrder = (v) => (!v || v === 0 ? Infinity : v);
+
 function sortVarietiesByDisplayOrder(varieties) {
   if (!Array.isArray(varieties) || varieties.length <= 1) return;
   varieties.sort((a, b) => {
-    const ao = a.displayOrder ?? 0;
-    const bo = b.displayOrder ?? 0;
+    const ao = effectiveOrder(a.displayOrder);
+    const bo = effectiveOrder(b.displayOrder);
     if (ao !== bo) return ao - bo;
     return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
   });
@@ -52,8 +55,8 @@ function sortProductsForApi(crops) {
     return crops;
   }
   const sorted = [...crops].sort((a, b) => {
-    const ao = a.displayOrder ?? 0;
-    const bo = b.displayOrder ?? 0;
+    const ao = effectiveOrder(a.displayOrder);
+    const bo = effectiveOrder(b.displayOrder);
     if (ao !== bo) return ao - bo;
     return String(a.cropName || '').localeCompare(String(b.cropName || ''), undefined, { sensitivity: 'base' });
   });
@@ -61,18 +64,6 @@ function sortProductsForApi(crops) {
   return sorted;
 }
 
-async function nextProductDisplayOrder(productType) {
-  const match =
-    productType === 'seed'
-      ? { $or: [{ productType: 'seed' }, { productType: { $exists: false } }] }
-      : { productType: 'chemical' };
-  const agg = await RamAgriInputsProduct.aggregate([
-    { $match: match },
-    { $group: { _id: null, maxOrder: { $max: { $ifNull: ['$displayOrder', 0] } } } },
-  ]);
-  const maxOrder = agg[0]?.maxOrder ?? -1;
-  return maxOrder + 1;
-}
 
 // Create crop
 export const createCrop = catchAsync(async (req, res, next) => {
@@ -107,16 +98,16 @@ export const createCrop = catchAsync(async (req, res, next) => {
     return next(new AppError('Crop with this name already exists', 409));
   }
 
-  const orderValue = parsedOrder !== undefined ? parsedOrder : await nextProductDisplayOrder(finalProductType);
-
-  const crop = await RamAgriInputsProduct.create({
+  const cropData = {
     productType: finalProductType,
     cropName: cropName.trim(),
     description: description?.trim() || '',
     varieties: varieties || [],
-    displayOrder: orderValue,
     createdBy: req.user._id,
-  });
+  };
+  if (parsedOrder !== undefined) cropData.displayOrder = parsedOrder;
+
+  const crop = await RamAgriInputsProduct.create(cropData);
 
   sortVarietiesByDisplayOrder(crop.varieties);
 
@@ -436,8 +427,7 @@ export const addVariety = catchAsync(async (req, res, next) => {
   if (displayOrder !== undefined && parsedVOrder === null) {
     return next(new AppError('displayOrder must be a non-negative integer', 400));
   }
-  const maxVarOrder = crop.varieties.reduce((m, v) => Math.max(m, v.displayOrder ?? 0), -1);
-  varietyData.displayOrder = parsedVOrder !== undefined ? parsedVOrder : maxVarOrder + 1;
+  if (parsedVOrder !== undefined) varietyData.displayOrder = parsedVOrder;
 
   const updatedCrop = await RamAgriInputsProduct.findByIdAndUpdate(
     id,
