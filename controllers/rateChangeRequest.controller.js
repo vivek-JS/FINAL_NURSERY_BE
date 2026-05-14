@@ -89,11 +89,9 @@ export async function createRateChangeRequest({ orderId, previousRate, requested
 
 async function sendRateChangeWhatsAppAlerts(request, snapshot, token) {
   try {
-    const frontendUrl = String(process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || "").replace(/\/$/, "");
-    if (!frontendUrl) {
-      console.warn("[RateChangeRequest] FRONTEND_URL not set — skipping WhatsApp alert");
-      return;
-    }
+    const frontendUrl = String(
+      process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || "https://erp.rambiotechplants.com"
+    ).replace(/\/$/, "");
 
     const adminNumbers = getAdminNumbersFromEnv();
     if (adminNumbers.length === 0) {
