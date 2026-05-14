@@ -6,6 +6,17 @@ const plantSubtypeSchema = new Schema({
   description: { type: String },
   characteristics: { type: Map, of: String },
   rates: { type: [Number], default: [] }, // Per-subtype list prices in DB; callers often use rates[0] as the active rate
+  monthlyRates: {
+    type: [{
+      month: {
+        type: String,
+        enum: ["January","February","March","April","May","June","July","August","September","October","November","December"],
+        required: true,
+      },
+      rate: { type: Number, default: 0 },
+    }],
+    default: [],
+  }, // Per-month rate overrides; if set for a month, takes priority over rates[0]
   dailyDispatch: { type: Number, default: 0 }, // Daily dispatch capacity for this subtype
   buffer: { type: Number, default: 0 }, // Buffer at plant subtype level
   plantReadyDays: { type: Number, default: 0 }, // Number of days for plant to be ready from sowing

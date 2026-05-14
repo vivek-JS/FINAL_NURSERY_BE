@@ -38,7 +38,9 @@ export async function createRateChangeRequest({ orderId, previousRate, requested
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
   const order = await Order.findById(orderId)
-    .populate("farmer", "name mobileNumber")
+    .populate("farmer", "name mobileNumber village taluka")
+    .populate("plantName", "name")
+    .populate("plantSubtype", "name")
     .session(session || null)
     .lean();
 
@@ -46,8 +48,10 @@ export async function createRateChangeRequest({ orderId, previousRate, requested
     orderId: order?.orderId || null,
     farmerName: order?.orderFor?.name || order?.farmer?.name || "",
     farmerMobile: String(order?.orderFor?.mobileNumber || order?.farmer?.mobileNumber || ""),
-    village: order?.orderFor?.village || "",
-    plantName: order?.plantName || "",
+    village: order?.orderFor?.village || order?.farmer?.village || "",
+    taluka: order?.orderFor?.taluka || order?.orderFor?.talukaName || order?.farmer?.taluka || "",
+    plantName: order?.plantName?.name || String(order?.plantName || ""),
+    plantSubtypeName: order?.plantSubtype?.name || "",
     numberOfPlants: order?.numberOfPlants || null,
   };
 
@@ -110,15 +114,19 @@ async function sendRateChangeWhatsAppAlerts(request, snapshot, token) {
 
         const farmerName = snapshot.farmerName || "—";
         const village = snapshot.village || "—";
+        const taluka = snapshot.taluka || "—";
         const plantName = snapshot.plantName || "—";
+        const subtypeName = snapshot.plantSubtypeName ? ` (${snapshot.plantSubtypeName})` : "";
         const qty = snapshot.numberOfPlants ?? "—";
         const orderNo = snapshot.orderId ?? "—";
 
         const message = [
           "📋 *Rate Change Approval Request*",
-          `Order #${orderNo} | ${farmerName}, ${village}`,
-          `Plant: ${plantName} x ${qty}`,
-          `Current Rate: ₹${request.previousRate} → Requested: ₹${request.requestedRate}`,
+          `Order #${orderNo}`,
+          `Farmer: ${farmerName}`,
+          `Village: ${village} | Taluka: ${taluka}`,
+          `Plant: *${plantName}${subtypeName}* × ${qty}`,
+          `Rate: ₹${request.previousRate} → *₹${request.requestedRate}*`,
           "",
           "✅ Approve (valid 24 hrs):",
           approvalUrl,

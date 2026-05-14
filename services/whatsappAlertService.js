@@ -216,7 +216,7 @@ export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHis
     const village = src?.farmer?.village || src?.orderFor?.village || order?.orderFor?.village || "—";
     const taluka = src?.farmer?.taluka || src?.orderFor?.taluka || order?.orderFor?.taluka || "—";
 
-    // Build human-readable change lines
+    // Build human-readable change lines from tracked edit history
     const changeLines = editHistory
       .filter((e) => e?.field && (e.previousValue !== undefined || e.newValue !== undefined))
       .map((e) => {
@@ -224,7 +224,6 @@ export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHis
         let prev = e.previousValue;
         let next = e.newValue;
 
-        // Format dates
         if (e.field === "deliveryDate") {
           prev = prev ? new Date(prev).toLocaleDateString("en-IN") : "—";
           next = next ? new Date(next).toLocaleDateString("en-IN") : "—";
@@ -236,8 +235,59 @@ export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHis
         return `  • ${label} updated`;
       });
 
+    // Also detect changes by diffing existingDoc vs updated order for fields not in editHistory
+    if (existingDoc && order) {
+      const diffChecks = [
+        {
+          field: "orderStatus",
+          label: "Status",
+          prev: existingDoc.orderStatus,
+          next: order.orderStatus,
+        },
+        {
+          field: "rate",
+          label: "Rate (₹)",
+          prev: existingDoc.rate,
+          next: order.rate,
+        },
+        {
+          field: "numberOfPlants",
+          label: "Qty",
+          prev: existingDoc.numberOfPlants,
+          next: order.numberOfPlants,
+        },
+        {
+          field: "deliveryDate",
+          label: "Delivery Date",
+          prev: existingDoc.deliveryDate,
+          next: order.deliveryDate,
+          format: (v) => (v ? new Date(v).toLocaleDateString("en-IN") : "—"),
+        },
+        {
+          field: "bookingSlot",
+          label: "Booking Slot",
+          prev: String(existingDoc.bookingSlot || ""),
+          next: String(order.bookingSlot || ""),
+        },
+      ];
+
+      for (const check of diffChecks) {
+        // Skip if already in editHistory
+        const alreadyTracked = editHistory.some((e) => e?.field === check.field);
+        if (alreadyTracked) continue;
+
+        const fmt = check.format || ((v) => String(v ?? "—"));
+        const prevStr = fmt(check.prev);
+        const nextStr = fmt(check.next);
+
+        if (prevStr !== nextStr && nextStr !== "—" && nextStr !== "undefined") {
+          changeLines.push(`  • ${check.label}: ${prevStr} → ${nextStr}`);
+        }
+      }
+    }
+
     if (changeLines.length === 0) {
-      changeLines.push("  • Quantity / Amount updated");
+      changeLines.push("  • Details updated");
     }
 
     const message = [

@@ -36,6 +36,7 @@ export const addPlant = async (req, res) => {
         description: subtype.description || "",
         characteristics: subtype.characteristics || {},
         rates: Array.isArray(subtype.rates) ? subtype.rates : [], // Ensure rates is an array
+        monthlyRates: Array.isArray(subtype.monthlyRates) ? subtype.monthlyRates : [],
         buffer: subtype.buffer || 0,
         plantReadyDays: subtype.plantReadyDays || 0, // Plant ready days for sowing
         slotDays: subtype.slotDays, // Slot days for this subtype
@@ -273,6 +274,7 @@ export const updatePlant = async (req, res) => {
           description: subtype.description || "",
           characteristics: subtype.characteristics || {},
           rates: Array.isArray(subtype.rates) ? subtype.rates : [],
+          monthlyRates: Array.isArray(subtype.monthlyRates) ? subtype.monthlyRates : [],
           buffer: subtype.buffer || 0,
           plantReadyDays: subtype.plantReadyDays || 0,
           slotDays: subtype.slotDays || subtype.slotSize || plant.slotSize,
@@ -712,6 +714,7 @@ export const getPlants = async (req, res) => {
         description: subtype.description || "",
         characteristics: subtype.characteristics || {},
         rates: subtype.rates || [],
+        monthlyRates: subtype.monthlyRates || [],
         dailyDispatch: subtype.dailyDispatch || 0,
         buffer: subtype.buffer || 0,
         plantReadyDays: subtype.plantReadyDays || 0, // Explicitly include plantReadyDays with default

@@ -424,6 +424,7 @@ export const getSubtypesByPlant = async (req, res) => {
           subtypeId: "$_id", // Include subtypeId
           subtypeName: "$subtypeData.name", // Extract and include the correct name
           rate: "$subtypeData.rates", // Include the rates array for the subtype
+          monthlyRates: "$subtypeData.monthlyRates", // Per-month rate overrides
           totalPlants: 1, // Include the sum of totalPlants
           totalBookedPlants: 1, // Include the sum of totalBookedPlants
         },
@@ -453,6 +454,7 @@ export const getSubtypesByPlant = async (req, res) => {
             subtypeId: s._id,
             subtypeName: s.name,
             rate: s.rates,
+            monthlyRates: s.monthlyRates || [],
             totalPlants: 0,
             totalBookedPlants: 0,
           }))
