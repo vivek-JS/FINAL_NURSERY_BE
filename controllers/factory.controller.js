@@ -1246,7 +1246,7 @@ const updateOne = (Model, modelName, allowedFields) =>
     try {
       const existingDoc = await Model.findById(id)
         .populate("plantName")
-        .populate("farmer", "name")
+        .populate("farmer", "name village taluka")
         .populate("salesPerson")
         .session(session);
 
@@ -2569,7 +2569,12 @@ const updateOne = (Model, modelName, allowedFields) =>
               sendOrderDispatchedAlert,
             } = await import("../services/whatsappAlertService.js");
             const plain = updatedDoc?.toObject ? updatedDoc.toObject() : updatedDoc;
-            await sendOrderEditedAlert(plain, req.user?.name || req.user?.email || "Unknown");
+            await sendOrderEditedAlert(
+              plain,
+              req.user?.name || req.user?.email || "Unknown",
+              editHistoryEntries,
+              existingDoc
+            );
 
             const prevStatus = String(existingDoc?.orderStatus || "").toUpperCase();
             const nextStatus = String(plain?.orderStatus || "").toUpperCase();

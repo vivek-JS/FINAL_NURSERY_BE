@@ -138,20 +138,53 @@ async function alertAdmins(message) {
  */
 export async function sendOrderPlacedAlert(order) {
   try {
+    // Dynamically import mongoose to populate unpopulated refs if needed
+    let farmerName = order?.farmer?.name || order?.orderFor?.name || "—";
+    let salesPersonName = order?.salesPerson?.name || "—";
+
+    let farmerVillage = order?.orderFor?.village || "—";
+    let farmerTaluka = order?.orderFor?.taluka || order?.orderFor?.talukaName || "—";
+
+    // If refs are ObjectIds (not populated), fetch names from DB
+    if (
+      (farmerName === "—" || typeof order?.farmer === "object" && !order?.farmer?.name) &&
+      order?.farmer
+    ) {
+      try {
+        const { default: mongoose } = await import("mongoose");
+        const Farmer = mongoose.model("Farmer");
+        const f = await Farmer.findById(order.farmer).select("name village taluka talukaName").lean();
+        if (f?.name) farmerName = f.name;
+        if (f?.village) farmerVillage = f.village;
+        if (f?.talukaName || f?.taluka) farmerTaluka = f.talukaName || f.taluka;
+      } catch (_) { /* ignore */ }
+    }
+
+    if (salesPersonName === "—" && order?.salesPerson) {
+      try {
+        const { default: mongoose } = await import("mongoose");
+        const User = mongoose.model("User");
+        const u = await User.findById(order.salesPerson).select("name").lean();
+        if (u?.name) salesPersonName = u.name;
+      } catch (_) { /* ignore */ }
+    }
+
     const orderNo = order?.orderNumber || order?._id || "—";
-    const customer =
-      order?.farmer?.name || order?.orderFor?.name || order?.salesPerson?.name || "—";
     const amount = order?.totalAmount ?? order?.rate ?? "—";
-    const items = order?.numberOfPlants ?? order?.quantity ?? "—";
-    const placedBy = order?.salesPerson?.name || "—";
+    const plants = order?.numberOfPlants ?? order?.quantity ?? "—";
+    const deliveryDate = order?.deliveryDate
+      ? new Date(order.deliveryDate).toLocaleDateString("en-IN")
+      : "—";
 
     const message = [
       "🟢 *New Order Placed*",
       `Order No: ${orderNo}`,
-      `Customer: ${customer}`,
+      `Customer: ${farmerName}`,
+      `Village: ${farmerVillage} | Taluka: ${farmerTaluka}`,
       `Amount: ₹${Number(amount).toLocaleString("en-IN")}`,
-      `Items: ${items}`,
-      `Placed By: ${placedBy}`,
+      `Plants: ${plants}`,
+      `Delivery Date: ${deliveryDate}`,
+      `Placed By: ${salesPersonName}`,
     ].join("\n");
 
     await alertAdmins(message);
@@ -160,18 +193,60 @@ export async function sendOrderPlacedAlert(order) {
   }
 }
 
+const FIELD_LABELS = {
+  numberOfPlants: "Qty",
+  rate: "Rate",
+  deliveryDate: "Delivery Date",
+  salesPerson: "Sales Person",
+  plantSubtype: "Subtype",
+  deliveryChallanInvoiceNumber: "Invoice No",
+};
+
 /**
  * 🟡 Order Updated
+ * @param {object} order         - updated order document (plain object)
+ * @param {string} changedBy     - name of user who made changes
+ * @param {Array}  editHistory   - array of { field, previousValue, newValue, notes }
+ * @param {object} existingDoc   - original document before update (populated: farmer.name/village/taluka)
  */
-export async function sendOrderEditedAlert(order, changedBy = "Unknown") {
+export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHistory = [], existingDoc = null) {
   try {
-    const orderNo = order?.orderNumber || order?._id || "—";
+    const src = existingDoc || order;
+    const farmerName = src?.farmer?.name || src?.orderFor?.name || order?.farmer?.name || "—";
+    const village = src?.farmer?.village || src?.orderFor?.village || order?.orderFor?.village || "—";
+    const taluka = src?.farmer?.taluka || src?.orderFor?.taluka || order?.orderFor?.taluka || "—";
+
+    // Build human-readable change lines
+    const changeLines = editHistory
+      .filter((e) => e?.field && (e.previousValue !== undefined || e.newValue !== undefined))
+      .map((e) => {
+        const label = FIELD_LABELS[e.field] || e.field;
+        let prev = e.previousValue;
+        let next = e.newValue;
+
+        // Format dates
+        if (e.field === "deliveryDate") {
+          prev = prev ? new Date(prev).toLocaleDateString("en-IN") : "—";
+          next = next ? new Date(next).toLocaleDateString("en-IN") : "—";
+        }
+
+        if (prev !== undefined && next !== undefined) {
+          return `  • ${label}: ${prev} → ${next}`;
+        }
+        return `  • ${label} updated`;
+      });
+
+    if (changeLines.length === 0) {
+      changeLines.push("  • Quantity / Amount updated");
+    }
 
     const message = [
       "🟡 *Order Updated*",
-      `Order No: ${orderNo}`,
+      `Farmer: ${farmerName}`,
+      `Village: ${village} | Taluka: ${taluka}`,
       `Updated By: ${changedBy}`,
-      "Changes: Quantity / Amount updated",
+      "Changes:",
+      ...changeLines,
     ].join("\n");
 
     await alertAdmins(message);
@@ -331,6 +406,15 @@ export async function sendLinkedAgriAlert(data = {}) {
     const productStr = products.length > 0 ? products.join(", ") : "—";
     const orderLines = [];
     const pendingOrderRefs = new Set();
+    let itemIndex = 0;
+
+    const actorPhone = normalizePhoneForWhitelist(process.env.WHATSAPP_ADMIN_NUMBERS?.split(",")?.[0] || "");
+    const baseUrl = String(
+      process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || ""
+    )
+      .trim()
+      .replace(/\/+$/, "");
+
     (Array.isArray(linkedOrders) ? linkedOrders : []).forEach((o) => {
       const orderRef = buildOrderRef(o);
       if (orderRef && orderRef !== "—") pendingOrderRefs.add(orderRef);
@@ -338,6 +422,7 @@ export async function sendLinkedAgriAlert(data = {}) {
 
       if (lineItems.length > 0) {
         lineItems.forEach((li) => {
+          itemIndex += 1;
           const product =
             String(li?.name || li?.productName || o?.productName || "Agri Input").trim();
           const subtype = resolveSubtype(li) || resolveSubtype(o) || "—";
@@ -346,64 +431,49 @@ export async function sendLinkedAgriAlert(data = {}) {
             toNumber(li?.qty) ||
             toNumber(li?.requestedQuantity) ||
             0;
+          const subtypeStr = subtype && subtype !== "—" ? ` | ${subtype}` : "";
           orderLines.push(
-            `• ऑर्डर ${orderRef} | प्रॉडक्ट: ${product} | सबटाइप: ${subtype} | Qty: ${qty > 0 ? qty : "—"}`
+            `${itemIndex}. ऑर्डर ${orderRef} | *${product}*${subtypeStr} | Qty: *${qty > 0 ? qty : "—"}*`
           );
-          const actorPhone = normalizePhoneForWhitelist(process.env.WHATSAPP_ADMIN_NUMBERS?.split(",")?.[0] || "");
-          const baseUrl = String(
-            process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || ""
-          )
-            .trim()
-            .replace(/\/+$/, "");
-          const oneClickUrl = baseUrl
-            ? `${baseUrl}/agri-load?orderNumber=${encodeURIComponent(
-                orderRef
-              )}&actorPhone=${encodeURIComponent(actorPhone)}`
-            : "";
-          if (oneClickUrl) {
-            orderLines.push(`  Mark Loaded: ${oneClickUrl}`);
-          }
         });
       } else {
+        itemIndex += 1;
         const product = String(o?.productName || "Agri Input").trim();
         const subtype = resolveSubtype(o) || "—";
         const qty = resolveAgriQty(o);
+        const subtypeStr = subtype && subtype !== "—" ? ` | ${subtype}` : "";
         orderLines.push(
-          `• ऑर्डर ${orderRef} | प्रॉडक्ट: ${product} | सबटाइप: ${subtype} | Qty: ${qty > 0 ? qty : "—"}`
+          `${itemIndex}. ऑर्डर ${orderRef} | *${product}*${subtypeStr} | Qty: *${qty > 0 ? qty : "—"}*`
         );
-        const actorPhone = normalizePhoneForWhitelist(process.env.WHATSAPP_ADMIN_NUMBERS?.split(",")?.[0] || "");
-        const baseUrl = String(
-          process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || ""
-        )
-          .trim()
-          .replace(/\/+$/, "");
-        const oneClickUrl = baseUrl
-          ? `${baseUrl}/agri-load?orderNumber=${encodeURIComponent(
-              orderRef
-            )}&actorPhone=${encodeURIComponent(actorPhone)}`
-          : "";
-        if (oneClickUrl) {
-          orderLines.push(`  Mark Loaded: ${oneClickUrl}`);
-        }
       }
     });
 
-    const trimmedOrderLines = orderLines.slice(0, 8);
-    const pendingLabel =
-      pendingOrderRefs.size > 0 ? Array.from(pendingOrderRefs).join(", ") : "—";
+    // Single mark-loaded link covering all pending orders (direct API action — no login needed)
+    const allOrderRefs = Array.from(pendingOrderRefs);
+    const primaryRef = allOrderRefs[0] || "";
+    const markLoadedUrl =
+      baseUrl && primaryRef
+        ? `${baseUrl}/api/v1/agri-load-link/mark-loaded?orderNumber=${encodeURIComponent(primaryRef)}&actorPhone=${encodeURIComponent(actorPhone)}`
+        : "";
+
+    const trimmedOrderLines = orderLines.slice(0, 10);
+    const pendingLabel = allOrderRefs.length > 0 ? allOrderRefs.join(", ") : "—";
     const driverStr = String(driverName || "").trim() || "—";
 
-    const message = [
+    const messageLines = [
       "🚨 *Agri Load Pending*",
       `Orders: ${linkedCount} | Pending: ${pendingLabel}`,
       `Driver: ${driverStr} | Vehicle: ${vehicleStr}`,
       trimmedOrderLines.length ? "*Load items:*" : `Load: ${productStr}`,
       ...trimmedOrderLines,
-      "After load, click link to mark LOADED.",
-      `By: ${loadedBy}`,
-    ]
-      .filter((line) => line !== null)
-      .join("\n");
+    ];
+
+    if (markLoadedUrl) {
+      messageLines.push(`Mark Loaded: ${markLoadedUrl}`);
+    }
+    messageLines.push("After load, click link to mark LOADED.");
+
+    const message = messageLines.filter(Boolean).join("\n");
 
     await alertAdmins(message);
   } catch (err) {
