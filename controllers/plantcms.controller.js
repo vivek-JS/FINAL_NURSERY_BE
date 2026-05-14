@@ -519,31 +519,43 @@ export const addSubtype = async (req, res) => {
 // Update a specific subtype
 export const updateSubtype = async (req, res) => {
   const { plantId, subtypeId } = req.params;
-  const { name, description, characteristics, plantReadyDays } = req.body;
+  const { name, description, characteristics, plantReadyDays, monthlyRates } = req.body;
 
   try {
-    const plant = await PlantCms.findById(plantId);
+    // Build the $set payload using the positional $ operator so we only update
+    // the matched subtype's fields — avoids full-document validation which would
+    // fail for older subtypes that predate the required slotDays/slotCapacity fields.
+    const setFields = {};
 
-    if (!plant) {
-      return res.status(404).json({ message: "Plant not found" });
+    if (name !== undefined) setFields["subtypes.$.name"] = name;
+    if (description !== undefined) setFields["subtypes.$.description"] = description;
+    if (characteristics !== undefined) setFields["subtypes.$.characteristics"] = characteristics;
+    if (plantReadyDays !== undefined) setFields["subtypes.$.plantReadyDays"] = Number(plantReadyDays) || 0;
+    if (monthlyRates !== undefined) {
+      setFields["subtypes.$.monthlyRates"] = Array.isArray(monthlyRates)
+        ? monthlyRates
+            .filter((mr) => mr.month && mr.rate !== "" && mr.rate !== null && mr.rate !== undefined)
+            .map((mr) => ({ month: mr.month, rate: Number(mr.rate) || 0 }))
+        : [];
     }
 
-    const subtype = plant.subtypes.id(subtypeId);
-
-    if (!subtype) {
-      return res.status(404).json({ message: "Subtype not found" });
+    if (Object.keys(setFields).length === 0) {
+      return res.status(400).json({ message: "No fields to update" });
     }
 
-    if (name !== undefined) subtype.name = name;
-    if (description !== undefined) subtype.description = description;
-    if (characteristics !== undefined) subtype.characteristics = characteristics;
-    if (plantReadyDays !== undefined) subtype.plantReadyDays = Number(plantReadyDays) || 0;
+    const result = await PlantCms.findOneAndUpdate(
+      { _id: plantId, "subtypes._id": subtypeId },
+      { $set: setFields },
+      { new: true, runValidators: false }
+    );
 
-    const updatedPlant = await plant.save();
+    if (!result) {
+      return res.status(404).json({ message: "Plant or subtype not found" });
+    }
 
     return res
       .status(200)
-      .json({ message: "Subtype updated successfully", data: updatedPlant });
+      .json({ message: "Subtype updated successfully", data: result });
   } catch (error) {
     return res
       .status(500)
