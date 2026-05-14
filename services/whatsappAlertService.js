@@ -409,11 +409,12 @@ export async function sendLinkedAgriAlert(data = {}) {
     let itemIndex = 0;
 
     const actorPhone = normalizePhoneForWhitelist(process.env.WHATSAPP_ADMIN_NUMBERS?.split(",")?.[0] || "");
-    const baseUrl = String(
-      process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || "https://erp.rambiotechplants.com"
-    )
-      .trim()
-      .replace(/\/+$/, "");
+    const rawBaseUrl = process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || "";
+    const baseUrl = (
+      rawBaseUrl && !rawBaseUrl.includes("YOUR_DOMAIN")
+        ? rawBaseUrl
+        : "https://erp.rambiotechplants.com"
+    ).trim().replace(/\/+$/, "");
 
     (Array.isArray(linkedOrders) ? linkedOrders : []).forEach((o) => {
       const orderRef = buildOrderRef(o);
