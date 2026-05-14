@@ -3481,8 +3481,9 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     }
   }
 
-  // For sales person, verify they are dispatching their own assigned orders
-  const isSalesPersonDispatchingAssigned = !isAdmin && (userJobTitle === "RAM_AGRI_SALES" || userJobTitle === "RAM_AGRI_SALES_MANAGER");
+  // For sales person (not manager), verify they are dispatching their own assigned orders
+  // RAM_AGRI_SALES_MANAGER can dispatch any order (same as admin for dispatch purposes)
+  const isSalesPersonDispatchingAssigned = !isAdmin && userJobTitle === "RAM_AGRI_SALES";
   
   if (isSalesPersonDispatchingAssigned) {
     const unassignedOrders = orders.filter(

@@ -351,12 +351,12 @@ export async function sendLinkedAgriAlert(data = {}) {
           );
           const actorPhone = normalizePhoneForWhitelist(process.env.WHATSAPP_ADMIN_NUMBERS?.split(",")?.[0] || "");
           const baseUrl = String(
-            process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || ""
+            process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || ""
           )
             .trim()
             .replace(/\/+$/, "");
           const oneClickUrl = baseUrl
-            ? `${baseUrl}/api/v1/agri-load-link/mark-loaded?orderNumber=${encodeURIComponent(
+            ? `${baseUrl}/agri-load?orderNumber=${encodeURIComponent(
                 orderRef
               )}&actorPhone=${encodeURIComponent(actorPhone)}`
             : "";
@@ -373,12 +373,12 @@ export async function sendLinkedAgriAlert(data = {}) {
         );
         const actorPhone = normalizePhoneForWhitelist(process.env.WHATSAPP_ADMIN_NUMBERS?.split(",")?.[0] || "");
         const baseUrl = String(
-          process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || ""
+          process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || ""
         )
           .trim()
           .replace(/\/+$/, "");
         const oneClickUrl = baseUrl
-          ? `${baseUrl}/api/v1/agri-load-link/mark-loaded?orderNumber=${encodeURIComponent(
+          ? `${baseUrl}/agri-load?orderNumber=${encodeURIComponent(
               orderRef
             )}&actorPhone=${encodeURIComponent(actorPhone)}`
           : "";
