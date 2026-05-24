@@ -170,6 +170,7 @@ const allowedParams = [
   "upcomingDays", // laboutward primary-mobile-dashboard window
   "orderLimit", // analytics short-report: max orders in list (cap 500)
   "dueOnly", // GET /insights/dashboard — overdue open orders only
+  "excludeReadyForDispatch", // GET /insights/dashboard — omit READY_FOR_DISPATCH from expected KPIs
   "varietyName", // GET /insights/dashboard — plant subtype name with plantId
   // One-click agri load link params
   "orderNumber",

@@ -15,11 +15,13 @@
  * - Date filter: orderBookingDate (same as getDeliveryOrders).
  * - Role scoping: mirrors getGeoSummary / getAll (SALES → own salesPerson; DEALER → dealer or salesPerson).
  *
- * Dispatches (timeline + KPI “today / next 7 days”):
- * - Loaded for a fixed IST calendar window: start of (today − 3 days) through end of (today + 8 days),
- *   using Dispatch.createdAt. NOT filtered by plant/subtype/dueOnly (matches mock kpis() behavior
- *   where dispatch KPIs used global dispatches).
- * - isDeleted: false. transportStatus CANCELLED rows are omitted from the list.
+ * Dispatches (timeline + “actually dispatched today” KPI):
+ * - Loaded for IST window: start of (today − 3 days) through end of (today + 8 days), Dispatch.createdAt.
+ * - isDeleted: false. transportStatus CANCELLED rows are omitted.
+ *
+ * KPI buckets (kpiSummary in response):
+ * - todayExpected / next7Expected / due: open farmer orders by deliveryDate (IST calendar).
+ * - todayActual: dispatch trips created today (plants + order count from Dispatch records).
  */
 
 import mongoose from "mongoose";
@@ -29,6 +31,16 @@ import Dispatch from "../models/dispatch.model.js";
 import PlantCms from "../models/plantCms.model.js";
 
 const EXCLUDED_ORDER_STATUSES = ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"];
+
+const CLOSED_FOR_EXPECTED_KPI = new Set([
+  "DISPATCHED",
+  "DISPATCH_PROCESS",
+  "COMPLETED",
+  "PARTIALLY_COMPLETED",
+  "CANCELLED",
+  "REJECTED",
+  "TEMPORARY_CANCELLED",
+]);
 
 const parseDate = (dateStr, isEnd = false) => {
   const [day, month, year] = dateStr.split("-");
@@ -98,8 +110,103 @@ function istStartOfDayFrom(baseYmd, dayOffset = 0) {
   return new Date(`${cal}T00:00:00+05:30`);
 }
 
+function istYmdFromValue(value) {
+  if (value == null || value === "") return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return istCalendarDateString(d);
+}
+
+function istAddDaysYmd(ymd, days) {
+  const pivot = new Date(`${ymd}T12:00:00+05:30`);
+  pivot.setDate(pivot.getDate() + days);
+  return istCalendarDateString(pivot);
+}
+
+function plantsForKpiOrder(row) {
+  const rem = Number(row.remainingPlants);
+  if (Number.isFinite(rem) && rem >= 0) return rem;
+  return Number(row.qty) || 0;
+}
+
+function isOpenForExpectedKpi(row, excludeReadyForDispatch) {
+  const st = String(row.rawOrderStatus || row.orderStatus || "").toUpperCase();
+  if (CLOSED_FOR_EXPECTED_KPI.has(st)) return false;
+  if (excludeReadyForDispatch && st === "READY_FOR_DISPATCH") return false;
+  return true;
+}
+
+function slimOrderForKpi(row) {
+  return {
+    id: row.id,
+    orderId: row.orderId,
+    farmerName: row.farmerName || "",
+    salesperson: row.salesperson || "",
+    plantId: row.plantId,
+    variety: row.variety || "",
+    plants: plantsForKpiOrder(row),
+    deliveryDate: row.deliveryDate || null,
+    orderStatus: row.rawOrderStatus || "",
+    district: row.district || "",
+    taluka: row.taluka || "",
+    village: row.village || "",
+  };
+}
+
+/** Expected = deliveryDate; actual today = Dispatch trips on report calendar day. */
+function computeDispatchKpiSummary(orders, dispatches, reportDateStr, options = {}) {
+  const excludeReadyForDispatch = Boolean(options.excludeReadyForDispatch);
+  const next7EndYmd = istAddDaysYmd(reportDateStr, 7);
+
+  const todayExpected = { plantCount: 0, orderCount: 0, orders: [] };
+  const next7Expected = { plantCount: 0, orderCount: 0, orders: [] };
+  const due = { plantCount: 0, orderCount: 0, orders: [] };
+  const todayActual = { plantCount: 0, orderCount: 0, dispatchCount: 0, dispatches: [] };
+
+  for (const o of orders) {
+    if (!isOpenForExpectedKpi(o, excludeReadyForDispatch)) continue;
+    const delYmd = istYmdFromValue(o.deliveryDate);
+    if (!delYmd) continue;
+    const plants = plantsForKpiOrder(o);
+    const slim = slimOrderForKpi(o);
+
+    if (delYmd < reportDateStr) {
+      due.plantCount += plants;
+      due.orderCount += 1;
+      due.orders.push(slim);
+    } else if (delYmd === reportDateStr) {
+      todayExpected.plantCount += plants;
+      todayExpected.orderCount += 1;
+      todayExpected.orders.push(slim);
+    } else if (delYmd > reportDateStr && delYmd <= next7EndYmd) {
+      next7Expected.plantCount += plants;
+      next7Expected.orderCount += 1;
+      next7Expected.orders.push(slim);
+    }
+  }
+
+  for (const d of dispatches) {
+    const dYmd = istYmdFromValue(d.date);
+    if (dYmd !== reportDateStr) continue;
+    todayActual.plantCount += Number(d.totalPlants) || 0;
+    todayActual.orderCount += Number(d.orders) || 0;
+    todayActual.dispatchCount += 1;
+    todayActual.dispatches.push({
+      id: d.id,
+      vehicle: d.vehicle || "",
+      driver: d.driver || "",
+      totalPlants: Number(d.totalPlants) || 0,
+      orders: Number(d.orders) || 0,
+      status: d.status || "scheduled",
+    });
+  }
+
+  return { todayExpected, next7Expected, due, todayActual, reportDate: reportDateStr };
+}
+
 export const getInsightsDashboard = catchAsync(async (req, res) => {
-  const { startDate, endDate, plantId, subtypeId, varietyName, dueOnly } = req.query;
+  const { startDate, endDate, plantId, subtypeId, varietyName, dueOnly, excludeReadyForDispatch } =
+    req.query;
 
   if (!startDate || !endDate) {
     return res.status(400).json({
@@ -230,9 +337,8 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       qty: {
         $add: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$additionalPlants", 0] }],
       },
-      expectedDispatch: {
-        $ifNull: ["$deliveryDate", { $ifNull: ["$dispatchTargetDate", "$farmReadyDate"] }],
-      },
+      remainingPlants: { $ifNull: ["$remainingPlants", "$numberOfPlants"] },
+      expectedDispatch: "$deliveryDate",
       farmerDistrict: {
         $ifNull: [
           { $arrayElemAt: ["$farmerData.districtName", 0] },
@@ -284,6 +390,7 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       orderStatus: 1,
       rate: 1,
       qty: 1,
+      remainingPlants: 1,
       orderBookingDate: 1,
       deliveryDate: 1,
       expectedDispatch: 1,
@@ -338,6 +445,8 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       (sr.length > 0 && sr !== "FARMER");
     const jt = String(row.salesJobTitle || "").toUpperCase().trim();
     const attributedToDealer = jt === "DEALER";
+    const remainingPlants =
+      row.remainingPlants != null ? Number(row.remainingPlants) : qty;
     return {
       id: `ORD-${row.orderId}`,
       orderId: row.orderId,
@@ -348,6 +457,7 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       plantId: String(row.plantNameId),
       variety: row.varietyName || "",
       qty,
+      remainingPlants: Number.isFinite(remainingPlants) ? remainingPlants : qty,
       pricePerPlant: rate,
       totalAmount,
       status: uiStatus,
@@ -454,6 +564,10 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
     };
   });
 
+  const kpiSummary = computeDispatchKpiSummary(orders, dispatches, reportDateStr, {
+    excludeReadyForDispatch: String(excludeReadyForDispatch) === "true",
+  });
+
   return res.status(200).json({
     success: true,
     data: {
@@ -463,6 +577,7 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       plantVarieties,
       orders,
       dispatches,
+      kpiSummary,
       meta: {
         orderCount: orders.length,
         cappedAt: rawOrders.length >= 10000 ? 10000 : null,
