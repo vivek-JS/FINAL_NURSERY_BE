@@ -110,10 +110,18 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
 
   let actual = 0;
   let paymentRatio = 0;
+  let baseCommission = 0;
+  let unpaidLiability = 0;
   if (ACTUAL_COMMISSION_STATUSES.has(order.orderStatus) && finalPlants > 0) {
+    baseCommission = finalPlants * rate;
     paymentRatio =
       orderTotalValue > 0 ? Math.min(1, collected / orderTotalValue) : 0;
-    actual = finalPlants * rate * paymentRatio;
+    if (paymentRatio >= 1) {
+      actual = baseCommission;
+    } else {
+      unpaidLiability = baseCommission * (1 - paymentRatio);
+      actual = -unpaidLiability;
+    }
   }
 
   return {
@@ -137,6 +145,8 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
     totalPlants,
     expectedCommission: expected,
     actualCommission: actual,
+    baseCommission,
+    unpaidLiability,
     paymentCollected: collected,
     paymentRatio,
     orderTotalValue,

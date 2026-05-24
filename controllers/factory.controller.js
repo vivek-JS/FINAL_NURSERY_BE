@@ -3243,8 +3243,27 @@ const getAll = (Model, modelName) =>
       { pick = "min", unknownDate = farmReadyFifoUnknownDate } = {}
     ) => {
       const useMax = pick === "max";
-      const unknownLiteral =
-        unknownDate === null ? null : { $literal: unknownDate };
+      const fallbackIfNull = Array.isArray(dateFallbackFields)
+        ? { $ifNull: dateFallbackFields }
+        : dateFallbackFields;
+      const convertedFromHistoryOrFallback = {
+        $convert: {
+          input: { $ifNull: ["$$fromHistory", fallbackIfNull] },
+          to: "date",
+          onError: null,
+          onNull: null,
+        },
+      };
+      const datedValue =
+        unknownDate === null
+          ? convertedFromHistoryOrFallback
+          : {
+              $ifNull: [
+                convertedFromHistoryOrFallback,
+                { $literal: unknownDate },
+              ],
+            };
+
       return {
         $let: {
           vars: {
@@ -3264,18 +3283,23 @@ const getAll = (Model, modelName) =>
                           },
                           as: "entry",
                           in: {
-                            $toDate: {
-                              $ifNull: [
-                                "$$entry.createdAt",
-                                "$$entry.changedAt",
-                                { $toDate: "$$entry._id" },
-                              ],
+                            $convert: {
+                              input: {
+                                $ifNull: [
+                                  "$$entry.createdAt",
+                                  "$$entry.changedAt",
+                                  { $toDate: "$$entry._id" },
+                                ],
+                              },
+                              to: "date",
+                              onError: null,
+                              onNull: null,
                             },
                           },
                         },
                       },
                       as: "d",
-                      cond: { $ne: [{ $ifNull: ["$$d", null] }, null] },
+                      cond: { $ne: ["$$d", null] },
                     },
                   },
                 },
@@ -3309,31 +3333,34 @@ const getAll = (Model, modelName) =>
               },
             },
           },
-          in: {
-            $toDate: {
-              $ifNull: [
-                "$$fromHistory",
-                { $ifNull: dateFallbackFields },
-                unknownLiteral,
-              ],
-            },
-          },
+          in: datedValue,
         },
       };
     };
 
     const farmReadyEnteredAtExpr = statusEnteredAtExpr(
       "FARM_READY",
-      ["$farmReadyDate", { $ifNull: ["$updatedAt", "$createdAt"] }],
+      ["$farmReadyDate", "$updatedAt", "$createdAt"],
       { pick: "min", unknownDate: farmReadyFifoUnknownDate }
     );
 
     /** Latest READY_FOR_DISPATCH transition — never use dispatchTargetDate (that is Aaj/Udya plan, not queue entry time). */
     const readyForDispatchEnteredAtExpr = statusEnteredAtExpr(
       "READY_FOR_DISPATCH",
-      { $ifNull: ["$updatedAt", "$createdAt"] },
+      ["$updatedAt", "$createdAt"],
       { pick: "max", unknownDate: null }
     );
+
+    const orderListSortSpec = () => {
+      const spec = { [effectiveSortKey]: effectiveOrder };
+      if (
+        effectiveSortKey === "readyForDispatchEnteredAt" ||
+        effectiveSortKey === "farmReadyEnteredAt"
+      ) {
+        spec.orderId = 1;
+      }
+      return spec;
+    };
 
     // Build the aggregation pipeline
     const pipeline = [];
@@ -3588,7 +3615,7 @@ const getAll = (Model, modelName) =>
 
     if (canEarlyPaginate) {
       pipeline.push(
-        { $sort: { [effectiveSortKey]: effectiveOrder } },
+        { $sort: orderListSortSpec() },
         { $skip: skip },
         { $limit: parseInt(limit, 10) }
       );
@@ -3745,7 +3772,7 @@ const getAll = (Model, modelName) =>
       !(slotId && monthName && startDay && endDay)
     ) {
       pipeline.push(
-        { $sort: { [effectiveSortKey]: effectiveOrder } },
+        { $sort: orderListSortSpec() },
         { $skip: skip },
         { $limit: parseInt(limit, 10) }
       );
@@ -3940,10 +3967,10 @@ const getAll = (Model, modelName) =>
     const lateListStages =
       !earlyPaginateInserted && !searchEarlyPaginateInserted
         ? exportAll
-          ? [{ $sort: { [effectiveSortKey]: effectiveOrder } }]
+          ? [{ $sort: orderListSortSpec() }]
           : hasPaginationParams
             ? [
-                { $sort: { [effectiveSortKey]: effectiveOrder } },
+                { $sort: orderListSortSpec() },
                 { $skip: skip },
                 { $limit: parseInt(limit, 10) },
               ]
@@ -4396,6 +4423,8 @@ const getAll = (Model, modelName) =>
           whatsappDispatchMessageKey: 1,
           dispatchDayKey: 1,
           dispatchTargetDate: 1,
+          farmReadyEnteredAt: 1,
+          readyForDispatchEnteredAt: 1,
           // Add orderFor field if present
           orderFor: 1,
         },
