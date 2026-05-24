@@ -9,8 +9,10 @@
  *   WHATSAPP_ALERTS_ENABLED=true
  */
 
+import mongoose from "mongoose";
 import { getWhatsAppClient, isWhatsAppReady } from "./whatsappClient.js";
 import { normalizePhoneForWhitelist } from "../utils/agriLoadLinkSigner.js";
+import Order from "../models/order.model.js";
 
 const toNumber = (value) => {
   const n = Number(value);
@@ -95,30 +97,79 @@ export function getAdminNumbersFromEnv() {
     .map(formatNumber);
 }
 
+/** Digits with country code for getNumberId (no @suffix). */
+function digitsForWhatsAppLookup(number) {
+  const raw = String(number).trim();
+  const digits = (raw.includes("@") ? raw.split("@")[0] : raw).replace(/\D/g, "");
+  if (digits.length === 10) return `91${digits}`;
+  return digits;
+}
+
+/**
+ * Resolve chat id via WhatsApp (required for many numbers not already in chat list).
+ */
+async function resolveWhatsAppChatId(wa, number) {
+  const digits = digitsForWhatsAppLookup(number);
+  const fallback = formatNumber(number);
+
+  if (!digits || digits.length < 10) {
+    return fallback;
+  }
+
+  try {
+    const registered = await wa.getNumberId(digits);
+    if (registered?._serialized) {
+      return registered._serialized;
+    }
+  } catch (err) {
+    console.warn(
+      `[WhatsApp Alert] getNumberId(${digits}) failed, using ${fallback}:`,
+      err?.message || err
+    );
+  }
+
+  return fallback;
+}
+
 /**
  * Sends a WhatsApp message to a single number.
- * Never throws — logs errors safely so the main API is never blocked.
+ * Never throws — returns { ok, chatId, resolvedId?, error?, reason? }.
  */
 export async function sendWhatsAppMessage(number, message) {
-  if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") return;
+  const chatId = formatNumber(number);
+
+  if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") {
+    return { ok: false, chatId, reason: "alerts_disabled" };
+  }
 
   if (!isWhatsAppReady) {
-    console.warn("[WhatsApp Alert] Client not ready — skipping alert to", number);
-    return;
+    console.warn("[WhatsApp Alert] Client not ready — skipping alert to", chatId);
+    return { ok: false, chatId, reason: "not_ready" };
   }
 
   const wa = getWhatsAppClient();
   if (!wa) {
-    console.warn("[WhatsApp Alert] Client not started — skipping alert to", number);
-    return;
+    console.warn("[WhatsApp Alert] Client not started — skipping alert to", chatId);
+    return { ok: false, chatId, reason: "no_client" };
   }
 
-  const chatId = formatNumber(number);
   try {
-    await wa.sendMessage(chatId, message);
-    console.log(`[WhatsApp Alert] ✅ Sent to ${chatId}`);
+    const targetId = await resolveWhatsAppChatId(wa, number);
+    const sent = await wa.sendMessage(targetId, message);
+    console.log(
+      `[WhatsApp Alert] ✅ Sent to ${targetId}`,
+      sent?.id?._serialized ? `(id ${sent.id._serialized})` : ""
+    );
+    return {
+      ok: true,
+      chatId,
+      resolvedId: targetId,
+      messageId: sent?.id?._serialized || null,
+    };
   } catch (err) {
-    console.error(`[WhatsApp Alert] ❌ Failed to send to ${chatId}:`, err?.message || err);
+    const error = err?.message || String(err);
+    console.error(`[WhatsApp Alert] ❌ Failed to send to ${chatId}:`, error);
+    return { ok: false, chatId, error };
   }
 }
 
@@ -126,13 +177,43 @@ export async function sendWhatsAppMessage(number, message) {
  * Sends a message to ALL admin numbers defined in env.
  * Errors on individual sends are logged but do not abort the others.
  */
-async function alertAdmins(message) {
+async function alertAdmins(message, context = "alert") {
+  if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") {
+    console.warn(`[WhatsApp Alert] ${context} skipped — WHATSAPP_ALERTS_ENABLED is not true`);
+    return;
+  }
+  if (!isWhatsAppReady) {
+    console.warn(`[WhatsApp Alert] ${context} skipped — WhatsApp client not ready`);
+    return;
+  }
+
   const numbers = getAdminNumbersFromEnv();
   if (numbers.length === 0) {
     console.warn("[WhatsApp Alert] No admin numbers configured. Set WHATSAPP_ADMIN_NUMBERS.");
     return;
   }
-  await Promise.allSettled(numbers.map((num) => sendWhatsAppMessage(num, message)));
+
+  console.log(`[WhatsApp Alert] Sending ${context} to ${numbers.length} admin(s)...`);
+  const results = await Promise.all(numbers.map((num) => sendWhatsAppMessage(num, message)));
+  const ok = results.filter((r) => r.ok).length;
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length) {
+    console.error(
+      `[WhatsApp Alert] ${context} failures:`,
+      failed.map((f) => `${f.chatId}: ${f.error || f.reason}`).join("; ")
+    );
+  }
+  console.log(`[WhatsApp Alert] ${context} done — ${ok}/${numbers.length} delivered`);
+}
+
+/** Reload order with farmer/sales names after create transaction commits. */
+async function loadOrderForWhatsAppAlert(orderOrId) {
+  const orderId = orderOrId?._id || orderOrId;
+  if (!orderId || !mongoose.isValidObjectId(String(orderId))) return null;
+  return Order.findById(orderId)
+    .populate("farmer", "name village taluka talukaName")
+    .populate("salesPerson", "name")
+    .lean();
 }
 
 // ---------------------------------------------------------------------------
@@ -142,42 +223,38 @@ async function alertAdmins(message) {
 /**
  * 🟢 New Order Placed
  */
-export async function sendOrderPlacedAlert(order) {
+export async function sendOrderPlacedAlert(orderOrId) {
   try {
-    // Dynamically import mongoose to populate unpopulated refs if needed
-    let farmerName = order?.farmer?.name || order?.orderFor?.name || "—";
-    let salesPersonName = order?.salesPerson?.name || "—";
+    const order =
+      (await loadOrderForWhatsAppAlert(orderOrId)) ||
+      (orderOrId && typeof orderOrId === "object" ? orderOrId : null);
 
-    let farmerVillage = order?.orderFor?.village || "—";
-    let farmerTaluka = order?.orderFor?.taluka || order?.orderFor?.talukaName || "—";
-
-    // If refs are ObjectIds (not populated), fetch names from DB
-    if (
-      (farmerName === "—" || typeof order?.farmer === "object" && !order?.farmer?.name) &&
-      order?.farmer
-    ) {
-      try {
-        const { default: mongoose } = await import("mongoose");
-        const Farmer = mongoose.model("Farmer");
-        const f = await Farmer.findById(order.farmer).select("name village taluka talukaName").lean();
-        if (f?.name) farmerName = f.name;
-        if (f?.village) farmerVillage = f.village;
-        if (f?.talukaName || f?.taluka) farmerTaluka = f.talukaName || f.taluka;
-      } catch (_) { /* ignore */ }
+    if (!order) {
+      console.warn("[WhatsApp Alert] sendOrderPlacedAlert — order not found:", orderOrId);
+      return;
     }
 
-    if (salesPersonName === "—" && order?.salesPerson) {
-      try {
-        const { default: mongoose } = await import("mongoose");
-        const User = mongoose.model("User");
-        const u = await User.findById(order.salesPerson).select("name").lean();
-        if (u?.name) salesPersonName = u.name;
-      } catch (_) { /* ignore */ }
-    }
+    const farmerName =
+      order?.farmer?.name || order?.orderFor?.name || "—";
+    const salesPersonName = order?.salesPerson?.name || "—";
+    const farmerVillage =
+      order?.farmer?.village || order?.orderFor?.village || "—";
+    const farmerTaluka =
+      order?.farmer?.talukaName ||
+      order?.farmer?.taluka ||
+      order?.orderFor?.taluka ||
+      order?.orderFor?.talukaName ||
+      "—";
 
-    const orderNo = order?.orderNumber || order?._id || "—";
-    const amount = order?.totalAmount ?? order?.rate ?? "—";
-    const plants = order?.numberOfPlants ?? order?.quantity ?? "—";
+    const orderNo = order?.orderId || order?.publicOrderCode || order?._id || "—";
+    const plants = Number(order?.numberOfPlants) || 0;
+    const rate = Number(order?.rate) || 0;
+    const amount =
+      order?.totalAmount != null
+        ? Number(order.totalAmount)
+        : plants && rate
+          ? plants * rate
+          : rate || 0;
     const deliveryDate = order?.deliveryDate
       ? new Date(order.deliveryDate).toLocaleDateString("en-IN")
       : "—";
@@ -188,12 +265,12 @@ export async function sendOrderPlacedAlert(order) {
       `Customer: ${farmerName}`,
       `Village: ${farmerVillage} | Taluka: ${farmerTaluka}`,
       `Amount: ₹${Number(amount).toLocaleString("en-IN")}`,
-      `Plants: ${plants}`,
+      `Plants: ${plants || "—"}`,
       `Delivery Date: ${deliveryDate}`,
       `Placed By: ${salesPersonName}`,
     ].join("\n");
 
-    await alertAdmins(message);
+    await alertAdmins(message, `new order #${orderNo}`);
   } catch (err) {
     console.error("[WhatsApp Alert] sendOrderPlacedAlert error:", err?.message || err);
   }

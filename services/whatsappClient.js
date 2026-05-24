@@ -77,6 +77,18 @@ export function getWhatsAppClient() {
   return client;
 }
 
+/** Phone number of the WhatsApp account linked via QR (sender). */
+export function getWhatsAppLinkedPhone() {
+  try {
+    const wid = client?.info?.wid;
+    if (!wid) return null;
+    if (typeof wid === "string") return wid.split("@")[0] || null;
+    return wid.user ? String(wid.user) : null;
+  } catch {
+    return null;
+  }
+}
+
 const clearReadyWatchdog = () => {
   if (readyWatchdog) {
     clearTimeout(readyWatchdog);

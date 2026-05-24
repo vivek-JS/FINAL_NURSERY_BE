@@ -1174,10 +1174,11 @@ const createOne = (Model, modelName) =>
         }
 
         if (modelName === "Order" && order[0]) {
+          const createdOrderId = order[0]._id;
           (async () => {
             try {
               const { sendOrderPlacedAlert } = await import("../services/whatsappAlertService.js");
-              await sendOrderPlacedAlert(order[0]);
+              await sendOrderPlacedAlert(createdOrderId);
             } catch (e) {
               console.error("whatsapp-alert (order create):", e?.message || e);
             }

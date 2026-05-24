@@ -12,6 +12,20 @@ const EXCLUDED_STATUSES = new Set([
   "TEMPORARY_CANCELLED",
 ]);
 
+export const EXPECTED_COMMISSION_STATUSES = new Set([
+  "ACCEPTED",
+  "FARM_READY",
+  "READY_FOR_DISPATCH",
+  "DISPATCH_PROCESS",
+  "DISPATCHED",
+  "PARTIALLY_COMPLETED",
+]);
+
+export const ACTUAL_COMMISSION_STATUSES = new Set([
+  "COMPLETED",
+  "PARTIALLY_COMPLETED",
+]);
+
 export function isPapayaCommissionException(plantName, subtypeName) {
   if (!plantName || !/papaya/i.test(String(plantName))) return false;
   const st = String(subtypeName || "").trim();
@@ -31,6 +45,13 @@ export function getDispatchedQty(order) {
   if (historyQty > 0) return historyQty;
   const remaining = order.remainingPlants ?? total;
   return Math.max(0, total - remaining);
+}
+
+export function getFinalPlants(order) {
+  const dispatched = getDispatchedQty(order);
+  const returned = Number(order.returnedPlants || 0);
+  const damaged = Number(order.damagedPlants || 0);
+  return Math.max(0, dispatched - returned - damaged);
 }
 
 export function getCollectedPayment(order) {
@@ -79,18 +100,20 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
   const baki = Math.max(0, totalPlants - dispatchedQty);
   const collected = getCollectedPayment(order);
   const orderTotalValue = totalPlants * Number(order.rate || 0);
+  const finalPlants = getFinalPlants(order);
 
   let expected = 0;
   const booked = totalPlants;
-  if (order.orderStatus === "ACCEPTED") {
+  if (EXPECTED_COMMISSION_STATUSES.has(order.orderStatus)) {
     expected = totalPlants * rate;
   }
 
   let actual = 0;
-  if (dispatchedQty > 0) {
-    const base = dispatchedQty * rate;
-    if (collected <= 0) actual = -base;
-    else actual = base;
+  let paymentRatio = 0;
+  if (ACTUAL_COMMISSION_STATUSES.has(order.orderStatus) && finalPlants > 0) {
+    paymentRatio =
+      orderTotalValue > 0 ? Math.min(1, collected / orderTotalValue) : 0;
+    actual = finalPlants * rate * paymentRatio;
   }
 
   return {
@@ -110,10 +133,12 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
     booked,
     baki,
     dispatched: dispatchedQty,
+    finalPlants,
     totalPlants,
     expectedCommission: expected,
     actualCommission: actual,
     paymentCollected: collected,
+    paymentRatio,
     orderTotalValue,
     paymentDue: Math.max(0, orderTotalValue - collected),
   };
@@ -169,7 +194,7 @@ export async function fetchDealerOrders(dealerId, { startDate, endDate } = {}) {
 
   return Order.find(query)
     .select(
-      "orderId orderStatus numberOfPlants additionalPlants remainingPlants plantName plantSubtype rate payment dispatchHistory orderFor farmer createdAt orderBookingDate"
+      "orderId orderStatus numberOfPlants additionalPlants remainingPlants returnedPlants damagedPlants plantName plantSubtype rate payment dispatchHistory orderFor farmer createdAt orderBookingDate"
     )
     .populate("farmer", "name village")
     .sort({ createdAt: -1 })

@@ -15,6 +15,7 @@ import {
   isWhatsAppReady,
   getWhatsAppSessionPath,
   hasPersistedWhatsAppSession,
+  getWhatsAppLinkedPhone,
 } from "../services/whatsappClient.js";
 
 const router = express.Router();
@@ -34,17 +35,27 @@ router.post("/test", async (req, res) => {
     });
   }
 
-  const results = await Promise.allSettled(
+  const results = await Promise.all(
     adminNumbers.map((num) => sendWhatsAppMessage(num, message.trim()))
   );
 
-  const sent = results.filter((r) => r.status === "fulfilled").length;
-  const failed = results.filter((r) => r.status === "rejected").length;
+  const sent = results.filter((r) => r.ok).length;
+  const failed = results.filter((r) => !r.ok);
 
-  return res.status(200).json({
-    status: "Success",
-    message: `Alert sent to ${sent} number(s)${failed > 0 ? `, failed for ${failed}` : ""}.`,
+  const httpStatus = sent === 0 ? 502 : 200;
+
+  return res.status(httpStatus).json({
+    status: sent === adminNumbers.length ? "Success" : sent > 0 ? "Partial" : "Fail",
+    message:
+      sent === adminNumbers.length
+        ? `Delivered to all ${sent} admin number(s).`
+        : sent > 0
+          ? `Delivered to ${sent}, failed for ${failed.length}.`
+          : `Failed for all ${failed.length} number(s). Check results and pm2 logs.`,
+    linkedBotPhone: getWhatsAppLinkedPhone(),
+    whatsappReady: isWhatsAppReady,
     sentTo: adminNumbers,
+    results,
   });
 });
 
@@ -54,9 +65,12 @@ router.get("/status", (req, res) => {
     status: "Success",
     whatsappReady: isWhatsAppReady,
     alertsEnabled: process.env.WHATSAPP_ALERTS_ENABLED === "true",
+    linkedBotPhone: getWhatsAppLinkedPhone(),
     adminNumbers: getAdminNumbersFromEnv(),
     sessionPath,
     hasSavedSession: hasPersistedWhatsAppSession(sessionPath),
+    hint:
+      "Messages are sent FROM linkedBotPhone. Recipients must use WhatsApp on adminNumbers. If test fails, run POST /whatsapp-alert/test and read results[].error.",
   });
 });
 
