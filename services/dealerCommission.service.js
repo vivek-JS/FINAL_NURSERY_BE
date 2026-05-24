@@ -112,15 +112,23 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
   let paymentRatio = 0;
   let baseCommission = 0;
   let unpaidLiability = 0;
+  const paymentDue = Math.max(0, orderTotalValue - collected);
+  const isPaymentComplete =
+    orderTotalValue <= 0 ||
+    paymentDue <= 0 ||
+    order.orderPaymentStatus === "COMPLETED" ||
+    order.paymentCompleted === true;
+
   if (ACTUAL_COMMISSION_STATUSES.has(order.orderStatus) && finalPlants > 0) {
     baseCommission = finalPlants * rate;
     paymentRatio =
-      orderTotalValue > 0 ? Math.min(1, collected / orderTotalValue) : 0;
-    if (paymentRatio >= 1) {
+      orderTotalValue > 0 ? Math.min(1, collected / orderTotalValue) : 1;
+    if (isPaymentComplete) {
       actual = baseCommission;
+      unpaidLiability = 0;
     } else {
-      unpaidLiability = baseCommission * (1 - paymentRatio);
-      actual = -unpaidLiability;
+      unpaidLiability = baseCommission;
+      actual = -baseCommission;
     }
   }
 
@@ -150,7 +158,7 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
     paymentCollected: collected,
     paymentRatio,
     orderTotalValue,
-    paymentDue: Math.max(0, orderTotalValue - collected),
+    paymentDue,
   };
 }
 
@@ -204,7 +212,7 @@ export async function fetchDealerOrders(dealerId, { startDate, endDate } = {}) {
 
   return Order.find(query)
     .select(
-      "orderId orderStatus numberOfPlants additionalPlants remainingPlants returnedPlants damagedPlants plantName plantSubtype rate payment dispatchHistory orderFor farmer createdAt orderBookingDate"
+      "orderId orderStatus orderPaymentStatus paymentCompleted numberOfPlants additionalPlants remainingPlants returnedPlants damagedPlants plantName plantSubtype rate payment dispatchHistory orderFor farmer createdAt orderBookingDate"
     )
     .populate("farmer", "name village")
     .sort({ createdAt: -1 })
