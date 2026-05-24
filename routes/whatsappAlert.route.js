@@ -10,7 +10,11 @@
  */
 
 import express from "express";
-import { sendWhatsAppMessage, getAdminNumbersFromEnv } from "../services/whatsappAlertService.js";
+import {
+  sendWhatsAppMessage,
+  sendOrderPlacedAlert,
+  getAdminNumbersFromEnv,
+} from "../services/whatsappAlertService.js";
 import {
   isWhatsAppReady,
   getWhatsAppSessionPath,
@@ -56,6 +60,27 @@ router.post("/test", async (req, res) => {
     whatsappReady: isWhatsAppReady,
     sentTo: adminNumbers,
     results,
+  });
+});
+
+/** Resend 🟢 New Order Placed alert for an existing order (debug / retry). */
+router.post("/new-order/:orderId", async (req, res) => {
+  const { orderId } = req.params;
+  if (!orderId || !/^[a-f0-9]{24}$/i.test(orderId)) {
+    return res.status(400).json({ status: "Fail", message: "Valid MongoDB orderId required in URL." });
+  }
+
+  const delivery = await sendOrderPlacedAlert(orderId);
+  const ok = (delivery?.delivered || 0) > 0;
+
+  return res.status(ok ? 200 : 502).json({
+    status: ok ? "Success" : "Fail",
+    message: ok
+      ? `New order alert delivered to ${delivery.delivered} admin(s).`
+      : `Not delivered. Reason: ${delivery?.reason || delivery?.error || "unknown"}`,
+    linkedBotPhone: getWhatsAppLinkedPhone(),
+    whatsappReady: isWhatsAppReady,
+    delivery,
   });
 });
 

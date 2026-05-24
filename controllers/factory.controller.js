@@ -1175,14 +1175,24 @@ const createOne = (Model, modelName) =>
 
         if (modelName === "Order" && order[0]) {
           const createdOrderId = order[0]._id;
-          (async () => {
-            try {
-              const { sendOrderPlacedAlert } = await import("../services/whatsappAlertService.js");
-              await sendOrderPlacedAlert(createdOrderId);
-            } catch (e) {
-              console.error("whatsapp-alert (order create):", e?.message || e);
-            }
-          })();
+          const createdOrderIdStr = String(createdOrderId);
+          setTimeout(() => {
+            (async () => {
+              try {
+                const { sendOrderPlacedAlert } = await import("../services/whatsappAlertService.js");
+                const delivery = await sendOrderPlacedAlert(createdOrderId);
+                if (!delivery?.delivered) {
+                  console.warn(
+                    `[WhatsApp Alert] New order ${createdOrderIdStr} alert not delivered:`,
+                    delivery?.reason || delivery?.error || "see results",
+                    delivery?.results || ""
+                  );
+                }
+              } catch (e) {
+                console.error("whatsapp-alert (order create):", e?.message || e);
+              }
+            })();
+          }, 500);
         }
 
         const response = generateResponse(
@@ -1508,7 +1518,7 @@ const updateOne = (Model, modelName, allowedFields) =>
               : "INSUFFICIENT_PERMISSION",
             detail: isDispatchManager
               ? `DISPATCH_MANAGER may only set: ${[...DISPATCH_MANAGER_ALLOWED_STATUSES].join(", ")}`
-              : "Only SUPER_ADMIN or OFFICE_ADMIN may change order status",
+              : "Only SUPER_ADMIN, OFFICE_ADMIN, or ADMIN may change order status",
             value: filteredBody.orderStatus,
           });
           delete filteredBody.orderStatus;
@@ -3181,6 +3191,7 @@ const getAll = (Model, modelName) =>
       "orderId",
       "orderStatus",
       "farmReadyEnteredAt",
+      "readyForDispatchEnteredAt",
     ]);
     const sortKey = ORDER_LIST_SORT_FIELDS.has(String(sortKeyRaw))
       ? String(sortKeyRaw)
@@ -3196,6 +3207,10 @@ const getAll = (Model, modelName) =>
     const order = sortOrderNorm === "desc" ? -1 : 1;
     const skip = (page - 1) * limit;
 
+    const sortByDeliveryOnReadyTab =
+      ready_for_dispatch === "true" &&
+      String(req.query.sortByDelivery ?? "").toLowerCase() === "true";
+
     /** FIFO: when listing only FARM_READY, legacy clients send delivery/booking sort — use first transition time instead. */
     let effectiveSortKey = sortKey;
     let effectiveOrder = order;
@@ -3207,41 +3222,64 @@ const getAll = (Model, modelName) =>
       effectiveOrder = 1;
     }
 
+    /**
+     * Ready-for-dispatch tab: sort by when status became READY_FOR_DISPATCH (kal/aaj queue),
+     * not delivery date — unless client sets sortByDelivery=true (delivery-date toggle).
+     */
+    if (ready_for_dispatch === "true" && !sortByDeliveryOnReadyTab) {
+      effectiveSortKey = "readyForDispatchEnteredAt";
+    }
+
     /** Far-future sentinel so ascending sort places rows with no usable timestamp last. */
     const farmReadyFifoUnknownDate = new Date("9999-12-31T23:59:59.999Z");
-    const farmReadyEnteredAtExpr = {
-      $ifNull: [
-        {
-          $let: {
-            vars: {
-              dates: {
-                $filter: {
-                  input: {
-                    $map: {
+    /**
+     * @param {string} targetStatus
+     * @param {unknown} dateFallbackFields $ifNull chain when statusChanges has no match
+     * @param {{ pick?: "min"|"max", unknownDate?: Date|null }} opts
+     */
+    const statusEnteredAtExpr = (
+      targetStatus,
+      dateFallbackFields,
+      { pick = "min", unknownDate = farmReadyFifoUnknownDate } = {}
+    ) => {
+      const useMax = pick === "max";
+      const unknownLiteral =
+        unknownDate === null ? null : { $literal: unknownDate };
+      return {
+        $let: {
+          vars: {
+            fromHistory: {
+              $let: {
+                vars: {
+                  dates: {
+                    $filter: {
                       input: {
-                        $filter: {
-                          input: { $ifNull: ["$statusChanges", []] },
-                          as: "sc",
-                          cond: { $eq: ["$$sc.newStatus", "FARM_READY"] },
+                        $map: {
+                          input: {
+                            $filter: {
+                              input: { $ifNull: ["$statusChanges", []] },
+                              as: "sc",
+                              cond: { $eq: ["$$sc.newStatus", targetStatus] },
+                            },
+                          },
+                          as: "entry",
+                          in: {
+                            $toDate: {
+                              $ifNull: [
+                                "$$entry.createdAt",
+                                "$$entry.changedAt",
+                                { $toDate: "$$entry._id" },
+                              ],
+                            },
+                          },
                         },
                       },
-                      as: "fr",
-                      in: {
-                        $ifNull: [
-                          "$$fr.createdAt",
-                          { $toDate: "$$fr._id" },
-                        ],
-                      },
+                      as: "d",
+                      cond: { $ne: [{ $ifNull: ["$$d", null] }, null] },
                     },
                   },
-                  as: "d",
-                  cond: { $ne: [{ $ifNull: ["$$d", null] }, null] },
                 },
-              },
-            },
-            in: {
-              $ifNull: [
-                {
+                in: {
                   $cond: [
                     { $gt: [{ $size: "$$dates" }, 0] },
                     {
@@ -3254,7 +3292,9 @@ const getAll = (Model, modelName) =>
                             "$$this",
                             {
                               $cond: [
-                                { $lt: ["$$this", "$$value"] },
+                                useMax
+                                  ? { $gt: ["$$this", "$$value"] }
+                                  : { $lt: ["$$this", "$$value"] },
                                 "$$this",
                                 "$$value",
                               ],
@@ -3266,19 +3306,34 @@ const getAll = (Model, modelName) =>
                     null,
                   ],
                 },
-                {
-                  $ifNull: [
-                    "$farmReadyDate",
-                    { $ifNull: ["$updatedAt", "$createdAt"] },
-                  ],
-                },
+              },
+            },
+          },
+          in: {
+            $toDate: {
+              $ifNull: [
+                "$$fromHistory",
+                { $ifNull: dateFallbackFields },
+                unknownLiteral,
               ],
             },
           },
         },
-        { $literal: farmReadyFifoUnknownDate },
-      ],
+      };
     };
+
+    const farmReadyEnteredAtExpr = statusEnteredAtExpr(
+      "FARM_READY",
+      ["$farmReadyDate", { $ifNull: ["$updatedAt", "$createdAt"] }],
+      { pick: "min", unknownDate: farmReadyFifoUnknownDate }
+    );
+
+    /** Latest READY_FOR_DISPATCH transition — never use dispatchTargetDate (that is Aaj/Udya plan, not queue entry time). */
+    const readyForDispatchEnteredAtExpr = statusEnteredAtExpr(
+      "READY_FOR_DISPATCH",
+      { $ifNull: ["$updatedAt", "$createdAt"] },
+      { pick: "max", unknownDate: null }
+    );
 
     // Build the aggregation pipeline
     const pipeline = [];
@@ -3522,6 +3577,12 @@ const getAll = (Model, modelName) =>
     if (effectiveSortKey === "farmReadyEnteredAt") {
       pipeline.push({
         $addFields: { farmReadyEnteredAt: farmReadyEnteredAtExpr },
+      });
+    }
+
+    if (effectiveSortKey === "readyForDispatchEnteredAt") {
+      pipeline.push({
+        $addFields: { readyForDispatchEnteredAt: readyForDispatchEnteredAtExpr },
       });
     }
 

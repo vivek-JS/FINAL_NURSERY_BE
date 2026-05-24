@@ -180,22 +180,22 @@ export async function sendWhatsAppMessage(number, message) {
 async function alertAdmins(message, context = "alert") {
   if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") {
     console.warn(`[WhatsApp Alert] ${context} skipped — WHATSAPP_ALERTS_ENABLED is not true`);
-    return;
+    return { delivered: 0, total: 0, results: [], reason: "alerts_disabled" };
   }
   if (!isWhatsAppReady) {
     console.warn(`[WhatsApp Alert] ${context} skipped — WhatsApp client not ready`);
-    return;
+    return { delivered: 0, total: 0, results: [], reason: "not_ready" };
   }
 
   const numbers = getAdminNumbersFromEnv();
   if (numbers.length === 0) {
     console.warn("[WhatsApp Alert] No admin numbers configured. Set WHATSAPP_ADMIN_NUMBERS.");
-    return;
+    return { delivered: 0, total: 0, results: [], reason: "no_admin_numbers" };
   }
 
   console.log(`[WhatsApp Alert] Sending ${context} to ${numbers.length} admin(s)...`);
   const results = await Promise.all(numbers.map((num) => sendWhatsAppMessage(num, message)));
-  const ok = results.filter((r) => r.ok).length;
+  const delivered = results.filter((r) => r.ok).length;
   const failed = results.filter((r) => !r.ok);
   if (failed.length) {
     console.error(
@@ -203,7 +203,8 @@ async function alertAdmins(message, context = "alert") {
       failed.map((f) => `${f.chatId}: ${f.error || f.reason}`).join("; ")
     );
   }
-  console.log(`[WhatsApp Alert] ${context} done — ${ok}/${numbers.length} delivered`);
+  console.log(`[WhatsApp Alert] ${context} done — ${delivered}/${numbers.length} delivered`);
+  return { delivered, total: numbers.length, results };
 }
 
 /** Reload order with farmer/sales names after create transaction commits. */
@@ -270,9 +271,10 @@ export async function sendOrderPlacedAlert(orderOrId) {
       `Placed By: ${salesPersonName}`,
     ].join("\n");
 
-    await alertAdmins(message, `new order #${orderNo}`);
+    return await alertAdmins(message, `new order #${orderNo}`);
   } catch (err) {
     console.error("[WhatsApp Alert] sendOrderPlacedAlert error:", err?.message || err);
+    return { delivered: 0, total: 0, results: [], error: err?.message || String(err) };
   }
 }
 

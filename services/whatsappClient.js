@@ -69,8 +69,31 @@ export function hasPersistedWhatsAppSession(dataPath = getWhatsAppSessionPath())
   }
 }
 
-function ensureSessionDir(dir) {
-  fs.mkdirSync(dir, { recursive: true });
+const FALLBACK_SESSION_PATH = path.join(PROJECT_ROOT, "data", "whatsapp-auth");
+
+function canWriteSessionDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Prefer WHATSAPP_SESSION_PATH; fall back to project data/ if not writable (fixes EACCES on Mac / bad perms). */
+export function resolveWritableWhatsAppSessionPath() {
+  const preferred = resolveWhatsAppSessionPath();
+  if (canWriteSessionDir(preferred)) return preferred;
+
+  console.warn(
+    `[WhatsApp] Cannot write session to ${preferred} — using ${FALLBACK_SESSION_PATH}`
+  );
+  if (canWriteSessionDir(FALLBACK_SESSION_PATH)) return FALLBACK_SESSION_PATH;
+
+  throw new Error(
+    `[WhatsApp] No writable session directory. Fix permissions on ${preferred} or set WHATSAPP_SESSION_PATH`
+  );
 }
 
 export function getWhatsAppClient() {
@@ -234,8 +257,7 @@ export async function startWhatsAppClient() {
   if (shuttingDown) return null;
   if (client) return client;
 
-  sessionPath = resolveWhatsAppSessionPath();
-  ensureSessionDir(sessionPath);
+  sessionPath = resolveWritableWhatsAppSessionPath();
 
   const hasSession = hasPersistedWhatsAppSession(sessionPath);
   console.log(

@@ -37,7 +37,8 @@ export function getOrderUpdateUserContext(user) {
     ur === "SUPERADMIN" ||
     ur === "SUPER_ADMIN" ||
     ur === "OFFICE_ADMIN" ||
-    ur === "OFFICEADMIN";
+    ur === "OFFICEADMIN" ||
+    ur === "ADMIN";
 
   return {
     userRole,
@@ -72,7 +73,7 @@ function extractBearerTokenFromReq(req) {
  * Plain user object for permission checks. If the JWT says DISPATCH_MANAGER but the DB user
  * document does not (stale profile), align to dispatch so PATCH matches the signed session.
  *
- * Same for OFFICE_ADMIN / SUPER_ADMIN / ACCOUNTANT: trust signed JWT when the DB profile is
+ * Same for OFFICE_ADMIN / SUPER_ADMIN / ADMIN / ACCOUNTANT: trust signed JWT when the DB profile is
  * stale, so salesPerson reassignment and status changes match what the user logged in as.
  *
  * @param {{ user?: import("mongoose").Document & { role?: string; jobTitle?: string }; token?: string; headers?: Record<string, string | undefined> } | null} req
