@@ -19,7 +19,11 @@ import {
   sendPaymentCollectedNotification,
   sendPaymentPendingNotification,
 } from "../utility/pushNotification.js";
-import { sendOrderAcceptedWhatsApp, sendOrderDispatchedWhatsAppDelivery1 } from "../utility/watiMessaging.js";
+import {
+  sendOrderAcceptedWhatsApp,
+  sendOrderDispatchedWhatsAppDelivery1,
+  buildWatiSendRecipient,
+} from "../utility/watiMessaging.js";
 import { isBananaPlantName } from "../utility/watiPlantText.js";
 import { getUnclearedPayments as getUnclearedPaymentsService, getPaymentsForApproval as getPaymentsForApprovalService, reconcile as reconcileService } from "../services/paymentReconciliationService.js";
 import { generateQR } from "../services/iciciBankService.js";
@@ -255,10 +259,14 @@ async function sendOrderAcceptedWhatsAppForOrder(order) {
         },
       };
     }
-    const result = await sendOrderAcceptedWhatsApp(
-      { ...dealerRec, taluka: watiTaluka },
-      orderDetails
-    );
+    const dealerSendTo = buildWatiSendRecipient(dealerRec, { taluka: watiTaluka });
+    if (!dealerSendTo) {
+      return {
+        success: false,
+        error: { message: "Dealer has no valid phone number for WhatsApp" },
+      };
+    }
+    const result = await sendOrderAcceptedWhatsApp(dealerSendTo, orderDetails);
     if (result.success) {
       order.whatsappAcceptedSentAt = new Date();
       const msgKey = extractWatiLocalMessageId(result.data);
@@ -288,10 +296,17 @@ async function sendOrderAcceptedWhatsAppForOrder(order) {
       },
     };
   }
-  const farmerResult = await sendOrderAcceptedWhatsApp(
-    { ...farmerRec, taluka: watiTaluka },
-    orderDetails
-  );
+  const farmerSendTo = buildWatiSendRecipient(farmerRec, { taluka: watiTaluka });
+  if (!farmerSendTo) {
+    return {
+      success: false,
+      error: {
+        message:
+          "Order has no farmer with mobile number — farmer WhatsApp is required for this order",
+      },
+    };
+  }
+  const farmerResult = await sendOrderAcceptedWhatsApp(farmerSendTo, orderDetails);
   if (!farmerResult.success) {
     return { success: false, error: farmerResult.error };
   }
@@ -304,7 +319,10 @@ async function sendOrderAcceptedWhatsAppForOrder(order) {
   let dealerSendNote = null;
   const dealerRec = dealerWhatsAppRecipient(order);
   if (dealerRec && watiPhonesDiffer(farmerRec.mobileNumber, dealerRec.mobileNumber)) {
-    const dealerResult = await sendOrderAcceptedWhatsApp(dealerRec, orderDetails);
+    const dealerCopySendTo = buildWatiSendRecipient(dealerRec, { taluka: watiTaluka });
+    const dealerResult = dealerCopySendTo
+      ? await sendOrderAcceptedWhatsApp(dealerCopySendTo, orderDetails)
+      : { success: false, error: "No mobile number" };
     dealerAlsoSent = Boolean(dealerResult.success);
     if (!dealerResult.success) {
       dealerSendNote =

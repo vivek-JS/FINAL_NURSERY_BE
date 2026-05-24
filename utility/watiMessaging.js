@@ -16,6 +16,22 @@ export function normalizeWatiMobile10(mobileNumber) {
   return clean;
 }
 
+/** Farmer uses mobileNumber; salesperson/dealer copy may use phoneNumber. */
+export function resolveWatiSendMobile(recipient) {
+  if (!recipient) return null;
+  const raw = recipient.mobileNumber ?? recipient.phoneNumber;
+  const ten = normalizeWatiMobile10(raw);
+  return ten.length === 10 ? ten : null;
+}
+
+export function buildWatiSendRecipient(recipient, extra = {}) {
+  const mobile = resolveWatiSendMobile(recipient);
+  if (!mobile) return null;
+  const base =
+    typeof recipient.toObject === "function" ? recipient.toObject() : { ...recipient };
+  return { ...base, ...extra, mobileNumber: mobile };
+}
+
 /**
  * WATI often returns HTTP 200 with result:false or invalid WhatsApp number.
  * @returns {{ ok: boolean, error?: string|object, localMessageId?: string }}
@@ -164,7 +180,14 @@ export async function sendWatiTemplateMessage(mobileNumber, templateName, parame
  */
 export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
   try {
-    if (!farmer || !farmer.mobileNumber) {
+    const sendTo = buildWatiSendRecipient(farmer, {
+      taluka:
+        farmer?.talukaName ||
+        farmer?.taluka ||
+        orderDetails?.taluka ||
+        "N/A",
+    });
+    if (!sendTo) {
       console.warn("⚠️ No farmer mobile number provided");
       return { success: false, error: "No mobile number" };
     }
@@ -202,18 +225,12 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       : "To be confirmed";
 
     // Parameters for WATI template: order_accpeted_revamped
-    const taluka =
-      farmer.talukaName ||
-      farmer.taluka ||
-      orderDetails.taluka ||
-      "N/A";
-
     const parameters = [
-      { name: "name", value: farmer.name || "Farmer" },
+      { name: "name", value: sendTo.name || "Farmer" },
       { name: "id", value: templateOrderId },
-      { name: "village", value: farmer.village || "N/A" },
-      { name: "taluka", value: taluka },
-      { name: "number", value: farmer.mobileNumber?.toString() || "N/A" },
+      { name: "village", value: sendTo.village || "N/A" },
+      { name: "taluka", value: sendTo.taluka || "N/A" },
+      { name: "number", value: sendTo.mobileNumber?.toString() || "N/A" },
       { name: "plant", value: acceptPlant },
       { name: "subtype", value: acceptSubtype },
       { name: "total_booked", value: numberOfPlants?.toString() || "0" },
@@ -228,7 +245,7 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
     const templateName = "order_accpeted_revamped";
 
     return await sendWatiTemplateMessage(
-      farmer.mobileNumber,
+      sendTo.mobileNumber,
       templateName,
       parameters
     );
