@@ -29,7 +29,10 @@ import {
   getFarmerPlantPaymentTransitionAction,
   shouldLogFarmerPlantLedger,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
-import { ensureDealerOrderBookingAudit } from "../utils/dealerLedgerHelper.js";
+import {
+  ensureDealerOrderBookingAudit,
+  ensureDealerOrderReceivablePaymentCredit,
+} from "../utils/dealerLedgerHelper.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import {
@@ -993,14 +996,8 @@ const addNewPayment = catchAsync(async (req, res, next) => {
           walletAmount = -amount;
           description = `Wallet payment ${finalPaymentStatus.toLowerCase()} for Order #${order._id} - ${farmerInfo}`;
           console.log(`This is a ${finalPaymentStatus.toLowerCase()} wallet payment, deducting amount from wallet`);
-        } else if (order.dealerOrder && finalPaymentStatus === "COLLECTED" && !isWalletPayment) {
-          // Add to wallet (positive amount) - when payment is collected from dealer (not wallet)
-          walletAmount = amount;
-          description = `Payment collected for Order #${order._id} via ${modeOfPayment} - ${farmerInfo}`;
-          console.log("This is a collected payment for dealer order, adding to wallet");
         } else if (order.dealerOrder && isWalletPayment && (finalPaymentStatus === "PENDING" || finalPaymentStatus === "COLLECTED")) {
           // Special case: Dealer order with wallet payment (pending or collected)
-          // This means the dealer is using their wallet balance to pay
           walletAmount = -amount;
           description = `Wallet payment ${finalPaymentStatus.toLowerCase()} for Dealer Order #${order._id} - ${farmerInfo}`;
           console.log(`This is a dealer wallet payment being ${finalPaymentStatus.toLowerCase()}`);
@@ -1079,6 +1076,11 @@ const addNewPayment = catchAsync(async (req, res, next) => {
         );
         if (order.dealerOrder) {
           await ensureDealerOrderBookingAudit(order, { userId: req.user?._id });
+          if (lastPayment.paymentStatus === "COLLECTED") {
+            await ensureDealerOrderReceivablePaymentCredit(order, lastPayment, {
+              userId: req.user?._id,
+            });
+          }
         }
       } catch (farmerLedgerErr) {
         console.error("Farmer plant ledger (add payment):", farmerLedgerErr);
@@ -1191,10 +1193,6 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
         // Deduct from wallet (negative amount) - for both pending and collected wallet payments
         walletAmount = -amount;
         description = `Wallet payment ${paymentStatus.toLowerCase()} for Order #${order._id} - ${farmerInfo}`;
-      } else if (order.dealerOrder && paymentStatus === "COLLECTED" && !isWalletPayment) {
-        // Add to wallet (positive amount) - when payment is collected from dealer (not wallet)
-        walletAmount = amount;
-        description = `Payment collected for Order #${order._id} via ${modeOfPayment} - ${farmerInfo}`;
       }
 
       // Process the wallet transaction if there is an impact
@@ -1432,51 +1430,7 @@ const updatePaymentStatus = async (req, res) => {
       }
       } // Close the else block for dealer validation
     }
-    // Handle bulk order (dealer order) payment status changes (ONLY if not a wallet payment)
-    else if (order.dealerOrder && order.dealer && !payment.isWalletPayment) {
-      console.log('Processing bulk order payment status change');
-      console.log('Current status:', payment.paymentStatus, 'New status:', paymentStatus);
-      console.log('Order is dealer order:', order.dealerOrder);
-      console.log('Payment is wallet payment:', payment.isWalletPayment);
-      console.log('Order dealer field:', order.dealer);
-      
-      // Validate that we have a dealer for wallet operations
-      if (!order.dealer) {
-        console.error('Cannot process bulk order payment: Order has no dealer field');
-        return res.status(400).json({
-          success: false,
-          message: "Cannot process bulk order payment: Order has no associated dealer",
-        });
-      }
-      
-      // For bulk orders (dealer orders):
-      // - When payment is collected, credit to wallet (add money)
-      // - When payment is rejected, debit from wallet (subtract money)
-      
-      try {
-        // Credit to wallet when payment becomes COLLECTED (from PENDING or BANK_VERIFIED)
-        if (payment.paymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
-          // Payment is now collected, credit to wallet
-          await updateDealerWalletBalance(order.dealer, amount, `Payment collected for bulk order - credited to wallet for Order #${order._id}`, req.user?._id);
-        } else if (payment.paymentStatus === "COLLECTED" && paymentStatus === "REJECTED") {
-          // Collected payment is now rejected, debit from wallet
-          await updateDealerWalletBalance(order.dealer, -amount, `Payment rejected for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
-        } else if (payment.paymentStatus === "COLLECTED" && (paymentStatus === "PENDING" || paymentStatus === "BANK_VERIFIED")) {
-          // Collected payment is now pending or bank-verified, debit from wallet
-          await updateDealerWalletBalance(order.dealer, -amount, `Payment changed to ${paymentStatus.toLowerCase()} for bulk order - debited from wallet for Order #${order._id}`, req.user?._id);
-        } else if ((payment.paymentStatus === "REJECTED" || payment.paymentStatus === "PENDING" || payment.paymentStatus === "BANK_VERIFIED") && paymentStatus === "COLLECTED") {
-          // Rejected/Pending/BankVerified payment is now collected, credit to wallet
-          await updateDealerWalletBalance(order.dealer, amount, `Payment collected for bulk order - credited to wallet for Order #${order._id}`, req.user?._id);
-        }
-      } catch (walletError) {
-        console.error('Error updating dealer wallet for bulk order:', walletError);
-        return res.status(500).json({
-          success: false,
-          message: "Error updating dealer wallet for bulk order",
-          error: walletError.message,
-        });
-      }
-    }
+    // Non-wallet collected payments do not change dealer wallet cash (ledger outstanding only).
 
     const previousPaymentStatus = payment.paymentStatus;
     if (previousPaymentStatus === paymentStatus) {
@@ -1544,6 +1498,11 @@ const updatePaymentStatus = async (req, res) => {
             success: false,
             message:
               "Payment status updated but farmer ledger transition was not recorded (duplicate or invalid transition).",
+          });
+        }
+        if (order.dealerOrder && paymentStatus === "COLLECTED") {
+          await ensureDealerOrderReceivablePaymentCredit(order, payment, {
+            userId: req.user?._id,
           });
         }
       } catch (farmerLedgerErr) {

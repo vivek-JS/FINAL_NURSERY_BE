@@ -27,7 +27,10 @@ import {
   syncFarmerPlantLedgerForOrderUpdate,
   archiveFarmerPlantOrderBeforeDelete,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
-import { ensureDealerOrderBookingAudit } from "../utils/dealerLedgerHelper.js";
+import {
+  ensureDealerOrderBookingAudit,
+  ensureDealerOrderReceivablePaymentCredit,
+} from "../utils/dealerLedgerHelper.js";
 import {
   getLastOutstandingAfterForCustomer,
   resolveFarmerIdentity,
@@ -40,6 +43,10 @@ import {
   DISPATCH_MANAGER_ALLOWED_STATUSES,
   resolveUserForOrderUpdatePermissions,
 } from "../utils/orderUpdatePermissions.js";
+import {
+  buildOrderEditHistoryEntries,
+  mergeEditHistoryIntoFilteredBody,
+} from "../utils/orderEditHistoryBuilder.js";
 
 const CANCEL_LIKE_ORDER_STATUSES = new Set(["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"]);
 function isCancelLikeOrderStatus(status) {
@@ -1124,10 +1131,6 @@ const createOne = (Model, modelName) =>
                   // Deduct from wallet (negative amount) - when dealer pays from wallet (pending or collected)
                   walletAmount = -paymentItem.paidAmount;
                   description = `Wallet payment ${paymentItem.paymentStatus.toLowerCase()} for Order #${order[0]._id}`;
-                } else if (order[0].dealerOrder && paymentItem.paymentStatus === "COLLECTED" && !paymentItem.isWalletPayment) {
-                  // Add to wallet (positive amount) - when payment is collected from dealer (not wallet)
-                  walletAmount = paymentItem.paidAmount;
-                  description = `Payment collected for Order #${order[0]._id} via ${paymentItem.modeOfPayment}`;
                 }
 
                 // If there's a wallet impact, record the transaction
@@ -1172,6 +1175,16 @@ const createOne = (Model, modelName) =>
                     paymentItem.paymentStatus,
                     { userId: req.user?._id, session }
                   );
+                  if (
+                    order[0].dealerOrder &&
+                    paymentItem.paymentStatus === "COLLECTED"
+                  ) {
+                    await ensureDealerOrderReceivablePaymentCredit(
+                      order[0],
+                      paymentItem,
+                      { userId: req.user?._id, session }
+                    );
+                  }
                 } catch (payLedgerErr) {
                   console.error(
                     "FarmerPlantOrderLedger payment on create:",
@@ -1839,17 +1852,22 @@ const updateOne = (Model, modelName, allowedFields) =>
       }
 
       // Track deliveryDate changes (specific delivery date)
-      if (filteredBody.deliveryDate) {
+      if (filteredBody.deliveryDate !== undefined) {
         const oldDate = existingDoc.deliveryDate ? new Date(existingDoc.deliveryDate) : null;
-        const newDate = new Date(filteredBody.deliveryDate);
-        
-        if (!oldDate || oldDate.toISOString() !== newDate.toISOString()) {
+        const newDate = filteredBody.deliveryDate
+          ? new Date(filteredBody.deliveryDate)
+          : null;
+
+        if (
+          (oldDate && newDate && oldDate.toISOString() !== newDate.toISOString()) ||
+          Boolean(oldDate) !== Boolean(newDate)
+        ) {
           editHistoryEntries.push({
             field: "deliveryDate",
             previousValue: oldDate,
             newValue: newDate,
             changedBy: req.user ? req.user._id : null,
-            notes: `Delivery date changed from ${oldDate ? oldDate.toLocaleDateString('en-IN') : 'Not set'} to ${newDate.toLocaleDateString('en-IN')}`,
+            notes: `Delivery date changed from ${oldDate ? oldDate.toLocaleDateString('en-IN') : 'Not set'} to ${newDate ? newDate.toLocaleDateString('en-IN') : 'Not set'}`,
           });
         }
       }
@@ -2023,20 +2041,48 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
-      // Add all edit history entries (merge with any existing $push.orderEditHistory from this request)
-      if (editHistoryEntries.length > 0) {
-        if (!filteredBody.$push) filteredBody.$push = {};
-        if (!filteredBody.$push.orderEditHistory) {
-          filteredBody.$push.orderEditHistory = { $each: [...editHistoryEntries] };
-        } else if (filteredBody.$push.orderEditHistory.$each) {
-          filteredBody.$push.orderEditHistory.$each.push(...editHistoryEntries);
-        } else {
-          const first = filteredBody.$push.orderEditHistory;
-          filteredBody.$push.orderEditHistory = {
-            $each: [first, ...editHistoryEntries],
-          };
+      // Track orderStatus changes in orderEditHistory (same audit trail as rate/qty edits).
+      if (
+        filteredBody.orderStatus !== undefined &&
+        String(filteredBody.orderStatus) !== String(existingDoc.orderStatus)
+      ) {
+        const prevStatus = existingDoc.orderStatus;
+        const nextStatus = filteredBody.orderStatus;
+        const noteParts = [`Status changed from ${prevStatus} to ${nextStatus}`];
+        const statusChangePush = filteredBody.$push?.statusChanges;
+        if (statusChangePush?.reason) {
+          noteParts.push(`Reason: ${statusChangePush.reason}`);
         }
+        if (statusChangePush?.notes) {
+          noteParts.push(statusChangePush.notes);
+        }
+        if (filteredBody.dispatchDayKey) {
+          noteParts.push(`Dispatch day: ${filteredBody.dispatchDayKey}`);
+        }
+        editHistoryEntries.push({
+          field: "orderStatus",
+          previousValue: prevStatus,
+          newValue: nextStatus,
+          changedBy: req.user ? req.user._id : null,
+          notes: noteParts.join(". "),
+        });
       }
+
+      // Catch-all: any other allowed $set field not already logged above
+      const manualHistoryFields = new Set(
+        editHistoryEntries.map((e) => e.field).filter(Boolean)
+      );
+      const autoHistoryEntries = buildOrderEditHistoryEntries({
+        existingDoc,
+        pendingSet: filteredBody,
+        userId: req.user?._id,
+        skipFields: manualHistoryFields,
+      });
+      if (autoHistoryEntries.length > 0) {
+        editHistoryEntries.push(...autoHistoryEntries);
+      }
+
+      mergeEditHistoryIntoFilteredBody(filteredBody, editHistoryEntries);
 
       // Update remainingPlants field if numberOfPlants is being updated
       if (
@@ -2619,7 +2665,7 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
-      if (modelName === "Order" && updatedDoc) {
+      if (modelName === "Order" && updatedDoc && editHistoryEntries.length > 0) {
         (async () => {
           try {
             const {
@@ -2627,20 +2673,23 @@ const updateOne = (Model, modelName, allowedFields) =>
               sendOrderDispatchedAlert,
             } = await import("../services/whatsappAlertService.js");
             const plain = updatedDoc?.toObject ? updatedDoc.toObject() : updatedDoc;
+            const changedBy = req.user?.name || req.user?.email || "Unknown";
             await sendOrderEditedAlert(
               plain,
-              req.user?.name || req.user?.email || "Unknown",
+              changedBy,
               editHistoryEntries,
               existingDoc
             );
 
             const prevStatus = String(existingDoc?.orderStatus || "").toUpperCase();
             const nextStatus = String(plain?.orderStatus || "").toUpperCase();
-            if (prevStatus !== "DISPATCHED" && nextStatus === "DISPATCHED") {
-              await sendOrderDispatchedAlert(
-                plain,
-                req.user?.name || req.user?.email || "Unknown"
-              );
+            const statusEdited = editHistoryEntries.some((e) => e.field === "orderStatus");
+            if (
+              statusEdited &&
+              prevStatus !== "DISPATCHED" &&
+              nextStatus === "DISPATCHED"
+            ) {
+              await sendOrderDispatchedAlert(plain, changedBy);
             }
           } catch (e) {
             console.error("whatsapp-alert (order update):", e?.message || e);
@@ -3248,11 +3297,6 @@ const getAll = (Model, modelName) =>
     const sortByDeliveryOnReadyTab =
       ready_for_dispatch === "true" &&
       String(req.query.sortByDelivery ?? "").toLowerCase() === "true";
-    const sortByReadyEnteredOnReadyTab =
-      ready_for_dispatch === "true" &&
-      (String(req.query.sortByReadyEntered ?? "").toLowerCase() === "true" ||
-        sortKey === "readyForDispatchEnteredAt");
-
     /** FIFO: when listing only FARM_READY, legacy clients send delivery/booking sort — use first transition time instead. */
     let effectiveSortKey = sortKey;
     let effectiveOrder = order;
@@ -3264,25 +3308,69 @@ const getAll = (Model, modelName) =>
       effectiveOrder = 1;
     }
 
-    /**
-     * Ready-for-dispatch tab (default): sort by dispatchTargetDate (Aaj/Udya/Kaal plan day).
-     * sortByReadyEntered=true → when marked ready; sortByDelivery=true → deliveryDate.
-     */
+    const sortByTargetOnReadyTab =
+      ready_for_dispatch === "true" &&
+      (sortKey === "dispatchTargetDate" || sortKey === "dispatchTargetDateSort");
+
+    /** Default ready tab: FIFO by readyForDispatchEnteredAt (22 → 23 → 24), past-due rows last. */
+    let readyDispatchFifoSort = false;
+
     if (ready_for_dispatch === "true") {
       if (sortByDeliveryOnReadyTab) {
         effectiveSortKey = "deliveryDate";
-      } else if (sortByReadyEnteredOnReadyTab) {
-        effectiveSortKey = "readyForDispatchEnteredAt";
-      } else if (
-        sortKey === "dispatchTargetDate" ||
-        sortKey === "dispatchTargetDateSort" ||
-        sortKey === "deliveryDate" ||
-        sortKey === "orderBookingDate" ||
-        sortKey === "createdAt"
-      ) {
+      } else if (sortByTargetOnReadyTab) {
         effectiveSortKey = "dispatchTargetDateSort";
+        effectiveOrder = 1;
+      } else {
+        readyDispatchFifoSort = true;
+        effectiveSortKey = "readyForDispatchEnteredAt";
+        effectiveOrder = 1;
       }
     }
+
+    const todayUtcStart = new Date();
+    todayUtcStart.setUTCHours(0, 0, 0, 0);
+    const readyDispatchPastDueRankExpr = {
+      $let: {
+        vars: { todayStart: { $literal: todayUtcStart } },
+        in: {
+          $cond: [
+            {
+              $or: [
+                {
+                  $lt: [
+                    {
+                      $convert: {
+                        input: "$dispatchTargetDate",
+                        to: "date",
+                        onError: null,
+                        onNull: null,
+                      },
+                    },
+                    "$$todayStart",
+                  ],
+                },
+                {
+                  $lt: [
+                    {
+                      $convert: {
+                        input: "$deliveryDate",
+                        to: "date",
+                        onError: null,
+                        onNull: null,
+                      },
+                    },
+                    "$$todayStart",
+                  ],
+                },
+              ],
+            },
+            1,
+            0,
+          ],
+        },
+      },
+    };
 
     const dispatchTargetDateSortExpr = {
       $convert: {
@@ -3415,6 +3503,13 @@ const getAll = (Model, modelName) =>
     );
 
     const orderListSortSpec = () => {
+      if (readyDispatchFifoSort) {
+        return {
+          readyDispatchPastDueRank: 1,
+          readyForDispatchEnteredAt: 1,
+          orderId: 1,
+        };
+      }
       const spec = { [effectiveSortKey]: effectiveOrder };
       if (
         effectiveSortKey === "readyForDispatchEnteredAt" ||
@@ -3671,7 +3766,14 @@ const getAll = (Model, modelName) =>
       });
     }
 
-    if (effectiveSortKey === "readyForDispatchEnteredAt") {
+    if (readyDispatchFifoSort) {
+      pipeline.push({
+        $addFields: {
+          readyForDispatchEnteredAt: readyForDispatchEnteredAtExpr,
+          readyDispatchPastDueRank: readyDispatchPastDueRankExpr,
+        },
+      });
+    } else if (effectiveSortKey === "readyForDispatchEnteredAt") {
       pipeline.push({
         $addFields: { readyForDispatchEnteredAt: readyForDispatchEnteredAtExpr },
       });

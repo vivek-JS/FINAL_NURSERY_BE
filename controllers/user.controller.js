@@ -1050,6 +1050,32 @@ function customerNameFromOrderDoc(order) {
   return "";
 }
 
+/** Human label + machine reason for wallet ledger rows (legacy rows inferred from description). */
+function resolveWalletTransactionReason(txn) {
+  if (txn?.reason) return txn.reason;
+  const desc = String(txn?.description || "").toLowerCase();
+  if (desc.includes("commission settlement")) return "COMMISSION_SETTLEMENT";
+  if (desc.includes("manual wallet credit")) return "MANUAL_CREDIT";
+  if (desc.includes("wallet payment")) return "ORDER_PAYMENT";
+  if (desc.includes("payment collected for order")) return "ORDER_PAYMENT";
+  if (desc.includes("payment changed")) return "PAYMENT_STATUS_UPDATE";
+  if (desc.includes("reconcile") || desc.includes("adjustment")) return "ADJUSTMENT";
+  return txn?.type === "DEBIT" ? "DEBIT" : "CREDIT";
+}
+
+function walletReasonLabel(reason) {
+  const map = {
+    COMMISSION_SETTLEMENT: "Commission paid",
+    ORDER_PAYMENT: "Order payment",
+    PAYMENT_STATUS_UPDATE: "Payment update",
+    ADJUSTMENT: "Adjustment",
+    MANUAL_CREDIT: "Manual credit",
+    CREDIT: "Credit",
+    DEBIT: "Debit",
+  };
+  return map[reason] || reason?.replace(/_/g, " ") || "Transaction";
+}
+
 /**
  * Get all transactions for a dealer wallet with pagination
  */
@@ -1100,36 +1126,14 @@ const getDealerWalletTransactions = async (req, res) => {
     console.log('Wallet found with ID:', wallet._id);
     console.log('Total transactions:', wallet.transactions?.length || 0);
 
-    // Wallet cash transactions + ORDER_BOOKING audit rows (no balance impact)
+    // Wallet cash transactions only — audit ledger is GET /dealers/:id/ledger
     let filteredTransactions = (wallet.transactions || []).map((t) => ({
       ...t.toObject?.() ?? t,
       source: "WALLET",
     }));
 
-    const bookingAudits = await DealerLedgerEntry.find({
-      dealer: dealerId,
-      refType: "ORDER_BOOKING",
-    })
-      .sort({ entryDate: -1 })
-      .lean();
-
-    for (const entry of bookingAudits) {
-      filteredTransactions.push({
-        _id: entry._id,
-        type: "ORDER_BOOKING",
-        amount: 0,
-        balanceBefore: entry.balanceBefore,
-        balanceAfter: entry.balanceAfter,
-        description: entry.description,
-        relatedOrder: entry.orderId,
-        createdAt: entry.entryDate || entry.createdAt,
-        source: "AUDIT",
-        auditOnly: true,
-      });
-    }
-
     // Filter by type if specified
-    if (type && ['CREDIT', 'DEBIT', 'ORDER_BOOKING', 'INVENTORY_ADD', 'INVENTORY_BOOK', 'INVENTORY_RELEASE'].includes(type.toUpperCase())) {
+    if (type && ['CREDIT', 'DEBIT', 'INVENTORY_ADD', 'INVENTORY_BOOK', 'INVENTORY_RELEASE'].includes(type.toUpperCase())) {
       const typeFilter = type.toUpperCase();
       console.log('Filtering by type:', typeFilter);
       filteredTransactions = filteredTransactions.filter(t => t.type === typeFilter);
@@ -1189,12 +1193,16 @@ const getDealerWalletTransactions = async (req, res) => {
       const orderMeta = relatedOrder
         ? orderMetaById[String(relatedOrder)]
         : null;
+      const reason = transaction.auditOnly
+        ? "ORDER_BOOKING"
+        : resolveWalletTransactionReason(transaction);
+      const isWalletCash = transaction.source === "WALLET";
       return {
         _id: transaction._id,
         type: transaction.type,
         amount: transaction.amount,
-        balanceBefore: transaction.balanceBefore,
-        balanceAfter: transaction.balanceAfter,
+        balanceBefore: isWalletCash ? transaction.balanceBefore : null,
+        balanceAfter: isWalletCash ? transaction.balanceAfter : null,
         description: transaction.description,
         status: transaction.status,
         reference: transaction.reference,
@@ -1205,6 +1213,8 @@ const getDealerWalletTransactions = async (req, res) => {
         customerName: orderMeta?.customerName ?? null,
         dealerOrder: orderMeta?.dealerOrder ?? null,
         auditOnly: Boolean(transaction.auditOnly),
+        reason,
+        reasonLabel: walletReasonLabel(reason),
         createdAt: transaction.createdAt,
       };
     });
@@ -1295,6 +1305,13 @@ const getDealerLedger = async (req, res) => {
       ])
     )[0]?.total || 0;
 
+    const { getLastDealerOrderOutstanding } = await import(
+      "../utils/dealerLedgerHelper.js"
+    );
+    const orderOutstanding = await getLastDealerOrderOutstanding(
+      new mongoose.Types.ObjectId(dealerId)
+    );
+
     return res.status(200).json({
       success: true,
       data: {
@@ -1303,6 +1320,7 @@ const getDealerLedger = async (req, res) => {
           totalDebit,
           totalCredit,
           balance: totalCredit - totalDebit,
+          orderOutstanding,
         },
         pagination: {
           page: pageNum,

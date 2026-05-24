@@ -7,12 +7,16 @@
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import Order from "../models/order.model.js";
+import DealerLedgerEntry from "../models/dealerLedgerEntry.model.js";
 import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
   shouldLogFarmerPlantLedger,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
-import { ensureDealerOrderBookingAudit } from "../utils/dealerLedgerHelper.js";
+import {
+  ensureDealerOrderBookingAudit,
+  ensureDealerOrderReceivablePaymentCredit,
+} from "../utils/dealerLedgerHelper.js";
 
 dotenv.config();
 
@@ -58,7 +62,18 @@ async function main() {
           { session }
         );
         if (row) farmerPayments += 1;
+        if (payment.paymentStatus === "COLLECTED") {
+          const recv = await ensureDealerOrderReceivablePaymentCredit(order, payment, {
+            session,
+          });
+          if (recv) farmerPayments += 1;
+        }
       }
+
+      await DealerLedgerEntry.deleteMany(
+        { orderId: order._id, refType: "ORDER_BOOKING", debit: 0 },
+        { session }
+      );
 
       const audit = await ensureDealerOrderBookingAudit(order, { session });
       if (audit) dealerAudit += 1;

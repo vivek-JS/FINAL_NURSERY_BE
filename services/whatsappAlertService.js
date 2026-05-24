@@ -279,12 +279,28 @@ export async function sendOrderPlacedAlert(orderOrId) {
 }
 
 const FIELD_LABELS = {
+  orderStatus: "Status",
   numberOfPlants: "Qty",
   rate: "Rate",
   deliveryDate: "Delivery Date",
+  bookingSlot: "Booking Slot",
   salesPerson: "Sales Person",
   plantSubtype: "Subtype",
+  orderPaymentStatus: "Payment Status",
+  notes: "Notes",
+  farmReadyDate: "Farm Ready Date",
+  dispatchDayKey: "Dispatch Day",
+  dispatchTargetDate: "Dispatch Target",
+  cavity: "Tray",
+  expectedNursery: "Nursery",
+  batchNumber: "Batch",
+  freightCharges: "Freight (₹)",
   deliveryChallanInvoiceNumber: "Invoice No",
+  remainingPlants: "Remaining Qty",
+  returnedPlants: "Returned Qty",
+  damagedPlants: "Damaged Qty",
+  additionalPlants: "Additional Qty",
+  orderFor: "Order For",
 };
 
 /**
@@ -309,9 +325,16 @@ export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHis
         let prev = e.previousValue;
         let next = e.newValue;
 
-        if (e.field === "deliveryDate") {
+        if (e.field === "deliveryDate" || e.field === "farmReadyDate" || e.field === "dispatchTargetDate") {
           prev = prev ? new Date(prev).toLocaleDateString("en-IN") : "—";
           next = next ? new Date(next).toLocaleDateString("en-IN") : "—";
+        }
+        if (e.field === "orderStatus") {
+          prev = String(prev ?? "—").replace(/_/g, " ");
+          next = String(next ?? "—").replace(/_/g, " ");
+        }
+        if (e.notes && e.field === "orderStatus") {
+          return `  • ${label}: ${prev} → ${next} (${e.notes})`;
         }
 
         if (prev !== undefined && next !== undefined) {
@@ -320,63 +343,16 @@ export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHis
         return `  • ${label} updated`;
       });
 
-    // Also detect changes by diffing existingDoc vs updated order for fields not in editHistory
-    if (existingDoc && order) {
-      const diffChecks = [
-        {
-          field: "orderStatus",
-          label: "Status",
-          prev: existingDoc.orderStatus,
-          next: order.orderStatus,
-        },
-        {
-          field: "rate",
-          label: "Rate (₹)",
-          prev: existingDoc.rate,
-          next: order.rate,
-        },
-        {
-          field: "numberOfPlants",
-          label: "Qty",
-          prev: existingDoc.numberOfPlants,
-          next: order.numberOfPlants,
-        },
-        {
-          field: "deliveryDate",
-          label: "Delivery Date",
-          prev: existingDoc.deliveryDate,
-          next: order.deliveryDate,
-          format: (v) => (v ? new Date(v).toLocaleDateString("en-IN") : "—"),
-        },
-        {
-          field: "bookingSlot",
-          label: "Booking Slot",
-          prev: String(existingDoc.bookingSlot || ""),
-          next: String(order.bookingSlot || ""),
-        },
-      ];
-
-      for (const check of diffChecks) {
-        // Skip if already in editHistory
-        const alreadyTracked = editHistory.some((e) => e?.field === check.field);
-        if (alreadyTracked) continue;
-
-        const fmt = check.format || ((v) => String(v ?? "—"));
-        const prevStr = fmt(check.prev);
-        const nextStr = fmt(check.next);
-
-        if (prevStr !== nextStr && nextStr !== "—" && nextStr !== "undefined") {
-          changeLines.push(`  • ${check.label}: ${prevStr} → ${nextStr}`);
-        }
-      }
-    }
-
     if (changeLines.length === 0) {
-      changeLines.push("  • Details updated");
+      return;
     }
+
+    const orderNo =
+      order?.orderId || order?.orderNumber || existingDoc?.orderId || "—";
 
     const message = [
       "🟡 *Order Updated*",
+      `Order #: ${orderNo}`,
       `Farmer: ${farmerName}`,
       `Village: ${village} | Taluka: ${taluka}`,
       `Updated By: ${changedBy}`,

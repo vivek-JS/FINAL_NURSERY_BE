@@ -438,6 +438,14 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
   }
 
   summary.gap = summary.expectedCommission - summary.actualCommission;
+  summary.totalPaymentOutstanding = orderRows.reduce(
+    (s, o) => s + Number(o.paymentDue ?? o.paymentPending ?? 0),
+    0
+  );
+  summary.totalOrderValue = orderRows.reduce(
+    (s, o) => s + Number(o.orderTotalValue || 0),
+    0
+  );
 
   const byPlantType = Array.from(plantMap.values())
     .map((p) => ({

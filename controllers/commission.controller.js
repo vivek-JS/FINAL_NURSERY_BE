@@ -6,6 +6,7 @@ import DealerCommissionRate from "../models/dealerCommissionRate.model.js";
 import DealerCommissionSettlement from "../models/dealerCommissionSettlement.model.js";
 import generateResponse from "../utility/responseFormat.js";
 import catchAsync from "../utility/catchAsync.js";
+import { createDealerLedgerEntry } from "../utils/dealerLedgerHelper.js";
 import {
   buildDealerCommissionAnalysis,
   buildCommissionImpactOrders,
@@ -273,18 +274,25 @@ export const postSettleDealerCommission = catchAsync(async (req, res) => {
       isPartial: settleAmount < unsettled,
     };
 
-    await DealerWallet.addPayment(
-      dealerId,
-      settleAmount,
+    await createDealerLedgerEntry({
+      dealer: dealerId,
+      refType: "COMMISSION_SETTLEMENT",
+      credit: settleAmount,
       description,
-      req.user?._id,
-      "COMMISSION_SETTLEMENT",
-      null,
+      createdBy: req.user?._id,
+      entryDate: new Date(),
+      metadata: {
+        ...metadata,
+        tracksWalletCash: false,
+        tracksCommissionSettlement: true,
+      },
       session,
-      metadata
-    );
+    });
 
-    const ledgerEntry = await DealerLedgerEntry.findOne({ dealer: dealerId })
+    const ledgerEntry = await DealerLedgerEntry.findOne({
+      dealer: dealerId,
+      refType: "COMMISSION_SETTLEMENT",
+    })
       .sort({ createdAt: -1 })
       .session(session)
       .lean();
@@ -323,7 +331,7 @@ export const postSettleDealerCommission = catchAsync(async (req, res) => {
     await session.commitTransaction();
 
     return res.status(200).json(
-      generateResponse("success", "Commission settled and wallet credited", {
+      generateResponse("success", "Commission settled (ledger recorded; wallet unchanged)", {
         settlement: settlement[0],
         availableAmount: wallet?.availableAmount ?? 0,
         settledAmount: settleAmount,

@@ -4,6 +4,42 @@ import {
   resolveFarmerIdentity,
 } from "./farmerPlantOrderLedgerHelper.js";
 
+const ORDER_RECEIVABLE_REF_TYPES = ["ORDER_BOOKING", "ORDER_RECEIVABLE_PAYMENT"];
+
+export function roundLedgerMoney(n) {
+  return Math.round(Number(n || 0) * 100) / 100;
+}
+
+/** Running order-value outstanding for dealer (ledger only — not wallet cash). */
+export async function getLastDealerOrderOutstanding(dealerId, session) {
+  const q = DealerLedgerEntry.find({
+    dealer: dealerId,
+    refType: { $in: ORDER_RECEIVABLE_REF_TYPES },
+  }).lean();
+  if (session) q.session(session);
+  const docs = await q;
+  if (!docs.length) return 0;
+
+  const sorted = [...docs].sort((a, b) => {
+    const ta = new Date(a.entryDate).getTime();
+    const tb = new Date(b.entryDate).getTime();
+    if (ta !== tb) return ta - tb;
+    return String(a._id).localeCompare(String(b._id));
+  });
+
+  let running = 0;
+  for (const d of sorted) {
+    if (d.balanceAfter != null && !Number.isNaN(Number(d.balanceAfter))) {
+      running = roundLedgerMoney(d.balanceAfter);
+    } else {
+      running = roundLedgerMoney(
+        running + (Number(d.debit) || 0) - (Number(d.credit) || 0)
+      );
+    }
+  }
+  return running;
+}
+
 /**
  * Maps addPayment type to DealerLedgerEntry refType
  */
@@ -121,13 +157,13 @@ export const addPaymentToLedgerEntry = async ({
     balanceAfter,
     description,
     createdBy: performedBy,
-    metadata,
+    metadata: { ...metadata, tracksWalletCash: true },
     session,
   });
 };
 
 /**
- * Audit-only dealer ledger row when a dealerOrder is booked (no wallet balance change).
+ * Dealer order receivable: debit on book (outstanding ↑). Does not change wallet cash.
  */
 export const ensureDealerOrderBookingAudit = async (order, { userId, session } = {}) => {
   if (!order?.dealerOrder || !order?.dealer) return null;
@@ -141,29 +177,96 @@ export const ensureDealerOrderBookingAudit = async (order, { userId, session } =
   if (existing) return existing;
 
   const { customerName } = await resolveFarmerIdentity(order);
-  const lineTotal = getPlantOrderLineTotal(order);
+  const lineTotal = roundLedgerMoney(getPlantOrderLineTotal(order));
+  if (!(lineTotal > 0)) return null;
+
   const plants =
     (Number(order.numberOfPlants) || 0) + (Number(order.additionalPlants) || 0);
+  const outstandingBefore = await getLastDealerOrderOutstanding(dealerId, session);
+  const outstandingAfter = roundLedgerMoney(outstandingBefore + lineTotal);
 
   const entryPayload = {
     dealer: dealerId,
     refType: "ORDER_BOOKING",
     refId: oid,
     orderId: oid,
-    debit: 0,
+    debit: lineTotal,
     credit: 0,
+    balanceBefore: outstandingBefore,
+    balanceAfter: outstandingAfter,
     reference: String(order.orderId ?? ""),
     description: customerName
-      ? `Order ${order.orderId ?? ""} booked for ${customerName}`
-      : `Order ${order.orderId ?? ""} booked`,
+      ? `Order ${order.orderId ?? ""} booked for ${customerName} — outstanding`
+      : `Order ${order.orderId ?? ""} booked — outstanding`,
     createdBy: userId,
     entryDate: order.orderBookingDate || order.createdAt || new Date(),
     metadata: {
-      auditOnly: true,
+      tracksOrderOutstanding: true,
       orderNumericId: order.orderId,
       lineTotal,
       plants,
       customerName: customerName || undefined,
+    },
+  };
+
+  if (session) {
+    const created = await DealerLedgerEntry.create([entryPayload], { session });
+    return created[0];
+  }
+  return DealerLedgerEntry.create(entryPayload);
+};
+
+/**
+ * Credit dealer order outstanding when payment is collected (ledger only — wallet cash is separate).
+ */
+export const ensureDealerOrderReceivablePaymentCredit = async (
+  order,
+  payment,
+  { userId, session } = {}
+) => {
+  if (!order?.dealerOrder || !order?.dealer || !payment?._id) return null;
+
+  const amount = roundLedgerMoney(Math.abs(Number(payment.paidAmount || 0)));
+  if (!(amount > 0)) return null;
+  if (payment.paymentStatus !== "COLLECTED") return null;
+
+  const dealerId = order.dealer._id || order.dealer;
+  const oid = order._id;
+  const pid = payment._id;
+
+  const q = DealerLedgerEntry.findOne({
+    orderId: oid,
+    paymentId: pid,
+    refType: "ORDER_RECEIVABLE_PAYMENT",
+  });
+  if (session) q.session(session);
+  if (await q.lean()) return null;
+
+  const outstandingBefore = await getLastDealerOrderOutstanding(dealerId, session);
+  const outstandingAfter = roundLedgerMoney(Math.max(0, outstandingBefore - amount));
+
+  const entryPayload = {
+    dealer: dealerId,
+    refType: "ORDER_RECEIVABLE_PAYMENT",
+    refId: pid,
+    orderId: oid,
+    paymentId: pid,
+    debit: 0,
+    credit: amount,
+    balanceBefore: outstandingBefore,
+    balanceAfter: outstandingAfter,
+    reference: String(order.orderId ?? ""),
+    description: `Payment collected — order ${order.orderId ?? ""} (outstanding reduced)`,
+    createdBy: userId,
+    entryDate: payment.paymentDate
+      ? new Date(payment.paymentDate)
+      : payment.updatedAt
+        ? new Date(payment.updatedAt)
+        : new Date(),
+    metadata: {
+      tracksOrderOutstanding: true,
+      modeOfPayment: payment.modeOfPayment,
+      isWalletPayment: Boolean(payment.isWalletPayment),
     },
   };
 

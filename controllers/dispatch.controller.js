@@ -39,6 +39,11 @@ import {
   getOrderUpdateUserContext,
   resolveUserForOrderUpdatePermissions,
 } from "../utils/orderUpdatePermissions.js";
+import {
+  buildOrderEditHistoryFromDocDiff,
+  mergeEditHistoryIntoFilteredBody,
+  fireOrderEditWhatsAppAlerts,
+} from "../utils/orderEditHistoryBuilder.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -50,7 +55,12 @@ const updateOrderWithLedgerSync = async ({
   ledgerSyncOptions = {},
   /** Extra options for `findByIdAndUpdate` (e.g. `arrayFilters`). */
   mongooseUpdateOptions = {},
+  /** Collect { previousOrder, updatedOrder, entries } for post-commit WhatsApp alerts */
+  editAlertQueue = null,
+  req = null,
 }) => {
+  const resolvedEditAlertQueue =
+    editAlertQueue ?? req?._orderEditAlertQueue ?? null;
   const previousOrder =
     existingDoc || (await Order.findById(orderId).session(session));
   if (!previousOrder) {
@@ -65,6 +75,21 @@ const updateOrderWithLedgerSync = async ({
       reason: contextLabel ? `dispatch:${contextLabel}` : "dispatch:order_update",
     }
   );
+
+  const setFields = opWithAudit.$set || {};
+  const previousPlain = previousOrder?.toObject?.() ?? previousOrder;
+  const syntheticNext = { ...previousPlain, ...setFields };
+  const dispatchHistoryEntries = buildOrderEditHistoryFromDocDiff(
+    previousPlain,
+    syntheticNext,
+    {
+      userId,
+      reasonPrefix: contextLabel ? `dispatch:${contextLabel}` : "dispatch",
+    }
+  );
+  if (dispatchHistoryEntries.length > 0) {
+    mergeEditHistoryIntoFilteredBody(opWithAudit, dispatchHistoryEntries);
+  }
 
   const updatedOrder = await Order.findByIdAndUpdate(orderId, opWithAudit, {
     new: true,
@@ -111,6 +136,14 @@ const updateOrderWithLedgerSync = async ({
     oldStatus: previousOrder?.orderStatus,
     newStatus: updatedOrder?.orderStatus,
   });
+
+  if (dispatchHistoryEntries.length > 0 && resolvedEditAlertQueue) {
+    resolvedEditAlertQueue.push({
+      previousOrder: previousPlain,
+      updatedOrder,
+      entries: dispatchHistoryEntries,
+    });
+  }
 
   return updatedOrder;
 };
@@ -292,6 +325,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
+  req._orderEditAlertQueue = [];
   const voiceFeedbackOrderIds = [];
   const dispatchedAlertQueue = new Map();
 
@@ -476,6 +510,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
           },
           session,
           userId: req.user?._id,
+          req,
           contextLabel: "create_dispatch_split_update",
         });
         queueDispatchedOrderAlert({
@@ -537,6 +572,11 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
     await session.commitTransaction();
     fireQueuedDispatchedOrderAlerts(dispatchedAlertQueue);
+    fireOrderEditWhatsAppAlerts(
+      req._orderEditAlertQueue,
+      req.user?.name || req.user?.email || "Unknown"
+    );
+    delete req._orderEditAlertQueue;
 
     if (voiceFeedbackOrderIds.length > 0) {
       (async () => {
@@ -822,6 +862,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   const dispatchedAlertQueue = new Map();
+  req._orderEditAlertQueue = [];
 
   try {
     const existing = await findDispatchDocumentFlexible(id, session);
@@ -940,6 +981,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
             existingDoc: order,
             session,
             userId: req.user?._id,
+          req,
             contextLabel: "update_dispatch_delete_all_revert",
             updateOperation: {
               $set: {
@@ -956,6 +998,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
             existingDoc: order,
             session,
             userId: req.user?._id,
+          req,
             contextLabel: "update_dispatch_delete_all_clear_current",
             updateOperation: {
               $set: {
@@ -995,6 +1038,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
             existingDoc: order,
             session,
             userId: req.user?._id,
+          req,
             contextLabel: "update_dispatch_remove_order_no_hist",
             updateOperation: {
               $set: {
@@ -1022,6 +1066,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
         existingDoc: order,
         session,
         userId: req.user?._id,
+          req,
         contextLabel: "update_dispatch_remove_order",
         updateOperation: entry
           ? {
@@ -1112,6 +1157,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
         existingDoc: order,
         session,
         userId: req.user?._id,
+          req,
         contextLabel: "update_dispatch_add_order",
         updateOperation: {
           $set: setUpdateDispatchAdd,
@@ -1216,6 +1262,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
         existingDoc: order,
         session,
         userId: req.user?._id,
+          req,
         contextLabel: "update_dispatch_qty_change",
         updateOperation: {
           $set: setPayload,
@@ -1283,6 +1330,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
           existingDoc: order,
           session,
           userId: req.user?._id,
+          req,
           contextLabel: "update_dispatch_expected_nursery",
           updateOperation: {
             $set: { expectedNursery: expectedNurseryPatch },
@@ -1293,6 +1341,11 @@ const updateDispatch = catchAsync(async (req, res, next) => {
 
     await session.commitTransaction();
     fireQueuedDispatchedOrderAlerts(dispatchedAlertQueue);
+    fireOrderEditWhatsAppAlerts(
+      req._orderEditAlertQueue,
+      req.user?.name || req.user?.email || "Unknown"
+    );
+    delete req._orderEditAlertQueue;
 
     const response = generateResponse(
       "Success",
@@ -1502,6 +1555,7 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
 
   const session = await mongoose.startSession();
   session.startTransaction();
+  req._orderEditAlertQueue = [];
   try {
     const existing = await findDispatchDocumentFlexible(id, session);
     if (!existing) {
@@ -1558,6 +1612,7 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
             existingDoc: ord,
             session,
             userId: req.user?._id,
+          req,
             contextLabel: "detach_last_order_revert",
             updateOperation: {
               $set: {
@@ -1574,6 +1629,7 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
             existingDoc: ord,
             session,
             userId: req.user?._id,
+          req,
             contextLabel: "detach_last_order_clear",
             updateOperation: {
               $set: {
@@ -1586,6 +1642,11 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
       }
       await Dispatch.deleteOne({ _id: dispatchOid }).session(session);
       await session.commitTransaction();
+      fireOrderEditWhatsAppAlerts(
+        req._orderEditAlertQueue,
+        req.user?.name || req.user?.email || "Unknown"
+      );
+      delete req._orderEditAlertQueue;
       return res.status(200).json(
         generateResponse("Success", "Dispatch removed (no orders left)", {
           deleted: true,
@@ -1613,6 +1674,7 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
             existingDoc: o,
             session,
             userId: req.user?._id,
+          req,
             contextLabel: "detach_order_no_hist",
             updateOperation: {
               $set: {
@@ -1640,6 +1702,7 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
         existingDoc: o,
         session,
         userId: req.user?._id,
+          req,
         contextLabel: "detach_order_from_dispatch",
         updateOperation: entry
           ? {
@@ -1690,6 +1753,11 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
     );
 
     await session.commitTransaction();
+    fireOrderEditWhatsAppAlerts(
+      req._orderEditAlertQueue,
+      req.user?.name || req.user?.email || "Unknown"
+    );
+    delete req._orderEditAlertQueue;
     return res.status(200).json(
       generateResponse("Success", "Order removed from dispatch", updated, undefined)
     );
@@ -1735,6 +1803,7 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   const dispatchedAlertQueue = new Map();
+  req._orderEditAlertQueue = [];
 
   try {
     const existingDispatchDoc = await findDispatchDocumentFlexible(id, session);
@@ -1932,9 +2001,10 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
           dispatchHistory: dispatchHistoryEntry,
         },
       },
-      session,
-      userId: req.user?._id,
-      contextLabel: "quick_add_to_dispatch",
+            session,
+            userId: req.user?._id,
+            req,
+            contextLabel: "quick_add_to_dispatch",
     });
     queueDispatchedOrderAlert({
       queue: dispatchedAlertQueue,
@@ -1946,6 +2016,11 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
 
     await session.commitTransaction();
     fireQueuedDispatchedOrderAlerts(dispatchedAlertQueue);
+    fireOrderEditWhatsAppAlerts(
+      req._orderEditAlertQueue,
+      req.user?.name || req.user?.email || "Unknown"
+    );
+    delete req._orderEditAlertQueue;
 
     if (newStatus === "DISPATCHED") {
       (async () => {
@@ -2839,6 +2914,7 @@ const regenerateDispatchPdfs = catchAsync(async (req, res, next) => {
 const removeTransport = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
+  req._orderEditAlertQueue = [];
 
   try {
     const { transportId } = req.params;
@@ -2897,6 +2973,7 @@ const removeTransport = async (req, res) => {
             existingDoc: order,
             session,
             userId: req.user?._id,
+          req,
             contextLabel: "remove_transport_restore",
             updateOperation: {
               $set: {
@@ -2921,6 +2998,7 @@ const removeTransport = async (req, res) => {
             existingDoc: order,
             session,
             userId: req.user?._id,
+          req,
             contextLabel: "remove_transport_no_history",
             updateOperation: {
               $set: {
@@ -2948,6 +3026,7 @@ const removeTransport = async (req, res) => {
           existingDoc: o,
           session,
           userId: req.user?._id,
+          req,
           contextLabel: "remove_transport_legacy_bulk",
           updateOperation: { $set: patch },
         });
@@ -2997,6 +3076,11 @@ const removeTransport = async (req, res) => {
     await Dispatch.deleteOne({ _id: dispatch._id }, { session });
 
     await session.commitTransaction();
+    fireOrderEditWhatsAppAlerts(
+      req._orderEditAlertQueue,
+      req.user?.name || req.user?.email || "Unknown"
+    );
+    delete req._orderEditAlertQueue;
 
     return res.status(200).json({
       success: true,
@@ -3024,6 +3108,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
 
   const session = await mongoose.startSession();
   session.startTransaction();
+  req._orderEditAlertQueue = [];
 
   try {
     const dispatch = await findDispatchDocumentFlexible(id, session);
@@ -3398,6 +3483,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         updateOperation,
         session,
         userId: req.user?._id,
+          req,
         contextLabel: "complete_dispatch_order_update",
         ledgerSyncOptions: { orderEditSource: "dispatch_complete" },
       });
@@ -3499,6 +3585,11 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
     }
 
     await session.commitTransaction();
+    fireOrderEditWhatsAppAlerts(
+      req._orderEditAlertQueue,
+      req.user?.name || req.user?.email || "Unknown"
+    );
+    delete req._orderEditAlertQueue;
 
     const response = generateResponse(
       "Success",

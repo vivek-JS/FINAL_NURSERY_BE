@@ -1,3 +1,2 @@
-2026/05/14-12:31:19.736 46b5d2 Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Session Storage/MANIFEST-000001
-2026/05/14-12:31:19.736 46b5d2 Recovering log #3
-2026/05/14-12:31:19.737 46b5d2 Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Session Storage/000003.log 
+2026/05/24-14:44:57.509 14a239 Creating DB /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Session Storage since it was missing.
+2026/05/24-14:44:57.531 14a239 Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Session Storage/MANIFEST-000001

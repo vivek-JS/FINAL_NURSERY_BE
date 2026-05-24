@@ -63,6 +63,11 @@ const transactionSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Order",
     },
+    /** Business reason: ORDER_PAYMENT, COMMISSION_SETTLEMENT, ADJUSTMENT, etc. */
+    reason: {
+      type: String,
+      trim: true,
+    },
   },
   { timestamps: true }
 );
@@ -138,6 +143,7 @@ dealerWalletSchema.statics.addPayment = async function (
       balanceAfter,
       performedBy,
       relatedOrder,
+      reason: type || (amount >= 0 ? "CREDIT" : "DEBIT"),
     };
 
     wallet.transactions.push(transaction);

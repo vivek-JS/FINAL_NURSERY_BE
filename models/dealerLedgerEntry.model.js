@@ -17,6 +17,7 @@ const dealerLedgerEntrySchema = new mongoose.Schema(
       type: String,
       enum: [
         "ORDER_BOOKING",
+        "ORDER_RECEIVABLE_PAYMENT",
         "ORDER_PAYMENT",
         "PAYMENT_STATUS_UPDATE",
         "ADJUSTMENT",
@@ -83,10 +84,20 @@ dealerLedgerEntrySchema.pre("validate", function (next) {
   const debit = Number(this.debit || 0);
   const credit = Number(this.credit || 0);
   if (this.refType === "ORDER_BOOKING") {
-    if (debit > 0 || credit > 0) {
-      return next(
-        new Error("ORDER_BOOKING audit entries must not change wallet balance")
-      );
+    if (credit > 0) {
+      return next(new Error("ORDER_BOOKING must be a debit-only receivable line"));
+    }
+    if (debit <= 0) {
+      return next(new Error("ORDER_BOOKING must have a debit amount for order outstanding"));
+    }
+    return next();
+  }
+  if (this.refType === "ORDER_RECEIVABLE_PAYMENT") {
+    if (debit > 0) {
+      return next(new Error("ORDER_RECEIVABLE_PAYMENT must be credit-only"));
+    }
+    if (credit <= 0) {
+      return next(new Error("ORDER_RECEIVABLE_PAYMENT must have a credit amount"));
     }
     return next();
   }
