@@ -1249,6 +1249,42 @@ const getDealerWalletTransactions = async (req, res) => {
 };
 
 /**
+ * Backfill missing ORDER_BOOKING / payment rows for a dealer's orders.
+ * POST /dealers/:dealerId/ledger/repair
+ */
+const postRepairDealerLedger = async (req, res) => {
+  try {
+    const { dealerId } = req.params;
+    if (!dealerId || !mongoose.Types.ObjectId.isValid(dealerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid dealer ID is required",
+      });
+    }
+
+    const { repairDealerLedgerForDealer } = await import(
+      "../utils/dealerLedgerHelper.js"
+    );
+    const result = await repairDealerLedgerForDealer(dealerId, {
+      userId: req.user?._id,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Dealer ledger repair completed",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error repairing dealer ledger:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error repairing dealer ledger",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * Get immutable dealer ledger entries for audit
  * GET /dealers/:dealerId/ledger?startDate=&endDate=&page=&limit=
  */
@@ -2493,6 +2529,7 @@ export {
   getDealerWalletDetails,
   getDealerWalletTransactions,
   getDealerLedger,
+  postRepairDealerLedger,
   exportDealerWalletTransactionsCSV,
   uploadMedia,
   processOCR

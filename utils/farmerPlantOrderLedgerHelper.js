@@ -516,6 +516,14 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
     if (strict) throw e;
   }
 
+  try {
+    const { syncDealerLedgerForOrder } = await import("./dealerLedgerHelper.js");
+    await syncDealerLedgerForOrder(updatedDoc, { userId, session });
+  } catch (e) {
+    console.error("syncDealerLedgerForOrder failed:", e);
+    if (strict) throw e;
+  }
+
   // Order total edit transition: write immutable delta adjustment rows for rate/quantity changes.
   // Skip when previous state is terminal to avoid double-counting with reopen logic.
   try {

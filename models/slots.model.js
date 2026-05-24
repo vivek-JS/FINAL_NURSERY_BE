@@ -215,6 +215,18 @@ const slotSchema = new Schema({
       return this.totalPlants;
     }
   },
+  /** Physically counted / actual plants in this slot window */
+  actualPlants: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  /** Closing stock at end of slot period */
+  closingStock: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
   buffer: {
     type: Number,
     default: 0,

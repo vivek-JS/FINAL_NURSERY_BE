@@ -777,9 +777,22 @@ export const updateSlotFieldById = async (req, res) => {
       targetSlot.setPerformer(performedBy);
     }
 
-    // Update the slot fields
-    Object.keys(updates).forEach(key => {
-      if (targetSlot[key] !== undefined) {
+    const allowedSlotFields = new Set([
+      "totalPlants",
+      "availablePlants",
+      "buffer",
+      "effectiveBuffer",
+      "status",
+      "actualPlants",
+      "closingStock",
+      "plantsSowed",
+      "officeSowed",
+      "primarySowed",
+    ]);
+
+    // Update the slot fields (whitelist so new schema fields work on older documents)
+    Object.keys(updates).forEach((key) => {
+      if (allowedSlotFields.has(key)) {
         targetSlot[key] = updates[key];
       }
     });

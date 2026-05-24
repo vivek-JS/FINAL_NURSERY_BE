@@ -30,8 +30,7 @@ import {
   shouldLogFarmerPlantLedger,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import {
-  ensureDealerOrderBookingAudit,
-  ensureDealerOrderReceivablePaymentCredit,
+  syncDealerLedgerForOrder,
 } from "../utils/dealerLedgerHelper.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
@@ -1074,17 +1073,15 @@ const addNewPayment = catchAsync(async (req, res, next) => {
           lastPayment.paymentStatus,
           { userId: req.user?._id }
         );
-        if (order.dealerOrder) {
-          await ensureDealerOrderBookingAudit(order, { userId: req.user?._id });
-          if (lastPayment.paymentStatus === "COLLECTED") {
-            await ensureDealerOrderReceivablePaymentCredit(order, lastPayment, {
-              userId: req.user?._id,
-            });
-          }
-        }
       } catch (farmerLedgerErr) {
         console.error("Farmer plant ledger (add payment):", farmerLedgerErr);
       }
+    }
+
+    try {
+      await syncDealerLedgerForOrder(order, { userId: req.user?._id });
+    } catch (dealerLedgerErr) {
+      console.error("Dealer ledger sync (add payment):", dealerLedgerErr);
     }
 
     // Return success with transaction info if it was created
@@ -1500,14 +1497,15 @@ const updatePaymentStatus = async (req, res) => {
               "Payment status updated but farmer ledger transition was not recorded (duplicate or invalid transition).",
           });
         }
-        if (order.dealerOrder && paymentStatus === "COLLECTED") {
-          await ensureDealerOrderReceivablePaymentCredit(order, payment, {
-            userId: req.user?._id,
-          });
-        }
       } catch (farmerLedgerErr) {
         console.error("Farmer plant ledger (payment status):", farmerLedgerErr);
       }
+    }
+
+    try {
+      await syncDealerLedgerForOrder(order, { userId: req.user?._id });
+    } catch (dealerLedgerErr) {
+      console.error("Dealer ledger sync (payment status):", dealerLedgerErr);
     }
 
     // Send push notification based on payment status change

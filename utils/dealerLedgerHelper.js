@@ -2,6 +2,7 @@ import DealerLedgerEntry from "../models/dealerLedgerEntry.model.js";
 import {
   getPlantOrderLineTotal,
   resolveFarmerIdentity,
+  resolveFundingDealerId,
 } from "./farmerPlantOrderLedgerHelper.js";
 
 const ORDER_RECEIVABLE_REF_TYPES = ["ORDER_BOOKING", "ORDER_RECEIVABLE_PAYMENT"];
@@ -163,12 +164,13 @@ export const addPaymentToLedgerEntry = async ({
 };
 
 /**
- * Dealer order receivable: debit on book (outstanding ↑). Does not change wallet cash.
+ * Dealer receivable audit (ORDER_BOOKING) for any order funded by a dealer:
+ * bulk dealerOrder, farmer order with order.dealer, or salesPerson with jobTitle DEALER.
  */
 export const ensureDealerOrderBookingAudit = async (order, { userId, session } = {}) => {
-  if (!order?.dealerOrder || !order?.dealer) return null;
+  const dealerId = await resolveFundingDealerId(order);
+  if (!dealerId) return null;
 
-  const dealerId = order.dealer._id || order.dealer;
   const oid = order._id;
 
   const q = DealerLedgerEntry.findOne({ orderId: oid, refType: "ORDER_BOOKING" });
@@ -224,13 +226,14 @@ export const ensureDealerOrderReceivablePaymentCredit = async (
   payment,
   { userId, session } = {}
 ) => {
-  if (!order?.dealerOrder || !order?.dealer || !payment?._id) return null;
+  if (!payment?._id) return null;
+
+  const dealerId = await resolveFundingDealerId(order);
+  if (!dealerId) return null;
 
   const amount = roundLedgerMoney(Math.abs(Number(payment.paidAmount || 0)));
   if (!(amount > 0)) return null;
   if (payment.paymentStatus !== "COLLECTED") return null;
-
-  const dealerId = order.dealer._id || order.dealer;
   const oid = order._id;
   const pid = payment._id;
 
@@ -275,4 +278,75 @@ export const ensureDealerOrderReceivablePaymentCredit = async (
     return created[0];
   }
   return DealerLedgerEntry.create(entryPayload);
+};
+
+/**
+ * Idempotent: ensure ORDER_BOOKING + COLLECTED payment credits exist for one order.
+ */
+export async function syncDealerLedgerForOrder(order, { userId, session } = {}) {
+  const dealerId = await resolveFundingDealerId(order);
+  if (!dealerId) {
+    return { bookingCreated: false, paymentsCreated: 0 };
+  }
+
+  const oid = order._id;
+  const hadBookingQ = DealerLedgerEntry.findOne({
+    orderId: oid,
+    refType: "ORDER_BOOKING",
+  });
+  if (session) hadBookingQ.session(session);
+  const hadBooking = await hadBookingQ.lean();
+
+  const booking = await ensureDealerOrderBookingAudit(order, { userId, session });
+  const bookingCreated = Boolean(booking && !hadBooking);
+
+  let paymentsCreated = 0;
+  for (const payment of order.payment || []) {
+    if (payment.paymentStatus !== "COLLECTED") continue;
+    const hadPaymentQ = DealerLedgerEntry.findOne({
+      orderId: oid,
+      paymentId: payment._id,
+      refType: "ORDER_RECEIVABLE_PAYMENT",
+    });
+    if (session) hadPaymentQ.session(session);
+    const hadPayment = await hadPaymentQ.lean();
+    const row = await ensureDealerOrderReceivablePaymentCredit(order, payment, {
+      userId,
+      session,
+    });
+    if (row && !hadPayment) paymentsCreated += 1;
+  }
+
+  return { bookingCreated, paymentsCreated };
+}
+
+/**
+ * Backfill missing dealer ledger rows for orders linked to this dealer.
+ */
+export async function repairDealerLedgerForDealer(dealerId, { userId, limit = 300 } = {}) {
+  const mongoose = (await import("mongoose")).default;
+  const Order = (await import("../models/order.model.js")).default;
+  const dealerOid = new mongoose.Types.ObjectId(dealerId);
+
+  const orders = await Order.find({
+    $or: [{ dealer: dealerOid }, { salesPerson: dealerOid }],
+  })
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
+
+  let scanned = 0;
+  let bookingsCreated = 0;
+  let paymentsCreated = 0;
+
+  for (const order of orders) {
+    const funding = await resolveFundingDealerId(order);
+    if (!funding || String(funding) !== String(dealerId)) continue;
+    scanned += 1;
+    const result = await syncDealerLedgerForOrder(order, { userId });
+    if (result.bookingCreated) bookingsCreated += 1;
+    paymentsCreated += result.paymentsCreated || 0;
+  }
+
+  return { scanned, bookingsCreated, paymentsCreated };
 };

@@ -28,8 +28,7 @@ import {
   archiveFarmerPlantOrderBeforeDelete,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import {
-  ensureDealerOrderBookingAudit,
-  ensureDealerOrderReceivablePaymentCredit,
+  syncDealerLedgerForOrder,
 } from "../utils/dealerLedgerHelper.js";
 import {
   getLastOutstandingAfterForCustomer,
@@ -1175,16 +1174,6 @@ const createOne = (Model, modelName) =>
                     paymentItem.paymentStatus,
                     { userId: req.user?._id, session }
                   );
-                  if (
-                    order[0].dealerOrder &&
-                    paymentItem.paymentStatus === "COLLECTED"
-                  ) {
-                    await ensureDealerOrderReceivablePaymentCredit(
-                      order[0],
-                      paymentItem,
-                      { userId: req.user?._id, session }
-                    );
-                  }
                 } catch (payLedgerErr) {
                   console.error(
                     "FarmerPlantOrderLedger payment on create:",
@@ -1196,15 +1185,13 @@ const createOne = (Model, modelName) =>
           } catch (ledgerErr) {
             console.error("FarmerPlantOrderLedger ORDER debit failed:", ledgerErr);
           }
-          if (order[0].dealerOrder) {
-            try {
-              await ensureDealerOrderBookingAudit(order[0], {
-                userId: req.user?._id,
-                session,
-              });
-            } catch (dealerAuditErr) {
-              console.error("Dealer ORDER_BOOKING audit failed:", dealerAuditErr);
-            }
+          try {
+            await syncDealerLedgerForOrder(order[0], {
+              userId: req.user?._id,
+              session,
+            });
+          } catch (dealerAuditErr) {
+            console.error("Dealer ledger sync on create failed:", dealerAuditErr);
           }
         }
 
