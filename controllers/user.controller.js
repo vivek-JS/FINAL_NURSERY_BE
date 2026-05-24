@@ -1116,10 +1116,27 @@ const getDealerWalletTransactions = async (req, res) => {
     const wallet = await DealerWallet.findOne({ dealer: dealerId });
 
     if (!wallet) {
-      console.log('No wallet found for dealer');
-      return res.status(404).json({
-        success: false,
-        message: "Wallet not found for this dealer"
+      console.log('No wallet document — returning empty cash transactions');
+      const pageNumEmpty = parseInt(page, 10) || 1;
+      const limitNumEmpty = parseInt(limit, 10) || 20;
+      return res.status(200).json({
+        success: true,
+        message: "No wallet yet — cash balance is ₹0",
+        data: {
+          transactions: [],
+          pagination: {
+            total: 0,
+            page: pageNumEmpty,
+            limit: limitNumEmpty,
+            totalPages: 0,
+            hasNextPage: false,
+            hasPrevPage: false,
+          },
+          wallet: {
+            availableAmount: 0,
+            exists: false,
+          },
+        },
       });
     }
 
@@ -1418,11 +1435,15 @@ const exportDealerWalletTransactionsCSV = async (req, res) => {
     const wallet = await DealerWallet.findOne({ dealer: dealerId });
 
     if (!wallet) {
-      console.log('No wallet found for dealer');
-      return res.status(404).json({
-        success: false,
-        message: "Wallet not found for this dealer"
-      });
+      console.log('No wallet found for dealer — empty CSV');
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="dealer-wallet-transactions-${dealerId}.csv"`
+      );
+      return res.status(200).send(
+        "Date,Type,Amount,Balance Before,Balance After,Description,Status,Reference\n"
+      );
     }
 
     console.log('Wallet found with ID:', wallet._id);

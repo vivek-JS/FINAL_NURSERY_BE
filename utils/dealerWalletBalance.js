@@ -1,6 +1,3 @@
-import mongoose from "mongoose";
-import DealerLedgerEntry from "../models/dealerLedgerEntry.model.js";
-
 /**
  * Running balance from the newest embedded wallet transaction (audit chain).
  * addPayment() always appends a tx with balanceAfter; if availableAmount was
@@ -22,22 +19,17 @@ export function balanceFromLastEmbeddedTransaction(wallet) {
 }
 
 /**
- * Best-effort cash balance for API/UI: embedded tx chain → immutable ledger → stored field.
+ * Cash wallet balance only (₹ the dealer can pay from wallet).
+ * Uses embedded wallet transactions, then stored availableAmount.
+ * Does NOT use DealerLedgerEntry — that tracks order receivable / outstanding, not cash.
  */
 export async function resolveDealerCashBalance(dealerId, walletLean) {
   const embedded = balanceFromLastEmbeddedTransaction(walletLean);
   if (embedded !== null) return embedded;
 
-  if (dealerId && mongoose.Types.ObjectId.isValid(String(dealerId))) {
-    const latest = await DealerLedgerEntry.findOne({
-      dealer: new mongoose.Types.ObjectId(dealerId),
-    })
-      .sort({ entryDate: -1, createdAt: -1 })
-      .select("balanceAfter")
-      .lean();
-    const lv = Number(latest?.balanceAfter);
-    if (Number.isFinite(lv)) return lv;
+  if (walletLean) {
+    return Number(walletLean.availableAmount) || 0;
   }
 
-  return walletLean ? Number(walletLean.availableAmount) || 0 : 0;
+  return 0;
 }
