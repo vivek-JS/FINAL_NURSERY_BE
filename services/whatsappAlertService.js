@@ -9,7 +9,7 @@
  *   WHATSAPP_ALERTS_ENABLED=true
  */
 
-import { client, isWhatsAppReady } from "./whatsappClient.js";
+import { getWhatsAppClient, isWhatsAppReady } from "./whatsappClient.js";
 import { normalizePhoneForWhitelist } from "../utils/agriLoadLinkSigner.js";
 
 const toNumber = (value) => {
@@ -107,9 +107,15 @@ export async function sendWhatsAppMessage(number, message) {
     return;
   }
 
+  const wa = getWhatsAppClient();
+  if (!wa) {
+    console.warn("[WhatsApp Alert] Client not started — skipping alert to", number);
+    return;
+  }
+
   const chatId = formatNumber(number);
   try {
-    await client.sendMessage(chatId, message);
+    await wa.sendMessage(chatId, message);
     console.log(`[WhatsApp Alert] ✅ Sent to ${chatId}`);
   } catch (err) {
     console.error(`[WhatsApp Alert] ❌ Failed to send to ${chatId}:`, err?.message || err);

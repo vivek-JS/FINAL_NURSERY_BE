@@ -11,7 +11,11 @@
 
 import express from "express";
 import { sendWhatsAppMessage, getAdminNumbersFromEnv } from "../services/whatsappAlertService.js";
-import { isWhatsAppReady } from "../services/whatsappClient.js";
+import {
+  isWhatsAppReady,
+  getWhatsAppSessionPath,
+  hasPersistedWhatsAppSession,
+} from "../services/whatsappClient.js";
 
 const router = express.Router();
 
@@ -45,11 +49,14 @@ router.post("/test", async (req, res) => {
 });
 
 router.get("/status", (req, res) => {
+  const sessionPath = getWhatsAppSessionPath();
   return res.status(200).json({
     status: "Success",
     whatsappReady: isWhatsAppReady,
     alertsEnabled: process.env.WHATSAPP_ALERTS_ENABLED === "true",
     adminNumbers: getAdminNumbersFromEnv(),
+    sessionPath,
+    hasSavedSession: hasPersistedWhatsAppSession(sessionPath),
   });
 });
 

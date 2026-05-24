@@ -1,8 +1,11 @@
-import dotenv from "dotenv";
-dotenv.config();
+import "dotenv/config";
 import mongoose from "mongoose";
 import server from "./app.js";
 import { attachVoiceFeedbackWebSocket } from "./services/voiceFeedback/voiceBridge.ws.js";
+import {
+  startWhatsAppClient,
+  shutdownWhatsAppClient,
+} from "./services/whatsappClient.js";
 
 /**
  * Resolve Mongo URI for the running environment.
@@ -57,6 +60,10 @@ mongoose
     // Define plants and varieties to be inserted
 
     try {
+      void startWhatsAppClient().catch((e) => {
+        console.error("[WhatsApp] Failed to start client:", e?.message || e);
+      });
+
       const httpServer = server.listen(process.env.PORT || 8000, '0.0.0.0', () => {
         const port = process.env.PORT || 8000;
         console.log(`Server running on port ${port}`);
@@ -80,6 +87,18 @@ mongoose
       httpServer.headersTimeout = 610000; // Slightly longer than keepAliveTimeout
       
       console.log('Server timeouts configured: 10 minutes');
+
+      const gracefulShutdown = async (signal) => {
+        console.log(`\n[${signal}] Graceful shutdown...`);
+        try {
+          await shutdownWhatsAppClient();
+        } catch (e) {
+          console.warn("[WhatsApp] Shutdown error:", e?.message || e);
+        }
+        process.exit(0);
+      };
+      process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+      process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
     } catch (error) {
       console.error("Error starting server:", error);
     }
