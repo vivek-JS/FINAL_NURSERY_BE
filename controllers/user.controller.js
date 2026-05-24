@@ -1043,6 +1043,13 @@ const getDealerWalletDetails = async (req, res) => {
   }
 };
 
+function customerNameFromOrderDoc(order) {
+  if (!order) return "";
+  if (order.orderFor?.name) return String(order.orderFor.name).trim();
+  if (order.farmer?.name) return String(order.farmer.name).trim();
+  return "";
+}
+
 /**
  * Get all transactions for a dealer wallet with pagination
  */
@@ -1093,11 +1100,36 @@ const getDealerWalletTransactions = async (req, res) => {
     console.log('Wallet found with ID:', wallet._id);
     console.log('Total transactions:', wallet.transactions?.length || 0);
 
-    // Filter and sort transactions
-    let filteredTransactions = wallet.transactions || [];
-    
+    // Wallet cash transactions + ORDER_BOOKING audit rows (no balance impact)
+    let filteredTransactions = (wallet.transactions || []).map((t) => ({
+      ...t.toObject?.() ?? t,
+      source: "WALLET",
+    }));
+
+    const bookingAudits = await DealerLedgerEntry.find({
+      dealer: dealerId,
+      refType: "ORDER_BOOKING",
+    })
+      .sort({ entryDate: -1 })
+      .lean();
+
+    for (const entry of bookingAudits) {
+      filteredTransactions.push({
+        _id: entry._id,
+        type: "ORDER_BOOKING",
+        amount: 0,
+        balanceBefore: entry.balanceBefore,
+        balanceAfter: entry.balanceAfter,
+        description: entry.description,
+        relatedOrder: entry.orderId,
+        createdAt: entry.entryDate || entry.createdAt,
+        source: "AUDIT",
+        auditOnly: true,
+      });
+    }
+
     // Filter by type if specified
-    if (type && ['CREDIT', 'DEBIT', 'INVENTORY_ADD', 'INVENTORY_BOOK', 'INVENTORY_RELEASE'].includes(type.toUpperCase())) {
+    if (type && ['CREDIT', 'DEBIT', 'ORDER_BOOKING', 'INVENTORY_ADD', 'INVENTORY_BOOK', 'INVENTORY_RELEASE'].includes(type.toUpperCase())) {
       const typeFilter = type.toUpperCase();
       console.log('Filtering by type:', typeFilter);
       filteredTransactions = filteredTransactions.filter(t => t.type === typeFilter);
@@ -1106,8 +1138,9 @@ const getDealerWalletTransactions = async (req, res) => {
 
     // Sort by createdAt in descending order
     filteredTransactions.sort((a, b) => {
-      if (!a.createdAt || !b.createdAt) return 0;
-      return new Date(b.createdAt) - new Date(a.createdAt);
+      const da = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const db = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return db - da;
     });
 
     // Calculate pagination
@@ -1125,21 +1158,56 @@ const getDealerWalletTransactions = async (req, res) => {
 
     // Get transactions for current page
     const paginatedTransactions = filteredTransactions.slice(startIndex, endIndex);
-    
+
+    const relatedOrderIds = [
+      ...new Set(
+        paginatedTransactions
+          .map((t) => t.relatedOrder)
+          .filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)))
+          .map((id) => new mongoose.Types.ObjectId(String(id)))
+      ),
+    ];
+
+    const orderMetaById = {};
+    if (relatedOrderIds.length) {
+      const orders = await Order.find({ _id: { $in: relatedOrderIds } })
+        .select("orderId orderFor farmer dealerOrder")
+        .populate("farmer", "name")
+        .lean();
+      for (const o of orders) {
+        orderMetaById[String(o._id)] = {
+          orderNumericId: o.orderId,
+          customerName: customerNameFromOrderDoc(o),
+          dealerOrder: Boolean(o.dealerOrder),
+        };
+      }
+    }
+
     // Format transactions for response
-    const formattedTransactions = paginatedTransactions.map(transaction => ({
-      _id: transaction._id,
-      type: transaction.type,
-      amount: transaction.amount,
-      balanceBefore: transaction.balanceBefore,
-      balanceAfter: transaction.balanceAfter,
-      description: transaction.description,
-      status: transaction.status,
-      reference: transaction.reference,
-      referenceId: transaction.referenceId,
-      performedBy: transaction.performedBy,
-      createdAt: transaction.createdAt
-    }));
+    const formattedTransactions = paginatedTransactions.map((transaction) => {
+      const relatedOrder = transaction.relatedOrder;
+      const orderMeta = relatedOrder
+        ? orderMetaById[String(relatedOrder)]
+        : null;
+      return {
+        _id: transaction._id,
+        type: transaction.type,
+        amount: transaction.amount,
+        balanceBefore: transaction.balanceBefore,
+        balanceAfter: transaction.balanceAfter,
+        description: transaction.description,
+        status: transaction.status,
+        reference: transaction.reference,
+        referenceId: transaction.referenceId,
+        performedBy: transaction.performedBy,
+        relatedOrder: relatedOrder || null,
+        orderNumericId: orderMeta?.orderNumericId ?? null,
+        customerName: orderMeta?.customerName ?? null,
+        dealerOrder: orderMeta?.dealerOrder ?? null,
+        auditOnly: Boolean(transaction.auditOnly),
+        createdAt: transaction.createdAt,
+      };
+    });
 
     const response = {
       success: true,
@@ -1201,7 +1269,11 @@ const getDealerLedger = async (req, res) => {
     const [entries, totalCount] = await Promise.all([
       DealerLedgerEntry.find(query)
         .populate("createdBy", "name")
-        .populate("orderId", "orderId numberOfPlants")
+        .populate({
+          path: "orderId",
+          select: "orderId numberOfPlants orderFor farmer dealerOrder",
+          populate: { path: "farmer", select: "name" },
+        })
         .sort({ entryDate: -1 })
         .skip(skip)
         .limit(limitNum)

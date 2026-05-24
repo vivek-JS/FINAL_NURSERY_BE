@@ -5,6 +5,73 @@ import {
   WATI_MERGED_SUBTYPE_PLACEHOLDER,
 } from "./watiPlantText.js";
 
+/** Normalize to 10-digit Indian mobile for logs; API uses 91 prefix. */
+export function normalizeWatiMobile10(mobileNumber) {
+  const clean = String(mobileNumber ?? "").replace(/\D/g, "");
+  if (clean.length === 12 && clean.startsWith("91")) return clean.slice(2);
+  if (clean.length > 10) return clean.slice(-10);
+  return clean;
+}
+
+/**
+ * WATI often returns HTTP 200 with result:false or invalid WhatsApp number.
+ * @returns {{ ok: boolean, error?: string|object, localMessageId?: string }}
+ */
+export function interpretWatiTemplateResponse(data, httpOk) {
+  if (!httpOk) {
+    return {
+      ok: false,
+      error: data?.info || data?.message || data?.error || data || "HTTP error",
+    };
+  }
+
+  if (!data || typeof data !== "object") {
+    return { ok: false, error: "Empty or invalid WATI response body" };
+  }
+
+  if (data.result === false) {
+    return {
+      ok: false,
+      error: data.info || data.message || data.error || "WATI result:false",
+    };
+  }
+
+  const receivers = Array.isArray(data.receivers) ? data.receivers : [];
+  if (receivers.length > 0) {
+    const bad = receivers.filter(
+      (r) => r.isValidWhatsAppNumber === false || (r.errors && r.errors.length > 0)
+    );
+    if (bad.length > 0) {
+      const detail = bad
+        .map((r) => ({
+          waId: r.waId,
+          errors: r.errors,
+          isValidWhatsAppNumber: r.isValidWhatsAppNumber,
+        }));
+      return {
+        ok: false,
+        error: { message: "Invalid WhatsApp number or template rejected", receivers: detail },
+        localMessageId: receivers[0]?.localMessageId || null,
+      };
+    }
+  }
+
+  if (data.validWhatsAppNumber === false) {
+    return {
+      ok: false,
+      error: data.info || "Not a valid WhatsApp number (WATI)",
+    };
+  }
+
+  const localMessageId =
+    data.localMessageId ||
+    data.local_message_id ||
+    receivers[0]?.localMessageId ||
+    null;
+
+  return { ok: true, localMessageId };
+}
+
 /**
  * Send WhatsApp template message via WATI API
  * @param {string} mobileNumber - Farmer's mobile number (10 digits)
@@ -14,7 +81,9 @@ import {
  */
 export async function sendWatiTemplateMessage(mobileNumber, templateName, parameters = []) {
   try {
-    const WATI_URL = process.env.SEND_TEMPLATE_MESSAGE_URL || `${getWatiBaseUrl()}/api/v1/sendTemplateMessage`;
+    const WATI_URL =
+      process.env.SEND_TEMPLATE_MESSAGE_URL ||
+      `${getWatiBaseUrl()}/api/v1/sendTemplateMessage`;
     const WATI_TOKEN = getWatiToken();
 
     if (!WATI_TOKEN) {
@@ -22,11 +91,10 @@ export async function sendWatiTemplateMessage(mobileNumber, templateName, parame
       return { success: false, error: "WATI not configured" };
     }
 
-    // Format mobile number - ensure 10 digits without country code
-    const cleanNumber = mobileNumber.toString().replace(/\D/g, "");
-    const phoneNumber = cleanNumber.length === 12 && cleanNumber.startsWith("91") 
-      ? cleanNumber.substring(2) 
-      : cleanNumber;
+    const phoneNumber = normalizeWatiMobile10(mobileNumber);
+    if (!phoneNumber || phoneNumber.length !== 10) {
+      return { success: false, error: `Invalid mobile: ${mobileNumber}` };
+    }
 
     const channelNumber = process.env.WATI_CHANNEL_NUMBER || "917276386452";
     const body = {
@@ -36,30 +104,49 @@ export async function sendWatiTemplateMessage(mobileNumber, templateName, parame
       channel_number: channelNumber,
     };
 
-    console.log(`📤 Sending WATI message to ${phoneNumber} using template: ${templateName}`);
-
-    const response = await fetch(
-      `${WATI_URL}?whatsappNumber=91${phoneNumber}`,
-      {
-        method: "POST",
-        body: JSON.stringify(body),
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: WATI_TOKEN,
-        },
-        timeout: 10000, // 10 second timeout
-      }
+    const waQuery = `91${phoneNumber}`;
+    console.log(
+      `📤 Sending WATI template "${templateName}" to ${phoneNumber} (API: ${waQuery}), channel: ${channelNumber}`
     );
 
-    const data = await response.json();
+    const authHeader = WATI_TOKEN.startsWith("Bearer ")
+      ? WATI_TOKEN
+      : `Bearer ${WATI_TOKEN}`;
 
-    if (response.ok) {
-      console.log(`✅ WATI message sent successfully to ${phoneNumber}`);
-      return { success: true, data };
-    } else {
-      console.error(`❌ WATI API error:`, data);
-      return { success: false, error: data };
+    const response = await fetch(`${WATI_URL}?whatsappNumber=${waQuery}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: authHeader,
+      },
+      timeout: 25000,
+    });
+
+    let data;
+    const rawText = await response.text();
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      data = { raw: rawText };
     }
+
+    const verdict = interpretWatiTemplateResponse(data, response.ok);
+
+    if (verdict.ok) {
+      console.log(
+        `✅ WATI template accepted for ${phoneNumber} (${templateName})` +
+          (verdict.localMessageId ? ` id=${verdict.localMessageId}` : "")
+      );
+      return {
+        success: true,
+        data: { ...data, localMessageId: verdict.localMessageId },
+      };
+    }
+
+    console.error(`❌ WATI template NOT delivered to ${phoneNumber} (${templateName}):`, verdict.error);
+    console.error(`   WATI raw response:`, JSON.stringify(data).slice(0, 800));
+    return { success: false, error: verdict.error, data };
   } catch (error) {
     console.error(`❌ Error sending WATI message:`, error.message);
     return { success: false, error: error.message };
@@ -140,6 +227,12 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
   }
 }
 
+function watiParamValue(value, fallback = "N/A") {
+  const s = String(value ?? "").trim();
+  if (!s || s === "—" || s === "-") return fallback;
+  return s;
+}
+
 /**
  * Dispatch notification — WATI template delivery_final_revamp (regular plant orders)
  * Placeholders: name, id, village, plant, subtype, total_dispatched, driver_name, vehicle_number, dispatch_date
@@ -180,16 +273,22 @@ export async function sendOrderDispatchedWhatsAppDelivery1(farmer, details) {
     }
 
     const parameters = [
-      { name: "name", value: farmer.name || "Farmer" },
-      { name: "id", value: details.publicOrderCode?.toString() || details.orderId?.toString() || "N/A" },
-      { name: "village", value: farmer.village || "N/A" },
-      { name: "plant", value: plantParam },
-      { name: "subtype", value: subtypeParam },
-      { name: "total_dispatched", value: (details.totalDispatched ?? "0").toString() },
-      { name: "driver_name", value: details.driverName || "N/A" },
-      { name: "vehicle_number", value: details.vehicleNumber || "N/A" },
-      { name: "dispatch_date", value: formatIn(details.dispatchDate) },
+      { name: "name", value: watiParamValue(farmer.name, "Customer") },
+      { name: "id", value: watiParamValue(details.publicOrderCode || details.orderId, "N/A") },
+      { name: "village", value: watiParamValue(farmer.village, "N/A") },
+      { name: "plant", value: watiParamValue(plantParam, "Plants") },
+      { name: "subtype", value: watiParamValue(subtypeParam, "N/A") },
+      { name: "total_dispatched", value: watiParamValue(details.totalDispatched ?? "0", "0") },
+      { name: "driver_name", value: watiParamValue(details.driverName, "N/A") },
+      { name: "vehicle_number", value: watiParamValue(details.vehicleNumber, "N/A") },
+      { name: "dispatch_date", value: watiParamValue(formatIn(details.dispatchDate), "N/A") },
     ];
+
+    if (farmer.sendToName) {
+      console.log(
+        `   📲 WATI dispatch → dealer ${farmer.sendToName} (${farmer.mobileNumber}); customer in template: ${parameters[0].value} / ${parameters[2].value}`
+      );
+    }
 
     return await sendWatiTemplateMessage(farmer.mobileNumber, "delivery_final_revamp", parameters);
   } catch (error) {

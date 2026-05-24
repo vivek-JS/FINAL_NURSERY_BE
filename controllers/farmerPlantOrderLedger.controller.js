@@ -10,6 +10,7 @@ import Log from "../models/log.model.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import {
   shouldLogFarmerPlantLedger,
+  hasFarmerPlantLedgerIdentity,
   normalizeFarmerMobile,
   computeOrderPaymentTotals,
   sortLedgerEntriesCanonical,
@@ -470,16 +471,15 @@ export const getFarmerPlantOrderDetails = catchAsync(async (req, res, next) => {
     );
   }
 
-  const hasFarmer = Boolean(order.farmer);
-  if (!hasFarmer) {
+  if (!hasFarmerPlantLedgerIdentity(order)) {
     return next(
-      new AppError("Order has no farmer — not a farmer plant ledger order", 400)
+      new AppError("Order has no customer identity for farmer plant ledger", 400)
     );
   }
 
   if (source === "ACTIVE" && !shouldLogFarmerPlantLedger(order)) {
     return next(
-      new AppError("Order has no farmer — not a farmer plant ledger order", 400)
+      new AppError("Order is not eligible for farmer plant ledger", 400)
     );
   }
 

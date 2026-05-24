@@ -6,8 +6,38 @@ import {
   isWhatsappOrderFlowDisabled,
   isWhatsappOrderWebJsEnabled,
 } from "../utility/whatsappOrderFlowFlags.js";
+import { shouldAcceptOrderMessage } from "../utility/whatsappOrderAcceptance.js";
 import { normalizeWhatsAppMobile } from "./whatsappOrderFarmer.service.js";
-import { setOrderReplyChannel } from "./whatsappOrderReplyChannel.js";
+import { setOrderReplyChannel, setWebJsChatJid } from "./whatsappOrderReplyChannel.js";
+import { registerWebJsInboundMessage } from "./whatsappOrderWebReply.js";
+
+async function resolveSenderMobile(msg) {
+  const from = msg?.from || "";
+  const direct = normalizeWhatsAppMobile(from.split("@")[0]);
+  if (direct) return direct;
+
+  try {
+    const contact = await msg.getContact();
+    const fromContact =
+      normalizeWhatsAppMobile(contact?.number) ||
+      normalizeWhatsAppMobile(contact?.id?.user);
+    if (fromContact) return fromContact;
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const chat = await msg.getChat();
+    const fromChat =
+      normalizeWhatsAppMobile(chat?.id?.user) ||
+      normalizeWhatsAppMobile(String(chat?.id || "").split("@")[0]);
+    if (fromChat) return fromChat;
+  } catch {
+    /* ignore */
+  }
+
+  return null;
+}
 
 export async function handleWebJsInboundMessage(msg) {
   if (isWhatsappOrderFlowDisabled() || !isWhatsappOrderWebJsEnabled()) {
@@ -36,9 +66,25 @@ export async function handleWebJsInboundMessage(msg) {
     return { handled: false, reason: "group" };
   }
 
-  const chatMobile = normalizeWhatsAppMobile(from.split("@")[0]);
+  const chatMobile = await resolveSenderMobile(msg);
   if (!chatMobile) {
+    console.warn("[WhatsApp Order / web.js] Could not resolve sender from", from);
     return { handled: false, reason: "invalid_sender" };
+  }
+
+  setOrderReplyChannel(chatMobile, "webjs");
+  if (from) {
+    setWebJsChatJid(chatMobile, from);
+  }
+  registerWebJsInboundMessage(chatMobile, msg);
+
+  const { getOrderConversationStep, handleInboundOrderMessage } = await import(
+    "../controllers/whatsappOrderBot.controller.js"
+  );
+
+  const step = getOrderConversationStep(chatMobile);
+  if (!shouldAcceptOrderMessage(text, step)) {
+    return { handled: false, reason: "not_order_message", chatMobile };
   }
 
   const senderName =
@@ -47,13 +93,7 @@ export async function handleWebJsInboundMessage(msg) {
     (await msg.getContact?.()?.catch(() => null))?.pushname ||
     "";
 
-  console.log(`\n📩 [WhatsApp Order / web.js] From ${chatMobile}: "${text.slice(0, 80)}"`);
-
-  setOrderReplyChannel(chatMobile, "webjs");
-
-  const { handleInboundOrderMessage } = await import(
-    "../controllers/whatsappOrderBot.controller.js"
-  );
+  console.log(`\n📩 [WhatsApp Order / web.js] From ${chatMobile} (${from}): "${text.slice(0, 80)}"`);
 
   await handleInboundOrderMessage({
     chatMobile,

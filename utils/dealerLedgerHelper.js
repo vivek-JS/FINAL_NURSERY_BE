@@ -1,4 +1,8 @@
 import DealerLedgerEntry from "../models/dealerLedgerEntry.model.js";
+import {
+  getPlantOrderLineTotal,
+  resolveFarmerIdentity,
+} from "./farmerPlantOrderLedgerHelper.js";
 
 /**
  * Maps addPayment type to DealerLedgerEntry refType
@@ -120,4 +124,52 @@ export const addPaymentToLedgerEntry = async ({
     metadata,
     session,
   });
+};
+
+/**
+ * Audit-only dealer ledger row when a dealerOrder is booked (no wallet balance change).
+ */
+export const ensureDealerOrderBookingAudit = async (order, { userId, session } = {}) => {
+  if (!order?.dealerOrder || !order?.dealer) return null;
+
+  const dealerId = order.dealer._id || order.dealer;
+  const oid = order._id;
+
+  const q = DealerLedgerEntry.findOne({ orderId: oid, refType: "ORDER_BOOKING" });
+  if (session) q.session(session);
+  const existing = await q.lean();
+  if (existing) return existing;
+
+  const { customerName } = await resolveFarmerIdentity(order);
+  const lineTotal = getPlantOrderLineTotal(order);
+  const plants =
+    (Number(order.numberOfPlants) || 0) + (Number(order.additionalPlants) || 0);
+
+  const entryPayload = {
+    dealer: dealerId,
+    refType: "ORDER_BOOKING",
+    refId: oid,
+    orderId: oid,
+    debit: 0,
+    credit: 0,
+    reference: String(order.orderId ?? ""),
+    description: customerName
+      ? `Order ${order.orderId ?? ""} booked for ${customerName}`
+      : `Order ${order.orderId ?? ""} booked`,
+    createdBy: userId,
+    entryDate: order.orderBookingDate || order.createdAt || new Date(),
+    metadata: {
+      auditOnly: true,
+      orderNumericId: order.orderId,
+      lineTotal,
+      plants,
+      customerName: customerName || undefined,
+    },
+  };
+
+  if (session) {
+    const created = await DealerLedgerEntry.create([entryPayload], { session });
+    return created[0];
+  }
+  return DealerLedgerEntry.create(entryPayload);
 };

@@ -27,7 +27,9 @@ import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
   getFarmerPlantPaymentTransitionAction,
+  shouldLogFarmerPlantLedger,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { ensureDealerOrderBookingAudit } from "../utils/dealerLedgerHelper.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import {
@@ -59,24 +61,52 @@ function farmerWhatsAppRecipient(order) {
 }
 
 /**
- * Dealer / salesperson copy: dealer orders → salesperson; farmer orders → same when jobTitle is DEALER.
+ * Customer shown in WATI template body (farmer / book-for name), not the WhatsApp recipient.
+ */
+function orderCustomerForWatiTemplate(order) {
+  const of = order?.orderFor;
+  if (of && typeof of === "object" && String(of.name || "").trim()) {
+    return {
+      name: String(of.name).trim(),
+      village:
+        String(of.village || of.villageName || "").trim() ||
+        "N/A",
+    };
+  }
+  const farmer = order?.farmer;
+  if (farmer && String(farmer.name || "").trim()) {
+    return {
+      name: String(farmer.name).trim(),
+      village: String(farmer.village || "").trim() || "N/A",
+    };
+  }
+  return { name: "Customer", village: "N/A" };
+}
+
+/**
+ * Dealer / salesperson copy: message goes TO dealer phone; template uses farmer/customer name.
  */
 function dealerWhatsAppRecipient(order) {
   if (!order) return null;
   const sp = order.salesPerson;
   if (!sp || !watiDigitsOk(sp.phoneNumber)) return null;
+
+  const customer = orderCustomerForWatiTemplate(order);
+
   if (order.dealerOrder) {
     return {
-      name: sp.name || "Dealer",
+      name: customer.name,
+      village: customer.village,
       mobileNumber: sp.phoneNumber,
-      village: "—",
+      sendToName: sp.name || "Dealer",
     };
   }
   if (String(sp.jobTitle || "").toUpperCase() === "DEALER") {
     return {
-      name: sp.name || "Dealer",
+      name: customer.name,
+      village: customer.village,
       mobileNumber: sp.phoneNumber,
-      village: "—",
+      sendToName: sp.name || "Dealer",
     };
   }
   return null;
@@ -1036,7 +1066,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       );
     }
 
-    if (!order.dealerOrder && order.farmer) {
+    if (shouldLogFarmerPlantLedger(order)) {
       try {
         await ensureFarmerPlantOrderDebit(order, { userId: req.user?._id });
         const lastPayment = order.payment[order.payment.length - 1];
@@ -1047,6 +1077,9 @@ const addNewPayment = catchAsync(async (req, res, next) => {
           lastPayment.paymentStatus,
           { userId: req.user?._id }
         );
+        if (order.dealerOrder) {
+          await ensureDealerOrderBookingAudit(order, { userId: req.user?._id });
+        }
       } catch (farmerLedgerErr) {
         console.error("Farmer plant ledger (add payment):", farmerLedgerErr);
       }
@@ -1456,7 +1489,7 @@ const updatePaymentStatus = async (req, res) => {
     payment.paymentStatus = paymentStatus;
     await order.save();
 
-    if (!order.dealerOrder && order.farmer) {
+    if (shouldLogFarmerPlantLedger(order)) {
       try {
         const action = getFarmerPlantPaymentTransitionAction(
           previousPaymentStatus,
@@ -3761,6 +3794,9 @@ export const sendOrderDispatchWhatsAppController = catchAsync(async (req, res) =
         message: "Dealer order has no salesperson with a valid mobile number for WhatsApp",
       });
     }
+    console.log(
+      `[WATI dispatch] Dealer order → ${dealerRec.sendToName || "dealer"} ${dealerRec.mobileNumber}; template customer: ${dealerRec.name} (${dealerRec.village})`
+    );
     const result = await sendOrderDispatchedWhatsAppDelivery1(dealerRec, details);
     if (result.success) {
       order.whatsappDispatchSentAt = new Date();

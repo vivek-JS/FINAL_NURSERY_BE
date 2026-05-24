@@ -21,6 +21,7 @@ import {
   setOrderReplyChannel,
   clearOrderReplyChannel,
 } from "../services/whatsappOrderReplyChannel.js";
+import { clearWebJsInboundMessage } from "../services/whatsappOrderWebReply.js";
 import {
   normalizeWhatsAppMobile,
   extractMobileFromMessage,
@@ -29,22 +30,14 @@ import {
   emptyFarmerState,
   isTenDigitMobileMessage,
 } from "../services/whatsappOrderFarmer.service.js";
+import { ORDER_TRIGGERS } from "../utility/whatsappOrderTriggers.js";
 
-const ORDER_TRIGGERS = new Set([
-  "order",
-  "ऑर्डर",
-  "book",
-  "booking",
-  "बुकिंग",
-  "hi",
-  "hello",
-  "start",
-  "नमस्कार",
-  "namaskar",
-]);
-
-const WATI_BASE_URL = getWatiBaseUrl();
-const WATI_TOKEN = getWatiToken();
+function watiBaseUrl() {
+  return getWatiBaseUrl();
+}
+function watiToken() {
+  return getWatiToken();
+}
 
 // Admin phone number for notifications (from env or default)
 const ADMIN_PHONE = process.env.ADMIN_PHONE || "7588686452";
@@ -57,8 +50,8 @@ console.log("\n" + "=".repeat(60));
 console.log("🔧 [INIT] WhatsApp Order Bot Configuration");
 console.log("=".repeat(60));
 console.log(`   NODE_ENV: ${process.env.NODE_ENV || "not set"}`);
-console.log(`   WATI_BASE_URL: ${WATI_BASE_URL || "❌ NOT SET"}`);
-console.log(`   WATI_TOKEN: ${WATI_TOKEN ? `${WATI_TOKEN.substring(0, 20)}...` : "❌ NOT SET"}`);
+console.log(`   WATI_BASE_URL: ${watiBaseUrl() || "❌ NOT SET"}`);
+console.log(`   WATI_TOKEN: ${watiToken() ? `${watiToken().substring(0, 20)}...` : "❌ NOT SET"}`);
 console.log(`   WATI_TOKEN from env: ${process.env.WATI_TOKEN ? "✅ YES" : "❌ NO (using default)"}`);
 console.log(`   WATI_URL from env: ${process.env.WATI_URL ? `✅ YES (${process.env.WATI_URL})` : "❌ NO (using default)"}`);
 console.log(`   ADMIN_PHONE: ${ADMIN_PHONE}`);
@@ -68,10 +61,10 @@ console.log(`   WHATSAPP_ORDER_DUAL_CHANNEL: ${process.env.WHATSAPP_ORDER_DUAL_C
 console.log("=".repeat(60) + "\n");
 
 // Validate configuration
-if (!WATI_BASE_URL) {
-  console.error("⚠️  WARNING: WATI_BASE_URL is not configured!");
+if (!watiBaseUrl()) {
+  console.error("⚠️  WARNING: WATI_BASE_URL / WATI_URL is not configured!");
 }
-if (!WATI_TOKEN) {
+if (!watiToken()) {
   console.error("⚠️  WARNING: WATI_TOKEN is not configured!");
 }
 
@@ -83,12 +76,20 @@ if (!WATI_TOKEN) {
  */
 /** WATI outbound only — order bot uses sendOrderBotMessage (web.js by default). */
 export async function sendOrderBotMessageWati(phone, text) {
+  const messageBody = String(text ?? "").trim();
+  if (!messageBody) {
+    console.error("   ❌ WATI: message text is empty — not sending");
+    return { success: false, error: "message text can not be empty" };
+  }
+
+  const WATI_TOKEN = watiToken();
+  const WATI_BASE_URL = watiBaseUrl();
+
   console.log("\n📤 [WATI] Preparing to send WhatsApp message...");
   console.log(`   📱 Input phone: ${phone}`);
-  console.log(`   📝 Message length: ${text?.length || 0} characters`);
+  console.log(`   📝 Message length: ${messageBody.length} characters`);
   
   try {
-    // Validate WATI configuration
     if (!WATI_TOKEN) {
       console.error("   ❌ WATI_TOKEN not configured");
       return { success: false, error: "WATI_TOKEN not configured" };
@@ -104,7 +105,6 @@ export async function sendOrderBotMessageWati(phone, text) {
     console.log(`   ✅ WATI_TOKEN preview: ${WATI_TOKEN ? `${WATI_TOKEN.substring(0, 30)}...` : 'MISSING'}`);
     console.log(`   ✅ WATI_TOKEN from env: ${process.env.WATI_TOKEN ? 'YES' : 'NO (using default)'}`);
     
-    // Check if token is a JWT and try to decode expiration
     if (WATI_TOKEN && WATI_TOKEN.includes('.')) {
       try {
         const tokenParts = WATI_TOKEN.split('.');
@@ -170,14 +170,14 @@ export async function sendOrderBotMessageWati(phone, text) {
     
     // Use query parameter method (PROVEN TO WORK in Postman)
     // Format: POST /api/v1/sendSessionMessage/91{phone}?messageText={encodedMessage}
-    const encodedMessage = encodeURIComponent(text);
+    const encodedMessage = encodeURIComponent(messageBody);
     const url = `${baseUrl}/api/v1/sendSessionMessage/91${phoneNumber}?messageText=${encodedMessage}`;
     
     console.log(`   🔗 Constructed URL: ${url.substring(0, 200)}${url.length > 200 ? '...' : ''}`);
     console.log(`   📋 URL breakdown:`);
     console.log(`      Base: ${baseUrl}`);
     console.log(`      Endpoint: /api/v1/sendSessionMessage/91${phoneNumber}`);
-    console.log(`      Query param: messageText=${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
+    console.log(`      Query param: messageText=${messageBody.substring(0, 50)}${messageBody.length > 50 ? '...' : ''}`);
     console.log(`      Encoded message length: ${encodedMessage.length} characters`);
     console.log(`      Full URL length: ${url.length} characters`);
     
@@ -488,7 +488,17 @@ function clearConversationState(mobileNumber) {
   console.log(`\n🗑️  [STATE] Clearing state for: ${mobileNumber}`);
   conversationState.delete(mobileNumber);
   clearOrderReplyChannel(mobileNumber);
+  clearWebJsInboundMessage(mobileNumber);
   console.log(`   ✅ State cleared\n`);
+}
+
+/** For web.js filter — do not run order bot on random forwarded jokes. */
+export function getOrderConversationStep(mobileNumber) {
+  const norm =
+    normalizeWhatsAppMobile(mobileNumber) ||
+    String(mobileNumber).replace(/\D/g, "").slice(-10);
+  const state = conversationState.get(norm);
+  return state?.step || null;
 }
 
 /**
@@ -592,6 +602,39 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
 
   void (async () => {
     try {
+      if (orderFlowOff) {
+        const wizardOnly = await runWhatsappReportWizardFromWebhookBody(req.body);
+        if (!wizardOnly.handled && process.env.WHATSAPP_LEGACY_INSTANT_BOOKING_PDF === "true") {
+          void runTodayBookingPdfJob(req.body).catch((err) => {
+            console.error(
+              "[booking report] Legacy instant PDF failed:",
+              err?.message || err
+            );
+          });
+        }
+        return;
+      }
+
+      const hasOrderSession = conversationState.has(mobileNumber);
+      const orderPriority =
+        isWhatsappOrderWatiEnabled() &&
+        (ORDER_TRIGGERS.has(String(message).trim().toLowerCase()) ||
+          hasOrderSession ||
+          isTenDigitMobileMessage(message));
+
+      if (orderPriority) {
+        setOrderReplyChannel(mobileNumber, "wati");
+        console.log("🔄 [FLOW] Order bot (priority over report wizard)...");
+        await handleInboundOrderMessage({
+          chatMobile: mobileNumber,
+          text: message,
+          senderName: senderName || "",
+          channel: "wati",
+        });
+        console.log("✅ [FLOW] Order flow completed\n");
+        return;
+      }
+
       const wizard = await runWhatsappReportWizardFromWebhookBody(req.body);
       if (wizard.handled) {
         return;
@@ -603,9 +646,6 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
             err?.message || err
           );
         });
-      }
-      if (orderFlowOff) {
-        return;
       }
       if (!isWhatsappOrderWatiEnabled()) {
         console.log("[WATI] Order flow skipped — WATI channel disabled (DISABLE_WHATSAPP_ORDER_WATI).");
@@ -1495,12 +1535,12 @@ export const webhookDiagnostics = catchAsync(async (req, res) => {
   const diagnostics = {
     environment: process.env.NODE_ENV || "not set",
     wati: {
-      baseUrl: WATI_BASE_URL || "❌ NOT SET",
-      baseUrlFromEnv: process.env.WATI_URL || "❌ NOT SET",
-      tokenConfigured: WATI_TOKEN ? "✅ YES" : "❌ NO",
+      baseUrl: watiBaseUrl() || "❌ NOT SET",
+      baseUrlFromEnv: process.env.WATI_URL || process.env.WATI_BASE_URL || "❌ NOT SET",
+      tokenConfigured: watiToken() ? "✅ YES" : "❌ NO",
       tokenFromEnv: process.env.WATI_TOKEN ? "✅ YES" : "❌ NO",
-      tokenLength: WATI_TOKEN?.length || 0,
-      tokenPreview: WATI_TOKEN ? `${WATI_TOKEN.substring(0, 30)}...` : "MISSING",
+      tokenLength: watiToken()?.length || 0,
+      tokenPreview: watiToken() ? `${watiToken().substring(0, 30)}...` : "MISSING",
     },
     admin: {
       phone: ADMIN_PHONE,
@@ -1515,9 +1555,10 @@ export const webhookDiagnostics = catchAsync(async (req, res) => {
   };
 
   // Check token expiration if it's a JWT
-  if (WATI_TOKEN && WATI_TOKEN.includes('.')) {
+  const diagToken = watiToken();
+  if (diagToken && diagToken.includes('.')) {
     try {
-      const tokenParts = WATI_TOKEN.split('.');
+      const tokenParts = diagToken.split('.');
       if (tokenParts.length === 3) {
         const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
         if (payload.exp) {

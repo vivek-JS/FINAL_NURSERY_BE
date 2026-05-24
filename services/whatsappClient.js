@@ -207,7 +207,7 @@ function attachClientHandlers(waClient) {
     }
   });
 
-  waClient.on("message", (msg) => {
+  const onInboundOrderMessage = (msg) => {
     void (async () => {
       try {
         const { handleWebJsInboundMessage } = await import(
@@ -218,7 +218,10 @@ function attachClientHandlers(waClient) {
         console.error("[WhatsApp] Order inbound handler error:", err?.message || err);
       }
     })();
-  });
+  };
+
+  waClient.on("message", onInboundOrderMessage);
+  waClient.on("message_create", onInboundOrderMessage);
 
   waClient.on("auth_failure", (msg) => {
     clearReadyWatchdog();

@@ -16,6 +16,7 @@ const dealerLedgerEntrySchema = new mongoose.Schema(
     refType: {
       type: String,
       enum: [
+        "ORDER_BOOKING",
         "ORDER_PAYMENT",
         "PAYMENT_STATUS_UPDATE",
         "ADJUSTMENT",
@@ -81,6 +82,14 @@ dealerLedgerEntrySchema.index({ orderId: 1 });
 dealerLedgerEntrySchema.pre("validate", function (next) {
   const debit = Number(this.debit || 0);
   const credit = Number(this.credit || 0);
+  if (this.refType === "ORDER_BOOKING") {
+    if (debit > 0 || credit > 0) {
+      return next(
+        new Error("ORDER_BOOKING audit entries must not change wallet balance")
+      );
+    }
+    return next();
+  }
   if (debit <= 0 && credit <= 0) {
     return next(new Error("Dealer ledger entry must have a debit or credit amount"));
   }

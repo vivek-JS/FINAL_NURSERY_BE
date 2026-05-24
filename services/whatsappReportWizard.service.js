@@ -45,6 +45,7 @@ import {
   parseDeliveryDueFilterChoice,
 } from "../utility/whatsappReportWizardParsers.js";
 import { isPhoneAllowedForReportWizard } from "../utility/whatsappReportWizardAllowlist.js";
+import { isOrderBotTrigger } from "../utility/whatsappOrderTriggers.js";
 
 const STATE_TTL_MS = 15 * 60 * 1000;
 
@@ -484,6 +485,13 @@ export async function processWhatsappReportWizard({ message, waId }) {
 
   const key = phone.replace(/\D/g, "").slice(-10) || phone;
   const low = text.toLowerCase();
+
+  if (isOrderBotTrigger(text)) {
+    if (reportWizardState.has(key)) {
+      reportWizardState.delete(key);
+    }
+    return { handled: false };
+  }
 
   if (["cancel", "stop", "exit", "0", "रद्द", "n"].includes(low)) {
     if (reportWizardState.has(key)) {

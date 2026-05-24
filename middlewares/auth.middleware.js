@@ -26,6 +26,7 @@ export const authenticateToken = async (req, res, next) => {
       '/api/v1/excel/download-unprocessed', // Allow unprocessed file downloads without auth
       '/api/v1/location', // Location endpoints are public
       '/api/v1/whatsapp-order/webhook', // WhatsApp webhook from Wati (public, no auth)
+      '/api/v1/whatsapp-order/status', // Order bot + web.js readiness (public)
       '/api/v1/opt-in/webhook', // Opt-in/opt-out webhook from Wati (public, no auth)
       '/api/v1/rate-change-requests/by-token/', // Rate change approval page — token is the credential
       '/api/v1/rate-change-requests/approve-via-link', // WhatsApp link approval — phone + token verified in controller

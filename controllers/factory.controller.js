@@ -23,9 +23,11 @@ import {
 } from "../utility/watiMessaging.js";
 import {
   ensureFarmerPlantOrderDebit,
+  recordFarmerPlantLedgerPaymentTransition,
   syncFarmerPlantLedgerForOrderUpdate,
   archiveFarmerPlantOrderBeforeDelete,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { ensureDealerOrderBookingAudit } from "../utils/dealerLedgerHelper.js";
 import {
   getLastOutstandingAfterForCustomer,
   resolveFarmerIdentity,
@@ -1160,8 +1162,36 @@ const createOne = (Model, modelName) =>
               userId: req.user?._id,
               session,
             });
+            if (paymentArray.length > 0) {
+              for (const paymentItem of paymentArray) {
+                try {
+                  await recordFarmerPlantLedgerPaymentTransition(
+                    order[0],
+                    paymentItem,
+                    null,
+                    paymentItem.paymentStatus,
+                    { userId: req.user?._id, session }
+                  );
+                } catch (payLedgerErr) {
+                  console.error(
+                    "FarmerPlantOrderLedger payment on create:",
+                    payLedgerErr
+                  );
+                }
+              }
+            }
           } catch (ledgerErr) {
             console.error("FarmerPlantOrderLedger ORDER debit failed:", ledgerErr);
+          }
+          if (order[0].dealerOrder) {
+            try {
+              await ensureDealerOrderBookingAudit(order[0], {
+                userId: req.user?._id,
+                session,
+              });
+            } catch (dealerAuditErr) {
+              console.error("Dealer ORDER_BOOKING audit failed:", dealerAuditErr);
+            }
           }
         }
 

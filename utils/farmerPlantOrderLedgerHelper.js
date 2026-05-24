@@ -130,8 +130,19 @@ export async function getLastOutstandingAfterForCustomer(customerMobile, session
   return computed;
 }
 
-export const shouldLogFarmerPlantLedger = (order) =>
-  Boolean(order && !order.dealerOrder && order.farmer);
+/** Customer identity for farmer-plant ledger (farmer ref or orderFor on dealer orders). */
+export function hasFarmerPlantLedgerIdentity(order) {
+  if (!order) return false;
+  if (order.farmer?._id || order.farmer) return true;
+  const of = order.orderFor;
+  return Boolean(of && String(of.name || "").trim());
+}
+
+export const shouldLogFarmerPlantLedger = (order) => {
+  if (!order) return false;
+  if (order.dealerOrder) return hasFarmerPlantLedgerIdentity(order);
+  return Boolean(order.farmer);
+};
 
 export const getPlantOrderLineTotal = (order) => {
   const n = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
@@ -147,26 +158,42 @@ export const normalizeFarmerMobile = (mobile) => {
 
 export async function resolveFarmerIdentity(order) {
   const farmerId = order.farmer?._id || order.farmer;
-  if (!farmerId) {
-    return { customerMobile: null, customerName: "", farmerId: null };
+  if (farmerId) {
+    let farmer =
+      order.farmer && typeof order.farmer === "object" && order.farmer.name
+        ? order.farmer
+        : await Farmer.findById(farmerId).lean();
+    if (!farmer) {
+      return { customerMobile: null, customerName: "", farmerId };
+    }
+    const customerMobile =
+      normalizeFarmerMobile(farmer.mobileNumber) ||
+      normalizeFarmerMobile(farmer.alternateNumber) ||
+      normalizeFarmerMobile(farmer.originalPhoneNumber) ||
+      `FARMER-${String(farmer._id || farmerId)}`;
+    const customerName = (farmer.name || "").trim();
+    return { customerMobile, customerName, farmerId: farmer._id || farmerId };
   }
-  let farmer =
-    order.farmer && typeof order.farmer === "object" && order.farmer.name
-      ? order.farmer
-      : await Farmer.findById(farmerId).lean();
-  if (!farmer) {
-    return { customerMobile: null, customerName: "", farmerId };
+
+  const of = order?.orderFor;
+  if (of && String(of.name || "").trim()) {
+    const customerMobile =
+      normalizeFarmerMobile(of.mobileNumber) ||
+      (order._id ? `ORDERFOR-${String(order._id)}` : null);
+    return {
+      customerMobile,
+      customerName: String(of.name).trim(),
+      farmerId: null,
+    };
   }
-  const customerMobile =
-    normalizeFarmerMobile(farmer.mobileNumber) ||
-    normalizeFarmerMobile(farmer.alternateNumber) ||
-    normalizeFarmerMobile(farmer.originalPhoneNumber) ||
-    `FARMER-${String(farmer._id || farmerId)}`;
-  const customerName = (farmer.name || "").trim();
-  return { customerMobile, customerName, farmerId: farmer._id || farmerId };
+
+  return { customerMobile: null, customerName: "", farmerId: null };
 }
 
 export async function resolveFundingDealerId(order) {
+  if (order.dealerOrder && order.dealer) {
+    return order.dealer._id || order.dealer;
+  }
   if (order.dealer) {
     return order.dealer._id || order.dealer;
   }
@@ -322,6 +349,7 @@ export async function ensureFarmerPlantOrderDebit(order, { userId, session } = {
     createdBy: userId,
     metadata: {
       orderNumericId: order.orderId,
+      dealerOrder: Boolean(order.dealerOrder),
       ...(fundingMeta ? { fundingDealerId: fundingMeta } : {}),
     },
     session,
