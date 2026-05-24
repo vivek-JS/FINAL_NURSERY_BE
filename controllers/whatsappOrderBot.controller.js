@@ -9,6 +9,27 @@ import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
 import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
 import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
 import { isWhatsappOrderFlowDisabled } from "../utility/whatsappOrderFlowFlags.js";
+import {
+  normalizeWhatsAppMobile,
+  extractMobileFromMessage,
+  lookupFarmerByMobile,
+  formatFarmerProfileMessage,
+  emptyFarmerState,
+  isTenDigitMobileMessage,
+} from "../services/whatsappOrderFarmer.service.js";
+
+const ORDER_TRIGGERS = new Set([
+  "order",
+  "ऑर्डर",
+  "book",
+  "booking",
+  "बुकिंग",
+  "hi",
+  "hello",
+  "start",
+  "नमस्कार",
+  "namaskar",
+]);
 
 const WATI_BASE_URL = getWatiBaseUrl();
 const WATI_TOKEN = getWatiToken();
@@ -407,6 +428,9 @@ function getConversationState(mobileNumber) {
   console.log(`   🆕 Creating new state - Step: MAIN_MENU`);
   const newState = {
     step: "MAIN_MENU",
+    chatMobile: mobileNumber,
+    farmer: emptyFarmerState(),
+    collectField: null,
     order: {
       plant: null,
       plantName: "",
@@ -632,8 +656,17 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
     console.log("   ❓ [COMMAND] HELP detected");
     await sendWhatsAppMessage(
       mobileNumber,
-      "📖 *मदत*\n\n• सुरु करण्यासाठी HI टाइप करा\n• रद्द करण्यासाठी CANCEL टाइप करा\n• मुख्य मेनूसाठी MENU टाइप करा\n• पर्याय निवडण्यासाठी नंबर टाइप करा"
+      "📖 *मदत*\n\n• ऑर्डर: ORDER / ऑर्डर / HI\n• मोबाईल नंबर पाठवल्यावर ग्राहक माहिती दिसेल\n• रद्द: CANCEL / 0\n• मेनू: MENU\n• एका संदेशात ऑर्डर (उदा.):\nऑर्डर\nमोबाईल: 98xxxxxxxx\nपिक: केळ\nवाण: ग्रँड नाईन\nगुण: 5000"
     );
+    return;
+  }
+
+  const scannedMobile = extractMobileFromMessage(userMessage);
+  if (
+    scannedMobile &&
+    (isTenDigitMobileMessage(userMessage) || state.step === "ASK_MOBILE")
+  ) {
+    await applyFarmerLookup(mobileNumber, state, scannedMobile);
     return;
   }
 
@@ -651,6 +684,18 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
       case "MAIN_MENU":
         console.log("   → Calling handleMainMenu()");
         await handleMainMenu(mobileNumber, state, message);
+        break;
+
+      case "ASK_MOBILE":
+        await handleAskMobile(mobileNumber, userMessage, state);
+        break;
+
+      case "CONFIRM_FARMER":
+        await handleConfirmFarmer(mobileNumber, userMessage, state);
+        break;
+
+      case "COLLECT_FARMER":
+        await handleCollectFarmer(mobileNumber, userMessage, state);
         break;
 
       case "SELECT_PLANT":
@@ -704,33 +749,158 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
   }
 }
 
+async function promptAskMobile(chatMobile, state) {
+  const norm = normalizeWhatsAppMobile(chatMobile);
+  await sendWhatsAppMessage(
+    chatMobile,
+    `📱 *ऑर्डर सुरू*\n\n10 अंकी मोबाईल नंबर पाठवा (ग्राहकाचा).\n\nकिंवा या WhatsApp नंबरवरून ऑर्डर करण्यासाठी *1* पाठवा.\n${norm ? `(तुमचा नंबर: ${norm})` : ""}`
+  );
+  state.step = "ASK_MOBILE";
+  saveConversationState(chatMobile, state);
+}
+
+async function applyFarmerLookup(chatMobile, state, bookingMobile) {
+  const norm = normalizeWhatsAppMobile(bookingMobile);
+  if (!norm) {
+    await sendWhatsAppMessage(chatMobile, "❌ वैध 10 अंकी मोबाईल नंबर पाठवा.");
+    state.step = "ASK_MOBILE";
+    saveConversationState(chatMobile, state);
+    return;
+  }
+
+  const farmer = await lookupFarmerByMobile(norm);
+  if (farmer) {
+    state.farmer = farmer;
+    state.step = "CONFIRM_FARMER";
+    saveConversationState(chatMobile, state);
+    await sendWhatsAppMessage(chatMobile, formatFarmerProfileMessage(farmer));
+    return;
+  }
+
+  state.farmer = { ...emptyFarmerState(), mobileNumber: norm, isNew: true };
+  state.step = "COLLECT_FARMER";
+  state.collectField = "NAME";
+  saveConversationState(chatMobile, state);
+  await sendWhatsAppMessage(
+    chatMobile,
+    `❌ मोबाईल *${norm}* नोंदणीत नाही.\n\nकृपया ग्राहकाचे *नाव* पाठवा:`
+  );
+}
+
+async function startPlantSelectionAfterFarmer(chatMobile, state) {
+  state.step = "SELECT_PLANT";
+  saveConversationState(chatMobile, state);
+  await loadPlants(chatMobile, state, true);
+}
+
+async function handleAskMobile(chatMobile, userMessage, state) {
+  const trimmed = userMessage.trim();
+  const lower = trimmed.toLowerCase();
+
+  if (lower === "1") {
+    const own = normalizeWhatsAppMobile(state.chatMobile || chatMobile);
+    if (!own) {
+      await sendWhatsAppMessage(chatMobile, "❌ वैध मोबाईल सापडला नाही. 10 अंकी नंबर टाइप करा.");
+      return;
+    }
+    await applyFarmerLookup(chatMobile, state, own);
+    return;
+  }
+
+  const fromText = extractMobileFromMessage(trimmed);
+  if (fromText) {
+    await applyFarmerLookup(chatMobile, state, fromText);
+    return;
+  }
+
+  await sendWhatsAppMessage(
+    chatMobile,
+    "❌ वैध मोबाईल नाही.\n\n10 अंकी नंबर पाठवा किंवा *1* (या WhatsApp नंबरवरून)."
+  );
+}
+
+async function handleConfirmFarmer(chatMobile, userMessage, state) {
+  const choice = userMessage.trim();
+  if (choice === "1") {
+    await startPlantSelectionAfterFarmer(chatMobile, state);
+    return;
+  }
+  if (choice === "2") {
+    state.step = "ASK_MOBILE";
+    state.farmer = emptyFarmerState();
+    saveConversationState(chatMobile, state);
+    await promptAskMobile(chatMobile, state);
+    return;
+  }
+  await sendWhatsAppMessage(chatMobile, "कृपया *1* (होय) किंवा *2* (दुसरा नंबर) पाठवा.");
+}
+
+async function handleCollectFarmer(chatMobile, userMessage, state) {
+  const text = userMessage.trim();
+  if (!text) {
+    await sendWhatsAppMessage(chatMobile, "❌ रिक्त संदेश. पुन्हा टाइप करा.");
+    return;
+  }
+
+  switch (state.collectField) {
+    case "NAME":
+      state.farmer.name = text;
+      state.collectField = "DISTRICT";
+      saveConversationState(chatMobile, state);
+      await sendWhatsAppMessage(chatMobile, "📍 *जिल्हा* पाठवा (मराठी/इंग्रजी):");
+      break;
+    case "DISTRICT":
+      state.farmer.district = text;
+      state.farmer.districtName = text;
+      state.collectField = "TALUKA";
+      saveConversationState(chatMobile, state);
+      await sendWhatsAppMessage(chatMobile, "📍 *तालुका* पाठवा:");
+      break;
+    case "TALUKA":
+      state.farmer.taluka = text;
+      state.farmer.talukaName = text;
+      state.collectField = "VILLAGE";
+      saveConversationState(chatMobile, state);
+      await sendWhatsAppMessage(chatMobile, "🏘️ *गाव* पाठवा:");
+      break;
+    case "VILLAGE":
+      state.farmer.village = text;
+      state.farmer.isNew = true;
+      state.collectField = null;
+      state.step = "CONFIRM_FARMER";
+      saveConversationState(chatMobile, state);
+      await sendWhatsAppMessage(
+        chatMobile,
+        formatFarmerProfileMessage(state.farmer, { title: "✅ नवीन ग्राहक तपशील" })
+      );
+      break;
+    default:
+      state.collectField = "NAME";
+      saveConversationState(chatMobile, state);
+      await sendWhatsAppMessage(chatMobile, "कृपया ग्राहकाचे *नाव* पाठवा:");
+  }
+}
+
 /**
  * STEP 0: Main Menu (Greeting)
  */
 async function handleMainMenu(mobileNumber, state, message = "") {
   console.log("\n📋 [STEP] MAIN_MENU Handler");
   console.log(`   📝 Input: "${message}"`);
-  
+
   const messageLower = message.toLowerCase().trim();
+  state.chatMobile = mobileNumber;
 
-  // Trigger words: hi, hello, start - directly show plants
-  if (messageLower === "hi" || messageLower === "hello" || messageLower === "start" || messageLower === "नमस्कार" || messageLower === "namaskar") {
-    console.log("   ✅ Trigger word detected - Showing greeting and plants directly");
-    // Directly go to plant selection and combine greeting with plants
-    state.step = "SELECT_PLANT";
-    saveConversationState(mobileNumber, state);
-    await loadPlants(mobileNumber, state, true); // Pass true to include greeting
+  if (ORDER_TRIGGERS.has(messageLower)) {
+    console.log("   ✅ Order flow — ask mobile first");
+    await promptAskMobile(mobileNumber, state);
     return;
   }
 
-  // If in MAIN_MENU and user sends any message, go to plant selection
-  if (state.step === "MAIN_MENU") {
-    console.log("   ✅ User in MAIN_MENU - Starting plant selection");
-    state.step = "SELECT_PLANT";
-    saveConversationState(mobileNumber, state);
-    await loadPlants(mobileNumber, state);
-    return;
-  }
+  await sendWhatsAppMessage(
+    mobileNumber,
+    "👋 नमस्कार!\n\nऑर्डर सुरू करण्यासाठी *ORDER* किंवा *ऑर्डर* टाइप करा.\n\nमोबाईल नंबर थेट पाठवल्यास ग्राहक माहिती दिसेल."
+  );
   saveConversationState(mobileNumber, state);
   console.log("   ✅ MAIN_MENU handler completed\n");
 }
@@ -1093,7 +1263,11 @@ async function handleDateSelection(mobileNumber, message, state) {
     console.log(`   💾 Updated order.slotId: ${state.order.slotId}`);
 
     // Show order summary
+    const f = state.farmer || emptyFarmerState();
     const summary = `📋 *ऑर्डर सारांश*
+
+👤 ${f.name || "—"} | 📱 ${f.mobileNumber || "—"}
+🏘️ ${f.village || "—"} | ${f.talukaName || f.taluka || "—"} | ${f.districtName || f.district || "—"}
 
 🌱 रोप: ${state.order.plantName}
 🍃 विविधता: ${state.order.varietyName}
@@ -1102,6 +1276,8 @@ async function handleDateSelection(mobileNumber, message, state) {
 💰 दर: ₹${state.order.rate}
 💵 एकूण: ₹${state.order.total}
 📅 डिलिव्हरी: ${state.order.deliveryDate}
+
+📌 स्टेटस: PENDING (WhatsApp)
 
 उत्तर द्या:
 1️⃣ ऑर्डर पुष्टी करा
@@ -1135,49 +1311,29 @@ async function handleConfirmation(mobileNumber, message, state) {
     );
 
     try {
-      console.log("\n   👤 [FARMER] Looking up farmer...");
-      // Find or create farmer
-      let farmer = await Farmer.findOne({ mobileNumber: parseInt(mobileNumber) });
-      let farmerName = "Unknown";
+      const f = state.farmer || emptyFarmerState();
+      const bookingMobile = normalizeWhatsAppMobile(f.mobileNumber || mobileNumber);
+      console.log("\n   👤 [FARMER] Using session farmer:", bookingMobile);
 
-      if (!farmer) {
-        console.log("   🆕 Farmer not found, creating new farmer record...");
-        // Create minimal farmer record
-        farmer = await new Farmer({
-          name: "WhatsApp Customer",
-          mobileNumber: parseInt(mobileNumber),
-          village: "To be updated",
-          taluka: "To be updated",
-          district: "To be updated",
-          state: "Maharashtra",
-          stateName: "Maharashtra",
-          talukaName: "To be updated",
-          districtName: "To be updated",
-        }).save();
-        farmerName = "WhatsApp Customer";
-        console.log(`   ✅ New farmer created: ${farmerName} (ID: ${farmer._id})`);
-      } else {
-        farmerName = farmer.name || "Unknown";
-        console.log(`   ✅ Existing farmer found: ${farmerName} (ID: ${farmer._id})`);
-      }
-
-      // Prepare order payload
       console.log("\n   📦 [ORDER] Preparing order payload...");
       const orderPayload = {
-        name: farmerName,
-        mobileNumber: mobileNumber,
-        village: farmer.village || "To be updated",
-        taluka: farmer.taluka || farmer.talukaName || "To be updated",
-        district: farmer.district || farmer.districtName || "To be updated",
-        state: farmer.state || farmer.stateName || "Maharashtra",
-        stateName: farmer.stateName || farmer.state || "Maharashtra",
-        districtName: farmer.districtName || farmer.district || "To be updated",
-        talukaName: farmer.talukaName || farmer.taluka || "To be updated",
+        name: f.name || "WhatsApp Customer",
+        mobileNumber: bookingMobile,
+        village: f.village || "To be updated",
+        taluka: f.taluka || f.talukaName || "To be updated",
+        district: f.district || f.districtName || "To be updated",
+        state: f.state || f.stateName || "Maharashtra",
+        stateName: f.stateName || f.state || "Maharashtra",
+        districtName: f.districtName || f.district || "To be updated",
+        talukaName: f.talukaName || f.taluka || "To be updated",
         typeOfPlants: "",
         numberOfPlants: state.order.quantity,
         rate: parseFloat(state.order.rate),
         paymentStatus: "not paid",
         orderStatus: "PENDING",
+        orderSource: "WHATSAPP",
+        bookedViaWhatsApp: true,
+        whatsappBookingMobile: bookingMobile,
         plantName: state.order.plant,
         plantSubtype: state.order.variety,
         bookingSlot: state.order.slotId,
@@ -1185,19 +1341,29 @@ async function handleConfirmation(mobileNumber, message, state) {
         orderPaymentStatus: "PENDING",
         cavity: parseInt(state.order.cavity),
         orderBookingDate: new Date().toISOString(),
+        orderRemarks: ["Booked via WhatsApp order bot"],
+        salesPerson: process.env.WHATSAPP_DEFAULT_SALES_PERSON_ID || undefined,
       };
+
+      if (!orderPayload.salesPerson) {
+        throw new Error(
+          "WHATSAPP_DEFAULT_SALES_PERSON_ID is not set in .env (required for createFarmer validation)"
+        );
+      }
       console.log("   📋 Order payload:", JSON.stringify(orderPayload, null, 2));
 
-      // Create order using internal API call
       const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8000";
       const orderUrl = `${API_BASE_URL}/api/v1/farmer/createFarmer`;
       console.log(`\n   🌐 [API] Calling order creation endpoint: ${orderUrl}`);
-      
+
+      const apiHeaders = { "Content-Type": "application/json" };
+      if (process.env.WHATSAPP_ORDER_API_TOKEN) {
+        apiHeaders.Authorization = `Bearer ${process.env.WHATSAPP_ORDER_API_TOKEN}`;
+      }
+
       const orderResponse = await fetch(orderUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: apiHeaders,
         body: JSON.stringify(orderPayload),
       });
 
@@ -1217,8 +1383,8 @@ async function handleConfirmation(mobileNumber, message, state) {
         // Send admin notification
         console.log("\n   📤 [NOTIFICATION] Sending admin notification...");
         await sendAdminNotification({
-          customerName: farmerName,
-          mobileNumber: mobileNumber,
+          customerName: f.name || "Unknown",
+          mobileNumber: bookingMobile,
           plantName: state.order.plantName,
           varietyName: state.order.varietyName,
           cavity: state.order.cavity,

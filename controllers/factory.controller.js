@@ -701,8 +701,14 @@ const createOne = (Model, modelName) =>
           await updateSlot(bookingSlot, numPlants, "subtract", session);
         }
 
-        const resolvedOrderStatus =
-          req.body.orderStatus === "DISPATCHED"
+        const isWhatsAppBooking =
+          orderData.orderSource === "WHATSAPP" ||
+          orderData.bookedViaWhatsApp === true ||
+          orderData.bookedViaWhatsApp === "true";
+
+        const resolvedOrderStatus = isWhatsAppBooking
+          ? "PENDING"
+          : req.body.orderStatus === "DISPATCHED"
             ? "DISPATCHED"
             : userCanCreateOrderAsAccepted(req.user)
               ? "ACCEPTED"

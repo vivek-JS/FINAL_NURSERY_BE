@@ -493,6 +493,22 @@ const orderSchema = new Schema(
         endDate: { type: String },
       },
     },
+    /** How the order was placed (ERP web/app vs WhatsApp bot). */
+    orderSource: {
+      type: String,
+      enum: ["ERP", "WHATSAPP", "IMPORT", "EXCEL"],
+      default: "ERP",
+    },
+    bookedViaWhatsApp: {
+      type: Boolean,
+      default: false,
+    },
+    /** 10-digit mobile used on WhatsApp booking (chat or entered). */
+    whatsappBookingMobile: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     orderStatus: {
       type: String,
       enum: [
