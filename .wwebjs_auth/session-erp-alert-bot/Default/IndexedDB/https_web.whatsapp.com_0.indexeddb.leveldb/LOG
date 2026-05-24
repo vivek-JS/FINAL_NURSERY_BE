@@ -92,3 +92,19 @@
 2026/05/24-18:52:08.602 14a23a compacted to: files[ 0 0 1 0 0 0 0 ]
 2026/05/24-18:52:08.603 14a23a Delete type=2 #28
 2026/05/24-18:52:08.603 14a23a Delete type=2 #26
+2026/05/24-19:23:48.899 14a23a Level-0 table #31: started
+2026/05/24-19:23:48.922 14a23a Level-0 table #31: 799302 bytes OK
+2026/05/24-19:23:48.926 14a23a Delete type=0 #27
+2026/05/24-19:24:34.753 14a23a Compacting 1@1 + 1@2 files
+2026/05/24-19:24:34.800 14a23a Generated table #32@1: 17450 keys, 1894858 bytes
+2026/05/24-19:24:34.800 14a23a Compacted 1@1 + 1@2 files => 1894858 bytes
+2026/05/24-19:24:34.802 14a23a compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/05/24-19:24:34.802 14a23a Delete type=2 #29
+2026/05/24-19:24:34.802 14a23a Delete type=2 #31
+2026/05/24-19:48:48.010 14a23c Level-0 table #34: started
+2026/05/24-19:48:49.784 14a23c Level-0 table #34: 888450 bytes OK
+2026/05/24-19:48:50.652 14a23c Delete type=0 #30
+2026/05/24-19:49:38.501 14a23c Compacting 1@1 + 1@2 files
+2026/05/24-19:49:46.881 14a23c Generated table #35@1: 19180 keys, 2228132 bytes
+2026/05/24-19:49:46.882 14a23c Compacted 1@1 + 1@2 files => 2228132 bytes
+2026/05/24-19:49:46.883 14a23c compacted to: files[ 0 0 1 0 0 0 0 ]

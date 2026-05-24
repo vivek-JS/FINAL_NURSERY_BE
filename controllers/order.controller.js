@@ -20,6 +20,7 @@ import {
   sendPaymentPendingNotification,
 } from "../utility/pushNotification.js";
 import { sendOrderAcceptedWhatsApp, sendOrderDispatchedWhatsAppDelivery1 } from "../utility/watiMessaging.js";
+import { isBananaPlantName } from "../utility/watiPlantText.js";
 import { getUnclearedPayments as getUnclearedPaymentsService, getPaymentsForApproval as getPaymentsForApprovalService, reconcile as reconcileService } from "../services/paymentReconciliationService.js";
 import { generateQR } from "../services/iciciBankService.js";
 import { normalizeIciciError, saveIciciQrAuditRecord } from "../services/iciciQr.service.js";
@@ -65,7 +66,22 @@ function farmerWhatsAppRecipient(order) {
 /**
  * Customer shown in WATI template body (farmer / book-for name), not the WhatsApp recipient.
  */
+function resolveOrderTalukaForWati(order) {
+  const of = order?.orderFor;
+  if (of && typeof of === "object") {
+    const t = String(of.talukaName || of.taluka || "").trim();
+    if (t) return t;
+  }
+  const farmer = order?.farmer;
+  if (farmer && typeof farmer === "object") {
+    const t = String(farmer.talukaName || farmer.taluka || "").trim();
+    if (t) return t;
+  }
+  return "N/A";
+}
+
 function orderCustomerForWatiTemplate(order) {
+  const taluka = resolveOrderTalukaForWati(order);
   const of = order?.orderFor;
   if (of && typeof of === "object" && String(of.name || "").trim()) {
     return {
@@ -73,6 +89,7 @@ function orderCustomerForWatiTemplate(order) {
       village:
         String(of.village || of.villageName || "").trim() ||
         "N/A",
+      taluka,
     };
   }
   const farmer = order?.farmer;
@@ -80,9 +97,15 @@ function orderCustomerForWatiTemplate(order) {
     return {
       name: String(farmer.name).trim(),
       village: String(farmer.village || "").trim() || "N/A",
+      taluka,
     };
   }
-  return { name: "Customer", village: "N/A" };
+  return { name: "Customer", village: "N/A", taluka };
+}
+
+function isBananaOrderForAcceptedWhatsApp(order, plantSubtypeName = "") {
+  const plantName = order?.plantName?.name || "";
+  return isBananaPlantName(plantName, plantSubtypeName);
 }
 
 /**
@@ -99,6 +122,7 @@ function dealerWhatsAppRecipient(order) {
     return {
       name: customer.name,
       village: customer.village,
+      taluka: customer.taluka,
       mobileNumber: sp.phoneNumber,
       sendToName: sp.name || "Dealer",
     };
@@ -107,6 +131,7 @@ function dealerWhatsAppRecipient(order) {
     return {
       name: customer.name,
       village: customer.village,
+      taluka: customer.taluka,
       mobileNumber: sp.phoneNumber,
       sendToName: sp.name || "Dealer",
     };
@@ -137,6 +162,211 @@ async function resolveOrderPlantSubtypeName(order) {
   const sid = String(subtypeId);
   const found = plant.subtypes.find((s) => String(s._id) === sid);
   return found?.name || "N/A";
+}
+
+const WATI_BLOCKED_ORDER_STATUSES_FOR_ACCEPT = new Set([
+  "PENDING",
+  "REJECTED",
+  "CANCELLED",
+]);
+
+function acceptedWhatsAppAutoSendSkipReason(order, plantSubtypeName = "") {
+  if (!order) return "no_order";
+  if (order.whatsappAcceptedSentAt) return "already_sent";
+  const status = String(order.orderStatus || "").toUpperCase();
+  if (WATI_BLOCKED_ORDER_STATUSES_FOR_ACCEPT.has(status)) return `order_status_${status}`;
+  const hasCollected =
+    order.payment?.some((p) => p.paymentStatus === "COLLECTED") ?? false;
+  if (!hasCollected) return "no_collected_payment";
+  if (!isBananaPlantName(order.plantName?.name || "", plantSubtypeName)) {
+    return "not_banana";
+  }
+  return null;
+}
+
+/** Schedule auto WATI for Banana only — full plant/subtype check runs in tryAutoSend after populate. */
+function maybeScheduleAcceptedWhatsAppAfterCollect(order) {
+  if (!order?._id || order.whatsappAcceptedSentAt) return;
+  const status = String(order.orderStatus || "").toUpperCase();
+  if (WATI_BLOCKED_ORDER_STATUSES_FOR_ACCEPT.has(status)) return;
+  if (!order.payment?.some((p) => p.paymentStatus === "COLLECTED")) return;
+  scheduleAutoSendOrderAcceptedWhatsApp(order._id);
+}
+
+async function buildOrderAcceptedWhatsAppDetails(order) {
+  if (!order.publicOrderCode) {
+    await Order.ensurePublicOrderCode(order);
+    await order.save();
+  }
+  const totalPlants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
+  const totalAmount = totalPlants * (order.rate || 0);
+  const paidAmount =
+    order.payment
+      ?.filter((p) => p.paymentStatus === "COLLECTED")
+      .reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0;
+  const remainingAmount = totalAmount - paidAmount;
+  const plantSubtypeName = await resolveOrderPlantSubtypeName(order);
+  return {
+    orderId: order.orderId || order._id,
+    publicOrderCode: order.publicOrderCode,
+    plantName: order.plantName?.name || "Plants",
+    plantSubtype: plantSubtypeName,
+    numberOfPlants: totalPlants,
+    deliveryDate: order.deliveryDate,
+    rate: order.rate,
+    totalAmount,
+    advanceAmount: paidAmount,
+    remainingAmount,
+    taluka: resolveOrderTalukaForWati(order),
+  };
+}
+
+async function sendOrderAcceptedWhatsAppForOrder(order) {
+  if (order.whatsappAcceptedSentAt) {
+    return {
+      success: true,
+      alreadySent: true,
+      whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
+      whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
+    };
+  }
+
+  const orderDetails = await buildOrderAcceptedWhatsAppDetails(order);
+
+  if (!isBananaOrderForAcceptedWhatsApp(order, orderDetails.plantSubtype)) {
+    return {
+      success: false,
+      error: {
+        message: "Order accepted WhatsApp is only sent for Banana orders",
+      },
+    };
+  }
+
+  const watiTaluka = orderDetails.taluka || resolveOrderTalukaForWati(order);
+
+  if (order.dealerOrder) {
+    const dealerRec = dealerWhatsAppRecipient(order);
+    if (!dealerRec) {
+      return {
+        success: false,
+        error: {
+          message:
+            "Dealer order has no salesperson with a valid mobile number for WhatsApp",
+        },
+      };
+    }
+    const result = await sendOrderAcceptedWhatsApp(
+      { ...dealerRec, taluka: watiTaluka },
+      orderDetails
+    );
+    if (result.success) {
+      order.whatsappAcceptedSentAt = new Date();
+      const msgKey = extractWatiLocalMessageId(result.data);
+      if (msgKey) order.whatsappAcceptedMessageKey = String(msgKey);
+      await order.save();
+      return {
+        success: true,
+        data: result.data,
+        farmerSent: false,
+        dealerSent: true,
+        stored: {
+          whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
+          whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
+        },
+      };
+    }
+    return { success: false, error: result.error };
+  }
+
+  const farmerRec = farmerWhatsAppRecipient(order);
+  if (!farmerRec) {
+    return {
+      success: false,
+      error: {
+        message:
+          "Order has no farmer with mobile number — farmer WhatsApp is required for this order",
+      },
+    };
+  }
+  const farmerResult = await sendOrderAcceptedWhatsApp(
+    { ...farmerRec, taluka: watiTaluka },
+    orderDetails
+  );
+  if (!farmerResult.success) {
+    return { success: false, error: farmerResult.error };
+  }
+  order.whatsappAcceptedSentAt = new Date();
+  const farmerMsgKey = extractWatiLocalMessageId(farmerResult.data);
+  if (farmerMsgKey) order.whatsappAcceptedMessageKey = String(farmerMsgKey);
+  await order.save();
+
+  let dealerAlsoSent = false;
+  let dealerSendNote = null;
+  const dealerRec = dealerWhatsAppRecipient(order);
+  if (dealerRec && watiPhonesDiffer(farmerRec.mobileNumber, dealerRec.mobileNumber)) {
+    const dealerResult = await sendOrderAcceptedWhatsApp(dealerRec, orderDetails);
+    dealerAlsoSent = Boolean(dealerResult.success);
+    if (!dealerResult.success) {
+      dealerSendNote =
+        dealerResult.error?.message ||
+        (typeof dealerResult.error === "string" ? dealerResult.error : "Dealer copy failed");
+    }
+  }
+
+  return {
+    success: true,
+    data: farmerResult.data,
+    farmerSent: true,
+    dealerAlsoSent,
+    dealerSendNote,
+    stored: {
+      whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
+      whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
+    },
+  };
+}
+
+/** Auto-send order_accpeted_revamped once when first payment is COLLECTED (fire-and-forget safe). */
+export async function tryAutoSendOrderAcceptedWhatsApp(orderId) {
+  try {
+    const order = await Order.findById(orderId)
+      .populate("farmer", "name mobileNumber village taluka talukaName")
+      .populate("salesPerson", "name phoneNumber jobTitle")
+      .populate("plantName", "name");
+    if (!order) {
+      console.warn(`[WATI accept] Order not found: ${orderId}`);
+      return;
+    }
+    const plantSubtypeName = await resolveOrderPlantSubtypeName(order);
+    const skipReason = acceptedWhatsAppAutoSendSkipReason(order, plantSubtypeName);
+    if (skipReason) {
+      console.log(
+        `[WATI accept] Skipped auto-send for Order #${order.orderId || order._id}: ${skipReason}`
+      );
+      return;
+    }
+    const result = await sendOrderAcceptedWhatsAppForOrder(order);
+    if (result.success && !result.alreadySent) {
+      console.log(
+        `✅ [WATI accept] Auto-sent for Order #${order.orderId || order._id}`
+      );
+    } else if (!result.success) {
+      console.warn(
+        `⚠️ [WATI accept] Auto-send failed for Order #${order.orderId || order._id}:`,
+        result.error?.message || result.error
+      );
+    }
+  } catch (err) {
+    console.error(
+      `❌ [WATI accept] Auto-send error for order ${orderId}:`,
+      err?.message || err
+    );
+  }
+}
+
+function scheduleAutoSendOrderAcceptedWhatsApp(orderId) {
+  if (!orderId) return;
+  void tryAutoSendOrderAcceptedWhatsApp(orderId);
 }
 
 const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
@@ -844,10 +1074,9 @@ const addNewPayment = catchAsync(async (req, res, next) => {
   try {
     // Find the order and populate farmer details
     console.log("Finding order with ID:", orderId);
-    const order = await Order.findById(orderId).populate(
-      "farmer",
-      "name village mobileNumber"
-    );
+    const order = await Order.findById(orderId)
+      .populate("farmer", "name village mobileNumber taluka talukaName")
+      .populate("plantName", "name");
     if (!order) {
       console.error("Order not found");
       return res.status(404).json({ message: "Order not found" });
@@ -1084,6 +1313,10 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       console.error("Dealer ledger sync (add payment):", dealerLedgerErr);
     }
 
+    if (finalPaymentStatus === "COLLECTED") {
+      maybeScheduleAcceptedWhatsAppAfterCollect(order);
+    }
+
     // Return success with transaction info if it was created
     if (transaction) {
       console.log("Returning success response with transaction");
@@ -1262,10 +1495,9 @@ const updatePaymentStatus = async (req, res) => {
     }
 
     // Find order by orderId field (numeric) instead of _id (ObjectId)
-    const order = await Order.findOne({ orderId: orderIdNum }).populate(
-      "farmer",
-      "name village mobileNumber"
-    );
+    const order = await Order.findOne({ orderId: orderIdNum })
+      .populate("farmer", "name village mobileNumber taluka talukaName")
+      .populate("plantName", "name");
     if (!order) {
       return res.status(404).json({ message: "Order not found." });
     }
@@ -1431,6 +1663,9 @@ const updatePaymentStatus = async (req, res) => {
 
     const previousPaymentStatus = payment.paymentStatus;
     if (previousPaymentStatus === paymentStatus) {
+      if (paymentStatus === "COLLECTED") {
+        maybeScheduleAcceptedWhatsAppAfterCollect(order);
+      }
       return res.status(200).json({
         success: true,
         message: "Payment status unchanged.",
@@ -1555,6 +1790,10 @@ const updatePaymentStatus = async (req, res) => {
       // Don't fail the request if notification fails
       console.error('❌ Error sending push notification:', notificationError);
       console.error('   Stack:', notificationError.stack);
+    }
+
+    if (paymentStatus === "COLLECTED") {
+      maybeScheduleAcceptedWhatsAppAfterCollect(order);
     }
 
     return res.status(200).json({
@@ -3578,119 +3817,58 @@ const getTodaysPaymentActivities = catchAsync(async (req, res, next) => {
 });
 
 /**
- * Send order accepted WhatsApp message to farmer (triggered by frontend after status change to ACCEPTED)
+ * Send order accepted WhatsApp (WATI order_accpeted_revamped).
+ * Auto on first COLLECTED payment; manual retry via POST send-accepted-whatsapp.
  */
 export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) => {
   const { orderId } = req.params;
   const order = await Order.findById(orderId)
-    .populate("farmer", "name mobileNumber village")
+    .populate("farmer", "name mobileNumber village taluka talukaName")
     .populate("salesPerson", "name phoneNumber jobTitle")
     .populate("plantName", "name");
   if (!order) {
     return res.status(404).json({ message: "Order not found" });
   }
-  if (order.whatsappAcceptedSentAt) {
-    return res.status(200).json(
-      generateResponse("Success", "WhatsApp accept message was already sent for this order", {
-        alreadySent: true,
-        whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
-        whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
-      }, undefined)
-    );
-  }
-  if (!order.publicOrderCode) {
-    await Order.ensurePublicOrderCode(order);
-    await order.save();
-  }
-  const totalPlants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
-  const totalAmount = totalPlants * (order.rate || 0);
-  const paidAmount =
-    order.payment?.filter((p) => p.paymentStatus === "COLLECTED").reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0;
-  const remainingAmount = totalAmount - paidAmount;
+
   const plantSubtypeName = await resolveOrderPlantSubtypeName(order);
-  const orderDetails = {
-    orderId: order.orderId || order._id,
-    publicOrderCode: order.publicOrderCode,
-    plantName: order.plantName?.name || "Plants",
-    plantSubtype: plantSubtypeName,
-    numberOfPlants: totalPlants,
-    deliveryDate: order.deliveryDate,
-    rate: order.rate,
-    totalAmount,
-    advanceAmount: paidAmount,
-    remainingAmount,
-  };
-
-  // Dealer-only order: WhatsApp to salesperson only.
-  if (order.dealerOrder) {
-    const dealerRec = dealerWhatsAppRecipient(order);
-    if (!dealerRec) {
-      return res.status(400).json({
-        message: "Dealer order has no salesperson with a valid mobile number for WhatsApp",
-      });
-    }
-    const result = await sendOrderAcceptedWhatsApp(dealerRec, orderDetails);
-    if (result.success) {
-      order.whatsappAcceptedSentAt = new Date();
-      const msgKey = extractWatiLocalMessageId(result.data);
-      if (msgKey) order.whatsappAcceptedMessageKey = String(msgKey);
-      await order.save();
-      return res.status(200).json(
-        generateResponse("Success", "WhatsApp message sent successfully", {
-          ...result.data,
-          stored: {
-            whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
-            whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
-          },
-          farmerSent: false,
-          dealerSent: true,
-        }, undefined)
-      );
-    }
-    return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
-  }
-
-  // Farmer order: farmer is mandatory; also send to dealer salesperson when applicable.
-  const farmerRec = farmerWhatsAppRecipient(order);
-  if (!farmerRec) {
+  if (!isBananaOrderForAcceptedWhatsApp(order, plantSubtypeName)) {
     return res.status(400).json({
-      message: "Order has no farmer with mobile number — farmer WhatsApp is required for this order",
+      message: "Order accepted WhatsApp is only sent for Banana orders",
     });
   }
-  const farmerResult = await sendOrderAcceptedWhatsApp(farmerRec, orderDetails);
-  if (!farmerResult.success) {
-    return res.status(500).json(
-      generateResponse("Error", farmerResult.error?.message || "Failed to send message", null, farmerResult.error)
+
+  const result = await sendOrderAcceptedWhatsAppForOrder(order);
+
+  if (result.alreadySent) {
+    return res.status(200).json(
+      generateResponse(
+        "Success",
+        "WhatsApp accept message was already sent for this order",
+        {
+          alreadySent: true,
+          whatsappAcceptedSentAt: result.whatsappAcceptedSentAt,
+          whatsappAcceptedMessageKey: result.whatsappAcceptedMessageKey || null,
+        },
+        undefined
+      )
     );
   }
-  order.whatsappAcceptedSentAt = new Date();
-  const farmerMsgKey = extractWatiLocalMessageId(farmerResult.data);
-  if (farmerMsgKey) order.whatsappAcceptedMessageKey = String(farmerMsgKey);
-  await order.save();
 
-  let dealerAlsoSent = false;
-  let dealerSendNote = null;
-  const dealerRec = dealerWhatsAppRecipient(order);
-  if (dealerRec && watiPhonesDiffer(farmerRec.mobileNumber, dealerRec.mobileNumber)) {
-    const dealerResult = await sendOrderAcceptedWhatsApp(dealerRec, orderDetails);
-    dealerAlsoSent = Boolean(dealerResult.success);
-    if (!dealerResult.success) {
-      dealerSendNote =
-        dealerResult.error?.message ||
-        (typeof dealerResult.error === "string" ? dealerResult.error : "Dealer copy failed");
-    }
+  if (!result.success) {
+    const msg =
+      result.error?.message ||
+      (typeof result.error === "string" ? result.error : "Failed to send message");
+    return res.status(500).json(generateResponse("Error", msg, null, result.error));
   }
 
   return res.status(200).json(
     generateResponse("Success", "WhatsApp message sent successfully", {
-      ...farmerResult.data,
-      stored: {
-        whatsappAcceptedSentAt: order.whatsappAcceptedSentAt,
-        whatsappAcceptedMessageKey: order.whatsappAcceptedMessageKey || null,
-      },
-      farmerSent: true,
-      dealerAlsoSent,
-      ...(dealerSendNote ? { dealerSendWarning: dealerSendNote } : {}),
+      ...result.data,
+      stored: result.stored,
+      farmerSent: result.farmerSent ?? false,
+      dealerSent: result.dealerSent ?? false,
+      dealerAlsoSent: result.dealerAlsoSent,
+      ...(result.dealerSendNote ? { dealerSendWarning: result.dealerSendNote } : {}),
     }, undefined)
   );
 });

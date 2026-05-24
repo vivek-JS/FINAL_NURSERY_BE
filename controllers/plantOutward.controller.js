@@ -722,7 +722,8 @@ const getPlantOutwardByBatchId = catchAsync(async (req, res, next) => {
 const buildPlantReadyBundleForMobile = async (upcomingDays) => {
   const windowDays = Math.min(Math.max(parseInt(upcomingDays, 10) || 7, 1), 31);
   const today = moment().startOf("day");
-  const windowEnd = today.clone().add(windowDays, "days").endOf("day");
+  // Inclusive window: "7 days" = today through today+6 (not today+7).
+  const windowEnd = today.clone().add(windowDays - 1, "days").endOf("day");
 
   const plantOutwards = await PlantOutward.find({})
     .populate(BATCH_POPULATE)

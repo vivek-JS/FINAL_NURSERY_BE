@@ -3,7 +3,10 @@ import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
 import {
   watiPlantAndSubtypeParams,
   WATI_MERGED_SUBTYPE_PLACEHOLDER,
+  isBananaPlantName,
 } from "./watiPlantText.js";
+
+export { isBananaPlantName };
 
 /** Normalize to 10-digit Indian mobile for logs; API uses 91 prefix. */
 export function normalizeWatiMobile10(mobileNumber) {
@@ -179,11 +182,12 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       plantName,
       orderDetails.plantSubtype
     );
-    const isPapayaAccept = /papaya/i.test(
-      `${plantName || ""} ${orderDetails.plantSubtype || ""}`
-    );
-    const acceptPlant = isPapayaAccept ? "Papaya" : plantParam;
-    const acceptSubtype = isPapayaAccept ? WATI_MERGED_SUBTYPE_PLACEHOLDER : subtypeParam;
+    if (!isBananaPlantName(plantName, orderDetails.plantSubtype)) {
+      return { success: false, error: "Order accepted WhatsApp is only sent for Banana orders" };
+    }
+
+    const acceptPlant = plantParam;
+    const acceptSubtype = subtypeParam;
 
     const templateOrderId =
       orderDetails.publicOrderCode?.toString() || orderId?.toString() || "N/A";
@@ -198,10 +202,17 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       : "To be confirmed";
 
     // Parameters for WATI template: order_accpeted_revamped
+    const taluka =
+      farmer.talukaName ||
+      farmer.taluka ||
+      orderDetails.taluka ||
+      "N/A";
+
     const parameters = [
       { name: "name", value: farmer.name || "Farmer" },
       { name: "id", value: templateOrderId },
       { name: "village", value: farmer.village || "N/A" },
+      { name: "taluka", value: taluka },
       { name: "number", value: farmer.mobileNumber?.toString() || "N/A" },
       { name: "plant", value: acceptPlant },
       { name: "subtype", value: acceptSubtype },

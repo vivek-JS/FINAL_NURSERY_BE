@@ -46,3 +46,8 @@ export function watiPlantAndSubtypeParams(plantNameRaw, subtypeRaw) {
     subtypeParam: WATI_MERGED_SUBTYPE_PLACEHOLDER,
   };
 }
+
+/** Accept / collection WATI is sent only for Banana (केळी) orders. */
+export function isBananaPlantName(plantNameRaw, subtypeRaw = "") {
+  return /banana|keli|केळ/i.test(`${plantNameRaw ?? ""} ${subtypeRaw ?? ""}`);
+}

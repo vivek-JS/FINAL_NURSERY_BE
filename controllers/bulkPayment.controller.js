@@ -12,6 +12,8 @@ import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { tryAutoSendOrderAcceptedWhatsApp } from "./order.controller.js";
+import { isBananaPlantName } from "../utility/watiPlantText.js";
 
 const shouldLogRamAgriLedger = (order) =>
   Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
@@ -242,6 +244,7 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
 
   const session = await mongoose.startSession();
   session.startTransaction();
+  const plantOrderIdsForWati = [];
 
   try {
     const mainPaymentId = bulk._id;
@@ -300,6 +303,7 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
       } else {
         const order = await Order.findById(alloc.orderId)
           .populate("farmer", "name village mobileNumber")
+          .populate("plantName", "name")
           .session(session);
         if (!order) throw new AppError(`Order not found: ${alloc.orderId}`, 400);
         order.payment.push({ ...paymentPayload });
@@ -336,6 +340,10 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
             session
           );
         }
+
+        if (isBananaPlantName(order.plantName?.name || "")) {
+          plantOrderIdsForWati.push(order._id);
+        }
       }
     }
 
@@ -350,6 +358,10 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
     throw err;
   } finally {
     session.endSession();
+  }
+
+  for (const oid of plantOrderIdsForWati) {
+    void tryAutoSendOrderAcceptedWhatsApp(oid);
   }
 
   const updated = await BulkPayment.findById(bulkId)
