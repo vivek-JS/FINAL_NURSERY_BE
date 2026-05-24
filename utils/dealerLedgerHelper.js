@@ -56,29 +56,40 @@ export function sortReceivableLedgerEntriesChronologically(entries) {
   });
 }
 
-/** Running order-value outstanding for dealer (ledger only — not wallet cash). */
+/**
+ * Running order-value outstanding for dealer (ledger only — not wallet cash).
+ * Sum of ORDER_BOOKING debits minus ORDER_RECEIVABLE_PAYMENT credits (reliable vs stale balanceAfter).
+ */
 export async function getLastDealerOrderOutstanding(dealerId, session) {
-  const q = DealerLedgerEntry.find({
+  const match = {
     dealer: dealerId,
     refType: { $in: ORDER_RECEIVABLE_REF_TYPES },
-  }).lean();
-  if (session) q.session(session);
-  const docs = await q;
-  if (!docs.length) return 0;
+  };
 
-  const sorted = sortReceivableLedgerEntriesChronologically(docs);
+  const pipeline = [
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        debit: { $sum: { $ifNull: ["$debit", 0] } },
+        credit: { $sum: { $ifNull: ["$credit", 0] } },
+      },
+    },
+  ];
 
-  let running = 0;
-  for (const d of sorted) {
-    if (d.balanceAfter != null && !Number.isNaN(Number(d.balanceAfter))) {
-      running = roundLedgerMoney(d.balanceAfter);
-    } else {
-      running = roundLedgerMoney(
-        running + (Number(d.debit) || 0) - (Number(d.credit) || 0)
-      );
-    }
-  }
-  return running;
+  let agg = DealerLedgerEntry.aggregate(pipeline);
+  if (session) agg = agg.session(session);
+  const row = (await agg)[0];
+  if (!row) return 0;
+
+  return roundLedgerMoney(Math.max(0, Number(row.debit) - Number(row.credit)));
+}
+
+/** Same formula as getLastDealerOrderOutstanding for API summary objects. */
+export function computeOrderOutstandingFromTotals(totalDebit, totalCredit) {
+  return roundLedgerMoney(
+    Math.max(0, (Number(totalDebit) || 0) - (Number(totalCredit) || 0))
+  );
 }
 
 /**

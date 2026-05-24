@@ -435,7 +435,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
         }
 
         // Validate dispatch quantity
-        const currentRemaining = order.remainingPlants || order.numberOfPlants;
+        const currentRemaining = orderRemainingOrBookable(order);
         if (orderDispatch.dispatchQuantity > currentRemaining) {
           throw new AppError(
             `Dispatch quantity (${orderDispatch.dispatchQuantity}) exceeds remaining plants (${currentRemaining}) for order ${order.orderId}`,
@@ -2740,7 +2740,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
         cavity: order.cavity,
         bookingSlot: order.bookingSlot,
         numberOfPlants: order.numberOfPlants,
-        remainingPlants: order.remainingPlants || order.numberOfPlants, // Include remainingPlants
+        remainingPlants: orderRemainingOrBookable(order),
         rate: order.rate,
         payment: order.payment,
         orderStatus: order.orderStatus,
@@ -3277,14 +3277,29 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       // Check if action properties exist with updated format from frontend
       const completeOrder = orderUpdate.actions?.completeOrder === true;
       const finalStatusFromActions = orderUpdate.actions?.finalStatus;
+      const nurseryRemaining = orderRemainingOrBookable(order);
 
       // Prefer explicit finalStatus from UI (e.g. READY_FOR_DISPATCH when remainingPlants > 0)
+      let orderStatusToSet = null;
       if (finalStatusFromActions) {
-        orderUpdateData.orderStatus = finalStatusFromActions;
+        orderStatusToSet = finalStatusFromActions;
       } else if (completeOrder) {
-        orderUpdateData.orderStatus = "COMPLETED";
+        orderStatusToSet = "COMPLETED";
       } else if (returnsForThisOrder > 0) {
-        orderUpdateData.orderStatus = "PARTIALLY_COMPLETED";
+        orderStatusToSet = "PARTIALLY_COMPLETED";
+      }
+
+      // Stale UI (remainingPlants shown as bookable total when DB has 0) must not revert to queue.
+      if (
+        nurseryRemaining === 0 &&
+        returnsForThisOrder === 0 &&
+        (completeOrder || orderStatusToSet === "READY_FOR_DISPATCH")
+      ) {
+        orderStatusToSet = "COMPLETED";
+      }
+
+      if (orderStatusToSet) {
+        orderUpdateData.orderStatus = orderStatusToSet;
       }
 
       let returnHistoryEntry = null;
