@@ -29,6 +29,11 @@ import {
   getFarmerPlantPaymentTransitionAction,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
+import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
+import {
+  approveFarmerOrderTransferRequest,
+  rejectFarmerOrderTransferRequest,
+} from "./farmerPlantOrderLedger.controller.js";
 
 function watiDigitsOk(n) {
   return n != null && String(n).replace(/\D/g, "").length >= 10;
@@ -371,7 +376,15 @@ const getCsv = catchAsync(async (req, res, next) => {
     }
 
     if (orderStatus) {
-      query.orderStatus = orderStatus;
+      const statuses = String(orderStatus)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (statuses.length > 1) {
+        query.orderStatus = { $in: statuses };
+      } else if (statuses.length === 1) {
+        query.orderStatus = statuses[0];
+      }
     }
 
     if (paymentStatus) {
@@ -426,6 +439,8 @@ const getCsv = catchAsync(async (req, res, next) => {
       "Billable plants (net)",
       "Rate",
       "Delivery date",
+      "Dispatched",
+      "Dispatched date",
       "Order status",
       "Reference",
     ];
@@ -438,6 +453,16 @@ const getCsv = catchAsync(async (req, res, next) => {
 
     const deliverySource = (obj) =>
       obj.deliveryDate || obj.farmReadyDate || null;
+
+    const latestDispatchInfo = (obj) => {
+      const hist = Array.isArray(obj.dispatchHistory) ? obj.dispatchHistory : [];
+      if (!hist.length) {
+        return { dispatched: obj.orderStatus === "DISPATCHED" ? "Y" : "N", date: null };
+      }
+      const latest = hist[hist.length - 1];
+      const d = latest?.dispatchDate || latest?.dispatchedAt || latest?.createdAt || null;
+      return { dispatched: "Y", date: d };
+    };
 
     const csvMobile = (farmerDoc, orderFor) => {
       const n =
@@ -474,6 +499,7 @@ const getCsv = catchAsync(async (req, res, next) => {
         const ret = Number(obj.returnedPlants) || 0;
         const dmg = Number(obj.damagedPlants) || 0;
         const billable = Math.max(0, (Number.isFinite(bookedTotal) ? bookedTotal : 0) - ret - dmg);
+        const dispatchInfo = latestDispatchInfo(obj);
 
         // Farmer may be unset (dealer / legacy rows); use orderFor for customer + address fallback.
         const addr =
@@ -513,6 +539,8 @@ const getCsv = catchAsync(async (req, res, next) => {
           "Billable plants (net)": billable,
           Rate: obj.rate ?? 0,
           "Delivery date": formatInDate(deliverySource(obj)),
+          Dispatched: dispatchInfo.dispatched,
+          "Dispatched date": formatInDate(dispatchInfo.date),
           "Order status": obj.orderStatus ?? "",
           Reference: reference,
         });
@@ -592,7 +620,7 @@ function mergeDashboardTabQuery(base, tab, queueFarmReadyOnly) {
   const searchTrimmed = String(q.search ?? "").trim();
 
   if (isCancelledTab) {
-    q.status = "CANCELLED";
+    q.status = "CANCELLED,TEMPORARY_CANCELLED";
   } else if (tab === "pending") {
     q.status = "PENDING";
   } else if (tab === "accepted") {
@@ -722,6 +750,7 @@ const updateOrder = updateOne(Order, "Order", [
   "expectedNursery", // Nursery site code from CMS (RB, GH, …)
   "batchNumber", // Lot / batch from complete-delivery form or manual edit
   "deliveryChallanInvoiceNumber", // Legacy / manual DC label when dispatch legs have no sequenced invoice #
+  "freightCharges", // Per-order freight at delivery complete
 ]);
 /**
  * Add a new payment to an order and update dealer wallet accordingly
@@ -1226,6 +1255,26 @@ const updatePaymentStatus = async (req, res) => {
     const payment = findPaymentSubdocument(order, paymentId);
     if (!payment) {
       return res.status(404).json({ message: "Payment not found." });
+    }
+
+    // Transfer-request payments: approve/reject via full transfer flow (source deduction + ledger).
+    if (
+      payment.transferRequestId &&
+      payment.paymentStatus === "PENDING" &&
+      (paymentStatus === "COLLECTED" || paymentStatus === "REJECTED")
+    ) {
+      const transferReq = await FarmerOrderTransferRequest.findById(payment.transferRequestId).lean();
+      if (transferReq && transferReq.status === "PENDING") {
+        req.params = { ...(req.params || {}), id: String(transferReq._id) };
+        if (paymentStatus === "COLLECTED") {
+          return approveFarmerOrderTransferRequest(req, res, next);
+        }
+        req.body = {
+          ...(req.body || {}),
+          reason: remark || req.body?.reason || "Rejected from payment dashboard",
+        };
+        return rejectFarmerOrderTransferRequest(req, res, next);
+      }
     }
 
     // Update payment fields if provided
@@ -5388,6 +5437,205 @@ const getRemainingDispatchMatrixOrders = catchAsync(async (req, res) => {
   return res.status(200).json({ success: true, data: { orders } });
 });
 
+/**
+ * Admin-only dashboard stats:
+ * - Today's booking / dispatch / plant counts
+ * - Date-range booking table by plant + subtype
+ * - Date-range salesperson chart data
+ */
+const getAdminDashboardStats = catchAsync(async (req, res) => {
+  const { startDate, endDate } = req.query;
+
+  // IST today boundaries
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date();
+  todayEnd.setHours(23, 59, 59, 999);
+
+  // ── Today's booking stats (use orderBookingDate — same field as the rest of the app) ─────
+  const todayBookingAgg = await Order.aggregate([
+    {
+      $match: {
+        orderBookingDate: { $gte: todayStart, $lte: todayEnd },
+        orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        bookingsCount: { $sum: 1 },
+        totalPlants: { $sum: { $ifNull: ["$numberOfPlants", 0] } },
+      },
+    },
+  ]);
+  const todayBooking = todayBookingAgg[0] || { bookingsCount: 0, totalPlants: 0 };
+
+  // ── Today's dispatch count ─────────────────────────────────────────────────
+  const todayDispatchCount = await Dispatch.countDocuments({
+    createdAt: { $gte: todayStart, $lte: todayEnd },
+  });
+
+  // ── Date-range aggregations (optional) ────────────────────────────────────
+  let bookingTable = [];
+  let rangeDispatchStats = null;
+
+  if (startDate && endDate) {
+    const rangeStart = new Date(startDate);
+    rangeStart.setHours(0, 0, 0, 0);
+    const rangeEnd = new Date(endDate);
+    rangeEnd.setHours(23, 59, 59, 999);
+
+    const rangeMatch = {
+      orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
+      orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
+    };
+
+    // Plant+subtype booking breakdown for the range
+    bookingTable = await Order.aggregate([
+      { $match: rangeMatch },
+      {
+        $lookup: {
+          from: "plantcms",
+          localField: "plantName",
+          foreignField: "_id",
+          as: "_plantData",
+          pipeline: [{ $project: { name: 1, subtypes: 1 } }],
+        },
+      },
+      {
+        $addFields: {
+          _plantRow: { $arrayElemAt: ["$_plantData", 0] },
+          _plantTypeName: { $arrayElemAt: ["$_plantData.name", 0] },
+        },
+      },
+      {
+        $addFields: {
+          _matchedSubtype: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$_plantRow.subtypes", []] },
+                  as: "st",
+                  cond: { $eq: ["$$st._id", "$plantSubtype"] },
+                },
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $addFields: {
+          _subtypeName: { $ifNull: ["$_matchedSubtype.name", "Other"] },
+        },
+      },
+      {
+        $group: {
+          _id: { plantName: "$_plantTypeName", subtype: "$_subtypeName" },
+          bookingCount: { $sum: 1 },
+          totalPlants: { $sum: { $ifNull: ["$numberOfPlants", 0] } },
+          dispatchedCount: {
+            $sum: {
+              $cond: [
+                {
+                  $in: [
+                    "$orderStatus",
+                    ["DISPATCH_PROCESS", "PARTIALLY_COMPLETED", "COMPLETED", "DISPATCHED"],
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          dispatchedPlants: {
+            $sum: {
+              $cond: [
+                {
+                  $in: [
+                    "$orderStatus",
+                    ["DISPATCH_PROCESS", "PARTIALLY_COMPLETED", "COMPLETED", "DISPATCHED"],
+                  ],
+                },
+                {
+                  $cond: [
+                    // COMPLETED / DISPATCHED = all plants have gone out
+                    { $in: ["$orderStatus", ["COMPLETED", "DISPATCHED"]] },
+                    { $ifNull: ["$numberOfPlants", 0] },
+                    // DISPATCH_PROCESS / PARTIALLY_COMPLETED = plants dispatched so far
+                    {
+                      $max: [
+                        0,
+                        {
+                          $subtract: [
+                            { $ifNull: ["$numberOfPlants", 0] },
+                            { $ifNull: ["$remainingPlants", 0] },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                0,
+              ],
+            },
+          },
+          pendingPlants: {
+            $sum: {
+              $cond: [
+                {
+                  $not: [
+                    {
+                      $in: [
+                        "$orderStatus",
+                        ["DISPATCH_PROCESS", "PARTIALLY_COMPLETED", "COMPLETED", "DISPATCHED", "CANCELLED"],
+                      ],
+                    },
+                  ],
+                },
+                { $ifNull: ["$remainingPlants", { $ifNull: ["$numberOfPlants", 0] }] },
+                0,
+              ],
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          plantName: { $ifNull: ["$_id.plantName", "Unknown"] },
+          subtype: "$_id.subtype",
+          bookingCount: 1,
+          totalPlants: 1,
+          dispatchedCount: 1,
+          dispatchedPlants: 1,
+          pendingPlants: 1,
+        },
+      },
+      { $sort: { plantName: 1, subtype: 1 } },
+    ]);
+
+    // Dispatch count in range
+    const dispatchInRange = await Dispatch.countDocuments({
+      createdAt: { $gte: rangeStart, $lte: rangeEnd },
+    });
+    rangeDispatchStats = { dispatchCount: dispatchInRange };
+  }
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      today: {
+        bookingsCount: todayBooking.bookingsCount,
+        totalPlants: todayBooking.totalPlants,
+        dispatchCount: todayDispatchCount,
+      },
+      bookingTable,
+      rangeDispatchStats,
+    },
+  });
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -5425,4 +5673,5 @@ export {
   getRemainingDispatchMatrix,
   getRemainingDispatchMatrixOrders,
   getFarmerOrdersDashboardTabCounts,
+  getAdminDashboardStats,
 };

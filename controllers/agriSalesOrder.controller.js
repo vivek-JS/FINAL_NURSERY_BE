@@ -2,7 +2,11 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
-import AgriSalesOrder, { getAgriOrderLines } from "../models/agriSalesOrder.model.js";
+import AgriSalesOrder, {
+  getAgriOrderLines,
+  distributeReturnQtyAcrossLines,
+  computeAgriReturnCreditAmount,
+} from "../models/agriSalesOrder.model.js";
 import { InventoryProduct, InventoryOutwardTransaction, StockAdjustment } from "../models/inventory.model.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
 import Order from "../models/order.model.js";
@@ -57,24 +61,6 @@ async function populateAgriSalesOrderProductRefs(order) {
     await order.populate("primaryUnit");
     await order.populate("secondaryUnit");
   }
-}
-
-/** Proportional split of total return units across order lines (integer parts). */
-function distributeReturnQtyAcrossLines(lines, returnQty) {
-  const n = lines.length;
-  if (!n || returnQty <= 0) return new Array(n).fill(0);
-  const qtys = lines.map((l) => Number(l.quantity) || 0);
-  const total = qtys.reduce((a, b) => a + b, 0);
-  if (total <= 0) return new Array(n).fill(0);
-  const out = qtys.map((q) => Math.floor((returnQty * q) / total));
-  let s = out.reduce((a, b) => a + b, 0);
-  let diff = returnQty - s;
-  for (let i = n - 1; i >= 0 && diff > 0; i--) {
-    const canAdd = Math.min(diff, qtys[i] - out[i]);
-    out[i] += canAdd;
-    diff -= canAdd;
-  }
-  return out;
 }
 
 /** Build validated line item documents for create (throws AppError). */
@@ -4002,6 +3988,16 @@ const completeOrders = catchAsync(async (req, res, next) => {
     order.deliveredQuantity = deliveredQty;
     order.returnReason = returnReason || "";
     order.returnNotes = returnNotes || "";
+
+    const completionLines = getAgriOrderLines(order);
+    const perLineReturns = distributeReturnQtyAcrossLines(completionLines, returnQty);
+    if (Array.isArray(order.lineItems) && order.lineItems.length > 0) {
+      order.lineItems.forEach((li, idx) => {
+        const rq = perLineReturns[idx] || 0;
+        li.returnQuantity = rq;
+        li.deliveredQuantity = Math.max(0, (Number(li.quantity) || 0) - rq);
+      });
+    }
     
     // Store original quantity and previous values for ledger entry
     // IMPORTANT: Calculate previous values based on ORIGINAL quantity, not current order values
@@ -4012,7 +4008,10 @@ const completeOrders = catchAsync(async (req, res, next) => {
     // Calculate previous totalAmount from ORIGINAL quantity (not from order.totalAmount which might be modified)
     // IMPORTANT: Always use originalQuantity * rate for previousTotalAmount to ensure correct calculation
     // even if order.totalAmount was modified in a previous operation
-    const originalTotalAmount = originalQuantity * (order.rate || 0);
+    const originalTotalAmount = completionLines.reduce(
+      (sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.rate) || 0),
+      0
+    );
     // For previousTotalAmount, use the original calculation UNLESS order was already completed
     // If order was already completed, use the current totalAmount as previous (it was already adjusted)
     const isAlreadyCompleted = order.orderStatus === "COMPLETED" || order.deliveredQuantity > 0;
@@ -4031,9 +4030,14 @@ const completeOrders = catchAsync(async (req, res, next) => {
       : 0;
     const previousBalanceAmount = previousTotalAmount - previousTotalPaid;
     
-    // Recalculate totalAmount based on deliveredQuantity (final quantity after returns)
-    // This ensures payment calculations use the actual delivered quantity
-    order.totalAmount = deliveredQty * (order.rate || 0);
+    // Recalculate totalAmount from per-line delivered qty (multi-product orders use line rates)
+    let newTotalAmount = 0;
+    completionLines.forEach((line, idx) => {
+      const deliveredLineQty = Math.max(0, (Number(line.quantity) || 0) - (perLineReturns[idx] || 0));
+      newTotalAmount += deliveredLineQty * (Number(line.rate) || 0);
+    });
+    order.totalAmount = newTotalAmount;
+    order.rate = deliveredQty > 0 ? newTotalAmount / deliveredQty : order.rate || 0;
     
     // Recalculate balanceAmount based on new totalAmount
     const totalPaid = order.payment && order.payment.length > 0
@@ -4125,16 +4129,13 @@ const completeOrders = catchAsync(async (req, res, next) => {
           // Amount was reduced - use the amount difference
           creditToUse = amountDifference;
         } else if (returnQty > 0 && (order.rate || 0) > 0) {
-          // Amount difference is 0 but there are returns - calculate from return quantity
-          // This handles cases where order was already adjusted but returns still need ledger entry
-          creditToUse = returnQty * order.rate;
+          // Amount difference is 0 but there are returns - use per-line rates
+          creditToUse = computeAgriReturnCreditAmount(order, returnQty);
         }
         
         // ALWAYS create ledger entry when there are returns, even if calculated credit is 0
-        // This ensures returns are tracked in the ledger
-        // If creditToUse is still 0, calculate from return quantity as fallback
-        if (creditToUse === 0 && returnQty > 0 && (order.rate || 0) > 0) {
-          creditToUse = returnQty * order.rate;
+        if (creditToUse === 0 && returnQty > 0) {
+          creditToUse = computeAgriReturnCreditAmount(order, returnQty);
         }
         
         // Create ledger entry if we have a valid credit amount

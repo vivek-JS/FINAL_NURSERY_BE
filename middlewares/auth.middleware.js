@@ -144,6 +144,46 @@ export const requireOfficeAdmin = authorizeRoles(['OFFICE_ADMIN', 'ADMIN', 'SUPE
  */
 export const requirePaymentAccess = authorizeRoles(['ACCOUNTANT', 'SUPER_ADMIN']);
 
+/** Commission management + settlement (accountant / super admin). */
+export const requireCommissionAccess = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json(
+      generateResponse('error', 'Authentication required', null, null)
+    );
+  }
+  const allowed = new Set(['ACCOUNTANT', 'SUPER_ADMIN', 'SUPERADMIN']);
+  const candidates = [req.user.role, req.user.jobTitle].filter(Boolean);
+  const ok = candidates.some((c) => allowed.has(c));
+  if (!ok) {
+    return res.status(403).json(
+      generateResponse('error', 'Insufficient permissions', null, null)
+    );
+  }
+  next();
+};
+
+/** Dealer may read own commission analysis; admins may read any dealer. */
+export const requireDealerAnalysisAccess = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json(
+      generateResponse('error', 'Authentication required', null, null)
+    );
+  }
+  const adminRoles = new Set(['ACCOUNTANT', 'SUPER_ADMIN', 'SUPERADMIN']);
+  const candidates = [req.user.role, req.user.jobTitle].filter(Boolean);
+  if (candidates.some((c) => adminRoles.has(c))) {
+    return next();
+  }
+  const isDealer = candidates.some((c) => c === 'DEALER');
+  const { dealerId } = req.params;
+  if (isDealer && dealerId && String(req.user._id) === String(dealerId)) {
+    return next();
+  }
+  return res.status(403).json(
+    generateResponse('error', 'Insufficient permissions', null, null)
+  );
+};
+
 /**
  * Middleware to allow creating bulk payment entries (pending only)
  * CASHIER can create entries but cannot accept/finalize.

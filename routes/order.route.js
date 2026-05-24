@@ -36,6 +36,7 @@ import {
   getRemainingDispatchMatrix,
   getRemainingDispatchMatrixOrders,
   getFarmerOrdersDashboardTabCounts,
+  getAdminDashboardStats,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -85,14 +86,19 @@ router
   .post("/farmer-plant-ledger/transfer-advance", requirePaymentAccess, transferFarmerPlantAdvance)
   .post("/farmer-plant-ledger/transfer-order-payment", requirePaymentAccess, transferFarmerPlantOrderPayment)
   .post("/farmer-plant-ledger/transfer-requests", createFarmerOrderTransferRequest)
+  .post("/dealer-plant-ledger/transfer-requests", createFarmerOrderTransferRequest)
   .get("/farmer-plant-ledger/transfer-requests", requirePaymentAccess, getFarmerOrderTransferRequests)
+  .get("/dealer-plant-ledger/transfer-requests", requirePaymentAccess, getFarmerOrderTransferRequests)
   .patch("/farmer-plant-ledger/transfer-requests/:id/approve", requirePaymentAccess, approveFarmerOrderTransferRequest)
+  .patch("/dealer-plant-ledger/transfer-requests/:id/approve", requirePaymentAccess, approveFarmerOrderTransferRequest)
   .patch("/farmer-plant-ledger/transfer-requests/:id/reject", requirePaymentAccess, rejectFarmerOrderTransferRequest)
+  .patch("/dealer-plant-ledger/transfer-requests/:id/reject", requirePaymentAccess, rejectFarmerOrderTransferRequest)
   .post("/farmer-plant-ledger/manual-entry", requirePaymentAccess, createManualFarmerPlantLedgerEntry)
   .get("/getCSV", getCsv)
   .get("/slots", getOrdersBySlot)
   .get("/getOrders", getOrders)
   .get("/dashboard-tab-counts", getFarmerOrdersDashboardTabCounts)
+  .get("/admin-dashboard-stats", getAdminDashboardStats)
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)
   .get("/bulk-payments", getBulkPayments)

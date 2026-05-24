@@ -3,6 +3,7 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import Dispatch from "../models/dispatch.model.js";
 import Order from "../models/order.model.js";
+import Farmer from "../models/farmer.model.js";
 import AgriSalesOrder from "../models/agriSalesOrder.model.js";
 import ReadyDispatchGroup from "../models/readyDispatchGroup.model.js";
 import PlantSlot from "../models/slots.model.js";
@@ -1972,6 +1973,138 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
   }
 });
 
+/** Non-deleted dispatches (field may be absent on older rows). */
+const DISPATCH_NOT_DELETED = { isDeleted: { $ne: true } };
+
+/** Match dispatches by vehicle/driver fields or by farmer/order on any linked order. */
+async function resolveDispatchIdsForSearch(searchTrim) {
+  const q = String(searchTrim || "").trim();
+  if (!q) return [];
+
+  const esc = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const nameRx = new RegExp(esc, "i");
+  const idSet = new Set();
+
+  const transportRows = await Dispatch.find({
+    ...DISPATCH_NOT_DELETED,
+    $or: [
+      { transportId: nameRx },
+      { driverName: nameRx },
+      { vehicleName: nameRx },
+      { vehicleNumber: nameRx },
+    ],
+  })
+    .select("_id")
+    .lean();
+  transportRows.forEach((d) => idSet.add(String(d._id)));
+
+  const orderOr = [];
+  const isNumeric = /^\d+$/.test(q);
+  if (isNumeric) {
+    const asNum = Number(q);
+    if (Number.isSafeInteger(asNum)) {
+      orderOr.push({ orderId: asNum });
+    }
+    if (q.length === 4) {
+      orderOr.push({ publicOrderCode: q });
+    }
+  }
+
+  orderOr.push({ "orderFor.name": nameRx });
+  orderOr.push({ "orderFor.village": nameRx });
+  orderOr.push({ "orderFor.talukaName": nameRx });
+  orderOr.push({ "orderFor.districtName": nameRx });
+
+  const mobileDigits = q.replace(/\D/g, "");
+  if (mobileDigits.length >= 4) {
+    orderOr.push({
+      $expr: {
+        $regexMatch: {
+          input: {
+            $toString: {
+              $ifNull: ["$orderFor.mobileNumber", ""],
+            },
+          },
+          regex: mobileDigits,
+        },
+      },
+    });
+  }
+
+  const farmerOr = [{ name: nameRx }];
+  if (mobileDigits.length >= 4) {
+    farmerOr.push({
+      $expr: {
+        $regexMatch: {
+          input: { $toString: { $ifNull: ["$mobileNumber", ""] } },
+          regex: mobileDigits,
+        },
+      },
+    });
+  }
+  const farmers = await Farmer.find({ $or: farmerOr }).select("_id").limit(200).lean();
+  if (farmers.length) {
+    orderOr.push({ farmer: { $in: farmers.map((f) => f._id) } });
+  }
+
+  if (orderOr.length) {
+    const orders = await Order.find({ $or: orderOr })
+      .select("_id currentDispatchId")
+      .limit(500)
+      .lean();
+    const orderMongoIds = orders.map((o) => o._id);
+    for (const o of orders) {
+      if (o.currentDispatchId) idSet.add(String(o.currentDispatchId));
+    }
+    if (orderMongoIds.length) {
+      const dispatchRows = await Dispatch.find({
+        ...DISPATCH_NOT_DELETED,
+        $or: [
+          { orderIds: { $in: orderMongoIds } },
+          { afterDispatchedOrderIds: { $in: orderMongoIds } },
+        ],
+      })
+        .select("_id")
+        .lean();
+      dispatchRows.forEach((d) => idSet.add(String(d._id)));
+    }
+  }
+
+  return [...idSet].map((id) => new mongoose.Types.ObjectId(id));
+}
+
+async function attachAgriLoadFlagsToDispatches(dispatches) {
+  const allOrderIds = [];
+  for (const d of dispatches) {
+    for (const o of d.orderIds || []) {
+      if (o?._id) allOrderIds.push(o._id);
+    }
+  }
+  const pendingAgri = await getPendingLinkedAgriLoads(allOrderIds);
+  const byNursery = new Map();
+  for (const row of pendingAgri) {
+    const nid = String(row.linkedNurseryOrderId || "");
+    if (!nid) continue;
+    if (!byNursery.has(nid)) byNursery.set(nid, []);
+    byNursery.get(nid).push({
+      agriOrderNumber: row.orderNumber,
+      agriOrderId: row._id,
+    });
+  }
+  return dispatches.map((d) => {
+    const blockedBy = [];
+    for (const o of d.orderIds || []) {
+      const oid = String(o._id || "");
+      blockedBy.push(...(byNursery.get(oid) || []));
+    }
+    return {
+      ...d,
+      agriLoadBlocked: blockedBy.length > 0,
+      agriLoadBlockedBy: blockedBy,
+    };
+  });
+}
+
 // Get dispatches controller
 const getDispatches = catchAsync(async (req, res, next) => {
   try {
@@ -1980,20 +2113,31 @@ const getDispatches = catchAsync(async (req, res, next) => {
       req.query.limit != null ||
       String(req.query.paged || "") === "1";
 
+    const searchTrim = String(req.query.search || "").trim();
     const listFilter = { isDeleted: false };
     if (req.query.transportStatus) {
       listFilter.transportStatus = String(req.query.transportStatus);
     }
-    const searchTrim = String(req.query.search || "").trim();
     if (searchTrim) {
-      const esc = searchTrim.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const rx = new RegExp(esc, "i");
-      listFilter.$or = [
-        { transportId: rx },
-        { driverName: rx },
-        { vehicleName: rx },
-        { vehicleNumber: rx },
-      ];
+      const searchIds = await resolveDispatchIdsForSearch(searchTrim);
+      if (!searchIds.length) {
+        const emptyPagination = hasPaging
+          ? {
+              total: 0,
+              page: Math.max(1, parseInt(req.query.page, 10) || 1),
+              limit: Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20)),
+              pages: 1,
+            }
+          : undefined;
+        return res
+          .status(200)
+          .json(
+            generateResponse("Success", "Dispatches fetched successfully", [], undefined, {
+              pagination: emptyPagination,
+            })
+          );
+      }
+      listFilter._id = { $in: searchIds };
     }
 
     let pagination = null;
@@ -2343,6 +2487,8 @@ const getDispatches = catchAsync(async (req, res, next) => {
         (a, b) => (rank.get(String(a._id)) ?? 0) - (rank.get(String(b._id)) ?? 0)
       );
     }
+
+    ordered = await attachAgriLoadFlagsToDispatches(ordered);
 
     res.status(200).json(
       generateResponse(
@@ -3087,6 +3233,14 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         orderUpdateData.remainingPlants = Math.max(0, prevRem + deltaAdd);
       }
 
+      let freightForTotal = Math.max(0, Number(order.freightCharges) || 0);
+      if (orderUpdate.freightCharges !== undefined && orderUpdate.freightCharges !== null) {
+        freightForTotal = Math.max(0, Number(orderUpdate.freightCharges) || 0);
+        if (freightForTotal !== (order.freightCharges || 0)) {
+          orderUpdateData.freightCharges = freightForTotal;
+        }
+      }
+
       const newPaymentSubdocs = buildDispatchCompletePaymentSubdocs(
         orderUpdate.newPayments,
         req.user,
@@ -3103,7 +3257,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       );
 
       const recalculatedTotalAmount = roundMoney(
-        (order.rate || 0) * totalOrderedPlants
+        (order.rate || 0) * totalOrderedPlants + freightForTotal
       );
       const isPaymentComplete = collectedAmount >= recalculatedTotalAmount;
 
@@ -3202,6 +3356,18 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       const pushPayload = {};
       if (returnHistoryEntry) {
         pushPayload.returnHistory = returnHistoryEntry;
+      }
+      if (
+        orderUpdateData.freightCharges !== undefined &&
+        orderUpdateData.freightCharges !== (order.freightCharges || 0)
+      ) {
+        pushPayload.orderEditHistory = {
+          field: "freightCharges",
+          previousValue: order.freightCharges || 0,
+          newValue: orderUpdateData.freightCharges,
+          changedBy: req.user ? req.user._id : undefined,
+          notes: `Freight charges set to ₹${orderUpdateData.freightCharges}`,
+        };
       }
       if (newPaymentSubdocs.length > 0) {
         pushPayload.payment = { $each: newPaymentSubdocs };

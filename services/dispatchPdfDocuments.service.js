@@ -45,6 +45,10 @@ function getCollectedPayments(order) {
   return rows.filter((p) => p?.paymentStatus === "COLLECTED");
 }
 
+function resolveOrderFreightCharges(order) {
+  return Math.max(0, Number(order?.freightCharges ?? 0) || 0);
+}
+
 function ensureSpace(doc, yNeeded, bottomMargin = 50) {
   const pageBottom = doc.page.height - bottomMargin;
   if (doc.y + yNeeded > pageBottom) doc.addPage();
@@ -91,6 +95,9 @@ export function buildDeliveryChallanPdfBuffer(dispatch) {
       const farmer = order?.farmer;
       const qty = getDispatchedQty(order, dispatch.orderDispatchDetails);
       const rate = Number(order?.rate || 0);
+      const freight = resolveOrderFreightCharges(order);
+      const plantAmount = qty * rate;
+      const lineTotal = plantAmount + freight;
       const dcLabel = resolveChallanInvoiceLabelForPdf(order, dispatchMongoId);
       const orderNum = order?.orderId != null ? String(order.orderId) : "";
 
@@ -105,7 +112,9 @@ export function buildDeliveryChallanPdfBuffer(dispatch) {
       if (manualStr && manualStr !== dcLabel) {
         doc.text(`Manual DC / sticker: ${manualStr}`);
       }
-      doc.text(`Line total: ${formatInr(qty * rate)}`);
+      doc.text(`Plant amount: ${formatInr(plantAmount)}`);
+      if (freight > 0) doc.text(`Freight: ${formatInr(freight)}`);
+      doc.text(`Line total: ${formatInr(lineTotal)}`);
       doc.moveDown(rowGap);
       if (idx < orders.length - 1) doc.moveTo(40, doc.y).lineTo(doc.page.width - 40, doc.y).strokeColor("#cccccc").stroke();
       doc.moveDown(rowGap);
@@ -157,7 +166,9 @@ export function buildCompleteInvoicePdfBuffer(dispatch) {
 
       const dispatchedQty = getDispatchedQty(order, dispatch.orderDispatchDetails);
       const rate = Number(order?.rate || 0);
-      const gross = dispatchedQty * rate;
+      const freight = resolveOrderFreightCharges(order);
+      const plantAmount = dispatchedQty * rate;
+      const gross = plantAmount + freight;
       const returned = Number(order?.returnedPlants ?? 0);
       const damaged = Number(order?.damagedPlants ?? 0);
       const returnedAmount = returned * rate;
@@ -186,6 +197,8 @@ export function buildCompleteInvoicePdfBuffer(dispatch) {
       doc.font("Helvetica").fontSize(9);
       doc.text(`Dispatched plants: ${dispatchedQty}`);
       doc.text(`Rate: ${formatInr(rate)} / plant`);
+      doc.text(`Plant amount: ${formatInr(plantAmount)}`);
+      if (freight > 0) doc.text(`Freight: ${formatInr(freight)}`);
       doc.text(`Gross: ${formatInr(gross)}`);
       doc.text(`Returned: ${returned} plants  (${formatInr(-returnedAmount)})`);
       doc.text(`Damaged: ${damaged} plants  (${formatInr(-damagedAmount)})`);

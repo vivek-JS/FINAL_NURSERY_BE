@@ -1,11 +1,64 @@
 import Farmer from "../models/farmer.model.js";
 import Order from "../models/order.model.js";
+import User from "../models/user.model.js";
 import AppError from "../utility/appError.js";
 import catchAsync from "../utility/catchAsync.js";
 import { getAll, updateOne, deleteOne } from "./factory.controller.js";
 import XLSX from "xlsx";
 import fs from "fs";
 import generateResponse from "../utility/responseFormat.js";
+
+/** Ensure salesPerson is a populated object with name (populate + batch lookup fallback). */
+async function enrichOrdersWithSalesPerson(orders = []) {
+  if (!Array.isArray(orders) || orders.length === 0) return orders;
+
+  const missingIds = [
+    ...new Set(
+      orders
+        .map((o) => {
+          const sp = o?.salesPerson;
+          if (!sp) return null;
+          if (typeof sp === "object" && sp.name) return null;
+          return String(sp._id || sp);
+        })
+        .filter(Boolean)
+    ),
+  ];
+
+  let byId = new Map();
+  if (missingIds.length) {
+    const users = await User.find({ _id: { $in: missingIds } })
+      .select("name phoneNumber jobTitle")
+      .lean();
+    byId = new Map(users.map((u) => [String(u._id), u]));
+  }
+
+  return orders.map((o) => {
+    const sp = o?.salesPerson;
+    if (sp && typeof sp === "object" && sp.name) {
+      return {
+        ...o,
+        salesPersonName: sp.name,
+      };
+    }
+    const id = sp ? String(sp._id || sp) : null;
+    if (!id) return { ...o, salesPersonName: null };
+    const user = byId.get(id);
+    const populated = user
+      ? {
+          _id: user._id,
+          name: user.name,
+          phoneNumber: user.phoneNumber,
+          jobTitle: user.jobTitle,
+        }
+      : { _id: id, name: null };
+    return {
+      ...o,
+      salesPerson: populated,
+      salesPersonName: user?.name || null,
+    };
+  });
+}
 
 const getFarmers = getAll(Farmer, "Farmer");
 const updateFarmer = updateOne(Farmer, "Farmer");
@@ -181,17 +234,29 @@ const getFarmerOrder = catchAsync(async (req, res, next) => {
 
   let farmerOrders;
 
+  const orderListQuery = Order.find({ farmer: farmerId }).sort({
+    orderBookingDate: -1,
+    createdAt: -1,
+  })
+    .populate("plantName", "name")
+    .populate({ path: "salesPerson", select: "name phoneNumber jobTitle" })
+    .populate("dealer", "name phoneNumber");
+
   if (orderId) {
-    farmerOrders = await Order.find({ orderId, farmer: farmerId });
+    farmerOrders = await Order.find({ orderId, farmer: farmerId })
+      .populate("plantName", "name")
+      .populate({ path: "salesPerson", select: "name phoneNumber jobTitle" })
+      .populate("dealer", "name phoneNumber")
+      .lean();
   } else {
-    let q = Order.find({ farmer: farmerId })
-      .sort({ orderBookingDate: -1, createdAt: -1 })
-      .populate("plantName", "name");
+    let q = orderListQuery;
     if (limit != null) {
       q = q.limit(limit);
     }
-    farmerOrders = await q;
+    farmerOrders = await q.lean();
   }
+
+  farmerOrders = await enrichOrdersWithSalesPerson(farmerOrders);
 
   if (!farmerOrders || farmerOrders.length === 0) {
     return next(new AppError("Order not found", 404));

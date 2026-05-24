@@ -22,6 +22,7 @@ const dealerLedgerEntrySchema = new mongoose.Schema(
         "REVERSAL",
         "MANUAL_CREDIT",
         "MANUAL_DEBIT",
+        "COMMISSION_SETTLEMENT",
       ],
       required: true,
     },

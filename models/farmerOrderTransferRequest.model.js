@@ -55,6 +55,18 @@ const farmerOrderTransferRequestSchema = new mongoose.Schema(
     toOrderSnapshot: { type: snapshotSchema, default: () => ({}) },
     postedAt: { type: Date, default: null },
     ledgerTxnId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
+    transferKind: {
+      type: String,
+      enum: ["farmer", "dealer"],
+      default: "farmer",
+      index: true,
+    },
+    dealerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
     postedMetadata: {
       sourcePaymentId: { type: mongoose.Schema.Types.ObjectId, default: null },
       targetPaymentId: { type: mongoose.Schema.Types.ObjectId, default: null },

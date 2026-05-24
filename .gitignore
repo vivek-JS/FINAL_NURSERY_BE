@@ -28,3 +28,6 @@ scripts/whatsapp-chrome-profile/
 
 # Generated dealer reports (local)
 scripts/exports/*.xlsx
+
+# Local database backups (created via API or quick-backup.sh)
+backups/

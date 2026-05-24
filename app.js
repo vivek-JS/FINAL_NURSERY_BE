@@ -302,6 +302,7 @@ import orderRoute from "./routes/order.route.js";
 import {
   handleQRPaymentCallback,
   getFarmerOrdersDashboardTabCounts,
+  getAdminDashboardStats,
 } from "./controllers/order.controller.js";
 import { getFarmerPlantLedger, getFarmerPlantLedgerParties } from "./controllers/farmerPlantOrderLedger.controller.js";
 import { getRamAgriLedgerParties } from "./controllers/ramAgriLedger.controller.js";
@@ -370,6 +371,7 @@ import whatsappStatusWebhookRoute from "./routes/whatsappStatusWebhook.route.js"
 import sowingRoute from "./routes/sowing.route.js";
 import publicFarmerLinkRoute from "./routes/publicFarmerLink.route.js";
 import clearDataRoute from "./routes/clearData.route.js";
+import backupRoute from "./routes/backup.route.js";
 import whatsappBroadcastRoute from "./routes/whatsappBroadcast.route.js";
 import iciciPaymentRoute from "./routes/icici.routes.js";
 import paymentReconciliationRoute from "./routes/payment.routes.js";
@@ -393,6 +395,7 @@ import agriSalesOrderRoute from "./routes/agriSalesOrder.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
 import agriLoadLinkRoute from "./routes/agriLoadLink.route.js";
 import rateChangeRequestRoute from "./routes/rateChangeRequest.route.js";
+import commissionRoute from "./routes/commission.route.js";
 import followupMetricsRoute from "./routes/followupMetrics.route.js";
 import taskRoute from "./routes/task.route.js";
 import plantProductMappingRoute from "./routes/plantProductMapping.route.js";
@@ -457,6 +460,7 @@ server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
 server.use("/api/v1/agri-load-link", agriLoadLinkRoute); // Public one-click agri load link
 server.use("/api/v1/rate-change-requests", authenticateToken, rateChangeRequestRoute); // Rate change approval flow (by-token + approve-via-link are in publicPaths)
+server.use("/api/v1/commission", commissionRoute);
 server.use("/api/v1/call-list", callListPublicRoute); // Public call list (token-based, no auth)
 server.use("/api/v1/voice-feedback", voiceFeedbackRoute); // Post-dispatch Marathi feedback (Exotel webhook public; admin routes JWT)
 server.use("/api/v1/tasks", taskRoute); // Task routes (require authentication)
@@ -494,6 +498,12 @@ server.get(
   "/api/v1/order/dashboard-tab-counts",
   authenticateToken,
   getFarmerOrdersDashboardTabCounts
+);
+// Admin stats dashboard — bound on app for reliability.
+server.get(
+  "/api/v1/order/admin-dashboard-stats",
+  authenticateToken,
+  getAdminDashboardStats
 );
 server.use("/api/v1/order", authenticateToken, orderRoute);
 // Direct bindings for reliability in environments with stale router mounts.
@@ -618,6 +628,7 @@ server.use("/api/v1/state", authenticateToken, stateRoute);
 server.use("/api/v1/notifications", notificationRoute); // Notification routes (has built-in auth)
 server.use("/api/v1/sowing", authenticateToken, sowingRoute); // Sowing management routes
 server.use("/api/v1/clear-data", authenticateToken, clearDataRoute); // Data clearing routes
+server.use("/api/v1/backup", authenticateToken, backupRoute); // Local database backup (SUPER_ADMIN)
 
 // Inventory Management Routes (all require authentication)
 // IMPORTANT: Mount /api/v1/inventory/products BEFORE /api/v1/inventory so list/detail/PUT/DELETE

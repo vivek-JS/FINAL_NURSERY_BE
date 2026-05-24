@@ -38,6 +38,11 @@ import {
   DISPATCH_MANAGER_ALLOWED_STATUSES,
   resolveUserForOrderUpdatePermissions,
 } from "../utils/orderUpdatePermissions.js";
+
+const CANCEL_LIKE_ORDER_STATUSES = new Set(["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"]);
+function isCancelLikeOrderStatus(status) {
+  return CANCEL_LIKE_ORDER_STATUSES.has(String(status || "").toUpperCase());
+}
 import { createRateChangeRequest } from "./rateChangeRequest.controller.js";
 
 const DISPATCH_DAY_KEY_TO_OFFSET = {
@@ -1593,7 +1598,7 @@ const updateOne = (Model, modelName, allowedFields) =>
               if (newStatus === 'ACCEPTED' || newStatus === 'CONFIRMED') {
                 await sendOrderAcceptedNotification(userToNotify.expoPushToken, orderId, orderDetails);
                 console.log(`✅ Order accepted notification sent for Order #${orderId}`);
-              } else if (newStatus === 'REJECTED' || newStatus === 'CANCELLED') {
+              } else if (isCancelLikeOrderStatus(newStatus)) {
                 const reason = filteredBody.statusChangeReason || statusChange.reason || '';
                 await sendOrderRejectedNotification(userToNotify.expoPushToken, orderId, reason);
                 console.log(`❌ Order rejected notification sent for Order #${orderId}`);
@@ -2068,11 +2073,15 @@ const updateOne = (Model, modelName, allowedFields) =>
       // Handle quota restoration for dealer orders when rejected or cancelled
       if (
         existingDoc.dealerOrder &&
-        (filteredBody.orderStatus === "REJECTED" || filteredBody.orderStatus === "CANCELLED") &&
+        isCancelLikeOrderStatus(filteredBody.orderStatus) &&
         !existingDoc.quotaRestored
       ) {
         try {
-          const reason = filteredBody.orderStatus === "CANCELLED" ? "cancelled" : "rejected";
+          const reason = filteredBody.orderStatus === "CANCELLED"
+            ? "cancelled"
+            : filteredBody.orderStatus === "TEMPORARY_CANCELLED"
+              ? "temporarily cancelled"
+              : "rejected";
           const quotaRestoration = await restoreDealerQuota(existingDoc._id, session, req.user?._id, reason);
           if (quotaRestoration.success) {
             console.log(`✅ Quota restored for order ${existingDoc._id}: ${quotaRestoration.message}`);
@@ -2089,9 +2098,8 @@ const updateOne = (Model, modelName, allowedFields) =>
       if (
         !existingDoc.dealerOrder &&
         filteredBody.orderStatus && 
-        (filteredBody.orderStatus === "REJECTED" || filteredBody.orderStatus === "CANCELLED") &&
-        existingDoc.orderStatus !== "REJECTED" &&
-        existingDoc.orderStatus !== "CANCELLED"
+        isCancelLikeOrderStatus(filteredBody.orderStatus) &&
+        !isCancelLikeOrderStatus(existingDoc.orderStatus)
       ) {
         // Fetch slot to check if sowing is allowed
         const cancelSlot = await PlantSlot.findOne(
@@ -2130,8 +2138,8 @@ const updateOne = (Model, modelName, allowedFields) =>
       }
 
       // Re-deduct slot when order status changes from CANCELLED/REJECTED back to PENDING (or any non-cancelled status)
-      const wasCancelledOrRejected = existingDoc.orderStatus === "REJECTED" || existingDoc.orderStatus === "CANCELLED";
-      const isNowActive = filteredBody.orderStatus && filteredBody.orderStatus !== "REJECTED" && filteredBody.orderStatus !== "CANCELLED";
+      const wasCancelledOrRejected = isCancelLikeOrderStatus(existingDoc.orderStatus);
+      const isNowActive = filteredBody.orderStatus && !isCancelLikeOrderStatus(filteredBody.orderStatus);
       if (wasCancelledOrRejected && isNowActive) {
         try {
           await updateSlot(
@@ -2294,11 +2302,15 @@ const updateOne = (Model, modelName, allowedFields) =>
             }
           }
           // When changing TO CANCELLED/REJECTED: farmer quota → release booked (INVENTORY_RELEASE). Dealer bulk → remove allocation (quantity -= n, INVENTORY_ADD negative).
-          if (filteredBody.orderStatus === "CANCELLED" || filteredBody.orderStatus === "REJECTED") {
+          if (isCancelLikeOrderStatus(filteredBody.orderStatus)) {
             const n = existingDoc.numberOfPlants;
             let balanceBefore = 0;
             let balanceAfter = 0;
-            const actionLabel = filteredBody.orderStatus === "CANCELLED" ? "cancelled" : "rejected";
+            const actionLabel = filteredBody.orderStatus === "CANCELLED"
+              ? "cancelled"
+              : filteredBody.orderStatus === "TEMPORARY_CANCELLED"
+                ? "temporarily cancelled"
+                : "rejected";
             const orderIdDisplay = existingDoc.orderId ?? existingDoc._id?.toString?.() ?? "";
             const farmerName = existingDoc.farmer?.name ?? (existingDoc.dealerOrder ? "Dealer order" : "—");
             const plantNameDisplay = existingDoc.plantName?.name ?? "Plant";
@@ -2405,8 +2417,7 @@ const updateOne = (Model, modelName, allowedFields) =>
             !existingDoc.dealerOrder &&
             existingDoc.orderStatus === "ACCEPTED" &&
             filteredBody.orderStatus !== "ACCEPTED" &&
-            filteredBody.orderStatus !== "CANCELLED" &&
-            filteredBody.orderStatus !== "REJECTED"
+            !isCancelLikeOrderStatus(filteredBody.orderStatus)
           ) {
             if (entryIdx !== -1) {
               dealerWallet.entries[entryIdx].quantity -= existingDoc.numberOfPlants;
@@ -2520,7 +2531,7 @@ const updateOne = (Model, modelName, allowedFields) =>
         const prevStatus = existingDoc?.orderStatus;
         const nextStatus = updatedDoc?.orderStatus;
         const statusChanged = prevStatus && nextStatus && prevStatus !== nextStatus;
-        const isRejectOrCancel = nextStatus === "REJECTED" || nextStatus === "CANCELLED";
+        const isRejectOrCancel = isCancelLikeOrderStatus(nextStatus);
         if (statusChanged && isRejectOrCancel) {
           try {
             const { customerMobile } = await resolveFarmerIdentity(updatedDoc);

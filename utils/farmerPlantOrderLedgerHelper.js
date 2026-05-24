@@ -890,7 +890,9 @@ export async function archiveFarmerPlantOrderBeforeDelete(doc, deletedBy) {
 export async function computeOrderPaymentTotals(order) {
   const totalOrderedPlants =
     (order.numberOfPlants || 0) + (order.additionalPlants || 0);
-  const orderTotal = Math.round((order.rate || 0) * totalOrderedPlants * 100) / 100;
+  const freight = Math.max(0, Number(order.freightCharges) || 0);
+  const orderTotal =
+    Math.round(((order.rate || 0) * totalOrderedPlants + freight) * 100) / 100;
   const totalCollected = (order.payment || [])
     .filter((p) => p.paymentStatus === "COLLECTED")
     .reduce((sum, p) => sum + (Number(p.paidAmount) || 0), 0);

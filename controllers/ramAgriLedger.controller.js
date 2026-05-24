@@ -2,7 +2,11 @@ import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
 import AppError from "../utility/appError.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
-import AgriSalesOrder from "../models/agriSalesOrder.model.js";
+import AgriSalesOrder, {
+  getAgriOrderLines,
+  getPerLineReturnQuantities,
+  ramAgriLineMatchesVariety,
+} from "../models/agriSalesOrder.model.js";
 import GRN from "../models/grn.model.js";
 import mongoose from "mongoose";
 import RamAgriCustomerLedgerEntry from "../models/ramAgriCustomerLedger.model.js";
@@ -100,19 +104,38 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
     .sort({ grnDate: -1 })
     .lean();
 
+  const cropOid = new mongoose.Types.ObjectId(cropId);
+  const varietyOid = new mongoose.Types.ObjectId(varietyId);
+
+  const varietyOrderMatch = {
+    $or: [
+      {
+        isRamAgriProduct: true,
+        ramAgriCropId: cropOid,
+        ramAgriVarietyId: varietyOid,
+      },
+      {
+        lineItems: {
+          $elemMatch: {
+            isRamAgriProduct: true,
+            ramAgriCropId: cropOid,
+            ramAgriVarietyId: varietyOid,
+          },
+        },
+      },
+    ],
+  };
+
   // Get all dispatched sales orders (DEBIT) - ONLY track manager dispatches (stockDeducted = true)
-  // Sales person dispatches don't impact warehouse stock, so they shouldn't appear in variety ledger
   const dispatchDateFilter = {};
   if (Object.keys(dateFilter).length > 0) {
     dispatchDateFilter.dispatchedAt = dateFilter;
   }
   
   const salesOrders = await AgriSalesOrder.find({
-    isRamAgriProduct: true,
-    ramAgriCropId: new mongoose.Types.ObjectId(cropId),
-    ramAgriVarietyId: new mongoose.Types.ObjectId(varietyId),
+    ...varietyOrderMatch,
     dispatchStatus: { $in: ["DISPATCHED", "IN_TRANSIT", "DELIVERED"] },
-    stockDeducted: true, // ONLY manager dispatches (stock deducted = true)
+    stockDeducted: true,
     ...dispatchDateFilter,
   })
     .sort({ dispatchedAt: -1 })
@@ -150,38 +173,42 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
     }
   });
 
-  // Add Sales Orders (DEBIT) - Only manager dispatches (stockDeducted = true)
-  // All orders in salesOrders array already have stockDeducted = true
-  salesOrders.forEach(order => {
+  // Add Sales Orders (DEBIT) - per matching line item
+  salesOrders.forEach((order) => {
     const dispatchDate = order.dispatchedAt || order.stockDeductedAt || order.orderDate || order.createdAt;
-    const dispatchMode = order.dispatchMode || "UNKNOWN";
-    
-    ledgerEntries.push({
-      date: dispatchDate,
-      type: 'DEBIT',
-      category: 'Sale (Manager Dispatch)',
-      reference: order.orderNumber || order._id.toString(),
-      description: `Sale to ${order.customerName || 'Customer'}`,
-      quantity: order.quantity || 0,
-      unit: order.primaryUnit || null,
-      rate: order.rate || 0,
-      amount: order.totalAmount || 0,
-      balance: 0,
-      details: {
-        orderId: order._id,
-        customerName: order.customerName,
-        customerMobile: order.customerMobile,
-        paymentStatus: order.paymentStatus,
-        orderStatus: order.orderStatus,
-        dispatchStatus: order.dispatchStatus,
-        dispatchedAt: order.dispatchedAt,
-        stockDeducted: true, // Always true for variety ledger entries
-        stockDeductedAt: order.stockDeductedAt,
-        dispatchMode: dispatchMode,
-        vehicleNumber: order.vehicleNumber,
-        driverName: order.driverName,
-        driverMobile: order.driverMobile,
-      },
+    const lines = getAgriOrderLines(order);
+    lines.forEach((line, lineIdx) => {
+      if (!ramAgriLineMatchesVariety(line, cropId, varietyId)) return;
+      const qty = Number(line.quantity) || 0;
+      const rate = Number(line.rate) || 0;
+      if (qty <= 0) return;
+      ledgerEntries.push({
+        date: dispatchDate,
+        type: "DEBIT",
+        category: "Sale (Manager Dispatch)",
+        reference: order.orderNumber || order._id.toString(),
+        description: `Sale to ${order.customerName || "Customer"}${lines.length > 1 ? ` (line ${lineIdx + 1})` : ""}`,
+        quantity: qty,
+        unit: order.primaryUnit || line.unit || null,
+        rate,
+        amount: qty * rate,
+        balance: 0,
+        details: {
+          orderId: order._id,
+          lineIndex: lineIdx,
+          customerName: order.customerName,
+          customerMobile: order.customerMobile,
+          paymentStatus: order.paymentStatus,
+          orderStatus: order.orderStatus,
+          dispatchStatus: order.dispatchStatus,
+          dispatchedAt: order.dispatchedAt,
+          stockDeducted: true,
+          stockDeductedAt: order.stockDeductedAt,
+          dispatchMode: order.dispatchMode || "UNKNOWN",
+          ramAgriCropName: line.ramAgriCropName,
+          ramAgriVarietyName: line.ramAgriVarietyName,
+        },
+      });
     });
   });
 
@@ -198,47 +225,52 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
   }
   
   const ordersWithReturns = await AgriSalesOrder.find({
-    isRamAgriProduct: true,
-    ramAgriCropId: new mongoose.Types.ObjectId(cropId),
-    ramAgriVarietyId: new mongoose.Types.ObjectId(varietyId),
-    returnQuantity: { $gt: 0 }, // Has returns
-    orderStatus: "COMPLETED", // Only completed orders can have returns
-    stockReturned: true, // ONLY manager-dispatched orders (stock was returned to warehouse)
+    ...varietyOrderMatch,
+    returnQuantity: { $gt: 0 },
+    orderStatus: "COMPLETED",
+    stockReturned: true,
   })
     .sort({ stockReturnedAt: -1, completedAt: -1 })
     .lean();
   
-  ordersWithReturns.forEach(order => {
+  ordersWithReturns.forEach((order) => {
     const returnDate = order.stockReturnedAt || order.completedAt || order.updatedAt || order.createdAt;
-    if (
-      order.returnQuantity &&
-      order.returnQuantity > 0 &&
-      isWithinDateFilter(returnDate)
-    ) {
+    if (!isWithinDateFilter(returnDate)) return;
+
+    const lines = getAgriOrderLines(order);
+    const perLineReturns = getPerLineReturnQuantities(order);
+
+    lines.forEach((line, lineIdx) => {
+      if (!ramAgriLineMatchesVariety(line, cropId, varietyId)) return;
+      const rq = Number(perLineReturns[lineIdx]) || 0;
+      if (rq <= 0) return;
+      const rate = Number(line.rate) || 0;
       ledgerEntries.push({
         date: returnDate,
-        type: 'CREDIT',
-        category: 'Sales Return (Stock Added)',
+        type: "CREDIT",
+        category: "Sales Return (Stock Added)",
         reference: order.orderNumber || order._id.toString(),
-        description: `Return from ${order.customerName || 'Customer'}${order.returnReason ? ` - ${order.returnReason}` : ''}`,
-        quantity: order.returnQuantity || 0,
-        unit: order.primaryUnit || null,
-        rate: order.rate || 0,
-        amount: (order.returnQuantity || 0) * (order.rate || 0),
+        description: `Return from ${order.customerName || "Customer"}${order.returnReason ? ` - ${order.returnReason}` : ""}${lines.length > 1 ? ` (line ${lineIdx + 1})` : ""}`,
+        quantity: rq,
+        unit: order.primaryUnit || line.unit || null,
+        rate,
+        amount: rq * rate,
         balance: 0,
         details: {
           orderId: order._id,
-          returnQuantity: order.returnQuantity,
+          lineIndex: lineIdx,
+          returnQuantity: rq,
+          orderReturnQuantity: order.returnQuantity,
           deliveredQuantity: order.deliveredQuantity,
-          originalQuantity: order.quantity,
+          originalQuantity: line.quantity,
           returnReason: order.returnReason,
           returnNotes: order.returnNotes,
-          stockReturned: true, // Always true for variety ledger entries
+          stockReturned: true,
           stockReturnedAt: order.stockReturnedAt,
           completedAt: order.completedAt,
         },
       });
-    }
+    });
   });
 
   // Sort by date
@@ -329,8 +361,16 @@ export const getCustomerLedger = catchAsync(async (req, res, next) => {
     .lean();
 
   const orders = await AgriSalesOrder.find({
-    isRamAgriProduct: true,
-    ...customerFilter,
+    $and: [
+      customerFilter,
+      {
+        $or: [
+          { isRamAgriProduct: true },
+          { "lineItems.isRamAgriProduct": true },
+          { "lineItems.ramAgriCropId": { $exists: true, $ne: null } },
+        ],
+      },
+    ],
   }).lean();
 
   if (orders.length === 0 && allEntries.length === 0) {

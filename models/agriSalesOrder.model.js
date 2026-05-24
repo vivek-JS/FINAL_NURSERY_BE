@@ -217,6 +217,9 @@ const agriLineItemSchema = new Schema(
     },
     rate: { type: Number, required: true, min: 0 },
     lineTotal: { type: Number, min: 0 },
+    /** Set on order completion when returns are split across lines. */
+    returnQuantity: { type: Number, default: 0, min: 0 },
+    deliveredQuantity: { type: Number, min: 0 },
   },
   { _id: true }
 );
@@ -285,6 +288,57 @@ export function rollupAgriLineItemsToRoot(doc) {
     doc.ramAgriCropId = null;
     doc.ramAgriVarietyId = null;
   }
+}
+
+/** Proportional split of total return units across order lines (integer parts). */
+export function distributeReturnQtyAcrossLines(lines, returnQty) {
+  const n = lines.length;
+  if (!n || returnQty <= 0) return new Array(n).fill(0);
+  const qtys = lines.map((l) => Number(l.quantity) || 0);
+  const total = qtys.reduce((a, b) => a + b, 0);
+  if (total <= 0) return new Array(n).fill(0);
+  const out = qtys.map((q) => Math.floor((returnQty * q) / total));
+  let diff = returnQty - out.reduce((a, b) => a + b, 0);
+  for (let i = n - 1; i >= 0 && diff > 0; i--) {
+    const canAdd = Math.min(diff, qtys[i] - out[i]);
+    out[i] += canAdd;
+    diff -= canAdd;
+  }
+  return out;
+}
+
+export function ramAgriLineMatchesVariety(line, cropId, varietyId) {
+  if (!line?.isRamAgriProduct && !line?.ramAgriCropId) return false;
+  const crop = String(line.ramAgriCropId || "");
+  const variety = String(line.ramAgriVarietyId || "");
+  return crop === String(cropId) && variety === String(varietyId);
+}
+
+/** Per-line return qty map (uses stored line.returnQuantity when present). */
+export function getPerLineReturnQuantities(orderLike, totalReturnQty = null) {
+  const lines = getAgriOrderLines(orderLike);
+  const total =
+    totalReturnQty != null
+      ? Number(totalReturnQty) || 0
+      : Number(orderLike?.returnQuantity) || 0;
+  const hasStored = lines.some((l) => Number(l.returnQuantity) > 0);
+  if (hasStored) {
+    return lines.map((l) => Number(l.returnQuantity) || 0);
+  }
+  return distributeReturnQtyAcrossLines(lines, total);
+}
+
+/** Rupee credit for returned qty (respects per-line rates). */
+export function computeAgriReturnCreditAmount(orderLike, returnQty = null) {
+  const lines = getAgriOrderLines(orderLike);
+  const rq =
+    returnQty != null ? Number(returnQty) || 0 : Number(orderLike?.returnQuantity) || 0;
+  const perLine = getPerLineReturnQuantities(orderLike, rq);
+  let total = 0;
+  for (let i = 0; i < lines.length; i++) {
+    total += (perLine[i] || 0) * (Number(lines[i].rate) || 0);
+  }
+  return total;
 }
 
 /** Normalize one logical line for stock / ledger (legacy docs have a single implicit line). */

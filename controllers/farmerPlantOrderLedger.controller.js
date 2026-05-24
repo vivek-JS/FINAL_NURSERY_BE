@@ -531,7 +531,35 @@ function getUserRole(req) {
 
 function canCreateTransferRequest(req) {
   const role = getUserRole(req);
-  return ["SALES", "ACCOUNTANT", "SUPER_ADMIN", "ADMIN"].includes(role);
+  return ["SALES", "DEALER", "ACCOUNTANT", "SUPER_ADMIN", "ADMIN"].includes(role);
+}
+
+function resolveDealerIdForOrder(order) {
+  if (!order) return null;
+  if (order.dealer) return String(order.dealer._id || order.dealer);
+  const sp = order.salesPerson;
+  if (sp && String(sp.jobTitle || "").toUpperCase() === "DEALER") {
+    return String(sp._id || sp);
+  }
+  return null;
+}
+
+function isDealerOrderTransferPair(fromOrder, toOrder) {
+  return Boolean(fromOrder?.dealerOrder && toOrder?.dealerOrder);
+}
+
+function recomputeOrderPaymentCompletion(order) {
+  const plants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
+  const freight = Math.max(0, Number(order.freightCharges) || 0);
+  const total = roundMoney((order.rate || 0) * plants + freight);
+  const collected = roundMoney(
+    (order.payment || []).reduce((sum, p) => {
+      if (p?.paymentStatus === "COLLECTED") return sum + (Number(p.paidAmount) || 0);
+      return sum;
+    }, 0)
+  );
+  order.orderPaymentStatus = collected >= total ? "COMPLETED" : "PENDING";
+  order.paymentCompleted = collected >= total;
 }
 
 function getOrderTransferableAmount(order) {
@@ -882,11 +910,25 @@ export const createFarmerOrderTransferRequest = catchAsync(async (req, res, next
   if (!fromOrder || !toOrder) {
     return next(new AppError("Source or target order not found", 404));
   }
-  if (fromOrder.dealerOrder || toOrder.dealerOrder) {
-    return next(new AppError("Only farmer orders are supported in this flow", 400));
-  }
-  if (!shouldLogFarmerPlantLedger(fromOrder) || !shouldLogFarmerPlantLedger(toOrder)) {
-    return next(new AppError("Both orders must be farmer-linked orders", 400));
+
+  const dealerPair = isDealerOrderTransferPair(fromOrder, toOrder);
+  if (dealerPair) {
+    const fromDealer = resolveDealerIdForOrder(fromOrder);
+    const toDealer = resolveDealerIdForOrder(toOrder);
+    if (!fromDealer || !toDealer || fromDealer !== toDealer) {
+      return next(new AppError("Both dealer orders must belong to the same dealer", 400));
+    }
+    const reqDealer = req.user?.jobTitle === "DEALER" ? String(req.user._id) : null;
+    if (reqDealer && reqDealer !== fromDealer) {
+      return next(new AppError("You can only transfer between your own dealer orders", 403));
+    }
+  } else {
+    if (fromOrder.dealerOrder || toOrder.dealerOrder) {
+      return next(new AppError("Cannot mix dealer and farmer orders in one transfer", 400));
+    }
+    if (!shouldLogFarmerPlantLedger(fromOrder) || !shouldLogFarmerPlantLedger(toOrder)) {
+      return next(new AppError("Both orders must be farmer-linked orders", 400));
+    }
   }
   if (String(fromOrder.orderStatus || "").toUpperCase() !== "ACCEPTED") {
     return next(new AppError("Source order must be ACCEPTED", 400));
@@ -920,6 +962,12 @@ export const createFarmerOrderTransferRequest = catchAsync(async (req, res, next
     );
   }
 
+  const sourceNumericId = fromOrder.orderId ?? "";
+  const targetNumericId = toOrder.orderId ?? "";
+  const pendingRemark =
+    `[Transfer request pending from order #${sourceNumericId} → order #${targetNumericId}]` +
+    (trimmedNote ? ` ${trimmedNote}` : "");
+
   const requestDoc = await FarmerOrderTransferRequest.create({
     fromOrderId: fromOrder._id,
     toOrderId: toOrder._id,
@@ -927,6 +975,8 @@ export const createFarmerOrderTransferRequest = catchAsync(async (req, res, next
     note: trimmedNote,
     requestedBy: req.user?._id,
     requestedAt: new Date(),
+    transferKind: dealerPair ? "dealer" : "farmer",
+    dealerId: dealerPair ? resolveDealerIdForOrder(fromOrder) : null,
     fromOrderSnapshot: {
       orderNumber: Number(fromOrder.orderId) || null,
       farmerId: fromOrder.farmer?._id || fromOrder.farmer || null,
@@ -941,12 +991,33 @@ export const createFarmerOrderTransferRequest = catchAsync(async (req, res, next
     },
   });
 
+  const targetPaymentPayload = {
+    paidAmount: amount,
+    paymentStatus: "PENDING",
+    paymentDate: new Date(),
+    modeOfPayment: "Transfer",
+    bankVerificationStatus: "NOT_REQUIRED",
+    remark: pendingRemark,
+    isWalletPayment: false,
+    transferredFromOrderId: fromOrder._id,
+    transferRequestId: requestDoc._id,
+  };
+  toOrder.payment.push(targetPaymentPayload);
+  await toOrder.save();
+  const targetPendingPayment = toOrder.payment[toOrder.payment.length - 1];
+  requestDoc.postedMetadata = {
+    ...(requestDoc.postedMetadata || {}),
+    targetPaymentId: targetPendingPayment?._id || null,
+  };
+  await requestDoc.save();
+
   return res.status(201).json(
     generateResponse(
       "Success",
       "Transfer request created and pending approval",
       {
         request: requestDoc,
+        targetPendingPaymentId: targetPendingPayment?._id || null,
         availableAfterRequest: roundMoney(availableNow - amount),
       },
       undefined
@@ -1077,14 +1148,60 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
     const sourceNumericId = sourceOrder.orderId ?? "";
     const targetNumericId = targetOrder.orderId ?? "";
     const transferMsg = String(requestDoc.note || "").trim();
+    const dealerPair = isDealerOrderTransferPair(sourceOrder, targetOrder);
 
-    await ensureFarmerPlantOrderDebit(sourceOrder, { userId: performedBy, session });
-    await ensureFarmerPlantOrderDebit(targetOrder, { userId: performedBy, session });
+    let sourceReversal = null;
+    let targetCredit = null;
+    let newPayment = null;
 
-    const sourceParty = await resolveFarmerIdentity(sourceOrder);
-    const targetParty = await resolveFarmerIdentity(targetOrder);
+    const existingTargetPayment = findPaymentSubdocument(
+      targetOrder,
+      requestDoc.postedMetadata?.targetPaymentId
+    ) ||
+      (targetOrder.payment || []).find(
+        (p) =>
+          p &&
+          p.transferRequestId &&
+          String(p.transferRequestId) === String(requestDoc._id) &&
+          p.paymentStatus === "PENDING"
+      );
 
-    const sourceReversal = await createFarmerPlantLedgerEntry({
+    if (dealerPair) {
+      if (existingTargetPayment) {
+        existingTargetPayment.paidAmount = amount;
+        existingTargetPayment.paymentStatus = "COLLECTED";
+        existingTargetPayment.paymentDate = new Date();
+        existingTargetPayment.modeOfPayment = mode;
+        existingTargetPayment.remark = `[Transfer request #${requestDoc._id} approved from dealer order #${sourceNumericId}]`;
+        existingTargetPayment.isWalletPayment = false;
+        existingTargetPayment.transferredFromOrderId = new mongoose.Types.ObjectId(sourceOrder._id);
+        newPayment = existingTargetPayment;
+      } else {
+        const targetPaymentPayload = {
+          paidAmount: amount,
+          paymentStatus: "COLLECTED",
+          paymentDate: new Date(),
+          modeOfPayment: mode,
+          remark: `[Transfer request #${requestDoc._id} approved from dealer order #${sourceNumericId}]`,
+          isWalletPayment: false,
+          transferredFromOrderId: new mongoose.Types.ObjectId(sourceOrder._id),
+          transferRequestId: requestDoc._id,
+        };
+        targetOrder.payment.push(targetPaymentPayload);
+        newPayment = targetOrder.payment[targetOrder.payment.length - 1];
+      }
+      recomputeOrderPaymentCompletion(sourceOrder);
+      recomputeOrderPaymentCompletion(targetOrder);
+      await sourceOrder.save({ session });
+      await targetOrder.save({ session });
+    } else {
+      await ensureFarmerPlantOrderDebit(sourceOrder, { userId: performedBy, session });
+      await ensureFarmerPlantOrderDebit(targetOrder, { userId: performedBy, session });
+
+      const sourceParty = await resolveFarmerIdentity(sourceOrder);
+      const targetParty = await resolveFarmerIdentity(targetOrder);
+
+      sourceReversal = await createFarmerPlantLedgerEntry({
       customerMobile: sourceParty.customerMobile,
       customerName: sourceParty.customerName,
       farmerId: sourceParty.farmerId,
@@ -1109,43 +1226,56 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
       session,
     });
 
-    const targetPaymentPayload = {
-      paidAmount: amount,
-      paymentStatus: "PENDING",
-      paymentDate: new Date(),
-      modeOfPayment: mode,
-      remark: `[Transfer request #${requestDoc._id} approved from order #${sourceNumericId}]`,
-      isWalletPayment: false,
-      transferredFromOrderId: new mongoose.Types.ObjectId(sourceOrder._id),
-    };
-    targetOrder.payment.push(targetPaymentPayload);
-    await targetOrder.save({ session });
-    const newPayment = targetOrder.payment[targetOrder.payment.length - 1];
-    const previousStatus = newPayment.paymentStatus;
-    newPayment.paymentStatus = "COLLECTED";
-    await targetOrder.save({ session });
-
-    const targetCredit = await recordFarmerPlantLedgerPaymentTransition(
-      targetOrder,
-      newPayment,
-      previousStatus,
-      "COLLECTED",
-      {
-        userId: performedBy,
-        session,
-        descriptionOverride:
-          `Transfer approved (in): order #${targetNumericId} <- order #${sourceNumericId}. ` +
-          `₹${amount.toLocaleString("en-IN")}.${transferMsg ? ` Note: ${transferMsg}` : ""}`,
-        metadataExtra: {
-          kind: "order_payment_transfer_request",
-          transferRequestId: String(requestDoc._id),
-          direction: "in",
-          peerOrderMongoId: String(sourceOrder._id),
-          peerOrderNumber: sourceNumericId,
-          ledgerTxnId: transferLedgerTxnId,
-        },
+      if (existingTargetPayment) {
+        existingTargetPayment.paidAmount = amount;
+        existingTargetPayment.paymentDate = new Date();
+        existingTargetPayment.modeOfPayment = mode;
+        existingTargetPayment.remark = `[Transfer request #${requestDoc._id} approved from order #${sourceNumericId}]`;
+        existingTargetPayment.isWalletPayment = false;
+        existingTargetPayment.transferredFromOrderId = new mongoose.Types.ObjectId(sourceOrder._id);
+        existingTargetPayment.transferRequestId = requestDoc._id;
+        newPayment = existingTargetPayment;
+      } else {
+        const targetPaymentPayload = {
+          paidAmount: amount,
+          paymentStatus: "PENDING",
+          paymentDate: new Date(),
+          modeOfPayment: mode,
+          remark: `[Transfer request #${requestDoc._id} approved from order #${sourceNumericId}]`,
+          isWalletPayment: false,
+          transferredFromOrderId: new mongoose.Types.ObjectId(sourceOrder._id),
+          transferRequestId: requestDoc._id,
+        };
+        targetOrder.payment.push(targetPaymentPayload);
+        newPayment = targetOrder.payment[targetOrder.payment.length - 1];
       }
-    );
+      await targetOrder.save({ session });
+      const previousStatus = newPayment.paymentStatus;
+      newPayment.paymentStatus = "COLLECTED";
+      await targetOrder.save({ session });
+
+      targetCredit = await recordFarmerPlantLedgerPaymentTransition(
+        targetOrder,
+        newPayment,
+        previousStatus,
+        "COLLECTED",
+        {
+          userId: performedBy,
+          session,
+          descriptionOverride:
+            `Transfer approved (in): order #${targetNumericId} <- order #${sourceNumericId}. ` +
+            `₹${amount.toLocaleString("en-IN")}.${transferMsg ? ` Note: ${transferMsg}` : ""}`,
+          metadataExtra: {
+            kind: "order_payment_transfer_request",
+            transferRequestId: String(requestDoc._id),
+            direction: "in",
+            peerOrderMongoId: String(sourceOrder._id),
+            peerOrderNumber: sourceNumericId,
+            ledgerTxnId: transferLedgerTxnId,
+          },
+        }
+      );
+    }
 
     if (!Array.isArray(sourceOrder.orderEditHistory)) sourceOrder.orderEditHistory = [];
     sourceOrder.orderEditHistory.push({
@@ -1238,6 +1368,28 @@ export const rejectFarmerOrderTransferRequest = catchAsync(async (req, res, next
   if (requestDoc.status !== "PENDING") {
     return next(new AppError("Only PENDING requests can be rejected", 409));
   }
+
+  const targetOrder = await Order.findById(requestDoc.toOrderId);
+  if (targetOrder) {
+    const pendingPayment =
+      findPaymentSubdocument(targetOrder, requestDoc.postedMetadata?.targetPaymentId) ||
+      (targetOrder.payment || []).find(
+        (p) =>
+          p &&
+          p.transferRequestId &&
+          String(p.transferRequestId) === String(requestDoc._id) &&
+          p.paymentStatus === "PENDING"
+      );
+    if (pendingPayment) {
+      pendingPayment.paymentStatus = "REJECTED";
+      const rejectNote = `[Transfer request #${requestDoc._id} rejected]`;
+      pendingPayment.remark = reason
+        ? `${rejectNote} ${reason}`
+        : rejectNote;
+      await targetOrder.save();
+    }
+  }
+
   requestDoc.status = "REJECTED";
   requestDoc.approval = {
     ...(requestDoc.approval || {}),

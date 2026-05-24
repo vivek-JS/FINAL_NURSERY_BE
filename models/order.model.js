@@ -256,6 +256,8 @@ const paymentSchema = new Schema(
     /** Set when this payment row was created by transferFarmerPlantOrderPayment (audit / UI). */
     transferredFromOrderId: { type: Schema.Types.ObjectId, ref: "Order", default: null },
     transferredFromPaymentId: { type: Schema.Types.ObjectId, default: null },
+    /** Links a PENDING payment row to FarmerOrderTransferRequest (approval via payment dashboard). */
+    transferRequestId: { type: Schema.Types.ObjectId, ref: "FarmerOrderTransferRequest", default: null },
   },
   { timestamps: true }
 );
@@ -450,6 +452,12 @@ const orderSchema = new Schema(
     rate: {
       type: Number,
       required: true,
+    },
+    /** Per-order freight / transport charges added at delivery complete (₹). */
+    freightCharges: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     orderPaymentStatus: {
       type: String,
