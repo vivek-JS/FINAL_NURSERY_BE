@@ -8,7 +8,9 @@ import generateResponse from "../utility/responseFormat.js";
 import catchAsync from "../utility/catchAsync.js";
 import {
   buildDealerCommissionAnalysis,
+  buildCommissionImpactOrders,
   computeUnsettledCommission,
+  summarizeCommissionImpactOrders,
   syncCommissionRatesFromPlants,
   bulkDefaultCommissionRates,
 } from "../services/dealerCommission.service.js";
@@ -123,6 +125,40 @@ export const getDealerCommissionAnalysis = catchAsync(async (req, res) => {
 
   return res.status(200).json(
     generateResponse("success", "Dealer commission analysis fetched", payload, null)
+  );
+});
+
+export const getDealerNegativeCommissionOrders = catchAsync(async (req, res) => {
+  const { dealerId } = req.params;
+  const check = await ensureDealer(dealerId);
+  if (check.error) {
+    return res.status(check.error === "Invalid dealer id" ? 400 : 404).json(
+      generateResponse("error", check.error, null, null)
+    );
+  }
+
+  const { startDate, endDate, sortBy, sortOrder, impact = "negative" } = req.query;
+  const impactMode = impact === "positive" ? "positive" : "negative";
+  const defaultSort = impactMode === "positive" ? "actualCommission" : "paymentPending";
+  const analysis = await buildDealerCommissionAnalysis(dealerId, { startDate, endDate });
+  const orders = buildCommissionImpactOrders(analysis.orders, {
+    impact: impactMode,
+    sortBy: sortBy || defaultSort,
+    sortOrder,
+  });
+  const summary = summarizeCommissionImpactOrders(orders, impactMode);
+
+  return res.status(200).json(
+    generateResponse("success", "Commission impact orders fetched", {
+      orders,
+      summary,
+      impact: impactMode,
+      sortBy: sortBy || defaultSort,
+      sortOrder: sortOrder === "asc" ? "asc" : "desc",
+      period: analysis.period,
+      negativeActualSummary: analysis.negativeActualSummary,
+      positiveActualSummary: analysis.positiveActualSummary,
+    }, null)
   );
 });
 

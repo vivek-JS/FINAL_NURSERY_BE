@@ -3192,6 +3192,8 @@ const getAll = (Model, modelName) =>
       "orderStatus",
       "farmReadyEnteredAt",
       "readyForDispatchEnteredAt",
+      "dispatchTargetDate",
+      "dispatchTargetDateSort",
     ]);
     const sortKey = ORDER_LIST_SORT_FIELDS.has(String(sortKeyRaw))
       ? String(sortKeyRaw)
@@ -3210,6 +3212,10 @@ const getAll = (Model, modelName) =>
     const sortByDeliveryOnReadyTab =
       ready_for_dispatch === "true" &&
       String(req.query.sortByDelivery ?? "").toLowerCase() === "true";
+    const sortByReadyEnteredOnReadyTab =
+      ready_for_dispatch === "true" &&
+      (String(req.query.sortByReadyEntered ?? "").toLowerCase() === "true" ||
+        sortKey === "readyForDispatchEnteredAt");
 
     /** FIFO: when listing only FARM_READY, legacy clients send delivery/booking sort — use first transition time instead. */
     let effectiveSortKey = sortKey;
@@ -3223,12 +3229,33 @@ const getAll = (Model, modelName) =>
     }
 
     /**
-     * Ready-for-dispatch tab: sort by when status became READY_FOR_DISPATCH (kal/aaj queue),
-     * not delivery date — unless client sets sortByDelivery=true (delivery-date toggle).
+     * Ready-for-dispatch tab (default): sort by dispatchTargetDate (Aaj/Udya/Kaal plan day).
+     * sortByReadyEntered=true → when marked ready; sortByDelivery=true → deliveryDate.
      */
-    if (ready_for_dispatch === "true" && !sortByDeliveryOnReadyTab) {
-      effectiveSortKey = "readyForDispatchEnteredAt";
+    if (ready_for_dispatch === "true") {
+      if (sortByDeliveryOnReadyTab) {
+        effectiveSortKey = "deliveryDate";
+      } else if (sortByReadyEnteredOnReadyTab) {
+        effectiveSortKey = "readyForDispatchEnteredAt";
+      } else if (
+        sortKey === "dispatchTargetDate" ||
+        sortKey === "dispatchTargetDateSort" ||
+        sortKey === "deliveryDate" ||
+        sortKey === "orderBookingDate" ||
+        sortKey === "createdAt"
+      ) {
+        effectiveSortKey = "dispatchTargetDateSort";
+      }
     }
+
+    const dispatchTargetDateSortExpr = {
+      $convert: {
+        input: { $ifNull: ["$dispatchTargetDate", "$deliveryDate"] },
+        to: "date",
+        onError: null,
+        onNull: null,
+      },
+    };
 
     /** Far-future sentinel so ascending sort places rows with no usable timestamp last. */
     const farmReadyFifoUnknownDate = new Date("9999-12-31T23:59:59.999Z");
@@ -3355,7 +3382,8 @@ const getAll = (Model, modelName) =>
       const spec = { [effectiveSortKey]: effectiveOrder };
       if (
         effectiveSortKey === "readyForDispatchEnteredAt" ||
-        effectiveSortKey === "farmReadyEnteredAt"
+        effectiveSortKey === "farmReadyEnteredAt" ||
+        effectiveSortKey === "dispatchTargetDateSort"
       ) {
         spec.orderId = 1;
       }
@@ -3610,6 +3638,12 @@ const getAll = (Model, modelName) =>
     if (effectiveSortKey === "readyForDispatchEnteredAt") {
       pipeline.push({
         $addFields: { readyForDispatchEnteredAt: readyForDispatchEnteredAtExpr },
+      });
+    }
+
+    if (effectiveSortKey === "dispatchTargetDateSort") {
+      pipeline.push({
+        $addFields: { dispatchTargetDateSort: dispatchTargetDateSortExpr },
       });
     }
 

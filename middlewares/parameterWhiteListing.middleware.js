@@ -69,7 +69,8 @@ const allowedParams = [
   "dealer",
   "farmReady",
   "ready_for_dispatch",
-  "sortByDelivery", // getOrders ready tab: "true" = sort by deliveryDate instead of readyForDispatchEnteredAt
+  "sortByDelivery", // getOrders ready tab: "true" = sort by deliveryDate
+  "sortByReadyEntered", // getOrders ready tab: "true" = sort by readyForDispatchEnteredAt (default = dispatchTargetDate)
   "queueFarmReadyOnly", // FarmerOrdersTable: ready-for-dispatch "Farm-ready on file" queue filter
   "plantTotals", // GET /order/getOrders — include totalPlantsSum for all matching rows (with pagination)
   "isActive",

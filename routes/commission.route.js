@@ -10,6 +10,7 @@ import {
   postSyncCommissionRates,
   postBulkDefaultCommissionRates,
   getDealerCommissionAnalysis,
+  getDealerNegativeCommissionOrders,
   getDealerCommissionSettlements,
   postSettleDealerCommission,
 } from "../controllers/commission.controller.js";
@@ -22,6 +23,12 @@ router.get(
   "/dealers/:dealerId/analysis",
   requireDealerAnalysisAccess,
   getDealerCommissionAnalysis
+);
+
+router.get(
+  "/dealers/:dealerId/negative-orders",
+  requireDealerAnalysisAccess,
+  getDealerNegativeCommissionOrders
 );
 
 router.use(requireCommissionAccess);

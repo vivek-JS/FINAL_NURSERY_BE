@@ -160,7 +160,102 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
     paymentRatio,
     orderTotalValue,
     paymentDue,
+    paymentPending: paymentDue,
+    isPaymentComplete,
   };
+}
+
+const COMMISSION_IMPACT_SORT_FIELDS = new Set([
+  "paymentPending",
+  "actualCommission",
+  "paymentCollected",
+  "finalPlants",
+]);
+
+function mapCommissionImpactOrder(o) {
+  return {
+    orderId: o.orderId,
+    orderMongoId: o.orderMongoId,
+    farmerName: o.farmerName,
+    village: o.village,
+    plantName: o.plantName,
+    subtypeName: o.subtypeName,
+    status: o.status,
+    totalPlants: o.totalPlants,
+    finalPlants: o.finalPlants,
+    paymentCollected: o.paymentCollected,
+    paymentPending: o.paymentPending ?? o.paymentDue ?? 0,
+    orderTotalValue: o.orderTotalValue,
+    actualCommission: o.actualCommission,
+    baseCommission: o.baseCommission,
+    ratePerPlant: o.ratePerPlant,
+    isPaymentComplete: o.isPaymentComplete,
+  };
+}
+
+export function buildCommissionImpactOrders(
+  orderRows,
+  { impact = "negative", sortBy = "paymentPending", sortOrder = "desc" } = {}
+) {
+  const mode = impact === "positive" ? "positive" : "negative";
+  const defaultSort = mode === "positive" ? "actualCommission" : "paymentPending";
+  const field = COMMISSION_IMPACT_SORT_FIELDS.has(sortBy) ? sortBy : defaultSort;
+  const desc = sortOrder !== "asc";
+
+  const rows = orderRows.filter((o) => {
+    const actual = Number(o.actualCommission || 0);
+    return mode === "positive" ? actual > 0 : actual < 0;
+  });
+
+  rows.sort((a, b) => {
+    const av = Number(a[field] ?? 0);
+    const bv = Number(b[field] ?? 0);
+    if (field === "actualCommission") {
+      if (mode === "negative") {
+        return desc ? av - bv : bv - av;
+      }
+      return desc ? bv - av : av - bv;
+    }
+    return desc ? bv - av : av - bv;
+  });
+
+  return rows.map(mapCommissionImpactOrder);
+}
+
+export function buildNegativeActualOrders(orderRows, options = {}) {
+  return buildCommissionImpactOrders(orderRows, { ...options, impact: "negative" });
+}
+
+export function buildPositiveActualOrders(orderRows, options = {}) {
+  return buildCommissionImpactOrders(orderRows, {
+    sortBy: "actualCommission",
+    sortOrder: "desc",
+    ...options,
+    impact: "positive",
+  });
+}
+
+export function summarizeCommissionImpactOrders(orders, impact = "negative") {
+  if (impact === "positive") {
+    return {
+      count: orders.length,
+      totalPositiveCommission: orders.reduce((s, o) => s + Number(o.actualCommission || 0), 0),
+      totalPaymentCollected: orders.reduce((s, o) => s + Number(o.paymentCollected || 0), 0),
+    };
+  }
+  return {
+    count: orders.length,
+    totalPaymentPending: orders.reduce((s, o) => s + Number(o.paymentPending || 0), 0),
+    totalNegativeCommission: orders.reduce((s, o) => s + Number(o.actualCommission || 0), 0),
+  };
+}
+
+export function summarizeNegativeActualOrders(orders) {
+  return summarizeCommissionImpactOrders(orders, "negative");
+}
+
+export function summarizePositiveActualOrders(orders) {
+  return summarizeCommissionImpactOrders(orders, "positive");
 }
 
 function buildPlantSubtypeMaps(plants) {
@@ -338,6 +433,11 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
     (a, b) => b.booked - a.booked
   );
 
+  const negativeActualOrders = buildNegativeActualOrders(orderRows);
+  const negativeActualSummary = summarizeNegativeActualOrders(negativeActualOrders);
+  const positiveActualOrders = buildPositiveActualOrders(orderRows);
+  const positiveActualSummary = summarizePositiveActualOrders(positiveActualOrders);
+
   return {
     dealerId,
     period: { startDate: startDate || null, endDate: endDate || null },
@@ -345,6 +445,10 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
     byPlantType,
     byVillage,
     orders: orderRows,
+    negativeActualOrders,
+    negativeActualSummary,
+    positiveActualOrders,
+    positiveActualSummary,
   };
 }
 
