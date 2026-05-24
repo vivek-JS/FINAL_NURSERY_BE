@@ -197,9 +197,12 @@ function attachClientHandlers(waClient) {
     isWhatsAppReady = true;
     reinitAttempts = 0;
     console.log("🟢 [WhatsApp] Client is ready. Alerts will now be delivered.");
-    if (process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true") {
+    if (
+      process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true" &&
+      process.env.DISABLE_WHATSAPP_ORDER_WEBJS !== "true"
+    ) {
       console.log(
-        "🟢 [WhatsApp] Order bot listening on this session (web.js) — farmers message this linked number."
+        "🟢 [WhatsApp] Order bot listening on scanned session (web.js). WATI webhook also active if not disabled."
       );
     }
   });

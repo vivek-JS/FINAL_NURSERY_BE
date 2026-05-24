@@ -1,12 +1,17 @@
 /**
- * Outbound messages for WhatsApp order bot — web.js (QR session) or WATI.
+ * Outbound messages for WhatsApp order bot — web.js and/or WATI (dual channel).
  */
 
 import {
   getWhatsAppClient,
   isWhatsAppReady,
 } from "./whatsappClient.js";
-import { isWhatsappOrderViaWebJs } from "../utility/whatsappOrderFlowFlags.js";
+import {
+  isWhatsappOrderWebJsEnabled,
+  isWhatsappOrderWatiEnabled,
+  isWhatsappOrderDualChannel,
+} from "../utility/whatsappOrderFlowFlags.js";
+import { getOrderReplyChannel } from "./whatsappOrderReplyChannel.js";
 
 function formatChatId(number) {
   const digits = String(number).replace(/\D/g, "");
@@ -35,13 +40,16 @@ async function resolveChatId(wa, number) {
 }
 
 async function sendViaWebJs(phone, text) {
+  if (!isWhatsappOrderWebJsEnabled()) {
+    return { success: false, error: "webjs_disabled", channel: "webjs" };
+  }
   if (!isWhatsAppReady) {
     console.warn("[WhatsApp Order] Client not ready — cannot reply to", phone);
-    return { success: false, error: "not_ready" };
+    return { success: false, error: "not_ready", channel: "webjs" };
   }
   const wa = getWhatsAppClient();
   if (!wa) {
-    return { success: false, error: "no_client" };
+    return { success: false, error: "no_client", channel: "webjs" };
   }
   try {
     const targetId = await resolveChatId(wa, phone);
@@ -50,25 +58,61 @@ async function sendViaWebJs(phone, text) {
     return { success: true, channel: "webjs" };
   } catch (err) {
     console.error("[WhatsApp Order] ❌ web.js send failed:", err?.message || err);
-    return { success: false, error: err?.message || String(err) };
+    return { success: false, error: err?.message || String(err), channel: "webjs" };
   }
 }
 
 async function sendViaWati(phone, text) {
+  if (!isWhatsappOrderWatiEnabled()) {
+    return { success: false, error: "wati_disabled", channel: "wati" };
+  }
   const { sendOrderBotMessageWati } = await import(
     "../controllers/whatsappOrderBot.controller.js"
   );
-  return sendOrderBotMessageWati(phone, text);
+  const result = await sendOrderBotMessageWati(phone, text);
+  return { ...result, channel: "wati" };
 }
 
-/** Send order-bot reply to user (10-digit or 91… mobile). */
-export async function sendOrderBotMessage(phone, text) {
-  if (isWhatsappOrderViaWebJs()) {
-    return sendViaWebJs(phone, text);
+/**
+ * Send order-bot reply on the channel the farmer last messaged on.
+ * @param {string} phone
+ * @param {string} text
+ * @param {{ channel?: 'webjs' | 'wati' }} [opts]
+ */
+export async function sendOrderBotMessage(phone, text, opts = {}) {
+  const preferred =
+    opts.channel || getOrderReplyChannel(phone, isWhatsappOrderWebJsEnabled() ? "webjs" : "wati");
+
+  if (preferred === "wati") {
+    const watiResult = await sendViaWati(phone, text);
+    if (watiResult.success) return watiResult;
+    if (isWhatsappOrderWebJsEnabled() && process.env.WHATSAPP_ORDER_FALLBACK_WEBJS === "true") {
+      console.warn("[WhatsApp Order] WATI failed, trying web.js fallback");
+      return sendViaWebJs(phone, text);
+    }
+    return watiResult;
   }
-  return sendViaWati(phone, text);
+
+  const webResult = await sendViaWebJs(phone, text);
+  if (webResult.success) return webResult;
+  if (isWhatsappOrderWatiEnabled() && process.env.WHATSAPP_ORDER_FALLBACK_WATI === "true") {
+    console.warn("[WhatsApp Order] web.js failed, trying WATI fallback");
+    return sendViaWati(phone, text);
+  }
+  return webResult;
 }
 
 export function getOrderBotChannel() {
-  return isWhatsappOrderViaWebJs() ? "webjs" : "wati";
+  if (isWhatsappOrderDualChannel()) return "dual";
+  if (isWhatsappOrderWebJsEnabled()) return "webjs";
+  if (isWhatsappOrderWatiEnabled()) return "wati";
+  return "none";
+}
+
+export function getOrderBotChannels() {
+  return {
+    mode: getOrderBotChannel(),
+    webjs: isWhatsappOrderWebJsEnabled(),
+    wati: isWhatsappOrderWatiEnabled(),
+  };
 }

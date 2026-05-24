@@ -2,12 +2,16 @@
  * Inbound WhatsApp messages on the scanned whatsapp-web.js session (order bot).
  */
 
-import { isWhatsappOrderFlowDisabled, isWhatsappOrderViaWebJs } from "../utility/whatsappOrderFlowFlags.js";
+import {
+  isWhatsappOrderFlowDisabled,
+  isWhatsappOrderWebJsEnabled,
+} from "../utility/whatsappOrderFlowFlags.js";
 import { normalizeWhatsAppMobile } from "./whatsappOrderFarmer.service.js";
+import { setOrderReplyChannel } from "./whatsappOrderReplyChannel.js";
 
 export async function handleWebJsInboundMessage(msg) {
-  if (isWhatsappOrderFlowDisabled() || !isWhatsappOrderViaWebJs()) {
-    return { handled: false, reason: "flow_disabled_or_wati_channel" };
+  if (isWhatsappOrderFlowDisabled() || !isWhatsappOrderWebJsEnabled()) {
+    return { handled: false, reason: "flow_disabled_or_webjs_off" };
   }
 
   if (!msg || msg.fromMe) {
@@ -45,6 +49,8 @@ export async function handleWebJsInboundMessage(msg) {
 
   console.log(`\n📩 [WhatsApp Order / web.js] From ${chatMobile}: "${text.slice(0, 80)}"`);
 
+  setOrderReplyChannel(chatMobile, "webjs");
+
   const { handleInboundOrderMessage } = await import(
     "../controllers/whatsappOrderBot.controller.js"
   );
@@ -53,7 +59,8 @@ export async function handleWebJsInboundMessage(msg) {
     chatMobile,
     text,
     senderName: senderName || "",
+    channel: "webjs",
   });
 
-  return { handled: true, chatMobile };
+  return { handled: true, chatMobile, channel: "webjs" };
 }

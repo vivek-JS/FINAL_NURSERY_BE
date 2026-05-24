@@ -10,9 +10,17 @@ import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.
 import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
 import {
   isWhatsappOrderFlowDisabled,
-  isWhatsappOrderViaWebJs,
+  isWhatsappOrderWatiEnabled,
 } from "../utility/whatsappOrderFlowFlags.js";
-import { sendOrderBotMessage, getOrderBotChannel } from "../services/whatsappOrderMessenger.js";
+import {
+  sendOrderBotMessage,
+  getOrderBotChannel,
+  getOrderBotChannels,
+} from "../services/whatsappOrderMessenger.js";
+import {
+  setOrderReplyChannel,
+  clearOrderReplyChannel,
+} from "../services/whatsappOrderReplyChannel.js";
 import {
   normalizeWhatsAppMobile,
   extractMobileFromMessage,
@@ -54,8 +62,9 @@ console.log(`   WATI_TOKEN: ${WATI_TOKEN ? `${WATI_TOKEN.substring(0, 20)}...` :
 console.log(`   WATI_TOKEN from env: ${process.env.WATI_TOKEN ? "✅ YES" : "❌ NO (using default)"}`);
 console.log(`   WATI_URL from env: ${process.env.WATI_URL ? `✅ YES (${process.env.WATI_URL})` : "❌ NO (using default)"}`);
 console.log(`   ADMIN_PHONE: ${ADMIN_PHONE}`);
-console.log(`   Order bot channel: ${getOrderBotChannel()} (web.js QR session unless WHATSAPP_ORDER_USE_WATI=true)`);
+console.log(`   Order bot channels: ${JSON.stringify(getOrderBotChannels())}`);
 console.log(`   WHATSAPP_ORDER_FLOW_ENABLED: ${process.env.WHATSAPP_ORDER_FLOW_ENABLED || "false"}`);
+console.log(`   WHATSAPP_ORDER_DUAL_CHANNEL: ${process.env.WHATSAPP_ORDER_DUAL_CHANNEL || "true (default when both enabled)"}`);
 console.log("=".repeat(60) + "\n");
 
 // Validate configuration
@@ -478,6 +487,7 @@ function saveConversationState(mobileNumber, state) {
 function clearConversationState(mobileNumber) {
   console.log(`\n🗑️  [STATE] Clearing state for: ${mobileNumber}`);
   conversationState.delete(mobileNumber);
+  clearOrderReplyChannel(mobileNumber);
   console.log(`   ✅ State cleared\n`);
 }
 
@@ -597,15 +607,18 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
       if (orderFlowOff) {
         return;
       }
-      if (isWhatsappOrderViaWebJs()) {
-        console.log(
-          "[WATI] Order flow skipped — inbound orders use scanned WhatsApp (web.js). Reports wizard still runs."
-        );
+      if (!isWhatsappOrderWatiEnabled()) {
+        console.log("[WATI] Order flow skipped — WATI channel disabled (DISABLE_WHATSAPP_ORDER_WATI).");
         return;
       }
-      console.log("🔄 [FLOW] Starting order flow processing (async via WATI)...");
-      const state = getConversationState(mobileNumber);
-      await processOrderFlow(mobileNumber, message, state, senderName);
+      setOrderReplyChannel(mobileNumber, "wati");
+      console.log("🔄 [FLOW] Starting order flow (WATI inbound)...");
+      await handleInboundOrderMessage({
+        chatMobile: mobileNumber,
+        text: message,
+        senderName: senderName || "",
+        channel: "wati",
+      });
       console.log("✅ [FLOW] Order flow processing completed\n");
     } catch (error) {
       console.error("\n❌❌❌ ERROR IN WEBHOOK HANDLER ❌❌❌");
@@ -628,6 +641,7 @@ export async function handleInboundOrderMessage({
   chatMobile,
   text,
   senderName = "",
+  channel = "webjs",
 }) {
   if (isWhatsappOrderFlowDisabled()) {
     return;
@@ -637,6 +651,9 @@ export async function handleInboundOrderMessage({
     String(chatMobile).replace(/\D/g, "").slice(-10);
   if (!mobile) {
     return;
+  }
+  if (channel === "wati" || channel === "webjs") {
+    setOrderReplyChannel(mobile, channel);
   }
   const state = getConversationState(mobile);
   await processOrderFlow(mobile, text, state, senderName);
@@ -1455,12 +1472,17 @@ async function handleConfirmation(mobileNumber, message, state) {
  * Health check endpoint for webhook (GET request)
  */
 export const webhookHealthCheck = catchAsync(async (req, res) => {
+  const channels = getOrderBotChannels();
   return res.status(200).json(
     generateResponse("success", "WhatsApp order bot status", {
-      orderChannel: getOrderBotChannel(),
+      ...channels,
       orderFlowEnabled: process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true",
       watiWebhook: "/api/v1/whatsapp-order/webhook",
       webJsInbound: "messages to the scanned WhatsApp number (same session as alerts)",
+      hint:
+        channels.mode === "dual"
+          ? "Farmers can use either channel; replies go back on the same channel they used."
+          : null,
       timestamp: new Date().toISOString(),
     })
   );
@@ -1485,10 +1507,9 @@ export const webhookDiagnostics = catchAsync(async (req, res) => {
       phoneFromEnv: process.env.ADMIN_PHONE || "❌ NOT SET",
     },
     orderBot: {
-      channel: getOrderBotChannel(),
+      ...getOrderBotChannels(),
       flowEnabled: process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true",
-      useWati: process.env.WHATSAPP_ORDER_USE_WATI === "true",
-      useWebJs: isWhatsappOrderViaWebJs(),
+      dualChannelEnv: process.env.WHATSAPP_ORDER_DUAL_CHANNEL === "true",
     },
     timestamp: new Date().toISOString(),
   };

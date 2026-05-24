@@ -45,14 +45,32 @@ export function getDispatchedQty(order) {
   );
   if (historyQty > 0) return historyQty;
   const remaining = order.remainingPlants ?? total;
-  return Math.max(0, total - remaining);
+  let dispatched = Math.max(0, total - remaining);
+  // Completed in prod without dispatchHistory / remainingPlants not zeroed
+  if (
+    dispatched === 0 &&
+    ACTUAL_COMMISSION_STATUSES.has(order.orderStatus) &&
+    total > 0
+  ) {
+    dispatched = total;
+  }
+  return dispatched;
 }
 
 export function getFinalPlants(order) {
+  const total = getOrderTotalPlants(order);
   const dispatched = getDispatchedQty(order);
   const returned = Number(order.returnedPlants || 0);
   const damaged = Number(order.damagedPlants || 0);
-  return Math.max(0, dispatched - returned - damaged);
+  let finalPlants = Math.max(0, dispatched - returned - damaged);
+  if (
+    finalPlants === 0 &&
+    ACTUAL_COMMISSION_STATUSES.has(order.orderStatus) &&
+    total > 0
+  ) {
+    finalPlants = Math.max(0, total - returned - damaged);
+  }
+  return finalPlants;
 }
 
 export function getCollectedPayment(order) {
@@ -301,6 +319,7 @@ export async function fetchDealerOrders(dealerId, { startDate, endDate } = {}) {
         $or: [
           { orderBookingDate: dateFilter },
           { createdAt: dateFilter },
+          { updatedAt: dateFilter },
         ],
       },
     ];

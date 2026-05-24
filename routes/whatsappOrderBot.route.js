@@ -7,7 +7,7 @@ import {
   webhookDiagnostics,
   handleInboundOrderMessage,
 } from "../controllers/whatsappOrderBot.controller.js";
-import { getOrderBotChannel } from "../services/whatsappOrderMessenger.js";
+import { getOrderBotChannels } from "../services/whatsappOrderMessenger.js";
 import { isWhatsAppReady } from "../services/whatsappClient.js";
 
 const router = express.Router();
@@ -180,16 +180,19 @@ router.post("/simulate-web", authenticateToken, async (req, res) => {
       message: "mobileNumber and text are required",
     });
   }
+  const channel = req.body?.channel === "wati" ? "wati" : "webjs";
   await handleInboundOrderMessage({
     chatMobile: mobileNumber,
     text: String(text),
     senderName: req.body?.senderName || "",
+    channel,
   });
   return res.status(200).json({
     success: true,
-    channel: getOrderBotChannel(),
+    ...getOrderBotChannels(),
+    simulatedChannel: channel,
     whatsappReady: isWhatsAppReady,
-    message: "Inbound message processed (replies sent via web.js if enabled)",
+    message: `Inbound processed; reply sent on ${channel} channel`,
   });
 });
 
