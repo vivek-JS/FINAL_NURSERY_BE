@@ -197,6 +197,24 @@ function attachClientHandlers(waClient) {
     isWhatsAppReady = true;
     reinitAttempts = 0;
     console.log("🟢 [WhatsApp] Client is ready. Alerts will now be delivered.");
+    if (process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true") {
+      console.log(
+        "🟢 [WhatsApp] Order bot listening on this session (web.js) — farmers message this linked number."
+      );
+    }
+  });
+
+  waClient.on("message", (msg) => {
+    void (async () => {
+      try {
+        const { handleWebJsInboundMessage } = await import(
+          "./whatsappOrderWebInbound.js"
+        );
+        await handleWebJsInboundMessage(msg);
+      } catch (err) {
+        console.error("[WhatsApp] Order inbound handler error:", err?.message || err);
+      }
+    })();
   });
 
   waClient.on("auth_failure", (msg) => {

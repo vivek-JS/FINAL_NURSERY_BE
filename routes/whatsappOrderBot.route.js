@@ -5,7 +5,10 @@ import {
   startOrderFlow,
   webhookHealthCheck,
   webhookDiagnostics,
+  handleInboundOrderMessage,
 } from "../controllers/whatsappOrderBot.controller.js";
+import { getOrderBotChannel } from "../services/whatsappOrderMessenger.js";
+import { isWhatsAppReady } from "../services/whatsappClient.js";
 
 const router = express.Router();
 
@@ -168,5 +171,28 @@ router.post("/webhook", (req, res, next) => {
 // Manual trigger endpoint (for testing/admin - requires authentication)
 router.post("/start", authenticateToken, startOrderFlow);
 
+/** Simulate a farmer message on the scanned WhatsApp session (no WATI). */
+router.post("/simulate-web", authenticateToken, async (req, res) => {
+  const { mobileNumber, text } = req.body || {};
+  if (!mobileNumber || !text) {
+    return res.status(400).json({
+      success: false,
+      message: "mobileNumber and text are required",
+    });
+  }
+  await handleInboundOrderMessage({
+    chatMobile: mobileNumber,
+    text: String(text),
+    senderName: req.body?.senderName || "",
+  });
+  return res.status(200).json({
+    success: true,
+    channel: getOrderBotChannel(),
+    whatsappReady: isWhatsAppReady,
+    message: "Inbound message processed (replies sent via web.js if enabled)",
+  });
+});
+
 export default router;
+
 

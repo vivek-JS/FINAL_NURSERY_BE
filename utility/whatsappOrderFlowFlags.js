@@ -1,12 +1,18 @@
 /**
- * WhatsApp **order bot** (plant list / banana–chili style ordering) is **off by default**.
- * Reports wizard handles inbound messages instead.
+ * WhatsApp order bot configuration.
  *
- * Opt in to the legacy order conversation: `WHATSAPP_ORDER_FLOW_ENABLED=true`
- * Force off regardless: `DISABLE_WHATSAPP_ORDER_FLOW=true`
+ * Enable flow: `WHATSAPP_ORDER_FLOW_ENABLED=true`
+ * Disable: `DISABLE_WHATSAPP_ORDER_FLOW=true`
  *
- * Legacy one-shot booking PDF: `WHATSAPP_LEGACY_INSTANT_BOOKING_PDF=true`
+ * Channel (default = scanned QR / whatsapp-web.js, same as admin alerts):
+ *   WHATSAPP_ORDER_USE_WATI=true  → inbound/outbound via WATI webhook only
+ *   (unset or false)             → inbound/outbound via whatsapp-web.js session
  */
+
+export function isWhatsappOrderViaWebJs() {
+  return process.env.WHATSAPP_ORDER_USE_WATI !== "true";
+}
+
 export function isWhatsappOrderFlowDisabled() {
   if (process.env.DISABLE_WHATSAPP_ORDER_FLOW === "true") {
     return true;

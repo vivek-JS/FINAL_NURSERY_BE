@@ -8,7 +8,11 @@ import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
 import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
 import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
 import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
-import { isWhatsappOrderFlowDisabled } from "../utility/whatsappOrderFlowFlags.js";
+import {
+  isWhatsappOrderFlowDisabled,
+  isWhatsappOrderViaWebJs,
+} from "../utility/whatsappOrderFlowFlags.js";
+import { sendOrderBotMessage, getOrderBotChannel } from "../services/whatsappOrderMessenger.js";
 import {
   normalizeWhatsAppMobile,
   extractMobileFromMessage,
@@ -50,6 +54,8 @@ console.log(`   WATI_TOKEN: ${WATI_TOKEN ? `${WATI_TOKEN.substring(0, 20)}...` :
 console.log(`   WATI_TOKEN from env: ${process.env.WATI_TOKEN ? "✅ YES" : "❌ NO (using default)"}`);
 console.log(`   WATI_URL from env: ${process.env.WATI_URL ? `✅ YES (${process.env.WATI_URL})` : "❌ NO (using default)"}`);
 console.log(`   ADMIN_PHONE: ${ADMIN_PHONE}`);
+console.log(`   Order bot channel: ${getOrderBotChannel()} (web.js QR session unless WHATSAPP_ORDER_USE_WATI=true)`);
+console.log(`   WHATSAPP_ORDER_FLOW_ENABLED: ${process.env.WHATSAPP_ORDER_FLOW_ENABLED || "false"}`);
 console.log("=".repeat(60) + "\n");
 
 // Validate configuration
@@ -66,7 +72,8 @@ if (!WATI_TOKEN) {
  * @param {string} text - Message text to send
  * @returns {Promise<Object>} Send result
  */
-async function sendWhatsAppMessage(phone, text) {
+/** WATI outbound only — order bot uses sendOrderBotMessage (web.js by default). */
+export async function sendOrderBotMessageWati(phone, text) {
   console.log("\n📤 [WATI] Preparing to send WhatsApp message...");
   console.log(`   📱 Input phone: ${phone}`);
   console.log(`   📝 Message length: ${text?.length || 0} characters`);
@@ -403,7 +410,7 @@ async function sendAdminNotification(orderData) {
 🧾 Order ID: ${orderData.orderId || "Processing..."}`;
 
     console.log("   📝 Notification message prepared");
-    await sendWhatsAppMessage(ADMIN_PHONE, message);
+    await sendOrderBotMessage(ADMIN_PHONE, message);
     console.log("   ✅ Admin notification sent successfully");
   } catch (error) {
     console.error("   ❌ Error sending admin notification:", error);
@@ -590,7 +597,13 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
       if (orderFlowOff) {
         return;
       }
-      console.log("🔄 [FLOW] Starting order flow processing (async)...");
+      if (isWhatsappOrderViaWebJs()) {
+        console.log(
+          "[WATI] Order flow skipped — inbound orders use scanned WhatsApp (web.js). Reports wizard still runs."
+        );
+        return;
+      }
+      console.log("🔄 [FLOW] Starting order flow processing (async via WATI)...");
       const state = getConversationState(mobileNumber);
       await processOrderFlow(mobileNumber, message, state, senderName);
       console.log("✅ [FLOW] Order flow processing completed\n");
@@ -607,6 +620,27 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
     }
   })();
 });
+
+/**
+ * Inbound order message (whatsapp-web.js session or internal test).
+ */
+export async function handleInboundOrderMessage({
+  chatMobile,
+  text,
+  senderName = "",
+}) {
+  if (isWhatsappOrderFlowDisabled()) {
+    return;
+  }
+  const mobile =
+    normalizeWhatsAppMobile(chatMobile) ||
+    String(chatMobile).replace(/\D/g, "").slice(-10);
+  if (!mobile) {
+    return;
+  }
+  const state = getConversationState(mobile);
+  await processOrderFlow(mobile, text, state, senderName);
+}
 
 /**
  * Main order flow processor
@@ -647,14 +681,14 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
   // Global commands (work at any step)
   if (message === "cancel" || message === "0" || message === "रद्द") {
     console.log("   🛑 [COMMAND] CANCEL detected");
-    await sendWhatsAppMessage(mobileNumber, "❌ ऑर्डर रद्द झाली.\n\nपुन्हा सुरु करण्यासाठी HI टाइप करा.");
+    await sendOrderBotMessage(mobileNumber, "❌ ऑर्डर रद्द झाली.\n\nपुन्हा सुरु करण्यासाठी HI टाइप करा.");
     clearConversationState(mobileNumber);
     return;
   }
 
   if (message === "help" || message === "मदत") {
     console.log("   ❓ [COMMAND] HELP detected");
-    await sendWhatsAppMessage(
+    await sendOrderBotMessage(
       mobileNumber,
       "📖 *मदत*\n\n• ऑर्डर: ORDER / ऑर्डर / HI\n• मोबाईल नंबर पाठवल्यावर ग्राहक माहिती दिसेल\n• रद्द: CANCEL / 0\n• मेनू: MENU\n• एका संदेशात ऑर्डर (उदा.):\nऑर्डर\nमोबाईल: 98xxxxxxxx\nपिक: केळ\nवाण: ग्रँड नाईन\nगुण: 5000"
     );
@@ -730,7 +764,7 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
 
       default:
         console.log(`   ⚠️  [WARNING] Unknown step: ${state.step}`);
-        await sendWhatsAppMessage(
+        await sendOrderBotMessage(
           mobileNumber,
           "मला समजले नाही. कृपया 'HI' टाइप करा."
         );
@@ -741,7 +775,7 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
   } catch (error) {
     console.error("\n❌ [ERROR] Error in order flow:", error);
     console.error("   Stack:", error.stack);
-    await sendWhatsAppMessage(
+    await sendOrderBotMessage(
       mobileNumber,
       "क्षमस्व, एक त्रुटी आली. पुन्हा सुरु करण्यासाठी 'HI' टाइप करा."
     );
@@ -751,7 +785,7 @@ async function processOrderFlow(mobileNumber, userMessage, state, senderName = "
 
 async function promptAskMobile(chatMobile, state) {
   const norm = normalizeWhatsAppMobile(chatMobile);
-  await sendWhatsAppMessage(
+  await sendOrderBotMessage(
     chatMobile,
     `📱 *ऑर्डर सुरू*\n\n10 अंकी मोबाईल नंबर पाठवा (ग्राहकाचा).\n\nकिंवा या WhatsApp नंबरवरून ऑर्डर करण्यासाठी *1* पाठवा.\n${norm ? `(तुमचा नंबर: ${norm})` : ""}`
   );
@@ -762,7 +796,7 @@ async function promptAskMobile(chatMobile, state) {
 async function applyFarmerLookup(chatMobile, state, bookingMobile) {
   const norm = normalizeWhatsAppMobile(bookingMobile);
   if (!norm) {
-    await sendWhatsAppMessage(chatMobile, "❌ वैध 10 अंकी मोबाईल नंबर पाठवा.");
+    await sendOrderBotMessage(chatMobile, "❌ वैध 10 अंकी मोबाईल नंबर पाठवा.");
     state.step = "ASK_MOBILE";
     saveConversationState(chatMobile, state);
     return;
@@ -773,7 +807,7 @@ async function applyFarmerLookup(chatMobile, state, bookingMobile) {
     state.farmer = farmer;
     state.step = "CONFIRM_FARMER";
     saveConversationState(chatMobile, state);
-    await sendWhatsAppMessage(chatMobile, formatFarmerProfileMessage(farmer));
+    await sendOrderBotMessage(chatMobile, formatFarmerProfileMessage(farmer));
     return;
   }
 
@@ -781,7 +815,7 @@ async function applyFarmerLookup(chatMobile, state, bookingMobile) {
   state.step = "COLLECT_FARMER";
   state.collectField = "NAME";
   saveConversationState(chatMobile, state);
-  await sendWhatsAppMessage(
+  await sendOrderBotMessage(
     chatMobile,
     `❌ मोबाईल *${norm}* नोंदणीत नाही.\n\nकृपया ग्राहकाचे *नाव* पाठवा:`
   );
@@ -800,7 +834,7 @@ async function handleAskMobile(chatMobile, userMessage, state) {
   if (lower === "1") {
     const own = normalizeWhatsAppMobile(state.chatMobile || chatMobile);
     if (!own) {
-      await sendWhatsAppMessage(chatMobile, "❌ वैध मोबाईल सापडला नाही. 10 अंकी नंबर टाइप करा.");
+      await sendOrderBotMessage(chatMobile, "❌ वैध मोबाईल सापडला नाही. 10 अंकी नंबर टाइप करा.");
       return;
     }
     await applyFarmerLookup(chatMobile, state, own);
@@ -813,7 +847,7 @@ async function handleAskMobile(chatMobile, userMessage, state) {
     return;
   }
 
-  await sendWhatsAppMessage(
+  await sendOrderBotMessage(
     chatMobile,
     "❌ वैध मोबाईल नाही.\n\n10 अंकी नंबर पाठवा किंवा *1* (या WhatsApp नंबरवरून)."
   );
@@ -832,13 +866,13 @@ async function handleConfirmFarmer(chatMobile, userMessage, state) {
     await promptAskMobile(chatMobile, state);
     return;
   }
-  await sendWhatsAppMessage(chatMobile, "कृपया *1* (होय) किंवा *2* (दुसरा नंबर) पाठवा.");
+  await sendOrderBotMessage(chatMobile, "कृपया *1* (होय) किंवा *2* (दुसरा नंबर) पाठवा.");
 }
 
 async function handleCollectFarmer(chatMobile, userMessage, state) {
   const text = userMessage.trim();
   if (!text) {
-    await sendWhatsAppMessage(chatMobile, "❌ रिक्त संदेश. पुन्हा टाइप करा.");
+    await sendOrderBotMessage(chatMobile, "❌ रिक्त संदेश. पुन्हा टाइप करा.");
     return;
   }
 
@@ -847,21 +881,21 @@ async function handleCollectFarmer(chatMobile, userMessage, state) {
       state.farmer.name = text;
       state.collectField = "DISTRICT";
       saveConversationState(chatMobile, state);
-      await sendWhatsAppMessage(chatMobile, "📍 *जिल्हा* पाठवा (मराठी/इंग्रजी):");
+      await sendOrderBotMessage(chatMobile, "📍 *जिल्हा* पाठवा (मराठी/इंग्रजी):");
       break;
     case "DISTRICT":
       state.farmer.district = text;
       state.farmer.districtName = text;
       state.collectField = "TALUKA";
       saveConversationState(chatMobile, state);
-      await sendWhatsAppMessage(chatMobile, "📍 *तालुका* पाठवा:");
+      await sendOrderBotMessage(chatMobile, "📍 *तालुका* पाठवा:");
       break;
     case "TALUKA":
       state.farmer.taluka = text;
       state.farmer.talukaName = text;
       state.collectField = "VILLAGE";
       saveConversationState(chatMobile, state);
-      await sendWhatsAppMessage(chatMobile, "🏘️ *गाव* पाठवा:");
+      await sendOrderBotMessage(chatMobile, "🏘️ *गाव* पाठवा:");
       break;
     case "VILLAGE":
       state.farmer.village = text;
@@ -869,7 +903,7 @@ async function handleCollectFarmer(chatMobile, userMessage, state) {
       state.collectField = null;
       state.step = "CONFIRM_FARMER";
       saveConversationState(chatMobile, state);
-      await sendWhatsAppMessage(
+      await sendOrderBotMessage(
         chatMobile,
         formatFarmerProfileMessage(state.farmer, { title: "✅ नवीन ग्राहक तपशील" })
       );
@@ -877,7 +911,7 @@ async function handleCollectFarmer(chatMobile, userMessage, state) {
     default:
       state.collectField = "NAME";
       saveConversationState(chatMobile, state);
-      await sendWhatsAppMessage(chatMobile, "कृपया ग्राहकाचे *नाव* पाठवा:");
+      await sendOrderBotMessage(chatMobile, "कृपया ग्राहकाचे *नाव* पाठवा:");
   }
 }
 
@@ -897,7 +931,7 @@ async function handleMainMenu(mobileNumber, state, message = "") {
     return;
   }
 
-  await sendWhatsAppMessage(
+  await sendOrderBotMessage(
     mobileNumber,
     "👋 नमस्कार!\n\nऑर्डर सुरू करण्यासाठी *ORDER* किंवा *ऑर्डर* टाइप करा.\n\nमोबाईल नंबर थेट पाठवल्यास ग्राहक माहिती दिसेल."
   );
@@ -917,7 +951,7 @@ async function loadPlants(mobileNumber, state, includeGreeting = false) {
     
     if (plants.length === 0) {
       console.log("   ⚠️  No plants found");
-      await sendWhatsAppMessage(mobileNumber, "❌ सध्या कोणतेही रोप उपलब्ध नाहीत.");
+      await sendOrderBotMessage(mobileNumber, "❌ सध्या कोणतेही रोप उपलब्ध नाहीत.");
       state.step = "MAIN_MENU";
       saveConversationState(mobileNumber, state);
       return;
@@ -965,12 +999,12 @@ async function loadPlants(mobileNumber, state, includeGreeting = false) {
     message += "\nनंबर टाइप करा";
 
     console.log("   ✅ Plants loaded, sending to user");
-    await sendWhatsAppMessage(mobileNumber, message);
+    await sendOrderBotMessage(mobileNumber, message);
     console.log("   ✅ Plants message sent\n");
   } catch (error) {
     console.error("   ❌ Error loading plants:", error);
     console.error("   Stack:", error.stack);
-    await sendWhatsAppMessage(mobileNumber, "❌ Error loading plants. Please try again later.");
+    await sendOrderBotMessage(mobileNumber, "❌ Error loading plants. Please try again later.");
     state.step = "MAIN_MENU";
     saveConversationState(mobileNumber, state);
   }
@@ -1002,7 +1036,7 @@ async function handlePlantSelection(mobileNumber, message, state) {
     console.log(`   💾 Updated order.plant: ${state.order.plant}`);
     console.log(`   💾 Updated order.plantName: ${state.order.plantName}`);
     
-    await sendWhatsAppMessage(
+    await sendOrderBotMessage(
       mobileNumber,
       `✅ रोप निवडली: ${selectedPlant.name}\n\nविविधता लोड होत आहे...`
     );
@@ -1011,7 +1045,7 @@ async function handlePlantSelection(mobileNumber, message, state) {
     await loadVarieties(mobileNumber, state);
   } else {
     console.log(`   ❌ Invalid selection (index ${selectedIdx} out of range)`);
-    await sendWhatsAppMessage(mobileNumber, "❌ Invalid selection. Please try again:");
+    await sendOrderBotMessage(mobileNumber, "❌ Invalid selection. Please try again:");
     await loadPlants(mobileNumber, state);
   }
   saveConversationState(mobileNumber, state);
@@ -1029,7 +1063,7 @@ async function loadVarieties(mobileNumber, state) {
     
     if (!plant || !plant.subtypes || plant.subtypes.length === 0) {
       console.log("   ⚠️  No varieties found");
-      await sendWhatsAppMessage(mobileNumber, "❌ No varieties available for this plant.");
+      await sendOrderBotMessage(mobileNumber, "❌ No varieties available for this plant.");
       state.step = "SELECT_PLANT";
       saveConversationState(mobileNumber, state);
       await loadPlants(mobileNumber, state);
@@ -1053,12 +1087,12 @@ async function loadVarieties(mobileNumber, state) {
     message += "\nविविधता निवडा";
 
     console.log("   ✅ Varieties loaded, sending to user");
-    await sendWhatsAppMessage(mobileNumber, message);
+    await sendOrderBotMessage(mobileNumber, message);
     console.log("   ✅ Varieties message sent\n");
   } catch (error) {
     console.error("   ❌ Error loading varieties:", error);
     console.error("   Stack:", error.stack);
-    await sendWhatsAppMessage(mobileNumber, "❌ Error loading varieties. Please try again.");
+    await sendOrderBotMessage(mobileNumber, "❌ Error loading varieties. Please try again.");
     state.step = "SELECT_PLANT";
     saveConversationState(mobileNumber, state);
     await loadPlants(mobileNumber, state);
@@ -1093,7 +1127,7 @@ async function handleVarietySelection(mobileNumber, message, state) {
     console.log(`   💾 Updated order.varietyName: ${state.order.varietyName}`);
     console.log(`   💾 Updated order.rate: ₹${state.order.rate}`);
     
-    await sendWhatsAppMessage(
+    await sendOrderBotMessage(
       mobileNumber,
       `✅ विविधता: ${selectedVariety.name}\nदर: ₹${selectedVariety.rate}\n\n📦 ट्रे कॅविटी निवडा:\n\n1️⃣ 50\n2️⃣ 100\n3️⃣ 200`
     );
@@ -1101,7 +1135,7 @@ async function handleVarietySelection(mobileNumber, message, state) {
     saveConversationState(mobileNumber, state);
   } else {
     console.log(`   ❌ Invalid selection (index ${selectedIdx} out of range)`);
-    await sendWhatsAppMessage(mobileNumber, "❌ Invalid selection. Please try again:");
+    await sendOrderBotMessage(mobileNumber, "❌ Invalid selection. Please try again:");
     await loadVarieties(mobileNumber, state);
   }
   saveConversationState(mobileNumber, state);
@@ -1127,7 +1161,7 @@ async function handleCavitySelection(mobileNumber, message, state) {
     state.order.cavity = selectedCavity;
     console.log(`   💾 Updated order.cavity: ${state.order.cavity}`);
     
-    await sendWhatsAppMessage(
+    await sendOrderBotMessage(
       mobileNumber,
       `✅ कॅविटी: ${selectedCavity}\n\n🔢 प्रमाण टाइप करा (फक्त नंबर)\n\nउदाहरण: 500`
     );
@@ -1135,7 +1169,7 @@ async function handleCavitySelection(mobileNumber, message, state) {
     saveConversationState(mobileNumber, state);
   } else {
     console.log(`   ❌ Invalid selection (index ${selectedIdx} out of range)`);
-    await sendWhatsAppMessage(mobileNumber, "❌ Invalid selection. Please select 1, 2, or 3:");
+    await sendOrderBotMessage(mobileNumber, "❌ Invalid selection. Please select 1, 2, or 3:");
   }
   saveConversationState(mobileNumber, state);
   console.log("   ✅ SELECT_CAVITY handler completed\n");
@@ -1154,7 +1188,7 @@ async function handleQuantity(mobileNumber, message, state) {
   
   if (isNaN(quantity) || quantity <= 0 || quantity > 10000) {
     console.log(`   ❌ Invalid quantity: ${quantity} (must be 1-10000)`);
-    await sendWhatsAppMessage(
+    await sendOrderBotMessage(
       mobileNumber,
       "❌ Invalid quantity. Please enter a number between 1 and 10000:"
     );
@@ -1168,7 +1202,7 @@ async function handleQuantity(mobileNumber, message, state) {
   console.log(`   💾 Updated order.total: ₹${state.order.total}`);
   console.log(`   💵 Calculation: ${quantity} × ₹${state.order.rate} = ₹${state.order.total}`);
   
-    await sendWhatsAppMessage(
+    await sendOrderBotMessage(
       mobileNumber,
       `✅ प्रमाण: ${quantity}\n\nउपलब्ध डिलिव्हरी तारखा लोड होत आहेत...`
     );
@@ -1201,7 +1235,7 @@ async function loadDeliveryDates(mobileNumber, state) {
 
     if (slots.length === 0) {
       console.log("   ⚠️  No slots found");
-      await sendWhatsAppMessage(
+      await sendOrderBotMessage(
         mobileNumber,
         "❌ No delivery slots available. Please try a different plant/variety."
       );
@@ -1224,12 +1258,12 @@ async function loadDeliveryDates(mobileNumber, state) {
     });
 
     console.log("   ✅ Slots loaded, sending to user");
-    await sendWhatsAppMessage(mobileNumber, message);
+    await sendOrderBotMessage(mobileNumber, message);
     console.log("   ✅ Slots message sent\n");
   } catch (error) {
     console.error("   ❌ Error loading slots:", error);
     console.error("   Stack:", error.stack);
-    await sendWhatsAppMessage(mobileNumber, "❌ Error loading delivery dates. Please try again.");
+    await sendOrderBotMessage(mobileNumber, "❌ Error loading delivery dates. Please try again.");
     state.step = "SELECT_PLANT";
     saveConversationState(mobileNumber, state);
     await loadPlants(mobileNumber, state);
@@ -1284,12 +1318,12 @@ async function handleDateSelection(mobileNumber, message, state) {
 2️⃣ रद्द करा`;
 
     console.log("   📋 Showing order summary to user");
-    await sendWhatsAppMessage(mobileNumber, summary);
+    await sendOrderBotMessage(mobileNumber, summary);
     state.step = "CONFIRM_ORDER";
     saveConversationState(mobileNumber, state);
   } else {
     console.log(`   ❌ Invalid selection (index ${selectedIdx} out of range)`);
-    await sendWhatsAppMessage(mobileNumber, "❌ Invalid selection. Please try again:");
+    await sendOrderBotMessage(mobileNumber, "❌ Invalid selection. Please try again:");
     await loadDeliveryDates(mobileNumber, state);
   }
   saveConversationState(mobileNumber, state);
@@ -1305,7 +1339,7 @@ async function handleConfirmation(mobileNumber, message, state) {
   
   if (message === "1" || message === "confirm" || message === "yes") {
     console.log("   ✅ User confirmed order");
-    await sendWhatsAppMessage(
+    await sendOrderBotMessage(
       mobileNumber,
       "⏳ आपली ऑर्डर प्रक्रिया करत आहे... कृपया प्रतीक्षा करा."
     );
@@ -1375,7 +1409,7 @@ async function handleConfirmation(mobileNumber, message, state) {
         const orderId = orderResult.data?.orderId || orderResult.orderId || "Processing...";
         console.log(`   ✅ Order created successfully! Order ID: ${orderId}`);
         
-        await sendWhatsAppMessage(
+        await sendOrderBotMessage(
           mobileNumber,
           `✅ *ऑर्डर यशस्वीरित्या झाली!*\n\n🧾 ऑर्डर ID: ${orderId}\n📅 डिलिव्हरी: ${state.order.deliveryDate}\n\nधन्यवाद 🙏\n\nदुसरी ऑर्डर करण्यासाठी HI टाइप करा`
         );
@@ -1404,7 +1438,7 @@ async function handleConfirmation(mobileNumber, message, state) {
     } catch (error) {
       console.error("\n   ❌ [ERROR] Error creating order:", error);
       console.error("   Stack:", error.stack);
-    await sendWhatsAppMessage(
+    await sendOrderBotMessage(
       mobileNumber,
       "❌ आपली ऑर्डर प्रक्रिया करताना त्रुटी आली. कृपया पुन्हा प्रयत्न करा किंवा सपोर्टशी संपर्क साधा."
     );
@@ -1412,7 +1446,7 @@ async function handleConfirmation(mobileNumber, message, state) {
     }
   } else {
     console.log("   ❌ User cancelled order");
-    await sendWhatsAppMessage(mobileNumber, "❌ Order cancelled.\n\nType HI to start again.");
+    await sendOrderBotMessage(mobileNumber, "❌ Order cancelled.\n\nType HI to start again.");
     clearConversationState(mobileNumber);
   }
 }
@@ -1422,10 +1456,11 @@ async function handleConfirmation(mobileNumber, message, state) {
  */
 export const webhookHealthCheck = catchAsync(async (req, res) => {
   return res.status(200).json(
-    generateResponse("success", "WhatsApp webhook endpoint is active", {
-      endpoint: "/api/v1/whatsapp-order/webhook",
-      method: "POST",
-      status: "ready",
+    generateResponse("success", "WhatsApp order bot status", {
+      orderChannel: getOrderBotChannel(),
+      orderFlowEnabled: process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true",
+      watiWebhook: "/api/v1/whatsapp-order/webhook",
+      webJsInbound: "messages to the scanned WhatsApp number (same session as alerts)",
       timestamp: new Date().toISOString(),
     })
   );
@@ -1448,6 +1483,12 @@ export const webhookDiagnostics = catchAsync(async (req, res) => {
     admin: {
       phone: ADMIN_PHONE,
       phoneFromEnv: process.env.ADMIN_PHONE || "❌ NOT SET",
+    },
+    orderBot: {
+      channel: getOrderBotChannel(),
+      flowEnabled: process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true",
+      useWati: process.env.WHATSAPP_ORDER_USE_WATI === "true",
+      useWebJs: isWhatsappOrderViaWebJs(),
     },
     timestamp: new Date().toISOString(),
   };
