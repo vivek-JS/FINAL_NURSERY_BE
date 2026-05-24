@@ -34,6 +34,8 @@ const slotTrailSchema = new Schema({
       "PACKETS_USED", // Packets marked as used
       "SOWING_READY_DATE_MAPPED", // Entry slot mapped to expected ready-date slot
       "READY_DAYS_UPDATED", // Plant ready days changed for slot timing
+      "ACTUAL_PLANTS_UPDATED",
+      "CLOSING_STOCK_UPDATED",
     ],
     required: true,
   },
@@ -71,6 +73,8 @@ const slotTrailSchema = new Schema({
     plantsSowed: { type: Number, default: 0 },
     totalBookedPlants: { type: Number, default: 0 },
     inProgressCount: { type: Number, default: 0 }, // Number of in-progress entries
+    actualPlants: { type: Number, default: 0 },
+    closingStock: { type: Number, default: 0 },
   },
   // After state (snapshot of values after change)
   after: {
@@ -82,6 +86,8 @@ const slotTrailSchema = new Schema({
     plantsSowed: { type: Number, default: 0 },
     totalBookedPlants: { type: Number, default: 0 },
     inProgressCount: { type: Number, default: 0 },
+    actualPlants: { type: Number, default: 0 },
+    closingStock: { type: Number, default: 0 },
   },
   previousTotalPlants: {
     type: Number,

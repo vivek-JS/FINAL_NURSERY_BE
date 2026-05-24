@@ -6,6 +6,11 @@ import moment from "moment"; // Optional: Use moment.js or other libraries for d
 import SlotTransferLog from "../models/slotTransfer.model.js";
 import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity, addPlantsToAvailable } from "../utility/bufferUtils.js";
 import { updateSlotBufferCalculations, updateAllSlotBuffers } from "../utility/slotBufferUpdater.js";
+import {
+  applyStockFieldUpdates,
+  logStockFieldChange,
+  STOCK_TRAIL_ACTION_LIST,
+} from "../utility/slotStockTrail.js";
 
 // Helper function to convert month name to number
 const getMonthNumber = (monthName) => {
@@ -790,9 +795,25 @@ export const updateSlotFieldById = async (req, res) => {
       "primarySowed",
     ]);
 
+    const stockPayload = {};
+    if (updates.actualPlants !== undefined) {
+      stockPayload.actualPlants = updates.actualPlants;
+    }
+    if (updates.closingStock !== undefined) {
+      stockPayload.closingStock = updates.closingStock;
+    }
+    if (Object.keys(stockPayload).length > 0) {
+      applyStockFieldUpdates(
+        targetSlot,
+        stockPayload,
+        performedBy,
+        "Slot update"
+      );
+    }
+
     // Update the slot fields (whitelist so new schema fields work on older documents)
     Object.keys(updates).forEach((key) => {
-      if (allowedSlotFields.has(key)) {
+      if (allowedSlotFields.has(key) && key !== "actualPlants" && key !== "closingStock") {
         targetSlot[key] = updates[key];
       }
     });
@@ -1147,7 +1168,17 @@ export const getPlantStats = async (req, res) => {
 // Function to manually add a slot to a plant subtype
 export const addManualSlot = async (req, res) => {
   try {
-    const { plantId, subtypeId, startDay, endDay, totalPlants, buffer = 0 } = req.body;
+    const {
+      plantId,
+      subtypeId,
+      startDay,
+      endDay,
+      totalPlants,
+      buffer = 0,
+      actualPlants: bodyActualPlants,
+      closingStock: bodyClosingStock,
+    } = req.body;
+    const performedBy = req.user?._id;
     
     // Validate required fields
     if (!plantId || !subtypeId || !startDay || !endDay || totalPlants === undefined) {
@@ -1236,6 +1267,9 @@ export const addManualSlot = async (req, res) => {
       });
     }
     
+    const actualPlants = Math.max(0, Number(bodyActualPlants) || 0);
+    const closingStock = Math.max(0, Number(bodyClosingStock) || 0);
+
     // Create the new slot with manual flag
     const newSlot = {
       startDay,
@@ -1249,7 +1283,31 @@ export const addManualSlot = async (req, res) => {
       month,
       isManual: true, // Flag to identify manually added slots
       plantReadyDays: 0,
+      actualPlants,
+      closingStock,
+      slotTrail: [],
     };
+
+    if (actualPlants > 0) {
+      logStockFieldChange(
+        newSlot,
+        "actualPlants",
+        0,
+        actualPlants,
+        performedBy,
+        "Manual slot create"
+      );
+    }
+    if (closingStock > 0) {
+      logStockFieldChange(
+        newSlot,
+        "closingStock",
+        0,
+        closingStock,
+        performedBy,
+        "Manual slot create"
+      );
+    }
     
     // Add the slot to the subtype slots array
     plantSlot.subtypeSlots[subtypeSlotIndex].slots.push(newSlot);
@@ -2503,10 +2561,229 @@ export const getSlotDetailsById = async (req, res) => {
   }
 };
 
+const sortSlotsByStartDay = (slots) => {
+  return [...slots].sort((a, b) => {
+    const ma = moment(a.startDay, "DD-MM-YYYY", true);
+    const mb = moment(b.startDay, "DD-MM-YYYY", true);
+    if (!ma.isValid() && !mb.isValid()) return 0;
+    if (!ma.isValid()) return 1;
+    if (!mb.isValid()) return -1;
+    return ma.valueOf() - mb.valueOf();
+  });
+};
+
+/** Flat slot list for stock entry panel */
+export const getStockEntry = async (req, res) => {
+  try {
+    const { plantId, subtypeId, year, month } = req.query;
+
+    if (!plantId || !subtypeId || !year) {
+      return res.status(400).json({
+        success: false,
+        message: "plantId, subtypeId, and year are required.",
+      });
+    }
+
+    if (
+      !mongoose.Types.ObjectId.isValid(plantId) ||
+      !mongoose.Types.ObjectId.isValid(subtypeId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid plantId or subtypeId.",
+      });
+    }
+
+    const plantSlot = await PlantSlot.findOne({
+      plantId: new mongoose.Types.ObjectId(plantId),
+      year: Number(year),
+    }).lean();
+
+    if (!plantSlot) {
+      return res.status(200).json({
+        success: true,
+        slots: [],
+        message: "No slots found for this plant and year.",
+      });
+    }
+
+    const subtypeSlot = (plantSlot.subtypeSlots || []).find(
+      (st) => st.subtypeId?.toString() === subtypeId.toString()
+    );
+
+    if (!subtypeSlot) {
+      return res.status(200).json({
+        success: true,
+        slots: [],
+        message: "No slots found for this subtype.",
+      });
+    }
+
+    let slots = subtypeSlot.slots || [];
+    if (month) {
+      slots = slots.filter((s) => s.month === month);
+    }
+    slots = sortSlotsByStartDay(slots);
+
+    const payload = slots.map((slot) => ({
+      _id: slot._id,
+      startDay: slot.startDay,
+      endDay: slot.endDay,
+      month: slot.month,
+      totalPlants: Number(slot.totalPlants) || 0,
+      totalBookedPlants: Number(slot.totalBookedPlants) || 0,
+      availablePlants: getSlotEffectiveAvailablePlants(slot),
+      plantsSowed: Number(slot.plantsSowed) || 0,
+      actualPlants: Number(slot.actualPlants) || 0,
+      closingStock: Number(slot.closingStock) || 0,
+      status: slot.status,
+      isManual: slot.isManual,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      slots: payload,
+      count: payload.length,
+    });
+  } catch (error) {
+    console.error("Error fetching stock entry slots:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error.",
+      error: error.message,
+    });
+  }
+};
+
+/** Bulk update actualPlants / closingStock with per-field trail */
+export const bulkStockEntry = async (req, res) => {
+  try {
+    const { updates } = req.body;
+    const performedBy = req.user?._id;
+
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "updates array is required.",
+      });
+    }
+
+    let updatedCount = 0;
+    const errors = [];
+    const plantSlotsToSave = new Map();
+
+    for (const row of updates) {
+      const { slotId, actualPlants, closingStock } = row || {};
+
+      if (!slotId || !mongoose.Types.ObjectId.isValid(slotId)) {
+        errors.push({ slotId, message: "Invalid slotId" });
+        continue;
+      }
+
+      const stockPayload = {};
+      if (actualPlants !== undefined) {
+        const n = Number(actualPlants);
+        if (!Number.isFinite(n) || n < 0) {
+          errors.push({ slotId, message: "actualPlants must be a non-negative number" });
+          continue;
+        }
+        stockPayload.actualPlants = Math.floor(n);
+      }
+      if (closingStock !== undefined) {
+        const n = Number(closingStock);
+        if (!Number.isFinite(n) || n < 0) {
+          errors.push({ slotId, message: "closingStock must be a non-negative number" });
+          continue;
+        }
+        stockPayload.closingStock = Math.floor(n);
+      }
+
+      if (Object.keys(stockPayload).length === 0) {
+        errors.push({ slotId, message: "No stock fields to update" });
+        continue;
+      }
+
+      try {
+        let plantSlot = null;
+        for (const doc of plantSlotsToSave.values()) {
+          const found = doc.subtypeSlots.some((st) =>
+            (st.slots || []).some((s) => s._id.toString() === slotId)
+          );
+          if (found) {
+            plantSlot = doc;
+            break;
+          }
+        }
+
+        if (!plantSlot) {
+          plantSlot = await PlantSlot.findOne({
+            "subtypeSlots.slots._id": new mongoose.Types.ObjectId(slotId),
+          });
+          if (!plantSlot) {
+            errors.push({ slotId, message: "Slot not found" });
+            continue;
+          }
+        }
+
+        let targetSlot = null;
+        for (const subtype of plantSlot.subtypeSlots) {
+          const slot = subtype.slots.find((s) => s._id.toString() === slotId);
+          if (slot) {
+            targetSlot = slot;
+            break;
+          }
+        }
+
+        if (!targetSlot) {
+          errors.push({ slotId, message: "Slot not found" });
+          continue;
+        }
+
+        const changed = applyStockFieldUpdates(
+          targetSlot,
+          stockPayload,
+          performedBy,
+          "Stock entry panel"
+        );
+
+        if (changed) {
+          updatedCount += 1;
+        }
+
+        plantSlotsToSave.set(plantSlot._id.toString(), plantSlot);
+      } catch (rowError) {
+        errors.push({ slotId, message: rowError.message });
+      }
+    }
+
+    for (const plantSlot of plantSlotsToSave.values()) {
+      await plantSlot.save();
+    }
+
+    return res.status(200).json({
+      success: errors.length === 0,
+      updatedCount,
+      errors,
+      message:
+        errors.length === 0
+          ? `Updated ${updatedCount} slot(s).`
+          : `Updated ${updatedCount} slot(s) with ${errors.length} error(s).`,
+    });
+  } catch (error) {
+    console.error("Error in bulk stock entry:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error.",
+      error: error.message,
+    });
+  }
+};
+
 // Get slot trail history with populated user info
 export const getSlotTrail = async (req, res) => {
   try {
     const { slotId } = req.params;
+    const { types } = req.query;
     
     if (!slotId) {
       return res.status(400).json({ 
@@ -2656,6 +2933,8 @@ export const getSlotTrail = async (req, res) => {
             'SOWING_COMPLETED': 'Sowing Completed',
             'SOWING_PRIMARY': 'Primary Location Sowing',
             'SOWING_OFFICE': 'Office Location Sowing',
+            'ACTUAL_PLANTS_UPDATED': 'Actual Plants Updated',
+            'CLOSING_STOCK_UPDATED': 'Closing Stock Updated',
           };
           return map[action] || (action ? action.replace(/_/g, ' ') : 'Unknown Activity');
         };
@@ -2691,6 +2970,8 @@ export const getSlotTrail = async (req, res) => {
             plantsSowed: trail.before?.plantsSowed ?? 0,
             totalBookedPlants: trail.before?.totalBookedPlants ?? 0,
             inProgressCount: trail.before?.inProgressCount ?? 0,
+            actualPlants: trail.before?.actualPlants ?? 0,
+            closingStock: trail.before?.closingStock ?? 0,
           },
           // After state with defaults
           after: {
@@ -2702,6 +2983,8 @@ export const getSlotTrail = async (req, res) => {
             plantsSowed: trail.after?.plantsSowed ?? 0,
             totalBookedPlants: trail.after?.totalBookedPlants ?? 0,
             inProgressCount: trail.after?.inProgressCount ?? 0,
+            actualPlants: trail.after?.actualPlants ?? 0,
+            closingStock: trail.after?.closingStock ?? 0,
           },
           // Legacy fields (for backward compatibility)
           previousTotalPlants: trail.previousTotalPlants ?? trail.before?.totalPlants ?? 0,
@@ -2741,11 +3024,21 @@ export const getSlotTrail = async (req, res) => {
         };
       });
 
+    let trailResponse = allTrailEntries;
+    if (types === "stock") {
+      trailResponse = allTrailEntries.filter((entry) =>
+        STOCK_TRAIL_ACTION_LIST.includes(entry.action)
+      );
+    }
+
     res.status(200).json({
       success: true,
-      data: allTrailEntries,
+      data: trailResponse,
       primarySowingEntries,
-      message: allTrailEntries.length > 0 ? "Slot trail retrieved successfully" : "No trail entries found",
+      message:
+        trailResponse.length > 0
+          ? "Slot trail retrieved successfully"
+          : "No trail entries found",
     });
     
   } catch (error) {

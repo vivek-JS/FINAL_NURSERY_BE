@@ -25,6 +25,8 @@ import {
   transferCapacity,
   getOrdersTransferTargets,
   transferOrders,
+  getStockEntry,
+  bulkStockEntry,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -34,6 +36,8 @@ slotRouter.get("/slots", getAllSlots);
 slotRouter.get("/slots/get-plants", getPlantNames);
 slotRouter.get("/slots/subtyps", getSubtypesByPlant);
 slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
+slotRouter.get("/slots/stock-entry", getStockEntry);
+slotRouter.put("/slots/stock-entry/bulk", bulkStockEntry);
 slotRouter.get("/slots/simple", getSimpleSlots);
 slotRouter.get("/slots/transfer-options", getSlotTransferOptions);
 slotRouter.get("/slots/transfer-capacity-options", getTransferCapacityOptions);

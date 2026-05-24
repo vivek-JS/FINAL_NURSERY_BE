@@ -1337,7 +1337,7 @@ const getDealerLedger = async (req, res) => {
           select: "orderId numberOfPlants orderFor farmer dealerOrder",
           populate: { path: "farmer", select: "name" },
         })
-        .sort({ entryDate: -1 })
+        .sort({ createdAt: -1, _id: -1 })
         .skip(skip)
         .limit(limitNum)
         .lean(),

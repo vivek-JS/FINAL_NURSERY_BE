@@ -78,6 +78,7 @@ const dealerLedgerEntrySchema = new mongoose.Schema(
 );
 
 dealerLedgerEntrySchema.index({ dealer: 1, entryDate: 1 });
+dealerLedgerEntrySchema.index({ dealer: 1, createdAt: -1 });
 dealerLedgerEntrySchema.index({ orderId: 1 });
 
 dealerLedgerEntrySchema.pre("validate", function (next) {

@@ -7,8 +7,53 @@ import {
 
 const ORDER_RECEIVABLE_REF_TYPES = ["ORDER_BOOKING", "ORDER_RECEIVABLE_PAYMENT"];
 
+const REF_TYPE_SORT_ORDER = {
+  ORDER_BOOKING: 0,
+  ORDER_RECEIVABLE_PAYMENT: 1,
+};
+
 export function roundLedgerMoney(n) {
   return Math.round(Number(n || 0) * 100) / 100;
+}
+
+/** Date-only paymentDate (midnight UTC) sorts before same-day bookings — use collection time instead. */
+export function resolveReceivablePaymentEntryDate(payment) {
+  if (payment?.paymentDate) {
+    const d = new Date(payment.paymentDate);
+    if (!Number.isNaN(d.getTime())) {
+      const isUtcMidnight =
+        d.getUTCHours() === 0 &&
+        d.getUTCMinutes() === 0 &&
+        d.getUTCSeconds() === 0 &&
+        d.getUTCMilliseconds() === 0;
+      if (isUtcMidnight) {
+        if (payment.updatedAt) return new Date(payment.updatedAt);
+        if (payment.createdAt) return new Date(payment.createdAt);
+      }
+      return d;
+    }
+  }
+  if (payment?.updatedAt) return new Date(payment.updatedAt);
+  return new Date();
+}
+
+/**
+ * Chronological order for running outstanding (matches balanceBefore/After write order).
+ * Uses createdAt — not entryDate alone — so date-only paymentDate cannot sort before bookings.
+ */
+export function sortReceivableLedgerEntriesChronologically(entries) {
+  return [...entries].sort((a, b) => {
+    const ca = new Date(a.createdAt || a.entryDate).getTime();
+    const cb = new Date(b.createdAt || b.entryDate).getTime();
+    if (ca !== cb) return ca - cb;
+    const oa = REF_TYPE_SORT_ORDER[a.refType] ?? 9;
+    const ob = REF_TYPE_SORT_ORDER[b.refType] ?? 9;
+    if (oa !== ob) return oa - ob;
+    const ta = new Date(a.entryDate).getTime();
+    const tb = new Date(b.entryDate).getTime();
+    if (ta !== tb) return ta - tb;
+    return String(a._id).localeCompare(String(b._id));
+  });
 }
 
 /** Running order-value outstanding for dealer (ledger only — not wallet cash). */
@@ -21,12 +66,7 @@ export async function getLastDealerOrderOutstanding(dealerId, session) {
   const docs = await q;
   if (!docs.length) return 0;
 
-  const sorted = [...docs].sort((a, b) => {
-    const ta = new Date(a.entryDate).getTime();
-    const tb = new Date(b.entryDate).getTime();
-    if (ta !== tb) return ta - tb;
-    return String(a._id).localeCompare(String(b._id));
-  });
+  const sorted = sortReceivableLedgerEntriesChronologically(docs);
 
   let running = 0;
   for (const d of sorted) {
@@ -261,11 +301,7 @@ export const ensureDealerOrderReceivablePaymentCredit = async (
     reference: String(order.orderId ?? ""),
     description: `Payment collected — order ${order.orderId ?? ""} (outstanding reduced)`,
     createdBy: userId,
-    entryDate: payment.paymentDate
-      ? new Date(payment.paymentDate)
-      : payment.updatedAt
-        ? new Date(payment.updatedAt)
-        : new Date(),
+    entryDate: resolveReceivablePaymentEntryDate(payment),
     metadata: {
       tracksOrderOutstanding: true,
       modeOfPayment: payment.modeOfPayment,
@@ -321,6 +357,41 @@ export async function syncDealerLedgerForOrder(order, { userId, session } = {}) 
 }
 
 /**
+ * Fix payment rows whose entryDate (date-only) sorts before the order booking on the same order.
+ */
+export async function normalizeReceivablePaymentEntryDates(dealerId) {
+  const payments = await DealerLedgerEntry.find({
+    dealer: dealerId,
+    refType: "ORDER_RECEIVABLE_PAYMENT",
+  }).lean();
+
+  let fixed = 0;
+  for (const payment of payments) {
+    if (!payment.orderId) continue;
+    const booking = await DealerLedgerEntry.findOne({
+      dealer: dealerId,
+      orderId: payment.orderId,
+      refType: "ORDER_BOOKING",
+    }).lean();
+    if (!booking?.entryDate || !payment.entryDate) continue;
+
+    const payTs = new Date(payment.entryDate).getTime();
+    const bookTs = new Date(booking.entryDate).getTime();
+    if (payTs >= bookTs) continue;
+
+    const nextDate = payment.createdAt
+      ? new Date(payment.createdAt)
+      : booking.entryDate;
+    await DealerLedgerEntry.updateOne(
+      { _id: payment._id },
+      { $set: { entryDate: nextDate } }
+    );
+    fixed += 1;
+  }
+  return fixed;
+}
+
+/**
  * Backfill missing dealer ledger rows for orders linked to this dealer.
  */
 export async function repairDealerLedgerForDealer(dealerId, { userId, limit = 300 } = {}) {
@@ -348,5 +419,7 @@ export async function repairDealerLedgerForDealer(dealerId, { userId, limit = 30
     paymentsCreated += result.paymentsCreated || 0;
   }
 
-  return { scanned, bookingsCreated, paymentsCreated };
+  const entryDatesFixed = await normalizeReceivablePaymentEntryDates(dealerId);
+
+  return { scanned, bookingsCreated, paymentsCreated, entryDatesFixed };
 };
