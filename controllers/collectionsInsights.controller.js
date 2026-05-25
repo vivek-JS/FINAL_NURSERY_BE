@@ -455,7 +455,8 @@ export const getCollectionsOverview = catchAsync(async (req, res) => {
   const {
     startDate,
     endDate,
-    dateField = "booking",
+    dateField: dateFieldParam,
+    dateRangeField,
     plantId,
     subtypeId,
     varietyName,
@@ -499,6 +500,8 @@ export const getCollectionsOverview = catchAsync(async (req, res) => {
     });
   }
 
+  /** dateRangeField is whitelisted on older prod; dateField on newer deploys. */
+  const dateField = dateFieldParam || dateRangeField || "booking";
   const useDelivery = String(dateField).toLowerCase() === "delivery";
   const reportDateStr = istCalendarDateString(new Date());
   const reportDateIso = `${reportDateStr}T12:00:00.000Z`;

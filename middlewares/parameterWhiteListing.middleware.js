@@ -188,6 +188,7 @@ const allowedParams = [
 /** Effective whitelist: array + mandatory extras (survives accidental removal from `allowedParams`). */
 const allowedQueryKeys = new Set(allowedParams);
 allowedQueryKeys.add("dateRangeField"); // GET /order/getOrders — booking | delivery date range
+allowedQueryKeys.add("dateField"); // GET /insights/collections/overview (alias of dateRangeField)
 allowedQueryKeys.add("plantTotals"); // GET /order/getOrders — totalPlantsSum envelope (must survive merges)
 allowedQueryKeys.add("queueFarmReadyOnly"); // GET /order/dashboard-tab-counts + ready tab queue filter
 allowedQueryKeys.add("paged"); // GET /dispatched — pagination toggle (also in allowedParams; duplicate for safety)
