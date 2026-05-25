@@ -107,11 +107,6 @@ function orderCustomerForWatiTemplate(order) {
   return { name: "Customer", village: "N/A", taluka };
 }
 
-function isBananaOrderForAcceptedWhatsApp(order, plantSubtypeName = "") {
-  const plantName = order?.plantName?.name || "";
-  return isBananaPlantName(plantName, plantSubtypeName);
-}
-
 /**
  * Dealer / salesperson copy: message goes TO dealer phone; template uses farmer/customer name.
  */
@@ -236,15 +231,6 @@ async function sendOrderAcceptedWhatsAppForOrder(order) {
   }
 
   const orderDetails = await buildOrderAcceptedWhatsAppDetails(order);
-
-  if (!isBananaOrderForAcceptedWhatsApp(order, orderDetails.plantSubtype)) {
-    return {
-      success: false,
-      error: {
-        message: "Order accepted WhatsApp is only sent for Banana orders",
-      },
-    };
-  }
 
   const watiTaluka = orderDetails.taluka || resolveOrderTalukaForWati(order);
 
@@ -3846,13 +3832,6 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
     .populate("plantName", "name");
   if (!order) {
     return res.status(404).json({ message: "Order not found" });
-  }
-
-  const plantSubtypeName = await resolveOrderPlantSubtypeName(order);
-  if (!isBananaOrderForAcceptedWhatsApp(order, plantSubtypeName)) {
-    return res.status(400).json({
-      message: "Order accepted WhatsApp is only sent for Banana orders",
-    });
   }
 
   const result = await sendOrderAcceptedWhatsAppForOrder(order);

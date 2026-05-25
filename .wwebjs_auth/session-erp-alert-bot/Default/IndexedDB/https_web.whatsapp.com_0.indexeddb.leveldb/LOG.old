@@ -1,2 +1,18 @@
-2026/05/24-14:44:38.998 149cf2 Creating DB /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb since it was missing.
-2026/05/24-14:44:39.008 149cf2 Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/05/25-08:57:06.268 ecaf Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/05/25-08:57:06.269 ecaf Recovering log #167
+2026/05/25-08:57:06.269 ecaf Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/000167.log 
+2026/05/25-08:57:06.269 ecaf Delete type=2 #166
+2026/05/25-08:57:06.269 ecaf Delete type=2 #151
+2026/05/25-08:57:06.633 ecb3 Manual compaction at level-0 from '\x00@\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00A\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/05/25-08:57:06.633 ecb3 Manual compaction at level-1 from '\x00@\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00A\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/05/25-08:57:06.634 ecaf Level-0 table #173: started
+2026/05/25-08:57:06.635 ecaf Level-0 table #173: 4616 bytes OK
+2026/05/25-08:57:06.637 ecaf Delete type=0 #167
+2026/05/25-08:57:06.637 ecaf Manual compaction at level-0 from '\x00A\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00B\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/05/25-08:57:06.637 ecaf Manual compaction at level-1 from '\x00A\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00B\x00\x00\x00' @ 0 : 0; will stop at '\x00A\x0a\x02\x03\x00\x00\x00\x00\x00\x00\xf0?' @ 201201 : 1
+2026/05/25-08:57:06.637 ecaf Compacting 1@1 + 1@2 files
+2026/05/25-08:57:06.638 ecaf Generated table #174@1: 24 keys, 620 bytes
+2026/05/25-08:57:06.638 ecaf Compacted 1@1 + 1@2 files => 620 bytes
+2026/05/25-08:57:06.639 ecaf compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/05/25-08:57:06.639 ecaf Delete type=2 #173
+2026/05/25-08:57:06.639 ecaf Manual compaction at level-1 from '\x00A\x0a\x02\x03\x00\x00\x00\x00\x00\x00\xf0?' @ 201201 : 1 .. '\x00B\x00\x00\x00' @ 0 : 0; will stop at (end)

@@ -1,2 +1,3 @@
-2026/05/24-14:44:55.202 14a23a Creating DB /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb since it was missing.
-2026/05/24-14:44:55.225 14a23a Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/MANIFEST-000001
+2026/05/25-08:57:44.086 f05b Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/MANIFEST-000001
+2026/05/25-08:57:44.087 f05b Recovering log #3
+2026/05/25-08:57:44.087 f05b Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/000003.log 

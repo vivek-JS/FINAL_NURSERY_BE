@@ -22,6 +22,7 @@
     "seed:gadi-fleet:prod": "node scripts/seed-gadi-fleet-from-xlsx.js --prod",
     "report:dealer-subtype-xlsx": "node scripts/export-dealers-subtype-quantity-xlsx.js",
     "report:papaya-taiwan-xlsx": "node scripts/export-papaya-taiwan-xlsx.js",
+    "report:banana-advance-july-pdf": "node scripts/export-banana-advance-july-pdf.js",
     "script:remove-wallet-tx": "node scripts/remove-dealer-wallet-embedded-transaction.js",
     "script:remove-order-payments-ledger": "node scripts/remove-order-payments-and-dealer-ledger.js",
     "backup": "node scripts/create-local-backup.js"

@@ -205,12 +205,11 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       plantName,
       orderDetails.plantSubtype
     );
-    if (!isBananaPlantName(plantName, orderDetails.plantSubtype)) {
-      return { success: false, error: "Order accepted WhatsApp is only sent for Banana orders" };
-    }
-
-    const acceptPlant = plantParam;
-    const acceptSubtype = subtypeParam;
+    const isPapayaAccept = /papaya/i.test(
+      `${plantName || ""} ${orderDetails.plantSubtype || ""}`
+    );
+    const acceptPlant = isPapayaAccept ? "Papaya" : plantParam;
+    const acceptSubtype = isPapayaAccept ? WATI_MERGED_SUBTYPE_PLACEHOLDER : subtypeParam;
 
     const templateOrderId =
       orderDetails.publicOrderCode?.toString() || orderId?.toString() || "N/A";

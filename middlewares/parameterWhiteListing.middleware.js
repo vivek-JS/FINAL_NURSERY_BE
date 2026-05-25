@@ -172,6 +172,14 @@ const allowedParams = [
   "dueOnly", // GET /insights/dashboard — overdue open orders only
   "excludeReadyForDispatch", // GET /insights/dashboard — omit READY_FOR_DISPATCH from expected KPIs
   "varietyName", // GET /insights/dashboard — plant subtype name with plantId
+  "dateField", // GET /insights/collections/overview — booking | delivery date range field
+  "paymentBucket", // GET /insights/collections/overview — all | has_collected | has_pending | fully_paid | partial | unpaid
+  "paymentBuckets", // GET /insights/collections/overview — comma-separated payment bucket filters
+  "paymentStatuses", // GET /insights/collections/overview — COLLECTED,PENDING on payment lines
+  "paymentTypes", // GET /insights/collections/overview — advance,after_dispatch timing on payment lines
+  "salesPersonIds", // GET /insights/collections/overview — comma-separated salesperson ObjectIds
+  "advanceOnly", // GET /insights/collections/overview — payment-entry view (advance lines)
+  "excludeTestFarmers", // GET /insights/collections/overview — exclude internal test farmer mobiles
   // One-click agri load link params
   "orderNumber",
   "actorPhone",
@@ -244,6 +252,12 @@ const parameterWhiteListing = (req, res, next) => {
     req.method === "GET" &&
     (dispatchListOnly === "/api/v1/dispatched" || dispatchListOnly === "/api/v1/dispatched/")
   ) {
+    return next();
+  }
+
+  /** Agri insights hub — dashboard + collections evolve query flags; controllers ignore unknown keys. */
+  const insightsPath = stripQuery(req.originalUrl || req.url || req.path || "") || "";
+  if (req.method === "GET" && insightsPath.includes("/api/v1/insights")) {
     return next();
   }
 
