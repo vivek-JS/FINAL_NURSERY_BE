@@ -2,8 +2,8 @@ import Order from "../models/order.model.js";
 import {
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
-  parseYmdRange,
 } from "../utility/istOrderDateStats.js";
+import { parseCentralReportDateRange } from "../utility/centralReportEngine/dateRange.js";
 import {
   aggregateDueSummary,
   duePipelineMatch,
@@ -219,7 +219,7 @@ async function fetchPersonBreakdownMetrics(
 }
 
 function parseRange(startDate, endDate) {
-  const parsed = parseYmdRange(startDate, endDate);
+  const parsed = parseCentralReportDateRange(startDate, endDate);
   if (parsed.error) {
     return { error: parsed.error, statusCode: 400 };
   }

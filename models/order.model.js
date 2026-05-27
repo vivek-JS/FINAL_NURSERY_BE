@@ -3,6 +3,11 @@ import {
   patchPaymentUpdateOperation,
   sanitizePaymentArrayForOrder,
 } from "../utils/paymentTiming.js";
+import {
+  allocateNextOrderId,
+  ORDER_ID_MIN,
+  ORDER_ID_MAX,
+} from "../services/orderIdAllocation.service.js";
 
 // Define a schema for delivery change history
 const deliveryChangeSchema = new Schema(
@@ -316,6 +321,17 @@ const orderSchema = new Schema(
       type: Number,
       unique: true,
       required: true,
+      validate: {
+        validator(value) {
+          if (!this.isNew) return true;
+          return (
+            Number.isFinite(value) &&
+            value >= ORDER_ID_MIN &&
+            value <= ORDER_ID_MAX
+          );
+        },
+        message: `orderId must be between ${ORDER_ID_MIN} and ${ORDER_ID_MAX} for new orders`,
+      },
     },
     is_excel: {
       type: Boolean,
@@ -877,19 +893,14 @@ orderSchema.methods.setAdditionalPlantsChangeMeta = function (meta = {}) {
   return this;
 };
 
-// Pre-save middleware to generate unique orderId
+// Pre-save: unique 4-digit orderId (1000–9999), then 5-digit when tier 1 is full
 orderSchema.pre("save", async function (next) {
   if (!this.isNew || this.orderId) return next();
 
   try {
-    const maxOrder = await this.constructor
-      .findOne()
-      .sort({ orderId: -1 })
-      .select("orderId");
-    // Keep business order ids 4-digit first (1000-9999), then continue 5+ digits.
-    // If legacy rows exist below 1000, start from 1000.
-    const maxOrderId = Number(maxOrder?.orderId || 0);
-    this.orderId = maxOrderId < 1000 ? 1000 : maxOrderId + 1;
+    this.orderId = await allocateNextOrderId(this.constructor, {
+      session: this.$session(),
+    });
     next();
   } catch (err) {
     next(err);

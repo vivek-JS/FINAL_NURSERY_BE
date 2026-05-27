@@ -268,15 +268,11 @@ export const importExcelData = catchAsync(async (req, res) => {
         // Generate import batch ID for this import session
         const importBatchId = `import-${Date.now()}`;
         const dryRun = toBoolean(req.body?.dryRun ?? req.query?.dryRun);
-        const forceFourDigitOrderId = !toBoolean(
-          req.body?.disableFourDigitOrderId ?? req.query?.disableFourDigitOrderId
-        );
 
         results = await importOrdersAndFarmers(req.file.buffer, {
           importBatchId: importBatchId,
           sourceFilename: req.file.originalname || 'unknown.xlsx',
           dryRun,
-          forceFourDigitOrderId,
         });
         
         // Create unprocessed rows file from failed imports

@@ -3,8 +3,8 @@ import {
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
   istDateStringExpr,
-  parseYmdRange,
 } from "../utility/istOrderDateStats.js";
+import { parseCentralReportDateRange } from "../utility/centralReportEngine/dateRange.js";
 import {
   aggregateDueSummary,
   aggregatePastDueDeliveryRows,
@@ -57,7 +57,7 @@ const PLANT_SUBTYPE_STAGES = [
 
 export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
   const { dueOnly = false, includeAllPastDue = false } = options;
-  const parsed = parseYmdRange(startDate, endDate);
+  const parsed = parseCentralReportDateRange(startDate, endDate);
   if (parsed.error) {
     return { error: parsed.error, statusCode: 400 };
   }

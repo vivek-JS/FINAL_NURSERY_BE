@@ -1,3 +1,5 @@
-2026/05/27-15:29:36.039 282884 Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/MANIFEST-000001
-2026/05/27-15:29:36.040 282884 Recovering log #17
-2026/05/27-15:29:36.040 282884 Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/000017.log 
+2026/05/27-18:13:49.811 29ebfd Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/MANIFEST-000001
+2026/05/27-18:13:49.813 29ebfd Recovering log #17
+2026/05/27-18:13:49.814 29ebfd Level-0 table #20: started
+2026/05/27-18:13:49.817 29ebfd Level-0 table #20: 26699 bytes OK
+2026/05/27-18:13:49.819 29ebfd Delete type=0 #17

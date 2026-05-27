@@ -17,6 +17,10 @@ import {
   recordFarmerPlantLedgerPaymentTransition,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { sanitizePaymentArrayForOrder } from "../utils/paymentTiming.js";
+import {
+  allocateNextOrderId,
+  reserveOrderId,
+} from "../services/orderIdAllocation.service.js";
 
 // Function to parse Excel date serial number
 function parseExcelDate(serialNumber) {
@@ -76,11 +80,9 @@ function parseOrderId(bookingNo) {
   const bookingStr = bookingNo.toString().trim();
   const numericValue = parseInt(bookingStr, 10);
 
-  // If booking number is 0, generate a random 5-digit ID
+  // Booking 0 — orderId comes from allocator, not from sheet
   if (numericValue === 0) {
-    console.log(`⚠️  Booking number is 0, generating random 5-digit ID`);
-    const randomId = Math.floor(Math.random() * 90000) + 10000; // 5-digit random number (10000-99999)
-    return randomId;
+    return null;
   }
 
   // Handle new format: "2025/2", "2025/10", etc.
@@ -112,15 +114,9 @@ function parseOrderId(bookingNo) {
     return parseInt(numericMatch[1], 10);
   }
 
-  // If no format matches, create a hash-based ID
-  console.log(`⚠️  Unknown booking number format: "${bookingStr}" - creating hash-based ID`);
-  let hash = 0;
-  for (let i = 0; i < bookingStr.length; i++) {
-    const char = bookingStr.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  return Math.abs(hash);
+  // Unknown format — orderId comes from allocator; keep booking in notes
+  console.log(`⚠️  Unknown booking number format: "${bookingStr}" (legacy reference only)`);
+  return null;
 }
 
 const splitFarmerName = (rawName) => {
@@ -159,18 +155,6 @@ const readExpectedDeliveryRaw = (row) => {
     row["Expected\r\nDelivery\r\nDate"] ??
     null
   );
-};
-
-const generateNextFourDigitNumericOrderId = async ({ usedOrderIds }) => {
-  for (let id = 1000; id <= 9999; id++) {
-    if (usedOrderIds.has(id)) continue;
-    const exists = await Order.exists({ orderId: id });
-    if (!exists) {
-      usedOrderIds.add(id);
-      return id;
-    }
-  }
-  throw new Error("No free 4-digit orderId available in range 1000-9999");
 };
 
 const findMatchingEmployeeByReference = (referenceValue, employees) => {
@@ -1111,7 +1095,6 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
   const importBatchId = options.importBatchId || `import-${Date.now()}`;
   const sourceFilename = options.sourceFilename || 'unknown.xlsx';
   const dryRun = !!options.dryRun;
-  const forceFourDigitOrderId = options.forceFourDigitOrderId !== false;
 
   const workbook = XLSX.read(fileBuffer, {
     type: "buffer",
@@ -1150,7 +1133,6 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
   const uniqueSalesPersons = new Set();
   const uniquePlants = new Set();
   const uniqueTrays = new Set();
-  const uniqueOrderIds = new Set();
   const validPhoneNumbers = new Set();
   const usedOrderIds = new Set();
 
@@ -1162,36 +1144,27 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
       console.log(`⏭️  Skipping empty row ${i + 2}`);
       continue;
     }
-    
-    const orderNumber = parseOrderId(row["Booking NO."]);
+
+    const legacyBookingRef =
+      row["Booking NO."] !== null &&
+      row["Booking NO."] !== undefined &&
+      row["Booking NO."] !== ""
+        ? String(row["Booking NO."]).trim()
+        : null;
+
     const rawCropName = normalizeName(row["Crop"]);
     const cropName = extractMainCropName(rawCropName); // Extract main crop name
     const mappedVarietyName = mapVarietyName(cropName, row["Variety"]);
     
-    // Track generated random IDs for 0 booking numbers
-    if (row["Booking NO."] == 0 || row["Booking NO."] === "0") {
-      results.generatedOrderIds.push({
-        row: i + 2, // Excel row number (1-indexed with header)
-        bookingNo: row["Booking NO."],
-        generatedOrderId: orderNumber,
-        name: row["Name"]
-      });
-    }
-    
     processedData.push({
       ...row,
-      orderNumber,
+      legacyBookingRef,
       normalizedCrop: cropName,
       mappedVarietyName,
       date: convertDate(row["Date"]),
       slots: convertDate(readExpectedDeliveryRaw(row)),
       "Advance Date": row["Advance\r\nDate"] ? convertDate(row["Advance\r\nDate"]) : null,
     });
-
-    uniqueOrderIds.add(orderNumber);
-    if (!Number.isNaN(Number(orderNumber))) {
-      usedOrderIds.add(Number(orderNumber));
-    }
     uniqueSalesPersons.add(row["Refrence"]);
     if (cropName) {
       uniquePlants.add(cropName);
@@ -1217,13 +1190,11 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
   // Step 2: Bulk fetch all reference data first
   console.log("📥 Step 2: Bulk fetching reference data...");
   const [
-    existingOrders,
     existingFarmers,
     salesPersons,
     plants,
     trays
   ] = await Promise.all([
-    Order.find({ orderId: { $in: Array.from(uniqueOrderIds) } }).lean(),
     Farmer.find({
       $or: [
         { mobileNumber: { $in: Array.from(validPhoneNumbers) } },
@@ -1250,12 +1221,6 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
 
   // Step 3: Build fast lookup maps
   console.log("🗺️  Step 3: Building lookup maps...");
-  const orderMap = new Map(existingOrders.map(o => [o.orderId, o]));
-  existingOrders.forEach((o) => {
-    if (!Number.isNaN(Number(o.orderId))) {
-      usedOrderIds.add(Number(o.orderId));
-    }
-  });
   const farmerPhoneMap = new Map();
   const salesPersonMap = new Map(salesPersons.map(s => [normalizeName(s.name), s]));
   
@@ -1580,17 +1545,10 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
           orderStatus = 'ACCEPTED';
         }
 
-        // Always create new order and allocate fresh orderId.
-        let finalOrderId = row.orderNumber;
-        if (forceFourDigitOrderId) {
-          finalOrderId = await generateNextFourDigitNumericOrderId({ usedOrderIds });
-        } else {
-          if (usedOrderIds.has(finalOrderId) || await Order.exists({ orderId: finalOrderId })) {
-            finalOrderId = await generateNextFourDigitNumericOrderId({ usedOrderIds });
-          } else {
-            usedOrderIds.add(finalOrderId);
-          }
-        }
+        const finalOrderId = await allocateNextOrderId(Order, {
+          reserved: usedOrderIds,
+        });
+        reserveOrderId(usedOrderIds, finalOrderId);
 
         // Set delivery date from Expected Del. Date (mandatory)
         let finalDeliveryDate = null;
@@ -1603,6 +1561,9 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
           }
         }
         let orderNotes = row["Remark"] || "";
+        if (row.legacyBookingRef) {
+          orderNotes = `${orderNotes}${orderNotes ? " | " : ""}Legacy booking: ${row.legacyBookingRef}`;
+        }
         const orderByValue = (row["Order By"] || row["Order\r\nBy"] || row["Order\nBy"] || "").toString().trim();
         if (orderByValue) {
           orderNotes = `${orderNotes}${orderNotes ? " | " : ""}Order By: ${orderByValue}`;
@@ -2567,6 +2528,8 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
     
     console.log(`📊 Processing ${rowsToProcess.length} row(s)${rowLimit ? ` (limited to first ${rowLimit} rows)` : ' (all rows)'} out of ${rows.length} total rows`);
 
+    const usedOrderIds = new Set();
+
     // Process each row
     for (let rowIndex = 0; rowIndex < rowsToProcess.length; rowIndex++) {
       const row = rowsToProcess[rowIndex];
@@ -2589,15 +2552,14 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
           bookingDate = new Date();
         }
 
-        // 2. Generate Booking NO. (Year + Month + Sequence)
+        // 2. Legacy booking reference from sheet (not used as numeric orderId)
         let bookingNo = row["Booking NO."];
         if (!bookingNo || bookingNo === "" || bookingNo === 0) {
           const year = moment(bookingDate).format("YYYY");
           const month = moment(bookingDate).format("MM");
-          const maxOrder = await Order.findOne().sort({ orderId: -1 }).select("orderId").lean();
-          const sequence = maxOrder ? (maxOrder.orderId % 1000) + 1 : 1;
-          bookingNo = `${year}${month}${sequence.toString().padStart(3, "0")}`;
+          bookingNo = `${year}${month}-import`;
         }
+        const legacyBookingRef = String(bookingNo).trim();
 
         // 3. Find or create farmer by mobile number
         let farmer = null;
@@ -3014,14 +2976,17 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
         const rate = parseFloat(row["Rate"] || 0);
         const expectedNursery = (row["Expected"] || "").toString().trim();
 
-        // Parse orderId from booking number
-        const parsedOrderId = parseOrderId(bookingNo);
-        
-        // Note: We're creating all orders, even if duplicates exist
-        // This allows multiple orders with the same booking number if needed
+        const allocatedOrderId = await allocateNextOrderId(Order, {
+          reserved: usedOrderIds,
+        });
+        reserveOrderId(usedOrderIds, allocatedOrderId);
+
+        const legacyNote = legacyBookingRef
+          ? `Legacy booking: ${legacyBookingRef}`
+          : "";
 
         const order = new Order({
-          orderId: parsedOrderId,
+          orderId: allocatedOrderId,
           farmer: farmer._id,
           salesPerson: salesPerson._id,
           numberOfPlants: numberOfPlants,
@@ -3037,7 +3002,9 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
           expectedNursery: expectedNursery || null,
           reference: referenceUser?._id || null,
           orderPaymentStatus: "PENDING",
+          notes: legacyNote,
           payment: [],
+          is_excel: true,
         });
 
         await order.save();

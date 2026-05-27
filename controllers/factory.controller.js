@@ -1,5 +1,6 @@
 import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
+import { allocateNextOrderId } from "../services/orderIdAllocation.service.js";
 import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
 import mongoose from "mongoose";
@@ -45,6 +46,7 @@ import {
   applyPaymentTimingToPayment,
   sanitizePaymentArrayForOrder,
 } from "../utils/paymentTiming.js";
+import { normalizeOrderForLocationFields } from "../utils/orderForNormalize.js";
 import {
   getOrderUpdateUserContext,
   DISPATCH_MANAGER_ALLOWED_STATUSES,
@@ -514,15 +516,7 @@ const createOne = (Model, modelName) =>
           });
         }
 
-        // Keep business order ids 4-digit first (1000-9999), then continue 5+ digits.
-        // If legacy data has ids below 1000, jump directly to 1000.
-        const lastOrder = await Model.findOne()
-          .sort({ orderId: -1 })
-          .select("orderId")
-          .session(session);
-
-        const lastOrderId = Number(lastOrder?.orderId || 0);
-        const orderId = lastOrderId < 1000 ? 1000 : lastOrderId + 1;
+        const orderId = await allocateNextOrderId(Model, { session });
 
         const trayId = await resolveTrayIdFromCavityInput(cavity, session);
 
@@ -838,7 +832,7 @@ const createOne = (Model, modelName) =>
             orderData.orderFor &&
             typeof orderData.orderFor === "object" &&
             !Array.isArray(orderData.orderFor)
-              ? orderData.orderFor
+              ? normalizeOrderForLocationFields(orderData.orderFor)
               : undefined,
           screenshots: screenshots, // Include uploaded screenshots
         };
@@ -1408,6 +1402,14 @@ const updateOne = (Model, modelName, allowedFields) =>
             value: req.body[k],
           });
         }
+      }
+
+      if (
+        filteredBody.orderFor != null &&
+        typeof filteredBody.orderFor === "object" &&
+        !Array.isArray(filteredBody.orderFor)
+      ) {
+        filteredBody.orderFor = normalizeOrderForLocationFields(filteredBody.orderFor);
       }
 
       console.log("=== UPDATE ORDER DEBUG ===");

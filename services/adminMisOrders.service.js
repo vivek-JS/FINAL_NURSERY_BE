@@ -3,9 +3,9 @@ import Order from "../models/order.model.js";
 import {
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
-  parseYmdRange,
   istDayBoundsFromYmd,
 } from "../utility/istOrderDateStats.js";
+import { parseCentralReportDateRange } from "../utility/centralReportEngine/dateRange.js";
 import { duePipelineMatch } from "../utility/adminMisDue.js";
 import { matchDeliveryDateInRange } from "../utility/centralReportEngine/deliveryMatch.js";
 import { transitionDrawerFacetStages } from "../utility/misTransitionMetrics.js";
@@ -48,7 +48,10 @@ function resolveDateWindow(query) {
     const { start, end } = istDayBoundsFromYmd(day);
     return { startYmd: day, endYmd: day, rangeStart: start, rangeEnd: end };
   }
-  const parsed = parseYmdRange(query.startDate || query.rangeStart, query.endDate || query.rangeEnd);
+  const parsed = parseCentralReportDateRange(
+    query.startDate || query.rangeStart,
+    query.endDate || query.rangeEnd
+  );
   if (parsed.error) return { error: parsed.error };
   return {
     startYmd: parsed.startYmd,

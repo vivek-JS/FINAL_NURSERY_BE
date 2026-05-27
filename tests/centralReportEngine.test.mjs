@@ -10,6 +10,8 @@ import {
   MIS_TRANSITION_RESOLUTION_ORDER,
   DELIVERY_TOTAL_EXCLUDED_STATUSES,
   matchDeliveryDateInRange,
+  MIS_DATE_RANGE_POLICY,
+  parseCentralReportDateRange,
 } from "../utility/centralReportEngine/index.js";
 import {
   resolveCentralReport,
@@ -47,11 +49,22 @@ test("getCentralReportEngineMeta includes metric rules", () => {
     "DISPATCHED",
     "COMPLETED",
   ]);
+  assert.equal(meta.dateRangePolicy?.allowFutureStart, true);
 });
 
 test("getMetricRule maps drawer buckets", () => {
   assert.equal(getMetricRule("dispatched")?.kind, "status_transition");
   assert.equal(getMetricRule("farmReady")?.status, "FARM_READY");
+});
+
+test("parseCentralReportDateRange allows future start and end", () => {
+  assert.equal(MIS_DATE_RANGE_POLICY.allowFutureStart, true);
+  assert.equal(MIS_DATE_RANGE_POLICY.allowFutureEnd, true);
+  const parsed = parseCentralReportDateRange("2026-08-01", "2026-08-31");
+  assert.ok(!parsed.error);
+  assert.equal(parsed.startYmd, "2026-08-01");
+  assert.equal(parsed.endYmd, "2026-08-31");
+  assert.equal(parsed.dateKeys.length, 31);
 });
 
 test("matchDeliveryDateInRange excludes dispatched and completed", () => {

@@ -7,6 +7,7 @@ import DealerWallet from "../models/dealerWallet.js";
 import { resolveDealerCashBalance } from "../utils/dealerWalletBalance.js";
 import Dispatch from "../models/dispatch.model.js";
 import AppError from "../utility/appError.js";
+import { allocateNextOrderId } from "../services/orderIdAllocation.service.js";
 import generateResponse from "../utility/responseFormat.js";
 import mongoose from "mongoose";
 import User from "../models/user.model.js";
@@ -4560,13 +4561,7 @@ const splitOrder = catchAsync(async (req, res, next) => {
     const parentNewRemaining = parentOriginalRemaining - qty;
     const parentNewQty = parent.numberOfPlants - qty;
 
-    // Compute the next orderId (same pattern as factory.controller.js)
-    const lastOrder = await Order.findOne()
-      .sort({ orderId: -1 })
-      .select("orderId")
-      .session(session);
-    const lastOrderId = Number(lastOrder?.orderId || 0);
-    const nextOrderId = lastOrderId < 1000 ? 1000 : lastOrderId + 1;
+    const nextOrderId = await allocateNextOrderId(Order, { session });
 
     // Build child order — clone all dispatch-relevant fields from the parent
     const childData = {
