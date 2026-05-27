@@ -5,6 +5,10 @@ import {
   parseYmdRange,
 } from "../utility/istOrderDateStats.js";
 import { buildPersonBreakdownTable } from "../utility/adminDailyMisMerge.js";
+import {
+  aggregateDueSummary,
+  misDeliveryStatusMatch,
+} from "../utility/adminMisDue.js";
 
 const REMAINING_STATUSES = [
   "READY_FOR_DISPATCH",
@@ -57,7 +61,7 @@ function parseRange(startDate, endDate) {
   return parsed;
 }
 
-async function aggregateSalesRows(rangeStart, rangeEnd, statusMatch) {
+async function aggregateSalesRows(rangeStart, rangeEnd, statusMatch, deliveryMatch) {
   const [bookingRows, deliveryRows] = await Promise.all([
     Order.aggregate([
       {
@@ -95,7 +99,7 @@ async function aggregateSalesRows(rangeStart, rangeEnd, statusMatch) {
     Order.aggregate([
       {
         $match: {
-          ...statusMatch,
+          ...deliveryMatch,
           deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
         },
       },
@@ -128,7 +132,7 @@ async function aggregateSalesRows(rangeStart, rangeEnd, statusMatch) {
   return buildPersonBreakdownTable(bookingRows, deliveryRows);
 }
 
-async function aggregateDealerRows(rangeStart, rangeEnd, statusMatch) {
+async function aggregateDealerRows(rangeStart, rangeEnd, statusMatch, deliveryMatch) {
   const dealerMatch = {
     dealerOrder: true,
     dealer: { $exists: true, $ne: null },
@@ -170,7 +174,7 @@ async function aggregateDealerRows(rangeStart, rangeEnd, statusMatch) {
     Order.aggregate([
       {
         $match: {
-          ...statusMatch,
+          ...deliveryMatch,
           ...dealerMatch,
           deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
         },
@@ -203,14 +207,19 @@ async function aggregateDealerRows(rangeStart, rangeEnd, statusMatch) {
   return buildPersonBreakdownTable(bookingRows, deliveryRows);
 }
 
-export async function fetchAdminSalesMis(startDate, endDate) {
+export async function fetchAdminSalesMis(startDate, endDate, options = {}) {
+  const { dueOnly = false, includeAllPastDue = false } = options;
   const parsed = parseRange(startDate, endDate);
   if (parsed.error) {
     return { error: parsed.error, statusCode: 400 };
   }
   const { rangeStart, rangeEnd, startYmd, endYmd } = parsed;
   const statusMatch = orderStatusExcludeMatch();
-  const table = await aggregateSalesRows(rangeStart, rangeEnd, statusMatch);
+  const deliveryMatch = misDeliveryStatusMatch(dueOnly);
+  const [table, dueSummary] = await Promise.all([
+    aggregateSalesRows(rangeStart, rangeEnd, statusMatch, deliveryMatch),
+    aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
+  ]);
 
   return {
     data: {
@@ -219,18 +228,26 @@ export async function fetchAdminSalesMis(startDate, endDate) {
       endDate: endYmd,
       rows: table.rows,
       totals: table.totals,
+      dueSummary,
+      dueOnly,
+      includeAllPastDue,
     },
   };
 }
 
-export async function fetchAdminDealerMis(startDate, endDate) {
+export async function fetchAdminDealerMis(startDate, endDate, options = {}) {
+  const { dueOnly = false, includeAllPastDue = false } = options;
   const parsed = parseRange(startDate, endDate);
   if (parsed.error) {
     return { error: parsed.error, statusCode: 400 };
   }
   const { rangeStart, rangeEnd, startYmd, endYmd } = parsed;
   const statusMatch = orderStatusExcludeMatch();
-  const table = await aggregateDealerRows(rangeStart, rangeEnd, statusMatch);
+  const deliveryMatch = misDeliveryStatusMatch(dueOnly);
+  const [table, dueSummary] = await Promise.all([
+    aggregateDealerRows(rangeStart, rangeEnd, statusMatch, deliveryMatch),
+    aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
+  ]);
 
   return {
     data: {
@@ -239,6 +256,9 @@ export async function fetchAdminDealerMis(startDate, endDate) {
       endDate: endYmd,
       rows: table.rows,
       totals: table.totals,
+      dueSummary,
+      dueOnly,
+      includeAllPastDue,
     },
   };
 }

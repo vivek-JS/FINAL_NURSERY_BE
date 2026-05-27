@@ -172,7 +172,8 @@ const allowedParams = [
   "includeAll", // include all records (don't exclude those in call lists)
   "upcomingDays", // laboutward primary-mobile-dashboard window
   "orderLimit", // analytics short-report: max orders in list (cap 500)
-  "dueOnly", // GET /insights/dashboard — overdue open orders only
+  "dueOnly", // GET /insights/dashboard + admin MIS — overdue open orders only
+  "includeAllPastDue", // GET /order/admin-*-mis — include delivery backlog before range start
   "excludeReadyForDispatch", // GET /insights/dashboard — omit READY_FOR_DISPATCH from expected KPIs
   "varietyName", // GET /insights/dashboard — plant subtype name with plantId
   "dateField", // GET /insights/collections/overview — booking | delivery date range field
@@ -198,6 +199,7 @@ allowedQueryKeys.add("expectedNursery"); // GET /order/getOrders — nursery sit
 allowedQueryKeys.add("queueFarmReadyOnly"); // GET /order/dashboard-tab-counts + ready tab queue filter
 allowedQueryKeys.add("paged"); // GET /dispatched — pagination toggle (also in allowedParams; duplicate for safety)
 allowedQueryKeys.add("transportStatus"); // GET /dispatched filter
+allowedQueryKeys.add("includeAllPastDue"); // admin MIS due backlog toggle
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
@@ -264,6 +266,17 @@ const parameterWhiteListing = (req, res, next) => {
   /** Agri insights hub — dashboard + collections evolve query flags; controllers ignore unknown keys. */
   const insightsPath = stripQuery(req.originalUrl || req.url || req.path || "") || "";
   if (req.method === "GET" && insightsPath.includes("/api/v1/insights")) {
+    return next();
+  }
+
+  /** Admin MIS — daily / sales / dealer breakdowns (dueOnly, includeAllPastDue, …). */
+  if (
+    req.method === "GET" &&
+    (orderListPath.includes("/order/admin-daily-mis") ||
+      orderListPath.includes("/order/admin-mis-sales") ||
+      orderListPath.includes("/order/admin-mis-dealer") ||
+      orderListPath.includes("/order/admin-mis-due"))
+  ) {
     return next();
   }
 

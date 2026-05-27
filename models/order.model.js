@@ -1,4 +1,5 @@
 import mongoose, { Schema, model } from "mongoose";
+import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
 
 // Define a schema for delivery change history
 const deliveryChangeSchema = new Schema(
@@ -262,7 +263,6 @@ const paymentSchema = new Schema(
     paymentTiming: {
       type: String,
       enum: ["advance", "balance"],
-      default: null,
     },
   },
   { timestamps: true }
@@ -1305,6 +1305,23 @@ orderSchema.pre("save", function (next) {
 
 // Add validation middleware to ensure proper business logic
 orderSchema.pre("validate", function (next) {
+  if (Array.isArray(this.payment)) {
+    for (const payment of this.payment) {
+      const timing = payment?.paymentTiming;
+      if (
+        timing == null ||
+        (timing !== "advance" && timing !== "balance")
+      ) {
+        if (typeof payment.set === "function") {
+          payment.set("paymentTiming", undefined);
+        } else {
+          delete payment.paymentTiming;
+        }
+      }
+      applyPaymentTimingToPayment(payment, this);
+    }
+  }
+
   const totalOrderedPlants =
     (this.numberOfPlants || 0) + (this.additionalPlants || 0);
 

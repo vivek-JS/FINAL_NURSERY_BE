@@ -40,6 +40,7 @@ import {
   getAdminDailyMis,
   getAdminSalesMis,
   getAdminDealerMis,
+  getAdminDueMis,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -122,6 +123,11 @@ router
     "/admin-mis-dealer",
     authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
     getAdminDealerMis
+  )
+  .get(
+    "/admin-mis-due",
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+    getAdminDueMis
   )
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)

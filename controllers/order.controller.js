@@ -43,6 +43,8 @@ import {
   fetchAdminSalesMis,
   fetchAdminDealerMis,
 } from "../services/adminMisBreakdown.service.js";
+import { fetchAdminDueMis } from "../services/adminMisDueTab.service.js";
+import { parseMisDueFlags } from "../utility/adminMisDue.js";
 import {
   resolveOrderStatusTokens,
   buildOrderStatusDateMatch,
@@ -5894,7 +5896,7 @@ const getAdminDashboardStats = catchAsync(async (req, res) => {
 
 const getAdminDailyMis = catchAsync(async (req, res) => {
   const { startDate, endDate } = req.query;
-  const result = await fetchAdminDailyMis(startDate, endDate);
+  const result = await fetchAdminDailyMis(startDate, endDate, parseMisDueFlags(req.query));
   if (result.error) {
     return res.status(result.statusCode || 400).json({
       success: false,
@@ -5909,7 +5911,7 @@ const getAdminDailyMis = catchAsync(async (req, res) => {
 
 const getAdminSalesMis = catchAsync(async (req, res) => {
   const { startDate, endDate } = req.query;
-  const result = await fetchAdminSalesMis(startDate, endDate);
+  const result = await fetchAdminSalesMis(startDate, endDate, parseMisDueFlags(req.query));
   if (result.error) {
     return res.status(result.statusCode || 400).json({
       success: false,
@@ -5924,7 +5926,23 @@ const getAdminSalesMis = catchAsync(async (req, res) => {
 
 const getAdminDealerMis = catchAsync(async (req, res) => {
   const { startDate, endDate } = req.query;
-  const result = await fetchAdminDealerMis(startDate, endDate);
+  const result = await fetchAdminDealerMis(startDate, endDate, parseMisDueFlags(req.query));
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({
+      success: false,
+      message: result.error,
+    });
+  }
+  return res.status(200).json({
+    success: true,
+    data: result.data,
+  });
+});
+
+const getAdminDueMis = catchAsync(async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const { includeAllPastDue } = parseMisDueFlags(req.query);
+  const result = await fetchAdminDueMis(startDate, endDate, { includeAllPastDue });
   if (result.error) {
     return res.status(result.statusCode || 400).json({
       success: false,
@@ -5978,4 +5996,5 @@ export {
   getAdminDailyMis,
   getAdminSalesMis,
   getAdminDealerMis,
+  getAdminDueMis,
 };

@@ -41,6 +41,7 @@ import {
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
 import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
+import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
 import {
   getOrderUpdateUserContext,
   DISPATCH_MANAGER_ALLOWED_STATUSES,
@@ -767,17 +768,26 @@ const createOne = (Model, modelName) =>
         // Process payment data if provided
         let paymentArray = [];
         if (paymentFromBody && Array.isArray(paymentFromBody) && paymentFromBody.length > 0) {
-          paymentArray = paymentFromBody.map(paymentItem => ({
-            paidAmount: Number(paymentItem.paidAmount) || 0,
-            paymentStatus: "PENDING", // Always PENDING for new payments
-            paymentDate: paymentItem.paymentDate || new Date(),
-            bankName: paymentItem.bankName || "",
-            transactionId: paymentItem.transactionId || undefined,
-            receiptPhoto: paymentItem.receiptPhoto || [],
-            modeOfPayment: paymentItem.modeOfPayment || "",
-            remark: paymentItem.remark || "",
-            isWalletPayment: paymentItem.isWalletPayment || false
-          }));
+          const timingContext = {
+            dispatchHistory: [],
+            statusChanges,
+            dispatchTargetDate: orderData.dispatchTargetDate,
+          };
+          paymentArray = paymentFromBody.map((paymentItem) => {
+            const row = {
+              paidAmount: Number(paymentItem.paidAmount) || 0,
+              paymentStatus: "PENDING", // Always PENDING for new payments
+              paymentDate: paymentItem.paymentDate || new Date(),
+              bankName: paymentItem.bankName || "",
+              transactionId: paymentItem.transactionId || undefined,
+              receiptPhoto: paymentItem.receiptPhoto || [],
+              modeOfPayment: paymentItem.modeOfPayment || "",
+              remark: paymentItem.remark || "",
+              isWalletPayment: paymentItem.isWalletPayment || false,
+            };
+            applyPaymentTimingToPayment(row, timingContext);
+            return row;
+          });
         }
 
         // Handle uploaded screenshots with Cloudinary
@@ -3221,7 +3231,8 @@ const getAll = (Model, modelName) =>
       endDate,
       dispatched = false, // New parameter
       salesPerson, // Added salesPerson parameter
-      dealer, // Added dealer parameter
+      dealer, // Added dealer parameter (legacy: filters salesPerson)
+      orderDealer, // Dealer-account orders: match order.dealer (admin MIS drawer)
       village, // Added village parameter
       district, // Added district parameter
       taluka, // Taluka filter (matches farmer.taluka / farmer.talukaName)
@@ -3598,9 +3609,17 @@ const getAll = (Model, modelName) =>
         });
       }
 
-      // `dealer` query param: id from dealer/agency picker — applied as salesperson filter (`salesPerson` only).
-      // DEALER role sending dealer=<self> is skipped — role-based $or (dealer|salesPerson) already applies.
-      if (dealer) {
+      // `orderDealer` — dealer orders where order.dealer is this user (admin MIS).
+      if (orderDealer && mongoose.Types.ObjectId.isValid(orderDealer)) {
+        pipeline.push({
+          $match: {
+            dealerOrder: true,
+            dealer: new mongoose.Types.ObjectId(orderDealer),
+          },
+        });
+      } else if (dealer) {
+        // `dealer` query param: id from dealer/agency picker — applied as salesperson filter (`salesPerson` only).
+        // DEALER role sending dealer=<self> is skipped — role-based $or (dealer|salesPerson) already applies.
         const dealerOid = new mongoose.Types.ObjectId(dealer);
         const dealerSelfOnly =
           req.user?.jobTitle === "DEALER" &&

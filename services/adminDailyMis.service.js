@@ -9,6 +9,11 @@ import {
   buildAdminDailyMisPayload,
   buildVarietyTable,
 } from "../utility/adminDailyMisMerge.js";
+import {
+  aggregateDueSummary,
+  aggregatePastDueDeliveryRows,
+  misDeliveryStatusMatch,
+} from "../utility/adminMisDue.js";
 
 /** Resolve plant + subtype labels for variety aggregations. */
 const PLANT_SUBTYPE_STAGES = [
@@ -56,13 +61,15 @@ const REMAINING_STATUSES = [
   "PARTIALLY_COMPLETED",
 ];
 
-export async function fetchAdminDailyMis(startDate, endDate) {
+export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
+  const { dueOnly = false, includeAllPastDue = false } = options;
   const parsed = parseYmdRange(startDate, endDate);
   if (parsed.error) {
     return { error: parsed.error, statusCode: 400 };
   }
   const { rangeStart, rangeEnd, dateKeys, startYmd, endYmd } = parsed;
   const statusMatch = orderStatusExcludeMatch();
+  const deliveryMatch = misDeliveryStatusMatch(dueOnly);
 
   const rangeOrMatch = {
     $or: [
@@ -107,7 +114,7 @@ export async function fetchAdminDailyMis(startDate, endDate) {
       Order.aggregate([
         {
           $match: {
-            ...statusMatch,
+            ...deliveryMatch,
             deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
           },
         },
@@ -247,7 +254,7 @@ export async function fetchAdminDailyMis(startDate, endDate) {
       Order.aggregate([
         {
           $match: {
-            ...statusMatch,
+            ...deliveryMatch,
             deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
           },
         },
@@ -280,6 +287,11 @@ export async function fetchAdminDailyMis(startDate, endDate) {
 
   const varietyTable = buildVarietyTable(varietyBookingRows, varietyDeliveryRows);
 
+  const [dueSummary, pastDueRow] = await Promise.all([
+    aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
+    includeAllPastDue ? aggregatePastDueDeliveryRows(rangeStart) : Promise.resolve(null),
+  ]);
+
   const payload = buildAdminDailyMisPayload({
     dateKeys,
     bookingRows,
@@ -288,13 +300,19 @@ export async function fetchAdminDailyMis(startDate, endDate) {
     rangeUniqueOrders: rangeUniqueAgg[0]?.uniqueOrders ?? 0,
   });
 
+  const days = pastDueRow ? [pastDueRow, ...payload.days] : payload.days;
+
   return {
     data: {
       ...payload,
+      days,
       startDate: startYmd,
       endDate: endYmd,
       varietyTable: varietyTable.rows,
       varietyTotals: varietyTable.totals,
+      dueSummary,
+      dueOnly,
+      includeAllPastDue,
     },
   };
 }
