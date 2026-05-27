@@ -5,7 +5,6 @@ import {
   istDateStringExpr,
   parseYmdRange,
 } from "../utility/istOrderDateStats.js";
-import { buildVarietyTable } from "../utility/adminDailyMisMerge.js";
 import {
   aggregateDueSummary,
   aggregatePastDueDeliveryRows,
@@ -13,6 +12,7 @@ import {
 import {
   fetchMisMetricSlices,
   buildAdminDailyMisPayloadFromMetrics,
+  fetchVarietyTableMetrics,
 } from "../utility/adminMisMetrics.js";
 
 /** Resolve plant + subtype labels for variety aggregations. */
@@ -78,8 +78,7 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
     bookingRows,
     uniquePerDayRows,
     rangeUniqueAgg,
-    varietyBookingRows,
-    varietyDeliveryRows,
+    varietyTableResult,
     dueSummary,
     pastDueRow,
   ] = await Promise.all([
@@ -175,69 +174,14 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
         },
       },
     ]),
-    Order.aggregate([
-      {
-        $match: {
-          ...statusMatch,
-          orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
-        },
-      },
-      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-      ...PLANT_SUBTYPE_STAGES,
-      {
-        $group: {
-          _id: {
-            plantName: { $ifNull: ["$_plantTypeName", "Unknown"] },
-            subtype: "$_subtypeName",
-            plantId: "$plantName",
-            subtypeId: "$plantSubtype",
-          },
-          bookingOrders: { $sum: 1 },
-          bookingPlants: { $sum: "$linePlantTotal" },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          plantName: "$_id.plantName",
-          subtype: "$_id.subtype",
-          plantId: "$_id.plantId",
-          subtypeId: "$_id.subtypeId",
-          bookingOrders: 1,
-          bookingPlants: 1,
-        },
-      },
-    ]),
-    Order.aggregate([
-      {
-        $match: {
-          ...statusMatch,
-          deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
-        },
-      },
-      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-      ...PLANT_SUBTYPE_STAGES,
-      {
-        $group: {
-          _id: {
-            plantName: { $ifNull: ["$_plantTypeName", "Unknown"] },
-            subtype: "$_subtypeName",
-            plantId: "$plantName",
-            subtypeId: "$plantSubtype",
-            status: "$orderStatus",
-          },
-          orders: { $sum: 1 },
-          plants: { $sum: "$linePlantTotal" },
-        },
-      },
-    ]),
+    fetchVarietyTableMetrics(rangeStart, rangeEnd, PLANT_SUBTYPE_STAGES),
     aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
     includeAllPastDue
       ? aggregatePastDueDeliveryRows(rangeStart)
       : Promise.resolve(null),
   ]);
 
-  const varietyTable = buildVarietyTable(varietyBookingRows, varietyDeliveryRows);
+  const varietyTable = varietyTableResult;
 
   const payload = buildAdminDailyMisPayloadFromMetrics({
     dateKeys,

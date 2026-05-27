@@ -607,6 +607,36 @@ export async function aggregatePipelineByGroup(
   ]);
 }
 
+/** Delivery in range (excludes DISPATCHED) per entity — variety Delivery column. */
+export async function aggregateDeliveryInRangeByGroup(
+  rangeStart,
+  rangeEnd,
+  statusMatch,
+  groupStages,
+  groupIdFields,
+  extraMatch = {}
+) {
+  const rows = await Order.aggregate([
+    {
+      $match: {
+        ...statusMatch,
+        ...extraMatch,
+        ...matchDeliveryDateInRange(rangeStart, rangeEnd),
+      },
+    },
+    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+    ...groupStages,
+    {
+      $group: {
+        _id: groupIdFields,
+        orders: { $sum: 1 },
+        plants: { $sum: "$linePlantTotal" },
+      },
+    },
+  ]);
+  return rows;
+}
+
 /** Delivery union total per entity (delivery in range OR FR OR RFD). */
 export async function aggregateDeliveryUnionByGroup(
   rangeStart,
@@ -669,12 +699,17 @@ export function buildBreakdownTableFromMetrics({
   dispatchedRows = [],
   pipelineRows = [],
   deliveryUnionRows = [],
+  /** Pass an array (may be empty) to use in-range delivery only for delivery.total (variety table). */
+  deliveryInRangeRows = null,
 }) {
   const farmReadyMap = metricsRowsToMap(globalFarmReadyRows, entityKeyFn);
   const rfdMap = metricsRowsToMap(globalRfdRows, entityKeyFn);
   const acceptedMap = metricsRowsToMap(acceptedRows, entityKeyFn);
   const dispatchedMap = metricsRowsToMap(dispatchedRows, entityKeyFn);
   const unionMap = metricsRowsToMap(deliveryUnionRows, entityKeyFn);
+  const inRangeMap = metricsRowsToMap(deliveryInRangeRows || [], entityKeyFn);
+  const deliveryTotalMap =
+    deliveryInRangeRows != null ? inRangeMap : unionMap;
 
   const pipelineMap = new Map();
   for (const row of pipelineRows || []) {
@@ -708,6 +743,9 @@ export function buildBreakdownTableFromMetrics({
   for (const key of acceptedMap.keys()) keys.add(key);
   for (const key of dispatchedMap.keys()) keys.add(key);
   for (const key of unionMap.keys()) keys.add(key);
+  if (deliveryInRangeRows != null) {
+    for (const key of inRangeMap.keys()) keys.add(key);
+  }
 
   const rows = [];
   for (const key of keys) {
@@ -727,7 +765,7 @@ export function buildBreakdownTableFromMetrics({
         plants: booking?.bookingPlants || 0,
       },
       delivery: {
-        total: unionMap.get(key) || emptyOrderPlants(),
+        total: deliveryTotalMap.get(key) || emptyOrderPlants(),
         accepted: acceptedMap.get(key) || emptyOrderPlants(),
         farmReady: farmReadyMap.get(key) || emptyOrderPlants(),
         readyForDispatch: rfdMap.get(key) || emptyOrderPlants(),
@@ -740,11 +778,13 @@ export function buildBreakdownTableFromMetrics({
     });
   }
 
-  rows.sort((a, b) =>
-    String(a.personName || a.plantName || "").localeCompare(
-      String(b.personName || b.plantName || "")
-    )
-  );
+  rows.sort((a, b) => {
+    const plantCmp = String(a.plantName || "").localeCompare(String(b.plantName || ""));
+    if (plantCmp !== 0) return plantCmp;
+    const subCmp = String(a.subtype || "").localeCompare(String(b.subtype || ""));
+    if (subCmp !== 0) return subCmp;
+    return String(a.personName || "").localeCompare(String(b.personName || ""));
+  });
 
   const totals = {
     booking: emptyOrderPlants(),
@@ -784,6 +824,130 @@ export function buildBreakdownTableFromMetrics({
   );
 
   return { rows, totals };
+}
+
+const VARIETY_GROUP_ID = {
+  plantName: { $ifNull: ["$_plantTypeName", "Unknown"] },
+  subtype: "$_subtypeName",
+  plantId: "$plantName",
+  subtypeId: "$plantSubtype",
+};
+
+function varietyEntityKey(row) {
+  const id = row._id ?? row;
+  const plantId = id.plantId ?? row.plantId;
+  const subtypeId = id.subtypeId ?? row.subtypeId;
+  if (plantId == null || subtypeId == null) return "";
+  return `${String(plantId)}:${String(subtypeId)}`;
+}
+
+function varietyLabelFromKey(key, booking) {
+  const id = booking?._id ?? booking ?? {};
+  const parts = String(key).split(":");
+  return {
+    plantName: id.plantName ?? booking?.plantName ?? "Unknown",
+    subtype: id.subtype ?? booking?.subtype ?? "Other",
+    plantId: id.plantId ?? booking?.plantId ?? parts[0],
+    subtypeId: id.subtypeId ?? booking?.subtypeId ?? parts[1],
+  };
+}
+
+function rowToVarietyBookingShape(row) {
+  const id = row._id ?? row;
+  return {
+    plantName: id.plantName,
+    subtype: id.subtype,
+    plantId: id.plantId,
+    subtypeId: id.subtypeId,
+    bookingOrders: row.bookingOrders ?? row.orders ?? 0,
+    bookingPlants: row.bookingPlants ?? row.plants ?? 0,
+  };
+}
+
+/** Variety breakdown — same metric rules as daily MIS; Delivery = in-range only (no DISPATCHED). */
+export async function fetchVarietyTableMetrics(
+  rangeStart,
+  rangeEnd,
+  groupStages
+) {
+  const statusMatch = orderStatusExcludeMatch();
+
+  const [
+    bookingRows,
+    globalFarmReadyRows,
+    globalRfdRows,
+    acceptedRows,
+    dispatchedRows,
+    pipelineRows,
+    deliveryInRangeRows,
+  ] = await Promise.all([
+    Order.aggregate([
+      {
+        $match: {
+          ...statusMatch,
+          orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
+        },
+      },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...groupStages,
+      {
+        $group: {
+          _id: VARIETY_GROUP_ID,
+          bookingOrders: { $sum: 1 },
+          bookingPlants: { $sum: "$linePlantTotal" },
+        },
+      },
+    ]),
+    aggregateGlobalStatusByGroup("FARM_READY", statusMatch, groupStages, VARIETY_GROUP_ID),
+    aggregateGlobalStatusByGroup(
+      "READY_FOR_DISPATCH",
+      statusMatch,
+      groupStages,
+      VARIETY_GROUP_ID
+    ),
+    aggregateAcceptedByDeliveryAndGroup(
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      VARIETY_GROUP_ID
+    ),
+    aggregateTransitionsByGroup(
+      "DISPATCHED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      VARIETY_GROUP_ID
+    ),
+    aggregatePipelineByGroup(
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      VARIETY_GROUP_ID
+    ),
+    aggregateDeliveryInRangeByGroup(
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      VARIETY_GROUP_ID
+    ),
+  ]);
+
+  return buildBreakdownTableFromMetrics({
+    bookingRows: bookingRows.map(rowToVarietyBookingShape),
+    entityKeyFn: varietyEntityKey,
+    labelFromKey: varietyLabelFromKey,
+    globalFarmReadyRows,
+    globalRfdRows,
+    acceptedRows,
+    dispatchedRows,
+    pipelineRows,
+    deliveryInRangeRows,
+    deliveryUnionRows: [],
+  });
 }
 
 export { istDateStringExpr };

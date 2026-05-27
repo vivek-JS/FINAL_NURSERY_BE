@@ -148,6 +148,12 @@ export function buildMisOrdersMatch(query, window) {
         ...deliveryInRangeClause(rangeStart, rangeEnd),
       };
     case "deliveryTotal":
+      if (
+        String(query.scope || "") === "variety" ||
+        (plantId && subtypeId)
+      ) {
+        return { ...base, ...extra, ...deliveryTotalInRangeClause(rangeStart, rangeEnd) };
+      }
       if (includeAllPastDue && isTotalsScope) {
         return {
           ...base,

@@ -40,6 +40,26 @@ test("buildMisOrdersMatch deliveryTotal single day is in-range only", () => {
   assert.ok(m.orderStatus?.$nin?.includes("DISPATCHED"));
 });
 
+test("buildMisOrdersMatch deliveryTotal variety scope is in-range only", () => {
+  const rangeWindow = {
+    rangeStart: istDayBoundsFromYmd("2026-05-01").start,
+    rangeEnd: istDayBoundsFromYmd("2026-05-07").end,
+  };
+  const m = buildMisOrdersMatch(
+    {
+      bucket: "deliveryTotal",
+      mode: "delivery",
+      scope: "variety",
+      plantId: "507f1f77bcf86cd799439011",
+      subtypeId: "507f1f77bcf86cd799439012",
+    },
+    rangeWindow
+  );
+  assert.ok(m.deliveryDate);
+  assert.equal(m.$or, undefined);
+  assert.ok(m.orderStatus?.$nin?.includes("DISPATCHED"));
+});
+
 test("buildMisOrdersMatch deliveryTotal range uses union", () => {
   const rangeWindow = {
     rangeStart: istDayBoundsFromYmd("2026-05-01").start,
