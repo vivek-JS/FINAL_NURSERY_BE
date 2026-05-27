@@ -1326,6 +1326,9 @@ const updateOne = (Model, modelName, allowedFields) =>
     session.startTransaction();
 
     try {
+      // Mutable bag for post-commit event emit (object ref avoids let TDZ on booking-slot updates)
+      const orderUpdateEventCtx = { deliveryChange: null };
+
       const existingDoc = await Model.findById(id)
         .populate("plantName")
         .populate("farmer", "name village taluka")
@@ -1734,8 +1737,6 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
-      let pendingDeliveryChangeForEvents = null;
-
       // Special handling for deliveryChanges - track booking slot changes
       if (
         filteredBody.bookingSlot &&
@@ -1786,7 +1787,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           // Use $push to add to existing array
           if (!filteredBody.$push) filteredBody.$push = {};
           filteredBody.$push.deliveryChanges = deliveryChange;
-          pendingDeliveryChangeForEvents = deliveryChange;
+          orderUpdateEventCtx.deliveryChange = deliveryChange;
 
           // Remove temporary field
           delete filteredBody.deliveryChangeReason;
@@ -2674,7 +2675,7 @@ const updateOne = (Model, modelName, allowedFields) =>
         emitPlantOrderUpdateEvents({
           orderId: updatedDoc._id,
           editHistoryEntries,
-          deliveryChange: pendingDeliveryChangeForEvents,
+          deliveryChange: orderUpdateEventCtx.deliveryChange,
           statusChangePush,
           userId: req.user?._id,
           actorName: req.user?.name,
