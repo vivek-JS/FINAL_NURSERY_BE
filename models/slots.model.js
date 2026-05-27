@@ -208,8 +208,9 @@ const slotSchema = new Schema({
     type: Number,
     default: 0,
   },
-  // Note: totalBookedPlants is now calculated dynamically from orders
-  // This field is kept for backward compatibility but should not be used
+  // Note: totalBookedPlants is calculated dynamically from orders for most APIs.
+  // GET /slots/stock-entry returns live booked/dispatched/remaining from orders.
+  // This field is kept for backward compatibility but should not be used alone.
   totalBookedPlants: {
     type: Number,
     default: 0,

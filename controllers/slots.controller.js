@@ -11,6 +11,11 @@ import {
   logStockFieldChange,
   STOCK_TRAIL_ACTION_LIST,
 } from "../utility/slotStockTrail.js";
+import {
+  aggregateSlotDispatchStats,
+  computeSlotDispatchStatsFromOrders,
+  getSlotDispatchStats,
+} from "../utility/slotDispatchStats.js";
 
 // Helper function to convert month name to number
 const getMonthNumber = (monthName) => {
@@ -2305,7 +2310,11 @@ const populateSlotsWithOrders = async (slots) => {
           ]
         }
       ]
-    }).select('_id orderId numberOfPlants farmer salesPerson orderStatus dealer quotaSource bookingSlot').lean();
+    })
+      .select(
+        "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot"
+      )
+      .lean();
 
     // Batch query: Get all dealer quota orders for all slots
     const dealerQuotaOrders = await Order.aggregate([
@@ -2380,10 +2389,8 @@ const populateSlotsWithOrders = async (slots) => {
       for (const slot of slotGroup.slots) {
         const slotId = slot._id?.toString ? slot._id.toString() : slot._id;
         const orders = ordersBySlot.get(slotId) || [];
-        
-        // Calculate totalBookedPlants from active orders
-        const totalBookedPlants = orders.reduce((sum, order) => sum + (order.numberOfPlants || 0), 0);
-        
+        const dispatchStats = computeSlotDispatchStatsFromOrders(orders);
+
         // Get dealer quota information for this slot
         const dealerQuota = dealerQuotaMap.get(slotId) || {
           totalDealerQuotaUsed: 0,
@@ -2393,7 +2400,9 @@ const populateSlotsWithOrders = async (slots) => {
         
         // Update slot with calculated values
         slot.orders = orders;
-        slot.totalBookedPlants = totalBookedPlants;
+        slot.totalBookedPlants = dispatchStats.totalBookedPlants;
+        slot.totalDispatchedPlants = dispatchStats.totalDispatchedPlants;
+        slot.remainingToDispatch = dispatchStats.remainingToDispatch;
         slot.dealerQuota = dealerQuota;
         
         // PRESERVE stored availablePlants from database (includes GRN updates)
@@ -2650,20 +2659,47 @@ export const getStockEntry = async (req, res) => {
     slots = filterNonPastSlots(slots);
     slots = sortSlotsByStartDay(slots);
 
-    const payload = slots.map((slot) => ({
-      _id: slot._id,
-      startDay: slot.startDay,
-      endDay: slot.endDay,
-      month: slot.month,
-      totalPlants: Number(slot.totalPlants) || 0,
-      totalBookedPlants: Number(slot.totalBookedPlants) || 0,
-      availablePlants: getSlotEffectiveAvailablePlants(slot),
-      plantsSowed: Number(slot.plantsSowed) || 0,
-      actualPlants: Number(slot.actualPlants) || 0,
-      closingStock: Number(slot.closingStock) || 0,
-      status: slot.status,
-      isManual: slot.isManual,
-    }));
+    const slotObjectIds = slots
+      .map((s) => s._id)
+      .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    let statsBySlot = new Map();
+    if (slotObjectIds.length > 0) {
+      const orders = await Order.find({
+        bookingSlot: { $in: slotObjectIds },
+        orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+        $or: [
+          { quotaSource: { $ne: "dealer" } },
+          { quotaSource: { $exists: false } },
+        ],
+      })
+        .select(
+          "bookingSlot numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus"
+        )
+        .lean();
+      statsBySlot = aggregateSlotDispatchStats(orders);
+    }
+
+    const payload = slots.map((slot) => {
+      const dispatchStats = getSlotDispatchStats(statsBySlot, slot._id);
+      return {
+        _id: slot._id,
+        startDay: slot.startDay,
+        endDay: slot.endDay,
+        month: slot.month,
+        totalPlants: Number(slot.totalPlants) || 0,
+        totalBookedPlants: dispatchStats.totalBookedPlants,
+        totalDispatchedPlants: dispatchStats.totalDispatchedPlants,
+        remainingToDispatch: dispatchStats.remainingToDispatch,
+        availablePlants: getSlotEffectiveAvailablePlants(slot),
+        plantsSowed: Number(slot.plantsSowed) || 0,
+        actualPlants: Number(slot.actualPlants) || 0,
+        closingStock: Number(slot.closingStock) || 0,
+        status: slot.status,
+        isManual: slot.isManual,
+      };
+    });
 
     return res.status(200).json({
       success: true,
