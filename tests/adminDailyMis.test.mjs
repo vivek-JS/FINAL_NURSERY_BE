@@ -11,6 +11,7 @@ import {
 import {
   buildAdminDailyMisPayloadFromMetrics,
   buildBreakdownTableFromMetrics,
+  mergeBreakdownWithPastDue,
 } from "../utility/adminMisMetrics.js";
 import { generateIstDateKeys, parseYmdRange } from "../utility/istOrderDateStats.js";
 
@@ -230,4 +231,77 @@ test("buildBreakdownTableFromMetrics keeps plant labels from delivery when booki
   assert.equal(rows[0].subtype, "G-9");
   assert.equal(rows[0].booking.orders, 0);
   assert.equal(rows[0].delivery.total.orders, 2);
+});
+
+test("mergeBreakdownWithPastDue attaches per-entity backlog, not global duplicate", () => {
+  const plantA = "507f1f77bcf86cd799439011";
+  const subA = "507f1f77bcf86cd799439012";
+  const plantB = "607f1f77bcf86cd799439011";
+  const subB = "607f1f77bcf86cd799439012";
+
+  const inRange = {
+    rows: [
+      {
+        plantId: plantA,
+        subtypeId: subA,
+        plantName: "Banana",
+        subtype: "G-9",
+        booking: { orders: 1, plants: 100 },
+        delivery: {
+          ...emptyDeliveryDay(),
+          total: { orders: 2, plants: 200 },
+        },
+      },
+    ],
+    totals: { booking: { orders: 1, plants: 100 }, delivery: emptyDeliveryDay() },
+  };
+
+  const pastDue = {
+    rows: [
+      {
+        plantId: plantA,
+        subtypeId: subA,
+        plantName: "Banana",
+        subtype: "G-9",
+        booking: { orders: 0, plants: 0 },
+        delivery: {
+          ...emptyDeliveryDay(),
+          total: { orders: 3, plants: 300 },
+          accepted: { orders: 3, plants: 300 },
+        },
+      },
+      {
+        plantId: plantB,
+        subtypeId: subB,
+        plantName: "Papaya",
+        subtype: "Red Lady",
+        booking: { orders: 0, plants: 0 },
+        delivery: {
+          ...emptyDeliveryDay(),
+          total: { orders: 1, plants: 50 },
+        },
+      },
+    ],
+    totals: {
+      booking: { orders: 0, plants: 0 },
+      delivery: {
+        ...emptyDeliveryDay(),
+        total: { orders: 4, plants: 350 },
+      },
+    },
+  };
+
+  const merged = mergeBreakdownWithPastDue(inRange, pastDue);
+  assert.equal(merged.rows.length, 2);
+
+  const banana = merged.rows.find((r) => r.plantName === "Banana");
+  assert.equal(banana.delivery.total.plants, 200);
+  assert.equal(banana.pastDue.total.plants, 300);
+  assert.equal(banana.pastDue.accepted.plants, 300);
+
+  const papaya = merged.rows.find((r) => r.plantName === "Papaya");
+  assert.equal(papaya.delivery.total.plants, 0);
+  assert.equal(papaya.pastDue.total.plants, 50);
+
+  assert.equal(merged.totals.pastDue.total.plants, 350);
 });

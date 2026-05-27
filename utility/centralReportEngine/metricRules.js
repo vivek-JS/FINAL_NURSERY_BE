@@ -7,7 +7,11 @@
 
 import { DELIVERY_TOTAL_EXCLUDED_STATUSES } from "./deliveryMatch.js";
 
-export { DELIVERY_TOTAL_EXCLUDED_STATUSES, matchDeliveryDateInRange } from "./deliveryMatch.js";
+export {
+  DELIVERY_TOTAL_EXCLUDED_STATUSES,
+  matchDeliveryDateInRange,
+  matchDeliveryDateBeforeRange,
+} from "./deliveryMatch.js";
 
 export const MIS_TIMEZONE = "Asia/Kolkata";
 

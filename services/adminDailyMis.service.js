@@ -13,6 +13,8 @@ import {
   fetchMisMetricSlices,
   buildAdminDailyMisPayloadFromMetrics,
   fetchVarietyTableMetrics,
+  fetchVarietyPastDueTableMetrics,
+  mergeBreakdownWithPastDue,
 } from "../utility/adminMisMetrics.js";
 
 /** Resolve plant + subtype labels for variety aggregations. */
@@ -81,6 +83,7 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
     varietyTableResult,
     dueSummary,
     pastDueRow,
+    varietyPastDueResult,
   ] = await Promise.all([
     fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly }),
     Order.aggregate([
@@ -179,9 +182,14 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
     includeAllPastDue
       ? aggregatePastDueDeliveryRows(rangeStart)
       : Promise.resolve(null),
+    includeAllPastDue
+      ? fetchVarietyPastDueTableMetrics(rangeStart, PLANT_SUBTYPE_STAGES, { dueOnly })
+      : Promise.resolve(null),
   ]);
 
-  const varietyTable = varietyTableResult;
+  const varietyTable = includeAllPastDue
+    ? mergeBreakdownWithPastDue(varietyTableResult, varietyPastDueResult)
+    : varietyTableResult;
 
   const payload = buildAdminDailyMisPayloadFromMetrics({
     dateKeys,

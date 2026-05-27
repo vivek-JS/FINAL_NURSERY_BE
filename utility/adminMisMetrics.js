@@ -5,11 +5,15 @@ import {
   istDateStringExpr,
 } from "./istOrderDateStats.js";
 import {
-  DELIVERY_TOTAL_EXCLUDED_STATUSES,
   matchDeliveryDateInRange,
+  matchDeliveryDateBeforeRange,
 } from "./centralReportEngine/deliveryMatch.js";
 
-export { DELIVERY_TOTAL_EXCLUDED_STATUSES, matchDeliveryDateInRange };
+export {
+  DELIVERY_TOTAL_EXCLUDED_STATUSES,
+  matchDeliveryDateInRange,
+  matchDeliveryDateBeforeRange,
+} from "./centralReportEngine/deliveryMatch.js";
 import {
   emptyOrderPlants,
   emptyDeliveryDay,
@@ -674,6 +678,35 @@ export async function aggregatePipelineByGroup(
   ]);
 }
 
+/** Delivery backlog before range (excludes DISPATCHED, COMPLETED) per entity. */
+export async function aggregateDeliveryBeforeRangeByGroup(
+  rangeStart,
+  statusMatch,
+  groupStages,
+  groupIdFields,
+  extraMatch = {}
+) {
+  const rows = await Order.aggregate([
+    {
+      $match: {
+        ...statusMatch,
+        ...extraMatch,
+        ...matchDeliveryDateBeforeRange(rangeStart),
+      },
+    },
+    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+    ...groupStages,
+    {
+      $group: {
+        _id: groupIdFields,
+        orders: { $sum: 1 },
+        plants: { $sum: "$linePlantTotal" },
+      },
+    },
+  ]);
+  return rows;
+}
+
 /** Delivery in range (excludes DISPATCHED, COMPLETED) per entity — variety Delivery column. */
 export async function aggregateDeliveryInRangeByGroup(
   rangeStart,
@@ -1075,6 +1108,188 @@ export async function fetchVarietyTableMetrics(
     deliveryInRangeRows,
     deliveryUnionRows: [],
   });
+}
+
+function backlogOrderExtra(rangeStart) {
+  return {
+    ...duePipelineMatch(),
+    deliveryDate: { $lt: rangeStart, $ne: null },
+  };
+}
+
+/**
+ * Entity breakdown for orders due before range start (per plant, sales person, etc.).
+ */
+export async function fetchEntityPastDueBreakdown(
+  rangeStart,
+  {
+    groupStages,
+    groupIdFields,
+    entityKeyFn,
+    labelFromKey,
+    extraMatch = {},
+    dueOnly = false,
+  }
+) {
+  const statusMatch = orderStatusExcludeMatch();
+  const backlogExtra = {
+    ...backlogOrderExtra(rangeStart),
+    ...extraMatch,
+    ...(dueOnly ? duePipelineMatch() : {}),
+  };
+
+  const pipelineRows = await Order.aggregate([
+    {
+      $match: {
+        ...statusMatch,
+        ...backlogExtra,
+        orderStatus: { $in: PIPELINE_DELIVERY_STATUSES },
+      },
+    },
+    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+    ...groupStages,
+    {
+      $group: {
+        _id: { ...groupIdFields, status: "$orderStatus" },
+        orders: { $sum: 1 },
+        plants: { $sum: "$linePlantTotal" },
+        plantsRemaining: {
+          $sum: {
+            $cond: [
+              { $in: ["$orderStatus", REMAINING_STATUSES] },
+              { $ifNull: ["$remainingPlants", 0] },
+              0,
+            ],
+          },
+        },
+      },
+    },
+  ]);
+
+  const [globalFarmReadyRows, globalRfdRows, acceptedRows, deliveryBacklogRows] =
+    await Promise.all([
+      aggregateGlobalStatusByGroup(
+        "FARM_READY",
+        statusMatch,
+        groupStages,
+        groupIdFields,
+        backlogExtra
+      ),
+      aggregateGlobalStatusByGroup(
+        "READY_FOR_DISPATCH",
+        statusMatch,
+        groupStages,
+        groupIdFields,
+        backlogExtra
+      ),
+      Order.aggregate([
+        {
+          $match: {
+            ...statusMatch,
+            ...backlogExtra,
+            orderStatus: "ACCEPTED",
+          },
+        },
+        { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+        ...groupStages,
+        {
+          $group: {
+            _id: groupIdFields,
+            orders: { $sum: 1 },
+            plants: { $sum: "$linePlantTotal" },
+          },
+        },
+      ]),
+      aggregateDeliveryBeforeRangeByGroup(
+        rangeStart,
+        statusMatch,
+        groupStages,
+        groupIdFields,
+        backlogExtra
+      ),
+    ]);
+
+  return buildBreakdownTableFromMetrics({
+    bookingRows: [],
+    entityKeyFn,
+    labelFromKey,
+    globalFarmReadyRows,
+    globalRfdRows,
+    acceptedRows,
+    dispatchedRows: [],
+    completedRows: [],
+    pipelineRows,
+    deliveryInRangeRows: deliveryBacklogRows,
+    deliveryUnionRows: [],
+  });
+}
+
+/** Variety table metrics for backlog (delivery date before range). */
+export async function fetchVarietyPastDueTableMetrics(
+  rangeStart,
+  groupStages,
+  { dueOnly = false } = {}
+) {
+  return fetchEntityPastDueBreakdown(rangeStart, {
+    groupStages,
+    groupIdFields: VARIETY_GROUP_ID,
+    entityKeyFn: varietyEntityKey,
+    labelFromKey: varietyLabelFromKey,
+    mapBookingRow: rowToVarietyBookingShape,
+    dueOnly,
+  });
+}
+
+function breakdownEntityKey(row) {
+  if (row.plantId != null && row.subtypeId != null) {
+    return `${row.plantId}:${row.subtypeId}`;
+  }
+  if (row.personId != null) return String(row.personId);
+  return "";
+}
+
+/**
+ * Attach per-entity pastDue delivery buckets for includeAllPastDue UI (in-range + backlog per cell).
+ */
+export function mergeBreakdownWithPastDue(inRangeTable, pastDueTable) {
+  const emptyDelivery = emptyDeliveryDay();
+  const byKey = new Map();
+
+  for (const row of inRangeTable?.rows || []) {
+    byKey.set(breakdownEntityKey(row), { ...row, pastDue: null });
+  }
+
+  for (const row of pastDueTable?.rows || []) {
+    const key = breakdownEntityKey(row);
+    if (!key) continue;
+    if (byKey.has(key)) {
+      byKey.get(key).pastDue = row.delivery;
+    } else {
+      byKey.set(key, {
+        ...row,
+        booking: { orders: 0, plants: 0 },
+        delivery: emptyDelivery,
+        pastDue: row.delivery,
+      });
+    }
+  }
+
+  const rows = [...byKey.values()];
+  rows.sort((a, b) => {
+    const plantCmp = String(a.plantName || a.personName || "").localeCompare(
+      String(b.plantName || b.personName || "")
+    );
+    if (plantCmp !== 0) return plantCmp;
+    return String(a.subtype || "").localeCompare(String(b.subtype || ""));
+  });
+
+  return {
+    rows,
+    totals: {
+      ...(inRangeTable?.totals || { booking: emptyOrderPlants(), delivery: emptyDelivery }),
+      pastDue: pastDueTable?.totals?.delivery || emptyDelivery,
+    },
+  };
 }
 
 export { istDateStringExpr };

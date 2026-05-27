@@ -16,6 +16,8 @@ import {
   aggregateDeliveryUnionByGroup,
   aggregateDeliveryInRangeByGroup,
   buildBreakdownTableFromMetrics,
+  fetchEntityPastDueBreakdown,
+  mergeBreakdownWithPastDue,
 } from "../utility/adminMisMetrics.js";
 
 const SALES_PERSON_STAGES = [
@@ -235,14 +237,27 @@ export async function fetchAdminSalesMis(startDate, endDate, options = {}) {
   }
   const { rangeStart, rangeEnd, startYmd, endYmd } = parsed;
 
-  const [table, dueSummary] = await Promise.all([
+  const [tableResult, dueSummary, pastDueTable] = await Promise.all([
     fetchPersonBreakdownMetrics(rangeStart, rangeEnd, {
       groupStages: SALES_PERSON_STAGES,
       groupIdFields: SALES_GROUP_ID,
       dueOnly,
     }),
     aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
+    includeAllPastDue
+      ? fetchEntityPastDueBreakdown(rangeStart, {
+          groupStages: SALES_PERSON_STAGES,
+          groupIdFields: SALES_GROUP_ID,
+          entityKeyFn: personEntityKey,
+          labelFromKey: metaFromBookingRow,
+          dueOnly,
+        })
+      : Promise.resolve(null),
   ]);
+
+  const table = includeAllPastDue
+    ? mergeBreakdownWithPastDue(tableResult, pastDueTable)
+    : tableResult;
 
   if (includeAllPastDue && dueSummary?.combined) {
     table.totals.delivery.total = { ...dueSummary.combined };
@@ -275,7 +290,7 @@ export async function fetchAdminDealerMis(startDate, endDate, options = {}) {
     dealer: { $exists: true, $ne: null },
   };
 
-  const [table, dueSummary] = await Promise.all([
+  const [tableResult, dueSummary, pastDueTable] = await Promise.all([
     fetchPersonBreakdownMetrics(rangeStart, rangeEnd, {
       groupStages: DEALER_STAGES,
       groupIdFields: DEALER_GROUP_ID,
@@ -283,7 +298,21 @@ export async function fetchAdminDealerMis(startDate, endDate, options = {}) {
       dueOnly,
     }),
     aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
+    includeAllPastDue
+      ? fetchEntityPastDueBreakdown(rangeStart, {
+          groupStages: DEALER_STAGES,
+          groupIdFields: DEALER_GROUP_ID,
+          entityKeyFn: personEntityKey,
+          labelFromKey: metaFromBookingRow,
+          extraMatch: dealerMatch,
+          dueOnly,
+        })
+      : Promise.resolve(null),
   ]);
+
+  const table = includeAllPastDue
+    ? mergeBreakdownWithPastDue(tableResult, pastDueTable)
+    : tableResult;
 
   if (includeAllPastDue && dueSummary?.combined) {
     table.totals.delivery.total = { ...dueSummary.combined };

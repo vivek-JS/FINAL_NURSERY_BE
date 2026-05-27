@@ -14,6 +14,7 @@ import {
   DRAWER_BUCKET_TO_METRIC,
   DELIVERY_TOTAL_EXCLUDED_STATUSES,
   matchDeliveryDateInRange,
+  matchDeliveryDateBeforeRange,
 } from "./metricRules.js";
 import {
   MIS_DATE_RANGE_POLICY,
@@ -35,6 +36,7 @@ export {
   DRAWER_BUCKET_TO_METRIC,
   DELIVERY_TOTAL_EXCLUDED_STATUSES,
   matchDeliveryDateInRange,
+  matchDeliveryDateBeforeRange,
   MIS_DATE_RANGE_POLICY,
   parseCentralReportDateRange,
   getIstTodayYmd,
