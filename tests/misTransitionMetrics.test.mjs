@@ -26,12 +26,13 @@ test("transitionHistoryByDayStages unwinds statusChanges per event", () => {
   assert.ok(stages.some((s) => s.$unwind === "$_misSc"));
 });
 
-test("transitionDrawerFacetStages uses history + legacy facet", () => {
+test("transitionDrawerFacetStages uses events + history + legacy facet", () => {
   const stages = transitionDrawerFacetStages(
     "DISPATCHED",
     new Date("2026-05-01T00:00:00+05:30"),
     new Date("2026-05-31T23:59:59+05:30")
   );
+  assert.ok(stages[0].$facet?.events);
   assert.ok(stages[0].$facet?.history);
   assert.ok(stages[0].$facet?.legacy);
 });

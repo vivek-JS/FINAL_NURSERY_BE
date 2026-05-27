@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import mongoose from "mongoose";
 import {
   buildMisOrdersMatch,
 } from "../services/adminMisOrders.service.js";
@@ -28,6 +29,24 @@ test("buildMisOrdersMatch dispatched uses transition kind", () => {
   const m = buildMisOrdersMatch({ bucket: "dispatched", mode: "delivery" }, window);
   assert.equal(m.kind, "transition");
   assert.equal(m.newStatus, "DISPATCHED");
+});
+
+test("buildMisOrdersMatch coerces plantId and subtypeId to ObjectId for aggregation", () => {
+  const plantHex = "68fdf6d45832d541b274acfa";
+  const subtypeHex = "6944c7e75845df7093731ba2";
+  const m = buildMisOrdersMatch(
+    {
+      bucket: "dispatched",
+      mode: "delivery",
+      plantId: plantHex,
+      subtypeId: subtypeHex,
+    },
+    window
+  );
+  assert.equal(m.kind, "transition");
+  assert.ok(m.extra.plantName instanceof mongoose.Types.ObjectId);
+  assert.ok(m.extra.plantSubtype instanceof mongoose.Types.ObjectId);
+  assert.equal(String(m.extra.plantName), plantHex);
 });
 
 test("buildMisOrdersMatch completed uses transition kind", () => {

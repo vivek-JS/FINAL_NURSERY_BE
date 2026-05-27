@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import {
   LINE_PLANT_TOTAL_ADD_FIELDS,
@@ -65,6 +66,14 @@ function bookingInRangeClause(rangeStart, rangeEnd) {
   return { orderBookingDate: { $gte: rangeStart, $lte: rangeEnd } };
 }
 
+/** Aggregation $match needs ObjectId — string ids do not match (unlike find/count). */
+function toMongoIdIfValid(value) {
+  if (value == null || value === "") return undefined;
+  const s = String(value).trim();
+  if (!mongoose.Types.ObjectId.isValid(s)) return value;
+  return new mongoose.Types.ObjectId(s);
+}
+
 /**
  * Build Mongo match for MIS drawer — mirrors adminMisMetrics column rules.
  */
@@ -81,15 +90,15 @@ export function buildMisOrdersMatch(query, window) {
   const isTotalsScope = !hasSingleDay;
 
   const extra = {};
-  const salesPerson = query.salesPerson || query.salesPersonId;
-  const orderDealer = query.orderDealer || query.dealerId;
+  const salesPerson = toMongoIdIfValid(query.salesPerson || query.salesPersonId);
+  const orderDealer = toMongoIdIfValid(query.orderDealer || query.dealerId);
   if (salesPerson) extra.salesPerson = salesPerson;
   if (orderDealer) {
     extra.dealer = orderDealer;
     extra.dealerOrder = true;
   }
-  const plantId = query.plantId;
-  const subtypeId = query.subtypeId;
+  const plantId = toMongoIdIfValid(query.plantId);
+  const subtypeId = toMongoIdIfValid(query.subtypeId);
   if (plantId) extra.plantName = plantId;
   if (subtypeId) extra.plantSubtype = subtypeId;
 
@@ -256,12 +265,6 @@ async function fetchTransitionOrders(matchSpec, window, { skip, limit }) {
   const pipeline = [
     { $match: { ...base, ...extra } },
     ...transitionDrawerFacetStages(newStatus, rangeStart, rangeEnd),
-    {
-      $group: {
-        _id: "$_id",
-        bucketEventAt: { $min: "$_misTransitionEventAt" },
-      },
-    },
     { $sort: { bucketEventAt: -1 } },
     {
       $facet: {

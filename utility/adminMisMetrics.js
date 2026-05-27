@@ -33,6 +33,12 @@ import {
   transitionHistoryByEntityStages,
   transitionLegacyByEntityStages,
 } from "./misTransitionMetrics.js";
+import {
+  aggregateTransitionEventsByDay,
+  aggregateTransitionEventsByGroup,
+  distinctOrderIdsWithTransitionEvents,
+  transitionExcludeOrderIdsMatch,
+} from "./misTransitionFromEvents.js";
 
 const IST = "Asia/Kolkata";
 const REMAINING_STATUSES = [
@@ -125,17 +131,19 @@ export async function aggregateAcceptedByDeliveryDay(
 }
 
 /**
- * Out / Done: statusChanges transition in range, or legacy updatedAt when history missing.
+ * Out / Done: OrderEvent first, then statusChanges, then legacy updatedAt.
  */
-function mergeTransitionDayRows(historyRows, legacyRows) {
-  const map = rowsToDayMap(historyRows);
-  for (const row of legacyRows || []) {
-    const day = row._id;
-    if (!day) continue;
-    if (!map.has(day)) map.set(day, { orders: 0, plants: 0 });
-    const bucket = map.get(day);
-    bucket.orders += row.orders || 0;
-    bucket.plants += row.plants || 0;
+function mergeTransitionDayRows(...rowSets) {
+  const map = new Map();
+  for (const rows of rowSets) {
+    for (const row of rows || []) {
+      const day = row._id?.day ?? row._id;
+      if (!day) continue;
+      if (!map.has(day)) map.set(day, { orders: 0, plants: 0 });
+      const bucket = map.get(day);
+      bucket.orders += row.orders || 0;
+      bucket.plants += row.plants || 0;
+    }
   }
   return map;
 }
@@ -146,19 +154,26 @@ export async function aggregateTransitionsByDay(
   rangeEnd,
   statusMatch
 ) {
-  const [historyRows, legacyRows] = await Promise.all([
+  const eventOrderIds = await distinctOrderIdsWithTransitionEvents(
+    newStatus,
+    rangeStart,
+    rangeEnd
+  );
+  const exclude = transitionExcludeOrderIdsMatch(eventOrderIds);
+  const [eventRows, historyRows, legacyRows] = await Promise.all([
+    aggregateTransitionEventsByDay(newStatus, rangeStart, rangeEnd, statusMatch),
     Order.aggregate([
-      { $match: statusMatch },
+      { $match: { ...statusMatch, ...exclude } },
       { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
       ...transitionHistoryByDayStages(newStatus, rangeStart, rangeEnd),
     ]),
     Order.aggregate([
-      { $match: statusMatch },
+      { $match: { ...statusMatch, ...exclude } },
       { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
       ...transitionLegacyByDayStages(newStatus, rangeStart, rangeEnd),
     ]),
   ]);
-  return mergeTransitionDayRows(historyRows, legacyRows);
+  return mergeTransitionDayRows(eventRows, historyRows, legacyRows);
 }
 
 /** Delivery in range — any status — by delivery day. */
@@ -578,9 +593,23 @@ export async function aggregateTransitionsByGroup(
   groupIdFields,
   extraMatch = {}
 ) {
-  const [historyRows, legacyRows] = await Promise.all([
+  const eventOrderIds = await distinctOrderIdsWithTransitionEvents(
+    newStatus,
+    rangeStart,
+    rangeEnd
+  );
+  const exclude = transitionExcludeOrderIdsMatch(eventOrderIds);
+  const [eventRows, historyRows, legacyRows] = await Promise.all([
+    aggregateTransitionEventsByGroup(
+      newStatus,
+      rangeStart,
+      rangeEnd,
+      { ...statusMatch, ...extraMatch },
+      groupStages,
+      groupIdFields
+    ),
     Order.aggregate([
-      { $match: { ...statusMatch, ...extraMatch } },
+      { $match: { ...statusMatch, ...extraMatch, ...exclude } },
       { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
       ...transitionHistoryByEntityStages(
         newStatus,
@@ -591,7 +620,7 @@ export async function aggregateTransitionsByGroup(
       ),
     ]),
     Order.aggregate([
-      { $match: { ...statusMatch, ...extraMatch } },
+      { $match: { ...statusMatch, ...extraMatch, ...exclude } },
       { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
       ...transitionLegacyByEntityStages(
         newStatus,
@@ -604,7 +633,7 @@ export async function aggregateTransitionsByGroup(
   ]);
 
   const byKey = new Map();
-  for (const row of [...historyRows, ...legacyRows]) {
+  for (const row of [...eventRows, ...historyRows, ...legacyRows]) {
     const key = JSON.stringify(row._id);
     if (!byKey.has(key)) {
       byKey.set(key, { _id: row._id, orders: 0, plants: 0 });

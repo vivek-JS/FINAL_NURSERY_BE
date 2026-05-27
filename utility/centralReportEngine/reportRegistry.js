@@ -4,7 +4,11 @@ import {
   fetchAdminDealerMis,
 } from "../../services/adminMisBreakdown.service.js";
 import { fetchAdminDueMis } from "../../services/adminMisDueTab.service.js";
-import { MIS_DELIVERY_METRICS, MIS_TIMEZONE } from "./metricRules.js";
+import {
+  MIS_DELIVERY_METRICS,
+  MIS_TIMEZONE,
+  MIS_TRANSITION_RESOLUTION_ORDER,
+} from "./metricRules.js";
 
 /**
  * Registered central reports. Add new reports here — one command → one runner.
@@ -111,6 +115,7 @@ export function listCentralReports() {
 export function getCentralReportEngineMeta() {
   return {
     timezone: MIS_TIMEZONE,
+    transitionResolutionOrder: MIS_TRANSITION_RESOLUTION_ORDER,
     metricRules: MIS_DELIVERY_METRICS,
     reports: listCentralReports(),
   };

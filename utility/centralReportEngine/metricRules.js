@@ -5,6 +5,16 @@
 
 export const MIS_TIMEZONE = "Asia/Kolkata";
 
+/**
+ * Out / Done resolution order (see misTransitionFromEvents.js).
+ * @type {readonly ['order_event', 'status_changes', 'legacy_updated_at']}
+ */
+export const MIS_TRANSITION_RESOLUTION_ORDER = [
+  "order_event",
+  "status_changes",
+  "legacy_updated_at",
+];
+
 /** @typedef {'date_field'|'status_and_date'|'global_status'|'status_transition'|'delivery_union'|'pipeline_by_delivery'|'computed'} MetricKind */
 
 /**
@@ -60,13 +70,17 @@ export const MIS_DELIVERY_METRICS = {
     kind: "status_transition",
     label: "Out / Dispatched",
     transitionStatus: "DISPATCHED",
-    description: "statusChanges.newStatus = DISPATCHED on the event day (IST), not delivery date.",
+    resolutionOrder: MIS_TRANSITION_RESOLUTION_ORDER,
+    description:
+      "1) OrderEvent (ORDER_STATUS_CHANGED→DISPATCHED, ORDER_DISPATCHED) on occurredAt day (IST); 2) statusChanges; 3) legacy orderStatus+updatedAt. Not delivery date.",
   },
   completed: {
     kind: "status_transition",
     label: "Completed",
     transitionStatus: "COMPLETED",
-    description: "statusChanges.newStatus = COMPLETED on the event day (IST).",
+    resolutionOrder: MIS_TRANSITION_RESOLUTION_ORDER,
+    description:
+      "1) OrderEvent (ORDER_STATUS_CHANGED→COMPLETED, ORDER_COMPLETED, ORDER_DELIVERED); 2) statusChanges; 3) legacy updatedAt.",
   },
   other: {
     kind: "pipeline_by_delivery",

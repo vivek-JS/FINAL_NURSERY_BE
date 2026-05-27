@@ -7,6 +7,7 @@ import {
   normalizeReportId,
   getMetricRule,
   MIS_DELIVERY_METRICS,
+  MIS_TRANSITION_RESOLUTION_ORDER,
 } from "../utility/centralReportEngine/index.js";
 import {
   resolveCentralReport,
@@ -44,6 +45,14 @@ test("getCentralReportEngineMeta includes metric rules", () => {
 test("getMetricRule maps drawer buckets", () => {
   assert.equal(getMetricRule("dispatched")?.kind, "status_transition");
   assert.equal(getMetricRule("farmReady")?.status, "FARM_READY");
+});
+
+test("status_transition metrics resolve events before legacy", () => {
+  assert.deepEqual(getMetricRule("dispatched")?.resolutionOrder, [
+    ...MIS_TRANSITION_RESOLUTION_ORDER,
+  ]);
+  assert.equal(MIS_TRANSITION_RESOLUTION_ORDER[0], "order_event");
+  assert.equal(MIS_TRANSITION_RESOLUTION_ORDER[2], "legacy_updated_at");
 });
 
 test("runCentralReport rejects unknown report", async () => {

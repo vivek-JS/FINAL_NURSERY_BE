@@ -1,3 +1,10 @@
+import {
+  orderEventTypesForTransition,
+  orderEventStatusValueMatch,
+  transitionHasOrderEventLookupStages,
+} from "./misTransitionFromEvents.js";
+import { ORDER_DOMAINS } from "../modules/orderEvents/domain/constants.js";
+
 const IST = "Asia/Kolkata";
 
 /** When statusChanges lacks an entry, infer transition from current status + updatedAt. */
@@ -65,6 +72,8 @@ export function istDayFromEventField(eventField = "$_misEventAt") {
 export function transitionHistoryByDayStages(newStatus, rangeStart, rangeEnd, preStages = []) {
   return [
     ...preStages,
+    ...transitionHasOrderEventLookupStages(newStatus, rangeStart, rangeEnd),
+    { $match: { _misHasOrdEv: false } },
     { $addFields: { _misSc: normalizeStatusChangesExpr() } },
     { $unwind: "$_misSc" },
     {
@@ -142,6 +151,8 @@ export function transitionLegacyByEntityStages(
   const legacyStatuses = legacyStatusesFor(newStatus);
   return [
     ...preStages,
+    ...transitionHasOrderEventLookupStages(newStatus, rangeStart, rangeEnd),
+    { $match: { _misHasOrdEv: false } },
     { $addFields: misTransitionEverScField(newStatus) },
     {
       $match: {
@@ -171,6 +182,8 @@ export function transitionLegacyByDayStages(newStatus, rangeStart, rangeEnd, pre
   const legacyStatuses = legacyStatusesFor(newStatus);
   return [
     ...preStages,
+    ...transitionHasOrderEventLookupStages(newStatus, rangeStart, rangeEnd),
+    { $match: { _misHasOrdEv: false } },
     { $addFields: misTransitionEverScField(newStatus) },
     {
       $match: {
@@ -199,13 +212,44 @@ export function transitionLegacyByDayStages(newStatus, rangeStart, rangeEnd, pre
   ];
 }
 
-/** Drawer: unique orders with any transition in window (history + legacy). */
+/** Drawer: unique orders — OrderEvent first, then statusChanges, then legacy. */
 export function transitionDrawerFacetStages(newStatus, rangeStart, rangeEnd) {
   const legacyStatuses = legacyStatusesFor(newStatus);
+  const eventTypes = orderEventTypesForTransition(newStatus);
+  const eventValueMatch = orderEventStatusValueMatch(newStatus);
   return [
     {
       $facet: {
+        events: [
+          {
+            $lookup: {
+              from: "orderevents",
+              let: { oid: "$_id" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: { $eq: ["$orderId", "$$oid"] },
+                    orderDomain: ORDER_DOMAINS.PLANT,
+                    eventType: { $in: eventTypes },
+                    occurredAt: { $gte: rangeStart, $lte: rangeEnd },
+                  },
+                },
+                { $match: eventValueMatch },
+              ],
+              as: "_misEv",
+            },
+          },
+          { $unwind: "$_misEv" },
+          {
+            $group: {
+              _id: "$_id",
+              bucketEventAt: { $min: "$_misEv.occurredAt" },
+            },
+          },
+        ],
         history: [
+          ...transitionHasOrderEventLookupStages(newStatus, rangeStart, rangeEnd),
+          { $match: { _misHasOrdEv: false } },
           { $addFields: { _misSc: normalizeStatusChangesExpr() } },
           { $unwind: "$_misSc" },
           {
@@ -227,6 +271,8 @@ export function transitionDrawerFacetStages(newStatus, rangeStart, rangeEnd) {
           },
         ],
         legacy: [
+          ...transitionHasOrderEventLookupStages(newStatus, rangeStart, rangeEnd),
+          { $match: { _misHasOrdEv: false } },
           { $addFields: misTransitionEverScField(newStatus) },
           {
             $match: {
@@ -246,7 +292,7 @@ export function transitionDrawerFacetStages(newStatus, rangeStart, rangeEnd) {
     },
     {
       $project: {
-        combined: { $concatArrays: ["$history", "$legacy"] },
+        combined: { $concatArrays: ["$events", "$history", "$legacy"] },
       },
     },
     { $unwind: "$combined" },
