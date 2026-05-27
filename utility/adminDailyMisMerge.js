@@ -310,3 +310,98 @@ export function buildVarietyTable(bookingRows = [], deliveryRows = []) {
 
   return { rows, totals };
 }
+
+function personKey(personId, personName) {
+  const idPart = personId != null ? String(personId) : "none";
+  return `${idPart}\u0000${normalizeLabel(personName, "Unknown")}`;
+}
+
+/**
+ * @param {Array<{ _id: { personId: unknown, personName: string, status: string }, orders: number, plants: number, plantsRemaining?: number }>} rows
+ */
+export function pivotPersonDelivery(rows) {
+  const byKey = new Map();
+  for (const row of rows || []) {
+    const personId = row._id?.personId;
+    const personName = row._id?.personName || "Unknown";
+    const status = row._id?.status;
+    if (!status) continue;
+    const key = personKey(personId, personName);
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        personId,
+        personName,
+        phoneNumber: row._id?.phoneNumber,
+        jobTitle: row._id?.jobTitle,
+        delivery: emptyDeliveryDay(),
+      });
+    }
+    const entry = byKey.get(key);
+    const bucketKey = statusToDeliveryBucket(status);
+    const bucket = entry.delivery[bucketKey];
+    bucket.orders += row.orders || 0;
+    bucket.plants += row.plants || 0;
+    if (
+      STATUSES_WITH_REMAINING.has(status) &&
+      typeof bucket.plantsRemaining === "number"
+    ) {
+      bucket.plantsRemaining += row.plantsRemaining || 0;
+    }
+  }
+  for (const entry of byKey.values()) {
+    recomputeDeliveryTotal(entry.delivery);
+  }
+  return byKey;
+}
+
+/**
+ * Range summary by person (sales rep or dealer).
+ * @param {Array<{ personId: unknown, personName: string, phoneNumber?: string, jobTitle?: string, bookingOrders?: number, bookingPlants?: number }>} bookingRows
+ */
+export function buildPersonBreakdownTable(bookingRows = [], deliveryRows = []) {
+  const deliveryMap = pivotPersonDelivery(deliveryRows);
+  const keys = new Set();
+
+  for (const row of bookingRows || []) {
+    keys.add(personKey(row.personId, row.personName));
+  }
+  for (const key of deliveryMap.keys()) {
+    keys.add(key);
+  }
+
+  const rows = [];
+  for (const key of keys) {
+    const booking = (bookingRows || []).find(
+      (r) => personKey(r.personId, r.personName) === key
+    );
+    const deliveryEntry = deliveryMap.get(key);
+    const [, personName] = key.split("\u0000");
+    rows.push({
+      personId: booking?.personId ?? deliveryEntry?.personId,
+      personName: normalizeLabel(
+        booking?.personName || deliveryEntry?.personName || personName,
+        "Unknown"
+      ),
+      phoneNumber: booking?.phoneNumber || deliveryEntry?.phoneNumber,
+      jobTitle: booking?.jobTitle || deliveryEntry?.jobTitle,
+      booking: {
+        orders: booking?.bookingOrders || 0,
+        plants: booking?.bookingPlants || 0,
+      },
+      delivery: deliveryEntry?.delivery || emptyDeliveryDay(),
+    });
+  }
+
+  rows.sort((a, b) => a.personName.localeCompare(b.personName));
+
+  const totals = {
+    booking: emptyOrderPlants(),
+    delivery: emptyDeliveryDay(),
+  };
+  for (const row of rows) {
+    totals.booking = addOrderPlants(totals.booking, row.booking);
+    totals.delivery = addDeliveryDays(totals.delivery, row.delivery);
+  }
+
+  return { rows, totals };
+}

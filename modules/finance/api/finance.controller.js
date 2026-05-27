@@ -35,7 +35,7 @@ export const postReconcileShadow = catchAsync(async (req, res) => {
 });
 
 export const getPartyStatementReport = catchAsync(async (req, res, next) => {
-  const { partyType, partyId, accountCode, startDate, endDate } = req.query;
+  const { partyType, partyId, accountCode, startDate, endDate, includeTransfers } = req.query;
   if (!partyType || !partyId) {
     return next(new AppError("partyType and partyId are required", 400));
   }
@@ -45,6 +45,7 @@ export const getPartyStatementReport = catchAsync(async (req, res, next) => {
     accountCode,
     startDate,
     endDate,
+    includeTransfers: includeTransfers === "true" || includeTransfers === "1",
   });
   return res.status(200).json(generateResponse("Success", "Party statement", data));
 });

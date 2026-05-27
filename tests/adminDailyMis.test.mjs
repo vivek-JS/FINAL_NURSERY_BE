@@ -5,6 +5,7 @@ import {
   pivotDeliveryByDay,
   buildAdminDailyMisPayload,
   buildVarietyTable,
+  buildPersonBreakdownTable,
   emptyDeliveryDay,
 } from "../utility/adminDailyMisMerge.js";
 import { generateIstDateKeys, parseYmdRange } from "../utility/istOrderDateStats.js";
@@ -112,4 +113,34 @@ test("buildVarietyTable merges booking and delivery by plant subtype", () => {
   assert.equal(rows[0].booking.orders, 3);
   assert.equal(rows[0].delivery.farmReady.orders, 2);
   assert.equal(totals.booking.plants, 300);
+});
+
+test("buildPersonBreakdownTable merges booking and delivery by person", () => {
+  const { rows, totals } = buildPersonBreakdownTable(
+    [
+      {
+        personId: "507f1f77bcf86cd799439011",
+        personName: "Ravi Sales",
+        bookingOrders: 4,
+        bookingPlants: 400,
+      },
+    ],
+    [
+      {
+        _id: {
+          personId: "507f1f77bcf86cd799439011",
+          personName: "Ravi Sales",
+          status: "ACCEPTED",
+        },
+        orders: 2,
+        plants: 200,
+        plantsRemaining: 0,
+      },
+    ]
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].personName, "Ravi Sales");
+  assert.equal(rows[0].booking.orders, 4);
+  assert.equal(rows[0].delivery.accepted.orders, 2);
+  assert.equal(totals.booking.plants, 400);
 });

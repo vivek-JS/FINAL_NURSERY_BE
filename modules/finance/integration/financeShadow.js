@@ -151,7 +151,13 @@ export function shadowFarmerAdvanceTransfer({ transferId, direction, amount, cus
     sourceDomain: "FarmerPlantLedger",
     sourceId: transferId,
     createdBy: userId,
-    payload: { amount: amt, direction, partyId: customerMobile, customerMobile },
+    payload: {
+      amount: amt,
+      direction,
+      partyId: customerMobile,
+      customerMobile,
+      metadata: { transferType: "advance", direction },
+    },
   }, options);
 }
 
@@ -164,7 +170,13 @@ export function shadowFarmerPaymentTransfer({ requestId, direction, amount, cust
     sourceDomain: "FarmerPlantLedger",
     sourceId: requestId,
     createdBy: userId,
-    payload: { amount: amt, direction, partyId: customerMobile, customerMobile },
+    payload: {
+      amount: amt,
+      direction,
+      partyId: customerMobile,
+      customerMobile,
+      metadata: { transferType: "payment", direction, transferRequestId: String(requestId) },
+    },
   }, options);
 }
 

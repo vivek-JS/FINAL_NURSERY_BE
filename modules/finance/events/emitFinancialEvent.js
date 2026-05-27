@@ -5,6 +5,7 @@ import { seedChartOfAccounts } from "../coa/seedChartOfAccounts.js";
 import { generateVoucherNo } from "../posting/voucherNumber.js";
 import { createAndPostVoucher } from "../posting/postJournal.js";
 import { buildJournalLines, voucherTypeForEvent } from "./buildJournalLines.js";
+import { describeFinancialEvent } from "../domain/eventLabels.js";
 import { DEFAULT_BRANCH_ID } from "../domain/constants.js";
 import { withFinancePostLock } from "../posting/financePostLock.js";
 
@@ -77,7 +78,17 @@ export async function emitFinancialEvent({
       }
     }
 
-    const lines = buildJournalLines(eventType, payload);
+    const builtLines = buildJournalLines(eventType, payload);
+    const lines = (builtLines || []).map((l) => ({
+      ...l,
+      metadata: {
+        ...(l.metadata || {}),
+        ...(payload.metadata || {}),
+        eventType,
+        ...(payload.direction != null ? { direction: payload.direction } : {}),
+      },
+      sourceLineRef: l.sourceLineRef || eventType,
+    }));
     if (!lines?.length) {
       await FinancialEvent.updateOne(
         { _id: financialEvent._id },
@@ -102,9 +113,9 @@ export async function emitFinancialEvent({
       partyId: partyId ? String(partyId) : undefined,
       sourceDomain,
       sourceRefs: sourceId ? [String(sourceId)] : [],
-      description: payload.description || `${eventType} ${sourceId || ""}`.trim(),
+      description: payload.description || describeFinancialEvent(eventType, payload),
       financialEventId: financialEvent._id,
-      metadata: payload.metadata,
+      metadata: { ...(payload.metadata || {}), eventType },
       createdBy,
     };
 

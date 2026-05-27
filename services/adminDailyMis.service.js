@@ -7,6 +7,7 @@ import {
 } from "../utility/istOrderDateStats.js";
 import {
   buildAdminDailyMisPayload,
+  buildPersonBreakdownTable,
   buildVarietyTable,
 } from "../utility/adminDailyMisMerge.js";
 
@@ -56,6 +57,43 @@ const REMAINING_STATUSES = [
   "PARTIALLY_COMPLETED",
 ];
 
+const SALES_PERSON_STAGES = [
+  {
+    $lookup: {
+      from: "users",
+      localField: "salesPerson",
+      foreignField: "_id",
+      as: "_personData",
+      pipeline: [{ $project: { name: 1, phoneNumber: 1, jobTitle: 1 } }],
+    },
+  },
+  {
+    $addFields: {
+      _personName: { $ifNull: [{ $arrayElemAt: ["$_personData.name", 0] }, "Unknown"] },
+      _personPhone: { $arrayElemAt: ["$_personData.phoneNumber", 0] },
+      _personJobTitle: { $arrayElemAt: ["$_personData.jobTitle", 0] },
+    },
+  },
+];
+
+const DEALER_STAGES = [
+  {
+    $lookup: {
+      from: "users",
+      localField: "dealer",
+      foreignField: "_id",
+      as: "_dealerData",
+      pipeline: [{ $project: { name: 1, phoneNumber: 1 } }],
+    },
+  },
+  {
+    $addFields: {
+      _dealerName: { $ifNull: [{ $arrayElemAt: ["$_dealerData.name", 0] }, "Unknown"] },
+      _dealerPhone: { $arrayElemAt: ["$_dealerData.phoneNumber", 0] },
+    },
+  },
+];
+
 export async function fetchAdminDailyMis(startDate, endDate) {
   const parsed = parseYmdRange(startDate, endDate);
   if (parsed.error) {
@@ -80,6 +118,10 @@ export async function fetchAdminDailyMis(startDate, endDate) {
     rangeUniqueAgg,
     varietyBookingRows,
     varietyDeliveryRows,
+    salesBookingRows,
+    salesDeliveryRows,
+    dealerBookingRows,
+    dealerDeliveryRows,
   ] = await Promise.all([
       Order.aggregate([
         {
@@ -276,9 +318,146 @@ export async function fetchAdminDailyMis(startDate, endDate) {
           },
         },
       ]),
+
+      Order.aggregate([
+        {
+          $match: {
+            ...statusMatch,
+            orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
+          },
+        },
+        { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+        ...SALES_PERSON_STAGES,
+        {
+          $group: {
+            _id: {
+              personId: "$salesPerson",
+              personName: "$_personName",
+              phoneNumber: "$_personPhone",
+              jobTitle: "$_personJobTitle",
+            },
+            bookingOrders: { $sum: 1 },
+            bookingPlants: { $sum: "$linePlantTotal" },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            personId: "$_id.personId",
+            personName: "$_id.personName",
+            phoneNumber: "$_id.phoneNumber",
+            jobTitle: "$_id.jobTitle",
+            bookingOrders: 1,
+            bookingPlants: 1,
+          },
+        },
+      ]),
+
+      Order.aggregate([
+        {
+          $match: {
+            ...statusMatch,
+            deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
+          },
+        },
+        { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+        ...SALES_PERSON_STAGES,
+        {
+          $group: {
+            _id: {
+              personId: "$salesPerson",
+              personName: "$_personName",
+              phoneNumber: "$_personPhone",
+              jobTitle: "$_personJobTitle",
+              status: "$orderStatus",
+            },
+            orders: { $sum: 1 },
+            plants: { $sum: "$linePlantTotal" },
+            plantsRemaining: {
+              $sum: {
+                $cond: [
+                  { $in: ["$orderStatus", REMAINING_STATUSES] },
+                  { $ifNull: ["$remainingPlants", 0] },
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]),
+
+      Order.aggregate([
+        {
+          $match: {
+            ...statusMatch,
+            dealerOrder: true,
+            dealer: { $exists: true, $ne: null },
+            orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
+          },
+        },
+        { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+        ...DEALER_STAGES,
+        {
+          $group: {
+            _id: {
+              personId: "$dealer",
+              personName: "$_dealerName",
+              phoneNumber: "$_dealerPhone",
+            },
+            bookingOrders: { $sum: 1 },
+            bookingPlants: { $sum: "$linePlantTotal" },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            personId: "$_id.personId",
+            personName: "$_id.personName",
+            phoneNumber: "$_id.phoneNumber",
+            bookingOrders: 1,
+            bookingPlants: 1,
+          },
+        },
+      ]),
+
+      Order.aggregate([
+        {
+          $match: {
+            ...statusMatch,
+            dealerOrder: true,
+            dealer: { $exists: true, $ne: null },
+            deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
+          },
+        },
+        { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+        ...DEALER_STAGES,
+        {
+          $group: {
+            _id: {
+              personId: "$dealer",
+              personName: "$_dealerName",
+              phoneNumber: "$_dealerPhone",
+              status: "$orderStatus",
+            },
+            orders: { $sum: 1 },
+            plants: { $sum: "$linePlantTotal" },
+            plantsRemaining: {
+              $sum: {
+                $cond: [
+                  { $in: ["$orderStatus", REMAINING_STATUSES] },
+                  { $ifNull: ["$remainingPlants", 0] },
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]),
     ]);
 
   const varietyTable = buildVarietyTable(varietyBookingRows, varietyDeliveryRows);
+  const salesTable = buildPersonBreakdownTable(salesBookingRows, salesDeliveryRows);
+  const dealerTable = buildPersonBreakdownTable(dealerBookingRows, dealerDeliveryRows);
 
   const payload = buildAdminDailyMisPayload({
     dateKeys,
@@ -295,6 +474,10 @@ export async function fetchAdminDailyMis(startDate, endDate) {
       endDate: endYmd,
       varietyTable: varietyTable.rows,
       varietyTotals: varietyTable.totals,
+      salesTable: salesTable.rows,
+      salesTotals: salesTable.totals,
+      dealerTable: dealerTable.rows,
+      dealerTotals: dealerTable.totals,
     },
   };
 }
