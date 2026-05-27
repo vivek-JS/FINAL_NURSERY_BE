@@ -12,6 +12,8 @@ import {
   MIS_TRANSITION_RESOLUTION_ORDER,
   getMetricRule,
   DRAWER_BUCKET_TO_METRIC,
+  DELIVERY_TOTAL_EXCLUDED_STATUSES,
+  matchDeliveryDateInRange,
 } from "./metricRules.js";
 
 export {
@@ -26,6 +28,8 @@ export {
   MIS_TRANSITION_RESOLUTION_ORDER,
   getMetricRule,
   DRAWER_BUCKET_TO_METRIC,
+  DELIVERY_TOTAL_EXCLUDED_STATUSES,
+  matchDeliveryDateInRange,
 };
 
 /**

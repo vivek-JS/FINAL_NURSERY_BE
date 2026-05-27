@@ -1,7 +1,13 @@
 /**
  * Single source of truth for Admin MIS / central report column semantics.
  * Used by aggregations (adminMisMetrics), drawer filters (FE), and report registry docs.
+ *
+ * Mongo $match helpers for delivery: see deliveryMatch.js
  */
+
+import { DELIVERY_TOTAL_EXCLUDED_STATUSES } from "./deliveryMatch.js";
+
+export { DELIVERY_TOTAL_EXCLUDED_STATUSES, matchDeliveryDateInRange } from "./deliveryMatch.js";
 
 export const MIS_TIMEZONE = "Asia/Kolkata";
 
@@ -30,8 +36,9 @@ export const MIS_DELIVERY_METRICS = {
   deliveryTotal: {
     kind: "delivery_union",
     label: "Delivery total",
+    excludedStatuses: DELIVERY_TOTAL_EXCLUDED_STATUSES,
     description:
-      "Daily/sales footer: delivery in range (excl. DISPATCHED) OR current FARM_READY OR RFD. Variety row: delivery in range only (excl. DISPATCHED). Out column is separate.",
+      "Daily/sales footer: delivery in range (excl. DISPATCHED, COMPLETED) OR current FARM_READY OR RFD. Variety row: delivery in range only (excl. DISPATCHED, COMPLETED). Out/Done columns are separate.",
   },
   accepted: {
     kind: "status_and_date",

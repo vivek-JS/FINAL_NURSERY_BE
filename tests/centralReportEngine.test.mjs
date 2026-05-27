@@ -8,6 +8,8 @@ import {
   getMetricRule,
   MIS_DELIVERY_METRICS,
   MIS_TRANSITION_RESOLUTION_ORDER,
+  DELIVERY_TOTAL_EXCLUDED_STATUSES,
+  matchDeliveryDateInRange,
 } from "../utility/centralReportEngine/index.js";
 import {
   resolveCentralReport,
@@ -40,11 +42,24 @@ test("getCentralReportEngineMeta includes metric rules", () => {
   assert.equal(meta.timezone, "Asia/Kolkata");
   assert.ok(meta.metricRules.accepted);
   assert.ok(meta.reports.length >= 4);
+  assert.deepEqual(meta.deliveryExcludedStatuses, ["DISPATCHED", "COMPLETED"]);
+  assert.deepEqual(meta.metricRules.deliveryTotal.excludedStatuses, [
+    "DISPATCHED",
+    "COMPLETED",
+  ]);
 });
 
 test("getMetricRule maps drawer buckets", () => {
   assert.equal(getMetricRule("dispatched")?.kind, "status_transition");
   assert.equal(getMetricRule("farmReady")?.status, "FARM_READY");
+});
+
+test("matchDeliveryDateInRange excludes dispatched and completed", () => {
+  assert.ok(DELIVERY_TOTAL_EXCLUDED_STATUSES.includes("DISPATCHED"));
+  assert.ok(DELIVERY_TOTAL_EXCLUDED_STATUSES.includes("COMPLETED"));
+  const clause = matchDeliveryDateInRange(new Date("2026-05-01"), new Date("2026-05-07"));
+  assert.ok(clause.orderStatus.$nin.includes("DISPATCHED"));
+  assert.ok(clause.orderStatus.$nin.includes("COMPLETED"));
 });
 
 test("status_transition metrics resolve events before legacy", () => {

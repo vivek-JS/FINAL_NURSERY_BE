@@ -4,6 +4,7 @@ import {
   fetchAdminDealerMis,
 } from "../../services/adminMisBreakdown.service.js";
 import { fetchAdminDueMis } from "../../services/adminMisDueTab.service.js";
+import { DELIVERY_TOTAL_EXCLUDED_STATUSES } from "./deliveryMatch.js";
 import {
   MIS_DELIVERY_METRICS,
   MIS_TIMEZONE,
@@ -116,6 +117,7 @@ export function getCentralReportEngineMeta() {
   return {
     timezone: MIS_TIMEZONE,
     transitionResolutionOrder: MIS_TRANSITION_RESOLUTION_ORDER,
+    deliveryExcludedStatuses: DELIVERY_TOTAL_EXCLUDED_STATUSES,
     metricRules: MIS_DELIVERY_METRICS,
     reports: listCentralReports(),
   };

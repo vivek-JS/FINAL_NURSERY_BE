@@ -7,7 +7,7 @@ import {
   istDayBoundsFromYmd,
 } from "../utility/istOrderDateStats.js";
 import { duePipelineMatch } from "../utility/adminMisDue.js";
-import { matchDeliveryDateInRange } from "../utility/adminMisMetrics.js";
+import { matchDeliveryDateInRange } from "../utility/centralReportEngine/deliveryMatch.js";
 import { transitionDrawerFacetStages } from "../utility/misTransitionMetrics.js";
 import {
   enrichMisOrderList,
@@ -62,7 +62,7 @@ function deliveryInRangeClause(rangeStart, rangeEnd) {
   return { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } };
 }
 
-/** Delivery total — delivery in range but not DISPATCHED. */
+/** Delivery total — delivery in range but not DISPATCHED or COMPLETED. */
 function deliveryTotalInRangeClause(rangeStart, rangeEnd) {
   return matchDeliveryDateInRange(rangeStart, rangeEnd);
 }

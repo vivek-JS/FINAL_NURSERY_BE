@@ -2,22 +2,14 @@ import Order from "../models/order.model.js";
 import {
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
-  ORDER_EXCLUDED_STATUSES,
   istDateStringExpr,
 } from "./istOrderDateStats.js";
+import {
+  DELIVERY_TOTAL_EXCLUDED_STATUSES,
+  matchDeliveryDateInRange,
+} from "./centralReportEngine/deliveryMatch.js";
 
-/** Not counted in Delivery column — use Out (Dispatched) instead. */
-export const DELIVERY_TOTAL_EXCLUDED_STATUSES = ["DISPATCHED"];
-
-/** Delivery date in IST range, excluding cancelled/rejected and dispatched. */
-export function matchDeliveryDateInRange(rangeStart, rangeEnd) {
-  return {
-    deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
-    orderStatus: {
-      $nin: [...ORDER_EXCLUDED_STATUSES, ...DELIVERY_TOTAL_EXCLUDED_STATUSES],
-    },
-  };
-}
+export { DELIVERY_TOTAL_EXCLUDED_STATUSES, matchDeliveryDateInRange };
 import {
   emptyOrderPlants,
   emptyDeliveryDay,
@@ -682,7 +674,7 @@ export async function aggregatePipelineByGroup(
   ]);
 }
 
-/** Delivery in range (excludes DISPATCHED) per entity — variety Delivery column. */
+/** Delivery in range (excludes DISPATCHED, COMPLETED) per entity — variety Delivery column. */
 export async function aggregateDeliveryInRangeByGroup(
   rangeStart,
   rangeEnd,
