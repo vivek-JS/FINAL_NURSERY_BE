@@ -14,6 +14,7 @@ import {
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { tryAutoSendOrderAcceptedWhatsApp } from "./order.controller.js";
 import { isBananaPlantName } from "../utility/watiPlantText.js";
+import { sanitizePaymentArrayForOrder } from "../utils/paymentTiming.js";
 
 const shouldLogRamAgriLedger = (order) =>
   Boolean(order?.isRamAgriProduct || order?.ramAgriCropId || order?.ramAgriVarietyId);
@@ -306,7 +307,9 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
           .populate("plantName", "name")
           .session(session);
         if (!order) throw new AppError(`Order not found: ${alloc.orderId}`, 400);
-        order.payment.push({ ...paymentPayload });
+        const plantPaymentRow = { ...paymentPayload };
+        sanitizePaymentArrayForOrder([plantPaymentRow], order);
+        order.payment.push(plantPaymentRow);
         await order.save({ session });
 
         if (!order.dealerOrder && order.farmer) {

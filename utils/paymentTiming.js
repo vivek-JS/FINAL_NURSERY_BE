@@ -168,3 +168,40 @@ export function applyPaymentTimingToPayment(payment, order, opts = {}) {
   }
   return timing;
 }
+
+/**
+ * Ensure each payment line has a valid paymentTiming (or omit field). Safe before save / $push.
+ * @param {Record<string, unknown>[]} payments
+ * @param {Record<string, unknown>} [order]
+ */
+export function sanitizePaymentArrayForOrder(payments, order = {}) {
+  if (!Array.isArray(payments)) return;
+  for (const payment of payments) {
+    if (!payment || typeof payment !== "object") continue;
+    const timing = payment.paymentTiming;
+    if (
+      timing == null ||
+      (timing !== "advance" && timing !== "balance")
+    ) {
+      delete payment.paymentTiming;
+    }
+    applyPaymentTimingToPayment(payment, order);
+  }
+}
+
+/**
+ * Strip null/invalid paymentTiming from findOneAndUpdate $set / $push payment payloads.
+ * @param {Record<string, unknown>} update
+ * @param {Record<string, unknown>} [order]
+ */
+export function patchPaymentUpdateOperation(update, order = {}) {
+  if (!update || typeof update !== "object") return;
+  const push = update.$push?.payment;
+  if (push) {
+    const items = push.$each ? push.$each : [push];
+    sanitizePaymentArrayForOrder(items, order);
+  }
+  if (Array.isArray(update.$set?.payment)) {
+    sanitizePaymentArrayForOrder(update.$set.payment, order);
+  }
+}

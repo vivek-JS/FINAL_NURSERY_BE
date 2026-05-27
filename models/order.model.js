@@ -1,5 +1,8 @@
 import mongoose, { Schema, model } from "mongoose";
-import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
+import {
+  patchPaymentUpdateOperation,
+  sanitizePaymentArrayForOrder,
+} from "../utils/paymentTiming.js";
 
 // Define a schema for delivery change history
 const deliveryChangeSchema = new Schema(
@@ -1305,22 +1308,7 @@ orderSchema.pre("save", function (next) {
 
 // Add validation middleware to ensure proper business logic
 orderSchema.pre("validate", function (next) {
-  if (Array.isArray(this.payment)) {
-    for (const payment of this.payment) {
-      const timing = payment?.paymentTiming;
-      if (
-        timing == null ||
-        (timing !== "advance" && timing !== "balance")
-      ) {
-        if (typeof payment.set === "function") {
-          payment.set("paymentTiming", undefined);
-        } else {
-          delete payment.paymentTiming;
-        }
-      }
-      applyPaymentTimingToPayment(payment, this);
-    }
-  }
+  sanitizePaymentArrayForOrder(this.payment, this);
 
   const totalOrderedPlants =
     (this.numberOfPlants || 0) + (this.additionalPlants || 0);
@@ -1343,6 +1331,20 @@ orderSchema.pre("validate", function (next) {
     return next(error);
   }
   next();
+});
+
+// findOneAndUpdate bypasses pre("validate"); sanitize payment $push/$set before validators run
+orderSchema.pre("findOneAndUpdate", function (next) {
+  try {
+    const update = this.getUpdate();
+    if (update) {
+      patchPaymentUpdateOperation(update);
+      this.setUpdate(update);
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Track original values when document is loaded from database

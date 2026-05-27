@@ -41,7 +41,10 @@ import {
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
 import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
-import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
+import {
+  applyPaymentTimingToPayment,
+  sanitizePaymentArrayForOrder,
+} from "../utils/paymentTiming.js";
 import {
   getOrderUpdateUserContext,
   DISPATCH_MANAGER_ALLOWED_STATUSES,
@@ -1731,6 +1734,8 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
+      let pendingDeliveryChangeForEvents = null;
+
       // Special handling for deliveryChanges - track booking slot changes
       if (
         filteredBody.bookingSlot &&
@@ -1813,7 +1818,6 @@ const updateOne = (Model, modelName, allowedFields) =>
 
       // Track general order field edits (rate, numberOfPlants, deliveryDate)
       const editHistoryEntries = [];
-      let pendingDeliveryChangeForEvents = null;
 
       // Rate change approval gate: non-super-admins trigger a pending approval request
       // instead of applying the rate immediately. Super admins bypass this and apply directly.
@@ -3040,7 +3044,14 @@ const updateOneAndPushElement = (Model, modelName) =>
     const updateObj = { ...req.body };
 
     if (paymentAmount !== undefined) {
-      updateObj.$push = { payment: { paidAmount: paymentAmount } };
+      const paymentRow = {
+        paidAmount: paymentAmount,
+        paymentStatus: "PENDING",
+        paymentDate: new Date(),
+        modeOfPayment: "",
+      };
+      sanitizePaymentArrayForOrder([paymentRow], {});
+      updateObj.$push = { payment: paymentRow };
     }
 
     const doc = await Model.findByIdAndUpdate(id, updateObj, {

@@ -16,6 +16,7 @@ import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { sanitizePaymentArrayForOrder } from "../utils/paymentTiming.js";
 
 // Function to parse Excel date serial number
 function parseExcelDate(serialNumber) {
@@ -1682,6 +1683,7 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
             });
             order.payment = [paymentData];
           } else {
+            sanitizePaymentArrayForOrder([paymentData], order);
             order.payment.push(paymentData);
             await order.save();
             try {
@@ -3158,6 +3160,7 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
               receiptPhoto: [],
               isWalletPayment: false,
             };
+            sanitizePaymentArrayForOrder([fullPayment], order);
             order.payment.push(fullPayment);
           }
           
