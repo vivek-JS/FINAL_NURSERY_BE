@@ -73,12 +73,13 @@ function personEntityKey(row) {
   return id != null ? String(id) : "";
 }
 
-function metaFromBookingRow(key, booking) {
+function metaFromBookingRow(key, booking, metricMeta) {
+  const id = metricMeta ?? {};
   return {
-    personId: booking?.personId ?? key,
-    personName: booking?.personName ?? "Unknown",
-    phoneNumber: booking?.phoneNumber,
-    jobTitle: booking?.jobTitle,
+    personId: booking?.personId ?? id.personId ?? key,
+    personName: booking?.personName ?? id.personName ?? "Unknown",
+    phoneNumber: booking?.phoneNumber ?? id.phoneNumber,
+    jobTitle: booking?.jobTitle ?? id.jobTitle,
   };
 }
 

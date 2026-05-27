@@ -8,7 +8,10 @@ import {
   buildPersonBreakdownTable,
   emptyDeliveryDay,
 } from "../utility/adminDailyMisMerge.js";
-import { buildAdminDailyMisPayloadFromMetrics } from "../utility/adminMisMetrics.js";
+import {
+  buildAdminDailyMisPayloadFromMetrics,
+  buildBreakdownTableFromMetrics,
+} from "../utility/adminMisMetrics.js";
 import { generateIstDateKeys, parseYmdRange } from "../utility/istOrderDateStats.js";
 
 test("statusToDeliveryBucket maps known statuses", () => {
@@ -181,4 +184,50 @@ test("buildPersonBreakdownTable merges booking and delivery by person", () => {
   assert.equal(rows[0].booking.orders, 4);
   assert.equal(rows[0].delivery.accepted.orders, 2);
   assert.equal(totals.booking.plants, 400);
+});
+
+test("buildBreakdownTableFromMetrics keeps plant labels from delivery when booking empty", () => {
+  const plantId = "507f1f77bcf86cd799439011";
+  const subtypeId = "507f1f77bcf86cd799439012";
+  const entityKeyFn = (row) => {
+    const id = row._id ?? row;
+    const pid = id.plantId ?? row.plantId;
+    const sid = id.subtypeId ?? row.subtypeId;
+    if (pid == null || sid == null) return "";
+    return `${String(pid)}:${String(sid)}`;
+  };
+  const labelFromKey = (key, booking, metricMeta) => {
+    const id = metricMeta ?? booking ?? {};
+    const parts = String(key).split(":");
+    return {
+      plantName: booking?.plantName ?? id.plantName ?? "Unknown",
+      subtype: booking?.subtype ?? id.subtype ?? "Other",
+      plantId: booking?.plantId ?? id.plantId ?? parts[0],
+      subtypeId: booking?.subtypeId ?? id.subtypeId ?? parts[1],
+    };
+  };
+
+  const { rows } = buildBreakdownTableFromMetrics({
+    bookingRows: [],
+    entityKeyFn,
+    labelFromKey,
+    deliveryInRangeRows: [
+      {
+        _id: {
+          plantName: "Banana",
+          subtype: "G-9",
+          plantId,
+          subtypeId,
+        },
+        orders: 2,
+        plants: 500,
+      },
+    ],
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].plantName, "Banana");
+  assert.equal(rows[0].subtype, "G-9");
+  assert.equal(rows[0].booking.orders, 0);
+  assert.equal(rows[0].delivery.total.orders, 2);
 });

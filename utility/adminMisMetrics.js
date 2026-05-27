@@ -753,6 +753,20 @@ function metricsRowsToMap(rows, keyFn) {
   return map;
 }
 
+/** Resolve display labels from any metric aggregation row (not only booking). */
+function buildLabelMetaByKey(rowSets, entityKeyFn) {
+  const map = new Map();
+  for (const rows of rowSets) {
+    for (const row of rows || []) {
+      const key = entityKeyFn(row);
+      if (!key || map.has(key)) continue;
+      const id = row._id ?? row;
+      map.set(key, id);
+    }
+  }
+  return map;
+}
+
 /**
  * Merge person/dealer breakdown rows with new metric rules.
  */
@@ -817,6 +831,21 @@ export function buildBreakdownTableFromMetrics({
     for (const key of inRangeMap.keys()) keys.add(key);
   }
 
+  const labelMetaByKey = buildLabelMetaByKey(
+    [
+      bookingRows,
+      globalFarmReadyRows,
+      globalRfdRows,
+      acceptedRows,
+      dispatchedRows,
+      completedRows,
+      pipelineRows,
+      deliveryUnionRows,
+      deliveryInRangeRows,
+    ],
+    entityKeyFn
+  );
+
   const rows = [];
   for (const key of keys) {
     if (!key) continue;
@@ -826,7 +855,7 @@ export function buildBreakdownTableFromMetrics({
       partiallyCompleted: emptyOrderPlants(),
       other: emptyOrderPlants(),
     };
-    const meta = labelFromKey(key, booking);
+    const meta = labelFromKey(key, booking, labelMetaByKey.get(key));
 
     rows.push({
       ...meta,
@@ -915,14 +944,14 @@ function varietyEntityKey(row) {
   return `${String(plantId)}:${String(subtypeId)}`;
 }
 
-function varietyLabelFromKey(key, booking) {
-  const id = booking?._id ?? booking ?? {};
+function varietyLabelFromKey(key, booking, metricMeta) {
+  const id = metricMeta ?? booking?._id ?? booking ?? {};
   const parts = String(key).split(":");
   return {
-    plantName: id.plantName ?? booking?.plantName ?? "Unknown",
-    subtype: id.subtype ?? booking?.subtype ?? "Other",
-    plantId: id.plantId ?? booking?.plantId ?? parts[0],
-    subtypeId: id.subtypeId ?? booking?.subtypeId ?? parts[1],
+    plantName: booking?.plantName ?? id.plantName ?? "Unknown",
+    subtype: booking?.subtype ?? id.subtype ?? "Other",
+    plantId: booking?.plantId ?? id.plantId ?? parts[0],
+    subtypeId: booking?.subtypeId ?? id.subtypeId ?? parts[1],
   };
 }
 
