@@ -1,10 +1,11 @@
-export const STOCK_TRAIL_ACTIONS = {
-  actualPlants: "ACTUAL_PLANTS_UPDATED",
-  closingStock: "CLOSING_STOCK_UPDATED",
-  availablePlants: "AVAILABLE_PLANTS_UPDATED",
-};
+import {
+  STOCK_TRAIL_FIELD_ACTIONS,
+  STOCK_TRAIL_ACTION_LIST,
+  getSlotTrailActivityName,
+} from "../constants/slotTrailActions.js";
 
-export const STOCK_TRAIL_ACTION_LIST = Object.values(STOCK_TRAIL_ACTIONS);
+export { STOCK_TRAIL_ACTION_LIST };
+export const STOCK_TRAIL_ACTIONS = STOCK_TRAIL_FIELD_ACTIONS;
 
 const buildSnapshot = (slot, field, fieldValue) => {
   const totalPlants = Number(slot.totalPlants) || 0;
@@ -47,19 +48,14 @@ export function logStockFieldChange(
   performedBy,
   source = "Slot update"
 ) {
-  if (!slot || !STOCK_TRAIL_ACTIONS[field]) return false;
+  if (!slot || !STOCK_TRAIL_FIELD_ACTIONS[field]) return false;
 
   const prev = Math.max(0, Number(previousValue) || 0);
   const next = Math.max(0, Number(newValue) || 0);
   if (prev === next) return false;
 
-  const action = STOCK_TRAIL_ACTIONS[field];
-  const activityNameByField = {
-    actualPlants: "Actual Plants Updated",
-    closingStock: "Closing Stock Updated",
-    availablePlants: "Available Plants Updated",
-  };
-  const activityName = activityNameByField[field] || "Stock Updated";
+  const action = STOCK_TRAIL_FIELD_ACTIONS[field];
+  const activityName = getSlotTrailActivityName(action);
   const totalPlants = Number(slot.totalPlants) || 0;
   const availablePlants =
     slot.availablePlants !== undefined && slot.availablePlants !== null
@@ -117,7 +113,7 @@ export function logStockFieldChange(
 }
 
 /**
- * Apply actualPlants / closingStock updates and log each changed field.
+ * Apply actualPlants / closingStock / availablePlants updates and log each changed field.
  */
 export function applyStockFieldUpdates(slot, updates, performedBy, source) {
   let changed = false;

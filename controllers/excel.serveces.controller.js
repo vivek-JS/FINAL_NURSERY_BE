@@ -21,6 +21,7 @@ import {
   allocateNextOrderId,
   reserveOrderId,
 } from "../services/orderIdAllocation.service.js";
+import { getSlotTrailActivityName } from "../constants/slotTrailActions.js";
 
 // Function to parse Excel date serial number
 function parseExcelDate(serialNumber) {
@@ -553,39 +554,6 @@ const normalizeName = (value) => (value || "").toString().trim();
 
 // Helper function to fix invalid slotTrail entries in a PlantSlot document
 const fixInvalidSlotTrailInDocument = async (plantSlotDoc) => {
-  const activityNameMap = {
-    'ADD': 'Plants Added',
-    'SUBTRACT': 'Plants Subtracted',
-    'BUFFER_APPLIED': 'Buffer Applied',
-    'BUFFER_RELEASED': 'Buffer Released',
-    'ADD_WITH_BUFFER': 'Plants Added with Buffer',
-    'ADD_WITH_BUFFER_RELEASE': 'Plants Added with Buffer Release',
-    'SUBTRACT_WITH_BUFFER': 'Plants Subtracted with Buffer',
-    'SUBTRACT_WITH_BUFFER_RELEASE': 'Plants Subtracted with Buffer Release',
-    'UPDATE': 'Slot Updated',
-    'ORDER_CANCELLED': 'Order Cancelled',
-    'ORDER_RETURNED': 'Order Returned',
-    'SOWING_STARTED': 'Sowing Started',
-    'SOWING_COMPLETED': 'Sowing Completed',
-    'SOWING_CANCELLED': 'Sowing Cancelled',
-    'SOWING_PRIMARY': 'Primary Location Sowing',
-    'SOWING_OFFICE': 'Office Location Sowing',
-    'SOWING_EXCESSIVE': 'Excessive Sowing',
-    'EXCESSIVE_SOWING_ADDED': 'Excessive Sowing Added',
-    'STOCK_REQUEST_CREATED': 'Stock Request Created',
-    'STOCK_REQUEST_ISSUED': 'Stock Request Issued',
-    'STOCK_REQUEST_CANCELLED': 'Stock Request Cancelled',
-    'GAP_COVERED': 'Gap Covered',
-    'SOWING_IN_PROGRESS_CLEARED': 'Sowing In Progress Cleared',
-    'PACKETS_RETURNED': 'Packets Returned',
-    'PACKETS_USED': 'Packets Used',
-  };
-
-  const getActivityName = (action) => {
-    if (!action) return 'Unknown Activity';
-    return activityNameMap[action] || action.replace(/_/g, ' ');
-  };
-
   let fixedCount = 0;
   for (const subtypeSlot of plantSlotDoc.subtypeSlots || []) {
     for (const s of subtypeSlot.slots || []) {
@@ -595,7 +563,7 @@ const fixInvalidSlotTrailInDocument = async (plantSlotDoc) => {
           if (!trail.activityName || 
               trail.activityName === 'undefined' || 
               trail.activityName.trim().length < 2) {
-            const newActivityName = getActivityName(trail.action);
+            const newActivityName = getSlotTrailActivityName(trail.action);
             trail.activityName = newActivityName;
             fixedCount++;
           }

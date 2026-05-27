@@ -11,6 +11,7 @@ import {
   logStockFieldChange,
   STOCK_TRAIL_ACTION_LIST,
 } from "../utility/slotStockTrail.js";
+import { getSlotTrailActivityName } from "../constants/slotTrailActions.js";
 import {
   aggregateSlotDispatchStats,
   computeSlotDispatchStatsFromOrders,
@@ -2988,31 +2989,11 @@ export const getSlotTrail = async (req, res) => {
       .filter((entry) => entry.slotTrail)
       .map((entry) => {
         const trail = entry.slotTrail;
-        
-        // Ensure all required fields have defaults
-        const getActivityName = (action) => {
-          const map = {
-            'ADD': 'Plants Added',
-            'SUBTRACT': 'Plants Subtracted',
-            'BUFFER_APPLIED': 'Buffer Applied',
-            'BUFFER_RELEASED': 'Buffer Released',
-            'UPDATE': 'Slot Updated',
-            'ORDER_CANCELLED': 'Order Cancelled',
-            'ORDER_RETURNED': 'Order Returned',
-            'SOWING_STARTED': 'Sowing Started',
-            'SOWING_COMPLETED': 'Sowing Completed',
-            'SOWING_PRIMARY': 'Primary Location Sowing',
-            'SOWING_OFFICE': 'Office Location Sowing',
-            'ACTUAL_PLANTS_UPDATED': 'Actual Plants Updated',
-            'CLOSING_STOCK_UPDATED': 'Closing Stock Updated',
-          };
-          return map[action] || (action ? action.replace(/_/g, ' ') : 'Unknown Activity');
-        };
 
         return {
           // Core fields with defaults
           action: trail.action || 'UPDATE',
-          activityName: trail.activityName || getActivityName(trail.action),
+          activityName: trail.activityName || getSlotTrailActivityName(trail.action),
           quantity: trail.quantity ?? 0,
           // Plus values with defaults
           plus: {

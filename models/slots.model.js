@@ -1,42 +1,12 @@
 import { Schema, model } from "mongoose";
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
+import { SLOT_TRAIL_ACTION_ENUM } from "../constants/slotTrailActions.js";
 
 // Define a schema for slot trail tracking
 const slotTrailSchema = new Schema({
   action: {
     type: String,
-    enum: [
-      "ADD", 
-      "SUBTRACT", 
-      "BUFFER_APPLIED", 
-      "BUFFER_RELEASED", 
-      "ORDER_CANCELLED", 
-      "ORDER_RETURNED",
-      "ADD_WITH_BUFFER",
-      "ADD_WITH_BUFFER_RELEASE",
-      "SUBTRACT_WITH_BUFFER",
-      "SUBTRACT_WITH_BUFFER_RELEASE",
-      "UPDATE",
-      "SOWING_STARTED",
-      "STOCK_REQUEST_ISSUED",
-      "SOWING_COMPLETED",
-      "SOWING_CANCELLED",
-      "SOWING_PRIMARY", // Primary location sowing
-      "SOWING_OFFICE", // Office location sowing
-      "SOWING_EXCESSIVE", // Excessive sowing
-      "EXCESSIVE_SOWING_ADDED",
-      "STOCK_REQUEST_CREATED",
-      "STOCK_REQUEST_ISSUED",
-      "STOCK_REQUEST_CANCELLED",
-      "GAP_COVERED", // Gap coverage from later slots
-      "SOWING_IN_PROGRESS_CLEARED", // Clearing in-progress entries
-      "PACKETS_RETURNED", // Packets returned after sowing
-      "PACKETS_USED", // Packets marked as used
-      "SOWING_READY_DATE_MAPPED", // Entry slot mapped to expected ready-date slot
-      "READY_DAYS_UPDATED", // Plant ready days changed for slot timing
-      "ACTUAL_PLANTS_UPDATED",
-      "CLOSING_STOCK_UPDATED",
-    ],
+    enum: SLOT_TRAIL_ACTION_ENUM,
     required: true,
   },
   activityName: {
