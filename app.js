@@ -384,6 +384,7 @@ import backupRoute from "./routes/backup.route.js";
 import whatsappBroadcastRoute from "./routes/whatsappBroadcast.route.js";
 import iciciPaymentRoute from "./routes/icici.routes.js";
 import paymentReconciliationRoute from "./routes/payment.routes.js";
+import bankingRoute from "./modules/banking/routes/banking.routes.js";
 import whatsappAlertRoute from "./routes/whatsappAlert.route.js";
 
 // Inventory Management Routes
@@ -500,6 +501,8 @@ server.post("/api/v1/order/payment/qr-callback", handleQRPaymentCallback);
 server.use("/api/payments/icici", authenticateToken, iciciPaymentRoute);
 // ERP payment reconciliation (accountant / super admin on sensitive routes)
 server.use("/api/payments", authenticateToken, paymentReconciliationRoute);
+// ICICI Corporate API — registration, statement, balance, enhanced reconciliation
+server.use("/api/banking", authenticateToken, bankingRoute);
 // Registered here (before order router) so GET /farmer-plant-ledger always resolves — mirrors order.route.js
 server.get("/api/v1/order/farmer-plant-ledger", authenticateToken, getFarmerPlantLedger);
 // Farmer dashboard tab totals — bound on app so stale order.route.js mounts never yield Cannot GET.
@@ -734,6 +737,15 @@ server.use(errorHandler);
     await initFinanceCronJobs();
   } catch (e) {
     console.error("[Finance] Failed to init finance cron jobs:", e?.message || e);
+  }
+})();
+
+(async () => {
+  try {
+    const { initBankingCronJobs } = await import("./modules/banking/jobs/bankingCronJobs.js");
+    initBankingCronJobs();
+  } catch (e) {
+    console.error("[Banking] Failed to init banking cron jobs:", e?.message || e);
   }
 })();
 

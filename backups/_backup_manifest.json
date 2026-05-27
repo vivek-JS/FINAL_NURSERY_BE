@@ -1,0 +1,24 @@
+{
+  "nursery_backup_2026-05-23T18-14-56.tar.gz": {
+    "filename": "nursery_backup_2026-05-23T18-14-56.tar.gz",
+    "fullPath": "/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/backups/nursery_backup_2026-05-23T18-14-56.tar.gz",
+    "size": 10328621,
+    "sizeFormatted": "9.9 MB",
+    "createdAt": "2026-05-23T18:15:53.093Z",
+    "modifiedAt": "2026-05-23T18:15:54.793Z",
+    "method": "mongodump",
+    "database": "test",
+    "createdBy": "Super Admin"
+  },
+  "nursery_backup_2026-05-23T18-16-22.tar.gz": {
+    "filename": "nursery_backup_2026-05-23T18-16-22.tar.gz",
+    "fullPath": "/Users/VivekP/Movies/ram/FINAL_NURSERY_BE/backups/nursery_backup_2026-05-23T18-16-22.tar.gz",
+    "size": 10328560,
+    "sizeFormatted": "9.9 MB",
+    "createdAt": "2026-05-23T18:17:17.054Z",
+    "modifiedAt": "2026-05-23T18:17:18.391Z",
+    "method": "mongodump",
+    "database": "test",
+    "createdBy": "Super Admin"
+  }
+}

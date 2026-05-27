@@ -32,5 +32,9 @@ data/whatsapp-auth/
 # Generated dealer reports (local)
 scripts/exports/*.xlsx
 
-# Local database backups (created via API or quick-backup.sh)
-backups/
+# ICICI banking certificates — never commit private keys
+config/certs/*.key
+config/certs/*.pem
+config/certs/icici_public.crt
+config/certs/*.jks
+config/certs/*.p12

@@ -2,8 +2,22 @@ import Order from "../models/order.model.js";
 import {
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
+  ORDER_EXCLUDED_STATUSES,
   istDateStringExpr,
 } from "./istOrderDateStats.js";
+
+/** Not counted in Delivery column — use Out (Dispatched) instead. */
+export const DELIVERY_TOTAL_EXCLUDED_STATUSES = ["DISPATCHED"];
+
+/** Delivery date in IST range, excluding cancelled/rejected and dispatched. */
+export function matchDeliveryDateInRange(rangeStart, rangeEnd) {
+  return {
+    deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
+    orderStatus: {
+      $nin: [...ORDER_EXCLUDED_STATUSES, ...DELIVERY_TOTAL_EXCLUDED_STATUSES],
+    },
+  };
+}
 import {
   emptyOrderPlants,
   emptyDeliveryDay,
@@ -154,7 +168,7 @@ export async function aggregateDeliveryInRangeByDay(
     {
       $match: {
         ...statusMatch,
-        deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
+        ...matchDeliveryDateInRange(rangeStart, rangeEnd),
       },
     },
     { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
@@ -252,7 +266,7 @@ export async function aggregatePipelineByDeliveryDay(
 
 /**
  * Delivery total (range): unique orders where
- * delivery in range OR FARM_READY OR READY_FOR_DISPATCH.
+ * delivery in range (not DISPATCHED) OR FARM_READY OR READY_FOR_DISPATCH.
  */
 export async function aggregateDeliveryUnionTotal(
   rangeStart,
@@ -265,7 +279,7 @@ export async function aggregateDeliveryUnionTotal(
     {
       $match: {
         $or: [
-          { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } },
+          matchDeliveryDateInRange(rangeStart, rangeEnd),
           { orderStatus: "FARM_READY" },
           { orderStatus: "READY_FOR_DISPATCH" },
         ],
@@ -609,7 +623,7 @@ export async function aggregateDeliveryUnionByGroup(
     {
       $match: {
         $or: [
-          { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } },
+          matchDeliveryDateInRange(rangeStart, rangeEnd),
           { orderStatus: "FARM_READY" },
           { orderStatus: "READY_FOR_DISPATCH" },
         ],

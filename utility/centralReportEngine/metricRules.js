@@ -21,7 +21,7 @@ export const MIS_DELIVERY_METRICS = {
     kind: "delivery_union",
     label: "Delivery total",
     description:
-      "Unique orders: delivery date in range OR current FARM_READY OR current READY_FOR_DISPATCH. Per-day row uses in-range delivery only; footer uses full union.",
+      "Open pipeline only: delivery date in range (excludes DISPATCHED) OR current FARM_READY OR current READY_FOR_DISPATCH. Dispatched orders appear only under Out.",
   },
   accepted: {
     kind: "status_and_date",

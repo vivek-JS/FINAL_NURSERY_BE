@@ -37,6 +37,7 @@ test("buildMisOrdersMatch deliveryTotal single day is in-range only", () => {
   );
   assert.ok(m.deliveryDate);
   assert.equal(m.$or, undefined);
+  assert.ok(m.orderStatus?.$nin?.includes("DISPATCHED"));
 });
 
 test("buildMisOrdersMatch deliveryTotal range uses union", () => {

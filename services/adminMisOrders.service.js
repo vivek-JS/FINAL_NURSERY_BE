@@ -6,6 +6,8 @@ import {
   istDayBoundsFromYmd,
 } from "../utility/istOrderDateStats.js";
 import { DUE_DELIVERY_STATUSES } from "../utility/adminMisDue.js";
+import { matchDeliveryDateInRange } from "../utility/adminMisMetrics.js";
+import { enrichMisOrderList } from "../utility/misOrderEnrichment.js";
 
 const IST = "Asia/Kolkata";
 
@@ -51,6 +53,11 @@ function resolveDateWindow(query) {
 
 function deliveryInRangeClause(rangeStart, rangeEnd) {
   return { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } };
+}
+
+/** Delivery total — delivery in range but not DISPATCHED. */
+function deliveryTotalInRangeClause(rangeStart, rangeEnd) {
+  return matchDeliveryDateInRange(rangeStart, rangeEnd);
 }
 
 function bookingInRangeClause(rangeStart, rangeEnd) {
@@ -146,8 +153,11 @@ export function buildMisOrdersMatch(query, window) {
           ...base,
           ...extra,
           $or: [
-            deliveryInRangeClause(rangeStart, rangeEnd),
-            { deliveryDate: { $lt: rangeStart, $ne: null } },
+            deliveryTotalInRangeClause(rangeStart, rangeEnd),
+            {
+              deliveryDate: { $lt: rangeStart, $ne: null },
+              orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED", "DISPATCHED"] },
+            },
             { orderStatus: "FARM_READY" },
             { orderStatus: "READY_FOR_DISPATCH" },
           ],
@@ -158,13 +168,13 @@ export function buildMisOrdersMatch(query, window) {
           ...base,
           ...extra,
           $or: [
-            deliveryInRangeClause(rangeStart, rangeEnd),
+            deliveryTotalInRangeClause(rangeStart, rangeEnd),
             { orderStatus: "FARM_READY" },
             { orderStatus: "READY_FOR_DISPATCH" },
           ],
         };
       }
-      return { ...base, ...extra, ...deliveryInRangeClause(rangeStart, rangeEnd) };
+      return { ...base, ...extra, ...deliveryTotalInRangeClause(rangeStart, rangeEnd) };
     case "yetToDispatch":
       return {
         ...base,
@@ -211,8 +221,13 @@ async function fetchTransitionOrders(matchSpec, window, { skip, limit }) {
         "statusChanges.createdAt": { $gte: rangeStart, $lte: rangeEnd },
       },
     },
-    { $group: { _id: "$_id" } },
-    { $sort: { _id: -1 } },
+    {
+      $group: {
+        _id: "$_id",
+        bucketEventAt: { $min: "$statusChanges.createdAt" },
+      },
+    },
+    { $sort: { bucketEventAt: -1 } },
     {
       $facet: {
         metadata: [{ $count: "total" }],
@@ -225,11 +240,17 @@ async function fetchTransitionOrders(matchSpec, window, { skip, limit }) {
               localField: "_id",
               foreignField: "_id",
               as: "doc",
+              pipeline: [{ $project: ORDER_LIST_PROJECT }],
             },
           },
           { $unwind: "$doc" },
-          { $replaceRoot: { newRoot: "$doc" } },
-          { $project: ORDER_LIST_PROJECT },
+          {
+            $replaceRoot: {
+              newRoot: {
+                $mergeObjects: ["$doc", { bucketEventAt: "$bucketEventAt" }],
+              },
+            },
+          },
         ],
       },
     },
@@ -276,11 +297,11 @@ export async function fetchAdminMisOrders(query = {}) {
 
   if (matchSpec?.kind === "transition") {
     const result = await fetchTransitionOrders(matchSpec, window, { skip, limit });
-    data = result.data;
+    data = enrichMisOrderList(result.data, bucket);
     total = result.total;
   } else {
     const result = await fetchStandardOrders(matchSpec, { skip, limit });
-    data = result.data;
+    data = enrichMisOrderList(result.data, bucket);
     total = result.total;
   }
 
