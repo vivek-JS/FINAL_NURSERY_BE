@@ -8,6 +8,7 @@ import {
   buildPersonBreakdownTable,
   emptyDeliveryDay,
 } from "../utility/adminDailyMisMerge.js";
+import { buildAdminDailyMisPayloadFromMetrics } from "../utility/adminMisMetrics.js";
 import { generateIstDateKeys, parseYmdRange } from "../utility/istOrderDateStats.js";
 
 test("statusToDeliveryBucket maps known statuses", () => {
@@ -113,6 +114,43 @@ test("buildVarietyTable merges booking and delivery by plant subtype", () => {
   assert.equal(rows[0].booking.orders, 3);
   assert.equal(rows[0].delivery.farmReady.orders, 2);
   assert.equal(totals.booking.plants, 300);
+});
+
+test("buildAdminDailyMisPayloadFromMetrics uses global FR/RFD and transition dispatched", () => {
+  const globalFarmReady = { orders: 5, plants: 500 };
+  const globalRfd = { orders: 2, plants: 200 };
+  const acceptedByDay = new Map([["2026-05-26", { orders: 1, plants: 100 }]]);
+  const dispatchedByDay = new Map([["2026-05-26", { orders: 3, plants: 300 }]]);
+  const completedByDay = new Map();
+  const pipelineByDay = new Map();
+  const deliveryInRangeByDay = new Map([
+    ["2026-05-26", { orders: 4, plants: 400 }],
+  ]);
+  const deliveryUnionTotal = { orders: 10, plants: 1000 };
+
+  const payload = buildAdminDailyMisPayloadFromMetrics({
+    dateKeys: ["2026-05-26"],
+    bookingRows: [{ _id: "2026-05-26", orders: 2, plants: 250 }],
+    uniquePerDayRows: [],
+    rangeUniqueOrders: 0,
+    globalFarmReady,
+    globalRfd,
+    acceptedByDay,
+    dispatchedByDay,
+    completedByDay,
+    pipelineByDay,
+    deliveryInRangeByDay,
+    deliveryUnionTotal,
+  });
+
+  const day = payload.days[0];
+  assert.equal(day.delivery.farmReady.orders, 5);
+  assert.equal(day.delivery.readyForDispatch.orders, 2);
+  assert.equal(day.delivery.dispatched.orders, 3);
+  assert.equal(day.delivery.accepted.orders, 1);
+  assert.equal(day.delivery.total.orders, 4);
+  assert.equal(payload.totals.delivery.total.orders, 10);
+  assert.equal(payload.totals.delivery.farmReady.orders, 5);
 });
 
 test("buildPersonBreakdownTable merges booking and delivery by person", () => {

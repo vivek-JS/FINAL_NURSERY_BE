@@ -4,17 +4,17 @@ import {
   orderStatusExcludeMatch,
   parseYmdRange,
 } from "../utility/istOrderDateStats.js";
-import { buildPersonBreakdownTable } from "../utility/adminDailyMisMerge.js";
 import {
   aggregateDueSummary,
-  misDeliveryStatusMatch,
 } from "../utility/adminMisDue.js";
-
-const REMAINING_STATUSES = [
-  "READY_FOR_DISPATCH",
-  "DISPATCH_PROCESS",
-  "PARTIALLY_COMPLETED",
-];
+import {
+  aggregateGlobalStatusByGroup,
+  aggregateAcceptedByDeliveryAndGroup,
+  aggregateTransitionsByGroup,
+  aggregatePipelineByGroup,
+  aggregateDeliveryUnionByGroup,
+  buildBreakdownTableFromMetrics,
+} from "../utility/adminMisMetrics.js";
 
 const SALES_PERSON_STAGES = [
   {
@@ -53,158 +53,149 @@ const DEALER_STAGES = [
   },
 ];
 
+const SALES_GROUP_ID = {
+  personId: "$salesPerson",
+  personName: "$_personName",
+  phoneNumber: "$_personPhone",
+  jobTitle: "$_personJobTitle",
+};
+
+const DEALER_GROUP_ID = {
+  personId: "$dealer",
+  personName: "$_dealerName",
+  phoneNumber: "$_dealerPhone",
+};
+
+function personEntityKey(row) {
+  const id = row._id?.personId ?? row.personId;
+  return id != null ? String(id) : "";
+}
+
+function metaFromBookingRow(key, booking) {
+  return {
+    personId: booking?.personId ?? key,
+    personName: booking?.personName ?? "Unknown",
+    phoneNumber: booking?.phoneNumber,
+    jobTitle: booking?.jobTitle,
+  };
+}
+
+function rowToBookingShape(row) {
+  const id = row._id ?? row;
+  return {
+    personId: id.personId ?? row.personId,
+    personName: id.personName ?? row.personName,
+    phoneNumber: id.phoneNumber ?? row.phoneNumber,
+    jobTitle: id.jobTitle ?? row.jobTitle,
+    bookingOrders: row.bookingOrders ?? row.orders ?? 0,
+    bookingPlants: row.bookingPlants ?? row.plants ?? 0,
+  };
+}
+
+async function fetchPersonBreakdownMetrics(
+  rangeStart,
+  rangeEnd,
+  { groupStages, groupIdFields, extraMatch = {} }
+) {
+  const statusMatch = orderStatusExcludeMatch();
+
+  const [
+    bookingRows,
+    globalFarmReadyRows,
+    globalRfdRows,
+    acceptedRows,
+    dispatchedRows,
+    pipelineRows,
+    deliveryUnionRows,
+  ] = await Promise.all([
+    Order.aggregate([
+      {
+        $match: {
+          ...statusMatch,
+          ...extraMatch,
+          orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
+        },
+      },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...groupStages,
+      {
+        $group: {
+          _id: groupIdFields,
+          bookingOrders: { $sum: 1 },
+          bookingPlants: { $sum: "$linePlantTotal" },
+        },
+      },
+    ]),
+    aggregateGlobalStatusByGroup(
+      "FARM_READY",
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      extraMatch
+    ),
+    aggregateGlobalStatusByGroup(
+      "READY_FOR_DISPATCH",
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      extraMatch
+    ),
+    aggregateAcceptedByDeliveryAndGroup(
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      extraMatch
+    ),
+    aggregateTransitionsByGroup(
+      "DISPATCHED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      extraMatch
+    ),
+    aggregatePipelineByGroup(
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      extraMatch
+    ),
+    aggregateDeliveryUnionByGroup(
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      extraMatch
+    ),
+  ]);
+
+  const bookingShaped = bookingRows.map(rowToBookingShape);
+
+  return buildBreakdownTableFromMetrics({
+    bookingRows: bookingShaped,
+    entityKeyFn: personEntityKey,
+    labelFromKey: metaFromBookingRow,
+    globalFarmReadyRows,
+    globalRfdRows,
+    acceptedRows,
+    dispatchedRows,
+    pipelineRows,
+    deliveryUnionRows,
+  });
+}
+
 function parseRange(startDate, endDate) {
   const parsed = parseYmdRange(startDate, endDate);
   if (parsed.error) {
     return { error: parsed.error, statusCode: 400 };
   }
   return parsed;
-}
-
-async function aggregateSalesRows(rangeStart, rangeEnd, statusMatch, deliveryMatch) {
-  const [bookingRows, deliveryRows] = await Promise.all([
-    Order.aggregate([
-      {
-        $match: {
-          ...statusMatch,
-          orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
-        },
-      },
-      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-      ...SALES_PERSON_STAGES,
-      {
-        $group: {
-          _id: {
-            personId: "$salesPerson",
-            personName: "$_personName",
-            phoneNumber: "$_personPhone",
-            jobTitle: "$_personJobTitle",
-          },
-          bookingOrders: { $sum: 1 },
-          bookingPlants: { $sum: "$linePlantTotal" },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          personId: "$_id.personId",
-          personName: "$_id.personName",
-          phoneNumber: "$_id.phoneNumber",
-          jobTitle: "$_id.jobTitle",
-          bookingOrders: 1,
-          bookingPlants: 1,
-        },
-      },
-    ]),
-    Order.aggregate([
-      {
-        $match: {
-          ...deliveryMatch,
-          deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
-        },
-      },
-      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-      ...SALES_PERSON_STAGES,
-      {
-        $group: {
-          _id: {
-            personId: "$salesPerson",
-            personName: "$_personName",
-            phoneNumber: "$_personPhone",
-            jobTitle: "$_personJobTitle",
-            status: "$orderStatus",
-          },
-          orders: { $sum: 1 },
-          plants: { $sum: "$linePlantTotal" },
-          plantsRemaining: {
-            $sum: {
-              $cond: [
-                { $in: ["$orderStatus", REMAINING_STATUSES] },
-                { $ifNull: ["$remainingPlants", 0] },
-                0,
-              ],
-            },
-          },
-        },
-      },
-    ]),
-  ]);
-  return buildPersonBreakdownTable(bookingRows, deliveryRows);
-}
-
-async function aggregateDealerRows(rangeStart, rangeEnd, statusMatch, deliveryMatch) {
-  const dealerMatch = {
-    dealerOrder: true,
-    dealer: { $exists: true, $ne: null },
-  };
-
-  const [bookingRows, deliveryRows] = await Promise.all([
-    Order.aggregate([
-      {
-        $match: {
-          ...statusMatch,
-          ...dealerMatch,
-          orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
-        },
-      },
-      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-      ...DEALER_STAGES,
-      {
-        $group: {
-          _id: {
-            personId: "$dealer",
-            personName: "$_dealerName",
-            phoneNumber: "$_dealerPhone",
-          },
-          bookingOrders: { $sum: 1 },
-          bookingPlants: { $sum: "$linePlantTotal" },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          personId: "$_id.personId",
-          personName: "$_id.personName",
-          phoneNumber: "$_id.phoneNumber",
-          bookingOrders: 1,
-          bookingPlants: 1,
-        },
-      },
-    ]),
-    Order.aggregate([
-      {
-        $match: {
-          ...deliveryMatch,
-          ...dealerMatch,
-          deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
-        },
-      },
-      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-      ...DEALER_STAGES,
-      {
-        $group: {
-          _id: {
-            personId: "$dealer",
-            personName: "$_dealerName",
-            phoneNumber: "$_dealerPhone",
-            status: "$orderStatus",
-          },
-          orders: { $sum: 1 },
-          plants: { $sum: "$linePlantTotal" },
-          plantsRemaining: {
-            $sum: {
-              $cond: [
-                { $in: ["$orderStatus", REMAINING_STATUSES] },
-                { $ifNull: ["$remainingPlants", 0] },
-                0,
-              ],
-            },
-          },
-        },
-      },
-    ]),
-  ]);
-  return buildPersonBreakdownTable(bookingRows, deliveryRows);
 }
 
 export async function fetchAdminSalesMis(startDate, endDate, options = {}) {
@@ -214,10 +205,12 @@ export async function fetchAdminSalesMis(startDate, endDate, options = {}) {
     return { error: parsed.error, statusCode: 400 };
   }
   const { rangeStart, rangeEnd, startYmd, endYmd } = parsed;
-  const statusMatch = orderStatusExcludeMatch();
-  const deliveryMatch = misDeliveryStatusMatch(dueOnly);
+
   const [table, dueSummary] = await Promise.all([
-    aggregateSalesRows(rangeStart, rangeEnd, statusMatch, deliveryMatch),
+    fetchPersonBreakdownMetrics(rangeStart, rangeEnd, {
+      groupStages: SALES_PERSON_STAGES,
+      groupIdFields: SALES_GROUP_ID,
+    }),
     aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
   ]);
 
@@ -242,10 +235,18 @@ export async function fetchAdminDealerMis(startDate, endDate, options = {}) {
     return { error: parsed.error, statusCode: 400 };
   }
   const { rangeStart, rangeEnd, startYmd, endYmd } = parsed;
-  const statusMatch = orderStatusExcludeMatch();
-  const deliveryMatch = misDeliveryStatusMatch(dueOnly);
+
+  const dealerMatch = {
+    dealerOrder: true,
+    dealer: { $exists: true, $ne: null },
+  };
+
   const [table, dueSummary] = await Promise.all([
-    aggregateDealerRows(rangeStart, rangeEnd, statusMatch, deliveryMatch),
+    fetchPersonBreakdownMetrics(rangeStart, rangeEnd, {
+      groupStages: DEALER_STAGES,
+      groupIdFields: DEALER_GROUP_ID,
+      extraMatch: dealerMatch,
+    }),
     aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
   ]);
 

@@ -174,6 +174,10 @@ const allowedParams = [
   "orderLimit", // analytics short-report: max orders in list (cap 500)
   "dueOnly", // GET /insights/dashboard + admin MIS — overdue open orders only
   "includeAllPastDue", // GET /order/admin-*-mis — include delivery backlog before range start
+  "bucket", // GET /order/admin-mis-orders — MIS column bucket
+  "mode", // GET /order/admin-mis-orders — booking | delivery
+  "pastDueOnly", // GET /order/admin-mis-orders — backlog before range
+  "date", // GET /order/admin-mis-orders — single IST day (YYYY-MM-DD)
   "excludeReadyForDispatch", // GET /insights/dashboard — omit READY_FOR_DISPATCH from expected KPIs
   "varietyName", // GET /insights/dashboard — plant subtype name with plantId
   "dateField", // GET /insights/collections/overview — booking | delivery date range field
@@ -275,7 +279,9 @@ const parameterWhiteListing = (req, res, next) => {
     (orderListPath.includes("/order/admin-daily-mis") ||
       orderListPath.includes("/order/admin-mis-sales") ||
       orderListPath.includes("/order/admin-mis-dealer") ||
-      orderListPath.includes("/order/admin-mis-due"))
+      orderListPath.includes("/order/admin-mis-due") ||
+      orderListPath.includes("/order/admin-mis-orders") ||
+      orderListPath.includes("/order/central-report"))
   ) {
     return next();
   }

@@ -38,13 +38,12 @@ import {
   syncDealerLedgerForOrder,
 } from "../utils/dealerLedgerHelper.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
-import { fetchAdminDailyMis } from "../services/adminDailyMis.service.js";
-import {
-  fetchAdminSalesMis,
-  fetchAdminDealerMis,
-} from "../services/adminMisBreakdown.service.js";
-import { fetchAdminDueMis } from "../services/adminMisDueTab.service.js";
 import { parseMisDueFlags } from "../utility/adminMisDue.js";
+import {
+  runCentralReport,
+  getCentralReportEngineMeta,
+} from "../utility/centralReportEngine/index.js";
+import { fetchAdminMisOrders } from "../services/adminMisOrders.service.js";
 import {
   resolveOrderStatusTokens,
   buildOrderStatusDateMatch,
@@ -5894,55 +5893,86 @@ const getAdminDashboardStats = catchAsync(async (req, res) => {
   });
 });
 
-const getAdminDailyMis = catchAsync(async (req, res) => {
-  const { startDate, endDate } = req.query;
-  const result = await fetchAdminDailyMis(startDate, endDate, parseMisDueFlags(req.query));
+function respondCentralReport(res, result, { includeMeta = false } = {}) {
   if (result.error) {
     return res.status(result.statusCode || 400).json({
       success: false,
       message: result.error,
     });
   }
+  const body = { success: true, data: result.data };
+  if (includeMeta) {
+    body.reportId = result.reportId;
+    body.reportTitle = result.reportTitle;
+    body.layout = result.layout;
+  }
+  return res.status(200).json(body);
+}
+
+const getCentralReportCatalog = catchAsync(async (req, res) => {
   return res.status(200).json({
     success: true,
-    data: result.data,
+    data: getCentralReportEngineMeta(),
   });
+});
+
+const getCentralReportById = catchAsync(async (req, res) => {
+  const { reportId } = req.params;
+  const { startDate, endDate } = req.query;
+  const flags = parseMisDueFlags(req.query);
+  const options =
+    String(reportId || "").includes("due") && !flags.dueOnly
+      ? { includeAllPastDue: flags.includeAllPastDue }
+      : flags;
+  const result = await runCentralReport(reportId, startDate, endDate, options);
+  return respondCentralReport(res, result, { includeMeta: true });
+});
+
+const getAdminDailyMis = catchAsync(async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const result = await runCentralReport(
+    "admin-daily-mis",
+    startDate,
+    endDate,
+    parseMisDueFlags(req.query)
+  );
+  return respondCentralReport(res, result);
 });
 
 const getAdminSalesMis = catchAsync(async (req, res) => {
   const { startDate, endDate } = req.query;
-  const result = await fetchAdminSalesMis(startDate, endDate, parseMisDueFlags(req.query));
-  if (result.error) {
-    return res.status(result.statusCode || 400).json({
-      success: false,
-      message: result.error,
-    });
-  }
-  return res.status(200).json({
-    success: true,
-    data: result.data,
-  });
+  const result = await runCentralReport(
+    "admin-mis-sales",
+    startDate,
+    endDate,
+    parseMisDueFlags(req.query)
+  );
+  return respondCentralReport(res, result);
 });
 
 const getAdminDealerMis = catchAsync(async (req, res) => {
   const { startDate, endDate } = req.query;
-  const result = await fetchAdminDealerMis(startDate, endDate, parseMisDueFlags(req.query));
-  if (result.error) {
-    return res.status(result.statusCode || 400).json({
-      success: false,
-      message: result.error,
-    });
-  }
-  return res.status(200).json({
-    success: true,
-    data: result.data,
-  });
+  const result = await runCentralReport(
+    "admin-mis-dealer",
+    startDate,
+    endDate,
+    parseMisDueFlags(req.query)
+  );
+  return respondCentralReport(res, result);
 });
 
 const getAdminDueMis = catchAsync(async (req, res) => {
   const { startDate, endDate } = req.query;
   const { includeAllPastDue } = parseMisDueFlags(req.query);
-  const result = await fetchAdminDueMis(startDate, endDate, { includeAllPastDue });
+  const result = await runCentralReport("admin-mis-due", startDate, endDate, {
+    includeAllPastDue,
+  });
+  return respondCentralReport(res, result);
+});
+
+/** MIS drawer order list — same rules as MIS count columns. */
+const getAdminMisOrders = catchAsync(async (req, res) => {
+  const result = await fetchAdminMisOrders(req.query);
   if (result.error) {
     return res.status(result.statusCode || 400).json({
       success: false,
@@ -5993,8 +6023,11 @@ export {
   getRemainingDispatchMatrixOrders,
   getFarmerOrdersDashboardTabCounts,
   getAdminDashboardStats,
+  getCentralReportCatalog,
+  getCentralReportById,
   getAdminDailyMis,
   getAdminSalesMis,
   getAdminDealerMis,
   getAdminDueMis,
+  getAdminMisOrders,
 };
