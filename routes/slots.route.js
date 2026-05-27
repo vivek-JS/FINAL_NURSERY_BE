@@ -13,6 +13,7 @@ import {
   updateSlotSalesmenRestrictions,
   createSlotsForMultipleYears,
   migrateBufferCalculations,
+  migrateSlotCapacityModel,
   releaseBufferPlantsController,
   addPlantsToCapacityController,
   createSlotsForSubtype,
@@ -69,6 +70,7 @@ slotRouter.put("/slots/:slotId", updateSlotFieldById);
 
 // Migration route for buffer calculations
 slotRouter.post("/slots/migrate-buffers", migrateBufferCalculations);
+slotRouter.post("/slots/migrate-capacity-model", migrateSlotCapacityModel);
 
 // Test route for slot generation
 slotRouter.get("/slots/test-generation", (req, res) => {

@@ -5,7 +5,6 @@
  * 3. Plant Buffer (lowest priority)
  */
 export const calculateEffectiveBuffer = (slotBuffer, subtypeBuffer, plantBuffer) => {
-  // Priority: Slot > Subtype > Plant
   if (slotBuffer !== undefined && slotBuffer !== null && slotBuffer > 0) {
     return slotBuffer;
   }
@@ -15,21 +14,14 @@ export const calculateEffectiveBuffer = (slotBuffer, subtypeBuffer, plantBuffer)
   if (plantBuffer !== undefined && plantBuffer !== null && plantBuffer > 0) {
     return plantBuffer;
   }
-  return 0; // Default to 0 if no buffer is set
+  return 0;
 };
 
-/**
- * Calculate available plants after applying buffer
- * Available Plants = Total Plants - (Buffer % of Total Plants)
- */
 export const calculateAvailablePlants = (totalPlants, bufferPercentage) => {
   const bufferAmount = (totalPlants * bufferPercentage) / 100;
   return Math.max(0, totalPlants - bufferAmount);
 };
 
-/**
- * Calculate buffer-adjusted capacity for display
- */
 export const calculateBufferAdjustedCapacity = (totalPlants, totalBookedPlants, bufferPercentage) => {
   const total = Number(totalPlants) || 0;
   const booked = Number(totalBookedPlants) || 0;
@@ -50,7 +42,13 @@ const finiteNumber = (value) => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** Slot had buffer saved/migrated/released — do not re-apply inherited plant/subtype %. */
+/** Capacity is always available + booked — never drives available. */
+export const deriveSlotCapacity = (availablePlants, bookedPlants) => {
+  const available = Number(availablePlants) || 0;
+  const booked = Number(bookedPlants) || 0;
+  return Math.max(0, available) + Math.max(0, booked);
+};
+
 export const isSlotBufferMaterialized = (slot) => {
   const original = finiteNumber(slot?.originalTotalPlants);
   if (original != null && original > 0) return true;
@@ -61,19 +59,57 @@ export const isSlotBufferMaterialized = (slot) => {
   return false;
 };
 
+export const isAvailablePlantsMaterialized = (slot) => {
+  if (slot?.availablePlantsMaterialized === true) return true;
+  if (slot?.availablePlantsMaterialized === false) return false;
+  if (Array.isArray(slot?.slotTrail)) {
+    return slot.slotTrail.some((t) => t?.action === "AVAILABLE_PLANTS_UPDATED");
+  }
+  return false;
+};
+
+const resolveStoredAvailable = (slot, booked) => {
+  const storedAvailableRaw = finiteNumber(slot?.availablePlants);
+  if (isAvailablePlantsMaterialized(slot)) {
+    return storedAvailableRaw ?? 0;
+  }
+  if (storedAvailableRaw != null && storedAvailableRaw > 0) {
+    return storedAvailableRaw;
+  }
+  return computeLegacyAvailableFromCapacity(slot, booked);
+};
+
+/** One-time legacy read/migration: old totalPlants − booked − buffer (unmaterialized slots only). */
+export const computeLegacyAvailableFromCapacity = (slot, bookedOverride) => {
+  const booked = Number(bookedOverride ?? slot?.totalBookedPlants) || 0;
+  const legacyTotal = Number(slot?.originalTotalPlants ?? slot?.totalPlants) || 0;
+  if (legacyTotal <= 0) {
+    const stored = finiteNumber(slot?.availablePlants);
+    return stored ?? 0;
+  }
+  const storedBuffer = finiteNumber(slot?.bufferAmount);
+  const bufferAmt =
+    storedBuffer != null && storedBuffer > 0
+      ? storedBuffer
+      : Math.round((legacyTotal * (Number(slot?.effectiveBuffer ?? slot?.buffer) || 0)) / 100);
+  return Math.max(0, legacyTotal - booked - bufferAmt);
+};
+
 /**
- * Resolve buffer + available for API/UI from stored slot fields and effective buffer %.
- * - Preserves GRN / manual available above formula
- * - Fixes stale DB availablePlants=0 when capacity exists
- * - After release/save on slot: never substitute inherited plant/subtype reserve
+ * Resolve buffer + available for API/UI.
+ * - Materialized available: use stored value (including 0).
+ * - Legacy unmigrated slots: derive available from old totalPlants once.
+ * - Capacity (display) = available + booked.
  */
 export const resolveSlotBufferFields = (
   slot,
   { subtypeBuffer = 0, plantBuffer = 0 } = {}
 ) => {
-  const total = Number(slot?.totalPlants) || 0;
   const booked = Number(slot?.totalBookedPlants) || 0;
+  const availablePlants = resolveStoredAvailable(slot, booked);
+  const capacity = deriveSlotCapacity(availablePlants, booked);
   const materialized = isSlotBufferMaterialized(slot);
+  const availableMaterialized = isAvailablePlantsMaterialized(slot);
 
   const effectiveBuffer = materialized
     ? finiteNumber(slot?.effectiveBuffer) ??
@@ -81,7 +117,7 @@ export const resolveSlotBufferFields = (
       0
     : calculateEffectiveBuffer(slot?.buffer || 0, subtypeBuffer, plantBuffer);
 
-  const bufferAdjusted = calculateBufferAdjustedCapacity(total, booked, effectiveBuffer);
+  const bufferAdjusted = calculateBufferAdjustedCapacity(capacity, booked, effectiveBuffer);
   const computedBufferAmount = bufferAdjusted.bufferAmount;
   const inheritedBufferAmount = materialized
     ? 0
@@ -106,29 +142,9 @@ export const resolveSlotBufferFields = (
     ? 0
     : computedBufferAmount;
 
-  const formulaAvailable = total - booked - effectiveBufferAmount;
-
-  const storedAvailableRaw = finiteNumber(slot?.availablePlants);
-  let availablePlants;
-  if (storedAvailableRaw == null) {
-    availablePlants = formulaAvailable;
-  } else {
-    const isStaleZero =
-      storedAvailableRaw === 0 &&
-      total > 0 &&
-      (booked > 0 || effectiveBuffer > 0 || formulaAvailable > 0);
-    if (isStaleZero) {
-      availablePlants = formulaAvailable;
-    } else if (storedAvailableRaw > formulaAvailable + 0.001) {
-      availablePlants = storedAvailableRaw;
-    } else {
-      availablePlants = storedAvailableRaw;
-    }
-  }
-
   return {
     effectiveBuffer,
-    bufferAdjustedCapacity: Math.max(0, total - effectiveBufferAmount),
+    bufferAdjustedCapacity: Math.max(0, capacity - effectiveBufferAmount),
     bufferAmount,
     displayBufferAmount,
     computedBufferAmount: inheritedBufferAmount,
@@ -137,19 +153,16 @@ export const resolveSlotBufferFields = (
     bufferMaterialized: materialized,
     inheritedBufferOnly: !materialized && !hasStoredBuffer && inheritedBufferAmount > 0,
     availablePlants,
+    availablePlantsMaterialized: availableMaterialized,
+    totalCapacity: capacity,
   };
 };
 
-/**
- * Release plants from buffer to available plants
- * This moves plants from buffer reserve to available plants
- */
 export const releaseBufferPlants = (slotData, plantsToRelease) => {
   const currentBufferAmount = slotData.bufferAmount || 0;
   const currentAvailablePlants = slotData.availablePlants || 0;
   const currentTotalPlants = slotData.totalPlants || 0;
   
-  // Calculate how many plants can be released
   const maxReleasable = Math.min(currentBufferAmount, plantsToRelease);
   
   if (maxReleasable <= 0) {
@@ -160,11 +173,8 @@ export const releaseBufferPlants = (slotData, plantsToRelease) => {
     };
   }
   
-  // Calculate new values
   const newBufferAmount = currentBufferAmount - maxReleasable;
   const newAvailablePlants = currentAvailablePlants + maxReleasable;
-  
-  // Recalculate effective buffer percentage
   const newBufferPercentage = currentTotalPlants > 0 ? (newBufferAmount / currentTotalPlants) * 100 : 0;
   
   return {
@@ -177,52 +187,40 @@ export const releaseBufferPlants = (slotData, plantsToRelease) => {
   };
 };
 
-/**
- * Add plants directly to total capacity (ignoring buffer)
- * This is used when editing plant capacity
- */
 export const addPlantsToCapacity = (slotData, plantsToAdd) => {
-  const currentTotalPlants = slotData.totalPlants || 0;
-  const currentBufferPercentage = slotData.effectiveBuffer || 0;
-  
-  const newTotalPlants = currentTotalPlants + plantsToAdd;
-  const newBufferAmount = (newTotalPlants * currentBufferPercentage) / 100;
-  const newAvailablePlants = Math.max(0, newTotalPlants - newBufferAmount - (slotData.totalBookedPlants || 0));
-  
-  return {
-    success: true,
-    newTotalPlants,
-    newBufferAmount,
-    newAvailablePlants,
-    message: `Added ${plantsToAdd} plants to total capacity`
-  };
-}; 
-
-/**
- * Add plants directly to available plants without changing buffer amount
- * Buffer percentage will be recalculated based on new total plants
- */
-export const addPlantsToAvailable = (slotData, plantsToAdd) => {
-  const currentTotalPlants = slotData.totalPlants || 0;
-  const currentBufferAmount = slotData.bufferAmount || 0;
   const currentAvailablePlants = slotData.availablePlants || 0;
   const currentBookedPlants = slotData.totalBookedPlants || 0;
+  const currentBufferAmount = slotData.bufferAmount || 0;
   
-  // Add plants directly to available plants
   const newAvailablePlants = currentAvailablePlants + plantsToAdd;
-  
-  // Calculate new total plants needed
-  const newTotalPlants = newAvailablePlants + currentBookedPlants + currentBufferAmount;
-  
-  // Calculate new buffer percentage based on the unchanged buffer amount
+  const newTotalPlants = newAvailablePlants + currentBookedPlants;
   const newBufferPercentage = newTotalPlants > 0 ? (currentBufferAmount / newTotalPlants) * 100 : 0;
   
   return {
     success: true,
     newTotalPlants,
-    newBufferAmount: currentBufferAmount, // Keep buffer amount unchanged
+    newBufferAmount: currentBufferAmount,
     newAvailablePlants,
     newBufferPercentage,
     message: `Added ${plantsToAdd} plants to available plants`
   };
 }; 
+
+export const addPlantsToAvailable = (slotData, plantsToAdd) => {
+  const currentAvailablePlants = slotData.availablePlants || 0;
+  const currentBookedPlants = slotData.totalBookedPlants || 0;
+  const currentBufferAmount = slotData.bufferAmount || 0;
+  
+  const newAvailablePlants = currentAvailablePlants + plantsToAdd;
+  const newTotalPlants = newAvailablePlants + currentBookedPlants;
+  const newBufferPercentage = newTotalPlants > 0 ? (currentBufferAmount / newTotalPlants) * 100 : 0;
+  
+  return {
+    success: true,
+    newTotalPlants,
+    newBufferAmount: currentBufferAmount,
+    newAvailablePlants,
+    newBufferPercentage,
+    message: `Added ${plantsToAdd} plants to available plants`
+  };
+};

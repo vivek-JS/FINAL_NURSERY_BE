@@ -1,17 +1,4 @@
-2026/05/28-00:41:39.618 32119f Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000339
-2026/05/28-00:41:39.619 32119f Recovering log #5163
-2026/05/28-00:41:39.619 32119f Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/005163.log 
-2026/05/28-00:41:39.619 32119f Delete type=2 #5162
-2026/05/28-00:41:40.085 3211a2 Manual compaction at level-0 from ' ]\x07\x00\x00\x00' @ 72057594037927935 : 1 .. ' ^\x07\x00\x00\x00' @ 0 : 0; will stop at (end)
-2026/05/28-00:41:40.085 3211a2 Manual compaction at level-1 from ' ]\x07\x00\x00\x00' @ 72057594037927935 : 1 .. ' ^\x07\x00\x00\x00' @ 0 : 0; will stop at (end)
-2026/05/28-00:41:40.087 3211a2 Level-0 table #5168: started
-2026/05/28-00:41:40.088 3211a2 Level-0 table #5168: 9190 bytes OK
-2026/05/28-00:41:40.090 3211a2 Delete type=0 #5163
-2026/05/28-00:41:40.090 32119f Manual compaction at level-0 from ' ^\x07\x00\x00\x00' @ 72057594037927935 : 1 .. ' _\x07\x00\x00\x00' @ 0 : 0; will stop at (end)
-2026/05/28-00:41:40.091 3211ac Manual compaction at level-1 from ' ^\x07\x00\x00\x00' @ 72057594037927935 : 1 .. ' _\x07\x00\x00\x00' @ 0 : 0; will stop at ' ^\x07\x0a\x02\x03\x00\x00\x00\x00\x00\x00\xf0?' @ 3168121 : 1
-2026/05/28-00:41:40.091 3211ac Compacting 1@1 + 1@2 files
-2026/05/28-00:41:40.094 3211ac Generated table #5169@1: 1929 keys, 48016 bytes
-2026/05/28-00:41:40.095 3211ac Compacted 1@1 + 1@2 files => 48016 bytes
-2026/05/28-00:41:40.097 3211ac compacted to: files[ 0 0 1 0 0 0 0 ]
-2026/05/28-00:41:40.098 3211ac Delete type=2 #5168
-2026/05/28-00:41:40.099 3211c4 Manual compaction at level-1 from ' ^\x07\x0a\x02\x03\x00\x00\x00\x00\x00\x00\xf0?' @ 3168121 : 1 .. ' _\x07\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/05/28-00:55:35.139 328c3a Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000339
+2026/05/28-00:55:35.140 328c3a Recovering log #5338
+2026/05/28-00:55:35.144 328c3a Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/005338.log 
+2026/05/28-00:55:35.144 328c3a Delete type=2 #5337

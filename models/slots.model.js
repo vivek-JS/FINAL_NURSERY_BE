@@ -192,6 +192,11 @@ const slotSchema = new Schema({
       return this.totalPlants;
     }
   },
+  /** True once availablePlants was explicitly saved (including 0). */
+  availablePlantsMaterialized: {
+    type: Boolean,
+    default: false,
+  },
   /** Physically counted / actual plants in this slot window */
   actualPlants: {
     type: Number,

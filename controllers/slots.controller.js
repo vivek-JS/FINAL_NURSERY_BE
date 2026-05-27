@@ -4,7 +4,7 @@ import Order from "../models/order.model.js";
 import mongoose from "mongoose";
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 import SlotTransferLog from "../models/slotTransfer.model.js";
-import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity, addPlantsToAvailable, resolveSlotBufferFields } from "../utility/bufferUtils.js";
+import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity, addPlantsToAvailable, resolveSlotBufferFields, computeLegacyAvailableFromCapacity, isAvailablePlantsMaterialized, deriveSlotCapacity } from "../utility/bufferUtils.js";
 import { updateSlotBufferCalculations, updateAllSlotBuffers } from "../utility/slotBufferUpdater.js";
 import {
   applyStockFieldUpdates,
@@ -1681,6 +1681,7 @@ export const releaseBufferPlantsController = async (req, res) => {
         $set: {
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAmount': releaseResult.newBufferAmount,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].availablePlants': releaseResult.newAvailablePlants,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].availablePlantsMaterialized': true,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].buffer': releaseResult.newBufferPercentage,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].effectiveBuffer': releaseResult.newBufferPercentage,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAdjustedCapacity': newBufferAdjustedCapacity,
@@ -1796,8 +1797,10 @@ export const addPlantsToCapacityController = async (req, res) => {
       {
         $set: {
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].totalPlants': addResult.newTotalPlants,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].availablePlantsMaterialized': true,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAmount': addResult.newBufferAmount,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].availablePlants': addResult.newAvailablePlants,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].availablePlantsMaterialized': true,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].buffer': addResult.newBufferPercentage,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].effectiveBuffer': addResult.newBufferPercentage,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAdjustedCapacity': newBufferAdjustedCapacity
@@ -1867,6 +1870,84 @@ export const migrateBufferCalculations = async (req, res) => {
       success: false,
       message: 'Internal server error during migration',
       error: error.message
+    });
+  }
+};
+
+/** Backfill available + totalPlants for legacy slots (capacity = available + booked). Skips materialized slots. */
+export const migrateSlotCapacityModel = async (req, res) => {
+  try {
+    const dryRun = String(req.query?.dryRun ?? "false") === "true";
+    const plantSlots = await PlantSlot.find({});
+    let updatedSlots = 0;
+    let skippedMaterialized = 0;
+    let unchanged = 0;
+    const samples = [];
+
+    for (const plantSlot of plantSlots) {
+      let docDirty = false;
+
+      for (const subtypeSlot of plantSlot.subtypeSlots || []) {
+        for (const slot of subtypeSlot.slots || []) {
+          const booked = Number(slot.totalBookedPlants) || 0;
+
+          if (isAvailablePlantsMaterialized(slot)) {
+            skippedMaterialized += 1;
+            const available = Number(slot.availablePlants) || 0;
+            const capacity = deriveSlotCapacity(available, booked);
+            if (slot.totalPlants !== capacity) {
+              slot.totalPlants = capacity;
+              docDirty = true;
+              updatedSlots += 1;
+            } else {
+              unchanged += 1;
+            }
+            continue;
+          }
+
+          const available = computeLegacyAvailableFromCapacity(slot, booked);
+          const capacity = deriveSlotCapacity(available, booked);
+
+          if (slot.availablePlants !== available || slot.totalPlants !== capacity) {
+            if (samples.length < 5) {
+              samples.push({
+                slotId: slot._id,
+                before: { availablePlants: slot.availablePlants, totalPlants: slot.totalPlants, booked },
+                after: { availablePlants: available, totalPlants: capacity, booked },
+              });
+            }
+            slot.availablePlants = available;
+            slot.totalPlants = capacity;
+            docDirty = true;
+            updatedSlots += 1;
+          } else {
+            unchanged += 1;
+          }
+        }
+      }
+
+      if (docDirty && !dryRun) {
+        await plantSlot.save();
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      dryRun,
+      message: dryRun
+        ? "Dry run complete — no documents saved"
+        : "Slot capacity model migration completed",
+      updatedSlots,
+      skippedMaterialized,
+      unchanged,
+      samples,
+    });
+  } catch (error) {
+    console.error("migrateSlotCapacityModel error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error during capacity migration",
+      error: error.message,
     });
   }
 };
@@ -2399,6 +2480,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         slot.effectiveBuffer = resolved.effectiveBuffer;
         slot.bufferAdjustedCapacity = resolved.bufferAdjustedCapacity;
         slot.availablePlants = resolved.availablePlants;
+        slot.totalPlants = resolved.totalCapacity;
         slot.bufferAmount = resolved.bufferAmount;
         slot.displayBufferAmount = resolved.displayBufferAmount;
         slot.computedBufferAmount = resolved.computedBufferAmount;
@@ -2406,6 +2488,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         slot.hasStoredBuffer = resolved.hasStoredBuffer;
         slot.bufferMaterialized = resolved.bufferMaterialized;
         slot.inheritedBufferOnly = resolved.inheritedBufferOnly;
+        slot.availablePlantsMaterialized = resolved.availablePlantsMaterialized;
 
         slot.isOverflow = slot.availablePlants < 0;
         slot.overflow = slot.availablePlants < 0;

@@ -42,6 +42,7 @@ import {
   roundMoney,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
+import { resolveSlotBufferFields } from "../utility/bufferUtils.js";
 import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
 import {
   applyPaymentTimingToPayment,
@@ -61,6 +62,9 @@ import {
   emitPlantOrderCreatedEvents,
   emitPlantOrderUpdateEvents,
 } from "../utils/orderEventDualWrite.js";
+
+const getSlotAvailableForBooking = (slot) =>
+  Math.max(0, resolveSlotBufferFields(slot).availablePlants);
 
 const CANCEL_LIKE_ORDER_STATUSES = new Set(["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"]);
 function isCancelLikeOrderStatus(status) {
@@ -251,11 +255,7 @@ export const updateSlot = async (
         throw new Error("Specific slot not found");
       }
 
-      // Calculate available plants considering buffer and already booked plants
-      const effectiveBuffer = targetSlot.effectiveBuffer || targetSlot.buffer || 0;
-      const bufferAmount = Math.round((targetSlot.totalPlants * effectiveBuffer) / 100);
-      const bufferAdjustedCapacity = targetSlot.totalPlants - bufferAmount;
-      const availablePlants = Math.max(0, bufferAdjustedCapacity - (targetSlot.totalBookedPlants || 0));
+      const availablePlants = getSlotAvailableForBooking(targetSlot);
       
       if (numberOfPlants > availablePlants) {
         const slotDateInfo =
@@ -298,11 +298,7 @@ export const updateSlot = async (
         );
         
         if (targetSlot) {
-          // Calculate available plants considering buffer
-          const effectiveBuffer = targetSlot.effectiveBuffer || 0;
-          const bufferAmount = Math.round((targetSlot.totalPlants * effectiveBuffer) / 100);
-          const bufferAdjustedCapacity = targetSlot.totalPlants - bufferAmount;
-          const availablePlants = Math.max(0, bufferAdjustedCapacity - (targetSlot.totalBookedPlants || 0));
+          const availablePlants = getSlotAvailableForBooking(targetSlot);
           
           // Check if this booking will cause overflow
           if (numberOfPlants > availablePlants) {
@@ -331,11 +327,7 @@ export const updateSlot = async (
         );
         
         if (targetSlot) {
-          // Calculate available plants after this addition
-          const effectiveBuffer = targetSlot.effectiveBuffer || 0;
-          const bufferAmount = Math.round((targetSlot.totalPlants * effectiveBuffer) / 100);
-          const bufferAdjustedCapacity = targetSlot.totalPlants - bufferAmount;
-          const newAvailablePlants = Math.max(0, bufferAdjustedCapacity - (targetSlot.totalBookedPlants || 0) + numberOfPlants);
+          const newAvailablePlants = getSlotAvailableForBooking(targetSlot) + numberOfPlants;
           
           if (newAvailablePlants >= 0 && targetSlot.isOverflow) {
             additionalUpdates["subtypeSlots.$[subtypeSlot].slots.$[slot].isOverflow"] = false;
@@ -2805,11 +2797,7 @@ const handleSlotUpdatesWithSession = async (
         return;
       }
 
-      // Calculate available plants considering buffer and already booked plants (for regular plants only)
-      const effectiveBuffer = slot.effectiveBuffer || slot.buffer || 0;
-      const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
-      const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
-      const availablePlants = Math.max(0, bufferAdjustedCapacity - (slot.totalBookedPlants || 0));
+      const availablePlants = getSlotAvailableForBooking(slot);
       
       if (plantsNeeded > availablePlants) {
         const slotDateInfo =
@@ -2950,11 +2938,7 @@ const handleSlotUpdates = async (existingDoc, filteredBody) => {
         return;
       }
 
-      // Calculate available plants considering buffer and already booked plants (for regular plants only)
-      const effectiveBuffer = slot.effectiveBuffer || slot.buffer || 0;
-      const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
-      const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
-      const availablePlants = Math.max(0, bufferAdjustedCapacity - (slot.totalBookedPlants || 0));
+      const availablePlants = getSlotAvailableForBooking(slot);
       
       if (plantsNeeded > availablePlants) {
         const slotDateInfo =

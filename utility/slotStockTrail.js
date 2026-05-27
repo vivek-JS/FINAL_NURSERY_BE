@@ -126,6 +126,9 @@ export function applyStockFieldUpdates(slot, updates, performedBy, source) {
     }
     slot[field] = next;
     if (field === "availablePlants") {
+      slot.availablePlantsMaterialized = true;
+      const booked = Number(slot.totalBookedPlants) || 0;
+      slot.totalPlants = next + booked;
       slot.isOverflow = next < 0;
       slot.overflow = next < 0;
     }
