@@ -40,6 +40,10 @@ import {
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
 import { fetchAdminDailyMis } from "../services/adminDailyMis.service.js";
 import {
+  fetchAdminSalesMis,
+  fetchAdminDealerMis,
+} from "../services/adminMisBreakdown.service.js";
+import {
   resolveOrderStatusTokens,
   buildOrderStatusDateMatch,
 } from "../utility/orderListQuery.js";
@@ -5903,6 +5907,36 @@ const getAdminDailyMis = catchAsync(async (req, res) => {
   });
 });
 
+const getAdminSalesMis = catchAsync(async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const result = await fetchAdminSalesMis(startDate, endDate);
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({
+      success: false,
+      message: result.error,
+    });
+  }
+  return res.status(200).json({
+    success: true,
+    data: result.data,
+  });
+});
+
+const getAdminDealerMis = catchAsync(async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const result = await fetchAdminDealerMis(startDate, endDate);
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({
+      success: false,
+      message: result.error,
+    });
+  }
+  return res.status(200).json({
+    success: true,
+    data: result.data,
+  });
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -5942,4 +5976,6 @@ export {
   getFarmerOrdersDashboardTabCounts,
   getAdminDashboardStats,
   getAdminDailyMis,
+  getAdminSalesMis,
+  getAdminDealerMis,
 };

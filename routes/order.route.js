@@ -38,6 +38,8 @@ import {
   getFarmerOrdersDashboardTabCounts,
   getAdminDashboardStats,
   getAdminDailyMis,
+  getAdminSalesMis,
+  getAdminDealerMis,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -110,6 +112,16 @@ router
     "/admin-daily-mis",
     authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
     getAdminDailyMis
+  )
+  .get(
+    "/admin-mis-sales",
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+    getAdminSalesMis
+  )
+  .get(
+    "/admin-mis-dealer",
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+    getAdminDealerMis
   )
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)

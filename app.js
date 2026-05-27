@@ -306,6 +306,8 @@ import {
   getFarmerOrdersDashboardTabCounts,
   getAdminDashboardStats,
   getAdminDailyMis,
+  getAdminSalesMis,
+  getAdminDealerMis,
 } from "./controllers/order.controller.js";
 import { getFarmerPlantLedger, getFarmerPlantLedgerParties } from "./controllers/farmerPlantOrderLedger.controller.js";
 import { getRamAgriLedgerParties } from "./controllers/ramAgriLedger.controller.js";
@@ -513,6 +515,18 @@ server.get(
   authenticateToken,
   authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
   getAdminDailyMis
+);
+server.get(
+  "/api/v1/order/admin-mis-sales",
+  authenticateToken,
+  authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+  getAdminSalesMis
+);
+server.get(
+  "/api/v1/order/admin-mis-dealer",
+  authenticateToken,
+  authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+  getAdminDealerMis
 );
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/order-events", authenticateToken, orderEventsRoute);
