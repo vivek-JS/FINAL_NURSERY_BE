@@ -97,6 +97,15 @@ export function transitionHistoryByDayStages(newStatus, rangeStart, rangeEnd, pr
   ];
 }
 
+/** Second entity $group must read keys from prior _id, not re-run lookup expressions. */
+export function entityRollupGroupId(groupIdFields) {
+  const id = {};
+  for (const key of Object.keys(groupIdFields)) {
+    id[key] = `$_id.${key}`;
+  }
+  return id;
+}
+
 /** After unwind — group by entity + order (sales / variety breakdown). */
 export function transitionHistoryByEntityStages(
   newStatus,
@@ -115,7 +124,7 @@ export function transitionHistoryByEntityStages(
     },
     {
       $group: {
-        _id: groupIdFields,
+        _id: entityRollupGroupId(groupIdFields),
         orders: { $sum: 1 },
         plants: { $sum: "$plants" },
       },
@@ -149,7 +158,7 @@ export function transitionLegacyByEntityStages(
     },
     {
       $group: {
-        _id: groupIdFields,
+        _id: entityRollupGroupId(groupIdFields),
         orders: { $sum: 1 },
         plants: { $sum: "$plants" },
       },

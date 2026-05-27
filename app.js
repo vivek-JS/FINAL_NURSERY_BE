@@ -16,6 +16,7 @@ import helmet from "helmet";
 import IPWhiteListing from "./middlewares/ipWhiteListing.middleware.js";
 
 import parameterWhiteListing from "./middlewares/parameterWhiteListing.middleware.js";
+import { noCacheApiResponse } from "./middlewares/noCacheApi.middleware.js";
 
 // Security middlewares
 server.use(helmet({
@@ -520,30 +521,15 @@ server.get(
   authenticateToken,
   getAdminDashboardStats
 );
-server.get(
-  "/api/v1/order/admin-daily-mis",
+const adminMisAuth = [
   authenticateToken,
   authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
-  getAdminDailyMis
-);
-server.get(
-  "/api/v1/order/admin-mis-sales",
-  authenticateToken,
-  authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
-  getAdminSalesMis
-);
-server.get(
-  "/api/v1/order/admin-mis-dealer",
-  authenticateToken,
-  authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
-  getAdminDealerMis
-);
-server.get(
-  "/api/v1/order/admin-mis-due",
-  authenticateToken,
-  authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
-  getAdminDueMis
-);
+  noCacheApiResponse,
+];
+server.get("/api/v1/order/admin-daily-mis", ...adminMisAuth, getAdminDailyMis);
+server.get("/api/v1/order/admin-mis-sales", ...adminMisAuth, getAdminSalesMis);
+server.get("/api/v1/order/admin-mis-dealer", ...adminMisAuth, getAdminDealerMis);
+server.get("/api/v1/order/admin-mis-due", ...adminMisAuth, getAdminDueMis);
 server.get(
   "/api/v1/order/central-report",
   authenticateToken,
@@ -558,8 +544,7 @@ server.get(
 );
 server.get(
   "/api/v1/order/admin-mis-orders",
-  authenticateToken,
-  authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+  ...adminMisAuth,
   getAdminMisOrders
 );
 server.use("/api/v1/order", authenticateToken, orderRoute);
