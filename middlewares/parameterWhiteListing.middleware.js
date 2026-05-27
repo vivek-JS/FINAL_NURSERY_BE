@@ -177,6 +177,7 @@ const allowedParams = [
   "bucket", // GET /order/admin-mis-orders — MIS column bucket
   "mode", // GET /order/admin-mis-orders — booking | delivery
   "pastDueOnly", // GET /order/admin-mis-orders — backlog before range
+  "drawerSegment", // GET /order/admin-mis-orders — inRange | pastDue (split drawer)
   "date", // GET /order/admin-mis-orders — single IST day (YYYY-MM-DD)
   "excludeReadyForDispatch", // GET /insights/dashboard — omit READY_FOR_DISPATCH from expected KPIs
   "varietyName", // GET /insights/dashboard — plant subtype name with plantId

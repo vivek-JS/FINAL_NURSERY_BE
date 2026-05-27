@@ -9,7 +9,10 @@ import {
 import { duePipelineMatch } from "../utility/adminMisDue.js";
 import { matchDeliveryDateInRange } from "../utility/adminMisMetrics.js";
 import { transitionDrawerFacetStages } from "../utility/misTransitionMetrics.js";
-import { enrichMisOrderList } from "../utility/misOrderEnrichment.js";
+import {
+  enrichMisOrderList,
+  hydrateMisOrderDrawerList,
+} from "../utility/misOrderEnrichment.js";
 
 const IST = "Asia/Kolkata";
 
@@ -29,6 +32,8 @@ const ORDER_LIST_PROJECT = {
   dealer: 1,
   dealerOrder: 1,
   statusChanges: 1,
+  dispatchHistory: 1,
+  orderFor: 1,
 };
 
 function parsePageLimit(query = {}) {
@@ -85,6 +90,7 @@ export function buildMisOrdersMatch(query, window) {
   const pastDueOnly = String(query.pastDueOnly ?? "") === "true";
   const dueOnly = String(query.dueOnly ?? "") === "true";
   const includeAllPastDue = String(query.includeAllPastDue ?? "") === "true";
+  const drawerSegment = String(query.drawerSegment || "").trim();
   const hasSingleDay =
     query.date && String(query.date).slice(0, 10) !== "past-due";
   const isTotalsScope = !hasSingleDay;
@@ -174,6 +180,15 @@ export function buildMisOrdersMatch(query, window) {
       };
     case "deliveryTotal": {
       if (varietyScope) {
+        return {
+          ...base,
+          ...extra,
+          ...dueFilter,
+          ...deliveryTotalInRangeClause(rangeStart, rangeEnd),
+        };
+      }
+      /** Drawer tab: in-range only (when All past due splits the list). */
+      if (drawerSegment === "inRange") {
         return {
           ...base,
           ...extra,
@@ -335,11 +350,11 @@ export async function fetchAdminMisOrders(query = {}) {
 
   if (matchSpec?.kind === "transition") {
     const result = await fetchTransitionOrders(matchSpec, window, { skip, limit });
-    data = enrichMisOrderList(result.data, bucket);
+    data = await hydrateMisOrderDrawerList(enrichMisOrderList(result.data, bucket));
     total = result.total;
   } else {
     const result = await fetchStandardOrders(matchSpec, { skip, limit });
-    data = enrichMisOrderList(result.data, bucket);
+    data = await hydrateMisOrderDrawerList(enrichMisOrderList(result.data, bucket));
     total = result.total;
   }
 

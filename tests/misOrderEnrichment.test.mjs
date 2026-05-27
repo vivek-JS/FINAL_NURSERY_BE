@@ -1,33 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  firstTransitionDate,
+  pickDispatchLegForBucket,
   enrichMisOrderRow,
 } from "../utility/misOrderEnrichment.js";
 
-test("firstTransitionDate returns earliest DISPATCHED", () => {
+test("pickDispatchLegForBucket picks leg near bucketEventAt", () => {
+  const at = new Date("2026-05-26T10:16:50.574Z");
   const order = {
-    statusChanges: [
-      { newStatus: "DISPATCHED", createdAt: new Date("2026-05-25T10:00:00Z") },
-      { newStatus: "DISPATCHED", createdAt: new Date("2026-05-20T10:00:00Z") },
+    dispatchHistory: [
+      { date: new Date("2026-05-20T00:00:00Z"), vehicleName: "Old" },
+      { date: at, vehicleName: "MH-12-AB-1234", driverName: "Ram" },
     ],
   };
-  const d = firstTransitionDate(order, "DISPATCHED");
-  assert.equal(d.toISOString(), new Date("2026-05-20T10:00:00Z").toISOString());
+  const leg = pickDispatchLegForBucket(order, at);
+  assert.equal(leg.vehicleName, "MH-12-AB-1234");
 });
 
-test("enrichMisOrderRow adds dispatchedDate and bucketEventAt for completed", () => {
+test("enrichMisOrderRow uses bucketEventAt for dispatched display", () => {
+  const at = new Date("2026-05-27T07:15:23.449Z");
   const row = enrichMisOrderRow(
     {
-      orderId: 1,
       statusChanges: [
-        { newStatus: "DISPATCHED", createdAt: new Date("2026-05-22") },
-        { newStatus: "COMPLETED", createdAt: new Date("2026-05-28") },
+        { newStatus: "DISPATCHED", createdAt: new Date("2026-05-01T00:00:00Z") },
       ],
     },
-    { bucket: "completed", bucketEventAt: new Date("2026-05-28") }
+    { bucket: "dispatched", bucketEventAt: at }
   );
-  assert.ok(row.dispatchedDate);
-  assert.ok(row.completedDate);
-  assert.ok(row.bucketEventAt);
+  assert.equal(row.dispatchedDate?.toISOString(), at.toISOString());
 });

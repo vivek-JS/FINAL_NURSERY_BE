@@ -106,6 +106,24 @@ test("buildMisOrdersMatch deliveryTotal range uses union", () => {
   assert.ok(Array.isArray(m.$or));
 });
 
+test("buildMisOrdersMatch drawerSegment inRange splits from includeAllPastDue union", () => {
+  const rangeWindow = {
+    rangeStart: istDayBoundsFromYmd("2026-05-01").start,
+    rangeEnd: istDayBoundsFromYmd("2026-05-07").end,
+  };
+  const m = buildMisOrdersMatch(
+    {
+      bucket: "deliveryTotal",
+      mode: "delivery",
+      includeAllPastDue: "true",
+      drawerSegment: "inRange",
+    },
+    rangeWindow
+  );
+  assert.ok(m.deliveryDate);
+  assert.equal(m.$or, undefined);
+});
+
 test("buildMisOrdersMatch includeAllPastDue uses due backlog not FR union", () => {
   const rangeWindow = {
     rangeStart: istDayBoundsFromYmd("2026-05-01").start,
