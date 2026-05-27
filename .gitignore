@@ -32,6 +32,14 @@ data/whatsapp-auth/
 # Generated dealer reports (local)
 scripts/exports/*.xlsx
 
+# ICICI keys — NEVER commit private.key or icici_public.crt
+keys/private.key
+keys/*.key
+keys/*.pem
+keys/icici_public.crt
+keys/*.p12
+keys/*.jks
+
 # ICICI banking certificates — never commit private keys
 config/certs/*.key
 config/certs/*.pem

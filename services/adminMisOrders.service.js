@@ -7,6 +7,7 @@ import {
 } from "../utility/istOrderDateStats.js";
 import { duePipelineMatch } from "../utility/adminMisDue.js";
 import { matchDeliveryDateInRange } from "../utility/adminMisMetrics.js";
+import { transitionDrawerFacetStages } from "../utility/misTransitionMetrics.js";
 import { enrichMisOrderList } from "../utility/misOrderEnrichment.js";
 
 const IST = "Asia/Kolkata";
@@ -138,7 +139,10 @@ export function buildMisOrdersMatch(query, window) {
         ...extra,
         ...dueFilter,
         orderStatus: "DISPATCH_PROCESS",
-        ...deliveryInRangeClause(rangeStart, rangeEnd),
+        $or: [
+          deliveryInRangeClause(rangeStart, rangeEnd),
+          { updatedAt: { $gte: rangeStart, $lte: rangeEnd } },
+        ],
       };
     case "partiallyCompleted":
       return {
@@ -146,7 +150,10 @@ export function buildMisOrdersMatch(query, window) {
         ...extra,
         ...dueFilter,
         orderStatus: "PARTIALLY_COMPLETED",
-        ...deliveryInRangeClause(rangeStart, rangeEnd),
+        $or: [
+          deliveryInRangeClause(rangeStart, rangeEnd),
+          { updatedAt: { $gte: rangeStart, $lte: rangeEnd } },
+        ],
       };
     case "other":
       return {
@@ -248,17 +255,11 @@ async function fetchTransitionOrders(matchSpec, window, { skip, limit }) {
 
   const pipeline = [
     { $match: { ...base, ...extra } },
-    { $unwind: "$statusChanges" },
-    {
-      $match: {
-        "statusChanges.newStatus": newStatus,
-        "statusChanges.createdAt": { $gte: rangeStart, $lte: rangeEnd },
-      },
-    },
+    ...transitionDrawerFacetStages(newStatus, rangeStart, rangeEnd),
     {
       $group: {
         _id: "$_id",
-        bucketEventAt: { $min: "$statusChanges.createdAt" },
+        bucketEventAt: { $min: "$_misTransitionEventAt" },
       },
     },
     { $sort: { bucketEventAt: -1 } },

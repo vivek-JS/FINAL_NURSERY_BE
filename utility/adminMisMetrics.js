@@ -27,6 +27,12 @@ import {
   addDeliveryDays,
 } from "./adminDailyMisMerge.js";
 import { duePipelineMatch } from "./adminMisDue.js";
+import {
+  transitionHistoryByDayStages,
+  transitionLegacyByDayStages,
+  transitionHistoryByEntityStages,
+  transitionLegacyByEntityStages,
+} from "./misTransitionMetrics.js";
 
 const IST = "Asia/Kolkata";
 const REMAINING_STATUSES = [
@@ -118,47 +124,41 @@ export async function aggregateAcceptedByDeliveryDay(
   return rowsToDayMap(rows);
 }
 
-/** statusChanges → newStatus on IST day (one row per order per day). */
+/**
+ * Out / Done: statusChanges transition in range, or legacy updatedAt when history missing.
+ */
+function mergeTransitionDayRows(historyRows, legacyRows) {
+  const map = rowsToDayMap(historyRows);
+  for (const row of legacyRows || []) {
+    const day = row._id;
+    if (!day) continue;
+    if (!map.has(day)) map.set(day, { orders: 0, plants: 0 });
+    const bucket = map.get(day);
+    bucket.orders += row.orders || 0;
+    bucket.plants += row.plants || 0;
+  }
+  return map;
+}
+
 export async function aggregateTransitionsByDay(
   newStatus,
   rangeStart,
   rangeEnd,
   statusMatch
 ) {
-  const rows = await Order.aggregate([
-    { $match: statusMatch },
-    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-    { $unwind: "$statusChanges" },
-    {
-      $match: {
-        "statusChanges.newStatus": newStatus,
-        "statusChanges.createdAt": { $gte: rangeStart, $lte: rangeEnd },
-      },
-    },
-    {
-      $group: {
-        _id: {
-          day: {
-            $dateToString: {
-              format: "%Y-%m-%d",
-              date: "$statusChanges.createdAt",
-              timezone: IST,
-            },
-          },
-          orderId: "$_id",
-        },
-        plants: { $first: "$linePlantTotal" },
-      },
-    },
-    {
-      $group: {
-        _id: "$_id.day",
-        orders: { $sum: 1 },
-        plants: { $sum: "$plants" },
-      },
-    },
+  const [historyRows, legacyRows] = await Promise.all([
+    Order.aggregate([
+      { $match: statusMatch },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...transitionHistoryByDayStages(newStatus, rangeStart, rangeEnd),
+    ]),
+    Order.aggregate([
+      { $match: statusMatch },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...transitionLegacyByDayStages(newStatus, rangeStart, rangeEnd),
+    ]),
   ]);
-  return rowsToDayMap(rows);
+  return mergeTransitionDayRows(historyRows, legacyRows);
 }
 
 /** Delivery in range — any status — by delivery day. */
@@ -203,13 +203,20 @@ export async function aggregatePipelineByDeliveryDay(
   statusMatch,
   extraMatch = {}
 ) {
+  const activeInRangeStatuses = ["DISPATCH_PROCESS", "PARTIALLY_COMPLETED"];
   const rows = await Order.aggregate([
     {
       $match: {
         ...statusMatch,
         ...extraMatch,
         orderStatus: { $in: PIPELINE_DELIVERY_STATUSES },
-        deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
+        $or: [
+          { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } },
+          {
+            orderStatus: { $in: activeInRangeStatuses },
+            updatedAt: { $gte: rangeStart, $lte: rangeEnd },
+          },
+        ],
       },
     },
     { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
@@ -571,32 +578,42 @@ export async function aggregateTransitionsByGroup(
   groupIdFields,
   extraMatch = {}
 ) {
-  const rows = await Order.aggregate([
-    { $match: { ...statusMatch, ...extraMatch } },
-    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-    ...groupStages,
-    { $unwind: "$statusChanges" },
-    {
-      $match: {
-        "statusChanges.newStatus": newStatus,
-        "statusChanges.createdAt": { $gte: rangeStart, $lte: rangeEnd },
-      },
-    },
-    {
-      $group: {
-        _id: { ...groupIdFields, orderId: "$_id" },
-        plants: { $first: "$linePlantTotal" },
-      },
-    },
-    {
-      $group: {
-        _id: groupIdFields,
-        orders: { $sum: 1 },
-        plants: { $sum: "$plants" },
-      },
-    },
+  const [historyRows, legacyRows] = await Promise.all([
+    Order.aggregate([
+      { $match: { ...statusMatch, ...extraMatch } },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...transitionHistoryByEntityStages(
+        newStatus,
+        rangeStart,
+        rangeEnd,
+        groupIdFields,
+        groupStages
+      ),
+    ]),
+    Order.aggregate([
+      { $match: { ...statusMatch, ...extraMatch } },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...transitionLegacyByEntityStages(
+        newStatus,
+        rangeStart,
+        rangeEnd,
+        groupIdFields,
+        groupStages
+      ),
+    ]),
   ]);
-  return rows;
+
+  const byKey = new Map();
+  for (const row of [...historyRows, ...legacyRows]) {
+    const key = JSON.stringify(row._id);
+    if (!byKey.has(key)) {
+      byKey.set(key, { _id: row._id, orders: 0, plants: 0 });
+    }
+    const slot = byKey.get(key);
+    slot.orders += row.orders || 0;
+    slot.plants += row.plants || 0;
+  }
+  return [...byKey.values()];
 }
 
 /** Pipeline buckets by delivery-in-range + current status, grouped by entity. */
@@ -608,13 +625,20 @@ export async function aggregatePipelineByGroup(
   groupIdFields,
   extraMatch = {}
 ) {
+  const activeInRangeStatuses = ["DISPATCH_PROCESS", "PARTIALLY_COMPLETED"];
   return Order.aggregate([
     {
       $match: {
         ...statusMatch,
         ...extraMatch,
         orderStatus: { $in: PIPELINE_DELIVERY_STATUSES },
-        deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
+        $or: [
+          { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } },
+          {
+            orderStatus: { $in: activeInRangeStatuses },
+            updatedAt: { $gte: rangeStart, $lte: rangeEnd },
+          },
+        ],
       },
     },
     { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },

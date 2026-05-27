@@ -385,6 +385,7 @@ import whatsappBroadcastRoute from "./routes/whatsappBroadcast.route.js";
 import iciciPaymentRoute from "./routes/icici.routes.js";
 import paymentReconciliationRoute from "./routes/payment.routes.js";
 import bankingRoute from "./modules/banking/routes/banking.routes.js";
+import iciciCorporateRoute from "./src/routes/icici.routes.js";
 import whatsappAlertRoute from "./routes/whatsappAlert.route.js";
 
 // Inventory Management Routes
@@ -503,6 +504,8 @@ server.use("/api/payments/icici", authenticateToken, iciciPaymentRoute);
 server.use("/api/payments", authenticateToken, paymentReconciliationRoute);
 // ICICI Corporate API — registration, statement, balance, enhanced reconciliation
 server.use("/api/banking", authenticateToken, bankingRoute);
+// ICICI Corporate API (certificate encryption) — /api/icici/health|register|statement
+server.use("/api/icici", authenticateToken, iciciCorporateRoute);
 // Registered here (before order router) so GET /farmer-plant-ledger always resolves — mirrors order.route.js
 server.get("/api/v1/order/farmer-plant-ledger", authenticateToken, getFarmerPlantLedger);
 // Farmer dashboard tab totals — bound on app so stale order.route.js mounts never yield Cannot GET.
