@@ -374,12 +374,53 @@ const createDispatch = catchAsync(async (req, res, next) => {
       delete dispatchRequest.readyDispatchGroupId;
     }
 
+    if (
+      readyDispatchGroupId &&
+      mongoose.isValidObjectId(String(readyDispatchGroupId))
+    ) {
+      const fleetGroup = await ReadyDispatchGroup.findById(readyDispatchGroupId).lean();
+      if (fleetGroup) {
+        if (!dispatchRequest.vehicleId && fleetGroup.vehicleId) {
+          dispatchRequest.vehicleId = fleetGroup.vehicleId;
+        }
+        if (!dispatchRequest.driverId && fleetGroup.driverId) {
+          dispatchRequest.driverId = fleetGroup.driverId;
+        }
+        if (!dispatchRequest.ownerId && fleetGroup.ownerId) {
+          dispatchRequest.ownerId = fleetGroup.ownerId;
+        }
+        dispatchRequest.vehicleName =
+          dispatchRequest.vehicleName || fleetGroup.vehicleName || "";
+        dispatchRequest.vehicleNumber =
+          dispatchRequest.vehicleNumber || fleetGroup.vehicleNumber || "";
+        dispatchRequest.driverName =
+          dispatchRequest.driverName || fleetGroup.driverName || "";
+        dispatchRequest.driverMobile =
+          dispatchRequest.driverMobile || fleetGroup.driverMobile || "";
+        dispatchRequest.routeId =
+          dispatchRequest.routeId || fleetGroup.routeId || "";
+        dispatchRequest.routeNotes =
+          dispatchRequest.routeNotes || fleetGroup.routeNotes || "";
+        dispatchRequest.driverRemark =
+          dispatchRequest.driverRemark || fleetGroup.driverRemark || "";
+        dispatchRequest.vehicleRemark =
+          dispatchRequest.vehicleRemark || fleetGroup.vehicleRemark || "";
+        if (!dispatchRequest.name?.trim()) {
+          dispatchRequest.name =
+            fleetGroup.notes?.trim() || fleetGroup.groupCode || "";
+        }
+      }
+    }
+
     // ── Auto-populate driverName / vehicleName from CMS when IDs are provided ──
     if (dispatchRequest.vehicleId && mongoose.isValidObjectId(String(dispatchRequest.vehicleId))) {
       const vehicle = await Vehicle.findById(dispatchRequest.vehicleId).lean();
       if (vehicle) {
         dispatchRequest.vehicleName = dispatchRequest.vehicleName || vehicle.name || "";
         dispatchRequest.vehicleNumber = dispatchRequest.vehicleNumber || vehicle.number || "";
+        if (!dispatchRequest.ownerId && vehicle.ownerId) {
+          dispatchRequest.ownerId = vehicle.ownerId;
+        }
         if (!dispatchRequest.driverName) {
           dispatchRequest.driverName = vehicle.driverName || "";
           dispatchRequest.driverMobile = dispatchRequest.driverMobile || vehicle.driverMobile || "";
@@ -1318,6 +1359,11 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       ...(raw.vehicleNumber !== undefined ? { vehicleNumber: raw.vehicleNumber } : {}),
       ...(raw.vehicleId !== undefined ? { vehicleId: raw.vehicleId } : {}),
       ...(raw.driverId !== undefined ? { driverId: raw.driverId } : {}),
+      ...(raw.ownerId !== undefined ? { ownerId: raw.ownerId } : {}),
+      ...(raw.routeNotes !== undefined ? { routeNotes: raw.routeNotes } : {}),
+      ...(raw.routeId !== undefined ? { routeId: raw.routeId } : {}),
+      ...(raw.driverRemark !== undefined ? { driverRemark: raw.driverRemark } : {}),
+      ...(raw.vehicleRemark !== undefined ? { vehicleRemark: raw.vehicleRemark } : {}),
       ...(raw.plantsDetails ? { plantsDetails: raw.plantsDetails } : {}),
       ...(raw.afterDispatchedOrderIds !== undefined
         ? { afterDispatchedOrderIds: raw.afterDispatchedOrderIds }
@@ -3686,31 +3732,43 @@ export { handleDispatchReturns };
 // Pre-dispatch step: assign a vehicle + driver to a planned set of orders.
 // Also optionally marks those orders as READY_FOR_DISPATCH.
 // ─────────────────────────────────────────────────────────────────────────────
+const buildReadyDispatchGroupCode = () =>
+  `RDG-${Date.now().toString(36).toUpperCase()}-${Math.random()
+    .toString(36)
+    .slice(2, 6)
+    .toUpperCase()}`;
+
+const getOrderPlantCountForGroup = (order) =>
+  Number(order?.totalPlants || order?.numberOfPlants || 0);
+
 const assignRoute = catchAsync(async (req, res, next) => {
   const {
-    orderIds,          // required: array of Order ObjectIds
-    vehicleId,         // optional: Vehicle CMS ObjectId
-    driverId,          // optional: VehicleDriver ObjectId
+    orderIds,
+    vehicleId,
+    driverId,
     driverName: bodyDriverName,
     driverMobile: bodyDriverMobile,
     vehicleName: bodyVehicleName,
     vehicleNumber: bodyVehicleNumber,
     routeId,
     routeNotes,
-    markReady = false, // if true → set READY_FOR_DISPATCH on FARM_READY orders
+    driverRemark: bodyDriverRemark,
+    vehicleRemark: bodyVehicleRemark,
+    groupName,
+    markReady = false,
   } = req.body;
 
   if (!Array.isArray(orderIds) || orderIds.length === 0) {
     return next(new AppError("orderIds array is required", 400));
   }
 
-  // Resolve vehicle + driver details from CMS when IDs are provided
   let resolvedDriverName = bodyDriverName || "";
   let resolvedDriverMobile = bodyDriverMobile || "";
   let resolvedVehicleName = bodyVehicleName || "";
   let resolvedVehicleNumber = bodyVehicleNumber || "";
   let resolvedVehicleId = null;
   let resolvedDriverId = null;
+  let resolvedOwnerId = null;
 
   if (vehicleId && mongoose.isValidObjectId(String(vehicleId))) {
     const vehicle = await Vehicle.findById(vehicleId).lean();
@@ -3718,7 +3776,7 @@ const assignRoute = catchAsync(async (req, res, next) => {
       resolvedVehicleId = vehicle._id;
       resolvedVehicleName = resolvedVehicleName || vehicle.name || "";
       resolvedVehicleNumber = resolvedVehicleNumber || vehicle.number || "";
-      // If no explicit driverName, fall back to vehicle's default driver info
+      if (vehicle.ownerId) resolvedOwnerId = vehicle.ownerId;
       if (!resolvedDriverName) {
         resolvedDriverName = vehicle.driverName || "";
         resolvedDriverMobile = resolvedDriverMobile || vehicle.driverMobile || "";
@@ -3732,24 +3790,19 @@ const assignRoute = catchAsync(async (req, res, next) => {
       resolvedDriverId = driver._id;
       resolvedDriverName = resolvedDriverName || driver.name || "";
       resolvedDriverMobile = resolvedDriverMobile || driver.mobile || "";
+      if (!resolvedOwnerId && driver.ownerId) resolvedOwnerId = driver.ownerId;
     }
   }
+
+  const driverRemark = String(bodyDriverRemark ?? "").trim();
+  const vehicleRemark = String(bodyVehicleRemark ?? "").trim();
+  const routeNotesStr = String(routeNotes ?? "").trim();
+  const routeIdStr = routeId != null ? String(routeId).trim() : "";
+  const groupNotes = String(groupName ?? "").trim();
 
   const assignedAt = new Date();
   const assignedBy = req.user?._id || null;
 
-  // Bulk update all orders
-  const updateOp = {
-    $set: {
-      assignedVehicle: resolvedVehicleNumber || resolvedVehicleName,
-      ...(resolvedDriverName && { routeId: routeId || "" }),
-      ...(routeId && { routeId }),
-      assignedAt,
-      ...(assignedBy && { assignedBy }),
-    },
-  };
-
-  // When markReady=true, also move FARM_READY → READY_FOR_DISPATCH
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -3763,20 +3816,95 @@ const assignRoute = catchAsync(async (req, res, next) => {
       return next(new AppError("No valid order IDs provided", 400));
     }
 
-    // Apply assignment to all orders
+    let readyDispatchGroup = null;
+    const canMergeGroup = resolvedVehicleId || routeIdStr;
+    if (canMergeGroup) {
+      const mergeFilter = { status: "DRAFT" };
+      if (resolvedVehicleId) mergeFilter.vehicleId = resolvedVehicleId;
+      if (routeIdStr) mergeFilter.routeId = routeIdStr;
+      readyDispatchGroup = await ReadyDispatchGroup.findOne(mergeFilter).session(
+        session
+      );
+    }
+
+    const mergedIdSet = new Set(
+      (readyDispatchGroup?.orderIds || []).map((id) => String(id))
+    );
+    validIds.forEach((id) => mergedIdSet.add(String(id)));
+    const mergedOrderIds = [...mergedIdSet].map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+
+    const allOrdersForTotal = await Order.find({
+      _id: { $in: mergedOrderIds },
+    })
+      .select("totalPlants numberOfPlants")
+      .session(session)
+      .lean();
+    const totalPlants = allOrdersForTotal.reduce(
+      (sum, o) => sum + getOrderPlantCountForGroup(o),
+      0
+    );
+
+    const groupFleetSet = {
+      ownerId: resolvedOwnerId || null,
+      vehicleId: resolvedVehicleId || null,
+      driverId: resolvedDriverId || null,
+      vehicleNumber: resolvedVehicleNumber || "",
+      vehicleName: resolvedVehicleName || "",
+      driverName: resolvedDriverName || "",
+      driverMobile: resolvedDriverMobile || "",
+      vehicleRef: resolvedVehicleNumber || resolvedVehicleName || "",
+      routeId: routeIdStr,
+      routeNotes: routeNotesStr,
+      driverRemark,
+      vehicleRemark,
+      orderIds: mergedOrderIds,
+      totalPlants,
+      ...(groupNotes ? { notes: groupNotes } : {}),
+      ...(assignedBy ? { createdBy: assignedBy } : {}),
+    };
+
+    if (readyDispatchGroup) {
+      Object.assign(readyDispatchGroup, groupFleetSet);
+      await readyDispatchGroup.save({ session });
+    } else {
+      [readyDispatchGroup] = await ReadyDispatchGroup.create(
+        [
+          {
+            groupCode: buildReadyDispatchGroupCode(),
+            status: "DRAFT",
+            ...groupFleetSet,
+          },
+        ],
+        { session }
+      );
+    }
+
+    const orderSet = {
+      assignedVehicle: resolvedVehicleNumber || resolvedVehicleName,
+      assignedAt,
+      readyDispatchGroupId: readyDispatchGroup._id,
+      driverRemark,
+      vehicleRemark,
+      ...(routeIdStr ? { routeId: routeIdStr } : {}),
+      ...(assignedBy ? { assignedBy } : {}),
+    };
+
     await Order.updateMany(
       { _id: { $in: validIds } },
-      updateOp,
+      { $set: orderSet },
       { session }
     );
 
-    // Mark FARM_READY orders as READY_FOR_DISPATCH if requested
     let readyCount = 0;
     if (markReady) {
       const farmReadyOrders = await Order.find(
         { _id: { $in: validIds }, orderStatus: "FARM_READY" },
         "_id orderStatus"
-      ).session(session).lean();
+      )
+        .session(session)
+        .lean();
 
       for (const ord of farmReadyOrders) {
         await Order.findByIdAndUpdate(
@@ -3804,7 +3932,13 @@ const assignRoute = catchAsync(async (req, res, next) => {
         driverMobile: resolvedDriverMobile,
         vehicleId: resolvedVehicleId,
         driverId: resolvedDriverId,
-        routeId: routeId || null,
+        ownerId: resolvedOwnerId,
+        routeId: routeIdStr || null,
+        routeNotes: routeNotesStr,
+        driverRemark,
+        vehicleRemark,
+        readyDispatchGroupId: readyDispatchGroup._id,
+        groupCode: readyDispatchGroup.groupCode,
       })
     );
   } catch (err) {

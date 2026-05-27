@@ -336,6 +336,7 @@ import vehicleOwnerRouter from "./routes/vehicleOwner.route.js";
 import vehicleDriverRouter from "./routes/vehicleDriver.route.js";
 import nurserySiteRouter from "./routes/nurserySite.route.js";
 import tripRouter from "./routes/trip.route.js";
+import fleetRouter from "./routes/fleet.route.js";
 import shadeRoter from "./routes/shades.route.js";
 import trayRouter from "./routes/tray.route.js";
 import dispatchRoute from "./routes/dispatched.route.js";
@@ -605,6 +606,7 @@ server.use("/api/v1/vehicle-owners", authenticateToken, vehicleOwnerRouter);
 server.use("/api/v1/vehicle-drivers", authenticateToken, vehicleDriverRouter);
 server.use("/api/v1/nursery-sites", authenticateToken, nurserySiteRouter);
 server.use("/api/v1/trips", authenticateToken, tripRouter);
+server.use("/api/v1/fleet", authenticateToken, fleetRouter);
 server.use("/api/v1/dispatched", authenticateToken, dispatchRoute);
 /** Explicit bindings — same pattern as dashboard-tab-counts / laboutward (always resolves). */
 server.get("/api/v1/invoice-sequence", authenticateToken, getDeliveryChallanInvoiceSequence);

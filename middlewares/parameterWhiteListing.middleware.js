@@ -36,6 +36,7 @@ const allowedParams = [
   "plantId",
   "subtypeId",
   "year",
+  "onlyAvailable", // GET /slots/availability-overview
   "minNumberPerCrate",
   "maxNumberPerCrate",
   "jobTitle",

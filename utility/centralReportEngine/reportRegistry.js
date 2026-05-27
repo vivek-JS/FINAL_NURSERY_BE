@@ -4,6 +4,7 @@ import {
   fetchAdminDealerMis,
 } from "../../services/adminMisBreakdown.service.js";
 import { fetchAdminDueMis } from "../../services/adminMisDueTab.service.js";
+import { fetchSlotAvailabilityReport } from "../../services/availabilityOverview.service.js";
 import { DELIVERY_TOTAL_EXCLUDED_STATUSES } from "./deliveryMatch.js";
 import { MIS_DATE_RANGE_POLICY } from "./dateRange.js";
 import {
@@ -55,6 +56,16 @@ export const CENTRAL_REPORT_REGISTRY = {
     run: fetchAdminDueMis,
     aliases: ["due", "mis-due", "admin_due_mis"],
   },
+  "slot-availability": {
+    id: "slot-availability",
+    title: "Slot availability overview",
+    description:
+      "All plants × subtypes × slots for booking (year, optional month/plant/search).",
+    apiPath: "/api/v1/slots/availability-overview",
+    layout: "availability",
+    run: fetchSlotAvailabilityReport,
+    aliases: ["availability", "stock", "available-stock", "availability-overview"],
+  },
 };
 
 /** @typedef {object} CentralReportDefinition
@@ -62,7 +73,7 @@ export const CENTRAL_REPORT_REGISTRY = {
  * @property {string} title
  * @property {string} description
  * @property {string} apiPath
- * @property {'daily'|'breakdown'|'due-tab'} layout
+ * @property {'daily'|'breakdown'|'due-tab'|'availability'} layout
  * @property {(startDate: string, endDate: string, options?: object) => Promise<{ data?: object, error?: string, statusCode?: number }>} run
  * @property {string[]} [aliases]
  * @property {string} [groupBy]

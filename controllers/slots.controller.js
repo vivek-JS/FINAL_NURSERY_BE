@@ -4,7 +4,7 @@ import Order from "../models/order.model.js";
 import mongoose from "mongoose";
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 import SlotTransferLog from "../models/slotTransfer.model.js";
-import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity, addPlantsToAvailable } from "../utility/bufferUtils.js";
+import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity, releaseBufferPlants, addPlantsToCapacity, addPlantsToAvailable, resolveSlotBufferFields } from "../utility/bufferUtils.js";
 import { updateSlotBufferCalculations, updateAllSlotBuffers } from "../utility/slotBufferUpdater.js";
 import {
   applyStockFieldUpdates,
@@ -16,6 +16,7 @@ import {
   computeSlotDispatchStatsFromOrders,
   getSlotDispatchStats,
 } from "../utility/slotDispatchStats.js";
+import { fetchSlotAvailabilityReport } from "../services/availabilityOverview.service.js";
 
 // Helper function to convert month name to number
 const getMonthNumber = (monthName) => {
@@ -81,16 +82,19 @@ const safeArray = (value) => (Array.isArray(value) ? value : []);
  * and `??` does not fall back for NaN, which breaks transfer UIs (max qty 0, confirm disabled).
  */
 const getSlotEffectiveAvailablePlants = (slot) => {
-  if (!slot) return 0;
-  const stored = slot.availablePlants;
-  if (stored !== undefined && stored !== null && stored !== "") {
-    const n = Number(stored);
-    if (Number.isFinite(n)) return n;
-  }
-  const total = Number(slot.totalPlants) || 0;
-  const booked = Number(slot.totalBookedPlants) || 0;
-  const bufferAmount = Number(slot.bufferAmount) || 0;
-  return Math.max(0, total - booked - bufferAmount);
+  const resolved = resolveSlotBufferFields(slot);
+  return resolved.availablePlants;
+};
+
+const getSlotBookedPlantCount = async (slotId) => {
+  const orders = await Order.find({
+    bookingSlot: new mongoose.Types.ObjectId(slotId),
+    orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
+    $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
+  })
+    .select("numberOfPlants additionalPlants orderStatus")
+    .lean();
+  return computeSlotDispatchStatsFromOrders(orders).totalBookedPlants;
 };
 
 export const createSlotsForYear = async (year) => {
@@ -672,48 +676,22 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
       }
     });
 
-    // Format paginatedSlots for the response and apply buffer calculations
+    // Format paginatedSlots — buffer/available resolved after orders are loaded
     const slots = paginatedSlots.map((slot) => ({
       plantId: slot._id.plantId,
       year: slot._id.year,
       subtypeId: slot._id.subtypeId,
-      slots: slot.slots.map(slotItem => {
-        // PRESERVE the stored availablePlants from database (includes GRN updates)
-        const storedAvailablePlants = slotItem.availablePlants;
-        
-        // Calculate effective buffer for this slot
-        const effectiveBuffer = calculateEffectiveBuffer(
-          slotItem.buffer || 0,
-          subtypeBuffer,
-          plantBuffer
-        );
-
-        // Calculate buffer-adjusted capacity
-        const bufferAdjusted = calculateBufferAdjustedCapacity(
-          slotItem.totalPlants,
-          slotItem.totalBookedPlants,
-          effectiveBuffer
-        );
-
-        return {
-          ...slotItem,
-          effectiveBuffer,
-          bufferAdjustedCapacity: bufferAdjusted.bufferAdjustedCapacity,
-          // Use stored availablePlants if it exists (includes GRN updates), otherwise use buffer-adjusted
-          availablePlants: storedAvailablePlants !== undefined && storedAvailablePlants !== null 
-            ? storedAvailablePlants 
-            : bufferAdjusted.availablePlants,
-          bufferAmount: bufferAdjusted.bufferAmount,
-          // Keep original totalPlants unchanged - this is the actual capacity
-          originalTotalPlants: slotItem.totalPlants,
-          // Keep totalPlants as the original capacity, don't overwrite with buffer-adjusted value
-          totalPlants: slotItem.totalPlants
-        };
-      }),
+      slots: slot.slots.map((slotItem) => ({
+        ...slotItem,
+        originalTotalPlants: slotItem.totalPlants,
+      })),
     }));
 
     // Populate slots with orders and recalculate totalBookedPlants
-    const slotsWithOrders = await populateSlotsWithOrders(slots);
+    const slotsWithOrders = await populateSlotsWithOrders(slots, {
+      subtypeBuffer,
+      plantBuffer,
+    });
 
     // Recalculate month-wise summary with actual orders data
     for (const slotGroup of slotsWithOrders) {
@@ -841,10 +819,11 @@ export const updateSlotFieldById = async (req, res) => {
 
     let bufferUpdateResult = { success: true, skipped: true };
     if (touchesCapacityOrBuffer) {
+      const bookedPlants = await getSlotBookedPlantCount(slotId);
       bufferUpdateResult = await updateSlotBufferCalculations(
         slotId,
         targetSlot.totalPlants,
-        targetSlot.totalBookedPlants,
+        bookedPlants,
         targetSlot.buffer
       );
       if (!bufferUpdateResult.success) {
@@ -937,11 +916,12 @@ export const updateSlotBuffer = async (req, res) => {
     // Save the document to trigger middleware
     await plantSlot.save();
 
-    // Update buffer calculations in the database
+    // Update buffer calculations in the database (use live booked count from orders)
+    const bookedPlants = await getSlotBookedPlantCount(slotId);
     const bufferUpdateResult = await updateSlotBufferCalculations(
       slotId,
       targetSlot.totalPlants,
-      targetSlot.totalBookedPlants,
+      bookedPlants,
       bufferValue
     );
 
@@ -1670,9 +1650,15 @@ export const releaseBufferPlantsController = async (req, res) => {
     const releaseResult = releaseBufferPlants(targetSlot, plantsToRelease);
     
     if (!releaseResult.success) {
+      const storedBuffer = Number(targetSlot.bufferAmount) || 0;
+      let message = releaseResult.message;
+      if (storedBuffer <= 0) {
+        message =
+          "No releasable buffer in database for this slot. The UI may show a theoretical reserve from inherited buffer % — save buffer % on this slot (PUT /slots/:id/buffer) or run POST /slots/migrate-buffers.";
+      }
       return res.status(400).json({
         success: false,
-        message: releaseResult.message
+        message
       });
     }
 
@@ -1687,7 +1673,7 @@ export const releaseBufferPlantsController = async (req, res) => {
     // Do NOT use updateSlotBufferCalculations as it recalculates from scratch
     // Calculate bufferAdjustedCapacity: totalPlants - bufferAmount
     const newBufferAdjustedCapacity = targetSlot.totalPlants - releaseResult.newBufferAmount;
-    
+
     const updateResult = await PlantSlot.updateOne(
       { _id: plantSlot._id },
       {
@@ -1696,7 +1682,9 @@ export const releaseBufferPlantsController = async (req, res) => {
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].availablePlants': releaseResult.newAvailablePlants,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].buffer': releaseResult.newBufferPercentage,
           'subtypeSlots.$[subtypeElem].slots.$[slotElem].effectiveBuffer': releaseResult.newBufferPercentage,
-          'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAdjustedCapacity': newBufferAdjustedCapacity
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].bufferAdjustedCapacity': newBufferAdjustedCapacity,
+          'subtypeSlots.$[subtypeElem].slots.$[slotElem].originalTotalPlants':
+            targetSlot.originalTotalPlants || targetSlot.totalPlants,
         }
       },
       {
@@ -2254,7 +2242,8 @@ const calculateTotalBookedPlantsFromOrders = async (slotId) => {
 
 // Function to populate slots with orders and calculate totalBookedPlants
 // OPTIMIZED: Batches all queries instead of N+1 queries
-const populateSlotsWithOrders = async (slots) => {
+const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
+  const { subtypeBuffer = 0, plantBuffer = 0 } = bufferContext;
   try {
     // Collect all slot information for batch querying
     const slotIds = [];
@@ -2404,22 +2393,19 @@ const populateSlotsWithOrders = async (slots) => {
         slot.totalDispatchedPlants = dispatchStats.totalDispatchedPlants;
         slot.remainingToDispatch = dispatchStats.remainingToDispatch;
         slot.dealerQuota = dealerQuota;
-        
-        // PRESERVE stored availablePlants from database (includes GRN updates)
-        // Do NOT recalculate - the stored value already accounts for GRN additions
-        // Only calculate if availablePlants was never set in database
-        if (slot.availablePlants === undefined || slot.availablePlants === null) {
-          // Fallback: Calculate available plants as totalPlants - totalBookedPlants
-          slot.availablePlants = Math.max(0, slot.totalPlants - totalBookedPlants);
-        }
-        // Otherwise, keep the stored value which includes GRN updates
-        
-        // Calculate buffer-related fields for reference
-        const effectiveBuffer = slot.effectiveBuffer || 0;
-        const bufferAmount = Math.round((slot.totalPlants * effectiveBuffer) / 100);
-        const bufferAdjustedCapacity = slot.totalPlants - bufferAmount;
-        
-        // Set overflow flag
+
+        const resolved = resolveSlotBufferFields(slot, { subtypeBuffer, plantBuffer });
+        slot.effectiveBuffer = resolved.effectiveBuffer;
+        slot.bufferAdjustedCapacity = resolved.bufferAdjustedCapacity;
+        slot.availablePlants = resolved.availablePlants;
+        slot.bufferAmount = resolved.bufferAmount;
+        slot.displayBufferAmount = resolved.displayBufferAmount;
+        slot.computedBufferAmount = resolved.computedBufferAmount;
+        slot.inheritedBufferAmount = resolved.inheritedBufferAmount;
+        slot.hasStoredBuffer = resolved.hasStoredBuffer;
+        slot.bufferMaterialized = resolved.bufferMaterialized;
+        slot.inheritedBufferOnly = resolved.inheritedBufferOnly;
+
         slot.isOverflow = slot.availablePlants < 0;
         slot.overflow = slot.availablePlants < 0;
       }
@@ -4651,10 +4637,29 @@ export const getSimpleSlots = async (req, res) => {
   }
 };
 
-// Example API route setup
-import express from "express";
-const router = express.Router();
+/** All plants × subtypes × slots for dashboard Available Stock tab (central report engine). */
+export const getAvailabilityOverview = async (req, res) => {
+  try {
+    const { year: yearParam, month, plantId, search, onlyAvailable } = req.query;
+    const result = await fetchSlotAvailabilityReport(null, null, {
+      year: Number(yearParam) || 2026,
+      month,
+      plantId,
+      search,
+      onlyAvailable,
+    });
 
-router.get("/plant-stats", getPlantStats);
-
-export default router;
+    res.status(200).json({
+      success: true,
+      data: result.data,
+      message: "Availability overview retrieved successfully",
+    });
+  } catch (error) {
+    console.error("Error in getAvailabilityOverview:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message,
+    });
+  }
+};

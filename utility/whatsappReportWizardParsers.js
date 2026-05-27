@@ -25,7 +25,7 @@ export function isReportEntry(text) {
   }
   if (
     /\b(report|रिपोर्ट)\b/i.test(t) &&
-    /\b(booking|delivery|dispatch|payment|slot|nursery|बुकिंग|डिलिव्हरी)\b/i.test(
+    /\b(booking|delivery|availability|avail|nursery|बुकिंग|डिलिव्हरी|उपलब्ध)\b/i.test(
       t
     )
   ) {
@@ -42,14 +42,8 @@ export function isReportEntry(text) {
 
 export function guessReportTypeFromText(text) {
   const t = String(text || "").toLowerCase();
-  if (/\bdispatch\b/.test(t) || /डिस्पॅच/.test(String(text || ""))) {
-    return "dispatch";
-  }
-  if (/\b(slot|slots|स्लॉट)\b/.test(t)) {
-    return "slots";
-  }
-  if (/\b(payment|payments|pay\b|पेमेंट)\b/.test(t)) {
-    return "payment";
+  if (/\b(availability|avail|stock|उपलब्ध)\b/.test(t)) {
+    return "availability";
   }
   if (/\b(delivery|डिलिव्हरी)\b/.test(t)) {
     return "delivery";
@@ -60,7 +54,7 @@ export function guessReportTypeFromText(text) {
   return null;
 }
 
-/** @returns {'booking'|'delivery'|'slots'|'payment'|'dispatch'|null} */
+/** @returns {'booking'|'delivery'|'availability'|null} */
 export function parseReportTypeChoice(text) {
   const t = String(text || "").trim().toLowerCase();
   if (["1", "1.", "one", "booking", "b"].includes(t) || t === "बुकिंग") {
@@ -69,17 +63,23 @@ export function parseReportTypeChoice(text) {
   if (["2", "2.", "two", "delivery"].includes(t) || t === "डिलिव्हरी") {
     return "delivery";
   }
-  if (["3", "3.", "three", "slots", "slot"].includes(t)) {
-    return "slots";
-  }
   if (
-    ["4", "4.", "four", "payment", "payments", "pay"].includes(t) ||
-    t === "पेमेंट"
+    ["3", "3.", "three", "availability", "avail", "stock"].includes(t) ||
+    t === "उपलब्ध"
   ) {
-    return "payment";
+    return "availability";
   }
-  if (["5", "5.", "five", "dispatch", "dispatched"].includes(t)) {
-    return "dispatch";
+  return null;
+}
+
+/** @returns {'by_plant'|'by_month'|null} */
+export function parseAvailabilityModeChoice(text) {
+  const t = String(text || "").trim().toLowerCase();
+  if (["1", "1.", "one", "plant", "by plant", "crop"].includes(t)) {
+    return "by_plant";
+  }
+  if (["2", "2.", "two", "month", "by month"].includes(t)) {
+    return "by_month";
   }
   return null;
 }

@@ -192,6 +192,9 @@ export const getReadyDispatchGroups = catchAsync(async (req, res) => {
       populate: { path: "farmer", select: "name village mobileNumber" },
     })
     .populate({ path: "convertedDispatchId", select: "transportId name" })
+    .populate({ path: "ownerId", select: "name mobile" })
+    .populate({ path: "vehicleId", select: "name number capacity" })
+    .populate({ path: "driverId", select: "name mobile" })
     .sort({ createdAt: -1 });
 
   return res
@@ -254,12 +257,53 @@ export const convertReadyDispatchGroupToDispatch = catchAsync(async (req, res, n
   group.status = "LOCKED";
   await group.save();
 
+  const g = group.toObject ? group.toObject() : group;
   return res.status(200).json(
     generateResponse("Success", "Group locked for dispatch handoff", {
       group,
       dispatchPrefill: {
         orderIds: group.orderIds.map((o) => o._id),
+        readyDispatchGroupId: group._id,
+        ownerId: g.ownerId || null,
+        vehicleId: g.vehicleId || null,
+        driverId: g.driverId || null,
+        vehicleNumber: g.vehicleNumber || "",
+        vehicleName: g.vehicleName || "",
+        driverName: g.driverName || "",
+        driverMobile: g.driverMobile || "",
+        routeId: g.routeId || "",
+        routeNotes: g.routeNotes || "",
+        driverRemark: g.driverRemark || "",
+        vehicleRemark: g.vehicleRemark || "",
+        name: (g.notes || "").trim() || g.groupCode || "",
       },
     })
   );
+});
+
+export const getReadyDispatchGroupById = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  if (!mongoose.isValidObjectId(id)) {
+    return next(new AppError("Invalid group id", 400));
+  }
+
+  const group = await ReadyDispatchGroup.findById(id)
+    .populate({
+      path: "orderIds",
+      select:
+        "orderId numberOfPlants totalPlants orderStatus dispatchDayKey dispatchTargetDate deliveryDate farmer",
+      populate: { path: "farmer", select: "name village mobileNumber" },
+    })
+    .populate({ path: "convertedDispatchId", select: "transportId name" })
+    .populate({ path: "ownerId", select: "name mobile" })
+    .populate({ path: "vehicleId", select: "name number capacity" })
+    .populate({ path: "driverId", select: "name mobile" });
+
+  if (!group) {
+    return next(new AppError("Ready dispatch group not found", 404));
+  }
+
+  return res
+    .status(200)
+    .json(generateResponse("Success", "Ready dispatch group fetched successfully", group));
 });

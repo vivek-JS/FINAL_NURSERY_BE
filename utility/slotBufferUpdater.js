@@ -206,42 +206,47 @@ export const updateSlotBufferCalculations = async (slotId, newTotalPlants, newTo
       plantBuffer
     );
     
-    // Calculate buffer-adjusted values
+    // Calculate buffer-adjusted values and materialize to DB
     const bufferAdjusted = calculateBufferAdjustedCapacity(
       newTotalPlants,
       newTotalBookedPlants,
       effectiveBuffer
     );
-    
+
+    const materializedBufferAmount = Math.round(bufferAdjusted.bufferAmount);
+    const materializedAvailable = bufferAdjusted.availablePlants;
+
     // Update the slot
     await PlantSlot.updateOne(
-      { 
+      {
         _id: plantSlot._id,
-        'subtypeSlots.subtypeId': targetSubtypeSlot.subtypeId,
-        'subtypeSlots.slots._id': slotId
+        "subtypeSlots.subtypeId": targetSubtypeSlot.subtypeId,
+        "subtypeSlots.slots._id": slotId,
       },
       {
         $set: {
-          'subtypeSlots.$.slots.$[slotElem].totalPlants': newTotalPlants,
-          'subtypeSlots.$.slots.$[slotElem].totalBookedPlants': newTotalBookedPlants,
-          'subtypeSlots.$.slots.$[slotElem].buffer': slotBuffer,
-          'subtypeSlots.$.slots.$[slotElem].effectiveBuffer': effectiveBuffer,
-          'subtypeSlots.$.slots.$[slotElem].bufferAdjustedCapacity': bufferAdjusted.bufferAdjustedCapacity,
-          'subtypeSlots.$.slots.$[slotElem].availablePlants': bufferAdjusted.availablePlants,
-          'subtypeSlots.$.slots.$[slotElem].bufferAmount': bufferAdjusted.bufferAmount,
-          'subtypeSlots.$.slots.$[slotElem].originalTotalPlants': newTotalPlants
-        }
+          "subtypeSlots.$.slots.$[slotElem].totalPlants": newTotalPlants,
+          "subtypeSlots.$.slots.$[slotElem].totalBookedPlants": newTotalBookedPlants,
+          "subtypeSlots.$.slots.$[slotElem].buffer": slotBuffer,
+          "subtypeSlots.$.slots.$[slotElem].effectiveBuffer": effectiveBuffer,
+          "subtypeSlots.$.slots.$[slotElem].bufferAdjustedCapacity":
+            bufferAdjusted.bufferAdjustedCapacity,
+          "subtypeSlots.$.slots.$[slotElem].availablePlants": materializedAvailable,
+          "subtypeSlots.$.slots.$[slotElem].bufferAmount": materializedBufferAmount,
+          "subtypeSlots.$.slots.$[slotElem].originalTotalPlants": newTotalPlants,
+        },
       },
       {
-        arrayFilters: [{ 'slotElem._id': slotId }]
+        arrayFilters: [{ "slotElem._id": slotId }],
       }
     );
-    
-    return { 
-      success: true, 
+
+    return {
+      success: true,
       effectiveBuffer,
-      availablePlants: bufferAdjusted.availablePlants,
-      bufferAmount: bufferAdjusted.bufferAmount
+      availablePlants: materializedAvailable,
+      bufferAmount: materializedBufferAmount,
+      displayBufferAmount: materializedBufferAmount,
     };
     
   } catch (error) {

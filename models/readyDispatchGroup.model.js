@@ -48,6 +48,29 @@ const readyDispatchGroupSchema = new Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    ownerId: {
+      type: Schema.Types.ObjectId,
+      ref: "VehicleOwner",
+      default: null,
+    },
+    vehicleId: {
+      type: Schema.Types.ObjectId,
+      ref: "Vehicle",
+      default: null,
+    },
+    driverId: {
+      type: Schema.Types.ObjectId,
+      ref: "VehicleDriver",
+      default: null,
+    },
+    vehicleNumber: { type: String, trim: true, default: "" },
+    vehicleName: { type: String, trim: true, default: "" },
+    driverName: { type: String, trim: true, default: "" },
+    driverMobile: { type: String, trim: true, default: "" },
+    routeId: { type: String, trim: true, default: "" },
+    routeNotes: { type: String, trim: true, default: "" },
+    driverRemark: { type: String, trim: true, default: "" },
+    vehicleRemark: { type: String, trim: true, default: "" },
     dispatchDayKey: {
       type: String,
       enum: ["TODAY", "TOMORROW", "DAY_AFTER"],
@@ -73,6 +96,7 @@ const readyDispatchGroupSchema = new Schema(
 
 readyDispatchGroupSchema.index({ orderIds: 1, status: 1 });
 readyDispatchGroupSchema.index({ dispatchTargetDate: 1, status: 1 });
+readyDispatchGroupSchema.index({ status: 1, routeId: 1, vehicleId: 1 });
 
 const ReadyDispatchGroup = model("ReadyDispatchGroup", readyDispatchGroupSchema);
 

@@ -750,6 +750,390 @@ export function generateDeliveryQueuePdf({
   });
 }
 
+function deliveryPlantsFromBucket(delivery, key) {
+  return delivery?.[key]?.plants || 0;
+}
+
+function deliveryTotalPlants(delivery) {
+  return delivery?.total?.plants || 0;
+}
+
+/**
+ * Central MIS delivery PDF — plant/subtype table with in-window + past due columns.
+ */
+export function generateCentralDeliveryPdf({
+  reportDateLabel,
+  varietyRows = [],
+  varietyTotals = {},
+  dueSummary = {},
+}) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margin: 36,
+      info: { Title: "Delivery Report", Author: "Nursery Management" },
+    });
+
+    const chunks = [];
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const pageW = doc.page.width;
+    const pageH = doc.page.height;
+    const ml = doc.page.margins.left;
+    const usableW = pageW - ml - doc.page.margins.right;
+    const mt = doc.page.margins.top;
+    let y = mt;
+
+    doc.save();
+    doc.rect(ml, y, usableW, 56).fill(COLORS.headerBar);
+    doc.rect(ml, y + 53, usableW, 3).fill(COLORS.headerAccent);
+    doc.fillColor(COLORS.headerText).font("Helvetica-Bold").fontSize(22);
+    doc.text("Delivery Report", ml + 16, y + 12, {
+      width: usableW - 32,
+      align: "center",
+    });
+    doc.font("Helvetica").fontSize(10).opacity(0.92);
+    doc.text(`${reportDateLabel} · Central MIS`, ml + 16, y + 34, {
+      width: usableW - 32,
+      align: "center",
+    });
+    doc.opacity(1).restore();
+    y += 66;
+
+    const inRange = varietyTotals?.delivery || {};
+    const pastDue = varietyTotals?.pastDue || {};
+    const kpiH = 52;
+    const gap = 10;
+    const kpiW = (usableW - gap * 2) / 3;
+    const kpis = [
+      {
+        label: "In-window plants",
+        value: String(deliveryTotalPlants(inRange)),
+        sub: `${inRange.total?.orders || 0} orders`,
+      },
+      {
+        label: "Past due plants",
+        value: String(dueSummary?.pastDue?.plants || deliveryTotalPlants(pastDue)),
+        sub: `${dueSummary?.pastDue?.orders || pastDue.total?.orders || 0} orders`,
+      },
+      {
+        label: "Combined pipeline",
+        value: String(
+          deliveryTotalPlants(inRange) +
+            (dueSummary?.pastDue?.plants || deliveryTotalPlants(pastDue))
+        ),
+        sub: "in-window + backlog",
+      },
+    ];
+    let kx = ml;
+    for (const k of kpis) {
+      doc.save();
+      doc.rect(kx, y, kpiW, kpiH).fillAndStroke(COLORS.kpiBg, COLORS.kpiBorder);
+      doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(18);
+      doc.text(k.value, kx + 8, y + 8, { width: kpiW - 16, align: "center" });
+      doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
+      doc.text(k.label, kx + 8, y + 30, { width: kpiW - 16, align: "center" });
+      doc.text(k.sub, kx + 8, y + 40, { width: kpiW - 16, align: "center" });
+      doc.restore();
+      kx += kpiW + gap;
+    }
+    y += kpiH + 18;
+
+    const barSource = [];
+    const plantMap = new Map();
+    for (const row of varietyRows) {
+      const p = row.plantName || "Unknown";
+      const inWin = deliveryTotalPlants(row.delivery);
+      const past = deliveryTotalPlants(row.pastDue);
+      if (inWin + past <= 0) continue;
+      plantMap.set(p, (plantMap.get(p) || 0) + inWin + past);
+    }
+    for (const [label, value] of plantMap) {
+      barSource.push({ label, value });
+    }
+    barSource.sort((a, b) => b.value - a.value);
+    const topBars = barSource.slice(0, 8);
+    const maxV = Math.max(...topBars.map((x) => x.value), 1);
+
+    if (topBars.length) {
+      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
+      doc.text("Plants by crop (in-window + past due)", ml, y);
+      y += 14;
+      const rowH = 18;
+      const labelW = usableW * 0.28;
+      const barMax = usableW * 0.52;
+      for (const row of topBars) {
+        if (y > pageH - doc.page.margins.bottom - 60) {
+          doc.addPage();
+          y = mt;
+        }
+        const frac = row.value / maxV;
+        doc.font("Helvetica").fontSize(8).fillColor("#212529");
+        doc.text(String(row.label).slice(0, 36), ml, y + 4, { width: labelW - 6 });
+        doc.save();
+        doc
+          .rect(ml + labelW, y + 2, Math.max(4, barMax * frac), rowH - 6)
+          .fillAndStroke("#dbeafe", COLORS.kpiBorder);
+        doc.restore();
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .fillColor(COLORS.accent)
+          .text(String(row.value), ml + labelW + barMax + 6, y + 4, {
+            width: 80,
+            align: "right",
+          });
+        y += rowH;
+      }
+      y += 14;
+    }
+
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#212529");
+    doc.text("Plant → subtype detail", ml, y);
+    y += 14;
+
+    const col = {
+      plant: ml,
+      sub: ml + usableW * 0.14,
+      inWin: ml + usableW * 0.28,
+      past: ml + usableW * 0.38,
+      acc: ml + usableW * 0.48,
+      fr: ml + usableW * 0.56,
+      rfd: ml + usableW * 0.64,
+      dp: ml + usableW * 0.72,
+    };
+    const headerH = 22;
+    doc.save();
+    doc.rect(ml, y, usableW, headerH).fill(COLORS.accent);
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7.5);
+    doc.text("Plant", col.plant + 4, y + 7, { width: usableW * 0.12 });
+    doc.text("Subtype", col.sub, y + 7, { width: usableW * 0.12 });
+    doc.text("In-win", col.inWin, y + 7, { width: usableW * 0.08 });
+    doc.text("Past due", col.past, y + 7, { width: usableW * 0.08 });
+    doc.text("ACC", col.acc, y + 7, { width: usableW * 0.06 });
+    doc.text("FR", col.fr, y + 7, { width: usableW * 0.06 });
+    doc.text("RFD", col.rfd, y + 7, { width: usableW * 0.06 });
+    doc.text("DP/PC", col.dp, y + 7, { width: usableW * 0.1 });
+    doc.restore();
+    y += headerH;
+
+    const detailRows = (varietyRows || []).filter(
+      (r) =>
+        deliveryTotalPlants(r.delivery) > 0 || deliveryTotalPlants(r.pastDue) > 0
+    );
+
+    doc.font("Helvetica").fontSize(7.5).fillColor("#212529");
+    if (!detailRows.length) {
+      doc.rect(ml, y, usableW, 28).fill("#fff3cd").stroke(COLORS.border);
+      doc.fillColor("#856404").text("No rows in this period.", ml + 8, y + 8, {
+        width: usableW - 16,
+      });
+    } else {
+      detailRows.forEach((row, idx) => {
+        if (y > pageH - doc.page.margins.bottom - 36) {
+          doc.addPage();
+          y = mt;
+        }
+        const rowH = 20;
+        if (idx % 2 === 0) {
+          doc.save();
+          doc.rect(ml, y, usableW, rowH).fill(COLORS.rowAlt);
+          doc.restore();
+        }
+        const d = row.delivery || {};
+        const dpPc =
+          deliveryPlantsFromBucket(d, "dispatchProcess") +
+          deliveryPlantsFromBucket(d, "partiallyCompleted");
+        doc.fillColor("#212529");
+        doc.text(String(row.plantName || "").slice(0, 18), col.plant + 4, y + 5, {
+          width: usableW * 0.12,
+        });
+        doc.text(String(row.subtype || "").slice(0, 16), col.sub, y + 5, {
+          width: usableW * 0.12,
+        });
+        doc.text(String(deliveryTotalPlants(d)), col.inWin, y + 5, {
+          width: usableW * 0.08,
+        });
+        doc.text(String(deliveryTotalPlants(row.pastDue)), col.past, y + 5, {
+          width: usableW * 0.08,
+        });
+        doc.text(String(deliveryPlantsFromBucket(d, "accepted")), col.acc, y + 5, {
+          width: usableW * 0.06,
+        });
+        doc.text(String(deliveryPlantsFromBucket(d, "farmReady")), col.fr, y + 5, {
+          width: usableW * 0.06,
+        });
+        doc.text(String(deliveryPlantsFromBucket(d, "readyForDispatch")), col.rfd, y + 5, {
+          width: usableW * 0.06,
+        });
+        doc.text(String(dpPc), col.dp, y + 5, { width: usableW * 0.1 });
+        y += rowH;
+      });
+    }
+
+    y += 12;
+    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
+    doc.text(
+      `Generated ${new Date().toISOString()} · Central MIS delivery · ${reportDateLabel}`,
+      ml,
+      y,
+      { width: usableW, align: "center" }
+    );
+    doc.end();
+  });
+}
+
+/**
+ * Slot availability PDF for WhatsApp wizard.
+ */
+export function generateAvailabilityPdf({
+  reportTitle,
+  reportDateLabel,
+  summary = {},
+  rows = [],
+}) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margin: 36,
+      info: { Title: "Availability Report", Author: "Nursery Management" },
+    });
+
+    const chunks = [];
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const pageW = doc.page.width;
+    const pageH = doc.page.height;
+    const ml = doc.page.margins.left;
+    const usableW = pageW - ml - doc.page.margins.right;
+    const mt = doc.page.margins.top;
+    let y = mt;
+
+    doc.save();
+    doc.rect(ml, y, usableW, 52).fill(COLORS.headerBar);
+    doc.rect(ml, y + 49, usableW, 3).fill("#22c55e");
+    doc.fillColor(COLORS.headerText).font("Helvetica-Bold").fontSize(20);
+    doc.text(reportTitle || "Availability Report", ml + 16, y + 10, {
+      width: usableW - 32,
+      align: "center",
+    });
+    doc.font("Helvetica").fontSize(10);
+    doc.text(reportDateLabel, ml + 16, y + 32, {
+      width: usableW - 32,
+      align: "center",
+    });
+    doc.restore();
+    y += 62;
+
+    const kpiH = 48;
+    const gap = 10;
+    const kpiW = (usableW - gap * 2) / 3;
+    const kpis = [
+      { label: "Slots", value: String(summary.slotCount || 0) },
+      { label: "Available plants", value: String(summary.available || 0) },
+      { label: "Capacity", value: String(summary.totalCapacity || 0) },
+    ];
+    let kx = ml;
+    for (const k of kpis) {
+      doc.save();
+      doc.rect(kx, y, kpiW, kpiH).fillAndStroke("#ecfdf5", "#86efac");
+      doc.fillColor("#065f46").font("Helvetica-Bold").fontSize(18);
+      doc.text(k.value, kx + 8, y + 8, { width: kpiW - 16, align: "center" });
+      doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
+      doc.text(k.label, kx + 8, y + 32, { width: kpiW - 16, align: "center" });
+      doc.restore();
+      kx += kpiW + gap;
+    }
+    y += kpiH + 16;
+
+    const col = {
+      plant: ml,
+      sub: ml + usableW * 0.16,
+      window: ml + usableW * 0.28,
+      month: ml + usableW * 0.46,
+      cap: ml + usableW * 0.56,
+      booked: ml + usableW * 0.66,
+      avail: ml + usableW * 0.76,
+    };
+    const headerH = 22;
+    doc.save();
+    doc.rect(ml, y, usableW, headerH).fill("#059669");
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
+    doc.text("Plant", col.plant + 4, y + 7, { width: usableW * 0.14 });
+    doc.text("Subtype", col.sub, y + 7, { width: usableW * 0.1 });
+    doc.text("Window", col.window, y + 7, { width: usableW * 0.16 });
+    doc.text("Month", col.month, y + 7, { width: usableW * 0.08 });
+    doc.text("Cap", col.cap, y + 7, { width: usableW * 0.08 });
+    doc.text("Booked", col.booked, y + 7, { width: usableW * 0.08 });
+    doc.text("Available", col.avail, y + 7, { width: usableW * 0.12 });
+    doc.restore();
+    y += headerH;
+
+    doc.font("Helvetica").fontSize(8).fillColor("#212529");
+    const list = rows.slice(0, 60);
+    if (!list.length) {
+      doc.rect(ml, y, usableW, 28).fill("#fff3cd").stroke(COLORS.border);
+      doc.fillColor("#856404").text("No slots match this filter.", ml + 8, y + 8, {
+        width: usableW - 16,
+      });
+    } else {
+      list.forEach((row, idx) => {
+        if (y > pageH - doc.page.margins.bottom - 36) {
+          doc.addPage();
+          y = mt;
+        }
+        const rowH = 20;
+        if (idx % 2 === 0) {
+          doc.save();
+          doc.rect(ml, y, usableW, rowH).fill(COLORS.rowAlt);
+          doc.restore();
+        }
+        doc.fillColor("#212529");
+        doc.text(String(row.plantName || "").slice(0, 20), col.plant + 4, y + 5, {
+          width: usableW * 0.14,
+        });
+        doc.text(String(row.subtypeName || "").slice(0, 14), col.sub, y + 5, {
+          width: usableW * 0.1,
+        });
+        doc.text(`${row.startDay}–${row.endDay}`, col.window, y + 5, {
+          width: usableW * 0.16,
+        });
+        doc.text(String(row.month || "").slice(0, 10), col.month, y + 5, {
+          width: usableW * 0.08,
+        });
+        doc.text(String(row.totalPlants), col.cap, y + 5, { width: usableW * 0.08 });
+        doc.text(String(row.bookedPlants), col.booked, y + 5, {
+          width: usableW * 0.08,
+        });
+        doc
+          .font("Helvetica-Bold")
+          .fillColor(row.availablePlants > 0 ? "#059669" : "#dc2626")
+          .text(String(row.availablePlants), col.avail, y + 5, {
+            width: usableW * 0.12,
+          });
+        doc.font("Helvetica").fillColor("#212529");
+        y += rowH;
+      });
+    }
+
+    y += 10;
+    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
+    doc.text(
+      `Generated ${new Date().toISOString()} · ${reportDateLabel}`,
+      ml,
+      y,
+      { width: usableW, align: "center" }
+    );
+    doc.end();
+  });
+}
+
 /**
  * Future slot windows (end ≥ today IST) with booked vs capacity.
  * @param {object} opts

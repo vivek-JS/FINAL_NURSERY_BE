@@ -4,6 +4,7 @@ import {
   parseOrderStatusList,
   resolveOrderStatusTokens,
   buildOrderStatusDateMatch,
+  parseOrderListDateDdMmYyyy,
   NEEDS_DISPATCH_STATUSES,
 } from "../utility/orderListQuery.js";
 
@@ -46,6 +47,20 @@ test("buildOrderStatusDateMatch applies date field to all statuses", () => {
   ]);
   assert.equal(match.deliveryDate.$gte.getTime(), start.getTime());
   assert.equal(match.deliveryDate.$lte.getTime(), end.getTime());
+});
+
+test("parseOrderListDateDdMmYyyy uses IST calendar day bounds", () => {
+  const start = parseOrderListDateDdMmYyyy("01-02-2025", false);
+  const end = parseOrderListDateDdMmYyyy("01-02-2025", true);
+  assert.equal(start.toISOString(), "2025-01-31T18:30:00.000Z");
+  assert.equal(end.toISOString(), "2025-02-01T18:29:59.999Z");
+
+  const feb1LocalMidnight = new Date("2025-01-31T18:30:00.000Z");
+  assert.ok(feb1LocalMidnight >= start);
+  assert.ok(feb1LocalMidnight <= end);
+
+  const jan31EndIst = parseOrderListDateDdMmYyyy("31-01-2025", true);
+  assert.ok(feb1LocalMidnight > jan31EndIst);
 });
 
 test("buildOrderStatusDateMatch booking vs delivery uses different fields", () => {

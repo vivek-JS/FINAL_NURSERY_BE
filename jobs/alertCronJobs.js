@@ -8,6 +8,10 @@
 import cron from "node-cron";
 import Order from "../models/order.model.js";
 import { sendDailySummaryAlert } from "../services/whatsappAlertService.js";
+import {
+  runScheduledAlertEngine,
+  runDailyOpsAlertEngine,
+} from "../services/whatsappAlertEngine.service.js";
 
 /**
  * Builds a daily summary by querying Orders created today.
@@ -58,7 +62,9 @@ export function initAlertCronJobs() {
     return;
   }
 
-  // Daily summary at 8:00 PM IST (UTC+5:30 → 14:30 UTC)
+  const tz = "Asia/Kolkata";
+
+  // Daily summary at 8:00 PM IST
   cron.schedule(
     "30 14 * * *",
     async () => {
@@ -71,11 +77,42 @@ export function initAlertCronJobs() {
         console.error("[WhatsApp Cron] Daily summary job failed:", err?.message || err);
       }
     },
-    {
-      scheduled: true,
-      timezone: "Asia/Kolkata",
-    }
+    { scheduled: true, timezone: tz }
   );
 
-  console.log("✅ [WhatsApp Cron] Daily summary scheduled at 8:00 PM IST.");
+  // Ops backlog digest — 8:00 AM IST
+  const opsCron = process.env.WHATSAPP_ALERT_OPS_CRON || "0 8 * * *";
+  cron.schedule(
+    opsCron,
+    async () => {
+      console.log("[WhatsApp Cron] Running ops alert engine...");
+      try {
+        const result = await runDailyOpsAlertEngine();
+        console.log("[WhatsApp Cron] Ops alert engine done:", result);
+      } catch (err) {
+        console.error("[WhatsApp Cron] Ops alert engine failed:", err?.message || err);
+      }
+    },
+    { scheduled: true, timezone: tz }
+  );
+
+  // Slot availability scan — default 9 AM, 2 PM, 6 PM IST
+  const slotCron = process.env.WHATSAPP_ALERT_SLOT_SCAN_CRON || "0 9,14,18 * * *";
+  cron.schedule(
+    slotCron,
+    async () => {
+      console.log("[WhatsApp Cron] Running slot availability alert scan...");
+      try {
+        const result = await runScheduledAlertEngine();
+        console.log("[WhatsApp Cron] Slot scan done:", result);
+      } catch (err) {
+        console.error("[WhatsApp Cron] Slot scan failed:", err?.message || err);
+      }
+    },
+    { scheduled: true, timezone: tz }
+  );
+
+  console.log("✅ [WhatsApp Cron] Daily summary @ 8:00 PM IST.");
+  console.log(`✅ [WhatsApp Cron] Ops digest @ ${opsCron} (${tz}).`);
+  console.log(`✅ [WhatsApp Cron] Slot scan @ ${slotCron} (${tz}).`);
 }

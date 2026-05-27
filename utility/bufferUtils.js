@@ -31,13 +31,112 @@ export const calculateAvailablePlants = (totalPlants, bufferPercentage) => {
  * Calculate buffer-adjusted capacity for display
  */
 export const calculateBufferAdjustedCapacity = (totalPlants, totalBookedPlants, bufferPercentage) => {
-  const bufferAmount = (totalPlants * bufferPercentage) / 100;
-  const bufferAdjustedCapacity = totalPlants - bufferAmount;
+  const total = Number(totalPlants) || 0;
+  const booked = Number(totalBookedPlants) || 0;
+  const pct = Number(bufferPercentage) || 0;
+  const bufferAmount = (total * pct) / 100;
+  const bufferAdjustedCapacity = total - bufferAmount;
   return {
-    availablePlants: Math.max(0, totalPlants - totalBookedPlants - bufferAmount), // Total - Booked - Buffer
-    totalCapacity: totalPlants,
+    availablePlants: total - booked - bufferAmount,
+    totalCapacity: total,
     bufferAdjustedCapacity: bufferAdjustedCapacity,
-    bufferAmount: bufferAmount
+    bufferAmount: bufferAmount,
+  };
+};
+
+const finiteNumber = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** Slot had buffer saved/migrated/released — do not re-apply inherited plant/subtype %. */
+export const isSlotBufferMaterialized = (slot) => {
+  const original = finiteNumber(slot?.originalTotalPlants);
+  if (original != null && original > 0) return true;
+  const storedBuffer = finiteNumber(slot?.bufferAmount);
+  if (storedBuffer != null && storedBuffer > 0) return true;
+  const slotPct = finiteNumber(slot?.buffer);
+  if (slotPct != null && slotPct > 0) return true;
+  return false;
+};
+
+/**
+ * Resolve buffer + available for API/UI from stored slot fields and effective buffer %.
+ * - Preserves GRN / manual available above formula
+ * - Fixes stale DB availablePlants=0 when capacity exists
+ * - After release/save on slot: never substitute inherited plant/subtype reserve
+ */
+export const resolveSlotBufferFields = (
+  slot,
+  { subtypeBuffer = 0, plantBuffer = 0 } = {}
+) => {
+  const total = Number(slot?.totalPlants) || 0;
+  const booked = Number(slot?.totalBookedPlants) || 0;
+  const materialized = isSlotBufferMaterialized(slot);
+
+  const effectiveBuffer = materialized
+    ? finiteNumber(slot?.effectiveBuffer) ??
+      finiteNumber(slot?.buffer) ??
+      0
+    : calculateEffectiveBuffer(slot?.buffer || 0, subtypeBuffer, plantBuffer);
+
+  const bufferAdjusted = calculateBufferAdjustedCapacity(total, booked, effectiveBuffer);
+  const computedBufferAmount = bufferAdjusted.bufferAmount;
+  const inheritedBufferAmount = materialized
+    ? 0
+    : Math.round(computedBufferAmount);
+
+  const storedBufferRaw = finiteNumber(slot?.bufferAmount);
+  const hasStoredBuffer = storedBufferRaw != null && storedBufferRaw > 0;
+  const bufferAmount = hasStoredBuffer ? storedBufferRaw : 0;
+
+  let displayBufferAmount;
+  if (hasStoredBuffer) {
+    displayBufferAmount = storedBufferRaw;
+  } else if (materialized) {
+    displayBufferAmount = 0;
+  } else {
+    displayBufferAmount = inheritedBufferAmount;
+  }
+
+  const effectiveBufferAmount = hasStoredBuffer
+    ? storedBufferRaw
+    : materialized
+    ? 0
+    : computedBufferAmount;
+
+  const formulaAvailable = total - booked - effectiveBufferAmount;
+
+  const storedAvailableRaw = finiteNumber(slot?.availablePlants);
+  let availablePlants;
+  if (storedAvailableRaw == null) {
+    availablePlants = formulaAvailable;
+  } else {
+    const isStaleZero =
+      storedAvailableRaw === 0 &&
+      total > 0 &&
+      (booked > 0 || effectiveBuffer > 0 || formulaAvailable > 0);
+    if (isStaleZero) {
+      availablePlants = formulaAvailable;
+    } else if (storedAvailableRaw > formulaAvailable + 0.001) {
+      availablePlants = storedAvailableRaw;
+    } else {
+      availablePlants = storedAvailableRaw;
+    }
+  }
+
+  return {
+    effectiveBuffer,
+    bufferAdjustedCapacity: Math.max(0, total - effectiveBufferAmount),
+    bufferAmount,
+    displayBufferAmount,
+    computedBufferAmount: inheritedBufferAmount,
+    inheritedBufferAmount,
+    hasStoredBuffer,
+    bufferMaterialized: materialized,
+    inheritedBufferOnly: !materialized && !hasStoredBuffer && inheritedBufferAmount > 0,
+    availablePlants,
   };
 };
 

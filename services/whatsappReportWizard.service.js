@@ -6,9 +6,8 @@ import {
 } from "./reportService.js";
 import {
   generateTodayBookingPdf,
-  generateDeliveryQueuePdf,
-  generateOrderTransitionInsightsPdf,
-  generateSlotsOutlookPdf,
+  generateCentralDeliveryPdf,
+  generateAvailabilityPdf,
   plantTotalsForBarChart,
 } from "./pdfService.js";
 import { sendSessionFileMessage, sendSessionTextMessage } from "./watiService.js";
@@ -20,21 +19,26 @@ import {
 } from "../utility/watiInboundPayload.js";
 import { isWatiConfigured } from "../config/wati.config.js";
 import {
-  buildDeliveryPaymentMatchForWizard,
-  fetchDeliveryPipelineForWizard,
-  fetchDispatchCompletedForRange,
-  fetchFutureSlotHighlights,
-  fetchOrderTransitionInsights,
   fetchPaymentStatsForMatch,
-  fetchSystemAlertsSnapshot,
-  formatDeliveryWhatsApp,
-  formatDispatchReportWhatsApp,
-  formatOrderTransitionInsightsWhatsApp,
   formatPaymentStatsWhatsApp,
-  fetchActiveOrdersPaymentSnapshot,
   matchOrdersInBookingRangeIST,
   splitForWhatsApp,
 } from "./whatsappReportData.service.js";
+import {
+  fetchCentralDeliveryReport,
+  formatCentralDeliveryWhatsApp,
+} from "./whatsappReportCentralDelivery.service.js";
+import {
+  fetchPlantsForAvailabilityWizard,
+  formatPlantMonthAvailabilityWhatsApp,
+  formatMonthAvailabilityWhatsApp,
+  upcomingMonthsForWizard,
+  buildMonthPromptText,
+  buildPlantPromptText,
+  resolveMonthFromChoice,
+  resolvePlantFromChoice,
+} from "./whatsappReportAvailability.service.js";
+import { fetchCentralAvailabilityReport } from "./whatsappReportCentralAvailability.service.js";
 import {
   isReportEntry,
   guessReportTypeFromText,
@@ -42,7 +46,7 @@ import {
   parseDateChoice,
   parseCustomRangeText,
   parseDeliveryWindowChoice,
-  parseDeliveryDueFilterChoice,
+  parseAvailabilityModeChoice,
 } from "../utility/whatsappReportWizardParsers.js";
 import { isPhoneAllowedForReportWizard } from "../utility/whatsappReportWizardAllowlist.js";
 import { isOrderBotTrigger } from "../utility/whatsappOrderTriggers.js";
@@ -55,10 +59,8 @@ const reportWizardState = new Map();
 const MENU_TEXT = `📋 *Nursery reports*
 Reply with a number:
 *1* — Booking (PDF + charts, date range)
-*2* — Delivery (due window: today / 7 / 14 days / custom + with/without due)
-*3* — Slots (PDF + future windows, busiest table)
-*4* — Payments (pending, collected, by plant)
-*5* — Dispatch / completed (orders touched in date range)
+*2* — Delivery (central MIS: totals, plant/subtype, past due + PDF)
+*3* — Availability (plant or month-wise slot stock)
 
 _Type *cancel* anytime._`;
 
@@ -70,26 +72,17 @@ const DELIVERY_WINDOW_PROMPT = `📅 *Delivery — pick planning window (IST)*
 
 Reply *1–4*, or *cancel*.`;
 
-const DELIVERY_FILTER_PROMPT = `📦 *Which orders include?* (still *ACCEPTED* + *FARM_READY* only)
-*1* — *With due* — delivery date falls inside the window you picked
-*2* — *Without due* — no delivery date on the order yet
-*3* — *Both* — two sections in the report
+const AVAILABILITY_MODE_PROMPT = `📦 *Availability — how to view?*
+*1* — *By plant* — pick plant, then month
+*2* — *By month* — pick month, see all plants
 
-Reply *1–3*, or *cancel*.`;
-
-const DELIVERY_MODE_CAPTION = {
-  due_in_window: "With due date in window",
-  no_due: "Without delivery date",
-  both: "With due + without due",
-};
+Reply *1* or *2*, or *cancel*.`;
 
 function datePromptTitle(reportType) {
   const m = {
     booking: "Booking",
-    delivery: "Delivery queue",
-    slots: "Slots",
-    payment: "Payments",
-    dispatch: "Dispatch / completed",
+    delivery: "Delivery",
+    availability: "Availability",
   };
   return m[reportType] || "Report";
 }
@@ -100,14 +93,26 @@ const DATE_PROMPT = (reportType) => `📅 *Pick dates (IST)* — ${datePromptTit
 *3* — Last 7 days (rolling)
 *4* — Custom (you’ll type two dates next)
 
-_Note: menu *3 Slots* is not filtered by these dates._
-
 Reply *1–4*, or *cancel*.`;
 
 async function sendChunks(whatsappNumber, messageText) {
   const parts = splitForWhatsApp(messageText);
   for (const chunk of parts) {
     await sendSessionTextMessage({ whatsappNumber, messageText: chunk });
+  }
+}
+
+async function sendPdfToPhone(phone, pdfBuffer, filename, caption) {
+  await sendSessionFileMessage({
+    whatsappNumber: phone,
+    fileBuffer: pdfBuffer,
+    filename,
+    caption,
+  });
+  if (process.env.DO_SPACES_KEY) {
+    void uploadToS3(pdfBuffer, filename).catch((e) =>
+      console.warn("[report wizard] optional Spaces copy failed:", e?.message || e)
+    );
   }
 }
 
@@ -160,123 +165,6 @@ function formatBookingText(data) {
   }
   lines.push("📎 *PDF attached* — full line-level detail + charts.");
   return lines.join("\n");
-}
-
-/** Slots + ops alerts (org-wide payment is menu *4*). */
-async function sendCompositeOpsAddOn(phone) {
-  const [slots, alerts] = await Promise.all([
-    fetchFutureSlotHighlights(),
-    fetchSystemAlertsSnapshot(),
-  ]);
-  await sendChunks(phone, `${slots.text}\n\n${alerts.text}`);
-}
-
-async function runSlotsReportWithPdf(phone, range) {
-  const slotsData = await fetchFutureSlotHighlights();
-  await sendChunks(phone, slotsData.text);
-  await sendChunks(
-    phone,
-    "_Detailed PDF (charts + busiest windows table) is attached below._"
-  );
-
-  const rangeLabel = formatISTRangeLabel(range.start, range.end);
-  const sessionLabel = `${rangeLabel} · wizard session anchor (slot list is not filtered by these dates)`;
-
-  if (isWatiConfigured()) {
-    try {
-      const pdfBuffer = await generateSlotsOutlookPdf({
-        reportDateLabel: sessionLabel,
-        slotRows: slotsData.slotRows || [],
-      });
-      const filename = `slots-${moment()
-        .utcOffset(330)
-        .format("YYYYMMDD-HHmmss")}.pdf`;
-      await sendSessionFileMessage({
-        whatsappNumber: phone,
-        fileBuffer: pdfBuffer,
-        filename,
-        caption: `Slots outlook · ${rangeLabel}`,
-      });
-      if (process.env.DO_SPACES_KEY) {
-        void uploadToS3(pdfBuffer, filename).catch((e) =>
-          console.warn("[report wizard] optional Spaces copy failed:", e?.message || e)
-        );
-      }
-    } catch (e) {
-      console.error("[report wizard] slots PDF failed:", e?.message || e);
-      try {
-        await sendSessionTextMessage({
-          whatsappNumber: phone,
-          messageText: `⚠️ Slots PDF could not be sent: ${(e && e.message) || String(e)}`,
-        });
-      } catch (_) {
-        /* ignore */
-      }
-    }
-  }
-
-  const { text: alertText } = await fetchSystemAlertsSnapshot();
-  await sendChunks(phone, alertText);
-}
-
-async function runPaymentReport(phone, range) {
-  const payRange = await fetchPaymentStatsForMatch(
-    matchOrdersInBookingRangeIST(range)
-  );
-  await sendChunks(
-    phone,
-    formatPaymentStatsWhatsApp(
-      payRange,
-      "Payments — orders booked in selected period"
-    )
-  );
-  const payOrg = await fetchActiveOrdersPaymentSnapshot();
-  await sendChunks(
-    phone,
-    formatPaymentStatsWhatsApp(payOrg, "All active orders — full snapshot")
-  );
-  const { text: alertText } = await fetchSystemAlertsSnapshot();
-  await sendChunks(phone, alertText);
-}
-
-async function runDispatchReport(phone, range) {
-  const [d, insights] = await Promise.all([
-    fetchDispatchCompletedForRange(range),
-    fetchOrderTransitionInsights(range),
-  ]);
-  await sendChunks(phone, formatDispatchReportWhatsApp(d));
-  await sendChunks(phone, formatOrderTransitionInsightsWhatsApp(insights));
-
-  if (isWatiConfigured()) {
-    try {
-      const rangeLabel = formatISTRangeLabel(range.start, range.end);
-      const pdfBuffer = await generateOrderTransitionInsightsPdf({
-        reportDateLabel: rangeLabel,
-        bookedOrders: insights.bookedOrders,
-        todayKey: insights.todayKey,
-        currentStatuses: insights.currentStatuses,
-        transitionMatrix: insights.transitionMatrix,
-      });
-      const filename = `transitions-${moment()
-        .utcOffset(330)
-        .format("YYYYMMDD-HHmmss")}.pdf`;
-      await sendSessionFileMessage({
-        whatsappNumber: phone,
-        fileBuffer: pdfBuffer,
-        filename,
-        caption: `Order transitions · ${rangeLabel}`,
-      });
-      if (process.env.DO_SPACES_KEY) {
-        void uploadToS3(pdfBuffer, filename).catch((e) =>
-          console.warn("[report wizard] optional Spaces copy failed:", e?.message || e)
-        );
-      }
-    } catch (e) {
-      console.error("[report wizard] transitions PDF failed:", e?.message || e);
-    }
-  }
-  const { text: alertText } = await fetchSystemAlertsSnapshot();
-  await sendChunks(phone, alertText);
 }
 
 async function runBookingWithPdf(phone, data) {
@@ -333,17 +221,7 @@ async function runBookingWithPdf(phone, data) {
     const filename = `booking-${moment()
       .utcOffset(330)
       .format("YYYYMMDD-HHmmss")}.pdf`;
-    await sendSessionFileMessage({
-      whatsappNumber: phone,
-      fileBuffer: pdfBuffer,
-      filename,
-      caption: `Booking ${rangeLabel}`,
-    });
-    if (process.env.DO_SPACES_KEY) {
-      void uploadToS3(pdfBuffer, filename).catch((e) =>
-        console.warn("[report wizard] optional Spaces copy failed:", e?.message || e)
-      );
-    }
+    await sendPdfToPhone(phone, pdfBuffer, filename, `Booking ${rangeLabel}`);
   } catch (e) {
     console.error("[report wizard] PDF step failed:", e?.message || e);
     try {
@@ -357,88 +235,92 @@ async function runBookingWithPdf(phone, data) {
   }
 }
 
-async function runDeliveryWithPdf(phone, range, deliveryFilterMode) {
-  const rangeLabel = formatISTRangeLabel(range.start, range.end);
-  const modeKey =
-    deliveryFilterMode && DELIVERY_MODE_CAPTION[deliveryFilterMode]
-      ? deliveryFilterMode
-      : "due_in_window";
-  const modeHuman = DELIVERY_MODE_CAPTION[modeKey];
+async function runDeliveryWithPdf(phone, range) {
+  try {
+    const { data, rangeLabel } = await fetchCentralDeliveryReport(range);
+    const text = formatCentralDeliveryWhatsApp({ data, rangeLabel });
+    await sendChunks(phone, text);
 
-  const { segments } = await fetchDeliveryPipelineForWizard(range, modeKey);
-  const payMatch = buildDeliveryPaymentMatchForWizard(range, modeKey);
-  const payQueue = await fetchPaymentStatsForMatch(payMatch);
-
-  const bodyParts = [
-    "🚚 *Delivery report*",
-    `_IST window: ${rangeLabel}_`,
-    `_Scope: ${modeHuman}_`,
-    "",
-  ];
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    bodyParts.push(`*${i + 1}. ${seg.title}*`, "");
-    bodyParts.push(
-      formatDeliveryWhatsApp(
-        { byPlant: seg.byPlant, totals: seg.totals },
-        { skipBanner: true }
-      )
-    );
-    bodyParts.push("", "──────────────", "");
-  }
-  bodyParts.push(
-    formatPaymentStatsWhatsApp(
-      payQueue,
-      "Payments — same filter (ACCEPTED + FARM_READY)"
-    ),
-    "",
-    "_PDF attached (one file; multiple sections if you chose “both”)._"
-  );
-  await sendChunks(phone, bodyParts.join("\n"));
-
-  if (isWatiConfigured()) {
-    try {
-      const sessionLabel = `${rangeLabel} · ${modeHuman}`;
-      const pdfBuffer = await generateDeliveryQueuePdf({
-        reportDateLabel: sessionLabel,
-        segments: segments.map((s) => ({
-          title: s.title,
-          byPlant: s.byPlant,
-          totals: s.totals,
-        })),
-        paymentSnapshot: payQueue.summary,
+    if (isWatiConfigured()) {
+      const pdfBuffer = await generateCentralDeliveryPdf({
+        reportDateLabel: rangeLabel,
+        varietyRows: data.varietyTable || [],
+        varietyTotals: data.varietyTotals || {},
+        dueSummary: data.dueSummary || {},
       });
       const filename = `delivery-${moment()
         .utcOffset(330)
         .format("YYYYMMDD-HHmmss")}.pdf`;
-      await sendSessionFileMessage({
-        whatsappNumber: phone,
-        fileBuffer: pdfBuffer,
+      await sendPdfToPhone(
+        phone,
+        pdfBuffer,
         filename,
-        caption: `Delivery queue · ${rangeLabel}`,
-      });
-      if (process.env.DO_SPACES_KEY) {
-        void uploadToS3(pdfBuffer, filename).catch((e) =>
-          console.warn("[report wizard] optional Spaces copy failed:", e?.message || e)
-        );
-      }
-    } catch (e) {
-      console.error("[report wizard] delivery PDF failed:", e?.message || e);
-      try {
-        await sendSessionTextMessage({
-          whatsappNumber: phone,
-          messageText: `⚠️ Delivery PDF could not be sent: ${(e && e.message) || String(e)}`,
-        });
-      } catch (_) {
-        /* ignore */
-      }
+        `Delivery · ${rangeLabel} · central MIS`
+      );
     }
+  } catch (e) {
+    console.error("[report wizard] central delivery failed:", e?.message || e);
+    await sendChunks(
+      phone,
+      `⚠️ Delivery report failed: ${(e && e.message) || String(e)}`
+    );
   }
-
-  await sendCompositeOpsAddOn(phone);
 }
 
-async function executeReportForRange(phone, reportType, range, extra = {}) {
+async function runAvailabilityReport(phone, { mode, plant, month, year }) {
+  try {
+    const data = await fetchCentralAvailabilityReport({
+      year,
+      month: month.name,
+      plantId: mode === "by_plant" ? plant.id : undefined,
+    });
+
+    let text;
+    let pdfTitle;
+    let pdfLabel;
+    if (mode === "by_plant") {
+      text = formatPlantMonthAvailabilityWhatsApp({
+        plantName: plant.name,
+        month: month.name,
+        year,
+        data,
+      });
+      pdfTitle = `Availability — ${plant.name}`;
+      pdfLabel = `${plant.name} · ${month.name} ${year}`;
+    } else {
+      text = formatMonthAvailabilityWhatsApp({
+        month: month.name,
+        year,
+        data,
+      });
+      pdfTitle = `Availability — ${month.name} ${year}`;
+      pdfLabel = `${month.name} ${year} · all plants`;
+    }
+
+    await sendChunks(phone, text);
+
+    if (isWatiConfigured()) {
+      const pdfBuffer = await generateAvailabilityPdf({
+        reportTitle: pdfTitle,
+        reportDateLabel: pdfLabel,
+        summary: data.summary,
+        rows: data.rows,
+      });
+      const filename = `availability-${moment()
+        .utcOffset(330)
+        .format("YYYYMMDD-HHmmss")}.pdf`;
+      await sendPdfToPhone(phone, pdfBuffer, filename, pdfLabel);
+    }
+  } catch (e) {
+    console.error("[report wizard] availability failed:", e?.message || e);
+    await sendChunks(
+      phone,
+      `⚠️ Availability report failed: ${(e && e.message) || String(e)}`
+    );
+  }
+}
+
+async function executeReportForRange(phone, reportType, range) {
   switch (reportType) {
     case "booking": {
       const data = await fetchBookingReportDataForDateRange(range);
@@ -446,16 +328,7 @@ async function executeReportForRange(phone, reportType, range, extra = {}) {
       break;
     }
     case "delivery":
-      await runDeliveryWithPdf(phone, range, extra.deliveryFilter);
-      break;
-    case "slots":
-      await runSlotsReportWithPdf(phone, range);
-      break;
-    case "payment":
-      await runPaymentReport(phone, range);
-      break;
-    case "dispatch":
-      await runDispatchReport(phone, range);
+      await runDeliveryWithPdf(phone, range);
       break;
     default:
       break;
@@ -532,6 +405,19 @@ export async function processWhatsappReportWizard({ message, waId }) {
     const guessed = guessReportTypeFromText(text);
     if (guessed) {
       const isDel = guessed === "delivery";
+      const isAvail = guessed === "availability";
+      if (isAvail) {
+        reportWizardState.set(key, {
+          step: "pick_availability_mode",
+          reportType: "availability",
+          lastAt: Date.now(),
+        });
+        await sendSessionTextMessage({
+          whatsappNumber: phone,
+          messageText: AVAILABILITY_MODE_PROMPT,
+        });
+        return { handled: true };
+      }
       reportWizardState.set(key, {
         step: isDel ? "pick_delivery_window" : "pick_date",
         reportType: guessed,
@@ -556,7 +442,7 @@ export async function processWhatsappReportWizard({ message, waId }) {
       await sendSessionTextMessage({
         whatsappNumber: phone,
         messageText:
-          "Reply *1*–*5* using the menu below, or *cancel*.\n\n" + MENU_TEXT,
+          "Reply *1*–*3* using the menu below, or *cancel*.\n\n" + MENU_TEXT,
       });
       return { handled: true };
     }
@@ -566,6 +452,12 @@ export async function processWhatsappReportWizard({ message, waId }) {
       await sendSessionTextMessage({
         whatsappNumber: phone,
         messageText: DELIVERY_WINDOW_PROMPT,
+      });
+    } else if (choice === "availability") {
+      state.step = "pick_availability_mode";
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText: AVAILABILITY_MODE_PROMPT,
       });
     } else {
       state.step = "pick_date";
@@ -597,12 +489,8 @@ export async function processWhatsappReportWizard({ message, waId }) {
       });
       return { handled: true };
     }
-    state.pendingDeliveryRange = dr.range;
-    state.step = "pick_delivery_filter";
-    await sendSessionTextMessage({
-      whatsappNumber: phone,
-      messageText: DELIVERY_FILTER_PROMPT,
-    });
+    reportWizardState.delete(key);
+    await runDeliveryWithPdf(phone, dr.range);
     return { handled: true };
   }
 
@@ -616,30 +504,88 @@ export async function processWhatsappReportWizard({ message, waId }) {
       });
       return { handled: true };
     }
-    state.pendingDeliveryRange = range;
-    state.step = "pick_delivery_filter";
+    reportWizardState.delete(key);
+    await runDeliveryWithPdf(phone, range);
+    return { handled: true };
+  }
+
+  if (state.step === "pick_availability_mode") {
+    const mode = parseAvailabilityModeChoice(text);
+    if (!mode) {
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText:
+          "Reply *1* (by plant) or *2* (by month).\n\n" + AVAILABILITY_MODE_PROMPT,
+      });
+      return { handled: true };
+    }
+    state.availabilityMode = mode;
+    state.monthOptions = upcomingMonthsForWizard(8);
+    if (mode === "by_plant") {
+      const plants = await fetchPlantsForAvailabilityWizard();
+      if (!plants.length) {
+        reportWizardState.delete(key);
+        await sendSessionTextMessage({
+          whatsappNumber: phone,
+          messageText: "❌ No plants found in CMS.",
+        });
+        return { handled: true };
+      }
+      state.plants = plants;
+      state.step = "pick_availability_plant";
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText: buildPlantPromptText(plants),
+      });
+    } else {
+      state.step = "pick_availability_month";
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText: buildMonthPromptText(state.monthOptions),
+      });
+    }
+    return { handled: true };
+  }
+
+  if (state.step === "pick_availability_plant") {
+    const plant = resolvePlantFromChoice(text, state.plants || []);
+    if (!plant) {
+      await sendSessionTextMessage({
+        whatsappNumber: phone,
+        messageText:
+          "Reply with a plant number from the list, or *cancel*.\n\n" +
+          buildPlantPromptText(state.plants || []),
+      });
+      return { handled: true };
+    }
+    state.selectedPlant = plant;
+    state.step = "pick_availability_month";
     await sendSessionTextMessage({
       whatsappNumber: phone,
-      messageText: DELIVERY_FILTER_PROMPT,
+      messageText: buildMonthPromptText(state.monthOptions || upcomingMonthsForWizard(8)),
     });
     return { handled: true };
   }
 
-  if (state.step === "pick_delivery_filter") {
-    const fl = parseDeliveryDueFilterChoice(text);
-    if (!fl.ok) {
+  if (state.step === "pick_availability_month") {
+    const month = resolveMonthFromChoice(text, state.monthOptions || []);
+    if (!month) {
       await sendSessionTextMessage({
         whatsappNumber: phone,
         messageText:
-          "Reply *1* (with due), *2* (without due), or *3* (both).\n\n" +
-          DELIVERY_FILTER_PROMPT,
+          "Reply with a month number or name, or *cancel*.\n\n" +
+          buildMonthPromptText(state.monthOptions || upcomingMonthsForWizard(8)),
       });
       return { handled: true };
     }
-    const range = state.pendingDeliveryRange;
+    const mode = state.availabilityMode;
+    const plant = state.selectedPlant;
     reportWizardState.delete(key);
-    await executeReportForRange(phone, "delivery", range, {
-      deliveryFilter: fl.mode,
+    await runAvailabilityReport(phone, {
+      mode,
+      plant,
+      month,
+      year: month.year,
     });
     return { handled: true };
   }

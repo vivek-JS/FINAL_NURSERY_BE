@@ -9,6 +9,8 @@ import { dirname, join } from "node:path";
 import {
   generateTodayBookingPdf,
   generateDeliveryQueuePdf,
+  generateCentralDeliveryPdf,
+  generateAvailabilityPdf,
   generateSlotsOutlookPdf,
 } from "../services/pdfService.js";
 
@@ -105,6 +107,63 @@ test("generateSlotsOutlookPdf produces a valid PDF buffer", async () => {
         label: "01-05-2026–07-05-2026 May 2026",
         cap: 5000,
         booked: 1200,
+      },
+    ],
+  });
+  assert.ok(Buffer.isBuffer(buf));
+  assert.equal(buf.subarray(0, 5).toString("utf8"), "%PDF-");
+});
+
+test("generateCentralDeliveryPdf produces a valid PDF buffer", async () => {
+  const buf = await generateCentralDeliveryPdf({
+    reportDateLabel: "2026-05-01 → 2026-05-07 (IST)",
+    varietyRows: [
+      {
+        plantName: "Banana",
+        subtype: "G9",
+        delivery: {
+          total: { orders: 2, plants: 500 },
+          accepted: { orders: 1, plants: 200 },
+          farmReady: { orders: 1, plants: 300 },
+          readyForDispatch: { orders: 0, plants: 0 },
+          dispatchProcess: { orders: 0, plants: 0 },
+          partiallyCompleted: { orders: 0, plants: 0 },
+        },
+        pastDue: {
+          total: { orders: 1, plants: 50 },
+          accepted: { orders: 1, plants: 50 },
+          farmReady: { orders: 0, plants: 0 },
+          readyForDispatch: { orders: 0, plants: 0 },
+          dispatchProcess: { orders: 0, plants: 0 },
+          partiallyCompleted: { orders: 0, plants: 0 },
+        },
+      },
+    ],
+    varietyTotals: {
+      delivery: { total: { orders: 2, plants: 500 } },
+      pastDue: { total: { orders: 1, plants: 50 } },
+    },
+    dueSummary: { pastDue: { orders: 1, plants: 50 } },
+  });
+  assert.ok(Buffer.isBuffer(buf));
+  assert.equal(buf.subarray(0, 5).toString("utf8"), "%PDF-");
+});
+
+test("generateAvailabilityPdf produces a valid PDF buffer", async () => {
+  const buf = await generateAvailabilityPdf({
+    reportTitle: "Availability — Banana",
+    reportDateLabel: "Banana · May 2026",
+    summary: { slotCount: 2, totalCapacity: 10000, booked: 3000, available: 7000 },
+    rows: [
+      {
+        plantName: "Banana",
+        subtypeName: "G9",
+        startDay: "01-05-2026",
+        endDay: "07-05-2026",
+        month: "May",
+        totalPlants: 5000,
+        bookedPlants: 1500,
+        availablePlants: 3500,
       },
     ],
   });

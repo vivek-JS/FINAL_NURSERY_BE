@@ -100,8 +100,22 @@ const getAllTrips = catchAsync(async (req, res, next) => {
   const skip = (parseInt(page) - 1) * parseInt(limit);
   query = query.skip(skip).limit(parseInt(limit));
 
-  // Populate references
-  query = query.populate("vehicleId", "name number capacity").populate("orderIds", "orderId");
+  query = query
+    .populate("vehicleId", "name number capacity ownerId")
+    .populate({
+      path: "dispatchId",
+      select:
+        "transportId transportStatus ownerId driverId vehicleId routeNotes driverRemark vehicleRemark vehicleName vehicleNumber driverName",
+      populate: [
+        { path: "ownerId", select: "name mobile" },
+        { path: "driverId", select: "name mobile" },
+      ],
+    })
+    .populate({
+      path: "orderIds",
+      select: "orderId orderStatus freightCharges numberOfPlants",
+      populate: { path: "farmer", select: "name village mobileNumber" },
+    });
 
   // Execute query
   const [trips, total] = await Promise.all([
@@ -130,8 +144,20 @@ const getAllTrips = catchAsync(async (req, res, next) => {
 const getTripById = catchAsync(async (req, res, next) => {
   const trip = await Trip.findById(req.params.id)
     .populate("vehicleId", "name number capacity")
-    .populate("orderIds", "orderId")
-    .populate("dispatchId", "transportId");
+    .populate({
+      path: "dispatchId",
+      select:
+        "transportId transportStatus ownerId driverId vehicleId routeNotes driverRemark vehicleRemark",
+      populate: [
+        { path: "ownerId", select: "name mobile" },
+        { path: "driverId", select: "name mobile" },
+      ],
+    })
+    .populate({
+      path: "orderIds",
+      select: "orderId orderStatus freightCharges numberOfPlants",
+      populate: { path: "farmer", select: "name village mobileNumber" },
+    });
 
   if (!trip) {
     return next(new AppError("No trip found with that ID", 404));

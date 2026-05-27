@@ -31,6 +31,7 @@ import {
 import {
   resolveOrderStatusTokens,
   buildOrderStatusDateMatch,
+  parseOrderListDateDdMmYyyy,
 } from "../utility/orderListQuery.js";
 import {
   syncDealerLedgerForOrder,
@@ -1248,6 +1249,10 @@ const createOne = (Model, modelName) =>
                     delivery?.results || ""
                   );
                 }
+                const { evaluateOrderAlertsOnCreate } = await import(
+                  "../services/whatsappAlertEngine.service.js"
+                );
+                await evaluateOrderAlertsOnCreate(createdOrderId);
               } catch (e) {
                 console.error("whatsapp-alert (order create):", e?.message || e);
               }
@@ -3574,6 +3579,10 @@ const getAll = (Model, modelName) =>
       });
     }
 
+    const slotStatScope = String(req.query?.slotStatScope ?? "")
+      .trim()
+      .toLowerCase();
+
     // Special case for slotId filtering
     if (slotId) {
       // Match orders with the specified slot ID
@@ -3582,6 +3591,42 @@ const getAll = (Model, modelName) =>
           bookingSlot: new mongoose.Types.ObjectId(slotId),
         },
       });
+
+      // Slot stat tiles: same order scope as slotDispatchStats on GET slots
+      if (slotStatScope || statusTokensUpper.length > 0) {
+        pipeline.push({
+          $match: {
+            $or: [
+              { quotaSource: { $ne: "dealer" } },
+              { quotaSource: { $exists: false } },
+            ],
+          },
+        });
+      }
+
+      if (slotStatScope === "booked") {
+        pipeline.push({
+          $match: {
+            orderStatus: {
+              $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"],
+            },
+          },
+        });
+      } else if (slotStatScope === "dispatched") {
+        pipeline.push({
+          $match: { orderStatus: { $in: ["DISPATCHED", "COMPLETED"] } },
+        });
+      } else if (slotStatScope === "remaining") {
+        pipeline.push({
+          $match: {
+            orderStatus: { $in: ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH"] },
+          },
+        });
+      } else if (statusTokensUpper.length > 0) {
+        pipeline.push({
+          $match: { orderStatus: { $in: statusTokensUpper } },
+        });
+      }
     } else {
       // Role-based filtering for non-admin users
       if (req.user) {
@@ -3732,15 +3777,8 @@ const getAll = (Model, modelName) =>
         !skipOrderDateRangeForFarmReadyOnlyStatus &&
         !farmReadyParamIgnoresOrderDateFilters
       ) {
-        const parseDate = (dateStr, isEnd = false) => {
-          const [day, month, year] = dateStr.split("-");
-          return isEnd
-            ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
-            : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-        };
-
-        const start = parseDate(startDate);
-        const end = parseDate(endDate, true);
+        const start = parseOrderListDateDdMmYyyy(startDate, false);
+        const end = parseOrderListDateDdMmYyyy(endDate, true);
         const usePastDueOr =
           includePastDueBeyondRange === "true" &&
           orderDateRangeMongoField === "deliveryDate";
@@ -3787,19 +3825,8 @@ const getAll = (Model, modelName) =>
       !skipOrderDateRangeForFarmReadyOnlyStatus &&
       !farmReadyParamIgnoresOrderDateFilters
     ) {
-      const parseDateDispatched = (dateStr, isEnd = false) => {
-        const [day, month, year] = dateStr.split("-");
-        const date = new Date(
-          Date.UTC(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10), 0, 0, 0, 0)
-        );
-        if (isEnd) {
-          date.setUTCHours(23, 59, 59, 999);
-        }
-        return date;
-      };
-
-      const startD = parseDateDispatched(startDate);
-      const endD = parseDateDispatched(endDate, true);
+      const startD = parseOrderListDateDdMmYyyy(startDate, false);
+      const endD = parseOrderListDateDdMmYyyy(endDate, true);
 
       const usePastDueOr =
         includePastDueBeyondRange === "true" &&
@@ -4686,20 +4713,26 @@ const getAll = (Model, modelName) =>
 
     const plantTotalsFlag =
       modelName === "Order" &&
-      String(req.query?.plantTotals ?? "") === "true" &&
-      !req.query?.slotId;
+      String(req.query?.plantTotals ?? "") === "true";
 
-    const orderPlantSumExpr = {
-      $ifNull: [
-        "$totalPlants",
-        {
-          $add: [
-            { $ifNull: ["$numberOfPlants", 0] },
-            { $ifNull: ["$additionalPlants", 0] },
-          ],
-        },
-      ],
-    };
+    const orderPlantSumExpr = slotId
+        ? {
+            $add: [
+              { $ifNull: ["$numberOfPlants", 0] },
+              { $ifNull: ["$additionalPlants", 0] },
+            ],
+          }
+        : {
+            $ifNull: [
+              "$totalPlants",
+              {
+                $add: [
+                  { $ifNull: ["$numberOfPlants", 0] },
+                  { $ifNull: ["$additionalPlants", 0] },
+                ],
+              },
+            ],
+          };
 
     if (hasPaginationParams && (earlyPaginateInserted || searchEarlyPaginateInserted)) {
       const matchOnlyStages = [];

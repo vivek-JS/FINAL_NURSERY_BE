@@ -184,10 +184,14 @@ export function getOrderEditHistoryFieldLabels() {
 export async function fireOrderEditWhatsAppAlerts(queue, changedBy = "Unknown") {
   if (!queue?.length) return;
   const { sendOrderEditedAlert } = await import("../services/whatsappAlertService.js");
+  const { evaluateOrderAlertsOnUpdate } = await import(
+    "../services/whatsappAlertEngine.service.js"
+  );
   for (const item of queue) {
     try {
       const plain = item.updatedOrder?.toObject?.() ?? item.updatedOrder;
       await sendOrderEditedAlert(plain, changedBy, item.entries, item.previousOrder);
+      await evaluateOrderAlertsOnUpdate(plain, item.entries);
     } catch (err) {
       console.error(
         "[orderEditHistory] WhatsApp alert failed:",

@@ -48,6 +48,7 @@ import { fetchAdminMisOrders } from "../services/adminMisOrders.service.js";
 import {
   resolveOrderStatusTokens,
   buildOrderStatusDateMatch,
+  parseOrderListDateDdMmYyyy,
 } from "../utility/orderListQuery.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import {
@@ -4798,14 +4799,8 @@ const getGeoSummary = catchAsync(async (req, res) => {
     String(dispatched) === "false" &&
     !skipDateForFarmReadyOnly
   ) {
-    const parseDate = (s, isEnd = false) => {
-      const [d, m, y] = s.split("-");
-      const dt = new Date(Date.UTC(+y, +m - 1, +d, 0, 0, 0, 0));
-      if (isEnd) dt.setUTCHours(23, 59, 59, 999);
-      return dt;
-    };
-    const start = parseDate(startDate);
-    const end = parseDate(endDate, true);
+    const start = parseOrderListDateDdMmYyyy(startDate, false);
+    const end = parseOrderListDateDdMmYyyy(endDate, true);
     if (
       includePastDueBeyondRange === "true" &&
       dateMongoField === "deliveryDate"
@@ -4843,14 +4838,8 @@ const getGeoSummary = catchAsync(async (req, res) => {
     ready_for_dispatch !== "true" &&
     !skipDateForFarmReadyOnly
   ) {
-    const parseDt = (s, isEnd = false) => {
-      const [d, m, y] = s.split("-");
-      const dt = new Date(Date.UTC(+y, +m - 1, +d, 0, 0, 0, 0));
-      if (isEnd) dt.setUTCHours(23, 59, 59, 999);
-      return dt;
-    };
-    const startD = parseDt(startDate);
-    const endD = parseDt(endDate, true);
+    const startD = parseOrderListDateDdMmYyyy(startDate, false);
+    const endD = parseOrderListDateDdMmYyyy(endDate, true);
     if (includePastDueBeyondRange === "true" && dateMongoField === "deliveryDate") {
       pipeline.push({
         $match: {
@@ -5012,23 +5001,12 @@ function pushOrderListRoleScopeForRemainingDispatch(pipeline, req) {
   }
 }
 
-function parseDdMmYyyyUtcRemaining(dateStr, isEnd = false) {
-  if (!dateStr || typeof dateStr !== "string") return null;
-  const parts = dateStr.split("-");
-  if (parts.length !== 3) return null;
-  const [day, month, year] = parts;
-  const d = isEnd
-    ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
-    : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-  return isNaN(d.getTime()) ? null : d;
-}
-
 function pushRemainingDispatchDateRangeMatch(pipeline, req) {
   const { startDate, endDate, dateRangeField, includePastDueBeyondRange } = req.query || {};
   if (!startDate || !endDate) return;
 
-  const start = parseDdMmYyyyUtcRemaining(startDate, false);
-  const end = parseDdMmYyyyUtcRemaining(endDate, true);
+  const start = parseOrderListDateDdMmYyyy(startDate, false);
+  const end = parseOrderListDateDdMmYyyy(endDate, true);
   if (!start || !end) return;
 
   const f = String(dateRangeField || "").toLowerCase().trim();
@@ -5913,12 +5891,20 @@ const getCentralReportCatalog = catchAsync(async (req, res) => {
 
 const getCentralReportById = catchAsync(async (req, res) => {
   const { reportId } = req.params;
-  const { startDate, endDate } = req.query;
+  const { startDate, endDate, year, month, plantId, search, onlyAvailable } = req.query;
   const flags = parseMisDueFlags(req.query);
-  const options =
-    String(reportId || "").includes("due") && !flags.dueOnly
+  const options = {
+    ...(String(reportId || "").includes("due") && !flags.dueOnly
       ? { includeAllPastDue: flags.includeAllPastDue }
-      : flags;
+      : flags),
+    ...(year != null && year !== "" ? { year: Number(year) } : {}),
+    ...(month ? { month } : {}),
+    ...(plantId ? { plantId } : {}),
+    ...(search ? { search } : {}),
+    ...(onlyAvailable != null && onlyAvailable !== ""
+      ? { onlyAvailable }
+      : {}),
+  };
   const result = await runCentralReport(reportId, startDate, endDate, options);
   return respondCentralReport(res, result, { includeMeta: true });
 });

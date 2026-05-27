@@ -278,6 +278,143 @@ export async function sendOrderPlacedAlert(orderOrId) {
   }
 }
 
+/**
+ * 🔥 Big order — quantity at or above WHATSAPP_ALERT_BIG_ORDER_QTY (default 10,000).
+ */
+export async function sendBigOrderAlert(order, { qty, threshold } = {}) {
+  try {
+    const plants = qty ?? orderPlantQtyFromDoc(order);
+    const minQty = threshold ?? parseInt(process.env.WHATSAPP_ALERT_BIG_ORDER_QTY || "10000", 10);
+
+    const farmerName =
+      order?.farmer?.name || order?.orderFor?.name || "—";
+    const salesPersonName = order?.salesPerson?.name || "—";
+    const farmerVillage =
+      order?.farmer?.village || order?.orderFor?.village || "—";
+    const plantLabel =
+      order?.plantName?.name ||
+      (typeof order?.plantName === "string" ? order.plantName : null) ||
+      "—";
+    const orderNo = order?.orderId || order?.publicOrderCode || order?._id || "—";
+    const rate = Number(order?.rate) || 0;
+    const amount =
+      order?.totalAmount != null
+        ? Number(order.totalAmount)
+        : plants && rate
+          ? plants * rate
+          : 0;
+    const deliveryDate = order?.deliveryDate
+      ? new Date(order.deliveryDate).toLocaleDateString("en-IN")
+      : "—";
+
+    const message = [
+      "🔥 *BIG ORDER ALERT*",
+      `_Quantity ≥ ${minQty.toLocaleString("en-IN")} plants_`,
+      "",
+      `Order No: *${orderNo}*`,
+      `Customer: ${farmerName}`,
+      `Village: ${farmerVillage}`,
+      `Plant: *${plantLabel}*`,
+      `Plants: *${Number(plants).toLocaleString("en-IN")}*`,
+      `Amount: ₹${Number(amount).toLocaleString("en-IN")}`,
+      `Delivery: ${deliveryDate}`,
+      `Sales: ${salesPersonName}`,
+    ].join("\n");
+
+    return await alertAdmins(message, `big order #${orderNo} (${plants})`);
+  } catch (err) {
+    console.error("[WhatsApp Alert] sendBigOrderAlert error:", err?.message || err);
+    return { delivered: 0, total: 0, results: [], error: err?.message || String(err) };
+  }
+}
+
+function orderPlantQtyFromDoc(order = {}) {
+  const base = Number(order?.numberOfPlants) || 0;
+  const extra = Number(order?.additionalPlants) || 0;
+  const total = Number(order?.totalPlants);
+  if (total > 0) return total;
+  return base + extra;
+}
+
+function formatSlotLine(row) {
+  const window = `${row.startDay}–${row.endDay}`;
+  const month = row.month ? ` (${row.month})` : "";
+  return `• *${row.plantName}* / ${row.subtypeName} — ${window}${month}\n  Avail: *${row.availablePlants}* / ${row.totalPlants} (booked ${row.bookedPlants}, ${row.utilPct ?? 0}% full)`;
+}
+
+/**
+ * 📦 Slot availability digest — low, high, overbooked (from alert engine scan).
+ */
+export async function sendSlotAvailabilityDigest({
+  low = [],
+  high = [],
+  overbooked = [],
+  year,
+  totalScanned = 0,
+}) {
+  try {
+    const lines = [
+      "📦 *Slot availability alerts*",
+      `_Scanned ${totalScanned} active slots · year ${year}_`,
+      "",
+    ];
+
+    if (overbooked.length) {
+      lines.push("⚠️ *Overbooked / critical*");
+      for (const row of overbooked) {
+        lines.push(formatSlotLine(row));
+      }
+      lines.push("");
+    }
+
+    if (low.length) {
+      lines.push("🔴 *Low availability* (almost full)");
+      for (const row of low) {
+        lines.push(formatSlotLine(row));
+      }
+      lines.push("");
+    }
+
+    if (high.length) {
+      lines.push("🟢 *High availability* (open capacity — push sales)");
+      for (const row of high) {
+        lines.push(formatSlotLine(row));
+      }
+      lines.push("");
+    }
+
+    if (lines.length <= 3) {
+      return { delivered: 0, total: 0, results: [], reason: "empty_digest" };
+    }
+
+    return await alertAdmins(lines.join("\n").trimEnd(), "slot availability digest");
+  } catch (err) {
+    console.error("[WhatsApp Alert] sendSlotAvailabilityDigest error:", err?.message || err);
+    return { delivered: 0, total: 0, results: [], error: err?.message || String(err) };
+  }
+}
+
+/**
+ * 🚨 Operational backlog digest (stuck orders, payments, overflow slots).
+ */
+export async function sendOpsAlertsDigest({ text, counts }) {
+  try {
+    const message = [
+      "🚨 *Daily ops alert*",
+      "_Automated engine scan_",
+      "",
+      text,
+      "",
+      `_Counts: ACCEPTED>7d ${counts?.stuckAccepted ?? 0} | FARM_READY stale ${counts?.stuckFarmReady ?? 0} | payment pending ${counts?.paymentPending ?? 0} | PENDING>7d ${counts?.oldPendingNew ?? 0} | over-cap slots ${counts?.overflowSlots ?? 0}_`,
+    ].join("\n");
+
+    return await alertAdmins(message, "ops digest");
+  } catch (err) {
+    console.error("[WhatsApp Alert] sendOpsAlertsDigest error:", err?.message || err);
+    return { delivered: 0, total: 0, results: [], error: err?.message || String(err) };
+  }
+}
+
 const FIELD_LABELS = {
   orderStatus: "Status",
   numberOfPlants: "Qty",

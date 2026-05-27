@@ -792,6 +792,21 @@ const orderSchema = new Schema(
       ref: "User",
       // User who assigned the order to the route
     },
+    readyDispatchGroupId: {
+      type: Schema.Types.ObjectId,
+      ref: "ReadyDispatchGroup",
+      default: null,
+    },
+    driverRemark: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    vehicleRemark: {
+      type: String,
+      trim: true,
+      default: "",
+    },
 
     // --- Order Split tracking ---
     /** Set on child orders created by a split. Points to the original parent order. */

@@ -79,6 +79,9 @@ export function buildDeliveryChallanPdfBuffer(dispatch) {
     doc.text(`Transport ID: ${dispatch.transportId ?? "—"}`);
     doc.text(`Driver: ${dispatch.driverName || "—"}    Vehicle: ${dispatch.vehicleName || "—"}`);
     if (dispatch.vehicleNumber) doc.text(`Vehicle number: ${dispatch.vehicleNumber}`);
+    if (dispatch.routeNotes) doc.text(`Route notes: ${dispatch.routeNotes}`);
+    if (dispatch.driverRemark) doc.text(`Driver instructions: ${dispatch.driverRemark}`);
+    if (dispatch.vehicleRemark) doc.text(`Vehicle / load notes: ${dispatch.vehicleRemark}`);
     doc.text(`Date: ${created.toLocaleDateString("en-IN")}`);
     doc.moveDown(1);
 

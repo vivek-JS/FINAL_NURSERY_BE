@@ -19,6 +19,7 @@ import {
   getSlotDetailsById,
   getSlotTrail,
   getSimpleSlots,
+  getAvailabilityOverview,
   getSlotTransferOptions,
   transferSlotPlants,
   getTransferCapacityOptions,
@@ -39,6 +40,7 @@ slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.get("/slots/stock-entry", getStockEntry);
 slotRouter.put("/slots/stock-entry/bulk", bulkStockEntry);
 slotRouter.get("/slots/simple", getSimpleSlots);
+slotRouter.get("/slots/availability-overview", getAvailabilityOverview);
 slotRouter.get("/slots/transfer-options", getSlotTransferOptions);
 slotRouter.get("/slots/transfer-capacity-options", getTransferCapacityOptions);
 slotRouter.get("/slots/orders-transfer-targets", getOrdersTransferTargets);

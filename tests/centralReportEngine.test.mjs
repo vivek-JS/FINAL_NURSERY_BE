@@ -30,6 +30,8 @@ test("resolveCentralReport finds by id and alias", () => {
   assert.equal(resolveCentralReport("sales")?.id, "admin-mis-sales");
   assert.equal(resolveCentralReport("dealer")?.id, "admin-mis-dealer");
   assert.equal(resolveCentralReport("due")?.id, "admin-mis-due");
+  assert.equal(resolveCentralReport("stock")?.id, "slot-availability");
+  assert.equal(resolveCentralReport("availability")?.id, "slot-availability");
   assert.equal(resolveCentralReport("unknown-xyz"), null);
 });
 
@@ -43,7 +45,8 @@ test("getCentralReportEngineMeta includes metric rules", () => {
   const meta = getCentralReportEngineMeta();
   assert.equal(meta.timezone, "Asia/Kolkata");
   assert.ok(meta.metricRules.accepted);
-  assert.ok(meta.reports.length >= 4);
+  assert.ok(meta.reports.length >= 5);
+  assert.ok(meta.reports.some((r) => r.id === "slot-availability"));
   assert.deepEqual(meta.deliveryExcludedStatuses, ["DISPATCHED", "COMPLETED"]);
   assert.deepEqual(meta.metricRules.deliveryTotal.excludedStatuses, [
     "DISPATCHED",

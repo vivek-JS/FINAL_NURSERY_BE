@@ -262,6 +262,19 @@ const dispatchSchema = new Schema(
       ref: "Vehicle",
       default: null,
     },
+    ownerId: {
+      type: Schema.Types.ObjectId,
+      ref: "VehicleOwner",
+      default: null,
+    },
+    driverRemark: {
+      type: String,
+      default: "",
+    },
+    vehicleRemark: {
+      type: String,
+      default: "",
+    },
     driverMobile: {
       type: String,
       default: "",
