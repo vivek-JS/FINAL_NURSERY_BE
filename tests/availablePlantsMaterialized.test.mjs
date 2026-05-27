@@ -52,3 +52,13 @@ test("trail entry AVAILABLE_PLANTS_UPDATED marks materialized", () => {
   assert.equal(resolveSlotBufferFields(slot).availablePlants, 0);
   assert.equal(resolveSlotBufferFields(slot).totalCapacity, 10000);
 });
+
+test("negative stored available is kept for unmigrated overbooked slots", () => {
+  const resolved = resolveSlotBufferFields({
+    availablePlants: -8000,
+    totalPlants: 80000,
+    totalBookedPlants: 80000,
+  });
+  assert.equal(resolved.availablePlants, -8000);
+  assert.equal(resolved.totalCapacity, 80000);
+});

@@ -7,6 +7,11 @@ import {
 export { STOCK_TRAIL_ACTION_LIST };
 export const STOCK_TRAIL_ACTIONS = STOCK_TRAIL_FIELD_ACTIONS;
 
+const parseStockNumber = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
+
 const buildSnapshot = (slot, field, fieldValue) => {
   const totalPlants = Number(slot.totalPlants) || 0;
   const availablePlants =
@@ -50,8 +55,8 @@ export function logStockFieldChange(
 ) {
   if (!slot || !STOCK_TRAIL_FIELD_ACTIONS[field]) return false;
 
-  const prev = Math.max(0, Number(previousValue) || 0);
-  const next = Math.max(0, Number(newValue) || 0);
+  const prev = parseStockNumber(previousValue);
+  const next = parseStockNumber(newValue);
   if (prev === next) return false;
 
   const action = STOCK_TRAIL_FIELD_ACTIONS[field];
@@ -119,8 +124,11 @@ export function applyStockFieldUpdates(slot, updates, performedBy, source) {
   let changed = false;
   for (const field of ["actualPlants", "closingStock", "availablePlants"]) {
     if (updates[field] === undefined) continue;
-    const prev = Number(slot[field]) || 0;
-    const next = Math.max(0, Number(updates[field]) || 0);
+    const prev = parseStockNumber(slot[field]);
+    const next =
+      field === "availablePlants"
+        ? parseStockNumber(updates[field])
+        : Math.max(0, parseStockNumber(updates[field]));
     if (logStockFieldChange(slot, field, prev, next, performedBy, source)) {
       changed = true;
     }

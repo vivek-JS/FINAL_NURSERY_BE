@@ -73,6 +73,9 @@ const resolveStoredAvailable = (slot, booked) => {
   if (isAvailablePlantsMaterialized(slot)) {
     return storedAvailableRaw ?? 0;
   }
+  if (storedAvailableRaw != null && storedAvailableRaw < 0) {
+    return storedAvailableRaw;
+  }
   if (storedAvailableRaw != null && storedAvailableRaw > 0) {
     return storedAvailableRaw;
   }

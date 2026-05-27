@@ -1,21 +1,310 @@
 import PDFDocument from "pdfkit";
 import { formatPlantCell } from "./reportService.js";
 
+/** Per-report colour themes — nursery / agri aesthetic */
+const THEMES = {
+  booking: {
+    primary: "#14532d",
+    primaryLight: "#166534",
+    accent: "#ca8a04",
+    accentSoft: "#fef3c7",
+    bar: "#4ade80",
+    barBg: "#dcfce7",
+    kpiText: "#14532d",
+    tableHead: "#166534",
+    rowAlt: "#f0fdf4",
+    calloutBg: "#ecfdf5",
+    calloutBorder: "#86efac",
+  },
+  delivery: {
+    primary: "#0f172a",
+    primaryLight: "#1e293b",
+    accent: "#f59e0b",
+    accentSoft: "#fef3c7",
+    bar: "#60a5fa",
+    barBg: "#dbeafe",
+    kpiText: "#0f172a",
+    tableHead: "#1e40af",
+    rowAlt: "#f8fafc",
+    calloutBg: "#eff6ff",
+    calloutBorder: "#93c5fd",
+  },
+  availability: {
+    primary: "#064e3b",
+    primaryLight: "#047857",
+    accent: "#34d399",
+    accentSoft: "#d1fae5",
+    bar: "#10b981",
+    barBg: "#a7f3d0",
+    kpiText: "#065f46",
+    tableHead: "#059669",
+    rowAlt: "#ecfdf5",
+    calloutBg: "#ecfdf5",
+    calloutBorder: "#6ee7b7",
+  },
+  slots: {
+    primary: "#1e3a5f",
+    primaryLight: "#2563eb",
+    accent: "#38bdf8",
+    accentSoft: "#e0f2fe",
+    bar: "#0ea5e9",
+    barBg: "#bae6fd",
+    kpiText: "#1e3a5f",
+    tableHead: "#0369a1",
+    rowAlt: "#f0f9ff",
+    calloutBg: "#e0f2fe",
+    calloutBorder: "#7dd3fc",
+  },
+  insight: {
+    primary: "#312e81",
+    primaryLight: "#4338ca",
+    accent: "#a78bfa",
+    accentSoft: "#ede9fe",
+    bar: "#818cf8",
+    barBg: "#c7d2fe",
+    kpiText: "#312e81",
+    tableHead: "#4f46e5",
+    rowAlt: "#f5f3ff",
+    calloutBg: "#ede9fe",
+    calloutBorder: "#c4b5fd",
+  },
+};
+
 const COLORS = {
-  headerBar: "#0f172a",
-  headerAccent: "#2563eb",
+  headerBar: THEMES.delivery.primary,
+  headerAccent: THEMES.delivery.accent,
   headerText: "#ffffff",
-  accent: "#1e3a8a",
+  accent: THEMES.delivery.tableHead,
   muted: "#64748b",
-  border: "#cbd5e1",
-  rowAlt: "#f1f5f9",
-  kpiBg: "#f8fafc",
-  kpiBorder: "#94a3b8",
+  border: "#e2e8f0",
+  rowAlt: "#f8fafc",
+  kpiBg: "#ffffff",
+  kpiBorder: "#e2e8f0",
+  text: "#1e293b",
+  textSoft: "#475569",
+  white: "#ffffff",
+  shadow: "#cbd5e1",
 };
 
 function formatInr(n) {
   const x = Math.round(Number(n) || 0);
   return `₹${x.toLocaleString("en-IN")}`;
+}
+
+function formatNum(n) {
+  return Number(n || 0).toLocaleString("en-IN");
+}
+
+function fmtGenDate() {
+  return new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** Layered hero banner with brand strip + accent line */
+function drawHeroBanner(doc, ml, y, usableW, { title, subtitle, theme, badge = "RAM BIOTECH" }) {
+  const h = 64;
+  const t = theme || THEMES.delivery;
+
+  doc.save();
+  // soft shadow
+  doc.rect(ml + 2, y + 3, usableW, h).fill(COLORS.shadow);
+  // main panel
+  doc.rect(ml, y, usableW, h).fill(t.primary);
+  // left brand stripe
+  doc.rect(ml, y, 6, h).fill(t.accent);
+  // subtle top highlight
+  doc.rect(ml + 6, y, usableW - 6, 14).fill(t.primaryLight).opacity(0.35);
+  doc.opacity(1);
+
+  // badge pill
+  const badgeW = doc.widthOfString(badge, { font: "Helvetica-Bold", size: 7 }) + 16;
+  doc.roundedRect(ml + usableW - badgeW - 14, y + 10, badgeW, 16, 8).fill(t.accent);
+  doc.fillColor(t.primary).font("Helvetica-Bold").fontSize(7);
+  doc.text(badge, ml + usableW - badgeW - 14, y + 14, {
+    width: badgeW,
+    align: "center",
+  });
+
+  doc.fillColor(COLORS.white).font("Helvetica-Bold").fontSize(23);
+  doc.text(title, ml + 18, y + 16, { width: usableW - badgeW - 40 });
+  doc.font("Helvetica").fontSize(10).fillColor("#cbd5e1");
+  doc.text(subtitle, ml + 18, y + 42, { width: usableW - 36 });
+
+  // accent underline
+  doc.rect(ml, y + h - 3, usableW, 3).fill(t.accent);
+  doc.restore();
+
+  return y + h + 14;
+}
+
+/** KPI card row with shadow + left accent */
+function drawKpiCards(doc, ml, y, usableW, kpis, theme) {
+  const t = theme || THEMES.delivery;
+  const gap = 12;
+  const count = kpis.length;
+  const kpiW = (usableW - gap * (count - 1)) / count;
+  const kpiH = 62;
+  let kx = ml;
+
+  for (let i = 0; i < kpis.length; i++) {
+    const k = kpis[i];
+    doc.save();
+    doc.rect(kx + 1, y + 2, kpiW, kpiH).fill(COLORS.shadow);
+    doc.roundedRect(kx, y, kpiW, kpiH, 6).fillAndStroke(COLORS.white, COLORS.border);
+    doc.rect(kx, y + 4, 4, kpiH - 8).fill(t.accent);
+    doc.fillColor(t.kpiText).font("Helvetica-Bold").fontSize(22);
+    doc.text(String(k.value), kx + 14, y + 12, {
+      width: kpiW - 20,
+      align: "left",
+    });
+    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
+    doc.text(k.label, kx + 14, y + 38, { width: kpiW - 20 });
+    if (k.sub) {
+      doc.font("Helvetica-Oblique").fontSize(7).fillColor(COLORS.textSoft);
+      doc.text(k.sub, kx + 14, y + 50, { width: kpiW - 20 });
+    }
+    doc.restore();
+    kx += kpiW + gap;
+  }
+  return y + kpiH + 16;
+}
+
+function drawSectionTitle(doc, ml, y, usableW, title, theme) {
+  const t = theme || THEMES.delivery;
+  doc.fillColor(t.primary).font("Helvetica-Bold").fontSize(12);
+  doc.text(title, ml, y, { width: usableW });
+  doc.rect(ml, y + 16, 48, 3).fill(t.accent);
+  return y + 26;
+}
+
+function drawCalloutBox(doc, ml, y, usableW, heading, lines, theme) {
+  const t = theme || THEMES.delivery;
+  const lineH = 11;
+  const boxH = 18 + lines.length * lineH;
+  doc.save();
+  doc.roundedRect(ml, y, usableW, boxH, 5).fill(t.calloutBg);
+  doc.roundedRect(ml, y, usableW, boxH, 5).stroke(t.calloutBorder);
+  doc.rect(ml, y, 4, boxH).fill(t.accent);
+  doc.fillColor(t.primary).font("Helvetica-Bold").fontSize(9);
+  doc.text(heading, ml + 12, y + 8, { width: usableW - 20 });
+  doc.font("Helvetica").fontSize(8).fillColor(COLORS.textSoft);
+  let ey = y + 22;
+  for (const line of lines) {
+    doc.text(`• ${line}`, ml + 12, ey, { width: usableW - 20 });
+    ey += lineH;
+  }
+  doc.restore();
+  return y + boxH + 12;
+}
+
+function drawHorizontalBars(doc, ml, y, usableW, rows, theme, pageH, mt, bottomMargin) {
+  if (!rows?.length) return y;
+  const t = theme || THEMES.delivery;
+  const maxV = Math.max(...rows.map((x) => x.value), 1);
+  const rowH = 22;
+  const labelW = usableW * 0.3;
+  const barMax = usableW * 0.52;
+
+  rows.forEach((row, i) => {
+    if (y > pageH - bottomMargin - 50) {
+      doc.addPage();
+      y = mt;
+    }
+    doc.font("Helvetica").fontSize(8.5).fillColor(COLORS.text);
+    doc.text(String(row.label).slice(0, 38), ml, y + 6, { width: labelW - 8 });
+    const frac = row.value / maxV;
+    const barW = Math.max(6, barMax * frac);
+    doc.save();
+    doc.roundedRect(ml + labelW, y + 4, barMax, rowH - 8, 3).fill(t.barBg);
+    doc.roundedRect(ml + labelW, y + 4, barW, rowH - 8, 3).fill(i % 2 === 0 ? t.bar : t.primaryLight);
+    doc.restore();
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(t.primary);
+    doc.text(formatNum(row.value), ml + labelW + barMax + 8, y + 6, {
+      width: 72,
+      align: "right",
+    });
+    y += rowH;
+  });
+  return y + 8;
+}
+
+function drawTableHeader(doc, ml, y, usableW, columns, theme) {
+  const t = theme || THEMES.delivery;
+  const hh = 26;
+  doc.save();
+  doc.roundedRect(ml, y, usableW, hh, 4).fill(t.tableHead);
+  doc.fillColor(COLORS.white).font("Helvetica-Bold").fontSize(8);
+  for (const col of columns) {
+    doc.text(col.label, col.x + 4, y + 9, {
+      width: col.w - 8,
+      align: col.align || "left",
+    });
+  }
+  doc.restore();
+  return y + hh;
+}
+
+function drawTableRow(doc, ml, y, usableW, rowH, columns, values, idx, theme) {
+  const t = theme || THEMES.delivery;
+  if (idx % 2 === 0) {
+    doc.save();
+    doc.rect(ml, y, usableW, rowH).fill(t.rowAlt);
+    doc.restore();
+  }
+  doc.font("Helvetica").fontSize(8.5).fillColor(COLORS.text);
+  values.forEach((val, i) => {
+    const col = columns[i];
+    const opts = { width: col.w - 8, align: col.align || "left" };
+    if (col.bold) doc.font("Helvetica-Bold");
+    if (col.color) doc.fillColor(col.color);
+    doc.text(String(val ?? ""), col.x + 4, y + 6, opts);
+    doc.font("Helvetica").fillColor(COLORS.text);
+  });
+  return y + rowH;
+}
+
+function drawGrandTotalBar(doc, ml, y, usableW, label, value, theme) {
+  const t = theme || THEMES.booking;
+  doc.save();
+  doc.roundedRect(ml, y, usableW, 34, 5).fill(t.primary);
+  doc.rect(ml, y, 5, 34).fill(t.accent);
+  doc.fillColor(COLORS.white).font("Helvetica-Bold").fontSize(12);
+  doc.text(label, ml + 16, y + 10, { width: usableW - 100 });
+  doc.font("Helvetica-Bold").fontSize(14).text(formatNum(value), ml, y + 9, {
+    width: usableW - 16,
+    align: "right",
+  });
+  doc.restore();
+  return y + 44;
+}
+
+function drawFooter(doc, ml, y, usableW, meta, theme) {
+  const t = theme || THEMES.delivery;
+  doc.moveTo(ml, y).lineTo(ml + usableW, y).strokeColor(t.calloutBorder).lineWidth(0.5).stroke();
+  y += 8;
+  doc.fillColor(COLORS.muted).font("Helvetica").fontSize(7.5);
+  doc.text(
+    `Generated ${fmtGenDate()} IST · ${meta}`,
+    ml,
+    y,
+    { width: usableW, align: "center" }
+  );
+}
+
+function drawEmptyState(doc, ml, y, usableW, message, theme) {
+  const t = theme || THEMES.delivery;
+  doc.save();
+  doc.roundedRect(ml, y, usableW, 32, 4).fill(t.accentSoft);
+  doc.fillColor(t.primary).font("Helvetica-Oblique").fontSize(9);
+  doc.text(message, ml + 12, y + 10, { width: usableW - 24, align: "center" });
+  doc.restore();
+  return y + 40;
 }
 
 /** @param {{ plant: string, subtype: string, quantity: number }[]} summaryRows */
@@ -90,176 +379,94 @@ export function generateTodayBookingPdf({
     const ml = doc.page.margins.left;
     const mr = doc.page.margins.right;
     const mt = doc.page.margins.top;
+    const mb = doc.page.margins.bottom;
     const usableW = pageW - ml - mr;
+    const theme = THEMES.booking;
 
-    let y = mt;
-
-    // --- Top banner ---
-    doc.save();
-    doc.rect(ml, y, usableW, 56).fill(COLORS.headerBar);
-    doc.rect(ml, y + 53, usableW, 3).fill(COLORS.headerAccent);
-    doc.fillColor(COLORS.headerText).font("Helvetica-Bold").fontSize(22);
-    doc.text(bannerTitle, ml + 16, y + 12, {
-      width: usableW - 32,
-      align: "center",
+    let y = drawHeroBanner(doc, ml, mt, usableW, {
+      title: bannerTitle,
+      subtitle: reportDateLabel,
+      theme,
+      badge: "BOOKING",
     });
-    doc.font("Helvetica").fontSize(10).opacity(0.92);
-    doc.text(reportDateLabel, ml + 16, y + 34, {
-      width: usableW - 32,
-      align: "center",
-    });
-    doc.opacity(1).restore();
-    y += 66;
 
-    // --- KPI figures ---
-    const kpiH = 58;
-    const gap = 12;
-    const kpiW = (usableW - gap * 2) / 3;
-    const kpis = [
-      {
-        label: "Total quantity (plants)",
-        value: String(stats.grandTotal),
-      },
-      {
-        label: "Booking lines",
-        value: String(stats.bookingLines),
-      },
-      {
-        label: "Farmers (named)",
-        value: String(stats.uniqueFarmers),
-      },
-    ];
-    let kx = ml;
-    for (let i = 0; i < kpis.length; i++) {
-      doc.save();
-      doc.rect(kx, y, kpiW, kpiH).fillAndStroke(COLORS.kpiBg, COLORS.kpiBorder);
-      doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(22);
-      doc.text(kpis[i].value, kx + 8, y + 10, {
-        width: kpiW - 16,
-        align: "center",
-      });
-      doc.fillColor(COLORS.muted).font("Helvetica").fontSize(9);
-      doc.text(kpis[i].label, kx + 8, y + 38, {
-        width: kpiW - 16,
-        align: "center",
-      });
-      doc.restore();
-      kx += kpiW + gap;
-    }
-    y += kpiH + 18;
+    y = drawKpiCards(
+      doc,
+      ml,
+      y,
+      usableW,
+      [
+        { label: "Total plants booked", value: formatNum(stats.grandTotal) },
+        { label: "Booking lines", value: formatNum(stats.bookingLines) },
+        { label: "Distinct farmers", value: formatNum(stats.uniqueFarmers) },
+      ],
+      theme
+    );
 
     const bars =
       plantBarChart && plantBarChart.length
         ? plantBarChart
         : plantTotalsForBarChart(summaryRows, 6);
     if (bars.length) {
-      const maxV = Math.max(...bars.map((x) => x.value), 1);
-      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-      doc.text("Plant booking volume (horizontal bars)", ml, y);
-      y += 14;
-      const rowH = 18;
-      const labelW = usableW * 0.34;
-      const barMax = usableW * 0.48;
-      bars.forEach((row) => {
-        if (y > pageH - doc.page.margins.bottom - 50) {
-          doc.addPage();
-          y = mt;
-        }
-        const frac = row.value / maxV;
-        doc.font("Helvetica").fontSize(8).fillColor("#212529");
-        doc.text(String(row.label).slice(0, 34), ml, y + 4, {
-          width: labelW - 6,
-        });
-        doc.save();
-        doc
-          .rect(ml + labelW, y + 2, Math.max(4, barMax * frac), rowH - 6)
-          .fillAndStroke("#d8f3dc", COLORS.kpiBorder);
-        doc.restore();
-        doc
-          .font("Helvetica-Bold")
-          .fontSize(9)
-          .fillColor(COLORS.accent)
-          .text(String(row.value), ml + labelW + barMax + 6, y + 4, {
-            width: 80,
-            align: "right",
-          });
-        y += rowH;
-      });
-      y += 12;
+      y = drawSectionTitle(doc, ml, y, usableW, "Plant booking volume", theme);
+      y = drawHorizontalBars(doc, ml, y, usableW, bars, theme, pageH, mt, mb + 50);
     }
 
     if (topFarmers && topFarmers.length) {
-      if (y > pageH - doc.page.margins.bottom - 120) {
+      if (y > pageH - mb - 120) {
         doc.addPage();
         y = mt;
       }
-      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-      doc.text("Top farmers (by plant quantity)", ml, y);
-      y += 14;
-      doc.font("Helvetica").fontSize(9).fillColor("#212529");
+      y = drawSectionTitle(doc, ml, y, usableW, "Top farmers by quantity", theme);
+      doc.font("Helvetica").fontSize(9).fillColor(COLORS.text);
       topFarmers.forEach((f, i) => {
-        doc.text(
-          `${i + 1}. ${f.name} — ${f.quantity} plants`,
-          ml,
-          y,
-          { width: usableW }
-        );
-        y += 13;
+        doc.fillColor(theme.primary).font("Helvetica-Bold").text(`${i + 1}.`, ml, y, { continued: true });
+        doc.fillColor(COLORS.text).font("Helvetica").text(` ${f.name} — ${formatNum(f.quantity)} plants`, { width: usableW });
+        y += 14;
       });
-      y += 8;
+      y += 6;
     }
 
     if (topVillages && topVillages.length) {
-      if (y > pageH - doc.page.margins.bottom - 100) {
+      if (y > pageH - mb - 100) {
         doc.addPage();
         y = mt;
       }
-      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-      doc.text("Top villages / areas (by quantity)", ml, y);
-      y += 14;
-      doc.font("Helvetica").fontSize(9).fillColor("#212529");
+      y = drawSectionTitle(doc, ml, y, usableW, "Top villages / areas", theme);
+      doc.font("Helvetica").fontSize(9).fillColor(COLORS.text);
       topVillages.forEach((v, i) => {
-        doc.text(
-          `${i + 1}. ${v.name} — ${v.quantity} plants`,
-          ml,
-          y,
-          { width: usableW }
-        );
-        y += 13;
+        doc.fillColor(theme.primary).font("Helvetica-Bold").text(`${i + 1}.`, ml, y, { continued: true });
+        doc.fillColor(COLORS.text).font("Helvetica").text(` ${v.name} — ${formatNum(v.quantity)} plants`, { width: usableW });
+        y += 14;
       });
-      y += 8;
+      y += 6;
     }
 
     if (paymentSnapshot && paymentSnapshot.totalDue != null) {
-      if (y > pageH - doc.page.margins.bottom - 80) {
+      if (y > pageH - mb - 80) {
         doc.addPage();
         y = mt;
       }
-      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-      doc.text("Payment summary (same order set)", ml, y);
-      y += 14;
-      doc.font("Helvetica").fontSize(9).fillColor("#212529");
-      doc.text(
-        `Billable: ${formatInr(paymentSnapshot.totalDue)} | Collected: ${formatInr(
-          paymentSnapshot.totalCollected
-        )} | Outstanding: ${formatInr(paymentSnapshot.totalOutstanding)}`,
+      y = drawCalloutBox(
+        doc,
         ml,
         y,
-        { width: usableW }
+        usableW,
+        "Payment summary",
+        [
+          `Billable: ${formatInr(paymentSnapshot.totalDue)} · Collected: ${formatInr(paymentSnapshot.totalCollected)} · Outstanding: ${formatInr(paymentSnapshot.totalOutstanding)}`,
+          `PENDING orders: ${paymentSnapshot.pendingPaymentOrders ?? "—"} · COMPLETED: ${paymentSnapshot.completedPaymentOrders ?? "—"}`,
+        ],
+        theme
       );
-      y += 12;
-      doc.text(
-        `Order flags — PENDING: ${paymentSnapshot.pendingPaymentOrders ?? "—"} | COMPLETED: ${paymentSnapshot.completedPaymentOrders ?? "—"}`,
-        ml,
-        y,
-        { width: usableW }
-      );
-      y += 18;
     }
 
-    doc.fillColor("#212529").font("Helvetica-Bold").fontSize(11);
-    doc.text("Detail — Farmer · Plant · Subtype · Quantity", ml, y);
-    y += 16;
+    if (y > pageH - mb - 140) {
+      doc.addPage();
+      y = mt;
+    }
+    y = drawSectionTitle(doc, ml, y, usableW, "Booking detail", theme);
+    y += 4;
 
     // --- Detail table (column widths as fractions of usable width) ---
     const wSr = usableW * 0.045;
@@ -284,133 +491,83 @@ export function generateTodayBookingPdf({
     };
 
     const headerH = 24;
-    doc.save();
-    doc.rect(ml, y, usableW, headerH).fill(COLORS.accent);
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(9);
-    doc.text("Sr", col.sr + 4, y + 7, { width: widths.sr - 8 });
-    doc.text("Farmer name", col.farmer, y + 7, { width: widths.farmer - 4 });
-    doc.text("Plant (type)", col.plant, y + 7, { width: widths.plant - 4 });
-    doc.text("Subtype (variety)", col.subtype, y + 7, {
-      width: widths.subtype - 4,
-    });
-    doc.text("Qty", col.qty, y + 7, {
-      width: widths.qty - 8,
-      align: "right",
-    });
-    doc.restore();
-    y += headerH;
-
-    doc.font("Helvetica").fontSize(9).fillColor("#212529");
+    const detailCols = [
+      { label: "Sr", x: col.sr, w: widths.sr + 6 },
+      { label: "Farmer", x: col.farmer, w: widths.farmer + 6 },
+      { label: "Plant", x: col.plant, w: widths.plant + 6 },
+      { label: "Subtype", x: col.subtype, w: widths.subtype + 6 },
+      { label: "Qty", x: col.qty, w: widths.qty + 6, align: "right" },
+    ];
+    y = drawTableHeader(doc, ml, y, usableW, detailCols, theme);
 
     if (!lineRows.length) {
-      doc.rect(ml, y, usableW, 28).fill("#fff3cd").stroke(COLORS.border);
-      doc.fillColor("#856404").text("No bookings recorded for today (IST).", ml + 10, y + 8, {
-        width: usableW - 20,
-      });
-      y += 36;
+      y = drawEmptyState(doc, ml, y, usableW, "No bookings recorded for this period (IST).", theme);
     } else {
       lineRows.forEach((row, idx) => {
-        if (y > pageH - doc.page.margins.bottom - 120) {
+        if (y > pageH - mb - 120) {
           doc.addPage();
           y = mt;
         }
         const rowH = 26;
-        if (idx % 2 === 0) {
-          doc.save();
-          doc.rect(ml, y, usableW, rowH).fill(COLORS.rowAlt);
-          doc.restore();
-        }
         const plantDisplay = formatPlantCell(row.plantName, row.plantType);
-        doc.fillColor("#212529");
-        doc.text(String(idx + 1), col.sr + 4, y + 7, { width: widths.sr - 8 });
-        doc.text(row.farmerName, col.farmer, y + 7, {
-          width: widths.farmer,
-        });
-        doc.text(plantDisplay, col.plant, y + 7, {
-          width: widths.plant,
-        });
-        doc.text(row.subtype, col.subtype, y + 7, {
-          width: widths.subtype,
-        });
-        doc.font("Helvetica-Bold").text(String(row.quantity), col.qty, y + 7, {
-          width: widths.qty - 8,
-          align: "right",
-        });
-        doc.font("Helvetica");
-        y += rowH;
+        y = drawTableRow(
+          doc,
+          ml,
+          y,
+          usableW,
+          rowH,
+          detailCols,
+          [
+            String(idx + 1),
+            row.farmerName,
+            plantDisplay,
+            row.subtype,
+            formatNum(row.quantity),
+          ],
+          idx,
+          theme
+        );
       });
     }
 
     y += 14;
-    doc.moveTo(ml, y).lineTo(ml + usableW, y).strokeColor(COLORS.border).lineWidth(1).stroke();
-    y += 12;
-
-    // --- Summary by plant / subtype ---
-    doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-    doc.text("Summary — Plant × Subtype (today’s totals)", ml, y);
-    y += 16;
+    y = drawSectionTitle(doc, ml, y, usableW, "Summary — Plant × Subtype", theme);
+    y += 4;
 
     const sCol = { plant: ml, subtype: ml + 280, qty: ml + 560 };
     const sW = { plant: 268, subtype: 268, qty: usableW - (560 - ml) };
+    const sumCols = [
+      { label: "Plant", x: sCol.plant, w: sW.plant },
+      { label: "Subtype", x: sCol.subtype, w: sW.subtype },
+      { label: "Total qty", x: sCol.qty, w: sW.qty, align: "right" },
+    ];
+    y = drawTableHeader(doc, ml, y, usableW, sumCols, theme);
 
-    doc.save();
-    doc.rect(ml, y, usableW, 22).fill("#e9ecef");
-    doc.fillColor("#212529").font("Helvetica-Bold").fontSize(9);
-    doc.text("Plant", sCol.plant + 6, y + 6, { width: sW.plant - 12 });
-    doc.text("Subtype", sCol.subtype + 6, y + 6, { width: sW.subtype - 12 });
-    doc.text("Total qty", sCol.qty + 6, y + 6, {
-      width: sW.qty - 12,
-      align: "right",
-    });
-    doc.restore();
-    y += 22;
-
-    doc.font("Helvetica").fontSize(9);
     if (!summaryRows.length) {
-      doc.text("—", ml + 6, y + 4);
-      y += 22;
+      y = drawEmptyState(doc, ml, y, usableW, "No summary rows.", theme);
     } else {
       summaryRows.forEach((r, i) => {
-        if (y > pageH - doc.page.margins.bottom - 60) {
+        if (y > pageH - mb - 60) {
           doc.addPage();
           y = mt;
         }
-        if (i % 2 === 1) {
-          doc.save();
-          doc.rect(ml, y, usableW, 20).fill("#f8f9fa");
-          doc.restore();
-        }
-        doc.fillColor("#212529");
-        doc.text(r.plant, sCol.plant + 6, y + 5, { width: sW.plant - 12 });
-        doc.text(r.subtype, sCol.subtype + 6, y + 5, { width: sW.subtype - 12 });
-        doc.font("Helvetica-Bold").text(String(r.quantity), sCol.qty + 6, y + 5, {
-          width: sW.qty - 12,
-          align: "right",
-        });
-        doc.font("Helvetica");
-        y += 20;
+        y = drawTableRow(
+          doc,
+          ml,
+          y,
+          usableW,
+          20,
+          sumCols,
+          [r.plant, r.subtype, formatNum(r.quantity)],
+          i,
+          theme
+        );
       });
     }
 
-    y += 10;
-    doc.save();
-    doc.rect(ml, y, usableW, 30).fill(COLORS.headerBar);
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(11);
-    doc.text("Grand total (quantity)", ml + 12, y + 9, { width: usableW - 120 });
-    doc.text(String(stats.grandTotal), ml, y + 9, {
-      width: usableW - 16,
-      align: "right",
-    });
-    doc.restore();
-
-    y += 44;
-    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-    doc.text(
-      `Generated ${new Date().toISOString()} · ${dataSourceLabel} · ${reportDateLabel}`,
-      ml,
-      y,
-      { width: usableW, align: "center" }
-    );
+    y += 8;
+    y = drawGrandTotalBar(doc, ml, y, usableW, "Grand total (plants)", stats.grandTotal, theme);
+    drawFooter(doc, ml, y, usableW, `${dataSourceLabel} · ${reportDateLabel}`, theme);
 
     doc.end();
   });
@@ -453,7 +610,9 @@ export function generateDeliveryQueuePdf({
     const ml = doc.page.margins.left;
     const mr = doc.page.margins.right;
     const mt = doc.page.margins.top;
+    const mb = doc.page.margins.bottom;
     const usableW = pageW - ml - mr;
+    const theme = THEMES.delivery;
     let y = mt;
 
     const segs =
@@ -467,65 +626,45 @@ export function generateDeliveryQueuePdf({
             },
           ];
 
-    const EXPLAIN = [
-      "ACCEPTED = approved booking; FARM_READY = plants ready at farm — both await dispatch.",
-      segs.length > 1
-        ? "Separate sections: orders with a delivery date in your window vs orders with no date set yet."
-        : "Rows are filtered by the due / no-due choice you picked in WhatsApp.",
-    ];
-
-    doc.save();
-    doc.rect(ml, y, usableW, 52).fill(COLORS.headerBar);
-    doc.fillColor(COLORS.headerText).font("Helvetica-Bold").fontSize(20);
-    doc.text("Delivery queue report", ml + 16, y + 8, {
-      width: usableW - 32,
-      align: "center",
+    y = drawHeroBanner(doc, ml, y, usableW, {
+      title: "Delivery Queue Report",
+      subtitle: reportDateLabel,
+      theme,
+      badge: "DELIVERY",
     });
-    doc.font("Helvetica").fontSize(10).opacity(0.95);
-    doc.text(reportDateLabel, ml + 16, y + 32, {
-      width: usableW - 32,
-      align: "center",
-    });
-    doc.opacity(1).restore();
-    y += 60;
 
-    doc.save();
-    doc.rect(ml, y, usableW, 44).fill("#e7f1ff").stroke(COLORS.kpiBorder);
-    doc.fillColor("#1a1a2e").font("Helvetica-Bold").fontSize(10);
-    doc.text("How to read this report", ml + 10, y + 6, { width: usableW - 20 });
-    doc.font("Helvetica").fontSize(8.5).fillColor("#333");
-    let ey = y + 22;
-    for (const line of EXPLAIN) {
-      doc.text(`• ${line}`, ml + 10, ey, { width: usableW - 20 });
-      ey += 12;
-    }
-    doc.restore();
-    y += 50;
+    y = drawCalloutBox(
+      doc,
+      ml,
+      y,
+      usableW,
+      "How to read this report",
+      [
+        "ACCEPTED = approved booking; FARM_READY = plants ready at farm — both await dispatch.",
+        segs.length > 1
+          ? "Separate sections: orders with delivery date in window vs orders without a date."
+          : "Filtered by your WhatsApp due / no-due selection.",
+      ],
+      theme
+    );
 
+    const kpiH = 50;
     const gap = 10;
     const kpiW = (usableW - gap) / 2;
-    const kpiH = 50;
 
     const drawKpi2 = (row) => {
       let kx = ml;
       for (let i = 0; i < row.length; i++) {
         doc.save();
-        doc.rect(kx, y, kpiW, kpiH).fillAndStroke(COLORS.kpiBg, COLORS.kpiBorder);
-        doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(20);
-        doc.text(row[i].value, kx + 8, y + 8, {
-          width: kpiW - 16,
-          align: "center",
-        });
+        doc.rect(kx + 1, y + 2, kpiW, kpiH).fill(COLORS.shadow);
+        doc.roundedRect(kx, y, kpiW, kpiH, 5).fillAndStroke(COLORS.white, COLORS.border);
+        doc.rect(kx, y + 6, 4, kpiH - 12).fill(theme.accent);
+        doc.fillColor(theme.kpiText).font("Helvetica-Bold").fontSize(18);
+        doc.text(row[i].value, kx + 12, y + 8, { width: kpiW - 20, align: "left" });
         doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-        doc.text(row[i].label, kx + 8, y + 32, {
-          width: kpiW - 16,
-          align: "center",
-        });
+        doc.text(row[i].label, kx + 12, y + 30, { width: kpiW - 20 });
         if (row[i].sub) {
-          doc.text(row[i].sub, kx + 8, y + 40, {
-            width: kpiW - 16,
-            align: "center",
-          });
+          doc.font("Helvetica-Oblique").fontSize(7).text(row[i].sub, kx + 12, y + 40, { width: kpiW - 20 });
         }
         doc.restore();
         kx += kpiW + gap;
@@ -534,102 +673,47 @@ export function generateDeliveryQueuePdf({
 
     for (let si = 0; si < segs.length; si++) {
       const seg = segs[si];
-      if (y > pageH - doc.page.margins.bottom - 140) {
+      if (y > pageH - mb - 140) {
         doc.addPage();
         y = mt;
       }
 
-      doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(12);
-      doc.text(seg.title, ml, y, { width: usableW });
-      y += 18;
+      y = drawSectionTitle(doc, ml, y, usableW, seg.title, theme);
 
       const st = seg.totals;
       const totalOrders = st.acceptedOrders + st.farmReadyOrders;
       const totalPlants = st.acceptedPlants + st.farmReadyPlants;
-      const kpiRow = [
-        {
-          label: "Orders in this section",
-          value: String(totalOrders),
-          sub: "ACCEPTED + FARM_READY",
-        },
-        {
-          label: "Plants in this section",
-          value: String(totalPlants),
-          sub: "sum of quantities",
-        },
-      ];
-      const kpiRow2 = [
-        {
-          label: "ACCEPTED",
-          value: `${st.acceptedOrders} ord`,
-          sub: `${st.acceptedPlants} plants`,
-        },
-        {
-          label: "FARM_READY",
-          value: `${st.farmReadyOrders} ord`,
-          sub: `${st.farmReadyPlants} plants`,
-        },
-      ];
-      drawKpi2(kpiRow);
-      y += kpiH + 8;
-      drawKpi2(kpiRow2);
+      drawKpi2([
+        { label: "Orders in section", value: formatNum(totalOrders), sub: "ACCEPTED + FARM_READY" },
+        { label: "Plants in section", value: formatNum(totalPlants), sub: "sum of quantities" },
+      ]);
+      y += kpiH + 10;
+      drawKpi2([
+        { label: "ACCEPTED", value: `${st.acceptedOrders} ord`, sub: `${formatNum(st.acceptedPlants)} plants` },
+        { label: "FARM_READY", value: `${st.farmReadyOrders} ord`, sub: `${formatNum(st.farmReadyPlants)} plants` },
+      ]);
       y += kpiH + 16;
 
       const barSource = Object.keys(seg.byPlant || {})
         .sort((a, b) => a.localeCompare(b))
         .map((name) => {
           const b = seg.byPlant[name];
-          const q =
-            (b.accepted?.plantsQty || 0) + (b.farmReady?.plantsQty || 0);
+          const q = (b.accepted?.plantsQty || 0) + (b.farmReady?.plantsQty || 0);
           return { label: name, value: q };
         })
         .filter((x) => x.value > 0)
         .sort((a, b) => b.value - a.value)
         .slice(0, 8);
 
-      const maxV = Math.max(...barSource.map((x) => x.value), 1);
       if (barSource.length) {
-        doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-        doc.text("Plants by crop (this section)", ml, y);
-        y += 14;
-        const rowH = 18;
-        const labelW = usableW * 0.32;
-        const barMax = usableW * 0.5;
-        barSource.forEach((row) => {
-          if (y > pageH - doc.page.margins.bottom - 50) {
-            doc.addPage();
-            y = mt;
-          }
-          const frac = row.value / maxV;
-          doc.font("Helvetica").fontSize(8).fillColor("#212529");
-          doc.text(String(row.label).slice(0, 40), ml, y + 4, {
-            width: labelW - 6,
-          });
-          doc.save();
-          doc
-            .rect(ml + labelW, y + 2, Math.max(4, barMax * frac), rowH - 6)
-            .fillAndStroke("#e0e7ff", COLORS.kpiBorder);
-          doc.restore();
-          doc
-            .font("Helvetica-Bold")
-            .fontSize(9)
-            .fillColor(COLORS.accent)
-            .text(String(row.value), ml + labelW + barMax + 6, y + 4, {
-              width: 80,
-              align: "right",
-            });
-          y += rowH;
-        });
-        y += 12;
+        y = drawSectionTitle(doc, ml, y, usableW, "Plants by crop", theme);
+        y = drawHorizontalBars(doc, ml, y, usableW, barSource, theme, pageH, mt, mb + 50);
       }
 
-      doc.fillColor("#212529").font("Helvetica-Bold").fontSize(11);
-      doc.text("Detail — by plant", ml, y);
-      y += 14;
+      y = drawSectionTitle(doc, ml, y, usableW, "Detail by plant", theme);
+      y += 4;
 
-      const plants = Object.keys(seg.byPlant || {}).sort((a, b) =>
-        a.localeCompare(b)
-      );
+      const plants = Object.keys(seg.byPlant || {}).sort((a, b) => a.localeCompare(b));
       const col = {
         plant: ml,
         ao: ml + usableW * 0.22,
@@ -638,113 +722,69 @@ export function generateDeliveryQueuePdf({
         fp: ml + usableW * 0.58,
         tp: ml + usableW * 0.72,
       };
-      const headerH = 22;
-      doc.save();
-      doc.rect(ml, y, usableW, headerH).fill(COLORS.accent);
-      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
-      doc.text("Plant", col.plant + 4, y + 7, { width: usableW * 0.18 });
-      doc.text("ACC orders", col.ao, y + 7, { width: usableW * 0.11 });
-      doc.text("ACC plants", col.ap, y + 7, { width: usableW * 0.11 });
-      doc.text("FR orders", col.fo, y + 7, { width: usableW * 0.11 });
-      doc.text("FR plants", col.fp, y + 7, { width: usableW * 0.13 });
-      doc.text("Total plants", col.tp, y + 7, {
-        width: usableW * 0.2,
-        align: "right",
-      });
-      doc.restore();
-      y += headerH;
+      const delCols = [
+        { label: "Plant", x: col.plant, w: usableW * 0.2 },
+        { label: "ACC ord", x: col.ao, w: usableW * 0.11 },
+        { label: "ACC pl", x: col.ap, w: usableW * 0.11 },
+        { label: "FR ord", x: col.fo, w: usableW * 0.11 },
+        { label: "FR pl", x: col.fp, w: usableW * 0.13 },
+        { label: "Total pl", x: col.tp, w: usableW * 0.22, align: "right" },
+      ];
+      y = drawTableHeader(doc, ml, y, usableW, delCols, theme);
 
-      doc.font("Helvetica").fontSize(8.5).fillColor("#212529");
       if (!plants.length) {
-        doc.rect(ml, y, usableW, 28).fill("#fff3cd").stroke(COLORS.border);
-        doc
-          .fillColor("#856404")
-          .text("No rows in this section.", ml + 8, y + 8, {
-            width: usableW - 16,
-          });
-        y += 36;
+        y = drawEmptyState(doc, ml, y, usableW, "No rows in this section.", theme);
       } else {
         plants.forEach((p, idx) => {
-          if (y > pageH - doc.page.margins.bottom - 40) {
+          if (y > pageH - mb - 40) {
             doc.addPage();
             y = mt;
           }
           const b = seg.byPlant[p];
-          const rowH = 22;
-          if (idx % 2 === 0) {
-            doc.save();
-            doc.rect(ml, y, usableW, rowH).fill(COLORS.rowAlt);
-            doc.restore();
-          }
-          const totP =
-            (b.accepted?.plantsQty || 0) + (b.farmReady?.plantsQty || 0);
-          doc.fillColor("#212529");
-          doc.text(p.slice(0, 36), col.plant + 4, y + 5, {
-            width: usableW * 0.18,
-          });
-          doc.text(String(b.accepted?.orders ?? 0), col.ao, y + 5, {
-            width: usableW * 0.11,
-          });
-          doc.text(String(b.accepted?.plantsQty ?? 0), col.ap, y + 5, {
-            width: usableW * 0.11,
-          });
-          doc.text(String(b.farmReady?.orders ?? 0), col.fo, y + 5, {
-            width: usableW * 0.11,
-          });
-          doc.text(String(b.farmReady?.plantsQty ?? 0), col.fp, y + 5, {
-            width: usableW * 0.11,
-          });
-          doc.font("Helvetica-Bold").text(String(totP), col.tp, y + 5, {
-            width: usableW * 0.22,
-            align: "right",
-          });
-          doc.font("Helvetica");
-          y += rowH;
+          const totP = (b.accepted?.plantsQty || 0) + (b.farmReady?.plantsQty || 0);
+          y = drawTableRow(
+            doc,
+            ml,
+            y,
+            usableW,
+            22,
+            delCols,
+            [
+              p.slice(0, 36),
+              String(b.accepted?.orders ?? 0),
+              formatNum(b.accepted?.plantsQty ?? 0),
+              String(b.farmReady?.orders ?? 0),
+              formatNum(b.farmReady?.plantsQty ?? 0),
+              formatNum(totP),
+            ],
+            idx,
+            theme
+          );
         });
       }
-
-      y += 20;
+      y += 16;
     }
 
     if (paymentSnapshot && paymentSnapshot.totalDue != null) {
-      if (y > pageH - doc.page.margins.bottom - 80) {
+      if (y > pageH - mb - 80) {
         doc.addPage();
         y = mt;
       }
-      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-      doc.text(
-        "Payment summary (orders matching your filter)",
-        ml,
-        y
-      );
-      y += 14;
-      doc.font("Helvetica").fontSize(9).fillColor("#212529");
-      doc.text(
-        `Billable: ${formatInr(paymentSnapshot.totalDue)} | Collected: ${formatInr(
-          paymentSnapshot.totalCollected
-        )} | Outstanding: ${formatInr(paymentSnapshot.totalOutstanding)}`,
+      y = drawCalloutBox(
+        doc,
         ml,
         y,
-        { width: usableW }
+        usableW,
+        "Payment summary",
+        [
+          `Billable: ${formatInr(paymentSnapshot.totalDue)} · Collected: ${formatInr(paymentSnapshot.totalCollected)} · Outstanding: ${formatInr(paymentSnapshot.totalOutstanding)}`,
+          `PENDING: ${paymentSnapshot.pendingPaymentOrders ?? "—"} · COMPLETED: ${paymentSnapshot.completedPaymentOrders ?? "—"}`,
+        ],
+        theme
       );
-      y += 12;
-      doc.text(
-        `Order payment flags — PENDING: ${paymentSnapshot.pendingPaymentOrders ?? "—"} | COMPLETED: ${paymentSnapshot.completedPaymentOrders ?? "—"}`,
-        ml,
-        y,
-        { width: usableW }
-      );
-      y += 18;
     }
 
-    y += 6;
-    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-    doc.text(
-      `Generated ${new Date().toISOString()} · Delivery planning · ${reportDateLabel}`,
-      ml,
-      y,
-      { width: usableW, align: "center" }
-    );
+    drawFooter(doc, ml, y + 6, usableW, `Delivery planning · ${reportDateLabel}`, theme);
 
     doc.end();
   });
@@ -785,62 +825,45 @@ export function generateCentralDeliveryPdf({
     const ml = doc.page.margins.left;
     const usableW = pageW - ml - doc.page.margins.right;
     const mt = doc.page.margins.top;
-    let y = mt;
+    const mb = doc.page.margins.bottom;
+    const theme = THEMES.delivery;
 
-    doc.save();
-    doc.rect(ml, y, usableW, 56).fill(COLORS.headerBar);
-    doc.rect(ml, y + 53, usableW, 3).fill(COLORS.headerAccent);
-    doc.fillColor(COLORS.headerText).font("Helvetica-Bold").fontSize(22);
-    doc.text("Delivery Report", ml + 16, y + 12, {
-      width: usableW - 32,
-      align: "center",
+    let y = drawHeroBanner(doc, ml, mt, usableW, {
+      title: "Delivery Report",
+      subtitle: `${reportDateLabel} · Central MIS`,
+      theme,
+      badge: "MIS",
     });
-    doc.font("Helvetica").fontSize(10).opacity(0.92);
-    doc.text(`${reportDateLabel} · Central MIS`, ml + 16, y + 34, {
-      width: usableW - 32,
-      align: "center",
-    });
-    doc.opacity(1).restore();
-    y += 66;
 
     const inRange = varietyTotals?.delivery || {};
     const pastDue = varietyTotals?.pastDue || {};
-    const kpiH = 52;
-    const gap = 10;
-    const kpiW = (usableW - gap * 2) / 3;
-    const kpis = [
-      {
-        label: "In-window plants",
-        value: String(deliveryTotalPlants(inRange)),
-        sub: `${inRange.total?.orders || 0} orders`,
-      },
-      {
-        label: "Past due plants",
-        value: String(dueSummary?.pastDue?.plants || deliveryTotalPlants(pastDue)),
-        sub: `${dueSummary?.pastDue?.orders || pastDue.total?.orders || 0} orders`,
-      },
-      {
-        label: "Combined pipeline",
-        value: String(
-          deliveryTotalPlants(inRange) +
-            (dueSummary?.pastDue?.plants || deliveryTotalPlants(pastDue))
-        ),
-        sub: "in-window + backlog",
-      },
-    ];
-    let kx = ml;
-    for (const k of kpis) {
-      doc.save();
-      doc.rect(kx, y, kpiW, kpiH).fillAndStroke(COLORS.kpiBg, COLORS.kpiBorder);
-      doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(18);
-      doc.text(k.value, kx + 8, y + 8, { width: kpiW - 16, align: "center" });
-      doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-      doc.text(k.label, kx + 8, y + 30, { width: kpiW - 16, align: "center" });
-      doc.text(k.sub, kx + 8, y + 40, { width: kpiW - 16, align: "center" });
-      doc.restore();
-      kx += kpiW + gap;
-    }
-    y += kpiH + 18;
+    y = drawKpiCards(
+      doc,
+      ml,
+      y,
+      usableW,
+      [
+        {
+          label: "In-window plants",
+          value: formatNum(deliveryTotalPlants(inRange)),
+          sub: `${inRange.total?.orders || 0} orders`,
+        },
+        {
+          label: "Past due plants",
+          value: formatNum(dueSummary?.pastDue?.plants || deliveryTotalPlants(pastDue)),
+          sub: `${dueSummary?.pastDue?.orders || pastDue.total?.orders || 0} orders`,
+        },
+        {
+          label: "Combined pipeline",
+          value: formatNum(
+            deliveryTotalPlants(inRange) +
+              (dueSummary?.pastDue?.plants || deliveryTotalPlants(pastDue))
+          ),
+          sub: "in-window + backlog",
+        },
+      ],
+      theme
+    );
 
     const barSource = [];
     const plantMap = new Map();
@@ -856,44 +879,14 @@ export function generateCentralDeliveryPdf({
     }
     barSource.sort((a, b) => b.value - a.value);
     const topBars = barSource.slice(0, 8);
-    const maxV = Math.max(...topBars.map((x) => x.value), 1);
 
     if (topBars.length) {
-      doc.font("Helvetica-Bold").fontSize(11).fillColor(COLORS.accent);
-      doc.text("Plants by crop (in-window + past due)", ml, y);
-      y += 14;
-      const rowH = 18;
-      const labelW = usableW * 0.28;
-      const barMax = usableW * 0.52;
-      for (const row of topBars) {
-        if (y > pageH - doc.page.margins.bottom - 60) {
-          doc.addPage();
-          y = mt;
-        }
-        const frac = row.value / maxV;
-        doc.font("Helvetica").fontSize(8).fillColor("#212529");
-        doc.text(String(row.label).slice(0, 36), ml, y + 4, { width: labelW - 6 });
-        doc.save();
-        doc
-          .rect(ml + labelW, y + 2, Math.max(4, barMax * frac), rowH - 6)
-          .fillAndStroke("#dbeafe", COLORS.kpiBorder);
-        doc.restore();
-        doc
-          .font("Helvetica-Bold")
-          .fontSize(9)
-          .fillColor(COLORS.accent)
-          .text(String(row.value), ml + labelW + barMax + 6, y + 4, {
-            width: 80,
-            align: "right",
-          });
-        y += rowH;
-      }
-      y += 14;
+      y = drawSectionTitle(doc, ml, y, usableW, "Plants by crop (in-window + past due)", theme);
+      y = drawHorizontalBars(doc, ml, y, usableW, topBars, theme, pageH, mt, mb + 50);
     }
 
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#212529");
-    doc.text("Plant → subtype detail", ml, y);
-    y += 14;
+    y = drawSectionTitle(doc, ml, y, usableW, "Plant → subtype detail", theme);
+    y += 4;
 
     const col = {
       plant: ml,
@@ -905,83 +898,59 @@ export function generateCentralDeliveryPdf({
       rfd: ml + usableW * 0.64,
       dp: ml + usableW * 0.72,
     };
-    const headerH = 22;
-    doc.save();
-    doc.rect(ml, y, usableW, headerH).fill(COLORS.accent);
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7.5);
-    doc.text("Plant", col.plant + 4, y + 7, { width: usableW * 0.12 });
-    doc.text("Subtype", col.sub, y + 7, { width: usableW * 0.12 });
-    doc.text("In-win", col.inWin, y + 7, { width: usableW * 0.08 });
-    doc.text("Past due", col.past, y + 7, { width: usableW * 0.08 });
-    doc.text("ACC", col.acc, y + 7, { width: usableW * 0.06 });
-    doc.text("FR", col.fr, y + 7, { width: usableW * 0.06 });
-    doc.text("RFD", col.rfd, y + 7, { width: usableW * 0.06 });
-    doc.text("DP/PC", col.dp, y + 7, { width: usableW * 0.1 });
-    doc.restore();
-    y += headerH;
+    const misCols = [
+      { label: "Plant", x: col.plant, w: usableW * 0.13 },
+      { label: "Subtype", x: col.sub, w: usableW * 0.13 },
+      { label: "In-win", x: col.inWin, w: usableW * 0.09 },
+      { label: "Past", x: col.past, w: usableW * 0.09 },
+      { label: "ACC", x: col.acc, w: usableW * 0.07 },
+      { label: "FR", x: col.fr, w: usableW * 0.07 },
+      { label: "RFD", x: col.rfd, w: usableW * 0.07 },
+      { label: "DP/PC", x: col.dp, w: usableW * 0.1 },
+    ];
+    y = drawTableHeader(doc, ml, y, usableW, misCols, theme);
 
     const detailRows = (varietyRows || []).filter(
       (r) =>
         deliveryTotalPlants(r.delivery) > 0 || deliveryTotalPlants(r.pastDue) > 0
     );
 
-    doc.font("Helvetica").fontSize(7.5).fillColor("#212529");
     if (!detailRows.length) {
-      doc.rect(ml, y, usableW, 28).fill("#fff3cd").stroke(COLORS.border);
-      doc.fillColor("#856404").text("No rows in this period.", ml + 8, y + 8, {
-        width: usableW - 16,
-      });
+      y = drawEmptyState(doc, ml, y, usableW, "No rows in this period.", theme);
     } else {
       detailRows.forEach((row, idx) => {
-        if (y > pageH - doc.page.margins.bottom - 36) {
+        if (y > pageH - mb - 36) {
           doc.addPage();
           y = mt;
-        }
-        const rowH = 20;
-        if (idx % 2 === 0) {
-          doc.save();
-          doc.rect(ml, y, usableW, rowH).fill(COLORS.rowAlt);
-          doc.restore();
         }
         const d = row.delivery || {};
         const dpPc =
           deliveryPlantsFromBucket(d, "dispatchProcess") +
           deliveryPlantsFromBucket(d, "partiallyCompleted");
-        doc.fillColor("#212529");
-        doc.text(String(row.plantName || "").slice(0, 18), col.plant + 4, y + 5, {
-          width: usableW * 0.12,
-        });
-        doc.text(String(row.subtype || "").slice(0, 16), col.sub, y + 5, {
-          width: usableW * 0.12,
-        });
-        doc.text(String(deliveryTotalPlants(d)), col.inWin, y + 5, {
-          width: usableW * 0.08,
-        });
-        doc.text(String(deliveryTotalPlants(row.pastDue)), col.past, y + 5, {
-          width: usableW * 0.08,
-        });
-        doc.text(String(deliveryPlantsFromBucket(d, "accepted")), col.acc, y + 5, {
-          width: usableW * 0.06,
-        });
-        doc.text(String(deliveryPlantsFromBucket(d, "farmReady")), col.fr, y + 5, {
-          width: usableW * 0.06,
-        });
-        doc.text(String(deliveryPlantsFromBucket(d, "readyForDispatch")), col.rfd, y + 5, {
-          width: usableW * 0.06,
-        });
-        doc.text(String(dpPc), col.dp, y + 5, { width: usableW * 0.1 });
-        y += rowH;
+        y = drawTableRow(
+          doc,
+          ml,
+          y,
+          usableW,
+          20,
+          misCols,
+          [
+            String(row.plantName || "").slice(0, 18),
+            String(row.subtype || "").slice(0, 16),
+            formatNum(deliveryTotalPlants(d)),
+            formatNum(deliveryTotalPlants(row.pastDue)),
+            formatNum(deliveryPlantsFromBucket(d, "accepted")),
+            formatNum(deliveryPlantsFromBucket(d, "farmReady")),
+            formatNum(deliveryPlantsFromBucket(d, "readyForDispatch")),
+            formatNum(dpPc),
+          ],
+          idx,
+          theme
+        );
       });
     }
 
-    y += 12;
-    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-    doc.text(
-      `Generated ${new Date().toISOString()} · Central MIS delivery · ${reportDateLabel}`,
-      ml,
-      y,
-      { width: usableW, align: "center" }
-    );
+    drawFooter(doc, ml, y + 12, usableW, `Central MIS delivery · ${reportDateLabel}`, theme);
     doc.end();
   });
 }
@@ -1013,44 +982,31 @@ export function generateAvailabilityPdf({
     const ml = doc.page.margins.left;
     const usableW = pageW - ml - doc.page.margins.right;
     const mt = doc.page.margins.top;
-    let y = mt;
+    const mb = doc.page.margins.bottom;
+    const theme = THEMES.availability;
 
-    doc.save();
-    doc.rect(ml, y, usableW, 52).fill(COLORS.headerBar);
-    doc.rect(ml, y + 49, usableW, 3).fill("#22c55e");
-    doc.fillColor(COLORS.headerText).font("Helvetica-Bold").fontSize(20);
-    doc.text(reportTitle || "Availability Report", ml + 16, y + 10, {
-      width: usableW - 32,
-      align: "center",
+    let y = drawHeroBanner(doc, ml, mt, usableW, {
+      title: reportTitle || "Availability Report",
+      subtitle: reportDateLabel,
+      theme,
+      badge: "STOCK",
     });
-    doc.font("Helvetica").fontSize(10);
-    doc.text(reportDateLabel, ml + 16, y + 32, {
-      width: usableW - 32,
-      align: "center",
-    });
-    doc.restore();
-    y += 62;
 
-    const kpiH = 48;
-    const gap = 10;
-    const kpiW = (usableW - gap * 2) / 3;
-    const kpis = [
-      { label: "Slots", value: String(summary.slotCount || 0) },
-      { label: "Available plants", value: String(summary.available || 0) },
-      { label: "Capacity", value: String(summary.totalCapacity || 0) },
-    ];
-    let kx = ml;
-    for (const k of kpis) {
-      doc.save();
-      doc.rect(kx, y, kpiW, kpiH).fillAndStroke("#ecfdf5", "#86efac");
-      doc.fillColor("#065f46").font("Helvetica-Bold").fontSize(18);
-      doc.text(k.value, kx + 8, y + 8, { width: kpiW - 16, align: "center" });
-      doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-      doc.text(k.label, kx + 8, y + 32, { width: kpiW - 16, align: "center" });
-      doc.restore();
-      kx += kpiW + gap;
-    }
-    y += kpiH + 16;
+    y = drawKpiCards(
+      doc,
+      ml,
+      y,
+      usableW,
+      [
+        { label: "Active slots", value: formatNum(summary.slotCount || 0) },
+        { label: "Available plants", value: formatNum(summary.available || 0) },
+        { label: "Total capacity", value: formatNum(summary.totalCapacity || 0) },
+      ],
+      theme
+    );
+
+    y = drawSectionTitle(doc, ml, y, usableW, "Slot availability detail", theme);
+    y += 4;
 
     const col = {
       plant: ml,
@@ -1061,75 +1017,52 @@ export function generateAvailabilityPdf({
       booked: ml + usableW * 0.66,
       avail: ml + usableW * 0.76,
     };
-    const headerH = 22;
-    doc.save();
-    doc.rect(ml, y, usableW, headerH).fill("#059669");
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8);
-    doc.text("Plant", col.plant + 4, y + 7, { width: usableW * 0.14 });
-    doc.text("Subtype", col.sub, y + 7, { width: usableW * 0.1 });
-    doc.text("Window", col.window, y + 7, { width: usableW * 0.16 });
-    doc.text("Month", col.month, y + 7, { width: usableW * 0.08 });
-    doc.text("Cap", col.cap, y + 7, { width: usableW * 0.08 });
-    doc.text("Booked", col.booked, y + 7, { width: usableW * 0.08 });
-    doc.text("Available", col.avail, y + 7, { width: usableW * 0.12 });
-    doc.restore();
-    y += headerH;
+    const availCols = [
+      { label: "Plant", x: col.plant, w: usableW * 0.15 },
+      { label: "Subtype", x: col.sub, w: usableW * 0.11 },
+      { label: "Window", x: col.window, w: usableW * 0.17 },
+      { label: "Month", x: col.month, w: usableW * 0.09 },
+      { label: "Cap", x: col.cap, w: usableW * 0.09 },
+      { label: "Booked", x: col.booked, w: usableW * 0.09 },
+      { label: "Available", x: col.avail, w: usableW * 0.13, align: "right" },
+    ];
+    y = drawTableHeader(doc, ml, y, usableW, availCols, theme);
 
-    doc.font("Helvetica").fontSize(8).fillColor("#212529");
     const list = rows.slice(0, 60);
     if (!list.length) {
-      doc.rect(ml, y, usableW, 28).fill("#fff3cd").stroke(COLORS.border);
-      doc.fillColor("#856404").text("No slots match this filter.", ml + 8, y + 8, {
-        width: usableW - 16,
-      });
+      y = drawEmptyState(doc, ml, y, usableW, "No slots match this filter.", theme);
     } else {
       list.forEach((row, idx) => {
-        if (y > pageH - doc.page.margins.bottom - 36) {
+        if (y > pageH - mb - 36) {
           doc.addPage();
           y = mt;
         }
-        const rowH = 20;
-        if (idx % 2 === 0) {
-          doc.save();
-          doc.rect(ml, y, usableW, rowH).fill(COLORS.rowAlt);
-          doc.restore();
-        }
-        doc.fillColor("#212529");
-        doc.text(String(row.plantName || "").slice(0, 20), col.plant + 4, y + 5, {
-          width: usableW * 0.14,
-        });
-        doc.text(String(row.subtypeName || "").slice(0, 14), col.sub, y + 5, {
-          width: usableW * 0.1,
-        });
-        doc.text(`${row.startDay}–${row.endDay}`, col.window, y + 5, {
-          width: usableW * 0.16,
-        });
-        doc.text(String(row.month || "").slice(0, 10), col.month, y + 5, {
-          width: usableW * 0.08,
-        });
-        doc.text(String(row.totalPlants), col.cap, y + 5, { width: usableW * 0.08 });
-        doc.text(String(row.bookedPlants), col.booked, y + 5, {
-          width: usableW * 0.08,
-        });
-        doc
-          .font("Helvetica-Bold")
-          .fillColor(row.availablePlants > 0 ? "#059669" : "#dc2626")
-          .text(String(row.availablePlants), col.avail, y + 5, {
-            width: usableW * 0.12,
-          });
-        doc.font("Helvetica").fillColor("#212529");
-        y += rowH;
+        const availColor = row.availablePlants > 0 ? theme.primaryLight : "#dc2626";
+        y = drawTableRow(
+          doc,
+          ml,
+          y,
+          usableW,
+          20,
+          availCols.map((c, i) =>
+            i === availCols.length - 1 ? { ...c, bold: true, color: availColor } : c
+          ),
+          [
+            String(row.plantName || "").slice(0, 20),
+            String(row.subtypeName || "").slice(0, 14),
+            `${row.startDay}–${row.endDay}`,
+            String(row.month || "").slice(0, 10),
+            formatNum(row.totalPlants),
+            formatNum(row.bookedPlants),
+            formatNum(row.availablePlants),
+          ],
+          idx,
+          theme
+        );
       });
     }
 
-    y += 10;
-    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-    doc.text(
-      `Generated ${new Date().toISOString()} · ${reportDateLabel}`,
-      ml,
-      y,
-      { width: usableW, align: "center" }
-    );
+    drawFooter(doc, ml, y + 10, usableW, reportDateLabel, theme);
     doc.end();
   });
 }
@@ -1167,14 +1100,9 @@ export function generateSlotsOutlookPdf({
     const ml = doc.page.margins.left;
     const mr = doc.page.margins.right;
     const mt = doc.page.margins.top;
+    const mb = doc.page.margins.bottom;
     const usableW = pageW - ml - mr;
-    let y = mt;
-
-    const EXPLAIN = [
-      "Only slot windows whose end date is today or later (Indian Standard Time) are included.",
-      "“Booked” is calculated from live orders tied to each slot; “Cap” is the slot’s plant capacity.",
-      "Bars below show total booked plants per crop (summed across all future windows). The table lists the busiest individual windows first.",
-    ];
+    const theme = THEMES.slots;
 
     let sumCap = 0;
     let sumBooked = 0;
@@ -1182,100 +1110,47 @@ export function generateSlotsOutlookPdf({
       sumCap += Number(r.cap) || 0;
       sumBooked += Number(r.booked) || 0;
     }
-    const fillPct =
-      sumCap > 0 ? Math.round((100 * sumBooked) / sumCap) : 0;
+    const fillPct = sumCap > 0 ? Math.round((100 * sumBooked) / sumCap) : 0;
 
-    doc.save();
-    doc.rect(ml, y, usableW, 52).fill("#1d3557");
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(20);
-    doc.text("Slots outlook report", ml + 16, y + 8, {
-      width: usableW - 32,
-      align: "center",
+    let y = drawHeroBanner(doc, ml, mt, usableW, {
+      title: "Slots Outlook Report",
+      subtitle: reportDateLabel,
+      theme,
+      badge: "SLOTS",
     });
-    doc.font("Helvetica").fontSize(10).opacity(0.95);
-    doc.text(reportDateLabel, ml + 16, y + 32, {
-      width: usableW - 32,
-      align: "center",
-    });
-    doc.opacity(1).restore();
-    y += 60;
 
-    doc.save();
-    doc.rect(ml, y, usableW, 44).fill("#e8f4f8").stroke("#457b9d");
-    doc.fillColor("#1d3557").font("Helvetica-Bold").fontSize(10);
-    doc.text("How to read this report", ml + 10, y + 6, { width: usableW - 20 });
-    doc.font("Helvetica").fontSize(8.5).fillColor("#333");
-    let ey = y + 22;
-    for (const line of EXPLAIN) {
-      doc.text(`• ${line}`, ml + 10, ey, { width: usableW - 20 });
-      ey += 12;
-    }
-    doc.restore();
-    y += 50;
+    y = drawCalloutBox(
+      doc,
+      ml,
+      y,
+      usableW,
+      "How to read this report",
+      [
+        "Only slot windows whose end date is today or later (IST) are included.",
+        "Booked = live orders on each slot; Cap = plant capacity.",
+        "Table lists busiest individual windows first.",
+      ],
+      theme
+    );
 
-    const gap = 10;
-    const kpiW = (usableW - 3 * gap) / 4;
-    const kpiH = 52;
-    const kpis = [
-      { label: "Future slot windows", value: String(slotRows.length) },
-      { label: "Σ capacity (plants)", value: String(sumCap) },
-      { label: "Σ booked (plants)", value: String(sumBooked) },
-      { label: "Overall fill", value: `${fillPct}%` },
-    ];
-    let kx = ml;
-    for (let i = 0; i < kpis.length; i++) {
-      doc.save();
-      doc.rect(kx, y, kpiW, kpiH).fillAndStroke("#f1faee", "#457b9d");
-      doc.fillColor("#1d3557").font("Helvetica-Bold").fontSize(18);
-      doc.text(kpis[i].value, kx + 6, y + 10, {
-        width: kpiW - 12,
-        align: "center",
-      });
-      doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-      doc.text(kpis[i].label, kx + 6, y + 34, {
-        width: kpiW - 12,
-        align: "center",
-      });
-      doc.restore();
-      kx += kpiW + gap;
-    }
-    y += kpiH + 16;
+    y = drawKpiCards(
+      doc,
+      ml,
+      y,
+      usableW,
+      [
+        { label: "Future windows", value: formatNum(slotRows.length) },
+        { label: "Total capacity", value: formatNum(sumCap) },
+        { label: "Total booked", value: formatNum(sumBooked) },
+        { label: "Overall fill", value: `${fillPct}%` },
+      ],
+      theme
+    );
 
     const bars = plantBookedTotalsForBarChart(slotRows, 8);
-    const maxV = Math.max(...bars.map((x) => x.value), 1);
     if (bars.length) {
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#1d3557");
-      doc.text("Booked plants by crop (all future windows combined)", ml, y);
-      y += 14;
-      const rowH = 18;
-      const labelW = usableW * 0.32;
-      const barMax = usableW * 0.5;
-      bars.forEach((row) => {
-        if (y > pageH - doc.page.margins.bottom - 50) {
-          doc.addPage();
-          y = mt;
-        }
-        const frac = row.value / maxV;
-        doc.font("Helvetica").fontSize(8).fillColor("#212529");
-        doc.text(String(row.label).slice(0, 40), ml, y + 4, {
-          width: labelW - 6,
-        });
-        doc.save();
-        doc
-          .rect(ml + labelW, y + 2, Math.max(4, barMax * frac), rowH - 6)
-          .fillAndStroke("#a8dadc", "#457b9d");
-        doc.restore();
-        doc
-          .font("Helvetica-Bold")
-          .fontSize(9)
-          .fillColor("#1d3557")
-          .text(String(row.value), ml + labelW + barMax + 6, y + 4, {
-            width: 80,
-            align: "right",
-          });
-        y += rowH;
-      });
-      y += 12;
+      y = drawSectionTitle(doc, ml, y, usableW, "Booked plants by crop", theme);
+      y = drawHorizontalBars(doc, ml, y, usableW, bars, theme, pageH, mt, mb + 50);
     }
 
     const sorted = [...slotRows].sort(
@@ -1284,13 +1159,15 @@ export function generateSlotsOutlookPdf({
     const detail = sorted.slice(0, maxDetailRows);
     const truncated = slotRows.length > maxDetailRows;
 
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#1d3557");
-    doc.text(
-      `Busiest slot windows (top ${detail.length}${truncated ? ` of ${slotRows.length}` : ""})`,
+    y = drawSectionTitle(
+      doc,
       ml,
-      y
+      y,
+      usableW,
+      `Busiest slot windows (top ${detail.length}${truncated ? ` of ${slotRows.length}` : ""})`,
+      theme
     );
-    y += 14;
+    y += 4;
 
     const w1 = usableW * 0.2;
     const w2 = usableW * 0.14;
@@ -1305,65 +1182,45 @@ export function generateSlotsOutlookPdf({
     const c4 = c3 + w4;
     const c5 = c4 + w5;
 
-    const hh = 22;
-    doc.save();
-    doc.rect(ml, y, usableW, hh).fill("#457b9d");
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7.5);
-    doc.text("Plant", c0 + 3, y + 7, { width: w1 - 6 });
-    doc.text("Subtype", c1 + 3, y + 7, { width: w2 - 6 });
-    doc.text("Window", c2 + 3, y + 7, { width: w3 - 6 });
-    doc.text("Booked", c3 + 3, y + 7, { width: w4 - 6, align: "right" });
-    doc.text("Cap", c4 + 3, y + 7, { width: w5 - 6, align: "right" });
-    doc.text("Fill %", c5 + 3, y + 7, { width: w6 - 6, align: "right" });
-    doc.restore();
-    y += hh;
+    const slotCols = [
+      { label: "Plant", x: c0, w: w1 },
+      { label: "Subtype", x: c1, w: w2 },
+      { label: "Window", x: c2, w: w3 },
+      { label: "Booked", x: c3, w: w4, align: "right" },
+      { label: "Cap", x: c4, w: w5, align: "right" },
+      { label: "Fill %", x: c5, w: w6, align: "right" },
+    ];
+    y = drawTableHeader(doc, ml, y, usableW, slotCols, theme);
 
-    doc.font("Helvetica").fontSize(7.5).fillColor("#212529");
     if (!detail.length) {
-      doc.rect(ml, y, usableW, 28).fill("#fff3cd").stroke("#457b9d");
-      doc.fillColor("#856404").text("No upcoming slot windows in configured PlantSlot data.", ml + 8, y + 8, {
-        width: usableW - 16,
-      });
-      y += 36;
+      y = drawEmptyState(doc, ml, y, usableW, "No upcoming slot windows found.", theme);
     } else {
       detail.forEach((r, idx) => {
-        if (y > pageH - doc.page.margins.bottom - 36) {
+        if (y > pageH - mb - 36) {
           doc.addPage();
           y = mt;
-        }
-        const rowH = 20;
-        if (idx % 2 === 0) {
-          doc.save();
-          doc.rect(ml, y, usableW, rowH).fill("#f8f9fa");
-          doc.restore();
         }
         const cap = Number(r.cap) || 0;
         const bk = Number(r.booked) || 0;
         const pct = cap > 0 ? Math.round((100 * bk) / cap) : 0;
-        doc.fillColor("#212529");
-        doc.text(String(r.plantName || "—").slice(0, 28), c0 + 3, y + 5, {
-          width: w1 - 6,
-        });
-        doc.text(String(r.subtypeName || "—").slice(0, 22), c1 + 3, y + 5, {
-          width: w2 - 6,
-        });
-        doc.text(String(r.label || "—").slice(0, 42), c2 + 3, y + 5, {
-          width: w3 - 6,
-        });
-        doc.text(String(bk), c3 + 3, y + 5, {
-          width: w4 - 6,
-          align: "right",
-        });
-        doc.text(String(cap), c4 + 3, y + 5, {
-          width: w5 - 6,
-          align: "right",
-        });
-        doc.font("Helvetica-Bold").text(String(pct), c5 + 3, y + 5, {
-          width: w6 - 6,
-          align: "right",
-        });
-        doc.font("Helvetica");
-        y += rowH;
+        y = drawTableRow(
+          doc,
+          ml,
+          y,
+          usableW,
+          20,
+          slotCols,
+          [
+            String(r.plantName || "—").slice(0, 28),
+            String(r.subtypeName || "—").slice(0, 22),
+            String(r.label || "—").slice(0, 42),
+            formatNum(bk),
+            formatNum(cap),
+            `${pct}%`,
+          ],
+          idx,
+          theme
+        );
       });
     }
 
@@ -1371,7 +1228,7 @@ export function generateSlotsOutlookPdf({
       y += 6;
       doc.font("Helvetica-Oblique").fontSize(8).fillColor(COLORS.muted);
       doc.text(
-        `…and ${slotRows.length - maxDetailRows} more windows not printed (open full data in the nursery app).`,
+        `…and ${slotRows.length - maxDetailRows} more windows not shown.`,
         ml,
         y,
         { width: usableW }
@@ -1379,14 +1236,7 @@ export function generateSlotsOutlookPdf({
       y += 14;
     }
 
-    y += 10;
-    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-    doc.text(
-      `Generated ${new Date().toISOString()} · PlantSlot future windows · ${reportDateLabel}`,
-      ml,
-      y,
-      { width: usableW, align: "center" }
-    );
+    drawFooter(doc, ml, y + 8, usableW, `PlantSlot future windows · ${reportDateLabel}`, theme);
 
     doc.end();
   });
@@ -1424,122 +1274,80 @@ export function generateOrderTransitionInsightsPdf({
     doc.on("error", reject);
 
     const pageW = doc.page.width;
+    const pageH = doc.page.height;
     const ml = doc.page.margins.left;
     const mr = doc.page.margins.right;
     const mt = doc.page.margins.top;
+    const mb = doc.page.margins.bottom;
     const usableW = pageW - ml - mr;
-    let y = mt;
+    const theme = THEMES.insight;
 
-    doc.rect(ml, y, usableW, 56).fill(COLORS.headerBar);
-    doc.rect(ml, y + 53, usableW, 3).fill(COLORS.headerAccent);
-    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(21);
-    doc.text("Order Status Transition Insights", ml + 12, y + 12, {
-      width: usableW - 24,
-      align: "center",
+    let y = drawHeroBanner(doc, ml, mt, usableW, {
+      title: "Order Status Insights",
+      subtitle: reportDateLabel,
+      theme,
+      badge: "INSIGHTS",
     });
-    doc.font("Helvetica").fontSize(10).opacity(0.9);
-    doc.text(reportDateLabel, ml + 12, y + 34, {
-      width: usableW - 24,
-      align: "center",
-    });
-    doc.opacity(1);
-    y += 66;
 
-    const kpiH = 56;
-    const gap = 10;
-    const kpiW = (usableW - gap * 4) / 5;
-    const kpis = [
-      { label: "Booked orders", value: String(bookedOrders) },
-      {
-        label: "Today ACC→DISP",
-        value: String(todayKey.acceptedToDispatched || 0),
-      },
-      {
-        label: "Today DISP→COMP",
-        value: String(todayKey.dispatchedToCompleted || 0),
-      },
-      {
-        label: "Today FR→DISP",
-        value: String(todayKey.farmReadyToDispatch || 0),
-      },
-      {
-        label: "Today ACC→FR",
-        value: String(todayKey.acceptedToFarmReady || 0),
-      },
-    ];
-    let x = ml;
-    for (const k of kpis) {
-      doc.rect(x, y, kpiW, kpiH).fillAndStroke(COLORS.kpiBg, COLORS.kpiBorder);
-      doc.fillColor(COLORS.headerBar).font("Helvetica-Bold").fontSize(18);
-      doc.text(k.value, x + 6, y + 10, { width: kpiW - 12, align: "center" });
-      doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-      doc.text(k.label, x + 6, y + 34, { width: kpiW - 12, align: "center" });
-      x += kpiW + gap;
-    }
-    y += kpiH + 18;
+    y = drawKpiCards(
+      doc,
+      ml,
+      y,
+      usableW,
+      [
+        { label: "Booked orders", value: formatNum(bookedOrders) },
+        { label: "Today ACC→DISP", value: formatNum(todayKey.acceptedToDispatched || 0) },
+        { label: "Today DISP→COMP", value: formatNum(todayKey.dispatchedToCompleted || 0) },
+        { label: "Today FR→DISP", value: formatNum(todayKey.farmReadyToDispatch || 0) },
+        { label: "Today ACC→FR", value: formatNum(todayKey.acceptedToFarmReady || 0) },
+      ],
+      theme
+    );
 
-    doc.fillColor(COLORS.accent).font("Helvetica-Bold").fontSize(12);
-    doc.text("Current status mix (for booked orders in selected period)", ml, y);
-    y += 14;
-    doc.font("Helvetica").fontSize(9).fillColor("#212529");
+    y = drawSectionTitle(doc, ml, y, usableW, "Current status mix (booked in period)", theme);
+    doc.font("Helvetica").fontSize(9).fillColor(COLORS.text);
     for (const row of currentStatuses.slice(0, 10)) {
-      doc.text(`• ${row._id}: ${row.count}`, ml, y, { width: usableW });
+      doc.fillColor(theme.primary).font("Helvetica-Bold").text("•", ml, y, { continued: true });
+      doc.fillColor(COLORS.text).font("Helvetica").text(` ${row._id}: ${formatNum(row.count)}`, { width: usableW });
       y += 12;
     }
     if (!currentStatuses.length) {
       doc.text("— no booked orders in selected period.", ml, y, { width: usableW });
       y += 12;
     }
-    y += 10;
+    y += 8;
 
-    doc.fillColor(COLORS.accent).font("Helvetica-Bold").fontSize(12);
-    doc.text("Top status transitions (selected period)", ml, y);
-    y += 14;
+    y = drawSectionTitle(doc, ml, y, usableW, "Top status transitions", theme);
+    y += 4;
 
     const c1 = ml;
-    const c2 = ml + usableW * 0.4;
     const c3 = ml + usableW * 0.78;
-    doc.rect(ml, y, usableW, 22).fill(COLORS.accent);
-    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(9);
-    doc.text("Transition", c1 + 6, y + 7, { width: usableW * 0.6 });
-    doc.text("Count", c3, y + 7, { width: usableW * 0.2, align: "right" });
-    y += 22;
+    const transCols = [
+      { label: "Transition", x: c1, w: usableW * 0.72 },
+      { label: "Count", x: c3, w: usableW * 0.22, align: "right" },
+    ];
+    y = drawTableHeader(doc, ml, y, usableW, transCols, theme);
 
-    doc.font("Helvetica").fontSize(9).fillColor("#212529");
     const top = transitionMatrix.slice(0, 16);
     if (!top.length) {
-      doc.text("— no status transition rows in selected period.", ml + 6, y + 6, {
-        width: usableW - 12,
-      });
-      y += 20;
+      y = drawEmptyState(doc, ml, y, usableW, "No status transitions in selected period.", theme);
     } else {
       top.forEach((r, i) => {
-        if (i % 2 === 0) {
-          doc.rect(ml, y, usableW, 20).fill(COLORS.rowAlt);
-        }
-        doc.fillColor("#212529");
-        doc.text(`${r._id?.from || "—"} → ${r._id?.to || "—"}`, c1 + 6, y + 6, {
-          width: usableW * 0.6,
-        });
-        doc
-          .font("Helvetica-Bold")
-          .text(String(r.count || 0), c3, y + 6, {
-            width: usableW * 0.2,
-            align: "right",
-          });
-        doc.font("Helvetica");
-        y += 20;
+        y = drawTableRow(
+          doc,
+          ml,
+          y,
+          usableW,
+          20,
+          transCols,
+          [`${r._id?.from || "—"} → ${r._id?.to || "—"}`, formatNum(r.count || 0)],
+          i,
+          theme
+        );
       });
     }
 
-    y += 12;
-    doc.fillColor(COLORS.muted).font("Helvetica").fontSize(8);
-    doc.text(
-      `Generated ${new Date().toISOString()} · ${reportDateLabel}`,
-      ml,
-      y,
-      { width: usableW, align: "center" }
-    );
+    drawFooter(doc, ml, y + 12, usableW, reportDateLabel, theme);
 
     doc.end();
   });
