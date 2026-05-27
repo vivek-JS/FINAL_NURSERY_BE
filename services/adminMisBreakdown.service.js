@@ -6,6 +6,7 @@ import {
 } from "../utility/istOrderDateStats.js";
 import {
   aggregateDueSummary,
+  duePipelineMatch,
 } from "../utility/adminMisDue.js";
 import {
   aggregateGlobalStatusByGroup,
@@ -13,6 +14,7 @@ import {
   aggregateTransitionsByGroup,
   aggregatePipelineByGroup,
   aggregateDeliveryUnionByGroup,
+  aggregateDeliveryInRangeByGroup,
   buildBreakdownTableFromMetrics,
 } from "../utility/adminMisMetrics.js";
 
@@ -95,9 +97,10 @@ function rowToBookingShape(row) {
 async function fetchPersonBreakdownMetrics(
   rangeStart,
   rangeEnd,
-  { groupStages, groupIdFields, extraMatch = {} }
+  { groupStages, groupIdFields, extraMatch = {}, dueOnly = false }
 ) {
   const statusMatch = orderStatusExcludeMatch();
+  const mergedExtra = { ...extraMatch, ...(dueOnly ? duePipelineMatch() : {}) };
 
   const [
     bookingRows,
@@ -105,14 +108,16 @@ async function fetchPersonBreakdownMetrics(
     globalRfdRows,
     acceptedRows,
     dispatchedRows,
+    completedRows,
     pipelineRows,
     deliveryUnionRows,
+    deliveryInRangeRows,
   ] = await Promise.all([
     Order.aggregate([
       {
         $match: {
           ...statusMatch,
-          ...extraMatch,
+          ...mergedExtra,
           orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
         },
       },
@@ -131,14 +136,14 @@ async function fetchPersonBreakdownMetrics(
       statusMatch,
       groupStages,
       groupIdFields,
-      extraMatch
+      mergedExtra
     ),
     aggregateGlobalStatusByGroup(
       "READY_FOR_DISPATCH",
       statusMatch,
       groupStages,
       groupIdFields,
-      extraMatch
+      mergedExtra
     ),
     aggregateAcceptedByDeliveryAndGroup(
       rangeStart,
@@ -146,7 +151,7 @@ async function fetchPersonBreakdownMetrics(
       statusMatch,
       groupStages,
       groupIdFields,
-      extraMatch
+      mergedExtra
     ),
     aggregateTransitionsByGroup(
       "DISPATCHED",
@@ -155,7 +160,16 @@ async function fetchPersonBreakdownMetrics(
       statusMatch,
       groupStages,
       groupIdFields,
-      extraMatch
+      mergedExtra
+    ),
+    aggregateTransitionsByGroup(
+      "COMPLETED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      mergedExtra
     ),
     aggregatePipelineByGroup(
       rangeStart,
@@ -163,16 +177,28 @@ async function fetchPersonBreakdownMetrics(
       statusMatch,
       groupStages,
       groupIdFields,
-      extraMatch
+      mergedExtra
     ),
-    aggregateDeliveryUnionByGroup(
-      rangeStart,
-      rangeEnd,
-      statusMatch,
-      groupStages,
-      groupIdFields,
-      extraMatch
-    ),
+    dueOnly
+      ? Promise.resolve([])
+      : aggregateDeliveryUnionByGroup(
+          rangeStart,
+          rangeEnd,
+          statusMatch,
+          groupStages,
+          groupIdFields,
+          extraMatch
+        ),
+    dueOnly
+      ? aggregateDeliveryInRangeByGroup(
+          rangeStart,
+          rangeEnd,
+          statusMatch,
+          groupStages,
+          groupIdFields,
+          mergedExtra
+        )
+      : Promise.resolve(null),
   ]);
 
   const bookingShaped = bookingRows.map(rowToBookingShape);
@@ -185,8 +211,10 @@ async function fetchPersonBreakdownMetrics(
     globalRfdRows,
     acceptedRows,
     dispatchedRows,
+    completedRows,
     pipelineRows,
     deliveryUnionRows,
+    deliveryInRangeRows: dueOnly ? deliveryInRangeRows : null,
   });
 }
 
@@ -210,9 +238,14 @@ export async function fetchAdminSalesMis(startDate, endDate, options = {}) {
     fetchPersonBreakdownMetrics(rangeStart, rangeEnd, {
       groupStages: SALES_PERSON_STAGES,
       groupIdFields: SALES_GROUP_ID,
+      dueOnly,
     }),
     aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
   ]);
+
+  if (includeAllPastDue && dueSummary?.combined) {
+    table.totals.delivery.total = { ...dueSummary.combined };
+  }
 
   return {
     data: {
@@ -246,9 +279,14 @@ export async function fetchAdminDealerMis(startDate, endDate, options = {}) {
       groupStages: DEALER_STAGES,
       groupIdFields: DEALER_GROUP_ID,
       extraMatch: dealerMatch,
+      dueOnly,
     }),
     aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
   ]);
+
+  if (includeAllPastDue && dueSummary?.combined) {
+    table.totals.delivery.total = { ...dueSummary.combined };
+  }
 
   return {
     data: {

@@ -26,6 +26,7 @@ import {
   addOrderPlants,
   addDeliveryDays,
 } from "./adminDailyMisMerge.js";
+import { duePipelineMatch } from "./adminMisDue.js";
 
 const IST = "Asia/Kolkata";
 const REMAINING_STATUSES = [
@@ -66,9 +67,9 @@ function rowsToDayMap(rows, { withRemaining = false } = {}) {
 }
 
 /** All orders with a given current status (no delivery-date filter). */
-export async function aggregateGlobalStatus(status, statusMatch) {
+export async function aggregateGlobalStatus(status, statusMatch, extraMatch = {}) {
   const rows = await Order.aggregate([
-    { $match: { ...statusMatch, orderStatus: status } },
+    { $match: { ...statusMatch, ...extraMatch, orderStatus: status } },
     { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
     {
       $group: {
@@ -85,12 +86,14 @@ export async function aggregateGlobalStatus(status, statusMatch) {
 export async function aggregateAcceptedByDeliveryDay(
   rangeStart,
   rangeEnd,
-  statusMatch
+  statusMatch,
+  extraMatch = {}
 ) {
   const rows = await Order.aggregate([
     {
       $match: {
         ...statusMatch,
+        ...extraMatch,
         orderStatus: "ACCEPTED",
         deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
       },
@@ -162,12 +165,14 @@ export async function aggregateTransitionsByDay(
 export async function aggregateDeliveryInRangeByDay(
   rangeStart,
   rangeEnd,
-  statusMatch
+  statusMatch,
+  extraMatch = {}
 ) {
   const rows = await Order.aggregate([
     {
       $match: {
         ...statusMatch,
+        ...extraMatch,
         ...matchDeliveryDateInRange(rangeStart, rangeEnd),
       },
     },
@@ -195,12 +200,14 @@ export async function aggregateDeliveryInRangeByDay(
 export async function aggregatePipelineByDeliveryDay(
   rangeStart,
   rangeEnd,
-  statusMatch
+  statusMatch,
+  extraMatch = {}
 ) {
   const rows = await Order.aggregate([
     {
       $match: {
         ...statusMatch,
+        ...extraMatch,
         orderStatus: { $in: PIPELINE_DELIVERY_STATUSES },
         deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
       },
@@ -392,6 +399,15 @@ function sumDeliveryDaysAcrossRange(days) {
 /**
  * Build daily MIS using agreed column rules.
  */
+function sumDayMapValues(dayMap) {
+  const total = emptyOrderPlants();
+  for (const v of dayMap.values()) {
+    total.orders += v.orders || 0;
+    total.plants += v.plants || 0;
+  }
+  return total;
+}
+
 export function buildAdminDailyMisPayloadFromMetrics({
   dateKeys,
   bookingRows = [],
@@ -405,6 +421,7 @@ export function buildAdminDailyMisPayloadFromMetrics({
   pipelineByDay,
   deliveryInRangeByDay,
   deliveryUnionTotal,
+  dueOnly = false,
 }) {
   const bookingMap = bookingRowsToMap(bookingRows);
   const uniqueMap = uniqueRowsToMap(uniquePerDayRows);
@@ -443,7 +460,9 @@ export function buildAdminDailyMisPayloadFromMetrics({
   totals.delivery.dispatchProcess = summed.dispatchProcess;
   totals.delivery.partiallyCompleted = summed.partiallyCompleted;
   totals.delivery.other = summed.other;
-  totals.delivery.total = { ...deliveryUnionTotal };
+  totals.delivery.total = dueOnly
+    ? sumDayMapValues(deliveryInRangeByDay)
+    : { ...deliveryUnionTotal };
 
   return {
     timezone: IST,
@@ -452,8 +471,9 @@ export function buildAdminDailyMisPayloadFromMetrics({
   };
 }
 
-export async function fetchMisMetricSlices(rangeStart, rangeEnd) {
+export async function fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly = false } = {}) {
   const statusMatch = orderStatusExcludeMatch();
+  const dueExtra = dueOnly ? duePipelineMatch() : {};
 
   const [
     globalFarmReady,
@@ -465,14 +485,16 @@ export async function fetchMisMetricSlices(rangeStart, rangeEnd) {
     deliveryInRangeByDay,
     deliveryUnionTotal,
   ] = await Promise.all([
-    aggregateGlobalStatus("FARM_READY", statusMatch),
-    aggregateGlobalStatus("READY_FOR_DISPATCH", statusMatch),
-    aggregateAcceptedByDeliveryDay(rangeStart, rangeEnd, statusMatch),
+    aggregateGlobalStatus("FARM_READY", statusMatch, dueExtra),
+    aggregateGlobalStatus("READY_FOR_DISPATCH", statusMatch, dueExtra),
+    aggregateAcceptedByDeliveryDay(rangeStart, rangeEnd, statusMatch, dueExtra),
     aggregateTransitionsByDay("DISPATCHED", rangeStart, rangeEnd, statusMatch),
     aggregateTransitionsByDay("COMPLETED", rangeStart, rangeEnd, statusMatch),
-    aggregatePipelineByDeliveryDay(rangeStart, rangeEnd, statusMatch),
-    aggregateDeliveryInRangeByDay(rangeStart, rangeEnd, statusMatch),
-    aggregateDeliveryUnionTotal(rangeStart, rangeEnd, statusMatch),
+    aggregatePipelineByDeliveryDay(rangeStart, rangeEnd, statusMatch, dueExtra),
+    aggregateDeliveryInRangeByDay(rangeStart, rangeEnd, statusMatch, dueExtra),
+    dueOnly
+      ? Promise.resolve({ orders: 0, plants: 0 })
+      : aggregateDeliveryUnionTotal(rangeStart, rangeEnd, statusMatch),
   ]);
 
   return {
@@ -697,6 +719,7 @@ export function buildBreakdownTableFromMetrics({
   globalRfdRows = [],
   acceptedRows = [],
   dispatchedRows = [],
+  completedRows = [],
   pipelineRows = [],
   deliveryUnionRows = [],
   /** Pass an array (may be empty) to use in-range delivery only for delivery.total (variety table). */
@@ -706,6 +729,7 @@ export function buildBreakdownTableFromMetrics({
   const rfdMap = metricsRowsToMap(globalRfdRows, entityKeyFn);
   const acceptedMap = metricsRowsToMap(acceptedRows, entityKeyFn);
   const dispatchedMap = metricsRowsToMap(dispatchedRows, entityKeyFn);
+  const completedMap = metricsRowsToMap(completedRows, entityKeyFn);
   const unionMap = metricsRowsToMap(deliveryUnionRows, entityKeyFn);
   const inRangeMap = metricsRowsToMap(deliveryInRangeRows || [], entityKeyFn);
   const deliveryTotalMap =
@@ -742,6 +766,7 @@ export function buildBreakdownTableFromMetrics({
   for (const key of rfdMap.keys()) keys.add(key);
   for (const key of acceptedMap.keys()) keys.add(key);
   for (const key of dispatchedMap.keys()) keys.add(key);
+  for (const key of completedMap.keys()) keys.add(key);
   for (const key of unionMap.keys()) keys.add(key);
   if (deliveryInRangeRows != null) {
     for (const key of inRangeMap.keys()) keys.add(key);
@@ -772,7 +797,7 @@ export function buildBreakdownTableFromMetrics({
         dispatchProcess: pipeline.dispatchProcess,
         partiallyCompleted: pipeline.partiallyCompleted,
         dispatched: dispatchedMap.get(key) || emptyOrderPlants(),
-        completed: emptyOrderPlants(),
+        completed: completedMap.get(key) || emptyOrderPlants(),
         other: pipeline.other,
       },
     });
@@ -799,6 +824,10 @@ export function buildBreakdownTableFromMetrics({
     totals.delivery.dispatched = addOrderPlants(
       totals.delivery.dispatched,
       row.delivery.dispatched
+    );
+    totals.delivery.completed = addOrderPlants(
+      totals.delivery.completed,
+      row.delivery.completed
     );
     totals.delivery.dispatchProcess = addOrderPlants(
       totals.delivery.dispatchProcess,
@@ -868,9 +897,11 @@ function rowToVarietyBookingShape(row) {
 export async function fetchVarietyTableMetrics(
   rangeStart,
   rangeEnd,
-  groupStages
+  groupStages,
+  { dueOnly = false } = {}
 ) {
   const statusMatch = orderStatusExcludeMatch();
+  const dueExtra = dueOnly ? duePipelineMatch() : {};
 
   const [
     bookingRows,
@@ -878,6 +909,7 @@ export async function fetchVarietyTableMetrics(
     globalRfdRows,
     acceptedRows,
     dispatchedRows,
+    completedRows,
     pipelineRows,
     deliveryInRangeRows,
   ] = await Promise.all([
@@ -898,19 +930,27 @@ export async function fetchVarietyTableMetrics(
         },
       },
     ]),
-    aggregateGlobalStatusByGroup("FARM_READY", statusMatch, groupStages, VARIETY_GROUP_ID),
+    aggregateGlobalStatusByGroup(
+      "FARM_READY",
+      statusMatch,
+      groupStages,
+      VARIETY_GROUP_ID,
+      dueExtra
+    ),
     aggregateGlobalStatusByGroup(
       "READY_FOR_DISPATCH",
       statusMatch,
       groupStages,
-      VARIETY_GROUP_ID
+      VARIETY_GROUP_ID,
+      dueExtra
     ),
     aggregateAcceptedByDeliveryAndGroup(
       rangeStart,
       rangeEnd,
       statusMatch,
       groupStages,
-      VARIETY_GROUP_ID
+      VARIETY_GROUP_ID,
+      dueExtra
     ),
     aggregateTransitionsByGroup(
       "DISPATCHED",
@@ -918,21 +958,33 @@ export async function fetchVarietyTableMetrics(
       rangeEnd,
       statusMatch,
       groupStages,
-      VARIETY_GROUP_ID
+      VARIETY_GROUP_ID,
+      dueExtra
+    ),
+    aggregateTransitionsByGroup(
+      "COMPLETED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      VARIETY_GROUP_ID,
+      dueExtra
     ),
     aggregatePipelineByGroup(
       rangeStart,
       rangeEnd,
       statusMatch,
       groupStages,
-      VARIETY_GROUP_ID
+      VARIETY_GROUP_ID,
+      dueExtra
     ),
     aggregateDeliveryInRangeByGroup(
       rangeStart,
       rangeEnd,
       statusMatch,
       groupStages,
-      VARIETY_GROUP_ID
+      VARIETY_GROUP_ID,
+      dueExtra
     ),
   ]);
 
@@ -944,6 +996,7 @@ export async function fetchVarietyTableMetrics(
     globalRfdRows,
     acceptedRows,
     dispatchedRows,
+    completedRows,
     pipelineRows,
     deliveryInRangeRows,
     deliveryUnionRows: [],

@@ -5,7 +5,7 @@ import {
   parseYmdRange,
   istDayBoundsFromYmd,
 } from "../utility/istOrderDateStats.js";
-import { DUE_DELIVERY_STATUSES } from "../utility/adminMisDue.js";
+import { duePipelineMatch } from "../utility/adminMisDue.js";
 import { matchDeliveryDateInRange } from "../utility/adminMisMetrics.js";
 import { enrichMisOrderList } from "../utility/misOrderEnrichment.js";
 
@@ -92,21 +92,21 @@ export function buildMisOrdersMatch(query, window) {
   if (plantId) extra.plantName = plantId;
   if (subtypeId) extra.plantSubtype = subtypeId;
 
+  if (bucket === "dispatched" || bucket === "completed") {
+    return {
+      kind: "transition",
+      newStatus: bucket === "dispatched" ? "DISPATCHED" : "COMPLETED",
+      base,
+      extra,
+    };
+  }
+
   if (pastDueOnly) {
     return {
       ...base,
       ...extra,
-      orderStatus: { $in: DUE_DELIVERY_STATUSES },
+      ...duePipelineMatch(),
       deliveryDate: { $lt: rangeStart, $ne: null },
-    };
-  }
-
-  if (dueOnly || String(query.scope || "") === "due") {
-    return {
-      ...base,
-      ...extra,
-      orderStatus: { $in: DUE_DELIVERY_STATUSES },
-      ...deliveryInRangeClause(rangeStart, rangeEnd),
     };
   }
 
@@ -114,22 +114,29 @@ export function buildMisOrdersMatch(query, window) {
     return { ...base, ...extra, ...bookingInRangeClause(rangeStart, rangeEnd) };
   }
 
+  const dueScope = dueOnly || String(query.scope || "") === "due";
+  const dueFilter = dueScope ? duePipelineMatch() : {};
+  const varietyScope =
+    String(query.scope || "") === "variety" || (plantId && subtypeId);
+
   switch (bucket) {
     case "accepted":
       return {
         ...base,
         ...extra,
+        ...dueFilter,
         orderStatus: "ACCEPTED",
         ...deliveryInRangeClause(rangeStart, rangeEnd),
       };
     case "farmReady":
-      return { ...base, ...extra, orderStatus: "FARM_READY" };
+      return { ...base, ...extra, ...dueFilter, orderStatus: "FARM_READY" };
     case "readyForDispatch":
-      return { ...base, ...extra, orderStatus: "READY_FOR_DISPATCH" };
+      return { ...base, ...extra, ...dueFilter, orderStatus: "READY_FOR_DISPATCH" };
     case "dispatchProcess":
       return {
         ...base,
         ...extra,
+        ...dueFilter,
         orderStatus: "DISPATCH_PROCESS",
         ...deliveryInRangeClause(rangeStart, rangeEnd),
       };
@@ -137,6 +144,7 @@ export function buildMisOrdersMatch(query, window) {
       return {
         ...base,
         ...extra,
+        ...dueFilter,
         orderStatus: "PARTIALLY_COMPLETED",
         ...deliveryInRangeClause(rangeStart, rangeEnd),
       };
@@ -144,29 +152,41 @@ export function buildMisOrdersMatch(query, window) {
       return {
         ...base,
         ...extra,
+        ...dueFilter,
         orderStatus: { $in: PIPELINE_OTHER_STATUSES },
         ...deliveryInRangeClause(rangeStart, rangeEnd),
       };
-    case "deliveryTotal":
-      if (
-        String(query.scope || "") === "variety" ||
-        (plantId && subtypeId)
-      ) {
-        return { ...base, ...extra, ...deliveryTotalInRangeClause(rangeStart, rangeEnd) };
+    case "deliveryTotal": {
+      if (varietyScope) {
+        return {
+          ...base,
+          ...extra,
+          ...dueFilter,
+          ...deliveryTotalInRangeClause(rangeStart, rangeEnd),
+        };
       }
       if (includeAllPastDue && isTotalsScope) {
         return {
           ...base,
           ...extra,
           $or: [
-            deliveryTotalInRangeClause(rangeStart, rangeEnd),
             {
-              deliveryDate: { $lt: rangeStart, $ne: null },
-              orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED", "DISPATCHED"] },
+              ...(dueScope ? duePipelineMatch() : {}),
+              ...deliveryTotalInRangeClause(rangeStart, rangeEnd),
             },
-            { orderStatus: "FARM_READY" },
-            { orderStatus: "READY_FOR_DISPATCH" },
+            {
+              ...duePipelineMatch(),
+              deliveryDate: { $lt: rangeStart, $ne: null },
+            },
           ],
+        };
+      }
+      if (dueScope) {
+        return {
+          ...base,
+          ...extra,
+          ...duePipelineMatch(),
+          ...deliveryTotalInRangeClause(rangeStart, rangeEnd),
         };
       }
       if (isTotalsScope) {
@@ -181,36 +201,44 @@ export function buildMisOrdersMatch(query, window) {
         };
       }
       return { ...base, ...extra, ...deliveryTotalInRangeClause(rangeStart, rangeEnd) };
-    case "yetToDispatch":
+    }
+    case "yetToDispatch": {
+      const branches = [
+        {
+          orderStatus: "ACCEPTED",
+          ...deliveryInRangeClause(rangeStart, rangeEnd),
+        },
+        { orderStatus: "FARM_READY" },
+        { orderStatus: "READY_FOR_DISPATCH" },
+        {
+          orderStatus: "DISPATCH_PROCESS",
+          ...deliveryInRangeClause(rangeStart, rangeEnd),
+        },
+        {
+          orderStatus: "PARTIALLY_COMPLETED",
+          ...deliveryInRangeClause(rangeStart, rangeEnd),
+        },
+        {
+          orderStatus: { $in: PIPELINE_OTHER_STATUSES },
+          ...deliveryInRangeClause(rangeStart, rangeEnd),
+        },
+      ];
+      if (dueScope) {
+        return {
+          ...base,
+          ...extra,
+          $or: branches.map((branch) => ({ ...duePipelineMatch(), ...branch })),
+        };
+      }
+      return { ...base, ...extra, $or: branches };
+    }
+    default:
       return {
         ...base,
         ...extra,
-        $or: [
-          {
-            orderStatus: "ACCEPTED",
-            ...deliveryInRangeClause(rangeStart, rangeEnd),
-          },
-          { orderStatus: "FARM_READY" },
-          { orderStatus: "READY_FOR_DISPATCH" },
-          {
-            orderStatus: "DISPATCH_PROCESS",
-            ...deliveryInRangeClause(rangeStart, rangeEnd),
-          },
-          {
-            orderStatus: "PARTIALLY_COMPLETED",
-            ...deliveryInRangeClause(rangeStart, rangeEnd),
-          },
-          {
-            orderStatus: { $in: PIPELINE_OTHER_STATUSES },
-            ...deliveryInRangeClause(rangeStart, rangeEnd),
-          },
-        ],
+        ...dueFilter,
+        ...deliveryInRangeClause(rangeStart, rangeEnd),
       };
-    case "dispatched":
-    case "completed":
-      return { kind: "transition", newStatus: bucket === "dispatched" ? "DISPATCHED" : "COMPLETED", base, extra };
-    default:
-      return { ...base, ...extra, ...deliveryInRangeClause(rangeStart, rangeEnd) };
   }
 }
 

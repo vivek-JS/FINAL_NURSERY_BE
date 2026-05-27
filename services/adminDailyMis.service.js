@@ -82,7 +82,7 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
     dueSummary,
     pastDueRow,
   ] = await Promise.all([
-    fetchMisMetricSlices(rangeStart, rangeEnd),
+    fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly }),
     Order.aggregate([
       {
         $match: {
@@ -174,7 +174,7 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
         },
       },
     ]),
-    fetchVarietyTableMetrics(rangeStart, rangeEnd, PLANT_SUBTYPE_STAGES),
+    fetchVarietyTableMetrics(rangeStart, rangeEnd, PLANT_SUBTYPE_STAGES, { dueOnly }),
     aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
     includeAllPastDue
       ? aggregatePastDueDeliveryRows(rangeStart)
@@ -189,7 +189,12 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
     uniquePerDayRows,
     rangeUniqueOrders: rangeUniqueAgg[0]?.uniqueOrders ?? 0,
     ...metricSlices,
+    dueOnly,
   });
+
+  if (includeAllPastDue && dueSummary?.combined) {
+    payload.totals.delivery.total = { ...dueSummary.combined };
+  }
 
   const days = pastDueRow ? [pastDueRow, ...payload.days] : payload.days;
 

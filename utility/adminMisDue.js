@@ -3,11 +3,8 @@ import {
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
 } from "./istOrderDateStats.js";
-import {
-  emptyDeliveryDay,
-  pivotDeliveryByDay,
-  recomputeDeliveryTotal,
-} from "./adminDailyMisMerge.js";
+
+import { emptyDeliveryDay, statusToDeliveryBucket } from "./adminDailyMisMerge.js";
 
 /** Pre-completion pipeline — delivery still owed. */
 export const DUE_DELIVERY_STATUSES = [
@@ -34,6 +31,11 @@ export function misDeliveryStatusMatch(dueOnly) {
     return { orderStatus: { $in: DUE_DELIVERY_STATUSES } };
   }
   return orderStatusExcludeMatch();
+}
+
+/** Mongo match fragment: open due pipeline only. */
+export function duePipelineMatch() {
+  return { orderStatus: { $in: DUE_DELIVERY_STATUSES } };
 }
 
 async function sumDueOrdersPlants(match) {
@@ -93,38 +95,53 @@ const REMAINING_STATUSES = [
   "PARTIALLY_COMPLETED",
 ];
 
-/** Delivery pipeline breakdown for orders due before range start. */
+/** Delivery pipeline breakdown for orders due before range start (aligns with due summary). */
 export async function aggregatePastDueDeliveryRows(rangeStart) {
-  const rows = await Order.aggregate([
-    {
-      $match: {
-        ...orderStatusExcludeMatch(),
-        orderStatus: { $in: DUE_DELIVERY_STATUSES },
-        deliveryDate: { $lt: rangeStart, $ne: null },
-      },
-    },
-    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-    {
-      $group: {
-        _id: { day: "past-due", status: "$orderStatus" },
-        orders: { $sum: 1 },
-        plants: { $sum: "$linePlantTotal" },
-        plantsRemaining: {
-          $sum: {
-            $cond: [
-              { $in: ["$orderStatus", REMAINING_STATUSES] },
-              { $ifNull: ["$remainingPlants", 0] },
-              0,
-            ],
+  const backlogMatch = {
+    ...orderStatusExcludeMatch(),
+    ...duePipelineMatch(),
+    deliveryDate: { $lt: rangeStart, $ne: null },
+  };
+
+  const [totalRow, statusRows] = await Promise.all([
+    sumDueOrdersPlants(backlogMatch),
+    Order.aggregate([
+      { $match: backlogMatch },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      {
+        $group: {
+          _id: "$orderStatus",
+          orders: { $sum: 1 },
+          plants: { $sum: "$linePlantTotal" },
+          plantsRemaining: {
+            $sum: {
+              $cond: [
+                { $in: ["$orderStatus", REMAINING_STATUSES] },
+                { $ifNull: ["$remainingPlants", 0] },
+                0,
+              ],
+            },
           },
         },
       },
-    },
+    ]),
   ]);
 
-  const byDay = pivotDeliveryByDay(rows);
-  const delivery = byDay.get("past-due") || emptyDeliveryDay();
-  recomputeDeliveryTotal(delivery);
+  const delivery = emptyDeliveryDay();
+  for (const row of statusRows) {
+    const status = row._id;
+    if (!status) continue;
+    const bucketKey = statusToDeliveryBucket(status);
+    const bucket = delivery[bucketKey];
+    if (!bucket) continue;
+    bucket.orders += row.orders || 0;
+    bucket.plants += row.plants || 0;
+    if (typeof bucket.plantsRemaining === "number") {
+      bucket.plantsRemaining += row.plantsRemaining || 0;
+    }
+  }
+  delivery.total = { ...totalRow };
+
   return {
     date: "past-due",
     label: "Past due (before range)",

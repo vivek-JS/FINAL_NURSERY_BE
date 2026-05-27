@@ -30,6 +30,21 @@ test("buildMisOrdersMatch dispatched uses transition kind", () => {
   assert.equal(m.newStatus, "DISPATCHED");
 });
 
+test("buildMisOrdersMatch completed uses transition kind", () => {
+  const m = buildMisOrdersMatch({ bucket: "completed", mode: "delivery" }, window);
+  assert.equal(m.kind, "transition");
+  assert.equal(m.newStatus, "COMPLETED");
+});
+
+test("buildMisOrdersMatch dueOnly does not block dispatched", () => {
+  const m = buildMisOrdersMatch(
+    { bucket: "dispatched", mode: "delivery", dueOnly: "true" },
+    window
+  );
+  assert.equal(m.kind, "transition");
+  assert.equal(m.newStatus, "DISPATCHED");
+});
+
 test("buildMisOrdersMatch deliveryTotal single day is in-range only", () => {
   const m = buildMisOrdersMatch(
     { bucket: "deliveryTotal", mode: "delivery", date: "2026-05-26" },
@@ -70,4 +85,23 @@ test("buildMisOrdersMatch deliveryTotal range uses union", () => {
     rangeWindow
   );
   assert.ok(Array.isArray(m.$or));
+});
+
+test("buildMisOrdersMatch includeAllPastDue uses due backlog not FR union", () => {
+  const rangeWindow = {
+    rangeStart: istDayBoundsFromYmd("2026-05-01").start,
+    rangeEnd: istDayBoundsFromYmd("2026-05-07").end,
+  };
+  const m = buildMisOrdersMatch(
+    {
+      bucket: "deliveryTotal",
+      mode: "delivery",
+      includeAllPastDue: "true",
+    },
+    rangeWindow
+  );
+  assert.ok(Array.isArray(m.$or));
+  assert.equal(m.$or.length, 2);
+  const hasFarmReadyUnion = m.$or.some((b) => b.orderStatus === "FARM_READY");
+  assert.equal(hasFarmReadyUnion, false);
 });
