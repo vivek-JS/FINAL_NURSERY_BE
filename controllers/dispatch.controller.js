@@ -44,6 +44,10 @@ import {
   mergeEditHistoryIntoFilteredBody,
   fireOrderEditWhatsAppAlerts,
 } from "../utils/orderEditHistoryBuilder.js";
+import {
+  emitDispatchCompletedEvent,
+  emitPlantOrderUpdateEvents,
+} from "../utils/orderEventDualWrite.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -143,6 +147,26 @@ const updateOrderWithLedgerSync = async ({
       updatedOrder,
       entries: dispatchHistoryEntries,
     });
+  }
+
+  const dispatchPush = opWithAudit.$push?.dispatchHistory;
+  const dispatchEntry =
+    dispatchPush && typeof dispatchPush === "object" && !dispatchPush.$each
+      ? dispatchPush
+      : null;
+
+  emitPlantOrderUpdateEvents({
+    orderId: updatedOrder._id,
+    editHistoryEntries: dispatchHistoryEntries,
+    userId,
+    actorName: req?.user?.name,
+  }).catch((e) => console.error("[OrderEvent] dispatch edit emit:", e?.message || e));
+
+  if (dispatchEntry) {
+    emitDispatchCompletedEvent(updatedOrder._id, dispatchEntry, {
+      userId,
+      actorName: req?.user?.name,
+    }).catch((e) => console.error("[OrderEvent] dispatch complete emit:", e?.message || e));
   }
 
   return updatedOrder;

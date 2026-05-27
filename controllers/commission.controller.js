@@ -274,7 +274,7 @@ export const postSettleDealerCommission = catchAsync(async (req, res) => {
       isPartial: settleAmount < unsettled,
     };
 
-    await createDealerLedgerEntry({
+    const commissionLedger = await createDealerLedgerEntry({
       dealer: dealerId,
       refType: "COMMISSION_SETTLEMENT",
       credit: settleAmount,
@@ -289,13 +289,15 @@ export const postSettleDealerCommission = catchAsync(async (req, res) => {
       session,
     });
 
-    const ledgerEntry = await DealerLedgerEntry.findOne({
-      dealer: dealerId,
-      refType: "COMMISSION_SETTLEMENT",
-    })
-      .sort({ createdAt: -1 })
-      .session(session)
-      .lean();
+    const ledgerEntry =
+      commissionLedger ||
+      (await DealerLedgerEntry.findOne({
+        dealer: dealerId,
+        refType: "COMMISSION_SETTLEMENT",
+      })
+        .sort({ createdAt: -1 })
+        .session(session)
+        .lean());
 
     const wallet = await DealerWallet.findOne({ dealer: dealerId })
       .select("availableAmount")
@@ -327,6 +329,18 @@ export const postSettleDealerCommission = catchAsync(async (req, res) => {
       ],
       { session }
     );
+
+    try {
+      const fs = await import("../modules/finance/integration/financeShadow.js");
+      fs.shadowDealerCommissionSettlement({
+        dealerId,
+        amount: settleAmount,
+        settlementId: settlement[0]._id,
+        userId: req.user?._id,
+      });
+    } catch (shadowErr) {
+      console.error("[Finance] shadow commission:", shadowErr?.message || shadowErr);
+    }
 
     await session.commitTransaction();
 

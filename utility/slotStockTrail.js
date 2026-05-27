@@ -1,6 +1,7 @@
 export const STOCK_TRAIL_ACTIONS = {
   actualPlants: "ACTUAL_PLANTS_UPDATED",
   closingStock: "CLOSING_STOCK_UPDATED",
+  availablePlants: "AVAILABLE_PLANTS_UPDATED",
 };
 
 export const STOCK_TRAIL_ACTION_LIST = Object.values(STOCK_TRAIL_ACTIONS);
@@ -16,7 +17,8 @@ const buildSnapshot = (slot, field, fieldValue) => {
     primarySowed: Number(slot.primarySowed) || 0,
     officeSowed: Number(slot.officeSowed) || 0,
     totalPlants,
-    availablePlants,
+    availablePlants:
+      field === "availablePlants" ? fieldValue : availablePlants,
     excessivePlants: Number(slot.excessiveSowing?.plants) || 0,
     plantsSowed: Number(slot.plantsSowed) || 0,
     totalBookedPlants: Number(slot.totalBookedPlants) || 0,
@@ -52,8 +54,12 @@ export function logStockFieldChange(
   if (prev === next) return false;
 
   const action = STOCK_TRAIL_ACTIONS[field];
-  const activityName =
-    field === "actualPlants" ? "Actual Plants Updated" : "Closing Stock Updated";
+  const activityNameByField = {
+    actualPlants: "Actual Plants Updated",
+    closingStock: "Closing Stock Updated",
+    availablePlants: "Available Plants Updated",
+  };
+  const activityName = activityNameByField[field] || "Stock Updated";
   const totalPlants = Number(slot.totalPlants) || 0;
   const availablePlants =
     slot.availablePlants !== undefined && slot.availablePlants !== null
@@ -85,8 +91,8 @@ export function logStockFieldChange(
     after,
     previousTotalPlants: totalPlants,
     newTotalPlants: totalPlants,
-    previousAvailablePlants: availablePlants,
-    newAvailablePlants: availablePlants,
+    previousAvailablePlants: field === "availablePlants" ? prev : availablePlants,
+    newAvailablePlants: field === "availablePlants" ? next : availablePlants,
     bufferPercentage: Number(slot.effectiveBuffer ?? slot.buffer) || 0,
     bufferAmount: Number(slot.bufferAmount) || 0,
     reason: source,
@@ -115,7 +121,7 @@ export function logStockFieldChange(
  */
 export function applyStockFieldUpdates(slot, updates, performedBy, source) {
   let changed = false;
-  for (const field of ["actualPlants", "closingStock"]) {
+  for (const field of ["actualPlants", "closingStock", "availablePlants"]) {
     if (updates[field] === undefined) continue;
     const prev = Number(slot[field]) || 0;
     const next = Math.max(0, Number(updates[field]) || 0);
@@ -123,6 +129,10 @@ export function applyStockFieldUpdates(slot, updates, performedBy, source) {
       changed = true;
     }
     slot[field] = next;
+    if (field === "availablePlants") {
+      slot.isOverflow = next < 0;
+      slot.overflow = next < 0;
+    }
   }
   return changed;
 }

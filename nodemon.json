@@ -1,7 +1,16 @@
 {
+  "watch": ["."],
+  "ext": "js,mjs,cjs,json",
   "ignore": [
-    "whatsapp-profile/**",
-    "logs/**",
-    "*.log"
-  ]
+    ".wwebjs_auth/**",
+    "data/whatsapp-auth/**",
+    "node_modules/**",
+    "uploads/**",
+    "backups/**",
+    "temp/**",
+    "tmp/**"
+  ],
+  "signal": "SIGTERM",
+  "delay": 2500,
+  "killTimeout": 20000
 }

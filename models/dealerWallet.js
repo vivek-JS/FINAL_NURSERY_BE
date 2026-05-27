@@ -116,6 +116,11 @@ dealerWalletSchema.statics.addPayment = async function (
   session = null,
   metadata = {}
 ) {
+  const strictLedger =
+    metadata?.strictLedger === true ||
+    (metadata?.strictLedger !== false &&
+      (Boolean(session) || process.env.FINANCE_STRICT_DEALER_LEDGER === "true"));
+
   try {
     let query = this.findOne({ dealer: dealerId });
     if (session) query = query.session(session);
@@ -133,6 +138,26 @@ dealerWalletSchema.statics.addPayment = async function (
 
     const balanceBefore = wallet.availableAmount;
     const balanceAfter = balanceBefore + amount;
+
+    const ledgerPayload = {
+      dealerId,
+      amount,
+      description,
+      performedBy,
+      type,
+      relatedOrder,
+      balanceBefore,
+      balanceAfter,
+      metadata,
+      session,
+    };
+
+    if (strictLedger) {
+      const ledgerEntry = await addPaymentToLedgerEntry(ledgerPayload);
+      if (!ledgerEntry) {
+        throw new Error("Dealer ledger entry was not created (strict mode)");
+      }
+    }
 
     // Add transaction record (embedded - legacy)
     const transaction = {
@@ -152,23 +177,39 @@ dealerWalletSchema.statics.addPayment = async function (
     const saveOptions = session ? { session } : {};
     await wallet.save(saveOptions);
 
-    // Write to immutable DealerLedgerEntry collection for audit
+    if (!strictLedger) {
+      try {
+        await addPaymentToLedgerEntry(ledgerPayload);
+      } catch (ledgerError) {
+        console.error("Error writing to dealer ledger (wallet updated):", ledgerError);
+      }
+    }
+
     try {
-      await addPaymentToLedgerEntry({
-        dealerId,
+      const fs = await import("../modules/finance/integration/financeShadow.js");
+      const { resolveFarmerIdentity } = await import("../utils/farmerPlantOrderLedgerHelper.js");
+      let farmerPartyId;
+      if (relatedOrder) {
+        const Order = (await import("../models/order.model.js")).default;
+        const oq = Order.findById(relatedOrder).select("farmer dealerOrder salesPerson");
+        if (session) oq.session(session);
+        const ord = await oq.lean();
+        if (ord) {
+          const id = await resolveFarmerIdentity(ord);
+          farmerPartyId = id.customerMobile;
+        }
+      }
+      fs.shadowDealerWalletMovement({
+        dealerId: String(dealerId),
         amount,
-        description,
-        performedBy,
-        type,
-        relatedOrder,
-        balanceBefore,
-        balanceAfter,
-        metadata,
-        session,
+        walletCredit: amount < 0,
+        farmerPartyId,
+        relatedOrderId: relatedOrder ? String(relatedOrder) : undefined,
+        userId: performedBy,
+        idempotencySuffix: `${type}:${Date.now()}:${wallet.transactions.length}`,
       });
-    } catch (ledgerError) {
-      console.error("Error writing to dealer ledger (wallet updated):", ledgerError);
-      // Don't fail the main operation; ledger write is best-effort audit
+    } catch (shadowErr) {
+      console.error("[Finance] shadow dealer wallet:", shadowErr?.message || shadowErr);
     }
 
     return transaction;

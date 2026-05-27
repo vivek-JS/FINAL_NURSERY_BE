@@ -354,7 +354,15 @@ export async function ensureFarmerPlantOrderDebit(order, { userId, session } = {
     },
     session,
   });
-  if (created) return created;
+  if (created) {
+    try {
+      const fs = await import("../modules/finance/integration/financeShadow.js");
+      fs.shadowFarmerOrderCreated({ order, customerMobile, userId });
+    } catch (shadowErr) {
+      console.error("[Finance] shadow farmer order:", shadowErr?.message || shadowErr);
+    }
+    return created;
+  }
   const q2 = FarmerPlantOrderLedgerEntry.findOne({ orderId: oid, refType: "ORDER" });
   if (session) q2.session(session);
   return q2.lean();
@@ -446,7 +454,7 @@ export async function recordFarmerPlantLedgerPaymentTransition(
     const defaultCreditDesc = payment.isWalletPayment
       ? `Payment collected (dealer wallet) — ${payment.modeOfPayment || "wallet"}`
       : `Payment collected — ${payment.modeOfPayment || "—"}`;
-    return createFarmerPlantLedgerEntry({
+    const row = await createFarmerPlantLedgerEntry({
       customerMobile,
       customerName,
       farmerId,
@@ -466,11 +474,27 @@ export async function recordFarmerPlantLedgerPaymentTransition(
       metadata: baseMeta,
       session,
     });
+    if (row) {
+      try {
+        const fs = await import("../modules/finance/integration/financeShadow.js");
+        fs.shadowFarmerPayment({
+          order,
+          payment,
+          customerMobile,
+          previousStatus,
+          newStatus,
+          userId,
+        });
+      } catch (shadowErr) {
+        console.error("[Finance] shadow farmer payment:", shadowErr?.message || shadowErr);
+      }
+    }
+    return row;
   }
 
   // action === "REVERSAL"
   const defaultReversalDesc = `Payment no longer collected (${previousStatus} → ${newStatus})`;
-  return createFarmerPlantLedgerEntry({
+  const reversalRow = await createFarmerPlantLedgerEntry({
     customerMobile,
     customerName,
     farmerId,
@@ -490,8 +514,22 @@ export async function recordFarmerPlantLedgerPaymentTransition(
     metadata: baseMeta,
     session,
   });
-
-  return null;
+  if (reversalRow) {
+    try {
+      const fs = await import("../modules/finance/integration/financeShadow.js");
+      fs.shadowFarmerPayment({
+        order,
+        payment,
+        customerMobile,
+        previousStatus,
+        newStatus,
+        userId,
+      });
+    } catch (shadowErr) {
+      console.error("[Finance] shadow farmer reversal:", shadowErr?.message || shadowErr);
+    }
+  }
+  return reversalRow;
 }
 
 /**
@@ -608,6 +646,20 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
             },
             session,
           });
+          try {
+            const fs = await import("../modules/finance/integration/financeShadow.js");
+            fs.shadowFarmerOrderDelta({
+              order: updatedDoc,
+              customerMobile,
+              deltaAmount,
+              isIncrease,
+              transitionKey,
+              userId,
+              entryDate,
+            });
+          } catch (shadowErr) {
+            console.error("[Finance] shadow farmer delta:", shadowErr?.message || shadowErr);
+          }
         }
       }
     }
@@ -666,6 +718,18 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
               metadata: { transitionKey, previousStatus: prevStatus, newStatus: nextStatus },
               session,
             });
+            try {
+              const fs = await import("../modules/finance/integration/financeShadow.js");
+              fs.shadowFarmerOrderCancel({
+                order: updatedDoc,
+                customerMobile,
+                amount: lineTotal,
+                userId,
+                transitionKey,
+              });
+            } catch (shadowErr) {
+              console.error("[Finance] shadow farmer cancel:", shadowErr?.message || shadowErr);
+            }
           } else if (prevStatus === "CANCELLED" || prevStatus === "REJECTED") {
             // Re-open from CANCELLED or REJECTED: restore order debit so receivable returns.
             const fromReject = prevStatus === "REJECTED";
@@ -687,6 +751,18 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
               metadata: { transitionKey, previousStatus: prevStatus, newStatus: nextStatus },
               session,
             });
+            try {
+              const fs = await import("../modules/finance/integration/financeShadow.js");
+              fs.shadowFarmerOrderReopen({
+                order: updatedDoc,
+                customerMobile,
+                amount: lineTotal,
+                userId,
+                transitionKey,
+              });
+            } catch (shadowErr) {
+              console.error("[Finance] shadow farmer reopen:", shadowErr?.message || shadowErr);
+            }
           }
         }
       }
@@ -826,6 +902,18 @@ export async function recordFarmerPlantLedgerDispatchReturnCredit(
     },
     session,
   });
+  try {
+    const fs = await import("../modules/finance/integration/financeShadow.js");
+    fs.shadowFarmerDispatchReturn({
+      order: updatedDoc,
+      customerMobile,
+      amount: creditAmount,
+      transitionKey,
+      userId,
+    });
+  } catch (shadowErr) {
+    console.error("[Finance] shadow dispatch return:", shadowErr?.message || shadowErr);
+  }
 }
 
 /**
@@ -905,6 +993,18 @@ export async function recordFarmerPlantLedgerDispatchDamagedCredit(
     },
     session,
   });
+  try {
+    const fs = await import("../modules/finance/integration/financeShadow.js");
+    fs.shadowFarmerDispatchReturn({
+      order: updatedDoc,
+      customerMobile,
+      amount: creditAmount,
+      transitionKey: transitionKey.replace("RETURN", "DAMAGED"),
+      userId,
+    });
+  } catch (shadowErr) {
+    console.error("[Finance] shadow dispatch damaged:", shadowErr?.message || shadowErr);
+  }
 }
 
 export async function archiveFarmerPlantOrderBeforeDelete(doc, deletedBy) {

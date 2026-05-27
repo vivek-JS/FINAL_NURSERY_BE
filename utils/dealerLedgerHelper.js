@@ -262,11 +262,27 @@ export const ensureDealerOrderBookingAudit = async (order, { userId, session } =
     },
   };
 
+  let createdEntry;
   if (session) {
     const created = await DealerLedgerEntry.create([entryPayload], { session });
-    return created[0];
+    createdEntry = created[0];
+  } else {
+    createdEntry = await DealerLedgerEntry.create(entryPayload);
   }
-  return DealerLedgerEntry.create(entryPayload);
+  if (createdEntry) {
+    try {
+      const fs = await import("../modules/finance/integration/financeShadow.js");
+      fs.shadowDealerOrderBooking({
+        order,
+        dealerId,
+        amount: lineTotal,
+        userId,
+      });
+    } catch (shadowErr) {
+      console.error("[Finance] shadow dealer booking:", shadowErr?.message || shadowErr);
+    }
+  }
+  return createdEntry;
 };
 
 /**
@@ -320,11 +336,27 @@ export const ensureDealerOrderReceivablePaymentCredit = async (
     },
   };
 
+  let createdEntry;
   if (session) {
     const created = await DealerLedgerEntry.create([entryPayload], { session });
-    return created[0];
+    createdEntry = created[0];
+  } else {
+    createdEntry = await DealerLedgerEntry.create(entryPayload);
   }
-  return DealerLedgerEntry.create(entryPayload);
+  if (createdEntry) {
+    try {
+      const fs = await import("../modules/finance/integration/financeShadow.js");
+      fs.shadowDealerReceivablePayment({
+        order,
+        payment,
+        dealerId,
+        userId,
+      });
+    } catch (shadowErr) {
+      console.error("[Finance] shadow dealer receivable:", shadowErr?.message || shadowErr);
+    }
+  }
+  return createdEntry;
 };
 
 /**

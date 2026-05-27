@@ -31,6 +31,16 @@ import {
   getAgriLoadWhitelist,
   normalizePhoneForWhitelist,
 } from "../utils/agriLoadLinkSigner.js";
+import { pushAgriActivityAndEmit } from "../utils/orderEventDualWrite.js";
+
+/** Push Agri activityLog entry and mirror to OrderEvent collection. */
+function logAgriActivity(order, entry, ctx = {}) {
+  pushAgriActivityAndEmit(order, entry, {
+    userId: ctx.userId || entry.performedBy,
+    actorName: ctx.actorName || entry.performedByName,
+    correlationId: ctx.correlationId,
+  });
+}
 
 /** Ram Agri: customer ledger exists, but there is no order-to-order payment transfer API (farmer plant only). */
 
@@ -656,7 +666,8 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
   const qtyLabel = useMultiLine ? normalizedLines.reduce((s, l) => s + l.quantity, 0) : quantity;
   const rateLabel = useMultiLine ? "multiple" : resolvedRate;
 
-  order.activityLog = [
+  logAgriActivity(
+    order,
     {
       action: "ORDER_CREATED",
       description: useMultiLine
@@ -678,11 +689,12 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
         orderNumber: order.orderNumber,
       },
     },
-  ];
+    { userId, actorName: req.user?.name }
+  );
 
   if (processedPayments.length > 0) {
     processedPayments.forEach((p) => {
-      order.activityLog.push({
+      logAgriActivity(order, {
         action: "PAYMENT_ADDED",
         description: `Payment of ₹${p.paidAmount} added via ${p.modeOfPayment}`,
         performedBy: userId,
@@ -878,8 +890,7 @@ const createLinkedAgriOrderFromNurseryOrder = catchAsync(async (req, res, next) 
     agriLoadStatus: "PENDING_LOAD",
   });
 
-  if (!order.activityLog) order.activityLog = [];
-  order.activityLog.push({
+  logAgriActivity(order,{
     action: "ORDER_CREATED",
     description: `Linked agri order created for nursery order #${linkedOrderCode} (${order.productName}).`,
     performedBy: userId,
@@ -943,8 +954,7 @@ const markLinkedAgriLoaded = catchAsync(async (req, res, next) => {
   order.agriLoadStatus = "LOADED";
   order.loadedAt = new Date();
   order.loadedBy = req.user?._id || req.user?.id || null;
-  if (!order.activityLog) order.activityLog = [];
-  order.activityLog.push({
+  logAgriActivity(order,{
     action: "DISPATCH_UPDATED",
     description: `Agri load marked as LOADED by ${req.user?.name || "admin"}.`,
     performedBy: req.user?._id || req.user?.id,
@@ -1006,8 +1016,7 @@ const markLinkedAgriLoadedViaLink = catchAsync(async (req, res, next) => {
     order.agriLoadStatus = "LOADED";
     order.loadedAt = new Date();
     order.loadedBy = fallbackUser._id;
-    if (!order.activityLog) order.activityLog = [];
-    order.activityLog.push({
+    logAgriActivity(order,{
       action: "DISPATCH_UPDATED",
       description: `Agri load marked as LOADED via one-click link by ${normalizedActorPhone}.`,
       performedBy: fallbackUser._id,
@@ -1149,9 +1158,6 @@ const acceptAgriSalesOrder = catchAsync(async (req, res, next) => {
     order.assignmentNotes = undefined;
   }
 
-  // Add activity log
-  if (!order.activityLog) order.activityLog = [];
-  
   let description = `Order accepted. Status: ${previousStatus} → ACCEPTED. Stock will be checked/deducted only if admin dispatches directly.`;
   if (previousStatus === "ASSIGNED") {
     description += " Assignment cleared.";
@@ -1186,7 +1192,10 @@ const acceptAgriSalesOrder = catchAsync(async (req, res, next) => {
     },
   };
 
-  order.activityLog.push(activityLogEntry);
+  logAgriActivity(order, activityLogEntry, {
+    userId: req.user?._id || req.user?.id,
+    actorName: req.user?.name,
+  });
 
   await order.save();
 
@@ -1255,8 +1264,7 @@ const rejectAgriSalesOrder = catchAsync(async (req, res, next) => {
   }
 
   // Add activity log
-  if (!order.activityLog) order.activityLog = [];
-  order.activityLog.push({
+  logAgriActivity(order,{
     action: "ORDER_REJECTED",
     description: `Order rejected${reason ? `: ${reason}` : ""}${stockWasDeducted ? " (stock restored)" : ""}`,
     performedBy: req.user?._id || req.user?.id,
@@ -1765,8 +1773,7 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
   }
 
   // Add activity log
-  if (!order.activityLog) order.activityLog = [];
-  order.activityLog.push({
+  logAgriActivity(order,{
     action: "PAYMENT_ADDED",
     description: `Payment of ₹${paidAmount} added via ${isWalletPayment ? "Wallet" : modeOfPayment}`,
     performedBy: req.user?._id || req.user?.id,
@@ -1927,8 +1934,7 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
   order.payment[index].paymentStatus = paymentStatus;
 
   // Add activity log
-  if (!order.activityLog) order.activityLog = [];
-  order.activityLog.push({
+  logAgriActivity(order,{
     action: "PAYMENT_STATUS_CHANGED",
     description: `Payment #${index + 1} (₹${paymentAmount}) status changed from ${previousPaymentStatus} to ${paymentStatus}`,
     performedBy: req.user?._id || req.user?.id,
@@ -2306,8 +2312,7 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
   }
 
   // Add activity log
-  if (!order.activityLog) order.activityLog = [];
-  order.activityLog.push({
+  logAgriActivity(order,{
     action: actionType,
     description,
     performedBy: req.user?._id || req.user?.id,
@@ -3008,8 +3013,7 @@ const assignOrdersToSalesPerson = catchAsync(async (req, res, next) => {
     }
 
     // Add activity log
-    if (!order.activityLog) order.activityLog = [];
-    order.activityLog.push({
+    logAgriActivity(order,{
       action: "ORDER_ASSIGNED",
       description: `Order assigned to ${salesPerson.name} (${salesPerson.phoneNumber}) for dispatch. Status: ${previousOrderStatus} → ASSIGNED`,
       performedBy: adminUserId,
@@ -3211,8 +3215,7 @@ const cancelAssignment = catchAsync(async (req, res, next) => {
   order.orderStatus = "ACCEPTED"; // Revert to ACCEPTED status
 
   // Add activity log
-  if (!order.activityLog) order.activityLog = [];
-  order.activityLog.push({
+  logAgriActivity(order,{
     action: "ASSIGNMENT_CANCELLED",
     description: `Assignment cancelled${previousAssignedToUser ? ` (was assigned to ${previousAssignedToUser.name})` : ""}${reason ? `: ${reason}` : ""}. Status: ${previousOrderStatus} → ACCEPTED`,
     performedBy: userId,
@@ -3647,8 +3650,7 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     }
 
     // Add activity log
-    if (!order.activityLog) order.activityLog = [];
-    order.activityLog.push({
+    logAgriActivity(order,{
       action: "ORDER_DISPATCHED",
       description: activityDescription,
       performedBy: userId,
@@ -3780,8 +3782,7 @@ const updateDispatchStatus = catchAsync(async (req, res, next) => {
   }
 
   // Add activity log
-  if (!order.activityLog) order.activityLog = [];
-  order.activityLog.push({
+  logAgriActivity(order,{
     action: "DISPATCH_UPDATED",
     description: `Dispatch status changed from ${previousDispatchStatus} to ${dispatchStatus}${notes ? `: ${notes}` : ""}`,
     performedBy: userId,
@@ -4340,8 +4341,7 @@ const completeOrders = catchAsync(async (req, res, next) => {
     }
 
     // Add activity log
-    if (!order.activityLog) order.activityLog = [];
-    order.activityLog.push({
+    logAgriActivity(order,{
       action: "ORDER_DELIVERED",
       description: activityDescription,
       performedBy: userId,
@@ -4372,7 +4372,7 @@ const completeOrders = catchAsync(async (req, res, next) => {
 
     // If stock was returned, add separate activity log entry
     if (returnQty > 0 && stockReturnSuccess) {
-      order.activityLog.push({
+      logAgriActivity(order, {
         action: "STOCK_RETURNED",
         description: `${returnQty} units returned to inventory (Stock: ${stockBefore} → ${stockAfter})`,
         performedBy: userId,
@@ -4383,7 +4383,7 @@ const completeOrders = catchAsync(async (req, res, next) => {
           returnQuantity: returnQty,
           returnReason,
         },
-      });
+      }, { userId, actorName: userName });
     }
 
     await order.save();
@@ -4597,11 +4597,7 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
   }
   activityDescription += `(NO stock impact - order was dispatched by sales person)`;
 
-  // Add activity log
-  if (!order.activityLog) order.activityLog = [];
-  
-  // Log sales return
-  order.activityLog.push({
+  logAgriActivity(order, {
     action: "SALES_RETURN_PROCESSED",
     description: activityDescription,
     performedBy: userId,
@@ -4609,7 +4605,7 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
     previousValue: {
       salesReturnQuantity: previousSalesReturnQty,
       totalPaidAmount: previousTotalPaid,
-      paymentStatus: order.paymentStatus, // Will be updated below if adjustments exist
+      paymentStatus: order.paymentStatus,
     },
     newValue: {
       salesReturnQuantity: returnQty,
@@ -4623,12 +4619,11 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
       isAssignedOrder,
       dispatchedBy: order.dispatchedBy,
     },
-  });
+  }, { userId, actorName: userName });
 
-  // Log payment adjustments separately if any
   if (paymentAdjustments && paymentAdjustments.length > 0) {
     for (const adjustment of paymentAdjustments) {
-      order.activityLog.push({
+      logAgriActivity(order, {
         action: "PAYMENT_ADJUSTED",
         description: `Payment ${adjustment.adjustmentType.toLowerCase()}: ${adjustment.amount >= 0 ? '+' : ''}${adjustment.amount.toFixed(2)}. ${adjustment.reason || ""} ${adjustment.notes || ""}`.trim(),
         performedBy: userId,

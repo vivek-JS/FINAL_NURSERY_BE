@@ -299,10 +299,13 @@ import whatsappContactListRoute from "./routes/whatsappContactList.route.js";
 import watiProxyRoute from "./routes/watiProxy.route.js";
 import exotelRoute from "./routes/exotel.route.js";
 import orderRoute from "./routes/order.route.js";
+import orderEventsRoute from "./modules/orderEvents/routes/orderEvents.route.js";
+import financeRoute from "./modules/finance/routes/finance.route.js";
 import {
   handleQRPaymentCallback,
   getFarmerOrdersDashboardTabCounts,
   getAdminDashboardStats,
+  getAdminDailyMis,
 } from "./controllers/order.controller.js";
 import { getFarmerPlantLedger, getFarmerPlantLedgerParties } from "./controllers/farmerPlantOrderLedger.controller.js";
 import { getRamAgriLedgerParties } from "./controllers/ramAgriLedger.controller.js";
@@ -505,7 +508,14 @@ server.get(
   authenticateToken,
   getAdminDashboardStats
 );
+server.get(
+  "/api/v1/order/admin-daily-mis",
+  authenticateToken,
+  authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+  getAdminDailyMis
+);
 server.use("/api/v1/order", authenticateToken, orderRoute);
+server.use("/api/v1/order-events", authenticateToken, orderEventsRoute);
 // Direct bindings for reliability in environments with stale router mounts.
 server.get("/api/v1/ready-dispatch-groups", authenticateToken, getReadyDispatchGroups);
 server.post("/api/v1/ready-dispatch-groups", authenticateToken, createReadyDispatchGroups);
@@ -656,6 +666,7 @@ server.use("/api/v1/inventory", authenticateToken, inventoryRoute); // General i
 server.use("/api/v1/plant-product-mappings", plantProductMappingRoute); // Plant product mapping routes (has built-in auth)
 server.use("/api/v1/purchase", authenticateToken, purchaseRoute);
 
+server.use("/api/v1/finance", authenticateToken, financeRoute);
 
 // WhatsApp internal alert routes (test endpoint + status check)
 server.use("/api/v1/whatsapp-alert", authenticateToken, whatsappAlertRoute);
@@ -672,6 +683,15 @@ server.use(errorHandler);
     initAlertCronJobs();
   } catch (e) {
     console.error("[WhatsApp Cron] Failed to init cron jobs:", e?.message || e);
+  }
+})();
+
+(async () => {
+  try {
+    const { initFinanceCronJobs } = await import("./jobs/financeCronJobs.js");
+    await initFinanceCronJobs();
+  } catch (e) {
+    console.error("[Finance] Failed to init finance cron jobs:", e?.message || e);
   }
 })();
 

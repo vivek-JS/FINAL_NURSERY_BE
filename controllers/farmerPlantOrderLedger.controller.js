@@ -22,6 +22,7 @@ import {
   resolveFarmerIdentity,
   getFarmerPlantPaymentTransitionAction,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
 
 const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
 const DEBUG_SESSION_ID = "69bde0";
@@ -709,6 +710,7 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
       transferredFromOrderId: new mongoose.Types.ObjectId(sid),
       transferredFromPaymentId: new mongoose.Types.ObjectId(pid),
     };
+    applyPaymentTimingToPayment(newPaymentPayload, targetOrder);
 
     targetOrder.payment.push(newPaymentPayload);
     await targetOrder.save({ session });
@@ -1002,6 +1004,7 @@ export const createFarmerOrderTransferRequest = catchAsync(async (req, res, next
     transferredFromOrderId: fromOrder._id,
     transferRequestId: requestDoc._id,
   };
+  applyPaymentTimingToPayment(targetPaymentPayload, toOrder);
   toOrder.payment.push(targetPaymentPayload);
   await toOrder.save();
   const targetPendingPayment = toOrder.payment[toOrder.payment.length - 1];
@@ -1175,6 +1178,7 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
         existingTargetPayment.remark = `[Transfer request #${requestDoc._id} approved from dealer order #${sourceNumericId}]`;
         existingTargetPayment.isWalletPayment = false;
         existingTargetPayment.transferredFromOrderId = new mongoose.Types.ObjectId(sourceOrder._id);
+        applyPaymentTimingToPayment(existingTargetPayment, targetOrder, { force: true });
         newPayment = existingTargetPayment;
       } else {
         const targetPaymentPayload = {
@@ -1187,6 +1191,7 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
           transferredFromOrderId: new mongoose.Types.ObjectId(sourceOrder._id),
           transferRequestId: requestDoc._id,
         };
+        applyPaymentTimingToPayment(targetPaymentPayload, targetOrder);
         targetOrder.payment.push(targetPaymentPayload);
         newPayment = targetOrder.payment[targetOrder.payment.length - 1];
       }
@@ -1234,6 +1239,7 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
         existingTargetPayment.isWalletPayment = false;
         existingTargetPayment.transferredFromOrderId = new mongoose.Types.ObjectId(sourceOrder._id);
         existingTargetPayment.transferRequestId = requestDoc._id;
+        applyPaymentTimingToPayment(existingTargetPayment, targetOrder, { force: true });
         newPayment = existingTargetPayment;
       } else {
         const targetPaymentPayload = {
@@ -1246,12 +1252,14 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
           transferredFromOrderId: new mongoose.Types.ObjectId(sourceOrder._id),
           transferRequestId: requestDoc._id,
         };
+        applyPaymentTimingToPayment(targetPaymentPayload, targetOrder);
         targetOrder.payment.push(targetPaymentPayload);
         newPayment = targetOrder.payment[targetOrder.payment.length - 1];
       }
       await targetOrder.save({ session });
       const previousStatus = newPayment.paymentStatus;
       newPayment.paymentStatus = "COLLECTED";
+      applyPaymentTimingToPayment(newPayment, targetOrder, { force: true });
       await targetOrder.save({ session });
 
       targetCredit = await recordFarmerPlantLedgerPaymentTransition(
@@ -1275,6 +1283,26 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
           },
         }
       );
+
+      try {
+        const fs = await import("../modules/finance/integration/financeShadow.js");
+        fs.shadowFarmerPaymentTransfer({
+          requestId: requestDoc._id,
+          direction: "REVERSAL",
+          amount,
+          customerMobile: sourceParty.customerMobile,
+          userId: performedBy,
+        });
+        fs.shadowFarmerPaymentTransfer({
+          requestId: requestDoc._id,
+          direction: "CREDIT",
+          amount,
+          customerMobile: targetParty.customerMobile,
+          userId: performedBy,
+        });
+      } catch (shadowErr) {
+        console.error("[Finance] shadow payment transfer:", shadowErr?.message || shadowErr);
+      }
     }
 
     if (!Array.isArray(sourceOrder.orderEditHistory)) sourceOrder.orderEditHistory = [];
@@ -1591,6 +1619,26 @@ export const transferFarmerPlantAdvance = catchAsync(async (req, res, next) => {
       session,
     });
 
+    try {
+      const fs = await import("../modules/finance/integration/financeShadow.js");
+      fs.shadowFarmerAdvanceTransfer({
+        transferId,
+        direction: "OUT",
+        amount: amt,
+        customerMobile: from.mobile,
+        userId: performedBy,
+      });
+      fs.shadowFarmerAdvanceTransfer({
+        transferId,
+        direction: "IN",
+        amount: amt,
+        customerMobile: to.mobile,
+        userId: performedBy,
+      });
+    } catch (shadowErr) {
+      console.error("[Finance] shadow advance transfer:", shadowErr?.message || shadowErr);
+    }
+
     const afterFrom = await getLastOutstandingAfterForCustomer(from.mobile, session);
     const afterTo = await getLastOutstandingAfterForCustomer(to.mobile, session);
 
@@ -1824,6 +1872,21 @@ export const createManualFarmerPlantLedgerEntry = catchAsync(
         },
         session,
       });
+
+      if (created) {
+        try {
+          const fs = await import("../modules/finance/integration/financeShadow.js");
+          fs.shadowFarmerManualAdjustment({
+            entryId: manualId,
+            amount: amt,
+            isDebit: type === "DEBIT",
+            customerMobile,
+            userId: createdBy,
+          });
+        } catch (shadowErr) {
+          console.error("[Finance] shadow manual entry:", shadowErr?.message || shadowErr);
+        }
+      }
 
       const outstandingAfter = await getLastOutstandingAfterForCustomer(customerMobile, session);
 

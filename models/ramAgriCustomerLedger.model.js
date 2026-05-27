@@ -19,7 +19,15 @@ const ramAgriCustomerLedgerSchema = new mongoose.Schema(
     },
     refType: {
       type: String,
-      enum: ["ORDER", "PAYMENT", "ADJUSTMENT", "REVERSAL"],
+      enum: [
+        "ORDER",
+        "PAYMENT",
+        "ADJUSTMENT",
+        "REVERSAL",
+        "PAYMENT_ADJUSTMENT",
+        "ORDER_ADJUSTMENT",
+        "BALANCE_ADJUSTMENT",
+      ],
       required: true,
     },
     refId: {

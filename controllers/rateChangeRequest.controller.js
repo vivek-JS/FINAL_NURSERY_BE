@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
 import RateChangeRequest from "../models/rateChangeRequest.model.js";
+import { emitOrderEvent, buildIdempotencyKey, ORDER_DOMAINS, ORDER_EVENT_TYPES } from "../modules/orderEvents/index.js";
 import Order from "../models/order.model.js";
 import User from "../models/user.model.js";
 import generateResponse from "../utility/responseFormat.js";
@@ -82,6 +83,20 @@ export async function createRateChangeRequest({ orderId, previousRate, requested
 
   // Send WhatsApp alerts to all super admin numbers
   await sendRateChangeWhatsAppAlerts(savedRequest, snapshot, token);
+
+  await emitOrderEvent({
+    orderDomain: ORDER_DOMAINS.PLANT,
+    orderId,
+    eventType: ORDER_EVENT_TYPES.RATE_CHANGE_REQUESTED,
+    idempotencyKey: buildIdempotencyKey("plant", "rate-req", savedRequest._id),
+    description: `Rate change requested: ₹${previousRate} → ₹${requestedRate}`,
+    previousValue: previousRate,
+    newValue: requestedRate,
+    actorId: requestedBy,
+    reason: notes || "Rate change approval required",
+    approval: { required: true, status: "PENDING", requestId: savedRequest._id },
+    refs: { rateChangeRequestId: savedRequest._id },
+  }).catch((e) => console.error("[OrderEvent] rate request emit:", e?.message || e));
 
   return savedRequest;
 }
@@ -269,6 +284,20 @@ export const rejectViaUI = catchAsync(async (req, res) => {
   // Clear pending flag on the order
   await Order.findByIdAndUpdate(request.orderId, { pendingRateChangeRequestId: null });
 
+  await emitOrderEvent({
+    orderDomain: ORDER_DOMAINS.PLANT,
+    orderId: request.orderId,
+    eventType: ORDER_EVENT_TYPES.RATE_CHANGE_REJECTED,
+    idempotencyKey: buildIdempotencyKey("plant", "rate-reject", request._id),
+    description: `Rate change rejected`,
+    previousValue: request.previousRate,
+    newValue: request.requestedRate,
+    actorId: req.user._id,
+    reason: rejectionReason || "Rejected by Super Admin",
+    approval: { required: true, status: "REJECTED", requestId: request._id },
+    refs: { rateChangeRequestId: request._id },
+  }).catch((e) => console.error("[OrderEvent] rate reject emit:", e?.message || e));
+
   return res.status(200).json(
     generateResponse("success", "Rate change request rejected", { requestId: request._id }, null)
   );
@@ -358,6 +387,35 @@ async function applyRateChangeApproval(request, approvedByUserId, res) {
     await request.save({ session });
 
     await session.commitTransaction();
+
+    await emitOrderEvent({
+      orderDomain: ORDER_DOMAINS.PLANT,
+      orderId: order._id,
+      eventType: ORDER_EVENT_TYPES.RATE_CHANGE_APPROVED,
+      idempotencyKey: buildIdempotencyKey("plant", "rate-approve", request._id),
+      description: `Rate change approved: ₹${previousRate} → ₹${request.requestedRate}`,
+      previousValue: previousRate,
+      newValue: request.requestedRate,
+      actorId: approvedByUserId,
+      reason: "Approved by Super Admin",
+      approval: { required: true, status: "APPROVED", requestId: request._id },
+      refs: { rateChangeRequestId: request._id },
+    }).catch((e) => console.error("[OrderEvent] rate approve emit:", e?.message || e));
+
+    const { emitOrderEventsFromEditHistory } = await import("../modules/orderEvents/index.js");
+    await emitOrderEventsFromEditHistory({
+      orderDomain: ORDER_DOMAINS.PLANT,
+      orderId: order._id,
+      entries: [
+        {
+          field: "rate",
+          previousValue: previousRate,
+          newValue: request.requestedRate,
+          changedBy: approvedByUserId,
+          notes: `Rate changed from ₹${previousRate} to ₹${request.requestedRate} (approved)`,
+        },
+      ],
+    }).catch((e) => console.error("[OrderEvent] rate approve edit emit:", e?.message || e));
 
     return res.status(200).json(
       generateResponse(

@@ -74,10 +74,28 @@ export const createCustomerLedgerEntry = async ({
     metadata,
   };
 
+  let entry;
   if (session) {
     const created = await RamAgriCustomerLedgerEntry.create([entryPayload], { session });
-    return created[0];
+    entry = created[0];
+  } else {
+    entry = await RamAgriCustomerLedgerEntry.create(entryPayload);
   }
 
-  return RamAgriCustomerLedgerEntry.create(entryPayload);
+  if (entry) {
+    try {
+      const fs = await import("../modules/finance/integration/financeShadow.js");
+      await fs.shadowAgriFromLedgerRow({
+        entry,
+        createdBy,
+        previousStatus: metadata?.previousPaymentStatus,
+        newStatus: metadata?.newPaymentStatus,
+        payment: metadata?.paymentSnapshot,
+      });
+    } catch (shadowErr) {
+      console.error("[Finance] shadow agri ledger:", shadowErr?.message || shadowErr);
+    }
+  }
+
+  return entry;
 };

@@ -38,11 +38,17 @@ import {
   syncDealerLedgerForOrder,
 } from "../utils/dealerLedgerHelper.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
+import { fetchAdminDailyMis } from "../services/adminDailyMis.service.js";
+import {
+  resolveOrderStatusTokens,
+  buildOrderStatusDateMatch,
+} from "../utility/orderListQuery.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import {
   approveFarmerOrderTransferRequest,
   rejectFarmerOrderTransferRequest,
 } from "./farmerPlantOrderLedger.controller.js";
+import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
 
 function watiDigitsOk(n) {
   return n != null && String(n).replace(/\D/g, "").length >= 10;
@@ -1157,6 +1163,7 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     };
     
     console.log("Created payment object with status:", newPayment.paymentStatus);
+    applyPaymentTimingToPayment(newPayment, order);
 
     // Extract farmer details BEFORE saving (to avoid losing populated data)
     console.log("DEBUG: Farmer data check BEFORE saving:");
@@ -1189,6 +1196,15 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     console.log("Saving order...");
     await order.save();
     console.log("Order saved successfully");
+
+    const savedPayment = order.payment[order.payment.length - 1];
+    if (savedPayment) {
+      const { emitPlantPaymentEvent } = await import("../utils/orderEventDualWrite.js");
+      emitPlantPaymentEvent(order._id, savedPayment, {
+        userId: req.user?._id,
+        actorName: req.user?.name,
+      }).catch((e) => console.error("[OrderEvent] payment emit:", e?.message || e));
+    }
 
     // Process wallet transaction if needed
     let transaction = null;
@@ -1400,6 +1416,7 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
       modeOfPayment,
       isWalletPayment,
     };
+    applyPaymentTimingToPayment(newPayment, order);
 
     // Add the payment to order
     order.payment.push(newPayment);
@@ -1677,6 +1694,7 @@ const updatePaymentStatus = async (req, res) => {
       });
     }
     payment.paymentStatus = paymentStatus;
+    applyPaymentTimingToPayment(payment, order, { force: true });
     await order.save();
 
     if (shouldLogFarmerPlantLedger(order)) {
@@ -2366,7 +2384,23 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
 
 // Get all payments with date filtering
 const getAllPayments = catchAsync(async (req, res, next) => {
-  const { startDate, endDate, paymentStatus, page = 1, limit = 100, search } = req.query;
+  const {
+    startDate,
+    endDate,
+    paymentStatus: paymentStatusParam,
+    paymentTiming: paymentTimingParam,
+    pendingAdvanceOnly,
+    page = 1,
+    limit = 100,
+    search,
+  } = req.query;
+
+  let paymentStatus = paymentStatusParam;
+  let paymentTiming = paymentTimingParam;
+  if (String(pendingAdvanceOnly).toLowerCase() === "true") {
+    paymentTiming = paymentTiming || "advance";
+    paymentStatus = paymentStatus || "PENDING";
+  }
   
   try {
     const order = -1; // desc order
@@ -2454,6 +2488,20 @@ const getAllPayments = catchAsync(async (req, res, next) => {
           "payment.paymentStatus": { $in: statusArray },
         },
       });
+    }
+
+    if (paymentTiming) {
+      const timingArray = paymentTiming
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s === "advance" || s === "balance");
+      if (timingArray.length) {
+        pipeline.push({
+          $match: {
+            "payment.paymentTiming": { $in: timingArray },
+          },
+        });
+      }
     }
 
     // Date range filtering for payment date
@@ -4071,6 +4119,7 @@ const generatePaymentQR = catchAsync(async (req, res) => {
     qrImage: qrResult.qrImageBase64 || undefined,
     qrPayload: qrResult.qrString || undefined,
   };
+  applyPaymentTimingToPayment(newPayment, order);
   order.payment.push(newPayment);
   await order.save();
   await saveIciciQrAuditRecord({
@@ -4618,6 +4667,18 @@ const splitOrder = catchAsync(async (req, res, next) => {
 
     await session.commitTransaction();
 
+    const { emitPlantSplitEvents } = await import("../utils/orderEventDualWrite.js");
+    await emitPlantSplitEvents(parent._id, childOrder._id, {
+      splitHistoryEntry,
+      userId: performedBy,
+      isChild: false,
+    }).catch((e) => console.error("[OrderEvent] split parent emit:", e?.message || e));
+    await emitPlantSplitEvents(parent._id, childOrder._id, {
+      splitHistoryEntry: childOrder.splitHistory?.[0],
+      userId: performedBy,
+      isChild: true,
+    }).catch((e) => console.error("[OrderEvent] split child emit:", e?.message || e));
+
     const updatedParent = await Order.findById(parent._id).lean();
     const populatedChild = await Order.findById(childOrder._id).lean();
 
@@ -4656,6 +4717,8 @@ const getGeoSummary = catchAsync(async (req, res) => {
     plantId,
     subtypeId,
     includePastDueBeyondRange,
+    needsDispatch: needsDispatchRaw,
+    expectedNursery,
   } = req.query;
 
   /* ── Resolve date-range field (same logic as resolveOrderDateRangeField in factory) ── */
@@ -4667,10 +4730,7 @@ const getGeoSummary = catchAsync(async (req, res) => {
   };
   const dateMongoField = resolveField();
 
-  /* ── FARM_READY-only shortcut (skip date window, same as getAll) ── */
-  const statusTokens = statusRaw
-    ? statusRaw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
-    : [];
+  const statusTokens = resolveOrderStatusTokens(needsDispatchRaw, statusRaw);
   const skipDateForFarmReadyOnly =
     statusTokens.length > 0 && statusTokens.every((s) => s === "FARM_READY");
 
@@ -4710,15 +4770,28 @@ const getGeoSummary = catchAsync(async (req, res) => {
     pipeline.push({ $match: { plantSubtype: new mongoose.Types.ObjectId(subtypeId) } });
   }
 
+  if (expectedNursery) {
+    const nurseryCode = String(expectedNursery).trim().toUpperCase();
+    if (nurseryCode) {
+      pipeline.push({ $match: { expectedNursery: nurseryCode } });
+    }
+  }
+
   /* ── Status filter (same precedence as getAll) ── */
   if (ready_for_dispatch === "true") {
     pipeline.push({ $match: { orderStatus: "READY_FOR_DISPATCH" } });
-  } else if (statusRaw) {
-    const statusArr = statusRaw.split(",").map((s) => s.trim()).filter(Boolean);
-    if (statusArr.length) pipeline.push({ $match: { orderStatus: { $in: statusArr } } });
+  } else if (statusTokens.length > 0) {
+    const willApplyDateWindow =
+      startDate &&
+      endDate &&
+      String(dispatched) === "false" &&
+      !skipDateForFarmReadyOnly;
+    if (!willApplyDateWindow) {
+      pipeline.push({ $match: { orderStatus: { $in: statusTokens } } });
+    }
   }
 
-  /* ── Date range — dispatched=false branch (mirrors getAll lines 2996-3017) ── */
+  /* ── Date range — dispatched=false branch (mirrors getAll) ── */
   if (
     startDate &&
     endDate &&
@@ -4733,9 +4806,10 @@ const getGeoSummary = catchAsync(async (req, res) => {
     };
     const start = parseDate(startDate);
     const end = parseDate(endDate, true);
-    // Support includePastDueBeyondRange for both dispatched=false and dispatched=true
-    // (the queue tab uses dispatched=false but still wants past-due orders included)
-    if (includePastDueBeyondRange === "true" && dateMongoField === "deliveryDate") {
+    if (
+      includePastDueBeyondRange === "true" &&
+      dateMongoField === "deliveryDate"
+    ) {
       pipeline.push({
         $match: {
           $or: [
@@ -4744,6 +4818,16 @@ const getGeoSummary = catchAsync(async (req, res) => {
           ],
         },
       });
+      if (statusTokens.length > 0) {
+        pipeline.push({ $match: { orderStatus: { $in: statusTokens } } });
+      }
+    } else if (statusTokens.length > 0) {
+      const combined = buildOrderStatusDateMatch(statusTokens, {
+        field: dateMongoField,
+        start,
+        end,
+      });
+      if (combined) pipeline.push({ $match: combined });
     } else {
       pipeline.push({
         $match: { [dateMongoField]: { $gte: start, $lte: end } },
@@ -5804,6 +5888,21 @@ const getAdminDashboardStats = catchAsync(async (req, res) => {
   });
 });
 
+const getAdminDailyMis = catchAsync(async (req, res) => {
+  const { startDate, endDate } = req.query;
+  const result = await fetchAdminDailyMis(startDate, endDate);
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({
+      success: false,
+      message: result.error,
+    });
+  }
+  return res.status(200).json({
+    success: true,
+    data: result.data,
+  });
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -5842,4 +5941,5 @@ export {
   getRemainingDispatchMatrixOrders,
   getFarmerOrdersDashboardTabCounts,
   getAdminDashboardStats,
+  getAdminDailyMis,
 };

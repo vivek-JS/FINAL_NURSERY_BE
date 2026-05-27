@@ -802,6 +802,9 @@ export const updateSlotFieldById = async (req, res) => {
     if (updates.closingStock !== undefined) {
       stockPayload.closingStock = updates.closingStock;
     }
+    if (updates.availablePlants !== undefined) {
+      stockPayload.availablePlants = updates.availablePlants;
+    }
     if (Object.keys(stockPayload).length > 0) {
       applyStockFieldUpdates(
         targetSlot,
@@ -813,7 +816,12 @@ export const updateSlotFieldById = async (req, res) => {
 
     // Update the slot fields (whitelist so new schema fields work on older documents)
     Object.keys(updates).forEach((key) => {
-      if (allowedSlotFields.has(key) && key !== "actualPlants" && key !== "closingStock") {
+      if (
+        allowedSlotFields.has(key) &&
+        key !== "actualPlants" &&
+        key !== "closingStock" &&
+        key !== "availablePlants"
+      ) {
         targetSlot[key] = updates[key];
       }
     });
@@ -821,16 +829,22 @@ export const updateSlotFieldById = async (req, res) => {
     // Save the document to trigger middleware
     await plantSlot.save();
 
-    // Update buffer calculations in the database
-    const bufferUpdateResult = await updateSlotBufferCalculations(
-      slotId,
-      targetSlot.totalPlants,
-      targetSlot.totalBookedPlants,
-      targetSlot.buffer
-    );
+    const touchesCapacityOrBuffer =
+      updates.totalPlants !== undefined ||
+      updates.buffer !== undefined ||
+      updates.effectiveBuffer !== undefined;
 
-    if (!bufferUpdateResult.success) {
-      console.error("Warning: Buffer calculations update failed:", bufferUpdateResult.error);
+    let bufferUpdateResult = { success: true, skipped: true };
+    if (touchesCapacityOrBuffer) {
+      bufferUpdateResult = await updateSlotBufferCalculations(
+        slotId,
+        targetSlot.totalPlants,
+        targetSlot.totalBookedPlants,
+        targetSlot.buffer
+      );
+      if (!bufferUpdateResult.success) {
+        console.error("Warning: Buffer calculations update failed:", bufferUpdateResult.error);
+      }
     }
 
     res.status(200).json({
@@ -2572,6 +2586,16 @@ const sortSlotsByStartDay = (slots) => {
   });
 };
 
+/** Keep slots whose delivery window has not ended (endDay >= today). */
+const filterNonPastSlots = (slots) => {
+  const today = moment().startOf("day");
+  return (slots || []).filter((slot) => {
+    const end = moment(slot.endDay, "DD-MM-YYYY", true);
+    if (!end.isValid()) return true;
+    return end.isSameOrAfter(today, "day");
+  });
+};
+
 /** Flat slot list for stock entry panel */
 export const getStockEntry = async (req, res) => {
   try {
@@ -2623,6 +2647,7 @@ export const getStockEntry = async (req, res) => {
     if (month) {
       slots = slots.filter((s) => s.month === month);
     }
+    slots = filterNonPastSlots(slots);
     slots = sortSlotsByStartDay(slots);
 
     const payload = slots.map((slot) => ({
@@ -2673,7 +2698,7 @@ export const bulkStockEntry = async (req, res) => {
     const plantSlotsToSave = new Map();
 
     for (const row of updates) {
-      const { slotId, actualPlants, closingStock } = row || {};
+      const { slotId, actualPlants, closingStock, availablePlants, status } = row || {};
 
       if (!slotId || !mongoose.Types.ObjectId.isValid(slotId)) {
         errors.push({ slotId, message: "Invalid slotId" });
@@ -2697,9 +2722,17 @@ export const bulkStockEntry = async (req, res) => {
         }
         stockPayload.closingStock = Math.floor(n);
       }
+      if (availablePlants !== undefined) {
+        const n = Number(availablePlants);
+        if (!Number.isFinite(n) || n < 0) {
+          errors.push({ slotId, message: "availablePlants must be a non-negative number" });
+          continue;
+        }
+        stockPayload.availablePlants = Math.floor(n);
+      }
 
-      if (Object.keys(stockPayload).length === 0) {
-        errors.push({ slotId, message: "No stock fields to update" });
+      if (Object.keys(stockPayload).length === 0 && status === undefined) {
+        errors.push({ slotId, message: "No fields to update" });
         continue;
       }
 
@@ -2739,12 +2772,27 @@ export const bulkStockEntry = async (req, res) => {
           continue;
         }
 
-        const changed = applyStockFieldUpdates(
-          targetSlot,
-          stockPayload,
-          performedBy,
-          "Stock entry panel"
-        );
+        if (performedBy && typeof targetSlot.setPerformer === "function") {
+          targetSlot.setPerformer(performedBy);
+        }
+
+        let changed = false;
+        if (Object.keys(stockPayload).length > 0) {
+          changed = applyStockFieldUpdates(
+            targetSlot,
+            stockPayload,
+            performedBy,
+            "Stock entry panel"
+          );
+        }
+
+        if (status !== undefined) {
+          const nextStatus = status === true || status === "true";
+          if (Boolean(targetSlot.status) !== nextStatus) {
+            targetSlot.status = nextStatus;
+            changed = true;
+          }
+        }
 
         if (changed) {
           updatedCount += 1;

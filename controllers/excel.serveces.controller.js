@@ -3120,6 +3120,7 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
               remark: row["Remark"] || null,
               receiptPhoto: [],
               isWalletPayment: false,
+              paymentTiming: "advance",
             };
             order.payment.push(advancePayment);
           }
@@ -3139,6 +3140,7 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
               remark: "Balance payment for completed order",
               receiptPhoto: [],
               isWalletPayment: false,
+              paymentTiming: "balance",
             };
             order.payment.push(balancePayment);
           }
@@ -3179,6 +3181,7 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
               remark: row["Remark"] || (isAdvanceCollected ? "Advance payment matched" : null),
               receiptPhoto: [],
               isWalletPayment: false,
+              paymentTiming: "advance",
             };
             order.payment.push(payment);
             console.log(`💰 Added payment: ${advanceAmount} (Status: ${paymentStatus}, ADV Y/N: ${advYN || "N/A"}, isCollected: ${isAdvanceCollected}) for order ${bookingNo}`);

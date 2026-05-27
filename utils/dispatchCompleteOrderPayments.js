@@ -83,6 +83,7 @@ export function buildDispatchCompletePaymentSubdocs(rawList, reqUser, order) {
       customerName:
         row.customerName?.trim() ||
         (!order.dealerOrder && order.farmer?.name ? order.farmer.name : undefined),
+      paymentTiming: "balance",
     });
   }
   return out;

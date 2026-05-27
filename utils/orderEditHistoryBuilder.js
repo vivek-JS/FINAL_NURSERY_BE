@@ -198,3 +198,5 @@ export async function fireOrderEditWhatsAppAlerts(queue, changedBy = "Unknown") 
 }
 
 export { FIELD_CONFIG as ORDER_EDIT_HISTORY_FIELD_CONFIG, formatDateEnIn };
+
+export { fieldToOrderEventType } from "../modules/orderEvents/events/mapEditHistoryToEvents.js";

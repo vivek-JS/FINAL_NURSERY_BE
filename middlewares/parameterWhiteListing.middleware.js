@@ -48,6 +48,7 @@ const allowedParams = [
   "mobileNumber",
   "phone",
   "slotId",
+  "types", // GET /api/v1/slot-trail/:slotId — e.g. stock = stock-related trail actions only
   "actionType",
   "orderId",
   "orderIds",
@@ -73,6 +74,8 @@ const allowedParams = [
   "sortByReadyEntered", // getOrders ready tab: "true" = sort by readyForDispatchEnteredAt (default = dispatchTargetDate)
   "queueFarmReadyOnly", // FarmerOrdersTable: ready-for-dispatch "Farm-ready on file" queue filter
   "plantTotals", // GET /order/getOrders — include totalPlantsSum for all matching rows (with pagination)
+  "needsDispatch", // GET /order/getOrders — pre-dispatch pipeline status preset
+  "expectedNursery", // GET /order/getOrders — filter by nursery site code (RB, GH, …)
   "isActive",
   "activeOnly", // GET /api/v1/nursery-sites — "true" filters to active sites only
   "category",
@@ -190,6 +193,8 @@ const allowedQueryKeys = new Set(allowedParams);
 allowedQueryKeys.add("dateRangeField"); // GET /order/getOrders — booking | delivery date range
 allowedQueryKeys.add("dateField"); // GET /insights/collections/overview (alias of dateRangeField)
 allowedQueryKeys.add("plantTotals"); // GET /order/getOrders — totalPlantsSum envelope (must survive merges)
+allowedQueryKeys.add("needsDispatch"); // GET /order/getOrders — yet-to-dispatch status preset
+allowedQueryKeys.add("expectedNursery"); // GET /order/getOrders — nursery site filter
 allowedQueryKeys.add("queueFarmReadyOnly"); // GET /order/dashboard-tab-counts + ready tab queue filter
 allowedQueryKeys.add("paged"); // GET /dispatched — pagination toggle (also in allowedParams; duplicate for safety)
 allowedQueryKeys.add("transportStatus"); // GET /dispatched filter
@@ -259,6 +264,11 @@ const parameterWhiteListing = (req, res, next) => {
   /** Agri insights hub — dashboard + collections evolve query flags; controllers ignore unknown keys. */
   const insightsPath = stripQuery(req.originalUrl || req.url || req.path || "") || "";
   if (req.method === "GET" && insightsPath.includes("/api/v1/insights")) {
+    return next();
+  }
+
+  /** Central ledger / finance reports — partyType, partyId, accountCode, branchId, etc. */
+  if (insightsPath.includes("/api/v1/finance")) {
     return next();
   }
 

@@ -99,6 +99,8 @@ mongoose
       };
       process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
       process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+      // nodemon < 3 default; harmless if unused
+      process.on("SIGUSR2", () => void gracefulShutdown("SIGUSR2"));
     } catch (error) {
       console.error("Error starting server:", error);
     }

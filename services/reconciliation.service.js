@@ -231,6 +231,17 @@ export async function runReconciliation(dateFrom, dateTo, source = "all") {
         subdoc.bankReconciliationConflict = false;
         if (!subdoc.utrNumber && pay.utrNumber) subdoc.utrNumber = pay.utrNumber;
         await order.save();
+        try {
+          const fs = await import("../modules/finance/integration/financeShadow.js");
+          fs.shadowBankPaymentVerified({
+            paymentId: pay.paymentId,
+            orderMongoId: pay.orderMongoId,
+            amount: pay.paidAmount,
+            userId: null,
+          });
+        } catch (shadowErr) {
+          console.error("[Finance] shadow bank verify:", shadowErr?.message || shadowErr);
+        }
       } else {
         const order = await AgriSalesOrder.findById(pay.orderMongoId);
         if (!order) {
@@ -251,6 +262,17 @@ export async function runReconciliation(dateFrom, dateTo, source = "all") {
         subdoc.bankReconciliationConflict = false;
         if (!subdoc.utrNumber && pay.utrNumber) subdoc.utrNumber = pay.utrNumber;
         await order.save();
+        try {
+          const fs = await import("../modules/finance/integration/financeShadow.js");
+          fs.shadowBankPaymentVerified({
+            paymentId: pay.paymentId,
+            orderMongoId: pay.orderMongoId,
+            amount: pay.paidAmount,
+            userId: null,
+          });
+        } catch (shadowErr) {
+          console.error("[Finance] shadow bank verify agri:", shadowErr?.message || shadowErr);
+        }
       }
       updatedCount += 1;
       matched.push({

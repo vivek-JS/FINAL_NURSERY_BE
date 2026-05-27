@@ -19,9 +19,11 @@
  * - Loaded for IST window: start of (today − 3 days) through end of (today + 8 days), Dispatch.createdAt.
  * - isDeleted: false. transportStatus CANCELLED rows are omitted.
  *
- * KPI buckets (kpiSummary in response):
+ * KPI buckets (kpiSummary in response) — computed from a separate delivery-window order pool:
  * - todayExpected / next7Expected / due: open farmer orders by deliveryDate (IST calendar).
- * - todayActual: dispatch trips created today (plants + order count from Dispatch records).
+ * - todayActual: dispatch trips created today + order-level rows from Dispatch.orderIds.
+ * - weekSchedule: per-day expected (open by deliveryDate) vs actualReady (READY_FOR_DISPATCH).
+ * Booking-date filter applies to `orders` only (charts/revenue), not KPI pool.
  */
 
 import mongoose from "mongoose";
@@ -29,18 +31,16 @@ import catchAsync from "../utility/catchAsync.js";
 import Order from "../models/order.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import PlantCms from "../models/plantCms.model.js";
+import {
+  computeDispatchKpiSummary,
+  istCalendarDateString,
+  istAddDaysYmd,
+  KPI_DELIVERY_LOOKBACK_DAYS,
+  KPI_DELIVERY_LOOKAHEAD_DAYS,
+  KPI_ORDER_CAP,
+} from "../utility/insightsKpi.js";
 
 const EXCLUDED_ORDER_STATUSES = ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"];
-
-const CLOSED_FOR_EXPECTED_KPI = new Set([
-  "DISPATCHED",
-  "DISPATCH_PROCESS",
-  "COMPLETED",
-  "PARTIALLY_COMPLETED",
-  "CANCELLED",
-  "REJECTED",
-  "TEMPORARY_CANCELLED",
-]);
 
 const parseDate = (dateStr, isEnd = false) => {
   const [day, month, year] = dateStr.split("-");
@@ -48,21 +48,6 @@ const parseDate = (dateStr, isEnd = false) => {
     ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
     : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
 };
-
-/** IST calendar YYYY-MM-DD for "today" (for reportDate + due comparisons). */
-function istCalendarDateString(d = new Date()) {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const parts = fmt.formatToParts(d);
-  const y = parts.find((p) => p.type === "year")?.value;
-  const m = parts.find((p) => p.type === "month")?.value;
-  const day = parts.find((p) => p.type === "day")?.value;
-  return `${y}-${m}-${day}`;
-}
 
 /** End of calendar day in Asia/Kolkata (for due-only comparisons vs DB dates). */
 function endOfIstDay(ymd) {
@@ -110,174 +95,18 @@ function istStartOfDayFrom(baseYmd, dayOffset = 0) {
   return new Date(`${cal}T00:00:00+05:30`);
 }
 
-function istYmdFromValue(value) {
-  if (value == null || value === "") return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return istCalendarDateString(d);
-}
-
-function istAddDaysYmd(ymd, days) {
-  const pivot = new Date(`${ymd}T12:00:00+05:30`);
-  pivot.setDate(pivot.getDate() + days);
-  return istCalendarDateString(pivot);
-}
-
-function plantsForKpiOrder(row) {
-  const rem = Number(row.remainingPlants);
-  if (Number.isFinite(rem) && rem >= 0) return rem;
-  return Number(row.qty) || 0;
-}
-
-function isOpenForExpectedKpi(row, excludeReadyForDispatch) {
-  const st = String(row.rawOrderStatus || row.orderStatus || "").toUpperCase();
-  if (CLOSED_FOR_EXPECTED_KPI.has(st)) return false;
-  if (excludeReadyForDispatch && st === "READY_FOR_DISPATCH") return false;
-  return true;
-}
-
-function slimOrderForKpi(row) {
-  return {
-    id: row.id,
-    orderId: row.orderId,
-    farmerName: row.farmerName || "",
-    salesperson: row.salesperson || "",
-    plantId: row.plantId,
-    variety: row.variety || "",
-    plants: plantsForKpiOrder(row),
-    deliveryDate: row.deliveryDate || null,
-    orderStatus: row.rawOrderStatus || "",
-    district: row.district || "",
-    taluka: row.taluka || "",
-    village: row.village || "",
-  };
-}
-
-/** Expected = deliveryDate; actual today = Dispatch trips on report calendar day. */
-function computeDispatchKpiSummary(orders, dispatches, reportDateStr, options = {}) {
-  const excludeReadyForDispatch = Boolean(options.excludeReadyForDispatch);
-  const next7EndYmd = istAddDaysYmd(reportDateStr, 7);
-
-  const todayExpected = { plantCount: 0, orderCount: 0, orders: [] };
-  const next7Expected = { plantCount: 0, orderCount: 0, orders: [] };
-  const due = { plantCount: 0, orderCount: 0, orders: [] };
-  const todayActual = { plantCount: 0, orderCount: 0, dispatchCount: 0, dispatches: [] };
-
-  for (const o of orders) {
-    if (!isOpenForExpectedKpi(o, excludeReadyForDispatch)) continue;
-    const delYmd = istYmdFromValue(o.deliveryDate);
-    if (!delYmd) continue;
-    const plants = plantsForKpiOrder(o);
-    const slim = slimOrderForKpi(o);
-
-    if (delYmd < reportDateStr) {
-      due.plantCount += plants;
-      due.orderCount += 1;
-      due.orders.push(slim);
-    } else if (delYmd === reportDateStr) {
-      todayExpected.plantCount += plants;
-      todayExpected.orderCount += 1;
-      todayExpected.orders.push(slim);
-    } else if (delYmd > reportDateStr && delYmd <= next7EndYmd) {
-      next7Expected.plantCount += plants;
-      next7Expected.orderCount += 1;
-      next7Expected.orders.push(slim);
-    }
-  }
-
-  for (const d of dispatches) {
-    const dYmd = istYmdFromValue(d.date);
-    if (dYmd !== reportDateStr) continue;
-    todayActual.plantCount += Number(d.totalPlants) || 0;
-    todayActual.orderCount += Number(d.orders) || 0;
-    todayActual.dispatchCount += 1;
-    todayActual.dispatches.push({
-      id: d.id,
-      vehicle: d.vehicle || "",
-      driver: d.driver || "",
-      totalPlants: Number(d.totalPlants) || 0,
-      orders: Number(d.orders) || 0,
-      status: d.status || "scheduled",
-    });
-  }
-
-  return { todayExpected, next7Expected, due, todayActual, reportDate: reportDateStr };
-}
-
-export const getInsightsDashboard = catchAsync(async (req, res) => {
-  const { startDate, endDate, plantId, subtypeId, varietyName, dueOnly, excludeReadyForDispatch } =
-    req.query;
-
-  if (!startDate || !endDate) {
-    return res.status(400).json({
-      success: false,
-      message: "startDate and endDate are required (DD-MM-YYYY)",
-    });
-  }
-
-  const reportDateStr = istCalendarDateString(new Date());
-  const reportDateIso = `${reportDateStr}T12:00:00.000Z`;
-  const dueCutoff = endOfIstDay(reportDateStr);
-
-  const plantDocs = await PlantCms.find({})
-    .select({ name: 1, subtypes: 1 })
-    .lean();
-
-  const plants = plantDocs.map((p) => {
-    const firstSubtype = p.subtypes?.[0];
-    return {
-      id: String(p._id),
-      name: p.name,
-      nameMr: p.name,
-      variety: firstSubtype?.name || "",
-    };
-  });
-
-  const plantVarieties = {};
-  for (const p of plantDocs) {
-    plantVarieties[String(p._id)] = (p.subtypes || [])
-      .map((s) => s.name)
-      .filter(Boolean);
-  }
-
-  const pipeline = [];
-
-  applyRoleMatch(pipeline, req.user);
-
-  const matchStage = {
-    dealerOrder: false,
-    farmer: { $exists: true, $ne: null },
-    orderStatus: { $nin: EXCLUDED_ORDER_STATUSES },
-    orderBookingDate: {
-      $gte: parseDate(startDate),
-      $lte: parseDate(endDate, true),
-    },
-  };
-
+function applyPlantFiltersToMatch(matchStage, { plantId, subtypeId, varietyName, subtypeObjectId }) {
   if (plantId && mongoose.Types.ObjectId.isValid(plantId)) {
     matchStage.plantName = new mongoose.Types.ObjectId(plantId);
   }
   if (subtypeId && subtypeId !== "general" && mongoose.Types.ObjectId.isValid(subtypeId)) {
     matchStage.plantSubtype = new mongoose.Types.ObjectId(subtypeId);
-  } else if (
-    plantId &&
-    varietyName &&
-    String(varietyName).trim() &&
-    mongoose.Types.ObjectId.isValid(plantId)
-  ) {
-    const cms = await PlantCms.findById(plantId).select("subtypes").lean();
-    const st = (cms?.subtypes || []).find(
-      (s) => s.name?.trim() === String(varietyName).trim()
-    );
-    if (st?._id) {
-      matchStage.plantSubtype = st._id;
-    }
+  } else if (subtypeObjectId) {
+    matchStage.plantSubtype = subtypeObjectId;
   }
+}
 
-  pipeline.push({ $match: matchStage });
-  pipeline.push({ $sort: { orderBookingDate: -1 } });
-  pipeline.push({ $limit: 10000 });
-
+function appendInsightsOrderStages(pipeline, { dueOnly, dueCutoff }) {
   pipeline.push({
     $lookup: {
       from: "farmers",
@@ -426,10 +255,10 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       },
     },
   });
+}
 
-  const rawOrders = await Order.aggregate(pipeline).allowDiskUse(true);
-
-  const orders = rawOrders.map((row) => {
+function mapAggregatedRowsToOrders(rawOrders) {
+  return rawOrders.map((row) => {
     const qty = row.qty || 0;
     const rate = row.rate || 0;
     const uiStatus = mapOrderStatusToUi(row.orderStatus);
@@ -449,6 +278,7 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       row.remainingPlants != null ? Number(row.remainingPlants) : qty;
     return {
       id: `ORD-${row.orderId}`,
+      mongoId: String(row._id),
       orderId: row.orderId,
       farmerName: row.farmerName || "",
       salesperson: row.salesperson || "",
@@ -479,6 +309,114 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       advancePercent,
     };
   });
+}
+
+export const getInsightsDashboard = catchAsync(async (req, res) => {
+  const { startDate, endDate, plantId, subtypeId, varietyName, dueOnly, excludeReadyForDispatch } =
+    req.query;
+
+  if (!startDate || !endDate) {
+    return res.status(400).json({
+      success: false,
+      message: "startDate and endDate are required (DD-MM-YYYY)",
+    });
+  }
+
+  const reportDateStr = istCalendarDateString(new Date());
+  const reportDateIso = `${reportDateStr}T12:00:00.000Z`;
+  const dueCutoff = endOfIstDay(reportDateStr);
+
+  const plantDocs = await PlantCms.find({})
+    .select({ name: 1, subtypes: 1 })
+    .lean();
+
+  const plants = plantDocs.map((p) => {
+    const firstSubtype = p.subtypes?.[0];
+    return {
+      id: String(p._id),
+      name: p.name,
+      nameMr: p.name,
+      variety: firstSubtype?.name || "",
+    };
+  });
+
+  const plantVarieties = {};
+  for (const p of plantDocs) {
+    plantVarieties[String(p._id)] = (p.subtypes || [])
+      .map((s) => s.name)
+      .filter(Boolean);
+  }
+
+  const pipeline = [];
+
+  applyRoleMatch(pipeline, req.user);
+
+  const matchStage = {
+    dealerOrder: false,
+    farmer: { $exists: true, $ne: null },
+    orderStatus: { $nin: EXCLUDED_ORDER_STATUSES },
+    orderBookingDate: {
+      $gte: parseDate(startDate),
+      $lte: parseDate(endDate, true),
+    },
+  };
+
+  let varietySubtypeId = null;
+  if (
+    plantId &&
+    varietyName &&
+    String(varietyName).trim() &&
+    mongoose.Types.ObjectId.isValid(plantId)
+  ) {
+    const cms = await PlantCms.findById(plantId).select("subtypes").lean();
+    const st = (cms?.subtypes || []).find(
+      (s) => s.name?.trim() === String(varietyName).trim()
+    );
+    if (st?._id) varietySubtypeId = st._id;
+  }
+
+  applyPlantFiltersToMatch(matchStage, {
+    plantId,
+    subtypeId,
+    varietyName,
+    subtypeObjectId: varietySubtypeId,
+  });
+
+  pipeline.push({ $match: matchStage });
+  pipeline.push({ $sort: { orderBookingDate: -1 } });
+  pipeline.push({ $limit: 10000 });
+  appendInsightsOrderStages(pipeline, { dueOnly, dueCutoff });
+
+  const rawOrders = await Order.aggregate(pipeline).allowDiskUse(true);
+  const orders = mapAggregatedRowsToOrders(rawOrders);
+
+  const kpiDeliveryStart = istStartOfDayFrom(reportDateStr, -KPI_DELIVERY_LOOKBACK_DAYS);
+  const kpiDeliveryEnd = endOfIstDay(
+    istAddDaysYmd(reportDateStr, KPI_DELIVERY_LOOKAHEAD_DAYS)
+  );
+
+  const kpiPipeline = [];
+  applyRoleMatch(kpiPipeline, req.user);
+  const kpiMatchStage = {
+    dealerOrder: false,
+    farmer: { $exists: true, $ne: null },
+    orderStatus: { $nin: EXCLUDED_ORDER_STATUSES },
+    deliveryDate: { $gte: kpiDeliveryStart, $lte: kpiDeliveryEnd, $ne: null },
+  };
+  applyPlantFiltersToMatch(kpiMatchStage, {
+    plantId,
+    subtypeId,
+    varietyName,
+    subtypeObjectId: varietySubtypeId,
+  });
+  kpiPipeline.push({ $match: kpiMatchStage });
+  kpiPipeline.push({ $sort: { deliveryDate: 1 } });
+  kpiPipeline.push({ $limit: KPI_ORDER_CAP });
+  appendInsightsOrderStages(kpiPipeline, { dueOnly: false, dueCutoff });
+
+  const rawKpiOrders = await Order.aggregate(kpiPipeline).allowDiskUse(true);
+  const kpiOrders = mapAggregatedRowsToOrders(rawKpiOrders);
+  const orderByMongoId = new Map(kpiOrders.map((o) => [o.mongoId, o]));
 
   const winStart = istStartOfDayFrom(reportDateStr, -3);
   const winEndExclusive = istStartOfDayFrom(reportDateStr, 9);
@@ -559,13 +497,15 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       taluka: geo?.taluka || "",
       totalPlants,
       orders: Array.isArray(d.orderIds) ? d.orderIds.length : 0,
+      orderIds: (d.orderIds || []).map((id) => String(id)),
       status: mapDispatchStatusToUi(d.transportStatus),
       plants: plantsBreakdown,
     };
   });
 
-  const kpiSummary = computeDispatchKpiSummary(orders, dispatches, reportDateStr, {
+  const kpiSummary = computeDispatchKpiSummary(kpiOrders, dispatches, reportDateStr, {
     excludeReadyForDispatch: String(excludeReadyForDispatch) === "true",
+    orderByMongoId,
   });
 
   return res.status(200).json({
@@ -581,6 +521,13 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       meta: {
         orderCount: orders.length,
         cappedAt: rawOrders.length >= 10000 ? 10000 : null,
+        kpiOrderCount: kpiOrders.length,
+        kpiCappedAt: rawKpiOrders.length >= KPI_ORDER_CAP ? KPI_ORDER_CAP : null,
+        kpiDeliveryWindow: {
+          start: kpiDeliveryStart.toISOString(),
+          end: kpiDeliveryEnd.toISOString(),
+          note: "KPI buckets use deliveryDate in this window; not limited by booking-date filter.",
+        },
         dispatchWindow: {
           start: winStart.toISOString(),
           end: winEnd.toISOString(),

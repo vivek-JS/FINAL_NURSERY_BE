@@ -37,6 +37,7 @@ import {
   getRemainingDispatchMatrixOrders,
   getFarmerOrdersDashboardTabCounts,
   getAdminDashboardStats,
+  getAdminDailyMis,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -63,9 +64,15 @@ import {
 import { check } from "express-validator";
 import checkErrors from "../middlewares/checkErrors.middleware.js";
 import multer from "multer";
-import { requirePaymentAccess, requireBulkPaymentCreateAccess, authenticateToken } from "../middlewares/auth.middleware.js";
+import {
+  requirePaymentAccess,
+  requireBulkPaymentCreateAccess,
+  authenticateToken,
+  authorizeRoles,
+} from "../middlewares/auth.middleware.js";
 import { sendPaymentCollectedNotification } from "../utility/pushNotification.js";
 import catchAsync from "../utility/catchAsync.js";
+import { getPlantOrderTimeline } from "../modules/orderEvents/api/orderEvents.controller.js";
 
 const router = express.Router();
 
@@ -99,6 +106,11 @@ router
   .get("/getOrders", getOrders)
   .get("/dashboard-tab-counts", getFarmerOrdersDashboardTabCounts)
   .get("/admin-dashboard-stats", getAdminDashboardStats)
+  .get(
+    "/admin-daily-mis",
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+    getAdminDailyMis
+  )
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)
   .get("/bulk-payments", getBulkPayments)
@@ -142,6 +154,7 @@ router
     checkErrors,
     updateOrder
   )
+  .get("/:orderId/timeline", getPlantOrderTimeline)
   .post("/:orderId/send-accepted-whatsapp", sendOrderAcceptedWhatsAppController)
   .post("/:orderId/send-dispatch-whatsapp", sendOrderDispatchWhatsAppController)
   .post("/test-notification", authenticateToken, catchAsync(async (req, res) => {

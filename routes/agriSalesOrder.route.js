@@ -39,6 +39,7 @@ import {
   patchRamAgriOutstandingLimitGlobal,
   patchRamAgriOutstandingLimitUser,
 } from "../controllers/agriSalesOrder.controller.js";
+import { getAgriOrderTimeline } from "../modules/orderEvents/api/orderEvents.controller.js";
 
 const router = express.Router();
 
@@ -316,6 +317,7 @@ router
     patchRamAgriOutstandingLimitUser
   )
   .get("/", getAllAgriSalesOrders)
+  .get("/:id/timeline", getAgriOrderTimeline)
   .get("/:id", getAgriSalesOrderById)
   .patch(
     "/:id",

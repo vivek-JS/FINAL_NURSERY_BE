@@ -7,6 +7,12 @@ import catchAsync from "../utility/catchAsync.js";
 import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import { normalizeFarmerMobile } from "../utils/farmerPlantOrderLedgerHelper.js";
+import {
+  getFirstDispatchAt,
+  resolvePaymentTiming,
+  getPaymentTimingForApi,
+  paymentMatchesTypes,
+} from "../utils/paymentTiming.js";
 
 const EXCLUDED_ORDER_STATUSES = ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"];
 
@@ -51,34 +57,6 @@ function sumByPaymentStatus(paymentArr, status) {
     .reduce((s, p) => s + (Number(p.paidAmount) || 0), 0);
 }
 
-function firstDispatchAt(row) {
-  const hist = row.dispatchHistory;
-  if (Array.isArray(hist) && hist.length) {
-    const dates = hist
-      .map((h) => h?.date)
-      .filter(Boolean)
-      .map((d) => new Date(d))
-      .filter((d) => !Number.isNaN(d.getTime()));
-    if (dates.length) {
-      dates.sort((a, b) => a - b);
-      return dates[0];
-    }
-  }
-  const changes = row.statusChanges;
-  if (Array.isArray(changes)) {
-    const dispatched = changes
-      .filter((c) => c?.newStatus === "DISPATCHED" && c?.createdAt)
-      .map((c) => new Date(c.createdAt))
-      .filter((d) => !Number.isNaN(d.getTime()));
-    if (dispatched.length) {
-      dispatched.sort((a, b) => a - b);
-      return dispatched[0];
-    }
-  }
-  if (row.dispatchTargetDate) return new Date(row.dispatchTargetDate);
-  return null;
-}
-
 function mapPaymentLines(paymentArr) {
   if (!Array.isArray(paymentArr)) return [];
   return paymentArr
@@ -93,48 +71,6 @@ function mapPaymentLines(paymentArr) {
       chequeNumber: p.chequeNumber || "",
       remark: p.remark || "",
     }));
-}
-
-/** Advance = COLLECTED payment before first dispatch (or order not dispatched yet). */
-function isAdvancePayment(payment, firstDispatchAtIso) {
-  if (!payment || payment.paymentStatus !== "COLLECTED") return false;
-  if (!(Number(payment.paidAmount) > 0)) return false;
-  if (!firstDispatchAtIso) return true;
-  const payDt = payment.paymentDate ? new Date(payment.paymentDate) : null;
-  const dispDt = new Date(firstDispatchAtIso);
-  if (!payDt || Number.isNaN(payDt.getTime()) || Number.isNaN(dispDt.getTime())) {
-    return true;
-  }
-  return payDt.getTime() < dispDt.getTime();
-}
-
-/** After dispatch = COLLECTED on/after first dispatch date. */
-function isAfterDispatchPayment(payment, firstDispatchAtIso) {
-  if (!payment || payment.paymentStatus !== "COLLECTED") return false;
-  if (!(Number(payment.paidAmount) > 0)) return false;
-  if (!firstDispatchAtIso) return false;
-  const payDt = payment.paymentDate ? new Date(payment.paymentDate) : null;
-  const dispDt = new Date(firstDispatchAtIso);
-  if (!payDt || Number.isNaN(payDt.getTime()) || Number.isNaN(dispDt.getTime())) {
-    return false;
-  }
-  return payDt.getTime() >= dispDt.getTime();
-}
-
-function getPaymentTiming(payment, firstDispatchAtIso) {
-  if (payment?.paymentStatus === "PENDING") {
-    return firstDispatchAtIso ? "after_dispatch" : "advance";
-  }
-  if (isAdvancePayment(payment, firstDispatchAtIso)) return "advance";
-  if (isAfterDispatchPayment(payment, firstDispatchAtIso)) return "after_dispatch";
-  return "other";
-}
-
-function paymentMatchesTypes(payment, firstDispatchAtIso, types) {
-  const list = parseCommaList(types).map((t) => t.toLowerCase());
-  if (!list.length) return true;
-  const timing = getPaymentTiming(payment, firstDispatchAtIso);
-  return list.includes(timing);
 }
 
 function orderMatchesPaymentFilters(order, types, statuses) {
@@ -164,7 +100,11 @@ function flattenPaymentEntries(orders, opts = {}) {
     for (let i = 0; i < payments.length; i++) {
       const p = payments[i];
       if (!["COLLECTED", "PENDING"].includes(p.paymentStatus)) continue;
-      if (advanceOnly && !paymentTypes.length && !isAdvancePayment(p, o.firstDispatchAt)) {
+      if (
+        advanceOnly &&
+        !paymentTypes.length &&
+        resolvePaymentTiming(p, o.firstDispatchAt) !== "advance"
+      ) {
         continue;
       }
       if (paymentStatuses.length && !paymentStatuses.includes(p.paymentStatus)) continue;
@@ -172,7 +112,7 @@ function flattenPaymentEntries(orders, opts = {}) {
         continue;
       }
 
-      const timing = getPaymentTiming(p, o.firstDispatchAt);
+      const timing = getPaymentTimingForApi(p, o.firstDispatchAt);
       entries.push({
         entryId: p.paymentId ? `${o.orderId}-${p.paymentId}` : `${o.orderId}-${i}`,
         paymentId: p.paymentId || null,
@@ -292,8 +232,8 @@ function applyRoleMatch(pipeline, user) {
 }
 
 function orderHasAdvancePayment(order) {
-  return (order.payments || []).some((p) =>
-    isAdvancePayment(p, order.firstDispatchAt)
+  return (order.payments || []).some(
+    (p) => resolvePaymentTiming(p, order.firstDispatchAt) === "advance"
   );
 }
 
@@ -473,6 +413,7 @@ export const getCollectionsOverview = catchAsync(async (req, res) => {
     paymentTypes,
     advanceOnly: advanceOnlyParam,
     excludeTestFarmers = "true",
+    source: dataSourceParam,
   } = req.query;
 
   const bucketList = parseCommaList(paymentBuckets || paymentBucket)
@@ -736,6 +677,7 @@ export const getCollectionsOverview = catchAsync(async (req, res) => {
 
     mappedPreBucket.push({
       orderId: row.orderId,
+      farmerMobile: row.farmerMobile != null ? String(row.farmerMobile) : "",
       farmerName: row.farmerName || "",
       district: row.farmerDistrict || "",
       taluka: row.farmerTaluka || "",
@@ -796,6 +738,30 @@ export const getCollectionsOverview = catchAsync(async (req, res) => {
     ? buildSeriesFromEntries(paymentEntries)
     : buildSeries(orders);
 
+  let ordersOut = orders;
+  const useLedgerSource = String(dataSourceParam || "").toLowerCase() === "ledger";
+  let ledgerMeta = {};
+  if (useLedgerSource) {
+    try {
+      const ledgerReports = await import(
+        "../modules/finance/reports/orderCollectionsFromLedger.js"
+      );
+      ordersOut = await ledgerReports.applyLedgerBalancesToOrders(orders);
+      const rangeStart = parseDate(startDate);
+      const rangeEnd = parseDate(endDate, true);
+      ledgerMeta = {
+        dataSource: "ledger",
+        ledgerCollectedInRange: await ledgerReports.getLedgerCollectedTotalForDateRange(
+          rangeStart,
+          rangeEnd
+        ),
+      };
+    } catch (ledgerErr) {
+      console.error("[Finance] collections ledger source:", ledgerErr?.message || ledgerErr);
+      ledgerMeta = { dataSource: "ledger", ledgerError: String(ledgerErr?.message || ledgerErr) };
+    }
+  }
+
   return res.status(200).json({
     success: true,
     data: {
@@ -803,13 +769,13 @@ export const getCollectionsOverview = catchAsync(async (req, res) => {
       reportDateCalendar: reportDateStr,
       plants,
       plantVarieties,
-      stats,
+      stats: { ...stats, ...ledgerMeta },
       filterOptions,
       series,
-      orders,
+      orders: ordersOut,
       paymentEntries,
       meta: {
-        orderCount: orders.length,
+        orderCount: ordersOut.length,
         paymentEntryCount: paymentEntries.length,
         rawCount: rawRows.length,
         cappedAt: rawRows.length >= 10000 ? 10000 : null,
@@ -817,6 +783,7 @@ export const getCollectionsOverview = catchAsync(async (req, res) => {
         viewMode: paymentEntryView ? "payments" : "orders",
         advanceOnly: paymentEntryView,
         paymentTypes: paymentTypeList,
+        ...ledgerMeta,
       },
     },
   });

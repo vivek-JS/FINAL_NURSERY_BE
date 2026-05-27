@@ -258,6 +258,12 @@ const paymentSchema = new Schema(
     transferredFromPaymentId: { type: Schema.Types.ObjectId, default: null },
     /** Links a PENDING payment row to FarmerOrderTransferRequest (approval via payment dashboard). */
     transferRequestId: { type: Schema.Types.ObjectId, ref: "FarmerOrderTransferRequest", default: null },
+    /** advance = before first dispatch; balance = on/after first dispatch */
+    paymentTiming: {
+      type: String,
+      enum: ["advance", "balance"],
+      default: null,
+    },
   },
   { timestamps: true }
 );

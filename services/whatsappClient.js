@@ -59,11 +59,25 @@ function sessionDirForClient(dataPath) {
   return path.join(dataPath, `session-${CLIENT_ID}`);
 }
 
+/** Chrome profile on disk ≠ logged in; require WhatsApp IndexedDB + cookies. */
 export function hasPersistedWhatsAppSession(dataPath = getWhatsAppSessionPath()) {
   const dir = sessionDirForClient(dataPath);
   if (!fs.existsSync(dir)) return false;
+
+  const waIndexedDb = path.join(
+    dir,
+    "Default",
+    "IndexedDB",
+    "https_web.whatsapp.com_0.indexeddb.leveldb"
+  );
+  const cookies = path.join(dir, "Default", "Cookies");
+
   try {
-    return fs.readdirSync(dir).length > 0;
+    const hasWaDb =
+      fs.existsSync(waIndexedDb) &&
+      fs.readdirSync(waIndexedDb).some((f) => f.endsWith(".ldb") || f.endsWith(".log"));
+    const hasCookies = fs.existsSync(cookies) && fs.statSync(cookies).size > 512;
+    return hasWaDb && hasCookies;
   } catch {
     return false;
   }
@@ -237,6 +251,13 @@ function attachClientHandlers(waClient) {
     clearReadyWatchdog();
     isWhatsAppReady = false;
     console.warn("🔴 [WhatsApp] Client disconnected:", reason);
+    if (reason === "LOGOUT") {
+      console.warn(
+        "[WhatsApp] WhatsApp logged out — whatsapp-web.js removed session files under",
+        sessionDirForClient(getWhatsAppSessionPath()),
+        "(scan QR again). Common causes: linked device removed on phone, corrupt session after hard kill, or two servers using the same session."
+      );
+    }
     if (!shuttingDown) {
       setTimeout(() => {
         void safeReinitialize(`disconnected:${reason}`);
@@ -284,11 +305,15 @@ export async function startWhatsAppClient() {
   sessionPath = resolveWritableWhatsAppSessionPath();
 
   const hasSession = hasPersistedWhatsAppSession(sessionPath);
+  const chromeOnly =
+    fs.existsSync(sessionDirForClient(sessionPath)) && !hasSession;
   console.log(
     `[WhatsApp] Session path: ${sessionPath} — ${
       hasSession
-        ? "saved session on disk (PM2 restart should reuse, no QR)"
-        : "no session yet (QR will appear in logs)"
+        ? "logged-in session on disk (restart should reuse, no QR)"
+        : chromeOnly
+          ? "Chrome profile exists but not logged in — scan QR (nodemon restarts during scan can wipe session)"
+          : "no session yet (QR will appear in logs)"
     }`
   );
 

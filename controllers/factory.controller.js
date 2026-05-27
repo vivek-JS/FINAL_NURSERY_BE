@@ -28,6 +28,10 @@ import {
   archiveFarmerPlantOrderBeforeDelete,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import {
+  resolveOrderStatusTokens,
+  buildOrderStatusDateMatch,
+} from "../utility/orderListQuery.js";
+import {
   syncDealerLedgerForOrder,
 } from "../utils/dealerLedgerHelper.js";
 import {
@@ -46,6 +50,10 @@ import {
   buildOrderEditHistoryEntries,
   mergeEditHistoryIntoFilteredBody,
 } from "../utils/orderEditHistoryBuilder.js";
+import {
+  emitPlantOrderCreatedEvents,
+  emitPlantOrderUpdateEvents,
+} from "../utils/orderEventDualWrite.js";
 
 const CANCEL_LIKE_ORDER_STATUSES = new Set(["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"]);
 function isCancelLikeOrderStatus(status) {
@@ -1198,6 +1206,15 @@ const createOne = (Model, modelName) =>
         await session.commitTransaction();
         session.endSession();
 
+        if (modelName === "Order" && order[0]) {
+          emitPlantOrderCreatedEvents(order[0], {
+            userId: req.user?._id,
+            actorName: req.user?.name,
+          }).catch((e) =>
+            console.error("[OrderEvent] create emit failed:", e?.message || e)
+          );
+        }
+
         if (modelName === "Order" && order[0]?.orderStatus === "DISPATCHED") {
           (async () => {
             try {
@@ -1754,6 +1771,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           // Use $push to add to existing array
           if (!filteredBody.$push) filteredBody.$push = {};
           filteredBody.$push.deliveryChanges = deliveryChange;
+          pendingDeliveryChangeForEvents = deliveryChange;
 
           // Remove temporary field
           delete filteredBody.deliveryChangeReason;
@@ -1785,6 +1803,7 @@ const updateOne = (Model, modelName, allowedFields) =>
 
       // Track general order field edits (rate, numberOfPlants, deliveryDate)
       const editHistoryEntries = [];
+      let pendingDeliveryChangeForEvents = null;
 
       // Rate change approval gate: non-super-admins trigger a pending approval request
       // instead of applying the rate immediately. Super admins bypass this and apply directly.
@@ -2636,6 +2655,21 @@ const updateOne = (Model, modelName, allowedFields) =>
       await session.commitTransaction();
       session.endSession();
 
+      if (modelName === "Order" && updatedDoc) {
+        const statusChangePush = filteredBody.$push?.statusChanges;
+        emitPlantOrderUpdateEvents({
+          orderId: updatedDoc._id,
+          editHistoryEntries,
+          deliveryChange: pendingDeliveryChangeForEvents,
+          statusChangePush,
+          userId: req.user?._id,
+          actorName: req.user?.name,
+          correlationId: req.headers["x-correlation-id"] || undefined,
+        }).catch((e) =>
+          console.error("[OrderEvent] update emit failed:", e?.message || e)
+        );
+      }
+
       if (modelName === "Order") {
         const prevStatus = existingDoc?.orderStatus;
         const nextStatus = updatedDoc?.orderStatus;
@@ -3205,19 +3239,15 @@ const getAll = (Model, modelName) =>
       orderIds, // NEW: Filter by specific order IDs
       includePastDueBeyondRange, // true: delivery in [start,end] OR delivery before start (older past-due backlog)
       dateRangeField, // "booking" | "delivery" — which date field startDate/endDate apply to (defaults: booking when dispatched=false, delivery when dispatched=true)
+      needsDispatch: needsDispatchRaw, // "true" = PENDING,ACCEPTED,ASSIGNED,FARM_READY,READY_FOR_DISPATCH
+      expectedNursery, // Filter by nursery site code (RB, GH, …)
       showonly, // When truthy: restrict ANY role (incl. DISPATCH_MANAGER/ADMIN) to only orders where salesPerson === req.user._id
       exportAll: exportAllRaw, // "true" = full export (no 500 cap; skip early pagination)
     } = req.query;
 
     const exportAll = String(exportAllRaw ?? "") === "true";
 
-    /** Express may pass repeated keys as an array; normalize to one comma-separated string. */
-    const status =
-      statusRaw == null
-        ? ""
-        : Array.isArray(statusRaw)
-          ? statusRaw.map((s) => String(s).trim()).filter(Boolean).join(",")
-          : String(statusRaw);
+    const statusTokensUpper = resolveOrderStatusTokens(needsDispatchRaw, statusRaw);
 
     /** Resolve MongoDB field for order date-range filtering. */
     const resolveOrderDateRangeField = () => {
@@ -3235,13 +3265,7 @@ const getAll = (Model, modelName) =>
     };
     const orderDateRangeMongoField = resolveOrderDateRangeField();
 
-    /** FARM_READY pipeline list: return all matching rows regardless of booking/delivery date window. */
-    const statusTokensUpper = status
-      ? status
-          .split(",")
-          .map((s) => s.trim().toUpperCase())
-          .filter(Boolean)
-      : [];
+    /** FARM_READY-only status list: skip date window (farm-ready tab parity when status=FARM_READY only). */
     const skipOrderDateRangeForFarmReadyOnlyStatus =
       statusTokensUpper.length > 0 &&
       statusTokensUpper.every((s) => s === "FARM_READY");
@@ -3607,6 +3631,15 @@ const getAll = (Model, modelName) =>
         });
       }
 
+      if (expectedNursery) {
+        const nurseryCode = String(expectedNursery).trim().toUpperCase();
+        if (nurseryCode) {
+          pipeline.push({
+            $match: { expectedNursery: nurseryCode },
+          });
+        }
+      }
+
       // Apply ready for dispatch filter if present - returns all READY_FOR_DISPATCH orders
       // This should be checked BEFORE status filter to avoid conflicts
       // Ready for dispatch means: orderStatus is READY_FOR_DISPATCH
@@ -3621,15 +3654,22 @@ const getAll = (Model, modelName) =>
         
         console.log(`[Ready for Dispatch Filter] Looking for orders with:`);
         console.log(`  - orderStatus: "READY_FOR_DISPATCH"`);
-      } else if (status) {
-        // Only apply status filter if ready_for_dispatch is not set
-        // Convert comma-separated string to array and handle single status case
-        const statusArray = status.split(",").map((s) => s.trim());
-        pipeline.push({
-          $match: {
-            orderStatus: { $in: statusArray },
-          },
-        });
+      } else if (statusTokensUpper.length > 0) {
+        // Status + date range are merged below when both apply (multi-status + booking dates).
+        // If there is no date window, apply status-only match here.
+        const willApplyDateWindow =
+          searchTrimmedEarly.length === 0 &&
+          startDate &&
+          endDate &&
+          dispatched === "false" &&
+          !skipOrderDateRangeForFarmReadyOnlyStatus &&
+          !farmReadyParamIgnoresOrderDateFilters;
+
+        if (!willApplyDateWindow) {
+          pipeline.push({
+            $match: { orderStatus: { $in: statusTokensUpper } },
+          });
+        }
       }
 
       // Apply farm ready filter if present
@@ -3672,7 +3712,17 @@ const getAll = (Model, modelName) =>
           includePastDueBeyondRange === "true" &&
           orderDateRangeMongoField === "deliveryDate";
 
-        if (usePastDueOr) {
+        if (
+          statusTokensUpper.length > 0 &&
+          !usePastDueOr
+        ) {
+          const combined = buildOrderStatusDateMatch(statusTokensUpper, {
+            field: orderDateRangeMongoField,
+            start,
+            end,
+          });
+          if (combined) pipeline.push({ $match: combined });
+        } else if (usePastDueOr) {
           pipeline.push({
             $match: {
               $or: [
@@ -3681,6 +3731,11 @@ const getAll = (Model, modelName) =>
               ],
             },
           });
+          if (statusTokensUpper.length > 0) {
+            pipeline.push({
+              $match: { orderStatus: { $in: statusTokensUpper } },
+            });
+          }
         } else {
           pipeline.push({
             $match: { [orderDateRangeMongoField]: { $gte: start, $lte: end } },
