@@ -68,3 +68,10 @@
 2026/05/27-18:30:55.032 2a7a7d compacted to: files[ 0 1 1 0 0 0 0 ]
 2026/05/27-18:30:55.032 2a7a7d Delete type=2 #4166
 2026/05/27-18:30:55.032 2a7a89 Manual compaction at level-0 from ' \xf2\x05\x0a\x02\x03\x00\x00\x00\x00\x00\x00\xf0?' @ 2603750 : 0 .. ' \xf3\x05\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/05/27-18:33:37.357 2a7a80 Compacting 1@1 + 1@2 files
+2026/05/27-18:33:37.364 2a7a80 Generated table #4168@1: 2258 keys, 52422 bytes
+2026/05/27-18:33:37.364 2a7a80 Compacted 1@1 + 1@2 files => 52422 bytes
+2026/05/27-18:33:37.366 2a7a80 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/05/27-18:33:37.367 2a7a80 Delete type=2 #4167
+2026/05/27-18:33:37.367 2a7a80 Delete type=2 #4164
+2026/05/27-18:33:37.367 2a7a80 Delete type=2 #4130
