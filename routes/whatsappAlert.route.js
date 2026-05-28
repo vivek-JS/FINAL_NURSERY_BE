@@ -147,4 +147,20 @@ router.post("/engine/big-order/:orderId", async (req, res) => {
   }
 });
 
+/** Manual trigger: delivery_final_second scan (past due + due in 7 days). */
+router.post("/engine/delivery-final-second-scan", async (req, res) => {
+  try {
+    const { runDeliveryFinalSecondScan } = await import(
+      "../services/deliveryFinalSecondWhatsapp.service.js"
+    );
+    const result = await runDeliveryFinalSecondScan();
+    return res.status(200).json({ status: "Success", result });
+  } catch (err) {
+    return res.status(500).json({
+      status: "Fail",
+      message: err?.message || String(err),
+    });
+  }
+});
+
 export default router;

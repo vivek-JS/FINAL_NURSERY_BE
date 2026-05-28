@@ -739,4 +739,13 @@ server.use(errorHandler);
   }
 })();
 
+(async () => {
+  try {
+    const { initDeliveryFinalSecondCronJobs } = await import("./jobs/deliveryFinalSecondCron.js");
+    initDeliveryFinalSecondCronJobs();
+  } catch (e) {
+    console.error("[WATI Cron] Failed to init delivery_final_second cron:", e?.message || e);
+  }
+})();
+
 export default server;

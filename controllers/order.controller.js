@@ -3926,6 +3926,65 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
 });
 
 /**
+ * Send farm-ready WhatsApp (WATI delivery_final_second) — manual from ERP / auto on FARM_READY status.
+ */
+export const sendOrderFarmReadyWhatsAppController = catchAsync(async (req, res) => {
+  const { orderId } = req.params;
+  const order = await Order.findById(orderId)
+    .populate("farmer", "name mobileNumber village taluka talukaName")
+    .populate("plantName", "name");
+  if (!order) {
+    return res.status(404).json({ message: "Order not found" });
+  }
+
+  if (order.whatsappFarmReadySentAt) {
+    return res.status(200).json(
+      generateResponse(
+        "Success",
+        "WhatsApp farm-ready message was already sent for this order",
+        {
+          alreadySent: true,
+          whatsappFarmReadySentAt: order.whatsappFarmReadySentAt,
+          whatsappFarmReadyMessageKey: order.whatsappFarmReadyMessageKey || null,
+        },
+        undefined
+      )
+    );
+  }
+
+  const { sendDeliveryFinalSecondForOrder, DELIVERY_FINAL_TRIGGERS } = await import(
+    "../services/deliveryFinalSecondWhatsapp.service.js"
+  );
+  const result = await sendDeliveryFinalSecondForOrder(
+    order,
+    DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS
+  );
+
+  if (!result.success) {
+    const msg =
+      result.error?.message ||
+      (typeof result.error === "string" ? result.error : "Failed to send message");
+    return res.status(500).json(generateResponse("Error", msg, null, result.error));
+  }
+
+  const sentAt = new Date();
+  const msgKey =
+    result.data?.localMessageId || result.localMessageId || null;
+
+  return res.status(200).json(
+    generateResponse("Success", "WhatsApp message sent successfully", {
+      ...result.data,
+      stored: {
+        whatsappFarmReadySentAt: sentAt,
+        whatsappFarmReadyMessageKey: msgKey,
+      },
+      whatsappFarmReadySentAt: sentAt,
+      whatsappFarmReadyMessageKey: msgKey,
+    }, undefined)
+  );
+});
+
+/**
  * Send dispatch WhatsApp (WATI template delivery_final_revamp) to farmer after order is dispatched
  */
 export const sendOrderDispatchWhatsAppController = catchAsync(async (req, res) => {

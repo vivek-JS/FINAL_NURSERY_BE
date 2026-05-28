@@ -24,6 +24,7 @@ import {
 } from "../utility/whatsappFarmReadyOrderResolve.js";
 
 export const FARM_READY_BTN_CONFIRM = "शेत तयार आहे";
+export const FARM_READY_BTN_CONFIRM_DOTTED = "शेत तयार आहे.";
 export const FARM_READY_BTN_RESCHEDULE = "दुसरी तारीख निवडा";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -139,7 +140,11 @@ export function parseDateChoiceFromReply(text, offeredDates) {
 
 export function isFarmReadyButtonMessage(text) {
   const t = normalizeInboundText(text);
-  return t === FARM_READY_BTN_CONFIRM || t === FARM_READY_BTN_RESCHEDULE;
+  return (
+    t === FARM_READY_BTN_CONFIRM ||
+    t === FARM_READY_BTN_CONFIRM_DOTTED ||
+    t === FARM_READY_BTN_RESCHEDULE
+  );
 }
 
 /**
@@ -503,7 +508,7 @@ export async function runFarmReadyWebhookFromBody(body) {
     `[farm-ready] Order resolved: ${orderCode} delivery=${order.deliveryDate ? formatDeliveryDateShortIn(order.deliveryDate) : "—"} replyContext=${extractReplyContextId(body) || "—"}`
   );
 
-  if (inbound === FARM_READY_BTN_CONFIRM) {
+  if (inbound === FARM_READY_BTN_CONFIRM || inbound === FARM_READY_BTN_CONFIRM_DOTTED) {
     return confirmFarmReadyViaWhatsapp(order, waId, messageId);
   }
 

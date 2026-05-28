@@ -27,6 +27,7 @@ import {
   generatePaymentQR,
   sendOrderAcceptedWhatsAppController,
   sendOrderDispatchWhatsAppController,
+  sendOrderFarmReadyWhatsAppController,
   getDeliverySummary,
   getDeliveryOrders,
   splitOrder,
@@ -175,6 +176,7 @@ router
   .get("/:orderId/timeline", getPlantOrderTimeline)
   .post("/:orderId/send-accepted-whatsapp", sendOrderAcceptedWhatsAppController)
   .post("/:orderId/send-dispatch-whatsapp", sendOrderDispatchWhatsAppController)
+  .post("/:orderId/send-farm-ready-whatsapp", sendOrderFarmReadyWhatsAppController)
   .post("/test-notification", authenticateToken, catchAsync(async (req, res) => {
     // Test endpoint to send a notification to current user
     const User = (await import("../models/user.model.js")).default;

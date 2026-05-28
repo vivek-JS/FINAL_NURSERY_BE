@@ -1759,32 +1759,19 @@ const updateOne = (Model, modelName, allowedFields) =>
               const farmerDetails = existingDoc.farmer ? await mongoose.model('Farmer').findById(existingDoc.farmer) : null;
               
               if (farmerDetails && farmerDetails.mobileNumber) {
-                const OrderModel = mongoose.model("Order");
-                await OrderModel.ensurePublicOrderCode(existingDoc);
-                if (existingDoc.isModified?.("publicOrderCode")) {
-                  await existingDoc.save({ session });
-                }
                 const orderId = existingDoc.orderId || existingDoc._id;
-                const orderDetails = {
-                  orderId,
-                  publicOrderCode: existingDoc.publicOrderCode,
-                  plantName: existingDoc.plantType?.name || existingDoc.plantName?.name || 'Plants',
-                  numberOfPlants: existingDoc.numberOfPlants,
-                  deliveryDate: existingDoc.deliveryDate,
-                };
 
-                console.log(`📱 Sending WhatsApp farm ready message to farmer: ${farmerDetails.name} (${farmerDetails.mobileNumber})`);
-                const result = await sendOrderReadyWhatsApp(farmerDetails, orderDetails);
-                
+                console.log(`📱 Sending WhatsApp delivery_final_second to farmer: ${farmerDetails.name} (${farmerDetails.mobileNumber})`);
+                const { sendDeliveryFinalSecondForOrder, DELIVERY_FINAL_TRIGGERS } = await import("../services/deliveryFinalSecondWhatsapp.service.js");
+                const result = await sendDeliveryFinalSecondForOrder(
+                  existingDoc,
+                  DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS
+                );
+
                 if (result.success) {
-                  console.log(`✅ WhatsApp farm ready message sent successfully for Order #${orderId}`);
-                  const { storeFarmReadyTemplateSendMeta } = await import("../services/whatsappFarmReadyReschedule.service.js");
-                  await storeFarmReadyTemplateSendMeta(
-                    existingDoc._id,
-                    result.data?.localMessageId || result.localMessageId
-                  );
+                  console.log(`✅ WhatsApp delivery_final_second sent for Order #${orderId}`);
                 } else {
-                  console.log(`⚠️ WhatsApp farm ready message failed for Order #${orderId}:`, result.error);
+                  console.log(`⚠️ WhatsApp delivery_final_second failed for Order #${orderId}:`, result.error);
                 }
               } else {
                 console.log('⚠️ No farmer mobile number found, skipping WhatsApp message');
@@ -4743,6 +4730,8 @@ const getAll = (Model, modelName) =>
           whatsappDispatchSentAt: 1,
           whatsappAcceptedMessageKey: 1,
           whatsappDispatchMessageKey: 1,
+          whatsappFarmReadySentAt: 1,
+          whatsappFarmReadyMessageKey: 1,
           dispatchDayKey: 1,
           dispatchTargetDate: 1,
           oldDeliveryDate: 1,

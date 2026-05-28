@@ -399,6 +399,12 @@ const orderSchema = new Schema(
         default: null,
       },
     },
+    /** Last delivery_final_second cron trigger: past_due | due_in_7_days | farm_ready_status */
+    whatsappDeliveryFinalSecondTrigger: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     dealerOrder: {
       type: Boolean,
       default: false,
