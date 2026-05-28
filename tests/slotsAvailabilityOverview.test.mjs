@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import moment from "moment";
 import {
   computeAvailablePlants,
   computeUtilizationPct,
@@ -8,6 +9,8 @@ import {
   sortAvailabilityRows,
   summarizeAvailabilityRows,
   filterAvailabilityRows,
+  filterNonPastAvailabilityRows,
+  isAvailabilityRowPast,
 } from "../utility/slotAvailabilityOverview.js";
 
 test("computeAvailablePlants uses slot field when set", () => {
@@ -107,6 +110,19 @@ test("sortAvailabilityRows orders by month then plant", () => {
     { month: "May", plantName: "A", subtypeName: "x", startDay: "01-05-2026" },
   ]);
   assert.equal(sorted[0].month, "May");
+});
+
+test("filterNonPastAvailabilityRows drops ended slots", () => {
+  const today = moment("15-06-2026", "DD-MM-YYYY", true).startOf("day");
+  const rows = [
+    { endDay: "10-06-2026", startDay: "01-06-2026" },
+    { endDay: "20-06-2026", startDay: "16-06-2026" },
+  ];
+  assert.equal(isAvailabilityRowPast(rows[0], today), true);
+  assert.equal(isAvailabilityRowPast(rows[1], today), false);
+  const kept = filterNonPastAvailabilityRows(rows, today);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].endDay, "20-06-2026");
 });
 
 test("summarizeAvailabilityRows sums totals", () => {

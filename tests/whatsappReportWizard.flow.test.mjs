@@ -155,9 +155,10 @@ test("extractInboundMessage (webhook shapes)", () => {
   assert.deepEqual(extractInboundMessage({ text: "get report", waId: "919998887766" }), {
     text: "get report",
     waId: "919998887766",
+    buttonText: "",
   });
   assert.deepEqual(
     extractInboundMessage({ data: { text: "1", waId: "9876543210" } }),
-    { text: "1", waId: "9876543210" }
+    { text: "1", waId: "9876543210", buttonText: "" }
   );
 });

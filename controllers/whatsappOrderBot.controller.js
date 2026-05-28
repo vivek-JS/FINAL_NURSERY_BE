@@ -8,6 +8,7 @@ import { getWatiBaseUrl, getWatiToken } from "../config/wati.config.js";
 import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
 import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
 import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
+import { runFarmReadyWebhookFromBody } from "../services/whatsappFarmReadyReschedule.service.js";
 import {
   isWhatsappOrderFlowDisabled,
   isWhatsappOrderWatiEnabled,
@@ -602,6 +603,12 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
 
   void (async () => {
     try {
+      const farmReady = await runFarmReadyWebhookFromBody(req.body);
+      if (farmReady.handled) {
+        console.log(`[WATI] Farm-ready flow handled: ${farmReady.action || "ok"}`);
+        return;
+      }
+
       if (orderFlowOff) {
         const wizardOnly = await runWhatsappReportWizardFromWebhookBody(req.body);
         if (!wizardOnly.handled && process.env.WHATSAPP_LEGACY_INSTANT_BOOKING_PDF === "true") {

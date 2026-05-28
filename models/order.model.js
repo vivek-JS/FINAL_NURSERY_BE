@@ -363,6 +363,42 @@ const orderSchema = new Schema(
       trim: true,
       default: null,
     },
+    whatsappFarmReadySentAt: {
+      type: Date,
+      default: null,
+    },
+    /** WATI `local_message_id` after order_ready (farm ready) template send. */
+    whatsappFarmReadyMessageKey: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    /** Farmer tapped "शेत तयार आहे" on WATI farm-ready template. */
+    farmReadyWhatsappConfirmedAt: {
+      type: Date,
+      default: null,
+    },
+    /** Farmer-initiated delivery reschedule via WATI (after confirmation). */
+    farmerWhatsappDeliveryReschedule: {
+      rescheduledBy: {
+        type: String,
+        enum: ["FARMER"],
+        default: null,
+      },
+      rescheduledAt: {
+        type: Date,
+        default: null,
+      },
+      oldDeliveryDate: {
+        type: Date,
+        default: null,
+      },
+      whatsappMessageId: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+    },
     dealerOrder: {
       type: Boolean,
       default: false,
@@ -747,6 +783,15 @@ const orderSchema = new Schema(
     // Old delivery date - for tracking delivery date changes
     oldDeliveryDate: {
       type: Date,
+    },
+    /** Booking slot before cross-slot early / overdue dispatch (READY_FOR_DISPATCH). */
+    originalBookingSlot: {
+      type: Schema.Types.ObjectId,
+    },
+    /** Order was moved to dispatch-day slot; show old + current delivery in UI. */
+    dispatchedFromAnotherSlot: {
+      type: Boolean,
+      default: false,
     },
     // Field to track call history for dispatch managers
     callHistory: [

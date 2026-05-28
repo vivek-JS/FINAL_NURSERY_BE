@@ -3968,21 +3968,45 @@ const bulkMarkReady = catchAsync(async (req, res, next) => {
     return next(new AppError("No valid order IDs provided", 400));
   }
 
+  const { getDispatchTargetDateFromKey } = await import("../utility/dispatchDay.js");
+  const { applyEarlyDispatch } = await import("../services/earlyDispatch.service.js");
+  const dispatchDayKey = "TODAY";
+  const dispatchTargetDate = getDispatchTargetDateFromKey(dispatchDayKey);
+
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const eligibleOrders = await Order.find(
-      { _id: { $in: validIds }, orderStatus: { $in: ["FARM_READY", "PROCESSING", "ACCEPTED"] } },
-      "_id orderStatus"
-    ).session(session).lean();
+    const eligibleOrders = await Order.find({
+      _id: { $in: validIds },
+      orderStatus: { $in: ["FARM_READY", "PROCESSING", "ACCEPTED"] },
+    })
+      .session(session);
 
     let updatedCount = 0;
     for (const ord of eligibleOrders) {
+      const filteredBody = {
+        orderStatus: "READY_FOR_DISPATCH",
+        dispatchDayKey,
+        dispatchTargetDate,
+      };
+
+      if (dispatchTargetDate) {
+        await applyEarlyDispatch({
+          order: ord,
+          dispatchTargetDate,
+          session,
+          filteredBody,
+          userId: req.user?._id,
+        });
+      }
+
+      const { __earlyDispatchSlotHandled, ...setFields } = filteredBody;
+
       await Order.findByIdAndUpdate(
         ord._id,
         appendStatusChangeToUpdate(
-          { $set: { orderStatus: "READY_FOR_DISPATCH" } },
+          { $set: setFields },
           ord.orderStatus,
           { userId: req.user?._id, reason: "dispatch:bulk_mark_ready" }
         ),

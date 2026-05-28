@@ -3,6 +3,8 @@
  * Aligned with getSimpleSlots + AddOrderForm booking rules.
  */
 
+import moment from "moment";
+
 const MONTH_ORDER = [
   "January",
   "February",
@@ -129,6 +131,27 @@ export function summarizeAvailabilityRows(rows) {
     available,
     slotCount: rows.length,
   };
+}
+
+const SLOT_END_FORMATS = ["DD-MM-YYYY", "D-M-YYYY", "DD/MM/YYYY"];
+
+/** Today start-of-day in IST (matches stock-entry past-slot rule). */
+export function availabilityTodayIST() {
+  return moment().utcOffset(330).startOf("day");
+}
+
+/** Past = delivery window ended (endDay before today). */
+export function isAvailabilityRowPast(row, today = availabilityTodayIST()) {
+  const endStr = row?.endDay;
+  if (!endStr) return false;
+  const end = moment(String(endStr).trim(), SLOT_END_FORMATS, true);
+  if (!end.isValid()) return false;
+  return end.isBefore(today, "day");
+}
+
+/** Exclude slots whose delivery period has already ended. */
+export function filterNonPastAvailabilityRows(rows, today = availabilityTodayIST()) {
+  return (rows || []).filter((r) => !isAvailabilityRowPast(r, today));
 }
 
 export function filterAvailabilityRows(rows, { month, plantId, search, onlyAvailable }) {

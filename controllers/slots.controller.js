@@ -2383,9 +2383,50 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       ]
     })
       .select(
-        "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot"
+        "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot"
       )
       .lean();
+
+    // Cross-slot dispatch aggregates (orders on other slots but dispatching here, or released from here)
+    const crossSlotOrders = await Order.find({
+      dispatchedFromAnotherSlot: true,
+      orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
+      $or: [
+        { bookingSlot: { $in: slotIds } },
+        { originalBookingSlot: { $in: slotIds } },
+      ],
+      $and: [
+        {
+          $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
+        },
+      ],
+    })
+      .select(
+        "numberOfPlants additionalPlants bookingSlot originalBookingSlot dispatchedFromAnotherSlot"
+      )
+      .lean();
+
+    const dispatchedFromOtherBySlot = new Map();
+    const releasedForEarlyBySlot = new Map();
+    for (const order of crossSlotOrders) {
+      const qty =
+        (Number(order.numberOfPlants) || 0) + (Number(order.additionalPlants) || 0);
+      const bookingId = order.bookingSlot?.toString?.() ?? String(order.bookingSlot);
+      const originalId =
+        order.originalBookingSlot?.toString?.() ?? String(order.originalBookingSlot);
+      if (bookingId && slotMap.has(bookingId)) {
+        dispatchedFromOtherBySlot.set(
+          bookingId,
+          (dispatchedFromOtherBySlot.get(bookingId) || 0) + qty
+        );
+      }
+      if (originalId && slotMap.has(originalId)) {
+        releasedForEarlyBySlot.set(
+          originalId,
+          (releasedForEarlyBySlot.get(originalId) || 0) + qty
+        );
+      }
+    }
 
     // Batch query: Get all dealer quota orders for all slots
     const dealerQuotaOrders = await Order.aggregate([
@@ -2475,6 +2516,8 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         slot.totalDispatchedPlants = dispatchStats.totalDispatchedPlants;
         slot.remainingToDispatch = dispatchStats.remainingToDispatch;
         slot.dealerQuota = dealerQuota;
+        slot.dispatchedFromOtherSlots = dispatchedFromOtherBySlot.get(slotId) || 0;
+        slot.releasedForEarlyDispatch = releasedForEarlyBySlot.get(slotId) || 0;
 
         const resolved = resolveSlotBufferFields(slot, { subtypeBuffer, plantBuffer });
         slot.effectiveBuffer = resolved.effectiveBuffer;

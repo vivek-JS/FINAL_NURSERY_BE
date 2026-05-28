@@ -2,36 +2,68 @@
  * Shared helpers for parsing WATI inbound webhook bodies (message text + sender id).
  */
 
+function pickString(...values) {
+  for (const v of values) {
+    if (v == null) continue;
+    const s = typeof v === "string" ? v.trim() : String(v).trim();
+    if (s) return s;
+  }
+  return "";
+}
+
 export function extractInboundMessage(body) {
-  const text =
-    body?.text ??
-    body?.messageText ??
-    body?.content ??
-    body?.message?.text ??
-    body?.whatsappMessage?.text ??
-    body?.data?.text ??
-    body?.payload?.text ??
-    body?.event?.message?.text ??
-    body?.buttonReply?.text ??
-    "";
+  const b = body || {};
+
+  const buttonOrList =
+    pickString(
+      b.buttonText,
+      b.buttonReply?.text,
+      b.buttonReply?.buttonText,
+      b.interactiveButtonReply?.title,
+      b.listReply?.title,
+      b.listReply?.description,
+      b.data?.buttonText,
+      b.data?.buttonReply?.text,
+      b.data?.listReply?.title,
+      b.whatsappMessage?.buttonText,
+      b.event?.message?.buttonText
+    ) || "";
+
+  const textField =
+    pickString(
+      b.text,
+      b.messageText,
+      b.content,
+      b.message?.text,
+      b.message?.body,
+      b.whatsappMessage?.text,
+      b.data?.text,
+      b.data?.text?.body,
+      b.payload?.text,
+      b.event?.message?.text
+    ) || "";
+
+  const text = buttonOrList || textField;
 
   const waId =
-    body?.waId ??
-    body?.wa_id ??
-    body?.whatsappNumber ??
-    body?.whatsapp_number ??
-    body?.sender?.wa_id ??
-    body?.sender?.waId ??
-    body?.whatsappMessage?.waId ??
-    body?.whatsappMessage?.sender?.wa_id ??
-    body?.data?.waId ??
-    body?.data?.from ??
-    body?.event?.sender?.wa_id ??
-    "";
+    pickString(
+      b.waId,
+      b.wa_id,
+      b.whatsappNumber,
+      b.whatsapp_number,
+      b.sender?.wa_id,
+      b.sender?.waId,
+      b.whatsappMessage?.waId,
+      b.whatsappMessage?.sender?.wa_id,
+      b.data?.waId,
+      b.data?.from,
+      b.event?.sender?.wa_id
+    ) || "";
 
   return {
     text: typeof text === "string" ? text : String(text ?? ""),
     waId: typeof waId === "string" ? waId : String(waId ?? ""),
+    buttonText: buttonOrList,
   };
 }
 

@@ -1625,6 +1625,55 @@ const updateOne = (Model, modelName, allowedFields) =>
         );
       }
 
+      // Cross-slot early / overdue dispatch (READY_FOR_DISPATCH outside booking slot window)
+      if (modelName === "Order") {
+        const {
+          applyEarlyDispatch,
+          revertEarlyDispatch,
+          shouldRevertEarlyDispatch,
+        } = await import("../services/earlyDispatch.service.js");
+
+        const prevStatus = existingDoc.orderStatus;
+        const nextStatus =
+          filteredBody.orderStatus !== undefined
+            ? filteredBody.orderStatus
+            : prevStatus;
+        const dispatchTarget =
+          filteredBody.dispatchTargetDate ?? existingDoc.dispatchTargetDate;
+        const dispatchDayChanged =
+          hasIncomingDispatchDayKey &&
+          String(filteredBody.dispatchDayKey || "") !==
+            String(existingDoc.dispatchDayKey || "");
+
+        if (
+          nextStatus !== prevStatus &&
+          shouldRevertEarlyDispatch(prevStatus, nextStatus, existingDoc)
+        ) {
+          await revertEarlyDispatch({
+            order: existingDoc,
+            session,
+            filteredBody,
+            userId: req.user?._id,
+          });
+        }
+
+        const enteringOrUpdatingReady =
+          dispatchTarget &&
+          nextStatus === "READY_FOR_DISPATCH" &&
+          (prevStatus !== "READY_FOR_DISPATCH" ||
+            (prevStatus === "READY_FOR_DISPATCH" && dispatchDayChanged));
+
+        if (enteringOrUpdatingReady) {
+          await applyEarlyDispatch({
+            order: existingDoc,
+            dispatchTargetDate: dispatchTarget,
+            session,
+            filteredBody,
+            userId: req.user?._id,
+          });
+        }
+      }
+
       // Special handling for statusChanges - update with user info
       if (
         filteredBody.orderStatus &&
@@ -1723,6 +1772,11 @@ const updateOne = (Model, modelName, allowedFields) =>
                 
                 if (result.success) {
                   console.log(`✅ WhatsApp farm ready message sent successfully for Order #${orderId}`);
+                  const { storeFarmReadyTemplateSendMeta } = await import("../services/whatsappFarmReadyReschedule.service.js");
+                  await storeFarmReadyTemplateSendMeta(
+                    existingDoc._id,
+                    result.data?.localMessageId || result.localMessageId
+                  );
                 } else {
                   console.log(`⚠️ WhatsApp farm ready message failed for Order #${orderId}:`, result.error);
                 }
@@ -2546,7 +2600,10 @@ const updateOne = (Model, modelName, allowedFields) =>
       // --- END DEALER QUOTA LOGIC ---
 
       // Handle slot updates - Modified to work within the transaction
-      if (filteredBody.bookingSlot || filteredBody.numberOfPlants) {
+      if (
+        (filteredBody.bookingSlot || filteredBody.numberOfPlants) &&
+        !filteredBody.__earlyDispatchSlotHandled
+      ) {
         try {
           // Modified handleSlotUpdates to use the session
           await handleSlotUpdatesWithSession(
@@ -2560,6 +2617,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           return next(error);
         }
       }
+      delete filteredBody.__earlyDispatchSlotHandled;
 
       // Update document: use explicit $set for scalar fields so MongoDB applies them alongside $push/$inc
       const { $push, ...setFields } = filteredBody;
@@ -4681,6 +4739,9 @@ const getAll = (Model, modelName) =>
           whatsappDispatchMessageKey: 1,
           dispatchDayKey: 1,
           dispatchTargetDate: 1,
+          oldDeliveryDate: 1,
+          originalBookingSlot: 1,
+          dispatchedFromAnotherSlot: 1,
           farmReadyEnteredAt: 1,
           readyForDispatchEnteredAt: 1,
           // Add orderFor field if present

@@ -5,6 +5,7 @@ import Order from "../models/order.model.js";
 import {
   buildAvailabilityOverviewRow,
   filterAvailabilityRows,
+  filterNonPastAvailabilityRows,
   sortAvailabilityRows,
   summarizeAvailabilityRows,
 } from "../utility/slotAvailabilityOverview.js";
@@ -119,6 +120,7 @@ export async function fetchAvailabilityOverviewData(filters = {}) {
   );
 
   rows = sortAvailabilityRows(rows);
+  rows = filterNonPastAvailabilityRows(rows);
   const summaryAll = summarizeAvailabilityRows(rows);
 
   rows = filterAvailabilityRows(rows, {
