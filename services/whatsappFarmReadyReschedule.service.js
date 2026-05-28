@@ -170,18 +170,65 @@ async function sendWatiReply(waId, messageText) {
  */
 export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
   const now = new Date();
+  const prevStatus = String(order.orderStatus || "");
+  const confirmNote = messageId
+    ? `Farmer confirmed farm is ready via WATI button (शेत तयार आहे) [${messageId}]`
+    : "Farmer confirmed farm is ready via WATI button (शेत तयार आहे)";
+
+  const $set = { farmReadyWhatsappConfirmedAt: now };
+  const $push = {};
+  const historyEntries = [
+    {
+      field: "farmReadyWhatsappConfirmedAt",
+      previousValue: order.farmReadyWhatsappConfirmedAt || null,
+      newValue: now,
+      changedBy: null,
+      notes: confirmNote,
+    },
+  ];
+
+  let statusUpdated = false;
+  if (prevStatus === "ACCEPTED") {
+    $set.orderStatus = "FARM_READY";
+    if (!order.farmReadyDate) {
+      $set.farmReadyDate = now;
+      $push.farmReadyDateChanges = {
+        previousDate: null,
+        newDate: now,
+        reason: "Farmer confirmed farm ready via WATI WhatsApp",
+        notes: confirmNote,
+      };
+    }
+    $push.statusChanges = {
+      previousStatus: prevStatus,
+      newStatus: "FARM_READY",
+      reason: "Farmer tapped शेत तयार आहे on WATI",
+      notes: messageId || "",
+    };
+    historyEntries.push({
+      field: "orderStatus",
+      previousValue: prevStatus,
+      newValue: "FARM_READY",
+      changedBy: null,
+      notes: "Auto-updated when farmer confirmed farm ready via WATI WhatsApp",
+    });
+    statusUpdated = true;
+  }
+
+  $push.orderEditHistory =
+    historyEntries.length === 1 ? historyEntries[0] : { $each: historyEntries };
+
+  await Order.updateOne({ _id: order._id }, { $set, $push });
+
+  if (statusUpdated) {
+    order.orderStatus = "FARM_READY";
+    if (!order.farmReadyDate) order.farmReadyDate = now;
+    console.log(
+      `[farm-ready] Order ${order.publicOrderCode || order.orderId || order._id}: ACCEPTED → FARM_READY (farmer WhatsApp confirm)`
+    );
+  }
+
   order.farmReadyWhatsappConfirmedAt = now;
-  order.orderEditHistory = order.orderEditHistory || [];
-  order.orderEditHistory.push({
-    field: "farmReadyWhatsappConfirmedAt",
-    previousValue: null,
-    newValue: now,
-    changedBy: null,
-    notes: messageId
-      ? `Farmer confirmed farm is ready via WATI button (शेत तयार आहे) [${messageId}]`
-      : "Farmer confirmed farm is ready via WATI button (शेत तयार आहे)",
-  });
-  await order.save();
 
   const deliveryLabel = order.deliveryDate
     ? formatDeliveryDateShortIn(order.deliveryDate)
@@ -194,15 +241,24 @@ export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
       "✅ धन्यवाद!",
       "",
       "आपले शेत तयार असल्याची नोंद झाली.",
+      statusUpdated ? "📋 ऑर्डर स्थिती: शेत तयार (Farm Ready)" : "",
       `📦 ऑर्डर: ${orderCode}`,
       `🌱 ${order.plantName?.name || "रोप"} — ${order.numberOfPlants || 0} रोपे`,
       `📅 वितरण तारीख: ${deliveryLabel}`,
       "",
       "कोणतीही समस्या असल्यास आमच्याशी संपर्क साधा.",
-    ].join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n")
   );
 
-  return { handled: true, action: "farm_ready_confirmed", orderId: String(order._id) };
+  return {
+    handled: true,
+    action: statusUpdated ? "farm_ready_confirmed_status_updated" : "farm_ready_confirmed",
+    orderId: String(order._id),
+    previousStatus: prevStatus,
+    newStatus: statusUpdated ? "FARM_READY" : prevStatus,
+  };
 }
 
 /**
