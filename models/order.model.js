@@ -451,6 +451,34 @@ const orderSchema = new Schema(
       trim: true,
       default: null,
     },
+    whatsappCancelSentAt: {
+      type: Date,
+      default: null,
+    },
+    whatsappCancelMessageKey: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    /** Farmer tapped ऑर्डर कन्फर्म आहे after cancel template — order revived to PENDING. */
+    revivedViaFarmerWhatsappAt: {
+      type: Date,
+      default: null,
+    },
+    revivedViaFarmerWhatsappFromStatus: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    revivedViaFarmerWhatsappMessageId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    whatsappCancelActivityLog: {
+      type: [whatsappFarmReadyActivityLogSchema],
+      default: [],
+    },
     dealerOrder: {
       type: Boolean,
       default: false,

@@ -3,6 +3,10 @@ import Farmer from "../models/farmer.model.js";
 import FarmerLead from "../models/farmerLead.model.js";
 import WhatsAppBroadcast from "../models/whatsappBroadcast.model.js";
 import { runFarmReadyWebhookFromBody } from "../services/whatsappFarmReadyReschedule.service.js";
+import { runCancelReviveWebhookFromBody } from "../services/whatsappOrderCancelRevive.service.js";
+import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
+import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
+import { updateOutboundFromStatusWebhook } from "../services/orderWhatsappOutbound.service.js";
 import {
   extractInboundMessage,
 } from "../utility/watiInboundPayload.js";
@@ -58,8 +62,8 @@ function parseTimestamp(ts) {
 }
 
 export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
-  // Report wizard runs only from the inbound message webhook (order bot / opt-in).
-  // Status URL also forwards farmer button clicks when WATI sends them here.
+  // Status URL receives delivery/read events; WATI often also posts inbound messages here.
+  // Forward those to cancel-revive → farm-ready → report wizard (same chain as opt-in / order bot).
 
   const userAgent = req.headers["user-agent"] || "";
   const isWati = userAgent.toLowerCase().includes("wati");
@@ -97,20 +101,38 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
   // Farmer button / text — often misconfigured on status URL instead of message webhook
   if (isInboundMessageEvent(body, eventType)) {
     statusLog(
-      "⚠️ Inbound message/button on STATUS webhook — forwarding to farm-ready flow. " +
+      "⚠️ Inbound message/button on STATUS webhook — forwarding to interactive flows. " +
         "Configure WATI message webhook → POST /api/v1/whatsapp-order/webhook (recommended)."
     );
     res.status(200).json({
       success: true,
-      message: "Status webhook received message event; processing farm-ready async",
+      message: "Status webhook received message event; processing inbound flows async",
       hint: "Point WATI incoming messages to /api/v1/whatsapp-order/webhook",
     });
     void (async () => {
       try {
-        const result = await runFarmReadyWebhookFromBody(body);
-        statusLog("farm-ready forward result:", result);
+        const cancelRevive = await runCancelReviveWebhookFromBody(body);
+        if (cancelRevive.handled) {
+          statusLog("cancel-revive forward result:", cancelRevive);
+          return;
+        }
+        const farmReady = await runFarmReadyWebhookFromBody(body);
+        if (farmReady.handled) {
+          statusLog("farm-ready forward result:", farmReady);
+          return;
+        }
+        const wizard = await runWhatsappReportWizardFromWebhookBody(body);
+        if (wizard.handled) {
+          statusLog("report wizard forward result:", wizard);
+          return;
+        }
+        if (process.env.WHATSAPP_LEGACY_INSTANT_BOOKING_PDF === "true") {
+          void runTodayBookingPdfJob(body).catch((err) => {
+            console.error("[WATI STATUS] legacy booking PDF:", err?.message || err);
+          });
+        }
       } catch (err) {
-        console.error("[WATI STATUS] farm-ready forward error:", err?.message || err);
+        console.error("[WATI STATUS] inbound forward error:", err?.message || err);
       }
     })();
     return;
@@ -181,6 +203,12 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
           }
         }
       }
+      await updateOutboundFromStatusWebhook({
+        localMessageId,
+        whatsappMessageId,
+        event: "sent",
+        timestamp: parseTimestamp(timestampRaw),
+      }).catch(() => {});
       return res.status(200).json({ success: true, message: 'processed templateMessageSent_v2' });
     }
 
@@ -237,6 +265,12 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
         ).catch(() => {});
       }
       statusLog("delivered", { localMessageId, broadcastName: broadcastName || "(none)" });
+      await updateOutboundFromStatusWebhook({
+        localMessageId,
+        whatsappMessageId,
+        event: "delivered",
+        timestamp: deliveredAt,
+      }).catch(() => {});
       return res.status(200).json({ success: true, message: "processed delivered" });
     }
 
@@ -291,6 +325,12 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
         ).catch(() => {});
       }
       statusLog("read", { localMessageId, broadcastName: broadcastName || "(none)" });
+      await updateOutboundFromStatusWebhook({
+        localMessageId,
+        whatsappMessageId,
+        event: "read",
+        timestamp: readAt,
+      }).catch(() => {});
       return res.status(200).json({ success: true, message: "processed read" });
     }
 
@@ -351,6 +391,14 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
         ).catch(() => {});
       }
       statusLog("failed", { localMessageId, normalizedPhone, failedCode, failedDetail });
+      await updateOutboundFromStatusWebhook({
+        localMessageId,
+        whatsappMessageId,
+        event: "failed",
+        timestamp: parseTimestamp(timestampRaw),
+        failedCode,
+        failedDetail,
+      }).catch(() => {});
       return res.status(200).json({ success: true, message: "processed failed" });
     }
 

@@ -3,6 +3,8 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   isReportEntry,
   guessReportTypeFromText,
@@ -161,4 +163,13 @@ test("extractInboundMessage (webhook shapes)", () => {
     extractInboundMessage({ data: { text: "1", waId: "9876543210" } }),
     { text: "1", waId: "9876543210", buttonText: "" }
   );
+});
+
+test("status webhook forwards inbound messages to report wizard", () => {
+  const source = readFileSync(
+    resolve(process.cwd(), "controllers/whatsappStatusWebhook.controller.js"),
+    "utf8"
+  );
+  assert.match(source, /runWhatsappReportWizardFromWebhookBody/);
+  assert.match(source, /report wizard forward result/);
 });

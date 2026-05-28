@@ -4,6 +4,7 @@ import {
   watiPlantAndSubtypeParams,
   WATI_MERGED_SUBTYPE_PLACEHOLDER,
   isBananaPlantName,
+  formatWhatsappPlantSubtypeDisplay,
 } from "./watiPlantText.js";
 import {
   formatWatiDateDdMmYyyy,
@@ -322,16 +323,18 @@ export function buildDeliveryFinalSecondParameters(farmer, orderDetails) {
     publicOrderCode,
     orderId,
     plantName,
+    plantSubtype,
     numberOfPlants,
     deliveryDate,
   } = orderDetails;
 
   const displayOrderId =
     publicOrderCode?.toString() || orderId?.toString() || "N/A";
+  const plantLine = formatWhatsappPlantSubtypeDisplay(plantName, plantSubtype);
 
   return [
     { name: "1", value: farmer?.name || "Farmer" },
-    { name: "2", value: plantName || "Plants" },
+    { name: "2", value: plantLine },
     { name: "3", value: String(numberOfPlants ?? 0) },
     { name: "4", value: formatDeliveryFinalSecondDate(deliveryDate) },
     { name: "5", value: displayOrderId },
@@ -365,6 +368,63 @@ export async function sendDeliveryFinalSecondWhatsApp(farmer, orderDetails) {
  */
 export async function sendOrderReadyWhatsApp(farmer, orderDetails) {
   return sendDeliveryFinalSecondWhatsApp(farmer, orderDetails);
+}
+
+/**
+ * WATI cancelled-order template — {{1}} name, {{2}} plant, {{3}} qty,
+ * {{4}} order id, {{5}} booking date, {{6}} quantity, {{7}} delivery slot.
+ */
+export function buildOrderCancelledTemplateSummary() {
+  return "[Template: order cancelled — रद्द करा / ऑर्डर कन्फर्म आहे]";
+}
+
+export function buildOrderCancelledParameters(farmer, orderDetails) {
+  const {
+    publicOrderCode,
+    orderId,
+    plantName,
+    numberOfPlants,
+    orderBookingDate,
+    deliverySlotLabel,
+  } = orderDetails;
+
+  const displayOrderId =
+    publicOrderCode?.toString() || orderId?.toString() || "N/A";
+  const qty = String(numberOfPlants ?? 0);
+  const bookingDate =
+    formatWatiDateDdMmYyyy(orderBookingDate) || "—";
+
+  return [
+    { name: "1", value: farmer?.name || "Farmer" },
+    { name: "2", value: plantName || "Plants" },
+    { name: "3", value: qty },
+    { name: "4", value: displayOrderId },
+    { name: "5", value: bookingDate },
+    { name: "6", value: qty },
+    { name: "7", value: deliverySlotLabel || "—" },
+  ];
+}
+
+export async function sendOrderCancelledWhatsApp(farmer, orderDetails) {
+  try {
+    const sendTo = buildWatiSendRecipient(farmer);
+    if (!sendTo) {
+      return { success: false, error: "No mobile number" };
+    }
+
+    const templateName =
+      process.env.WATI_ORDER_CANCELLED_TEMPLATE || "order_cancelled_revamped";
+    const parameters = buildOrderCancelledParameters(sendTo, orderDetails);
+
+    return await sendWatiTemplateMessage(
+      sendTo.mobileNumber,
+      templateName,
+      parameters
+    );
+  } catch (error) {
+    console.error("❌ Error in sendOrderCancelledWhatsApp:", error);
+    return { success: false, error: error.message };
+  }
 }
 
 /**

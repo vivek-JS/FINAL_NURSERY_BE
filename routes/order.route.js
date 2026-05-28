@@ -28,6 +28,8 @@ import {
   sendOrderAcceptedWhatsAppController,
   sendOrderDispatchWhatsAppController,
   sendOrderFarmReadyWhatsAppController,
+  sendSelectedOrdersWhatsappController,
+  listOrderWhatsappOutboundController,
   getDeliverySummary,
   getDeliveryOrders,
   splitOrder,
@@ -173,6 +175,8 @@ router
     checkErrors,
     updateOrder
   )
+  .get("/whatsapp/outbound", listOrderWhatsappOutboundController)
+  .post("/whatsapp/send-selected", sendSelectedOrdersWhatsappController)
   .get("/:orderId/timeline", getPlantOrderTimeline)
   .post("/:orderId/send-accepted-whatsapp", sendOrderAcceptedWhatsAppController)
   .post("/:orderId/send-dispatch-whatsapp", sendOrderDispatchWhatsAppController)

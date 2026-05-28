@@ -10,6 +10,7 @@ import {
   formatDeliveryFinalSecondDate,
 } from "../utility/watiMessaging.js";
 import { storeFarmReadyTemplateSendMeta } from "./whatsappFarmReadyReschedule.service.js";
+import { markOutboundSentFromWatiResult } from "./orderWhatsappOutbound.service.js";
 import { getWatiToken } from "../config/wati.config.js";
 import { isWhatsappUnlimitedSendEnabled } from "../utility/whatsappUnlimitedSend.js";
 
@@ -112,7 +113,8 @@ export function buildDeliveryFinalSecondQuery(trigger, ref = istNow()) {
  */
 export async function sendDeliveryFinalSecondForOrder(
   order,
-  trigger = DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS
+  trigger = DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS,
+  outboundMeta = {}
 ) {
   if (!getWatiToken()) {
     return { success: false, error: "WATI not configured" };
@@ -120,7 +122,8 @@ export async function sendDeliveryFinalSecondForOrder(
 
   const orderDoc = await Order.findById(order._id || order.id)
     .populate("farmer", "name mobileNumber village")
-    .populate("plantName", "name");
+    .populate("plantName", "name")
+    .populate("plantSubtype", "name");
 
   if (!orderDoc) return { success: false, error: "order_not_found" };
 
@@ -134,12 +137,14 @@ export async function sendDeliveryFinalSecondForOrder(
     await orderDoc.save();
   }
   const plantName = orderDoc.plantName?.name || "Plants";
+  const plantSubtype = orderDoc.plantSubtype?.name || "";
   const qty = orderPlantQty(orderDoc);
 
   const result = await sendDeliveryFinalSecondWhatsApp(farmerDoc, {
     publicOrderCode: orderDoc.publicOrderCode,
     orderId: orderDoc.orderId || orderDoc._id,
     plantName,
+    plantSubtype,
     numberOfPlants: qty,
     deliveryDate: orderDoc.deliveryDate,
   });
@@ -158,6 +163,14 @@ export async function sendDeliveryFinalSecondForOrder(
       orderDoc._id,
       result.data?.localMessageId || result.localMessageId
     );
+    const outboundDoc = await markOutboundSentFromWatiResult(orderDoc._id, result, {
+      templateType: "farm_ready",
+      trigger: outboundMeta.trigger || trigger,
+      sentBy: outboundMeta.sentBy || null,
+      publicOrderCode: orderDoc.publicOrderCode,
+      farmer: orderDoc.farmer,
+    });
+    result.outboundLogId = outboundDoc?._id ? String(outboundDoc._id) : null;
   }
 
   return {
@@ -168,6 +181,7 @@ export async function sendDeliveryFinalSecondForOrder(
     deliveryDate: orderDoc.deliveryDate
       ? formatDeliveryFinalSecondDate(orderDoc.deliveryDate)
       : null,
+    outboundLogId: result.success ? result.outboundLogId || null : null,
   };
 }
 

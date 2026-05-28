@@ -1766,7 +1766,8 @@ const updateOne = (Model, modelName, allowedFields) =>
                 const { sendDeliveryFinalSecondForOrder, DELIVERY_FINAL_TRIGGERS } = await import("../services/deliveryFinalSecondWhatsapp.service.js");
                 const result = await sendDeliveryFinalSecondForOrder(
                   existingDoc,
-                  DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS
+                  DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS,
+                  { trigger: "auto_farm_ready_status" }
                 );
 
                 if (result.success) {
@@ -1779,6 +1780,38 @@ const updateOne = (Model, modelName, allowedFields) =>
               }
             } catch (whatsappError) {
               console.error('❌ Error sending WhatsApp message:', whatsappError.message);
+            }
+          })();
+        }
+
+        if (
+          (newStatus === 'CANCELLED' || newStatus === 'TEMPORARY_CANCELLED') &&
+          !isCancelLikeOrderStatus(existingDoc.orderStatus)
+        ) {
+          (async () => {
+            try {
+              const farmerDetails = existingDoc.farmer
+                ? await mongoose.model('Farmer').findById(existingDoc.farmer)
+                : null;
+              if (!farmerDetails?.mobileNumber) {
+                console.log('⚠️ No farmer mobile for cancel WhatsApp');
+                return;
+              }
+              const orderId = existingDoc.orderId || existingDoc._id;
+              console.log(`📱 Sending cancel-revive WhatsApp to farmer: ${farmerDetails.name} (${farmerDetails.mobileNumber})`);
+              const { sendOrderCancelledWhatsAppForOrder } = await import(
+                '../services/whatsappOrderCancelRevive.service.js'
+              );
+              const result = await sendOrderCancelledWhatsAppForOrder(existingDoc);
+              if (result.success) {
+                console.log(`✅ Cancel WhatsApp sent for Order #${orderId}`);
+              } else if (result.alreadySent) {
+                console.log(`ℹ️ Cancel WhatsApp already sent for Order #${orderId}`);
+              } else {
+                console.log(`⚠️ Cancel WhatsApp failed for Order #${orderId}:`, result.error || result.reason);
+              }
+            } catch (whatsappError) {
+              console.error('❌ Error sending cancel WhatsApp:', whatsappError.message);
             }
           })();
         }
@@ -4735,6 +4768,11 @@ const getAll = (Model, modelName) =>
           whatsappFarmReadyMessageKey: 1,
           farmReadyWhatsappConfirmedAt: 1,
           whatsappFarmReadyActivityLog: 1,
+          whatsappCancelSentAt: 1,
+          whatsappCancelMessageKey: 1,
+          revivedViaFarmerWhatsappAt: 1,
+          revivedViaFarmerWhatsappFromStatus: 1,
+          whatsappCancelActivityLog: 1,
           dispatchDayKey: 1,
           dispatchTargetDate: 1,
           oldDeliveryDate: 1,

@@ -1,14 +1,32 @@
-2026/05/29-00:38:21.864 3ac758 Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000339
-2026/05/29-00:38:21.864 3ac758 Recovering log #6601
-2026/05/29-00:38:21.865 3ac758 Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/006601.log 
-2026/05/29-00:38:21.865 3ac758 Delete type=2 #6599
-2026/05/29-00:38:23.123 3ac764 Level-0 table #6606: started
-2026/05/29-00:38:23.125 3ac764 Level-0 table #6606: 9048 bytes OK
-2026/05/29-00:38:23.127 3ac764 Delete type=0 #6601
-2026/05/29-00:38:23.128 3ac758 Manual compaction at level-0 from ' |\x09\x00\x00\x00' @ 72057594037927935 : 1 .. ' }\x09\x00\x00\x00' @ 0 : 0; will stop at (end)
-2026/05/29-00:38:31.239 3ac758 Compacting 1@1 + 1@2 files
-2026/05/29-00:38:31.242 3ac758 Generated table #6607@1: 1942 keys, 48281 bytes
-2026/05/29-00:38:31.242 3ac758 Compacted 1@1 + 1@2 files => 48281 bytes
-2026/05/29-00:38:31.243 3ac758 compacted to: files[ 0 0 1 0 0 0 0 ]
-2026/05/29-00:38:31.244 3ac758 Delete type=2 #6606
-2026/05/29-00:38:31.244 3ac758 Delete type=2 #6603
+2026/05/29-01:29:56.235 3c3b48 Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000339
+2026/05/29-01:29:56.236 3c3b48 Recovering log #7012
+2026/05/29-01:29:56.236 3c3b48 Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/007012.log 
+2026/05/29-01:29:56.236 3c3b48 Delete type=2 #7011
+2026/05/29-01:29:56.662 3c3b4b Level-0 table #7017: started
+2026/05/29-01:29:56.665 3c3b4b Level-0 table #7017: 7975 bytes OK
+2026/05/29-01:29:56.675 3c3b4b Delete type=0 #7012
+2026/05/29-01:29:56.682 3c3b4b Manual compaction at level-0 from ' \x0c\x0a\x00\x00\x00' @ 72057594037927935 : 1 .. ' \x0d\x0a\x00\x00\x00' @ 0 : 0; will stop at ' \x13\x0a\x0a\x02\x03\x00\x00\x00\x00\x00\x00\xf0?' @ 4217795 : 1
+2026/05/29-01:29:56.682 3c3b4b Compacting 1@0 + 1@1 files
+2026/05/29-01:29:56.689 3c3b4b Generated table #7018@0: 11283 keys, 94190 bytes
+2026/05/29-01:29:56.690 3c3b4b Compacted 1@0 + 1@1 files => 94190 bytes
+2026/05/29-01:29:56.696 3c3b4b compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/05/29-01:29:56.699 3c3b4b Delete type=2 #7017
+2026/05/29-01:29:56.700 3c3b4b Manual compaction at level-0 from ' \x13\x0a\x0a\x02\x03\x00\x00\x00\x00\x00\x00\xf0?' @ 4217795 : 1 .. ' \x0d\x0a\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/05/29-01:29:56.702 3c3b58 Level-0 table #7020: started
+2026/05/29-01:29:56.704 3c3b58 Level-0 table #7020: 6854 bytes OK
+2026/05/29-01:29:56.707 3c3b58 Delete type=2 #7014
+2026/05/29-01:29:56.707 3c3b58 Delete type=0 #7016
+2026/05/29-01:29:56.708 3c3b4b Manual compaction at level-0 from ' \x13\x0a\x00\x00\x00' @ 72057594037927935 : 1 .. ' \x14\x0a\x00\x00\x00' @ 0 : 0; will stop at ' \x15\x0a\x00\x00\xc8\x11\x00w\x00o\x00r\x00k\x00e\x00r\x00_\x00w\x00a\x00m\x00_\x00e\x00v\x00e\x00n\x00t\x00s' @ 4218212 : 1
+2026/05/29-01:29:56.708 3c3b4b Compacting 1@0 + 1@1 files
+2026/05/29-01:29:56.713 3c3b4b Generated table #7021@0: 11273 keys, 94386 bytes
+2026/05/29-01:29:56.714 3c3b4b Compacted 1@0 + 1@1 files => 94386 bytes
+2026/05/29-01:29:56.714 3c3b4b compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/05/29-01:29:56.715 3c3b4b Delete type=2 #7020
+2026/05/29-01:29:56.715 3c3b4b Manual compaction at level-0 from ' \x15\x0a\x00\x00\xc8\x11\x00w\x00o\x00r\x00k\x00e\x00r\x00_\x00w\x00a\x00m\x00_\x00e\x00v\x00e\x00n\x00t\x00s' @ 4218212 : 1 .. ' \x14\x0a\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/05/29-01:29:59.867 3c3b48 Compacting 1@1 + 1@2 files
+2026/05/29-01:29:59.871 3c3b48 Generated table #7022@1: 2258 keys, 52419 bytes
+2026/05/29-01:29:59.871 3c3b48 Compacted 1@1 + 1@2 files => 52419 bytes
+2026/05/29-01:29:59.874 3c3b48 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/05/29-01:29:59.874 3c3b48 Delete type=2 #7021
+2026/05/29-01:29:59.874 3c3b48 Delete type=2 #7018
+2026/05/29-01:29:59.874 3c3b48 Delete type=2 #6719

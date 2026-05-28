@@ -9,6 +9,7 @@ import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
 import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
 import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
 import { runFarmReadyWebhookFromBody } from "../services/whatsappFarmReadyReschedule.service.js";
+import { runCancelReviveWebhookFromBody } from "../services/whatsappOrderCancelRevive.service.js";
 import {
   isWhatsappOrderFlowDisabled,
   isWhatsappOrderWatiEnabled,
@@ -594,6 +595,12 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
 
   void (async () => {
     try {
+      const cancelRevive = await runCancelReviveWebhookFromBody(req.body);
+      if (cancelRevive.handled) {
+        console.log(`[WATI] Cancel-revive flow handled: ${cancelRevive.action || "ok"}`);
+        return;
+      }
+
       const farmReady = await runFarmReadyWebhookFromBody(req.body);
       if (farmReady.handled) {
         console.log(`[WATI] Farm-ready flow handled: ${farmReady.action || "ok"}`);

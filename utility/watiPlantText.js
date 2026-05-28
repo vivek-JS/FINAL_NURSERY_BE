@@ -51,3 +51,41 @@ export function watiPlantAndSubtypeParams(plantNameRaw, subtypeRaw) {
 export function isBananaPlantName(plantNameRaw, subtypeRaw = "") {
   return /banana|keli|केळ/i.test(`${plantNameRaw ?? ""} ${subtypeRaw ?? ""}`);
 }
+
+/** Farmer-facing short plant name for WhatsApp (Marathi where common). */
+const WHATSAPP_PLANT_MARATHI_SHORT = {
+  banana: "Keli",
+  keli: "Keli",
+  papaya: "Papaya",
+  watermelon: "Tarbuj",
+  tarbuj: "Tarbuj",
+};
+
+/**
+ * e.g. Banana + G9 → "Keli - G9" for farm-ready template {{2}} and bot replies.
+ * @param {string|null|undefined} plantNameRaw
+ * @param {string|null|undefined} subtypeRaw
+ */
+export function formatWhatsappPlantSubtypeDisplay(plantNameRaw, subtypeRaw) {
+  const plant = String(plantNameRaw ?? "").trim() || "Plants";
+  const sub = String(subtypeRaw ?? "").trim();
+  const plantLower = plant.toLowerCase();
+
+  let displayPlant = plant;
+  for (const [key, label] of Object.entries(WHATSAPP_PLANT_MARATHI_SHORT)) {
+    if (plantLower.includes(key)) {
+      displayPlant = label;
+      break;
+    }
+  }
+
+  if (!sub || sub === "N/A" || sub === "Unknown" || sub === "\u2014") {
+    return displayPlant;
+  }
+
+  if (isNumberNoVarietyName(sub)) {
+    return formatWhatsAppPlantSubtypeLabel(plant, sub);
+  }
+
+  return `${displayPlant} - ${sub}`;
+}

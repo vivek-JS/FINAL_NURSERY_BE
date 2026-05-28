@@ -37,19 +37,20 @@ test("formatDeliveryFinalSecondDate — IST when UTC instant is previous evening
   );
 });
 
-test("buildDeliveryFinalSecondParameters — {{4}} date, {{5}} order id", () => {
+test("buildDeliveryFinalSecondParameters — {{2}} plant-subtype, {{3}} qty", () => {
   const params = buildDeliveryFinalSecondParameters(
     { name: "Vivek" },
     {
       publicOrderCode: "1212",
-      plantName: "banana",
+      plantName: "Banana",
+      plantSubtype: "G9",
       numberOfPlants: 5000,
       deliveryDate: new Date(2025, 4, 28),
     }
   );
   const map = Object.fromEntries(params.map((p) => [p.name, p.value]));
   assert.equal(map["1"], "Vivek");
-  assert.equal(map["2"], "banana");
+  assert.equal(map["2"], "Keli - G9");
   assert.equal(map["3"], "5000");
   assert.equal(map["4"], "28-May-2025");
   assert.equal(map["5"], "1212");

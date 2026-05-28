@@ -3967,7 +3967,11 @@ export const sendOrderFarmReadyWhatsAppController = catchAsync(async (req, res) 
   );
   const result = await sendDeliveryFinalSecondForOrder(
     order,
-    DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS
+    DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS,
+    {
+      trigger: "manual_icon",
+      sentBy: req.user?._id || req.user?.id || null,
+    }
   );
 
   if (!result.success) {
@@ -3990,8 +3994,115 @@ export const sendOrderFarmReadyWhatsAppController = catchAsync(async (req, res) 
       },
       whatsappFarmReadySentAt: sentAt,
       whatsappFarmReadyMessageKey: msgKey,
+      outboundLogId: result.outboundLogId || null,
     }, undefined)
   );
+});
+
+/**
+ * POST /order/whatsapp/send-selected — checkbox send (max 1 order, farm-ready only).
+ */
+export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) => {
+  const { orderIds, templateType = "farm_ready" } = req.body || {};
+
+  if (!Array.isArray(orderIds) || orderIds.length === 0) {
+    return res.status(400).json(
+      generateResponse("Error", "Select at least one order", null, null)
+    );
+  }
+  if (orderIds.length > 1) {
+    return res.status(400).json(
+      generateResponse(
+        "Error",
+        "Select only 1 order for now — bulk send coming soon",
+        null,
+        null
+      )
+    );
+  }
+  if (String(templateType) !== "farm_ready") {
+    return res.status(400).json(
+      generateResponse("Error", "Only farm_ready template is supported", null, null)
+    );
+  }
+
+  const orderId = orderIds[0];
+  if (!mongoose.isValidObjectId(orderId)) {
+    return res.status(400).json(generateResponse("Error", "Invalid order id", null, null));
+  }
+
+  const order = await Order.findById(orderId)
+    .populate("farmer", "name mobileNumber village taluka talukaName")
+    .populate("plantName", "name");
+  if (!order) {
+    return res.status(404).json(generateResponse("Error", "Order not found", null, null));
+  }
+
+  if (order.whatsappFarmReadySentAt && !isWhatsappManualResendAllowed(req)) {
+    return res.status(200).json(
+      generateResponse(
+        "Success",
+        "WhatsApp farm-ready message was already sent for this order",
+        {
+          alreadySent: true,
+          whatsappFarmReadySentAt: order.whatsappFarmReadySentAt,
+          whatsappFarmReadyMessageKey: order.whatsappFarmReadyMessageKey || null,
+        },
+        undefined
+      )
+    );
+  }
+
+  const { sendDeliveryFinalSecondForOrder, DELIVERY_FINAL_TRIGGERS } = await import(
+    "../services/deliveryFinalSecondWhatsapp.service.js"
+  );
+  const result = await sendDeliveryFinalSecondForOrder(
+    order,
+    DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS,
+    {
+      trigger: "manual_selected",
+      sentBy: req.user?._id || req.user?.id || null,
+    }
+  );
+
+  if (!result.success) {
+    const msg =
+      result.error?.message ||
+      (typeof result.error === "string" ? result.error : "Failed to send message");
+    return res.status(500).json(generateResponse("Error", msg, null, result.error));
+  }
+
+  const sentAt = new Date();
+  const msgKey = result.data?.localMessageId || result.localMessageId || null;
+
+  return res.status(200).json(
+    generateResponse("Success", "WhatsApp message sent successfully", {
+      ...result.data,
+      orderId: String(order._id),
+      stored: {
+        whatsappFarmReadySentAt: sentAt,
+        whatsappFarmReadyMessageKey: msgKey,
+      },
+      whatsappFarmReadySentAt: sentAt,
+      whatsappFarmReadyMessageKey: msgKey,
+      outboundLogId: result.outboundLogId || null,
+    }, undefined)
+  );
+});
+
+/**
+ * GET /order/whatsapp/outbound — paginated delivery/read/reply log.
+ */
+export const listOrderWhatsappOutboundController = catchAsync(async (req, res) => {
+  const { listOutboundLogs } = await import("../services/orderWhatsappOutbound.service.js");
+  const result = await listOutboundLogs({
+    page: req.query.page,
+    limit: req.query.limit,
+    orderId: req.query.orderId,
+    status: req.query.status,
+    templateType: req.query.templateType || "farm_ready",
+  });
+  return res.status(200).json(generateResponse("Success", "WhatsApp outbound log", result, undefined));
 });
 
 /**

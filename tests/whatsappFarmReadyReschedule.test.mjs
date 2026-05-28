@@ -3,6 +3,8 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   buildNextDeliveryDateOptions,
   parseDateChoiceFromReply,
@@ -117,6 +119,17 @@ test("plainOfferedSlot — mongoose subdoc spread fix", () => {
   assert.ok(plain.deliveryDate instanceof Date);
   const display = formatWhatsappSlotDisplay(subdoc);
   assert.match(display.listLine, /11 to 17 June/);
-  assert.match(display.listLine, /वितरण:/);
-  assert.match(display.confirmLine, /वितरण तारीख:/);
+  assert.doesNotMatch(display.listLine, /वितरण:/);
+  assert.match(display.confirmLine, /Delivery Date:/);
+  assert.match(display.confirmLine, /Slot:/);
+});
+
+test("logFarmerWhatsappInbound wires recordFarmerReply on inbound", () => {
+  const source = readFileSync(
+    resolve(process.cwd(), "services/whatsappFarmReadyReschedule.service.js"),
+    "utf8"
+  );
+  assert.match(source, /recordFarmerReply\(/);
+  assert.match(source, /orderWhatsappOutbound\.service\.js/);
+  assert.match(source, /replyContextId/);
 });
