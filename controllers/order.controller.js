@@ -1,6 +1,7 @@
 import { Parser as CsvParser } from "json2csv";
 import catchAsync from "../utility/catchAsync.js";
 import escapeRegex from "../utility/escapeRegex.js";
+import { isWhatsappUnlimitedSendEnabled } from "../utility/whatsappUnlimitedSend.js";
 import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import { getAll, createOne, updateOne } from "./factory.controller.js";
@@ -235,7 +236,7 @@ async function buildOrderAcceptedWhatsAppDetails(order) {
 }
 
 async function sendOrderAcceptedWhatsAppForOrder(order) {
-  if (order.whatsappAcceptedSentAt) {
+  if (order.whatsappAcceptedSentAt && !isWhatsappUnlimitedSendEnabled()) {
     return {
       success: true,
       alreadySent: true,
@@ -3938,7 +3939,7 @@ export const sendOrderFarmReadyWhatsAppController = catchAsync(async (req, res) 
     return res.status(404).json({ message: "Order not found" });
   }
 
-  if (order.whatsappFarmReadySentAt) {
+  if (order.whatsappFarmReadySentAt && !isWhatsappUnlimitedSendEnabled()) {
     return res.status(200).json(
       generateResponse(
         "Success",
@@ -3997,7 +3998,7 @@ export const sendOrderDispatchWhatsAppController = catchAsync(async (req, res) =
   if (!order) {
     return res.status(404).json({ message: "Order not found" });
   }
-  if (order.whatsappDispatchSentAt) {
+  if (order.whatsappDispatchSentAt && !isWhatsappUnlimitedSendEnabled()) {
     return res.status(200).json(
       generateResponse("Success", "WhatsApp dispatch message was already sent for this order", {
         alreadySent: true,

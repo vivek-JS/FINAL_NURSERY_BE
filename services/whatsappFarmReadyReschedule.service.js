@@ -468,8 +468,16 @@ async function runFarmReadyWebhookFromBodyInner(body) {
   const messageId = extractInboundMessageId(body);
   const inbound = normalizeInboundText(text);
 
+  console.log("[farm-ready] inbound", {
+    waId: waId || "(none)",
+    messageId: messageId || "(none)",
+    text: inbound ? inbound.slice(0, 80) : "(empty)",
+    bodyKeys: Object.keys(body || {}),
+  });
+
   if (!waId || !inbound) {
-    return { handled: false };
+    console.log("[farm-ready] skip — missing waId or message text/button");
+    return { handled: false, reason: "no_waId_or_text" };
   }
 
   const mobile10 =
@@ -488,7 +496,8 @@ async function runFarmReadyWebhookFromBodyInner(body) {
   }
 
   if (!isFarmReadyButtonMessage(inbound)) {
-    return { handled: false };
+    console.log("[farm-ready] skip — not a farm-ready button:", inbound.slice(0, 80));
+    return { handled: false, reason: "not_farm_ready_button" };
   }
 
   const farmer = await lookupFarmerByMobile(mobile10);

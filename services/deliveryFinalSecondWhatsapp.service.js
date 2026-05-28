@@ -11,6 +11,7 @@ import {
 } from "../utility/watiMessaging.js";
 import { storeFarmReadyTemplateSendMeta } from "./whatsappFarmReadyReschedule.service.js";
 import { getWatiToken } from "../config/wati.config.js";
+import { isWhatsappUnlimitedSendEnabled } from "../utility/whatsappUnlimitedSend.js";
 
 const IST = "+05:30";
 
@@ -94,12 +95,14 @@ export function buildDeliveryFinalSecondQuery(trigger, ref = istNow()) {
     q.deliveryDate = { $gte: start, $lte: end };
   }
 
-  const cooldownBefore = new Date(Date.now() - cooldownMs());
-  q.$or = [
-    { whatsappFarmReadySentAt: null },
-    { whatsappFarmReadySentAt: { $exists: false } },
-    { whatsappFarmReadySentAt: { $lt: cooldownBefore } },
-  ];
+  if (!isWhatsappUnlimitedSendEnabled()) {
+    const cooldownBefore = new Date(Date.now() - cooldownMs());
+    q.$or = [
+      { whatsappFarmReadySentAt: null },
+      { whatsappFarmReadySentAt: { $exists: false } },
+      { whatsappFarmReadySentAt: { $lt: cooldownBefore } },
+    ];
+  }
 
   return q;
 }

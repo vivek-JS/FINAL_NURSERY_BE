@@ -215,7 +215,8 @@ server.use(xss());
 // Global request logger - logs ALL incoming requests (for debugging)
 server.use((req, res, next) => {
   // Only log API requests to reduce noise
-  if (req.path.startsWith('/api/v1/whatsapp-order/webhook')) {
+  if (req.path.startsWith('/api/v1/whatsapp-order/webhook') ||
+      req.path.startsWith('/api/v1/whatsapp-status/webhook')) {
     console.log("\n🌐🌐🌐 INCOMING REQUEST TO WEBHOOK 🌐🌐🌐");
     console.log(`   Method: ${req.method}`);
     console.log(`   Path: ${req.path}`);
