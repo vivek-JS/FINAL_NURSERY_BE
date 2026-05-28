@@ -29,6 +29,14 @@ test("formatDeliveryFinalSecondDate", () => {
   );
 });
 
+test("formatDeliveryFinalSecondDate — IST when UTC instant is previous evening", () => {
+  // May 28 00:00 IST often stored as 2026-05-27T18:30:00.000Z
+  assert.equal(
+    formatDeliveryFinalSecondDate("2026-05-27T18:30:00.000Z"),
+    "28-May-2026"
+  );
+});
+
 test("buildDeliveryFinalSecondParameters — {{4}} date, {{5}} order id", () => {
   const params = buildDeliveryFinalSecondParameters(
     { name: "Vivek" },

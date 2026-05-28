@@ -13,6 +13,7 @@ import mongoose from "mongoose";
 import { getWhatsAppClient, isWhatsAppReady } from "./whatsappClient.js";
 import { normalizePhoneForWhitelist } from "../utils/agriLoadLinkSigner.js";
 import Order from "../models/order.model.js";
+import { formatWatiDateEnIN } from "../utility/watiIstDateFormat.js";
 
 const toNumber = (value) => {
   const n = Number(value);
@@ -256,9 +257,7 @@ export async function sendOrderPlacedAlert(orderOrId) {
         : plants && rate
           ? plants * rate
           : rate || 0;
-    const deliveryDate = order?.deliveryDate
-      ? new Date(order.deliveryDate).toLocaleDateString("en-IN")
-      : "—";
+    const deliveryDate = formatWatiDateEnIN(order?.deliveryDate, "—");
 
     const message = [
       "🟢 *New Order Placed*",
@@ -303,9 +302,7 @@ export async function sendBigOrderAlert(order, { qty, threshold } = {}) {
         : plants && rate
           ? plants * rate
           : 0;
-    const deliveryDate = order?.deliveryDate
-      ? new Date(order.deliveryDate).toLocaleDateString("en-IN")
-      : "—";
+    const deliveryDate = formatWatiDateEnIN(order?.deliveryDate, "—");
 
     const message = [
       "🔥 *BIG ORDER ALERT*",
@@ -463,8 +460,8 @@ export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHis
         let next = e.newValue;
 
         if (e.field === "deliveryDate" || e.field === "farmReadyDate" || e.field === "dispatchTargetDate") {
-          prev = prev ? new Date(prev).toLocaleDateString("en-IN") : "—";
-          next = next ? new Date(next).toLocaleDateString("en-IN") : "—";
+          prev = formatWatiDateEnIN(prev, "—");
+          next = formatWatiDateEnIN(next, "—");
         }
         if (e.field === "orderStatus") {
           prev = String(prev ?? "—").replace(/_/g, " ");
@@ -736,7 +733,7 @@ export async function sendLinkedAgriAlert(data = {}) {
  */
 export async function sendDailySummaryAlert(summary) {
   try {
-    const date = summary?.date || new Date().toLocaleDateString("en-IN");
+    const date = summary?.date || formatWatiDateEnIN(new Date(), "—");
     const orders = summary?.orderCount ?? 0;
     const revenue = summary?.totalRevenue ?? 0;
     const dispatches = summary?.dispatches ?? 0;

@@ -5,6 +5,12 @@ import {
   WATI_MERGED_SUBTYPE_PLACEHOLDER,
   isBananaPlantName,
 } from "./watiPlantText.js";
+import {
+  formatWatiDateDdMmYyyy,
+  formatDeliveryFinalSecondDate,
+} from "./watiIstDateFormat.js";
+
+export { formatDeliveryFinalSecondDate } from "./watiIstDateFormat.js";
 
 export { isBananaPlantName };
 
@@ -214,14 +220,8 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
     const templateOrderId =
       orderDetails.publicOrderCode?.toString() || orderId?.toString() || "N/A";
 
-    // Format delivery date
-    const formattedDate = deliveryDate
-      ? new Date(deliveryDate).toLocaleDateString("en-IN", {
-          day: "2-digit",
-          month: "2-digit",
-          year: "numeric",
-        })
-      : "To be confirmed";
+    const formattedDate =
+      formatWatiDateDdMmYyyy(deliveryDate) || "To be confirmed";
 
     // Parameters for WATI template: order_accpeted_revamped
     const parameters = [
@@ -271,14 +271,7 @@ export async function sendOrderDispatchedWhatsAppDelivery1(farmer, details) {
       return { success: false, error: "No mobile number" };
     }
 
-    const formatIn = (d) =>
-      d
-        ? new Date(d).toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "2-digit",
-            year: "numeric",
-          })
-        : "N/A";
+    const formatIn = (d) => formatWatiDateDdMmYyyy(d) || "N/A";
 
     const { plantParam, subtypeParam } = watiPlantAndSubtypeParams(
       details.plantName,
@@ -322,31 +315,6 @@ export async function sendOrderDispatchedWhatsAppDelivery1(farmer, details) {
     console.error("❌ Error in sendOrderDispatchedWhatsAppDelivery1:", error);
     return { success: false, error: error.message };
   }
-}
-
-/**
- * WATI `delivery_final_second` — {{1}} name, {{2}} plant, {{3}} qty, {{4}} delivery date, {{5}} order id.
- * Approved body: ऑर्डर आयडी {{5}}, डिलिव्हरी तारीख {{4}}.
- */
-export function formatDeliveryFinalSecondDate(deliveryDate) {
-  if (!deliveryDate) return "Soon";
-  const d = new Date(deliveryDate);
-  if (Number.isNaN(d.getTime())) return "Soon";
-  const months = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-  return `${d.getDate()}-${months[d.getMonth()]}-${d.getFullYear()}`;
 }
 
 export function buildDeliveryFinalSecondParameters(farmer, orderDetails) {
@@ -414,13 +382,7 @@ export async function sendPaymentReminderWhatsApp(farmer, paymentDetails) {
 
     const { orderId, remainingAmount, dueDate } = paymentDetails;
 
-    const formattedDate = dueDate
-      ? new Date(dueDate).toLocaleDateString("en-IN", {
-          day: "2-digit",
-          month: "2-digit",
-          year: "numeric",
-        })
-      : "Soon";
+    const formattedDate = formatWatiDateDdMmYyyy(dueDate) || "Soon";
 
     const parameters = [
       {

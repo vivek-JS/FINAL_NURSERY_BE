@@ -24,6 +24,10 @@ import {
   findOrderForFarmReadyReply,
   extractReplyContextId,
 } from "../utility/whatsappFarmReadyOrderResolve.js";
+import {
+  formatDeliveryDateLabelEn,
+  formatWatiDateEnIN,
+} from "../utility/watiIstDateFormat.js";
 
 export const FARM_READY_BTN_CONFIRM = "शेत तयार आहे";
 export const FARM_READY_BTN_CONFIRM_DOTTED = "शेत तयार आहे.";
@@ -120,40 +124,14 @@ function offeredSlotsForSession(slots) {
   return (slots || []).map((s) => plainOfferedSlot(s)).filter(Boolean);
 }
 
-const MONTHS_MR = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-
-/** @param {Date} d */
+/** @param {Date|string} d — IST calendar day for WATI / farmer messages */
 export function formatDeliveryDateLabel(d) {
-  const date = d instanceof Date ? d : new Date(d);
-  if (Number.isNaN(date.getTime())) return "—";
-  const day = date.getDate();
-  const month = MONTHS_MR[date.getMonth()] || "";
-  const year = date.getFullYear();
-  return `${String(day).padStart(2, "0")} ${month} ${year}`;
+  return formatDeliveryDateLabelEn(d);
 }
 
-/** @param {Date} d */
+/** @param {Date|string} d */
 export function formatDeliveryDateShortIn(d) {
-  const date = d instanceof Date ? d : new Date(d);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
+  return formatWatiDateEnIN(d, "—");
 }
 
 /**
