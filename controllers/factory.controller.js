@@ -33,6 +33,7 @@ import {
   buildOrderStatusDateMatch,
   parseOrderListDateDdMmYyyy,
 } from "../utility/orderListQuery.js";
+import escapeRegex from "../utility/escapeRegex.js";
 import {
   syncDealerLedgerForOrder,
 } from "../utils/dealerLedgerHelper.js";
@@ -3934,7 +3935,7 @@ const getAll = (Model, modelName) =>
     // Search filtering (ignore whitespace-only `search`)
     const searchTrimmed = search ? String(search).trim() : "";
     if (searchTrimmed) {
-      const searchRegex = new RegExp(searchTrimmed, "i");
+      const searchRegex = new RegExp(escapeRegex(searchTrimmed), "i");
 
       pipeline.push({
         $lookup: {
@@ -4034,10 +4035,10 @@ const getAll = (Model, modelName) =>
     if (village || district || taluka) {
       const locClauses = [];
       if (village) {
-        locClauses.push({ "farmer.village": new RegExp(village, "i") });
+        locClauses.push({ "farmer.village": new RegExp(escapeRegex(village), "i") });
       }
       if (district) {
-        const dr = new RegExp(district, "i");
+        const dr = new RegExp(escapeRegex(district), "i");
         locClauses.push({
           $or: [
             { "farmer.district": dr },
@@ -4046,7 +4047,7 @@ const getAll = (Model, modelName) =>
         });
       }
       if (taluka) {
-        const tr = new RegExp(taluka, "i");
+        const tr = new RegExp(escapeRegex(taluka), "i");
         locClauses.push({
           $or: [
             { "farmer.taluka": tr },

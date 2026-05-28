@@ -50,6 +50,7 @@ const sendErrorProd = (err, req, res) => {
     });
   }
   console.error("ERROR 💥", err);
+  console.error("Request:", req.method, req.originalUrl || req.url);
   console.error("Error stack:", err.stack);
   console.error("Error name:", err.name);
   console.error("Error message:", err.message);

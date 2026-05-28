@@ -1,5 +1,6 @@
 import { Parser as CsvParser } from "json2csv";
 import catchAsync from "../utility/catchAsync.js";
+import escapeRegex from "../utility/escapeRegex.js";
 import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import { getAll, createOne, updateOne } from "./factory.controller.js";
@@ -1924,7 +1925,7 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
     // Search filtering
     if (search) {
       const searchTrimmed = String(search).trim();
-      const searchRegex = new RegExp(searchTrimmed, "i");
+      const searchRegex = new RegExp(escapeRegex(searchTrimmed), "i");
 
       pipeline.push({
         $lookup: {
@@ -2541,7 +2542,7 @@ const getAllPayments = catchAsync(async (req, res, next) => {
     // Search filtering
     if (search) {
       const searchTrimmed = String(search).trim();
-      const searchRegex = new RegExp(searchTrimmed, "i");
+      const searchRegex = new RegExp(escapeRegex(searchTrimmed), "i");
 
       pipeline.push({
         $lookup: {
@@ -4969,8 +4970,8 @@ const getGeoSummary = catchAsync(async (req, res) => {
     pipeline.push({
       $match: {
         $or: [
-          { _geoTaluka: new RegExp(`^${talukaFilter.trim()}$`, "i") },
-          { _geoTalukaDisplay: new RegExp(`^${talukaFilter.trim()}$`, "i") },
+          { _geoTaluka: new RegExp(`^${escapeRegex(talukaFilter.trim())}$`, "i") },
+          { _geoTalukaDisplay: new RegExp(`^${escapeRegex(talukaFilter.trim())}$`, "i") },
         ],
       },
     });

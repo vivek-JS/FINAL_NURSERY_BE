@@ -454,6 +454,16 @@ export async function continueRescheduleSession(mobile10, waId, text, messageId 
  * @returns {Promise<{ handled: boolean, action?: string }>}
  */
 export async function runFarmReadyWebhookFromBody(body) {
+  try {
+    return await runFarmReadyWebhookFromBodyInner(body);
+  } catch (err) {
+    console.error("[farm-ready] webhook error:", err?.message || err);
+    if (err?.stack) console.error(err.stack);
+    return { handled: false, error: err?.message || String(err) };
+  }
+}
+
+async function runFarmReadyWebhookFromBodyInner(body) {
   const { text, waId } = extractInboundMessage(body);
   const messageId = extractInboundMessageId(body);
   const inbound = normalizeInboundText(text);

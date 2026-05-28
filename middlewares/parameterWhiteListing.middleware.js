@@ -225,9 +225,13 @@ const parameterWhiteListing = (req, res, next) => {
     return next();
   }
 
-  // Skip parameter validation for WhatsApp webhook (completely public, no params needed)
-  if (req.path === '/api/v1/whatsapp-order/webhook' || 
-      req.originalUrl === '/api/v1/whatsapp-order/webhook') {
+  // Skip parameter validation for WATI webhooks (public POST, no query params needed)
+  const webhookPath = stripQuery(req.originalUrl || req.url || "") || req.path || "";
+  if (
+    webhookPath === "/api/v1/whatsapp-order/webhook" ||
+    webhookPath.startsWith("/api/v1/opt-in/webhook") ||
+    webhookPath.startsWith("/api/v1/whatsapp-status/webhook")
+  ) {
     return next();
   }
 

@@ -32,6 +32,7 @@ import {
   isTenDigitMobileMessage,
 } from "../services/whatsappOrderFarmer.service.js";
 import { ORDER_TRIGGERS } from "../utility/whatsappOrderTriggers.js";
+import { extractInboundMessage } from "../utility/watiInboundPayload.js";
 
 function watiBaseUrl() {
   return getWatiBaseUrl();
@@ -530,47 +531,37 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
     );
   }
 
-  // Support multiple webhook formats
-  let message = null;
-  let phone = null;
+  // Parse WATI payload (buttonText + text + waId — same helper as farm-ready flow)
+  const inbound = extractInboundMessage(req.body);
+  let message = String(inbound.text || "").trim();
+  let phone = inbound.waId || null;
   let mobileNumber = null;
-  let senderName = null;
+  let senderName =
+    req.body?.senderName ||
+    req.body?.data?.senderName ||
+    req.body?.data?.sender_name ||
+    "";
 
-  // Format 1: New format (eventType, type, text, waId, senderName)
-  if (req.body?.eventType === "message" && req.body?.waId) {
-    message = req.body.text || "";
-    phone = req.body.waId;
-    senderName = req.body.senderName || "";
-    mobileNumber = phone.replace(/^91/, "") || phone;
-    console.log("📩 Format 1 - New format detected");
-    console.log(`   Phone: ${phone}, Message: ${message}, Sender: ${senderName}`);
-  }
-  // Format 2: Direct format (req.body.text, req.body.waId)
-  else if (req.body?.text && req.body?.waId) {
-    message = req.body.text;
-    phone = req.body.waId;
-    mobileNumber = phone.replace(/^91/, "") || phone;
-    console.log("📩 Format 2 - Direct format detected");
-  }
-  // Format 3: Nested Wati format (req.body.event, req.body.data)
-  else if (req.body?.event === "message" && req.body?.data) {
-    const { waId, text, buttonText } = req.body.data;
-    phone = waId || req.body.data.from;
-    mobileNumber = phone?.replace(/^91/, "") || phone;
-    message = buttonText || text?.body || text || "";
-    console.log("📩 Format 3 - Nested Wati format detected");
-  }
-  // Format 4: Simple nested (req.body.data.text, req.body.data.waId)
-  else if (req.body?.data?.text && req.body?.data?.waId) {
-    message = req.body.data.text;
-    phone = req.body.data.waId;
-    mobileNumber = phone.replace(/^91/, "") || phone;
-    console.log("📩 Format 4 - Simple nested format detected");
+  if (phone) {
+    const digits = String(phone).replace(/\D/g, "");
+    mobileNumber =
+      digits.length === 12 && digits.startsWith("91")
+        ? digits.slice(2)
+        : digits.length >= 10
+          ? digits.slice(-10)
+          : digits;
   }
 
-  // If no message or phone, return success (webhook received but not a message)
-  if (!message || !phone) {
-    console.log("⚠️  No message or phone found in webhook payload");
+  if (message && phone) {
+    console.log("📩 WATI inbound parsed (extractInboundMessage)");
+    console.log(`   Phone: ${phone}, Message: ${message}, Button: ${inbound.buttonText || "—"}`);
+  } else if (req.body?.eventType === "message" && req.body?.waId && !message) {
+    console.log("⚠️  WATI message event with waId but no text/buttonText — check payload keys:", Object.keys(req.body || {}));
+  }
+
+  // Need at least phone; message may be empty for some status-only payloads
+  if (!phone) {
+    console.log("⚠️  No phone (waId) found in webhook payload");
     return res
       .status(200)
       .json({ success: true, orderFlow: orderFlowOff ? "disabled" : "enabled" });
@@ -606,6 +597,10 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
       const farmReady = await runFarmReadyWebhookFromBody(req.body);
       if (farmReady.handled) {
         console.log(`[WATI] Farm-ready flow handled: ${farmReady.action || "ok"}`);
+        return;
+      }
+
+      if (orderFlowOff && !message) {
         return;
       }
 
