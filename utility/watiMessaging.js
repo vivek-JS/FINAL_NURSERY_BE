@@ -325,8 +325,8 @@ export async function sendOrderDispatchedWhatsAppDelivery1(farmer, details) {
 }
 
 /**
- * WATI `delivery_final_second` — {{1}} name, {{2}} plant, {{3}} qty, {{4}} order id, {{5}} delivery date.
- * Approved body: ऑर्डर आयडी {{4}}, डिलिव्हरी तारीख {{5}}.
+ * WATI `delivery_final_second` — {{1}} name, {{2}} plant, {{3}} qty, {{4}} delivery date, {{5}} order id.
+ * Approved body: ऑर्डर आयडी {{5}}, डिलिव्हरी तारीख {{4}}.
  */
 export function formatDeliveryFinalSecondDate(deliveryDate) {
   if (!deliveryDate) return "Soon";
@@ -365,8 +365,8 @@ export function buildDeliveryFinalSecondParameters(farmer, orderDetails) {
     { name: "1", value: farmer?.name || "Farmer" },
     { name: "2", value: plantName || "Plants" },
     { name: "3", value: String(numberOfPlants ?? 0) },
-    { name: "4", value: displayOrderId },
-    { name: "5", value: formatDeliveryFinalSecondDate(deliveryDate) },
+    { name: "4", value: formatDeliveryFinalSecondDate(deliveryDate) },
+    { name: "5", value: displayOrderId },
   ];
 }
 

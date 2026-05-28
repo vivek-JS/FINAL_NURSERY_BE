@@ -29,7 +29,7 @@ test("formatDeliveryFinalSecondDate", () => {
   );
 });
 
-test("buildDeliveryFinalSecondParameters — {{4}} order id, {{5}} date", () => {
+test("buildDeliveryFinalSecondParameters — {{4}} date, {{5}} order id", () => {
   const params = buildDeliveryFinalSecondParameters(
     { name: "Vivek" },
     {
@@ -43,8 +43,8 @@ test("buildDeliveryFinalSecondParameters — {{4}} order id, {{5}} date", () => 
   assert.equal(map["1"], "Vivek");
   assert.equal(map["2"], "banana");
   assert.equal(map["3"], "5000");
-  assert.equal(map["4"], "1212");
-  assert.equal(map["5"], "28-May-2025");
+  assert.equal(map["4"], "28-May-2025");
+  assert.equal(map["5"], "1212");
 });
 
 test("past due and due in 7 days classification", () => {

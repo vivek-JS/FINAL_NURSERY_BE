@@ -152,6 +152,47 @@ const orderEditHistorySchema = new Schema(
   { timestamps: true }
 );
 
+const whatsappFarmReadyActivityLogSchema = new Schema(
+  {
+    direction: {
+      type: String,
+      enum: ["inbound", "outbound"],
+      required: true,
+    },
+    text: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    whatsappMessageId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    waId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    /** e.g. farm_ready_confirmed, slot_choice, bot_reply, template_sent */
+    action: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    sessionStep: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    meta: {
+      type: Schema.Types.Mixed,
+      default: null,
+    },
+  },
+  { timestamps: true }
+);
+
 const additionalPlantsHistorySchema = new Schema(
   {
     previousTotal: {
@@ -398,6 +439,11 @@ const orderSchema = new Schema(
         trim: true,
         default: null,
       },
+    },
+    /** Inbound/outbound WATI farm-ready conversation (farmer + bot). */
+    whatsappFarmReadyActivityLog: {
+      type: [whatsappFarmReadyActivityLogSchema],
+      default: [],
     },
     /** Last delivery_final_second cron trigger: past_due | due_in_7_days | farm_ready_status */
     whatsappDeliveryFinalSecondTrigger: {

@@ -12,6 +12,8 @@ import {
   findNextSlotOptionsForOrder,
   parseSlotChoiceFromReply,
   applyFarmerSlotReschedule,
+  formatSlotOfferLabel,
+  deliveryDateFromSlotStart,
 } from "./whatsappFarmReadySlot.service.js";
 import {
   extractInboundMessage,
@@ -28,6 +30,95 @@ export const FARM_READY_BTN_CONFIRM_DOTTED = "शेत तयार आहे."
 export const FARM_READY_BTN_RESCHEDULE = "दुसरी तारीख निवडा";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const ACTIVITY_LOG_MAX = 200;
+
+/** Persist farmer/bot WhatsApp lines on the order for audit. */
+export async function appendOrderWhatsappFarmReadyLog(orderId, entry) {
+  if (!orderId) return;
+  const doc = {
+    direction: entry.direction,
+    text: String(entry.text ?? "").slice(0, 4000),
+    whatsappMessageId: entry.whatsappMessageId || null,
+    waId: entry.waId || null,
+    action: entry.action || null,
+    sessionStep: entry.sessionStep || null,
+    ...(entry.meta != null ? { meta: entry.meta } : {}),
+  };
+  try {
+    await Order.updateOne(
+      { _id: orderId },
+      {
+        $push: {
+          whatsappFarmReadyActivityLog: {
+            $each: [doc],
+            $slice: -ACTIVITY_LOG_MAX,
+          },
+        },
+      }
+    );
+  } catch (err) {
+    console.error("[farm-ready] activity log failed:", err?.message || err);
+  }
+}
+
+async function logFarmerWhatsappInbound(orderId, { text, waId, messageId, action, sessionStep, meta }) {
+  if (!orderId) return;
+  await appendOrderWhatsappFarmReadyLog(orderId, {
+    direction: "inbound",
+    text,
+    waId,
+    whatsappMessageId: messageId || null,
+    action: action || "farmer_message",
+    sessionStep: sessionStep || null,
+    meta,
+  });
+}
+
+/** Mongoose subdocs do not spread — always normalize before reading label/slotId. */
+export function plainOfferedSlot(raw) {
+  if (!raw) return null;
+  const s = typeof raw.toObject === "function" ? raw.toObject() : { ...raw };
+  const slotId = s.slotId != null ? String(s.slotId) : null;
+  let label = String(s.label || "").trim();
+  if (!label && s.startDay && s.endDay) {
+    label = formatSlotOfferLabel(s);
+  }
+  let deliveryDate = s.deliveryDate ? new Date(s.deliveryDate) : null;
+  if ((!deliveryDate || Number.isNaN(deliveryDate.getTime())) && s.startDay) {
+    deliveryDate = deliveryDateFromSlotStart(s);
+  }
+  return {
+    slotId,
+    label,
+    startDay: s.startDay,
+    endDay: s.endDay,
+    month: s.month,
+    year: s.year,
+    deliveryDate,
+  };
+}
+
+/** Slot window + वितरण (order deliveryDate) for WhatsApp copy. */
+export function formatWhatsappSlotDisplay(slot) {
+  const plain = plainOfferedSlot(slot);
+  if (!plain) {
+    return { slotLabel: "—", deliveryLabel: "—", listLine: "—", confirmLine: "—" };
+  }
+  const slotLabel = plain.label || "—";
+  const deliveryLabel = plain.deliveryDate
+    ? formatDeliveryDateShortIn(plain.deliveryDate)
+    : "—";
+  return {
+    slotLabel,
+    deliveryLabel,
+    listLine: `${slotLabel} — वितरण: ${deliveryLabel}`,
+    confirmLine: `वितरण तारीख: ${deliveryLabel} (${slotLabel})`,
+  };
+}
+
+function offeredSlotsForSession(slots) {
+  return (slots || []).map((s) => plainOfferedSlot(s)).filter(Boolean);
+}
 
 const MONTHS_MR = [
   "January",
@@ -155,12 +246,23 @@ export async function findActiveFarmReadyOrderForFarmer(farmerId) {
   return findOrderForFarmReadyReply({ body: {}, farmerId, inboundText: "" });
 }
 
-async function sendWatiReply(waId, messageText) {
+async function sendWatiReply(waId, messageText, logContext = {}) {
   const digits = normalizeWhatsAppNumberForWati(waId);
   if (!digits) {
     throw new Error("Invalid waId for WATI reply");
   }
-  return sendSessionTextMessage({ whatsappNumber: digits, messageText });
+  const result = await sendSessionTextMessage({ whatsappNumber: digits, messageText });
+  const { orderId, action, sessionStep } = logContext;
+  if (orderId) {
+    await appendOrderWhatsappFarmReadyLog(orderId, {
+      direction: "outbound",
+      text: messageText,
+      waId,
+      action: action || "bot_reply",
+      sessionStep: sessionStep || null,
+    });
+  }
+  return result;
 }
 
 const AUTO_FARM_READY_FROM_STATUSES = new Set([
@@ -175,6 +277,33 @@ function shouldAutoTransitionToFarmReady(status) {
   return AUTO_FARM_READY_FROM_STATUSES.has(String(status || "").toUpperCase());
 }
 
+async function applyEarlyDispatchRevertForFarmReady(order, $set, $unset) {
+  const prevStatus = String(order.orderStatus || "");
+  if (prevStatus !== "READY_FOR_DISPATCH") return;
+
+  const { revertEarlyDispatch, shouldRevertEarlyDispatch } = await import(
+    "./earlyDispatch.service.js"
+  );
+  if (!shouldRevertEarlyDispatch(prevStatus, "FARM_READY", order)) return;
+
+  const filteredBody = {};
+  await revertEarlyDispatch({
+    order,
+    session: null,
+    filteredBody,
+    userId: null,
+  });
+
+  for (const [key, value] of Object.entries(filteredBody)) {
+    if (key.startsWith("__")) continue;
+    if (value === null || value === undefined) {
+      $unset[key] = "";
+    } else {
+      $set[key] = value;
+    }
+  }
+}
+
 /**
  * @param {object} order
  * @param {string} waId
@@ -187,6 +316,13 @@ export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
   if (!fresh) {
     throw new Error("Order not found for farm-ready confirm");
   }
+
+  await logFarmerWhatsappInbound(fresh._id, {
+    text: FARM_READY_BTN_CONFIRM,
+    waId,
+    messageId,
+    action: "button_farm_ready",
+  });
 
   const now = new Date();
   const prevStatus = String(fresh.orderStatus || "");
@@ -210,7 +346,8 @@ export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
   let statusUpdated = false;
   if (shouldAutoTransitionToFarmReady(prevStatus)) {
     $set.orderStatus = "FARM_READY";
-    if (!fresh.farmReadyDate) {
+    const prevFarmReadyDate = fresh.farmReadyDate ? new Date(fresh.farmReadyDate) : null;
+    if (!prevFarmReadyDate || Number.isNaN(prevFarmReadyDate.getTime())) {
       $set.farmReadyDate = now;
       $push.farmReadyDateChanges = {
         previousDate: null,
@@ -222,6 +359,7 @@ export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
     if (prevStatus === "READY_FOR_DISPATCH") {
       $unset.dispatchDayKey = "";
       $unset.dispatchTargetDate = "";
+      await applyEarlyDispatchRevertForFarmReady(fresh, $set, $unset);
     }
     $push.statusChanges = {
       previousStatus: prevStatus,
@@ -248,26 +386,43 @@ export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
 
   const update = { $set, $push };
   if (Object.keys($unset).length) update.$unset = $unset;
-  await Order.updateOne({ _id: fresh._id }, update);
 
-  if (statusUpdated) {
-    fresh.orderStatus = "FARM_READY";
-    if (!fresh.farmReadyDate) fresh.farmReadyDate = now;
+  const updated = await Order.findByIdAndUpdate(fresh._id, update, {
+    new: true,
+    runValidators: true,
+  })
+    .populate("plantName", "name")
+    .populate("farmer", "name mobileNumber");
+
+  if (!updated) {
+    throw new Error("Order update failed after farm-ready WhatsApp confirm");
+  }
+
+  console.log("[farm-ready] verified DB state:", {
+    order: updated.publicOrderCode || updated.orderId || String(updated._id),
+    orderStatus: updated.orderStatus,
+    farmReadyDate: updated.farmReadyDate,
+    farmReadyWhatsappConfirmedAt: updated.farmReadyWhatsappConfirmedAt,
+  });
+
+  if (statusUpdated && updated.orderStatus !== "FARM_READY") {
+    console.error(
+      `[farm-ready] CRITICAL: expected FARM_READY after update, got ${updated.orderStatus}`
+    );
+  } else if (statusUpdated) {
     console.log(
-      `[farm-ready] Order ${fresh.publicOrderCode || fresh.orderId || fresh._id}: ${prevStatus} → FARM_READY (farmer WhatsApp confirm)`
+      `[farm-ready] Order ${updated.publicOrderCode || updated.orderId || updated._id}: ${prevStatus} → FARM_READY (farmer WhatsApp confirm)`
     );
   }
 
-  order.farmReadyWhatsappConfirmedAt = now;
-  if (statusUpdated) {
-    order.orderStatus = "FARM_READY";
-    if (!order.farmReadyDate) order.farmReadyDate = now;
-  }
+  order.farmReadyWhatsappConfirmedAt = updated.farmReadyWhatsappConfirmedAt;
+  order.orderStatus = updated.orderStatus;
+  order.farmReadyDate = updated.farmReadyDate;
 
-  const deliveryLabel = fresh.deliveryDate
-    ? formatDeliveryDateShortIn(fresh.deliveryDate)
+  const deliveryLabel = updated.deliveryDate
+    ? formatDeliveryDateShortIn(updated.deliveryDate)
     : "लवकरच";
-  const orderCode = fresh.publicOrderCode || fresh.orderId || fresh._id;
+  const orderCode = updated.publicOrderCode || updated.orderId || updated._id;
 
   await sendWatiReply(
     waId,
@@ -277,21 +432,25 @@ export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
       "आपले शेत तयार असल्याची नोंद झाली.",
       statusUpdated ? "📋 ऑर्डर स्थिती: शेत तयार (Farm Ready)" : "",
       `📦 ऑर्डर: ${orderCode}`,
-      `🌱 ${fresh.plantName?.name || "रोप"} — ${fresh.numberOfPlants || 0} रोपे`,
+      `🌱 ${updated.plantName?.name || "रोप"} — ${updated.numberOfPlants || 0} रोपे`,
       `📅 वितरण तारीख: ${deliveryLabel}`,
       "",
       "कोणतीही समस्या असल्यास आमच्याशी संपर्क साधा.",
     ]
       .filter(Boolean)
-      .join("\n")
+      .join("\n"),
+    {
+      orderId: updated._id,
+      action: statusUpdated ? "farm_ready_confirmed_reply" : "farm_ready_confirm_ack",
+    }
   );
 
   return {
     handled: true,
     action: statusUpdated ? "farm_ready_confirmed_status_updated" : "farm_ready_confirmed",
-    orderId: String(fresh._id),
+    orderId: String(updated._id),
     previousStatus: prevStatus,
-    newStatus: statusUpdated ? "FARM_READY" : prevStatus,
+    newStatus: updated.orderStatus,
   };
 }
 
@@ -302,6 +461,13 @@ export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
  * @param {string} [messageId]
  */
 export async function startRescheduleDateOffer(order, mobile10, waId, messageId = "") {
+  await logFarmerWhatsappInbound(order._id, {
+    text: FARM_READY_BTN_RESCHEDULE,
+    waId,
+    messageId,
+    action: "button_reschedule",
+  });
+
   const oldDeliveryDate = order.deliveryDate ? new Date(order.deliveryDate) : null;
   const offeredSlots = await findNextSlotOptionsForOrder(order, 5);
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
@@ -309,7 +475,8 @@ export async function startRescheduleDateOffer(order, mobile10, waId, messageId 
   if (!offeredSlots.length) {
     await sendWatiReply(
       waId,
-      "⚠️ सध्या पुढील स्लॉट उपलब्ध नाहीत. कृपया 📞 7218186452 वर संपर्क करा."
+      "⚠️ सध्या पुढील स्लॉट उपलब्ध नाहीत. कृपया 📞 7218186452 वर संपर्क करा.",
+      { orderId: order._id, action: "no_slots_available", sessionStep: "offered_slots" }
     );
     return { handled: true, action: "no_slots_available", orderId: String(order._id) };
   }
@@ -320,7 +487,7 @@ export async function startRescheduleDateOffer(order, mobile10, waId, messageId 
       mobile10,
       orderId: order._id,
       step: "offered_slots",
-      offeredSlots,
+      offeredSlots: offeredSlotsForSession(offeredSlots),
       offeredDates: [],
       selectedSlotIndex: null,
       selectedDate: null,
@@ -334,19 +501,23 @@ export async function startRescheduleDateOffer(order, mobile10, waId, messageId 
   const orderCode = order.publicOrderCode || order.orderId || order._id;
   const lines = [
     `📦 ऑर्डर आयडी: ${orderCode}`,
-    "🗓️ कृपया नवीन डिलिव्हरी स्लॉट निवडा:",
+    "🗓️ कृपया नवीन वितरण तारीख / स्लॉट निवडा:",
     "",
   ];
   offeredSlots.forEach((s, i) => {
-    lines.push(`${i + 1}. ${s.label}`);
+    lines.push(`${i + 1}. ${formatWhatsappSlotDisplay(s).listLine}`);
   });
   lines.push("", "📌 वरील क्रमांक (1–5) पाठवा.");
 
   if (oldDeliveryDate) {
-    lines.push("", `📅 सध्याची तारीख: ${formatDeliveryDateShortIn(oldDeliveryDate)}`);
+    lines.push("", `📅 सध्याची वितरण तारीख: ${formatDeliveryDateShortIn(oldDeliveryDate)}`);
   }
 
-  await sendWatiReply(waId, lines.join("\n"));
+  await sendWatiReply(waId, lines.join("\n"), {
+    orderId: order._id,
+    action: "reschedule_slots_offered",
+    sessionStep: "offered_slots",
+  });
 
   return { handled: true, action: "reschedule_slots_offered", orderId: String(order._id) };
 }
@@ -359,29 +530,44 @@ export async function startRescheduleDateOffer(order, mobile10, waId, messageId 
  * @param {string} [messageId]
  */
 export async function promptRescheduleConfirmation(session, order, waId, selectedSlot, messageId = "") {
+  const slot = plainOfferedSlot(selectedSlot);
+  if (!slot) {
+    await sendWatiReply(waId, "⚠️ स्लॉट निवडला नाही. कृपया पुन्हा प्रयत्न करा.", {
+      orderId: order._id,
+      action: "error_no_slot",
+      sessionStep: session.step,
+    });
+    return { handled: true, action: "error_no_slot" };
+  }
+
   session.step = "await_confirm";
   session.selectedSlotIndex = selectedSlot.index;
-  session.selectedDate = selectedSlot.deliveryDate || null;
+  session.selectedDate = slot.deliveryDate || null;
   session.lastInboundMessageId = messageId || session.lastInboundMessageId;
   session.expiresAt = new Date(Date.now() + SESSION_TTL_MS);
   await session.save();
 
   const orderCode = order.publicOrderCode || order.orderId || order._id;
-  const slotLabel = selectedSlot.label;
+  const display = formatWhatsappSlotDisplay(slot);
   await sendWatiReply(
     waId,
     [
-      "✅ नवीन डिलिव्हरी स्लॉट:",
-      `📅 ${slotLabel}`,
+      "✅ नवीन वितरण तारीख:",
+      `📅 ${display.confirmLine}`,
       "",
       `📦 ऑर्डर आयडी: ${orderCode}`,
       "",
       "कृपया निवडा:",
-      `1. ${slotLabel} — निश्चित करा`,
+      `1. ${display.deliveryLabel} — निश्चित करा`,
       "2. रद्द करा",
       "",
       "📌 `1` — पुष्टी | `2` — रद्द",
-    ].join("\n")
+    ].join("\n"),
+    {
+      orderId: order._id,
+      action: "await_confirm_prompt",
+      sessionStep: "await_confirm",
+    }
   );
 
   return { handled: true, action: "await_confirm", orderId: String(order._id) };
@@ -394,17 +580,23 @@ export async function promptRescheduleConfirmation(session, order, waId, selecte
  * @param {string} [messageId]
  */
 export async function applyFarmerDeliveryReschedule(order, session, waId, messageId = "") {
-  const offered = session.offeredSlots || [];
+  const offered = (session.offeredSlots || []).map((s) => plainOfferedSlot(s)).filter(Boolean);
   const idx =
     session.selectedSlotIndex != null
       ? session.selectedSlotIndex
       : session.selectedDate
-        ? offered.findIndex((s) => s.deliveryDate && sameCalendarDay(s.deliveryDate, session.selectedDate))
+        ? offered.findIndex(
+            (s) => s.deliveryDate && sameCalendarDay(s.deliveryDate, session.selectedDate)
+          )
         : -1;
   const selectedSlot = idx >= 0 ? offered[idx] : null;
 
   if (!selectedSlot?.slotId) {
-    await sendWatiReply(waId, "⚠️ स्लॉट निवडला नाही. कृपया पुन्हा प्रयत्न करा.");
+    await sendWatiReply(waId, "⚠️ स्लॉट निवडला नाही. कृपया पुन्हा प्रयत्न करा.", {
+      orderId: order._id,
+      action: "error_no_slot",
+      sessionStep: session.step,
+    });
     await WhatsappFarmReadySession.deleteOne({ _id: session._id });
     return { handled: true, action: "error_no_slot" };
   }
@@ -424,17 +616,26 @@ export async function applyFarmerDeliveryReschedule(order, session, waId, messag
     await WhatsappFarmReadySession.deleteOne({ _id: session._id });
 
     const orderCode = freshOrder.publicOrderCode || freshOrder.orderId || freshOrder._id;
+    const deliveryLabel = newDeliveryDate
+      ? formatDeliveryDateShortIn(newDeliveryDate)
+      : formatWhatsappSlotDisplay(selectedSlot).deliveryLabel;
     await sendWatiReply(
       waId,
       [
         "✅ धन्यवाद!",
         "",
-        "आपली डिलिव्हरी स्लॉट निश्चित झाली.",
-        `📅 ${slotLabel}`,
+        "आपली वितरण तारीख निश्चित झाली.",
+        `📅 वितरण तारीख: ${deliveryLabel}`,
+        `🗓️ स्लॉट: ${slotLabel}`,
         `📦 ऑर्डर आयडी: ${orderCode}`,
         "",
-        "स्लॉट ERP मध्ये अपडेट झाला. आमचा प्रतिनिधी लवकरच संपर्क साधेल.",
-      ].join("\n")
+        "ERP मध्ये अपडेट झाले. आमचा प्रतिनिधी लवकरच संपर्क साधेल.",
+      ].join("\n"),
+      {
+        orderId: freshOrder._id,
+        action: "delivery_rescheduled_reply",
+        sessionStep: "await_confirm",
+      }
     );
 
     return {
@@ -449,7 +650,8 @@ export async function applyFarmerDeliveryReschedule(order, session, waId, messag
     await WhatsappFarmReadySession.deleteOne({ _id: session._id });
     await sendWatiReply(
       waId,
-      "⚠️ स्लॉट बदलता आला नाही (कदाचित स्लॉट भरला). 📞 7218186452 वर संपर्क करा."
+      "⚠️ स्लॉट बदलता आला नाही (कदाचित स्लॉट भरला). 📞 7218186452 वर संपर्क करा.",
+      { orderId: order._id, action: "slot_reschedule_failed", sessionStep: session.step }
     );
     return { handled: true, action: "slot_reschedule_failed" };
   }
@@ -476,9 +678,17 @@ export async function continueRescheduleSession(mobile10, waId, text, messageId 
   const order = session.orderId;
   const t = normalizeInboundText(text);
 
+  await logFarmerWhatsappInbound(order._id, {
+    text: t,
+    waId,
+    messageId,
+    action: "reschedule_inbound",
+    sessionStep: session.step,
+  });
+
   if (session.step === "offered_slots" || session.step === "offered_dates") {
     const offeredSlots = session.offeredSlots?.length
-      ? session.offeredSlots
+      ? session.offeredSlots.map((s) => plainOfferedSlot(s)).filter(Boolean)
       : (session.offeredDates || []).map((d, i) => ({
           slotId: null,
           label: formatDeliveryDateLabel(d),
@@ -494,7 +704,8 @@ export async function continueRescheduleSession(mobile10, waId, text, messageId 
     if (pickedIdx == null) {
       await sendWatiReply(
         waId,
-        "⚠️ कृपया 1 ते 5 मधील क्रमांक पाठवा.\n\nउदा. `2` — दुसऱ्या स्लॉटसाठी."
+        "⚠️ कृपया 1 ते 5 मधील क्रमांक पाठवा.\n\nउदा. `2` — दुसऱ्या स्लॉटसाठी.",
+        { orderId: order._id, action: "invalid_slot_choice", sessionStep: session.step }
       );
       return { handled: true, action: "invalid_slot_choice" };
     }
@@ -510,24 +721,32 @@ export async function continueRescheduleSession(mobile10, waId, text, messageId 
   }
 
   if (session.step === "await_confirm") {
-    const offered = session.offeredSlots || [];
-    const selectedLabel =
+    const offered = (session.offeredSlots || []).map((s) => plainOfferedSlot(s)).filter(Boolean);
+    const selectedPlain =
       session.selectedSlotIndex != null && offered[session.selectedSlotIndex]
-        ? offered[session.selectedSlotIndex].label
-        : session.selectedDate
-          ? formatDeliveryDateLabel(session.selectedDate)
-          : null;
+        ? offered[session.selectedSlotIndex]
+        : null;
+    const selectedLabel = selectedPlain
+      ? formatWhatsappSlotDisplay(selectedPlain).deliveryLabel
+      : session.selectedDate
+        ? formatDeliveryDateShortIn(session.selectedDate)
+        : null;
 
     const choice = parseConfirmChoiceFromReply(t, selectedLabel);
     if (choice === "cancel") {
       await WhatsappFarmReadySession.deleteOne({ _id: session._id });
-      await sendWatiReply(waId, "❌ तारीख बदल रद्द केला. सध्याची तारीख कायम राहील.");
+      await sendWatiReply(waId, "❌ तारीख बदल रद्द केला. सध्याची तारीख कायम राहील.", {
+        orderId: order._id,
+        action: "reschedule_cancelled",
+        sessionStep: session.step,
+      });
       return { handled: true, action: "reschedule_cancelled" };
     }
     if (choice !== "confirm") {
       await sendWatiReply(
         waId,
-        "⚠️ कृपया `1` (पुष्टी) किंवा `2` (रद्द) पाठवा.\n\nतारीख पुन्हा पाठवल्यासही पुष्टी होते."
+        "⚠️ कृपया `1` (पुष्टी) किंवा `2` (रद्द) पाठवा.\n\nतारीख पुन्हा पाठवल्यासही पुष्टी होते.",
+        { orderId: order._id, action: "await_confirm_retry", sessionStep: session.step }
       );
       return { handled: true, action: "await_confirm_retry" };
     }
@@ -633,4 +852,10 @@ export async function storeFarmReadyTemplateSendMeta(orderId, localMessageId) {
     set.whatsappFarmReadyMessageKey = String(localMessageId);
   }
   await Order.updateOne({ _id: orderId }, { $set: set }).catch(() => {});
+  await appendOrderWhatsappFarmReadyLog(orderId, {
+    direction: "outbound",
+    text: "[Template: delivery_final_second — शेत तयार / दुसरी तारीख निवडा]",
+    whatsappMessageId: localMessageId ? String(localMessageId) : null,
+    action: "template_sent",
+  });
 }

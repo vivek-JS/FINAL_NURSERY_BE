@@ -11,6 +11,8 @@ import {
   FARM_READY_BTN_CONFIRM,
   FARM_READY_BTN_RESCHEDULE,
   formatDeliveryDateLabel,
+  plainOfferedSlot,
+  formatWhatsappSlotDisplay,
 } from "../services/whatsappFarmReadyReschedule.service.js";
 import {
   formatSlotOfferLabel,
@@ -97,3 +99,24 @@ function sameDay(a, b) {
     a.getDate() === b.getDate()
   );
 }
+
+test("plainOfferedSlot — mongoose subdoc spread fix", () => {
+  const subdoc = {
+    toObject() {
+      return {
+        slotId: "507f1f77bcf86cd799439011",
+        label: "11 to 17 June",
+        startDay: "11-06-2026",
+        endDay: "17-06-2026",
+        deliveryDate: new Date("2026-06-11T00:00:00.000Z"),
+      };
+    },
+  };
+  const plain = plainOfferedSlot(subdoc);
+  assert.equal(plain.label, "11 to 17 June");
+  assert.ok(plain.deliveryDate instanceof Date);
+  const display = formatWhatsappSlotDisplay(subdoc);
+  assert.match(display.listLine, /11 to 17 June/);
+  assert.match(display.listLine, /वितरण:/);
+  assert.match(display.confirmLine, /वितरण तारीख:/);
+});
