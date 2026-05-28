@@ -334,7 +334,18 @@ export async function sendOrderReadyWhatsApp(farmer, orderDetails) {
       return { success: false, error: "No mobile number" };
     }
 
-    const { orderId, plantName, numberOfPlants, deliveryDate } = orderDetails;
+    const {
+      orderId,
+      publicOrderCode,
+      plantName,
+      numberOfPlants,
+      deliveryDate,
+    } = orderDetails;
+
+    const displayOrderId =
+      publicOrderCode?.toString() ||
+      orderId?.toString() ||
+      "N/A";
 
     const formattedDate = deliveryDate
       ? new Date(deliveryDate).toLocaleDateString("en-IN", {
@@ -344,30 +355,25 @@ export async function sendOrderReadyWhatsApp(farmer, orderDetails) {
         })
       : "Soon";
 
-    const parameters = [
-      {
-        name: "name",
-        value: farmer.name || "Farmer",
-      },
-      {
-        name: "orderNumber",
-        value: orderId?.toString() || "N/A",
-      },
-      {
-        name: "plant",
-        value: plantName || "Plants",
-      },
-      {
-        name: "quantity",
-        value: numberOfPlants?.toString() || "0",
-      },
-      {
-        name: "delivery",
-        value: formattedDate,
-      },
-    ];
+    // Template body: {{1}} name, {{2}} plant, {{3}} qty, {{4}} delivery, {{5}} order id
+    const templateName = process.env.WATI_FARM_READY_TEMPLATE || "order_ready";
+    const useNumericParams = process.env.WATI_FARM_READY_NUMERIC_PARAMS !== "false";
 
-    const templateName = "order_ready"; // Update this with your actual template name
+    const parameters = useNumericParams
+      ? [
+          { name: "1", value: farmer.name || "Farmer" },
+          { name: "2", value: plantName || "Plants" },
+          { name: "3", value: numberOfPlants?.toString() || "0" },
+          { name: "4", value: formattedDate },
+          { name: "5", value: displayOrderId },
+        ]
+      : [
+          { name: "name", value: farmer.name || "Farmer" },
+          { name: "plant", value: plantName || "Plants" },
+          { name: "quantity", value: numberOfPlants?.toString() || "0" },
+          { name: "delivery", value: formattedDate },
+          { name: "order_id", value: displayOrderId },
+        ];
 
     return await sendWatiTemplateMessage(
       farmer.mobileNumber,

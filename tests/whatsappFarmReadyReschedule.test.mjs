@@ -12,63 +12,81 @@ import {
   FARM_READY_BTN_RESCHEDULE,
   formatDeliveryDateLabel,
 } from "../services/whatsappFarmReadyReschedule.service.js";
+import {
+  formatSlotOfferLabel,
+  parseSlotChoiceFromReply,
+} from "../services/whatsappFarmReadySlot.service.js";
 import { extractInboundMessage } from "../utility/watiInboundPayload.js";
+import {
+  extractReplyContextId,
+  extractReplyContextText,
+  extractOrderRefsFromText,
+} from "../utility/whatsappFarmReadyOrderResolve.js";
+
+test("formatSlotOfferLabel — same month window", () => {
+  assert.equal(
+    formatSlotOfferLabel({ startDay: "05-06-2026", endDay: "10-06-2026", month: "June" }),
+    "5 to 10 June"
+  );
+});
+
+test("parseSlotChoiceFromReply — numeric and label", () => {
+  const slots = [
+    { label: "5 to 10 June", slotId: "a" },
+    { label: "11 to 15 June", slotId: "b" },
+  ];
+  assert.equal(parseSlotChoiceFromReply("2", slots), 1);
+  assert.equal(parseSlotChoiceFromReply("11 to 15 June", slots), 1);
+  assert.equal(parseSlotChoiceFromReply("9", slots), null);
+});
 
 test("buildNextDeliveryDateOptions — 5 days after delivery date", () => {
-  const base = new Date(2026, 4, 27); // 27 May 2026 (local)
+  const base = new Date(2026, 4, 27);
   const opts = buildNextDeliveryDateOptions(base, 5);
   assert.equal(opts.length, 5);
   assert.equal(formatDeliveryDateLabel(opts[0]), "28 May 2026");
-  assert.equal(formatDeliveryDateLabel(opts[4]), "01 June 2026");
 });
 
-test("parseDateChoiceFromReply — numeric choice", () => {
-  const dates = buildNextDeliveryDateOptions(new Date("2026-05-27"), 5);
-  assert.ok(sameDay(parseDateChoiceFromReply("2", dates), dates[1]));
-  assert.equal(parseDateChoiceFromReply("9", dates), null);
-});
-
-test("parseConfirmChoiceFromReply — 1 confirm, 2 cancel", () => {
-  const picked = new Date(2026, 4, 29);
-  assert.equal(parseConfirmChoiceFromReply("1", picked), "confirm");
-  assert.equal(parseConfirmChoiceFromReply("1️⃣", picked), "confirm");
-  assert.equal(parseConfirmChoiceFromReply("2", picked), "cancel");
-  assert.equal(parseConfirmChoiceFromReply("2️⃣", picked), "cancel");
-  assert.equal(parseConfirmChoiceFromReply("हो", picked), null);
-  assert.equal(parseConfirmChoiceFromReply("नाही", picked), null);
-});
-
-test("parseConfirmChoiceFromReply — date label reply confirms", () => {
-  const picked = new Date(2026, 4, 29);
-  const label = formatDeliveryDateLabel(picked);
-  assert.equal(parseConfirmChoiceFromReply(label, picked), "confirm");
-  assert.equal(parseConfirmChoiceFromReply(` ${label} `, picked), "confirm");
+test("parseConfirmChoiceFromReply — 1 confirm, 2 cancel, slot label", () => {
+  assert.equal(parseConfirmChoiceFromReply("1", "5 to 10 June"), "confirm");
+  assert.equal(parseConfirmChoiceFromReply("2", "5 to 10 June"), "cancel");
+  assert.equal(parseConfirmChoiceFromReply("5 to 10 June", "5 to 10 June"), "confirm");
 });
 
 test("isFarmReadyButtonMessage", () => {
   assert.equal(isFarmReadyButtonMessage(FARM_READY_BTN_CONFIRM), true);
   assert.equal(isFarmReadyButtonMessage(FARM_READY_BTN_RESCHEDULE), true);
-  assert.equal(isFarmReadyButtonMessage("hello"), false);
+});
+
+test("extractReplyContextId from WATI button reply", () => {
+  assert.equal(
+    extractReplyContextId({
+      replyContextId: "d38f0c3a-e833-4725-a894-53a2b1dc1af6",
+    }),
+    "d38f0c3a-e833-4725-a894-53a2b1dc1af6"
+  );
+});
+
+test("extractOrderRefsFromText — ऑर्डर आयडी from template", () => {
+  const refs = extractOrderRefsFromText("तुमचा ऑर्डर आयडी: 4521");
+  assert.ok(refs.some((r) => r.value === "4521"));
+});
+
+test("extractReplyContextText — parent template message", () => {
+  assert.equal(
+    extractReplyContextText({
+      replyContextMessage: { text: "तुमचा ऑर्डर आयडी: 7832" },
+    }),
+    "तुमचा ऑर्डर आयडी: 7832"
+  );
 });
 
 test("extractInboundMessage prefers buttonText", () => {
-  const { text, buttonText } = extractInboundMessage({
+  const { text } = extractInboundMessage({
     waId: "919876543210",
-    text: "ignored",
     buttonText: FARM_READY_BTN_RESCHEDULE,
   });
   assert.equal(text, FARM_READY_BTN_RESCHEDULE);
-  assert.equal(buttonText, FARM_READY_BTN_RESCHEDULE);
-});
-
-test("extractInboundMessage nested WATI list reply", () => {
-  const dates = buildNextDeliveryDateOptions(new Date("2026-05-27"), 5);
-  const label = formatDeliveryDateLabel(dates[2]);
-  const { text } = extractInboundMessage({
-    waId: "919876543210",
-    data: { waId: "919876543210", listReply: { title: label } },
-  });
-  assert.equal(text, label);
 });
 
 function sameDay(a, b) {

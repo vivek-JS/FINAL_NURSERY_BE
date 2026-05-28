@@ -917,6 +917,7 @@ orderSchema.index(
 orderSchema.index({ orderBookingDate: -1 });
 orderSchema.index({ deliveryDate: -1 });
 orderSchema.index({ salesPerson: 1, orderBookingDate: -1 });
+orderSchema.index({ whatsappFarmReadyMessageKey: 1 }, { sparse: true });
 orderSchema.index({ dealer: 1, orderBookingDate: -1 });
 // Daily pipeline / transition reports filter on statusChanges timestamps
 orderSchema.index({ "statusChanges.createdAt": 1 }, { sparse: true });

@@ -1759,9 +1759,15 @@ const updateOne = (Model, modelName, allowedFields) =>
               const farmerDetails = existingDoc.farmer ? await mongoose.model('Farmer').findById(existingDoc.farmer) : null;
               
               if (farmerDetails && farmerDetails.mobileNumber) {
+                const OrderModel = mongoose.model("Order");
+                await OrderModel.ensurePublicOrderCode(existingDoc);
+                if (existingDoc.isModified?.("publicOrderCode")) {
+                  await existingDoc.save({ session });
+                }
                 const orderId = existingDoc.orderId || existingDoc._id;
                 const orderDetails = {
-                  orderId: orderId,
+                  orderId,
+                  publicOrderCode: existingDoc.publicOrderCode,
                   plantName: existingDoc.plantType?.name || existingDoc.plantName?.name || 'Plants',
                   numberOfPlants: existingDoc.numberOfPlants,
                   deliveryDate: existingDoc.deliveryDate,

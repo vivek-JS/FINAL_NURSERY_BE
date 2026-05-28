@@ -20,12 +20,31 @@ const whatsappFarmReadySessionSchema = new Schema(
     },
     step: {
       type: String,
-      enum: ["offered_dates", "await_confirm"],
+      enum: ["offered_slots", "offered_dates", "await_confirm"],
       required: true,
     },
+    offeredSlots: {
+      type: [
+        {
+          slotId: { type: Schema.Types.ObjectId, required: true },
+          label: { type: String, trim: true },
+          startDay: String,
+          endDay: String,
+          month: String,
+          year: Number,
+          deliveryDate: Date,
+        },
+      ],
+      default: [],
+    },
+    /** @deprecated use offeredSlots */
     offeredDates: {
       type: [Date],
       default: [],
+    },
+    selectedSlotIndex: {
+      type: Number,
+      default: null,
     },
     selectedDate: {
       type: Date,
