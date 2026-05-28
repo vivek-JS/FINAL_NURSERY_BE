@@ -382,7 +382,7 @@ const orderSchema = new Schema(
     farmerWhatsappDeliveryReschedule: {
       rescheduledBy: {
         type: String,
-        enum: ["FARMER"],
+        enum: ["FARMER", null],
         default: null,
       },
       rescheduledAt: {

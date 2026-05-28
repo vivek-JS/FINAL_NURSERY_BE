@@ -171,17 +171,15 @@ async function sendWatiReply(waId, messageText) {
 export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
   const now = new Date();
   order.farmReadyWhatsappConfirmedAt = now;
-  if (messageId) {
-    order.farmerWhatsappDeliveryReschedule = order.farmerWhatsappDeliveryReschedule || {};
-    order.farmerWhatsappDeliveryReschedule.whatsappMessageId = messageId;
-  }
   order.orderEditHistory = order.orderEditHistory || [];
   order.orderEditHistory.push({
     field: "farmReadyWhatsappConfirmedAt",
     previousValue: null,
     newValue: now,
     changedBy: null,
-    notes: "Farmer confirmed farm is ready via WATI button (शेत तयार आहे)",
+    notes: messageId
+      ? `Farmer confirmed farm is ready via WATI button (शेत तयार आहे) [${messageId}]`
+      : "Farmer confirmed farm is ready via WATI button (शेत तयार आहे)",
   });
   await order.save();
 

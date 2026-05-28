@@ -4733,6 +4733,7 @@ const getAll = (Model, modelName) =>
           whatsappDispatchMessageKey: 1,
           whatsappFarmReadySentAt: 1,
           whatsappFarmReadyMessageKey: 1,
+          farmReadyWhatsappConfirmedAt: 1,
           dispatchDayKey: 1,
           dispatchTargetDate: 1,
           oldDeliveryDate: 1,

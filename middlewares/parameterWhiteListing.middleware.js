@@ -207,6 +207,7 @@ allowedQueryKeys.add("paged"); // GET /dispatched — pagination toggle (also in
 allowedQueryKeys.add("transportStatus"); // GET /dispatched filter
 allowedQueryKeys.add("includeAllPastDue"); // admin MIS due backlog toggle
 allowedQueryKeys.add("_"); // cache-bust query param (admin MIS)
+allowedQueryKeys.add("forceResend"); // POST order send-*-whatsapp — unlimited test resend
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
