@@ -13,6 +13,7 @@ import { storeFarmReadyTemplateSendMeta } from "./whatsappFarmReadyReschedule.se
 import { markOutboundSentFromWatiResult } from "./orderWhatsappOutbound.service.js";
 import { getWatiToken } from "../config/wati.config.js";
 import { isWhatsappUnlimitedSendEnabled } from "../utility/whatsappUnlimitedSend.js";
+import { resolveEmbeddedSubtypeName, isBananaPlantName } from "../utility/watiPlantText.js";
 
 const IST = "+05:30";
 
@@ -108,6 +109,19 @@ export function buildDeliveryFinalSecondQuery(trigger, ref = istNow()) {
   return q;
 }
 
+/** @returns {null|"not_banana"} — farm-ready WhatsApp is Banana-only for now. */
+export function farmReadyWhatsAppSkipReason(orderDoc, plantSubtypeName = "") {
+  const plantName = orderDoc?.plantName?.name || "";
+  const subtype =
+    plantSubtypeName ||
+    resolveEmbeddedSubtypeName(orderDoc?.plantName, orderDoc?.plantSubtype) ||
+    "";
+  if (!isBananaPlantName(plantName, subtype)) {
+    return "not_banana";
+  }
+  return null;
+}
+
 /**
  * Send delivery_final_second for one order (farmer must have mobile).
  */
@@ -122,8 +136,7 @@ export async function sendDeliveryFinalSecondForOrder(
 
   const orderDoc = await Order.findById(order._id || order.id)
     .populate("farmer", "name mobileNumber village")
-    .populate("plantName", "name")
-    .populate("plantSubtype", "name");
+    .populate("plantName", "name subtypes");
 
   if (!orderDoc) return { success: false, error: "order_not_found" };
 
@@ -137,7 +150,14 @@ export async function sendDeliveryFinalSecondForOrder(
     await orderDoc.save();
   }
   const plantName = orderDoc.plantName?.name || "Plants";
-  const plantSubtype = orderDoc.plantSubtype?.name || "";
+  const plantSubtype =
+    resolveEmbeddedSubtypeName(orderDoc.plantName, orderDoc.plantSubtype) || "";
+
+  const skipReason = farmReadyWhatsAppSkipReason(orderDoc, plantSubtype);
+  if (skipReason) {
+    return { success: false, error: skipReason, skipped: true };
+  }
+
   const qty = orderPlantQty(orderDoc);
 
   const result = await sendDeliveryFinalSecondWhatsApp(farmerDoc, {
@@ -167,6 +187,12 @@ export async function sendDeliveryFinalSecondForOrder(
       templateType: "farm_ready",
       trigger: outboundMeta.trigger || trigger,
       sentBy: outboundMeta.sentBy || null,
+      batchId: outboundMeta.batchId || null,
+      displayOrderCode:
+        orderDoc.orderId != null
+          ? String(orderDoc.orderId)
+          : orderDoc.publicOrderCode?.toString() || null,
+      orderBusinessId: orderDoc.orderId,
       publicOrderCode: orderDoc.publicOrderCode,
       farmer: orderDoc.farmer,
     });

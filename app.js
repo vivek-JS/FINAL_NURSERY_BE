@@ -469,7 +469,7 @@ server.use("/api/v1/location", locationRoute); // No authentication required for
 server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
 server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook + today's booking PDF report (same POST URL)
-// WATI status webhook (templateMessageSent_v2, delivered, read, failed)
+// WATI unified webhook (template sent/delivered/read/failed + messageReceived)
 server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
 server.use("/api/v1/agri-load-link", agriLoadLinkRoute); // Public one-click agri load link

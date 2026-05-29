@@ -4,7 +4,7 @@ import {
   watiPlantAndSubtypeParams,
   WATI_MERGED_SUBTYPE_PLACEHOLDER,
   isBananaPlantName,
-  formatWhatsappPlantSubtypeDisplay,
+  deliveryFinalSecondPlantSubtypeParams,
 } from "./watiPlantText.js";
 import {
   formatWatiDateDdMmYyyy,
@@ -324,18 +324,22 @@ export function buildDeliveryFinalSecondParameters(farmer, orderDetails) {
     orderId,
     plantName,
     plantSubtype,
-    numberOfPlants,
     deliveryDate,
   } = orderDetails;
 
+  // Approved WATI delivery_final_second body:
+  // {{2}} plant type, {{3}} subtype — "तुमचं शेत {{2}} - {{3}} रोप..."
+  // {{4}} delivery date, {{5}} order id — "डिलिव्हरी {{4}}", "ऑर्डर आयडी {{5}}"
   const displayOrderId =
-    publicOrderCode?.toString() || orderId?.toString() || "N/A";
-  const plantLine = formatWhatsappPlantSubtypeDisplay(plantName, plantSubtype);
+    orderId != null && orderId !== ""
+      ? String(orderId)
+      : publicOrderCode?.toString() || "N/A";
+  const { plant, subtype } = deliveryFinalSecondPlantSubtypeParams(plantName, plantSubtype);
 
   return [
     { name: "1", value: farmer?.name || "Farmer" },
-    { name: "2", value: plantLine },
-    { name: "3", value: String(numberOfPlants ?? 0) },
+    { name: "2", value: plant },
+    { name: "3", value: subtype },
     { name: "4", value: formatDeliveryFinalSecondDate(deliveryDate) },
     { name: "5", value: displayOrderId },
   ];

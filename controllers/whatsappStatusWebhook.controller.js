@@ -27,22 +27,27 @@ function safeJsonPreview(obj, max = 2000) {
   }
 }
 
+/** WATI "Message Received" + legacy inbound event names (single-webhook setup). */
+const INBOUND_EVENT_TYPES = new Set([
+  "message",
+  "message_received",
+  "messagereceived",
+  "messages",
+  "button",
+  "interactive",
+]);
+
 function isInboundMessageEvent(body, eventType) {
   const et = String(eventType || "").toLowerCase();
-  if (["message", "message_received", "messages"].includes(et)) return true;
+  if (INBOUND_EVENT_TYPES.has(et)) return true;
+  if (String(body?.statusString || "").toLowerCase() === "received") return true;
   if (body?.buttonText || body?.buttonReply?.text || body?.data?.buttonText) return true;
   const inbound = extractInboundMessage(body);
   if (inbound.waId && inbound.text?.trim()) return true;
   return false;
 }
 
-const MESSAGE_EVENT_TYPES = new Set([
-  "message",
-  "message_received",
-  "messages",
-  "button",
-  "interactive",
-]);
+const MESSAGE_EVENT_TYPES = INBOUND_EVENT_TYPES;
 // Normalize phone helper (expects 10-digit or 91-prefixed)
 function normalizeWaId(waId) {
   if (!waId) return null;
@@ -62,8 +67,8 @@ function parseTimestamp(ts) {
 }
 
 export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
-  // Status URL receives delivery/read events; WATI often also posts inbound messages here.
-  // Forward those to cancel-revive → farm-ready → report wizard (same chain as opt-in / order bot).
+  // Unified WATI webhook: template status (sent/delivered/read/failed) + Message Received.
+  // Inbound → cancel-revive → farm-ready → report wizard (no WhatsApp order bot on this URL).
 
   const userAgent = req.headers["user-agent"] || "";
   const isWati = userAgent.toLowerCase().includes("wati");
@@ -98,16 +103,12 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
     buttonText: inbound.buttonText || "(none)",
   });
 
-  // Farmer button / text — often misconfigured on status URL instead of message webhook
+  // Message Received / button replies (single WATI webhook with template status events)
   if (isInboundMessageEvent(body, eventType)) {
-    statusLog(
-      "⚠️ Inbound message/button on STATUS webhook — forwarding to interactive flows. " +
-        "Configure WATI message webhook → POST /api/v1/whatsapp-order/webhook (recommended)."
-    );
+    statusLog("inbound message — cancel-revive → farm-ready → report wizard");
     res.status(200).json({
       success: true,
-      message: "Status webhook received message event; processing inbound flows async",
-      hint: "Point WATI incoming messages to /api/v1/whatsapp-order/webhook",
+      message: "Unified webhook: processing inbound message async",
     });
     void (async () => {
       try {
@@ -411,6 +412,18 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
 });
 
 export const statusWebhookHealth = catchAsync(async (req, res) => {
-  return res.status(200).json({ success: true, message: 'WATI status webhook active', timestamp: new Date().toISOString() });
+  return res.status(200).json({
+    success: true,
+    message: "WATI unified webhook active (template status + messageReceived)",
+    url: "/api/v1/whatsapp-status/webhook",
+    events: [
+      "templateMessageSent_v2",
+      "sentMessageDELIVERED_v2",
+      "sentMessageREAD_v2",
+      "templateMessageFailed",
+      "messageReceived",
+    ],
+    timestamp: new Date().toISOString(),
+  });
 });
 

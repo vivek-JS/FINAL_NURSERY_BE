@@ -173,3 +173,12 @@ test("status webhook forwards inbound messages to report wizard", () => {
   assert.match(source, /runWhatsappReportWizardFromWebhookBody/);
   assert.match(source, /report wizard forward result/);
 });
+
+test("unified WATI webhook recognizes messageReceived event", () => {
+  const source = readFileSync(
+    resolve(process.cwd(), "controllers/whatsappStatusWebhook.controller.js"),
+    "utf8"
+  );
+  assert.match(source, /messagereceived/);
+  assert.match(source, /statusString.*received/i);
+});

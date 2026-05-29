@@ -78,6 +78,7 @@ import {
 } from "../middlewares/auth.middleware.js";
 import { sendPaymentCollectedNotification } from "../utility/pushNotification.js";
 import catchAsync from "../utility/catchAsync.js";
+import { noCacheApiResponse } from "../middlewares/noCacheApi.middleware.js";
 import { getPlantOrderTimeline } from "../modules/orderEvents/api/orderEvents.controller.js";
 
 const router = express.Router();
@@ -175,7 +176,7 @@ router
     checkErrors,
     updateOrder
   )
-  .get("/whatsapp/outbound", listOrderWhatsappOutboundController)
+  .get("/whatsapp/outbound", noCacheApiResponse, listOrderWhatsappOutboundController)
   .post("/whatsapp/send-selected", sendSelectedOrdersWhatsappController)
   .get("/:orderId/timeline", getPlantOrderTimeline)
   .post("/:orderId/send-accepted-whatsapp", sendOrderAcceptedWhatsAppController)

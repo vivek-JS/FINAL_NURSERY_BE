@@ -54,38 +54,73 @@ export function isBananaPlantName(plantNameRaw, subtypeRaw = "") {
 
 /** Farmer-facing short plant name for WhatsApp (Marathi where common). */
 const WHATSAPP_PLANT_MARATHI_SHORT = {
-  banana: "Keli",
-  keli: "Keli",
+  banana: "केळी",
+  keli: "केळी",
+  केळ: "केळी",
+  केळी: "केळी",
   papaya: "Papaya",
   watermelon: "Tarbuj",
   tarbuj: "Tarbuj",
 };
 
 /**
- * e.g. Banana + G9 → "Keli - G9" for farm-ready template {{2}} and bot replies.
+ * CMS plant name → farmer WhatsApp label (e.g. Banana → केळी).
  * @param {string|null|undefined} plantNameRaw
- * @param {string|null|undefined} subtypeRaw
  */
-export function formatWhatsappPlantSubtypeDisplay(plantNameRaw, subtypeRaw) {
+export function formatWhatsappPlantMarathiShort(plantNameRaw) {
   const plant = String(plantNameRaw ?? "").trim() || "Plants";
-  const sub = String(subtypeRaw ?? "").trim();
   const plantLower = plant.toLowerCase();
-
-  let displayPlant = plant;
   for (const [key, label] of Object.entries(WHATSAPP_PLANT_MARATHI_SHORT)) {
-    if (plantLower.includes(key)) {
-      displayPlant = label;
-      break;
+    if (plantLower.includes(key.toLowerCase())) {
+      return label;
     }
   }
+  return plant;
+}
+
+/**
+ * plantSubtype on Order is an ObjectId of an embedded PlantCms subtype — not populate()-able.
+ * @param {{ subtypes?: Array<{ _id?: unknown, name?: string }> }|null|undefined} plantDoc
+ * @param {unknown} plantSubtypeId
+ */
+export function resolveEmbeddedSubtypeName(plantDoc, plantSubtypeId) {
+  if (!plantDoc || plantSubtypeId == null) return "";
+  const sid = String(plantSubtypeId);
+  const hit = (plantDoc.subtypes || []).find((s) => String(s._id) === sid);
+  return hit?.name ? String(hit.name).trim() : "";
+}
+
+/**
+ * Farmer-facing plant line when a single combined field is needed (not delivery_final_second).
+ * delivery_final_second uses separate {{2}} plant + {{3}} subtype in WATI.
+ */
+export function formatWhatsappPlantSubtypeDisplay(plantNameRaw, subtypeRaw) {
+  const displayPlant = formatWhatsappPlantMarathiShort(plantNameRaw);
+  const sub = String(subtypeRaw ?? "").trim();
 
   if (!sub || sub === "N/A" || sub === "Unknown" || sub === "\u2014") {
     return displayPlant;
   }
 
   if (isNumberNoVarietyName(sub)) {
-    return formatWhatsAppPlantSubtypeLabel(plant, sub);
+    return formatWhatsAppPlantSubtypeLabel(plantNameRaw, sub);
   }
 
   return `${displayPlant} - ${sub}`;
+}
+
+/**
+ * {{2}} plant + {{3}} subtype for delivery_final_second.
+ * @returns {{ plant: string, subtype: string }}
+ */
+export function deliveryFinalSecondPlantSubtypeParams(plantNameRaw, subtypeRaw) {
+  const plant = formatWhatsappPlantMarathiShort(plantNameRaw);
+  const sub = String(subtypeRaw ?? "").trim();
+  if (!sub || sub === "N/A" || sub === "Unknown" || sub === WATI_MERGED_SUBTYPE_PLACEHOLDER) {
+    return { plant, subtype: "" };
+  }
+  if (isNumberNoVarietyName(sub)) {
+    return { plant, subtype: sub };
+  }
+  return { plant, subtype: sub };
 }

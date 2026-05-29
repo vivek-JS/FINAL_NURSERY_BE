@@ -29,6 +29,27 @@ function pickLocalMessageId(result) {
   );
 }
 
+function pickWhatsappMessageId(result) {
+  return (
+    result?.data?.whatsappMessageId ||
+    result?.whatsappMessageId ||
+    result?.data?.receivers?.[0]?.whatsappMessageId ||
+    null
+  );
+}
+
+/** ERP order # shown in log table (prefer numeric orderId over publicOrderCode). */
+export function outboundDisplayOrderCode(orderOrOpts) {
+  const orderId = orderOrOpts?.orderId;
+  if (orderId != null && orderId !== "" && typeof orderId !== "object") {
+    return String(orderId);
+  }
+  if (orderOrOpts?.publicOrderCode) {
+    return String(orderOrOpts.publicOrderCode);
+  }
+  return null;
+}
+
 /**
  * @param {object} order — populated or lean order doc
  * @param {object} opts
@@ -52,7 +73,11 @@ export async function createOutboundRecord(order, opts = {}) {
 
   const doc = await OrderWhatsappOutbound.create({
     orderId: order._id,
-    publicOrderCode: order.publicOrderCode?.toString() || null,
+    publicOrderCode:
+      opts.displayOrderCode ||
+      outboundDisplayOrderCode(order) ||
+      order.publicOrderCode?.toString() ||
+      null,
     farmerName,
     farmerMobile10,
     templateType: opts.templateType || "farm_ready",
@@ -62,6 +87,7 @@ export async function createOutboundRecord(order, opts = {}) {
     sentAt: localMessageId ? now : null,
     sentBy: opts.sentBy || null,
     trigger: opts.trigger || null,
+    batchId: opts.batchId || null,
   });
 
   return doc;
@@ -72,10 +98,11 @@ export async function createOutboundRecord(order, opts = {}) {
  */
 export async function markOutboundSentFromWatiResult(orderId, watiResult, opts = {}) {
   const localMessageId = pickLocalMessageId(watiResult);
+  const whatsappMessageId = pickWhatsappMessageId(watiResult);
   if (!localMessageId) {
     return createOutboundRecord(
       { _id: orderId, ...(opts.orderSnapshot || {}) },
-      { ...opts, localMessageId: null }
+      { ...opts, localMessageId: null, whatsappMessageId }
     );
   }
 
@@ -91,8 +118,13 @@ export async function markOutboundSentFromWatiResult(orderId, watiResult, opts =
         $set: {
           status: "sent",
           sentAt: existing.sentAt || new Date(),
+          ...(whatsappMessageId && !existing.whatsappMessageId
+            ? { whatsappMessageId: String(whatsappMessageId) }
+            : {}),
           ...(opts.trigger ? { trigger: opts.trigger } : {}),
           ...(opts.sentBy ? { sentBy: opts.sentBy } : {}),
+          ...(opts.batchId ? { batchId: opts.batchId } : {}),
+          ...(opts.displayOrderCode ? { publicOrderCode: opts.displayOrderCode } : {}),
         },
       }
     );
@@ -102,14 +134,18 @@ export async function markOutboundSentFromWatiResult(orderId, watiResult, opts =
   return createOutboundRecord(
     {
       _id: orderId,
-      publicOrderCode: opts.publicOrderCode,
+      orderId: opts.orderBusinessId,
+      publicOrderCode: opts.displayOrderCode || opts.publicOrderCode,
       farmer: opts.farmer,
     },
     {
       templateType: opts.templateType || "farm_ready",
       localMessageId,
+      whatsappMessageId,
+      displayOrderCode: opts.displayOrderCode,
       trigger: opts.trigger,
       sentBy: opts.sentBy,
+      batchId: opts.batchId,
     }
   );
 }
@@ -131,9 +167,11 @@ export async function updateOutboundFromStatusWebhook({
   const query = { $or: [] };
   if (localMessageId) query.$or.push({ localMessageId: String(localMessageId) });
   if (whatsappMessageId) query.$or.push({ whatsappMessageId: String(whatsappMessageId) });
+  // WATI status webhooks sometimes send `id` equal to our stored localMessageId
+  if (localMessageId) query.$or.push({ whatsappMessageId: String(localMessageId) });
   if (!query.$or.length) return { matched: 0 };
 
-  const doc = await OrderWhatsappOutbound.findOne(query);
+  const doc = await OrderWhatsappOutbound.findOne(query).sort({ createdAt: -1 });
   if (!doc) return { matched: 0 };
 
   const nextStatus = event === "failed" ? "failed" : event;

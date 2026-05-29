@@ -34,7 +34,7 @@ export function formatWatiDateEnIN(value, fallback = "—") {
   });
 }
 
-/** delivery_final_second {{4}} — e.g. 28-May-2026 */
+/** delivery_final_second {{4}} delivery date — e.g. 28-May-2026 */
 export function formatDeliveryFinalSecondDate(deliveryDate) {
   if (deliveryDate == null || deliveryDate === "") return "Soon";
   const m = momentInIst(deliveryDate);

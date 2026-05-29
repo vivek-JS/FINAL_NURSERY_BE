@@ -3976,9 +3976,12 @@ export const sendOrderFarmReadyWhatsAppController = catchAsync(async (req, res) 
 
   if (!result.success) {
     const msg =
-      result.error?.message ||
-      (typeof result.error === "string" ? result.error : "Failed to send message");
-    return res.status(500).json(generateResponse("Error", msg, null, result.error));
+      result.error === "not_banana"
+        ? "Farm-ready WhatsApp is only available for Banana (केळी) orders"
+        : result.error?.message ||
+          (typeof result.error === "string" ? result.error : "Failed to send message");
+    const status = result.error === "not_banana" ? 400 : 500;
+    return res.status(status).json(generateResponse("Error", msg, null, result.error));
   }
 
   const sentAt = new Date();
@@ -3999,8 +4002,18 @@ export const sendOrderFarmReadyWhatsAppController = catchAsync(async (req, res) 
   );
 });
 
+const WHATSAPP_BULK_SEND_MAX = parseInt(process.env.WHATSAPP_BULK_SEND_MAX || "50", 10);
+const WHATSAPP_BULK_SEND_DELAY_MS = parseInt(
+  process.env.WHATSAPP_BULK_SEND_DELAY_MS || "1500",
+  10
+);
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
- * POST /order/whatsapp/send-selected — checkbox send (max 1 order, farm-ready only).
+ * POST /order/whatsapp/send-selected — checkbox bulk send (farm-ready only).
  */
 export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) => {
   const { orderIds, templateType = "farm_ready" } = req.body || {};
@@ -4010,83 +4023,165 @@ export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) 
       generateResponse("Error", "Select at least one order", null, null)
     );
   }
-  if (orderIds.length > 1) {
-    return res.status(400).json(
-      generateResponse(
-        "Error",
-        "Select only 1 order for now — bulk send coming soon",
-        null,
-        null
-      )
-    );
-  }
   if (String(templateType) !== "farm_ready") {
     return res.status(400).json(
       generateResponse("Error", "Only farm_ready template is supported", null, null)
     );
   }
 
-  const orderId = orderIds[0];
-  if (!mongoose.isValidObjectId(orderId)) {
-    return res.status(400).json(generateResponse("Error", "Invalid order id", null, null));
+  const uniqueIds = [
+    ...new Set(orderIds.map((id) => String(id).trim()).filter(Boolean)),
+  ];
+  const invalidIds = uniqueIds.filter((id) => !mongoose.isValidObjectId(id));
+  if (invalidIds.length) {
+    return res.status(400).json(
+      generateResponse("Error", `Invalid order id(s): ${invalidIds.join(", ")}`, null, null)
+    );
+  }
+  if (uniqueIds.length > WHATSAPP_BULK_SEND_MAX) {
+    return res.status(400).json(
+      generateResponse(
+        "Error",
+        `Maximum ${WHATSAPP_BULK_SEND_MAX} orders per bulk send`,
+        null,
+        null
+      )
+    );
   }
 
-  const order = await Order.findById(orderId)
-    .populate("farmer", "name mobileNumber village taluka talukaName")
-    .populate("plantName", "name");
-  if (!order) {
-    return res.status(404).json(generateResponse("Error", "Order not found", null, null));
+  const allowResend = isWhatsappManualResendAllowed(req);
+  const sentBy = req.user?._id || req.user?.id || null;
+  const batchId = new mongoose.Types.ObjectId().toString();
+  const { sendDeliveryFinalSecondForOrder, DELIVERY_FINAL_TRIGGERS } = await import(
+    "../services/deliveryFinalSecondWhatsapp.service.js"
+  );
+
+  const results = [];
+  for (let i = 0; i < uniqueIds.length; i += 1) {
+    const orderId = uniqueIds[i];
+    if (i > 0 && WHATSAPP_BULK_SEND_DELAY_MS > 0) {
+      await sleepMs(WHATSAPP_BULK_SEND_DELAY_MS);
+    }
+
+    const order = await Order.findById(orderId)
+      .populate("farmer", "name mobileNumber village taluka talukaName")
+      .populate("plantName", "name");
+    if (!order) {
+      results.push({
+        orderId,
+        success: false,
+        error: "Order not found",
+      });
+      continue;
+    }
+
+    if (order.whatsappFarmReadySentAt && !allowResend) {
+      results.push({
+        orderId: String(order._id),
+        publicOrderCode: order.publicOrderCode || null,
+        success: false,
+        skipped: true,
+        reason: "already_sent",
+        alreadySent: true,
+        whatsappFarmReadySentAt: order.whatsappFarmReadySentAt,
+        whatsappFarmReadyMessageKey: order.whatsappFarmReadyMessageKey || null,
+      });
+      continue;
+    }
+
+    const result = await sendDeliveryFinalSecondForOrder(
+      order,
+      DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS,
+      {
+        trigger: "manual_selected",
+        sentBy,
+        batchId,
+      }
+    );
+
+    if (!result.success) {
+      results.push({
+        orderId: String(order._id),
+        publicOrderCode: order.publicOrderCode || null,
+        success: false,
+        skipped: result.skipped === true || result.error === "not_banana",
+        reason: result.error === "not_banana" ? "not_banana" : undefined,
+        error:
+          result.error === "not_banana"
+            ? "Farm-ready WhatsApp is only available for Banana (केळी) orders"
+            : result.error?.message ||
+              (typeof result.error === "string" ? result.error : "Failed to send message"),
+      });
+      continue;
+    }
+
+    const sentAt = new Date();
+    const msgKey = result.data?.localMessageId || result.localMessageId || null;
+    results.push({
+      orderId: String(order._id),
+      publicOrderCode: order.publicOrderCode || null,
+      success: true,
+      whatsappFarmReadySentAt: sentAt,
+      whatsappFarmReadyMessageKey: msgKey,
+      outboundLogId: result.outboundLogId || null,
+      stored: {
+        whatsappFarmReadySentAt: sentAt,
+        whatsappFarmReadyMessageKey: msgKey,
+      },
+    });
   }
 
-  if (order.whatsappFarmReadySentAt && !isWhatsappManualResendAllowed(req)) {
+  const sent = results.filter((r) => r.success).length;
+  const skipped = results.filter((r) => r.skipped).length;
+  const failed = results.filter((r) => !r.success && !r.skipped).length;
+  const total = uniqueIds.length;
+
+  if (total === 1 && failed === 1 && sent === 0 && skipped === 0) {
+    return res.status(500).json(
+      generateResponse("Error", results[0]?.error || "Failed to send message", null, results[0])
+    );
+  }
+
+  if (total === 1 && sent === 1) {
+    const one = results[0];
+    return res.status(200).json(
+      generateResponse("Success", "WhatsApp message sent successfully", {
+        ...one,
+        batchId,
+        results,
+        summary: { total, sent, skipped, failed },
+      }, undefined)
+    );
+  }
+
+  if (total === 1 && skipped === 1) {
+    const one = results[0];
     return res.status(200).json(
       generateResponse(
         "Success",
         "WhatsApp farm-ready message was already sent for this order",
         {
-          alreadySent: true,
-          whatsappFarmReadySentAt: order.whatsappFarmReadySentAt,
-          whatsappFarmReadyMessageKey: order.whatsappFarmReadyMessageKey || null,
+          ...one,
+          batchId,
+          results,
+          summary: { total, sent, skipped, failed },
         },
         undefined
       )
     );
   }
 
-  const { sendDeliveryFinalSecondForOrder, DELIVERY_FINAL_TRIGGERS } = await import(
-    "../services/deliveryFinalSecondWhatsapp.service.js"
-  );
-  const result = await sendDeliveryFinalSecondForOrder(
-    order,
-    DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS,
-    {
-      trigger: "manual_selected",
-      sentBy: req.user?._id || req.user?.id || null,
-    }
-  );
+  const message =
+    failed === 0
+      ? `Sent farm-ready WhatsApp to ${sent} of ${total} order(s)${skipped ? ` (${skipped} skipped)` : ""}`
+      : `Sent ${sent} of ${total}; ${failed} failed${skipped ? `; ${skipped} skipped` : ""}`;
 
-  if (!result.success) {
-    const msg =
-      result.error?.message ||
-      (typeof result.error === "string" ? result.error : "Failed to send message");
-    return res.status(500).json(generateResponse("Error", msg, null, result.error));
-  }
-
-  const sentAt = new Date();
-  const msgKey = result.data?.localMessageId || result.localMessageId || null;
-
-  return res.status(200).json(
-    generateResponse("Success", "WhatsApp message sent successfully", {
-      ...result.data,
-      orderId: String(order._id),
-      stored: {
-        whatsappFarmReadySentAt: sentAt,
-        whatsappFarmReadyMessageKey: msgKey,
-      },
-      whatsappFarmReadySentAt: sentAt,
-      whatsappFarmReadyMessageKey: msgKey,
-      outboundLogId: result.outboundLogId || null,
-    }, undefined)
+  return res.status(sent > 0 ? 200 : 500).json(
+    generateResponse(sent > 0 ? "Success" : "Error", message, {
+      batchId,
+      results,
+      summary: { total, sent, skipped, failed },
+    }, sent > 0 ? undefined : results)
   );
 });
 
@@ -4102,6 +4197,8 @@ export const listOrderWhatsappOutboundController = catchAsync(async (req, res) =
     status: req.query.status,
     templateType: req.query.templateType || "farm_ready",
   });
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
   return res.status(200).json(generateResponse("Success", "WhatsApp outbound log", result, undefined));
 });
 

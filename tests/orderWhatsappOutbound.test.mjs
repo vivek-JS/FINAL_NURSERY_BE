@@ -50,20 +50,22 @@ describe("order WhatsApp outbound routes", () => {
       resolve(process.cwd(), "routes/order.route.js"),
       "utf8"
     );
-    assert.match(routeSource, /\/whatsapp\/outbound",\s*listOrderWhatsappOutboundController/);
+    assert.match(routeSource, /\/whatsapp\/outbound",\s*noCacheApiResponse,\s*listOrderWhatsappOutboundController/);
     assert.match(routeSource, /\/whatsapp\/send-selected",\s*sendSelectedOrdersWhatsappController/);
   });
 });
 
 describe("send-selected controller validation", () => {
-  it("rejects more than one order id", () => {
+  it("supports bulk farm-ready send with delay and batch id", () => {
     const source = readFileSync(
       resolve(process.cwd(), "controllers/order.controller.js"),
       "utf8"
     );
-    assert.match(source, /orderIds\.length > 1/);
-    assert.match(source, /bulk send coming soon/);
+    assert.match(source, /WHATSAPP_BULK_SEND_MAX/);
+    assert.match(source, /WHATSAPP_BULK_SEND_DELAY_MS/);
+    assert.match(source, /batchId/);
     assert.match(source, /manual_selected/);
+    assert.doesNotMatch(source, /Select only 1 order for now/);
   });
 });
 
@@ -106,7 +108,9 @@ describe("updateOutboundFromStatusWebhook — status rank", () => {
       whatsappMessageId: null,
     };
 
-    OrderWhatsappOutbound.findOne = async () => ({ ...docState });
+    OrderWhatsappOutbound.findOne = () => ({
+      sort: () => Promise.resolve({ ...docState }),
+    });
     OrderWhatsappOutbound.updateOne = async (_filter, update) => {
       Object.assign(docState, update.$set);
       return { modifiedCount: 1 };
@@ -123,7 +127,9 @@ describe("updateOutboundFromStatusWebhook — status rank", () => {
     assert.equal(docState.deliveredAt, deliveredAt);
 
     const readAt = new Date("2026-05-27T10:10:00Z");
-    OrderWhatsappOutbound.findOne = async () => ({ ...docState });
+    OrderWhatsappOutbound.findOne = () => ({
+      sort: () => Promise.resolve({ ...docState }),
+    });
     const r2 = await updateOutboundFromStatusWebhook({
       localMessageId,
       event: "read",
@@ -134,7 +140,9 @@ describe("updateOutboundFromStatusWebhook — status rank", () => {
     assert.equal(docState.readAt, readAt);
 
     // delivered after read should not downgrade
-    OrderWhatsappOutbound.findOne = async () => ({ ...docState });
+    OrderWhatsappOutbound.findOne = () => ({
+      sort: () => Promise.resolve({ ...docState }),
+    });
     const r3 = await updateOutboundFromStatusWebhook({
       localMessageId,
       event: "delivered",

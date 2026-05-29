@@ -65,12 +65,19 @@ const orderWhatsappOutboundSchema = new Schema(
       trim: true,
       default: null,
     },
+    batchId: {
+      type: String,
+      trim: true,
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );
 
 orderWhatsappOutboundSchema.index({ orderId: 1, createdAt: -1 });
 orderWhatsappOutboundSchema.index({ status: 1, createdAt: -1 });
+orderWhatsappOutboundSchema.index({ batchId: 1, createdAt: -1 });
 
 const OrderWhatsappOutbound =
   mongoose.models.OrderWhatsappOutbound ||

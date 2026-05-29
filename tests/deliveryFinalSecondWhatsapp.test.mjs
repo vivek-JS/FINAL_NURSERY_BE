@@ -37,7 +37,7 @@ test("formatDeliveryFinalSecondDate — IST when UTC instant is previous evening
   );
 });
 
-test("buildDeliveryFinalSecondParameters — {{2}} plant-subtype, {{3}} qty", () => {
+test("buildDeliveryFinalSecondParameters — {{2}} plant, {{3}} subtype", () => {
   const params = buildDeliveryFinalSecondParameters(
     { name: "Vivek" },
     {
@@ -50,10 +50,42 @@ test("buildDeliveryFinalSecondParameters — {{2}} plant-subtype, {{3}} qty", ()
   );
   const map = Object.fromEntries(params.map((p) => [p.name, p.value]));
   assert.equal(map["1"], "Vivek");
-  assert.equal(map["2"], "Keli - G9");
-  assert.equal(map["3"], "5000");
+  assert.equal(map["2"], "केळी");
+  assert.equal(map["3"], "G9");
   assert.equal(map["4"], "28-May-2025");
   assert.equal(map["5"], "1212");
+});
+
+test("buildDeliveryFinalSecondParameters — empty subtype (no em dash)", () => {
+  const params = buildDeliveryFinalSecondParameters(
+    { name: "Vivek" },
+    {
+      plantName: "Banana",
+      plantSubtype: "",
+      deliveryDate: new Date(2025, 4, 28),
+      orderId: 100,
+    }
+  );
+  const map = Object.fromEntries(params.map((p) => [p.name, p.value]));
+  assert.equal(map["2"], "केळी");
+  assert.equal(map["3"], "");
+});
+
+test("buildDeliveryFinalSecondParameters — prefers orderId over publicOrderCode for {{5}}", () => {
+  const params = buildDeliveryFinalSecondParameters(
+    { name: "Vivek" },
+    {
+      publicOrderCode: "4521",
+      orderId: 5586,
+      plantName: "Banana",
+      plantSubtype: "G9",
+      numberOfPlants: 5000,
+      deliveryDate: new Date(2025, 4, 28),
+    }
+  );
+  const map = Object.fromEntries(params.map((p) => [p.name, p.value]));
+  assert.equal(map["4"], "28-May-2025");
+  assert.equal(map["5"], "5586");
 });
 
 test("past due and due in 7 days classification", () => {
@@ -72,4 +104,18 @@ test("past due and due in 7 days classification", () => {
 
 test("isFarmReadyButtonMessage accepts WATI button with period", () => {
   assert.equal(isFarmReadyButtonMessage(FARM_READY_BTN_CONFIRM_DOTTED), true);
+});
+
+test("farmReadyWhatsAppSkipReason — Banana only", async () => {
+  const { farmReadyWhatsAppSkipReason } = await import(
+    "../services/deliveryFinalSecondWhatsapp.service.js"
+  );
+  assert.equal(
+    farmReadyWhatsAppSkipReason({ plantName: { name: "Banana" } }, "G9"),
+    null
+  );
+  assert.equal(
+    farmReadyWhatsAppSkipReason({ plantName: { name: "Papaya" } }, "15 no"),
+    "not_banana"
+  );
 });
