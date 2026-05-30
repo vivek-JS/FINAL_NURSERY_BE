@@ -18,6 +18,117 @@ import {
   getSlotDispatchStats,
 } from "../utility/slotDispatchStats.js";
 import { fetchSlotAvailabilityReport } from "../services/availabilityOverview.service.js";
+import { DUE_DELIVERY_STATUSES } from "../utility/adminMisDue.js";
+import {
+  runPastDueSlotRollover,
+  isSlotExpiredByEndDay,
+  findCurrentSlotIdForGroup,
+} from "../services/pastDueSlotRollover.service.js";
+
+const DUE_PIPELINE_STATUS_SET = new Set(DUE_DELIVERY_STATUSES);
+
+function orderLinePlants(order) {
+  return (Number(order.numberOfPlants) || 0) + (Number(order.additionalPlants) || 0);
+}
+
+function isEligiblePastDueOrder(order) {
+  if (order?.quotaSource === "dealer") return false;
+  return DUE_PIPELINE_STATUS_SET.has(order?.orderStatus);
+}
+
+function mapPastDueOrderRow(order) {
+  return {
+    _id: order._id?.toString?.() || String(order._id),
+    orderId: order.orderId,
+    orderStatus: order.orderStatus,
+    plants: orderLinePlants(order),
+    pastDueSlotRollover: Boolean(order.pastDueSlotRollover),
+  };
+}
+
+/** Past-due pills: one current slot per subtype — sum + per-bucket order lists for UI. */
+function aggregatePastDueMetricsForSlotGroup(slots, ordersBySlot, asOfDate = new Date()) {
+  let pastDueRolledInPlants = 0;
+  let pastDuePendingOnSlot = 0;
+  const currentSlotId = findCurrentSlotIdForGroup(slots, asOfDate);
+
+  const rolledInOnCurrentSlot = [];
+  const rolledInOnOtherSlots = [];
+  const pendingBySlotMap = new Map();
+
+  for (const slot of slots || []) {
+    if (slot.status === false) continue;
+    const slotId = slot._id?.toString?.() || String(slot._id);
+    const orders = ordersBySlot.get(slotId) || [];
+    const isCurrent = slotId === currentSlotId;
+
+    for (const o of orders) {
+      const qty = orderLinePlants(o);
+      const row = mapPastDueOrderRow(o);
+
+      if (o.pastDueSlotRollover) {
+        pastDueRolledInPlants += qty;
+        if (isCurrent) rolledInOnCurrentSlot.push(row);
+        else rolledInOnOtherSlots.push(row);
+      }
+
+      if (isSlotExpiredByEndDay(slot, asOfDate) && isEligiblePastDueOrder(o)) {
+        pastDuePendingOnSlot += qty;
+        if (!pendingBySlotMap.has(slotId)) {
+          pendingBySlotMap.set(slotId, {
+            slotId,
+            startDay: slot.startDay,
+            endDay: slot.endDay,
+            label: `${slot.startDay}–${slot.endDay}`,
+            orderCount: 0,
+            plants: 0,
+            orders: [],
+          });
+        }
+        const bucket = pendingBySlotMap.get(slotId);
+        bucket.orders.push(row);
+        bucket.orderCount += 1;
+        bucket.plants += qty;
+      }
+    }
+  }
+
+  const pendingBySlot = [...pendingBySlotMap.values()].sort(
+    (a, b) => b.plants - a.plants || b.orderCount - a.orderCount
+  );
+
+  const pastDueRolledInOrders =
+    rolledInOnCurrentSlot.length + rolledInOnOtherSlots.length;
+  const pastDuePendingOrders = pendingBySlot.reduce(
+    (s, b) => s + b.orderCount,
+    0
+  );
+
+  return {
+    currentSlotId,
+    pastDueRolledInPlants,
+    pastDuePendingOnSlot,
+    pastDueRolledInOrders,
+    pastDuePendingOrders,
+    pastDueDetail: {
+      rolledInOnCurrentSlot: {
+        orderCount: rolledInOnCurrentSlot.length,
+        plants: rolledInOnCurrentSlot.reduce((s, r) => s + r.plants, 0),
+        orders: rolledInOnCurrentSlot,
+      },
+      rolledInOnOtherSlots: {
+        orderCount: rolledInOnOtherSlots.length,
+        plants: rolledInOnOtherSlots.reduce((s, r) => s + r.plants, 0),
+        orders: rolledInOnOtherSlots,
+      },
+      pendingBySlot,
+      pendingTotal: {
+        orderCount: pendingBySlot.reduce((s, b) => s + b.orderCount, 0),
+        plants: pastDuePendingOnSlot,
+      },
+    },
+  };
+}
 
 // Helper function to convert month name to number
 const getMonthNumber = (monthName) => {
@@ -2383,7 +2494,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       ]
     })
       .select(
-        "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot"
+        "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover"
       )
       .lean();
 
@@ -2496,8 +2607,16 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       }
     }
 
+    const asOfToday = new Date();
+
     // Update slots with orders and calculate values
     for (const slotGroup of slots) {
+      const pastDueGroup = aggregatePastDueMetricsForSlotGroup(
+        slotGroup.slots,
+        ordersBySlot,
+        asOfToday
+      );
+
       for (const slot of slotGroup.slots) {
         const slotId = slot._id?.toString ? slot._id.toString() : slot._id;
         const orders = ordersBySlot.get(slotId) || [];
@@ -2519,10 +2638,27 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         slot.dispatchedFromOtherSlots = dispatchedFromOtherBySlot.get(slotId) || 0;
         slot.releasedForEarlyDispatch = releasedForEarlyBySlot.get(slotId) || 0;
 
+        const isCurrentSlot = slotId === pastDueGroup.currentSlotId;
+        slot.isCurrentDateSlot = isCurrentSlot;
+        slot.pastDueRolledInPlants = isCurrentSlot
+          ? pastDueGroup.pastDueRolledInPlants
+          : 0;
+        slot.pastDuePendingOnSlot = isCurrentSlot
+          ? pastDueGroup.pastDuePendingOnSlot
+          : 0;
+        slot.pastDueRolledInOrders = isCurrentSlot
+          ? pastDueGroup.pastDueRolledInOrders
+          : 0;
+        slot.pastDuePendingOrders = isCurrentSlot
+          ? pastDueGroup.pastDuePendingOrders
+          : 0;
+        slot.pastDueDetail = isCurrentSlot ? pastDueGroup.pastDueDetail : null;
+
         const resolved = resolveSlotBufferFields(slot, { subtypeBuffer, plantBuffer });
         slot.effectiveBuffer = resolved.effectiveBuffer;
         slot.bufferAdjustedCapacity = resolved.bufferAdjustedCapacity;
         slot.availablePlants = resolved.availablePlants;
+        slot.availableIncludingPastDue = resolved.availablePlants;
         slot.totalPlants = resolved.totalCapacity;
         slot.bufferAmount = resolved.bufferAmount;
         slot.displayBufferAmount = resolved.displayBufferAmount;
@@ -4767,6 +4903,45 @@ export const getAvailabilityOverview = async (req, res) => {
       success: false,
       message: "Internal server error",
       error: error.message,
+    });
+  }
+};
+
+function canRunPastDueSlotRollover(user) {
+  const role = String(user?.role || user?.jobTitle || "").toUpperCase();
+  return ["SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "ADMIN"].includes(role);
+}
+
+/** POST /slots/past-due-rollover/run — manual past-due slot rollover (admin). */
+export const runPastDueSlotRolloverController = async (req, res) => {
+  try {
+    if (!canRunPastDueSlotRollover(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only SUPER_ADMIN or OFFICE_ADMIN may run past-due slot rollover",
+      });
+    }
+
+    const dryRun =
+      req.body?.dryRun === true ||
+      String(req.query?.dryRun || "").toLowerCase() === "true";
+    const asOfRaw = req.body?.asOfDate || req.query?.asOfDate;
+    const asOfDate = asOfRaw ? new Date(asOfRaw) : undefined;
+
+    const summary = await runPastDueSlotRollover({ asOfDate, dryRun });
+
+    return res.status(200).json({
+      success: true,
+      message: dryRun
+        ? "Past-due slot rollover dry-run completed"
+        : "Past-due slot rollover completed",
+      data: summary,
+    });
+  } catch (error) {
+    console.error("Error in runPastDueSlotRolloverController:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Past-due slot rollover failed",
     });
   }
 };

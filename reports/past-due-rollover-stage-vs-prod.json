@@ -1,0 +1,1922 @@
+{
+  "asOf": "2026-05-30",
+  "stage": {
+    "ordersToMove": 21,
+    "plantsToMove": 138599,
+    "byOrderStatus": [
+      {
+        "status": "PENDING",
+        "orders": 7,
+        "plants": 7780
+      },
+      {
+        "status": "ACCEPTED",
+        "orders": 12,
+        "plants": 128597
+      },
+      {
+        "status": "FARM_READY",
+        "orders": 1,
+        "plants": 0
+      },
+      {
+        "status": "READY_FOR_DISPATCH",
+        "orders": 1,
+        "plants": 2222
+      }
+    ],
+    "orders": [
+      {
+        "orderId": "699af92a8b988eba97a50376",
+        "publicOrderId": 252601749,
+        "orderStatus": "ACCEPTED",
+        "plants": 4998,
+        "fromSlot": "01-02-2026–07-02-2026",
+        "toSlot": "08-02-2026–14-02-2026",
+        "deliveryDate": "2026-02-07T18:30:00.000Z"
+      },
+      {
+        "orderId": "69a8067afc0bf0179bc8bcb2",
+        "publicOrderId": 252601754,
+        "orderStatus": "PENDING",
+        "plants": 123,
+        "fromSlot": "01-03-2026–07-03-2026",
+        "toSlot": "08-03-2026–14-03-2026",
+        "deliveryDate": "2026-03-07T18:30:00.000Z"
+      },
+      {
+        "orderId": "69d0f75a1a7d14409e73848a",
+        "publicOrderId": 252601771,
+        "orderStatus": "FARM_READY",
+        "plants": 0,
+        "fromSlot": "08-03-2026–14-03-2026",
+        "toSlot": "15-03-2026–21-03-2026",
+        "deliveryDate": "2026-03-14T18:30:00.000Z"
+      },
+      {
+        "orderId": "69c4dd360061b780022e5275",
+        "publicOrderId": 252601760,
+        "orderStatus": "ACCEPTED",
+        "plants": 3600,
+        "fromSlot": "15-03-2026–21-03-2026",
+        "toSlot": "22-03-2026–31-03-2026",
+        "deliveryDate": "2026-03-21T18:30:00.000Z"
+      },
+      {
+        "orderId": "69a7fbfffc0bf0179bc8b898",
+        "publicOrderId": 252601753,
+        "orderStatus": "PENDING",
+        "plants": 12,
+        "fromSlot": "15-03-2026–21-03-2026",
+        "toSlot": "22-03-2026–31-03-2026",
+        "deliveryDate": "2026-03-21T18:30:00.000Z"
+      },
+      {
+        "orderId": "69c4d2ee0061b780022e4f51",
+        "publicOrderId": 252601759,
+        "orderStatus": "PENDING",
+        "plants": 123,
+        "fromSlot": "15-03-2026–21-03-2026",
+        "toSlot": "22-03-2026–31-03-2026",
+        "deliveryDate": "2026-03-21T18:30:00.000Z"
+      },
+      {
+        "orderId": "69c4d04d19dada0c83b43a88",
+        "publicOrderId": 252601758,
+        "orderStatus": "PENDING",
+        "plants": 1233,
+        "fromSlot": "22-03-2026–31-03-2026",
+        "toSlot": "01-04-2026–07-04-2026",
+        "deliveryDate": "2026-03-31T18:30:00.000Z"
+      },
+      {
+        "orderId": "69a0512cba89155eb56a1ea9",
+        "publicOrderId": 252601751,
+        "orderStatus": "ACCEPTED",
+        "plants": 10000,
+        "fromSlot": "08-04-2026–14-04-2026",
+        "toSlot": "15-04-2026–21-04-2026",
+        "deliveryDate": "2026-04-14T18:30:00.000Z"
+      },
+      {
+        "orderId": "69e4575af6efae7b2565c6e2",
+        "publicOrderId": 252601792,
+        "orderStatus": "ACCEPTED",
+        "plants": 1222,
+        "fromSlot": "15-04-2026–21-04-2026",
+        "toSlot": "22-04-2026–30-04-2026",
+        "deliveryDate": "2026-04-21T18:30:00.000Z"
+      },
+      {
+        "orderId": "69e457bbf6efae7b2565c777",
+        "publicOrderId": 252601793,
+        "orderStatus": "ACCEPTED",
+        "plants": 1222,
+        "fromSlot": "15-04-2026–21-04-2026",
+        "toSlot": "22-04-2026–30-04-2026",
+        "deliveryDate": "2026-04-21T18:30:00.000Z"
+      },
+      {
+        "orderId": "69e457e2f6efae7b2565c80c",
+        "publicOrderId": 252601794,
+        "orderStatus": "ACCEPTED",
+        "plants": 1000,
+        "fromSlot": "15-04-2026–21-04-2026",
+        "toSlot": "22-04-2026–30-04-2026",
+        "deliveryDate": "2026-04-21T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a11e540ca32892cf3725e17",
+        "publicOrderId": 252601797,
+        "orderStatus": "ACCEPTED",
+        "plants": 222,
+        "fromSlot": "15-04-2026–21-04-2026",
+        "toSlot": "22-04-2026–30-04-2026",
+        "deliveryDate": "2026-04-21T18:30:00.000Z"
+      },
+      {
+        "orderId": "69c4bfd1363da9f6d4374f03",
+        "publicOrderId": 252601756,
+        "orderStatus": "PENDING",
+        "plants": 12,
+        "fromSlot": "15-04-2026–21-04-2026",
+        "toSlot": "22-04-2026–30-04-2026",
+        "deliveryDate": "2026-04-21T18:30:00.000Z"
+      },
+      {
+        "orderId": "69e45745f6efae7b2565c64d",
+        "publicOrderId": 252601791,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 2222,
+        "fromSlot": "15-04-2026–21-04-2026",
+        "toSlot": "22-04-2026–30-04-2026",
+        "deliveryDate": "2026-04-21T18:30:00.000Z"
+      },
+      {
+        "orderId": "69c96621258d8fa43ef140b5",
+        "publicOrderId": 252601764,
+        "orderStatus": "ACCEPTED",
+        "plants": 100000,
+        "fromSlot": "22-04-2026–30-04-2026",
+        "toSlot": "01-05-2026–07-05-2026",
+        "deliveryDate": "2026-04-30T18:30:00.000Z"
+      },
+      {
+        "orderId": "69d86f284f24a9f4b27b7218",
+        "publicOrderId": 252601773,
+        "orderStatus": "ACCEPTED",
+        "plants": 1233,
+        "fromSlot": "22-04-2026–30-04-2026",
+        "toSlot": "01-05-2026–07-05-2026",
+        "deliveryDate": "2026-04-30T18:30:00.000Z"
+      },
+      {
+        "orderId": "69d8889b9947f1abbf69e00e",
+        "publicOrderId": 252601779,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "22-04-2026–30-04-2026",
+        "toSlot": "01-05-2026–07-05-2026",
+        "deliveryDate": "2026-04-30T18:30:00.000Z"
+      },
+      {
+        "orderId": "69c966fd258d8fa43ef1424b",
+        "publicOrderId": 252601765,
+        "orderStatus": "PENDING",
+        "plants": 1600,
+        "fromSlot": "08-05-2026–14-05-2026",
+        "toSlot": "15-05-2026–21-05-2026",
+        "deliveryDate": "2026-05-14T18:30:00.000Z"
+      },
+      {
+        "orderId": "69cb2f44e7bfb692edcfbea7",
+        "publicOrderId": 252601768,
+        "orderStatus": "PENDING",
+        "plants": 4677,
+        "fromSlot": "05-04-2026–05-04-2026",
+        "toSlot": "06-04-2026–06-04-2026",
+        "deliveryDate": "2026-04-05T18:30:00.000Z"
+      },
+      {
+        "orderId": "69cb8b3e163086716a7e78ea",
+        "publicOrderId": 252601770,
+        "orderStatus": "ACCEPTED",
+        "plants": 2000,
+        "fromSlot": "01-04-2026–07-04-2026",
+        "toSlot": "08-04-2026–14-04-2026",
+        "deliveryDate": "2026-04-07T18:30:00.000Z"
+      },
+      {
+        "orderId": "69cb7d12b6eb3413378d0339",
+        "publicOrderId": 252601769,
+        "orderStatus": "ACCEPTED",
+        "plants": 100,
+        "fromSlot": "08-04-2026–14-04-2026",
+        "toSlot": "15-04-2026–21-04-2026",
+        "deliveryDate": "2026-04-14T18:30:00.000Z"
+      }
+    ]
+  },
+  "prod": {
+    "ordersToMove": 186,
+    "plantsToMove": 726836,
+    "byOrderStatus": [
+      {
+        "status": "ACCEPTED",
+        "orders": 132,
+        "plants": 632226
+      },
+      {
+        "status": "FARM_READY",
+        "orders": 26,
+        "plants": 28000
+      },
+      {
+        "status": "READY_FOR_DISPATCH",
+        "orders": 25,
+        "plants": 62810
+      },
+      {
+        "status": "DISPATCH_PROCESS",
+        "orders": 3,
+        "plants": 3800
+      }
+    ],
+    "orders": [
+      {
+        "orderId": "69ca79a2c6624a5d70fe778c",
+        "publicOrderId": 1463,
+        "orderStatus": "ACCEPTED",
+        "plants": 3500,
+        "fromSlot": "27-03-2026–27-03-2026",
+        "toSlot": "28-03-2026–28-03-2026",
+        "deliveryDate": "2026-03-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a2cc6624a5d7000ea33",
+        "publicOrderId": 1635,
+        "orderStatus": "ACCEPTED",
+        "plants": 2500,
+        "fromSlot": "26-03-2026–01-04-2026",
+        "toSlot": "02-04-2026–08-04-2026",
+        "deliveryDate": "2026-04-01T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc6be3fa1b373422106a60",
+        "publicOrderId": 25261663,
+        "orderStatus": "ACCEPTED",
+        "plants": 4500,
+        "fromSlot": "02-04-2026–08-04-2026",
+        "toSlot": "09-04-2026–15-04-2026",
+        "deliveryDate": "2026-04-08T18:30:00.000Z"
+      },
+      {
+        "orderId": "69cb72646d7fa837e289cffe",
+        "publicOrderId": 1756,
+        "orderStatus": "ACCEPTED",
+        "plants": 100,
+        "fromSlot": "01-04-2026–07-04-2026",
+        "toSlot": "08-04-2026–14-04-2026",
+        "deliveryDate": "2026-04-07T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc6b3bfa1b373422106854",
+        "publicOrderId": 25261662,
+        "orderStatus": "ACCEPTED",
+        "plants": 2900,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca78c1c6624a5d70fa9366",
+        "publicOrderId": 1187,
+        "orderStatus": "ACCEPTED",
+        "plants": 2000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca791dc6624a5d70fc353c",
+        "publicOrderId": 1299,
+        "orderStatus": "ACCEPTED",
+        "plants": 4000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a6ec6624a5d7002248a",
+        "publicOrderId": 1712,
+        "orderStatus": "ACCEPTED",
+        "plants": 6000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc695cfa1b373422106123",
+        "publicOrderId": 25261659,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc6a80fa1b373422106619",
+        "publicOrderId": 25261661,
+        "orderStatus": "ACCEPTED",
+        "plants": 4000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7a48fa1b37342210939e",
+        "publicOrderId": 25261679,
+        "orderStatus": "ACCEPTED",
+        "plants": 2300,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7b7afa1b373422109a35",
+        "publicOrderId": 25261681,
+        "orderStatus": "ACCEPTED",
+        "plants": 5700,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc8b48fa1b37342210d1e8",
+        "publicOrderId": 25261700,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc8c60fa1b37342210d734",
+        "publicOrderId": 25261703,
+        "orderStatus": "ACCEPTED",
+        "plants": 19000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc9a03fa1b373422110421",
+        "publicOrderId": 25261724,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7986c6624a5d70fe0582",
+        "publicOrderId": 1427,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca79f5c6624a5d70ffea1a",
+        "publicOrderId": 1568,
+        "orderStatus": "ACCEPTED",
+        "plants": 4000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca79f7c6624a5d70fff366",
+        "publicOrderId": 1570,
+        "orderStatus": "ACCEPTED",
+        "plants": 2500,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a78c6624a5d7002579f",
+        "publicOrderId": 1723,
+        "orderStatus": "ACCEPTED",
+        "plants": 4000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a7dc6624a5d70026ed9",
+        "publicOrderId": 1728,
+        "orderStatus": "ACCEPTED",
+        "plants": 2000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a7ec6624a5d7002737e",
+        "publicOrderId": 1729,
+        "orderStatus": "ACCEPTED",
+        "plants": 4500,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69da2b0329e2fc1a42280884",
+        "publicOrderId": 25261627,
+        "orderStatus": "ACCEPTED",
+        "plants": 35000,
+        "fromSlot": "18-04-2026–18-04-2026",
+        "toSlot": "19-04-2026–19-04-2026",
+        "deliveryDate": "2026-04-18T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc64e2fa1b37342210565c",
+        "publicOrderId": 25261653,
+        "orderStatus": "ACCEPTED",
+        "plants": 9000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc68d3fa1b373422105f66",
+        "publicOrderId": 25261658,
+        "orderStatus": "ACCEPTED",
+        "plants": 3600,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc69d4fa1b3734221062df",
+        "publicOrderId": 25261660,
+        "orderStatus": "ACCEPTED",
+        "plants": 4999,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7933fa1b373422109006",
+        "publicOrderId": 25261677,
+        "orderStatus": "ACCEPTED",
+        "plants": 3500,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7c02fa1b373422109c22",
+        "publicOrderId": 25261682,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7d7dfa1b37342210a40b",
+        "publicOrderId": 25261686,
+        "orderStatus": "ACCEPTED",
+        "plants": 6000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7ef3fa1b37342210ad76",
+        "publicOrderId": 25261691,
+        "orderStatus": "ACCEPTED",
+        "plants": 6000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7f44fa1b37342210af3a",
+        "publicOrderId": 25261692,
+        "orderStatus": "ACCEPTED",
+        "plants": 2000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7faefa1b37342210b0fb",
+        "publicOrderId": 25261693,
+        "orderStatus": "ACCEPTED",
+        "plants": 4000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc8013fa1b37342210b2d3",
+        "publicOrderId": 25261694,
+        "orderStatus": "ACCEPTED",
+        "plants": 4000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc82a5fa1b37342210b820",
+        "publicOrderId": 25261696,
+        "orderStatus": "ACCEPTED",
+        "plants": 5500,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc82f2fa1b37342210ba07",
+        "publicOrderId": 25261697,
+        "orderStatus": "ACCEPTED",
+        "plants": 4499,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc8381fa1b37342210bbe6",
+        "publicOrderId": 25261698,
+        "orderStatus": "ACCEPTED",
+        "plants": 4100,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc8cb3fa1b37342210d8fa",
+        "publicOrderId": 25261704,
+        "orderStatus": "ACCEPTED",
+        "plants": 6500,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc8d1efa1b37342210dabe",
+        "publicOrderId": 25261705,
+        "orderStatus": "ACCEPTED",
+        "plants": 3500,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc8f49fa1b37342210e5c3",
+        "publicOrderId": 25261709,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc9120fa1b37342210ee7d",
+        "publicOrderId": 25261712,
+        "orderStatus": "ACCEPTED",
+        "plants": 6000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc917dfa1b37342210f041",
+        "publicOrderId": 25261713,
+        "orderStatus": "ACCEPTED",
+        "plants": 2000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc91e1fa1b37342210f205",
+        "publicOrderId": 25261714,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc92d8fa1b37342210f74f",
+        "publicOrderId": 25261717,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc94ebfa1b37342210fb41",
+        "publicOrderId": 25261719,
+        "orderStatus": "ACCEPTED",
+        "plants": 4000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc97adfa1b37342210fecd",
+        "publicOrderId": 25261721,
+        "orderStatus": "ACCEPTED",
+        "plants": 3250,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc9868fa1b373422110092",
+        "publicOrderId": 25261722,
+        "orderStatus": "ACCEPTED",
+        "plants": 4500,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc9990fa1b373422110259",
+        "publicOrderId": 25261723,
+        "orderStatus": "ACCEPTED",
+        "plants": 3800,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc9ad6fa1b3734221107ac",
+        "publicOrderId": 25261726,
+        "orderStatus": "ACCEPTED",
+        "plants": 8000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dcac6afa1b37342211131a",
+        "publicOrderId": 25261730,
+        "orderStatus": "ACCEPTED",
+        "plants": 5999,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7921c6624a5d70fc4c74",
+        "publicOrderId": 1304,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7996c6624a5d70fe3fac",
+        "publicOrderId": 1448,
+        "orderStatus": "ACCEPTED",
+        "plants": 6500,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7996c6624a5d70fe4452",
+        "publicOrderId": 1449,
+        "orderStatus": "ACCEPTED",
+        "plants": 9000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca79f6c6624a5d70ffeec0",
+        "publicOrderId": 1569,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7e1bfa1b37342210a899",
+        "publicOrderId": 25261688,
+        "orderStatus": "ACCEPTED",
+        "plants": 1400,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a76c6624a5d70024e55",
+        "publicOrderId": 1721,
+        "orderStatus": "ACCEPTED",
+        "plants": 20000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc74e4fa1b373422108499",
+        "publicOrderId": 25261673,
+        "orderStatus": "ACCEPTED",
+        "plants": 8000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc76eafa1b373422108da5",
+        "publicOrderId": 25261676,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7c5afa1b373422109e33",
+        "publicOrderId": 25261683,
+        "orderStatus": "ACCEPTED",
+        "plants": 5600,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7e93fa1b37342210aab6",
+        "publicOrderId": 25261689,
+        "orderStatus": "ACCEPTED",
+        "plants": 6000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc8e2ffa1b37342210e079",
+        "publicOrderId": 25261706,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc8feefa1b37342210e7c4",
+        "publicOrderId": 25261710,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc903dfa1b37342210ea01",
+        "publicOrderId": 25261711,
+        "orderStatus": "ACCEPTED",
+        "plants": 6000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc9226fa1b37342210f3c7",
+        "publicOrderId": 25261715,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc9b56fa1b373422110973",
+        "publicOrderId": 25261727,
+        "orderStatus": "ACCEPTED",
+        "plants": 2000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69df4704fa1b373422127975",
+        "publicOrderId": 25261762,
+        "orderStatus": "ACCEPTED",
+        "plants": 1500,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca790fc6624a5d70fbffba",
+        "publicOrderId": 1279,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69da2aef29e2fc1a4227a0e9",
+        "publicOrderId": 25261608,
+        "orderStatus": "ACCEPTED",
+        "plants": 1500,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7997c6624a5d70fe48f7",
+        "publicOrderId": 1450,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca79f8c6624a5d70fff80c",
+        "publicOrderId": 1571,
+        "orderStatus": "ACCEPTED",
+        "plants": 5500,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc6c96fa1b373422106cd4",
+        "publicOrderId": 25261664,
+        "orderStatus": "ACCEPTED",
+        "plants": 2800,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc6d1cfa1b373422106ea7",
+        "publicOrderId": 25261665,
+        "orderStatus": "ACCEPTED",
+        "plants": 4500,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7536fa1b37342210869b",
+        "publicOrderId": 25261674,
+        "orderStatus": "ACCEPTED",
+        "plants": 6000,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc75dafa1b373422108a7e",
+        "publicOrderId": 25261675,
+        "orderStatus": "ACCEPTED",
+        "plants": 6000,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc799efa1b3734221091df",
+        "publicOrderId": 25261678,
+        "orderStatus": "ACCEPTED",
+        "plants": 5400,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7ae5fa1b3734221097f1",
+        "publicOrderId": 25261680,
+        "orderStatus": "ACCEPTED",
+        "plants": 11000,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a6fc6624a5d7002292f",
+        "publicOrderId": 1713,
+        "orderStatus": "ACCEPTED",
+        "plants": 2600,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc6d7ffa1b373422107062",
+        "publicOrderId": 25261666,
+        "orderStatus": "ACCEPTED",
+        "plants": 4500,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc7cb6fa1b37342210a018",
+        "publicOrderId": 25261684,
+        "orderStatus": "ACCEPTED",
+        "plants": 3200,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69f364dcc351826855812b2c",
+        "publicOrderId": 25261887,
+        "orderStatus": "ACCEPTED",
+        "plants": 1500,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69d6355100cc41783dd831f3",
+        "publicOrderId": 1797,
+        "orderStatus": "ACCEPTED",
+        "plants": 4500,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc71b9fa1b3734221074ac",
+        "publicOrderId": 25261667,
+        "orderStatus": "ACCEPTED",
+        "plants": 3600,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc71fdfa1b373422107684",
+        "publicOrderId": 25261668,
+        "orderStatus": "ACCEPTED",
+        "plants": 2900,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc72bbfa1b373422107854",
+        "publicOrderId": 25261669,
+        "orderStatus": "ACCEPTED",
+        "plants": 5200,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc73e5fa1b373422107e62",
+        "publicOrderId": 25261672,
+        "orderStatus": "ACCEPTED",
+        "plants": 6000,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca788cc6624a5d70f9aff4",
+        "publicOrderId": 1116,
+        "orderStatus": "ACCEPTED",
+        "plants": 2600,
+        "fromSlot": "30-04-2026–06-05-2026",
+        "toSlot": "07-05-2026–13-05-2026",
+        "deliveryDate": "2026-05-06T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc658bfa1b373422105819",
+        "publicOrderId": 25261654,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc65e2fa1b3734221059d6",
+        "publicOrderId": 25261655,
+        "orderStatus": "ACCEPTED",
+        "plants": 9000,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69da2af529e2fc1a4227b4ad",
+        "publicOrderId": 25261615,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69da2afb29e2fc1a4227cf9c",
+        "publicOrderId": 25261622,
+        "orderStatus": "ACCEPTED",
+        "plants": 4000,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca785bc6624a5d70f8fa95",
+        "publicOrderId": 1049,
+        "orderStatus": "ACCEPTED",
+        "plants": 3500,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69f57c49c351826855829828",
+        "publicOrderId": 25261910,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0086da23578a92917b8aeb",
+        "publicOrderId": 25262038,
+        "orderStatus": "ACCEPTED",
+        "plants": 500,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a008cbf23578a92917b8e04",
+        "publicOrderId": 25262039,
+        "orderStatus": "ACCEPTED",
+        "plants": 600,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc737efa1b373422107b90",
+        "publicOrderId": 25261671,
+        "orderStatus": "ACCEPTED",
+        "plants": 2899,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a00745923578a92917b8583",
+        "publicOrderId": 25262037,
+        "orderStatus": "ACCEPTED",
+        "plants": 60000,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a02a5eb23578a92917c0021",
+        "publicOrderId": 25262045,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a041b9023578a92917ca44e",
+        "publicOrderId": 25262071,
+        "orderStatus": "ACCEPTED",
+        "plants": 500,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a042f4923578a92917cc869",
+        "publicOrderId": 25262075,
+        "orderStatus": "ACCEPTED",
+        "plants": 1000,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a04977f23578a92917d1882",
+        "publicOrderId": 25262081,
+        "orderStatus": "ACCEPTED",
+        "plants": 240,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "69da2af729e2fc1a4227bc5f",
+        "publicOrderId": 25261617,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a042d3223578a92917cc6b5",
+        "publicOrderId": 25262074,
+        "orderStatus": "ACCEPTED",
+        "plants": 300,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a05d9460f3f3c91e87e9040",
+        "publicOrderId": 25262095,
+        "orderStatus": "ACCEPTED",
+        "plants": 2500,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0687bb55425c447421353b",
+        "publicOrderId": 25262102,
+        "orderStatus": "ACCEPTED",
+        "plants": 60,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a08019a55425c447421e898",
+        "publicOrderId": 25262115,
+        "orderStatus": "ACCEPTED",
+        "plants": 200,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a080b4c55425c447421f5fc",
+        "publicOrderId": 25262117,
+        "orderStatus": "ACCEPTED",
+        "plants": 1700,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a081ace55425c447422179d",
+        "publicOrderId": 25262121,
+        "orderStatus": "ACCEPTED",
+        "plants": 300,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a081b1d55425c4474221928",
+        "publicOrderId": 25262122,
+        "orderStatus": "ACCEPTED",
+        "plants": 1400,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0882d155425c4474225ea1",
+        "publicOrderId": 25262136,
+        "orderStatus": "ACCEPTED",
+        "plants": 200,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a094bb155425c4474227b03",
+        "publicOrderId": 25262145,
+        "orderStatus": "ACCEPTED",
+        "plants": 180,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7985c6624a5d70fe00dd",
+        "publicOrderId": 1426,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc677efa1b373422105b98",
+        "publicOrderId": 25261656,
+        "orderStatus": "ACCEPTED",
+        "plants": 7000,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "69fc2d1723578a929179047f",
+        "publicOrderId": 25261969,
+        "orderStatus": "ACCEPTED",
+        "plants": 5000,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a00652723578a92917b653c",
+        "publicOrderId": 25262035,
+        "orderStatus": "ACCEPTED",
+        "plants": 2500,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0d822d55425c447423fe7e",
+        "publicOrderId": 25262212,
+        "orderStatus": "ACCEPTED",
+        "plants": 500,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0d8afb55425c4474241d0f",
+        "publicOrderId": 25262222,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "69fda7ca23578a92917995b7",
+        "publicOrderId": 25261981,
+        "orderStatus": "ACCEPTED",
+        "plants": 3000,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0da31955425c4474245365",
+        "publicOrderId": 25262231,
+        "orderStatus": "ACCEPTED",
+        "plants": 600,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0ef02855425c447424afeb",
+        "publicOrderId": 25262245,
+        "orderStatus": "ACCEPTED",
+        "plants": 2000,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a11567d55425c447425516a",
+        "publicOrderId": 25262277,
+        "orderStatus": "ACCEPTED",
+        "plants": 600,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a12b689d92b520958f00ac0",
+        "publicOrderId": 25262298,
+        "orderStatus": "ACCEPTED",
+        "plants": 1000,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "69d105580c646061d2afce83",
+        "publicOrderId": 1766,
+        "orderStatus": "ACCEPTED",
+        "plants": 2500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "69f6c7aec351826855832460",
+        "publicOrderId": 25261919,
+        "orderStatus": "ACCEPTED",
+        "plants": 1000,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "69f89cb4c6c1856948dc87bc",
+        "publicOrderId": 25261939,
+        "orderStatus": "ACCEPTED",
+        "plants": 13500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "69feb3fd23578a92917a03f9",
+        "publicOrderId": 25261989,
+        "orderStatus": "ACCEPTED",
+        "plants": 24000,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a03267723578a92917c8677",
+        "publicOrderId": 25262063,
+        "orderStatus": "ACCEPTED",
+        "plants": 15000,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a1481dc37e9e35dbfdce30a",
+        "publicOrderId": 25262328,
+        "orderStatus": "ACCEPTED",
+        "plants": 300,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a8ec6624a5d7002a640",
+        "publicOrderId": 1750,
+        "orderStatus": "ACCEPTED",
+        "plants": 2500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a1116a555425c447424fc9d",
+        "publicOrderId": 25262259,
+        "orderStatus": "ACCEPTED",
+        "plants": 2000,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a13d1c837e9e35dbfdcb286",
+        "publicOrderId": 25262316,
+        "orderStatus": "ACCEPTED",
+        "plants": 300,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a150afd37e9e35dbfdce66e",
+        "publicOrderId": 25262329,
+        "orderStatus": "ACCEPTED",
+        "plants": 200,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a199b10b7a095d3b3c665b4",
+        "publicOrderId": 1883,
+        "orderStatus": "ACCEPTED",
+        "plants": 3500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a166aedd2921e6f6cd638de",
+        "publicOrderId": 25262348,
+        "orderStatus": "ACCEPTED",
+        "plants": 1100,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a199042b7a095d3b3c65fb1",
+        "publicOrderId": 1881,
+        "orderStatus": "ACCEPTED",
+        "plants": 1500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "69d7059a00cc41783dd84c01",
+        "publicOrderId": 1800,
+        "orderStatus": "DISPATCH_PROCESS",
+        "plants": 800,
+        "fromSlot": "02-04-2026–08-04-2026",
+        "toSlot": "09-04-2026–15-04-2026",
+        "deliveryDate": "2026-04-08T18:30:00.000Z"
+      },
+      {
+        "orderId": "69d7054500cc41783dd84a35",
+        "publicOrderId": 1798,
+        "orderStatus": "DISPATCH_PROCESS",
+        "plants": 1000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69d7056b00cc41783dd84b35",
+        "publicOrderId": 1799,
+        "orderStatus": "DISPATCH_PROCESS",
+        "plants": 2000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a198acdb7a095d3b3c65d9a",
+        "publicOrderId": 1880,
+        "orderStatus": "FARM_READY",
+        "plants": 500,
+        "fromSlot": "26-03-2026–01-04-2026",
+        "toSlot": "02-04-2026–08-04-2026",
+        "deliveryDate": "2026-04-01T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca789bc6624a5d70f9f92b",
+        "publicOrderId": 1136,
+        "orderStatus": "FARM_READY",
+        "plants": 1800,
+        "fromSlot": "02-04-2026–08-04-2026",
+        "toSlot": "09-04-2026–15-04-2026",
+        "deliveryDate": "2026-04-08T18:30:00.000Z"
+      },
+      {
+        "orderId": "69e9906c22310cbd3a139344",
+        "publicOrderId": 25261841,
+        "orderStatus": "FARM_READY",
+        "plants": 2800,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69eb349ac3518268557e6cb6",
+        "publicOrderId": 25261861,
+        "orderStatus": "FARM_READY",
+        "plants": 500,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dcc291fa1b373422113276",
+        "publicOrderId": 25261735,
+        "orderStatus": "FARM_READY",
+        "plants": 4000,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69e06235ddafd1ac6d9b7663",
+        "publicOrderId": 25261774,
+        "orderStatus": "FARM_READY",
+        "plants": 2200,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca78ffc6624a5d70fbb7ef",
+        "publicOrderId": 1261,
+        "orderStatus": "FARM_READY",
+        "plants": 2500,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0a86df55425c447422affc",
+        "publicOrderId": 25262159,
+        "orderStatus": "FARM_READY",
+        "plants": 200,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0d88ff55425c44742411b2",
+        "publicOrderId": 25262218,
+        "orderStatus": "FARM_READY",
+        "plants": 490,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a1133c155425c4474251d82",
+        "publicOrderId": 25262263,
+        "orderStatus": "FARM_READY",
+        "plants": 120,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a1133f955425c4474252007",
+        "publicOrderId": 25262264,
+        "orderStatus": "FARM_READY",
+        "plants": 300,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a11343155425c4474252193",
+        "publicOrderId": 25262265,
+        "orderStatus": "FARM_READY",
+        "plants": 120,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a11353a55425c44742526ef",
+        "publicOrderId": 25262266,
+        "orderStatus": "FARM_READY",
+        "plants": 1080,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a11364a55425c4474252bf0",
+        "publicOrderId": 25262267,
+        "orderStatus": "FARM_READY",
+        "plants": 500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a11368055425c4474252d7d",
+        "publicOrderId": 25262268,
+        "orderStatus": "FARM_READY",
+        "plants": 600,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a1136b355425c4474252f09",
+        "publicOrderId": 25262269,
+        "orderStatus": "FARM_READY",
+        "plants": 500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a11370a55425c4474253097",
+        "publicOrderId": 25262270,
+        "orderStatus": "FARM_READY",
+        "plants": 1100,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a1137c055425c4474253239",
+        "publicOrderId": 25262271,
+        "orderStatus": "FARM_READY",
+        "plants": 240,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a1137ff55425c44742533c8",
+        "publicOrderId": 25262272,
+        "orderStatus": "FARM_READY",
+        "plants": 500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a113e4f55425c4474253698",
+        "publicOrderId": 25262273,
+        "orderStatus": "FARM_READY",
+        "plants": 500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a1282fb5122756597b7f395",
+        "publicOrderId": 25262289,
+        "orderStatus": "FARM_READY",
+        "plants": 150,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a1290694d3d2324dba4368b",
+        "publicOrderId": 25262291,
+        "orderStatus": "FARM_READY",
+        "plants": 300,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a12910a4d3d2324dba43d9a",
+        "publicOrderId": 25262292,
+        "orderStatus": "FARM_READY",
+        "plants": 1000,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a12c4dfd92b520958f03c6b",
+        "publicOrderId": 25262302,
+        "orderStatus": "FARM_READY",
+        "plants": 5300,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a15106937e9e35dbfdce8c3",
+        "publicOrderId": 25262330,
+        "orderStatus": "FARM_READY",
+        "plants": 500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a16c8c873b1f590ba2c39f3",
+        "publicOrderId": 25262360,
+        "orderStatus": "FARM_READY",
+        "plants": 200,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a77c6624a5d700252fa",
+        "publicOrderId": 1722,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 4000,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69d4e453e6c92b3c3f8ce6e2",
+        "publicOrderId": 1792,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 2100,
+        "fromSlot": "09-04-2026–15-04-2026",
+        "toSlot": "16-04-2026–22-04-2026",
+        "deliveryDate": "2026-04-15T18:30:00.000Z"
+      },
+      {
+        "orderId": "69e0c2fcddafd1ac6d9bf575",
+        "publicOrderId": 25261791,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 150,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7913c6624a5d70fc13b6",
+        "publicOrderId": 1285,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 2100,
+        "fromSlot": "16-04-2026–22-04-2026",
+        "toSlot": "23-04-2026–29-04-2026",
+        "deliveryDate": "2026-04-22T18:30:00.000Z"
+      },
+      {
+        "orderId": "69dc9a66fa1b3734221105e8",
+        "publicOrderId": 25261725,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 2800,
+        "fromSlot": "23-04-2026–29-04-2026",
+        "toSlot": "30-04-2026–06-05-2026",
+        "deliveryDate": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "orderId": "69df688cfa1b37342212aa9d",
+        "publicOrderId": 25261766,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 4000,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69fedfdb23578a92917a2d2d",
+        "publicOrderId": 25261990,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 5300,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69fee2b223578a92917a34b9",
+        "publicOrderId": 25261992,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 1600,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69fef4d423578a92917a47de",
+        "publicOrderId": 25261995,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 1200,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ff013f23578a92917a6116",
+        "publicOrderId": 25261998,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 2200,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0008d923578a92917ad261",
+        "publicOrderId": 25262012,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 1260,
+        "fromSlot": "08-05-2026–14-05-2026",
+        "toSlot": "15-05-2026–21-05-2026",
+        "deliveryDate": "2026-05-14T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a000ce623578a92917ad586",
+        "publicOrderId": 25262013,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 600,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ff088323578a92917a72ee",
+        "publicOrderId": 25262000,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 600,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ff0ccc23578a92917a7e23",
+        "publicOrderId": 25262001,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 4500,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ff0f3c23578a92917a8714",
+        "publicOrderId": 25262002,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 4000,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca79fbc6624a5d7000037a",
+        "publicOrderId": 1576,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 5000,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "69fffd4023578a92917abeb3",
+        "publicOrderId": 25262010,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 300,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a004c1a23578a92917b1e01",
+        "publicOrderId": 25262019,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 3200,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a004d0623578a92917b24a9",
+        "publicOrderId": 25262020,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 3000,
+        "fromSlot": "07-05-2026–13-05-2026",
+        "toSlot": "14-05-2026–20-05-2026",
+        "deliveryDate": "2026-05-13T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0d8e3c55425c44742426b8",
+        "publicOrderId": 25262225,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 500,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0d8ea355425c447424298e",
+        "publicOrderId": 25262226,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 1500,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a0d8fc655425c4474243741",
+        "publicOrderId": 25262227,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 3000,
+        "fromSlot": "14-05-2026–20-05-2026",
+        "toSlot": "21-05-2026–27-05-2026",
+        "deliveryDate": "2026-05-20T18:30:00.000Z"
+      },
+      {
+        "orderId": "69ca7a3fc6624a5d70014547",
+        "publicOrderId": 1658,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 4500,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a12c6dbd92b520958f03fb0",
+        "publicOrderId": 25262303,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 2000,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      },
+      {
+        "orderId": "6a07e2aa55425c447421b96b",
+        "publicOrderId": 25262112,
+        "orderStatus": "READY_FOR_DISPATCH",
+        "plants": 3400,
+        "fromSlot": "21-05-2026–27-05-2026",
+        "toSlot": "28-05-2026–03-06-2026",
+        "deliveryDate": "2026-05-27T18:30:00.000Z"
+      }
+    ]
+  }
+}

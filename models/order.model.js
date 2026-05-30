@@ -882,6 +882,15 @@ const orderSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    /** Auto-moved from expired booking slot to next slot (daily past-due rollover). */
+    pastDueSlotRollover: {
+      type: Boolean,
+      default: false,
+    },
+    pastDueSlotRolloverAt: {
+      type: Date,
+      default: null,
+    },
     // Field to track call history for dispatch managers
     callHistory: [
       {

@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
+import CMS from "../models/cms.model.js";
 import DealerCommissionRate from "../models/dealerCommissionRate.model.js";
 import DealerCommissionSettlement from "../models/dealerCommissionSettlement.model.js";
 
@@ -22,7 +23,9 @@ export const EXPECTED_COMMISSION_STATUSES = new Set([
   "COMPLETED",
 ]);
 
+/** Earned/at-risk commission: dispatched (or completed) plants, adjusted by payment. */
 export const ACTUAL_COMMISSION_STATUSES = new Set([
+  "DISPATCHED",
   "COMPLETED",
   "PARTIALLY_COMPLETED",
 ]);
@@ -81,14 +84,37 @@ export function getCollectedPayment(order) {
   );
 }
 
-export function resolveOrderVillage(order) {
+/** CMS village id/name → display label for analytics grouping. */
+export async function loadVillageDisplayMap() {
+  const rows = await CMS.find({ type: "village" }).select("data").lean();
+  const map = new Map();
+  for (const row of rows) {
+    const name = String(row.data || "").trim();
+    if (!name) continue;
+    map.set(name, name);
+    map.set(row._id.toString(), name);
+  }
+  return map;
+}
+
+function resolveVillageRaw(order) {
   const farmer = order.farmer && typeof order.farmer === "object" ? order.farmer : null;
   const orderFor =
     order.orderFor && typeof order.orderFor === "object" ? order.orderFor : null;
   return (
-    String(orderFor?.village || farmer?.village || "Unknown village").trim() ||
-    "Unknown village"
+    String(orderFor?.villageName || orderFor?.village || "").trim() ||
+    String(farmer?.village || "").trim() ||
+    ""
   );
+}
+
+export function resolveOrderVillage(order, villageDisplayMap = null) {
+  const raw = resolveVillageRaw(order);
+  if (!raw) return "Unknown village";
+  const mapped = villageDisplayMap?.get(raw);
+  if (mapped) return mapped;
+  if (/^[a-f0-9]{24}$/i.test(raw)) return "Unknown village";
+  return raw;
 }
 
 export async function loadCommissionRatesMap() {
@@ -109,7 +135,28 @@ export function getCommissionRateForOrder(order, ratesMap) {
   return ratesMap.get(`${plantId}_${subtypeId}`) ?? DEFAULT_COMMISSION_RATE;
 }
 
-export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subtypeNames) {
+/** Split order actual commission into earned (paid) vs at-risk (dispatched, payment pending). */
+export function splitCommissionAmount(actualCommission) {
+  const n = Number(actualCommission || 0);
+  if (n > 0) return { earnedCommission: n, atRiskCommission: 0 };
+  if (n < 0) return { earnedCommission: 0, atRiskCommission: Math.abs(n) };
+  return { earnedCommission: 0, atRiskCommission: 0 };
+}
+
+function addCommissionToAgg(agg, metrics) {
+  const actual = Number(metrics.actualCommission || 0);
+  agg.actualCommission += actual;
+  agg.earnedCommission += Number(metrics.earnedCommission || 0);
+  agg.atRiskCommission += Number(metrics.atRiskCommission || 0);
+}
+
+export function computeOrderCommissionMetrics(
+  order,
+  ratesMap,
+  plantNames,
+  subtypeNames,
+  options = {}
+) {
   const plantId = order.plantName?.toString?.() ?? String(order.plantName || "");
   const subtypeId =
     order.plantSubtype?.toString?.() ?? String(order.plantSubtype || "");
@@ -151,6 +198,8 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
     }
   }
 
+  const { earnedCommission, atRiskCommission } = splitCommissionAmount(actual);
+
   return {
     orderId: order.orderId || order._id,
     orderMongoId: order._id,
@@ -159,7 +208,7 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
       order.orderFor?.name ||
       (order.farmer && typeof order.farmer === "object" ? order.farmer.name : "") ||
       "—",
-    village: resolveOrderVillage(order),
+    village: resolveOrderVillage(order, options.villageDisplayMap),
     plantId,
     subtypeId,
     plantName: plantNames.get(plantId) || plantId,
@@ -172,6 +221,8 @@ export function computeOrderCommissionMetrics(order, ratesMap, plantNames, subty
     totalPlants,
     expectedCommission: expected,
     actualCommission: actual,
+    earnedCommission,
+    atRiskCommission,
     baseCommission,
     unpaidLiability,
     paymentCollected: collected,
@@ -336,10 +387,11 @@ export async function fetchDealerOrders(dealerId, { startDate, endDate } = {}) {
 
 export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
   const { startDate, endDate } = options;
-  const [orders, ratesMap, plants] = await Promise.all([
+  const [orders, ratesMap, plants, villageDisplayMap] = await Promise.all([
     fetchDealerOrders(dealerId, { startDate, endDate }),
     loadCommissionRatesMap(),
     PlantCms.find({}).select("name subtypes").lean(),
+    loadVillageDisplayMap(),
   ]);
 
   const { plantNames, subtypeNames } = buildPlantSubtypeMaps(plants);
@@ -347,6 +399,8 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
   const summary = {
     expectedCommission: 0,
     actualCommission: 0,
+    earnedCommission: 0,
+    atRiskCommission: 0,
     gap: 0,
     acceptedOrders: 0,
     bookedPlants: 0,
@@ -364,12 +418,13 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
       order,
       ratesMap,
       plantNames,
-      subtypeNames
+      subtypeNames,
+      { villageDisplayMap }
     );
     orderRows.push(metrics);
 
     summary.expectedCommission += metrics.expectedCommission;
-    summary.actualCommission += metrics.actualCommission;
+    addCommissionToAgg(summary, metrics);
     summary.bookedPlants += metrics.booked;
     summary.dispatchedPlants += metrics.dispatched;
     summary.bakiPlants += metrics.baki;
@@ -386,6 +441,8 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
         dispatched: 0,
         expectedCommission: 0,
         actualCommission: 0,
+        earnedCommission: 0,
+        atRiskCommission: 0,
         subtypes: new Map(),
       });
     }
@@ -394,7 +451,7 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
     plantAgg.baki += metrics.baki;
     plantAgg.dispatched += metrics.dispatched;
     plantAgg.expectedCommission += metrics.expectedCommission;
-    plantAgg.actualCommission += metrics.actualCommission;
+    addCommissionToAgg(plantAgg, metrics);
 
     const stKey = metrics.subtypeId;
     if (!plantAgg.subtypes.has(stKey)) {
@@ -407,6 +464,8 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
         dispatched: 0,
         expectedCommission: 0,
         actualCommission: 0,
+        earnedCommission: 0,
+        atRiskCommission: 0,
       });
     }
     const stAgg = plantAgg.subtypes.get(stKey);
@@ -414,7 +473,7 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
     stAgg.baki += metrics.baki;
     stAgg.dispatched += metrics.dispatched;
     stAgg.expectedCommission += metrics.expectedCommission;
-    stAgg.actualCommission += metrics.actualCommission;
+    addCommissionToAgg(stAgg, metrics);
 
     const villageKey = metrics.village;
     if (!villageMap.has(villageKey)) {
@@ -425,6 +484,8 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
         dispatched: 0,
         expectedCommission: 0,
         actualCommission: 0,
+        earnedCommission: 0,
+        atRiskCommission: 0,
         orderCount: 0,
       });
     }
@@ -433,7 +494,7 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
     villageAgg.baki += metrics.baki;
     villageAgg.dispatched += metrics.dispatched;
     villageAgg.expectedCommission += metrics.expectedCommission;
-    villageAgg.actualCommission += metrics.actualCommission;
+    addCommissionToAgg(villageAgg, metrics);
     villageAgg.orderCount += 1;
   }
 

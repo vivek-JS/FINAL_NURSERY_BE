@@ -29,6 +29,7 @@ import {
   transferOrders,
   getStockEntry,
   bulkStockEntry,
+  runPastDueSlotRolloverController,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -56,6 +57,7 @@ slotRouter.post("/slots/create-subtype", createSlotsForSubtype);
 slotRouter.post("/slots/transfer", transferSlotPlants);
 slotRouter.post("/slots/transfer-capacity", transferCapacity);
 slotRouter.post("/slots/transfer-orders", transferOrders);
+slotRouter.post("/slots/past-due-rollover/run", runPastDueSlotRolloverController);
 
 // Salesmen restriction routes - Using completely different path pattern
 slotRouter.put("/salesmen-access/:slotId", updateSlotSalesmenRestrictions);

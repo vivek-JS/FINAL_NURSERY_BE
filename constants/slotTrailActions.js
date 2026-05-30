@@ -34,6 +34,8 @@ export const SLOT_TRAIL_ACTIONS = {
   EARLY_DISPATCH_IN: "EARLY_DISPATCH_IN",
   EARLY_DISPATCH_REVERT_OUT: "EARLY_DISPATCH_REVERT_OUT",
   EARLY_DISPATCH_REVERT_IN: "EARLY_DISPATCH_REVERT_IN",
+  PAST_DUE_ROLLOUT_OUT: "PAST_DUE_ROLLOUT_OUT",
+  PAST_DUE_ROLLOUT_IN: "PAST_DUE_ROLLOUT_IN",
 };
 
 export const SLOT_TRAIL_ACTION_ENUM = Object.values(SLOT_TRAIL_ACTIONS);
@@ -82,6 +84,8 @@ export const SLOT_TRAIL_ACTIVITY_NAMES = {
   [SLOT_TRAIL_ACTIONS.EARLY_DISPATCH_IN]: "Cross-slot dispatch booking",
   [SLOT_TRAIL_ACTIONS.EARLY_DISPATCH_REVERT_OUT]: "Cross-slot dispatch reverted (out)",
   [SLOT_TRAIL_ACTIONS.EARLY_DISPATCH_REVERT_IN]: "Cross-slot dispatch reverted (in)",
+  [SLOT_TRAIL_ACTIONS.PAST_DUE_ROLLOUT_OUT]: "Past-due rollover (released from expired slot)",
+  [SLOT_TRAIL_ACTIONS.PAST_DUE_ROLLOUT_IN]: "Past-due rollover (booked on next slot)",
 };
 
 export function getSlotTrailActivityName(action) {

@@ -31,6 +31,12 @@ export function deliveryDateFromSlotStart(slot) {
   return m.isValid() ? m.toDate() : null;
 }
 
+/** Delivery date = slot window end day (IST) — used for past-due rollover transfers. */
+export function deliveryDateFromSlotEnd(slot) {
+  const m = moment(slot.endDay, "DD-MM-YYYY").utcOffset(IST_OFFSET).startOf("day");
+  return m.isValid() ? m.toDate() : null;
+}
+
 function slotStartMoment(slot) {
   return moment(slot.startDay, "DD-MM-YYYY").utcOffset(IST_OFFSET).startOf("day");
 }

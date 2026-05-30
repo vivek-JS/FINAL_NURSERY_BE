@@ -32,7 +32,7 @@ export function shouldApplyEarlyDispatch(previousStatus, nextStatus) {
   return nextStatus === "READY_FOR_DISPATCH";
 }
 
-const moveOrderBetweenSlots = async ({
+export const moveOrderBetweenSlots = async ({
   orderId,
   fromSlotId,
   toSlotId,
@@ -94,7 +94,7 @@ const moveOrderBetweenSlots = async ({
   });
 };
 
-const appendSlotTrail = async ({
+export const appendSlotTrail = async ({
   slotId,
   action,
   quantity,

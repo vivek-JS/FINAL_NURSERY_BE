@@ -4757,6 +4757,8 @@ const getAll = (Model, modelName) =>
           oldDeliveryDate: 1,
           originalBookingSlot: 1,
           dispatchedFromAnotherSlot: 1,
+          pastDueSlotRollover: 1,
+          pastDueSlotRolloverAt: 1,
           farmReadyEnteredAt: 1,
           readyForDispatchEnteredAt: 1,
           // Add orderFor field if present
