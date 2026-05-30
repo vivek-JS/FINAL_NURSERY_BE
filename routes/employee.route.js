@@ -12,6 +12,7 @@ import {
   getEmployee,
   getEmployees,
   requireEmployeePasswordChange,
+  resetEmployeePasswordToDefault,
 } from "../controllers/employee.controller.js";
 import { createJobTitle } from "../controllers/cms.controller.js";
 
@@ -71,6 +72,12 @@ router
     requireEmployeeManager,
     validateEmployeeId,
     requireEmployeePasswordChange
+  )
+  .patch(
+    "/resetPasswordToDefault",
+    requireEmployeeManager,
+    validateEmployeeId,
+    resetEmployeePasswordToDefault
   )
   .delete(
     "/deleteEmployee",

@@ -6,8 +6,12 @@ import cron from "node-cron";
 import { runDeliveryFinalSecondScan } from "../services/deliveryFinalSecondWhatsapp.service.js";
 
 export function initDeliveryFinalSecondCronJobs() {
-  if (process.env.WATI_DELIVERY_FINAL_SECOND_ENABLED === "false") {
-    console.log("[WATI Cron] delivery_final_second disabled — skipping.");
+  if (process.env.WATI_DELIVERY_FINAL_SECOND_ENABLED !== "true") {
+    console.log("[WATI Cron] delivery_final_second cron off (set WATI_DELIVERY_FINAL_SECOND_ENABLED=true to enable).");
+    return;
+  }
+  if (process.env.WATI_DELIVERY_FINAL_SECOND_ALLOW_AUTO !== "true") {
+    console.log("[WATI Cron] delivery_final_second cron skipped — manual-only mode (no ALLOW_AUTO).");
     return;
   }
 

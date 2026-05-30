@@ -31,6 +31,24 @@ export const DELIVERY_FINAL_TRIGGERS = {
   FARM_READY_STATUS: "farm_ready_status",
 };
 
+/** ERP manual send only — see send-selected + per-order icon. */
+export const MANUAL_FARM_READY_WHATSAPP_TRIGGERS = new Set([
+  "manual_icon",
+  "manual_selected",
+]);
+
+export function isManualFarmReadyWhatsAppTrigger(trigger) {
+  return MANUAL_FARM_READY_WHATSAPP_TRIGGERS.has(String(trigger || ""));
+}
+
+function isAutoFarmReadySendAllowed() {
+  return process.env.WATI_DELIVERY_FINAL_SECOND_ALLOW_AUTO === "true";
+}
+
+function isCronEnabled() {
+  return process.env.WATI_DELIVERY_FINAL_SECOND_ENABLED === "true";
+}
+
 function istNow() {
   return moment().utcOffset(IST);
 }
@@ -61,13 +79,49 @@ export function classifyDeliveryFinalSecondTrigger(deliveryDate, ref = istNow())
   return null;
 }
 
+export function getFarmReadyWhatsappCooldownHours() {
+  return Math.max(1, parseInt(process.env.WATI_DELIVERY_FINAL_COOLDOWN_HOURS || "72", 10));
+}
+
+export function getFarmReadyWhatsappCooldownMs() {
+  return getFarmReadyWhatsappCooldownHours() * 60 * 60 * 1000;
+}
+
 function cooldownMs() {
-  const hours = parseInt(process.env.WATI_DELIVERY_FINAL_COOLDOWN_HOURS || "24", 10);
-  return Math.max(1, hours) * 60 * 60 * 1000;
+  return getFarmReadyWhatsappCooldownMs();
+}
+
+export function isWithinFarmReadyWhatsappCooldown(sentAt, nowMs = Date.now()) {
+  if (!sentAt) return false;
+  const t = new Date(sentAt).getTime();
+  if (!Number.isFinite(t)) return false;
+  return nowMs - t < getFarmReadyWhatsappCooldownMs();
+}
+
+export function getFarmReadyWhatsappResendAvailableAt(sentAt) {
+  if (!sentAt) return null;
+  const t = new Date(sentAt).getTime();
+  if (!Number.isFinite(t)) return null;
+  return new Date(t + getFarmReadyWhatsappCooldownMs());
+}
+
+/** @returns {null|object} block payload when send must wait */
+export function getFarmReadyWhatsappCooldownBlock(sentAt, bypassCooldown = false) {
+  if (!sentAt || bypassCooldown) return null;
+  if (!isWithinFarmReadyWhatsappCooldown(sentAt)) return null;
+  const hours = getFarmReadyWhatsappCooldownHours();
+  const resendAvailableAt = getFarmReadyWhatsappResendAvailableAt(sentAt);
+  return {
+    error: "cooldown_active",
+    skipped: true,
+    message: `Farm-ready WhatsApp was sent recently — wait ${hours} hours before sending again`,
+    whatsappFarmReadySentAt: sentAt,
+    resendAvailableAt,
+  };
 }
 
 function isEnabled() {
-  return process.env.WATI_DELIVERY_FINAL_SECOND_ENABLED !== "false";
+  return isCronEnabled() && isAutoFarmReadySendAllowed();
 }
 
 function orderPlantQty(order) {
@@ -134,11 +188,30 @@ export async function sendDeliveryFinalSecondForOrder(
     return { success: false, error: "WATI not configured" };
   }
 
+  const effectiveTrigger = outboundMeta.trigger || trigger;
+  if (!isManualFarmReadyWhatsAppTrigger(effectiveTrigger) && !isAutoFarmReadySendAllowed()) {
+    return {
+      success: false,
+      error: "manual_only",
+      skipped: true,
+      message: "Farm-ready WhatsApp is manual-only from ERP (ACCEPTED orders)",
+    };
+  }
+
   const orderDoc = await Order.findById(order._id || order.id)
     .populate("farmer", "name mobileNumber village")
     .populate("plantName", "name subtypes");
 
   if (!orderDoc) return { success: false, error: "order_not_found" };
+
+  if (String(orderDoc.orderStatus || "").toUpperCase() !== "ACCEPTED") {
+    return {
+      success: false,
+      error: "order_not_accepted",
+      skipped: true,
+      message: "Farm-ready WhatsApp can only be sent for ACCEPTED orders",
+    };
+  }
 
   const farmerDoc = orderDoc.farmer;
   if (!farmerDoc?.mobileNumber) {
@@ -156,6 +229,14 @@ export async function sendDeliveryFinalSecondForOrder(
   const skipReason = farmReadyWhatsAppSkipReason(orderDoc, plantSubtype);
   if (skipReason) {
     return { success: false, error: skipReason, skipped: true };
+  }
+
+  const cooldownBlock = getFarmReadyWhatsappCooldownBlock(
+    orderDoc.whatsappFarmReadySentAt,
+    outboundMeta.bypassCooldown === true
+  );
+  if (cooldownBlock) {
+    return { success: false, ...cooldownBlock };
   }
 
   const qty = orderPlantQty(orderDoc);
@@ -188,6 +269,7 @@ export async function sendDeliveryFinalSecondForOrder(
       trigger: outboundMeta.trigger || trigger,
       sentBy: outboundMeta.sentBy || null,
       batchId: outboundMeta.batchId || null,
+      campaignName: outboundMeta.campaignName || null,
       displayOrderCode:
         orderDoc.orderId != null
           ? String(orderDoc.orderId)
@@ -215,8 +297,11 @@ export async function sendDeliveryFinalSecondForOrder(
  * Cron / manual scan — past due + due in 7 days.
  */
 export async function runDeliveryFinalSecondScan() {
-  if (!isEnabled()) {
-    return { skipped: true, reason: "disabled" };
+  if (!isCronEnabled()) {
+    return { skipped: true, reason: "cron_disabled" };
+  }
+  if (!isAutoFarmReadySendAllowed()) {
+    return { skipped: true, reason: "manual_only" };
   }
   if (!getWatiToken()) {
     return { skipped: true, reason: "wati_not_configured" };

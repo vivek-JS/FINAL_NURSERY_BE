@@ -1246,6 +1246,10 @@ const createOne = (Model, modelName) =>
                   "../services/whatsappAlertEngine.service.js"
                 );
                 await evaluateOrderAlertsOnCreate(createdOrderId);
+                const { tryAutoSendOrderPlacedWhatsApp } = await import(
+                  "./order.controller.js"
+                );
+                await tryAutoSendOrderPlacedWhatsApp(createdOrderId);
               } catch (e) {
                 console.error("whatsapp-alert (order create):", e?.message || e);
               }
@@ -1752,36 +1756,11 @@ const updateOne = (Model, modelName, allowedFields) =>
           console.log('⚠️ No push token found for user, skipping order status notification');
         }
 
-        // WhatsApp for ACCEPTED: now triggered by frontend (user preview + send on Yes)
+        // WhatsApp farm-ready (delivery_final_second): manual only from ERP — not on status change.
         if (newStatus === 'FARM_READY') {
-          // Send WhatsApp message when farm ready
-          (async () => {
-            try {
-              const farmerDetails = existingDoc.farmer ? await mongoose.model('Farmer').findById(existingDoc.farmer) : null;
-              
-              if (farmerDetails && farmerDetails.mobileNumber) {
-                const orderId = existingDoc.orderId || existingDoc._id;
-
-                console.log(`📱 Sending WhatsApp delivery_final_second to farmer: ${farmerDetails.name} (${farmerDetails.mobileNumber})`);
-                const { sendDeliveryFinalSecondForOrder, DELIVERY_FINAL_TRIGGERS } = await import("../services/deliveryFinalSecondWhatsapp.service.js");
-                const result = await sendDeliveryFinalSecondForOrder(
-                  existingDoc,
-                  DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS,
-                  { trigger: "auto_farm_ready_status" }
-                );
-
-                if (result.success) {
-                  console.log(`✅ WhatsApp delivery_final_second sent for Order #${orderId}`);
-                } else {
-                  console.log(`⚠️ WhatsApp delivery_final_second failed for Order #${orderId}:`, result.error);
-                }
-              } else {
-                console.log('⚠️ No farmer mobile number found, skipping WhatsApp message');
-              }
-            } catch (whatsappError) {
-              console.error('❌ Error sending WhatsApp message:', whatsappError.message);
-            }
-          })();
+          console.log(
+            `[order] FARM_READY status set — farm-ready WhatsApp is manual-only (ACCEPTED orders from ERP)`
+          );
         }
 
         if (

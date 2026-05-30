@@ -601,10 +601,14 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
         return;
       }
 
-      const farmReady = await runFarmReadyWebhookFromBody(req.body);
-      if (farmReady.handled) {
-        console.log(`[WATI] Farm-ready flow handled: ${farmReady.action || "ok"}`);
-        return;
+      const farmReadyOnOrderBot =
+        process.env.WHATSAPP_FARM_READY_ON_ORDER_BOT_WEBHOOK === "true";
+      if (farmReadyOnOrderBot) {
+        const farmReady = await runFarmReadyWebhookFromBody(req.body);
+        if (farmReady.handled) {
+          console.log(`[WATI] Farm-ready flow handled: ${farmReady.action || "ok"}`);
+          return;
+        }
       }
 
       if (orderFlowOff && !message) {

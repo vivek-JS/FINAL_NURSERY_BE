@@ -130,6 +130,10 @@ test("logFarmerWhatsappInbound wires recordFarmerReply on inbound", () => {
     "utf8"
   );
   assert.match(source, /recordFarmerReply\(/);
+  assert.match(source, /recordFarmerRescheduleComplete\(/);
+  assert.match(source, /skipOutboundReply/);
   assert.match(source, /orderWhatsappOutbound\.service\.js/);
   assert.match(source, /replyContextId/);
+  assert.match(source, /claimFarmReadyInboundDedupe/);
+  assert.match(source, /duplicate_inbound_skipped/);
 });

@@ -119,3 +119,44 @@ test("farmReadyWhatsAppSkipReason — Banana only", async () => {
     "not_banana"
   );
 });
+
+test("isManualFarmReadyWhatsAppTrigger — manual ERP only by default", async () => {
+  const {
+    isManualFarmReadyWhatsAppTrigger,
+    MANUAL_FARM_READY_WHATSAPP_TRIGGERS,
+  } = await import("../services/deliveryFinalSecondWhatsapp.service.js");
+  assert.equal(isManualFarmReadyWhatsAppTrigger("manual_icon"), true);
+  assert.equal(isManualFarmReadyWhatsAppTrigger("manual_selected"), true);
+  assert.equal(isManualFarmReadyWhatsAppTrigger("auto_farm_ready_status"), false);
+  assert.equal(isManualFarmReadyWhatsAppTrigger("past_due"), false);
+  assert.equal(MANUAL_FARM_READY_WHATSAPP_TRIGGERS.has("manual_selected"), true);
+});
+
+test("farm-ready WhatsApp cooldown — 72 hours by default", async () => {
+  const {
+    getFarmReadyWhatsappCooldownHours,
+    isWithinFarmReadyWhatsappCooldown,
+    getFarmReadyWhatsappCooldownBlock,
+    getFarmReadyWhatsappResendAvailableAt,
+  } = await import("../services/deliveryFinalSecondWhatsapp.service.js");
+
+  const prev = process.env.WATI_DELIVERY_FINAL_COOLDOWN_HOURS;
+  delete process.env.WATI_DELIVERY_FINAL_COOLDOWN_HOURS;
+  assert.equal(getFarmReadyWhatsappCooldownHours(), 72);
+
+  const sentAt = new Date("2026-05-27T10:00:00.000Z");
+  const within = new Date("2026-05-28T09:00:00.000Z").getTime();
+  const after = new Date("2026-05-30T11:00:00.000Z").getTime();
+  assert.equal(isWithinFarmReadyWhatsappCooldown(sentAt, within), true);
+  assert.equal(isWithinFarmReadyWhatsappCooldown(sentAt, after), false);
+
+  const block = getFarmReadyWhatsappCooldownBlock(sentAt, false);
+  assert.equal(block?.error, "cooldown_active");
+  assert.equal(getFarmReadyWhatsappCooldownBlock(sentAt, true), null);
+
+  const resendAt = getFarmReadyWhatsappResendAvailableAt(sentAt);
+  assert.equal(resendAt.getTime(), sentAt.getTime() + 72 * 60 * 60 * 1000);
+
+  if (prev === undefined) delete process.env.WATI_DELIVERY_FINAL_COOLDOWN_HOURS;
+  else process.env.WATI_DELIVERY_FINAL_COOLDOWN_HOURS = prev;
+});

@@ -6,6 +6,7 @@
 
 import Order from "../models/order.model.js";
 import WhatsappFarmReadySession from "../models/whatsappFarmReadySession.model.js";
+import WhatsappInboundDedupe from "../models/whatsappInboundDedupe.model.js";
 import { lookupFarmerByMobile } from "./whatsappOrderFarmer.service.js";
 import { sendSessionTextMessage } from "./watiService.js";
 import {
@@ -28,7 +29,10 @@ import {
   formatDeliveryDateLabelEn,
   formatWatiDateEnIN,
 } from "../utility/watiIstDateFormat.js";
-import { formatWhatsappPlantSubtypeDisplay } from "../utility/watiPlantText.js";
+import {
+  formatWhatsappPlantSubtypeDisplay,
+  resolveEmbeddedSubtypeName,
+} from "../utility/watiPlantText.js";
 
 export const FARM_READY_BTN_CONFIRM = "शेत तयार आहे";
 export const FARM_READY_BTN_CONFIRM_DOTTED = "शेत तयार आहे.";
@@ -79,14 +83,21 @@ async function logFarmerWhatsappInbound(orderId, { text, waId, messageId, action
     meta,
   });
   try {
-    const { recordFarmerReply } = await import("./orderWhatsappOutbound.service.js");
-    await recordFarmerReply({
-      orderId,
-      localMessageId: meta?.replyContextId || null,
-      text,
-      action: action || "farmer_message",
-      messageId: messageId || null,
-    });
+    const skipOutboundReply = new Set([
+      "reschedule_inbound",
+      "invalid_slot_choice",
+      "await_confirm_retry",
+    ]).has(action);
+    if (!skipOutboundReply) {
+      const { recordFarmerReply } = await import("./orderWhatsappOutbound.service.js");
+      await recordFarmerReply({
+        orderId,
+        localMessageId: meta?.replyContextId || null,
+        text,
+        action: action || "farmer_message",
+        messageId: messageId || null,
+      });
+    }
   } catch (err) {
     console.error("[farm-ready] outbound reply log failed:", err?.message || err);
   }
@@ -135,10 +146,12 @@ export function formatWhatsappSlotDisplay(slot) {
 }
 
 function formatOrderPlantLine(order) {
-  return formatWhatsappPlantSubtypeDisplay(
-    order?.plantName?.name || order?.plantName,
-    order?.plantSubtype?.name || order?.plantSubtype
-  );
+  const plantName = order?.plantName?.name || order?.plantName || "";
+  const subtype =
+    resolveEmbeddedSubtypeName(order?.plantName, order?.plantSubtype) ||
+    order?.plantSubtype?.name ||
+    "";
+  return formatWhatsappPlantSubtypeDisplay(plantName, subtype);
 }
 
 function offeredSlotsForSession(slots) {
@@ -245,6 +258,36 @@ export async function findActiveFarmReadyOrderForFarmer(farmerId) {
   return findOrderForFarmReadyReply({ body: {}, farmerId, inboundText: "" });
 }
 
+function buildFarmReadyInboundDedupeKey(messageId, mobile10, inbound) {
+  if (messageId) return `farm-ready:msg:${String(messageId)}`;
+  const text = normalizeInboundText(inbound);
+  const minuteBucket = Math.floor(Date.now() / 60000);
+  return `farm-ready:btn:${mobile10}:${text}:${minuteBucket}`;
+}
+
+/**
+ * @returns {Promise<boolean>} true if this inbound should be processed (first time)
+ */
+export async function claimFarmReadyInboundDedupe(messageId, mobile10, inbound) {
+  const dedupeKey = buildFarmReadyInboundDedupeKey(messageId, mobile10, inbound);
+  try {
+    await WhatsappInboundDedupe.create({
+      dedupeKey,
+      messageId: messageId ? String(messageId) : null,
+      mobile10: mobile10 || null,
+      flow: "farm_ready",
+    });
+    return true;
+  } catch (err) {
+    if (err?.code === 11000) {
+      console.log("[farm-ready] skip duplicate inbound", { dedupeKey, messageId: messageId || "(none)" });
+      return false;
+    }
+    console.error("[farm-ready] dedupe check failed:", err?.message || err);
+    return true;
+  }
+}
+
 async function sendWatiReply(waId, messageText, logContext = {}) {
   const digits = normalizeWhatsAppNumberForWati(waId);
   if (!digits) {
@@ -310,11 +353,30 @@ async function applyEarlyDispatchRevertForFarmReady(order, $set, $unset) {
  */
 export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
   const fresh = await Order.findById(order._id || order.id)
-    .populate("plantName", "name")
-    .populate("plantSubtype", "name")
+    .populate("plantName", "name subtypes")
     .populate("farmer", "name mobileNumber");
   if (!fresh) {
     throw new Error("Order not found for farm-ready confirm");
+  }
+
+  const confirmedAt = fresh.farmReadyWhatsappConfirmedAt
+    ? new Date(fresh.farmReadyWhatsappConfirmedAt)
+    : null;
+  if (
+    confirmedAt &&
+    !Number.isNaN(confirmedAt.getTime()) &&
+    Date.now() - confirmedAt.getTime() < 120000
+  ) {
+    console.log(
+      `[farm-ready] Order ${fresh.publicOrderCode || fresh.orderId || fresh._id}: already confirmed recently — skip duplicate reply`
+    );
+    return {
+      handled: true,
+      action: "farm_ready_already_confirmed",
+      orderId: String(fresh._id),
+      previousStatus: String(fresh.orderStatus || ""),
+      newStatus: fresh.orderStatus,
+    };
   }
 
   await logFarmerWhatsappInbound(fresh._id, {
@@ -391,8 +453,7 @@ export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
     new: true,
     runValidators: true,
   })
-    .populate("plantName", "name")
-    .populate("plantSubtype", "name")
+    .populate("plantName", "name subtypes")
     .populate("farmer", "name mobileNumber");
 
   if (!updated) {
@@ -431,12 +492,11 @@ export async function confirmFarmReadyViaWhatsapp(order, waId, messageId = "") {
       "✅ धन्यवाद!",
       "",
       "आपले शेत तयार असल्याची नोंद झाली.",
-      statusUpdated ? "📋 ऑर्डर स्थिती: शेत तयार (Farm Ready)" : "",
       `📦 ऑर्डर: ${orderCode}`,
       `🌱 ${formatOrderPlantLine(updated)}`,
       `📅 ${WA_DELIVERY_DATE}: ${deliveryLabel}`,
       "",
-      "कोणतीही समस्या असल्यास आमच्याशी संपर्क साधा.",
+      "कोणतीही समस्या असल्यास 📞 7218186452 वर संपर्क साधा.",
     ]
       .filter(Boolean)
       .join("\n"),
@@ -554,7 +614,7 @@ export async function applyFarmerDeliveryReschedule(order, session, waId, messag
 
   try {
     const freshOrder = await Order.findById(order._id)
-      .populate("plantName", "name")
+      .populate("plantName", "name subtypes")
       .populate("farmer", "name mobileNumber");
     if (!freshOrder) throw new Error("Order not found");
 
@@ -589,6 +649,17 @@ export async function applyFarmerDeliveryReschedule(order, session, waId, messag
       }
     );
 
+    try {
+      const { recordFarmerRescheduleComplete } = await import("./orderWhatsappOutbound.service.js");
+      await recordFarmerRescheduleComplete(freshOrder._id, {
+        slotLabel,
+        deliveryLabel,
+        messageId: messageId || session.lastInboundMessageId || "",
+      });
+    } catch (err) {
+      console.error("[farm-ready] outbound reschedule log failed:", err?.message || err);
+    }
+
     return {
       handled: true,
       action: "delivery_rescheduled",
@@ -617,8 +688,7 @@ export async function continueRescheduleSession(mobile10, waId, text, messageId 
     path: "orderId",
     populate: [
       { path: "farmer", select: "name mobileNumber" },
-      { path: "plantName", select: "name" },
-      { path: "plantSubtype", select: "name" },
+      { path: "plantName", select: "name subtypes" },
     ],
   });
 
@@ -745,6 +815,11 @@ async function runFarmReadyWebhookFromBodyInner(body) {
 
   if (!mobile10 || mobile10.length !== 10) {
     return { handled: false };
+  }
+
+  const claimed = await claimFarmReadyInboundDedupe(messageId, mobile10, inbound);
+  if (!claimed) {
+    return { handled: true, action: "duplicate_inbound_skipped", messageId: messageId || null };
   }
 
   // Active reschedule session takes priority over new button clicks

@@ -11,7 +11,11 @@ import {
   normalizeMobile10,
   updateOutboundFromStatusWebhook,
   recordFarmerReply,
+  recordFarmerRescheduleComplete,
+  isErpSessionAutoReplyStatusText,
   listOutboundLogs,
+  normalizeCampaignName,
+  listWhatsappCampaigns,
 } from "../services/orderWhatsappOutbound.service.js";
 
 describe("OrderWhatsappOutbound model", () => {
@@ -50,6 +54,7 @@ describe("order WhatsApp outbound routes", () => {
       resolve(process.cwd(), "routes/order.route.js"),
       "utf8"
     );
+    assert.match(routeSource, /\/whatsapp\/campaigns",\s*noCacheApiResponse,\s*listOrderWhatsappCampaignsController/);
     assert.match(routeSource, /\/whatsapp\/outbound",\s*noCacheApiResponse,\s*listOrderWhatsappOutboundController/);
     assert.match(routeSource, /\/whatsapp\/send-selected",\s*sendSelectedOrdersWhatsappController/);
   });
@@ -64,12 +69,21 @@ describe("send-selected controller validation", () => {
     assert.match(source, /WHATSAPP_BULK_SEND_MAX/);
     assert.match(source, /WHATSAPP_BULK_SEND_DELAY_MS/);
     assert.match(source, /batchId/);
+    assert.match(source, /campaignName/);
+    assert.match(source, /createWhatsappCampaign/);
+    assert.match(source, /Campaign name is required for farm-ready WhatsApp send/);
     assert.match(source, /manual_selected/);
     assert.doesNotMatch(source, /Select only 1 order for now/);
   });
 });
 
 describe("orderWhatsappOutbound.service helpers", () => {
+  it("normalizeCampaignName — trims and caps length", () => {
+    assert.equal(normalizeCampaignName("  June Keli  "), "June Keli");
+    assert.equal(normalizeCampaignName(""), "Farm Ready Campaign");
+    assert.equal(normalizeCampaignName("x".repeat(200)).length, 120);
+  });
+
   it("pickLocalMessageId — nested WATI shapes", () => {
     assert.equal(
       pickLocalMessageId({ data: { localMessageId: "abc-123" } }),
@@ -86,6 +100,22 @@ describe("orderWhatsappOutbound.service helpers", () => {
     assert.equal(normalizeMobile10("917588686453"), "7588686453");
     assert.equal(normalizeMobile10("7588686453"), "7588686453");
     assert.equal(normalizeMobile10(""), null);
+  });
+
+  it("isErpSessionAutoReplyStatusText — skips farm-ready and reschedule confirmations", () => {
+    assert.equal(
+      isErpSessionAutoReplyStatusText({
+        text: "✅ धन्यवाद!\n\nआपले शेत तयार असल्याची नोंद झाली.",
+      }),
+      true
+    );
+    assert.equal(
+      isErpSessionAutoReplyStatusText({
+        text: "✅ धन्यवाद!\n\nआपली Delivery Date निश्चित झाली.\n📅 Delivery Date: 18/06/2026",
+      }),
+      true
+    );
+    assert.equal(isErpSessionAutoReplyStatusText({ text: "Hello farmer" }), false);
   });
 });
 
@@ -159,6 +189,54 @@ describe("updateOutboundFromStatusWebhook — status rank", () => {
     const r = await updateOutboundFromStatusWebhook({ event: "sent" });
     assert.deepEqual(r, { matched: 0 });
   });
+
+  it("links template sent ids then matches delivered by watiWebhookId", async () => {
+    const sendUuid = "d38f0c3a-e833-4725-a894-53a2b1dc1af6";
+    const watiId = "6a190344640dd7889fbbacc7";
+    const wamid = "wamid.HBgMOTE5NTk1OTk2NDUyFQIAERgSODE0NzEwQUVBODQ3NTRBREQzAA==";
+    const docState = {
+      _id: "outbound-wati-id",
+      orderId,
+      localMessageId: sendUuid,
+      watiWebhookId: null,
+      whatsappMessageId: null,
+      status: "sent",
+    };
+
+    OrderWhatsappOutbound.findOne = () => ({
+      sort: () => Promise.resolve({ ...docState }),
+    });
+    OrderWhatsappOutbound.updateOne = async (_filter, update) => {
+      Object.assign(docState, update.$set);
+      return { modifiedCount: 1 };
+    };
+
+    await updateOutboundFromStatusWebhook({
+      localMessageId: sendUuid,
+      watiWebhookId: watiId,
+      whatsappMessageId: wamid,
+      event: "sent",
+      timestamp: new Date("2026-05-29T06:59:00Z"),
+    });
+    assert.equal(docState.watiWebhookId, watiId);
+    assert.equal(docState.whatsappMessageId, wamid);
+
+    const deliveredAt = new Date("2026-05-29T07:00:00Z");
+    const r = await updateOutboundFromStatusWebhook({
+      watiWebhookId: watiId,
+      whatsappMessageId: wamid,
+      event: "delivered",
+      timestamp: deliveredAt,
+    });
+
+    assert.equal(r.matched, 1);
+    assert.equal(r.updated, true);
+    assert.equal(docState.status, "delivered");
+    assert.equal(docState.deliveredAt, deliveredAt);
+
+    OrderWhatsappOutbound.findOne = originalFindOne;
+    OrderWhatsappOutbound.updateOne = originalUpdateOne;
+  });
 });
 
 describe("recordFarmerReply", () => {
@@ -197,6 +275,40 @@ describe("recordFarmerReply", () => {
     assert.equal(updated.farmerReplyText, "शेत तयार आहे");
     assert.equal(updated.farmerReplyAction, "button_farm_ready");
     assert.ok(updated.farmerReplyAt instanceof Date);
+
+    OrderWhatsappOutbound.findOne = originalFindOne;
+    OrderWhatsappOutbound.updateOne = originalUpdateOne;
+  });
+
+  it("recordFarmerRescheduleComplete — overwrites prior reply with slot summary", async () => {
+    const orderId = "507f1f77bcf86cd799439011";
+    const doc = {
+      _id: "out-resched",
+      orderId,
+      templateType: "farm_ready",
+      farmerReplyAt: new Date("2026-05-29T03:00:00Z"),
+      farmerReplyText: "दुसरी तारीख निवडा",
+      farmerReplyAction: "button_reschedule",
+      status: "read",
+    };
+    let updated = null;
+
+    OrderWhatsappOutbound.findOne = () => ({
+      sort: () => Promise.resolve(doc),
+    });
+    OrderWhatsappOutbound.updateOne = async (_f, update) => {
+      updated = update.$set;
+      return { modifiedCount: 1 };
+    };
+
+    await recordFarmerRescheduleComplete(orderId, {
+      slotLabel: "18 to 24 June",
+      deliveryLabel: "18/06/2026",
+    });
+
+    assert.equal(updated.farmerReplyAction, "delivery_rescheduled");
+    assert.match(updated.farmerReplyText, /18 to 24 June/);
+    assert.match(updated.farmerReplyText, /18\/06\/2026/);
 
     OrderWhatsappOutbound.findOne = originalFindOne;
     OrderWhatsappOutbound.updateOne = originalUpdateOne;

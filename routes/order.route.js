@@ -26,10 +26,12 @@ import {
   reconcilePayments,
   generatePaymentQR,
   sendOrderAcceptedWhatsAppController,
+  sendOrderPlacedWhatsAppController,
   sendOrderDispatchWhatsAppController,
   sendOrderFarmReadyWhatsAppController,
   sendSelectedOrdersWhatsappController,
   listOrderWhatsappOutboundController,
+  listOrderWhatsappCampaignsController,
   getDeliverySummary,
   getDeliveryOrders,
   splitOrder,
@@ -176,10 +178,12 @@ router
     checkErrors,
     updateOrder
   )
+  .get("/whatsapp/campaigns", noCacheApiResponse, listOrderWhatsappCampaignsController)
   .get("/whatsapp/outbound", noCacheApiResponse, listOrderWhatsappOutboundController)
   .post("/whatsapp/send-selected", sendSelectedOrdersWhatsappController)
   .get("/:orderId/timeline", getPlantOrderTimeline)
   .post("/:orderId/send-accepted-whatsapp", sendOrderAcceptedWhatsAppController)
+  .post("/:orderId/send-placed-whatsapp", sendOrderPlacedWhatsAppController)
   .post("/:orderId/send-dispatch-whatsapp", sendOrderDispatchWhatsAppController)
   .post("/:orderId/send-farm-ready-whatsapp", sendOrderFarmReadyWhatsAppController)
   .post("/test-notification", authenticateToken, catchAsync(async (req, res) => {

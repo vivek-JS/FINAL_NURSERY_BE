@@ -4,6 +4,7 @@ import escapeRegex from "../utility/escapeRegex.js";
 import {
   isWhatsappUnlimitedSendEnabled,
   isWhatsappManualResendAllowed,
+  isFarmReadyWhatsappCooldownBypassAllowed,
 } from "../utility/whatsappUnlimitedSend.js";
 import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
@@ -27,6 +28,7 @@ import {
 } from "../utility/pushNotification.js";
 import {
   sendOrderAcceptedWhatsApp,
+  sendOrderPlacedWhatsApp,
   sendOrderDispatchedWhatsAppDelivery1,
   buildWatiSendRecipient,
 } from "../utility/watiMessaging.js";
@@ -230,6 +232,8 @@ async function buildOrderAcceptedWhatsAppDetails(order) {
     plantSubtype: plantSubtypeName,
     numberOfPlants: totalPlants,
     deliveryDate: order.deliveryDate,
+    orderBookingDate: order.orderBookingDate,
+    createdAt: order.createdAt,
     rate: order.rate,
     totalAmount,
     advanceAmount: paidAmount,
@@ -393,6 +397,114 @@ export async function tryAutoSendOrderAcceptedWhatsApp(orderId) {
 function scheduleAutoSendOrderAcceptedWhatsApp(orderId) {
   if (!orderId) return;
   void tryAutoSendOrderAcceptedWhatsApp(orderId);
+}
+
+async function sendOrderPlacedWhatsAppForOrder(order, { allowResend = false } = {}) {
+  if (
+    order.whatsappPlacedSentAt &&
+    !allowResend &&
+    !isWhatsappUnlimitedSendEnabled()
+  ) {
+    return {
+      success: true,
+      alreadySent: true,
+      whatsappPlacedSentAt: order.whatsappPlacedSentAt,
+      whatsappPlacedMessageKey: order.whatsappPlacedMessageKey || null,
+    };
+  }
+
+  if (order.dealerOrder) {
+    return { success: false, skipped: true, reason: "dealer_order" };
+  }
+
+  const orderDetails = await buildOrderAcceptedWhatsAppDetails(order);
+  const watiTaluka = orderDetails.taluka || resolveOrderTalukaForWati(order);
+  const farmerRec = farmerWhatsAppRecipient(order);
+  if (!farmerRec) {
+    return {
+      success: false,
+      error: {
+        message:
+          "Order has no farmer with mobile number — farmer WhatsApp is required for this order",
+      },
+    };
+  }
+  const farmerSendTo = buildWatiSendRecipient(farmerRec, { taluka: watiTaluka });
+  if (!farmerSendTo) {
+    return {
+      success: false,
+      error: {
+        message:
+          "Order has no farmer with mobile number — farmer WhatsApp is required for this order",
+      },
+    };
+  }
+
+  const farmerResult = await sendOrderPlacedWhatsApp(farmerSendTo, orderDetails);
+  if (!farmerResult.success) {
+    return { success: false, error: farmerResult.error };
+  }
+  order.whatsappPlacedSentAt = new Date();
+  const farmerMsgKey = extractWatiLocalMessageId(farmerResult.data);
+  if (farmerMsgKey) order.whatsappPlacedMessageKey = String(farmerMsgKey);
+  await order.save();
+
+  return {
+    success: true,
+    data: farmerResult.data,
+    farmerSent: true,
+    stored: {
+      whatsappPlacedSentAt: order.whatsappPlacedSentAt,
+      whatsappPlacedMessageKey: order.whatsappPlacedMessageKey || null,
+    },
+  };
+}
+
+/** Auto-send order_placed_revamped when a farmer order is created (env-gated). */
+export async function tryAutoSendOrderPlacedWhatsApp(orderId) {
+  if (process.env.WATI_ORDER_PLACED_ON_CREATE === "false") {
+    return { skipped: true, reason: "disabled" };
+  }
+  try {
+    const order = await Order.findById(orderId)
+      .populate("farmer", "name mobileNumber village taluka talukaName")
+      .populate("salesPerson", "name phoneNumber jobTitle")
+      .populate("plantName", "name");
+    if (!order) {
+      console.warn(`[WATI placed] Order not found: ${orderId}`);
+      return;
+    }
+    if (order.dealerOrder) {
+      return { skipped: true, reason: "dealer_order" };
+    }
+    const status = String(order.orderStatus || "").toUpperCase();
+    if (WATI_BLOCKED_ORDER_STATUSES_FOR_ACCEPT.has(status)) {
+      return { skipped: true, reason: `order_status_${status}` };
+    }
+    const result = await sendOrderPlacedWhatsAppForOrder(order);
+    if (result.success && !result.alreadySent) {
+      console.log(
+        `✅ [WATI placed] Auto-sent for Order #${order.orderId || order._id}`
+      );
+    } else if (!result.success && !result.skipped) {
+      console.warn(
+        `⚠️ [WATI placed] Auto-send failed for Order #${order.orderId || order._id}:`,
+        result.error?.message || result.error
+      );
+    }
+    return result;
+  } catch (err) {
+    console.error(
+      `❌ [WATI placed] Auto-send error for order ${orderId}:`,
+      err?.message || err
+    );
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+
+function scheduleAutoSendOrderPlacedWhatsApp(orderId) {
+  if (!orderId) return;
+  void tryAutoSendOrderPlacedWhatsApp(orderId);
 }
 
 const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
@@ -3936,7 +4048,64 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
 });
 
 /**
- * Send farm-ready WhatsApp (WATI delivery_final_second) — manual from ERP / auto on FARM_READY status.
+ * Send order placed WhatsApp (WATI order_placed_revamped).
+ * Auto on order create when WATI_ORDER_PLACED_ON_CREATE is not false.
+ */
+export const sendOrderPlacedWhatsAppController = catchAsync(async (req, res) => {
+  const { orderId } = req.params;
+  const order = await Order.findById(orderId)
+    .populate("farmer", "name mobileNumber village taluka talukaName")
+    .populate("salesPerson", "name phoneNumber jobTitle")
+    .populate("plantName", "name");
+  if (!order) {
+    return res.status(404).json({ message: "Order not found" });
+  }
+
+  const allowResend = isWhatsappManualResendAllowed(req);
+  const result = await sendOrderPlacedWhatsAppForOrder(order, { allowResend });
+
+  if (result.alreadySent) {
+    return res.status(200).json(
+      generateResponse(
+        "Success",
+        "WhatsApp placed message was already sent for this order",
+        {
+          alreadySent: true,
+          whatsappPlacedSentAt: result.whatsappPlacedSentAt,
+          whatsappPlacedMessageKey: result.whatsappPlacedMessageKey || null,
+        },
+        undefined
+      )
+    );
+  }
+
+  if (result.skipped) {
+    return res.status(200).json(
+      generateResponse("Success", "Skipped — not applicable for this order", {
+        skipped: true,
+        reason: result.reason,
+      }, undefined)
+    );
+  }
+
+  if (!result.success) {
+    const msg =
+      result.error?.message ||
+      (typeof result.error === "string" ? result.error : "Failed to send message");
+    return res.status(500).json(generateResponse("Error", msg, null, result.error));
+  }
+
+  return res.status(200).json(
+    generateResponse("Success", "WhatsApp placed message sent successfully", {
+      ...result.data,
+      stored: result.stored,
+      farmerSent: result.farmerSent ?? false,
+    }, undefined)
+  );
+});
+
+/**
+ * Send farm-ready WhatsApp (WATI delivery_final_second) — manual from ERP only (ACCEPTED orders).
  */
 export const sendOrderFarmReadyWhatsAppController = catchAsync(async (req, res) => {
   const { orderId } = req.params;
@@ -3947,21 +4116,7 @@ export const sendOrderFarmReadyWhatsAppController = catchAsync(async (req, res) 
     return res.status(404).json({ message: "Order not found" });
   }
 
-  if (order.whatsappFarmReadySentAt && !isWhatsappManualResendAllowed(req)) {
-    return res.status(200).json(
-      generateResponse(
-        "Success",
-        "WhatsApp farm-ready message was already sent for this order",
-        {
-          alreadySent: true,
-          whatsappFarmReadySentAt: order.whatsappFarmReadySentAt,
-          whatsappFarmReadyMessageKey: order.whatsappFarmReadyMessageKey || null,
-        },
-        undefined
-      )
-    );
-  }
-
+  const bypassCooldown = isFarmReadyWhatsappCooldownBypassAllowed(req);
   const { sendDeliveryFinalSecondForOrder, DELIVERY_FINAL_TRIGGERS } = await import(
     "../services/deliveryFinalSecondWhatsapp.service.js"
   );
@@ -3971,16 +4126,32 @@ export const sendOrderFarmReadyWhatsAppController = catchAsync(async (req, res) 
     {
       trigger: "manual_icon",
       sentBy: req.user?._id || req.user?.id || null,
+      bypassCooldown,
     }
   );
 
-  if (!result.success) {
-    const msg =
-      result.error === "not_banana"
-        ? "Farm-ready WhatsApp is only available for Banana (केळी) orders"
-        : result.error?.message ||
-          (typeof result.error === "string" ? result.error : "Failed to send message");
-    const status = result.error === "not_banana" ? 400 : 500;
+    if (!result.success) {
+      if (result.error === "cooldown_active") {
+        return res.status(200).json(
+          generateResponse("Success", result.message, {
+            alreadySent: true,
+            skipped: true,
+            reason: "cooldown_active",
+            whatsappFarmReadySentAt: order.whatsappFarmReadySentAt,
+            whatsappFarmReadyMessageKey: order.whatsappFarmReadyMessageKey || null,
+            resendAvailableAt: result.resendAvailableAt || null,
+          }, undefined)
+        );
+      }
+      const msg =
+        result.error === "not_banana"
+          ? "Farm-ready WhatsApp is only available for Banana (केळी) orders"
+          : result.error === "order_not_accepted"
+            ? "Farm-ready WhatsApp can only be sent for ACCEPTED orders"
+            : result.error?.message ||
+              (typeof result.error === "string" ? result.error : "Failed to send message");
+      const status =
+        result.error === "not_banana" || result.error === "order_not_accepted" ? 400 : 500;
     return res.status(status).json(generateResponse("Error", msg, null, result.error));
   }
 
@@ -4049,12 +4220,37 @@ export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) 
     );
   }
 
-  const allowResend = isWhatsappManualResendAllowed(req);
+  const bypassCooldown = isFarmReadyWhatsappCooldownBypassAllowed(req);
   const sentBy = req.user?._id || req.user?.id || null;
   const batchId = new mongoose.Types.ObjectId().toString();
   const { sendDeliveryFinalSecondForOrder, DELIVERY_FINAL_TRIGGERS } = await import(
     "../services/deliveryFinalSecondWhatsapp.service.js"
   );
+  const {
+    createWhatsappCampaign,
+    normalizeCampaignName,
+  } = await import("../services/orderWhatsappOutbound.service.js");
+
+  const campaignNameRaw = String(req.body?.campaignName ?? "").trim();
+  if (!campaignNameRaw) {
+    return res.status(400).json(
+      generateResponse(
+        "Error",
+        "Campaign name is required for farm-ready WhatsApp send",
+        null,
+        null
+      )
+    );
+  }
+  const campaignName = normalizeCampaignName(campaignNameRaw);
+
+  await createWhatsappCampaign({
+    batchId,
+    campaignName,
+    templateType: "farm_ready",
+    sentBy,
+    plannedCount: uniqueIds.length,
+  });
 
   const results = [];
   for (let i = 0; i < uniqueIds.length; i += 1) {
@@ -4075,20 +4271,6 @@ export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) 
       continue;
     }
 
-    if (order.whatsappFarmReadySentAt && !allowResend) {
-      results.push({
-        orderId: String(order._id),
-        publicOrderCode: order.publicOrderCode || null,
-        success: false,
-        skipped: true,
-        reason: "already_sent",
-        alreadySent: true,
-        whatsappFarmReadySentAt: order.whatsappFarmReadySentAt,
-        whatsappFarmReadyMessageKey: order.whatsappFarmReadyMessageKey || null,
-      });
-      continue;
-    }
-
     const result = await sendDeliveryFinalSecondForOrder(
       order,
       DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS,
@@ -4096,6 +4278,8 @@ export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) 
         trigger: "manual_selected",
         sentBy,
         batchId,
+        campaignName,
+        bypassCooldown,
       }
     );
 
@@ -4104,13 +4288,35 @@ export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) 
         orderId: String(order._id),
         publicOrderCode: order.publicOrderCode || null,
         success: false,
-        skipped: result.skipped === true || result.error === "not_banana",
-        reason: result.error === "not_banana" ? "not_banana" : undefined,
+        skipped:
+          result.skipped === true ||
+          result.error === "not_banana" ||
+          result.error === "order_not_accepted" ||
+          result.error === "cooldown_active",
+        reason:
+          result.error === "not_banana"
+            ? "not_banana"
+            : result.error === "order_not_accepted"
+              ? "not_accepted"
+              : result.error === "cooldown_active"
+                ? "cooldown_active"
+                : undefined,
         error:
           result.error === "not_banana"
             ? "Farm-ready WhatsApp is only available for Banana (केळी) orders"
-            : result.error?.message ||
-              (typeof result.error === "string" ? result.error : "Failed to send message"),
+            : result.error === "order_not_accepted"
+              ? "Farm-ready WhatsApp can only be sent for ACCEPTED orders"
+              : result.error === "cooldown_active"
+                ? result.message ||
+                  "Farm-ready WhatsApp was sent recently — wait 72 hours before sending again"
+                : result.error?.message ||
+                  (typeof result.error === "string" ? result.error : "Failed to send message"),
+        ...(result.error === "cooldown_active"
+          ? {
+              resendAvailableAt: result.resendAvailableAt || null,
+              whatsappFarmReadySentAt: order.whatsappFarmReadySentAt || null,
+            }
+          : {}),
       });
       continue;
     }
@@ -4148,6 +4354,7 @@ export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) 
       generateResponse("Success", "WhatsApp message sent successfully", {
         ...one,
         batchId,
+        campaignName,
         results,
         summary: { total, sent, skipped, failed },
       }, undefined)
@@ -4163,6 +4370,7 @@ export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) 
         {
           ...one,
           batchId,
+          campaignName,
           results,
           summary: { total, sent, skipped, failed },
         },
@@ -4179,9 +4387,37 @@ export const sendSelectedOrdersWhatsappController = catchAsync(async (req, res) 
   return res.status(sent > 0 ? 200 : 500).json(
     generateResponse(sent > 0 ? "Success" : "Error", message, {
       batchId,
+      campaignName,
       results,
       summary: { total, sent, skipped, failed },
     }, sent > 0 ? undefined : results)
+  );
+});
+
+/**
+ * GET /order/whatsapp/campaigns — named bulk sends with live stats.
+ */
+export const listOrderWhatsappCampaignsController = catchAsync(async (req, res) => {
+  const {
+    listWhatsappCampaigns,
+    getUncategorizedOutboundStats,
+  } = await import("../services/orderWhatsappOutbound.service.js");
+  const templateType = req.query.templateType || "farm_ready";
+  const [campaigns, uncategorizedStats] = await Promise.all([
+    listWhatsappCampaigns({
+      page: req.query.page,
+      limit: req.query.limit,
+      templateType,
+    }),
+    getUncategorizedOutboundStats(templateType),
+  ]);
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  return res.status(200).json(
+    generateResponse("Success", "WhatsApp campaigns", {
+      ...campaigns,
+      uncategorizedStats,
+    }, undefined)
   );
 });
 
@@ -4195,6 +4431,7 @@ export const listOrderWhatsappOutboundController = catchAsync(async (req, res) =
     limit: req.query.limit,
     orderId: req.query.orderId,
     status: req.query.status,
+    batchId: req.query.batchId,
     templateType: req.query.templateType || "farm_ready",
   });
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");

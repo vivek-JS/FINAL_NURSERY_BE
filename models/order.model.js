@@ -394,6 +394,15 @@ const orderSchema = new Schema(
       trim: true,
       default: null,
     },
+    whatsappPlacedSentAt: {
+      type: Date,
+      default: null,
+    },
+    whatsappPlacedMessageKey: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     whatsappDispatchSentAt: {
       type: Date,
       default: null,

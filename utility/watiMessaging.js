@@ -179,6 +179,67 @@ export async function sendWatiTemplateMessage(mobileNumber, templateName, parame
   }
 }
 
+/** Coerce WATI template parameter values to strings (Date objects would serialize as ISO). */
+function watiTemplateParameters(params) {
+  return params.map((p) => ({
+    name: p.name,
+    value: String(p.value ?? "").trim() || "—",
+  }));
+}
+
+/**
+ * Shared params for order_accpeted_revamped / order_placed_revamped (IST dates).
+ */
+export function buildOrderConfirmationTemplateParameters(sendTo, orderDetails) {
+  const {
+    orderId,
+    plantName,
+    numberOfPlants,
+    deliveryDate,
+    orderBookingDate,
+    createdAt,
+    rate,
+    totalAmount,
+  } = orderDetails;
+
+  const { plantParam, subtypeParam } = watiPlantAndSubtypeParams(
+    plantName,
+    orderDetails.plantSubtype
+  );
+  const isPapayaAccept = /papaya/i.test(
+    `${plantName || ""} ${orderDetails.plantSubtype || ""}`
+  );
+  const acceptPlant = isPapayaAccept ? "Papaya" : plantParam;
+  const acceptSubtype = isPapayaAccept ? WATI_MERGED_SUBTYPE_PLACEHOLDER : subtypeParam;
+
+  const templateOrderId =
+    orderDetails.publicOrderCode?.toString() || orderId?.toString() || "N/A";
+
+  const formattedDelivery =
+    formatWatiDateDdMmYyyy(deliveryDate) || "To be confirmed";
+  const formattedBooking =
+    formatWatiDateDdMmYyyy(orderBookingDate || createdAt) || "—";
+
+  return watiTemplateParameters([
+    { name: "name", value: sendTo.name || "Farmer" },
+    { name: "id", value: templateOrderId },
+    { name: "village", value: sendTo.village || "N/A" },
+    { name: "taluka", value: sendTo.taluka || "N/A" },
+    { name: "number", value: sendTo.mobileNumber?.toString() || "N/A" },
+    { name: "plant", value: acceptPlant },
+    { name: "subtype", value: acceptSubtype },
+    { name: "total_booked", value: numberOfPlants?.toString() || "0" },
+    { name: "rate", value: rate?.toString() || "0" },
+    { name: "total", value: totalAmount?.toString() || "0" },
+    { name: "advacne", value: orderDetails.advanceAmount?.toString() || "0" },
+    { name: "remaiing", value: orderDetails.remainingAmount?.toString() || "0" },
+    { name: "booking", value: formattedBooking },
+    { name: "booking_date", value: formattedBooking },
+    { name: "delivery", value: formattedDelivery },
+    { name: "deliveryDate", value: formattedDelivery },
+  ]);
+}
+
 /**
  * Send order accepted WhatsApp message to farmer
  * @param {Object} farmer - Farmer details
@@ -199,50 +260,9 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       return { success: false, error: "No mobile number" };
     }
 
-    const {
-      orderId,
-      plantName,
-      numberOfPlants,
-      deliveryDate,
-      rate,
-      totalAmount,
-    } = orderDetails;
-
-    const { plantParam, subtypeParam } = watiPlantAndSubtypeParams(
-      plantName,
-      orderDetails.plantSubtype
-    );
-    const isPapayaAccept = /papaya/i.test(
-      `${plantName || ""} ${orderDetails.plantSubtype || ""}`
-    );
-    const acceptPlant = isPapayaAccept ? "Papaya" : plantParam;
-    const acceptSubtype = isPapayaAccept ? WATI_MERGED_SUBTYPE_PLACEHOLDER : subtypeParam;
-
-    const templateOrderId =
-      orderDetails.publicOrderCode?.toString() || orderId?.toString() || "N/A";
-
-    const formattedDate =
-      formatWatiDateDdMmYyyy(deliveryDate) || "To be confirmed";
-
-    // Parameters for WATI template: order_accpeted_revamped
-    const parameters = [
-      { name: "name", value: sendTo.name || "Farmer" },
-      { name: "id", value: templateOrderId },
-      { name: "village", value: sendTo.village || "N/A" },
-      { name: "taluka", value: sendTo.taluka || "N/A" },
-      { name: "number", value: sendTo.mobileNumber?.toString() || "N/A" },
-      { name: "plant", value: acceptPlant },
-      { name: "subtype", value: acceptSubtype },
-      { name: "total_booked", value: numberOfPlants?.toString() || "0" },
-      { name: "rate", value: rate?.toString() || "0" },
-      { name: "total", value: totalAmount?.toString() || "0" },
-      { name: "advacne", value: orderDetails.advanceAmount?.toString() || "0" },  // Note: typo in template
-      { name: "remaiing", value: orderDetails.remainingAmount?.toString() || "0" }, // Note: typo in template
-      { name: "delivery", value: formattedDate },
-    ];
-
-    // WATI template name (approved template)
-    const templateName = "order_accpeted_revamped";
+    const templateName =
+      process.env.WATI_ORDER_ACCEPTED_TEMPLATE || "order_accpeted_revamped";
+    const parameters = buildOrderConfirmationTemplateParameters(sendTo, orderDetails);
 
     return await sendWatiTemplateMessage(
       sendTo.mobileNumber,
@@ -251,6 +271,38 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
     );
   } catch (error) {
     console.error("❌ Error in sendOrderAcceptedWhatsApp:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Order placed confirmation (WATI order_placed_revamped or same params as accepted).
+ */
+export async function sendOrderPlacedWhatsApp(farmer, orderDetails) {
+  try {
+    const sendTo = buildWatiSendRecipient(farmer, {
+      taluka:
+        farmer?.talukaName ||
+        farmer?.taluka ||
+        orderDetails?.taluka ||
+        "N/A",
+    });
+    if (!sendTo) {
+      console.warn("⚠️ No farmer mobile number provided");
+      return { success: false, error: "No mobile number" };
+    }
+
+    const templateName =
+      process.env.WATI_ORDER_PLACED_TEMPLATE || "order_placed_revamped";
+    const parameters = buildOrderConfirmationTemplateParameters(sendTo, orderDetails);
+
+    return await sendWatiTemplateMessage(
+      sendTo.mobileNumber,
+      templateName,
+      parameters
+    );
+  } catch (error) {
+    console.error("❌ Error in sendOrderPlacedWhatsApp:", error);
     return { success: false, error: error.message };
   }
 }

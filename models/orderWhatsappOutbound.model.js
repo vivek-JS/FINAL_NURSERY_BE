@@ -40,6 +40,13 @@ const orderWhatsappOutboundSchema = new Schema(
       default: null,
       index: true,
     },
+    /** WATI webhook `id` (hex) — often differs from send API localMessageId UUID. */
+    watiWebhookId: {
+      type: String,
+      trim: true,
+      default: null,
+      index: true,
+    },
     status: {
       type: String,
       enum: ["pending", "sent", "delivered", "read", "failed"],
@@ -70,6 +77,11 @@ const orderWhatsappOutboundSchema = new Schema(
       trim: true,
       default: null,
       index: true,
+    },
+    campaignName: {
+      type: String,
+      trim: true,
+      default: null,
     },
   },
   { timestamps: true }

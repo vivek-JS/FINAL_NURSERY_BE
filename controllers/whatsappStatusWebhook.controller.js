@@ -6,7 +6,10 @@ import { runFarmReadyWebhookFromBody } from "../services/whatsappFarmReadyResche
 import { runCancelReviveWebhookFromBody } from "../services/whatsappOrderCancelRevive.service.js";
 import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
 import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
-import { updateOutboundFromStatusWebhook } from "../services/orderWhatsappOutbound.service.js";
+import {
+  shouldUpdateFarmReadyOutboundStatus,
+  updateOutboundFromStatusWebhook,
+} from "../services/orderWhatsappOutbound.service.js";
 import {
   extractInboundMessage,
 } from "../utility/watiInboundPayload.js";
@@ -16,6 +19,20 @@ const WATI_STATUS_DEBUG =
 
 function statusLog(...args) {
   if (WATI_STATUS_DEBUG) console.log("[WATI STATUS]", ...args);
+}
+
+async function applyOutboundStatusUpdate(params) {
+  const result = await updateOutboundFromStatusWebhook(params).catch(() => ({ matched: 0 }));
+  statusLog("outbound log update", {
+    event: params.event,
+    matched: result.matched,
+    updated: result.updated,
+    outboundId: result.id || null,
+    localMessageId: params.localMessageId || null,
+    watiWebhookId: params.watiWebhookId || null,
+    whatsappMessageId: params.whatsappMessageId || null,
+  });
+  return result;
 }
 
 function safeJsonPreview(obj, max = 2000) {
@@ -37,7 +54,23 @@ const INBOUND_EVENT_TYPES = new Set([
   "interactive",
 ]);
 
+/** Template / delivery lifecycle — never treat as farmer inbound even if `text` is present. */
+const OUTBOUND_STATUS_EVENT_TYPES = new Set([
+  "templatemessagesent_v2",
+  "templatemessagefailed",
+  "sentmessagedelivered",
+  "sentmessagedelivered_v2",
+  "sentmessageread",
+  "sentmessageread_v2",
+  "sentmessagereplied_v2",
+]);
+
+function isOutboundStatusEvent(eventType) {
+  return OUTBOUND_STATUS_EVENT_TYPES.has(String(eventType || "").toLowerCase());
+}
+
 function isInboundMessageEvent(body, eventType) {
+  if (isOutboundStatusEvent(eventType)) return false;
   const et = String(eventType || "").toLowerCase();
   if (INBOUND_EVENT_TYPES.has(et)) return true;
   if (String(body?.statusString || "").toLowerCase() === "received") return true;
@@ -80,9 +113,11 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
     preview: safeJsonPreview(body),
   });
 
-  const eventType = body.eventType || body.type || body.event;
+  const eventType = body.eventType || body.event;
+  const messageType = body.type || body.data?.type || null;
+  const watiWebhookId = body.id || body.data?.id || null;
   const localMessageId =
-    body.localMessageId || body.id || body.data?.localMessageId || body.data?.id || null;
+    body.localMessageId || body.data?.localMessageId || watiWebhookId || null;
   const waId = body.waId || body.whatsappId || body.data?.waId || body.data?.from || null;
   const statusString = body.statusString || body.status || null;
   const whatsappMessageId = body.whatsappMessageId || null;
@@ -99,6 +134,9 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
     statusString: statusString || "(none)",
     waId: waId || "(none)",
     localMessageId: localMessageId || "(none)",
+    watiWebhookId: watiWebhookId || "(none)",
+    whatsappMessageId: whatsappMessageId || "(none)",
+    messageType: messageType || "(none)",
     inboundText: inbound.text ? String(inbound.text).slice(0, 120) : "(empty)",
     buttonText: inbound.buttonText || "(none)",
   });
@@ -204,18 +242,21 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
           }
         }
       }
-      await updateOutboundFromStatusWebhook({
-        localMessageId,
+      await applyOutboundStatusUpdate({
+        localMessageId: body.localMessageId || body.data?.localMessageId || null,
+        watiWebhookId,
         whatsappMessageId,
-        event: "sent",
+        event: "delivered",
         timestamp: parseTimestamp(timestampRaw),
-      }).catch(() => {});
+      });
       return res.status(200).json({ success: true, message: 'processed templateMessageSent_v2' });
     }
 
     // For delivered/read/failed events, use localMessageId or id to find and update
     if (eventType === 'sentMessageDELIVERED' || eventType === 'sentMessageDELIVERED_v2' || String(statusString).toLowerCase() === 'delivered') {
-      if (!localMessageId) return res.status(200).json({ success: false, message: 'no localMessageId' });
+      if (!localMessageId && !whatsappMessageId) {
+        return res.status(200).json({ success: false, message: 'no message id' });
+      }
       const deliveredAt = parseTimestamp(timestampRaw);
       // Find activity to get broadcastName and phone for WhatsAppBroadcast update
       let broadcastName = null, contactPhone = null;
@@ -265,18 +306,29 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
           { arrayFilters: [arrayFilter] }
         ).catch(() => {});
       }
-      statusLog("delivered", { localMessageId, broadcastName: broadcastName || "(none)" });
-      await updateOutboundFromStatusWebhook({
-        localMessageId,
-        whatsappMessageId,
-        event: "delivered",
-        timestamp: deliveredAt,
-      }).catch(() => {});
+      statusLog("delivered", { localMessageId, watiWebhookId, broadcastName: broadcastName || "(none)" });
+      if (shouldUpdateFarmReadyOutboundStatus(body, eventType)) {
+        await applyOutboundStatusUpdate({
+          localMessageId: body.localMessageId || body.data?.localMessageId || null,
+          watiWebhookId,
+          whatsappMessageId,
+          event: "delivered",
+          timestamp: deliveredAt,
+        });
+      } else {
+        statusLog("skip outbound log — not farm-ready template status", {
+          eventType,
+          messageType,
+          reason: "session_text_or_confirmation",
+        });
+      }
       return res.status(200).json({ success: true, message: "processed delivered" });
     }
 
     if (eventType === 'sentMessageREAD' || eventType === 'sentMessageREAD_v2' || String(statusString).toLowerCase() === 'read') {
-      if (!localMessageId) return res.status(200).json({ success: false, message: 'no localMessageId' });
+      if (!localMessageId && !whatsappMessageId) {
+        return res.status(200).json({ success: false, message: 'no message id' });
+      }
       const readAt = parseTimestamp(timestampRaw);
       let broadcastName = null, contactPhone = null;
       const f = await Farmer.findOne({ 'whatsappAutomationActivities.localMessageId': localMessageId }).lean().catch(() => null);
@@ -325,13 +377,22 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
           { arrayFilters: [arrayFilter] }
         ).catch(() => {});
       }
-      statusLog("read", { localMessageId, broadcastName: broadcastName || "(none)" });
-      await updateOutboundFromStatusWebhook({
-        localMessageId,
-        whatsappMessageId,
-        event: "read",
-        timestamp: readAt,
-      }).catch(() => {});
+      statusLog("read", { localMessageId, watiWebhookId, broadcastName: broadcastName || "(none)" });
+      if (shouldUpdateFarmReadyOutboundStatus(body, eventType)) {
+        await applyOutboundStatusUpdate({
+          localMessageId: body.localMessageId || body.data?.localMessageId || null,
+          watiWebhookId,
+          whatsappMessageId,
+          event: "read",
+          timestamp: readAt,
+        });
+      } else {
+        statusLog("skip outbound log — not farm-ready template status", {
+          eventType,
+          messageType,
+          reason: "session_text_or_confirmation",
+        });
+      }
       return res.status(200).json({ success: true, message: "processed read" });
     }
 
@@ -392,14 +453,15 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
         ).catch(() => {});
       }
       statusLog("failed", { localMessageId, normalizedPhone, failedCode, failedDetail });
-      await updateOutboundFromStatusWebhook({
-        localMessageId,
+      await applyOutboundStatusUpdate({
+        localMessageId: body.localMessageId || body.data?.localMessageId || null,
+        watiWebhookId,
         whatsappMessageId,
         event: "failed",
         timestamp: parseTimestamp(timestampRaw),
         failedCode,
         failedDetail,
-      }).catch(() => {});
+      });
       return res.status(200).json({ success: true, message: "processed failed" });
     }
 

@@ -19,3 +19,9 @@ export function isWhatsappManualResendAllowed(req) {
   if (parseForceResend(req?.query?.forceResend)) return true;
   return process.env.WATI_WHATSAPP_UNLIMITED_SEND !== "false";
 }
+
+/** Farm-ready template: skip 72h cooldown only for unlimited test or ?forceResend=1 */
+export function isFarmReadyWhatsappCooldownBypassAllowed(req) {
+  if (isWhatsappUnlimitedSendEnabled()) return true;
+  return parseForceResend(req?.query?.forceResend);
+}

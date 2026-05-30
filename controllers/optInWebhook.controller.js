@@ -2,9 +2,6 @@ import catchAsync from "../utility/catchAsync.js";
 import Farmer from "../models/farmer.model.js";
 import FarmerLead from "../models/farmerLead.model.js";
 import { sendWatiTemplateMessage } from "../utility/watiMessaging.js";
-import { runTodayBookingPdfJob } from "../services/bookingReportWebhook.service.js";
-import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
-import { runFarmReadyWebhookFromBody } from "../services/whatsappFarmReadyReschedule.service.js";
 
 /**
  * Parse webhook timestamp to valid Date.
@@ -121,24 +118,8 @@ export const handleOptInWebhook = catchAsync(async (req, res) => {
     }
   }
 
-  // Interactive report wizard + farm-ready buttons + optional legacy one-shot PDF
-  void (async () => {
-    try {
-      const farmReady = await runFarmReadyWebhookFromBody(req.body);
-      if (farmReady.handled) {
-        console.log(`[opt-in] Farm-ready flow handled: ${farmReady.action || "ok"}`);
-        return;
-      }
-      const w = await runWhatsappReportWizardFromWebhookBody(req.body);
-      if (!w.handled && process.env.WHATSAPP_LEGACY_INSTANT_BOOKING_PDF === "true") {
-        void runTodayBookingPdfJob(req.body).catch((err) => {
-          console.error("[opt-in legacy PDF]", err?.message || err);
-        });
-      }
-    } catch (err) {
-      console.error("[opt-in webhook] report wizard:", err?.message || err);
-    }
-  })();
+  // Farm-ready + report wizard live on /api/v1/whatsapp-status/webhook only (avoid duplicate replies).
+  // Opt-in URL should receive opt_in / opt_out only in WATI dashboard.
 
   // Extract event type and phone number from webhook payload
   let eventType = null;

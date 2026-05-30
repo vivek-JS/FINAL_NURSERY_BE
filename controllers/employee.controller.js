@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import bcrypt from "bcryptjs";
 import Employee from "../models/user.model.js"; //not employee its user
 import { deleteOne, getOne } from "./factory.controller.js";
 import catchAsync from "../utility/catchAsync.js";
@@ -7,6 +8,19 @@ import generateResponse from "../utility/responseFormat.js";
 import { createChangeLog, generateChangesArray } from "../utils/changeLogHelper.js";
 
 const EMPLOYEE_PATCH_FIELDS = ["name", "phoneNumber", "jobTitle", "birthDate"];
+const DEFAULT_LOGIN_PASSWORD = "1234";
+
+function assertEmployeePasswordResetAllowed(before, next) {
+  if (before.role === "FARMER" || !before.jobTitle) {
+    next(new AppError("This action is only available for employee accounts", 400));
+    return false;
+  }
+  if (before.jobTitle === "SUPER_ADMIN" || before.role === "SUPER_ADMIN") {
+    next(new AppError("Cannot reset password for Super Admin", 403));
+    return false;
+  }
+  return true;
+}
 
 const createEmployee = catchAsync(async (req, res, next) => {
   const doc = await Employee.create(req.body);
@@ -113,16 +127,7 @@ const requireEmployeePasswordChange = catchAsync(async (req, res, next) => {
     return next(new AppError("No document found with that ID", 404));
   }
 
-  if (before.role === "FARMER" || !before.jobTitle) {
-    return next(new AppError("This action is only available for employee accounts", 400));
-  }
-
-  const isTargetSuperAdmin =
-    before.jobTitle === "SUPER_ADMIN" ||
-    before.role === "SUPER_ADMIN";
-  if (isTargetSuperAdmin) {
-    return next(new AppError("Cannot require password change for Super Admin", 403));
-  }
+  if (!assertEmployeePasswordResetAllowed(before, next)) return;
 
   const doc = await Employee.findByIdAndUpdate(
     id,
@@ -159,6 +164,59 @@ const requireEmployeePasswordChange = catchAsync(async (req, res, next) => {
         undefined
       )
     );
+});
+
+/** Resets password to factory default (1234) and forces a new password on next login. */
+const resetEmployeePasswordToDefault = catchAsync(async (req, res, next) => {
+  let { id, _id } = req.body;
+  if (_id && !id) id = _id;
+
+  if (!mongoose.isValidObjectId(id)) {
+    return next(new AppError("Invalid ID format", 400));
+  }
+
+  const before = await Employee.findById(id).lean();
+  if (!before) {
+    return next(new AppError("No document found with that ID", 404));
+  }
+
+  if (!assertEmployeePasswordResetAllowed(before, next)) return;
+
+  const hashedPassword = await bcrypt.hash(DEFAULT_LOGIN_PASSWORD, 10);
+  const doc = await Employee.findByIdAndUpdate(
+    id,
+    { password: hashedPassword, isPasswordSet: false },
+    { new: true, runValidators: true }
+  ).select("-password -__v");
+
+  if (!doc) {
+    return next(new AppError("No document found with that ID", 404));
+  }
+
+  if (req.user?._id) {
+    await createChangeLog({
+      entityType: "employee",
+      entityId: doc._id,
+      action: "update",
+      changedBy: req.user._id,
+      changes: [
+        { field: "password", oldValue: "[redacted]", newValue: "[reset to default]" },
+        { field: "isPasswordSet", oldValue: before.isPasswordSet, newValue: false },
+      ],
+      description: `Password reset to default for "${doc.name}" (must change on next login)`,
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+  }
+
+  return res.status(200).json(
+    generateResponse(
+      "Success",
+      `Password reset to ${DEFAULT_LOGIN_PASSWORD}. User must set a new password after logging in.`,
+      doc,
+      undefined
+    )
+  );
 });
 
 const getEmployees = catchAsync(async (req, res) => {
@@ -202,4 +260,5 @@ export {
   getEmployees,
   getEmployee,
   requireEmployeePasswordChange,
+  resetEmployeePasswordToDefault,
 };
