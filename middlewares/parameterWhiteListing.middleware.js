@@ -125,6 +125,8 @@ const allowedParams = [
     "myOrders", // Boolean: show only current user's orders
     "showonly", // For restricting getOrders to the logged-in user's own orders (overrides role-based access for admins)
     "paymentStatus", // For filtering by payment status (PENDING, PARTIAL, COMPLETED)
+  "paymentTiming", // GET /order/payments — advance | balance
+  "pendingAdvanceOnly", // GET /order/payments — shorthand PENDING + advance
   // Old sales analytics filters
   "plant",
   "variety",
@@ -209,6 +211,9 @@ allowedQueryKeys.add("includeAllPastDue"); // admin MIS due backlog toggle
 allowedQueryKeys.add("_"); // cache-bust query param (admin MIS)
 allowedQueryKeys.add("forceResend"); // POST order send-*-whatsapp — unlimited test resend
 allowedQueryKeys.add("templateType"); // GET /order/whatsapp/outbound — filter by template
+allowedQueryKeys.add("batchId"); // GET /order/whatsapp/outbound — campaign batch filter ("none" = unbatched)
+allowedQueryKeys.add("paymentTiming"); // GET /order/payments
+allowedQueryKeys.add("pendingAdvanceOnly"); // GET /order/payments accountant dashboard
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)

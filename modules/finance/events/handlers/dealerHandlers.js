@@ -21,6 +21,16 @@ export function buildJournalForDealerEvent(eventType, payload) {
       b.cr(ACCOUNT_CODES.SALES_PLANTS, amount);
       break;
 
+    case FINANCIAL_EVENT_TYPES.DEALER_ORDER_CANCEL:
+      b.dr(ACCOUNT_CODES.SALES_PLANTS, amount);
+      b.cr(ACCOUNT_CODES.AR_DEALER, amount, partyExtras);
+      break;
+
+    case FINANCIAL_EVENT_TYPES.DEALER_ORDER_REOPEN:
+      b.dr(ACCOUNT_CODES.AR_DEALER, amount, partyExtras);
+      b.cr(ACCOUNT_CODES.SALES_PLANTS, amount);
+      break;
+
     case FINANCIAL_EVENT_TYPES.DEALER_RECEIVABLE_PAYMENT:
       b.dr(ACCOUNT_CODES.PAYMENT_CLEARING, amount);
       b.cr(ACCOUNT_CODES.AR_DEALER, amount, partyExtras);

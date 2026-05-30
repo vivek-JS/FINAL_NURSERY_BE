@@ -5087,6 +5087,7 @@ const splitOrder = catchAsync(async (req, res, next) => {
       salesPerson: parent.salesPerson,
       plantName: parent.plantName,
       plantSubtype: parent.plantSubtype,
+      commissionRatePerPlant: parent.commissionRatePerPlant ?? null,
       bookingSlot: parent.bookingSlot,
       cavity: parent.cavity,
       rate: parent.rate,

@@ -23,6 +23,7 @@ const FIELD_TO_EVENT_TYPE = {
   returnedPlants: ORDER_EVENT_TYPES.ORDER_QUANTITY_CHANGED,
   damagedPlants: ORDER_EVENT_TYPES.ORDER_QUANTITY_CHANGED,
   additionalPlants: ORDER_EVENT_TYPES.ORDER_QUANTITY_CHANGED,
+  commissionRatePerPlant: ORDER_EVENT_TYPES.ORDER_FIELD_CHANGED,
 };
 
 export function fieldToOrderEventType(field) {

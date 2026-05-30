@@ -1,6 +1,7 @@
 import DealerLedgerEntry from "../models/dealerLedgerEntry.model.js";
 import {
   getPlantOrderLineTotal,
+  isTerminalPlantOrderStatus,
   resolveFarmerIdentity,
   resolveFundingDealerId,
 } from "./farmerPlantOrderLedgerHelper.js";
@@ -58,12 +59,18 @@ export function sortReceivableLedgerEntriesChronologically(entries) {
 
 /**
  * Running order-value outstanding for dealer (ledger only — not wallet cash).
- * Sum of ORDER_BOOKING debits minus ORDER_RECEIVABLE_PAYMENT credits (reliable vs stale balanceAfter).
+ * Sum of ORDER_BOOKING debits minus payment credits and order-cancel REVERSAL credits.
  */
 export async function getLastDealerOrderOutstanding(dealerId, session) {
   const match = {
     dealer: dealerId,
-    refType: { $in: ORDER_RECEIVABLE_REF_TYPES },
+    $or: [
+      { refType: { $in: ORDER_RECEIVABLE_REF_TYPES } },
+      {
+        refType: { $in: ["REVERSAL", "ADJUSTMENT"] },
+        "metadata.tracksOrderOutstanding": true,
+      },
+    ],
   };
 
   const pipeline = [
@@ -359,6 +366,208 @@ export const ensureDealerOrderReceivablePaymentCredit = async (
   return createdEntry;
 };
 
+async function dealerLedgerTransitionExists(orderId, transitionKey, session) {
+  const q = DealerLedgerEntry.findOne({
+    orderId,
+    "metadata.transitionKey": transitionKey,
+  });
+  if (session) q.session(session);
+  return Boolean(await q.lean());
+}
+
+/**
+ * Net ORDER_BOOKING debit minus cancel REVERSAL credits for one order (dealer receivable slice).
+ */
+export async function getDealerOrderBookingNet(orderId, dealerId, session) {
+  const match = {
+    orderId,
+    dealer: dealerId,
+    $or: [
+      { refType: "ORDER_BOOKING" },
+      {
+        refType: { $in: ["REVERSAL", "ADJUSTMENT"] },
+        "metadata.tracksOrderOutstanding": true,
+      },
+    ],
+  };
+  const pipeline = [
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        debit: { $sum: { $ifNull: ["$debit", 0] } },
+        credit: { $sum: { $ifNull: ["$credit", 0] } },
+      },
+    },
+  ];
+  let agg = DealerLedgerEntry.aggregate(pipeline);
+  if (session) agg = agg.session(session);
+  const row = (await agg)[0];
+  if (!row) return 0;
+  return roundLedgerMoney(Math.max(0, Number(row.debit) - Number(row.credit)));
+}
+
+/**
+ * On cancel/reject/reopen, write immutable dealer receivable reversal or restore booking.
+ */
+export async function syncDealerLedgerOrderStatusTransition(
+  existingDoc,
+  updatedDoc,
+  { userId, session } = {}
+) {
+  const prevStatus = existingDoc?.orderStatus;
+  const nextStatus = updatedDoc?.orderStatus;
+  if (!prevStatus || !nextStatus || prevStatus === nextStatus) return;
+
+  const dealerId = await resolveFundingDealerId(updatedDoc);
+  if (!dealerId) return;
+
+  const oid = updatedDoc._id;
+  const transitionAt =
+    updatedDoc?.updatedAt instanceof Date
+      ? updatedDoc.updatedAt.getTime()
+      : updatedDoc?.updatedAt
+        ? new Date(updatedDoc.updatedAt).getTime()
+        : Date.now();
+  const orderVersion =
+    typeof updatedDoc?.__v === "number" || typeof updatedDoc?.__v === "string"
+      ? String(updatedDoc.__v)
+      : "0";
+  const transitionKey = `DEALER_ORDER_STATUS_${oid}_${prevStatus}_${nextStatus}_${transitionAt}_${orderVersion}`;
+
+  if (await dealerLedgerTransitionExists(oid, transitionKey, session)) return;
+
+  const entryDate = Number.isFinite(transitionAt) ? new Date(transitionAt) : new Date();
+  const { customerName } = await resolveFarmerIdentity(updatedDoc);
+  const orderRef = String(updatedDoc.orderId ?? "");
+
+  const wasTerminal = isTerminalPlantOrderStatus(prevStatus);
+  const isTerminal = isTerminalPlantOrderStatus(nextStatus);
+
+  if (isTerminal && !wasTerminal) {
+    const reverseAmount = await getDealerOrderBookingNet(oid, dealerId, session);
+    if (!(reverseAmount > 0)) return;
+
+    const bookingQ = DealerLedgerEntry.findOne({ orderId: oid, refType: "ORDER_BOOKING" });
+    if (session) bookingQ.session(session);
+    const booking = await bookingQ.lean();
+
+    const isCancel = nextStatus === "CANCELLED" || nextStatus === "TEMPORARY_CANCELLED";
+    const category = isCancel ? "Order Cancel" : "Order Reject";
+    const outstandingBefore = await getLastDealerOrderOutstanding(dealerId, session);
+    const outstandingAfter = roundLedgerMoney(
+      Math.max(0, outstandingBefore - reverseAmount)
+    );
+
+    const row = await createDealerLedgerEntry({
+      dealer: dealerId,
+      refType: "REVERSAL",
+      refId: oid,
+      orderId: oid,
+      debit: 0,
+      credit: reverseAmount,
+      balanceBefore: outstandingBefore,
+      balanceAfter: outstandingAfter,
+      reference: orderRef,
+      description: customerName
+        ? `Order ${orderRef} ${category.toLowerCase()} — reverse booking for ${customerName}`
+        : `Order ${orderRef} ${category.toLowerCase()} — reverse booking`,
+      createdBy: userId,
+      entryDate,
+      reversalOf: booking?._id,
+      metadata: {
+        transitionKey,
+        category,
+        tracksOrderOutstanding: true,
+        previousStatus: prevStatus,
+        newStatus: nextStatus,
+      },
+      session,
+    });
+
+    if (row) {
+      try {
+        const fs = await import("../modules/finance/integration/financeShadow.js");
+        fs.shadowDealerOrderCancel({
+          order: updatedDoc,
+          dealerId,
+          amount: reverseAmount,
+          userId,
+          transitionKey,
+        });
+      } catch (shadowErr) {
+        console.error("[Finance] shadow dealer cancel:", shadowErr?.message || shadowErr);
+      }
+    }
+    return;
+  }
+
+  if (wasTerminal && !isTerminal) {
+    const lineTotal = roundLedgerMoney(getPlantOrderLineTotal(updatedDoc));
+    const netBooking = await getDealerOrderBookingNet(oid, dealerId, session);
+    const restoreAmount = roundLedgerMoney(Math.max(lineTotal, netBooking));
+    if (!(restoreAmount > 0)) return;
+
+    let booking = null;
+    if (netBooking <= 0) {
+      const outstandingBefore = await getLastDealerOrderOutstanding(dealerId, session);
+      const outstandingAfter = roundLedgerMoney(outstandingBefore + restoreAmount);
+      const hadBookingQ = DealerLedgerEntry.findOne({
+        orderId: oid,
+        refType: "ORDER_BOOKING",
+      });
+      if (session) hadBookingQ.session(session);
+      const hadBooking = await hadBookingQ.lean();
+
+      if (hadBooking) {
+        booking = await createDealerLedgerEntry({
+          dealer: dealerId,
+          refType: "ADJUSTMENT",
+          refId: oid,
+          orderId: oid,
+          debit: restoreAmount,
+          credit: 0,
+          balanceBefore: outstandingBefore,
+          balanceAfter: outstandingAfter,
+          reference: orderRef,
+          description: customerName
+            ? `Order ${orderRef} reopened — restore booking for ${customerName}`
+            : `Order ${orderRef} reopened — restore booking`,
+          createdBy: userId,
+          entryDate,
+          metadata: {
+            transitionKey,
+            category: "Order Reopen",
+            tracksOrderOutstanding: true,
+            previousStatus: prevStatus,
+            newStatus: nextStatus,
+          },
+          session,
+        });
+      } else {
+        booking = await ensureDealerOrderBookingAudit(updatedDoc, { userId, session });
+      }
+    } else {
+      booking = await ensureDealerOrderBookingAudit(updatedDoc, { userId, session });
+    }
+
+    if (booking) {
+      try {
+        const fs = await import("../modules/finance/integration/financeShadow.js");
+        fs.shadowDealerOrderReopen({
+          order: updatedDoc,
+          dealerId,
+          amount: restoreAmount,
+          userId,
+          transitionKey,
+        });
+      } catch (shadowErr) {
+        console.error("[Finance] shadow dealer reopen:", shadowErr?.message || shadowErr);
+      }
+    }
+  }
+}
+
 /**
  * Idempotent: ensure ORDER_BOOKING + COLLECTED payment credits exist for one order.
  */
@@ -460,6 +669,25 @@ export async function repairDealerLedgerForDealer(dealerId, { userId, limit = 30
     const result = await syncDealerLedgerForOrder(order, { userId });
     if (result.bookingCreated) bookingsCreated += 1;
     paymentsCreated += result.paymentsCreated || 0;
+
+    if (isTerminalPlantOrderStatus(order.orderStatus)) {
+      const net = await getDealerOrderBookingNet(order._id, dealerId);
+      if (net > 0) {
+        const hadCancelReversal = await DealerLedgerEntry.findOne({
+          orderId: order._id,
+          refType: "REVERSAL",
+          "metadata.tracksOrderOutstanding": true,
+          "metadata.category": { $in: ["Order Cancel", "Order Reject"] },
+        }).lean();
+        if (!hadCancelReversal) {
+          await syncDealerLedgerOrderStatusTransition(
+            { ...order, orderStatus: "ACCEPTED" },
+            order,
+            { userId }
+          );
+        }
+      }
+    }
   }
 
   const entryDatesFixed = await normalizeReceivablePaymentEntryDates(dealerId);

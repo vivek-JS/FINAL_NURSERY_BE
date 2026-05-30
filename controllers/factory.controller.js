@@ -51,6 +51,10 @@ import {
 } from "../utils/paymentTiming.js";
 import { normalizeOrderForLocationFields } from "../utils/orderForNormalize.js";
 import {
+  isDealerUser,
+  lookupCommissionRateForPlantSubtype,
+} from "../services/dealerCommission.service.js";
+import {
   getOrderUpdateUserContext,
   DISPATCH_MANAGER_ALLOWED_STATUSES,
   resolveUserForOrderUpdatePermissions,
@@ -854,6 +858,25 @@ const createOne = (Model, modelName) =>
           authUserObjectIdForOrderAudit(req.user) ?? null;
         orderDocument.placedByOfficeAdmin = isInternalStaffPlacingOrder(req.user);
         
+        // Lock dealer commission rate at order placement so future rate changes do not back-effect
+        const salesPersonId = orderDocument.salesPerson || orderData.salesPerson;
+        if (salesPersonId) {
+          const salesPersonUser = await User.findById(salesPersonId)
+            .select("jobTitle role")
+            .session(session)
+            .lean();
+          if (isDealerUser(salesPersonUser)) {
+            orderDocument.commissionRatePerPlant = await lookupCommissionRateForPlantSubtype(
+              orderDocument.plantName || orderData.plantName,
+              orderDocument.plantSubtype || orderData.plantSubtype
+            );
+          } else {
+            delete orderDocument.commissionRatePerPlant;
+          }
+        } else {
+          delete orderDocument.commissionRatePerPlant;
+        }
+
         console.log('🎯 Final order document orderStatus:', orderDocument.orderStatus);
         
         // Create the Order with all new fields

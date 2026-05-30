@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import {
   computeOrderCommissionMetrics,
   ACTUAL_COMMISSION_STATUSES,
+  EXPECTED_COMMISSION_STATUSES,
+  COMMISSION_REVENUE_STATUSES,
   splitCommissionAmount,
+  getCommissionRateForOrder,
+  isDealerUser,
 } from "../services/dealerCommission.service.js";
 
 const plantNames = new Map([["plant1", "Banana"]]);
@@ -13,7 +17,7 @@ const ratesMap = new Map([["plant1_st1", 1]]);
 function baseOrder(overrides = {}) {
   return {
     orderId: 252601799,
-    orderStatus: "DISPATCHED",
+    orderStatus: "COMPLETED",
     numberOfPlants: 100,
     additionalPlants: 0,
     remainingPlants: 0,
@@ -33,11 +37,22 @@ function baseOrder(overrides = {}) {
 }
 
 describe("dealerCommission", () => {
-  it("includes DISPATCHED in actual commission statuses", () => {
-    assert.ok(ACTUAL_COMMISSION_STATUSES.has("DISPATCHED"));
+  it("recognizes actual commission only on COMPLETED / PARTIALLY_COMPLETED", () => {
+    assert.ok(ACTUAL_COMMISSION_STATUSES.has("COMPLETED"));
+    assert.ok(ACTUAL_COMMISSION_STATUSES.has("PARTIALLY_COMPLETED"));
+    assert.ok(!ACTUAL_COMMISSION_STATUSES.has("DISPATCHED"));
+    assert.ok(!ACTUAL_COMMISSION_STATUSES.has("READY_FOR_DISPATCH"));
+    assert.equal(COMMISSION_REVENUE_STATUSES, ACTUAL_COMMISSION_STATUSES);
   });
 
-  it("counts positive actual commission for fully dispatched, paid DISPATCHED order", () => {
+  it("expected commission only for pre-dispatch pipeline (ACCEPTED, FARM_READY)", () => {
+    assert.ok(EXPECTED_COMMISSION_STATUSES.has("ACCEPTED"));
+    assert.ok(EXPECTED_COMMISSION_STATUSES.has("FARM_READY"));
+    assert.ok(!EXPECTED_COMMISSION_STATUSES.has("READY_FOR_DISPATCH"));
+    assert.ok(!EXPECTED_COMMISSION_STATUSES.has("DISPATCHED"));
+  });
+
+  it("counts positive actual commission for fully completed, paid order", () => {
     const metrics = computeOrderCommissionMetrics(
       baseOrder(),
       ratesMap,
@@ -50,9 +65,10 @@ describe("dealerCommission", () => {
     assert.equal(metrics.earnedCommission, 100);
     assert.equal(metrics.atRiskCommission, 0);
     assert.equal(metrics.isPaymentComplete, true);
+    assert.equal(metrics.recognizedRevenue, 1000);
   });
 
-  it("counts negative actual commission for DISPATCHED order with payment pending", () => {
+  it("counts negative actual commission for COMPLETED order with payment pending", () => {
     const metrics = computeOrderCommissionMetrics(
       baseOrder({
         payment: [],
@@ -67,6 +83,36 @@ describe("dealerCommission", () => {
     assert.equal(metrics.earnedCommission, 0);
     assert.equal(metrics.atRiskCommission, 100);
     assert.equal(metrics.unpaidLiability, 100);
+  });
+
+  it("does not count actual commission for DISPATCHED (only completed)", () => {
+    const metrics = computeOrderCommissionMetrics(
+      baseOrder({
+        orderStatus: "DISPATCHED",
+        remainingPlants: 0,
+      }),
+      ratesMap,
+      plantNames,
+      subtypeNames
+    );
+    assert.equal(metrics.actualCommission, 0);
+    assert.equal(metrics.recognizedRevenue, 0);
+    assert.equal(metrics.earnedCommission, 0);
+  });
+
+  it("does not count actual commission for READY_FOR_DISPATCH", () => {
+    const metrics = computeOrderCommissionMetrics(
+      baseOrder({
+        orderStatus: "READY_FOR_DISPATCH",
+        remainingPlants: 100,
+      }),
+      ratesMap,
+      plantNames,
+      subtypeNames
+    );
+    assert.equal(metrics.actualCommission, 0);
+    assert.equal(metrics.recognizedRevenue, 0);
+    assert.equal(metrics.expectedCommission, 0);
   });
 
   it("splitCommissionAmount separates earned and at-risk", () => {
@@ -87,5 +133,68 @@ describe("dealerCommission", () => {
     );
     assert.equal(metrics.actualCommission, 0);
     assert.equal(metrics.expectedCommission, 100);
+  });
+
+  it("calculates commission as ratePerPlant × net delivered quantity", () => {
+    const metrics = computeOrderCommissionMetrics(
+      baseOrder({
+        numberOfPlants: 100,
+        remainingPlants: 50,
+        dispatchHistory: [{ quantity: 50 }],
+        commissionRatePerPlant: 2,
+      }),
+      ratesMap,
+      plantNames,
+      subtypeNames
+    );
+    assert.equal(metrics.deliveredQuantity, 50);
+    assert.equal(metrics.netDeliveredQuantity, 50);
+    assert.equal(metrics.commissionAmount, 100);
+    assert.equal(metrics.actualCommission, 100);
+  });
+
+  it("reduces commission for returns on delivered plants", () => {
+    const metrics = computeOrderCommissionMetrics(
+      baseOrder({
+        numberOfPlants: 100,
+        remainingPlants: 0,
+        returnedPlants: 10,
+        commissionRatePerPlant: 2,
+      }),
+      ratesMap,
+      plantNames,
+      subtypeNames
+    );
+    assert.equal(metrics.deliveredQuantity, 100);
+    assert.equal(metrics.netDeliveredQuantity, 90);
+    assert.equal(metrics.commissionAmount, 180);
+    assert.equal(metrics.actualCommission, 180);
+  });
+
+  it("uses snapshotted commissionRatePerPlant over live ratesMap", () => {
+    const order = baseOrder({ commissionRatePerPlant: 3 });
+    assert.equal(getCommissionRateForOrder(order, ratesMap), 3);
+
+    const metrics = computeOrderCommissionMetrics(
+      order,
+      ratesMap,
+      plantNames,
+      subtypeNames
+    );
+    assert.equal(metrics.ratePerPlant, 3);
+    assert.equal(metrics.actualCommission, 300);
+    assert.equal(metrics.earnedCommission, 300);
+  });
+
+  it("falls back to ratesMap when commissionRatePerPlant is not set", () => {
+    const order = baseOrder();
+    assert.equal(getCommissionRateForOrder(order, ratesMap), 1);
+  });
+
+  it("isDealerUser detects dealer by jobTitle or role", () => {
+    assert.equal(isDealerUser({ jobTitle: "DEALER" }), true);
+    assert.equal(isDealerUser({ role: "DEALER" }), true);
+    assert.equal(isDealerUser({ jobTitle: "SALES", role: "SALES" }), false);
+    assert.equal(isDealerUser(null), false);
   });
 });

@@ -367,6 +367,32 @@ export function shadowDealerOrderBooking({ order, dealerId, amount, userId }, op
   }, options);
 }
 
+export function shadowDealerOrderCancel({ order, dealerId, amount, userId, transitionKey }, options = {}) {
+  const amt = roundMoney(amount);
+  if (amt <= 0) return;
+  return shadowEmit({
+    idempotencyKey: `dealer:order:${order._id}:${transitionKey || "cancel"}`,
+    eventType: FINANCIAL_EVENT_TYPES.DEALER_ORDER_CANCEL,
+    sourceDomain: "Order",
+    sourceId: order._id,
+    createdBy: userId,
+    payload: { amount: amt, dealerId: String(dealerId), sourceLineRef: transitionKey },
+  }, options);
+}
+
+export function shadowDealerOrderReopen({ order, dealerId, amount, userId, transitionKey }, options = {}) {
+  const amt = roundMoney(amount);
+  if (amt <= 0) return;
+  return shadowEmit({
+    idempotencyKey: `dealer:order:${order._id}:reopen:${transitionKey || "reopen"}`,
+    eventType: FINANCIAL_EVENT_TYPES.DEALER_ORDER_REOPEN,
+    sourceDomain: "Order",
+    sourceId: order._id,
+    createdBy: userId,
+    payload: { amount: amt, dealerId: String(dealerId), sourceLineRef: transitionKey },
+  }, options);
+}
+
 export function shadowDealerReceivablePayment({ order, payment, dealerId, userId }, options = {}) {
   const amt = roundMoney(payment?.paidAmount);
   if (amt <= 0) return;

@@ -143,6 +143,9 @@ async function main() {
   const User     = DRY_RUN ? null : (await import('../models/user.model.js')).default;
   const PlantCms = DRY_RUN ? null : (await import('../models/plantCms.model.js')).default;
   const PlantSlot = DRY_RUN ? null : (await import('../models/slots.model.js')).default;
+  const commissionHelpers = DRY_RUN
+    ? null
+    : await import('../services/dealerCommission.service.js');
 
   // Read Excel
   const wb    = XLSX.readFile(XLSX_PATH);
@@ -376,6 +379,16 @@ async function main() {
           isWalletPayment: false,
           customerName:  row.name,
         }];
+      }
+
+      if (
+        commissionHelpers?.isDealerUser(salesPerson)
+      ) {
+        orderData.commissionRatePerPlant =
+          await commissionHelpers.lookupCommissionRateForPlantSubtype(
+            plant._id,
+            subtype._id
+          );
       }
 
       await Order.create(orderData);

@@ -13,22 +13,20 @@ const EXCLUDED_STATUSES = new Set([
   "TEMPORARY_CANCELLED",
 ]);
 
+/** Pipeline commission (booked, not yet delivered to farmer). */
 export const EXPECTED_COMMISSION_STATUSES = new Set([
   "ACCEPTED",
   "FARM_READY",
-  "READY_FOR_DISPATCH",
-  "DISPATCH_PROCESS",
-  "DISPATCHED",
-  "PARTIALLY_COMPLETED",
-  "COMPLETED",
 ]);
 
-/** Earned/at-risk commission: dispatched (or completed) plants, adjusted by payment. */
+/** Earned/at-risk commission and recognized revenue: delivery complete only. */
 export const ACTUAL_COMMISSION_STATUSES = new Set([
-  "DISPATCHED",
   "COMPLETED",
   "PARTIALLY_COMPLETED",
 ]);
+
+/** @deprecated alias — same as ACTUAL_COMMISSION_STATUSES */
+export const COMMISSION_REVENUE_STATUSES = ACTUAL_COMMISSION_STATUSES;
 
 export function isPapayaCommissionException(plantName, subtypeName) {
   if (!plantName || !/papaya/i.test(String(plantName))) return false;
@@ -40,7 +38,8 @@ export function getOrderTotalPlants(order) {
   return (order.numberOfPlants || 0) + (order.additionalPlants || 0);
 }
 
-export function getDispatchedQty(order) {
+/** Plants dispatched / delivered to farmer (gross, before returns). */
+export function getDeliveredQuantity(order) {
   const total = getOrderTotalPlants(order);
   const historyQty = (order.dispatchHistory || []).reduce(
     (sum, row) => sum + Number(row.quantity || 0),
@@ -48,32 +47,43 @@ export function getDispatchedQty(order) {
   );
   if (historyQty > 0) return historyQty;
   const remaining = order.remainingPlants ?? total;
-  let dispatched = Math.max(0, total - remaining);
+  let delivered = Math.max(0, total - remaining);
   // Completed in prod without dispatchHistory / remainingPlants not zeroed
   if (
-    dispatched === 0 &&
+    delivered === 0 &&
     ACTUAL_COMMISSION_STATUSES.has(order.orderStatus) &&
     total > 0
   ) {
-    dispatched = total;
+    delivered = total;
   }
-  return dispatched;
+  return delivered;
 }
 
-export function getFinalPlants(order) {
+/** @deprecated alias — use getDeliveredQuantity */
+export function getDispatchedQty(order) {
+  return getDeliveredQuantity(order);
+}
+
+/** Net delivered plants for commission: delivered minus returns and damage. */
+export function getNetDeliveredQuantity(order) {
   const total = getOrderTotalPlants(order);
-  const dispatched = getDispatchedQty(order);
+  const delivered = getDeliveredQuantity(order);
   const returned = Number(order.returnedPlants || 0);
   const damaged = Number(order.damagedPlants || 0);
-  let finalPlants = Math.max(0, dispatched - returned - damaged);
+  let netDelivered = Math.max(0, delivered - returned - damaged);
   if (
-    finalPlants === 0 &&
+    netDelivered === 0 &&
     ACTUAL_COMMISSION_STATUSES.has(order.orderStatus) &&
     total > 0
   ) {
-    finalPlants = Math.max(0, total - returned - damaged);
+    netDelivered = Math.max(0, total - returned - damaged);
   }
-  return finalPlants;
+  return netDelivered;
+}
+
+/** @deprecated alias — use getNetDeliveredQuantity */
+export function getFinalPlants(order) {
+  return getNetDeliveredQuantity(order);
 }
 
 export function getCollectedPayment(order) {
@@ -117,6 +127,11 @@ export function resolveOrderVillage(order, villageDisplayMap = null) {
   return raw;
 }
 
+export function isDealerUser(user) {
+  if (!user) return false;
+  return user.jobTitle === "DEALER" || user.role === "DEALER";
+}
+
 export async function loadCommissionRatesMap() {
   const rates = await DealerCommissionRate.find({ isActive: true }).lean();
   const map = new Map();
@@ -128,7 +143,33 @@ export async function loadCommissionRatesMap() {
   return map;
 }
 
+export async function lookupCommissionRateForPlantSubtype(plantId, subtypeId) {
+  const plantKey = plantId?.toString?.() ?? String(plantId || "");
+  const subtypeKey = subtypeId?.toString?.() ?? String(subtypeId || "");
+  if (!plantKey || !subtypeKey) return DEFAULT_COMMISSION_RATE;
+
+  const row = await DealerCommissionRate.findOne({
+    plantId: plantKey,
+    subtypeId: subtypeKey,
+    isActive: true,
+  })
+    .select("ratePerPlant")
+    .lean();
+
+  if (row?.ratePerPlant != null && Number.isFinite(Number(row.ratePerPlant))) {
+    return Number(row.ratePerPlant);
+  }
+  return DEFAULT_COMMISSION_RATE;
+}
+
 export function getCommissionRateForOrder(order, ratesMap) {
+  if (
+    order.commissionRatePerPlant != null &&
+    Number.isFinite(Number(order.commissionRatePerPlant))
+  ) {
+    return Number(order.commissionRatePerPlant);
+  }
+
   const plantId = order.plantName?.toString?.() ?? String(order.plantName || "");
   const subtypeId =
     order.plantSubtype?.toString?.() ?? String(order.plantSubtype || "");
@@ -162,16 +203,28 @@ export function computeOrderCommissionMetrics(
     order.plantSubtype?.toString?.() ?? String(order.plantSubtype || "");
   const rate = getCommissionRateForOrder(order, ratesMap);
   const totalPlants = getOrderTotalPlants(order);
-  const dispatchedQty = getDispatchedQty(order);
-  const baki = Math.max(0, totalPlants - dispatchedQty);
+  const deliveredQuantity = getDeliveredQuantity(order);
+  const netDeliveredQuantity = getNetDeliveredQuantity(order);
+  const dispatchedQty = deliveredQuantity;
+  const baki = Math.max(0, totalPlants - deliveredQuantity);
   const collected = getCollectedPayment(order);
-  const orderTotalValue = totalPlants * Number(order.rate || 0);
-  const finalPlants = getFinalPlants(order);
+  const finalPlants = netDeliveredQuantity;
+  const bookedOrderValue = totalPlants * Number(order.rate || 0);
+  const isCompletedForCommission = ACTUAL_COMMISSION_STATUSES.has(order.orderStatus);
+  const recognizedRevenue = isCompletedForCommission
+    ? netDeliveredQuantity * Number(order.rate || 0)
+    : 0;
+  const orderTotalValue = isCompletedForCommission ? recognizedRevenue : bookedOrderValue;
+
+  // Commission = locked rate per plant × net delivered quantity (not booked qty).
+  const commissionAmount = netDeliveredQuantity * rate;
 
   let expected = 0;
   const booked = totalPlants;
   if (EXPECTED_COMMISSION_STATUSES.has(order.orderStatus)) {
-    expected = totalPlants * rate;
+    const expectedQty =
+      deliveredQuantity > 0 ? netDeliveredQuantity : totalPlants;
+    expected = expectedQty * rate;
   }
 
   let actual = 0;
@@ -185,8 +238,8 @@ export function computeOrderCommissionMetrics(
     order.orderPaymentStatus === "COMPLETED" ||
     order.paymentCompleted === true;
 
-  if (ACTUAL_COMMISSION_STATUSES.has(order.orderStatus) && finalPlants > 0) {
-    baseCommission = finalPlants * rate;
+  if (isCompletedForCommission && netDeliveredQuantity > 0) {
+    baseCommission = commissionAmount;
     paymentRatio =
       orderTotalValue > 0 ? Math.min(1, collected / orderTotalValue) : 1;
     if (isPaymentComplete) {
@@ -217,8 +270,11 @@ export function computeOrderCommissionMetrics(
     booked,
     baki,
     dispatched: dispatchedQty,
+    deliveredQuantity,
+    netDeliveredQuantity,
     finalPlants,
     totalPlants,
+    commissionAmount,
     expectedCommission: expected,
     actualCommission: actual,
     earnedCommission,
@@ -231,6 +287,8 @@ export function computeOrderCommissionMetrics(
     paymentDue,
     paymentPending: paymentDue,
     isPaymentComplete,
+    recognizedRevenue,
+    bookedOrderValue,
   };
 }
 
@@ -252,6 +310,9 @@ function mapCommissionImpactOrder(o) {
     status: o.status,
     totalPlants: o.totalPlants,
     finalPlants: o.finalPlants,
+    deliveredQuantity: o.deliveredQuantity,
+    netDeliveredQuantity: o.netDeliveredQuantity,
+    commissionAmount: o.commissionAmount,
     paymentCollected: o.paymentCollected,
     paymentPending: o.paymentPending ?? o.paymentDue ?? 0,
     orderTotalValue: o.orderTotalValue,
@@ -378,7 +439,7 @@ export async function fetchDealerOrders(dealerId, { startDate, endDate } = {}) {
 
   return Order.find(query)
     .select(
-      "orderId orderStatus orderPaymentStatus paymentCompleted numberOfPlants additionalPlants remainingPlants returnedPlants damagedPlants plantName plantSubtype rate payment dispatchHistory orderFor farmer createdAt orderBookingDate"
+      "orderId orderStatus orderPaymentStatus paymentCompleted numberOfPlants additionalPlants remainingPlants returnedPlants damagedPlants plantName plantSubtype commissionRatePerPlant rate payment dispatchHistory orderFor farmer createdAt orderBookingDate"
     )
     .populate("farmer", "name village")
     .sort({ createdAt: -1 })
@@ -428,7 +489,9 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
     summary.bookedPlants += metrics.booked;
     summary.dispatchedPlants += metrics.dispatched;
     summary.bakiPlants += metrics.baki;
-    summary.paymentCollected += metrics.paymentCollected;
+    if (COMMISSION_REVENUE_STATUSES.has(order.orderStatus)) {
+      summary.paymentCollected += metrics.paymentCollected;
+    }
     if (order.orderStatus === "ACCEPTED") summary.acceptedOrders += 1;
 
     const plantKey = metrics.plantId;
@@ -500,11 +563,14 @@ export async function buildDealerCommissionAnalysis(dealerId, options = {}) {
 
   summary.gap = summary.expectedCommission - summary.actualCommission;
   summary.totalPaymentOutstanding = orderRows.reduce(
-    (s, o) => s + Number(o.paymentDue ?? o.paymentPending ?? 0),
+    (s, o) =>
+      COMMISSION_REVENUE_STATUSES.has(o.status)
+        ? s + Number(o.paymentDue ?? o.paymentPending ?? 0)
+        : s,
     0
   );
   summary.totalOrderValue = orderRows.reduce(
-    (s, o) => s + Number(o.orderTotalValue || 0),
+    (s, o) => s + Number(o.recognizedRevenue ?? 0),
     0
   );
 

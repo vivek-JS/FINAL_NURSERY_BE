@@ -588,6 +588,12 @@ const orderSchema = new Schema(
       // Use aggregation or manual lookup instead
       required: true,
     },
+    /** Locked dealer commission rate per plant at order placement (null = legacy, use live rate). */
+    commissionRatePerPlant: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
     bookingSlot: {
       type: Schema.Types.ObjectId,
       // Note: This references a subdocument within PlantSlot, cannot use .populate()

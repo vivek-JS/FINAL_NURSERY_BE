@@ -22,6 +22,10 @@ import {
   reserveOrderId,
 } from "../services/orderIdAllocation.service.js";
 import { getSlotTrailActivityName } from "../constants/slotTrailActions.js";
+import {
+  isDealerUser,
+  lookupCommissionRateForPlantSubtype,
+} from "../services/dealerCommission.service.js";
 
 // Function to parse Excel date serial number
 function parseExcelDate(serialNumber) {
@@ -1556,6 +1560,13 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
           is_excel: true,
         };
 
+        if (isDealerUser(salesPerson)) {
+          orderData.commissionRatePerPlant = await lookupCommissionRateForPlantSubtype(
+            plant._id,
+            subtype._id
+          );
+        }
+
         const order = dryRun
           ? { _id: `dry-run-order-${rowIndex + 2}`, orderId: finalOrderId, ...orderData, payment: [] }
           : await Order.create(orderData);
@@ -2953,7 +2964,7 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
           ? `Legacy booking: ${legacyBookingRef}`
           : "";
 
-        const order = new Order({
+        const orderPayload = {
           orderId: allocatedOrderId,
           farmer: farmer._id,
           salesPerson: salesPerson._id,
@@ -2973,7 +2984,14 @@ export const importOrdersFromExcel = async (fileBuffer, options = {}) => {
           notes: legacyNote,
           payment: [],
           is_excel: true,
-        });
+        };
+
+        if (isDealerUser(salesPerson)) {
+          orderPayload.commissionRatePerPlant =
+            await lookupCommissionRateForPlantSubtype(plant._id, subtype._id);
+        }
+
+        const order = new Order(orderPayload);
 
         await order.save();
 

@@ -9,8 +9,8 @@ import PlantCms from "../models/plantCms.model.js";
 import {
   computeOrderCommissionMetrics,
   loadCommissionRatesMap,
-  getDispatchedQty,
-  getFinalPlants,
+  getDeliveredQuantity,
+  getNetDeliveredQuantity,
   ACTUAL_COMMISSION_STATUSES,
 } from "../services/dealerCommission.service.js";
 
@@ -59,8 +59,10 @@ async function main() {
     damagedPlants: order.damagedPlants,
     dispatchHistoryCount: (order.dispatchHistory || []).length,
     dispatchHistoryQty: (order.dispatchHistory || []).reduce((s, r) => s + Number(r.quantity || 0), 0),
-    dispatchedQty: getDispatchedQty(order),
-    finalPlants: getFinalPlants(order),
+    deliveredQuantity: getDeliveredQuantity(order),
+    netDeliveredQuantity: getNetDeliveredQuantity(order),
+    commissionAmount: metrics.commissionAmount,
+    ratePerPlant: metrics.ratePerPlant,
     inActualStatuses: ACTUAL_COMMISSION_STATUSES.has(order.orderStatus),
     orderPaymentStatus: order.orderPaymentStatus,
     paymentCompleted: order.paymentCompleted,

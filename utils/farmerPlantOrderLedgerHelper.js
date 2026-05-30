@@ -4,6 +4,16 @@ import User from "../models/user.model.js";
 import FarmerPlantOrderLedgerEntry from "../models/farmerPlantOrderLedger.model.js";
 import FarmerPlantOrderArchive from "../models/farmerPlantOrderArchive.model.js";
 
+const TERMINAL_PLANT_ORDER_STATUSES = new Set([
+  "CANCELLED",
+  "REJECTED",
+  "TEMPORARY_CANCELLED",
+]);
+
+export function isTerminalPlantOrderStatus(status) {
+  return TERMINAL_PLANT_ORDER_STATUSES.has(String(status || "").toUpperCase());
+}
+
 const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
 const DEBUG_SESSION_ID = "69bde0";
 const DEBUG_RUN_ID = "due-before-after-investigation";
@@ -215,6 +225,21 @@ export async function ledgerTransitionExists(orderId, transitionKey, session) {
   if (session) q.session(session);
   const doc = await q.lean();
   return Boolean(doc);
+}
+
+/**
+ * Net receivable still attributed to this order in the farmer-plant sub-ledger (debits − credits).
+ */
+export async function getFarmerOrderLedgerNetReceivable(orderId, session) {
+  if (!orderId) return 0;
+  const q = FarmerPlantOrderLedgerEntry.find({ orderId }).select("debit credit").lean();
+  if (session) q.session(session);
+  const docs = await q;
+  let net = 0;
+  for (const d of docs) {
+    net += (Number(d.debit) || 0) - (Number(d.credit) || 0);
+  }
+  return roundMoney(Math.max(0, net));
 }
 
 export async function createFarmerPlantLedgerEntry({
@@ -555,8 +580,13 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
   }
 
   try {
-    const { syncDealerLedgerForOrder } = await import("./dealerLedgerHelper.js");
+    const { syncDealerLedgerForOrder, syncDealerLedgerOrderStatusTransition } =
+      await import("./dealerLedgerHelper.js");
     await syncDealerLedgerForOrder(updatedDoc, { userId, session });
+    await syncDealerLedgerOrderStatusTransition(existingDoc, updatedDoc, {
+      userId,
+      session,
+    });
   } catch (e) {
     console.error("syncDealerLedgerForOrder failed:", e);
     if (strict) throw e;
@@ -568,8 +598,7 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
     const oid = updatedDoc?._id;
     const prevStatus = existingDoc?.orderStatus;
     const nextStatus = updatedDoc?.orderStatus;
-    const terminalStatuses = ["CANCELLED", "REJECTED"];
-    const prevIsTerminal = terminalStatuses.includes(prevStatus);
+    const prevIsTerminal = isTerminalPlantOrderStatus(prevStatus);
 
     const previousLineTotal = roundMoney(getPlantOrderLineTotal(existingDoc || {}));
     const nextLineTotal = roundMoney(getPlantOrderLineTotal(updatedDoc || {}));
@@ -697,71 +726,94 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
             ? new Date(transitionAt)
             : new Date();
 
-          // Terminal: cancel or reject — reverse current principal for the order.
-          if (nextStatus === "CANCELLED" || nextStatus === "REJECTED") {
-            const isCancel = nextStatus === "CANCELLED";
-            await createFarmerPlantLedgerEntry({
-              customerMobile,
-              customerName,
-              farmerId,
-              refType: "ADJUSTMENT",
-              refId: oid,
-              orderId: oid,
-              credit: lineTotal,
-              reference: String(updatedDoc.orderId ?? ""),
-              category: isCancel ? "Order Cancel" : "Order Reject",
-              description: isCancel
-                ? `Order ${updatedDoc.orderId ?? ""} cancelled — reverse order debit`
-                : `Order ${updatedDoc.orderId ?? ""} rejected — reverse order debit`,
-              entryDate,
-              createdBy: userId,
-              metadata: { transitionKey, previousStatus: prevStatus, newStatus: nextStatus },
-              session,
-            });
-            try {
-              const fs = await import("../modules/finance/integration/financeShadow.js");
-              fs.shadowFarmerOrderCancel({
-                order: updatedDoc,
+          const wasTerminal = isTerminalPlantOrderStatus(prevStatus);
+          const isTerminal = isTerminalPlantOrderStatus(nextStatus);
+
+          // Terminal: cancel, temporary cancel, or reject — reverse net order receivable.
+          if (isTerminal && !wasTerminal) {
+            const netReceivable = await getFarmerOrderLedgerNetReceivable(oid, session);
+            const reverseAmount = roundMoney(
+              Math.max(lineTotal, netReceivable)
+            );
+            if (reverseAmount > 0) {
+              const isCancel =
+                nextStatus === "CANCELLED" || nextStatus === "TEMPORARY_CANCELLED";
+              await createFarmerPlantLedgerEntry({
                 customerMobile,
-                amount: lineTotal,
-                userId,
-                transitionKey,
+                customerName,
+                farmerId,
+                refType: "ADJUSTMENT",
+                refId: oid,
+                orderId: oid,
+                credit: reverseAmount,
+                reference: String(updatedDoc.orderId ?? ""),
+                category: isCancel ? "Order Cancel" : "Order Reject",
+                description: isCancel
+                  ? `Order ${updatedDoc.orderId ?? ""} cancelled — reverse order debit`
+                  : `Order ${updatedDoc.orderId ?? ""} rejected — reverse order debit`,
+                entryDate,
+                createdBy: userId,
+                metadata: {
+                  transitionKey,
+                  previousStatus: prevStatus,
+                  newStatus: nextStatus,
+                },
+                session,
               });
-            } catch (shadowErr) {
-              console.error("[Finance] shadow farmer cancel:", shadowErr?.message || shadowErr);
+              try {
+                const fs = await import("../modules/finance/integration/financeShadow.js");
+                fs.shadowFarmerOrderCancel({
+                  order: updatedDoc,
+                  customerMobile,
+                  amount: reverseAmount,
+                  userId,
+                  transitionKey,
+                });
+              } catch (shadowErr) {
+                console.error("[Finance] shadow farmer cancel:", shadowErr?.message || shadowErr);
+              }
             }
-          } else if (prevStatus === "CANCELLED" || prevStatus === "REJECTED") {
-            // Re-open from CANCELLED or REJECTED: restore order debit so receivable returns.
-            const fromReject = prevStatus === "REJECTED";
-            await createFarmerPlantLedgerEntry({
-              customerMobile,
-              customerName,
-              farmerId,
-              refType: "ADJUSTMENT",
-              refId: oid,
-              orderId: oid,
-              debit: lineTotal,
-              reference: String(updatedDoc.orderId ?? ""),
-              category: "Order Reopen",
-              description: fromReject
-                ? `Order ${updatedDoc.orderId ?? ""} reopened from rejected — restore order debit`
-                : `Order ${updatedDoc.orderId ?? ""} reopened — restore order debit`,
-              entryDate,
-              createdBy: userId,
-              metadata: { transitionKey, previousStatus: prevStatus, newStatus: nextStatus },
-              session,
-            });
-            try {
-              const fs = await import("../modules/finance/integration/financeShadow.js");
-              fs.shadowFarmerOrderReopen({
-                order: updatedDoc,
+          } else if (wasTerminal && !isTerminal) {
+            // Re-open from terminal status: restore order debit so receivable returns.
+            const restoreAmount = roundMoney(
+              Math.max(lineTotal, await getFarmerOrderLedgerNetReceivable(oid, session))
+            );
+            if (restoreAmount > 0) {
+              const fromReject = prevStatus === "REJECTED";
+              await createFarmerPlantLedgerEntry({
                 customerMobile,
-                amount: lineTotal,
-                userId,
-                transitionKey,
+                customerName,
+                farmerId,
+                refType: "ADJUSTMENT",
+                refId: oid,
+                orderId: oid,
+                debit: restoreAmount,
+                reference: String(updatedDoc.orderId ?? ""),
+                category: "Order Reopen",
+                description: fromReject
+                  ? `Order ${updatedDoc.orderId ?? ""} reopened from rejected — restore order debit`
+                  : `Order ${updatedDoc.orderId ?? ""} reopened — restore order debit`,
+                entryDate,
+                createdBy: userId,
+                metadata: {
+                  transitionKey,
+                  previousStatus: prevStatus,
+                  newStatus: nextStatus,
+                },
+                session,
               });
-            } catch (shadowErr) {
-              console.error("[Finance] shadow farmer reopen:", shadowErr?.message || shadowErr);
+              try {
+                const fs = await import("../modules/finance/integration/financeShadow.js");
+                fs.shadowFarmerOrderReopen({
+                  order: updatedDoc,
+                  customerMobile,
+                  amount: restoreAmount,
+                  userId,
+                  transitionKey,
+                });
+              } catch (shadowErr) {
+                console.error("[Finance] shadow farmer reopen:", shadowErr?.message || shadowErr);
+              }
             }
           }
         }

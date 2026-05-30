@@ -77,7 +77,12 @@ function farmerAdjustmentKind(entry) {
   }
   if (tk.startsWith("DISPATCH_RETURN") || cat === "Dispatch Return") return "DISPATCH_RETURN";
   if (tk.startsWith("DISPATCH_DAMAGED") || cat === "Dispatch Damaged") return "DISPATCH_DAMAGED";
-  if (cat === "Order Cancel" || cat === "Order Reject" || tk.includes("_CANCELLED_")) {
+  if (
+    cat === "Order Cancel" ||
+    cat === "Order Reject" ||
+    tk.includes("_CANCELLED_") ||
+    tk.includes("TEMPORARY_CANCELLED")
+  ) {
     return "ORDER_CANCEL";
   }
   if (cat === "Order Reopen" || tk.includes("_REJECTED_") || tk.includes("REOPEN")) {
@@ -305,6 +310,30 @@ export async function replayDealerLedgerEntry(entry, ctx) {
     if (!order || !payment) return { status: "skipped_payment_missing" };
     const r = await shadow.shadowDealerReceivablePayment({ order, payment, dealerId, userId }, opts);
     return { status: resultLabel(r) };
+  }
+
+  if (
+    (entry.refType === "REVERSAL" || entry.refType === "ADJUSTMENT") &&
+    entry.metadata?.tracksOrderOutstanding
+  ) {
+    const order = await ctx.getPlantOrder(entry.orderId);
+    if (!order) return { status: "skipped_order_missing" };
+    const transitionKey = entry.metadata?.transitionKey || `${entry.refType}:${entry._id}`;
+    const cat = String(entry.metadata?.category || "");
+    if (cat === "Order Reopen") {
+      const r = await shadow.shadowDealerOrderReopen(
+        { order, dealerId, amount: entry.debit || amount, userId, transitionKey },
+        opts
+      );
+      return { status: resultLabel(r) };
+    }
+    if (entry.refType === "REVERSAL" || cat === "Order Cancel" || cat === "Order Reject") {
+      const r = await shadow.shadowDealerOrderCancel(
+        { order, dealerId, amount: entry.credit || amount, userId, transitionKey },
+        opts
+      );
+      return { status: resultLabel(r) };
+    }
   }
 
   if (entry.refType === "COMMISSION_SETTLEMENT") {

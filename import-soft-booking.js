@@ -90,6 +90,10 @@ const run = async () => {
   const User     = (await import('./models/user.model.js')).default;
   const PlantCms = (await import('./models/plantCms.model.js')).default;
   const PlantSlot = (await import('./models/slots.model.js')).default;
+  const {
+    isDealerUser,
+    lookupCommissionRateForPlantSubtype,
+  } = await import('./services/dealerCommission.service.js');
 
   console.log('📖 Reading Excel via read-soft-booking.py …\n');
   const { stdout } = await execAsync('python3 read-soft-booking.py', { cwd: __dirname });
@@ -251,6 +255,13 @@ const run = async () => {
           paymentStatus: 'COLLECTED',
           isWalletPayment: false,
         }];
+      }
+
+      if (isDealerUser(salesPerson)) {
+        orderData.commissionRatePerPlant = await lookupCommissionRateForPlantSubtype(
+          plant._id,
+          subtype._id
+        );
       }
 
       await Order.create(orderData);

@@ -231,6 +231,19 @@ describe("buildJournalLines — all financial event types", () => {
     assertBalanced(p, "dealer recv pay");
   });
 
+  it("DEALER_ORDER_CANCEL and REOPEN", () => {
+    const cancel = buildJournalLines(FINANCIAL_EVENT_TYPES.DEALER_ORDER_CANCEL, {
+      amount,
+      dealerId,
+    });
+    const reopen = buildJournalLines(FINANCIAL_EVENT_TYPES.DEALER_ORDER_REOPEN, {
+      amount,
+      dealerId,
+    });
+    assertBalanced(cancel, "dealer cancel");
+    assertBalanced(reopen, "dealer reopen");
+  });
+
   it("DEALER_WALLET_MOVEMENT credit and debit", () => {
     const pay = buildJournalLines(FINANCIAL_EVENT_TYPES.DEALER_WALLET_MOVEMENT, {
       amount: 1000,
