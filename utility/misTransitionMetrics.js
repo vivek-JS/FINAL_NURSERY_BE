@@ -9,7 +9,8 @@ const IST = "Asia/Kolkata";
 
 /** When statusChanges lacks an entry, infer transition from current status + updatedAt. */
 export const LEGACY_ORDER_STATUS_FOR_TRANSITION = {
-  DISPATCHED: ["DISPATCHED", "COMPLETED", "PARTIALLY_COMPLETED"],
+  /** Out only — COMPLETED / PARTIAL belong in Done / Partial columns, not Out. */
+  DISPATCHED: ["DISPATCHED"],
   COMPLETED: ["COMPLETED"],
 };
 
