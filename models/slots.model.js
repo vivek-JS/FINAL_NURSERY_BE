@@ -1,6 +1,7 @@
 import { Schema, model } from "mongoose";
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 import { SLOT_TRAIL_ACTION_ENUM } from "../constants/slotTrailActions.js";
+import { normalizeSlotTrailInPlantSlot } from "../utility/normalizeSlotTrail.js";
 
 // Define a schema for slot trail tracking
 const slotTrailSchema = new Schema({
@@ -989,6 +990,11 @@ const plantSlotSchema = new Schema({
 plantSlotSchema.index({ plantId: 1, year: 1 }); // Compound index for getSlotsByPlantAndSubtype query
 plantSlotSchema.index({ "subtypeSlots.subtypeId": 1 }); // Index for filtering by subtypeId
 plantSlotSchema.index({ "subtypeSlots.slots._id": 1 }); // Index for finding slots by _id
+
+plantSlotSchema.pre("validate", function normalizeSlotTrailBeforeValidate(next) {
+  normalizeSlotTrailInPlantSlot(this);
+  next();
+});
 
 const PlantSlot = model("PlantSlot", plantSlotSchema);
 

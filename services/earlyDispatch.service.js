@@ -103,13 +103,15 @@ export const appendSlotTrail = async ({
   notes,
   session,
 }) => {
+  const activityName = getSlotTrailActivityName(action);
   const trailEntry = {
     action,
-    activityName: getSlotTrailActivityName(action),
+    activityName,
     quantity,
     orderId,
     performedBy: performedBy || null,
     notes: notes || "",
+    reason: (typeof notes === "string" && notes.trim()) || activityName,
     previousTotalPlants: 0,
     newTotalPlants: 0,
     previousAvailablePlants: 0,
