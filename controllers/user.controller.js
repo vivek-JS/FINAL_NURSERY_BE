@@ -1304,9 +1304,14 @@ const postRepairDealerLedger = async (req, res) => {
 /**
  * Dispatched / completed dealer orders with payment outstanding.
  * GET /dealers/:dealerId/dispatch-outstanding-orders?page=&limit=
+ * GET /dealers/:dealerId/dispatch-outstanding-orders?aggregate=villages
  */
 const getDealerDispatchOutstandingOrders = async (req, res) => {
   try {
+    if (String(req.query.aggregate || "").toLowerCase() === "villages") {
+      return getDealerDispatchOutstandingVillages(req, res);
+    }
+
     const { dealerId } = req.params;
     const { page, limit, village, district } = req.query;
 

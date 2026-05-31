@@ -31,6 +31,7 @@ const allowedParams = [
   "search",
   "page",
   "limit",
+  "aggregate", // GET dispatch-outstanding-orders — aggregate=villages
   "status",
   "paymentStatus",
   "plantId",
@@ -205,6 +206,7 @@ allowedQueryKeys.add("plantTotals"); // GET /order/getOrders — totalPlantsSum 
 allowedQueryKeys.add("needsDispatch"); // GET /order/getOrders — yet-to-dispatch status preset
 allowedQueryKeys.add("expectedNursery"); // GET /order/getOrders — nursery site filter
 allowedQueryKeys.add("queueFarmReadyOnly"); // GET /order/dashboard-tab-counts + ready tab queue filter
+allowedQueryKeys.add("aggregate"); // GET /user/dealers/:id/dispatch-outstanding-orders?villages
 allowedQueryKeys.add("paged"); // GET /dispatched — pagination toggle (also in allowedParams; duplicate for safety)
 allowedQueryKeys.add("transportStatus"); // GET /dispatched filter
 allowedQueryKeys.add("includeAllPastDue"); // admin MIS due backlog toggle
