@@ -445,12 +445,26 @@ export async function syncDealerLedgerOrderStatusTransition(
   const isTerminal = isTerminalPlantOrderStatus(nextStatus);
 
   if (isTerminal && !wasTerminal) {
-    const reverseAmount = await getDealerOrderBookingNet(oid, dealerId, session);
-    if (!(reverseAmount > 0)) return;
-
     const bookingQ = DealerLedgerEntry.findOne({ orderId: oid, refType: "ORDER_BOOKING" });
     if (session) bookingQ.session(session);
     const booking = await bookingQ.lean();
+
+    let reverseAmount = await getDealerOrderBookingNet(oid, dealerId, session);
+    if (!(reverseAmount > 0) && booking?.debit > 0) {
+      reverseAmount = roundLedgerMoney(booking.debit);
+    }
+    if (!(reverseAmount > 0)) {
+      const lineTotal = roundLedgerMoney(getPlantOrderLineTotal(updatedDoc));
+      if (lineTotal > 0) {
+        const ensured =
+          booking ||
+          (await ensureDealerOrderBookingAudit(updatedDoc, { userId, session }));
+        if (ensured) {
+          reverseAmount = roundLedgerMoney(ensured.debit || lineTotal);
+        }
+      }
+    }
+    if (!(reverseAmount > 0)) return;
 
     const isCancel = nextStatus === "CANCELLED" || nextStatus === "TEMPORARY_CANCELLED";
     const category = isCancel ? "Order Cancel" : "Order Reject";

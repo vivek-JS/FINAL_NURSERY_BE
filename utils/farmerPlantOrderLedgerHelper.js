@@ -201,19 +201,23 @@ export async function resolveFarmerIdentity(order) {
 }
 
 export async function resolveFundingDealerId(order) {
-  if (order.dealerOrder && order.dealer) {
-    return order.dealer._id || order.dealer;
-  }
+  if (!order) return null;
+
   if (order.dealer) {
     return order.dealer._id || order.dealer;
   }
+
   if (order.salesPerson) {
     const spId = order.salesPerson._id || order.salesPerson;
-    const sp = await User.findById(spId).select("jobTitle").lean();
+    const sp =
+      order.salesPerson && typeof order.salesPerson === "object" && order.salesPerson.jobTitle
+        ? order.salesPerson
+        : await User.findById(spId).select("jobTitle").lean();
     if (sp && sp.jobTitle === "DEALER") {
       return spId;
     }
   }
+
   return null;
 }
 
@@ -570,15 +574,8 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
   const strict = options?.strict === true;
   const orderEditSource = options?.orderEditSource;
   const isDispatchComplete = orderEditSource === "dispatch_complete";
-  if (!shouldLogFarmerPlantLedger(updatedDoc)) return;
 
-  try {
-    await ensureFarmerPlantOrderDebit(updatedDoc, { userId, session });
-  } catch (e) {
-    console.error("ensureFarmerPlantOrderDebit failed:", e);
-    if (strict) throw e;
-  }
-
+  // Dealer receivable ledger (GET /dealers/:id/ledger) — not gated on farmer identity.
   try {
     const { syncDealerLedgerForOrder, syncDealerLedgerOrderStatusTransition } =
       await import("./dealerLedgerHelper.js");
@@ -589,6 +586,15 @@ export async function syncFarmerPlantLedgerForOrderUpdate(
     });
   } catch (e) {
     console.error("syncDealerLedgerForOrder failed:", e);
+    if (strict) throw e;
+  }
+
+  if (!shouldLogFarmerPlantLedger(updatedDoc)) return;
+
+  try {
+    await ensureFarmerPlantOrderDebit(updatedDoc, { userId, session });
+  } catch (e) {
+    console.error("ensureFarmerPlantOrderDebit failed:", e);
     if (strict) throw e;
   }
 
