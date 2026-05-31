@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
 import catchAsync from "../utility/catchAsync.js";
+import {
+  isOrderEligibleForPlantTransfer,
+  isDealerScopedTransferPair,
+  orderBelongsToDealerScope,
+  resolveDealerIdForOrder,
+} from "../utility/orderTransferEligibility.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import Order from "../models/order.model.js";
@@ -535,18 +541,8 @@ function canCreateTransferRequest(req) {
   return ["SALES", "DEALER", "ACCOUNTANT", "SUPER_ADMIN", "ADMIN"].includes(role);
 }
 
-function resolveDealerIdForOrder(order) {
-  if (!order) return null;
-  if (order.dealer) return String(order.dealer._id || order.dealer);
-  const sp = order.salesPerson;
-  if (sp && String(sp.jobTitle || "").toUpperCase() === "DEALER") {
-    return String(sp._id || sp);
-  }
-  return null;
-}
-
 function isDealerOrderTransferPair(fromOrder, toOrder) {
-  return Boolean(fromOrder?.dealerOrder && toOrder?.dealerOrder);
+  return isDealerScopedTransferPair(fromOrder, toOrder);
 }
 
 function recomputeOrderPaymentCompletion(order) {
@@ -913,30 +909,40 @@ export const createFarmerOrderTransferRequest = catchAsync(async (req, res, next
     return next(new AppError("Source or target order not found", 404));
   }
 
+  const fromDealer = resolveDealerIdForOrder(fromOrder);
+  const toDealer = resolveDealerIdForOrder(toOrder);
   const dealerPair = isDealerOrderTransferPair(fromOrder, toOrder);
+
   if (dealerPair) {
-    const fromDealer = resolveDealerIdForOrder(fromOrder);
-    const toDealer = resolveDealerIdForOrder(toOrder);
-    if (!fromDealer || !toDealer || fromDealer !== toDealer) {
-      return next(new AppError("Both dealer orders must belong to the same dealer", 400));
-    }
     const reqDealer = req.user?.jobTitle === "DEALER" ? String(req.user._id) : null;
     if (reqDealer && reqDealer !== fromDealer) {
       return next(new AppError("You can only transfer between your own dealer orders", 403));
     }
-  } else {
-    if (fromOrder.dealerOrder || toOrder.dealerOrder) {
-      return next(new AppError("Cannot mix dealer and farmer orders in one transfer", 400));
-    }
-    if (!shouldLogFarmerPlantLedger(fromOrder) || !shouldLogFarmerPlantLedger(toOrder)) {
-      return next(new AppError("Both orders must be farmer-linked orders", 400));
-    }
+  } else if (orderBelongsToDealerScope(fromOrder) || orderBelongsToDealerScope(toOrder)) {
+    return next(
+      new AppError(
+        "Cannot transfer between dealer-scoped orders and other orders (must be same dealer)",
+        400
+      )
+    );
+  } else if (!shouldLogFarmerPlantLedger(fromOrder) || !shouldLogFarmerPlantLedger(toOrder)) {
+    return next(new AppError("Both orders must be farmer-linked orders", 400));
   }
-  if (String(fromOrder.orderStatus || "").toUpperCase() !== "ACCEPTED") {
-    return next(new AppError("Source order must be ACCEPTED", 400));
+  if (!isOrderEligibleForPlantTransfer(fromOrder)) {
+    return next(
+      new AppError(
+        "Source order cannot be dispatched, completed, cancelled, or rejected",
+        400
+      )
+    );
   }
-  if (String(toOrder.orderStatus || "").toUpperCase() !== "ACCEPTED") {
-    return next(new AppError("Target order must be ACCEPTED", 400));
+  if (!isOrderEligibleForPlantTransfer(toOrder)) {
+    return next(
+      new AppError(
+        "Target order cannot be dispatched, completed, cancelled, or rejected",
+        400
+      )
+    );
   }
 
   const sourceTransferable = getOrderTransferableAmount(fromOrder);
@@ -1107,11 +1113,17 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
     if (!sourceOrder || !targetOrder) {
       throw new AppError("Source or target order no longer exists", 404);
     }
-    if (String(sourceOrder.orderStatus || "").toUpperCase() !== "ACCEPTED") {
-      throw new AppError("Source order is no longer in ACCEPTED state", 409);
+    if (!isOrderEligibleForPlantTransfer(sourceOrder)) {
+      throw new AppError(
+        "Source order is no longer eligible for transfer (dispatched/completed/cancelled)",
+        409
+      );
     }
-    if (String(targetOrder.orderStatus || "").toUpperCase() !== "ACCEPTED") {
-      throw new AppError("Target order is no longer in ACCEPTED state", 409);
+    if (!isOrderEligibleForPlantTransfer(targetOrder)) {
+      throw new AppError(
+        "Target order is no longer eligible for transfer (dispatched/completed/cancelled)",
+        409
+      );
     }
 
     let remaining = roundMoney(requestDoc.requestedAmount);
