@@ -1616,7 +1616,7 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
   }
 });
 
-const updatePaymentStatus = async (req, res) => {
+const updatePaymentStatus = async (req, res, next) => {
   try {
     const { 
       orderId, 
