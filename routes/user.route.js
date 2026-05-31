@@ -18,6 +18,7 @@ import {
   getAllDealersWithWalletInfo,
   getDealerWalletTransactions,
   getDealerLedger,
+  getDealerDispatchOutstandingOrders,
   postRepairDealerLedger,
   exportDealerWalletTransactionsCSV,
   getDealerWalletStats,
@@ -109,6 +110,10 @@ router
   .get("/dealers/transactions/:dealerId", getDealerWalletTransactions)
   .get("/dealers/transactions/:dealerId/csv", exportDealerWalletTransactionsCSV)
   .get("/dealers/:dealerId/ledger", getDealerLedger)
+  .get(
+    "/dealers/:dealerId/dispatch-outstanding-orders",
+    getDealerDispatchOutstandingOrders
+  )
   .post("/dealers/:dealerId/ledger/repair", authenticateToken, postRepairDealerLedger)
   .get("/dealers/:dealerId/plant-ledger", getDealerPlantLedger)
   .post(

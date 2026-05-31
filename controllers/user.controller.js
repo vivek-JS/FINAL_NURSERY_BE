@@ -1302,6 +1302,44 @@ const postRepairDealerLedger = async (req, res) => {
 };
 
 /**
+ * Dispatched / completed dealer orders with payment outstanding.
+ * GET /dealers/:dealerId/dispatch-outstanding-orders?page=&limit=
+ */
+const getDealerDispatchOutstandingOrders = async (req, res) => {
+  try {
+    const { dealerId } = req.params;
+    const { page, limit } = req.query;
+
+    if (!dealerId || !mongoose.Types.ObjectId.isValid(dealerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid dealer ID is required",
+      });
+    }
+
+    const { listDealerDispatchOutstandingOrders } = await import(
+      "../services/dealerDispatchOutstanding.service.js"
+    );
+    const payload = await listDealerDispatchOutstandingOrders(dealerId, {
+      page,
+      limit,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+    });
+  } catch (error) {
+    console.error("Error fetching dispatch outstanding orders:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching dispatch outstanding orders",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * Get immutable dealer ledger entries for audit
  * GET /dealers/:dealerId/ledger?startDate=&endDate=&page=&limit=
  */
@@ -2550,6 +2588,7 @@ export {
   getDealerWalletDetails,
   getDealerWalletTransactions,
   getDealerLedger,
+  getDealerDispatchOutstandingOrders,
   postRepairDealerLedger,
   exportDealerWalletTransactionsCSV,
   uploadMedia,
