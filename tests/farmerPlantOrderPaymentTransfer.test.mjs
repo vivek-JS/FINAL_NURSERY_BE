@@ -9,7 +9,11 @@ import {
   getFarmerPlantPaymentTransitionAction,
   hasFarmerPlantLedgerIdentity,
   shouldLogFarmerPlantLedger,
+  isDirectOrderPaymentTransfer,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import {
+  syncDealerLedgerForPaymentStatusTransition,
+} from "../utils/dealerLedgerHelper.js";
 import Order from "../models/order.model.js";
 
 const FARMER_ID = "507f1f77bcf86cd799439011";
@@ -113,5 +117,61 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
     const inner = payPath?.schema;
     assert.ok(inner?.paths?.transferredFromOrderId, "transferredFromOrderId");
     assert.ok(inner?.paths?.transferredFromPaymentId, "transferredFromPaymentId");
+  });
+
+  describe("isDirectOrderPaymentTransfer", () => {
+    const sourceOid = "507f1f77bcf86cd799439012";
+    const payOid = "507f1f77bcf86cd799439013";
+
+    it("true when transferredFrom fields set and no transferRequestId", () => {
+      assert.equal(
+        isDirectOrderPaymentTransfer({
+          transferredFromOrderId: sourceOid,
+          transferredFromPaymentId: payOid,
+          paymentStatus: "COLLECTED",
+        }),
+        true
+      );
+    });
+
+    it("false when transferRequestId is set (transfer-request flow)", () => {
+      assert.equal(
+        isDirectOrderPaymentTransfer({
+          transferredFromOrderId: sourceOid,
+          transferredFromPaymentId: payOid,
+          transferRequestId: "507f1f77bcf86cd799439014",
+        }),
+        false
+      );
+    });
+
+    it("false without transferredFrom trace", () => {
+      assert.equal(isDirectOrderPaymentTransfer({ paymentStatus: "COLLECTED" }), false);
+      assert.equal(isDirectOrderPaymentTransfer(null), false);
+    });
+  });
+
+  describe("syncDealerLedgerForPaymentStatusTransition (transfer-in skip)", () => {
+    it("skips COLLECTED on transferred-in payment unless allowTransferIn", async () => {
+      const payment = {
+        _id: "507f1f77bcf86cd799439015",
+        paidAmount: 1000,
+        transferredFromOrderId: "507f1f77bcf86cd799439012",
+        paymentStatus: "COLLECTED",
+      };
+      const order = {
+        _id: "507f1f77bcf86cd799439016",
+        orderId: 2000,
+        dealer: "507f1f77bcf86cd799439017",
+        payment: [payment],
+      };
+      const skipped = await syncDealerLedgerForPaymentStatusTransition(
+        order,
+        payment,
+        "PENDING",
+        "COLLECTED"
+      );
+      assert.equal(skipped.action, "SKIP_TRANSFER_IN");
+    });
   });
 });

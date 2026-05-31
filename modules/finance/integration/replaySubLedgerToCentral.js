@@ -116,8 +116,11 @@ export async function replayFarmerPlantLedgerEntry(entry, ctx) {
 
   if (entry.refType === "REVERSAL") {
     const kind = entry.metadata?.kind;
-    if (kind === "order_payment_transfer_request") {
-      const requestId = entry.metadata?.transferRequestId || entry.refId;
+    if (kind === "order_payment_transfer_request" || kind === "order_payment_transfer") {
+      const requestId =
+        entry.metadata?.transferRequestId ||
+        entry.metadata?.transferId ||
+        entry.refId;
       const r = await shadow.shadowFarmerPaymentTransfer(
         {
           requestId,
@@ -170,8 +173,9 @@ export async function replayFarmerPlantLedgerEntry(entry, ctx) {
     );
     statuses.push(resultLabel(payResult));
 
-    if (entry.metadata?.kind === "order_payment_transfer_request") {
-      const requestId = entry.metadata?.transferRequestId;
+    const xferKind = entry.metadata?.kind;
+    if (xferKind === "order_payment_transfer_request" || xferKind === "order_payment_transfer") {
+      const requestId = entry.metadata?.transferRequestId || entry.metadata?.transferId;
       if (requestId) {
         const xfer = await shadow.shadowFarmerPaymentTransfer(
           {
@@ -309,6 +313,25 @@ export async function replayDealerLedgerEntry(entry, ctx) {
     const payment = await ctx.getPaymentFromPlantOrder(entry.orderId, entry.paymentId);
     if (!order || !payment) return { status: "skipped_payment_missing" };
     const r = await shadow.shadowDealerReceivablePayment({ order, payment, dealerId, userId }, opts);
+    return { status: resultLabel(r) };
+  }
+
+  if (
+    entry.refType === "REVERSAL" &&
+    entry.metadata?.tracksOrderOutstanding &&
+    entry.metadata?.reversedReceivablePaymentId &&
+    entry.paymentId
+  ) {
+    const order = await ctx.getPlantOrder(entry.orderId);
+    const payment = await ctx.getPaymentFromPlantOrder(entry.orderId, entry.paymentId);
+    if (!order || !payment) return { status: "skipped_payment_missing" };
+    const r = await shadow.shadowDealerReceivablePaymentReversal({
+      order,
+      payment,
+      dealerId,
+      userId,
+      newStatus: entry.metadata?.newStatus || "REJECTED",
+    }, opts);
     return { status: resultLabel(r) };
   }
 

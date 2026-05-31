@@ -295,12 +295,242 @@ export const ensureDealerOrderBookingAudit = async (order, { userId, session } =
 /**
  * Credit dealer order outstanding when payment is collected (ledger only — wallet cash is separate).
  */
+async function findDealerOrderReceivablePaymentEntry(orderId, paymentId, session) {
+  const q = DealerLedgerEntry.findOne({
+    orderId,
+    paymentId,
+    refType: "ORDER_RECEIVABLE_PAYMENT",
+  });
+  if (session) q.session(session);
+  return q.lean();
+}
+
+/**
+ * Dealer receivable mirror for paymentStatus changes on dealer-funded orders.
+ * COLLECTED → REJECTED/PENDING writes REVERSAL (debit); REJECTED → COLLECTED writes credit.
+ */
+export async function syncDealerLedgerForPaymentStatusTransition(
+  order,
+  payment,
+  previousStatus,
+  newStatus,
+  { userId, session, descriptionOverride, metadataExtra } = {}
+) {
+  const dealerId = await resolveFundingDealerId(order);
+  if (!dealerId || !payment?._id) return { action: "NONE" };
+
+  const amount = roundLedgerMoney(Math.abs(Number(payment.paidAmount || 0)));
+  if (!(amount > 0)) return { action: "NONE" };
+
+  if (
+    payment.transferredFromOrderId &&
+    newStatus === "COLLECTED" &&
+    !metadataExtra?.allowTransferIn
+  ) {
+    return { action: "SKIP_TRANSFER_IN" };
+  }
+
+  const prev = previousStatus;
+  const next = newStatus;
+  if (!prev || !next || prev === next) return { action: "NONE" };
+
+  const oid = order._id;
+  const pid = payment._id;
+  const orderRef = String(order.orderId ?? "");
+
+  if (next === "COLLECTED" && prev !== "COLLECTED") {
+    const allowTransferIn = Boolean(metadataExtra?.allowTransferIn);
+    const { allowTransferIn: _drop, ...metaForEntry } = metadataExtra || {};
+    const row = await ensureDealerOrderReceivablePaymentCredit(order, payment, {
+      userId,
+      session,
+      allowTransferIn,
+      metadataExtra: metaForEntry,
+    });
+    return { action: row ? "CREDIT" : "NONE", entry: row };
+  }
+
+  if (
+    prev === "COLLECTED" &&
+    ["REJECTED", "PENDING", "BANK_VERIFIED"].includes(next)
+  ) {
+    const existing = await findDealerOrderReceivablePaymentEntry(oid, pid, session);
+    if (!existing) return { action: "NONE" };
+
+    const eventAt =
+      payment?.updatedAt instanceof Date
+        ? payment.updatedAt.getTime()
+        : Date.now();
+    const transitionKey = `recvpay_${pid}_${prev}_${next}_${eventAt}`;
+
+    if (await dealerLedgerTransitionExists(oid, transitionKey, session)) {
+      return { action: "DUPLICATE" };
+    }
+
+    const outstandingBefore = await getLastDealerOrderOutstanding(dealerId, session);
+    const outstandingAfter = roundLedgerMoney(outstandingBefore + amount);
+
+    const row = await createDealerLedgerEntry({
+      dealer: dealerId,
+      refType: "REVERSAL",
+      refId: pid,
+      orderId: oid,
+      paymentId: pid,
+      debit: amount,
+      credit: 0,
+      balanceBefore: outstandingBefore,
+      balanceAfter: outstandingAfter,
+      reference: orderRef,
+      description:
+        descriptionOverride != null && String(descriptionOverride).trim()
+          ? String(descriptionOverride).trim()
+          : `Payment no longer collected (${prev} → ${next}) — order ${orderRef}`,
+      createdBy: userId,
+      entryDate: resolveReceivablePaymentEntryDate(payment),
+      reversalOf: existing._id,
+      metadata: {
+        tracksOrderOutstanding: true,
+        transitionKey,
+        previousStatus: prev,
+        newStatus: next,
+        reversedReceivablePaymentId: String(existing._id),
+        ...(metadataExtra && typeof metadataExtra === "object" ? metadataExtra : {}),
+      },
+      session,
+    });
+
+    if (row) {
+      try {
+        const fs = await import("../modules/finance/integration/financeShadow.js");
+        fs.shadowDealerReceivablePaymentReversal({
+          order,
+          payment,
+          dealerId,
+          userId,
+          newStatus: next,
+        });
+      } catch (shadowErr) {
+        console.error(
+          "[Finance] shadow dealer receivable reversal:",
+          shadowErr?.message || shadowErr
+        );
+      }
+    }
+    return { action: "REVERSAL", entry: row };
+  }
+
+  return { action: "NONE" };
+}
+
+/**
+ * Paired dealer receivable rows for direct order payment transfer (net-zero on dealer outstanding).
+ */
+export async function syncDealerLedgerForDirectOrderPaymentTransfer(
+  { sourceOrder, sourcePayment, targetOrder, targetPayment, transferId, userId },
+  { session } = {}
+) {
+  const sourceDealer = await resolveFundingDealerId(sourceOrder);
+  const targetDealer = await resolveFundingDealerId(targetOrder);
+  if (!sourceDealer && !targetDealer) {
+    return { source: null, target: null };
+  }
+
+  const xferMeta = {
+    kind: "order_payment_transfer",
+    transferId: transferId ? String(transferId) : undefined,
+  };
+
+  let sourceResult = null;
+  let targetResult = null;
+
+  if (sourceDealer) {
+    sourceResult = await syncDealerLedgerForPaymentStatusTransition(
+      sourceOrder,
+      sourcePayment,
+      "COLLECTED",
+      "REJECTED",
+      {
+        userId,
+        session,
+        descriptionOverride: `Order payment transfer out — order ${sourceOrder.orderId ?? ""}`,
+        metadataExtra: { ...xferMeta, direction: "out" },
+      }
+    );
+  }
+
+  if (targetDealer) {
+    targetResult = await syncDealerLedgerForPaymentStatusTransition(
+      targetOrder,
+      targetPayment,
+      "PENDING",
+      "COLLECTED",
+      {
+        userId,
+        session,
+        descriptionOverride: `Order payment transfer in — order ${targetOrder.orderId ?? ""}`,
+        metadataExtra: {
+          ...xferMeta,
+          direction: "in",
+          allowTransferIn: true,
+        },
+      }
+    );
+  }
+
+  return { source: sourceResult, target: targetResult };
+}
+
+/**
+ * Undo paired dealer receivable rows when a transferred-in payment is rejected.
+ */
+export async function syncDealerLedgerForDirectOrderPaymentTransferUndo(
+  { sourceOrder, sourcePayment, targetOrder, targetPayment, userId },
+  { session } = {}
+) {
+  const undoMeta = { kind: "order_payment_transfer_undo" };
+  let sourceResult = null;
+  let targetResult = null;
+
+  if (await resolveFundingDealerId(sourceOrder)) {
+    sourceResult = await syncDealerLedgerForPaymentStatusTransition(
+      sourceOrder,
+      sourcePayment,
+      "REJECTED",
+      "COLLECTED",
+      {
+        userId,
+        session,
+        descriptionOverride: `Transfer undo — restore payment on order ${sourceOrder.orderId ?? ""}`,
+        metadataExtra: { ...undoMeta, direction: "restore_source" },
+      }
+    );
+  }
+
+  if (await resolveFundingDealerId(targetOrder)) {
+    targetResult = await syncDealerLedgerForPaymentStatusTransition(
+      targetOrder,
+      targetPayment,
+      "COLLECTED",
+      "REJECTED",
+      {
+        userId,
+        session,
+        descriptionOverride: `Transfer undo — reject transferred payment on order ${targetOrder.orderId ?? ""}`,
+        metadataExtra: { ...undoMeta, direction: "reject_target" },
+      }
+    );
+  }
+
+  return { source: sourceResult, target: targetResult };
+}
+
 export const ensureDealerOrderReceivablePaymentCredit = async (
   order,
   payment,
-  { userId, session } = {}
+  { userId, session, allowTransferIn = false, metadataExtra } = {}
 ) => {
   if (!payment?._id) return null;
+  if (payment.transferredFromOrderId && !allowTransferIn) return null;
 
   const dealerId = await resolveFundingDealerId(order);
   if (!dealerId) return null;
@@ -340,6 +570,7 @@ export const ensureDealerOrderReceivablePaymentCredit = async (
       tracksOrderOutstanding: true,
       modeOfPayment: payment.modeOfPayment,
       isWalletPayment: Boolean(payment.isWalletPayment),
+      ...(metadataExtra && typeof metadataExtra === "object" ? metadataExtra : {}),
     },
   };
 

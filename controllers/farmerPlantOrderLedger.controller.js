@@ -29,6 +29,7 @@ import {
   getFarmerPlantPaymentTransitionAction,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
+import { syncDealerLedgerForDirectOrderPaymentTransfer } from "../utils/dealerLedgerHelper.js";
 
 const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
 const DEBUG_SESSION_ID = "69bde0";
@@ -575,12 +576,9 @@ function getOrderTransferableAmount(order) {
  * POST move one COLLECTED payment from a farmer plant order to another (any eligible farmer plant target).
  * Body: { sourceOrderId, targetOrderId, paymentId, message? }
  *
- * - Source payment → REJECTED + farmer-plant REVERSAL ledger line
- * - Target order → new payment PENDING then COLLECTED + PAYMENT ledger credit
+ * - Source payment → REJECTED; target → new payment COLLECTED (ledger-neutral internal move)
+ * - Rejecting the target payment via updatePaymentStatus restores the source payment
  * - Excludes wallet payments and bulk-linked payments (mainPaymentId)
- *
- * Source order may be CANCELLED (or any status): cancellation reverses order principal in the ledger,
- * but payment rows often stay COLLECTED until explicitly moved here.
  */
 export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next) => {
   const { sourceOrderId, targetOrderId, paymentId, message } = req.body || {};
@@ -601,9 +599,6 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
   const transferId = new mongoose.Types.ObjectId();
   const session = await mongoose.startSession();
   session.startTransaction();
-
-  let reversalEntryId = null;
-  let paymentEntryId = null;
 
   try {
     const sourceOrder = await Order.findById(sid).populate(orderDetailsPopulate).session(session);
@@ -656,38 +651,6 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     await sourceOrder.save({ session });
 
     const mode = sourcePayment.modeOfPayment || "Cash";
-    await ensureFarmerPlantOrderDebit(sourceOrder, { userId: performedBy, session });
-    const rupeeLabel = `₹${amount.toLocaleString("en-IN")}`;
-    const ledgerDescReversal =
-      `Order transfer (out): order #${sourceNumericId} → target order #${targetNumericId}. ` +
-      `पेमेंट दुसऱ्या ऑर्डरला transfer — लेजर reversal (${prevSourceStatus} → REJECTED). ` +
-      `${mode} ${rupeeLabel}.${msg ? ` Msg: ${msg}` : ""}`;
-    const transferLedgerMetaBase = {
-      kind: "order_payment_transfer",
-      transferId: String(transferId),
-    };
-    const sourceReversal = await recordFarmerPlantLedgerPaymentTransition(
-      sourceOrder,
-      sourcePayment,
-      prevSourceStatus,
-      "REJECTED",
-      {
-        userId: performedBy,
-        session,
-        descriptionOverride: ledgerDescReversal,
-        metadataExtra: {
-          ...transferLedgerMetaBase,
-          direction: "out",
-          peerOrderMongoId: String(tid),
-          peerOrderNumber: targetNumericId,
-        },
-      }
-    );
-    const revAction = getFarmerPlantPaymentTransitionAction(prevSourceStatus, "REJECTED");
-    if (revAction === "REVERSAL" && !sourceReversal) {
-      throw new AppError("Farmer ledger reversal was not recorded (duplicate or conflict)", 409);
-    }
-    reversalEntryId = sourceReversal?._id || null;
 
     const incomingNote = `[Transferred from order #${sourceNumericId}${msg ? ` — ${msg}` : ""}]`;
     const newPaymentPayload = {
@@ -716,37 +679,22 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
       throw new AppError("Failed to create payment on target order", 500);
     }
 
-    const prevTargetPayStatus = newPayment.paymentStatus;
     newPayment.paymentStatus = "COLLECTED";
+    recomputeOrderPaymentCompletion(sourceOrder);
+    recomputeOrderPaymentCompletion(targetOrder);
     await targetOrder.save({ session });
 
-    await ensureFarmerPlantOrderDebit(targetOrder, { userId: performedBy, session });
-    const ledgerDescCredit =
-      `Order transfer (in): order #${targetNumericId} ← source order #${sourceNumericId}. ` +
-      `पेमेंट स्रोत ऑर्डरवरून transfer — लेजर credit (${prevTargetPayStatus} → COLLECTED). ` +
-      `${mode} ${rupeeLabel}.${msg ? ` Msg: ${msg}` : ""}`;
-    const targetCredit = await recordFarmerPlantLedgerPaymentTransition(
-      targetOrder,
-      newPayment,
-      prevTargetPayStatus,
-      "COLLECTED",
+    await syncDealerLedgerForDirectOrderPaymentTransfer(
       {
+        sourceOrder,
+        sourcePayment,
+        targetOrder,
+        targetPayment: newPayment,
+        transferId,
         userId: performedBy,
-        session,
-        descriptionOverride: ledgerDescCredit,
-        metadataExtra: {
-          ...transferLedgerMetaBase,
-          direction: "in",
-          peerOrderMongoId: String(sid),
-          peerOrderNumber: sourceNumericId,
-        },
-      }
+      },
+      { session }
     );
-    const creditAction = getFarmerPlantPaymentTransitionAction(prevTargetPayStatus, "COLLECTED");
-    if (creditAction === "CREDIT" && !targetCredit) {
-      throw new AppError("Farmer ledger credit was not recorded (duplicate or conflict)", 409);
-    }
-    paymentEntryId = targetCredit?._id || null;
 
     const transferHistoryPayload = {
       transferId: String(transferId),
@@ -821,8 +769,8 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
             targetOrderNumericId: targetNumericId,
             originalPaymentId: pid,
             newPaymentId: newPayment._id ? String(newPayment._id) : null,
-            reversalLedgerEntryId: reversalEntryId ? String(reversalEntryId) : null,
-            paymentLedgerEntryId: paymentEntryId ? String(paymentEntryId) : null,
+            reversalLedgerEntryId: null,
+            paymentLedgerEntryId: null,
             sourceCustomerMobile: fromParty.customerMobile,
             targetCustomerMobile: toParty.customerMobile,
             outstandingAfterSource: roundMoney(outstandingAfterSource),
@@ -855,8 +803,8 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
           amount,
           sourceOrder: { _id: sourceOrder._id, orderId: sourceOrder.orderId },
           targetOrder: { _id: targetOrder._id, orderId: targetOrder.orderId },
-          reversalLedgerEntryId: reversalEntryId,
-          paymentLedgerEntryId: paymentEntryId,
+          reversalLedgerEntryId: null,
+          paymentLedgerEntryId: null,
           outstandingAfterSource: roundMoney(outstandingAfterSource),
           outstandingAfterTarget: roundMoney(outstandingAfterTarget),
           outstandingAfter: roundMoney(outstandingAfterSource),

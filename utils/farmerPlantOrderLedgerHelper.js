@@ -1,8 +1,10 @@
 import mongoose from "mongoose";
 import Farmer from "../models/farmer.model.js";
 import User from "../models/user.model.js";
+import Order from "../models/order.model.js";
 import FarmerPlantOrderLedgerEntry from "../models/farmerPlantOrderLedger.model.js";
 import FarmerPlantOrderArchive from "../models/farmerPlantOrderArchive.model.js";
+import { applyPaymentTimingToPayment } from "./paymentTiming.js";
 
 const TERMINAL_PLANT_ORDER_STATUSES = new Set([
   "CANCELLED",
@@ -1097,4 +1099,290 @@ export async function computeOrderPaymentTotals(order) {
     outstanding,
     isFullyPaid: outstanding <= 0,
   };
+}
+
+/** Target payment row created by POST transfer-order-payment (not transfer-request flow). */
+export function isDirectOrderPaymentTransfer(payment) {
+  if (!payment) return false;
+  if (payment.transferRequestId) return false;
+  const fromOrder = payment.transferredFromOrderId;
+  const fromPayment = payment.transferredFromPaymentId;
+  return Boolean(fromOrder && fromPayment);
+}
+
+export function findPaymentInOrder(order, paymentId) {
+  if (!order?.payment?.length) return null;
+  if (paymentId == null || paymentId === "") return null;
+  let p = order.payment.id(paymentId);
+  if (p) return p;
+  const s = String(paymentId).trim();
+  if (mongoose.Types.ObjectId.isValid(s)) {
+    const oid = new mongoose.Types.ObjectId(s);
+    p = order.payment.id(oid);
+    if (p) return p;
+  }
+  return order.payment.find((x) => x?._id && String(x._id) === s);
+}
+
+export function recomputeOrderPaymentCompletion(order) {
+  const plants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
+  const freight = Math.max(0, Number(order.freightCharges) || 0);
+  const total = roundMoney((order.rate || 0) * plants + freight);
+  const collected = roundMoney(
+    (order.payment || []).reduce((sum, p) => {
+      if (p?.paymentStatus === "COLLECTED") return sum + (Number(p.paidAmount) || 0);
+      return sum;
+    }, 0)
+  );
+  order.orderPaymentStatus = collected >= total ? "COMPLETED" : "PENDING";
+  order.paymentCompleted = collected >= total;
+}
+
+/**
+ * Legacy direct transfers wrote farmer-plant ledger rows with metadata.kind order_payment_transfer.
+ */
+export async function hasLegacyDirectTransferLedgerEntries(
+  { sourceOrderId, sourcePaymentId, targetOrderId, targetPaymentId },
+  { session } = {}
+) {
+  const oidSource =
+    sourceOrderId instanceof mongoose.Types.ObjectId
+      ? sourceOrderId
+      : new mongoose.Types.ObjectId(String(sourceOrderId));
+  const oidTarget =
+    targetOrderId instanceof mongoose.Types.ObjectId
+      ? targetOrderId
+      : new mongoose.Types.ObjectId(String(targetOrderId));
+  const pidSource =
+    sourcePaymentId instanceof mongoose.Types.ObjectId
+      ? sourcePaymentId
+      : new mongoose.Types.ObjectId(String(sourcePaymentId));
+  const pidTarget =
+    targetPaymentId instanceof mongoose.Types.ObjectId
+      ? targetPaymentId
+      : new mongoose.Types.ObjectId(String(targetPaymentId));
+
+  const q = FarmerPlantOrderLedgerEntry.findOne({
+    "metadata.kind": "order_payment_transfer",
+    $or: [
+      { orderId: oidSource, paymentId: pidSource },
+      { orderId: oidTarget, paymentId: pidTarget },
+    ],
+  });
+  if (session) q.session(session);
+  return Boolean(await q.lean());
+}
+
+/**
+ * Undo a direct order payment transfer when the target (transferred-in) payment is rejected.
+ * Restores source payment to COLLECTED; marks target REJECTED. Ledger-neutral unless legacy rows exist.
+ */
+export async function undoDirectOrderPaymentTransfer({
+  targetOrder,
+  targetPayment,
+  userId,
+  remark,
+}) {
+  if (!isDirectOrderPaymentTransfer(targetPayment)) {
+    const err = new Error("Payment is not from a direct order-to-order transfer");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const targetStatus = targetPayment.paymentStatus;
+  if (!["COLLECTED", "PENDING"].includes(targetStatus)) {
+    const err = new Error(
+      `Cannot undo transfer: target payment status is ${targetStatus}`
+    );
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const sid = String(targetPayment.transferredFromOrderId);
+  const spid = String(targetPayment.transferredFromPaymentId);
+  const amount = roundMoney(Math.abs(Number(targetPayment.paidAmount || 0)));
+  if (!(amount > 0)) {
+    const err = new Error("Transfer payment amount must be greater than zero");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const sourceOrder = await Order.findById(sid).session(session);
+    const targetOrderDoc = await Order.findById(targetOrder._id).session(session);
+    if (!sourceOrder || !targetOrderDoc) {
+      const err = new Error("Source or target order not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const sourcePayment = findPaymentInOrder(sourceOrder, spid);
+    const targetPay = findPaymentInOrder(
+      targetOrderDoc,
+      targetPayment._id || targetPayment
+    );
+    if (!sourcePayment || !targetPay) {
+      const err = new Error("Source or target payment not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    if (sourcePayment.paymentStatus !== "REJECTED") {
+      const err = new Error(
+        "Source payment is not in REJECTED state; transfer may already be undone"
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const sourceAmount = roundMoney(Math.abs(Number(sourcePayment.paidAmount || 0)));
+    if (Math.abs(sourceAmount - amount) > 0.01) {
+      const err = new Error("Transfer amounts on source and target do not match");
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const targetNumericId = targetOrderDoc.orderId ?? "";
+    const sourceNumericId = sourceOrder.orderId ?? "";
+    const undoNoteTarget = `[Transfer undone — payment rejected${
+      remark ? `: ${String(remark).trim()}` : ""
+    }]`;
+    const undoNoteSource = `[Transfer undone — restored from order #${targetNumericId}]`;
+
+    const prevTargetStatus = targetPay.paymentStatus;
+    targetPay.paymentStatus = "REJECTED";
+    const prevTargetRemark = targetPay.remark ? String(targetPay.remark).trim() : "";
+    targetPay.remark = prevTargetRemark
+      ? `${prevTargetRemark}\n${undoNoteTarget}`
+      : undoNoteTarget;
+    applyPaymentTimingToPayment(targetPay, targetOrderDoc, { force: true });
+
+    const prevSourceStatus = sourcePayment.paymentStatus;
+    sourcePayment.paymentStatus = "COLLECTED";
+    const prevSourceRemark = sourcePayment.remark ? String(sourcePayment.remark).trim() : "";
+    sourcePayment.remark = prevSourceRemark
+      ? `${prevSourceRemark}\n${undoNoteSource}`
+      : undoNoteSource;
+    applyPaymentTimingToPayment(sourcePayment, sourceOrder, { force: true });
+
+    recomputeOrderPaymentCompletion(sourceOrder);
+    recomputeOrderPaymentCompletion(targetOrderDoc);
+
+    const performedBy = userId || null;
+    if (!Array.isArray(sourceOrder.orderEditHistory)) sourceOrder.orderEditHistory = [];
+    sourceOrder.orderEditHistory.push({
+      field: "paymentTransferUndo",
+      previousValue: { paymentStatus: prevSourceStatus, targetOrderNumber: targetNumericId },
+      newValue: { paymentStatus: "COLLECTED", amount },
+      changedBy: performedBy,
+      notes: undoNoteSource,
+    });
+    if (!Array.isArray(targetOrderDoc.orderEditHistory)) {
+      targetOrderDoc.orderEditHistory = [];
+    }
+    targetOrderDoc.orderEditHistory.push({
+      field: "paymentTransferUndo",
+      previousValue: {
+        paymentStatus: prevTargetStatus,
+        sourceOrderNumber: sourceNumericId,
+      },
+      newValue: { paymentStatus: "REJECTED", amount },
+      changedBy: performedBy,
+      notes: undoNoteTarget,
+    });
+
+    await sourceOrder.save({ session });
+    await targetOrderDoc.save({ session });
+
+    const { syncDealerLedgerForDirectOrderPaymentTransferUndo } = await import(
+      "./dealerLedgerHelper.js"
+    );
+    const dealerLedgerUndo = await syncDealerLedgerForDirectOrderPaymentTransferUndo(
+      {
+        sourceOrder,
+        sourcePayment,
+        targetOrder: targetOrderDoc,
+        targetPayment: targetPay,
+        userId,
+      },
+      { session }
+    );
+
+    const legacyLedger = await hasLegacyDirectTransferLedgerEntries(
+      {
+        sourceOrderId: sourceOrder._id,
+        sourcePaymentId: sourcePayment._id,
+        targetOrderId: targetOrderDoc._id,
+        targetPaymentId: targetPay._id,
+      },
+      { session }
+    );
+
+    const undoMeta = { kind: "order_payment_transfer_undo" };
+    let sourceLedgerUndo = null;
+    let targetLedgerUndo = null;
+    if (legacyLedger && shouldLogFarmerPlantLedger(sourceOrder)) {
+      await ensureFarmerPlantOrderDebit(sourceOrder, { userId, session });
+      sourceLedgerUndo = await recordFarmerPlantLedgerPaymentTransition(
+        sourceOrder,
+        sourcePayment,
+        "REJECTED",
+        "COLLECTED",
+        {
+          userId,
+          session,
+          descriptionOverride: `Transfer undo: restore order #${sourceNumericId} payment (REJECTED → COLLECTED)`,
+          metadataExtra: {
+            ...undoMeta,
+            direction: "restore_source",
+            peerOrderMongoId: String(targetOrderDoc._id),
+            peerOrderNumber: targetNumericId,
+          },
+        }
+      );
+    }
+    if (legacyLedger && shouldLogFarmerPlantLedger(targetOrderDoc) && prevTargetStatus === "COLLECTED") {
+      await ensureFarmerPlantOrderDebit(targetOrderDoc, { userId, session });
+      targetLedgerUndo = await recordFarmerPlantLedgerPaymentTransition(
+        targetOrderDoc,
+        targetPay,
+        "COLLECTED",
+        "REJECTED",
+        {
+          userId,
+          session,
+          descriptionOverride: `Transfer undo: reject order #${targetNumericId} transferred payment`,
+          metadataExtra: {
+            ...undoMeta,
+            direction: "reject_target",
+            peerOrderMongoId: String(sourceOrder._id),
+            peerOrderNumber: sourceNumericId,
+          },
+        }
+      );
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return {
+      sourceOrder,
+      targetOrder: targetOrderDoc,
+      legacyLedgerCompensated: legacyLedger,
+      sourceLedgerUndoId: sourceLedgerUndo?._id || null,
+      targetLedgerUndoId: targetLedgerUndo?._id || null,
+      dealerLedgerUndo,
+    };
+  } catch (e) {
+    try {
+      await session.abortTransaction();
+    } catch (_) {}
+    try {
+      session.endSession();
+    } catch (_) {}
+    throw e;
+  }
 }

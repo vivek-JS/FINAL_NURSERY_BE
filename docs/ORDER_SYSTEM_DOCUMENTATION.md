@@ -417,6 +417,8 @@ Referenced by dealer.controller for getDealerOrdersByBooking and updateDealerOrd
 4. Set payment.paymentStatus = paymentStatus. order.save() (pre-save recalculates orderPaymentStatus).
 5. Optional: send push notifications (payment accepted/rejected/collected/pending). Return updated order.
 
+**Direct order payment transfer:** Payments with `transferredFromOrderId` / `transferredFromPaymentId` (and no `transferRequestId`) come from `POST /order/farmer-plant-ledger/transfer-order-payment`. Farmer plant ledger stays neutral (no rows). Dealer-funded orders get paired dealer receivable rows on transfer (source payment reversal debit + target transfer-in credit, net-zero on dealer outstanding) and the inverse on reject-undo. Rejecting such a payment with `paymentStatus: REJECTED` undoes the transfer: target payment → REJECTED, source payment restored to COLLECTED (legacy farmer-plant transfers may write compensating lines only if rows were posted before this policy).
+
 ---
 
 ### 5.8 updateOrder (PATCH /order/updateOrder) – factory updateOne(Order)

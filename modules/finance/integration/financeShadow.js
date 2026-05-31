@@ -406,6 +406,27 @@ export function shadowDealerReceivablePayment({ order, payment, dealerId, userId
   }, options);
 }
 
+export function shadowDealerReceivablePaymentReversal(
+  { order, payment, dealerId, userId, newStatus },
+  options = {}
+) {
+  const amt = roundMoney(payment?.paidAmount);
+  if (amt <= 0) return;
+  const status = newStatus || "REJECTED";
+  return shadowEmit({
+    idempotencyKey: `dealer:recvpay:${payment._id}:rev:${status}`,
+    eventType: FINANCIAL_EVENT_TYPES.DEALER_RECEIVABLE_PAYMENT_REVERSED,
+    sourceDomain: "Order",
+    sourceId: order._id,
+    createdBy: userId,
+    payload: {
+      amount: amt,
+      dealerId: String(dealerId),
+      sourceLineRef: `payment:${payment._id}:rev`,
+    },
+  }, options);
+}
+
 export function shadowDealerWalletMovement({ dealerId, amount, walletCredit, farmerPartyId, relatedOrderId, userId, idempotencySuffix }, options = {}) {
   const amt = roundMoney(Math.abs(amount));
   if (amt <= 0) return;

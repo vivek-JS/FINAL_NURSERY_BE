@@ -41,6 +41,8 @@ import {
   recordFarmerPlantLedgerPaymentTransition,
   getFarmerPlantPaymentTransitionAction,
   shouldLogFarmerPlantLedger,
+  isDirectOrderPaymentTransfer,
+  undoDirectOrderPaymentTransfer,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import {
   syncDealerLedgerForOrder,
@@ -1683,6 +1685,32 @@ const updatePaymentStatus = async (req, res, next) => {
           reason: remark || req.body?.reason || "Rejected from payment dashboard",
         };
         return rejectFarmerOrderTransferRequest(req, res, next);
+      }
+    }
+
+    // Direct transfer undo: rejecting transferred-in payment restores source order payment.
+    if (paymentStatus === "REJECTED" && isDirectOrderPaymentTransfer(payment)) {
+      try {
+        const undoResult = await undoDirectOrderPaymentTransfer({
+          targetOrder: order,
+          targetPayment: payment,
+          userId: req.user?._id,
+          remark: remark || req.body?.reason,
+        });
+        return res.status(200).json({
+          success: true,
+          message:
+            "Transfer payment rejected; source order payment restored to COLLECTED.",
+          order: undoResult.targetOrder,
+          sourceOrder: undoResult.sourceOrder,
+          legacyLedgerCompensated: undoResult.legacyLedgerCompensated,
+        });
+      } catch (undoErr) {
+        const code = undoErr.statusCode || 500;
+        return res.status(code).json({
+          success: false,
+          message: undoErr.message || "Failed to undo payment transfer",
+        });
       }
     }
 

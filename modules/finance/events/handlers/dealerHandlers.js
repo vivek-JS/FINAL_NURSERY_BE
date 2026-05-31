@@ -36,6 +36,11 @@ export function buildJournalForDealerEvent(eventType, payload) {
       b.cr(ACCOUNT_CODES.AR_DEALER, amount, partyExtras);
       break;
 
+    case FINANCIAL_EVENT_TYPES.DEALER_RECEIVABLE_PAYMENT_REVERSED:
+      b.dr(ACCOUNT_CODES.AR_DEALER, amount, partyExtras);
+      b.cr(ACCOUNT_CODES.PAYMENT_CLEARING, amount);
+      break;
+
     case FINANCIAL_EVENT_TYPES.DEALER_WALLET_MOVEMENT:
       if (payload.walletCredit) {
         b.dr(ACCOUNT_CODES.AR_FARMER, amount, {
