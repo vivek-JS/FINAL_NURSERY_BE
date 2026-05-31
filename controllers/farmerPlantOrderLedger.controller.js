@@ -29,7 +29,7 @@ import {
   getFarmerPlantPaymentTransitionAction,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
-import { syncDealerLedgerForDirectOrderPaymentTransfer } from "../utils/dealerLedgerHelper.js";
+import { syncDirectOrderPaymentTransferLedgers } from "../services/orderPaymentTransferLedger.service.js";
 
 const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
 const DEBUG_SESSION_ID = "69bde0";
@@ -518,6 +518,124 @@ export const getFarmerPlantOrderDetails = catchAsync(async (req, res, next) => {
     .json(generateResponse("Success", "Order details", payload, undefined));
 });
 
+function summarizeOrderForTransferContext(order, payment) {
+  if (!order) return null;
+  const farmer = order.farmer;
+  return {
+    orderMongoId: String(order._id || ""),
+    orderNumber: order.orderId ?? null,
+    orderStatus: order.orderStatus || null,
+    farmer: farmer
+      ? {
+          name: farmer.name || "",
+          mobileNumber: farmer.mobileNumber || "",
+          village: farmer.village || farmer.villageName || "",
+          district: farmer.district || "",
+        }
+      : null,
+    payment: payment
+      ? {
+          paymentId: String(payment._id || ""),
+          paidAmount: roundMoney(Number(payment.paidAmount || 0)),
+          paymentStatus: payment.paymentStatus || null,
+          remark: payment.remark || null,
+          modeOfPayment: payment.modeOfPayment || null,
+        }
+      : null,
+  };
+}
+
+/**
+ * GET transfer peer order summary for accountant dashboard.
+ * Query: orderId (mongo), paymentId (mongo subdoc id)
+ */
+export const getOrderPaymentTransferContext = catchAsync(async (req, res, next) => {
+  const orderMongoId = String(req.query?.orderId || "").trim();
+  const paymentId = String(req.query?.paymentId || "").trim();
+
+  if (!mongoose.isValidObjectId(orderMongoId) || !mongoose.isValidObjectId(paymentId)) {
+    return next(new AppError("Valid orderId and paymentId are required", 400));
+  }
+
+  const oid = new mongoose.Types.ObjectId(orderMongoId);
+  const order = await Order.findById(oid).populate(orderDetailsPopulate);
+  if (!order) {
+    return next(new AppError("Order not found", 404));
+  }
+
+  const payment = findPaymentSubdocument(order, paymentId);
+  if (!payment) {
+    return next(new AppError("Payment not found on order", 404));
+  }
+
+  const amount = roundMoney(Math.abs(Number(payment.paidAmount || 0)));
+  let direction = null;
+  let peerOrder = null;
+  let peerPayment = null;
+  let transferId = payment.orderPaymentTransferId
+    ? String(payment.orderPaymentTransferId)
+    : null;
+
+  if (payment.transferredFromOrderId && payment.transferredFromPaymentId) {
+    direction = "in";
+    const sourceOrder = await Order.findById(payment.transferredFromOrderId).populate(
+      orderDetailsPopulate
+    );
+    if (sourceOrder) {
+      peerOrder = sourceOrder;
+      peerPayment = findPaymentSubdocument(
+        sourceOrder,
+        payment.transferredFromPaymentId
+      );
+      if (!transferId && peerPayment?.orderPaymentTransferId) {
+        transferId = String(peerPayment.orderPaymentTransferId);
+      }
+    }
+  } else if (
+    payment.paymentStatus === "REJECTED" &&
+    /Transferred to order/i.test(String(payment.remark || ""))
+  ) {
+    direction = "out";
+    const peer = await Order.findOne({
+      payment: {
+        $elemMatch: {
+          transferredFromOrderId: oid,
+          transferredFromPaymentId: new mongoose.Types.ObjectId(paymentId),
+        },
+      },
+    }).populate(orderDetailsPopulate);
+    if (peer) {
+      peerOrder = peer;
+      peerPayment = (peer.payment || []).find(
+        (p) =>
+          p?.transferredFromOrderId &&
+          String(p.transferredFromOrderId) === String(oid) &&
+          p?.transferredFromPaymentId &&
+          String(p.transferredFromPaymentId) === String(paymentId)
+      );
+      if (!transferId && peerPayment?.orderPaymentTransferId) {
+        transferId = String(peerPayment.orderPaymentTransferId);
+      }
+    }
+  }
+
+  const payload = {
+    direction,
+    transferId,
+    amount,
+    currentOrder: summarizeOrderForTransferContext(order, payment),
+    peerOrder: summarizeOrderForTransferContext(peerOrder, peerPayment),
+    rejectUndoHint:
+      direction === "in"
+        ? "Reject this payment on the target order to restore the source order payment to COLLECTED."
+        : direction === "out"
+          ? "This payment was moved out. Reject the transferred-in payment on the target order to undo."
+          : null,
+  };
+
+  return res.status(200).json(generateResponse("Success", "Transfer context", payload, undefined));
+});
+
 function findPaymentSubdocument(order, paymentId) {
   if (!order?.payment?.length) return null;
   if (paymentId == null || paymentId === "") return null;
@@ -576,8 +694,8 @@ function getOrderTransferableAmount(order) {
  * POST move one COLLECTED payment from a farmer plant order to another (any eligible farmer plant target).
  * Body: { sourceOrderId, targetOrderId, paymentId, message? }
  *
- * - Source payment → REJECTED; target → new payment COLLECTED (ledger-neutral internal move)
- * - Rejecting the target payment via updatePaymentStatus restores the source payment
+ * - Source payment → REJECTED; target → new payment COLLECTED; paired ledger rows on transfer
+ * - Rejecting the target payment via updatePaymentStatus restores source + reverses ledgers
  * - Excludes wallet payments and bulk-linked payments (mainPaymentId)
  */
 export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next) => {
@@ -645,6 +763,7 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     const transferNote = `[Transferred to order #${targetNumericId}${msg ? ` — ${msg}` : ""}]`;
     const prevRemark = sourcePayment.remark ? String(sourcePayment.remark).trim() : "";
     sourcePayment.remark = prevRemark ? `${prevRemark}\n${transferNote}` : transferNote;
+    sourcePayment.orderPaymentTransferId = transferId;
     const prevSourceStatus = sourcePayment.paymentStatus;
     sourcePayment.paymentStatus = "REJECTED";
 
@@ -668,6 +787,7 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
       isWalletPayment: false,
       transferredFromOrderId: new mongoose.Types.ObjectId(sid),
       transferredFromPaymentId: new mongoose.Types.ObjectId(pid),
+      orderPaymentTransferId: transferId,
     };
     applyPaymentTimingToPayment(newPaymentPayload, targetOrder);
 
@@ -684,7 +804,7 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     recomputeOrderPaymentCompletion(targetOrder);
     await targetOrder.save({ session });
 
-    await syncDealerLedgerForDirectOrderPaymentTransfer(
+    const ledgerSync = await syncDirectOrderPaymentTransferLedgers(
       {
         sourceOrder,
         sourcePayment,
@@ -692,6 +812,7 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
         targetPayment: newPayment,
         transferId,
         userId: performedBy,
+        prevSourceStatus,
       },
       { session }
     );
@@ -803,8 +924,9 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
           amount,
           sourceOrder: { _id: sourceOrder._id, orderId: sourceOrder.orderId },
           targetOrder: { _id: targetOrder._id, orderId: targetOrder.orderId },
-          reversalLedgerEntryId: null,
-          paymentLedgerEntryId: null,
+          reversalLedgerEntryId: ledgerSync?.farmer?.source?._id || null,
+          paymentLedgerEntryId: ledgerSync?.farmer?.target?._id || null,
+          ledgerSync,
           outstandingAfterSource: roundMoney(outstandingAfterSource),
           outstandingAfterTarget: roundMoney(outstandingAfterTarget),
           outstandingAfter: roundMoney(outstandingAfterSource),

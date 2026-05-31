@@ -40,5 +40,9 @@ describe("farmer order transfer routes", () => {
       routeSource,
       /\/farmer-plant\/:orderId\/details\",\s*getFarmerPlantOrderDetails/
     );
+    assert.match(
+      routeSource,
+      /\/farmer-plant-ledger\/transfer-context\",\s*requirePaymentAccess,\s*getOrderPaymentTransferContext/
+    );
   });
 });

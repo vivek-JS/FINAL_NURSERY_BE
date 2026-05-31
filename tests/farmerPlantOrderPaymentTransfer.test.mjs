@@ -169,6 +169,38 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
     assert.match(orderControllerSource, /undoApprovedTransferRequestPayment/);
   });
 
+  it("updatePaymentStatus routes direct transfer reject to undoDirectOrderPaymentTransfer", () => {
+    const orderControllerSource = readFileSync(
+      resolve(process.cwd(), "controllers/order.controller.js"),
+      "utf8"
+    );
+    assert.match(
+      orderControllerSource,
+      /paymentStatus === "REJECTED" && isDirectOrderPaymentTransfer\(payment\)/
+    );
+    assert.match(orderControllerSource, /undoDirectOrderPaymentTransfer\(/);
+    assert.match(orderControllerSource, /ledgerUndo: undoResult\.ledgerUndo/);
+  });
+
+  it("transfer and undo call orderPaymentTransferLedger orchestrator", () => {
+    const controllerSource = readFileSync(
+      resolve(process.cwd(), "controllers/farmerPlantOrderLedger.controller.js"),
+      "utf8"
+    );
+    assert.match(controllerSource, /syncDirectOrderPaymentTransferLedgers\(/);
+    assert.match(controllerSource, /orderPaymentTransferId = transferId/);
+
+    const helperSource = readFileSync(
+      resolve(process.cwd(), "utils/farmerPlantOrderLedgerHelper.js"),
+      "utf8"
+    );
+    assert.match(helperSource, /syncDirectOrderPaymentTransferUndoLedgers\(/);
+    assert.doesNotMatch(
+      helperSource,
+      /hasLegacyDirectTransferLedgerEntries[\s\S]{0,400}syncDirectOrderPaymentTransferUndoLedgers/
+    );
+  });
+
   it("transferFarmerPlantOrderPayment requires sourceOrderId, targetOrderId, paymentId in body", () => {
     const controllerSource = readFileSync(
       resolve(process.cwd(), "controllers/farmerPlantOrderLedger.controller.js"),
@@ -181,6 +213,12 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
     );
     assert.match(controllerSource, /transferredFromOrderId: new mongoose\.Types\.ObjectId\(sid\)/);
     assert.match(controllerSource, /transferredFromPaymentId: new mongoose\.Types\.ObjectId\(pid\)/);
+  });
+
+  it("Order payment sub-schema includes orderPaymentTransferId", () => {
+    const payPath = Order.schema.path("payment");
+    const inner = payPath?.schema;
+    assert.ok(inner?.paths?.orderPaymentTransferId, "orderPaymentTransferId");
   });
 
   describe("syncDealerLedgerForPaymentStatusTransition (transfer-in skip)", () => {

@@ -295,7 +295,7 @@ export const ensureDealerOrderBookingAudit = async (order, { userId, session } =
 /**
  * Credit dealer order outstanding when payment is collected (ledger only — wallet cash is separate).
  */
-async function findDealerOrderReceivablePaymentEntry(orderId, paymentId, session) {
+export async function findDealerOrderReceivablePaymentEntry(orderId, paymentId, session) {
   const q = DealerLedgerEntry.findOne({
     orderId,
     paymentId,

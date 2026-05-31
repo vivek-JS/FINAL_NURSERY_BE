@@ -49,6 +49,7 @@ import {
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
+  getOrderPaymentTransferContext,
   getFarmerPlantLedgerParties,
   transferFarmerPlantAdvance,
   transferFarmerPlantOrderPayment,
@@ -97,6 +98,11 @@ const uploadImages = multer({
 
 router
   .get("/farmer-plant/:orderId/details", getFarmerPlantOrderDetails)
+  .get(
+    "/farmer-plant-ledger/transfer-context",
+    requirePaymentAccess,
+    getOrderPaymentTransferContext
+  )
   .get("/farmer-plant-ledger/parties", requirePaymentAccess, getFarmerPlantLedgerParties)
   .get("/farmer-plant-ledger/search-farmers", requirePaymentAccess, searchFarmersForLedgerTransfer)
   .post("/farmer-plant-ledger/transfer-advance", requirePaymentAccess, transferFarmerPlantAdvance)

@@ -1177,7 +1177,7 @@ export async function hasLegacyDirectTransferLedgerEntries(
 
 /**
  * Undo a direct order payment transfer when the target (transferred-in) payment is rejected.
- * Restores source payment to COLLECTED; marks target REJECTED. Ledger-neutral unless legacy rows exist.
+ * Restores source payment to COLLECTED; marks target REJECTED; reverses all ledgers.
  */
 export async function undoDirectOrderPaymentTransfer({
   targetOrder,
@@ -1299,73 +1299,26 @@ export async function undoDirectOrderPaymentTransfer({
     await sourceOrder.save({ session });
     await targetOrderDoc.save({ session });
 
-    const { syncDealerLedgerForDirectOrderPaymentTransferUndo } = await import(
-      "./dealerLedgerHelper.js"
+    const transferId =
+      targetPay.orderPaymentTransferId ||
+      sourcePayment.orderPaymentTransferId ||
+      null;
+
+    const { syncDirectOrderPaymentTransferUndoLedgers } = await import(
+      "../services/orderPaymentTransferLedger.service.js"
     );
-    const dealerLedgerUndo = await syncDealerLedgerForDirectOrderPaymentTransferUndo(
+    const ledgerUndo = await syncDirectOrderPaymentTransferUndoLedgers(
       {
         sourceOrder,
         sourcePayment,
         targetOrder: targetOrderDoc,
         targetPayment: targetPay,
+        transferId,
         userId,
+        prevTargetStatus,
       },
       { session }
     );
-
-    const legacyLedger = await hasLegacyDirectTransferLedgerEntries(
-      {
-        sourceOrderId: sourceOrder._id,
-        sourcePaymentId: sourcePayment._id,
-        targetOrderId: targetOrderDoc._id,
-        targetPaymentId: targetPay._id,
-      },
-      { session }
-    );
-
-    const undoMeta = { kind: "order_payment_transfer_undo" };
-    let sourceLedgerUndo = null;
-    let targetLedgerUndo = null;
-    if (legacyLedger && shouldLogFarmerPlantLedger(sourceOrder)) {
-      await ensureFarmerPlantOrderDebit(sourceOrder, { userId, session });
-      sourceLedgerUndo = await recordFarmerPlantLedgerPaymentTransition(
-        sourceOrder,
-        sourcePayment,
-        "REJECTED",
-        "COLLECTED",
-        {
-          userId,
-          session,
-          descriptionOverride: `Transfer undo: restore order #${sourceNumericId} payment (REJECTED → COLLECTED)`,
-          metadataExtra: {
-            ...undoMeta,
-            direction: "restore_source",
-            peerOrderMongoId: String(targetOrderDoc._id),
-            peerOrderNumber: targetNumericId,
-          },
-        }
-      );
-    }
-    if (legacyLedger && shouldLogFarmerPlantLedger(targetOrderDoc) && prevTargetStatus === "COLLECTED") {
-      await ensureFarmerPlantOrderDebit(targetOrderDoc, { userId, session });
-      targetLedgerUndo = await recordFarmerPlantLedgerPaymentTransition(
-        targetOrderDoc,
-        targetPay,
-        "COLLECTED",
-        "REJECTED",
-        {
-          userId,
-          session,
-          descriptionOverride: `Transfer undo: reject order #${targetNumericId} transferred payment`,
-          metadataExtra: {
-            ...undoMeta,
-            direction: "reject_target",
-            peerOrderMongoId: String(sourceOrder._id),
-            peerOrderNumber: sourceNumericId,
-          },
-        }
-      );
-    }
 
     await session.commitTransaction();
     session.endSession();
@@ -1373,10 +1326,10 @@ export async function undoDirectOrderPaymentTransfer({
     return {
       sourceOrder,
       targetOrder: targetOrderDoc,
-      legacyLedgerCompensated: legacyLedger,
-      sourceLedgerUndoId: sourceLedgerUndo?._id || null,
-      targetLedgerUndoId: targetLedgerUndo?._id || null,
-      dealerLedgerUndo,
+      transferId: transferId ? String(transferId) : null,
+      ledgerUndo,
+      sourceLedgerUndoId: ledgerUndo?.farmer?.source?._id || null,
+      targetLedgerUndoId: ledgerUndo?.farmer?.target?._id || null,
     };
   } catch (e) {
     try {

@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
 import AppError from "../utility/appError.js";
 import { SLOT_TRAIL_ACTIONS, getSlotTrailActivityName } from "../constants/slotTrailActions.js";
@@ -32,64 +33,73 @@ export function shouldApplyEarlyDispatch(previousStatus, nextStatus) {
   return nextStatus === "READY_FOR_DISPATCH";
 }
 
+const getSlotMoveTargets = async (slotId, session) => {
+  const slotOid = new mongoose.Types.ObjectId(slotId.toString());
+  let query = PlantSlot.findOne({ "subtypeSlots.slots._id": slotOid }).lean();
+  if (session) query = query.session(session);
+  const doc = await query;
+  if (!doc) {
+    throw new AppError(`Slot not found: ${slotId}`, 404);
+  }
+  for (const st of doc.subtypeSlots || []) {
+    const slot = (st.slots || []).find((s) => s._id?.toString() === slotOid.toString());
+    if (slot) {
+      return { plantSlotId: doc._id, subtypeId: st.subtypeId };
+    }
+  }
+  throw new AppError(`Slot not found: ${slotId}`, 404);
+};
+
 export const moveOrderBetweenSlots = async ({
   orderId,
   fromSlotId,
   toSlotId,
+  fromPlantSlotId,
+  fromSubtypeId,
+  toPlantSlotId,
+  toSubtypeId,
   plantsCount,
   session,
-  isReadyPlantsOrder,
 }) => {
   if (!fromSlotId || !toSlotId || fromSlotId.toString() === toSlotId.toString()) {
     return;
   }
 
-  const slotForUpdate = await PlantSlot.findOne(
-    { "subtypeSlots.slots._id": fromSlotId },
-    { "subtypeSlots.$": 1 }
-  )
-    .populate("plantId", "sowingAllowed")
-    .session(session);
+  const fromCtx =
+    fromPlantSlotId && fromSubtypeId
+      ? { plantSlotId: fromPlantSlotId, subtypeId: fromSubtypeId }
+      : await getSlotMoveTargets(fromSlotId, session);
+  const toCtx =
+    toPlantSlotId && toSubtypeId
+      ? { plantSlotId: toPlantSlotId, subtypeId: toSubtypeId }
+      : await getSlotMoveTargets(toSlotId, session);
 
-  const isSowingAllowed = slotForUpdate?.plantId?.sowingAllowed || false;
+  const fromSlotOid = new mongoose.Types.ObjectId(fromSlotId.toString());
+  const toSlotOid = new mongoose.Types.ObjectId(toSlotId.toString());
+  const fromSubtypeOid = new mongoose.Types.ObjectId(fromCtx.subtypeId.toString());
+  const toSubtypeOid = new mongoose.Types.ObjectId(toCtx.subtypeId.toString());
+  const fromPlantOid = new mongoose.Types.ObjectId(fromCtx.plantSlotId.toString());
+  const toPlantOid = new mongoose.Types.ObjectId(toCtx.plantSlotId.toString());
 
   const releaseOp = {
     $pull: {
-      "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": orderId,
-    },
-    $inc: {
-      "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": -plantsCount,
+      "subtypeSlots.$[st].slots.$[sl].orders": orderId,
     },
   };
-  if (!isSowingAllowed) {
-    releaseOp.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] =
-      plantsCount;
-  } else if (isReadyPlantsOrder) {
-    releaseOp.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] =
-      -plantsCount;
-  }
 
-  await PlantSlot.updateOne({ "subtypeSlots.slots._id": fromSlotId }, releaseOp, {
-    arrayFilters: [{ "subtypeSlot.slots._id": fromSlotId }, { "slot._id": fromSlotId }],
+  await PlantSlot.updateOne({ _id: fromPlantOid }, releaseOp, {
+    arrayFilters: [{ "st.subtypeId": fromSubtypeOid }, { "sl._id": fromSlotOid }],
     session,
   });
 
   const bookOp = {
     $push: {
-      "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": orderId,
-    },
-    $inc: {
-      "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": plantsCount,
+      "subtypeSlots.$[st].slots.$[sl].orders": orderId,
     },
   };
-  if (!isSowingAllowed) {
-    bookOp.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = -plantsCount;
-  } else if (isReadyPlantsOrder) {
-    bookOp.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = plantsCount;
-  }
 
-  await PlantSlot.updateOne({ "subtypeSlots.slots._id": toSlotId }, bookOp, {
-    arrayFilters: [{ "subtypeSlot.slots._id": toSlotId }, { "slot._id": toSlotId }],
+  await PlantSlot.updateOne({ _id: toPlantOid }, bookOp, {
+    arrayFilters: [{ "st.subtypeId": toSubtypeOid }, { "sl._id": toSlotOid }],
     session,
   });
 };

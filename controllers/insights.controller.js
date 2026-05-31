@@ -39,6 +39,7 @@ import {
   KPI_DELIVERY_LOOKAHEAD_DAYS,
   KPI_ORDER_CAP,
 } from "../utility/insightsKpi.js";
+import { fetchInsightsOperations } from "../services/insightsCentral.service.js";
 
 const EXCLUDED_ORDER_STATUSES = ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"];
 
@@ -508,6 +509,10 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
     orderByMongoId,
   });
 
+  const operationsResult = await fetchInsightsOperations(startDate, endDate, {
+    dueOnly: String(dueOnly) === "true",
+  });
+
   return res.status(200).json({
     success: true,
     data: {
@@ -518,6 +523,8 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       orders,
       dispatches,
       kpiSummary,
+      operations: operationsResult.data || null,
+      operationsError: operationsResult.error || null,
       meta: {
         orderCount: orders.length,
         cappedAt: rawOrders.length >= 10000 ? 10000 : null,
@@ -537,4 +544,26 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       },
     },
   });
+});
+
+/** Central MIS only — day-wise booking/dispatch + plant variety table (Admin MIS rules). */
+export const getInsightsOperations = catchAsync(async (req, res) => {
+  const { startDate, endDate, dueOnly, includeAllPastDue } = req.query;
+  if (!startDate || !endDate) {
+    return res.status(400).json({
+      success: false,
+      message: "startDate and endDate are required (DD-MM-YYYY)",
+    });
+  }
+  const result = await fetchInsightsOperations(startDate, endDate, {
+    dueOnly: String(dueOnly) === "true",
+    includeAllPastDue: String(includeAllPastDue) === "true",
+  });
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({
+      success: false,
+      message: result.error,
+    });
+  }
+  return res.status(200).json({ success: true, data: result.data });
 });

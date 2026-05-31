@@ -1740,7 +1740,8 @@ const updatePaymentStatus = async (req, res, next) => {
             "Transfer payment rejected; source order payment restored to COLLECTED.",
           order: undoResult.targetOrder,
           sourceOrder: undoResult.sourceOrder,
-          legacyLedgerCompensated: undoResult.legacyLedgerCompensated,
+          transferId: undoResult.transferId,
+          ledgerUndo: undoResult.ledgerUndo,
         });
       } catch (undoErr) {
         const code = undoErr.statusCode || 500;

@@ -11,7 +11,16 @@ import {
   logStockFieldChange,
   STOCK_TRAIL_ACTION_LIST,
 } from "../utility/slotStockTrail.js";
-import { getSlotTrailActivityName } from "../constants/slotTrailActions.js";
+import {
+  getSlotTrailActivityName,
+  SLOT_TRAIL_ACTIONS,
+  TRANSFER_TRAIL_ACTION_LIST,
+} from "../constants/slotTrailActions.js";
+import {
+  appendTransferSlotTrail,
+  buildSlotSnapshot,
+} from "../utility/slotTransferTrail.js";
+import { executeMassOrderSlotTransfer } from "../services/slotOrderTransfer.service.js";
 import {
   aggregateSlotDispatchStats,
   computeSlotDispatchStatsFromOrders,
@@ -3112,6 +3121,64 @@ export const bulkStockEntry = async (req, res) => {
   }
 };
 
+/** Attach display order # and farmer for trail rows that reference an order. */
+async function enrichTrailEntriesWithOrderInfo(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return entries;
+
+  const idSet = new Set();
+  for (const entry of entries) {
+    const raw = entry.orderId?._id ?? entry.orderId;
+    if (raw) idSet.add(String(raw));
+    const metaIds = entry.metadata?.orderIds;
+    if (Array.isArray(metaIds)) {
+      metaIds.forEach((id) => {
+        if (id) idSet.add(String(id));
+      });
+    }
+  }
+
+  if (idSet.size === 0) {
+    return entries.map((entry) => ({
+      ...entry,
+      orderMongoId: entry.orderId?._id?.toString?.() ?? entry.orderId?.toString?.() ?? null,
+      orderNumber: null,
+      farmerName: null,
+      farmerMobile: null,
+    }));
+  }
+
+  const orderDocs = await Order.find({
+    _id: { $in: [...idSet].map((id) => new mongoose.Types.ObjectId(id)) },
+  })
+    .select("_id orderId farmer")
+    .populate("farmer", "name mobileNumber")
+    .lean();
+
+  const orderMap = new Map(
+    orderDocs.map((o) => [
+      String(o._id),
+      {
+        orderNumber: o.orderId ?? null,
+        farmerName: o.farmer?.name ?? null,
+        farmerMobile: o.farmer?.mobileNumber ?? null,
+      },
+    ])
+  );
+
+  return entries.map((entry) => {
+    const orderMongoId =
+      entry.orderId?._id?.toString?.() ?? entry.orderId?.toString?.() ?? null;
+    const info = orderMongoId ? orderMap.get(orderMongoId) : null;
+    return {
+      ...entry,
+      orderMongoId,
+      orderNumber: info?.orderNumber ?? null,
+      farmerName: info?.farmerName ?? null,
+      farmerMobile: info?.farmerMobile ?? null,
+    };
+  });
+}
+
 // Get slot trail history with populated user info
 export const getSlotTrail = async (req, res) => {
   try {
@@ -3342,14 +3409,118 @@ export const getSlotTrail = async (req, res) => {
       trailResponse = allTrailEntries.filter((entry) =>
         STOCK_TRAIL_ACTION_LIST.includes(entry.action)
       );
+    } else if (types === "transfer") {
+      trailResponse = allTrailEntries.filter((entry) =>
+        TRANSFER_TRAIL_ACTION_LIST.includes(entry.action)
+      );
     }
+
+    const hasSowingTransferTrail = allTrailEntries.some(
+      (e) =>
+        e.action === SLOT_TRAIL_ACTIONS.SOWING_TRANSFER_OUT ||
+        e.action === SLOT_TRAIL_ACTIONS.SOWING_TRANSFER_IN
+    );
+
+    if (!hasSowingTransferTrail && types !== "stock") {
+      const slotOid = slotObjectId;
+      const transferLogs = await SlotTransferLog.find({
+        $or: [{ sourceSlotId: slotOid }, { targetSlotId: slotOid }],
+        transferType: "sowing",
+      })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .populate("performedBy", "name phoneNumber")
+        .lean();
+
+      const synthesized = [];
+      for (const log of transferLogs) {
+        const isSource = log.sourceSlotId?.toString() === slotId;
+        const isTarget = log.targetSlotId?.toString() === slotId;
+        const peerId = isSource ? log.targetSlotId : log.sourceSlotId;
+        const snapBefore = isSource ? log.sourceBefore : log.targetBefore;
+        const snapAfter = isSource ? log.sourceAfter : log.targetAfter;
+        const action = isSource
+          ? SLOT_TRAIL_ACTIONS.SOWING_TRANSFER_OUT
+          : SLOT_TRAIL_ACTIONS.SOWING_TRANSFER_IN;
+
+        if (!isSource && !isTarget) continue;
+
+        synthesized.push({
+          action,
+          activityName: getSlotTrailActivityName(action),
+          quantity: log.quantity ?? 0,
+          plus: {},
+          minus: {},
+          before: {
+            primarySowed: snapBefore?.primarySowed ?? 0,
+            officeSowed: snapBefore?.officeSowed ?? 0,
+            totalPlants: snapBefore?.totalPlants ?? 0,
+            availablePlants: snapBefore?.availablePlants ?? 0,
+            plantsSowed: snapBefore?.plantsSowed ?? 0,
+            totalBookedPlants: snapBefore?.totalBookedPlants ?? 0,
+            excessivePlants: 0,
+            inProgressCount: 0,
+            actualPlants: 0,
+            closingStock: 0,
+          },
+          after: {
+            primarySowed: snapAfter?.primarySowed ?? 0,
+            officeSowed: snapAfter?.officeSowed ?? 0,
+            totalPlants: snapAfter?.totalPlants ?? 0,
+            availablePlants: snapAfter?.availablePlants ?? 0,
+            plantsSowed: snapAfter?.plantsSowed ?? 0,
+            totalBookedPlants: snapAfter?.totalBookedPlants ?? 0,
+            excessivePlants: 0,
+            inProgressCount: 0,
+            actualPlants: 0,
+            closingStock: 0,
+          },
+          previousTotalPlants: snapBefore?.totalPlants ?? 0,
+          newTotalPlants: snapAfter?.totalPlants ?? 0,
+          previousAvailablePlants: snapBefore?.availablePlants ?? 0,
+          newAvailablePlants: snapAfter?.availablePlants ?? 0,
+          bufferPercentage: 0,
+          bufferAmount: 0,
+          reason: log.reason || getSlotTrailActivityName(action),
+          notes: log.reason || "",
+          metadata: {
+            transferType: "sowing",
+            peerSlotId: peerId?.toString(),
+            backfilledFromLog: true,
+          },
+          createdAt: log.createdAt,
+          updatedAt: log.updatedAt,
+          performedBy: log.performedBy
+            ? {
+                _id: log.performedBy._id,
+                name: log.performedBy.name,
+                phoneNumber: log.performedBy.phoneNumber,
+              }
+            : null,
+          performedById: log.performedBy?._id || log.performedBy,
+          orderId: null,
+        });
+      }
+
+      if (types === "transfer") {
+        trailResponse = [...synthesized, ...trailResponse].filter((entry) =>
+          TRANSFER_TRAIL_ACTION_LIST.includes(entry.action)
+        );
+      } else {
+        trailResponse = [...synthesized, ...trailResponse].sort(
+          (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+        );
+      }
+    }
+
+    const enrichedTrail = await enrichTrailEntriesWithOrderInfo(trailResponse);
 
     res.status(200).json({
       success: true,
-      data: trailResponse,
+      data: enrichedTrail,
       primarySowingEntries,
       message:
-        trailResponse.length > 0
+        enrichedTrail.length > 0
           ? "Slot trail retrieved successfully"
           : "No trail entries found",
     });
@@ -3657,9 +3828,64 @@ export const transferSlotPlants = async (req, res) => {
       }
     );
 
+    const performedBy = req.user?._id || null;
+    const sourceBeforeSnap = buildSlotSnapshot({
+      ...sourceDetails.slot,
+      primarySowed: sourcePrimary,
+      plantsSowed: sourcePlantsSowed,
+    });
+    const targetBeforeSnap = buildSlotSnapshot({
+      ...targetDetails.slot,
+      primarySowed: targetPrimary,
+      plantsSowed: targetPlantsSowed,
+    });
+    const sourceAfterSnap = buildSlotSnapshot({
+      ...sourceDetails.slot,
+      primarySowed: updatedSourcePrimary,
+      plantsSowed: updatedSourcePlants,
+    });
+    const targetAfterSnap = buildSlotSnapshot({
+      ...targetDetails.slot,
+      primarySowed: updatedTargetPrimary,
+      plantsSowed: updatedTargetPlants,
+    });
+
+    const peerMeta = {
+      transferType: "sowing",
+      peerSlotId: targetSlotId,
+      daysDifference: diffDays,
+    };
+
+    await appendTransferSlotTrail({
+      slotId: sourceSlotId,
+      action: SLOT_TRAIL_ACTIONS.SOWING_TRANSFER_OUT,
+      quantity: qty,
+      performedBy,
+      notes: reason || `Sowing surplus transfer to ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`,
+      reason: `Sowing surplus transferred to slot ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`,
+      metadata: { ...peerMeta, peerSlotId: targetSlotId },
+      before: sourceBeforeSnap,
+      after: sourceAfterSnap,
+      session,
+    });
+
+    await appendTransferSlotTrail({
+      slotId: targetSlotId,
+      action: SLOT_TRAIL_ACTIONS.SOWING_TRANSFER_IN,
+      quantity: qty,
+      performedBy,
+      notes: reason || `Sowing surplus transfer from ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay}`,
+      reason: `Sowing surplus received from slot ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay}`,
+      metadata: { ...peerMeta, peerSlotId: sourceSlotId },
+      before: targetBeforeSnap,
+      after: targetAfterSnap,
+      session,
+    });
+
     await SlotTransferLog.create(
       [
         {
+          transferType: "sowing",
           plantId: sourceDetails.plantId,
           plantName: plantInfo?.name || "",
           sourceSlotId: new mongoose.Types.ObjectId(sourceSlotId),
@@ -3670,7 +3896,7 @@ export const transferSlotPlants = async (req, res) => {
           targetSubtypeName: subtypeNameMap.get(targetDetails.subtypeId.toString()) || "Subtype",
           quantity: qty,
           reason,
-          performedBy: req.user?._id || null,
+          performedBy,
           sourceBefore: {
             primarySowed: sourcePrimary,
             plantsSowed: sourcePlantsSowed,
@@ -4005,80 +4231,57 @@ export const transferCapacity = async (req, res) => {
       throw new Error("Target slot update failed: slot or subtype not found");
     }
 
-    const sourceSlotTrailEntry = {
-      action: "SUBTRACT",
-      activityName: "Capacity transferred out",
+    const performedBy = req.user?._id || null;
+    const sourceBeforeCap = buildSlotSnapshot({
+      ...sourceDetails.slot,
+      totalPlants: sourceTotal,
+      availablePlants: sourceAvailable,
+    });
+    const sourceAfterCap = buildSlotSnapshot({
+      ...sourceDetails.slot,
+      totalPlants: newSourceTotal,
+      availablePlants: newSourceAvailable,
+    });
+    const targetBeforeCap = buildSlotSnapshot({
+      ...targetDetails.slot,
+      totalPlants: targetTotal,
+      availablePlants: Number(targetDetails.slot.availablePlants) ?? 0,
+    });
+    const targetAfterCap = buildSlotSnapshot({
+      ...targetDetails.slot,
+      totalPlants: newTargetTotal,
+      availablePlants: newTargetAvailable,
+    });
+
+    await appendTransferSlotTrail({
+      slotId: sourceSlotId,
+      action: SLOT_TRAIL_ACTIONS.CAPACITY_TRANSFER_OUT,
       quantity: qty,
-      previousTotalPlants: sourceTotal,
-      newTotalPlants: newSourceTotal,
-      previousAvailablePlants: sourceAvailable,
-      newAvailablePlants: newSourceAvailable,
+      performedBy,
+      notes: reason || "Capacity transfer from SlotsView",
+      reason: `Capacity transferred to slot ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`,
+      metadata: { transferType: "capacity", peerSlotId: targetSlotId },
+      before: sourceBeforeCap,
+      after: sourceAfterCap,
       bufferPercentage: sourceBuffer,
       bufferAmount: sourceBufferAmount,
-      reason: `Transfer to slot ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`,
-      performedBy: req.user?._id || null,
-      notes: reason || "Capacity transfer from SlotsView",
-      plus: { primarySowed: 0, officeSowed: 0, totalPlants: 0, availablePlants: 0, excessivePlants: 0, packetsUsed: 0, plantsSowed: 0, gapCovered: 0 },
-      minus: { packetsRemaining: 0, inProgressEntries: 0 },
-      before: { primarySowed: 0, officeSowed: 0, totalPlants: sourceTotal, availablePlants: sourceAvailable, excessivePlants: 0, plantsSowed: 0, totalBookedPlants: sourceBooked, inProgressCount: 0 },
-      after: { primarySowed: 0, officeSowed: 0, totalPlants: newSourceTotal, availablePlants: newSourceAvailable, excessivePlants: 0, plantsSowed: 0, totalBookedPlants: sourceBooked, inProgressCount: 0 },
-      metadata: {},
-    };
+      session,
+    });
 
-    const targetSlotTrailEntry = {
-      action: "ADD",
-      activityName: "Capacity transferred in",
+    await appendTransferSlotTrail({
+      slotId: targetSlotId,
+      action: SLOT_TRAIL_ACTIONS.CAPACITY_TRANSFER_IN,
       quantity: qty,
-      previousTotalPlants: targetTotal,
-      newTotalPlants: newTargetTotal,
-      previousAvailablePlants: Number(targetDetails.slot.availablePlants) ?? targetTotal - targetBooked - targetBufferAmount,
-      newAvailablePlants: newTargetAvailable,
+      performedBy,
+      notes: reason || "Capacity transfer from SlotsView",
+      reason: `Capacity received from slot ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay}`,
+      metadata: { transferType: "capacity", peerSlotId: sourceSlotId },
+      before: targetBeforeCap,
+      after: targetAfterCap,
       bufferPercentage: Number(targetDetails.slot.effectiveBuffer || targetDetails.slot.buffer) || 0,
       bufferAmount: targetBufferAmount,
-      reason: `Transfer from slot ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay}`,
-      performedBy: req.user?._id || null,
-      notes: reason || "Capacity transfer from SlotsView",
-      plus: { primarySowed: 0, officeSowed: 0, totalPlants: qty, availablePlants: qty, excessivePlants: 0, packetsUsed: 0, plantsSowed: 0, gapCovered: 0 },
-      minus: { packetsRemaining: 0, inProgressEntries: 0 },
-      before: { primarySowed: 0, officeSowed: 0, totalPlants: targetTotal, availablePlants: Number(targetDetails.slot.availablePlants) ?? 0, excessivePlants: 0, plantsSowed: 0, totalBookedPlants: targetBooked, inProgressCount: 0 },
-      after: { primarySowed: 0, officeSowed: 0, totalPlants: newTargetTotal, availablePlants: newTargetAvailable, excessivePlants: 0, plantsSowed: 0, totalBookedPlants: targetBooked, inProgressCount: 0 },
-      metadata: {},
-    };
-
-    const plantSlotSource = await PlantSlot.findById(sourceDetails.plantSlotId).session(session);
-    const plantSlotTarget =
-      sourceDetails.plantSlotId.toString() === targetDetails.plantSlotId.toString()
-        ? plantSlotSource
-        : await PlantSlot.findById(targetDetails.plantSlotId).session(session);
-
-    for (const st of plantSlotSource.subtypeSlots || []) {
-      if (st.subtypeId.toString() === sourceDetails.subtypeId.toString()) {
-        const slot = st.slots?.find((s) => s._id.toString() === sourceSlotId);
-        if (slot) {
-          slot.slotTrail = slot.slotTrail || [];
-          slot.slotTrail.unshift(sourceSlotTrailEntry);
-          plantSlotSource.markModified("subtypeSlots");
-          break;
-        }
-      }
-    }
-
-    for (const st of plantSlotTarget.subtypeSlots || []) {
-      if (st.subtypeId.toString() === targetDetails.subtypeId.toString()) {
-        const slot = st.slots?.find((s) => s._id.toString() === targetSlotId);
-        if (slot) {
-          slot.slotTrail = slot.slotTrail || [];
-          slot.slotTrail.unshift(targetSlotTrailEntry);
-          plantSlotTarget.markModified("subtypeSlots");
-          break;
-        }
-      }
-    }
-
-    await plantSlotSource.save({ session });
-    if (plantSlotSource !== plantSlotTarget) {
-      await plantSlotTarget.save({ session });
-    }
+      session,
+    });
 
     await SlotTransferLog.create(
       [
@@ -4271,10 +4474,7 @@ export const getOrdersTransferTargets = async (req, res) => {
           const totalPlants = Number(slot.totalPlants) || 0;
           const totalBooked = bookingsMap[slot._id.toString()] || 0;
           const bufferAmount = Number(slot.bufferAmount) || 0;
-          const effectiveAvailable = Math.max(0, totalPlants - totalBooked - bufferAmount);
-
-          // Any positive free capacity can be a target (subset transfers use less plants).
-          if (effectiveAvailable <= 0) return;
+          const effectiveAvailable = totalPlants - totalBooked - bufferAmount;
 
           options.push({
             slotId: slot._id.toString(),
@@ -4286,6 +4486,7 @@ export const getOrdersTransferTargets = async (req, res) => {
             month: slot.month,
             year: plantSlotDoc.year,
             availableCapacity: effectiveAvailable,
+            isOverflow: effectiveAvailable < 0,
             daysDifference: moment(slot.startDay, "DD-MM-YYYY").diff(sourceStart, "days"),
           });
         });
@@ -4408,25 +4609,31 @@ export const transferOrders = async (req, res) => {
       orderFilter._id = { $in: uniqueOrderIds.map((id) => new mongoose.Types.ObjectId(id)) };
     }
 
-    const orders = await Order.find(orderFilter).select("_id orderId numberOfPlants").lean();
+    let skippedDealerQuota = 0;
+    if (Array.isArray(orderIds) && uniqueOrderIds.length > 0) {
+      const dealerSkipped = await Order.countDocuments({
+        _id: { $in: uniqueOrderIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        bookingSlot: new mongoose.Types.ObjectId(sourceSlotId),
+        orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+        quotaSource: "dealer",
+      });
+      skippedDealerQuota = dealerSkipped;
+    }
+
+    const orders = await Order.find(orderFilter)
+      .select(
+        "_id orderId numberOfPlants productMappingId productName dispatchedFromAnotherSlot originalBookingSlot bookingSlot"
+      )
+      .lean();
     const totalPlantsToTransfer = orders.reduce((sum, o) => sum + (Number(o.numberOfPlants) || 0), 0);
 
     if (orders.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "No orders found to transfer",
-      });
-    }
-
-    const targetTotal = Number(targetDetails.slot.totalPlants) || 0;
-    const targetBooked = await calculateTotalBookedPlantsFromOrders(targetSlotId);
-    const targetBufferAmount = Number(targetDetails.slot.bufferAmount) || 0;
-    const targetAvailable = Math.max(0, targetTotal - targetBooked - targetBufferAmount);
-
-    if (targetAvailable < totalPlantsToTransfer) {
-      return res.status(400).json({
-        success: false,
-        message: `Target slot has insufficient capacity. Available: ${targetAvailable}, required: ${totalPlantsToTransfer}`,
+        message:
+          skippedDealerQuota > 0
+            ? `No transferable orders found (${skippedDealerQuota} dealer-quota order(s) excluded)`
+            : "No orders found to transfer",
       });
     }
 
@@ -4439,276 +4646,40 @@ export const transferOrders = async (req, res) => {
     try {
       session.startTransaction();
 
-      const sourceSlotObjectId = new mongoose.Types.ObjectId(sourceSlotId);
-    const targetSlotObjectId = new mongoose.Types.ObjectId(targetSlotId);
-    const performedBy = req.user?._id || null;
+      const performedBy = req.user?._id || null;
 
-    let sourceTotalBooked = Number(sourceDetails.slot.totalBookedPlants) || 0;
-    let sourceAvailable = getSlotEffectiveAvailablePlants(sourceDetails.slot);
-    let targetTotalBooked = targetBooked;
-
-    for (const order of orders) {
-      const orderPlants = Number(order.numberOfPlants) || 0;
-      if (orderPlants <= 0) continue;
-
-      sourceTotalBooked -= orderPlants;
-      sourceAvailable += orderPlants;
-      targetTotalBooked += orderPlants;
-
-      await PlantSlot.updateOne(
-        { _id: sourceDetails.plantSlotId },
-        {
-          $inc: {
-            "subtypeSlots.$[st].slots.$[sl].totalBookedPlants": -orderPlants,
-            "subtypeSlots.$[st].slots.$[sl].availablePlants": orderPlants,
-          },
-          $pull: { "subtypeSlots.$[st].slots.$[sl].orders": order._id },
-        },
-        {
-          arrayFilters: [
-            { "st.subtypeId": sourceDetails.subtypeId },
-            { "sl._id": sourceSlotObjectId },
-          ],
-          session,
-        }
-      );
-
-      await PlantSlot.updateOne(
-        { _id: targetDetails.plantSlotId },
-        {
-          $inc: {
-            "subtypeSlots.$[st].slots.$[sl].totalBookedPlants": orderPlants,
-            "subtypeSlots.$[st].slots.$[sl].availablePlants": -orderPlants,
-          },
-          $addToSet: { "subtypeSlots.$[st].slots.$[sl].orders": order._id },
-        },
-        {
-          arrayFilters: [
-            { "st.subtypeId": targetDetails.subtypeId },
-            { "sl._id": targetSlotObjectId },
-          ],
-          session,
-        }
-      );
-
-      const deliveryChangeEntry = {
-        previousDeliveryDate: {
-          startDay: sourceDetails.slot.startDay,
-          endDay: sourceDetails.slot.endDay,
-          month: sourceDetails.slot.month,
-          year: sourceDetails.plantSlotYear,
-        },
-        newDeliveryDate: {
-          startDay: targetDetails.slot.startDay,
-          endDay: targetDetails.slot.endDay,
-          month: targetDetails.slot.month,
-          year: targetDetails.plantSlotYear,
-        },
-        previousSlot: sourceSlotObjectId,
-        newSlot: targetSlotObjectId,
-        reasonForChange: reason?.trim() || "Mass order transfer from SlotsView",
-        changedBy: performedBy,
-      };
-
-      const orderEditEntry = {
-        field: "bookingSlot",
-        previousValue: sourceSlotObjectId,
-        newValue: targetSlotObjectId,
-        changedBy: performedBy,
-        notes: reason?.trim()
-          ? `${reason.trim()} — ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay} to ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`
-          : `Slot transfer: ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay} to ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`,
-      };
-
-      await Order.updateOne(
-        { _id: order._id },
-        {
-          $set: { bookingSlot: targetSlotObjectId },
-          $push: {
-            deliveryChanges: deliveryChangeEntry,
-            orderEditHistory: orderEditEntry,
-          },
-        },
-        { session }
-      );
-    }
-
-    const plantSlotSource = await PlantSlot.findById(sourceDetails.plantSlotId).session(session);
-    const plantSlotTarget = await PlantSlot.findById(targetDetails.plantSlotId).session(session);
-
-    const sourceSlotTrailEntry = {
-      action: "ORDER_RETURNED",
-      activityName: "Orders transferred out",
-      quantity: totalPlantsToTransfer,
-      previousTotalPlants: Number(sourceDetails.slot.totalPlants) || 0,
-      newTotalPlants: Number(sourceDetails.slot.totalPlants) || 0,
-      previousAvailablePlants: Number(sourceDetails.slot.availablePlants) ?? 0,
-      newAvailablePlants: sourceAvailable,
-      bufferPercentage: Number(sourceDetails.slot.effectiveBuffer || sourceDetails.slot.buffer) || 0,
-      bufferAmount: Number(sourceDetails.slot.bufferAmount) || 0,
-      reason: `Mass order transfer to slot ${targetDetails.slot.startDay}-${targetDetails.slot.endDay}`,
-      performedBy,
-      notes: reason || `Transferred ${orders.length} order(s), ${totalPlantsToTransfer} plants`,
-      plus: { primarySowed: 0, officeSowed: 0, totalPlants: 0, availablePlants: totalPlantsToTransfer, excessivePlants: 0, packetsUsed: 0, plantsSowed: 0, gapCovered: 0 },
-      minus: { packetsRemaining: 0, inProgressEntries: 0 },
-      before: {
-        primarySowed: 0,
-        officeSowed: 0,
-        totalPlants: Number(sourceDetails.slot.totalPlants) || 0,
-        availablePlants: Number(sourceDetails.slot.availablePlants) ?? 0,
-        excessivePlants: 0,
-        plantsSowed: 0,
-        totalBookedPlants: Number(sourceDetails.slot.totalBookedPlants) || 0,
-        inProgressCount: 0,
-      },
-      after: {
-        primarySowed: 0,
-        officeSowed: 0,
-        totalPlants: Number(sourceDetails.slot.totalPlants) || 0,
-        availablePlants: sourceAvailable,
-        excessivePlants: 0,
-        plantsSowed: 0,
-        totalBookedPlants: sourceTotalBooked,
-        inProgressCount: 0,
-      },
-      metadata: {},
-    };
-
-    const targetSlotTrailEntry = {
-      action: "SUBTRACT",
-      activityName: "Orders transferred in",
-      quantity: totalPlantsToTransfer,
-      previousTotalPlants: Number(targetDetails.slot.totalPlants) || 0,
-      newTotalPlants: Number(targetDetails.slot.totalPlants) || 0,
-      previousAvailablePlants: Number(targetDetails.slot.availablePlants) ?? 0,
-      newAvailablePlants: Math.max(0, (Number(targetDetails.slot.availablePlants) ?? 0) - totalPlantsToTransfer),
-      bufferPercentage: Number(targetDetails.slot.effectiveBuffer || targetDetails.slot.buffer) || 0,
-      bufferAmount: targetBufferAmount,
-      reason: `Mass order transfer from slot ${sourceDetails.slot.startDay}-${sourceDetails.slot.endDay}`,
-      performedBy,
-      notes: reason || `Transferred ${orders.length} order(s), ${totalPlantsToTransfer} plants`,
-      plus: { primarySowed: 0, officeSowed: 0, totalPlants: 0, availablePlants: 0, excessivePlants: 0, packetsUsed: 0, plantsSowed: 0, gapCovered: 0 },
-      minus: { packetsRemaining: 0, inProgressEntries: 0 },
-      before: {
-        primarySowed: 0,
-        officeSowed: 0,
-        totalPlants: Number(targetDetails.slot.totalPlants) || 0,
-        availablePlants: Number(targetDetails.slot.availablePlants) ?? 0,
-        excessivePlants: 0,
-        plantsSowed: 0,
-        totalBookedPlants: targetBooked,
-        inProgressCount: 0,
-      },
-      after: {
-        primarySowed: 0,
-        officeSowed: 0,
-        totalPlants: Number(targetDetails.slot.totalPlants) || 0,
-        availablePlants: Math.max(0, (Number(targetDetails.slot.availablePlants) ?? 0) - totalPlantsToTransfer),
-        excessivePlants: 0,
-        plantsSowed: 0,
-        totalBookedPlants: targetTotalBooked,
-        inProgressCount: 0,
-      },
-      metadata: {},
-    };
-
-    for (const st of plantSlotSource.subtypeSlots || []) {
-      if (st.subtypeId.toString() === sourceDetails.subtypeId.toString()) {
-        const slot = st.slots?.find((s) => s._id.toString() === sourceSlotId);
-        if (slot) {
-          slot.slotTrail = slot.slotTrail || [];
-          slot.slotTrail.unshift(sourceSlotTrailEntry);
-          plantSlotSource.markModified("subtypeSlots");
-          await plantSlotSource.save({ session });
-          break;
-        }
-      }
-    }
-
-    for (const st of plantSlotTarget.subtypeSlots || []) {
-      if (st.subtypeId.toString() === targetDetails.subtypeId.toString()) {
-        const slot = st.slots?.find((s) => s._id.toString() === targetSlotId);
-        if (slot) {
-          slot.slotTrail = slot.slotTrail || [];
-          slot.slotTrail.unshift(targetSlotTrailEntry);
-          plantSlotTarget.markModified("subtypeSlots");
-          await plantSlotTarget.save({ session });
-          break;
-        }
-      }
-    }
-
-    await SlotTransferLog.create(
-      [
-        {
-          transferType: "orders",
-          orderIds: orders.map((o) => o._id),
-          plantId: sourceDetails.plantId,
-          plantName: plantInfo?.name || "",
-          sourceSlotId: sourceSlotObjectId,
-          sourceSubtypeId: sourceDetails.subtypeId,
-          sourceSubtypeName: subtypeNameMap.get(sourceDetails.subtypeId.toString()) || "Subtype",
-          targetSlotId: targetSlotObjectId,
-          targetSubtypeId: targetDetails.subtypeId,
-          targetSubtypeName: subtypeNameMap.get(targetDetails.subtypeId.toString()) || "Subtype",
-          quantity: totalPlantsToTransfer,
-          reason,
-          performedBy,
-          sourceBefore: {
-            primarySowed: Number(sourceDetails.slot.primarySowed) || 0,
-            plantsSowed: Number(sourceDetails.slot.plantsSowed) || 0,
-            officeSowed: Number(sourceDetails.slot.officeSowed) || 0,
-            totalBookedPlants: Number(sourceDetails.slot.totalBookedPlants) || 0,
-            totalPlants: Number(sourceDetails.slot.totalPlants) || 0,
-            availablePlants: Number(sourceDetails.slot.availablePlants) ?? 0,
-          },
-          sourceAfter: {
-            primarySowed: Number(sourceDetails.slot.primarySowed) || 0,
-            plantsSowed: Number(sourceDetails.slot.plantsSowed) || 0,
-            officeSowed: Number(sourceDetails.slot.officeSowed) || 0,
-            totalBookedPlants: sourceTotalBooked,
-            totalPlants: Number(sourceDetails.slot.totalPlants) || 0,
-            availablePlants: sourceAvailable,
-          },
-          targetBefore: {
-            primarySowed: Number(targetDetails.slot.primarySowed) || 0,
-            plantsSowed: Number(targetDetails.slot.plantsSowed) || 0,
-            officeSowed: Number(targetDetails.slot.officeSowed) || 0,
-            totalBookedPlants: targetBooked,
-            totalPlants: Number(targetDetails.slot.totalPlants) || 0,
-            availablePlants: Number(targetDetails.slot.availablePlants) ?? 0,
-          },
-          targetAfter: {
-            primarySowed: Number(targetDetails.slot.primarySowed) || 0,
-            plantsSowed: Number(targetDetails.slot.plantsSowed) || 0,
-            officeSowed: Number(targetDetails.slot.officeSowed) || 0,
-            totalBookedPlants: targetTotalBooked,
-            totalPlants: Number(targetDetails.slot.totalPlants) || 0,
-            availablePlants: Math.max(0, (Number(targetDetails.slot.availablePlants) ?? 0) - totalPlantsToTransfer),
-          },
-          metadata: {
-            sourceSlotStartDay: sourceDetails.slot.startDay,
-            sourceSlotEndDay: sourceDetails.slot.endDay,
-            targetSlotStartDay: targetDetails.slot.startDay,
-            targetSlotEndDay: targetDetails.slot.endDay,
-            ordersCount: orders.length,
-          },
-        },
-      ],
-      { session }
-    );
+      const transferResult = await executeMassOrderSlotTransfer({
+        sourceSlotId,
+        targetSlotId,
+        orders,
+        sourceDetails,
+        targetDetails,
+        plantInfo,
+        subtypeNameMap,
+        reason,
+        performedBy,
+        session,
+      });
 
       await session.commitTransaction();
 
+      const responseData = {
+        ordersCount: transferResult.ordersCount,
+        totalPlants: transferResult.totalPlants,
+        source: transferResult.source || { slotId: sourceSlotId },
+        target: transferResult.target || { slotId: targetSlotId },
+      };
+      if (skippedDealerQuota > 0) {
+        responseData.skippedDealerQuota = skippedDealerQuota;
+      }
+
       return res.status(200).json({
         success: true,
-        message: "Orders transferred successfully",
-        data: {
-          ordersCount: orders.length,
-          totalPlants: totalPlantsToTransfer,
-          source: { slotId: sourceSlotId },
-          target: { slotId: targetSlotId },
-        },
+        message:
+          skippedDealerQuota > 0
+            ? `Transferred ${transferResult.ordersCount} order(s); ${skippedDealerQuota} dealer-quota order(s) were skipped`
+            : "Orders transferred successfully",
+        data: responseData,
       });
     } catch (innerErr) {
       await session.abortTransaction();
