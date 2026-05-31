@@ -169,6 +169,39 @@ export function transitionEventsByDayStages(
   ];
 }
 
+/** One row per IST day + order (OrderEvent path). */
+export function transitionEventsByDayPerOrderStages(
+  newStatus,
+  rangeStart,
+  rangeEnd,
+  statusMatch,
+  preStages = []
+) {
+  return transitionEventsByDayStages(newStatus, rangeStart, rangeEnd, statusMatch, preStages).slice(
+    0,
+    -1
+  );
+}
+
+/** One row per entity + order (OrderEvent path). */
+export function transitionEventsByEntityPerOrderStages(
+  newStatus,
+  rangeStart,
+  rangeEnd,
+  statusMatch,
+  groupIdFields,
+  groupStages
+) {
+  return transitionEventsByEntityStages(
+    newStatus,
+    rangeStart,
+    rangeEnd,
+    statusMatch,
+    groupIdFields,
+    groupStages
+  ).slice(0, -1);
+}
+
 /** Per event row — group by entity + order (variety / sales / dealer). */
 export function transitionEventsByEntityStages(
   newStatus,

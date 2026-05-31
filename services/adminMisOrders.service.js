@@ -10,6 +10,10 @@ import { duePipelineMatch } from "../utility/adminMisDue.js";
 import { matchDeliveryDateInRange } from "../utility/centralReportEngine/deliveryMatch.js";
 import { transitionDrawerFacetStages } from "../utility/misTransitionMetrics.js";
 import {
+  orderIdsWithDispatchedAndCompletedSameDay,
+} from "../utility/adminMisMetrics.js";
+import { distinctOrderIdsWithTransitionEvents } from "../utility/misTransitionFromEvents.js";
+import {
   enrichMisOrderList,
   hydrateMisOrderDrawerList,
 } from "../utility/misOrderEnrichment.js";
@@ -276,12 +280,38 @@ export function buildMisOrdersMatch(query, window) {
   }
 }
 
-async function fetchTransitionOrders(matchSpec, window, { skip, limit }) {
+async function fetchTransitionOrders(matchSpec, window, query, { skip, limit }) {
   const { rangeStart, rangeEnd } = window;
   const { newStatus, base, extra } = matchSpec;
 
+  let excludeOrderIds = [];
+  if (newStatus === "DISPATCHED") {
+    const day = String(query?.date || "").slice(0, 10);
+    const singleDay = day && /^\d{4}-\d{2}-\d{2}$/.test(day) && day !== "past-due";
+    if (singleDay) {
+      const rawIds = await orderIdsWithDispatchedAndCompletedSameDay(
+        rangeStart,
+        rangeEnd,
+        base
+      );
+      excludeOrderIds = rawIds
+        .map((id) => toMongoIdIfValid(id))
+        .filter(Boolean);
+    } else {
+      const rawIds = await distinctOrderIdsWithTransitionEvents(
+        "COMPLETED",
+        rangeStart,
+        rangeEnd
+      );
+      excludeOrderIds = rawIds.filter(Boolean);
+    }
+  }
+
+  const idExclude =
+    excludeOrderIds.length > 0 ? { _id: { $nin: excludeOrderIds } } : {};
+
   const pipeline = [
-    { $match: { ...base, ...extra } },
+    { $match: { ...base, ...extra, ...idExclude } },
     ...transitionDrawerFacetStages(newStatus, rangeStart, rangeEnd),
     { $sort: { bucketEventAt: -1 } },
     {
@@ -352,7 +382,7 @@ export async function fetchAdminMisOrders(query = {}) {
   let total;
 
   if (matchSpec?.kind === "transition") {
-    const result = await fetchTransitionOrders(matchSpec, window, { skip, limit });
+    const result = await fetchTransitionOrders(matchSpec, window, query, { skip, limit });
     data = await hydrateMisOrderDrawerList(enrichMisOrderList(result.data, bucket));
     total = result.total;
   } else {

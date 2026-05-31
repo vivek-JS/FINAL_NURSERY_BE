@@ -83,7 +83,7 @@ export const MIS_DELIVERY_METRICS = {
     transitionStatus: "DISPATCHED",
     resolutionOrder: MIS_TRANSITION_RESOLUTION_ORDER,
     description:
-      "1) OrderEvent (ORDER_STATUS_CHANGED→DISPATCHED, ORDER_DISPATCHED) on occurredAt day (IST); 2) statusChanges; 3) legacy orderStatus+updatedAt. Not delivery date.",
+      "1) OrderEvent (ORDER_STATUS_CHANGED→DISPATCHED, ORDER_DISPATCHED) on occurredAt day (IST); 2) statusChanges; 3) legacy orderStatus+updatedAt. Not delivery date. Same order+day also Done → counts only under Completed.",
   },
   completed: {
     kind: "status_transition",

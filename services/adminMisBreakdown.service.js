@@ -11,6 +11,7 @@ import {
 import {
   aggregateGlobalStatusByGroup,
   aggregateAcceptedByDeliveryAndGroup,
+  aggregateDispatchedByGroup,
   aggregateTransitionsByGroup,
   aggregatePipelineByGroup,
   aggregateDeliveryUnionByGroup,
@@ -156,8 +157,7 @@ async function fetchPersonBreakdownMetrics(
       groupIdFields,
       mergedExtra
     ),
-    aggregateTransitionsByGroup(
-      "DISPATCHED",
+    aggregateDispatchedByGroup(
       rangeStart,
       rangeEnd,
       statusMatch,

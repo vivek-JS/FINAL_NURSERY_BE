@@ -107,6 +107,33 @@ export function transitionHistoryByDayStages(newStatus, rangeStart, rangeEnd, pr
   ];
 }
 
+/** One row per IST day + order (before daily rollup). */
+export function transitionHistoryByDayPerOrderStages(
+  newStatus,
+  rangeStart,
+  rangeEnd,
+  preStages = []
+) {
+  return transitionHistoryByDayStages(newStatus, rangeStart, rangeEnd, preStages).slice(0, -1);
+}
+
+/** One row per entity + order in range (before entity rollup). */
+export function transitionHistoryByEntityPerOrderStages(
+  newStatus,
+  rangeStart,
+  rangeEnd,
+  groupIdFields,
+  preStages = []
+) {
+  return transitionHistoryByEntityStages(
+    newStatus,
+    rangeStart,
+    rangeEnd,
+    groupIdFields,
+    preStages
+  ).slice(0, -1);
+}
+
 /** Second entity $group must read keys from prior _id, not re-run lookup expressions. */
 export function entityRollupGroupId(groupIdFields) {
   const id = {};
@@ -211,6 +238,33 @@ export function transitionLegacyByDayStages(newStatus, rangeStart, rangeEnd, pre
       },
     },
   ];
+}
+
+/** One row per IST day + order (legacy fallback). */
+export function transitionLegacyByDayPerOrderStages(
+  newStatus,
+  rangeStart,
+  rangeEnd,
+  preStages = []
+) {
+  return transitionLegacyByDayStages(newStatus, rangeStart, rangeEnd, preStages).slice(0, -1);
+}
+
+/** One row per entity + order (legacy fallback). */
+export function transitionLegacyByEntityPerOrderStages(
+  newStatus,
+  rangeStart,
+  rangeEnd,
+  groupIdFields,
+  preStages = []
+) {
+  return transitionLegacyByEntityStages(
+    newStatus,
+    rangeStart,
+    rangeEnd,
+    groupIdFields,
+    preStages
+  ).slice(0, -1);
 }
 
 /** Drawer: unique orders — OrderEvent first, then statusChanges, then legacy. */

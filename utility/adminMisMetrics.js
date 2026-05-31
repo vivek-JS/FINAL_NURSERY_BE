@@ -1,4 +1,5 @@
 import Order from "../models/order.model.js";
+import OrderEvent from "../modules/orderEvents/models/orderEvent.model.js";
 import {
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
@@ -26,6 +27,10 @@ import { duePipelineMatch } from "./adminMisDue.js";
 import {
   transitionHistoryByDayStages,
   transitionLegacyByDayStages,
+  transitionHistoryByDayPerOrderStages,
+  transitionLegacyByDayPerOrderStages,
+  transitionHistoryByEntityPerOrderStages,
+  transitionLegacyByEntityPerOrderStages,
   transitionHistoryByEntityStages,
   transitionLegacyByEntityStages,
 } from "./misTransitionMetrics.js";
@@ -34,6 +39,8 @@ import {
   aggregateTransitionEventsByGroup,
   distinctOrderIdsWithTransitionEvents,
   transitionExcludeOrderIdsMatch,
+  transitionEventsByDayPerOrderStages,
+  transitionEventsByEntityPerOrderStages,
 } from "./misTransitionFromEvents.js";
 
 const IST = "Asia/Kolkata";
@@ -142,6 +149,230 @@ function mergeTransitionDayRows(...rowSets) {
     }
   }
   return map;
+}
+
+function orderDayKey(day, orderId) {
+  return `${day}\0${String(orderId)}`;
+}
+
+/** Merge per-order-day rows (one plant total per day + order). */
+function mergeTransitionOrderDayRows(...rowSets) {
+  const map = new Map();
+  for (const rows of rowSets) {
+    for (const row of rows || []) {
+      const day = row._id?.day;
+      const orderId = row._id?.orderId;
+      if (!day || orderId == null) continue;
+      const key = orderDayKey(day, orderId);
+      if (!map.has(key)) {
+        map.set(key, { day, orderId: String(orderId), plants: row.plants || 0 });
+      }
+    }
+  }
+  return map;
+}
+
+function rollupOrderDayMapToDayTotals(orderDayMap) {
+  const map = new Map();
+  for (const entry of orderDayMap.values()) {
+    if (!map.has(entry.day)) map.set(entry.day, { orders: 0, plants: 0 });
+    const bucket = map.get(entry.day);
+    bucket.orders += 1;
+    bucket.plants += entry.plants || 0;
+  }
+  return map;
+}
+
+function entityOrderKey(idObj) {
+  return JSON.stringify(idObj);
+}
+
+function entityKeyFromId(idObj) {
+  const { orderId, ...entity } = idObj || {};
+  return JSON.stringify(entity);
+}
+
+/** Merge per-entity-order rows (one plant total per entity + order in range). */
+function mergeTransitionEntityOrderRows(...rowSets) {
+  const map = new Map();
+  for (const rows of rowSets) {
+    for (const row of rows || []) {
+      if (!row._id || row._id.orderId == null) continue;
+      const key = entityOrderKey(row._id);
+      if (!map.has(key)) {
+        map.set(key, { _id: row._id, plants: row.plants || 0 });
+      }
+    }
+  }
+  return map;
+}
+
+function rollupEntityOrderMapToRows(entityOrderMap) {
+  const byEntity = new Map();
+  for (const row of entityOrderMap.values()) {
+    const eKey = entityKeyFromId(row._id);
+    if (!byEntity.has(eKey)) {
+      const { orderId, ...entityId } = row._id;
+      byEntity.set(eKey, { _id: entityId, orders: 0, plants: 0 });
+    }
+    const slot = byEntity.get(eKey);
+    slot.orders += 1;
+    slot.plants += row.plants || 0;
+  }
+  return [...byEntity.values()];
+}
+
+async function aggregateTransitionsByDayPerOrder(
+  newStatus,
+  rangeStart,
+  rangeEnd,
+  statusMatch
+) {
+  const eventOrderIds = await distinctOrderIdsWithTransitionEvents(
+    newStatus,
+    rangeStart,
+    rangeEnd
+  );
+  const exclude = transitionExcludeOrderIdsMatch(eventOrderIds);
+  const [eventRows, historyRows, legacyRows] = await Promise.all([
+    OrderEvent.aggregate(
+      transitionEventsByDayPerOrderStages(newStatus, rangeStart, rangeEnd, statusMatch)
+    ),
+    Order.aggregate([
+      { $match: { ...statusMatch, ...exclude } },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...transitionHistoryByDayPerOrderStages(newStatus, rangeStart, rangeEnd),
+    ]),
+    Order.aggregate([
+      { $match: { ...statusMatch, ...exclude } },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...transitionLegacyByDayPerOrderStages(newStatus, rangeStart, rangeEnd),
+    ]),
+  ]);
+  return mergeTransitionOrderDayRows(eventRows, historyRows, legacyRows);
+}
+
+async function aggregateTransitionsByEntityPerOrder(
+  newStatus,
+  rangeStart,
+  rangeEnd,
+  statusMatch,
+  groupStages,
+  groupIdFields,
+  extraMatch = {}
+) {
+  const eventOrderIds = await distinctOrderIdsWithTransitionEvents(
+    newStatus,
+    rangeStart,
+    rangeEnd
+  );
+  const exclude = transitionExcludeOrderIdsMatch(eventOrderIds);
+  const match = { ...statusMatch, ...extraMatch };
+  const [eventRows, historyRows, legacyRows] = await Promise.all([
+    OrderEvent.aggregate(
+      transitionEventsByEntityPerOrderStages(
+        newStatus,
+        rangeStart,
+        rangeEnd,
+        match,
+        groupIdFields,
+        groupStages
+      )
+    ),
+    Order.aggregate([
+      { $match: { ...match, ...exclude } },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...transitionHistoryByEntityPerOrderStages(
+        newStatus,
+        rangeStart,
+        rangeEnd,
+        groupIdFields,
+        groupStages
+      ),
+    ]),
+    Order.aggregate([
+      { $match: { ...match, ...exclude } },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+      ...transitionLegacyByEntityPerOrderStages(
+        newStatus,
+        rangeStart,
+        rangeEnd,
+        groupIdFields,
+        groupStages
+      ),
+    ]),
+  ]);
+  return mergeTransitionEntityOrderRows(eventRows, historyRows, legacyRows);
+}
+
+/**
+ * Out (dispatched): exclude orders that also have Done (completed) on the same IST day.
+ */
+export async function aggregateDispatchedByDay(
+  rangeStart,
+  rangeEnd,
+  statusMatch
+) {
+  const [dispatched, completed] = await Promise.all([
+    aggregateTransitionsByDayPerOrder("DISPATCHED", rangeStart, rangeEnd, statusMatch),
+    aggregateTransitionsByDayPerOrder("COMPLETED", rangeStart, rangeEnd, statusMatch),
+  ]);
+  const completedKeys = new Set(completed.keys());
+  const filtered = new Map();
+  for (const [key, entry] of dispatched) {
+    if (completedKeys.has(key)) continue;
+    filtered.set(key, entry);
+  }
+  return rollupOrderDayMapToDayTotals(filtered);
+}
+
+/**
+ * Out by entity: exclude orders that have any Done transition in the range.
+ */
+/** Order ids that have both Out and Done on the same IST day (count Done only). */
+export async function orderIdsWithDispatchedAndCompletedSameDay(
+  rangeStart,
+  rangeEnd,
+  statusMatch
+) {
+  const [dispatched, completed] = await Promise.all([
+    aggregateTransitionsByDayPerOrder("DISPATCHED", rangeStart, rangeEnd, statusMatch),
+    aggregateTransitionsByDayPerOrder("COMPLETED", rangeStart, rangeEnd, statusMatch),
+  ]);
+  const ids = new Set();
+  for (const [key, entry] of dispatched) {
+    if (completed.has(key)) ids.add(entry.orderId);
+  }
+  return [...ids];
+}
+
+export async function aggregateDispatchedByGroup(
+  rangeStart,
+  rangeEnd,
+  statusMatch,
+  groupStages,
+  groupIdFields,
+  extraMatch = {}
+) {
+  const [dispatched, completedOrderIds] = await Promise.all([
+    aggregateTransitionsByEntityPerOrder(
+      "DISPATCHED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      extraMatch
+    ),
+    distinctOrderIdsWithTransitionEvents("COMPLETED", rangeStart, rangeEnd),
+  ]);
+  const completedSet = new Set(completedOrderIds.map((id) => String(id)));
+  const filtered = new Map();
+  for (const [key, row] of dispatched) {
+    if (completedSet.has(String(row._id.orderId))) continue;
+    filtered.set(key, row);
+  }
+  return rollupEntityOrderMapToRows(filtered);
 }
 
 export async function aggregateTransitionsByDay(
@@ -506,7 +737,7 @@ export async function fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly = fal
     aggregateGlobalStatus("FARM_READY", statusMatch, dueExtra),
     aggregateGlobalStatus("READY_FOR_DISPATCH", statusMatch, dueExtra),
     aggregateAcceptedByDeliveryDay(rangeStart, rangeEnd, statusMatch, dueExtra),
-    aggregateTransitionsByDay("DISPATCHED", rangeStart, rangeEnd, statusMatch),
+    aggregateDispatchedByDay(rangeStart, rangeEnd, statusMatch),
     aggregateTransitionsByDay("COMPLETED", rangeStart, rangeEnd, statusMatch),
     aggregatePipelineByDeliveryDay(rangeStart, rangeEnd, statusMatch, dueExtra),
     aggregateDeliveryInRangeByDay(rangeStart, rangeEnd, statusMatch, dueExtra),
@@ -1059,8 +1290,7 @@ export async function fetchVarietyTableMetrics(
       VARIETY_GROUP_ID,
       dueExtra
     ),
-    aggregateTransitionsByGroup(
-      "DISPATCHED",
+    aggregateDispatchedByGroup(
       rangeStart,
       rangeEnd,
       statusMatch,
