@@ -1308,7 +1308,7 @@ const postRepairDealerLedger = async (req, res) => {
 const getDealerDispatchOutstandingOrders = async (req, res) => {
   try {
     const { dealerId } = req.params;
-    const { page, limit } = req.query;
+    const { page, limit, village, district } = req.query;
 
     if (!dealerId || !mongoose.Types.ObjectId.isValid(dealerId)) {
       return res.status(400).json({
@@ -1323,6 +1323,8 @@ const getDealerDispatchOutstandingOrders = async (req, res) => {
     const payload = await listDealerDispatchOutstandingOrders(dealerId, {
       page,
       limit,
+      village,
+      district,
     });
 
     return res.status(200).json({
@@ -1334,6 +1336,40 @@ const getDealerDispatchOutstandingOrders = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Error fetching dispatch outstanding orders",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Village-wise dispatch outstanding summary.
+ * GET /dealers/:dealerId/dispatch-outstanding-villages
+ */
+const getDealerDispatchOutstandingVillages = async (req, res) => {
+  try {
+    const { dealerId } = req.params;
+
+    if (!dealerId || !mongoose.Types.ObjectId.isValid(dealerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid dealer ID is required",
+      });
+    }
+
+    const { listDealerDispatchOutstandingByVillage } = await import(
+      "../services/dealerDispatchOutstanding.service.js"
+    );
+    const payload = await listDealerDispatchOutstandingByVillage(dealerId);
+
+    return res.status(200).json({
+      success: true,
+      data: payload,
+    });
+  } catch (error) {
+    console.error("Error fetching dispatch outstanding villages:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching dispatch outstanding villages",
       error: error.message,
     });
   }
@@ -2589,6 +2625,7 @@ export {
   getDealerWalletTransactions,
   getDealerLedger,
   getDealerDispatchOutstandingOrders,
+  getDealerDispatchOutstandingVillages,
   postRepairDealerLedger,
   exportDealerWalletTransactionsCSV,
   uploadMedia,

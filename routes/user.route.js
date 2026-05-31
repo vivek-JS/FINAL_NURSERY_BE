@@ -19,6 +19,7 @@ import {
   getDealerWalletTransactions,
   getDealerLedger,
   getDealerDispatchOutstandingOrders,
+  getDealerDispatchOutstandingVillages,
   postRepairDealerLedger,
   exportDealerWalletTransactionsCSV,
   getDealerWalletStats,
@@ -113,6 +114,10 @@ router
   .get(
     "/dealers/:dealerId/dispatch-outstanding-orders",
     getDealerDispatchOutstandingOrders
+  )
+  .get(
+    "/dealers/:dealerId/dispatch-outstanding-villages",
+    getDealerDispatchOutstandingVillages
   )
   .post("/dealers/:dealerId/ledger/repair", authenticateToken, postRepairDealerLedger)
   .get("/dealers/:dealerId/plant-ledger", getDealerPlantLedger)
