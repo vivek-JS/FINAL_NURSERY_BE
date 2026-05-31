@@ -8,6 +8,7 @@ import {
   COMMISSION_REVENUE_STATUSES,
   splitCommissionAmount,
   getCommissionRateForOrder,
+  getBilledNetPlants,
   isDealerUser,
 } from "../services/dealerCommission.service.js";
 
@@ -46,7 +47,7 @@ describe("dealerCommission", () => {
     assert.equal(COMMISSION_REVENUE_STATUSES, ACTUAL_COMMISSION_STATUSES);
   });
 
-  it("expected commission from ACCEPTED through dispatch and complete (booked qty)", () => {
+  it("expected commission from ACCEPTED through dispatch and complete (billed net qty)", () => {
     assert.ok(EXPECTED_COMMISSION_STATUSES.has("ACCEPTED"));
     assert.ok(EXPECTED_COMMISSION_STATUSES.has("READY_FOR_DISPATCH"));
     assert.ok(EXPECTED_COMMISSION_STATUSES.has("DISPATCHED"));
@@ -104,7 +105,7 @@ describe("dealerCommission", () => {
     assert.equal(metrics.expectedCommission, 100);
   });
 
-  it("keeps expected on DISPATCHED (booked qty) without actual until complete", () => {
+  it("expected on DISPATCHED uses billed net (booked − returns − damage)", () => {
     const metrics = computeOrderCommissionMetrics(
       baseOrder({
         orderStatus: "DISPATCHED",
@@ -115,10 +116,31 @@ describe("dealerCommission", () => {
       plantNames,
       subtypeNames
     );
-    assert.equal(metrics.expectedCommission, 100);
+    assert.equal(metrics.billedNetPlants, 90);
+    assert.equal(metrics.expectedCommission, 90);
     assert.equal(metrics.actualCommission, 0);
     assert.equal(metrics.recognizedRevenue, 0);
     assert.equal(metrics.earnedCommission, 0);
+  });
+
+  it("expected = billed net plants × rate (100 − 30 ret − 20 dmg = 50)", () => {
+    const order = baseOrder({
+      orderStatus: "ACCEPTED",
+      remainingPlants: 100,
+      returnedPlants: 30,
+      damagedPlants: 20,
+      commissionRatePerPlant: 2,
+    });
+    assert.equal(getBilledNetPlants(order), 50);
+    const metrics = computeOrderCommissionMetrics(
+      order,
+      ratesMap,
+      plantNames,
+      subtypeNames
+    );
+    assert.equal(metrics.billedNetPlants, 50);
+    assert.equal(metrics.expectedCommission, 100);
+    assert.equal(metrics.actualCommission, 0);
   });
 
   it("splitCommissionAmount separates earned and at-risk", () => {

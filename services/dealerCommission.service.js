@@ -14,8 +14,8 @@ const EXCLUDED_STATUSES = new Set([
 ]);
 
 /**
- * Expected commission applies from ACCEPTED through delivery — fixed on booked qty,
- * unchanged when order moves to ready-for-dispatch or dispatched.
+ * Expected commission applies from ACCEPTED through delivery — on billed (net) plants
+ * (booked − returned − damaged), unchanged when order moves to dispatch queue.
  */
 export const EXPECTED_COMMISSION_STATUSES = new Set([
   "ACCEPTED",
@@ -55,6 +55,14 @@ export function isPapayaCommissionException(plantName, subtypeName) {
 
 export function getOrderTotalPlants(order) {
   return (order.numberOfPlants || 0) + (order.additionalPlants || 0);
+}
+
+/** Billed (net) plants for expected commission: booked minus returns and damage. */
+export function getBilledNetPlants(order) {
+  const booked = getOrderTotalPlants(order);
+  const returned = Number(order.returnedPlants || 0);
+  const damaged = Number(order.damagedPlants || 0);
+  return Math.max(0, booked - returned - damaged);
 }
 
 /** Plants dispatched / delivered to farmer (gross, before returns). */
@@ -238,10 +246,12 @@ export function computeOrderCommissionMetrics(
   // Commission = locked rate per plant × net delivered quantity (not booked qty).
   const commissionAmount = netDeliveredQuantity * rate;
 
+  const billedNetPlants = getBilledNetPlants(order);
+
   let expected = 0;
   const booked = totalPlants;
   if (orderQualifiesForExpectedCommission(order)) {
-    expected = totalPlants * rate;
+    expected = billedNetPlants * rate;
   }
 
   let actual = 0;
@@ -285,6 +295,7 @@ export function computeOrderCommissionMetrics(
     subtypeName: subtypeNames.get(subtypeId) || subtypeId,
     ratePerPlant: rate,
     booked,
+    billedNetPlants,
     baki,
     dispatched: dispatchedQty,
     deliveredQuantity,
