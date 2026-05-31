@@ -4,6 +4,8 @@ import User from "../models/user.model.js";
 import Order from "../models/order.model.js";
 import FarmerPlantOrderLedgerEntry from "../models/farmerPlantOrderLedger.model.js";
 import FarmerPlantOrderArchive from "../models/farmerPlantOrderArchive.model.js";
+import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
+import { isDealerScopedTransferPair } from "../utility/orderTransferEligibility.js";
 import { applyPaymentTimingToPayment } from "./paymentTiming.js";
 
 const TERMINAL_PLANT_ORDER_STATUSES = new Set([
@@ -1375,6 +1377,223 @@ export async function undoDirectOrderPaymentTransfer({
       sourceLedgerUndoId: sourceLedgerUndo?._id || null,
       targetLedgerUndoId: targetLedgerUndo?._id || null,
       dealerLedgerUndo,
+    };
+  } catch (e) {
+    try {
+      await session.abortTransaction();
+    } catch (_) {}
+    try {
+      session.endSession();
+    } catch (_) {}
+    throw e;
+  }
+}
+
+/** Parse ₹ amount from approve remark: `[Transfer request #<id> approved: -₹1,000 moved ...]` */
+export function parseTransferRequestDeductionFromRemark(remark, requestId) {
+  const reqIdStr = String(requestId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(
+    `\\[Transfer request #${reqIdStr} approved: -₹([\\d,.]+) moved`,
+    "i"
+  );
+  const m = String(remark || "").match(re);
+  if (!m) return 0;
+  return roundMoney(Number(String(m[1]).replace(/,/g, "")) || 0);
+}
+
+/**
+ * Undo an APPROVED transfer request when the target COLLECTED payment is rejected.
+ * Restores source order payment amounts; marks target REJECTED; reverses farmer ledger when posted.
+ */
+export async function undoApprovedTransferRequestPayment({
+  targetOrder,
+  targetPayment,
+  userId,
+  remark,
+}) {
+  const requestId = targetPayment?.transferRequestId;
+  if (!requestId) {
+    const err = new Error("Payment is not linked to a transfer request");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!["COLLECTED", "PENDING"].includes(targetPayment.paymentStatus)) {
+    const err = new Error(
+      `Cannot undo transfer request: target payment status is ${targetPayment.paymentStatus}`
+    );
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const requestDoc = await FarmerOrderTransferRequest.findById(requestId).session(session);
+    if (!requestDoc) {
+      const err = new Error("Transfer request not found");
+      err.statusCode = 404;
+      throw err;
+    }
+    if (requestDoc.status !== "APPROVED") {
+      const err = new Error(
+        `Transfer request status is ${requestDoc.status}; only APPROVED requests can be undone via payment reject`
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const amount = roundMoney(Math.abs(Number(requestDoc.requestedAmount || 0)));
+    if (!(amount > 0)) {
+      const err = new Error("Transfer request amount must be greater than zero");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const sourceOrder = await Order.findById(requestDoc.fromOrderId).session(session);
+    const targetOrderDoc = await Order.findById(targetOrder._id).session(session);
+    if (!sourceOrder || !targetOrderDoc) {
+      const err = new Error("Source or target order not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const targetPay = findPaymentInOrder(
+      targetOrderDoc,
+      targetPayment._id || targetPayment
+    );
+    if (!targetPay) {
+      const err = new Error("Target payment not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    let restoredTotal = 0;
+    for (const p of sourceOrder.payment || []) {
+      const deduct = parseTransferRequestDeductionFromRemark(p.remark, requestDoc._id);
+      if (!(deduct > 0)) continue;
+      p.paidAmount = roundMoney(Number(p.paidAmount || 0) + deduct);
+      restoredTotal = roundMoney(restoredTotal + deduct);
+      const undoNote = `[Transfer request #${requestDoc._id} undone: +₹${deduct.toLocaleString("en-IN")} restored]`;
+      const prevRemark = p.remark ? String(p.remark).trim() : "";
+      p.remark = prevRemark ? `${prevRemark}\n${undoNote}` : undoNote;
+      applyPaymentTimingToPayment(p, sourceOrder, { force: true });
+    }
+
+    if (Math.abs(restoredTotal - amount) > 0.02) {
+      const err = new Error(
+        `Could not restore source payments (restored ₹${restoredTotal}, expected ₹${amount})`
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const sourceNumericId = sourceOrder.orderId ?? "";
+    const targetNumericId = targetOrderDoc.orderId ?? "";
+    const undoNoteTarget = `[Transfer request undone — payment rejected${
+      remark ? `: ${String(remark).trim()}` : ""
+    }]`;
+
+    const prevTargetStatus = targetPay.paymentStatus;
+    targetPay.paymentStatus = "REJECTED";
+    const prevTargetRemark = targetPay.remark ? String(targetPay.remark).trim() : "";
+    targetPay.remark = prevTargetRemark
+      ? `${prevTargetRemark}\n${undoNoteTarget}`
+      : undoNoteTarget;
+    applyPaymentTimingToPayment(targetPay, targetOrderDoc, { force: true });
+
+    recomputeOrderPaymentCompletion(sourceOrder);
+    recomputeOrderPaymentCompletion(targetOrderDoc);
+
+    const dealerPair = isDealerScopedTransferPair(sourceOrder, targetOrderDoc);
+    const performedBy = userId || null;
+
+    if (!dealerPair && shouldLogFarmerPlantLedger(targetOrderDoc) && prevTargetStatus === "COLLECTED") {
+      await ensureFarmerPlantOrderDebit(targetOrderDoc, { userId: performedBy, session });
+      await recordFarmerPlantLedgerPaymentTransition(
+        targetOrderDoc,
+        targetPay,
+        "COLLECTED",
+        "REJECTED",
+        {
+          userId: performedBy,
+          session,
+          descriptionOverride: `Transfer request undo: reject payment on order #${targetNumericId}`,
+          metadataExtra: {
+            kind: "order_payment_transfer_request_undo",
+            transferRequestId: String(requestDoc._id),
+            direction: "reject_target",
+          },
+        }
+      );
+    }
+
+    if (!dealerPair && shouldLogFarmerPlantLedger(sourceOrder) && restoredTotal > 0) {
+      const sourceParty = await resolveFarmerIdentity(sourceOrder);
+      if (sourceParty.customerMobile) {
+        await createFarmerPlantLedgerEntry({
+          customerMobile: sourceParty.customerMobile,
+          customerName: sourceParty.customerName,
+          farmerId: sourceParty.farmerId,
+          refType: "ADJUSTMENT",
+          refId: new mongoose.Types.ObjectId(),
+          orderId: sourceOrder._id,
+          credit: restoredTotal,
+          reference: String(sourceOrder.orderId || ""),
+          category: "Order Transfer Undo",
+          description: `Transfer request undo: restore order #${sourceNumericId} (reject on #${targetNumericId})`,
+          entryDate: new Date(),
+          createdBy: performedBy,
+          metadata: {
+            kind: "order_payment_transfer_request_undo",
+            transferRequestId: String(requestDoc._id),
+            direction: "restore_source",
+            peerOrderMongoId: String(targetOrderDoc._id),
+            peerOrderNumber: targetNumericId,
+          },
+          session,
+        });
+      }
+    }
+
+    if (dealerPair) {
+      const { syncDealerLedgerForPaymentStatusTransition } = await import("./dealerLedgerHelper.js");
+      await syncDealerLedgerForPaymentStatusTransition(
+        targetOrderDoc,
+        targetPay,
+        "COLLECTED",
+        "REJECTED",
+        {
+          userId: performedBy,
+          session,
+          descriptionOverride: `Transfer request undo — reject on order ${targetNumericId}`,
+          metadataExtra: { kind: "order_payment_transfer_request_undo" },
+        }
+      );
+    }
+
+    requestDoc.status = "REJECTED";
+    requestDoc.approval = {
+      ...(requestDoc.approval || {}),
+      rejectedBy: performedBy,
+      rejectedAt: new Date(),
+      rejectionReason: remark ? String(remark).trim() : "Payment rejected after approval",
+      approvedBy: requestDoc.approval?.approvedBy || null,
+      approvedAt: requestDoc.approval?.approvedAt || null,
+    };
+
+    await sourceOrder.save({ session });
+    await targetOrderDoc.save({ session });
+    await requestDoc.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return {
+      sourceOrder,
+      targetOrder: targetOrderDoc,
+      request: requestDoc,
+      restoredAmount: restoredTotal,
     };
   } catch (e) {
     try {

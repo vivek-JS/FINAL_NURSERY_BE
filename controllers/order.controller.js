@@ -43,6 +43,7 @@ import {
   shouldLogFarmerPlantLedger,
   isDirectOrderPaymentTransfer,
   undoDirectOrderPaymentTransfer,
+  undoApprovedTransferRequestPayment,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import {
   syncDealerLedgerForOrder,
@@ -1685,6 +1686,42 @@ const updatePaymentStatus = async (req, res, next) => {
           reason: remark || req.body?.reason || "Rejected from payment dashboard",
         };
         return rejectFarmerOrderTransferRequest(req, res, next);
+      }
+    }
+
+    // Approved transfer-request undo: reject target COLLECTED payment → restore source deductions.
+    if (
+      paymentStatus === "REJECTED" &&
+      payment.transferRequestId &&
+      payment.paymentStatus === "COLLECTED"
+    ) {
+      const transferReq = await FarmerOrderTransferRequest.findById(
+        payment.transferRequestId
+      ).lean();
+      if (transferReq?.status === "APPROVED") {
+        try {
+          const undoResult = await undoApprovedTransferRequestPayment({
+            targetOrder: order,
+            targetPayment: payment,
+            userId: req.user?._id,
+            remark: remark || req.body?.reason,
+          });
+          return res.status(200).json({
+            success: true,
+            message:
+              "Transfer request payment rejected; source order amounts restored.",
+            order: undoResult.targetOrder,
+            sourceOrder: undoResult.sourceOrder,
+            transferRequest: undoResult.request,
+            restoredAmount: undoResult.restoredAmount,
+          });
+        } catch (undoErr) {
+          const code = undoErr.statusCode || 500;
+          return res.status(code).json({
+            success: false,
+            message: undoErr.message || "Failed to undo approved transfer request",
+          });
+        }
       }
     }
 

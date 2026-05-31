@@ -5,11 +5,14 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   getFarmerPlantPaymentTransitionAction,
   hasFarmerPlantLedgerIdentity,
   shouldLogFarmerPlantLedger,
   isDirectOrderPaymentTransfer,
+  parseTransferRequestDeductionFromRemark,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import {
   syncDealerLedgerForPaymentStatusTransition,
@@ -149,6 +152,35 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
       assert.equal(isDirectOrderPaymentTransfer({ paymentStatus: "COLLECTED" }), false);
       assert.equal(isDirectOrderPaymentTransfer(null), false);
     });
+  });
+
+  it("parseTransferRequestDeductionFromRemark reads approve deduction", () => {
+    const reqId = "507f1f77bcf86cd799439014";
+    const remark = `[Transfer request #${reqId} approved: -₹1,500 moved to order #1931]`;
+    assert.equal(parseTransferRequestDeductionFromRemark(remark, reqId), 1500);
+    assert.equal(parseTransferRequestDeductionFromRemark("other", reqId), 0);
+  });
+
+  it("updatePaymentStatus routes approved transfer-request reject to undo helper", () => {
+    const orderControllerSource = readFileSync(
+      resolve(process.cwd(), "controllers/order.controller.js"),
+      "utf8"
+    );
+    assert.match(orderControllerSource, /undoApprovedTransferRequestPayment/);
+  });
+
+  it("transferFarmerPlantOrderPayment requires sourceOrderId, targetOrderId, paymentId in body", () => {
+    const controllerSource = readFileSync(
+      resolve(process.cwd(), "controllers/farmerPlantOrderLedger.controller.js"),
+      "utf8"
+    );
+    assert.match(controllerSource, /const \{ sourceOrderId, targetOrderId, paymentId, message \} = req\.body/);
+    assert.match(
+      controllerSource,
+      /Valid sourceOrderId, targetOrderId, and paymentId are required/
+    );
+    assert.match(controllerSource, /transferredFromOrderId: new mongoose\.Types\.ObjectId\(sid\)/);
+    assert.match(controllerSource, /transferredFromPaymentId: new mongoose\.Types\.ObjectId\(pid\)/);
   });
 
   describe("syncDealerLedgerForPaymentStatusTransition (transfer-in skip)", () => {

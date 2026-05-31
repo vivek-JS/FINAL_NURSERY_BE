@@ -26,4 +26,19 @@ describe("farmer order transfer routes", () => {
       /\/farmer-plant-ledger\/transfer-requests\/:id\/reject\",\s*requirePaymentAccess,\s*rejectFarmerOrderTransferRequest/
     );
   });
+
+  it("registers direct order payment transfer endpoint", () => {
+    const routeSource = readFileSync(
+      resolve(process.cwd(), "routes/order.route.js"),
+      "utf8"
+    );
+    assert.match(
+      routeSource,
+      /\/farmer-plant-ledger\/transfer-order-payment\",\s*requirePaymentAccess,\s*transferFarmerPlantOrderPayment/
+    );
+    assert.match(
+      routeSource,
+      /\/farmer-plant\/:orderId\/details\",\s*getFarmerPlantOrderDetails/
+    );
+  });
 });
