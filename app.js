@@ -318,6 +318,10 @@ import {
 import { getFarmerPlantLedger, getFarmerPlantLedgerParties } from "./controllers/farmerPlantOrderLedger.controller.js";
 import { getRamAgriLedgerParties } from "./controllers/ramAgriLedger.controller.js";
 import userRoute from "./routes/user.route.js";
+import {
+  getDealerDispatchOutstandingOrders,
+  getDealerDispatchOutstandingVillages,
+} from "./controllers/user.controller.js";
 import cmsRoute from "./routes/cms.route.js";
 import employeeRoute from "./routes/employee.route.js";
 import attendanceRoute from "./routes/attendance.route.js";
@@ -458,6 +462,16 @@ server.use(
 server.get("/api/dummyData", (req, res) => {
   res.json({ msg: "Welcome to nursery app" });
 });
+
+// Dealer dispatch payment outstanding — bound on app so stale user.route mounts never yield Cannot GET.
+server.get(
+  "/api/v1/user/dealers/:dealerId/dispatch-outstanding-orders",
+  getDealerDispatchOutstandingOrders
+);
+server.get(
+  "/api/v1/user/dealers/:dealerId/dispatch-outstanding-villages",
+  getDealerDispatchOutstandingVillages
+);
 
 // defining routes
 server.use("/api/v1/user", userRoute);
