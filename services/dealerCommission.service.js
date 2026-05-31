@@ -13,11 +13,30 @@ const EXCLUDED_STATUSES = new Set([
   "TEMPORARY_CANCELLED",
 ]);
 
-/** Pipeline commission (booked, not yet delivered to farmer). */
+/**
+ * Expected commission applies from ACCEPTED through delivery — fixed on booked qty,
+ * unchanged when order moves to ready-for-dispatch or dispatched.
+ */
 export const EXPECTED_COMMISSION_STATUSES = new Set([
   "ACCEPTED",
   "FARM_READY",
+  "READY_FOR_DISPATCH",
+  "DISPATCH_PROCESS",
+  "DISPATCHED",
+  "PARTIALLY_COMPLETED",
+  "COMPLETED",
 ]);
+
+const EXPECTED_COMMISSION_EXCLUDED_STATUSES = new Set([
+  ...EXCLUDED_STATUSES,
+  "PENDING",
+  "PROCESSING",
+]);
+
+export function orderQualifiesForExpectedCommission(order) {
+  const status = String(order?.orderStatus || "").toUpperCase();
+  return Boolean(status) && !EXPECTED_COMMISSION_EXCLUDED_STATUSES.has(status);
+}
 
 /** Earned/at-risk commission and recognized revenue: delivery complete only. */
 export const ACTUAL_COMMISSION_STATUSES = new Set([
@@ -221,10 +240,8 @@ export function computeOrderCommissionMetrics(
 
   let expected = 0;
   const booked = totalPlants;
-  if (EXPECTED_COMMISSION_STATUSES.has(order.orderStatus)) {
-    const expectedQty =
-      deliveredQuantity > 0 ? netDeliveredQuantity : totalPlants;
-    expected = expectedQty * rate;
+  if (orderQualifiesForExpectedCommission(order)) {
+    expected = totalPlants * rate;
   }
 
   let actual = 0;

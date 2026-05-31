@@ -4,6 +4,7 @@ import {
   computeOrderCommissionMetrics,
   ACTUAL_COMMISSION_STATUSES,
   EXPECTED_COMMISSION_STATUSES,
+  orderQualifiesForExpectedCommission,
   COMMISSION_REVENUE_STATUSES,
   splitCommissionAmount,
   getCommissionRateForOrder,
@@ -45,11 +46,14 @@ describe("dealerCommission", () => {
     assert.equal(COMMISSION_REVENUE_STATUSES, ACTUAL_COMMISSION_STATUSES);
   });
 
-  it("expected commission only for pre-dispatch pipeline (ACCEPTED, FARM_READY)", () => {
+  it("expected commission from ACCEPTED through dispatch and complete (booked qty)", () => {
     assert.ok(EXPECTED_COMMISSION_STATUSES.has("ACCEPTED"));
-    assert.ok(EXPECTED_COMMISSION_STATUSES.has("FARM_READY"));
-    assert.ok(!EXPECTED_COMMISSION_STATUSES.has("READY_FOR_DISPATCH"));
-    assert.ok(!EXPECTED_COMMISSION_STATUSES.has("DISPATCHED"));
+    assert.ok(EXPECTED_COMMISSION_STATUSES.has("READY_FOR_DISPATCH"));
+    assert.ok(EXPECTED_COMMISSION_STATUSES.has("DISPATCHED"));
+    assert.ok(EXPECTED_COMMISSION_STATUSES.has("COMPLETED"));
+    assert.ok(!EXPECTED_COMMISSION_STATUSES.has("PENDING"));
+    assert.ok(orderQualifiesForExpectedCommission({ orderStatus: "DISPATCHED" }));
+    assert.ok(!orderQualifiesForExpectedCommission({ orderStatus: "PENDING" }));
   });
 
   it("counts positive actual commission for fully completed, paid order", () => {
@@ -85,22 +89,7 @@ describe("dealerCommission", () => {
     assert.equal(metrics.unpaidLiability, 100);
   });
 
-  it("does not count actual commission for DISPATCHED (only completed)", () => {
-    const metrics = computeOrderCommissionMetrics(
-      baseOrder({
-        orderStatus: "DISPATCHED",
-        remainingPlants: 0,
-      }),
-      ratesMap,
-      plantNames,
-      subtypeNames
-    );
-    assert.equal(metrics.actualCommission, 0);
-    assert.equal(metrics.recognizedRevenue, 0);
-    assert.equal(metrics.earnedCommission, 0);
-  });
-
-  it("does not count actual commission for READY_FOR_DISPATCH", () => {
+  it("keeps expected on READY_FOR_DISPATCH but no actual until complete", () => {
     const metrics = computeOrderCommissionMetrics(
       baseOrder({
         orderStatus: "READY_FOR_DISPATCH",
@@ -112,7 +101,24 @@ describe("dealerCommission", () => {
     );
     assert.equal(metrics.actualCommission, 0);
     assert.equal(metrics.recognizedRevenue, 0);
-    assert.equal(metrics.expectedCommission, 0);
+    assert.equal(metrics.expectedCommission, 100);
+  });
+
+  it("keeps expected on DISPATCHED (booked qty) without actual until complete", () => {
+    const metrics = computeOrderCommissionMetrics(
+      baseOrder({
+        orderStatus: "DISPATCHED",
+        remainingPlants: 0,
+        returnedPlants: 10,
+      }),
+      ratesMap,
+      plantNames,
+      subtypeNames
+    );
+    assert.equal(metrics.expectedCommission, 100);
+    assert.equal(metrics.actualCommission, 0);
+    assert.equal(metrics.recognizedRevenue, 0);
+    assert.equal(metrics.earnedCommission, 0);
   });
 
   it("splitCommissionAmount separates earned and at-risk", () => {
