@@ -236,6 +236,31 @@ export async function ledgerTransitionExists(orderId, transitionKey, session) {
 }
 
 /**
+ * Stable transitionKey when callers omit metadata.transitionKey.
+ * Avoids E11000 on { orderId, metadata.transitionKey } where null collides with legacy ORDER rows.
+ */
+export function buildDefaultLedgerTransitionKey({
+  refType,
+  orderId,
+  refId,
+  paymentId,
+  metadata = {},
+}) {
+  if (metadata?.transitionKey) return String(metadata.transitionKey);
+  if (!orderId) return null;
+  const oid = String(orderId);
+  if (refType === "ORDER") return `ORDER_DEBIT:${oid}`;
+  const rid = refId ? String(refId) : paymentId ? String(paymentId) : null;
+  if (!rid) return null;
+  return `${refType}:${oid}:${rid}`;
+}
+
+/** Idempotent keys for transfer-request approve / undo ledger rows. */
+export function transferRequestLedgerTransitionKey(transferRequestId, part) {
+  return `xfer_req:${String(transferRequestId)}:${part}`;
+}
+
+/**
  * Net receivable still attributed to this order in the farmer-plant sub-ledger (debits − credits).
  */
 export async function getFarmerOrderLedgerNetReceivable(orderId, session) {
@@ -296,6 +321,18 @@ export async function createFarmerPlantLedgerEntry({
     entryDate: entryDate ? new Date(entryDate).toISOString() : null,
   });
 
+  const transitionKey = buildDefaultLedgerTransitionKey({
+    refType,
+    orderId,
+    refId,
+    paymentId,
+    metadata,
+  });
+  const resolvedMetadata = {
+    ...metadata,
+    ...(transitionKey ? { transitionKey } : {}),
+  };
+
   const entryPayload = {
     customerMobile: mobileKey,
     customerName: customerName?.trim() || "",
@@ -313,7 +350,7 @@ export async function createFarmerPlantLedgerEntry({
     category,
     description,
     createdBy,
-    metadata,
+    metadata: resolvedMetadata,
   };
 
   if (session) {
@@ -324,7 +361,15 @@ export async function createFarmerPlantLedgerEntry({
       );
       return created[0];
     } catch (e) {
-      if (e.code === 11000) return null;
+      // Duplicate inside a transaction aborts the whole txn — do not swallow.
+      if (e.code === 11000) {
+        const err = new Error(
+          `Farmer ledger duplicate (${refType}): ${e.message || "transitionKey conflict"}`
+        );
+        err.statusCode = 409;
+        err.cause = e;
+        throw err;
+      }
       throw e;
     }
   }
@@ -381,6 +426,11 @@ export async function ensureFarmerPlantOrderDebit(order, { userId, session } = {
         : (order.orderBookingDate || order.createdAt),
     createdBy: userId,
     metadata: {
+      transitionKey: buildDefaultLedgerTransitionKey({
+        refType: "ORDER",
+        orderId: oid,
+        refId: oid,
+      }),
       orderNumericId: order.orderId,
       dealerOrder: Boolean(order.dealerOrder),
       ...(fundingMeta ? { fundingDealerId: fundingMeta } : {}),

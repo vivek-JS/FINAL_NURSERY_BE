@@ -28,6 +28,7 @@ import {
   recordFarmerPlantLedgerPaymentTransition,
   resolveFarmerIdentity,
   getFarmerPlantPaymentTransitionAction,
+  transferRequestLedgerTransitionKey,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
 import { syncDirectOrderPaymentTransferLedgers } from "../services/orderPaymentTransferLedger.service.js";
@@ -1317,6 +1318,7 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
         direction: "out",
         peerOrderMongoId: String(targetOrder._id),
         peerOrderNumber: targetNumericId,
+        transitionKey: transferRequestLedgerTransitionKey(requestDoc._id, "approve_out"),
       },
       session,
     });

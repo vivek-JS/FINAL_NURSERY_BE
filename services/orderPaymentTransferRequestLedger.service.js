@@ -12,6 +12,7 @@ import {
   resolveFundingDealerId,
   roundMoney,
   parseTransferRequestDeductionFromRemark,
+  transferRequestLedgerTransitionKey,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import {
   createDealerLedgerEntry,
@@ -351,7 +352,13 @@ async function syncFarmerTransferRequestApprove({
         `₹${amount.toLocaleString("en-IN")}.${transferMsg ? ` Note: ${transferMsg}` : ""}`,
       entryDate: new Date(),
       createdBy: userId,
-      metadata: { ...meta, direction: "out", peerOrderMongoId: String(targetOrder._id), peerOrderNumber: targetNum },
+      metadata: {
+        ...meta,
+        direction: "out",
+        peerOrderMongoId: String(targetOrder._id),
+        peerOrderNumber: targetNum,
+        transitionKey: transferRequestLedgerTransitionKey(transferRequestId, "approve_out"),
+      },
       session,
     });
   }
@@ -375,7 +382,13 @@ async function syncFarmerTransferRequestApprove({
         `₹${amount.toLocaleString("en-IN")}.${transferMsg ? ` Note: ${transferMsg}` : ""}`,
       entryDate: new Date(),
       createdBy: userId,
-      metadata: { ...meta, direction: "in", peerOrderMongoId: String(sourceOrder._id), peerOrderNumber: sourceNum },
+      metadata: {
+        ...meta,
+        direction: "in",
+        peerOrderMongoId: String(sourceOrder._id),
+        peerOrderNumber: sourceNum,
+        transitionKey: transferRequestLedgerTransitionKey(transferRequestId, "approve_in"),
+      },
       session,
     });
   }
@@ -440,6 +453,10 @@ async function syncFarmerTransferRequestUndo({
           direction: "restore_source",
           peerOrderMongoId: String(targetOrder._id),
           peerOrderNumber: targetNum,
+          transitionKey: transferRequestLedgerTransitionKey(
+            transferRequestId,
+            "undo_restore_source"
+          ),
         },
         session,
       });
