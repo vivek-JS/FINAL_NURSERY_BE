@@ -44,6 +44,7 @@ import {
   isDirectOrderPaymentTransfer,
   undoDirectOrderPaymentTransfer,
   undoApprovedTransferRequestPayment,
+  isBlockedTransferRequestReCollect,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import {
   syncDealerLedgerForOrder,
@@ -1714,6 +1715,7 @@ const updatePaymentStatus = async (req, res, next) => {
             sourceOrder: undoResult.sourceOrder,
             transferRequest: undoResult.request,
             restoredAmount: undoResult.restoredAmount,
+            ledgerUndo: undoResult.ledgerUndo,
           });
         } catch (undoErr) {
           const code = undoErr.statusCode || 500;
@@ -1722,6 +1724,20 @@ const updatePaymentStatus = async (req, res, next) => {
             message: undoErr.message || "Failed to undo approved transfer request",
           });
         }
+      }
+    }
+
+    // Block re-collect after transfer request was undone (would credit target without source deduct).
+    if (paymentStatus === "COLLECTED" && payment.transferRequestId) {
+      const transferReq = await FarmerOrderTransferRequest.findById(
+        payment.transferRequestId
+      ).lean();
+      if (isBlockedTransferRequestReCollect(payment, transferReq)) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "This transfer was undone. Create a new transfer request instead of collecting this payment again.",
+        });
       }
     }
 

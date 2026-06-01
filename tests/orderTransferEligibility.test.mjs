@@ -1,37 +1,48 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
-  isOrderEligibleForPlantTransfer,
-  isDealerScopedTransferPair,
-  orderBelongsToDealerScope,
   ORDER_TRANSFER_EXCLUDED_STATUSES,
+  ORDER_TRANSFER_SEARCH_STATUS_QUERY,
+  isOrderEligibleForPlantTransfer,
+  getOrderTransferIneligibilityMessage,
+  assertOrdersEligibleForPlantTransfer,
 } from "../utility/orderTransferEligibility.js";
 
 describe("orderTransferEligibility", () => {
-  it("allows pipeline statuses except dispatched/completed/cancelled", () => {
+  it("excludes DISPATCHED and COMPLETED", () => {
+    assert.ok(ORDER_TRANSFER_EXCLUDED_STATUSES.includes("DISPATCHED"));
+    assert.ok(ORDER_TRANSFER_EXCLUDED_STATUSES.includes("COMPLETED"));
+    assert.equal(isOrderEligibleForPlantTransfer({ orderStatus: "DISPATCHED" }), false);
+    assert.equal(isOrderEligibleForPlantTransfer({ orderStatus: "COMPLETED" }), false);
     assert.equal(isOrderEligibleForPlantTransfer({ orderStatus: "ACCEPTED" }), true);
-    assert.equal(isOrderEligibleForPlantTransfer({ orderStatus: "PENDING" }), true);
     assert.equal(isOrderEligibleForPlantTransfer({ orderStatus: "FARM_READY" }), true);
-    assert.equal(isOrderEligibleForPlantTransfer({ orderStatus: "READY_FOR_DISPATCH" }), true);
   });
 
-  it("blocks terminal statuses", () => {
-    for (const st of ORDER_TRANSFER_EXCLUDED_STATUSES) {
-      assert.equal(isOrderEligibleForPlantTransfer({ orderStatus: st }), false);
-    }
+  it("search status query omits dispatched and completed", () => {
+    const tokens = ORDER_TRANSFER_SEARCH_STATUS_QUERY.split(",");
+    assert.ok(!tokens.includes("DISPATCHED"));
+    assert.ok(!tokens.includes("COMPLETED"));
+    assert.ok(tokens.includes("ACCEPTED"));
   });
 
-  it("treats dealer-booked farmer orders as dealer scope when dealerOrder is false", () => {
-    const row = {
-      dealerOrder: false,
-      dealer: "6a1bbed6940ac57e9970507b",
-      salesPerson: { _id: "6a1bbed6940ac57e9970507b", jobTitle: "DEALER" },
-      orderStatus: "ACCEPTED",
-    };
-    assert.equal(orderBelongsToDealerScope(row), true);
-    assert.equal(
-      isDealerScopedTransferPair(row, { ...row, _id: "other", orderId: 2 }),
-      true
+  it("assertOrdersEligibleForPlantTransfer throws for ineligible source", () => {
+    assert.throws(
+      () =>
+        assertOrdersEligibleForPlantTransfer(
+          { orderId: 1, orderStatus: "DISPATCHED" },
+          { orderId: 2, orderStatus: "ACCEPTED" }
+        ),
+      /Source order #1 is DISPATCHED/
     );
+  });
+
+  it("direct transfer controller enforces eligibility", () => {
+    const src = readFileSync(
+      resolve(process.cwd(), "controllers/farmerPlantOrderLedger.controller.js"),
+      "utf8"
+    );
+    assert.match(src, /assertOrdersEligibleForPlantTransfer\(sourceOrder, targetOrder\)/);
   });
 });

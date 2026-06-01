@@ -31,6 +31,38 @@ export function isOrderEligibleForPlantTransfer(orderOrStatus) {
   return !ORDER_TRANSFER_EXCLUDED_STATUSES.includes(normalized);
 }
 
+/** Human-readable reason when transfer is blocked (for API errors). */
+export function getOrderTransferIneligibilityMessage(order, role = "order") {
+  const st = String(order?.orderStatus || order || "").trim().toUpperCase();
+  const num = order?.orderId != null ? ` #${order.orderId}` : "";
+  const label = role === "source" ? "Source" : role === "target" ? "Target" : "Order";
+  if (!st) {
+    return `${label} order${num} has no status; transfer is not allowed.`;
+  }
+  if (ORDER_TRANSFER_EXCLUDED_STATUSES.includes(st)) {
+    return (
+      `${label} order${num} is ${st}. Only remaining orders may transfer payments ` +
+      `(not dispatched, completed, partially completed, cancelled, or rejected).`
+    );
+  }
+  return null;
+}
+
+export function assertOrdersEligibleForPlantTransfer(sourceOrder, targetOrder) {
+  const sourceMsg = getOrderTransferIneligibilityMessage(sourceOrder, "source");
+  if (sourceMsg) {
+    const err = new Error(sourceMsg);
+    err.statusCode = 400;
+    throw err;
+  }
+  const targetMsg = getOrderTransferIneligibilityMessage(targetOrder, "target");
+  if (targetMsg) {
+    const err = new Error(targetMsg);
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
 /** Dealer bulk order or farmer order booked under a dealer account. */
 export function orderBelongsToDealerScope(order) {
   if (!order || typeof order !== "object") return false;

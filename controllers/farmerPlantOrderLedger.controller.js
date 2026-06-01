@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import catchAsync from "../utility/catchAsync.js";
 import {
   isOrderEligibleForPlantTransfer,
+  assertOrdersEligibleForPlantTransfer,
   isDealerScopedTransferPair,
   orderBelongsToDealerScope,
   resolveDealerIdForOrder,
@@ -30,6 +31,10 @@ import {
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
 import { syncDirectOrderPaymentTransferLedgers } from "../services/orderPaymentTransferLedger.service.js";
+import {
+  syncTransferRequestApproveLedgers,
+  syncDealerTransferRequestApproveReference,
+} from "../services/orderPaymentTransferRequestLedger.service.js";
 
 const DEBUG_ENDPOINT = "http://127.0.0.1:7242/ingest/44347468-0193-498c-9d04-ef8c3f7959e9";
 const DEBUG_SESSION_ID = "69bde0";
@@ -731,6 +736,11 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     if (!shouldLogFarmerPlantLedger(sourceOrder) || !shouldLogFarmerPlantLedger(targetOrder)) {
       throw new AppError("Both orders must have a farmer for plant ledger", 400);
     }
+    try {
+      assertOrdersEligibleForPlantTransfer(sourceOrder, targetOrder);
+    } catch (e) {
+      throw new AppError(e.message, e.statusCode || 400);
+    }
 
     const fromParty = await resolveFarmerIdentity(sourceOrder);
     const toParty = await resolveFarmerIdentity(targetOrder);
@@ -998,21 +1008,10 @@ export const createFarmerOrderTransferRequest = catchAsync(async (req, res, next
   } else if (!shouldLogFarmerPlantLedger(fromOrder) || !shouldLogFarmerPlantLedger(toOrder)) {
     return next(new AppError("Both orders must be farmer-linked orders", 400));
   }
-  if (!isOrderEligibleForPlantTransfer(fromOrder)) {
-    return next(
-      new AppError(
-        "Source order cannot be dispatched, completed, cancelled, or rejected",
-        400
-      )
-    );
-  }
-  if (!isOrderEligibleForPlantTransfer(toOrder)) {
-    return next(
-      new AppError(
-        "Target order cannot be dispatched, completed, cancelled, or rejected",
-        400
-      )
-    );
+  try {
+    assertOrdersEligibleForPlantTransfer(fromOrder, toOrder);
+  } catch (e) {
+    return next(new AppError(e.message, e.statusCode || 400));
   }
 
   const sourceTransferable = getOrderTransferableAmount(fromOrder);
@@ -1183,17 +1182,10 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
     if (!sourceOrder || !targetOrder) {
       throw new AppError("Source or target order no longer exists", 404);
     }
-    if (!isOrderEligibleForPlantTransfer(sourceOrder)) {
-      throw new AppError(
-        "Source order is no longer eligible for transfer (dispatched/completed/cancelled)",
-        409
-      );
-    }
-    if (!isOrderEligibleForPlantTransfer(targetOrder)) {
-      throw new AppError(
-        "Target order is no longer eligible for transfer (dispatched/completed/cancelled)",
-        409
-      );
+    try {
+      assertOrdersEligibleForPlantTransfer(sourceOrder, targetOrder);
+    } catch (e) {
+      throw new AppError(e.message, e.statusCode || 409);
     }
 
     let remaining = roundMoney(requestDoc.requestedAmount);
@@ -1281,6 +1273,22 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
       recomputeOrderPaymentCompletion(targetOrder);
       await sourceOrder.save({ session });
       await targetOrder.save({ session });
+
+      const ledgerSync = await syncTransferRequestApproveLedgers(
+        {
+          sourceOrder,
+          targetOrder,
+          targetPayment: newPayment,
+          transferRequestId: requestDoc._id,
+          amount,
+          userId: performedBy,
+          ledgerTxnId: transferLedgerTxnId,
+          transferMsg,
+        },
+        { session }
+      );
+      sourceReversal = ledgerSync?.farmer?.source || null;
+      targetCredit = ledgerSync?.farmer?.target || null;
     } else {
       await ensureFarmerPlantOrderDebit(sourceOrder, { userId: performedBy, session });
       await ensureFarmerPlantOrderDebit(targetOrder, { userId: performedBy, session });
@@ -1385,6 +1393,18 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
       } catch (shadowErr) {
         console.error("[Finance] shadow payment transfer:", shadowErr?.message || shadowErr);
       }
+
+      await syncDealerTransferRequestApproveReference(
+        {
+          sourceOrder,
+          targetOrder,
+          targetPayment: newPayment,
+          amount,
+          transferRequestId: requestDoc._id,
+          userId: performedBy,
+        },
+        { session }
+      );
     }
 
     if (!Array.isArray(sourceOrder.orderEditHistory)) sourceOrder.orderEditHistory = [];

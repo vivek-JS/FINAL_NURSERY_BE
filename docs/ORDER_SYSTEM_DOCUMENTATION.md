@@ -419,6 +419,8 @@ Referenced by dealer.controller for getDealerOrdersByBooking and updateDealerOrd
 
 **Direct order payment transfer:** Payments with `transferredFromOrderId` / `transferredFromPaymentId` (and no `transferRequestId`) come from `POST /order/farmer-plant-ledger/transfer-order-payment`. Transfer writes paired farmer-plant, dealer (same dealer), and central finance rows (`orderPaymentTransferId` links both sides). `GET /order/farmer-plant-ledger/transfer-context?orderId=&paymentId=` returns source/target order summaries for the accountant dashboard. Rejecting such a payment with `paymentStatus: REJECTED` fully undoes the transfer (payments + all ledgers).
 
+**Transfer request (approve / reject undo):** Payments with `transferRequestId` come from approved `FarmerOrderTransferRequest` flows. Same-dealer (dealer-scoped) pairs now post farmer-plant debit/credit, paired dealer reference rows (`metadata.kind: order_payment_transfer_request`), and central `shadowFarmerPaymentTransfer` on approve; reject-undo writes the inverse (`order_payment_transfer_request_undo`). Farmer-to-farmer requests already posted farmer ledger on approve; undo always reverses farmer + dealer (when same dealer) + central.
+
 ---
 
 ### 5.8 updateOrder (PATCH /order/updateOrder) – factory updateOne(Order)

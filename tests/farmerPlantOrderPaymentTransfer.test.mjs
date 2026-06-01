@@ -12,6 +12,7 @@ import {
   hasFarmerPlantLedgerIdentity,
   shouldLogFarmerPlantLedger,
   isDirectOrderPaymentTransfer,
+  isBlockedTransferRequestReCollect,
   parseTransferRequestDeductionFromRemark,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import {
@@ -122,6 +123,42 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
     assert.ok(inner?.paths?.transferredFromPaymentId, "transferredFromPaymentId");
   });
 
+  describe("isBlockedTransferRequestReCollect", () => {
+    it("blocks when transfer request is REJECTED", () => {
+      assert.equal(
+        isBlockedTransferRequestReCollect(
+          { transferRequestId: "507f1f77bcf86cd799439014", paymentStatus: "REJECTED" },
+          { status: "REJECTED" }
+        ),
+        true
+      );
+    });
+
+    it("blocks when remark shows transfer undone", () => {
+      assert.equal(
+        isBlockedTransferRequestReCollect(
+          {
+            transferRequestId: "507f1f77bcf86cd799439014",
+            paymentStatus: "REJECTED",
+            remark: "[Transfer request undone — payment rejected]",
+          },
+          { status: "APPROVED" }
+        ),
+        true
+      );
+    });
+
+    it("allows PENDING payment on PENDING request", () => {
+      assert.equal(
+        isBlockedTransferRequestReCollect(
+          { transferRequestId: "507f1f77bcf86cd799439014", paymentStatus: "PENDING" },
+          { status: "PENDING" }
+        ),
+        false
+      );
+    });
+  });
+
   describe("isDirectOrderPaymentTransfer", () => {
     const sourceOid = "507f1f77bcf86cd799439012";
     const payOid = "507f1f77bcf86cd799439013";
@@ -169,6 +206,18 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
     assert.match(orderControllerSource, /undoApprovedTransferRequestPayment/);
   });
 
+  it("updatePaymentStatus blocks re-collect on undone transfer request payment", () => {
+    const orderControllerSource = readFileSync(
+      resolve(process.cwd(), "controllers/order.controller.js"),
+      "utf8"
+    );
+    assert.match(orderControllerSource, /isBlockedTransferRequestReCollect\(payment, transferReq\)/);
+    assert.match(
+      orderControllerSource,
+      /Create a new transfer request instead of collecting this payment again/
+    );
+  });
+
   it("updatePaymentStatus routes direct transfer reject to undoDirectOrderPaymentTransfer", () => {
     const orderControllerSource = readFileSync(
       resolve(process.cwd(), "controllers/order.controller.js"),
@@ -180,6 +229,19 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
     );
     assert.match(orderControllerSource, /undoDirectOrderPaymentTransfer\(/);
     assert.match(orderControllerSource, /ledgerUndo: undoResult\.ledgerUndo/);
+  });
+
+  it("transfer request approve/undo use orderPaymentTransferRequestLedger service", () => {
+    const controllerSource = readFileSync(
+      resolve(process.cwd(), "controllers/farmerPlantOrderLedger.controller.js"),
+      "utf8"
+    );
+    const helperSource = readFileSync(
+      resolve(process.cwd(), "utils/farmerPlantOrderLedgerHelper.js"),
+      "utf8"
+    );
+    assert.match(controllerSource, /syncTransferRequestApproveLedgers\(/);
+    assert.match(helperSource, /syncTransferRequestUndoLedgers\(/);
   });
 
   it("transfer and undo call orderPaymentTransferLedger orchestrator", () => {

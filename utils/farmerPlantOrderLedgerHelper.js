@@ -1103,6 +1103,19 @@ export async function computeOrderPaymentTotals(order) {
   };
 }
 
+/** True when COLLECTED must not be set again on this transfer-request payment line. */
+export function isBlockedTransferRequestReCollect(payment, transferRequest) {
+  if (!payment?.transferRequestId || !transferRequest) return false;
+  if (transferRequest.status === "REJECTED") return true;
+  if (
+    transferRequest.status === "APPROVED" &&
+    payment.paymentStatus === "REJECTED"
+  ) {
+    return true;
+  }
+  return /Transfer request undone/i.test(String(payment.remark || ""));
+}
+
 /** Target payment row created by POST transfer-order-payment (not transfer-request flow). */
 export function isDirectOrderPaymentTransfer(payment) {
   if (!payment) return false;
@@ -1458,72 +1471,24 @@ export async function undoApprovedTransferRequestPayment({
     recomputeOrderPaymentCompletion(sourceOrder);
     recomputeOrderPaymentCompletion(targetOrderDoc);
 
-    const dealerPair = isDealerScopedTransferPair(sourceOrder, targetOrderDoc);
     const performedBy = userId || null;
 
-    if (!dealerPair && shouldLogFarmerPlantLedger(targetOrderDoc) && prevTargetStatus === "COLLECTED") {
-      await ensureFarmerPlantOrderDebit(targetOrderDoc, { userId: performedBy, session });
-      await recordFarmerPlantLedgerPaymentTransition(
-        targetOrderDoc,
-        targetPay,
-        "COLLECTED",
-        "REJECTED",
-        {
-          userId: performedBy,
-          session,
-          descriptionOverride: `Transfer request undo: reject payment on order #${targetNumericId}`,
-          metadataExtra: {
-            kind: "order_payment_transfer_request_undo",
-            transferRequestId: String(requestDoc._id),
-            direction: "reject_target",
-          },
-        }
-      );
-    }
-
-    if (!dealerPair && shouldLogFarmerPlantLedger(sourceOrder) && restoredTotal > 0) {
-      const sourceParty = await resolveFarmerIdentity(sourceOrder);
-      if (sourceParty.customerMobile) {
-        await createFarmerPlantLedgerEntry({
-          customerMobile: sourceParty.customerMobile,
-          customerName: sourceParty.customerName,
-          farmerId: sourceParty.farmerId,
-          refType: "ADJUSTMENT",
-          refId: new mongoose.Types.ObjectId(),
-          orderId: sourceOrder._id,
-          credit: restoredTotal,
-          reference: String(sourceOrder.orderId || ""),
-          category: "Order Transfer Undo",
-          description: `Transfer request undo: restore order #${sourceNumericId} (reject on #${targetNumericId})`,
-          entryDate: new Date(),
-          createdBy: performedBy,
-          metadata: {
-            kind: "order_payment_transfer_request_undo",
-            transferRequestId: String(requestDoc._id),
-            direction: "restore_source",
-            peerOrderMongoId: String(targetOrderDoc._id),
-            peerOrderNumber: targetNumericId,
-          },
-          session,
-        });
-      }
-    }
-
-    if (dealerPair) {
-      const { syncDealerLedgerForPaymentStatusTransition } = await import("./dealerLedgerHelper.js");
-      await syncDealerLedgerForPaymentStatusTransition(
-        targetOrderDoc,
-        targetPay,
-        "COLLECTED",
-        "REJECTED",
-        {
-          userId: performedBy,
-          session,
-          descriptionOverride: `Transfer request undo — reject on order ${targetNumericId}`,
-          metadataExtra: { kind: "order_payment_transfer_request_undo" },
-        }
-      );
-    }
+    const { syncTransferRequestUndoLedgers } = await import(
+      "../services/orderPaymentTransferRequestLedger.service.js"
+    );
+    const ledgerUndo = await syncTransferRequestUndoLedgers(
+      {
+        sourceOrder,
+        targetOrder: targetOrderDoc,
+        targetPayment: targetPay,
+        transferRequestId: requestDoc._id,
+        amount,
+        restoredTotal,
+        userId: performedBy,
+        prevTargetStatus,
+      },
+      { session }
+    );
 
     requestDoc.status = "REJECTED";
     requestDoc.approval = {
@@ -1547,6 +1512,7 @@ export async function undoApprovedTransferRequestPayment({
       targetOrder: targetOrderDoc,
       request: requestDoc,
       restoredAmount: restoredTotal,
+      ledgerUndo,
     };
   } catch (e) {
     try {
