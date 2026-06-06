@@ -570,7 +570,24 @@ async function rolloverOneOrder(order, sourceDetails, targetMeta, session) {
  * Plan rollover without writes — status/state breakdown + orders to move list.
  * @param {{ asOfDate?: Date|string, onProgress?: (msg: string) => void }} options
  */
-export async function planPastDueSlotRollover({ asOfDate, onProgress } = {}) {
+function matchesPlantSubtypeFilter(sourceDetails, plantId, subtypeId) {
+  if (!sourceDetails) return false;
+  if (plantId) {
+    const pid = sourceDetails.plantId?.toString?.() || String(sourceDetails.plantId || "");
+    if (pid !== String(plantId)) return false;
+  }
+  if (subtypeId) {
+    const sid =
+      sourceDetails.subtypeId?.toString?.() || String(sourceDetails.subtypeId || "");
+    if (sid !== String(subtypeId)) return false;
+  }
+  return true;
+}
+
+/**
+ * @param {{ asOfDate?: Date|string, onProgress?: (msg: string) => void, plantId?: string, subtypeId?: string }} options
+ */
+export async function planPastDueSlotRollover({ asOfDate, onProgress, plantId, subtypeId } = {}) {
   const log = (msg) => {
     if (onProgress) onProgress(msg);
     else console.log(msg);
@@ -604,8 +621,23 @@ export async function planPastDueSlotRollover({ asOfDate, onProgress } = {}) {
   };
 
   const t0 = Date.now();
-  log("[past-due-rollover] loading plant slots (single query)...");
-  const plantSlots = await PlantSlot.find({}).select(PLANT_SLOT_SELECT).lean();
+  const plantSlotQuery = {};
+  if (plantId && mongoose.isValidObjectId(String(plantId))) {
+    plantSlotQuery.plantId = new mongoose.Types.ObjectId(String(plantId));
+  }
+  if (subtypeId && mongoose.isValidObjectId(String(subtypeId))) {
+    plantSlotQuery["subtypeSlots.subtypeId"] = new mongoose.Types.ObjectId(
+      String(subtypeId)
+    );
+  }
+  const scoped =
+    Object.keys(plantSlotQuery).length > 0
+      ? ` (plant=${plantId || "—"} subtype=${subtypeId || "—"})`
+      : "";
+  log(`[past-due-rollover] loading plant slots (single query)${scoped}...`);
+  const plantSlots = await PlantSlot.find(plantSlotQuery)
+    .select(PLANT_SLOT_SELECT)
+    .lean();
   log(
     `[past-due-rollover] plant slot docs loaded: ${plantSlots.length} (${Date.now() - t0}ms)`
   );
@@ -708,6 +740,10 @@ export async function planPastDueSlotRollover({ asOfDate, onProgress } = {}) {
       continue;
     }
 
+    if (!matchesPlantSubtypeFilter(sourceDetails, plantId, subtypeId)) {
+      continue;
+    }
+
     const targetMeta = rolloverTargetsByPsKey.get(
       plantSubtypeKey(sourceDetails.plantId, sourceDetails.subtypeId)
     );
@@ -762,16 +798,27 @@ export async function planPastDueSlotRollover({ asOfDate, onProgress } = {}) {
 }
 
 /**
- * @param {{ asOfDate?: Date|string, dryRun?: boolean, onProgress?: (msg: string) => void }} options
+ * @param {{ asOfDate?: Date|string, dryRun?: boolean, onProgress?: (msg: string) => void, plantId?: string, subtypeId?: string }} options
  */
-export async function runPastDueSlotRollover({ asOfDate, dryRun = false, onProgress } = {}) {
+export async function runPastDueSlotRollover({
+  asOfDate,
+  dryRun = false,
+  onProgress,
+  plantId,
+  subtypeId,
+} = {}) {
   const log = (msg) => {
     if (onProgress) onProgress(msg);
     else console.log(msg);
   };
 
   const asOf = asOfDate ? new Date(asOfDate) : new Date();
-  const plan = await planPastDueSlotRollover({ asOfDate: asOf, onProgress });
+  const plan = await planPastDueSlotRollover({
+    asOfDate: asOf,
+    onProgress,
+    plantId,
+    subtypeId,
+  });
   const summary = {
     asOf: plan.asOf,
     dryRun: Boolean(dryRun),
@@ -806,11 +853,19 @@ export async function runPastDueSlotRollover({ asOfDate, dryRun = false, onProgr
     .lean();
   const orderById = new Map(orders.map((o) => [String(o._id), o]));
 
-  const plantSlots = await PlantSlot.find({}).select(PLANT_SLOT_SELECT).lean();
-  const { slotById, slotsByPlantSubtype, expiredSlotIds } = buildSlotRolloverIndexes(
-    plantSlots,
-    asOf
-  );
+  const plantSlotQuery = {};
+  if (plantId && mongoose.isValidObjectId(String(plantId))) {
+    plantSlotQuery.plantId = new mongoose.Types.ObjectId(String(plantId));
+  }
+  if (subtypeId && mongoose.isValidObjectId(String(subtypeId))) {
+    plantSlotQuery["subtypeSlots.subtypeId"] = new mongoose.Types.ObjectId(
+      String(subtypeId)
+    );
+  }
+  const plantSlots = await PlantSlot.find(plantSlotQuery)
+    .select(PLANT_SLOT_SELECT)
+    .lean();
+  const { slotById, slotsByPlantSubtype } = buildSlotRolloverIndexes(plantSlots, asOf);
   const rolloverTargetsByPsKey = buildRolloverTargetsByPlantSubtype(
     slotsByPlantSubtype,
     asOf

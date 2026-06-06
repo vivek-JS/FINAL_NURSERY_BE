@@ -228,27 +228,45 @@ function hasLineItems(doc) {
   return Array.isArray(doc.lineItems) && doc.lineItems.length > 0;
 }
 
-/** Sync root-level product fields from `lineItems` for validation, payments, and legacy readers. */
-export function rollupAgriLineItemsToRoot(doc) {
+/**
+ * Sync root-level product fields from `lineItems` for validation, payments, and legacy readers.
+ * @param {{ useDeliveredQty?: boolean }} options — when true (completed orders), bill from delivered/return lines
+ */
+export function rollupAgriLineItemsToRoot(doc, options = {}) {
   const lines = doc.lineItems;
   if (!lines || !lines.length) return;
 
-  let totalQty = 0;
+  const useDelivered = Boolean(options.useDeliveredQty);
+  let billableQty = 0;
+  let orderedQty = 0;
   let totalAmt = 0;
   lines.forEach((line, idx) => {
     line.sortOrder = line.sortOrder ?? idx;
-    const q = Number(line.quantity) || 0;
+    const ordered = Number(line.quantity) || 0;
+    orderedQty += ordered;
+    const returned = Number(line.returnQuantity) || 0;
+    const delivered =
+      line.deliveredQuantity != null && line.deliveredQuantity !== undefined
+        ? Number(line.deliveredQuantity)
+        : Math.max(0, ordered - returned);
+    const qForBill = useDelivered ? delivered : ordered;
     const r = Number(line.rate) || 0;
-    let lt = line.lineTotal != null ? Number(line.lineTotal) : q * r;
-    if (Number.isNaN(lt)) lt = q * r;
-    line.lineTotal = lt;
-    totalQty += q;
-    totalAmt += lt;
+    let lt = useDelivered ? qForBill * r : line.lineTotal != null ? Number(line.lineTotal) : ordered * r;
+    if (Number.isNaN(lt)) lt = qForBill * r;
+    line.lineTotal = roundMoney(lt);
+    if (useDelivered) {
+      line.deliveredQuantity = delivered;
+    }
+    billableQty += qForBill;
+    totalAmt += line.lineTotal;
   });
 
-  doc.quantity = totalQty;
-  doc.totalAmount = totalAmt;
-  doc.rate = totalQty > 0 ? totalAmt / totalQty : 0;
+  doc.quantity = orderedQty;
+  if (useDelivered) {
+    doc.deliveredQuantity = billableQty;
+  }
+  doc.totalAmount = roundMoney(totalAmt);
+  doc.rate = billableQty > 0 ? roundMoney(totalAmt / billableQty) : 0;
   doc.productName =
     lines.length === 1
       ? String(lines[0].productName || "").trim() || "Item"
@@ -326,6 +344,29 @@ export function getPerLineReturnQuantities(orderLike, totalReturnQty = null) {
     return lines.map((l) => Number(l.returnQuantity) || 0);
   }
   return distributeReturnQtyAcrossLines(lines, total);
+}
+
+/** Delivered qty and billable amount from line delivered/return fields. */
+export function computeAgriDeliveredTotalFromLines(orderLike) {
+  const lines = getAgriOrderLines(orderLike);
+  let totalQty = 0;
+  let totalAmt = 0;
+  lines.forEach((line) => {
+    const ordered = Number(line.quantity) || 0;
+    const returned = Number(line.returnQuantity) || 0;
+    const delivered =
+      line.deliveredQuantity != null && line.deliveredQuantity !== undefined
+        ? Number(line.deliveredQuantity)
+        : Math.max(0, ordered - returned);
+    const rate = Number(line.rate) || 0;
+    totalQty += delivered;
+    totalAmt += delivered * rate;
+  });
+  return { totalQty, totalAmt: roundMoney(totalAmt) };
+}
+
+function roundMoney(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
 }
 
 /** Rupee credit for returned qty (respects per-line rates). */
@@ -884,7 +925,9 @@ agriSalesOrderSchema.pre("validate", async function (next) {
 // Calculate total amount and balance before save
 agriSalesOrderSchema.pre("save", function (next) {
   if (hasLineItems(this)) {
-    rollupAgriLineItemsToRoot(this);
+    rollupAgriLineItemsToRoot(this, {
+      useDeliveredQty: this.orderStatus === "COMPLETED",
+    });
   }
 
   // Recalculate total amount if quantity, rate, or deliveredQuantity changes
@@ -904,15 +947,6 @@ agriSalesOrderSchema.pre("save", function (next) {
     this.totalAmount = quantityForAmount * (this.rate || 0);
   }
 
-  if (
-    hasLineItems(this) &&
-    this.orderStatus === "COMPLETED" &&
-    this.deliveredQuantity > 0 &&
-    (this.isModified("deliveredQuantity") || this.isModified("orderStatus"))
-  ) {
-    this.totalAmount = this.deliveredQuantity * (this.rate || 0);
-  }
-
   // Recalculate payment status and balance if payment changes
   if (this.isModified("payment") || this.isModified("totalAmount") || this.isModified("deliveredQuantity") || this.isModified("orderStatus")) {
     const totalPaid = this.payment && this.payment.length > 0
@@ -925,12 +959,11 @@ agriSalesOrderSchema.pre("save", function (next) {
       : 0;
 
     this.totalPaidAmount = totalPaid;
-    
-    // For completed orders, recalculate totalAmount based on deliveredQuantity
-    if (this.orderStatus === "COMPLETED" && this.deliveredQuantity > 0) {
+
+    if (!hasLineItems(this) && this.orderStatus === "COMPLETED" && this.deliveredQuantity > 0) {
       this.totalAmount = this.deliveredQuantity * (this.rate || 0);
     }
-    
+
     this.balanceAmount = (this.totalAmount || 0) - totalPaid;
 
     // Update payment status

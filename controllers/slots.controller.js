@@ -22,122 +22,28 @@ import {
 } from "../utility/slotTransferTrail.js";
 import { executeMassOrderSlotTransfer } from "../services/slotOrderTransfer.service.js";
 import {
+  aggregateShedStockBySlotIds,
+  computeActualAvailable,
+  getSlotSecondaryShedBreakdown,
+} from "../services/secondaryShedSlotStock.service.js";
+import { slotWindowToDeliveryUtcRange } from "../utility/findDeliverySlot.js";
+import {
+  addRolledRemainingToStats,
   aggregateSlotDispatchStats,
   computeSlotDispatchStatsFromOrders,
+  getNativeDeliveryCohortOrders,
   getSlotDispatchStats,
+  groupOrdersByDeliverySlot,
 } from "../utility/slotDispatchStats.js";
 import { fetchSlotAvailabilityReport } from "../services/availabilityOverview.service.js";
-import { DUE_DELIVERY_STATUSES } from "../utility/adminMisDue.js";
 import {
   runPastDueSlotRollover,
-  isSlotExpiredByEndDay,
-  findCurrentSlotIdForGroup,
 } from "../services/pastDueSlotRollover.service.js";
-
-const DUE_PIPELINE_STATUS_SET = new Set(DUE_DELIVERY_STATUSES);
-
-function orderLinePlants(order) {
-  return (Number(order.numberOfPlants) || 0) + (Number(order.additionalPlants) || 0);
-}
-
-function isEligiblePastDueOrder(order) {
-  if (order?.quotaSource === "dealer") return false;
-  return DUE_PIPELINE_STATUS_SET.has(order?.orderStatus);
-}
-
-function mapPastDueOrderRow(order) {
-  return {
-    _id: order._id?.toString?.() || String(order._id),
-    orderId: order.orderId,
-    orderStatus: order.orderStatus,
-    plants: orderLinePlants(order),
-    pastDueSlotRollover: Boolean(order.pastDueSlotRollover),
-  };
-}
-
-/** Past-due pills: one current slot per subtype — sum + per-bucket order lists for UI. */
-function aggregatePastDueMetricsForSlotGroup(slots, ordersBySlot, asOfDate = new Date()) {
-  let pastDueRolledInPlants = 0;
-  let pastDuePendingOnSlot = 0;
-  const currentSlotId = findCurrentSlotIdForGroup(slots, asOfDate);
-
-  const rolledInOnCurrentSlot = [];
-  const rolledInOnOtherSlots = [];
-  const pendingBySlotMap = new Map();
-
-  for (const slot of slots || []) {
-    if (slot.status === false) continue;
-    const slotId = slot._id?.toString?.() || String(slot._id);
-    const orders = ordersBySlot.get(slotId) || [];
-    const isCurrent = slotId === currentSlotId;
-
-    for (const o of orders) {
-      const qty = orderLinePlants(o);
-      const row = mapPastDueOrderRow(o);
-
-      if (o.pastDueSlotRollover) {
-        pastDueRolledInPlants += qty;
-        if (isCurrent) rolledInOnCurrentSlot.push(row);
-        else rolledInOnOtherSlots.push(row);
-      }
-
-      if (isSlotExpiredByEndDay(slot, asOfDate) && isEligiblePastDueOrder(o)) {
-        pastDuePendingOnSlot += qty;
-        if (!pendingBySlotMap.has(slotId)) {
-          pendingBySlotMap.set(slotId, {
-            slotId,
-            startDay: slot.startDay,
-            endDay: slot.endDay,
-            label: `${slot.startDay}–${slot.endDay}`,
-            orderCount: 0,
-            plants: 0,
-            orders: [],
-          });
-        }
-        const bucket = pendingBySlotMap.get(slotId);
-        bucket.orders.push(row);
-        bucket.orderCount += 1;
-        bucket.plants += qty;
-      }
-    }
-  }
-
-  const pendingBySlot = [...pendingBySlotMap.values()].sort(
-    (a, b) => b.plants - a.plants || b.orderCount - a.orderCount
-  );
-
-  const pastDueRolledInOrders =
-    rolledInOnCurrentSlot.length + rolledInOnOtherSlots.length;
-  const pastDuePendingOrders = pendingBySlot.reduce(
-    (s, b) => s + b.orderCount,
-    0
-  );
-
-  return {
-    currentSlotId,
-    pastDueRolledInPlants,
-    pastDuePendingOnSlot,
-    pastDueRolledInOrders,
-    pastDuePendingOrders,
-    pastDueDetail: {
-      rolledInOnCurrentSlot: {
-        orderCount: rolledInOnCurrentSlot.length,
-        plants: rolledInOnCurrentSlot.reduce((s, r) => s + r.plants, 0),
-        orders: rolledInOnCurrentSlot,
-      },
-      rolledInOnOtherSlots: {
-        orderCount: rolledInOnOtherSlots.length,
-        plants: rolledInOnOtherSlots.reduce((s, r) => s + r.plants, 0),
-        orders: rolledInOnOtherSlots,
-      },
-      pendingBySlot,
-      pendingTotal: {
-        orderCount: pendingBySlot.reduce((s, b) => s + b.orderCount, 0),
-        plants: pastDuePendingOnSlot,
-      },
-    },
-  };
-}
+import {
+  aggregatePastDueMetricsForSlotGroup,
+  buildSlotOrderMetrics,
+  sumEarlyDispatchOntoSlot,
+} from "../utility/pastDueSlotMetrics.js";
 
 // Helper function to convert month name to number
 const getMonthNumber = (monthName) => {
@@ -208,12 +114,24 @@ const getSlotEffectiveAvailablePlants = (slot) => {
 };
 
 const getSlotBookedPlantCount = async (slotId) => {
-  const orders = await Order.find({
-    bookingSlot: new mongoose.Types.ObjectId(slotId),
+  const details = await findSlotDetails(slotId);
+  const range = details?.slot ? slotWindowToDeliveryUtcRange(details.slot) : null;
+  const match = {
     orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
     $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
-  })
-    .select("numberOfPlants additionalPlants orderStatus")
+  };
+  if (range) {
+    match.deliveryDate = { $gte: range.start, $lte: range.end };
+  } else {
+    match.bookingSlot = new mongoose.Types.ObjectId(slotId);
+  }
+  if (details?.plantId) match.plantName = details.plantId;
+  if (details?.subtypeId) match.plantSubtype = details.subtypeId;
+
+  const orders = await Order.find(match)
+    .select(
+      "numberOfPlants additionalPlants orderStatus pastDueSlotRollover pastDueSlotRolloverAt deliveryDate quotaSource"
+    )
     .lean();
   return computeSlotDispatchStatsFromOrders(orders).totalBookedPlants;
 };
@@ -2503,9 +2421,56 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       ]
     })
       .select(
-        "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover"
+        "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover pastDueSlotRolloverAt deliveryDate plantName plantSubtype"
       )
       .lean();
+
+    const deliveryRangeConditions = [];
+    const plantIdsForDelivery = new Set();
+    const subtypeIdsForDelivery = new Set();
+    for (const slotGroup of slots) {
+      if (slotGroup.plantId) plantIdsForDelivery.add(slotGroup.plantId.toString());
+      if (slotGroup.subtypeId) subtypeIdsForDelivery.add(slotGroup.subtypeId.toString());
+      for (const slot of slotGroup.slots || []) {
+        const range = slotWindowToDeliveryUtcRange(slot);
+        if (range) {
+          deliveryRangeConditions.push({
+            deliveryDate: { $gte: range.start, $lte: range.end },
+          });
+        }
+      }
+    }
+
+    let deliveryDateOrders = [];
+    if (deliveryRangeConditions.length > 0) {
+      const deliveryMatch = {
+        $or: deliveryRangeConditions,
+        deliveryDate: { $exists: true, $ne: null },
+        orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+        $and: [
+          {
+            $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
+          },
+        ],
+      };
+      if (plantIdsForDelivery.size === 1) {
+        deliveryMatch.plantName = new mongoose.Types.ObjectId([...plantIdsForDelivery][0]);
+      }
+      if (subtypeIdsForDelivery.size === 1) {
+        deliveryMatch.plantSubtype = new mongoose.Types.ObjectId([...subtypeIdsForDelivery][0]);
+      }
+      deliveryDateOrders = await Order.find(deliveryMatch)
+        .select(
+          "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover pastDueSlotRolloverAt deliveryDate plantName plantSubtype"
+        )
+        .lean();
+    }
+
+    const ordersById = new Map();
+    for (const order of [...allOrders, ...deliveryDateOrders]) {
+      ordersById.set(order._id?.toString?.() ?? String(order._id), order);
+    }
+    const mergedOrders = [...ordersById.values()];
 
     // Cross-slot dispatch aggregates (orders on other slots but dispatching here, or released from here)
     const crossSlotOrders = await Order.find({
@@ -2522,24 +2487,19 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       ],
     })
       .select(
-        "numberOfPlants additionalPlants bookingSlot originalBookingSlot dispatchedFromAnotherSlot"
+        "numberOfPlants additionalPlants bookingSlot originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover"
       )
       .lean();
 
-    const dispatchedFromOtherBySlot = new Map();
+    const slotIdSet = new Set([...slotMap.keys()]);
+    const dispatchedFromOtherBySlot = sumEarlyDispatchOntoSlot(crossSlotOrders, slotIdSet);
     const releasedForEarlyBySlot = new Map();
     for (const order of crossSlotOrders) {
+      if (order.pastDueSlotRollover) continue;
       const qty =
         (Number(order.numberOfPlants) || 0) + (Number(order.additionalPlants) || 0);
-      const bookingId = order.bookingSlot?.toString?.() ?? String(order.bookingSlot);
       const originalId =
         order.originalBookingSlot?.toString?.() ?? String(order.originalBookingSlot);
-      if (bookingId && slotMap.has(bookingId)) {
-        dispatchedFromOtherBySlot.set(
-          bookingId,
-          (dispatchedFromOtherBySlot.get(bookingId) || 0) + qty
-        );
-      }
       if (originalId && slotMap.has(originalId)) {
         releasedForEarlyBySlot.set(
           originalId,
@@ -2620,6 +2580,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
 
     // Update slots with orders and calculate values
     for (const slotGroup of slots) {
+      const ordersByDelivery = groupOrdersByDeliverySlot(mergedOrders, slotGroup.slots);
       const pastDueGroup = aggregatePastDueMetricsForSlotGroup(
         slotGroup.slots,
         ordersBySlot,
@@ -2629,7 +2590,13 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       for (const slot of slotGroup.slots) {
         const slotId = slot._id?.toString ? slot._id.toString() : slot._id;
         const orders = ordersBySlot.get(slotId) || [];
-        const dispatchStats = computeSlotDispatchStatsFromOrders(orders);
+        const deliveryOrders = ordersByDelivery.get(slotId) || [];
+        const nativeDelivery = getNativeDeliveryCohortOrders(deliveryOrders);
+        const dispatchStats = computeSlotDispatchStatsFromOrders(orders, {
+          bookedOrders: nativeDelivery,
+          pipelineOrders: nativeDelivery,
+        });
+        addRolledRemainingToStats(dispatchStats, deliveryOrders);
 
         // Get dealer quota information for this slot
         const dealerQuota = dealerQuotaMap.get(slotId) || {
@@ -2638,30 +2605,20 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
           hasDealerQuota: false
         };
         
-        // Update slot with calculated values
         slot.orders = orders;
-        slot.totalBookedPlants = dispatchStats.totalBookedPlants;
-        slot.totalDispatchedPlants = dispatchStats.totalDispatchedPlants;
-        slot.remainingToDispatch = dispatchStats.remainingToDispatch;
         slot.dealerQuota = dealerQuota;
-        slot.dispatchedFromOtherSlots = dispatchedFromOtherBySlot.get(slotId) || 0;
-        slot.releasedForEarlyDispatch = releasedForEarlyBySlot.get(slotId) || 0;
-
-        const isCurrentSlot = slotId === pastDueGroup.currentSlotId;
-        slot.isCurrentDateSlot = isCurrentSlot;
-        slot.pastDueRolledInPlants = isCurrentSlot
-          ? pastDueGroup.pastDueRolledInPlants
-          : 0;
-        slot.pastDuePendingOnSlot = isCurrentSlot
-          ? pastDueGroup.pastDuePendingOnSlot
-          : 0;
-        slot.pastDueRolledInOrders = isCurrentSlot
-          ? pastDueGroup.pastDueRolledInOrders
-          : 0;
-        slot.pastDuePendingOrders = isCurrentSlot
-          ? pastDueGroup.pastDuePendingOrders
-          : 0;
-        slot.pastDueDetail = isCurrentSlot ? pastDueGroup.pastDueDetail : null;
+        Object.assign(
+          slot,
+          buildSlotOrderMetrics({
+            slot,
+            slotId,
+            orders,
+            dispatchStats,
+            pastDueGroup,
+            dispatchedFromOtherBySlot,
+            releasedForEarlyBySlot,
+          })
+        );
 
         const resolved = resolveSlotBufferFields(slot, { subtypeBuffer, plantBuffer });
         slot.effectiveBuffer = resolved.effectiveBuffer;
@@ -2939,8 +2896,20 @@ export const getStockEntry = async (req, res) => {
       statsBySlot = aggregateSlotDispatchStats(orders);
     }
 
+    const shedBySlot =
+      slotObjectIds.length > 0
+        ? await aggregateShedStockBySlotIds(slotObjectIds)
+        : new Map();
+
     const payload = slots.map((slot) => {
       const dispatchStats = getSlotDispatchStats(statsBySlot, slot._id);
+      const actualPlants = Number(slot.actualPlants) || 0;
+      const remainingToDispatch = dispatchStats.remainingToDispatch;
+      const actualAvailable = computeActualAvailable(
+        actualPlants,
+        remainingToDispatch
+      );
+      const shed = shedBySlot.get(String(slot._id)) || {};
       return {
         _id: slot._id,
         startDay: slot.startDay,
@@ -2949,11 +2918,16 @@ export const getStockEntry = async (req, res) => {
         totalPlants: Number(slot.totalPlants) || 0,
         totalBookedPlants: dispatchStats.totalBookedPlants,
         totalDispatchedPlants: dispatchStats.totalDispatchedPlants,
-        remainingToDispatch: dispatchStats.remainingToDispatch,
+        remainingToDispatch,
         availablePlants: getSlotEffectiveAvailablePlants(slot),
         plantsSowed: Number(slot.plantsSowed) || 0,
-        actualPlants: Number(slot.actualPlants) || 0,
+        actualPlants,
+        actualAvailable,
         closingStock: Number(slot.closingStock) || 0,
+        shedSyncedPlants: shed.shedSyncedPlants ?? 0,
+        shedAvailableInShed: shed.shedAvailableInShed ?? 0,
+        linkedBatchCount: shed.linkedBatchCount ?? 0,
+        shedLineCount: shed.lineCount ?? 0,
         status: slot.status,
         isManual: slot.isManual,
       };
@@ -2966,6 +2940,39 @@ export const getStockEntry = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching stock entry slots:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error.",
+      error: error.message,
+    });
+  }
+};
+
+/** Secondary shed batches + sowing dates linked to a booking slot (ERP drill-down). */
+export const getSlotSecondaryShedBreakdownHandler = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    if (!slotId || !mongoose.Types.ObjectId.isValid(String(slotId))) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid slotId is required.",
+      });
+    }
+
+    const data = await getSlotSecondaryShedBreakdown(slotId);
+    if (!data) {
+      return res.status(404).json({
+        success: false,
+        message: "Slot not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      ...data,
+    });
+  } catch (error) {
+    console.error("Error fetching slot secondary shed breakdown:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error.",
@@ -4899,7 +4906,14 @@ export const runPastDueSlotRolloverController = async (req, res) => {
     const asOfRaw = req.body?.asOfDate || req.query?.asOfDate;
     const asOfDate = asOfRaw ? new Date(asOfRaw) : undefined;
 
-    const summary = await runPastDueSlotRollover({ asOfDate, dryRun });
+    const plantId = req.body?.plantId || req.query?.plantId;
+    const subtypeId = req.body?.subtypeId || req.query?.subtypeId;
+    const summary = await runPastDueSlotRollover({
+      asOfDate,
+      dryRun,
+      plantId: plantId ? String(plantId) : undefined,
+      subtypeId: subtypeId ? String(subtypeId) : undefined,
+    });
 
     return res.status(200).json({
       success: true,

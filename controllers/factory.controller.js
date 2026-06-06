@@ -44,6 +44,7 @@ import {
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
 import { resolveSlotBufferFields } from "../utility/bufferUtils.js";
+import { slotWindowToDeliveryUtcRange } from "../utility/findDeliverySlot.js";
 import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
 import {
   applyPaymentTimingToPayment,
@@ -3656,12 +3657,35 @@ const getAll = (Model, modelName) =>
 
     // Special case for slotId filtering
     if (slotId) {
-      // Match orders with the specified slot ID
-      pipeline.push({
-        $match: {
-          bookingSlot: new mongoose.Types.ObjectId(slotId),
-        },
-      });
+      const slotOid = new mongoose.Types.ObjectId(slotId);
+      const slotDeliveryRange =
+        startDay && endDay ? slotWindowToDeliveryUtcRange({ startDay, endDay }) : null;
+      const slotStatUsesDeliveryWindow =
+        slotDeliveryRange &&
+        [
+          "booked",
+          "dispatched",
+          "remaining",
+          "remaining_native",
+          "remaining_rolled",
+        ].includes(slotStatScope);
+
+      if (slotStatUsesDeliveryWindow) {
+        pipeline.push({
+          $match: {
+            deliveryDate: {
+              $gte: slotDeliveryRange.start,
+              $lte: slotDeliveryRange.end,
+            },
+          },
+        });
+      } else {
+        pipeline.push({
+          $match: {
+            bookingSlot: slotOid,
+          },
+        });
+      }
 
       // Slot stat tiles: same order scope as slotDispatchStats on GET slots
       if (slotStatScope || statusTokensUpper.length > 0) {
@@ -3681,16 +3705,37 @@ const getAll = (Model, modelName) =>
             orderStatus: {
               $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"],
             },
+            $nor: [
+              { pastDueSlotRollover: true },
+              { pastDueSlotRolloverAt: { $exists: true, $ne: null } },
+            ],
           },
         });
       } else if (slotStatScope === "dispatched") {
         pipeline.push({
           $match: { orderStatus: { $in: ["DISPATCHED", "COMPLETED"] } },
         });
-      } else if (slotStatScope === "remaining") {
+      } else if (
+        slotStatScope === "remaining" ||
+        slotStatScope === "remaining_native"
+      ) {
         pipeline.push({
           $match: {
             orderStatus: { $in: ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH"] },
+            $nor: [
+              { pastDueSlotRollover: true },
+              { pastDueSlotRolloverAt: { $exists: true, $ne: null } },
+            ],
+          },
+        });
+      } else if (slotStatScope === "remaining_rolled") {
+        pipeline.push({
+          $match: {
+            orderStatus: { $in: ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH"] },
+            $or: [
+              { pastDueSlotRollover: true },
+              { pastDueSlotRolloverAt: { $exists: true, $ne: null } },
+            ],
           },
         });
       } else if (statusTokensUpper.length > 0) {

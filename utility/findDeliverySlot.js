@@ -77,6 +77,22 @@ export async function findDeliverySlotByDate(plantId, subtypeId, deliveryDate) {
  * @param {Date|string|moment.Moment} date
  * @param {{ startDay: string, endDay: string }} slotWindow
  */
+/** True when delivery falls on a calendar day inside slot startDay–endDay (DD-MM-YYYY). */
+export function isDeliveryDateInSlotWindow(date, slotWindow) {
+  if (!date || !slotWindow?.startDay || !slotWindow?.endDay) return false;
+  return !isDateOutsideSlotWindow(date, slotWindow);
+}
+
+/** UTC day bounds for MongoDB deliveryDate queries on a slot window. */
+export function slotWindowToDeliveryUtcRange(slotWindow) {
+  if (!slotWindow?.startDay || !slotWindow?.endDay) return null;
+  const slotStart = slotWindow.startDay.split("-").reverse().join("-");
+  const slotEnd = slotWindow.endDay.split("-").reverse().join("-");
+  const start = moment.utc(slotStart + "T00:00:00").startOf("day").toDate();
+  const end = moment.utc(slotEnd + "T23:59:59.999").endOf("day").toDate();
+  return { start, end };
+}
+
 export function isDateOutsideSlotWindow(date, slotWindow) {
   if (!slotWindow?.startDay || !slotWindow?.endDay) {
     return true;
@@ -110,7 +126,7 @@ export async function getSlotWindowById(slotId) {
   const plantSlotDoc = await PlantSlot.findOne({
     "subtypeSlots.slots._id": slotId,
   })
-    .select("subtypeSlots.slots")
+    .select("plantId subtypeSlots.subtypeId subtypeSlots.slots")
     .lean();
 
   if (!plantSlotDoc) return null;
@@ -120,7 +136,14 @@ export async function getSlotWindowById(slotId) {
       (s) => s._id?.toString() === slotId.toString()
     );
     if (slot) {
-      return { _id: slot._id, startDay: slot.startDay, endDay: slot.endDay };
+      return {
+        _id: slot._id,
+        startDay: slot.startDay,
+        endDay: slot.endDay,
+        month: slot.month,
+        plantId: plantSlotDoc.plantId,
+        subtypeId: subtype.subtypeId,
+      };
     }
   }
   return null;

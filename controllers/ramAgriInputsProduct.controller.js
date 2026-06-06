@@ -534,6 +534,7 @@ export const updateVariety = catchAsync(async (req, res, next) => {
           'varieties.$.currentStock': parsedStock,
           'varieties.$.stockValue': nextStockValue,
           'varieties.$.averagePrice': Number(nextAveragePrice || 0),
+          'varieties.$.stockUpdatedAt': new Date(),
           updatedBy: req.user._id,
         },
       },
@@ -700,6 +701,7 @@ export const updateVariety = catchAsync(async (req, res, next) => {
       oldAveragePrice > 0 ? oldAveragePrice : fallbackPrice > 0 ? fallbackPrice : 0;
 
     variety.currentStock = parsedStock;
+    variety.stockUpdatedAt = new Date();
     if (parsedStock === 0) {
       variety.stockValue = 0;
       if (oldAveragePrice <= 0 && effectiveAveragePrice > 0) {

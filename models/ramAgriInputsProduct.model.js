@@ -105,6 +105,10 @@ const varietySchema = new mongoose.Schema({
     min: 0,
     comment: "Current stock quantity for this variety",
   },
+  stockUpdatedAt: {
+    type: Date,
+    comment: "Last time currentStock was changed for this variety",
+  },
   stockValue: {
     type: Number,
     default: 0,

@@ -13,12 +13,21 @@ import {
   deletePrimaryInward,
   getPrimaryInwardByBatchId,
   labToPrimaryInward,
+  primaryInwardFifoPreview,
+  primaryInwardFifoPreviewGlobal,
+  labToPrimaryInwardBulk,
+  labToPrimaryInwardBulkGlobal,
   primaryToSecondaryInward,
+  secondaryBatchLagwadFromPrimaryOutward,
   acknowledgePrimaryOutwardForSecondary,
   recordSecondaryPrimaryOutwardMortality,
   markSecondaryPrimaryOutwardSowingComplete,
   getTransferHistory,
+  getShedActivityByBatch,
+  getSecondaryInwardActivity,
   primaryInwardToPrimaryOutward,
+  primaryBatchInwardToPrimaryOutward,
+  patchPrimaryInwardReadinessBypass,
   secondaryInwardToSecondaryOutward,
   getPrimaryInwards,
   getPrimaryInwardLinesPaginated,
@@ -32,8 +41,11 @@ import {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
+  getSecondaryPolyhouseStock,
   getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,
+  previewSecondaryVehicleLoadHandler,
+  postSecondaryVehicleLoad,
 } from "../controllers/plantOutward.controller.js";
 
 const router = express.Router();
@@ -57,9 +69,21 @@ router.delete(
 );
 router.get("/plant-outward/primary-inward/:batchId", getPrimaryInwardByBatchId);
 router.post("/lab-to-primaryInward/:batchId", labToPrimaryInward);
+router.post("/primary-inward-fifo-preview", primaryInwardFifoPreviewGlobal);
+router.post("/primary-inward-bulk", labToPrimaryInwardBulkGlobal);
+router.post("/primary-inward-fifo-preview/:batchId", primaryInwardFifoPreview);
+router.post("/lab-to-primaryInward-bulk/:batchId", labToPrimaryInwardBulk);
 router.post(
   "/primaryInward-to-primaryOutward/:batchId",
   primaryInwardToPrimaryOutward
+);
+router.post(
+  "/primary-inward-to-primary-outward-batch/:batchId",
+  primaryBatchInwardToPrimaryOutward
+);
+router.patch(
+  "/primary-inward/:batchId/:primaryInwardId/readiness-bypass",
+  patchPrimaryInwardReadinessBypass
 );
 router.post("/primary-to-secondary/:batchId", primaryToSecondaryInward);
 router.post(
@@ -68,11 +92,27 @@ router.post(
 );
 /** Namespaced aliases (same handlers) — primary vs secondary mobile flows */
 router.post("/primary/lab-to-primary-inward/:batchId", labToPrimaryInward);
+router.post("/primary/primary-inward-fifo-preview", primaryInwardFifoPreviewGlobal);
+router.post("/primary/primary-inward-bulk", labToPrimaryInwardBulkGlobal);
+router.post("/primary/primary-inward-fifo-preview/:batchId", primaryInwardFifoPreview);
+router.post("/primary/lab-to-primary-inward-bulk/:batchId", labToPrimaryInwardBulk);
 router.post(
   "/primary/primary-inward-to-primary-outward/:batchId",
   primaryInwardToPrimaryOutward
 );
+router.post(
+  "/primary/:batchId/primary-inward-to-primary-outward-batch",
+  primaryBatchInwardToPrimaryOutward
+);
+router.patch(
+  "/primary/:batchId/primary-inward/:primaryInwardId/readiness-bypass",
+  patchPrimaryInwardReadinessBypass
+);
 router.post("/secondary/from-primary-outward/:batchId", primaryToSecondaryInward);
+router.post(
+  "/secondary/:batchId/batch-lagwad",
+  secondaryBatchLagwadFromPrimaryOutward
+);
 router.post(
   "/secondary/acknowledge-primary-outward/:batchId/:primaryOutwardId",
   acknowledgePrimaryOutwardForSecondary
@@ -94,6 +134,15 @@ router.get(
   "/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
   getVehicleDispatchAllocationSuggestions
 );
+router.post(
+  "/secondary/vehicle-dispatch/:dispatchId/load-preview",
+  previewSecondaryVehicleLoadHandler
+);
+router.post(
+  "/secondary/vehicle-dispatch/:dispatchId/load",
+  postSecondaryVehicleLoad
+);
+router.get("/secondary/polyhouse-stock", getSecondaryPolyhouseStock);
 router.get(
   "/secondary/farmer-dispatch/pickup-batch-suggestions",
   getFarmerDispatchPickupBatchSuggestions
@@ -107,6 +156,11 @@ router.patch(
   patchSecondaryInwardReadinessBypass
 );
 router.get("/transfers/:batchId", getTransferHistory);
+router.get("/activity/:batchId", getShedActivityByBatch);
+router.get(
+  "/secondary-inward/:batchId/:secondaryInwardId/activity",
+  getSecondaryInwardActivity
+);
 
 router.get("/primary-inwards", getPrimaryInwards);
 router.get("/primary-inward-lines", getPrimaryInwardLinesPaginated);

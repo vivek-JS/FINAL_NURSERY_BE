@@ -357,10 +357,17 @@ import {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
+  getSecondaryPolyhouseStock,
+  previewSecondaryVehicleLoadHandler,
+  postSecondaryVehicleLoad,
   getFarmerDispatchPickupBatchSuggestions,
   recordSecondaryPrimaryOutwardMortality,
   markSecondaryPrimaryOutwardSowingComplete,
+  secondaryBatchLagwadFromPrimaryOutward,
   patchSecondaryInwardReadinessBypass,
+  patchPrimaryInwardReadinessBypass,
+  primaryInwardFifoPreviewGlobal,
+  labToPrimaryInwardBulkGlobal,
 } from "./controllers/plantOutward.controller.js";
 import PollyHouse from "./routes/pollyhouse.route.js";
 import DelaerRoutes from "./routes/dealer.route.js";
@@ -642,6 +649,27 @@ server.get(
   authenticateToken,
   getPrimaryInwardLinesPaginated
 );
+/** Global primary inward (bottle FIFO across all batches) — explicit so POST always resolves. */
+server.post(
+  "/api/v1/laboutward/primary-inward-fifo-preview",
+  authenticateToken,
+  primaryInwardFifoPreviewGlobal
+);
+server.post(
+  "/api/v1/laboutward/primary-inward-bulk",
+  authenticateToken,
+  labToPrimaryInwardBulkGlobal
+);
+server.post(
+  "/api/v1/laboutward/primary/primary-inward-fifo-preview",
+  authenticateToken,
+  primaryInwardFifoPreviewGlobal
+);
+server.post(
+  "/api/v1/laboutward/primary/primary-inward-bulk",
+  authenticateToken,
+  labToPrimaryInwardBulkGlobal
+);
 /** Explicit POSTs so secondary mortality / sowing-complete always resolve (same handlers as plantOutward.route). */
 server.post(
   "/api/v1/laboutward/secondary/primary-outward/:batchId/:primaryOutwardId/mortality",
@@ -653,10 +681,26 @@ server.post(
   authenticateToken,
   markSecondaryPrimaryOutwardSowingComplete
 );
+server.post(
+  "/api/v1/laboutward/secondary/:batchId/batch-lagwad",
+  authenticateToken,
+  secondaryBatchLagwadFromPrimaryOutward
+);
 server.patch(
   "/api/v1/laboutward/secondary/:batchId/secondary-inward/:secondaryInwardId/readiness-bypass",
   authenticateToken,
   patchSecondaryInwardReadinessBypass
+);
+/** Primary inward plant-ready bypass — explicit so PATCH always resolves. */
+server.patch(
+  "/api/v1/laboutward/primary/:batchId/primary-inward/:primaryInwardId/readiness-bypass",
+  authenticateToken,
+  patchPrimaryInwardReadinessBypass
+);
+server.patch(
+  "/api/v1/laboutward/primary-inward/:batchId/:primaryInwardId/readiness-bypass",
+  authenticateToken,
+  patchPrimaryInwardReadinessBypass
 );
 /** Static paths before :batchId routes — avoids param routes swallowing fixed segments on some proxies. */
 server.get(
@@ -668,6 +712,21 @@ server.get(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
   authenticateToken,
   getVehicleDispatchAllocationSuggestions
+);
+server.get(
+  "/api/v1/laboutward/secondary/polyhouse-stock",
+  authenticateToken,
+  getSecondaryPolyhouseStock
+);
+server.post(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/load-preview",
+  authenticateToken,
+  previewSecondaryVehicleLoadHandler
+);
+server.post(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/load",
+  authenticateToken,
+  postSecondaryVehicleLoad
 );
 server.get(
   "/api/v1/laboutward/secondary/farmer-dispatch/pickup-batch-suggestions",

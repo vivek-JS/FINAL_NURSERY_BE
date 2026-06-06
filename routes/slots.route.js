@@ -28,6 +28,7 @@ import {
   getOrdersTransferTargets,
   transferOrders,
   getStockEntry,
+  getSlotSecondaryShedBreakdownHandler,
   bulkStockEntry,
   runPastDueSlotRolloverController,
 } from "../controllers/slots.controller.js";
@@ -40,6 +41,10 @@ slotRouter.get("/slots/get-plants", getPlantNames);
 slotRouter.get("/slots/subtyps", getSubtypesByPlant);
 slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.get("/slots/stock-entry", getStockEntry);
+slotRouter.get(
+  "/slots/:slotId/secondary-shed-breakdown",
+  getSlotSecondaryShedBreakdownHandler
+);
 slotRouter.put("/slots/stock-entry/bulk", bulkStockEntry);
 slotRouter.get("/slots/simple", getSimpleSlots);
 slotRouter.get("/slots/availability-overview", getAvailabilityOverview);

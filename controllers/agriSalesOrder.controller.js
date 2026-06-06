@@ -6,6 +6,7 @@ import AgriSalesOrder, {
   getAgriOrderLines,
   distributeReturnQtyAcrossLines,
   computeAgriReturnCreditAmount,
+  computeAgriDeliveredTotalFromLines,
 } from "../models/agriSalesOrder.model.js";
 import { InventoryProduct, InventoryOutwardTransaction, StockAdjustment } from "../models/inventory.model.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
@@ -2191,6 +2192,7 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
     previousValues[key] = order[key];
   });
   const previousTotalAmount = order.totalAmount || 0;
+  const lineItemsWereUpdated = Boolean(filteredData.lineItems);
 
   // Track edit history entries (same as regular orders)
   const editHistoryEntries = [];
@@ -2344,35 +2346,41 @@ const updateAgriSalesOrder = catchAsync(async (req, res, next) => {
     const deltaAmount = newTotalAmount - previousTotalAmount;
     const deltaBalance = newBalanceAmount - previousBalanceAmount;
     
-    // Update ledger if amount changed OR if order has payments (to ensure payment ledger is always updated)
-    if (deltaAmount !== 0 || (order.payment && order.payment.length > 0)) {
+    // Update ledger when bill changed, line items changed, or payments exist
+    if (deltaAmount !== 0 || lineItemsWereUpdated || (order.payment && order.payment.length > 0)) {
       try {
-        // If amount changed, create adjustment entry
-        if (deltaAmount !== 0) {
-          await createCustomerLedgerEntry({
-            customerMobile: order.customerMobile,
-            customerName: order.customerName,
-            refType: "ADJUSTMENT",
-            refId: order._id,
-            orderId: order._id,
-            debit: deltaAmount > 0 ? deltaAmount : 0,
-            credit: deltaAmount < 0 ? Math.abs(deltaAmount) : 0,
-            reference: order.orderNumber,
-            category: "Adjustment",
-            description: `Order adjusted (Δ ${deltaAmount > 0 ? "+" : ""}${deltaAmount.toFixed(2)}). Outstanding: ₹${newBalanceAmount.toFixed(2)}`,
-            entryDate: new Date(),
-            createdBy: req.user?._id || req.user?.id,
-            metadata: {
-              previousTotalAmount,
-              newTotalAmount,
-              previousBalanceAmount,
-              newBalanceAmount,
-              deltaAmount,
-              deltaBalance,
-              totalPaid,
-              fieldsUpdated: Object.keys(filteredData),
-            },
-          });
+        if (deltaAmount !== 0 || lineItemsWereUpdated) {
+          const adjustmentDebit = deltaAmount > 0 ? deltaAmount : 0;
+          const adjustmentCredit = deltaAmount < 0 ? Math.abs(deltaAmount) : 0;
+          if (adjustmentDebit > 0 || adjustmentCredit > 0) {
+            await createCustomerLedgerEntry({
+              customerMobile: order.customerMobile,
+              customerName: order.customerName,
+              refType: "ADJUSTMENT",
+              refId: order._id,
+              orderId: order._id,
+              debit: adjustmentDebit,
+              credit: adjustmentCredit,
+              reference: order.orderNumber,
+              category: "Adjustment",
+              description: lineItemsWereUpdated
+                ? `Order line items updated (Δ ${deltaAmount > 0 ? "+" : ""}${deltaAmount.toFixed(2)}). Outstanding: ₹${newBalanceAmount.toFixed(2)}`
+                : `Order adjusted (Δ ${deltaAmount > 0 ? "+" : ""}${deltaAmount.toFixed(2)}). Outstanding: ₹${newBalanceAmount.toFixed(2)}`,
+              entryDate: new Date(),
+              createdBy: req.user?._id || req.user?.id,
+              metadata: {
+                previousTotalAmount,
+                newTotalAmount,
+                previousBalanceAmount,
+                newBalanceAmount,
+                deltaAmount,
+                deltaBalance,
+                totalPaid,
+                lineItemsWereUpdated,
+                fieldsUpdated: Object.keys(filteredData),
+              },
+            });
+          }
         }
         
         // If balance changed but amount didn't (payment-related change), create balance adjustment entry
@@ -3885,8 +3893,7 @@ const completeOrders = catchAsync(async (req, res, next) => {
     let stockAfter = 0;
     let stockReturnSuccess = false;
 
-    // Calculate delivered quantity
-    const deliveredQty = order.quantity - returnQty;
+    const originalQuantity = order.quantity || 0;
 
     // Check if order was assigned to a sales person (sales person dispatched orders)
     const isAssignedOrder = order.assignedTo != null;
@@ -3969,16 +3976,19 @@ const completeOrders = catchAsync(async (req, res, next) => {
       stockReturnSuccess = false;
     }
 
-    stockReturnResults.push({
-      orderId: order._id,
-      orderNumber: order.orderNumber,
-      originalQuantity: order.quantity,
-      returnQuantity: returnQty,
-      deliveredQuantity: deliveredQty,
-      stockReturned: stockReturnSuccess,
-      stockBefore,
-      stockAfter,
-    });
+    // Bill and balances before this completion (respects prior edits / partial payments)
+    const previousTotalAmount = Number(order.totalAmount) || 0;
+    const previousDeliveredQuantity = order.deliveredQuantity || originalQuantity;
+    const previousTotalPaid =
+      order.payment && order.payment.length > 0
+        ? order.payment.reduce((sum, p) => {
+            if (p.paymentStatus === "COLLECTED") {
+              return sum + (p.paidAmount || 0);
+            }
+            return sum;
+          }, 0)
+        : 0;
+    const previousBalanceAmount = previousTotalAmount - previousTotalPaid;
 
     // Update order fields
     order.dispatchStatus = "DELIVERED";
@@ -3986,7 +3996,6 @@ const completeOrders = catchAsync(async (req, res, next) => {
     order.completedAt = completedAt;
     order.completedBy = userId;
     order.returnQuantity = returnQty;
-    order.deliveredQuantity = deliveredQty;
     order.returnReason = returnReason || "";
     order.returnNotes = returnNotes || "";
 
@@ -3999,46 +4008,23 @@ const completeOrders = catchAsync(async (req, res, next) => {
         li.deliveredQuantity = Math.max(0, (Number(li.quantity) || 0) - rq);
       });
     }
-    
-    // Store original quantity and previous values for ledger entry
-    // IMPORTANT: Calculate previous values based on ORIGINAL quantity, not current order values
-    // This ensures we get the correct previous balance even if order was modified before
-    const originalQuantity = order.quantity || 0;
-    const previousDeliveredQuantity = order.deliveredQuantity || originalQuantity;
-    
-    // Calculate previous totalAmount from ORIGINAL quantity (not from order.totalAmount which might be modified)
-    // IMPORTANT: Always use originalQuantity * rate for previousTotalAmount to ensure correct calculation
-    // even if order.totalAmount was modified in a previous operation
-    const originalTotalAmount = completionLines.reduce(
-      (sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.rate) || 0),
-      0
-    );
-    // For previousTotalAmount, use the original calculation UNLESS order was already completed
-    // If order was already completed, use the current totalAmount as previous (it was already adjusted)
-    const isAlreadyCompleted = order.orderStatus === "COMPLETED" || order.deliveredQuantity > 0;
-    const previousTotalAmount = isAlreadyCompleted && order.totalAmount 
-      ? order.totalAmount 
-      : originalTotalAmount;
-    
-    // Calculate previous balance based on original totalAmount and current payments
-    const previousTotalPaid = order.payment && order.payment.length > 0
-      ? order.payment.reduce((sum, p) => {
-          if (p.paymentStatus === "COLLECTED") {
-            return sum + (p.paidAmount || 0);
-          }
-          return sum;
-        }, 0)
-      : 0;
-    const previousBalanceAmount = previousTotalAmount - previousTotalPaid;
-    
-    // Recalculate totalAmount from per-line delivered qty (multi-product orders use line rates)
-    let newTotalAmount = 0;
-    completionLines.forEach((line, idx) => {
-      const deliveredLineQty = Math.max(0, (Number(line.quantity) || 0) - (perLineReturns[idx] || 0));
-      newTotalAmount += deliveredLineQty * (Number(line.rate) || 0);
-    });
+
+    const { totalQty: deliveredQty, totalAmt: newTotalAmount } =
+      computeAgriDeliveredTotalFromLines(order);
+    order.deliveredQuantity = deliveredQty;
     order.totalAmount = newTotalAmount;
     order.rate = deliveredQty > 0 ? newTotalAmount / deliveredQty : order.rate || 0;
+
+    stockReturnResults.push({
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      originalQuantity,
+      returnQuantity: returnQty,
+      deliveredQuantity: deliveredQty,
+      stockReturned: stockReturnSuccess,
+      stockBefore,
+      stockAfter,
+    });
     
     // Recalculate balanceAmount based on new totalAmount
     const totalPaid = order.payment && order.payment.length > 0
@@ -4474,6 +4460,8 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
 
   const previousSalesReturnQty = order.salesReturnQuantity || 0;
   const previousTotalPaid = order.totalPaidAmount || 0;
+  const previousTotalAmount = Number(order.totalAmount) || 0;
+  const previousBalanceAmount = Number(order.balanceAmount) || previousTotalAmount - previousTotalPaid;
 
   // Update sales return fields
   order.salesReturnQuantity = returnQty;
@@ -4482,8 +4470,21 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
   order.salesReturnedAt = new Date();
   order.salesReturnedBy = userId;
 
-  // Calculate delivered quantity (considering sales return, but separate from regular return)
-  const salesDeliveredQty = order.quantity - returnQty;
+  const completionLines = getAgriOrderLines(order);
+  const perLineReturns = distributeReturnQtyAcrossLines(completionLines, returnQty);
+  if (Array.isArray(order.lineItems) && order.lineItems.length > 0) {
+    order.lineItems.forEach((li, idx) => {
+      const rq = perLineReturns[idx] || 0;
+      li.returnQuantity = rq;
+      li.deliveredQuantity = Math.max(0, (Number(li.quantity) || 0) - rq);
+    });
+  }
+
+  const returnCreditAmount = computeAgriReturnCreditAmount(order, returnQty);
+  const salesDeliveredQty = Math.max(0, (order.quantity || 0) - returnQty);
+  order.deliveredQuantity = salesDeliveredQty;
+  order.returnQuantity = returnQty;
+  order.totalAmount = Math.max(0, previousTotalAmount - returnCreditAmount);
 
   // Process payment adjustments (if any)
   if (paymentAdjustments && Array.isArray(paymentAdjustments) && paymentAdjustments.length > 0) {
@@ -4583,6 +4584,45 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
       order.paymentStatus = "COMPLETED";
     } else {
       order.paymentStatus = "PARTIAL";
+    }
+  } else {
+    order.balanceAmount = order.totalAmount - (order.totalPaidAmount || previousTotalPaid);
+    if (order.balanceAmount <= 0) {
+      order.paymentStatus = "COMPLETED";
+    } else if ((order.totalPaidAmount || previousTotalPaid) > 0) {
+      order.paymentStatus = "PARTIAL";
+    } else {
+      order.paymentStatus = "PENDING";
+    }
+  }
+
+  const amountReduced = returnCreditAmount > 0 && order.totalAmount < previousTotalAmount;
+  if (shouldLogRamAgriLedger(order) && amountReduced) {
+    try {
+      await createCustomerLedgerEntry({
+        customerMobile: order.customerMobile,
+        customerName: order.customerName,
+        refType: "SALES_RETURN",
+        refId: order._id,
+        orderId: order._id,
+        credit: returnCreditAmount,
+        reference: order.orderNumber,
+        category: "Sales Return",
+        description: `Sales return: ${returnQty} unit(s) returned. Bill reduced from ₹${previousTotalAmount.toFixed(2)} to ₹${order.totalAmount.toFixed(2)}`,
+        entryDate: new Date(),
+        createdBy: userId,
+        metadata: {
+          returnQuantity: returnQty,
+          salesDeliveredQty,
+          previousTotalAmount,
+          newTotalAmount: order.totalAmount,
+          previousBalanceAmount,
+          newBalanceAmount: order.balanceAmount,
+          returnReason: returnReason || "",
+        },
+      });
+    } catch (ledgerError) {
+      console.error("Error creating ledger entry for sales return:", ledgerError);
     }
   }
 

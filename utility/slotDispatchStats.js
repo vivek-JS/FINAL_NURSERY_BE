@@ -1,9 +1,13 @@
 import { getOrderTotalPlants } from "../services/dealerCommission.service.js";
+import { isPastDueRolledInOrder } from "./pastDueSlotMetrics.js";
+import { isDeliveryDateInSlotWindow } from "./findDeliverySlot.js";
 
 const EMPTY_STATS = {
   totalBookedPlants: 0,
   totalDispatchedPlants: 0,
   remainingToDispatch: 0,
+  remainingRolledIn: 0,
+  remainingNative: 0,
 };
 
 /** Dispatched & completed column — DISPATCHED + COMPLETED only (full order qty). */
@@ -59,24 +63,104 @@ export function getRemainingToDispatchQty(order) {
 }
 
 /**
- * Aggregate booked / dispatched & completed / remaining per slot from orders.
- * Caller must exclude CANCELLED, REJECTED, and dealer-quota orders when loading orders.
+ * Booked plants: delivery-date cohort on a slot window, excluding past-due rolled-in.
  */
-export function computeSlotDispatchStatsFromOrders(orders) {
-  const stats = { ...EMPTY_STATS };
-
+export function computeBookedPlantsFromOrders(orders) {
+  let totalBookedPlants = 0;
   for (const order of orders || []) {
+    if (!isSlotStatEligibleOrder(order)) continue;
+    if (isPastDueRolledInOrder(order)) continue;
+    totalBookedPlants += getOrderTotalPlants(order);
+  }
+  return totalBookedPlants;
+}
+
+/** Delivery-window cohort for slot cards — excludes past-due rolled-in. */
+export function getNativeDeliveryCohortOrders(orders) {
+  return (orders || []).filter(
+    (o) => isSlotStatEligibleOrder(o) && !isPastDueRolledInOrder(o)
+  );
+}
+
+/**
+ * Slot card stats: booked + remaining + dispatched share the same native delivery cohort
+ * when `pipelineOrders` / `bookedOrders` are passed from groupOrdersByDeliverySlot.
+ * `orders` (bookingSlot list) is kept for slot.orders attachment only.
+ */
+export function computeSlotDispatchStatsFromOrders(
+  orders,
+  { bookedOrders, pipelineOrders } = {}
+) {
+  const stats = { ...EMPTY_STATS };
+  const pipeList =
+    pipelineOrders !== undefined
+      ? pipelineOrders
+      : getNativeDeliveryCohortOrders(orders);
+
+  for (const order of pipeList) {
     if (EXCLUDED_ORDER_STATUSES.has(order?.orderStatus)) {
       continue;
     }
 
-    stats.totalBookedPlants += getOrderTotalPlants(order);
     stats.totalDispatchedPlants += getDispatchedAndCompletedQty(order);
-    stats.remainingToDispatch += getRemainingToDispatchQty(order);
+    const remaining = getRemainingToDispatchQty(order);
+    stats.remainingToDispatch += remaining;
+    stats.remainingNative += remaining;
   }
+
+  stats.totalBookedPlants = computeBookedPlantsFromOrders(
+    bookedOrders !== undefined ? bookedOrders : pipeList
+  );
 
   return stats;
 }
+
+/** Rolled-in pre-dispatch queue (booking or delivery cohort) — for past-due breakdown only. */
+export function addRolledRemainingToStats(stats, orders) {
+  for (const order of orders || []) {
+    if (!isPastDueRolledInOrder(order)) continue;
+    if (EXCLUDED_ORDER_STATUSES.has(order?.orderStatus)) continue;
+    stats.remainingRolledIn += getRemainingToDispatchQty(order);
+  }
+  return stats;
+}
+
+const NON_DEALER_QUOTA_MATCH = {
+  $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
+};
+
+/** Reusable filter for slot booked / dispatch stats (non-dealer farmer orders). */
+export function isSlotStatEligibleOrder(order) {
+  if (!order || EXCLUDED_ORDER_STATUSES.has(order.orderStatus)) return false;
+  if (order.quotaSource === "dealer") return false;
+  return true;
+}
+
+/**
+ * Assign orders to slots by deliveryDate within each slot window (not bookingSlot).
+ */
+export function groupOrdersByDeliverySlot(orders, slots) {
+  const slotList = (slots || []).filter((s) => s?.startDay && s?.endDay);
+  const map = new Map();
+  for (const slot of slotList) {
+    const id = slot._id?.toString?.() ?? String(slot._id);
+    map.set(id, []);
+  }
+
+  for (const order of orders || []) {
+    if (!isSlotStatEligibleOrder(order) || !order.deliveryDate) continue;
+    for (const slot of slotList) {
+      if (isDeliveryDateInSlotWindow(order.deliveryDate, slot)) {
+        const id = slot._id?.toString?.() ?? String(slot._id);
+        if (map.has(id)) map.get(id).push(order);
+        break;
+      }
+    }
+  }
+  return map;
+}
+
+export { NON_DEALER_QUOTA_MATCH };
 
 export function aggregateSlotDispatchStats(orders) {
   const statsBySlot = new Map();
@@ -92,6 +176,8 @@ export function aggregateSlotDispatchStats(orders) {
       totalDispatchedPlants:
         prev.totalDispatchedPlants + orderStats.totalDispatchedPlants,
       remainingToDispatch: prev.remainingToDispatch + orderStats.remainingToDispatch,
+      remainingRolledIn: prev.remainingRolledIn + orderStats.remainingRolledIn,
+      remainingNative: prev.remainingNative + orderStats.remainingNative,
     });
   }
 

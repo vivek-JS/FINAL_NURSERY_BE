@@ -233,11 +233,54 @@ export async function shadowAgriFromLedgerRow({ entry, createdBy, previousStatus
       options
     );
   }
+  if (entry.refType === "SALES_RETURN" && roundMoney(entry.credit || 0) > 0) {
+    return shadowAgriSalesReturn(
+      {
+        order: orderStub,
+        amount: entry.credit,
+        refundPayout: false,
+        adjustmentKey: entry.metadata?.transitionKey || `sales-return:${entry._id}`,
+        userId: createdBy,
+      },
+      options
+    );
+  }
+  if (entry.refType === "ORDER_COMPLETION") {
+    const credit = roundMoney(entry.credit || 0);
+    const debit = roundMoney(entry.debit || 0);
+    const transitionKey = entry.metadata?.transitionKey || `completion:${entry._id}`;
+    if (credit > 0) {
+      return shadowAgriSalesReturn(
+        {
+          order: orderStub,
+          amount: credit,
+          refundPayout: false,
+          adjustmentKey: transitionKey,
+          userId: createdBy,
+        },
+        options
+      );
+    }
+    if (debit > 0) {
+      return shadowAgriOrderDelta(
+        {
+          order: orderStub,
+          deltaAmount: debit,
+          isIncrease: true,
+          transitionKey,
+          userId: createdBy,
+        },
+        options
+      );
+    }
+    return;
+  }
   if (
     entry.refType === "ADJUSTMENT" ||
     entry.refType === "PAYMENT_ADJUSTMENT" ||
     entry.refType === "ORDER_ADJUSTMENT" ||
-    entry.refType === "BALANCE_ADJUSTMENT"
+    entry.refType === "BALANCE_ADJUSTMENT" ||
+    entry.refType === "SALES_RETURN"
   ) {
     const isIncrease = (entry.debit || 0) > 0;
     const transitionKey =

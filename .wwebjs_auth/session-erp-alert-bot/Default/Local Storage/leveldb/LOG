@@ -1,3 +1,15 @@
 2026/05/31-19:45:27.491 10230 Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/MANIFEST-000001
 2026/05/31-19:45:27.501 10230 Recovering log #39
 2026/05/31-19:45:27.503 10230 Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/000039.log 
+2026/06/02-22:59:32.943 1022e Level-0 table #43: started
+2026/06/02-22:59:32.948 1022e Level-0 table #43: 17331 bytes OK
+2026/06/02-22:59:32.951 1022e Delete type=0 #39
+2026/06/02-22:59:32.953 1022e Compacting 4@0 + 1@1 files
+2026/06/02-22:59:32.961 1022e Generated table #44@0: 1325 keys, 75918 bytes
+2026/06/02-22:59:32.961 1022e Compacted 4@0 + 1@1 files => 75918 bytes
+2026/06/02-22:59:32.962 1022e compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/06/02-22:59:32.962 1022e Delete type=2 #36
+2026/06/02-22:59:32.962 1022e Delete type=2 #33
+2026/06/02-22:59:32.962 1022e Delete type=2 #31
+2026/06/02-22:59:32.962 1022e Delete type=2 #43
+2026/06/02-22:59:32.962 1022e Delete type=2 #40

@@ -6,6 +6,21 @@ import {
   clampUintForDb,
 } from "../utility/safeMongooseNumber.js";
 
+const activityLogSchema = new Schema(
+  {
+    action: { type: String, required: true },
+    activityName: { type: String, required: true },
+    performedAt: { type: Date, default: Date.now },
+    performedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    quantity: { type: Number, min: 0 },
+    previousValue: { type: Schema.Types.Mixed },
+    newValue: { type: Schema.Types.Mixed },
+    reason: { type: String, default: "" },
+    metadata: { type: Schema.Types.Mixed },
+  },
+  { _id: true }
+);
+
 // Lab Schema for outward entries
 const labSchema = new Schema({
   outwardDate: {
@@ -102,6 +117,11 @@ const primaryInwardSchema = new Schema({
     required: true,
     min: 1,
   },
+  /** Lab tray count for records only (plants ÷ 126); does not affect stock math. */
+  numberOfLabTrays: {
+    type: Number,
+    min: 0,
+  },
   totalQuantity: {
     type: Number,
     required: true,
@@ -136,10 +156,33 @@ const primaryInwardSchema = new Schema({
   sourceLabId: {
     type: Schema.Types.ObjectId,
   },
+  inwardSessionId: {
+    type: Schema.Types.ObjectId,
+  },
+  laboursLadies: {
+    type: Number,
+    min: 0,
+  },
+  laboursGents: {
+    type: Number,
+    min: 0,
+  },
   remarks: {
     type: String,
     trim: true,
   },
+  readinessBypassAt: {
+    type: Date,
+  },
+  readinessBypassBy: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+  },
+  readinessBypassReason: {
+    type: String,
+    trim: true,
+  },
+  activityLog: { type: [activityLogSchema], default: [] },
 });
 
 // Primary Outward Schema
@@ -304,6 +347,22 @@ const secondaryInwardSchema = new Schema({
     type: Date,
     required: true
   },
+  /** Materialized: secondaryInwardDate + batch secondaryPlantReadyDays (server source of truth). */
+  expectedReadyDate: {
+    type: Date,
+    default: null,
+  },
+  /** Booking slot (date window) for ERP actualPlants — matched from batch + expectedReadyDate. */
+  linkedBookingSlotId: {
+    type: Schema.Types.ObjectId,
+    default: null,
+  },
+  /** Plants already reflected on slot.actualPlants from this inward line. */
+  slotStockSyncedPlants: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
   /** Which primary outward row this secondary inward came from (set on transfer). */
   sourcePrimaryOutwardId: {
     type: Schema.Types.ObjectId,
@@ -332,6 +391,7 @@ const secondaryInwardSchema = new Schema({
     maxlength: 500,
     default: "",
   },
+  activityLog: { type: [activityLogSchema], default: [] },
 });
 
 // Secondary Outward Schema
@@ -360,9 +420,25 @@ const secondaryOutwardSchema = new Schema({
     required: true,
     min: 1,
   },
+  /** Full trays in this outward (excludes partial last tray). */
+  numberOfFullTrays: {
+    type: Number,
+    min: 0,
+  },
+  /** Plants on the partial last tray when present. */
+  partialTrayPlants: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
   totalQuantity: {
     type: Number,
     required: true,
+    min: 1,
+  },
+  /** Actual plants moved (matches totalQuantity; explicit for partial-tray loads). */
+  numberOfPlants: {
+    type: Number,
     min: 1,
   },
   availableQuantity: {

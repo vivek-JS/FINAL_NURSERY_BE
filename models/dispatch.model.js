@@ -239,6 +239,18 @@ const dispatchSchema = new Schema(
             ],
             default: [],
           },
+          shedLoadedQuantity: {
+            type: Number,
+            default: 0,
+            min: 0,
+          },
+          shedLoadedAt: {
+            type: Date,
+          },
+          shedLoadedFromSecondary: {
+            type: Boolean,
+            default: false,
+          },
         },
       ],
       default: [], // Optional for backward compatibility

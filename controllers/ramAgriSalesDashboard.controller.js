@@ -1,6 +1,7 @@
 import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
+import InventoryChangeLog from "../models/inventoryChangeLog.model.js";
 import AgriSalesOrder from "../models/agriSalesOrder.model.js";
 import PurchaseOrder from "../models/purchaseOrder.model.js";
 import Merchant from "../models/merchant.model.js";
@@ -10,9 +11,90 @@ import mongoose from "mongoose";
 
 const ORDER_STATUSES = ['PENDING', 'ACCEPTED', 'ASSIGNED', 'DISPATCHED', 'REJECTED', 'COMPLETED', 'CANCELLED'];
 const PAYMENT_STATUSES = ['COLLECTED', 'PENDING', 'REJECTED'];
+const LOW_STOCK_THRESHOLD = 100;
+
+const STOCK_SORT_KEYS = {
+  updated: 'stockUpdatedAt',
+  crop: 'cropName',
+  variety: 'varietyName',
+  stock: 'currentStock',
+  value: 'stockValue',
+};
+
+const getStockUpdatedAt = (variety, crop, changeLogMap) => {
+  if (variety.stockUpdatedAt) return new Date(variety.stockUpdatedAt);
+  const fromLog = changeLogMap.get(String(variety._id));
+  if (fromLog) return new Date(fromLog);
+  if (crop.updatedAt) return new Date(crop.updatedAt);
+  if (crop.createdAt) return new Date(crop.createdAt);
+  return new Date(0);
+};
+
+const mapVarietyForStock = (crop, variety, changeLogMap) => ({
+  varietyId: variety._id,
+  name: variety.name,
+  currentStock: variety.currentStock || 0,
+  stockValue: variety.stockValue || 0,
+  averagePrice: variety.averagePrice || 0,
+  primaryUnit: variety.primaryUnit,
+  secondaryUnit: variety.secondaryUnit,
+  conversionFactor: variety.conversionFactor || 1,
+  defaultRate: variety.defaultRate,
+  purchasePrice: variety.purchasePrice,
+  stockUpdatedAt: getStockUpdatedAt(variety, crop, changeLogMap),
+});
+
+const sortStockItems = (items, sortKey = 'updated', sortOrder = 'desc') => {
+  const field = STOCK_SORT_KEYS[sortKey] || STOCK_SORT_KEYS.updated;
+  const dir = String(sortOrder).toLowerCase() === 'asc' ? 1 : -1;
+
+  return [...items].sort((a, b) => {
+    if (field === 'stockUpdatedAt') {
+      const diff = new Date(a.stockUpdatedAt) - new Date(b.stockUpdatedAt);
+      if (diff !== 0) return diff * dir;
+      return String(a.cropName).localeCompare(String(b.cropName)) * dir;
+    }
+    if (field === 'currentStock' || field === 'stockValue') {
+      return ((a[field] || 0) - (b[field] || 0)) * dir;
+    }
+    const av = String(a[field] || '').toLowerCase();
+    const bv = String(b[field] || '').toLowerCase();
+    return av.localeCompare(bv) * dir;
+  });
+};
+
+const buildFlatStockItems = (crops, changeLogMap) => {
+  const items = [];
+  crops.forEach((crop) => {
+    (crop.varieties || []).forEach((variety) => {
+      const mapped = mapVarietyForStock(crop, variety, changeLogMap);
+      items.push({
+        cropId: crop._id,
+        cropName: crop.cropName,
+        productType: crop.productType || 'seed',
+        varietyId: mapped.varietyId,
+        varietyName: mapped.name,
+        ...mapped,
+      });
+    });
+  });
+  return items;
+};
 
 export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
-  const { startDate, endDate, cropId, varietyId, orderStatus, paymentStatus } = req.query;
+  const {
+    startDate,
+    endDate,
+    cropId,
+    varietyId,
+    orderStatus,
+    paymentStatus,
+    productType,
+    stockCropId,
+    stockSearch,
+    stockSort = 'updated',
+    stockOrder = 'desc',
+  } = req.query;
 
   // Parse status filters (comma-separated or single)
   const orderStatusFilter = orderStatus
@@ -72,7 +154,7 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
   const lowStockVarieties = crops.flatMap(crop => 
     (crop.varieties || []).filter(v => {
       const stock = v.currentStock || 0;
-      return stock > 0 && stock < 100; // Custom threshold
+      return stock > 0 && stock < LOW_STOCK_THRESHOLD;
     })
   );
 
@@ -81,27 +163,69 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
     (crop.varieties || []).filter(v => (v.currentStock || 0) === 0)
   );
 
-  // Stock by crop
-  const stockByCrop = crops.map(crop => ({
-    cropId: crop._id,
-    cropName: crop.cropName,
-    productType: crop.productType || 'seed',
-    varietiesCount: crop.varieties?.length || 0,
-    totalStock: crop.varieties?.reduce((sum, v) => sum + (v.currentStock || 0), 0) || 0,
-    totalValue: crop.varieties?.reduce((sum, v) => sum + (v.stockValue || 0), 0) || 0,
-    varieties: crop.varieties?.map(v => ({
-      varietyId: v._id,
-      name: v.name,
-      currentStock: v.currentStock || 0,
-      stockValue: v.stockValue || 0,
-      averagePrice: v.averagePrice || 0,
-      primaryUnit: v.primaryUnit,
-      secondaryUnit: v.secondaryUnit,
-      conversionFactor: v.conversionFactor || 1,
-      defaultRate: v.defaultRate,
-      purchasePrice: v.purchasePrice,
-    })) || [],
-  }));
+  const varietyIds = crops.flatMap((crop) => (crop.varieties || []).map((v) => v._id));
+  const stockChangeLogs = varietyIds.length
+    ? await InventoryChangeLog.aggregate([
+        {
+          $match: {
+            entityType: 'variety',
+            entityId: { $in: varietyIds },
+            'changes.field': 'currentStock',
+          },
+        },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: '$entityId',
+            lastStockUpdate: { $first: '$createdAt' },
+          },
+        },
+      ])
+    : [];
+  const stockChangeLogMap = new Map(
+    stockChangeLogs.map((row) => [String(row._id), row.lastStockUpdate])
+  );
+
+  const buildStockByCrop = (cropList) =>
+    cropList.map((crop) => {
+      const varieties = (crop.varieties || [])
+        .map((v) => mapVarietyForStock(crop, v, stockChangeLogMap))
+        .sort(
+          (a, b) => new Date(b.stockUpdatedAt) - new Date(a.stockUpdatedAt)
+        );
+      return {
+        cropId: crop._id,
+        cropName: crop.cropName,
+        productType: crop.productType || 'seed',
+        varietiesCount: varieties.length,
+        totalStock: varieties.reduce((sum, v) => sum + (v.currentStock || 0), 0),
+        totalValue: varieties.reduce((sum, v) => sum + (v.stockValue || 0), 0),
+        varieties,
+      };
+    });
+
+  const stockByCrop = buildStockByCrop(crops);
+
+  let stockItems = buildFlatStockItems(crops, stockChangeLogMap);
+
+  const stockProductType = productType === 'chemical' || productType === 'seed' ? productType : null;
+  if (stockProductType) {
+    stockItems = stockItems.filter((item) => item.productType === stockProductType);
+  }
+  if (stockCropId && mongoose.isValidObjectId(stockCropId)) {
+    const cropIdStr = String(stockCropId);
+    stockItems = stockItems.filter((item) => String(item.cropId) === cropIdStr);
+  }
+  if (stockSearch && String(stockSearch).trim()) {
+    const q = String(stockSearch).trim().toLowerCase();
+    stockItems = stockItems.filter(
+      (item) =>
+        item.cropName?.toLowerCase().includes(q) ||
+        item.varietyName?.toLowerCase().includes(q)
+    );
+  }
+
+  stockItems = sortStockItems(stockItems, stockSort, stockOrder);
 
   // ==================== SALES DATA (RAM AGRI ORDERS ONLY) ====================
 
@@ -487,6 +611,11 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
     },
     stock: {
       stockByCrop,
+      stockItems,
+      stockSort: {
+        sortBy: stockSort,
+        sortOrder: String(stockOrder).toLowerCase() === 'asc' ? 'asc' : 'desc',
+      },
       lowStockVarieties: lowStockVarieties.slice(0, 50).map(v => ({
         varietyId: v._id,
         name: v.name,

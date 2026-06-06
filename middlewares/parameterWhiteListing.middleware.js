@@ -162,6 +162,10 @@ const allowedParams = [
     "varietyId", // For Ram Agri variety ledger (variety ID)
     "merchantId", // For Ram Agri merchant ledger (merchant ID)
   "productType", // For Ram Agri inputs filter (seed/chemical)
+  "stockSort", // GET /inventory/ram-agri-sales-dashboard — stockItems sort field
+  "stockOrder", // GET /inventory/ram-agri-sales-dashboard — asc | desc
+  "stockCropId", // GET /inventory/ram-agri-sales-dashboard — filter by plant/crop
+  "stockSearch", // GET /inventory/ram-agri-sales-dashboard — crop/variety search
   "period", // For Ram Agri video summary (day/week)
   // WATI proxy
   "pageSize",
@@ -216,6 +220,10 @@ allowedQueryKeys.add("templateType"); // GET /order/whatsapp/outbound — filter
 allowedQueryKeys.add("batchId"); // GET /order/whatsapp/outbound — campaign batch filter ("none" = unbatched)
 allowedQueryKeys.add("paymentTiming"); // GET /order/payments
 allowedQueryKeys.add("pendingAdvanceOnly"); // GET /order/payments accountant dashboard
+allowedQueryKeys.add("stockSort");
+allowedQueryKeys.add("stockOrder");
+allowedQueryKeys.add("stockCropId");
+allowedQueryKeys.add("stockSearch");
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
@@ -304,6 +312,14 @@ const parameterWhiteListing = (req, res, next) => {
 
   /** Central ledger / finance reports — partyType, partyId, accountCode, branchId, etc. */
   if (insightsPath.includes("/api/v1/finance")) {
+    return next();
+  }
+
+  /** Ram Agri sales dashboard / stock filters — stockSort, stockOrder, stockCropId, stockSearch, … */
+  if (
+    req.method === "GET" &&
+    insightsPath.includes("/api/v1/inventory/ram-agri-sales-dashboard")
+  ) {
     return next();
   }
 
