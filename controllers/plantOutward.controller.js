@@ -4113,11 +4113,11 @@ const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next)
         stage: "secondary_inward",
         subdocId: row.secondaryInwardId,
         action: SHED_ACTIVITY_ACTIONS.SECONDARY_LAGWAD_RECORDED,
-        activityName: `लागवड नोंद · ${sr.plants} रोप · ${sr.size}`,
+        activityName: `लागवड नोंद · ${row.plants} रोप · ${row.size}`,
         performedBy,
-        quantity: sr.plants,
+        quantity: row.plants,
         newValue: {
-          size: sr.size,
+          size: row.size,
           expectedReadyDate,
           pollyhouse: String(pollyhouse).trim(),
         },
@@ -4131,7 +4131,7 @@ const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next)
           action: SHED_ACTIVITY_ACTIONS.SECONDARY_SLOT_LINKED,
           activityName: `स्लॉट जोडला · ${moment(expectedReadyDate).format("DD MMM YYYY")}`,
           performedBy,
-          quantity: sr.plants,
+          quantity: row.plants,
           newValue: {
             linkedBookingSlotId: siPlain.linkedBookingSlotId,
             expectedReadyDate,
