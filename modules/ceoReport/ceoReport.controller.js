@@ -9,6 +9,7 @@ import { fetchCeoTerritoryCollections } from "./services/ceoTerritoryCollections
 import { fetchCeoInventorySlots } from "./services/ceoInventorySlots.service.js";
 import { fetchCeoOperations } from "./services/ceoOperations.service.js";
 import { fetchCeoFleetPerformance } from "./services/ceoFleetPerformance.service.js";
+import { fetchCeoSlotAnalysis } from "./services/ceoSlotAnalysis.service.js";
 import { fetchAdminMisOrders } from "../../services/adminMisOrders.service.js";
 
 function respondCeo(res, result) {
@@ -74,6 +75,11 @@ export const getCeoOperations = catchAsync(async (req, res) => {
 
 export const getCeoFleetPerformance = catchAsync(async (req, res) => {
   const result = await fetchCeoFleetPerformance(req.query);
+  return respondCeo(res, result);
+});
+
+export const getCeoSlotAnalysis = catchAsync(async (req, res) => {
+  const result = await fetchCeoSlotAnalysis(req.query);
   return respondCeo(res, result);
 });
 

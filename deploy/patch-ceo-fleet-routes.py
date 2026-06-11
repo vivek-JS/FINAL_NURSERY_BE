@@ -21,6 +21,7 @@ import {
   getCeoInventorySlots,
   getCeoOperations,
   getCeoFleetPerformance,
+  getCeoSlotAnalysis,
   getCeoReportOrders,
 } from "./modules/ceoReport/ceoReport.controller.js";
 """
@@ -53,6 +54,7 @@ server.get(
 server.get("/api/v1/ceo-report/inventory-slots", ...adminMisAuth, getCeoInventorySlots);
 server.get("/api/v1/ceo-report/operations", ...adminMisAuth, getCeoOperations);
 server.get("/api/v1/ceo-report/fleet-performance", ...adminMisAuth, getCeoFleetPerformance);
+server.get("/api/v1/ceo-report/slot-analysis", ...adminMisAuth, getCeoSlotAnalysis);
 server.get("/api/v1/ceo-report/orders", ...adminMisAuth, getCeoReportOrders);
 """
         route_anchor = "  getAdminMisOrders\n);"
@@ -73,8 +75,22 @@ server.get("/api/v1/ceo-report/orders", ...adminMisAuth, getCeoReportOrders);
                 1,
             )
 
+    if "slot-analysis" not in text:
+        text = text.replace(
+            'server.get("/api/v1/ceo-report/fleet-performance", ...adminMisAuth, getCeoFleetPerformance);',
+            'server.get("/api/v1/ceo-report/fleet-performance", ...adminMisAuth, getCeoFleetPerformance);\n'
+            'server.get("/api/v1/ceo-report/slot-analysis", ...adminMisAuth, getCeoSlotAnalysis);',
+            1,
+        )
+        if "getCeoSlotAnalysis" not in text:
+            text = text.replace(
+                "getCeoFleetPerformance,\n  getCeoReportOrders,",
+                "getCeoFleetPerformance,\n  getCeoSlotAnalysis,\n  getCeoReportOrders,",
+                1,
+            )
+
     APP.write_text(text)
-    print("Patched app.js — CEO + fleet-performance routes ready")
+    print("Patched app.js — CEO routes ready")
 
 
 if __name__ == "__main__":

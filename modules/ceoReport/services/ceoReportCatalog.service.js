@@ -51,6 +51,14 @@ export function getCeoReportCatalog() {
         depths: ["summary", "periods"],
       },
       {
+        id: "slot-analysis",
+        title: "Slot & Fulfillment Analysis",
+        description: "Plant → subtype → slot drill, procurement gap, pending/past-due delivery, daily load, geo",
+        apiPath: "/api/v1/ceo-report/slot-analysis",
+        depths: ["summary", "periods", "full"],
+        breakdownGroupBy: ["plant", "subtype", "slot", "taluka", "district", "day"],
+      },
+      {
         id: "operations",
         title: "Operations",
         description: "Pipeline funnel, dispatch queue, today activity, geo",

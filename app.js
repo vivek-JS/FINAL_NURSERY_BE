@@ -328,6 +328,7 @@ import {
   getCeoInventorySlots,
   getCeoOperations,
   getCeoFleetPerformance,
+  getCeoSlotAnalysis,
   getCeoReportOrders,
 } from "./modules/ceoReport/ceoReport.controller.js";
 import { getFarmerPlantLedger, getFarmerPlantLedgerParties } from "./controllers/farmerPlantOrderLedger.controller.js";
@@ -611,6 +612,7 @@ server.get(
 server.get("/api/v1/ceo-report/inventory-slots", ...adminMisAuth, getCeoInventorySlots);
 server.get("/api/v1/ceo-report/operations", ...adminMisAuth, getCeoOperations);
 server.get("/api/v1/ceo-report/fleet-performance", ...adminMisAuth, getCeoFleetPerformance);
+server.get("/api/v1/ceo-report/slot-analysis", ...adminMisAuth, getCeoSlotAnalysis);
 server.get("/api/v1/ceo-report/orders", ...adminMisAuth, getCeoReportOrders);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/order-events", authenticateToken, orderEventsRoute);
