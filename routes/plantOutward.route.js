@@ -46,6 +46,8 @@ import {
   patchSecondaryInwardReadinessBypass,
   previewSecondaryVehicleLoadHandler,
   postSecondaryVehicleLoad,
+  getSecondaryVehicleLoadedLines,
+  postSecondaryVehicleUnload,
 } from "../controllers/plantOutward.controller.js";
 
 const router = express.Router();
@@ -141,6 +143,14 @@ router.post(
 router.post(
   "/secondary/vehicle-dispatch/:dispatchId/load",
   postSecondaryVehicleLoad
+);
+router.get(
+  "/secondary/vehicle-dispatch/:dispatchId/loaded-lines",
+  getSecondaryVehicleLoadedLines
+);
+router.post(
+  "/secondary/vehicle-dispatch/:dispatchId/unload",
+  postSecondaryVehicleUnload
 );
 router.get("/secondary/polyhouse-stock", getSecondaryPolyhouseStock);
 router.get(

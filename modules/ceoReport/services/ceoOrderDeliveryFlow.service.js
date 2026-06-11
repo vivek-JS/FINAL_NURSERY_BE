@@ -8,9 +8,67 @@ import {
   compactPeriodRow,
   rollupDaysToMonths,
 } from "../utility/ceoMetricDrillHints.js";
+import {
+  buildOrderDeliveryDeltas,
+  generateOrderDeliveryInsights,
+} from "../utility/ceoOrderDeliveryInsights.js";
+import { resolvePreviousRange } from "../utility/ceoPreviousRange.js";
 import { parseCeoReportQuery } from "../utility/ceoQueryParams.js";
-import { generateIstMonthKeys } from "../utility/istMonthStats.js";
+import { generateIstMonthKeys, monthBoundsFromYm } from "../utility/istMonthStats.js";
 import moment from "moment";
+
+async function fetchCoreMetrics(startYmd, endYmd, rangeStart, rangeEnd, { dueOnly, includeAllPastDue, extraMatch, includeFuture }) {
+  const [misResult, dueSummary, deliveryChanges, geoTop, futureRow] = await Promise.all([
+    fetchAdminDailyMis(startYmd, endYmd, { dueOnly, includeAllPastDue }),
+    aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
+    aggregateDeliveryChangeSummary(rangeStart, rangeEnd, extraMatch),
+    aggregateGeoTop(rangeStart, rangeEnd, extraMatch),
+    includeFuture ? aggregateFutureDeliveryRows(rangeEnd) : Promise.resolve(null),
+  ]);
+
+  const misData = misResult?.data;
+  const futurePlants = futureRow?.delivery?.total || { orders: 0, plants: 0 };
+  const summary = buildSummaryFromMis(misData, dueSummary, futurePlants);
+  summary.deliveryChanged = {
+    orders: deliveryChanges.totalChanges.orders,
+    farmers: deliveryChanges.totalChanges.farmers,
+    plants:
+      deliveryChanges.byDirection.early.plants +
+      deliveryChanges.byDirection.late.plants +
+      deliveryChanges.byDirection.sameWindow.plants,
+  };
+  summary.earlyDelivery = {
+    orders: deliveryChanges.earlyDispatch.orders,
+    farmers: deliveryChanges.earlyDispatch.farmers,
+    plants: deliveryChanges.earlyDispatch.plants,
+  };
+
+  return { misData, summary, deliveryChanges, geoTop, futureRow, dueSummary };
+}
+
+function attachPeriodMom(periods) {
+  const real = periods.filter((p) => !p.isSynthetic && /^\d{4}-\d{2}$/.test(p.key));
+  const prevMap = new Map();
+  for (let i = 1; i < real.length; i++) {
+    prevMap.set(real[i].key, real[i - 1]);
+  }
+  return periods.map((p) => {
+    if (p.isSynthetic || !/^\d{4}-\d{2}$/.test(p.key)) return p;
+    const prev = prevMap.get(p.key);
+    if (!prev) return p;
+    const curPlants = p.booking?.plants ?? 0;
+    const prevPlants = prev.booking?.plants ?? 0;
+    const changePct = prevPlants > 0 ? Math.round(((curPlants - prevPlants) / prevPlants) * 1000) / 10 : curPlants > 0 ? 100 : 0;
+    return {
+      ...p,
+      mom: {
+        bookingPlants: changePct,
+        previousKey: prev.key,
+        previousLabel: prev.label,
+      },
+    };
+  });
+}
 
 export async function fetchCeoOrderDeliveryFlow(query = {}) {
   const opts = parseCeoReportQuery(query);
@@ -30,60 +88,69 @@ export async function fetchCeoOrderDeliveryFlow(query = {}) {
     extraMatch,
   } = opts;
 
-  const [misResult, dueSummary, deliveryChanges, geoTop, futureRow] =
-    await Promise.all([
-      depth === "summary"
-        ? Promise.resolve(null)
-        : fetchAdminDailyMis(startYmd, endYmd, {
-            dueOnly,
-            includeAllPastDue,
-          }),
-      aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
-      aggregateDeliveryChangeSummary(rangeStart, rangeEnd, extraMatch),
-      aggregateGeoTop(rangeStart, rangeEnd, extraMatch),
-      includeFuture
-        ? aggregateFutureDeliveryRows(rangeEnd)
-        : Promise.resolve(null),
-    ]);
+  const comparePrevious = String(query.comparePrevious ?? "true") !== "false";
 
-  let misData = misResult?.data;
-  if (depth === "summary") {
-    const fullMis = await fetchAdminDailyMis(startYmd, endYmd, {
+  const [current, previousCtx] = await Promise.all([
+    fetchCoreMetrics(startYmd, endYmd, rangeStart, rangeEnd, {
       dueOnly,
-      includeAllPastDue: false,
-    });
-    misData = fullMis?.data;
-  }
+      includeAllPastDue: depth === "summary" ? false : includeAllPastDue,
+      extraMatch,
+      includeFuture,
+    }),
+    comparePrevious
+      ? (async () => {
+          const prev = resolvePreviousRange(startYmd, endYmd);
+          if (!prev) return null;
+          const metrics = await fetchCoreMetrics(prev.startYmd, prev.endYmd, prev.rangeStart, prev.rangeEnd, {
+            dueOnly,
+            includeAllPastDue: false,
+            extraMatch,
+            includeFuture: false,
+          });
+          return { ...prev, ...metrics };
+        })()
+      : Promise.resolve(null),
+  ]);
 
-  const futurePlants = futureRow?.delivery?.total || { orders: 0, plants: 0 };
-  const summary = buildSummaryFromMis(misData, dueSummary, futurePlants);
-  summary.deliveryChanged = {
-    orders: deliveryChanges.totalChanges.orders,
-    farmers: deliveryChanges.totalChanges.farmers,
-    plants: deliveryChanges.byDirection.early.plants +
-      deliveryChanges.byDirection.late.plants +
-      deliveryChanges.byDirection.sameWindow.plants,
-  };
-  summary.earlyDelivery = {
-    orders: deliveryChanges.earlyDispatch.orders,
-    farmers: deliveryChanges.earlyDispatch.farmers,
-    plants: deliveryChanges.earlyDispatch.plants,
-  };
+  const { misData, summary, deliveryChanges, geoTop, futureRow } = current;
+  const currentLabel =
+    monthBoundsFromYm(startYmd.slice(0, 7))?.label ||
+    moment(startYmd).format("D MMM") + " – " + moment(endYmd).format("D MMM YYYY");
 
   const payload = {
     tab: "order-delivery-flow",
     granularity,
     timezone: "Asia/Kolkata",
     depth,
-    range: { startDate: startYmd, endDate: endYmd },
+    range: { startDate: startYmd, endDate: endYmd, label: currentLabel },
     summary,
     deliveryChanges,
     geoTop,
-    dueSummary,
     dueOnly,
     includePastDue,
     includeFuture,
   };
+
+  if (previousCtx) {
+    payload.previousRange = {
+      startDate: previousCtx.startYmd,
+      endDate: previousCtx.endYmd,
+      label: previousCtx.label,
+    };
+    payload.previousSummary = previousCtx.summary;
+    payload.deltas = buildOrderDeliveryDeltas(summary, previousCtx.summary);
+    payload.insights = generateOrderDeliveryInsights({
+      summary,
+      previousSummary: previousCtx.summary,
+      deltas: payload.deltas,
+      deliveryChanges,
+      previousDeliveryChanges: previousCtx.deliveryChanges,
+      geoTop,
+      previousGeoTop: previousCtx.geoTop,
+      currentRange: payload.range,
+      previousRange: payload.previousRange,
+    });
+  }
 
   if (depth === "summary") {
     payload.syntheticRows = {
@@ -133,7 +200,8 @@ export async function fetchCeoOrderDeliveryFlow(query = {}) {
     );
   }
 
-  payload.periods = periods;
+  payload.periods =
+    granularity === "month" ? attachPeriodMom(periods) : periods;
   payload.monthKeys =
     granularity === "month" ? generateIstMonthKeys(startYmd, endYmd) : undefined;
 

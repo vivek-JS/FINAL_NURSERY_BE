@@ -59,6 +59,10 @@ test("buildAdminDailyMisPayloadFromMetrics sums Out across days in totals", () =
     globalRfd: { orders: 0, plants: 0 },
     acceptedByDay: new Map(),
     dispatchedByDay,
+    vehicleDispatchedByDay: new Map([
+      ["2026-05-25", { orders: 1, plants: 100 }],
+      ["2026-05-26", { orders: 2, plants: 150 }],
+    ]),
     completedByDay: new Map(),
     pipelineByDay: new Map(),
     deliveryInRangeByDay: new Map(),
@@ -69,6 +73,10 @@ test("buildAdminDailyMisPayloadFromMetrics sums Out across days in totals", () =
   assert.equal(payload.days[1].delivery.dispatched.orders, 3);
   assert.equal(payload.totals.delivery.dispatched.orders, 5);
   assert.equal(payload.totals.delivery.dispatched.plants, 500);
+  assert.equal(payload.days[0].delivery.vehicleDispatched.orders, 1);
+  assert.equal(payload.days[1].delivery.vehicleDispatched.orders, 2);
+  assert.equal(payload.totals.delivery.vehicleDispatched.orders, 3);
+  assert.equal(payload.totals.delivery.vehicleDispatched.plants, 250);
 });
 
 test("Out per-day cell uses transition day not delivery day", () => {
@@ -86,6 +94,7 @@ test("Out per-day cell uses transition day not delivery day", () => {
     globalRfd: { orders: 0, plants: 0 },
     acceptedByDay: new Map(),
     dispatchedByDay,
+    vehicleDispatchedByDay: new Map(),
     completedByDay: new Map(),
     pipelineByDay: new Map(),
     deliveryInRangeByDay,

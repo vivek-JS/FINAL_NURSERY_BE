@@ -26,6 +26,8 @@ import { ensureOfficialDeliveryChallanForOrder } from "./officialDeliveryChallan
 const BATCH_SELECT_FIELDS =
   "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
 
+export const DISPATCH_SHED_ALLOWED_STATUSES = ["PENDING", "IN_TRANSIT", "LOADED"];
+
 export function pollyhouseMatchesFilter(linePollyhouse, filterPollyhouse) {
   const ph = String(linePollyhouse || "").trim().toLowerCase();
   const f = String(filterPollyhouse || "").trim().toLowerCase();
@@ -575,7 +577,7 @@ export function computeSecondaryDispatchEligibility(
   return { dispatchEligible, expectedReadyByCalendar, calendarEligible };
 }
 
-async function resolvePlantRowFromDispatch(dispatchDoc, plantRowIndex) {
+export async function resolvePlantRowFromDispatch(dispatchDoc, plantRowIndex) {
   let row = dispatchDoc.plantsDetails?.[plantRowIndex];
   if (!row) {
     const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
@@ -965,6 +967,32 @@ export async function updateDispatchOrderShedLoaded({
   };
 }
 
+export async function syncDispatchTransportStatusAfterShedChange({
+  session,
+  dispatchDoc,
+  plantRowIndex = 0,
+}) {
+  const row = await resolvePlantRowFromDispatch(dispatchDoc, plantRowIndex);
+  const vehicleNeed = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
+  const { total: loaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+
+  if (vehicleNeed > 0 && loaded >= vehicleNeed) {
+    if (dispatchDoc.transportStatus !== "LOADED") {
+      dispatchDoc.transportStatus = "LOADED";
+      await dispatchDoc.save({ session, validateBeforeSave: true });
+    }
+    return "LOADED";
+  }
+
+  if (dispatchDoc.transportStatus === "LOADED" && loaded < vehicleNeed) {
+    dispatchDoc.transportStatus = "PENDING";
+    await dispatchDoc.save({ session, validateBeforeSave: true });
+    return "PENDING";
+  }
+
+  return dispatchDoc.transportStatus;
+}
+
 export async function previewSecondaryVehicleLoad({
   dispatchId,
   pollyhouse,
@@ -978,8 +1006,8 @@ export async function previewSecondaryVehicleLoad({
   if (!dispatchDoc) {
     throw new AppError("Vehicle dispatch not found", 404);
   }
-  if (!["PENDING", "IN_TRANSIT"].includes(dispatchDoc.transportStatus)) {
-    throw new AppError("Vehicle must be PENDING or IN_TRANSIT", 400);
+  if (!DISPATCH_SHED_ALLOWED_STATUSES.includes(dispatchDoc.transportStatus)) {
+    throw new AppError("Vehicle must be PENDING, IN_TRANSIT, or LOADED", 400);
   }
 
   const row = await resolvePlantRowFromDispatch(dispatchDoc, plantRowIndex);
@@ -1058,8 +1086,8 @@ export async function executeSecondaryVehicleLoad({
   if (!dispatchDoc) {
     throw new AppError("Vehicle dispatch not found", 404);
   }
-  if (!["PENDING", "IN_TRANSIT"].includes(dispatchDoc.transportStatus)) {
-    throw new AppError("Vehicle must be PENDING or IN_TRANSIT", 400);
+  if (!DISPATCH_SHED_ALLOWED_STATUSES.includes(dispatchDoc.transportStatus)) {
+    throw new AppError("Vehicle must be PENDING, IN_TRANSIT, or LOADED", 400);
   }
 
   const dispatchPlantRowIdx = Math.max(0, Number(plantRowIndex) || 0);
@@ -1156,6 +1184,12 @@ export async function executeSecondaryVehicleLoad({
       });
     }
 
+    const transportStatus = await syncDispatchTransportStatusAfterShedChange({
+      session,
+      dispatchDoc: freshDispatch,
+      plantRowIndex: dispatchPlantRowIdx,
+    });
+
     await session.commitTransaction();
 
     return {
@@ -1163,6 +1197,7 @@ export async function executeSecondaryVehicleLoad({
       totalLoaded: fifo.totalAllocated,
       slotSubtractTotal,
       orderLoaded,
+      transportStatus,
       suggestedFulfillmentSequence: seq - fifo.allocations.length,
       linkedOrderId: resolvedOrderId || null,
     };

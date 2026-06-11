@@ -211,6 +211,84 @@ export async function recordSecondaryOutwardOnLedger(session, payload) {
 }
 
 /**
+ * Reverse a vehicle unload: add plants back to the FIFO line for the source secondary inward.
+ */
+export async function recordSecondaryUnloadOnLedger(session, payload) {
+  const {
+    dispatchBatchId,
+    plantOutwardId,
+    secondaryInwardId,
+    secondaryOutwardId,
+    quantity,
+    performedBy,
+    metadata,
+  } = payload;
+
+  if (!dispatchBatchId || !secondaryInwardId || quantity == null) {
+    throw new AppError("Ledger unload: missing required ids or quantity", 400);
+  }
+  const qty = Number(quantity);
+  if (!Number.isFinite(qty) || qty < 1 || !Number.isInteger(qty)) {
+    throw new AppError("Ledger unload: invalid plant quantity", 400);
+  }
+
+  let doc = await SecondaryDispatchAvailability.findOne({ dispatchBatchId })
+    .session(session)
+    .exec();
+
+  if (!doc) {
+    await bootstrapLedgerFromPlantOutward(session, dispatchBatchId, performedBy);
+    doc = await SecondaryDispatchAvailability.findOne({ dispatchBatchId })
+      .session(session)
+      .exec();
+  }
+
+  if (!doc) {
+    throw new AppError("Secondary availability ledger missing for this batch", 400);
+  }
+
+  const prevTotal = doc.totalAvailablePlants;
+  let line = (doc.fifoLines || []).find(
+    (l) => String(l.secondaryInwardId) === String(secondaryInwardId)
+  );
+
+  if (!line) {
+    line = {
+      secondaryInwardId,
+      plantOutwardId,
+      secondaryInwardDate: new Date(),
+      remainingPlants: 0,
+      initialPlants: qty,
+      size: undefined,
+    };
+    doc.fifoLines = sortFifoByDateAsc([...(doc.fifoLines || []), line]);
+  }
+
+  line.remainingPlants = Math.max(0, Number(line.remainingPlants) || 0) + qty;
+  doc.recalcTotal();
+
+  const trailEntry = {
+    action: "ADD_SECONDARY_UNLOAD",
+    activityName: "Secondary unload (return to shed)",
+    quantity: qty,
+    previousTotalAvailable: prevTotal,
+    newTotalAvailable: doc.totalAvailablePlants,
+    reason: "Plants returned to secondary shed from vehicle",
+    plantOutwardId,
+    secondaryInwardId,
+    secondaryOutwardId,
+    performedBy: performedBy || undefined,
+  };
+  if (metadata != null && typeof metadata === "object") {
+    trailEntry.metadata = metadata;
+  }
+  doc.availabilityTrail.unshift(trailEntry);
+
+  await doc.save({ session });
+  return doc;
+}
+
+/**
  * Optional: true FIFO allocation across lines (oldest planting first) — not used by default API.
  * Exported for future bulk dispatch or admin tools.
  */

@@ -62,6 +62,7 @@ export const DELIVERY_BUCKET_KEYS = [
   "dispatchProcess",
   "partiallyCompleted",
   "dispatched",
+  "vehicleDispatched",
   "completed",
   "other",
 ];

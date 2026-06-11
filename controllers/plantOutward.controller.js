@@ -58,7 +58,13 @@ import {
   executeSecondaryVehicleLoad,
   sumPlantsLoadedOnDispatch,
   groupPolyhouseStockByBatch,
+  DISPATCH_SHED_ALLOWED_STATUSES,
+  findDispatchActiveByIdOrTransport,
 } from "../services/secondaryVehicleLoad.service.js";
+import {
+  collectLoadedOutwardLinesForDispatch,
+  executeSecondaryVehicleUnload,
+} from "../services/secondaryVehicleUnload.service.js";
 
 const BATCH_SELECT_FIELDS =
   "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
@@ -5080,16 +5086,6 @@ const getSecondaryInwardById = catchAsync(async (req, res, next) => {
   res.status(200).json(response);
 });
 
-async function findDispatchActiveByIdOrTransport(idParam) {
-  const raw = String(idParam ?? "").trim();
-  if (!raw) return null;
-  if (mongoose.isValidObjectId(raw)) {
-    const d = await Dispatch.findOne({ _id: raw, isDeleted: { $ne: true } });
-    if (d) return d;
-  }
-  return Dispatch.findOne({ transportId: raw, isDeleted: { $ne: true } });
-}
-
 /** All order ObjectIds tied to a dispatch (top-level list + per-line orderDispatchDetails). */
 function unionDispatchOrderObjectIds(dispatchDoc) {
   const plain = dispatchDoc?.toObject?.() ?? dispatchDoc;
@@ -5105,9 +5101,9 @@ function unionDispatchOrderObjectIds(dispatchDoc) {
     .map((id) => new mongoose.Types.ObjectId(id));
 }
 
-/** PENDING / IN_TRANSIT vehicle dispatches for secondary shed fulfillment UI (paginated). */
+/** PENDING / IN_TRANSIT / LOADED vehicle dispatches for secondary shed fulfillment UI (paginated). */
 const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
-  const ALLOWED = ["PENDING", "IN_TRANSIT"];
+  const ALLOWED = DISPATCH_SHED_ALLOWED_STATUSES;
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
   const skip = (page - 1) * limit;
@@ -5699,6 +5695,68 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
   );
 });
 
+/** GET outward lines already loaded on a vehicle (for unload / edit UI). */
+const getSecondaryVehicleLoadedLines = catchAsync(async (req, res, next) => {
+  const { dispatchId } = req.params;
+  const linkedOrderId = req.query.linkedOrderId ?? req.query.orderId ?? null;
+
+  const doc = await findDispatchActiveByIdOrTransport(dispatchId);
+  if (!doc) {
+    return next(new AppError("Vehicle dispatch not found", 404));
+  }
+
+  const { lines, totalPlants } = await collectLoadedOutwardLinesForDispatch(
+    doc._id,
+    linkedOrderId ? String(linkedOrderId) : undefined
+  );
+
+  const orderIds = [
+    ...new Set(lines.map((l) => l.linkedOrderId).filter(Boolean)),
+  ];
+  const orderLabels =
+    orderIds.length > 0
+      ? await Order.find({ _id: { $in: orderIds } })
+          .select("_id orderId publicOrderCode farmer")
+          .populate("farmer", "name firstName lastName")
+          .lean()
+      : [];
+
+  return res.status(200).json(
+    generateResponse("Success", "Loaded outward lines for vehicle", {
+      dispatchId: doc._id,
+      transportId: doc.transportId,
+      transportStatus: doc.transportStatus,
+      linkedOrderId: linkedOrderId ? String(linkedOrderId) : null,
+      lines,
+      totalPlants,
+      orders: orderLabels.map((o) => ({
+        _id: o._id,
+        orderId: o.orderId,
+        publicOrderCode: o.publicOrderCode,
+        farmer: o.farmer,
+      })),
+    })
+  );
+});
+
+/** POST unload plants from vehicle back to source secondary inward / slot. */
+const postSecondaryVehicleUnload = catchAsync(async (req, res, next) => {
+  const { dispatchId } = req.params;
+  const { linkedOrderId, outwardSelections, plantRowIndex } = req.body || {};
+  const userId = req.user?._id || req.user?.id;
+  const result = await executeSecondaryVehicleUnload({
+    dispatchId,
+    linkedOrderId,
+    outwardSelections,
+    plantRowIndex,
+    performedBy:
+      userId && mongoose.isValidObjectId(String(userId)) ? userId : undefined,
+  });
+  return res.status(200).json(
+    generateResponse("Success", "Plants unloaded to secondary shed", result, undefined)
+  );
+});
+
 /**
  * FIFO secondary inward lines for farmer dispatch shade picker — matches nursery `pollyhouse` to shade name/number.
  */
@@ -5899,4 +5957,6 @@ export {
   patchSecondaryInwardReadinessBypass,
   previewSecondaryVehicleLoadHandler,
   postSecondaryVehicleLoad,
+  getSecondaryVehicleLoadedLines,
+  postSecondaryVehicleUnload,
 };

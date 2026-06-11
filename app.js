@@ -374,6 +374,8 @@ import {
   getSecondaryPolyhouseStock,
   previewSecondaryVehicleLoadHandler,
   postSecondaryVehicleLoad,
+  getSecondaryVehicleLoadedLines,
+  postSecondaryVehicleUnload,
   getFarmerDispatchPickupBatchSuggestions,
   recordSecondaryPrimaryOutwardMortality,
   markSecondaryPrimaryOutwardSowingComplete,
@@ -763,6 +765,16 @@ server.post(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/load",
   authenticateToken,
   postSecondaryVehicleLoad
+);
+server.get(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/loaded-lines",
+  authenticateToken,
+  getSecondaryVehicleLoadedLines
+);
+server.post(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/unload",
+  authenticateToken,
+  postSecondaryVehicleUnload
 );
 server.get(
   "/api/v1/laboutward/secondary/farmer-dispatch/pickup-batch-suggestions",

@@ -140,7 +140,7 @@ const dispatchSchema = new Schema(
     // Added transportStatus field with enum values and default
     transportStatus: {
       type: String,
-      enum: ["PENDING", "DELIVERED", "IN_TRANSIT", "CANCELLED"],
+      enum: ["PENDING", "DELIVERED", "IN_TRANSIT", "LOADED", "CANCELLED"],
       default: "PENDING",
     },
     orderIds: {

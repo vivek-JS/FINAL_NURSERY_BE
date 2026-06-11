@@ -758,7 +758,7 @@ export function buildAdminDailyMisPayloadFromMetrics({
   globalRfd,
   acceptedByDay,
   dispatchedByDay,
-  vehicleDispatchedByDay,
+  vehicleDispatchedByDay = new Map(),
   completedByDay,
   pipelineByDay,
   deliveryInRangeByDay,

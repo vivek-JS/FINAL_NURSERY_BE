@@ -504,6 +504,64 @@ export async function subtractSecondaryInwardSlotStock({
 }
 
 /**
+ * Return plants unloaded from a vehicle back to the source booking slot (mirror of subtract).
+ */
+export async function restoreSecondaryInwardSlotStock({
+  session,
+  batchId,
+  secondaryInwardId,
+  batchLean,
+  siPlain,
+  quantity,
+  performedBy,
+}) {
+  const qty = Math.max(0, Math.floor(Number(quantity) || 0));
+  if (qty < 1) return { restored: 0 };
+
+  const slotId = siPlain?.linkedBookingSlotId;
+  if (!slotId) {
+    return { restored: 0, skipped: "no_linked_slot" };
+  }
+
+  const loaded = await loadSlotSubdoc(slotId, session);
+  if (!loaded) {
+    return { restored: 0, skipped: "slot_not_found" };
+  }
+
+  const { plantSlot, slot } = loaded;
+  const prevActual = Math.max(0, Number(slot.actualPlants) || 0);
+  const nextActual = prevActual + qty;
+  const synced = Math.max(0, Number(siPlain?.slotStockSyncedPlants) || 0);
+  const newSynced = synced + qty;
+  const bn = batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
+
+  applyStockFieldUpdates(
+    slot,
+    { actualPlants: nextActual },
+    performedBy,
+    `Secondary unload · batch ${bn} (+${qty} plants)`
+  );
+
+  if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
+    slot.setPerformer?.(performedBy);
+  }
+
+  await plantSlot.save({ session: session || undefined, validateBeforeSave: true });
+
+  await PlantOutward.updateOne(
+    { batchId, "secondaryInward._id": secondaryInwardId },
+    {
+      $set: {
+        "secondaryInward.$.slotStockSyncedPlants": newSynced,
+      },
+    },
+    { session: session || undefined }
+  );
+
+  return { restored: qty, slotId: String(slotId) };
+}
+
+/**
  * Mark-ready bypass: undo prior slot sync, re-link to today's booking slot, sync plants.
  */
 export async function relocateSecondaryInwardSlotOnBypass({
