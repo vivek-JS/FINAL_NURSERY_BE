@@ -226,8 +226,10 @@ async function aggregateTransitionsByDayPerOrder(
   newStatus,
   rangeStart,
   rangeEnd,
-  statusMatch
+  statusMatch,
+  extraMatch = {}
 ) {
+  const match = { ...statusMatch, ...extraMatch };
   const eventOrderIds = await distinctOrderIdsWithTransitionEvents(
     newStatus,
     rangeStart,
@@ -236,20 +238,40 @@ async function aggregateTransitionsByDayPerOrder(
   const exclude = transitionExcludeOrderIdsMatch(eventOrderIds);
   const [eventRows, historyRows, legacyRows] = await Promise.all([
     OrderEvent.aggregate(
-      transitionEventsByDayPerOrderStages(newStatus, rangeStart, rangeEnd, statusMatch)
+      transitionEventsByDayPerOrderStages(newStatus, rangeStart, rangeEnd, match)
     ),
     Order.aggregate([
-      { $match: { ...statusMatch, ...exclude } },
+      { $match: { ...match, ...exclude } },
       { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
       ...transitionHistoryByDayPerOrderStages(newStatus, rangeStart, rangeEnd),
     ]),
     Order.aggregate([
-      { $match: { ...statusMatch, ...exclude } },
+      { $match: { ...match, ...exclude } },
       { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
       ...transitionLegacyByDayPerOrderStages(newStatus, rangeStart, rangeEnd),
     ]),
   ]);
   return mergeTransitionOrderDayRows(eventRows, historyRows, legacyRows);
+}
+
+/** Orders with vehicle / dispatch leg on dispatchHistory or assignedVehicle. */
+export function matchOrderHasVehicleDispatchDetails() {
+  return {
+    $or: [
+      { assignedVehicle: { $exists: true, $nin: [null, ""] } },
+      {
+        dispatchHistory: {
+          $elemMatch: {
+            $or: [
+              { vehicleName: { $exists: true, $nin: [null, ""] } },
+              { driverName: { $exists: true, $nin: [null, ""] } },
+              { dispatchId: { $exists: true, $ne: null } },
+            ],
+          },
+        },
+      },
+    ],
+  };
 }
 
 async function aggregateTransitionsByEntityPerOrder(
@@ -327,6 +349,34 @@ export async function aggregateDispatchedByDay(
 }
 
 /**
+ * Vehicle Out: same rules as Out but only orders with vehicle/dispatch details.
+ */
+export async function aggregateVehicleDispatchedByDay(
+  rangeStart,
+  rangeEnd,
+  statusMatch
+) {
+  const vehicleMatch = matchOrderHasVehicleDispatchDetails();
+  const [dispatched, completed] = await Promise.all([
+    aggregateTransitionsByDayPerOrder(
+      "DISPATCHED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      vehicleMatch
+    ),
+    aggregateTransitionsByDayPerOrder("COMPLETED", rangeStart, rangeEnd, statusMatch),
+  ]);
+  const completedKeys = new Set(completed.keys());
+  const filtered = new Map();
+  for (const [key, entry] of dispatched) {
+    if (completedKeys.has(key)) continue;
+    filtered.set(key, entry);
+  }
+  return rollupOrderDayMapToDayTotals(filtered);
+}
+
+/**
  * Out by entity: exclude orders that have any Done transition in the range.
  */
 /** Order ids that have both Out and Done on the same IST day (count Done only). */
@@ -363,6 +413,36 @@ export async function aggregateDispatchedByGroup(
       groupStages,
       groupIdFields,
       extraMatch
+    ),
+    distinctOrderIdsWithTransitionEvents("COMPLETED", rangeStart, rangeEnd),
+  ]);
+  const completedSet = new Set(completedOrderIds.map((id) => String(id)));
+  const filtered = new Map();
+  for (const [key, row] of dispatched) {
+    if (completedSet.has(String(row._id.orderId))) continue;
+    filtered.set(key, row);
+  }
+  return rollupEntityOrderMapToRows(filtered);
+}
+
+export async function aggregateVehicleDispatchedByGroup(
+  rangeStart,
+  rangeEnd,
+  statusMatch,
+  groupStages,
+  groupIdFields,
+  extraMatch = {}
+) {
+  const vehicleMatch = matchOrderHasVehicleDispatchDetails();
+  const [dispatched, completedOrderIds] = await Promise.all([
+    aggregateTransitionsByEntityPerOrder(
+      "DISPATCHED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      { ...extraMatch, ...vehicleMatch }
     ),
     distinctOrderIdsWithTransitionEvents("COMPLETED", rangeStart, rangeEnd),
   ]);
@@ -565,6 +645,7 @@ function buildDeliveryDayForDate(
     globalRfd,
     acceptedByDay,
     dispatchedByDay,
+    vehicleDispatchedByDay,
     completedByDay,
     pipelineByDay,
     deliveryInRangeByDay,
@@ -582,6 +663,9 @@ function buildDeliveryDayForDate(
   delivery.farmReady = { ...globalFarmReady };
   delivery.readyForDispatch = { ...globalRfd };
   delivery.dispatched = { ...(dispatchedByDay.get(date) || emptyOrderPlants()) };
+  delivery.vehicleDispatched = {
+    ...(vehicleDispatchedByDay.get(date) || emptyOrderPlants()),
+  };
   delivery.completed = { ...(completedByDay.get(date) || emptyOrderPlants()) };
   delivery.dispatchProcess = { ...pipeline.dispatchProcess };
   delivery.partiallyCompleted = { ...pipeline.partiallyCompleted };
@@ -602,6 +686,10 @@ function sumDeliveryDaysAcrossRange(days) {
       totals.farmReady = { ...day.delivery.farmReady };
       totals.readyForDispatch = { ...day.delivery.readyForDispatch };
       totals.dispatched = addOrderPlants(totals.dispatched, day.delivery.dispatched);
+      totals.vehicleDispatched = addOrderPlants(
+        totals.vehicleDispatched,
+        day.delivery.vehicleDispatched
+      );
       totals.completed = addOrderPlants(totals.completed, day.delivery.completed);
       totals.dispatchProcess = addOrderPlants(
         totals.dispatchProcess,
@@ -623,6 +711,10 @@ function sumDeliveryDaysAcrossRange(days) {
     } else {
       totals.accepted = addOrderPlants(totals.accepted, day.delivery.accepted);
       totals.dispatched = addOrderPlants(totals.dispatched, day.delivery.dispatched);
+      totals.vehicleDispatched = addOrderPlants(
+        totals.vehicleDispatched,
+        day.delivery.vehicleDispatched
+      );
       totals.completed = addOrderPlants(totals.completed, day.delivery.completed);
       totals.dispatchProcess = addOrderPlants(
         totals.dispatchProcess,
@@ -666,6 +758,7 @@ export function buildAdminDailyMisPayloadFromMetrics({
   globalRfd,
   acceptedByDay,
   dispatchedByDay,
+  vehicleDispatchedByDay,
   completedByDay,
   pipelineByDay,
   deliveryInRangeByDay,
@@ -683,6 +776,7 @@ export function buildAdminDailyMisPayloadFromMetrics({
       globalRfd,
       acceptedByDay,
       dispatchedByDay,
+      vehicleDispatchedByDay,
       completedByDay,
       pipelineByDay,
       deliveryInRangeByDay,
@@ -705,6 +799,7 @@ export function buildAdminDailyMisPayloadFromMetrics({
   totals.delivery.farmReady = { ...globalFarmReady };
   totals.delivery.readyForDispatch = { ...globalRfd };
   totals.delivery.dispatched = summed.dispatched;
+  totals.delivery.vehicleDispatched = summed.vehicleDispatched;
   totals.delivery.completed = summed.completed;
   totals.delivery.dispatchProcess = summed.dispatchProcess;
   totals.delivery.partiallyCompleted = summed.partiallyCompleted;
@@ -729,6 +824,7 @@ export async function fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly = fal
     globalRfd,
     acceptedByDay,
     dispatchedByDay,
+    vehicleDispatchedByDay,
     completedByDay,
     pipelineByDay,
     deliveryInRangeByDay,
@@ -738,6 +834,7 @@ export async function fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly = fal
     aggregateGlobalStatus("READY_FOR_DISPATCH", statusMatch, dueExtra),
     aggregateAcceptedByDeliveryDay(rangeStart, rangeEnd, statusMatch, dueExtra),
     aggregateDispatchedByDay(rangeStart, rangeEnd, statusMatch),
+    aggregateVehicleDispatchedByDay(rangeStart, rangeEnd, statusMatch),
     aggregateTransitionsByDay("COMPLETED", rangeStart, rangeEnd, statusMatch),
     aggregatePipelineByDeliveryDay(rangeStart, rangeEnd, statusMatch, dueExtra),
     aggregateDeliveryInRangeByDay(rangeStart, rangeEnd, statusMatch, dueExtra),
@@ -751,6 +848,7 @@ export async function fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly = fal
     globalRfd,
     acceptedByDay,
     dispatchedByDay,
+    vehicleDispatchedByDay,
     completedByDay,
     pipelineByDay,
     deliveryInRangeByDay,
@@ -1042,6 +1140,7 @@ export function buildBreakdownTableFromMetrics({
   globalRfdRows = [],
   acceptedRows = [],
   dispatchedRows = [],
+  vehicleDispatchedRows = [],
   completedRows = [],
   pipelineRows = [],
   deliveryUnionRows = [],
@@ -1052,6 +1151,7 @@ export function buildBreakdownTableFromMetrics({
   const rfdMap = metricsRowsToMap(globalRfdRows, entityKeyFn);
   const acceptedMap = metricsRowsToMap(acceptedRows, entityKeyFn);
   const dispatchedMap = metricsRowsToMap(dispatchedRows, entityKeyFn);
+  const vehicleDispatchedMap = metricsRowsToMap(vehicleDispatchedRows, entityKeyFn);
   const completedMap = metricsRowsToMap(completedRows, entityKeyFn);
   const unionMap = metricsRowsToMap(deliveryUnionRows, entityKeyFn);
   const inRangeMap = metricsRowsToMap(deliveryInRangeRows || [], entityKeyFn);
@@ -1089,6 +1189,7 @@ export function buildBreakdownTableFromMetrics({
   for (const key of rfdMap.keys()) keys.add(key);
   for (const key of acceptedMap.keys()) keys.add(key);
   for (const key of dispatchedMap.keys()) keys.add(key);
+  for (const key of vehicleDispatchedMap.keys()) keys.add(key);
   for (const key of completedMap.keys()) keys.add(key);
   for (const key of unionMap.keys()) keys.add(key);
   if (deliveryInRangeRows != null) {
@@ -1102,6 +1203,7 @@ export function buildBreakdownTableFromMetrics({
       globalRfdRows,
       acceptedRows,
       dispatchedRows,
+      vehicleDispatchedRows,
       completedRows,
       pipelineRows,
       deliveryUnionRows,
@@ -1135,6 +1237,7 @@ export function buildBreakdownTableFromMetrics({
         dispatchProcess: pipeline.dispatchProcess,
         partiallyCompleted: pipeline.partiallyCompleted,
         dispatched: dispatchedMap.get(key) || emptyOrderPlants(),
+        vehicleDispatched: vehicleDispatchedMap.get(key) || emptyOrderPlants(),
         completed: completedMap.get(key) || emptyOrderPlants(),
         other: pipeline.other,
       },
@@ -1162,6 +1265,10 @@ export function buildBreakdownTableFromMetrics({
     totals.delivery.dispatched = addOrderPlants(
       totals.delivery.dispatched,
       row.delivery.dispatched
+    );
+    totals.delivery.vehicleDispatched = addOrderPlants(
+      totals.delivery.vehicleDispatched,
+      row.delivery.vehicleDispatched
     );
     totals.delivery.completed = addOrderPlants(
       totals.delivery.completed,
@@ -1247,6 +1354,7 @@ export async function fetchVarietyTableMetrics(
     globalRfdRows,
     acceptedRows,
     dispatchedRows,
+    vehicleDispatchedRows,
     completedRows,
     pipelineRows,
     deliveryInRangeRows,
@@ -1298,6 +1406,14 @@ export async function fetchVarietyTableMetrics(
       VARIETY_GROUP_ID,
       dueExtra
     ),
+    aggregateVehicleDispatchedByGroup(
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      VARIETY_GROUP_ID,
+      dueExtra
+    ),
     aggregateTransitionsByGroup(
       "COMPLETED",
       rangeStart,
@@ -1333,6 +1449,7 @@ export async function fetchVarietyTableMetrics(
     globalRfdRows,
     acceptedRows,
     dispatchedRows,
+    vehicleDispatchedRows,
     completedRows,
     pipelineRows,
     deliveryInRangeRows,

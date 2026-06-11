@@ -85,6 +85,15 @@ export const MIS_DELIVERY_METRICS = {
     description:
       "1) OrderEvent (ORDER_STATUS_CHANGED→DISPATCHED, ORDER_DISPATCHED) on occurredAt day (IST); 2) statusChanges; 3) legacy orderStatus+updatedAt. Not delivery date. Same order+day also Done → counts only under Completed.",
   },
+  vehicleDispatched: {
+    kind: "status_transition",
+    label: "Vehicle / Out with dispatch",
+    transitionStatus: "DISPATCHED",
+    resolutionOrder: MIS_TRANSITION_RESOLUTION_ORDER,
+    requiresVehicleDetails: true,
+    description:
+      "Same as Out but only orders with vehicle/dispatch details (dispatchHistory vehicle/driver/dispatchId or assignedVehicle). Same Done-day exclusion as Out.",
+  },
   completed: {
     kind: "status_transition",
     label: "Completed",
@@ -127,9 +136,13 @@ export const DRAWER_BUCKET_TO_METRIC = {
   dispatchProcess: "dispatchProcess",
   partiallyCompleted: "partiallyCompleted",
   dispatched: "dispatched",
+  vehicleDispatched: "vehicleDispatched",
   completed: "completed",
   other: "other",
   yetToDispatch: "yetToDispatch",
+  future: "futureDelivery",
+  deliveryChanged: "deliveryChanged",
+  earlyDelivery: "earlyDelivery",
 };
 
 /**

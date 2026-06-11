@@ -181,6 +181,16 @@ const allowedParams = [
   "upcomingDays", // laboutward primary-mobile-dashboard window
   "orderLimit", // analytics short-report: max orders in list (cap 500)
   "dueOnly", // GET /insights/dashboard + admin MIS — overdue open orders only
+  "depth", // GET /ceo-report/* — summary | periods | full
+  "granularity", // GET /ceo-report/order-delivery-flow — day | month
+  "includePastDue", // GET /ceo-report/* — synthetic past-due row
+  "includeFuture", // GET /ceo-report/* — synthetic future row
+  "periodKey", // GET /ceo-report/.../breakdown — drill period
+  "changeDirection", // GET /ceo-report/orders — early | late delivery changes
+  "futureDeliveryOnly", // GET /ceo-report/orders — future backlog drill
+  "nurserySite", // GET /ceo-report/* — nursery site filter
+  "comparePrevious", // GET /ceo-report/* — prior-period comparison
+  "branchId", // GET /ceo-report/territory-collections — branch drill filter
   "includeAllPastDue", // GET /order/admin-*-mis — include delivery backlog before range start
   "bucket", // GET /order/admin-mis-orders — MIS column bucket
   "mode", // GET /order/admin-mis-orders — booking | delivery
@@ -297,7 +307,7 @@ const parameterWhiteListing = (req, res, next) => {
     return next();
   }
 
-  /** Admin MIS — daily / sales / dealer breakdowns (dueOnly, includeAllPastDue, …). */
+  /** Admin MIS + CEO report — daily / sales / dealer breakdowns (dueOnly, depth, granularity, …). */
   if (
     req.method === "GET" &&
     (orderListPath.includes("/order/admin-daily-mis") ||
@@ -305,7 +315,8 @@ const parameterWhiteListing = (req, res, next) => {
       orderListPath.includes("/order/admin-mis-dealer") ||
       orderListPath.includes("/order/admin-mis-due") ||
       orderListPath.includes("/order/admin-mis-orders") ||
-      orderListPath.includes("/order/central-report"))
+      orderListPath.includes("/order/central-report") ||
+      orderListPath.includes("/ceo-report"))
   ) {
     return next();
   }

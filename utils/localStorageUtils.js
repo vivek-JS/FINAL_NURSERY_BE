@@ -10,6 +10,8 @@ const __dirname = path.dirname(__filename);
 
 const UPLOADS_ROOT = path.join(__dirname, '..', 'uploads');
 
+export { UPLOADS_ROOT };
+
 const MIME_TO_EXT = {
   'image/jpeg': 'jpg',
   'image/jpg': 'jpg',
@@ -22,8 +24,44 @@ const MIME_TO_EXT = {
   'application/pdf': 'pdf',
 };
 
-const getBaseUrl = () =>
-  (process.env.BASE_URL || 'http://167.71.232.6').replace(/\/$/, '');
+const getBaseUrl = () => {
+  if (process.env.BASE_URL) {
+    return String(process.env.BASE_URL).replace(/\/$/, "");
+  }
+  const port = process.env.PORT || 8000;
+  if (process.env.NODE_ENV !== "production") {
+    return `http://localhost:${port}`;
+  }
+  return "http://167.71.232.6";
+};
+
+/** Read file from local uploads/ when URL path is /uploads/... (works in dev even if BASE_URL is wrong). */
+export function readUploadBufferFromUrl(imageUrl) {
+  try {
+    const u = new URL(String(imageUrl).trim());
+    const match = u.pathname.match(/^\/uploads\/(.+)$/);
+    if (!match) return null;
+
+    const publicId = decodeURIComponent(match[1]);
+    if (!publicId || publicId.includes("..")) return null;
+
+    const absolutePath = path.resolve(UPLOADS_ROOT, publicId);
+    if (!absolutePath.startsWith(path.resolve(UPLOADS_ROOT))) return null;
+    if (!fs.existsSync(absolutePath)) return null;
+
+    const ext = path.extname(absolutePath).slice(1).toLowerCase();
+    const extToMime = Object.fromEntries(
+      Object.entries(MIME_TO_EXT).map(([mime, e]) => [e, mime])
+    );
+
+    return {
+      buffer: fs.readFileSync(absolutePath),
+      mimeType: extToMime[ext] || "image/jpeg",
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Upload image/file buffer to local disk

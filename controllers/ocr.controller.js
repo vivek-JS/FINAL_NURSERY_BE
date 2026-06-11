@@ -1,4 +1,5 @@
 import { extractUpiFromImage } from "../services/gemini.service.js";
+import { readUploadBufferFromUrl } from "../utils/localStorageUtils.js";
 
 const AMOUNT_NUMERIC = /^\d+(\.\d+)?$/;
 const ALLOWED_STATUS = new Set(["SUCCESS", "FAILED", "PENDING"]);
@@ -52,11 +53,20 @@ function assertFetchableImageUrl(urlString) {
 }
 
 async function fetchImageBufferFromUrl(imageUrl) {
-  assertFetchableImageUrl(imageUrl);
+  const trimmed = String(imageUrl).trim();
+  const local = readUploadBufferFromUrl(trimmed);
+  if (local?.buffer?.length) {
+    if (local.buffer.length > MAX_IMAGE_BYTES) {
+      throw new Error("Image is too large (max 10MB)");
+    }
+    return local;
+  }
+
+  assertFetchableImageUrl(trimmed);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(imageUrl, {
+    const res = await fetch(trimmed, {
       redirect: "follow",
       signal: ctrl.signal,
       headers: { "User-Agent": "NurseryBE-UPI-OCR/1.0" },

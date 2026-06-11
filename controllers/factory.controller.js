@@ -1513,7 +1513,27 @@ const updateOne = (Model, modelName, allowedFields) =>
         delete filteredBody.quantity;
       }
 
+      // Resolve tray/cavity on update (same as create — accepts tray _id or numeric cavity count).
+      if (filteredBody.cavity !== undefined) {
+        const resolvedCavity = await resolveTrayIdFromCavityInput(
+          filteredBody.cavity,
+          session
+        );
+        if (
+          filteredBody.cavity !== null &&
+          filteredBody.cavity !== "" &&
+          resolvedCavity == null
+        ) {
+          throw new AppError(
+            "Invalid tray/cavity — no matching tray found for the selected value.",
+            400
+          );
+        }
+        filteredBody.cavity = resolvedCavity;
+      }
+
       // Plant quantity is locked once the order is in the ready-for-dispatch queue or a terminal state.
+      // cavity and salesPerson are NOT gated here — office roles may change them through DISPATCHED.
       const statusesBlockingQuantityEdit = new Set([
         "READY_FOR_DISPATCH",
         "DISPATCH_PROCESS",

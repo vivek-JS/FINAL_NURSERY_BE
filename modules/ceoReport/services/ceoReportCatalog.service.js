@@ -1,0 +1,78 @@
+import { MIS_DELIVERY_METRICS, MIS_TIMEZONE } from "../../../utility/centralReportEngine/metricRules.js";
+
+export function getCeoReportCatalog() {
+  return {
+    version: "ceo-v1",
+    timezone: MIS_TIMEZONE,
+    tabs: [
+      {
+        id: "order-delivery-flow",
+        title: "Order & Delivery Flow",
+        description: "Booked, due, out, completed, past due, future, delivery changes",
+        apiPath: "/api/v1/ceo-report/order-delivery-flow",
+        granularities: ["day", "month"],
+        depths: ["summary", "periods", "full"],
+        breakdownGroupBy: ["plant", "sales", "dealer", "taluka", "village", "district"],
+      },
+      {
+        id: "sales-collections",
+        title: "Sales & Collections",
+        description: "Revenue, collected, outstanding, top sales and dealers",
+        apiPath: "/api/v1/ceo-report/sales-collections",
+        depths: ["summary", "periods"],
+      },
+      {
+        id: "sales-collection-analytics",
+        title: "AI Collection Analytics",
+        description: "Hidden insights — payment behavior, delays, village/salesman patterns vs prior range",
+        apiPath: "/api/v1/ceo-report/sales-collection-analytics",
+        depths: ["summary", "full"],
+      },
+      {
+        id: "sales-performance",
+        title: "Sales Performance",
+        description: "Salesman leaderboard, bar race, territory breakdown from live orders",
+        apiPath: "/api/v1/ceo-report/sales-performance",
+        granularities: ["daily", "weekly", "monthly"],
+        depths: ["summary", "full"],
+      },
+      {
+        id: "territory-collections",
+        title: "Territory Collections",
+        description: "Branch → village → farmer order & collection hierarchy",
+        apiPath: "/api/v1/ceo-report/territory-collections",
+        depths: ["summary", "full"],
+      },
+      {
+        id: "inventory-slots",
+        title: "Inventory & Slots",
+        description: "Capacity, booked, available, utilization by plant",
+        apiPath: "/api/v1/ceo-report/inventory-slots",
+        depths: ["summary", "periods"],
+      },
+      {
+        id: "operations",
+        title: "Operations",
+        description: "Pipeline funnel, dispatch queue, today activity, geo",
+        apiPath: "/api/v1/ceo-report/operations",
+        depths: ["summary", "periods"],
+      },
+    ],
+    drillEndpoints: {
+      breakdown: "/api/v1/ceo-report/order-delivery-flow/breakdown",
+      orders: "/api/v1/ceo-report/orders",
+    },
+    metricGlossary: MIS_DELIVERY_METRICS,
+    sharedParams: [
+      "startDate",
+      "endDate",
+      "depth",
+      "granularity",
+      "includePastDue",
+      "includeFuture",
+      "dueOnly",
+      "plantId",
+      "nurserySite",
+    ],
+  };
+}

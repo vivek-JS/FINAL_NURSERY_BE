@@ -67,6 +67,7 @@ import {
   rejectFarmerOrderTransferRequest,
 } from "./farmerPlantOrderLedger.controller.js";
 import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
+import { addPaymentsToOrder } from "../services/orderPayment.service.js";
 
 function watiDigitsOk(n) {
   return n != null && String(n).replace(/\D/g, "").length >= 10;
@@ -845,6 +846,7 @@ const getCsv = catchAsync(async (req, res, next) => {
       "Delivery date",
       "Dispatched",
       "Dispatched date",
+      "Manual DC number",
       "Order status",
       "Reference",
     ];
@@ -945,6 +947,11 @@ const getCsv = catchAsync(async (req, res, next) => {
           "Delivery date": formatInDate(deliverySource(obj)),
           Dispatched: dispatchInfo.dispatched,
           "Dispatched date": formatInDate(dispatchInfo.date),
+          "Manual DC number":
+            obj.deliveryChallanInvoiceNumber != null &&
+            obj.deliveryChallanInvoiceNumber !== ""
+              ? String(obj.deliveryChallanInvoiceNumber)
+              : "",
           "Order status": obj.orderStatus ?? "",
           Reference: reference,
         });
@@ -1169,339 +1176,101 @@ const validateDealerId = (dealerId) => {
     return null;
   }
 };
-const addNewPayment = catchAsync(async (req, res, next) => {
-  console.log("\n========== PAYMENT CONTROLLER DEBUGGING ==========");
-  console.log("Request params:", req.params);
-  console.log("Request body:", req.body);
-  console.log("Request file:", req.file);
-
+const addNewPayment = catchAsync(async (req, res) => {
   const { orderId } = req.params;
-  const {
-    paidAmount,
-    paymentStatus,
-    paymentDate,
-    bankName,
-    receiptPhoto,
-    modeOfPayment,
-    isWalletPayment,
-    remark,
-    transactionId,
-    chequeNumber,
-    utrNumber,
-    customerName,
-  } = req.body;
-
-  // Handle uploaded screenshot file with Cloudinary
-  let screenshotUrl = null;
+  let extraReceiptUrls = [];
   if (req.file) {
     try {
-      const { uploadImageToLocalStorage } = await import('../utils/localStorageUtils.js');
+      const { uploadImageToLocalStorage } = await import("../utils/localStorageUtils.js");
       const uploadResult = await uploadImageToLocalStorage(
         req.file.buffer,
-        'nursery-orders/payments',
+        "nursery-orders/payments",
         { mimetype: req.file.mimetype }
       );
-      
-      if (uploadResult.success) {
-        screenshotUrl = uploadResult.url;
-        console.log("Screenshot uploaded to local storage:", screenshotUrl);
-      } else {
-        console.error("Failed to upload screenshot to local storage:", uploadResult.error);
+      if (uploadResult.success && uploadResult.url) {
+        extraReceiptUrls = [uploadResult.url];
       }
     } catch (error) {
-      console.error("Error uploading screenshot to local storage:", error);
+      console.error("Error uploading payment screenshot:", error);
     }
   }
 
-  try {
-    // Find the order and populate farmer details
-    console.log("Finding order with ID:", orderId);
-    const order = await Order.findById(orderId)
-      .populate("farmer", "name village mobileNumber taluka talukaName")
-      .populate("plantName", "name");
-    if (!order) {
-      console.error("Order not found");
-      return res.status(404).json({ message: "Order not found" });
-    }
+  const result = await addPaymentsToOrder(orderId, [req.body], req.user, {
+    extraReceiptUrls,
+  });
 
-    console.log("Order found:");
-    console.log("- ID:", order._id);
-    console.log("- Dealer:", order.dealer);
-    console.log("- Dealer Type:", typeof order.dealer);
-    console.log("- Sales Person:", order.salesPerson);
-    console.log("- isDealerOrder:", order.dealerOrder);
+  if (result.hasCollected) {
+    maybeScheduleAcceptedWhatsAppAfterCollect(result.order);
+  }
 
-    // Check if order has a dealer
-    if (!order.dealer) {
-      console.warn("Order has no dealer field, will check salesPerson");
-    }
+  const message =
+    result.walletTransactions?.length > 0
+      ? "Payment added successfully and wallet updated"
+      : "Payment added successfully";
 
-    // Convert paidAmount to number
-    const amount = Number(paidAmount);
-    if (isNaN(amount)) {
-      console.error("Invalid payment amount");
-      return res.status(400).json({ message: "Invalid payment amount" });
-    }
+  return res.status(200).json({
+    message,
+    updatedOrder: result.order,
+    transaction: result.walletTransactions[0] || undefined,
+    walletDebited: result.walletDebited || 0,
+  });
+});
 
-    // Set payment status based on payment type and user role
-    // Prioritize jobTitle over role
-    const userRole = req.user?.jobTitle || req.user?.role;
-    let finalPaymentStatus = "PENDING"; // Default to PENDING for new payments
-    const canMarkPaymentCollected =
-      userRole === "ACCOUNTANT" ||
-      userRole === "SUPER_ADMIN" ||
-      userRole === "SUPERADMIN";
-
-    // OFFICE_ADMIN: always PENDING. Others: only accountant/super-admin may set COLLECTED.
-    if (userRole === "OFFICE_ADMIN") {
-      finalPaymentStatus = "PENDING";
-      console.log("OFFICE_ADMIN payment - forcing status to PENDING");
-    } else if (
-      canMarkPaymentCollected &&
-      paymentStatus &&
-      (paymentStatus === "COLLECTED" || paymentStatus === "PENDING")
-    ) {
-      finalPaymentStatus = paymentStatus;
-      console.log("Using requested payment status:", finalPaymentStatus);
-    } else {
-      console.log("Using default payment status: PENDING");
-    }
-
-    console.log("Payment details:");
-    console.log("- Amount:", amount);
-    console.log("- Requested Status:", paymentStatus);
-    console.log("- Final Status:", finalPaymentStatus);
-    console.log("- User Role:", userRole);
-    console.log("- Is wallet payment:", isWalletPayment ? "Yes" : "No");
-    console.log("- Mode:", modeOfPayment);
-    console.log("- Payment will be saved with status:", finalPaymentStatus);
-
-    // Create the payment object
-    const newPayment = {
-      paidAmount: amount,
-      paymentStatus: finalPaymentStatus, // Use the determined status
-      paymentDate,
-      bankName,
-      receiptPhoto: screenshotUrl ? [screenshotUrl] : (receiptPhoto || []), // Use uploaded screenshot or existing receiptPhoto
-      modeOfPayment,
-      isWalletPayment,
-      remark: remark || "",
-      transactionId: transactionId || undefined,
-      chequeNumber: chequeNumber || undefined,
-      utrNumber: utrNumber?.trim() || undefined,
-      customerName:
-        customerName?.trim() ||
-        (!order.dealerOrder && order.farmer?.name ? order.farmer.name : undefined),
-    };
-    
-    console.log("Created payment object with status:", newPayment.paymentStatus);
-    applyPaymentTimingToPayment(newPayment, order);
-
-    // Extract farmer details BEFORE saving (to avoid losing populated data)
-    console.log("DEBUG: Farmer data check BEFORE saving:");
-    console.log("- order.dealerOrder:", order.dealerOrder);
-    console.log("- order.farmer:", order.farmer);
-    console.log("- order.farmer type:", typeof order.farmer);
-    console.log("- order.farmer name:", order.farmer?.name);
-    console.log("- order.farmer village:", order.farmer?.village);
-    
-    let farmerInfo = 'Unknown Customer';
-    if (order.dealerOrder) {
-      // For dealer orders, use dealer info instead of farmer
-      farmerInfo = 'Dealer Order';
-      console.log("DEBUG: Using Dealer Order for description");
-    } else if (order.farmer && typeof order.farmer === 'object' && order.farmer.name) {
-      // For farmer orders, use farmer name and village
-      const farmerName = order.farmer.name || 'Unknown Farmer';
-      const farmerVillage = order.farmer.village || 'Unknown Village';
-      farmerInfo = `${farmerName} (${farmerVillage})`;
-      console.log("DEBUG: Using farmer info:", farmerInfo);
-    } else {
-      console.log("DEBUG: No farmer data found, using Unknown Customer");
-    }
-
-    // Add the payment to order
-    console.log("Adding payment to order");
-    order.payment.push(newPayment);
-
-    // Save the order with the new payment
-    console.log("Saving order...");
-    await order.save();
-    console.log("Order saved successfully");
-
-    const savedPayment = order.payment[order.payment.length - 1];
-    if (savedPayment) {
-      const { emitPlantPaymentEvent } = await import("../utils/orderEventDualWrite.js");
-      emitPlantPaymentEvent(order._id, savedPayment, {
-        userId: req.user?._id,
-        actorName: req.user?.name,
-      }).catch((e) => console.error("[OrderEvent] payment emit:", e?.message || e));
-    }
-
-    // Process wallet transaction if needed
-    let transaction = null;
-    
-    // Get dealer ID from order.dealer or from salesPerson if they are a dealer
-    let dealerId = order.dealer;
-    
-    // If no dealer field, check if salesPerson is a dealer
-    if (!dealerId && order.salesPerson) {
-      try {
-        // Fetch the sales person to check their jobTitle
-        const salesPerson = await User.findById(order.salesPerson);
-        if (salesPerson && salesPerson.jobTitle === 'DEALER') {
-          dealerId = salesPerson._id;
-          console.log("Found dealer from salesPerson:", dealerId);
-        }
-      } catch (error) {
-        console.error("Error fetching sales person:", error);
-      }
-    }
-
-    if (dealerId) {
-      console.log("Processing wallet transaction for dealer:", dealerId);
-      try {
-        // First, debug the current wallet state
-        console.log("Checking current wallet state for dealer:", dealerId);
-        await DealerWallet.debugWallet(dealerId);
-
-        // Determine transaction type and amount
-        let walletAmount = 0;
-        let description = "";
-
-        // Wallet impact based on payment type and status
-        // PENDING and COLLECTED payments should impact wallet balance
-        if (isWalletPayment && (finalPaymentStatus === "PENDING" || finalPaymentStatus === "COLLECTED")) {
-          // Deduct from wallet (negative amount) - when dealer pays from wallet (pending or collected)
-          walletAmount = -amount;
-          description = `Wallet payment ${finalPaymentStatus.toLowerCase()} for Order #${order._id} - ${farmerInfo}`;
-          console.log(`This is a ${finalPaymentStatus.toLowerCase()} wallet payment, deducting amount from wallet`);
-        } else if (order.dealerOrder && isWalletPayment && (finalPaymentStatus === "PENDING" || finalPaymentStatus === "COLLECTED")) {
-          // Special case: Dealer order with wallet payment (pending or collected)
-          walletAmount = -amount;
-          description = `Wallet payment ${finalPaymentStatus.toLowerCase()} for Dealer Order #${order._id} - ${farmerInfo}`;
-          console.log(`This is a dealer wallet payment being ${finalPaymentStatus.toLowerCase()}`);
-        } else {
-          // Non-wallet payments or other statuses should NOT impact wallet balance
-          walletAmount = 0;
-          description = `Payment recorded (no wallet impact) for Order #${order._id} - ${farmerInfo}`;
-          console.log("This payment has no wallet impact");
-          console.log("Debug info:");
-          console.log("- isWalletPayment:", isWalletPayment);
-          console.log("- finalPaymentStatus:", finalPaymentStatus);
-          console.log("- order.dealerOrder:", order.dealerOrder);
-        }
-
-        // If there's a wallet impact, record the transaction
-        if (walletAmount !== 0) {
-          console.log(
-            `Recording wallet transaction: amount=${walletAmount}, description="${description}"`
-          );
-
-          const performedBy = req.user?._id || dealerId;
-          console.log("Transaction performed by:", performedBy);
-
-          // Use the addPayment method
-          transaction = await DealerWallet.addPayment(
-            dealerId,
-            walletAmount, // Positive for credit, negative for debit
-            description,
-            performedBy,
-            "ORDER_PAYMENT",
-            order._id
-          );
-
-          // Check transaction result
-          if (transaction) {
-            console.log("Transaction recorded successfully:");
-            console.log("- Type:", transaction.type);
-            console.log("- Amount:", transaction.amount);
-            console.log("- Balance After:", transaction.balanceAfter);
-          } else {
-            console.error(
-              "Failed to record transaction - null result returned"
-            );
-          }
-
-          // Debug wallet state after transaction
-          console.log("Checking wallet state after transaction:");
-          await DealerWallet.debugWallet(dealerId);
-        }
-      } catch (walletError) {
-        // Log the error but don't fail the payment addition
-        console.error("Error updating wallet:", walletError);
-
-        return res.status(200).json({
-          message: "Payment added to order but wallet update failed",
-          error: walletError.message,
-          updatedOrder: order,
-        });
-      }
-    } else {
-      console.log(
-        "No dealer found (neither order.dealer nor salesPerson as dealer), skipping wallet transaction"
-      );
-    }
-
-    if (shouldLogFarmerPlantLedger(order)) {
-      try {
-        await ensureFarmerPlantOrderDebit(order, { userId: req.user?._id });
-        const lastPayment = order.payment[order.payment.length - 1];
-        await recordFarmerPlantLedgerPaymentTransition(
-          order,
-          lastPayment,
-          null,
-          lastPayment.paymentStatus,
-          { userId: req.user?._id }
-        );
-      } catch (farmerLedgerErr) {
-        console.error("Farmer plant ledger (add payment):", farmerLedgerErr);
-      }
-    }
-
+const addBatchPayments = catchAsync(async (req, res) => {
+  const { orderId } = req.params;
+  let payments = req.body.payments;
+  if (payments == null) {
+    throw new AppError("payments array is required", 400);
+  }
+  if (typeof payments === "string") {
     try {
-      await syncDealerLedgerForOrder(order, { userId: req.user?._id });
-    } catch (dealerLedgerErr) {
-      console.error("Dealer ledger sync (add payment):", dealerLedgerErr);
+      payments = JSON.parse(payments);
+    } catch {
+      throw new AppError("Invalid payments JSON", 400);
     }
-
-    if (finalPaymentStatus === "COLLECTED") {
-      maybeScheduleAcceptedWhatsAppAfterCollect(order);
-    }
-
-    // Return success with transaction info if it was created
-    if (transaction) {
-      console.log("Returning success response with transaction");
-      console.log(
-        "========== PAYMENT CONTROLLER DEBUGGING COMPLETE ==========\n"
-      );
-      return res.status(200).json({
-        message: "Payment added successfully and wallet updated",
-        updatedOrder: order,
-        transaction,
-      });
-    }
-
-    // Return success if no wallet transaction was needed
-    console.log("Returning success response without transaction");
-    console.log(
-      "========== PAYMENT CONTROLLER DEBUGGING COMPLETE ==========\n"
-    );
-    return res.status(200).json({
-      message: "Payment added successfully",
-      updatedOrder: order,
-    });
-  } catch (error) {
-    console.error("Error adding payment:", error);
-    console.log(
-      "========== PAYMENT CONTROLLER DEBUGGING COMPLETE ==========\n"
-    );
-    return res.status(500).json({
-      message: "Server error while processing payment",
-      error: error.message,
-      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
-    });
   }
+  if (!Array.isArray(payments)) {
+    throw new AppError("payments must be an array", 400);
+  }
+
+  let extraReceiptUrls = [];
+  if (req.file) {
+    try {
+      const { uploadImageToLocalStorage } = await import("../utils/localStorageUtils.js");
+      const uploadResult = await uploadImageToLocalStorage(
+        req.file.buffer,
+        "nursery-orders/payments",
+        { mimetype: req.file.mimetype }
+      );
+      if (uploadResult.success && uploadResult.url) {
+        extraReceiptUrls = [uploadResult.url];
+      }
+    } catch (error) {
+      console.error("Error uploading payment screenshot:", error);
+    }
+  }
+
+  const result = await addPaymentsToOrder(orderId, payments, req.user, {
+    extraReceiptUrls,
+  });
+
+  if (result.hasCollected) {
+    maybeScheduleAcceptedWhatsAppAfterCollect(result.order);
+  }
+
+  const count = result.savedPayments.length;
+  const message =
+    result.walletTransactions?.length > 0
+      ? `${count} payment(s) added and wallet updated`
+      : `${count} payment(s) added successfully`;
+
+  return res.status(200).json({
+    message,
+    updatedOrder: result.order,
+    transactions: result.walletTransactions,
+    count,
+    walletDebited: result.walletDebited || 0,
+  });
 });
 
 /**
@@ -6569,7 +6338,8 @@ export {
   getOrders, 
   createOrder, 
   updateOrder, 
-  addNewPayment, 
+  addNewPayment,
+  addBatchPayments, 
   updatePaymentStatus, 
   createDealerOrder, 
   addAfterDispatchedOrderIds,

@@ -12,6 +12,7 @@ import {
   aggregateGlobalStatusByGroup,
   aggregateAcceptedByDeliveryAndGroup,
   aggregateDispatchedByGroup,
+  aggregateVehicleDispatchedByGroup,
   aggregateTransitionsByGroup,
   aggregatePipelineByGroup,
   aggregateDeliveryUnionByGroup,
@@ -112,6 +113,7 @@ async function fetchPersonBreakdownMetrics(
     globalRfdRows,
     acceptedRows,
     dispatchedRows,
+    vehicleDispatchedRows,
     completedRows,
     pipelineRows,
     deliveryUnionRows,
@@ -158,6 +160,14 @@ async function fetchPersonBreakdownMetrics(
       mergedExtra
     ),
     aggregateDispatchedByGroup(
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      mergedExtra
+    ),
+    aggregateVehicleDispatchedByGroup(
       rangeStart,
       rangeEnd,
       statusMatch,
@@ -214,6 +224,7 @@ async function fetchPersonBreakdownMetrics(
     globalRfdRows,
     acceptedRows,
     dispatchedRows,
+    vehicleDispatchedRows,
     completedRows,
     pipelineRows,
     deliveryUnionRows,

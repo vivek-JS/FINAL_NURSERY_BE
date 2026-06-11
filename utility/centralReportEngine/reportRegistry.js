@@ -5,6 +5,7 @@ import {
 } from "../../services/adminMisBreakdown.service.js";
 import { fetchAdminDueMis } from "../../services/adminMisDueTab.service.js";
 import { fetchSlotAvailabilityReport } from "../../services/availabilityOverview.service.js";
+import { fetchCeoOrderDeliveryFlow } from "../../modules/ceoReport/services/ceoOrderDeliveryFlow.service.js";
 import { DELIVERY_TOTAL_EXCLUDED_STATUSES } from "./deliveryMatch.js";
 import { MIS_DATE_RANGE_POLICY } from "./dateRange.js";
 import {
@@ -55,6 +56,15 @@ export const CENTRAL_REPORT_REGISTRY = {
     layout: "due-tab",
     run: fetchAdminDueMis,
     aliases: ["due", "mis-due", "admin_due_mis"],
+  },
+  "ceo-order-delivery-flow": {
+    id: "ceo-order-delivery-flow",
+    title: "CEO — Order & Delivery Flow",
+    description: "CEO report tab: booking, delivery pipeline, changes, geo.",
+    apiPath: "/api/v1/ceo-report/order-delivery-flow",
+    layout: "ceo-tab",
+    run: (start, end, opts) => fetchCeoOrderDeliveryFlow({ startDate: start, endDate: end, ...opts }),
+    aliases: ["ceo", "ceo-report", "ceo_order_delivery"],
   },
   "slot-availability": {
     id: "slot-availability",

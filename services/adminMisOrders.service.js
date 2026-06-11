@@ -11,12 +11,19 @@ import { matchDeliveryDateInRange } from "../utility/centralReportEngine/deliver
 import { transitionDrawerFacetStages } from "../utility/misTransitionMetrics.js";
 import {
   orderIdsWithDispatchedAndCompletedSameDay,
+  matchOrderHasVehicleDispatchDetails,
 } from "../utility/adminMisMetrics.js";
 import { distinctOrderIdsWithTransitionEvents } from "../utility/misTransitionFromEvents.js";
 import {
   enrichMisOrderList,
   hydrateMisOrderDrawerList,
 } from "../utility/misOrderEnrichment.js";
+import { monthBoundsFromYm } from "../modules/ceoReport/utility/istMonthStats.js";
+import {
+  deliveryChangedMatch,
+  earlyDeliveryMatch,
+} from "../modules/ceoReport/utility/ceoDeliveryChanges.js";
+import { futureDeliveryMatch } from "../modules/ceoReport/utility/ceoFutureDelivery.js";
 
 const IST = "Asia/Kolkata";
 
@@ -37,6 +44,7 @@ const ORDER_LIST_PROJECT = {
   dealerOrder: 1,
   statusChanges: 1,
   dispatchHistory: 1,
+  assignedVehicle: 1,
   orderFor: 1,
 };
 
@@ -47,6 +55,20 @@ function parsePageLimit(query = {}) {
 }
 
 function resolveDateWindow(query) {
+  const month = String(query.month || "").trim();
+  if (/^\d{4}-\d{2}$/.test(month)) {
+    const bounds = monthBoundsFromYm(month);
+    if (bounds) {
+      return {
+        startYmd: bounds.startYmd,
+        endYmd: bounds.endYmd,
+        rangeStart: bounds.rangeStart,
+        rangeEnd: bounds.rangeEnd,
+        month,
+      };
+    }
+  }
+
   const day = String(query.date || "").slice(0, 10);
   if (day && /^\d{4}-\d{2}-\d{2}$/.test(day) && day !== "past-due") {
     const { start, end } = istDayBoundsFromYmd(day);
@@ -95,6 +117,7 @@ export function buildMisOrdersMatch(query, window) {
   const bucket = String(query.bucket || "").trim();
   const mode = String(query.mode || "delivery").trim();
   const pastDueOnly = String(query.pastDueOnly ?? "") === "true";
+  const futureDeliveryOnly = String(query.futureDeliveryOnly ?? "") === "true";
   const dueOnly = String(query.dueOnly ?? "") === "true";
   const includeAllPastDue = String(query.includeAllPastDue ?? "") === "true";
   const drawerSegment = String(query.drawerSegment || "").trim();
@@ -115,12 +138,14 @@ export function buildMisOrdersMatch(query, window) {
   if (plantId) extra.plantName = plantId;
   if (subtypeId) extra.plantSubtype = subtypeId;
 
-  if (bucket === "dispatched" || bucket === "completed") {
+  if (bucket === "dispatched" || bucket === "vehicleDispatched" || bucket === "completed") {
+    const vehicleExtra =
+      bucket === "vehicleDispatched" ? matchOrderHasVehicleDispatchDetails() : {};
     return {
       kind: "transition",
-      newStatus: bucket === "dispatched" ? "DISPATCHED" : "COMPLETED",
+      newStatus: bucket === "completed" ? "COMPLETED" : "DISPATCHED",
       base,
-      extra,
+      extra: { ...extra, ...vehicleExtra },
     };
   }
 
@@ -131,6 +156,18 @@ export function buildMisOrdersMatch(query, window) {
       ...duePipelineMatch(),
       deliveryDate: { $lt: rangeStart, $ne: null },
     };
+  }
+
+  if (futureDeliveryOnly) {
+    return { ...futureDeliveryMatch(rangeEnd), ...extra };
+  }
+
+  if (bucket === "deliveryChanged") {
+    return { ...deliveryChangedMatch(rangeStart, rangeEnd), ...extra };
+  }
+
+  if (bucket === "earlyDelivery") {
+    return { ...earlyDeliveryMatch(rangeStart, rangeEnd), ...extra };
   }
 
   if (mode === "booking" || bucket === "booking") {

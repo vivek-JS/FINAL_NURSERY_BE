@@ -3,6 +3,7 @@ import {
   getCsv,
   updateOrder,
   addNewPayment,
+  addBatchPayments,
   getOrders,
   updatePaymentStatus,
   getOrdersBySlot,
@@ -177,6 +178,11 @@ router
     "/payment/:orderId",
     uploadImages.single('screenshot'), // Handle single file upload for screenshot
     addNewPayment // Controller function to add payment
+  )
+  .post(
+    "/payments/:orderId",
+    uploadImages.single("screenshot"),
+    addBatchPayments
   )
   .patch(
     "/updateOrder",

@@ -72,6 +72,8 @@ const staticFallbackOrigins = [
   'http://127.0.0.1:8084',
   'http://localhost:8085',
   'http://127.0.0.1:8085',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
   'exp://localhost:8081',
   'exp://127.0.0.1:8081',
   // Production web app (browser Origin must match; explicit list avoids deploy drift)
@@ -315,6 +317,18 @@ import {
   getCentralReportById,
   getAdminMisOrders,
 } from "./controllers/order.controller.js";
+import {
+  getCeoReportCatalogHandler,
+  getCeoOrderDeliveryFlow,
+  getCeoOrderDeliveryBreakdown,
+  getCeoSalesCollections,
+  getCeoSalesCollectionAnalytics,
+  getCeoSalesPerformance,
+  getCeoTerritoryCollections,
+  getCeoInventorySlots,
+  getCeoOperations,
+  getCeoReportOrders,
+} from "./modules/ceoReport/ceoReport.controller.js";
 import { getFarmerPlantLedger, getFarmerPlantLedgerParties } from "./controllers/farmerPlantOrderLedger.controller.js";
 import { getRamAgriLedgerParties } from "./controllers/ramAgriLedger.controller.js";
 import userRoute from "./routes/user.route.js";
@@ -572,6 +586,28 @@ server.get(
   ...adminMisAuth,
   getAdminMisOrders
 );
+server.get("/api/v1/ceo-report/catalog", ...adminMisAuth, getCeoReportCatalogHandler);
+server.get("/api/v1/ceo-report/order-delivery-flow", ...adminMisAuth, getCeoOrderDeliveryFlow);
+server.get(
+  "/api/v1/ceo-report/order-delivery-flow/breakdown",
+  ...adminMisAuth,
+  getCeoOrderDeliveryBreakdown
+);
+server.get("/api/v1/ceo-report/sales-collections", ...adminMisAuth, getCeoSalesCollections);
+server.get(
+  "/api/v1/ceo-report/sales-collection-analytics",
+  ...adminMisAuth,
+  getCeoSalesCollectionAnalytics
+);
+server.get("/api/v1/ceo-report/sales-performance", ...adminMisAuth, getCeoSalesPerformance);
+server.get(
+  "/api/v1/ceo-report/territory-collections",
+  ...adminMisAuth,
+  getCeoTerritoryCollections
+);
+server.get("/api/v1/ceo-report/inventory-slots", ...adminMisAuth, getCeoInventorySlots);
+server.get("/api/v1/ceo-report/operations", ...adminMisAuth, getCeoOperations);
+server.get("/api/v1/ceo-report/orders", ...adminMisAuth, getCeoReportOrders);
 server.use("/api/v1/order", authenticateToken, orderRoute);
 server.use("/api/v1/order-events", authenticateToken, orderEventsRoute);
 // Direct bindings for reliability in environments with stale router mounts.

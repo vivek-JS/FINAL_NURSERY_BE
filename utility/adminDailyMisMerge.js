@@ -49,6 +49,7 @@ export function emptyDeliveryDay() {
     dispatchProcess: emptyDeliveryBucket(true),
     partiallyCompleted: emptyDeliveryBucket(true),
     dispatched: emptyOrderPlants(),
+    vehicleDispatched: emptyOrderPlants(),
     completed: emptyOrderPlants(),
     other: emptyOrderPlants(),
   };

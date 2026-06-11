@@ -107,7 +107,9 @@ export function enrichMisOrderRow(order, { bucket, bucketEventAt } = {}) {
 
   const dispatchLeg = pickDispatchLegForBucket(order, eventAt);
   const displayDispatched =
-    bucket === "dispatched" && eventAt ? eventAt : dispatchedDate;
+    (bucket === "dispatched" || bucket === "vehicleDispatched") && eventAt
+      ? eventAt
+      : dispatchedDate;
   const displayCompleted =
     bucket === "completed" && eventAt ? eventAt : completedDate;
 
@@ -190,6 +192,13 @@ export async function hydrateMisOrderDrawerList(orders) {
     const plantSubtypeName =
       subtypeNameFromPlant(plantDoc, order.plantSubtype) || null;
 
+    const deliveryChangeCount = Array.isArray(order.deliveryChanges)
+      ? order.deliveryChanges.length
+      : 0;
+    const lastChange = deliveryChangeCount
+      ? order.deliveryChanges[deliveryChangeCount - 1]
+      : null;
+
     return {
       ...order,
       farmerName,
@@ -201,6 +210,9 @@ export async function hydrateMisOrderDrawerList(orders) {
       plantSubtypeName,
       salesPersonName: salesDoc?.name || null,
       dealerName: dealerDoc?.name || null,
+      deliveryChangeCount,
+      isEarlyDispatch: Boolean(order.dispatchedFromAnotherSlot),
+      lastDeliveryChangeReason: lastChange?.reasonForChange || null,
     };
   });
 }
