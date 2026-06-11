@@ -68,6 +68,11 @@ import {
 } from "./farmerPlantOrderLedger.controller.js";
 import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
 import { addPaymentsToOrder } from "../services/orderPayment.service.js";
+import {
+  resolveSplitBookForAssign,
+  validateSplitNewFarmerDetails,
+} from "../utils/orderForEditValidation.js";
+import { normalizeOrderForLocationFields } from "../utils/orderForNormalize.js";
 
 function watiDigitsOk(n) {
   return n != null && String(n).replace(/\D/g, "").length >= 10;
@@ -4869,6 +4874,41 @@ const getDeliveryOrders = catchAsync(async (req, res, next) => {
   });
 });
 
+function trimSplitStr(v) {
+  return v == null ? "" : String(v).trim();
+}
+
+/** Create (or reuse by mobile) a Farmer record for split assign — new mode. */
+async function createFarmerForSplitAssign(details, session) {
+  const of = normalizeOrderForLocationFields(details);
+  const mob = String(of.mobileNumber ?? "").replace(/\D/g, "").slice(-10);
+  if (mob.length !== 10) {
+    throw new AppError("New farmer requires a 10-digit mobile number.", 400);
+  }
+  const mobileNumber = Number(mob);
+
+  if (mobileNumber != null) {
+    const existing = await Farmer.findOne({ mobileNumber }).session(session);
+    if (existing) return existing;
+  }
+
+  const addressFallback = trimSplitStr(of.address) || "To be updated";
+  const farmerData = {
+    name: trimSplitStr(of.name),
+    village: trimSplitStr(of.village) || addressFallback,
+    taluka: trimSplitStr(of.taluka) || trimSplitStr(of.talukaName) || "To be updated",
+    district: trimSplitStr(of.district) || trimSplitStr(of.districtName) || "To be updated",
+    state: trimSplitStr(of.state) || trimSplitStr(of.stateName) || "To be updated",
+    stateName: trimSplitStr(of.stateName) || trimSplitStr(of.state) || "To be updated",
+    talukaName: trimSplitStr(of.talukaName) || trimSplitStr(of.taluka) || "To be updated",
+    districtName: trimSplitStr(of.districtName) || trimSplitStr(of.district) || "To be updated",
+    ...(mobileNumber != null ? { mobileNumber } : {}),
+  };
+
+  const [created] = await Farmer.create([farmerData], { session });
+  return created;
+}
+
 /**
  * Split an order into two separate orders.
  *
@@ -4881,11 +4921,17 @@ const getDeliveryOrders = catchAsync(async (req, res, next) => {
  * records the quantity change.
  *
  * POST /order/:orderId/split
- * Body: { splitQuantity: Number, notes?: String }
+ * Body: { splitQuantity: Number, notes?: String, assignMode?: String, farmerId?: String, orderFor?: Object }
  */
 const splitOrder = catchAsync(async (req, res, next) => {
   const { orderId } = req.params;
-  const { splitQuantity, notes } = req.body;
+  const {
+    splitQuantity,
+    notes,
+    orderFor: orderForBody,
+    assignMode,
+    farmerId,
+  } = req.body;
 
   if (!splitQuantity || isNaN(Number(splitQuantity)) || Number(splitQuantity) < 1) {
     return next(new AppError("splitQuantity must be a positive number", 400));
@@ -4933,10 +4979,71 @@ const splitOrder = catchAsync(async (req, res, next) => {
 
     const nextOrderId = await allocateNextOrderId(Order, { session });
 
+    let childFarmer = parent.farmer;
+    let childOrderFor = parent.orderFor ?? null;
+    let assignHistoryEntry = null;
+
+    if (assignMode === "bookfor") {
+      const bookFor = resolveSplitBookForAssign(orderForBody);
+      if (!bookFor.ok) {
+        await session.abortTransaction();
+        return next(new AppError(bookFor.message || "Invalid book-for details", 400));
+      }
+      childFarmer = parent.farmer;
+      childOrderFor = bookFor.orderFor;
+      assignHistoryEntry = {
+        field: "orderFor",
+        previousValue: parent.orderFor ?? null,
+        newValue: childOrderFor,
+        changedBy: performedBy,
+        notes: "Split order: book-for beneficiary (booking farmer unchanged)",
+      };
+    } else if (assignMode === "existing") {
+      if (!farmerId || !mongoose.Types.ObjectId.isValid(farmerId)) {
+        await session.abortTransaction();
+        return next(new AppError("Select an existing farmer.", 400));
+      }
+      const existingFarmer = await Farmer.findById(farmerId).session(session).lean();
+      if (!existingFarmer) {
+        await session.abortTransaction();
+        return next(new AppError("Farmer not found.", 404));
+      }
+      childFarmer = existingFarmer._id;
+      childOrderFor = null;
+      assignHistoryEntry = {
+        field: "farmer",
+        previousValue: parent.farmer,
+        newValue: existingFarmer._id,
+        changedBy: performedBy,
+        notes: `Split order assigned to existing farmer: ${existingFarmer.name || ""}`,
+      };
+    } else if (assignMode === "new") {
+      const newFarmerCheck = validateSplitNewFarmerDetails(orderForBody);
+      if (!newFarmerCheck.ok) {
+        await session.abortTransaction();
+        return next(
+          new AppError(newFarmerCheck.message || "Invalid new farmer details", 400)
+        );
+      }
+      const newFarmer = await createFarmerForSplitAssign(
+        newFarmerCheck.farmerDetails,
+        session
+      );
+      childFarmer = newFarmer._id;
+      childOrderFor = null;
+      assignHistoryEntry = {
+        field: "farmer",
+        previousValue: parent.farmer,
+        newValue: newFarmer._id,
+        changedBy: performedBy,
+        notes: `Split order assigned to new farmer: ${newFarmer.name || ""}`,
+      };
+    }
+
     // Build child order — clone all dispatch-relevant fields from the parent
     const childData = {
       orderId: nextOrderId,
-      farmer: parent.farmer,
+      farmer: childFarmer,
       dealer: parent.dealer,
       dealerOrder: parent.dealerOrder,
       salesPerson: parent.salesPerson,
@@ -4959,7 +5066,7 @@ const splitOrder = catchAsync(async (req, res, next) => {
       dispatchDayKey: parent.dispatchDayKey,
       dispatchTargetDate: parent.dispatchTargetDate,
       farmReadyDate: parent.farmReadyDate,
-      orderFor: parent.orderFor,
+      orderFor: childOrderFor,
       expectedNursery: parent.expectedNursery,
       reference: parent.reference,
       placedByOfficeAdmin: parent.placedByOfficeAdmin,
@@ -4994,6 +5101,9 @@ const splitOrder = catchAsync(async (req, res, next) => {
           changedBy: performedBy,
         },
       ],
+      ...(assignHistoryEntry
+        ? { orderEditHistory: [assignHistoryEntry] }
+        : {}),
     };
 
     const [childOrder] = await Order.create([childData], { session });

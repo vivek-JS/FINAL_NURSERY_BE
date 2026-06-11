@@ -65,6 +65,10 @@ import {
   mergeEditHistoryIntoFilteredBody,
 } from "../utils/orderEditHistoryBuilder.js";
 import {
+  validateOrderForBeneficiaryEdit,
+  splitBeneficiaryEditHistoryNote,
+} from "../utils/orderForEditValidation.js";
+import {
   emitPlantOrderCreatedEvents,
   emitPlantOrderUpdateEvents,
 } from "../utils/orderEventDualWrite.js";
@@ -1438,6 +1442,24 @@ const updateOne = (Model, modelName, allowedFields) =>
         filteredBody.orderFor = normalizeOrderForLocationFields(filteredBody.orderFor);
       }
 
+      if (
+        existingDoc.isSplit === true &&
+        filteredBody.orderFor != null &&
+        typeof filteredBody.orderFor === "object" &&
+        !Array.isArray(filteredBody.orderFor)
+      ) {
+        const beneficiaryValidation = validateOrderForBeneficiaryEdit(
+          existingDoc.orderFor,
+          filteredBody.orderFor
+        );
+        if (!beneficiaryValidation.ok) {
+          throw new AppError(
+            beneficiaryValidation.message || "Invalid beneficiary details for split order",
+            beneficiaryValidation.noChanges ? 400 : 400
+          );
+        }
+      }
+
       console.log("=== UPDATE ORDER DEBUG ===");
       console.log("Received body:", req.body);
       console.log("Filtered body:", filteredBody);
@@ -2201,6 +2223,10 @@ const updateOne = (Model, modelName, allowedFields) =>
         pendingSet: filteredBody,
         userId: req.user?._id,
         skipFields: manualHistoryFields,
+        notesForField: (field, previousValue, newValue) => {
+          if (field !== "orderFor" || existingDoc.isSplit !== true) return undefined;
+          return splitBeneficiaryEditHistoryNote(previousValue, newValue);
+        },
       });
       if (autoHistoryEntries.length > 0) {
         editHistoryEntries.push(...autoHistoryEntries);

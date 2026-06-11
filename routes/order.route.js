@@ -105,7 +105,7 @@ router
     getOrderPaymentTransferContext
   )
   .get("/farmer-plant-ledger/parties", requirePaymentAccess, getFarmerPlantLedgerParties)
-  .get("/farmer-plant-ledger/search-farmers", requirePaymentAccess, searchFarmersForLedgerTransfer)
+  .get("/farmer-plant-ledger/search-farmers", searchFarmersForLedgerTransfer)
   .post("/farmer-plant-ledger/transfer-advance", requirePaymentAccess, transferFarmerPlantAdvance)
   .post("/farmer-plant-ledger/transfer-order-payment", requirePaymentAccess, transferFarmerPlantOrderPayment)
   .post("/farmer-plant-ledger/transfer-requests", createFarmerOrderTransferRequest)

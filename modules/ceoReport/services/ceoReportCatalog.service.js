@@ -57,6 +57,15 @@ export function getCeoReportCatalog() {
         apiPath: "/api/v1/ceo-report/operations",
         depths: ["summary", "periods"],
       },
+      {
+        id: "fleet-performance",
+        title: "Fleet & Trips",
+        description: "Drivers, vehicles, villages, trips, plants delivered, status mix",
+        apiPath: "/api/v1/ceo-report/fleet-performance",
+        granularities: ["day", "month"],
+        depths: ["summary", "periods", "full"],
+        breakdownGroupBy: ["driver", "vehicle", "village", "taluka", "status"],
+      },
     ],
     drillEndpoints: {
       breakdown: "/api/v1/ceo-report/order-delivery-flow/breakdown",
