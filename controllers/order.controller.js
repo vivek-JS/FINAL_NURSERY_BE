@@ -870,6 +870,13 @@ const getCsv = catchAsync(async (req, res, next) => {
       return { dispatched: "Y", date: d };
     };
 
+    const manualDcNumber = (obj) => {
+      const raw = obj?.deliveryChallanInvoiceNumber;
+      if (raw == null || raw === "") return "";
+      const s = String(raw).trim();
+      return s || "";
+    };
+
     const csvMobile = (farmerDoc, orderFor) => {
       const n =
         farmerDoc?.mobileNumber ??
@@ -947,11 +954,7 @@ const getCsv = catchAsync(async (req, res, next) => {
           "Delivery date": formatInDate(deliverySource(obj)),
           Dispatched: dispatchInfo.dispatched,
           "Dispatched date": formatInDate(dispatchInfo.date),
-          "Manual DC number":
-            obj.deliveryChallanInvoiceNumber != null &&
-            obj.deliveryChallanInvoiceNumber !== ""
-              ? String(obj.deliveryChallanInvoiceNumber)
-              : "",
+          "Manual DC number": manualDcNumber(obj),
           "Order status": obj.orderStatus ?? "",
           Reference: reference,
         });
@@ -2673,6 +2676,7 @@ const getAllPayments = catchAsync(async (req, res, next) => {
         createdAt: 1,
         updatedAt: 1,
         dealerOrder: 1,
+        orderFor: 1,
         currentDispatchId: 1,
         dispatch: {
           vehicleName:   { $arrayElemAt: ["$_dispatch.vehicleName", 0] },
