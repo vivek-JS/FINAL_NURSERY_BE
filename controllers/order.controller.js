@@ -61,6 +61,11 @@ import {
   buildOrderStatusDateMatch,
   parseOrderListDateDdMmYyyy,
 } from "../utility/orderListQuery.js";
+import {
+  parseCalendarQueryBound,
+  istYearBounds,
+  istMonthBounds,
+} from "../utility/istCalendar.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import {
   approveFarmerOrderTransferRequest,
@@ -236,7 +241,7 @@ async function buildOrderAcceptedWhatsAppDetails(order) {
   const remainingAmount = totalAmount - paidAmount;
   const plantSubtypeName = await resolveOrderPlantSubtypeName(order);
   return {
-    orderId: order.orderId || order._id,
+    orderId: order.orderId,
     publicOrderCode: order.publicOrderCode,
     plantName: order.plantName?.name || "Plants",
     plantSubtype: plantSubtypeName,
@@ -1887,18 +1892,13 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
       });
     }
 
-    // Date range filtering
+    // Date range filtering (IST calendar days — see istDate.middleware)
     if (startDate && endDate) {
-      const parseDate = (dateStr, isEnd = false) => {
-        const [day, month, year] = dateStr.split("-");
-        return isEnd
-          ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
-          : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-      };
-
-      const start = parseDate(startDate);
-      const end = parseDate(endDate, true);
-      pipeline.push({ $match: { orderBookingDate: { $gte: start, $lte: end } } });
+      const start = parseCalendarQueryBound(startDate, false);
+      const end = parseCalendarQueryBound(endDate, true);
+      if (start && end) {
+        pipeline.push({ $match: { orderBookingDate: { $gte: start, $lte: end } } });
+      }
     }
 
     // Search filtering
@@ -2491,21 +2491,13 @@ const getAllPayments = catchAsync(async (req, res, next) => {
       }
     }
 
-    // Date range filtering for payment date
+    // Date range filtering for payment date (IST calendar days)
     if (startDate && endDate) {
       try {
-        const parseDate = (dateStr, isEnd = false) => {
-          const [day, month, year] = dateStr.split("-");
-          return isEnd
-            ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
-            : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-        };
-
-        const start = parseDate(startDate);
-        const end = parseDate(endDate, true);
+        const start = parseCalendarQueryBound(startDate, false);
+        const end = parseCalendarQueryBound(endDate, true);
         
-        // Only add date filter if dates are valid
-        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        if (start && end && !isNaN(start.getTime()) && !isNaN(end.getTime())) {
           pipeline.push({ 
             $match: { 
               "payment.paymentDate": { $gte: start, $lte: end } 
@@ -3307,21 +3299,24 @@ const getOrderBucketing = catchAsync(async (req, res, next) => {
       matchFilter.plantSubtype = new mongoose.Types.ObjectId(subtypeId);
     }
 
-    // Year filter
+    // Year filter (IST)
     if (year) {
-      const yearNum = parseInt(year);
-      matchFilter.orderBookingDate = matchFilter.orderBookingDate || {};
-      matchFilter.orderBookingDate.$gte = new Date(`${yearNum}-01-01`);
-      matchFilter.orderBookingDate.$lte = new Date(`${yearNum}-12-31T23:59:59.999Z`);
+      const bounds = istYearBounds(year);
+      if (bounds) {
+        matchFilter.orderBookingDate = matchFilter.orderBookingDate || {};
+        matchFilter.orderBookingDate.$gte = bounds.start;
+        matchFilter.orderBookingDate.$lte = bounds.end;
+      }
     }
 
-    // Month filter
+    // Month filter (IST)
     if (month && year) {
-      const yearNum = parseInt(year);
-      const monthNum = parseInt(month);
-      matchFilter.orderBookingDate = matchFilter.orderBookingDate || {};
-      matchFilter.orderBookingDate.$gte = new Date(yearNum, monthNum - 1, 1);
-      matchFilter.orderBookingDate.$lte = new Date(yearNum, monthNum, 0, 23, 59, 59, 999);
+      const bounds = istMonthBounds(year, month);
+      if (bounds) {
+        matchFilter.orderBookingDate = matchFilter.orderBookingDate || {};
+        matchFilter.orderBookingDate.$gte = bounds.start;
+        matchFilter.orderBookingDate.$lte = bounds.end;
+      }
     }
 
     // Day filter
@@ -4594,16 +4589,13 @@ const handleQRPaymentCallback = catchAsync(async (req, res) => {
 const getDeliverySummary = catchAsync(async (req, res, next) => {
   const { startDate, endDate, plantId } = req.query;
 
-  const parseDate = (dateStr, isEnd = false) => {
-    const [day, month, year] = dateStr.split("-");
-    return isEnd
-      ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
-      : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-  };
-
   const matchFilter = {};
   if (startDate && endDate) {
-    matchFilter.orderBookingDate = { $gte: parseDate(startDate), $lte: parseDate(endDate, true) };
+    const start = parseCalendarQueryBound(startDate, false);
+    const end = parseCalendarQueryBound(endDate, true);
+    if (start && end) {
+      matchFilter.orderBookingDate = { $gte: start, $lte: end };
+    }
   }
   if (plantId) {
     try { matchFilter.plantName = new mongoose.Types.ObjectId(plantId); } catch (_) {}
@@ -4794,16 +4786,13 @@ const getDeliverySummary = catchAsync(async (req, res, next) => {
 const getDeliveryOrders = catchAsync(async (req, res, next) => {
   const { startDate, endDate, plantId, status, subtypeId, village, paymentStatus, page = 1, limit = 100 } = req.query;
 
-  const parseDate = (dateStr, isEnd = false) => {
-    const [day, month, year] = dateStr.split("-");
-    return isEnd
-      ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
-      : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-  };
-
   const matchFilter = {};
   if (startDate && endDate) {
-    matchFilter.orderBookingDate = { $gte: parseDate(startDate), $lte: parseDate(endDate, true) };
+    const start = parseCalendarQueryBound(startDate, false);
+    const end = parseCalendarQueryBound(endDate, true);
+    if (start && end) {
+      matchFilter.orderBookingDate = { $gte: start, $lte: end };
+    }
   }
   if (plantId) { try { matchFilter.plantName = new mongoose.Types.ObjectId(plantId); } catch (_) {} }
   if (status)  { matchFilter.orderStatus = { $in: status.split(",").map(s => s.trim()) }; }

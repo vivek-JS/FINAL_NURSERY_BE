@@ -1,30 +1,28 @@
-import moment from "moment";
 import PlantSlot from "../models/slots.model.js";
+import {
+  deliveryDateToIstMoment,
+  isDateOutsideSlotWindow,
+  isDeliveryDateInSlotWindow,
+  slotDayEndMoment,
+  slotDayStartMoment,
+  slotWindowToDeliveryUtcRange,
+} from "./istSlotDate.js";
+
+export {
+  isDateOutsideSlotWindow,
+  isDeliveryDateInSlotWindow,
+  slotWindowToDeliveryUtcRange,
+};
 
 /**
- * Find the slot subdocument whose date window contains deliveryDate.
- * Does not auto-create slots — callers get a clear error if missing.
+ * Find the slot subdocument whose date window contains deliveryDate (IST calendar days).
  */
 export async function findDeliverySlotByDate(plantId, subtypeId, deliveryDate) {
-  let deliveryMoment;
-  if (moment.isMoment(deliveryDate)) {
-    deliveryMoment = moment.utc(deliveryDate.format("YYYY-MM-DD"));
-  } else if (deliveryDate instanceof Date) {
-    const year = deliveryDate.getUTCFullYear();
-    const month = deliveryDate.getUTCMonth() + 1;
-    const day = deliveryDate.getUTCDate();
-    deliveryMoment = moment.utc(
-      `${year}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`
-    );
-  } else {
-    deliveryMoment = moment.utc(deliveryDate);
-  }
-
-  if (!deliveryMoment.isValid()) {
+  const deliveryMoment = deliveryDateToIstMoment(deliveryDate);
+  if (!deliveryMoment?.isValid()) {
     throw new Error(`Invalid delivery date: ${deliveryDate}`);
   }
 
-  deliveryMoment = moment.utc(deliveryMoment.format("YYYY-MM-DD"));
   const year = deliveryMoment.year();
   const month = deliveryMoment.format("MMMM");
 
@@ -48,77 +46,25 @@ export async function findDeliverySlotByDate(plantId, subtypeId, deliveryDate) {
     throw new Error(`No slots found for subtype ${subtypeId}`);
   }
 
-  const deliveryDateStr = deliveryMoment.format("YYYY-MM-DD");
-  const normalizedDeliveryDate = moment(deliveryDateStr + "T00:00:00");
-
   const targetSlot = subtypeSlot.slots.find((slot) => {
-    const slotStart = slot.startDay.split("-").reverse().join("-");
-    const slotEnd = slot.endDay.split("-").reverse().join("-");
-    const startMoment = moment(slotStart + "T00:00:00");
-    const endMoment = moment(slotEnd + "T00:00:00");
+    const start = slotDayStartMoment(slot.startDay);
+    const end = slotDayEndMoment(slot.endDay);
+    if (!start || !end) return false;
     return (
-      normalizedDeliveryDate.isSameOrAfter(startMoment, "day") &&
-      normalizedDeliveryDate.isSameOrBefore(endMoment, "day")
+      deliveryMoment.isSameOrAfter(start, "day") &&
+      deliveryMoment.isSameOrBefore(end, "day")
     );
   });
 
   if (!targetSlot) {
     throw new Error(
-      `No suitable slot found for delivery date ${normalizedDeliveryDate.format(
+      `No suitable slot found for delivery date ${deliveryMoment.format(
         "DD-MM-YYYY"
       )} in month ${month}`
     );
   }
 
   return targetSlot;
-}
-
-/**
- * @param {Date|string|moment.Moment} date
- * @param {{ startDay: string, endDay: string }} slotWindow
- */
-/** True when delivery falls on a calendar day inside slot startDay–endDay (DD-MM-YYYY). */
-export function isDeliveryDateInSlotWindow(date, slotWindow) {
-  if (!date || !slotWindow?.startDay || !slotWindow?.endDay) return false;
-  return !isDateOutsideSlotWindow(date, slotWindow);
-}
-
-/** UTC day bounds for MongoDB deliveryDate queries on a slot window. */
-export function slotWindowToDeliveryUtcRange(slotWindow) {
-  if (!slotWindow?.startDay || !slotWindow?.endDay) return null;
-  const slotStart = slotWindow.startDay.split("-").reverse().join("-");
-  const slotEnd = slotWindow.endDay.split("-").reverse().join("-");
-  const start = moment.utc(slotStart + "T00:00:00").startOf("day").toDate();
-  const end = moment.utc(slotEnd + "T23:59:59.999").endOf("day").toDate();
-  return { start, end };
-}
-
-export function isDateOutsideSlotWindow(date, slotWindow) {
-  if (!slotWindow?.startDay || !slotWindow?.endDay) {
-    return true;
-  }
-
-  let targetMoment;
-  if (date instanceof Date) {
-    const y = date.getUTCFullYear();
-    const m = date.getUTCMonth() + 1;
-    const d = date.getUTCDate();
-    targetMoment = moment.utc(
-      `${y}-${m.toString().padStart(2, "0")}-${d.toString().padStart(2, "0")}`
-    );
-  } else {
-    targetMoment = moment.utc(date);
-  }
-  targetMoment = moment.utc(targetMoment.format("YYYY-MM-DD"));
-
-  const slotStart = slotWindow.startDay.split("-").reverse().join("-");
-  const slotEnd = slotWindow.endDay.split("-").reverse().join("-");
-  const startMoment = moment(slotStart + "T00:00:00");
-  const endMoment = moment(slotEnd + "T00:00:00");
-
-  return (
-    targetMoment.isBefore(startMoment, "day") || targetMoment.isAfter(endMoment, "day")
-  );
 }
 
 export async function getSlotWindowById(slotId) {
@@ -147,4 +93,31 @@ export async function getSlotWindowById(slotId) {
     }
   }
   return null;
+}
+
+/** Shape returned on each order as `bookingSlotDetails` (GET /order/getOrders slot-week drill-down). */
+export async function getBookingSlotDetailsForOrderList({
+  slotId,
+  monthName,
+  startDay,
+  endDay,
+}) {
+  const slot = await getSlotWindowById(slotId);
+  if (!slot) return null;
+  if (
+    slot.month !== monthName ||
+    slot.startDay !== startDay ||
+    slot.endDay !== endDay
+  ) {
+    return null;
+  }
+  return [
+    {
+      slotId: slot._id,
+      startDay: slot.startDay,
+      endDay: slot.endDay,
+      subtypeId: slot.subtypeId,
+      month: slot.month,
+    },
+  ];
 }

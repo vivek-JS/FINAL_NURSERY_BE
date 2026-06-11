@@ -16,6 +16,7 @@ import helmet from "helmet";
 import IPWhiteListing from "./middlewares/ipWhiteListing.middleware.js";
 
 import parameterWhiteListing from "./middlewares/parameterWhiteListing.middleware.js";
+import istDateMiddleware from "./middlewares/istDate.middleware.js";
 import { noCacheApiResponse } from "./middlewares/noCacheApi.middleware.js";
 
 // Security middlewares
@@ -231,6 +232,9 @@ server.use((req, res, next) => {
   }
   next();
 });
+
+// IST calendar-day normalization (deliveryDate body, query date ranges, req.ist helpers)
+server.use(istDateMiddleware);
 
 // Parameter whitelisting
 server.use(parameterWhiteListing);

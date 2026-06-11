@@ -1,8 +1,9 @@
 /**
  * Shared helpers for GET /order/getOrders status + date-range filtering.
+ * Calendar-day bounds: prefer utility/istCalendar.js (also applied via istDate.middleware).
  */
 
-/** Asia/Kolkata offset for calendar-day bounds (matches ERP UI / moment local display). */
+/** Asia/Kolkata offset for calendar-day bounds (matches ERP UI / IST users). */
 const IST_OFFSET = "+05:30";
 
 /**
