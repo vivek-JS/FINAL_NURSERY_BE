@@ -29,6 +29,13 @@ import catchAsync from "../utility/catchAsync.js";
 import Order from "../models/order.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import PlantCms from "../models/plantCms.model.js";
+import { isSalesOrDealerInsightsUser, scopedInsightsRole } from "../utils/insightsAccess.js";
+import {
+  filterDispatchesByVisibleOrders,
+  getOrderIdStrings,
+  scopedOrderIdsForDispatch,
+  sumDispatchPlantsForScope,
+} from "../utils/insightsDispatchScope.js";
 
 const EXCLUDED_ORDER_STATUSES = ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"];
 
@@ -92,10 +99,11 @@ function sumCollectedPayments(paymentArr) {
 
 function applyRoleMatch(pipeline, user) {
   if (!user) return;
-  const { jobTitle, _id: userId } = user;
-  if (jobTitle === "SALES") {
+  const { _id: userId } = user;
+  const role = scopedInsightsRole(user);
+  if (role === "SALES") {
     pipeline.push({ $match: { salesPerson: userId } });
-  } else if (jobTitle === "DEALER") {
+  } else if (role === "DEALER") {
     pipeline.push({
       $match: { $or: [{ dealer: userId }, { salesPerson: userId }] },
     });
@@ -492,16 +500,47 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
     .sort({ createdAt: 1 })
     .lean();
 
-  const allOrderIds = [
+  let visibleDispatchOrderIdSet = null;
+  let dispatchDocsForResponse = dispatchDocs;
+  if (isSalesOrDealerInsightsUser(req.user)) {
+    const candidateOrderIdStrings = [
+      ...new Set(dispatchDocs.flatMap((d) => getOrderIdStrings(d.orderIds))),
+    ];
+    const candidateOrderIds = candidateOrderIdStrings
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    visibleDispatchOrderIdSet = new Set();
+    if (candidateOrderIds.length) {
+      const scopedOrderPipeline = [
+        { $match: { _id: { $in: candidateOrderIds }, dealerOrder: false } },
+      ];
+      applyRoleMatch(scopedOrderPipeline, req.user);
+      scopedOrderPipeline.push({ $project: { _id: 1 } });
+      const scopedOrders = await Order.aggregate(scopedOrderPipeline).allowDiskUse(true);
+      visibleDispatchOrderIdSet = new Set(scopedOrders.map((o) => String(o._id)));
+    }
+
+    dispatchDocsForResponse = filterDispatchesByVisibleOrders(
+      dispatchDocs,
+      visibleDispatchOrderIdSet
+    );
+  }
+
+  const geoOrderIds = [
     ...new Set(
-      dispatchDocs.flatMap((d) => (d.orderIds || []).map((id) => new mongoose.Types.ObjectId(id)))
+      dispatchDocsForResponse.flatMap((d) =>
+        scopedOrderIdsForDispatch(d, visibleDispatchOrderIdSet)
+      )
     ),
-  ];
+  ]
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
 
   const geoByOrderId = new Map();
-  if (allOrderIds.length) {
+  if (geoOrderIds.length) {
     const geoRows = await Order.aggregate([
-      { $match: { _id: { $in: allOrderIds }, dealerOrder: false } },
+      { $match: { _id: { $in: geoOrderIds }, dealerOrder: false } },
       {
         $lookup: {
           from: "farmers",
@@ -535,18 +574,22 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
     }
   }
 
-  const dispatches = dispatchDocs.map((d) => {
-    const firstOid = d.orderIds?.[0];
+  const dispatches = dispatchDocsForResponse.map((d) => {
+    const scopedOrderIds = scopedOrderIdsForDispatch(d, visibleDispatchOrderIdSet);
+    const firstOid = scopedOrderIds[0];
     const geo = firstOid ? geoByOrderId.get(String(firstOid)) : null;
-    let totalPlants = 0;
+    const totalPlants = sumDispatchPlantsForScope(d, visibleDispatchOrderIdSet);
+    const exposePlantBreakdown =
+      !visibleDispatchOrderIdSet || scopedOrderIds.length === getOrderIdStrings(d.orderIds).length;
     const plantsBreakdown = [];
-    for (const pd of d.plantsDetails || []) {
-      const q = pd.totalPlants || pd.quantity || 0;
-      totalPlants += q;
-      plantsBreakdown.push({
-        plantId: pd.plantId ? String(pd.plantId) : String(pd.id || ""),
-        qty: q,
-      });
+    if (exposePlantBreakdown) {
+      for (const pd of d.plantsDetails || []) {
+        const q = pd.totalPlants || pd.quantity || 0;
+        plantsBreakdown.push({
+          plantId: pd.plantId ? String(pd.plantId) : String(pd.id || ""),
+          qty: q,
+        });
+      }
     }
     const vehicle = [d.vehicleNumber, d.vehicleName].filter(Boolean).join(" · ") || d.vehicleName || "";
     return {
@@ -558,7 +601,7 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       district: geo?.district || "",
       taluka: geo?.taluka || "",
       totalPlants,
-      orders: Array.isArray(d.orderIds) ? d.orderIds.length : 0,
+      orders: scopedOrderIds.length,
       status: mapDispatchStatusToUi(d.transportStatus),
       plants: plantsBreakdown,
     };
