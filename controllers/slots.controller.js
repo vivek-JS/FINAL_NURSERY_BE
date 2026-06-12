@@ -28,12 +28,15 @@ import {
 } from "../services/secondaryShedSlotStock.service.js";
 import { slotWindowToDeliveryUtcRange } from "../utility/findDeliverySlot.js";
 import {
+  addRolledDispatchedToStats,
   addRolledRemainingToStats,
   aggregateSlotDispatchStats,
   computeSlotDispatchStatsFromOrders,
+  finalizeDispatchedBifurcation,
   getNativeDeliveryCohortOrders,
   getSlotDispatchStats,
   groupOrdersByDeliverySlot,
+  sumDispatchedCrossSlotOntoSlot,
 } from "../utility/slotDispatchStats.js";
 import { fetchSlotAvailabilityReport } from "../services/availabilityOverview.service.js";
 import {
@@ -2492,7 +2495,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       ],
     })
       .select(
-        "_id orderId orderStatus numberOfPlants additionalPlants bookingSlot originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover pastDueSlotRolloverAt"
+        "_id orderId orderStatus numberOfPlants additionalPlants bookingSlot originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover pastDueSlotRolloverAt deliveryDate"
       )
       .lean();
 
@@ -2592,6 +2595,11 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         ordersBySlot,
         asOfToday
       );
+      const dispatchedCrossSlotBySlot = sumDispatchedCrossSlotOntoSlot(
+        crossSlotOrders,
+        slotIdSet,
+        slotGroup.slots
+      );
 
       for (const slot of slotGroup.slots) {
         const slotId = slot._id?.toString ? slot._id.toString() : slot._id;
@@ -2603,6 +2611,11 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
           pipelineOrders: nativeDelivery,
         });
         addRolledRemainingToStats(dispatchStats, deliveryOrders);
+        addRolledDispatchedToStats(dispatchStats, deliveryOrders);
+        finalizeDispatchedBifurcation(
+          dispatchStats,
+          dispatchedCrossSlotBySlot.get(slotId) || 0
+        );
 
         // Get dealer quota information for this slot
         const dealerQuota = dealerQuotaMap.get(slotId) || {

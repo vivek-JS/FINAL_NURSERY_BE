@@ -233,6 +233,12 @@ export function buildSlotOrderMetrics({
   return {
     totalBookedPlants: dispatchStats.totalBookedPlants,
     totalDispatchedPlants: dispatchStats.totalDispatchedPlants,
+    dispatchedNativePlants: dispatchStats.totalDispatchedPlants,
+    dispatchedRolledInPlants: dispatchStats.dispatchedRolledInPlants || 0,
+    dispatchedCrossSlotInPlants: dispatchStats.dispatchedCrossSlotInPlants || 0,
+    dispatchedOtherPlants: dispatchStats.dispatchedOtherPlants || 0,
+    totalAllDispatchedPlants:
+      dispatchStats.totalAllDispatchedPlants ?? dispatchStats.totalDispatchedPlants,
     remainingToDispatch: dispatchStats.remainingToDispatch,
     remainingRolledIn: dispatchStats.remainingRolledIn,
     remainingNative: dispatchStats.remainingNative,

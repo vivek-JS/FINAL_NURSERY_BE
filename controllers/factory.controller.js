@@ -3750,6 +3750,10 @@ const getAll = (Model, modelName) =>
         [
           "booked",
           "dispatched",
+          "dispatched_native",
+          "dispatched_rolled",
+          "dispatched_other",
+          "dispatched_all",
           "remaining",
           "remaining_native",
           "remaining_rolled",
@@ -3796,9 +3800,40 @@ const getAll = (Model, modelName) =>
             ],
           },
         });
-      } else if (slotStatScope === "dispatched") {
+      } else if (slotStatScope === "dispatched" || slotStatScope === "dispatched_native") {
+        pipeline.push({
+          $match: {
+            orderStatus: { $in: ["DISPATCHED", "COMPLETED"] },
+            $nor: [
+              { pastDueSlotRollover: true },
+              { pastDueSlotRolloverAt: { $exists: true, $ne: null } },
+            ],
+          },
+        });
+      } else if (slotStatScope === "dispatched_rolled") {
+        pipeline.push({
+          $match: {
+            orderStatus: { $in: ["DISPATCHED", "COMPLETED"] },
+            $or: [
+              { pastDueSlotRollover: true },
+              { pastDueSlotRolloverAt: { $exists: true, $ne: null } },
+            ],
+          },
+        });
+      } else if (slotStatScope === "dispatched_all") {
         pipeline.push({
           $match: { orderStatus: { $in: ["DISPATCHED", "COMPLETED"] } },
+        });
+      } else if (slotStatScope === "dispatched_other") {
+        pipeline.push({
+          $match: {
+            orderStatus: { $in: ["DISPATCHED", "COMPLETED"] },
+            $or: [
+              { pastDueSlotRollover: true },
+              { pastDueSlotRolloverAt: { $exists: true, $ne: null } },
+              { dispatchedFromAnotherSlot: true },
+            ],
+          },
         });
       } else if (
         slotStatScope === "remaining" ||

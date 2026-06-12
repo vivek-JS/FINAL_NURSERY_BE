@@ -5,6 +5,10 @@ import { isDeliveryDateInSlotWindow } from "./findDeliverySlot.js";
 const EMPTY_STATS = {
   totalBookedPlants: 0,
   totalDispatchedPlants: 0,
+  dispatchedRolledInPlants: 0,
+  dispatchedCrossSlotInPlants: 0,
+  dispatchedOtherPlants: 0,
+  totalAllDispatchedPlants: 0,
   remainingToDispatch: 0,
   remainingRolledIn: 0,
   remainingNative: 0,
@@ -122,6 +126,60 @@ export function addRolledRemainingToStats(stats, orders) {
     if (EXCLUDED_ORDER_STATUSES.has(order?.orderStatus)) continue;
     stats.remainingRolledIn += getRemainingToDispatchQty(order);
   }
+  return stats;
+}
+
+/** Rolled-in dispatched plants in delivery cohort (excluded from native dispatched). */
+export function addRolledDispatchedToStats(stats, orders) {
+  for (const order of orders || []) {
+    if (!isPastDueRolledInOrder(order)) continue;
+    if (EXCLUDED_ORDER_STATUSES.has(order?.orderStatus)) continue;
+    stats.dispatchedRolledInPlants += getDispatchedAndCompletedQty(order);
+  }
+  return stats;
+}
+
+/**
+ * Cross-slot early-in dispatched on bookingSlot (excludes past-due rollover).
+ * Orders whose delivery already sits in the native cohort are counted only in totalDispatchedPlants.
+ */
+export function sumDispatchedCrossSlotOntoSlot(crossSlotOrders, slotIdSet, slotList = []) {
+  const bySlot = new Map();
+  const slotById = new Map();
+  for (const slot of slotList || []) {
+    const id = slot._id?.toString?.() ?? String(slot._id);
+    slotById.set(id, slot);
+  }
+
+  for (const order of crossSlotOrders || []) {
+    if (isPastDueRolledInOrder(order)) continue;
+    const qty = getDispatchedAndCompletedQty(order);
+    if (!qty) continue;
+    const bookingId =
+      order.bookingSlot?.toString?.() ?? String(order.bookingSlot || "");
+    if (!bookingId || !slotIdSet.has(bookingId)) continue;
+
+    const slot = slotById.get(bookingId);
+    if (
+      slot &&
+      order.deliveryDate &&
+      isDeliveryDateInSlotWindow(order.deliveryDate, slot)
+    ) {
+      continue;
+    }
+
+    bySlot.set(bookingId, (bySlot.get(bookingId) || 0) + qty);
+  }
+  return bySlot;
+}
+
+export function finalizeDispatchedBifurcation(stats, dispatchedCrossSlotIn = 0) {
+  const native = Number(stats.totalDispatchedPlants) || 0;
+  const rolled = Number(stats.dispatchedRolledInPlants) || 0;
+  const cross = Number(dispatchedCrossSlotIn) || 0;
+  stats.dispatchedCrossSlotInPlants = cross;
+  stats.dispatchedOtherPlants = rolled + cross;
+  stats.totalAllDispatchedPlants = native + rolled + cross;
   return stats;
 }
 

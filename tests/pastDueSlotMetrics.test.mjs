@@ -8,8 +8,11 @@ import {
   sumEarlyDispatchOntoSlot,
 } from "../utility/pastDueSlotMetrics.js";
 import {
+  addRolledDispatchedToStats,
   addRolledRemainingToStats,
   computeSlotDispatchStatsFromOrders,
+  finalizeDispatchedBifurcation,
+  sumDispatchedCrossSlotOntoSlot,
 } from "../utility/slotDispatchStats.js";
 
 const CURRENT = "cccccccccccccccccccccccc";
@@ -132,6 +135,56 @@ describe("pastDueSlotMetrics — early dispatch vs rollover", () => {
     ];
     const map = sumEarlyDispatchOntoSlot(cross, new Set([slotId]));
     assert.strictEqual(map.get(slotId), 100);
+  });
+});
+
+describe("slotDispatchStats — dispatched bifurcation", () => {
+  it("native + rolled + cross-slot = totalAllDispatchedPlants", () => {
+    const slotId = "ffffffffffffffffffffffff";
+    const slotMap = new Map([
+      [slotId, { _id: slotId, startDay: "11-06-2026", endDay: "17-06-2026" }],
+    ]);
+    const deliveryOrders = [
+      {
+        orderStatus: "DISPATCHED",
+        numberOfPlants: 1000,
+        pastDueSlotRollover: false,
+      },
+      {
+        orderStatus: "COMPLETED",
+        numberOfPlants: 500,
+        pastDueSlotRollover: true,
+      },
+      {
+        orderStatus: "ACCEPTED",
+        numberOfPlants: 200,
+        pastDueSlotRollover: true,
+      },
+    ];
+    const native = deliveryOrders.filter((o) => !o.pastDueSlotRollover);
+    const stats = computeSlotDispatchStatsFromOrders(deliveryOrders, {
+      bookedOrders: native,
+      pipelineOrders: native,
+    });
+    addRolledDispatchedToStats(stats, deliveryOrders);
+    const cross = [
+      {
+        bookingSlot: slotId,
+        orderStatus: "DISPATCHED",
+        numberOfPlants: 300,
+        pastDueSlotRollover: false,
+        dispatchedFromAnotherSlot: true,
+        deliveryDate: new Date("2026-05-01T00:00:00+05:30"),
+      },
+    ];
+    const crossMap = sumDispatchedCrossSlotOntoSlot(cross, new Set([slotId]), [...slotMap.values()]);
+    finalizeDispatchedBifurcation(stats, crossMap.get(slotId) || 0);
+
+    assert.strictEqual(stats.totalDispatchedPlants, 1000);
+    assert.strictEqual(stats.dispatchedRolledInPlants, 500);
+    assert.strictEqual(stats.dispatchedCrossSlotInPlants, 300);
+    assert.strictEqual(stats.dispatchedOtherPlants, 800);
+    assert.strictEqual(stats.totalAllDispatchedPlants, 1800);
   });
 });
 
