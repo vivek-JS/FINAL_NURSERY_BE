@@ -41,6 +41,7 @@ import {
 } from "../services/pastDueSlotRollover.service.js";
 import {
   aggregatePastDueMetricsForSlotGroup,
+  buildCrossSlotDetailBySlot,
   buildSlotOrderMetrics,
   sumEarlyDispatchOntoSlot,
 } from "../utility/pastDueSlotMetrics.js";
@@ -2487,11 +2488,12 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       ],
     })
       .select(
-        "numberOfPlants additionalPlants bookingSlot originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover"
+        "_id orderId orderStatus numberOfPlants additionalPlants bookingSlot originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover pastDueSlotRolloverAt"
       )
       .lean();
 
     const slotIdSet = new Set([...slotMap.keys()]);
+    const crossSlotDetailBySlot = buildCrossSlotDetailBySlot(crossSlotOrders, slotMap);
     const dispatchedFromOtherBySlot = sumEarlyDispatchOntoSlot(crossSlotOrders, slotIdSet);
     const releasedForEarlyBySlot = new Map();
     for (const order of crossSlotOrders) {
@@ -2617,6 +2619,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
             pastDueGroup,
             dispatchedFromOtherBySlot,
             releasedForEarlyBySlot,
+            crossSlotDetailBySlot,
           })
         );
 

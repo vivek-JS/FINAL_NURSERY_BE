@@ -32,6 +32,69 @@ export function isPastDueRolledInOrder(order) {
   );
 }
 
+export function mapCrossSlotOrderRow(order, extra = {}) {
+  return {
+    _id: order._id?.toString?.() || String(order._id),
+    orderId: order.orderId,
+    orderStatus: order.orderStatus,
+    plants: orderLinePlants(order),
+    ...extra,
+  };
+}
+
+function slotWindowLabel(slot) {
+  if (!slot?.startDay || !slot?.endDay) return "";
+  return `${slot.startDay}–${slot.endDay}`;
+}
+
+/** Per-slot early-dispatch in / released-out order lists for slots UI drawer. */
+export function buildCrossSlotDetailBySlot(crossSlotOrders, slotMap) {
+  const bySlot = new Map();
+  const ensure = (slotId) => {
+    if (!bySlot.has(slotId)) {
+      bySlot.set(slotId, {
+        earlyDispatchIn: { orders: [], orderCount: 0, plants: 0 },
+        releasedOut: { orders: [], orderCount: 0, plants: 0 },
+      });
+    }
+    return bySlot.get(slotId);
+  };
+
+  for (const order of crossSlotOrders || []) {
+    if (isPastDueRolledInOrder(order)) continue;
+    const bookingId = order.bookingSlot?.toString?.() ?? String(order.bookingSlot || "");
+    const originalId =
+      order.originalBookingSlot?.toString?.() ?? String(order.originalBookingSlot || "");
+    if (!bookingId || !originalId || bookingId === originalId) continue;
+
+    const row = mapCrossSlotOrderRow(order);
+
+    if (slotMap.has(bookingId)) {
+      const bucket = ensure(bookingId).earlyDispatchIn;
+      const fromSlot = slotMap.get(originalId);
+      bucket.orders.push({
+        ...row,
+        fromSlotLabel: slotWindowLabel(fromSlot) || originalId,
+      });
+      bucket.orderCount += 1;
+      bucket.plants += row.plants;
+    }
+
+    if (slotMap.has(originalId)) {
+      const bucket = ensure(originalId).releasedOut;
+      const toSlot = slotMap.get(bookingId);
+      bucket.orders.push({
+        ...row,
+        toSlotLabel: slotWindowLabel(toSlot) || bookingId,
+      });
+      bucket.orderCount += 1;
+      bucket.plants += row.plants;
+    }
+  }
+
+  return bySlot;
+}
+
 /** Sum plants on slot from early/cross-slot moves — excludes past-due rollover. */
 export function sumEarlyDispatchOntoSlot(crossSlotOrders, slotIdSet) {
   const bySlot = new Map();
@@ -136,9 +199,11 @@ export function buildSlotOrderMetrics({
   pastDueGroup,
   dispatchedFromOtherBySlot,
   releasedForEarlyBySlot,
+  crossSlotDetailBySlot,
 }) {
   const isCurrentSlot = slotId === pastDueGroup.currentSlotId;
   const rolledOnCurrent = pastDueGroup.pastDueDetail?.rolledInOnCurrentSlot || {};
+  const crossSlotDetail = crossSlotDetailBySlot?.get(slotId) || null;
 
   return {
     totalBookedPlants: dispatchStats.totalBookedPlants,
@@ -156,5 +221,6 @@ export function buildSlotOrderMetrics({
     pastDueDetail: isCurrentSlot ? pastDueGroup.pastDueDetail : null,
     pastDueRolledInPlantsSubtype: isCurrentSlot ? pastDueGroup.pastDueRolledInPlants : 0,
     pastDuePendingOnSlotSubtype: isCurrentSlot ? pastDueGroup.pastDuePendingOnSlot : 0,
+    crossSlotDetail,
   };
 }

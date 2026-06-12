@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
   aggregatePastDueMetricsForSlotGroup,
+  buildCrossSlotDetailBySlot,
   buildSlotOrderMetrics,
   sumEarlyDispatchOntoSlot,
 } from "../utility/pastDueSlotMetrics.js";
@@ -70,6 +71,44 @@ describe("pastDueSlotMetrics — rolled-in on current slot only", () => {
     assert.strictEqual(metrics.pastDueRolledInPlantsSubtype, 23000);
     assert.strictEqual(metrics.totalBookedPlants, 0);
     assert.notStrictEqual(metrics.totalBookedPlants, metrics.pastDueRolledInPlants);
+  });
+});
+
+describe("pastDueSlotMetrics — cross-slot detail", () => {
+  it("buildCrossSlotDetailBySlot splits early-in vs released-out per slot", () => {
+    const slotA = "aaaaaaaaaaaaaaaaaaaaaaaa";
+    const slotB = "bbbbbbbbbbbbbbbbbbbbbbbb";
+    const slotMap = new Map([
+      [slotA, { startDay: "01-06-2026", endDay: "07-06-2026" }],
+      [slotB, { startDay: "08-06-2026", endDay: "14-06-2026" }],
+    ]);
+    const cross = [
+      {
+        _id: "o1",
+        orderId: 101,
+        orderStatus: "READY_FOR_DISPATCH",
+        numberOfPlants: 500,
+        bookingSlot: slotB,
+        originalBookingSlot: slotA,
+        dispatchedFromAnotherSlot: true,
+        pastDueSlotRollover: false,
+      },
+      {
+        _id: "o2",
+        orderId: 102,
+        orderStatus: "ACCEPTED",
+        numberOfPlants: 200,
+        bookingSlot: slotA,
+        originalBookingSlot: slotA,
+        dispatchedFromAnotherSlot: true,
+        pastDueSlotRollover: true,
+      },
+    ];
+    const detail = buildCrossSlotDetailBySlot(cross, slotMap);
+    assert.strictEqual(detail.get(slotA).releasedOut.plants, 500);
+    assert.strictEqual(detail.get(slotB).earlyDispatchIn.plants, 500);
+    assert.strictEqual(detail.get(slotA).releasedOut.orderCount, 1);
+    assert.strictEqual(detail.get(slotB).earlyDispatchIn.orders[0].fromSlotLabel, "01-06-2026–07-06-2026");
   });
 });
 

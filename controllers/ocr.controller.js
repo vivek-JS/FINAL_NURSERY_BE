@@ -1,4 +1,5 @@
 import { extractUpiFromImage } from "../services/gemini.service.js";
+import { devanagariToAsciiDigits } from "../utility/devanagariNumerals.js";
 import { readUploadBufferFromUrl } from "../utils/localStorageUtils.js";
 
 const AMOUNT_NUMERIC = /^\d+(\.\d+)?$/;
@@ -14,7 +15,7 @@ function toNullIfEmpty(val) {
 
 function cleanAmount(raw) {
   if (raw == null) return null;
-  let s = String(raw)
+  let s = devanagariToAsciiDigits(String(raw))
     .replace(/₹/g, "")
     .replace(/,/g, "")
     .trim();
@@ -24,7 +25,13 @@ function cleanAmount(raw) {
 
 function cleanUtr(raw) {
   if (raw == null) return null;
-  const s = String(raw).replace(/\s/g, "");
+  const s = devanagariToAsciiDigits(String(raw)).replace(/\s/g, "");
+  return s === "" ? null : s;
+}
+
+function cleanNumericText(raw) {
+  if (raw == null) return null;
+  const s = devanagariToAsciiDigits(String(raw)).trim();
   return s === "" ? null : s;
 }
 
@@ -92,9 +99,9 @@ function buildSuccessPayload(raw) {
   const name = toNullIfEmpty(raw.name);
   const amount = cleanAmount(raw.amount);
   const utr_number = cleanUtr(raw.utr_number);
-  const transaction_id = toNullIfEmpty(raw.transaction_id);
-  const date = toNullIfEmpty(raw.date);
-  const time = toNullIfEmpty(raw.time);
+  const transaction_id = cleanNumericText(raw.transaction_id);
+  const date = cleanNumericText(raw.date);
+  const time = cleanNumericText(raw.time);
   const statusRaw = toNullIfEmpty(raw.status);
   const status = statusRaw ? statusRaw.toUpperCase() : null;
   const app_name = toNullIfEmpty(raw.app_name);
