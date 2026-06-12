@@ -50,6 +50,8 @@ const allowedParams = [
   "mobileNumber",
   "phone",
   "slotId",
+  "targetSlotId", // GET /slots/roll-expired-available/sources
+  "sourceSlotId", // slot capacity / order transfer APIs
   "types", // GET /api/v1/slot-trail/:slotId — e.g. stock = stock-related trail actions only
   "actionType",
   "orderId",
