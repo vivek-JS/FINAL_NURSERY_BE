@@ -1,6 +1,7 @@
 export function buildSlotDeltas(current, previous) {
   if (!previous) return [];
   const keys = [
+    { key: "needToDeliver", label: "Need to deliver" },
     { key: "pendingDelivery", label: "Pending delivery" },
     { key: "pastDuePending", label: "Past due pending" },
     { key: "needToProcure", label: "Need to procure" },
@@ -27,6 +28,15 @@ export function generateSlotInsights({
 }) {
   const insights = [];
   const topPlant = plants?.[0];
+
+  if (summary.needToDeliver > 0) {
+    insights.push({
+      id: "need-deliver",
+      severity: summary.pastDuePending > 0 ? "warning" : "info",
+      title: "Plants to deliver",
+      body: `${summary.needToDeliver.toLocaleString("en-IN")} plants need delivery in this view — ${summary.pendingDelivery?.toLocaleString("en-IN") || 0} in-range pending${summary.pastDuePending > 0 ? ` + ${summary.pastDuePending.toLocaleString("en-IN")} past due` : ""}.`,
+    });
+  }
 
   if (summary.pastDuePending > 0) {
     const share = summary.pendingDelivery > 0

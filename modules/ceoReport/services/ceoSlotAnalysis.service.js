@@ -21,19 +21,19 @@ export async function fetchCeoSlotAnalysis(query = {}) {
   const plantId = query.plantId ? String(query.plantId) : null;
   const subtypeId = query.subtypeId ? String(query.subtypeId) : null;
   const includePastDue = String(query.includePastDue ?? "true") !== "false";
-  const comparePrevious = String(query.comparePrevious ?? "true") !== "false";
+  const comparePrevious = String(query.comparePrevious ?? "true") !== "false" && depth !== "full";
   const year = queryYear || Number(startYmd.slice(0, 4)) || new Date().getFullYear();
+  const withGeo = depth !== "summary";
 
-  const load = (rs, re) =>
+  const load = (rs, re, geo = withGeo) =>
     fetchSlotAnalysisCore({
       rangeStart: rs,
       rangeEnd: re,
-      startYmd,
-      endYmd,
       year,
       plantId,
       subtypeId,
       includePastDue,
+      withGeo: geo,
     });
 
   const [current, previousCtx] = await Promise.all([
@@ -42,7 +42,7 @@ export async function fetchCeoSlotAnalysis(query = {}) {
       ? (async () => {
           const prev = resolvePreviousRange(startYmd, endYmd);
           if (!prev) return null;
-          const metrics = await load(prev.rangeStart, prev.rangeEnd);
+          const metrics = await load(prev.rangeStart, prev.rangeEnd, false);
           return { ...prev, ...metrics };
         })()
       : Promise.resolve(null),
@@ -73,23 +73,26 @@ export async function fetchCeoSlotAnalysis(query = {}) {
     };
     payload.previousSummary = previousCtx.summary;
     payload.deltas = buildSlotDeltas(current.summary, previousCtx.summary);
-    payload.insights = generateSlotInsights({
-      summary: current.summary,
-      plants: current.plants,
-      geoTop: current.geoTop,
-      dailyLoad: current.dailyLoad,
-      previousSummary: previousCtx.summary,
-      currentRange: payload.range,
-      previousRange: payload.previousRange,
-    });
   }
+
+  payload.insights = generateSlotInsights({
+    summary: current.summary,
+    plants: current.plants,
+    geoTop: current.geoTop,
+    dailyLoad: current.dailyLoad,
+    previousSummary: previousCtx?.summary,
+    currentRange: payload.range,
+    previousRange: payload.previousRange,
+  });
 
   if (depth === "summary") {
     return { data: payload };
   }
 
   payload.dailyLoad = current.dailyLoad;
+  payload.weeklyLoad = current.weeklyLoad;
   payload.slotLoad = current.slotLoad;
+  payload.statusBreakdown = current.statusBreakdown;
 
   if (depth !== "summary") {
     payload.periods = current.plants.map((p) => ({
@@ -102,6 +105,7 @@ export async function fetchCeoSlotAnalysis(query = {}) {
 
   if (depth === "full") {
     payload.plants = current.plants;
+    payload.activeSlots = current.activeSlots;
   }
 
   return { data: payload };

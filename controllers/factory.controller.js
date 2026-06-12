@@ -44,7 +44,10 @@ import {
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
 import { resolveSlotBufferFields } from "../utility/bufferUtils.js";
-import { slotWindowToDeliveryUtcRange } from "../utility/findDeliverySlot.js";
+import {
+  slotWindowToDeliveryUtcRange,
+  getBookingSlotDetailsForOrderList,
+} from "../utility/findDeliverySlot.js";
 import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
 import {
   applyPaymentTimingToPayment,
@@ -3701,6 +3704,42 @@ const getAll = (Model, modelName) =>
       .trim()
       .toLowerCase();
 
+    const slotWindowListQuery =
+      Boolean(slotId && monthName && startDay && endDay);
+    let prefetchedBookingSlotDetails = null;
+    if (slotWindowListQuery) {
+      prefetchedBookingSlotDetails = await getBookingSlotDetailsForOrderList({
+        slotId,
+        monthName,
+        startDay,
+        endDay,
+      });
+      if (!prefetchedBookingSlotDetails) {
+        const plantTotalsEmpty =
+          modelName === "Order" &&
+          String(req.query?.plantTotals ?? "") === "true";
+        const emptyPayload = {
+          data: [],
+          total: 0,
+          totalPages: 0,
+          currentPage: page,
+          limit: hasPaginationParams ? limit : 0,
+          hasPaginationParams,
+        };
+        if (plantTotalsEmpty) {
+          emptyPayload.totalPlantsSum = 0;
+        }
+        return res.status(200).json(
+          generateResponse(
+            "Success",
+            `${modelName} found successfully`,
+            emptyPayload,
+            undefined
+          )
+        );
+      }
+    }
+
     // Special case for slotId filtering
     if (slotId) {
       const slotOid = new mongoose.Types.ObjectId(slotId);
@@ -4021,8 +4060,7 @@ const getAll = (Model, modelName) =>
       searchTrimmedEarly.length === 0 &&
       !village &&
       !district &&
-      !taluka &&
-      !(slotId && monthName && startDay && endDay);
+      !taluka;
 
     if (effectiveSortKey === "farmReadyEnteredAt") {
       pipeline.push({
@@ -4201,12 +4239,7 @@ const getAll = (Model, modelName) =>
 
     // Search + pagination: paginate here so plant/users/dispatch $lookups and $project run on ~`limit` docs only.
     // (Previously $sort/$skip/$limit ran after all joins — very slow on large status sets e.g. DISPATCHED + name search.)
-    if (
-      !exportAll &&
-      searchTrimmed &&
-      hasPaginationParams &&
-      !(slotId && monthName && startDay && endDay)
-    ) {
+    if (!exportAll && searchTrimmed && hasPaginationParams) {
       pipeline.push(
         { $sort: orderListSortSpec() },
         { $skip: skip },
@@ -4297,55 +4330,15 @@ const getAll = (Model, modelName) =>
       }
     );
 
-    // Booking slot lookup with date validation if needed
-    if (slotId && monthName && startDay && endDay) {
+    // Slot-week drill-down: slot metadata resolved once (indexed find) — not per-order plantslots unwind.
+    if (prefetchedBookingSlotDetails) {
       pipeline.push({
-        $lookup: {
-          from: "plantslots",
-          let: { bookingSlotId: { $toObjectId: slotId } },
-          pipeline: [
-            { $unwind: "$subtypeSlots" },
-            { $unwind: "$subtypeSlots.slots" },
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    {
-                      $eq: [
-                        { $toString: "$subtypeSlots.slots._id" },
-                        { $toString: "$$bookingSlotId" },
-                      ],
-                    },
-                    { $eq: ["$subtypeSlots.slots.month", monthName] },
-                    { $eq: ["$subtypeSlots.slots.startDay", startDay] },
-                    { $eq: ["$subtypeSlots.slots.endDay", endDay] },
-                  ],
-                },
-              },
-            },
-            {
-              $project: {
-                _id: 0,
-                slotId: "$subtypeSlots.slots._id",
-                startDay: "$subtypeSlots.slots.startDay",
-                endDay: "$subtypeSlots.slots.endDay",
-                subtypeId: "$subtypeSlots.subtypeId",
-                month: "$subtypeSlots.slots.month",
-              },
-            },
-          ],
-          as: "bookingSlotDetails",
-        },
-      });
-
-      // Only keep orders where the slot details matched the criteria
-      pipeline.push({
-        $match: {
-          bookingSlotDetails: { $ne: [] },
+        $addFields: {
+          bookingSlotDetails: { $literal: prefetchedBookingSlotDetails },
         },
       });
     } else {
-      // Standard booking slot lookup without date validation
+      // Standard booking slot lookup keyed on each order's bookingSlot
       pipeline.push({
         $lookup: {
           from: "plantslots",

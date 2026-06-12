@@ -187,6 +187,13 @@ function watiTemplateParameters(params) {
   }));
 }
 
+/** Farmer-facing order id — business orderId first (matches ERP), then publicOrderCode. */
+export function watiDisplayOrderId({ orderId, publicOrderCode } = {}) {
+  if (orderId != null && orderId !== "") return String(orderId);
+  if (publicOrderCode != null && publicOrderCode !== "") return String(publicOrderCode);
+  return "N/A";
+}
+
 /**
  * Shared params for order_accpeted_revamped / order_placed_revamped (IST dates).
  */
@@ -212,8 +219,7 @@ export function buildOrderConfirmationTemplateParameters(sendTo, orderDetails) {
   const acceptPlant = isPapayaAccept ? "Papaya" : plantParam;
   const acceptSubtype = isPapayaAccept ? WATI_MERGED_SUBTYPE_PLACEHOLDER : subtypeParam;
 
-  const templateOrderId =
-    orderDetails.publicOrderCode?.toString() || orderId?.toString() || "N/A";
+  const templateOrderId = watiDisplayOrderId(orderDetails);
 
   const formattedDelivery =
     formatWatiDateDdMmYyyy(deliveryDate) || "To be confirmed";
@@ -339,7 +345,7 @@ export async function sendOrderDispatchedWhatsAppDelivery1(farmer, details) {
       // The message uses {{3}} for driver number.
       const papayaParams = [
         { name: "name", value: farmer.name || "Farmer" },
-        { name: "id", value: details.publicOrderCode?.toString() || details.orderId?.toString() || "N/A" },
+        { name: "id", value: watiDisplayOrderId(details) },
         { name: "driver_number", value: details.driverNumber || "N/A" },
       ];
       return await sendWatiTemplateMessage(farmer.mobileNumber, "driver_fianl", papayaParams);
@@ -347,7 +353,7 @@ export async function sendOrderDispatchedWhatsAppDelivery1(farmer, details) {
 
     const parameters = [
       { name: "name", value: watiParamValue(farmer.name, "Customer") },
-      { name: "id", value: watiParamValue(details.publicOrderCode || details.orderId, "N/A") },
+      { name: "id", value: watiParamValue(watiDisplayOrderId(details), "N/A") },
       { name: "village", value: watiParamValue(farmer.village, "N/A") },
       { name: "plant", value: watiParamValue(plantParam, "Plants") },
       { name: "subtype", value: watiParamValue(subtypeParam, "N/A") },
@@ -382,10 +388,7 @@ export function buildDeliveryFinalSecondParameters(farmer, orderDetails) {
   // Approved WATI delivery_final_second body:
   // {{2}} plant type, {{3}} subtype — "तुमचं शेत {{2}} - {{3}} रोप..."
   // {{4}} delivery date, {{5}} order id — "डिलिव्हरी {{4}}", "ऑर्डर आयडी {{5}}"
-  const displayOrderId =
-    orderId != null && orderId !== ""
-      ? String(orderId)
-      : publicOrderCode?.toString() || "N/A";
+  const displayOrderId = watiDisplayOrderId({ orderId, publicOrderCode });
   const { plant, subtype } = deliveryFinalSecondPlantSubtypeParams(plantName, plantSubtype);
 
   return [
@@ -444,8 +447,7 @@ export function buildOrderCancelledParameters(farmer, orderDetails) {
     deliverySlotLabel,
   } = orderDetails;
 
-  const displayOrderId =
-    publicOrderCode?.toString() || orderId?.toString() || "N/A";
+  const displayOrderId = watiDisplayOrderId({ orderId, publicOrderCode });
   const qty = String(numberOfPlants ?? 0);
   const bookingDate =
     formatWatiDateDdMmYyyy(orderBookingDate) || "—";

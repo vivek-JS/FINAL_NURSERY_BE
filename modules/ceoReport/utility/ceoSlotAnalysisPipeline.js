@@ -1,30 +1,32 @@
 import moment from "moment";
-import PlantSlot from "../../../models/slots.model.js";
 import Order from "../../../models/order.model.js";
+import PlantSlot from "../../../models/slots.model.js";
 import { fetchAvailabilityOverviewData } from "../../../services/whatsappReportAvailability.service.js";
 import {
   groupOrdersByDeliverySlot,
-  computeSlotDispatchStatsFromOrders,
-  getRemainingToDispatchQty,
-  getDispatchedAndCompletedQty,
+  resolveBookingSlotId,
   isSlotStatEligibleOrder,
-  NON_DEALER_QUOTA_MATCH,
 } from "../../../utility/slotDispatchStats.js";
 import { aggregatePastDueMetricsForSlotGroup, isPastDueRolledInOrder } from "../../../utility/pastDueSlotMetrics.js";
-import { getIstTodayYmd } from "../../../utility/istOrderDateStats.js";
+import { getIstTodayYmd, LINE_PLANT_TOTAL_ADD_FIELDS } from "../../../utility/istOrderDateStats.js";
+import { filterRowsInRange, getSlotPhase, isSlotActiveToday } from "./ceoSlotDateFilter.js";
+import {
+  linePlants,
+  pendingPlants,
+  dispatchedPlants,
+  slotIdsOrderMatch,
+  deliveryRangeMatch,
+  pastDueMatch,
+  rollupOrderMetrics,
+} from "./ceoSlotOrderMetrics.js";
 
 const IST = "Asia/Kolkata";
-const PENDING_STATUSES = new Set(["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH", "DISPATCH_PROCESS", "PARTIALLY_COMPLETED"]);
-
-function orderPlants(o) {
-  return (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0);
-}
 
 function slotKey(plantId, subtypeId) {
   return `${plantId}::${subtypeId}`;
 }
 
-async function loadSlotFulfillmentMeta(year, plantId) {
+async function loadSlotMeta(year, plantId) {
   const filter = { year: Number(year) };
   if (plantId) filter.plantId = plantId;
   const docs = await PlantSlot.find(filter).select("plantId subtypeSlots").lean();
@@ -33,8 +35,7 @@ async function loadSlotFulfillmentMeta(year, plantId) {
     for (const st of doc.subtypeSlots || []) {
       for (const slot of st.slots || []) {
         if (slot.status === false) continue;
-        const id = String(slot._id);
-        bySlotId.set(id, {
+        bySlotId.set(String(slot._id), {
           plantsSowed: Number(slot.plantsSowed) || 0,
           primarySowed: Number(slot.primarySowed) || 0,
           actualPlants: Number(slot.actualPlants) || 0,
@@ -46,144 +47,213 @@ async function loadSlotFulfillmentMeta(year, plantId) {
   return bySlotId;
 }
 
-async function loadAnalysisOrders(plantIds, year) {
-  const match = {
-    ...NON_DEALER_QUOTA_MATCH,
-    orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
-    dealerOrder: { $ne: true },
-    deliveryDate: {
-      $exists: true,
-      $ne: null,
-      $gte: new Date(`${year}-01-01T00:00:00+05:30`),
-      $lte: new Date(`${year}-12-31T23:59:59.999+05:30`),
-    },
-  };
-  if (plantIds?.length === 1) match.plantName = plantIds[0];
-  else if (plantIds?.length > 1) match.plantName = { $in: plantIds };
-
-  return Order.aggregate([
-    { $match: match },
-    {
-      $lookup: {
-        from: "farmers",
-        localField: "farmer",
-        foreignField: "_id",
-        pipeline: [{ $project: { village: 1, talukaName: 1, districtName: 1 } }],
-        as: "_farmer",
-      },
-    },
-    {
-      $addFields: {
-        linePlantTotal: {
-          $add: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$additionalPlants", 0] }],
-        },
-        village: { $ifNull: [{ $arrayElemAt: ["$_farmer.village", 0] }, ""] },
-        taluka: { $ifNull: [{ $arrayElemAt: ["$_farmer.talukaName", 0] }, ""] },
-        district: { $ifNull: [{ $arrayElemAt: ["$_farmer.districtName", 0] }, ""] },
-        deliveryChangeCount: { $size: { $ifNull: ["$deliveryChanges", []] } },
-      },
-    },
-  ]);
+function groupOrdersByBookingSlot(orders, slots) {
+  const map = new Map();
+  for (const slot of slots || []) {
+    const id = slot._id?.toString?.() ?? String(slot._id);
+    map.set(id, []);
+  }
+  for (const order of orders || []) {
+    if (!isSlotStatEligibleOrder(order)) continue;
+    const slotId = resolveBookingSlotId(order.bookingSlot);
+    if (slotId && map.has(slotId)) map.get(slotId).push(order);
+  }
+  return map;
 }
 
-function isPastDueByDate(order, todayYmd) {
-  if (!order?.deliveryDate || !PENDING_STATUSES.has(order.orderStatus)) return false;
-  const d = new Date(order.deliveryDate).toLocaleDateString("en-CA", { timeZone: IST });
-  return d < todayYmd;
-}
-
-function filterOrdersInRange(orders, rangeStart, rangeEnd) {
-  return orders.filter((o) => {
-    const t = new Date(o.deliveryDate).getTime();
-    return t >= rangeStart.getTime() && t <= rangeEnd.getTime();
-  });
-}
-
-function filterDeliveryChangesInRange(orders, rangeStart, rangeEnd) {
-  let orderCount = 0;
-  let plantCount = 0;
-  for (const o of orders) {
-    const changes = o.deliveryChanges || [];
-    const inRange = changes.some((c) => {
-      const t = new Date(c.createdAt || c.updatedAt || 0).getTime();
-      return t >= rangeStart.getTime() && t <= rangeEnd.getTime();
-    });
-    if (inRange || (changes.length > 0 && filterOrdersInRange([o], rangeStart, rangeEnd).length)) {
-      if (changes.length > 0) {
-        orderCount += 1;
-        plantCount += o.linePlantTotal || orderPlants(o);
-      }
+function mergeSlotOrders(...lists) {
+  const seen = new Set();
+  const merged = [];
+  for (const list of lists) {
+    for (const o of list || []) {
+      const id = String(o._id);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      merged.push(o);
     }
   }
-  return { orders: orderCount, plants: plantCount };
+  return merged;
 }
 
-function buildDailyLoad(orders, rangeStart, rangeEnd) {
+/** Slot-scoped orders (bookingSlot) + delivery cohort for charts + past-due. */
+async function loadOrdersBundle(slotIds, plantIds, rangeStart, rangeEnd, withGeo) {
+  const geoStages = withGeo
+    ? [
+        {
+          $lookup: {
+            from: "farmers",
+            localField: "farmer",
+            foreignField: "_id",
+            pipeline: [{ $project: { village: 1, talukaName: 1, districtName: 1 } }],
+            as: "_farmer",
+          },
+        },
+        {
+          $addFields: {
+            village: { $ifNull: [{ $arrayElemAt: ["$_farmer.village", 0] }, ""] },
+            taluka: { $ifNull: [{ $arrayElemAt: ["$_farmer.talukaName", 0] }, ""] },
+            district: { $ifNull: [{ $arrayElemAt: ["$_farmer.districtName", 0] }, ""] },
+          },
+        },
+      ]
+    : [];
+
+  const projectFields = {
+    orderStatus: 1,
+    numberOfPlants: 1,
+    additionalPlants: 1,
+    bookingSlot: 1,
+    deliveryDate: 1,
+    deliveryChanges: 1,
+    plantName: 1,
+    plantSubtype: 1,
+    quotaSource: 1,
+    dealerOrder: 1,
+    pastDueRolledFromSlotId: 1,
+    pastDueRolledAt: 1,
+  };
+
+  const [slotOrders, deliveryOrders, pastDueOrders] = await Promise.all([
+    slotIds.length
+      ? Order.aggregate([
+          { $match: slotIdsOrderMatch(slotIds, plantIds) },
+          { $project: projectFields },
+          { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+          ...geoStages,
+        ])
+      : [],
+    Order.aggregate([
+      { $match: deliveryRangeMatch(plantIds, rangeStart, rangeEnd) },
+      { $project: projectFields },
+      { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+    ]),
+    Order.aggregate([
+      { $match: pastDueMatch(plantIds, rangeStart) },
+      { $project: projectFields },
+      { $addFields: { ...LINE_PLANT_TOTAL_ADD_FIELDS, _pastDue: true } },
+      ...geoStages,
+    ]),
+  ]);
+
+  const allOrders = mergeSlotOrders(slotOrders, pastDueOrders);
+  const chartOrders = deliveryOrders.filter((o) => isSlotStatEligibleOrder(o));
+  return { slotOrders, chartOrders, pastDueOrders, allOrders };
+}
+
+function buildDailyLoad(chartOrders, rangeStart, rangeEnd) {
   const todayYmd = getIstTodayYmd();
   const byDay = new Map();
-  const start = moment(rangeStart).utcOffset(330).startOf("day");
+  const cur = moment(rangeStart).utcOffset(330).startOf("day");
   const end = moment(rangeEnd).utcOffset(330).startOf("day");
-  while (start.isSameOrBefore(end, "day")) {
-    const key = start.format("YYYY-MM-DD");
+  while (cur.isSameOrBefore(end, "day")) {
+    const key = cur.format("YYYY-MM-DD");
     byDay.set(key, {
       key,
-      label: start.format("D MMM"),
+      label: cur.format("D MMM"),
+      bookedPlants: 0,
       pendingPlants: 0,
       dispatchedPlants: 0,
       orders: 0,
       pastDue: key < todayYmd,
     });
-    start.add(1, "day");
+    cur.add(1, "day");
   }
 
-  for (const o of orders) {
+  for (const o of chartOrders) {
     if (!isSlotStatEligibleOrder(o) || !o.deliveryDate) continue;
     const key = new Date(o.deliveryDate).toLocaleDateString("en-CA", { timeZone: IST });
     if (!byDay.has(key)) continue;
     const row = byDay.get(key);
-    const pending = getRemainingToDispatchQty(o);
-    const dispatched = getDispatchedAndCompletedQty(o);
-    row.pendingPlants += pending;
-    row.dispatchedPlants += dispatched;
-    if (pending > 0) row.orders += 1;
+    row.bookedPlants += linePlants(o);
+    row.pendingPlants += pendingPlants(o);
+    row.dispatchedPlants += dispatchedPlants(o);
+    if (pendingPlants(o) > 0) row.orders += 1;
   }
-
   return [...byDay.values()];
+}
+
+function buildWeeklyLoad(dailyLoad) {
+  const weeks = new Map();
+  for (const d of dailyLoad) {
+    const wk = moment(d.key, "YYYY-MM-DD").utcOffset(330).startOf("isoWeek").format("YYYY-MM-DD");
+    const row = weeks.get(wk) || {
+      key: wk,
+      label: moment(wk, "YYYY-MM-DD").format("D MMM") + " wk",
+      bookedPlants: 0,
+      pendingPlants: 0,
+      dispatchedPlants: 0,
+    };
+    row.bookedPlants += d.bookedPlants;
+    row.pendingPlants += d.pendingPlants;
+    row.dispatchedPlants += d.dispatchedPlants;
+    weeks.set(wk, row);
+  }
+  return [...weeks.values()];
 }
 
 function buildGeoBreakdown(orders) {
   const talukaMap = new Map();
   const districtMap = new Map();
   for (const o of orders) {
-    const pending = getRemainingToDispatchQty(o);
-    if (pending <= 0) continue;
+    const p = pendingPlants(o);
+    if (p <= 0) continue;
     const taluka = o.taluka || "Unknown";
     const district = o.district || "Unknown";
     const t = talukaMap.get(taluka) || { taluka, plants: 0, orders: 0 };
-    t.plants += pending;
+    t.plants += p;
     t.orders += 1;
     talukaMap.set(taluka, t);
     const d = districtMap.get(district) || { district, plants: 0, orders: 0 };
-    d.plants += pending;
+    d.plants += p;
     d.orders += 1;
     districtMap.set(district, d);
   }
-  const byTaluka = [...talukaMap.values()].sort((a, b) => b.plants - a.plants).slice(0, 12);
-  const byDistrict = [...districtMap.values()].sort((a, b) => b.plants - a.plants).slice(0, 10);
-  return { byTaluka, byDistrict };
+  return {
+    byTaluka: [...talukaMap.values()].sort((a, b) => b.plants - a.plants).slice(0, 12),
+    byDistrict: [...districtMap.values()].sort((a, b) => b.plants - a.plants).slice(0, 10),
+  };
 }
 
-function buildSlotRow(row, slotMeta, pipelineOrders, bookedOrders, pastDueGroup, slotId) {
+function bookedFromSlotOrders(orders) {
+  let total = 0;
+  for (const o of orders || []) {
+    if (!isSlotStatEligibleOrder(o) || isPastDueRolledInOrder(o)) continue;
+    total += linePlants(o);
+  }
+  return total;
+}
+
+function pastDuePlantsOnSlot(slotId, slotOrders, pastDueGroup) {
+  const bucket = pastDueGroup?.pastDueDetail?.pendingBySlot?.find((b) => b.slotId === slotId);
+  let rolled = 0;
+  for (const o of slotOrders || []) {
+    if (isPastDueRolledInOrder(o)) rolled += pendingPlants(o);
+  }
+  return (bucket?.plants || 0) + rolled;
+}
+
+function buildSlotRow(row, slotMeta, slotOrders, pastDueGroup, slotId) {
   const meta = slotMeta.get(slotId) || {};
-  const dispatchStats = computeSlotDispatchStatsFromOrders([], {
-    pipelineOrders,
-    bookedOrders,
-  });
-  const booked = row.bookedPlants || dispatchStats.totalBookedPlants;
-  const sowed = meta.plantsSowed || meta.primarySowed || 0;
+  const booked = bookedFromSlotOrders(slotOrders);
+  const pending = slotOrders.reduce((s, o) => s + pendingPlants(o), 0);
+  const dispatched = slotOrders.reduce((s, o) => s + dispatchedPlants(o), 0);
+  const remainingNative = slotOrders.reduce((s, o) => {
+    if (isPastDueRolledInOrder(o)) return s;
+    return s + pendingPlants(o);
+  }, 0);
+  const remainingRolledIn = slotOrders.reduce((s, o) => {
+    if (!isPastDueRolledInOrder(o)) return s;
+    return s + pendingPlants(o);
+  }, 0);
+  const sowed = Math.max(meta.plantsSowed || 0, meta.primarySowed || 0);
   const actual = meta.actualPlants || 0;
-  const needToProcure = Math.max(0, booked - Math.max(sowed, actual));
+  const stockBase = Math.max(sowed, actual);
+  const needToProcure = Math.max(0, booked - stockBase);
   const isCurrent = slotId === pastDueGroup?.currentSlotId;
+  const phase = getSlotPhase(row);
+  const isActiveSlot = isCurrent || isSlotActiveToday(row);
+  const pastDuePlants = pastDuePlantsOnSlot(slotId, slotOrders, pastDueGroup);
+  const needToDeliver = pending;
 
   return {
     slotId,
@@ -191,6 +261,9 @@ function buildSlotRow(row, slotMeta, pipelineOrders, bookedOrders, pastDueGroup,
     startDay: row.startDay,
     endDay: row.endDay,
     label: `${row.startDay} – ${row.endDay}`,
+    isActiveSlot,
+    isCurrentSlot: isCurrent,
+    slotPhase: phase,
     capacity: {
       totalPlants: row.totalPlants,
       availablePlants: row.availablePlants,
@@ -199,17 +272,18 @@ function buildSlotRow(row, slotMeta, pipelineOrders, bookedOrders, pastDueGroup,
     },
     booking: {
       bookedPlants: booked,
-      dispatchedPlants: dispatchStats.totalDispatchedPlants,
-      remainingToDispatch: dispatchStats.remainingToDispatch,
-      remainingNative: dispatchStats.remainingNative,
-      remainingRolledIn: dispatchStats.remainingRolledIn,
+      dispatchedPlants: dispatched,
+      remainingToDispatch: pending,
+      needToDeliver,
+      remainingNative,
+      remainingRolledIn,
     },
     fulfillment: {
       plantsSowed: sowed,
       actualPlants: actual,
       closingStock: meta.closingStock || 0,
       needToProcure,
-      loadScore: dispatchStats.remainingToDispatch + booked * 0.1,
+      loadScore: pending + booked * 0.05,
     },
     pastDue: isCurrent
       ? {
@@ -221,16 +295,18 @@ function buildSlotRow(row, slotMeta, pipelineOrders, bookedOrders, pastDueGroup,
   };
 }
 
-function rollupTotals(rows) {
+function rollupSlotRows(rows) {
   return rows.reduce(
     (acc, r) => {
-      acc.totalCapacity += r.capacity?.totalPlants || r.totalPlants || 0;
-      acc.bookedPlants += r.booking?.bookedPlants || r.bookedPlants || 0;
-      acc.availablePlants += r.capacity?.availablePlants || r.availablePlants || 0;
+      acc.totalCapacity += Math.round(r.capacity?.totalPlants || 0);
+      acc.bookedPlants += r.booking?.bookedPlants || 0;
+      acc.availablePlants += Math.round(r.capacity?.availablePlants || 0);
       acc.pendingDelivery += r.booking?.remainingToDispatch || 0;
+      acc.needToDeliver += r.booking?.needToDeliver || r.booking?.remainingToDispatch || 0;
       acc.dispatchedPlants += r.booking?.dispatchedPlants || 0;
+      if (r.isActiveSlot) acc.activeSlotCount += 1;
       acc.needToProcure += r.fulfillment?.needToProcure || 0;
-      acc.pastDuePending += r.pastDue?.pendingPlants || 0;
+      acc.pastDuePending += (r.pastDue?.pendingPlants || 0) + (r.pastDue?.rolledInPlants || 0);
       acc.pastDueRolledIn += r.pastDue?.rolledInPlants || 0;
       if (r.capacity?.status === "overbooked") acc.overbookedSlots += 1;
       return acc;
@@ -240,8 +316,10 @@ function rollupTotals(rows) {
       bookedPlants: 0,
       availablePlants: 0,
       pendingDelivery: 0,
+      needToDeliver: 0,
       dispatchedPlants: 0,
       needToProcure: 0,
+      activeSlotCount: 0,
       pastDuePending: 0,
       pastDueRolledIn: 0,
       overbookedSlots: 0,
@@ -250,56 +328,45 @@ function rollupTotals(rows) {
   );
 }
 
-function buildPlantTree(rows, orders, slotMeta, { plantId, subtypeId }) {
-  const plantMap = new Map();
-  const ordersByPlantSubtype = new Map();
-
-  for (const o of orders) {
-    const pid = String(o.plantName);
-    const sid = String(o.plantSubtype || "");
-    const k = slotKey(pid, sid);
-    const list = ordersByPlantSubtype.get(k) || [];
-    list.push(o);
-    ordersByPlantSubtype.set(k, list);
-  }
-
-  const filteredRows = rows.filter((r) => {
+function buildPlantTree(rangeRows, slotOrders, slotMeta, { plantId, subtypeId }) {
+  const filtered = rangeRows.filter((r) => {
     if (plantId && String(r.plantId) !== String(plantId)) return false;
     if (subtypeId && String(r.subtypeId) !== String(subtypeId)) return false;
     return true;
   });
 
-  const slotsBySubtype = new Map();
-  for (const row of filteredRows) {
+  const bySubtype = new Map();
+  for (const row of filtered) {
     const k = slotKey(row.plantId, row.subtypeId);
-    const list = slotsBySubtype.get(k) || { meta: row, slots: [] };
-    list.slots.push(row);
-    slotsBySubtype.set(k, list);
+    const g = bySubtype.get(k) || { meta: row, slots: [] };
+    g.slots.push(row);
+    bySubtype.set(k, g);
   }
 
-  for (const [k, { meta, slots }] of slotsBySubtype) {
-    const subtypeOrders = ordersByPlantSubtype.get(k) || [];
-    const slotDocs = slots.map((r) => ({ _id: r.slotId, startDay: r.startDay, endDay: r.endDay, month: r.month, status: true }));
-    const ordersBySlot = groupOrdersByDeliverySlot(subtypeOrders, slotDocs);
-    const pastDueGroup = aggregatePastDueMetricsForSlotGroup(slotDocs, ordersBySlot);
+  const plantMap = new Map();
+  for (const [, { meta, slots }] of bySubtype) {
+    const slotDocs = slots.map((r) => ({
+      _id: r.slotId,
+      startDay: r.startDay,
+      endDay: r.endDay,
+      month: r.month,
+      status: true,
+    }));
+    const ordersByBooking = groupOrdersByBookingSlot(slotOrders, slotDocs);
+    const ordersByDelivery = groupOrdersByDeliverySlot(slotOrders, slotDocs);
+    const pastDueGroup = aggregatePastDueMetricsForSlotGroup(slotDocs, ordersByDelivery);
 
     const slotRows = slots.map((row) => {
       const sid = String(row.slotId);
-      const pipeline = ordersBySlot.get(sid) || [];
-      return buildSlotRow(row, slotMeta, pipeline, pipeline, pastDueGroup, sid);
+      const merged = mergeSlotOrders(ordersByBooking.get(sid), ordersByDelivery.get(sid));
+      return buildSlotRow(row, slotMeta, merged, pastDueGroup, sid);
     });
 
-    const subtypeTotals = rollupTotals(slotRows);
+    const subtypeTotals = rollupSlotRows(slotRows);
     const pid = String(meta.plantId);
     let plant = plantMap.get(pid);
     if (!plant) {
-      plant = {
-        plantId: pid,
-        plantName: meta.plantName,
-        sowingAllowed: meta.sowingAllowed,
-        subtypes: [],
-        totals: null,
-      };
+      plant = { plantId: pid, plantName: meta.plantName, sowingAllowed: meta.sowingAllowed, subtypes: [], totals: null };
       plantMap.set(pid, plant);
     }
     plant.subtypes.push({
@@ -310,96 +377,152 @@ function buildPlantTree(rows, orders, slotMeta, { plantId, subtypeId }) {
         subtypeTotals.totalCapacity > 0
           ? Math.min(100, Math.round((subtypeTotals.bookedPlants / subtypeTotals.totalCapacity) * 100))
           : 0,
-      slots: slotRows.sort((a, b) => (b.fulfillment?.loadScore || 0) - (a.fulfillment?.loadScore || 0)),
+      slots: slotRows.sort((a, b) => {
+        if (a.isActiveSlot !== b.isActiveSlot) return a.isActiveSlot ? -1 : 1;
+        return (b.fulfillment?.loadScore || 0) - (a.fulfillment?.loadScore || 0);
+      }),
     });
   }
 
-  const plants = [...plantMap.values()].map((p) => {
-    const allSlots = p.subtypes.flatMap((s) => s.slots);
-    p.totals = rollupTotals(allSlots);
-    p.totals.utilizationPct =
-      p.totals.totalCapacity > 0
-        ? Math.min(100, Math.round((p.totals.bookedPlants / p.totals.totalCapacity) * 100))
-        : 0;
-    p.subtypes.sort((a, b) => b.totals.bookedPlants - a.totals.bookedPlants);
-    return p;
-  });
-
-  plants.sort((a, b) => b.totals.bookedPlants - a.totals.bookedPlants);
-  return plants;
+  return [...plantMap.values()]
+    .map((p) => {
+      const allSlots = p.subtypes.flatMap((s) => s.slots);
+      p.totals = rollupSlotRows(allSlots);
+      p.totals.utilizationPct =
+        p.totals.totalCapacity > 0
+          ? Math.min(100, Math.round((p.totals.bookedPlants / p.totals.totalCapacity) * 100))
+          : 0;
+      p.subtypes.sort((a, b) => b.totals.bookedPlants - a.totals.bookedPlants);
+      return p;
+    })
+    .sort((a, b) => b.totals.bookedPlants - a.totals.bookedPlants);
 }
 
 export async function fetchSlotAnalysisCore({
   rangeStart,
   rangeEnd,
-  startYmd,
-  endYmd,
   year,
   plantId,
   subtypeId,
   includePastDue,
+  withGeo = true,
 }) {
-  const todayYmd = getIstTodayYmd();
-  const { rows } = await fetchAvailabilityOverviewData({ year, plantId });
-  const plantIds = plantId ? [plantId] : [...new Set(rows.map((r) => r.plantId))];
+  const { rows: allRows } = await fetchAvailabilityOverviewData({ year, plantId });
+  const rangeRows = filterRowsInRange(allRows, rangeStart, rangeEnd);
+  const effectivePlantIds = plantId ? [plantId] : [...new Set(rangeRows.map((r) => r.plantId))];
 
-  const [slotMeta, allOrders] = await Promise.all([
-    loadSlotFulfillmentMeta(year, plantId),
-    loadAnalysisOrders(plantIds, year),
+  if (!effectivePlantIds.length) {
+    return {
+      summary: {
+        totalCapacity: 0,
+        bookedPlants: 0,
+        availablePlants: 0,
+        utilizationPct: 0,
+        pendingDelivery: 0,
+        needToDeliver: 0,
+        needToDeliverInRange: 0,
+        dispatchedPlants: 0,
+        pastDuePending: 0,
+        pastDueExcludingRollover: 0,
+        pastDueRolledIn: 0,
+        needToProcure: 0,
+        procureGapPct: 0,
+        deliveryChangedOrders: 0,
+        deliveryChangedPlants: 0,
+        overbookedSlots: 0,
+        activeSlotCount: 0,
+        plantCount: 0,
+        slotCount: 0,
+        statusBreakdown: [],
+      },
+      plants: [],
+      plantPicker: [],
+      activeSlots: [],
+      dailyLoad: [],
+      weeklyLoad: [],
+      slotLoad: [],
+      geoTop: { byTaluka: [], byDistrict: [] },
+      statusBreakdown: [],
+    };
+  }
+
+  const slotIds = rangeRows.map((r) => r.slotId).filter(Boolean);
+
+  const [slotMeta, orderBundle] = await Promise.all([
+    loadSlotMeta(year, plantId),
+    loadOrdersBundle(slotIds, effectivePlantIds, rangeStart, rangeEnd, withGeo),
   ]);
 
-  const rangeOrders = filterOrdersInRange(allOrders, rangeStart, rangeEnd);
-  const deliveryChanges = filterDeliveryChangesInRange(allOrders, rangeStart, rangeEnd);
+  const { slotOrders, chartOrders, pastDueOrders, allOrders } = orderBundle;
+
+  const plants = buildPlantTree(rangeRows, slotOrders, slotMeta, { plantId, subtypeId });
+  const slotRollup = rollupSlotRows(plants.flatMap((p) => p.subtypes.flatMap((s) => s.slots)));
+
+  const orderMetrics = rollupOrderMetrics(allOrders, rangeStart, rangeEnd, {
+    bookedFromSlots: slotRollup.bookedPlants,
+  });
+  const pipelineOrders = mergeSlotOrders(slotOrders, pastDueOrders);
+  const needToDeliverTotal = pipelineOrders.reduce((s, o) => s + pendingPlants(o), 0);
 
   let pastDueNative = 0;
   let pastDueRolled = 0;
-  for (const o of allOrders) {
-    if (!PENDING_STATUSES.has(o.orderStatus)) continue;
-    const pending = getRemainingToDispatchQty(o);
-    if (pending <= 0) continue;
-    if (!isPastDueByDate(o, todayYmd)) continue;
-    if (isPastDueRolledInOrder(o)) pastDueRolled += pending;
-    else pastDueNative += pending;
+  for (const o of pastDueOrders) {
+    const p = pendingPlants(o);
+    if (p <= 0) continue;
+    if (isPastDueRolledInOrder(o)) pastDueRolled += p;
+    else pastDueNative += p;
   }
 
-  const plants = buildPlantTree(rows, allOrders, slotMeta, { plantId, subtypeId });
-  const allSlotRows = plants.flatMap((p) => p.subtypes.flatMap((s) => s.slots));
-  const rolledUp = rollupTotals(allSlotRows.length ? allSlotRows : rows.map((r) => ({
-    totalPlants: r.totalPlants,
-    bookedPlants: r.bookedPlants,
-    availablePlants: r.availablePlants,
-    capacity: { status: r.status },
-    booking: { remainingToDispatch: 0, dispatchedPlants: 0 },
-    fulfillment: { needToProcure: Math.max(0, r.bookedPlants - (slotMeta.get(r.slotId)?.plantsSowed || 0)) },
-    pastDue: { pendingPlants: 0, rolledInPlants: 0 },
-  })));
+  const activeSlots = plants
+    .flatMap((p) => p.subtypes.flatMap((s) => s.slots))
+    .filter((s) => s.isActiveSlot)
+    .map((s) => ({
+      slotId: s.slotId,
+      label: s.label,
+      plantId: plants.find((p) => p.subtypes.some((st) => st.slots.some((sl) => sl.slotId === s.slotId)))?.plantId,
+      needToDeliver: s.booking?.needToDeliver || s.booking?.remainingToDispatch || 0,
+      pending: s.booking?.remainingToDispatch || 0,
+      pastDue: (s.pastDue?.pendingPlants || 0) + (s.pastDue?.rolledInPlants || 0),
+    }));
 
-  const pendingInRange = rangeOrders.reduce((s, o) => s + getRemainingToDispatchQty(o), 0);
-  const dailyLoad = buildDailyLoad(allOrders, rangeStart, rangeEnd);
-  const geoTop = buildGeoBreakdown(allOrders);
+  const dailyLoad = buildDailyLoad(chartOrders, rangeStart, rangeEnd);
+  const weeklyLoad = buildWeeklyLoad(dailyLoad);
+  const geoTop = withGeo ? buildGeoBreakdown([...allOrders, ...pastDueOrders]) : { byTaluka: [], byDistrict: [] };
 
   const summary = {
-    ...rolledUp,
+    totalCapacity: slotRollup.totalCapacity || Math.round(rangeRows.reduce((s, r) => s + r.totalPlants, 0)),
+    bookedPlants: slotRollup.bookedPlants,
+    availablePlants: Math.max(
+      0,
+      (slotRollup.totalCapacity || 0) - slotRollup.bookedPlants
+    ),
     utilizationPct:
-      rolledUp.totalCapacity > 0
-        ? Math.min(100, Math.round((rolledUp.bookedPlants / rolledUp.totalCapacity) * 100))
+      slotRollup.totalCapacity > 0
+        ? Math.min(100, Math.round((slotRollup.bookedPlants / slotRollup.totalCapacity) * 100))
         : 0,
-    pendingDelivery: rolledUp.pendingDelivery || pendingInRange,
+    pendingDelivery: slotRollup.pendingDelivery,
+    needToDeliver: needToDeliverTotal,
+    needToDeliverInRange: slotRollup.needToDeliver,
+    dispatchedPlants: slotRollup.dispatchedPlants,
+    activeSlotCount: slotRollup.activeSlotCount,
     pastDuePending: includePastDue ? pastDueNative + pastDueRolled : pastDueNative,
     pastDueExcludingRollover: pastDueNative,
     pastDueRolledIn: pastDueRolled,
-    needToProcure: rolledUp.needToProcure,
+    needToProcure: slotRollup.needToProcure,
     procureGapPct:
-      rolledUp.bookedPlants > 0
-        ? Math.round((rolledUp.needToProcure / rolledUp.bookedPlants) * 100)
+      slotRollup.bookedPlants > 0
+        ? Math.round((slotRollup.needToProcure / slotRollup.bookedPlants) * 100)
         : 0,
-    deliveryChangedOrders: deliveryChanges.orders,
-    deliveryChangedPlants: deliveryChanges.plants,
+    deliveryChangedOrders: orderMetrics.deliveryChangedOrders,
+    deliveryChangedPlants: orderMetrics.deliveryChangedPlants,
+    overbookedSlots: slotRollup.overbookedSlots,
     plantCount: plants.length,
-    slotCount: rolledUp.slotCount || rows.length,
+    slotCount: rangeRows.length,
+    statusBreakdown: orderMetrics.statusBreakdown,
   };
 
-  const slotLoad = allSlotRows
+  const slotLoad = plants
+    .flatMap((p) => p.subtypes.flatMap((s) => s.slots))
     .filter((s) => (s.booking?.remainingToDispatch || 0) + (s.booking?.bookedPlants || 0) > 0)
     .map((s) => ({
       slotId: s.slotId,
@@ -407,22 +530,25 @@ export async function fetchSlotAnalysisCore({
       month: s.month,
       bookedPlants: s.booking?.bookedPlants || 0,
       pendingPlants: s.booking?.remainingToDispatch || 0,
+      dispatchedPlants: s.booking?.dispatchedPlants || 0,
       loadPct: s.capacity?.utilizationPct || 0,
       status: s.capacity?.status,
     }))
     .sort((a, b) => b.pendingPlants - a.pendingPlants)
-    .slice(0, 24);
+    .slice(0, 30);
 
-  const plantPicker = [...new Map(rows.map((r) => [r.plantId, { plantId: r.plantId, plantName: r.plantName }])).values()]
+  const plantPicker = [...new Map(allRows.map((r) => [r.plantId, { plantId: r.plantId, plantName: r.plantName }])).values()]
     .sort((a, b) => a.plantName.localeCompare(b.plantName));
 
   return {
     summary,
     plants,
     plantPicker,
+    activeSlots,
     dailyLoad,
+    weeklyLoad,
     slotLoad,
     geoTop,
-    deliveryChanges,
+    statusBreakdown: orderMetrics.statusBreakdown,
   };
 }

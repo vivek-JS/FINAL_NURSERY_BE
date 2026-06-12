@@ -1022,6 +1022,7 @@ orderSchema.index(
 // List/getOrders: date filters + sort (early pagination uses these fields heavily)
 orderSchema.index({ orderBookingDate: -1 });
 orderSchema.index({ deliveryDate: -1 });
+orderSchema.index({ deliveryDate: 1, orderStatus: 1, quotaSource: 1 });
 orderSchema.index({ salesPerson: 1, orderBookingDate: -1 });
 orderSchema.index({ whatsappFarmReadyMessageKey: 1 }, { sparse: true });
 orderSchema.index({ dealer: 1, orderBookingDate: -1 });

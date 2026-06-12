@@ -1,3 +1,6 @@
 2026/06/10-22:24:32.917 438e Reusing MANIFEST /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/MANIFEST-000001
 2026/06/10-22:24:32.926 438e Recovering log #45
 2026/06/10-22:24:32.927 438e Reusing old log /Users/VivekP/Movies/ram/FINAL_NURSERY_BE/.wwebjs_auth/session-erp-alert-bot/Default/Local Storage/leveldb/000045.log 
+2026/06/11-23:32:51.564 438a Level-0 table #49: started
+2026/06/11-23:32:51.570 438a Level-0 table #49: 10428 bytes OK
+2026/06/11-23:32:51.573 438a Delete type=0 #45
