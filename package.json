@@ -21,6 +21,8 @@
     "start": "node index.js",
     "backfill:central-ledger": "node scripts/backfill-central-ledger-from-subledgers.js",
     "backfill:central-ledger:stage": "node scripts/backfill-central-ledger-from-subledgers.js --stage",
+    "repair:payment-ledger": "node scripts/repair-missing-payment-ledger.js",
+    "repair:payment-ledger:stage": "node scripts/repair-missing-payment-ledger.js --stage",
     "backfill:public-order-code": "node scripts/backfill-public-order-code.js",
     "backfill:payment-timing": "node scripts/backfill-payment-timing.js",
     "order:set-status": "node scripts/set-order-status.js",

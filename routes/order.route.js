@@ -124,22 +124,22 @@ router
   .get("/admin-dashboard-stats", getAdminDashboardStats)
   .get(
     "/admin-daily-mis",
-    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
     getAdminDailyMis
   )
   .get(
     "/admin-mis-sales",
-    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
     getAdminSalesMis
   )
   .get(
     "/admin-mis-dealer",
-    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
     getAdminDealerMis
   )
   .get(
     "/admin-mis-due",
-    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
     getAdminDueMis
   )
   .get("/by-status", getOrdersByStatus)

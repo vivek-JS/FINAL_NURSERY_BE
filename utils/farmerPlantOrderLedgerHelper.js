@@ -95,7 +95,14 @@ export function getFarmerPlantPaymentTransitionAction(
   previousStatus,
   newStatus
 ) {
-  if (!previousStatus || !newStatus) return "INVALID";
+  if (!newStatus) return "INVALID";
+
+  // Newly-inserted payment (no prior status): credit immediately only when it
+  // lands as COLLECTED. PENDING/REJECTED/etc. defer the credit until collected.
+  if (!previousStatus) {
+    return newStatus === "COLLECTED" ? "CREDIT" : "NONE";
+  }
+
   if (previousStatus === newStatus) return "NONE";
 
   // Any "to COLLECTED" means we should credit to farmer (if amount > 0).

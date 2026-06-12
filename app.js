@@ -570,7 +570,7 @@ server.get(
 );
 const adminMisAuth = [
   authenticateToken,
-  authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN"]),
+  authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
   noCacheApiResponse,
 ];
 server.get("/api/v1/order/admin-daily-mis", ...adminMisAuth, getAdminDailyMis);
