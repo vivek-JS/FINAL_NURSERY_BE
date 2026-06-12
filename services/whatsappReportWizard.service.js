@@ -7,6 +7,7 @@ import {
 import {
   generateTodayBookingPdf,
   generateCentralDeliveryPdf,
+  generateDeliveryOrdersListPdf,
   generateAvailabilityPdf,
   plantTotalsForBarChart,
 } from "./pdfService.js";
@@ -27,6 +28,7 @@ import {
 import {
   fetchCentralDeliveryReport,
   formatCentralDeliveryWhatsApp,
+  fetchDeliveryOrdersList,
 } from "./whatsappReportCentralDelivery.service.js";
 import {
   fetchPlantsForAvailabilityWizard,
@@ -64,13 +66,15 @@ Reply with a number:
 
 _Type *cancel* anytime._`;
 
-const DELIVERY_WINDOW_PROMPT = `📅 *Delivery — pick planning window (IST)*
+const DELIVERY_WINDOW_PROMPT = `📅 *Delivery — pick window (IST)*
 *1* — Today
-*2* — Next 7 days (today through +6 days)
-*3* — Next 14 days (today through +13 days)
-*4* — Custom (you’ll type two dates next)
+*2* — Next 7 days
+*3* — This month
+*4* — Next month
+*5* — Custom (you’ll type two dates next)
 
-Reply *1–4*, or *cancel*.`;
+Each option sends *stats + summary PDF + full order-list PDF*.
+Reply *1–5*, or *cancel*.`;
 
 const AVAILABILITY_MODE_PROMPT = `📦 *Availability — how to view?*
 *1* — *By plant* — pick plant, then month
@@ -257,12 +261,64 @@ async function runDeliveryWithPdf(phone, range) {
         filename,
         `Delivery · ${rangeLabel} · central MIS`
       );
+
+      // Full order list (all orders with delivery date in window) as a separate PDF.
+      await runDeliveryOrdersListPdf(phone, range, rangeLabel);
     }
   } catch (e) {
     console.error("[report wizard] central delivery failed:", e?.message || e);
     await sendChunks(
       phone,
       `⚠️ Delivery report failed: ${(e && e.message) || String(e)}`
+    );
+  }
+}
+
+async function runDeliveryOrdersListPdf(phone, range, rangeLabel) {
+  try {
+    const { rows, totals } = await fetchDeliveryOrdersList(range);
+    if (!rows.length) {
+      await sendChunks(
+        phone,
+        `📋 *All orders list* — no orders with a delivery date in ${rangeLabel}.`
+      );
+      return;
+    }
+    const statusSummary = Object.entries(totals.byStatus || {})
+      .sort((a, b) => (b[1].plants || 0) - (a[1].plants || 0))
+      .map(([s, v]) => `• ${s}: ${v.orders} ord / ${v.plants} plants`)
+      .join("\n");
+    await sendChunks(
+      phone,
+      [
+        "📋 *All orders (delivery in window)*",
+        `_${rangeLabel}_`,
+        `Total: *${totals.orders}* orders | *${totals.plants}* plants`,
+        "",
+        statusSummary,
+        "",
+        "📎 *Order-list PDF attached* — farmer, village, plant, qty, status, delivery date.",
+      ].join("\n")
+    );
+    const pdfBuffer = await generateDeliveryOrdersListPdf({
+      reportDateLabel: rangeLabel,
+      rows,
+      totals,
+    });
+    const filename = `delivery-orders-${moment()
+      .utcOffset(330)
+      .format("YYYYMMDD-HHmmss")}.pdf`;
+    await sendPdfToPhone(
+      phone,
+      pdfBuffer,
+      filename,
+      `All orders · ${rangeLabel}`
+    );
+  } catch (e) {
+    console.error("[report wizard] orders list PDF failed:", e?.message || e);
+    await sendChunks(
+      phone,
+      `⚠️ Order-list PDF failed: ${(e && e.message) || String(e)}`
     );
   }
 }
@@ -475,7 +531,7 @@ export async function processWhatsappReportWizard({ message, waId }) {
       await sendSessionTextMessage({
         whatsappNumber: phone,
         messageText:
-          "Reply *1–4*, or type a date range on one line.\n\n" +
+          "Reply *1–5*, or type a date range on one line.\n\n" +
           DELIVERY_WINDOW_PROMPT,
       });
       return { handled: true };

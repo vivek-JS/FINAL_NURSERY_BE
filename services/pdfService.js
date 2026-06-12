@@ -1352,3 +1352,148 @@ export function generateOrderTransitionInsightsPdf({
     doc.end();
   });
 }
+
+const STATUS_SHORT = {
+  ACCEPTED: "ACC",
+  FARM_READY: "FR",
+  READY_FOR_DISPATCH: "RFD",
+  DISPATCH_PROCESS: "DP",
+  PARTIALLY_COMPLETED: "PC",
+  DISPATCHED: "DISP",
+  COMPLETED: "COMP",
+};
+
+/**
+ * Full delivery order list (line-level) — landscape table, paginated.
+ * @param {object} opts
+ * @param {string} opts.reportDateLabel
+ * @param {{ orderId: any, farmerName: string, mobile: string, village: string, plant: string, subtype: string, quantity: number, status: string, deliveryDate: string }[]} opts.rows
+ * @param {{ orders: number, plants: number, byStatus: Record<string, { orders: number, plants: number }> }} opts.totals
+ */
+export function generateDeliveryOrdersListPdf({ reportDateLabel, rows = [], totals = {} }) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "A4",
+      layout: "landscape",
+      margin: 36,
+      info: { Title: "Delivery orders list", Author: "Nursery Management" },
+    });
+    const chunks = [];
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const pageW = doc.page.width;
+    const pageH = doc.page.height;
+    const ml = doc.page.margins.left;
+    const mr = doc.page.margins.right;
+    const mt = doc.page.margins.top;
+    const mb = doc.page.margins.bottom;
+    const usableW = pageW - ml - mr;
+    const theme = THEMES.delivery;
+
+    let y = drawHeroBanner(doc, ml, mt, usableW, {
+      title: "Delivery Orders — Full List",
+      subtitle: reportDateLabel,
+      theme,
+      badge: "ORDERS",
+    });
+
+    y = drawKpiCards(
+      doc,
+      ml,
+      y,
+      usableW,
+      [
+        { label: "Total orders", value: formatNum(totals.orders || 0) },
+        { label: "Total plants", value: formatNum(totals.plants || 0) },
+        {
+          label: "Statuses",
+          value: String(Object.keys(totals.byStatus || {}).length || 0),
+          sub: "distinct order states",
+        },
+      ],
+      theme
+    );
+
+    const statusLines = Object.entries(totals.byStatus || {})
+      .sort((a, b) => (b[1].plants || 0) - (a[1].plants || 0))
+      .map(([s, v]) => `${s}: ${v.orders} ord / ${formatNum(v.plants)} pl`);
+    if (statusLines.length) {
+      y = drawCalloutBox(
+        doc,
+        ml,
+        y,
+        usableW,
+        "Status breakdown (delivery date in window)",
+        [statusLines.join("  ·  ")],
+        theme
+      );
+    }
+
+    y = drawSectionTitle(doc, ml, y, usableW, "Order list", theme);
+    y += 2;
+
+    const col = {
+      idx: ml,
+      oid: ml + usableW * 0.05,
+      farmer: ml + usableW * 0.13,
+      village: ml + usableW * 0.33,
+      plant: ml + usableW * 0.49,
+      sub: ml + usableW * 0.63,
+      qty: ml + usableW * 0.77,
+      status: ml + usableW * 0.85,
+      del: ml + usableW * 0.93,
+    };
+    const cols = [
+      { label: "#", x: col.idx, w: usableW * 0.05 },
+      { label: "Order", x: col.oid, w: usableW * 0.08 },
+      { label: "Farmer", x: col.farmer, w: usableW * 0.2 },
+      { label: "Village", x: col.village, w: usableW * 0.16 },
+      { label: "Plant", x: col.plant, w: usableW * 0.14 },
+      { label: "Subtype", x: col.sub, w: usableW * 0.14 },
+      { label: "Qty", x: col.qty, w: usableW * 0.08, align: "right" },
+      { label: "Status", x: col.status, w: usableW * 0.08 },
+      { label: "Delivery", x: col.del, w: usableW * 0.07 },
+    ];
+
+    y = drawTableHeader(doc, ml, y, usableW, cols, theme);
+
+    if (!rows.length) {
+      y = drawEmptyState(doc, ml, y, usableW, "No delivery orders in this window.", theme);
+    } else {
+      rows.forEach((r, i) => {
+        if (y > pageH - mb - 30) {
+          doc.addPage();
+          y = mt;
+          y = drawTableHeader(doc, ml, y, usableW, cols, theme);
+        }
+        y = drawTableRow(
+          doc,
+          ml,
+          y,
+          usableW,
+          18,
+          cols,
+          [
+            String(i + 1),
+            String(r.orderId ?? "—"),
+            String(r.farmerName || "—").slice(0, 26),
+            String(r.village || "—").slice(0, 22),
+            String(r.plant || "—").slice(0, 18),
+            String(r.subtype || "—").slice(0, 18),
+            formatNum(r.quantity || 0),
+            STATUS_SHORT[r.status] || r.status || "—",
+            r.deliveryDate || "—",
+          ],
+          i,
+          theme
+        );
+      });
+      y = drawGrandTotalBar(doc, ml, y + 4, usableW, "Total plants", totals.plants || 0, theme);
+    }
+
+    drawFooter(doc, ml, y + 8, usableW, `Delivery orders · ${reportDateLabel}`, theme);
+    doc.end();
+  });
+}

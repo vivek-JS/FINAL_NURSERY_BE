@@ -121,8 +121,8 @@ export function parseDateChoice(text) {
 }
 
 /**
- * Delivery planning window (IST): today, next 7 / 14 calendar days from today, or custom.
- * @returns {{ ok: boolean, range?: { start: Date, end: Date }, pendingCustom?: boolean }}
+ * Delivery planning window (IST): today, next 7 days, this month, next month, or custom.
+ * @returns {{ ok: boolean, range?: { start: Date, end: Date }, pendingCustom?: boolean, label?: string }}
  */
 export function parseDeliveryWindowChoice(text) {
   const t = String(text || "").trim().toLowerCase();
@@ -130,25 +130,39 @@ export function parseDeliveryWindowChoice(text) {
   if (["1", "1.", "one", "today", "today only", "आज"].includes(t)) {
     const start = today.clone().startOf("day").toDate();
     const end = today.clone().endOf("day").toDate();
-    return { ok: true, range: { start, end } };
+    return { ok: true, range: { start, end }, label: "Today" };
   }
   if (
-    ["2", "2.", "two", "7", "7 days", "next 7", "next seven"].includes(t)
+    ["2", "2.", "two", "7", "7 days", "next 7", "next seven", "week"].includes(t)
   ) {
     const start = today.clone().startOf("day").toDate();
     const end = today.clone().add(6, "day").endOf("day").toDate();
-    return { ok: true, range: { start, end } };
+    return { ok: true, range: { start, end }, label: "Next 7 days" };
   }
   if (
-    ["3", "3.", "three", "14", "14 days", "next 14", "next fourteen"].includes(
-      t
-    )
+    [
+      "3",
+      "3.",
+      "three",
+      "this month",
+      "month",
+      "current month",
+      "this mnth",
+    ].includes(t)
   ) {
-    const start = today.clone().startOf("day").toDate();
-    const end = today.clone().add(13, "day").endOf("day").toDate();
-    return { ok: true, range: { start, end } };
+    const start = today.clone().startOf("month").startOf("day").toDate();
+    const end = today.clone().endOf("month").endOf("day").toDate();
+    return { ok: true, range: { start, end }, label: "This month" };
   }
-  if (["4", "4.", "four", "custom", "range", "दिनांक"].includes(t)) {
+  if (
+    ["4", "4.", "four", "next month", "nextmonth", "next mnth"].includes(t)
+  ) {
+    const nm = today.clone().add(1, "month");
+    const start = nm.clone().startOf("month").startOf("day").toDate();
+    const end = nm.clone().endOf("month").endOf("day").toDate();
+    return { ok: true, range: { start, end }, label: "Next month" };
+  }
+  if (["5", "5.", "five", "custom", "range", "दिनांक"].includes(t)) {
     return { ok: true, pendingCustom: true };
   }
 
