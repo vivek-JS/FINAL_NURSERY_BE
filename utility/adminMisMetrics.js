@@ -333,11 +333,12 @@ async function aggregateTransitionsByEntityPerOrder(
 export async function aggregateDispatchedByDay(
   rangeStart,
   rangeEnd,
-  statusMatch
+  statusMatch,
+  extraMatch = {}
 ) {
   const [dispatched, completed] = await Promise.all([
-    aggregateTransitionsByDayPerOrder("DISPATCHED", rangeStart, rangeEnd, statusMatch),
-    aggregateTransitionsByDayPerOrder("COMPLETED", rangeStart, rangeEnd, statusMatch),
+    aggregateTransitionsByDayPerOrder("DISPATCHED", rangeStart, rangeEnd, statusMatch, extraMatch),
+    aggregateTransitionsByDayPerOrder("COMPLETED", rangeStart, rangeEnd, statusMatch, extraMatch),
   ]);
   const completedKeys = new Set(completed.keys());
   const filtered = new Map();
@@ -354,7 +355,8 @@ export async function aggregateDispatchedByDay(
 export async function aggregateVehicleDispatchedByDay(
   rangeStart,
   rangeEnd,
-  statusMatch
+  statusMatch,
+  extraMatch = {}
 ) {
   const vehicleMatch = matchOrderHasVehicleDispatchDetails();
   const [dispatched, completed] = await Promise.all([
@@ -363,9 +365,9 @@ export async function aggregateVehicleDispatchedByDay(
       rangeStart,
       rangeEnd,
       statusMatch,
-      vehicleMatch
+      { ...extraMatch, ...vehicleMatch }
     ),
-    aggregateTransitionsByDayPerOrder("COMPLETED", rangeStart, rangeEnd, statusMatch),
+    aggregateTransitionsByDayPerOrder("COMPLETED", rangeStart, rangeEnd, statusMatch, extraMatch),
   ]);
   const completedKeys = new Set(completed.keys());
   const filtered = new Map();
@@ -459,7 +461,8 @@ export async function aggregateTransitionsByDay(
   newStatus,
   rangeStart,
   rangeEnd,
-  statusMatch
+  statusMatch,
+  extraMatch = {}
 ) {
   const eventOrderIds = await distinctOrderIdsWithTransitionEvents(
     newStatus,
@@ -467,15 +470,16 @@ export async function aggregateTransitionsByDay(
     rangeEnd
   );
   const exclude = transitionExcludeOrderIdsMatch(eventOrderIds);
+  const match = { ...statusMatch, ...extraMatch };
   const [eventRows, historyRows, legacyRows] = await Promise.all([
-    aggregateTransitionEventsByDay(newStatus, rangeStart, rangeEnd, statusMatch),
+    aggregateTransitionEventsByDay(newStatus, rangeStart, rangeEnd, match),
     Order.aggregate([
-      { $match: { ...statusMatch, ...exclude } },
+      { $match: { ...match, ...exclude } },
       { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
       ...transitionHistoryByDayStages(newStatus, rangeStart, rangeEnd),
     ]),
     Order.aggregate([
-      { $match: { ...statusMatch, ...exclude } },
+      { $match: { ...match, ...exclude } },
       { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
       ...transitionLegacyByDayStages(newStatus, rangeStart, rangeEnd),
     ]),
@@ -815,9 +819,13 @@ export function buildAdminDailyMisPayloadFromMetrics({
   };
 }
 
-export async function fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly = false } = {}) {
+export async function fetchMisMetricSlices(
+  rangeStart,
+  rangeEnd,
+  { dueOnly = false, extraMatch = {} } = {}
+) {
   const statusMatch = orderStatusExcludeMatch();
-  const dueExtra = dueOnly ? duePipelineMatch() : {};
+  const dueExtra = { ...extraMatch, ...(dueOnly ? duePipelineMatch() : {}) };
 
   const [
     globalFarmReady,
@@ -833,14 +841,14 @@ export async function fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly = fal
     aggregateGlobalStatus("FARM_READY", statusMatch, dueExtra),
     aggregateGlobalStatus("READY_FOR_DISPATCH", statusMatch, dueExtra),
     aggregateAcceptedByDeliveryDay(rangeStart, rangeEnd, statusMatch, dueExtra),
-    aggregateDispatchedByDay(rangeStart, rangeEnd, statusMatch),
-    aggregateVehicleDispatchedByDay(rangeStart, rangeEnd, statusMatch),
-    aggregateTransitionsByDay("COMPLETED", rangeStart, rangeEnd, statusMatch),
+    aggregateDispatchedByDay(rangeStart, rangeEnd, statusMatch, extraMatch),
+    aggregateVehicleDispatchedByDay(rangeStart, rangeEnd, statusMatch, extraMatch),
+    aggregateTransitionsByDay("COMPLETED", rangeStart, rangeEnd, statusMatch, extraMatch),
     aggregatePipelineByDeliveryDay(rangeStart, rangeEnd, statusMatch, dueExtra),
     aggregateDeliveryInRangeByDay(rangeStart, rangeEnd, statusMatch, dueExtra),
     dueOnly
       ? Promise.resolve({ orders: 0, plants: 0 })
-      : aggregateDeliveryUnionTotal(rangeStart, rangeEnd, statusMatch),
+      : aggregateDeliveryUnionTotal(rangeStart, rangeEnd, { ...statusMatch, ...extraMatch }),
   ]);
 
   return {
@@ -1343,10 +1351,10 @@ export async function fetchVarietyTableMetrics(
   rangeStart,
   rangeEnd,
   groupStages,
-  { dueOnly = false } = {}
+  { dueOnly = false, extraMatch = {} } = {}
 ) {
   const statusMatch = orderStatusExcludeMatch();
-  const dueExtra = dueOnly ? duePipelineMatch() : {};
+  const dueExtra = { ...extraMatch, ...(dueOnly ? duePipelineMatch() : {}) };
 
   const [
     bookingRows,
@@ -1363,6 +1371,7 @@ export async function fetchVarietyTableMetrics(
       {
         $match: {
           ...statusMatch,
+          ...extraMatch,
           orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
         },
       },
@@ -1575,7 +1584,7 @@ export async function fetchEntityPastDueBreakdown(
 export async function fetchVarietyPastDueTableMetrics(
   rangeStart,
   groupStages,
-  { dueOnly = false } = {}
+  { dueOnly = false, extraMatch = {} } = {}
 ) {
   return fetchEntityPastDueBreakdown(rangeStart, {
     groupStages,
@@ -1583,6 +1592,7 @@ export async function fetchVarietyPastDueTableMetrics(
     entityKeyFn: varietyEntityKey,
     labelFromKey: varietyLabelFromKey,
     mapBookingRow: rowToVarietyBookingShape,
+    extraMatch,
     dueOnly,
   });
 }

@@ -58,7 +58,7 @@ const PLANT_SUBTYPE_STAGES = [
 ];
 
 export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
-  const { dueOnly = false, includeAllPastDue = false } = options;
+  const { dueOnly = false, includeAllPastDue = false, extraMatch = {} } = options;
   const parsed = parseCentralReportDateRange(startDate, endDate);
   if (parsed.error) {
     return { error: parsed.error, statusCode: 400 };
@@ -85,11 +85,12 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
     pastDueRow,
     varietyPastDueResult,
   ] = await Promise.all([
-    fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly }),
+    fetchMisMetricSlices(rangeStart, rangeEnd, { dueOnly, extraMatch }),
     Order.aggregate([
       {
         $match: {
           ...statusMatch,
+          ...extraMatch,
           orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
         },
       },
@@ -109,7 +110,7 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
       },
     ]),
     Order.aggregate([
-      { $match: { ...statusMatch, ...rangeOrMatch } },
+      { $match: { ...statusMatch, ...extraMatch, ...rangeOrMatch } },
       {
         $project: {
           orderId: "$_id",
@@ -163,7 +164,7 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
       },
     ]),
     Order.aggregate([
-      { $match: { ...statusMatch, ...rangeOrMatch } },
+      { $match: { ...statusMatch, ...extraMatch, ...rangeOrMatch } },
       {
         $group: {
           _id: null,
@@ -177,13 +178,13 @@ export async function fetchAdminDailyMis(startDate, endDate, options = {}) {
         },
       },
     ]),
-    fetchVarietyTableMetrics(rangeStart, rangeEnd, PLANT_SUBTYPE_STAGES, { dueOnly }),
-    aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
+    fetchVarietyTableMetrics(rangeStart, rangeEnd, PLANT_SUBTYPE_STAGES, { dueOnly, extraMatch }),
+    aggregateDueSummary(rangeStart, rangeEnd, { dueOnly, extraMatch }),
     includeAllPastDue
-      ? aggregatePastDueDeliveryRows(rangeStart)
+      ? aggregatePastDueDeliveryRows(rangeStart, extraMatch)
       : Promise.resolve(null),
     includeAllPastDue
-      ? fetchVarietyPastDueTableMetrics(rangeStart, PLANT_SUBTYPE_STAGES, { dueOnly })
+      ? fetchVarietyPastDueTableMetrics(rangeStart, PLANT_SUBTYPE_STAGES, { dueOnly, extraMatch })
       : Promise.resolve(null),
   ]);
 

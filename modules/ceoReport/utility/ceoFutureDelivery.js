@@ -31,9 +31,10 @@ async function sumFutureOrdersPlants(match) {
 }
 
 /** Orders with delivery after range end — open pipeline only. */
-export async function aggregateFutureDeliveryRows(rangeEnd) {
+export async function aggregateFutureDeliveryRows(rangeEnd, extraMatch = {}) {
   const backlogMatch = {
     ...orderStatusExcludeMatch(),
+    ...extraMatch,
     ...duePipelineMatch(),
     deliveryDate: { $gt: rangeEnd, $ne: null },
   };

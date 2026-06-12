@@ -1,7 +1,14 @@
+import mongoose from "mongoose";
 import { parseCentralReportDateRange } from "../../../utility/centralReportEngine/dateRange.js";
 import { parseMisDueFlags } from "../../../utility/adminMisDue.js";
 import { monthBoundsFromYm } from "./istMonthStats.js";
 import { istDayBoundsFromYmd } from "../../../utility/istOrderDateStats.js";
+
+function toOid(id) {
+  if (!id) return null;
+  const s = String(id).trim();
+  return mongoose.Types.ObjectId.isValid(s) ? new mongoose.Types.ObjectId(s) : s;
+}
 
 export function parseCeoReportQuery(query = {}) {
   const { startDate, endDate } = query;
@@ -18,7 +25,8 @@ export function parseCeoReportQuery(query = {}) {
   const includeFuture = String(query.includeFuture ?? "true") !== "false";
 
   const extraMatch = {};
-  if (query.plantId) extraMatch.plantName = query.plantId;
+  if (query.plantId) extraMatch.plantName = toOid(query.plantId);
+  if (query.subtypeId) extraMatch.plantSubtype = toOid(query.subtypeId);
   if (query.nurserySite) {
     extraMatch.expectedNursery = String(query.nurserySite).trim().toUpperCase();
   }

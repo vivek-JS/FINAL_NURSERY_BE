@@ -59,18 +59,20 @@ async function sumDueOrdersPlants(match) {
 /**
  * Due in selected delivery window vs backlog before range start.
  */
-export async function aggregateDueSummary(rangeStart, rangeEnd, { dueOnly = false } = {}) {
+export async function aggregateDueSummary(rangeStart, rangeEnd, { dueOnly = false, extraMatch = {} } = {}) {
   const base = orderStatusExcludeMatch();
   const dueStatus = { orderStatus: { $in: DUE_DELIVERY_STATUSES } };
 
   const [inRange, pastDue] = await Promise.all([
     sumDueOrdersPlants({
       ...base,
+      ...extraMatch,
       ...dueStatus,
       deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
     }),
     sumDueOrdersPlants({
       ...base,
+      ...extraMatch,
       ...dueStatus,
       deliveryDate: { $lt: rangeStart, $ne: null },
     }),
@@ -96,9 +98,10 @@ const REMAINING_STATUSES = [
 ];
 
 /** Delivery pipeline breakdown for orders due before range start (aligns with due summary). */
-export async function aggregatePastDueDeliveryRows(rangeStart) {
+export async function aggregatePastDueDeliveryRows(rangeStart, extraMatch = {}) {
   const backlogMatch = {
     ...orderStatusExcludeMatch(),
+    ...extraMatch,
     ...duePipelineMatch(),
     deliveryDate: { $lt: rangeStart, $ne: null },
   };

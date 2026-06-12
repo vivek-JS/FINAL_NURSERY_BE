@@ -19,11 +19,11 @@ import moment from "moment";
 
 async function fetchCoreMetrics(startYmd, endYmd, rangeStart, rangeEnd, { dueOnly, includeAllPastDue, extraMatch, includeFuture }) {
   const [misResult, dueSummary, deliveryChanges, geoTop, futureRow] = await Promise.all([
-    fetchAdminDailyMis(startYmd, endYmd, { dueOnly, includeAllPastDue }),
-    aggregateDueSummary(rangeStart, rangeEnd, { dueOnly }),
+    fetchAdminDailyMis(startYmd, endYmd, { dueOnly, includeAllPastDue, extraMatch }),
+    aggregateDueSummary(rangeStart, rangeEnd, { dueOnly, extraMatch }),
     aggregateDeliveryChangeSummary(rangeStart, rangeEnd, extraMatch),
     aggregateGeoTop(rangeStart, rangeEnd, extraMatch),
-    includeFuture ? aggregateFutureDeliveryRows(rangeEnd) : Promise.resolve(null),
+    includeFuture ? aggregateFutureDeliveryRows(rangeEnd, extraMatch) : Promise.resolve(null),
   ]);
 
   const misData = misResult?.data;
