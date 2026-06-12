@@ -190,6 +190,30 @@ export function aggregatePastDueMetricsForSlotGroup(slots, ordersBySlot, asOfDat
   };
 }
 
+/** Physical stock vs dispatch queue metrics for slot list API. */
+export function computeSlotPhysicalMetrics(slot, dispatchStats) {
+  const actualPlants = Number(slot?.actualPlants) || 0;
+  const actualRemaining =
+    (Number(dispatchStats?.remainingNative) || 0) +
+    (Number(dispatchStats?.remainingRolledIn) || 0);
+  const remainingToDispatch = Number(dispatchStats?.remainingToDispatch) || 0;
+  const actualGapRaw = actualRemaining - actualPlants;
+  const actualGapPlants = Math.max(0, actualGapRaw);
+  const actualSurplusPlants = Math.max(0, -actualGapRaw);
+  const actualGapPct =
+    actualPlants <= 0 ? (actualGapPlants > 0 ? 100 : 0) : Math.round((actualGapPlants / actualPlants) * 100);
+
+  return {
+    actualPlants,
+    actualAvailable: Math.max(0, actualPlants - remainingToDispatch),
+    actualRemainingPlants: actualRemaining,
+    actualGapPlants,
+    actualGapPct,
+    actualSurplusPlants,
+    rolledInAvailablePlants: Number(slot?.rolledInAvailablePlants) || 0,
+  };
+}
+
 /** Attach dispatch + past-due fields for one slot row (GET slots). */
 export function buildSlotOrderMetrics({
   slot,
@@ -204,6 +228,7 @@ export function buildSlotOrderMetrics({
   const isCurrentSlot = slotId === pastDueGroup.currentSlotId;
   const rolledOnCurrent = pastDueGroup.pastDueDetail?.rolledInOnCurrentSlot || {};
   const crossSlotDetail = crossSlotDetailBySlot?.get(slotId) || null;
+  const physical = computeSlotPhysicalMetrics(slot, dispatchStats);
 
   return {
     totalBookedPlants: dispatchStats.totalBookedPlants,
@@ -222,5 +247,6 @@ export function buildSlotOrderMetrics({
     pastDueRolledInPlantsSubtype: isCurrentSlot ? pastDueGroup.pastDueRolledInPlants : 0,
     pastDuePendingOnSlotSubtype: isCurrentSlot ? pastDueGroup.pastDuePendingOnSlot : 0,
     crossSlotDetail,
+    ...physical,
   };
 }

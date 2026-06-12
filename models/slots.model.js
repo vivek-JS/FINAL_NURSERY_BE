@@ -204,6 +204,12 @@ const slotSchema = new Schema({
     default: 0,
     min: 0,
   },
+  /** Booking capacity rolled in from expired slot windows (not order rollover). */
+  rolledInAvailablePlants: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
   /** Closing stock at end of slot period */
   closingStock: {
     type: Number,

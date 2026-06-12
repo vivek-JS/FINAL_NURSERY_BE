@@ -40,6 +40,10 @@ import {
   runPastDueSlotRollover,
 } from "../services/pastDueSlotRollover.service.js";
 import {
+  listRollExpiredAvailableSources,
+  runRollExpiredSlotAvailable,
+} from "../services/rollExpiredSlotAvailable.service.js";
+import {
   aggregatePastDueMetricsForSlotGroup,
   buildCrossSlotDetailBySlot,
   buildSlotOrderMetrics,
@@ -4930,6 +4934,75 @@ export const runPastDueSlotRolloverController = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || "Past-due slot rollover failed",
+    });
+  }
+};
+
+/** GET /slots/roll-expired-available/sources */
+export const getRollExpiredAvailableSources = async (req, res) => {
+  try {
+    if (!canRunPastDueSlotRollover(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins may roll expired slot available",
+      });
+    }
+
+    const { targetSlotId } = req.query;
+    if (!targetSlotId) {
+      return res.status(400).json({ success: false, message: "targetSlotId is required" });
+    }
+
+    const asOfRaw = req.query?.asOfDate;
+    const asOfDate = asOfRaw ? new Date(asOfRaw) : undefined;
+    const data = await listRollExpiredAvailableSources(targetSlotId, asOfDate);
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("getRollExpiredAvailableSources:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to load expired slot sources",
+    });
+  }
+};
+
+/** POST /slots/roll-expired-available */
+export const postRollExpiredAvailable = async (req, res) => {
+  try {
+    if (!canRunPastDueSlotRollover(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins may roll expired slot available",
+      });
+    }
+
+    const { targetSlotId, transfers, reason } = req.body || {};
+    if (!reason || !String(reason).trim()) {
+      return res.status(400).json({ success: false, message: "reason is required" });
+    }
+
+    const asOfRaw = req.body?.asOfDate;
+    const asOfDate = asOfRaw ? new Date(asOfRaw) : undefined;
+
+    const data = await runRollExpiredSlotAvailable({
+      targetSlotId,
+      transfers,
+      reason: String(reason).trim(),
+      performedBy: req.user?._id || null,
+      asOfDate,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Expired slot available rolled successfully",
+      data,
+    });
+  } catch (error) {
+    console.error("postRollExpiredAvailable:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Roll expired available failed",
     });
   }
 };

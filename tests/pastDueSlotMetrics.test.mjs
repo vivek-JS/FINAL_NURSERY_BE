@@ -4,6 +4,7 @@ import {
   aggregatePastDueMetricsForSlotGroup,
   buildCrossSlotDetailBySlot,
   buildSlotOrderMetrics,
+  computeSlotPhysicalMetrics,
   sumEarlyDispatchOntoSlot,
 } from "../utility/pastDueSlotMetrics.js";
 import {
@@ -165,5 +166,35 @@ describe("pastDueSlotMetrics — remaining split on slot row", () => {
     assert.strictEqual(metrics.remainingToDispatch, 3000);
     assert.strictEqual(metrics.remainingRolledIn, 7000);
     assert.strictEqual(metrics.remainingNative, 3000);
+  });
+
+  it("buildSlotOrderMetrics attaches physical stock fields", () => {
+    const dispatchStats = {
+      totalBookedPlants: 100,
+      totalDispatchedPlants: 0,
+      remainingToDispatch: 500,
+      remainingRolledIn: 200,
+      remainingNative: 300,
+    };
+    const metrics = buildSlotOrderMetrics({
+      slot: { actualPlants: 400, rolledInAvailablePlants: 50 },
+      slotId: CURRENT,
+      orders: [],
+      dispatchStats,
+      pastDueGroup: {
+        currentSlotId: CURRENT,
+        pastDuePendingOnSlot: 0,
+        pastDuePendingOrders: 0,
+        pastDueRolledInPlants: 0,
+        pastDueDetail: null,
+      },
+      dispatchedFromOtherBySlot: new Map(),
+      releasedForEarlyBySlot: new Map(),
+    });
+    assert.strictEqual(metrics.actualPlants, 400);
+    assert.strictEqual(metrics.actualRemainingPlants, 500);
+    assert.strictEqual(metrics.actualGapPlants, 100);
+    assert.strictEqual(metrics.actualGapPct, 25);
+    assert.strictEqual(metrics.rolledInAvailablePlants, 50);
   });
 });
