@@ -237,6 +237,14 @@ function buildSlotRow(row, slotMeta, slotOrders, pastDueGroup, slotId) {
   const booked = bookedFromSlotOrders(slotOrders);
   const pending = slotOrders.reduce((s, o) => s + pendingPlants(o), 0);
   const dispatched = slotOrders.reduce((s, o) => s + dispatchedPlants(o), 0);
+  const dispatchedNative = slotOrders.reduce((s, o) => {
+    if (isPastDueRolledInOrder(o)) return s;
+    return s + dispatchedPlants(o);
+  }, 0);
+  const dispatchedOther = slotOrders.reduce((s, o) => {
+    if (!isPastDueRolledInOrder(o)) return s;
+    return s + dispatchedPlants(o);
+  }, 0);
   const remainingNative = slotOrders.reduce((s, o) => {
     if (isPastDueRolledInOrder(o)) return s;
     return s + pendingPlants(o);
@@ -249,6 +257,10 @@ function buildSlotRow(row, slotMeta, slotOrders, pastDueGroup, slotId) {
   const actual = meta.actualPlants || 0;
   const stockBase = Math.max(sowed, actual);
   const needToProcure = Math.max(0, booked - stockBase);
+  // Physical position: full pre-dispatch queue (native + rolled) vs actual stock on slot.
+  const actualRemaining = remainingNative + remainingRolledIn;
+  const actualAvailable = Math.max(0, actual - actualRemaining);
+  const actualGap = Math.max(0, actualRemaining - actual);
   const isCurrent = slotId === pastDueGroup?.currentSlotId;
   const phase = getSlotPhase(row);
   const isActiveSlot = isCurrent || isSlotActiveToday(row);
@@ -273,6 +285,8 @@ function buildSlotRow(row, slotMeta, slotOrders, pastDueGroup, slotId) {
     booking: {
       bookedPlants: booked,
       dispatchedPlants: dispatched,
+      dispatchedNative,
+      dispatchedOther,
       remainingToDispatch: pending,
       needToDeliver,
       remainingNative,
@@ -281,6 +295,9 @@ function buildSlotRow(row, slotMeta, slotOrders, pastDueGroup, slotId) {
     fulfillment: {
       plantsSowed: sowed,
       actualPlants: actual,
+      actualRemaining,
+      actualAvailable,
+      actualGap,
       closingStock: meta.closingStock || 0,
       needToProcure,
       loadScore: pending + booked * 0.05,
@@ -304,8 +321,14 @@ function rollupSlotRows(rows) {
       acc.pendingDelivery += r.booking?.remainingToDispatch || 0;
       acc.needToDeliver += r.booking?.needToDeliver || r.booking?.remainingToDispatch || 0;
       acc.dispatchedPlants += r.booking?.dispatchedPlants || 0;
+      acc.dispatchedNative += r.booking?.dispatchedNative || 0;
+      acc.dispatchedOther += r.booking?.dispatchedOther || 0;
       if (r.isActiveSlot) acc.activeSlotCount += 1;
       acc.needToProcure += r.fulfillment?.needToProcure || 0;
+      acc.actualPlants += r.fulfillment?.actualPlants || 0;
+      acc.actualRemaining += r.fulfillment?.actualRemaining || 0;
+      acc.actualAvailable += r.fulfillment?.actualAvailable || 0;
+      acc.actualGap += r.fulfillment?.actualGap || 0;
       acc.pastDuePending += (r.pastDue?.pendingPlants || 0) + (r.pastDue?.rolledInPlants || 0);
       acc.pastDueRolledIn += r.pastDue?.rolledInPlants || 0;
       if (r.capacity?.status === "overbooked") acc.overbookedSlots += 1;
@@ -318,7 +341,13 @@ function rollupSlotRows(rows) {
       pendingDelivery: 0,
       needToDeliver: 0,
       dispatchedPlants: 0,
+      dispatchedNative: 0,
+      dispatchedOther: 0,
       needToProcure: 0,
+      actualPlants: 0,
+      actualRemaining: 0,
+      actualAvailable: 0,
+      actualGap: 0,
       activeSlotCount: 0,
       pastDuePending: 0,
       pastDueRolledIn: 0,
@@ -422,6 +451,12 @@ export async function fetchSlotAnalysisCore({
         needToDeliver: 0,
         needToDeliverInRange: 0,
         dispatchedPlants: 0,
+        dispatchedNative: 0,
+        dispatchedOther: 0,
+        actualPlants: 0,
+        actualRemaining: 0,
+        actualAvailable: 0,
+        actualGap: 0,
         pastDuePending: 0,
         pastDueExcludingRollover: 0,
         pastDueRolledIn: 0,
@@ -504,6 +539,12 @@ export async function fetchSlotAnalysisCore({
     needToDeliver: needToDeliverTotal,
     needToDeliverInRange: slotRollup.needToDeliver,
     dispatchedPlants: slotRollup.dispatchedPlants,
+    dispatchedNative: slotRollup.dispatchedNative,
+    dispatchedOther: slotRollup.dispatchedOther,
+    actualPlants: slotRollup.actualPlants,
+    actualRemaining: slotRollup.actualRemaining,
+    actualAvailable: slotRollup.actualAvailable,
+    actualGap: slotRollup.actualGap,
     activeSlotCount: slotRollup.activeSlotCount,
     pastDuePending: includePastDue ? pastDueNative + pastDueRolled : pastDueNative,
     pastDueExcludingRollover: pastDueNative,

@@ -77,7 +77,7 @@ export async function fetchCeoOrderDeliveryBreakdown(query = {}) {
     };
   }
 
-  if (groupBy === "plant") {
+  if (groupBy === "plant" || groupBy === "plantsubtype" || groupBy === "subtype") {
     const rows = await aggregatePlantBreakdown(window, bucket, opts.extraMatch);
     return { data: { groupBy: "plant", bucket, rows } };
   }
@@ -120,7 +120,7 @@ async function aggregatePlantBreakdown(window, bucket, extraMatch) {
     return [];
   }
 
-  const rows = await Order.aggregate([
+  const grouped = await Order.aggregate([
     { $match: { ...match, ...extraMatch } },
     {
       $lookup: {
@@ -133,28 +133,54 @@ async function aggregatePlantBreakdown(window, bucket, extraMatch) {
     },
     {
       $addFields: {
-        _plantRow: { $arrayElemAt: ["$_plant", 0] },
         _plantName: { $ifNull: [{ $arrayElemAt: ["$_plant.name", 0] }, "Unknown"] },
+        _subtypes: { $ifNull: [{ $arrayElemAt: ["$_plant.subtypes", 0] }, []] },
       },
     },
     { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
     {
       $group: {
-        _id: { plantId: "$plantName", plantName: "$_plantName" },
+        _id: {
+          plantId: "$plantName",
+          plantName: "$_plantName",
+          subtypeId: "$plantSubtype",
+        },
         orders: { $sum: 1 },
         plants: { $sum: "$linePlantTotal" },
-      },
-    },
-    { $sort: { plants: -1 } },
-    {
-      $project: {
-        _id: 0,
-        plantId: "$_id.plantId",
-        name: "$_id.plantName",
-        orders: 1,
-        plants: 1,
+        subtypes: { $first: "$_subtypes" },
       },
     },
   ]);
-  return rows;
+
+  // Build nested plant -> subtype tree (subtype names resolved from the plant CMS subtypes array).
+  const plantMap = new Map();
+  for (const g of grouped) {
+    const plantId = g._id.plantId ? String(g._id.plantId) : "unknown";
+    const plantName = g._id.plantName || "Unknown";
+    const subtypeId = g._id.subtypeId ? String(g._id.subtypeId) : null;
+    const subtypeName =
+      (g.subtypes || []).find((s) => String(s._id) === subtypeId)?.name ||
+      "Other";
+
+    let plant = plantMap.get(plantId);
+    if (!plant) {
+      plant = { plantId, name: plantName, orders: 0, plants: 0, subtypes: [] };
+      plantMap.set(plantId, plant);
+    }
+    plant.orders += g.orders || 0;
+    plant.plants += g.plants || 0;
+    plant.subtypes.push({
+      subtypeId,
+      name: subtypeName,
+      orders: g.orders || 0,
+      plants: g.plants || 0,
+    });
+  }
+
+  return [...plantMap.values()]
+    .map((p) => ({
+      ...p,
+      subtypes: p.subtypes.sort((a, b) => b.plants - a.plants),
+    }))
+    .sort((a, b) => b.plants - a.plants);
 }
