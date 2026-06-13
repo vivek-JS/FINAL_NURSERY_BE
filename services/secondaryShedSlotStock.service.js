@@ -84,6 +84,55 @@ function plantSubtypeLabels(batchLean) {
   };
 }
 
+function resolveSubtypeNameFromPlant(subtypeSlot, plantLean) {
+  if (!subtypeSlot) return "";
+  const fromSlot = subtypeSlot.subtypeName || subtypeSlot.name || "";
+  if (fromSlot) return fromSlot;
+  const sid = subtypeSlot.subtypeId;
+  if (!sid || !plantLean?.subtypes) return "";
+  const sub = plantLean.subtypes.find((s) => String(s._id) === String(sid));
+  return sub?.name || "";
+}
+
+function fmtDayLabel(isoOrMoment) {
+  if (!isoOrMoment) return null;
+  const m = moment.isMoment(isoOrMoment) ? isoOrMoment : moment(isoOrMoment);
+  return m.isValid() ? m.format("DD MMM YYYY") : null;
+}
+
+/** Fill batch timeline from inward lines when sowing anchor is missing. */
+function enrichBatchGroupTimeline(group) {
+  const lines = group.lines || [];
+  if (!lines.length) return group;
+
+  const inwardMoments = lines
+    .map((ln) => (ln.secondaryInwardDate ? moment(ln.secondaryInwardDate).startOf("day") : null))
+    .filter((m) => m?.isValid());
+  const expectedMoments = lines
+    .map((ln) => (ln.expectedReadyDate ? moment(ln.expectedReadyDate).startOf("day") : null))
+    .filter((m) => m?.isValid());
+
+  if (!group.anchorSowingLabel && inwardMoments.length) {
+    const earliest = inwardMoments.reduce((a, b) => (a.isBefore(b) ? a : b));
+    group.lagwadAnchorDate = earliest.format("YYYY-MM-DD");
+    group.lagwadAnchorLabel = earliest.format("DD MMM YYYY");
+  }
+
+  if (!group.secondaryReadyDate && expectedMoments.length) {
+    const ready = expectedMoments[0];
+    group.secondaryReadyDate = ready.format("YYYY-MM-DD");
+    group.secondaryReadyLabel = ready.format("DD MMM YYYY");
+  } else if (group.secondaryReadyDate && !group.secondaryReadyLabel) {
+    group.secondaryReadyLabel = fmtDayLabel(group.secondaryReadyDate);
+  }
+
+  if (group.primaryReadyDate && !group.primaryReadyLabel) {
+    group.primaryReadyLabel = fmtDayLabel(group.primaryReadyDate);
+  }
+
+  return group;
+}
+
 function parseSowingDateToMoment(raw) {
   if (!raw) return null;
   const m = moment(raw, ["DD-MM-YYYY", "YYYY-MM-DD", moment.ISO_8601], true);
@@ -163,9 +212,14 @@ export async function getSlotSecondaryShedBreakdown(slotId) {
   const plantSlotDoc = await PlantSlot.findOne({
     "subtypeSlots.slots._id": slotOid,
   })
-    .populate("plantId", "name")
+    .populate("plantId", "name subtypes")
     .lean();
   if (!plantSlotDoc) return null;
+
+  const plantLean =
+    plantSlotDoc.plantId && typeof plantSlotDoc.plantId === "object"
+      ? plantSlotDoc.plantId
+      : null;
 
   let slot = null;
   let subtypeName = "";
@@ -175,7 +229,7 @@ export async function getSlotSecondaryShedBreakdown(slotId) {
     );
     if (found) {
       slot = found;
-      subtypeName = st.subtypeName || st.name || "";
+      subtypeName = resolveSubtypeNameFromPlant(st, plantLean);
       break;
     }
   }
@@ -252,20 +306,36 @@ export async function getSlotSecondaryShedBreakdown(slotId) {
       const calendarEligible =
         expected && today.isSameOrAfter(expected, "day");
       const dispatchEligible = calendarEligible || bypass;
+      const pendingSlotSync = computePendingSlotSync(avail, synced);
+      const slotSyncStatus =
+        synced <= 0
+          ? "pending"
+          : pendingSlotSync > 0
+            ? "partial"
+            : "synced";
 
       group.lines.push({
         secondaryInwardId: si._id,
         plantOutwardId: po._id,
         secondaryInwardDate: si.secondaryInwardDate,
+        lagwadDate: si.secondaryInwardDate,
+        lagwadLabel: fmtDayLabel(si.secondaryInwardDate),
         expectedReadyDate: expected ? expected.toISOString() : null,
+        expectedReadyLabel: expected ? expected.format("DD MMM YYYY") : null,
+        dateOfDispatch: si.dateOfDispatch ?? null,
+        dateOfDispatchLabel: fmtDayLabel(si.dateOfDispatch),
         pollyhouse: si.pollyhouse,
         size: si.size,
         cavity: si.cavity,
         numberOfTrays: si.numberOfTrays,
+        totalQuantity: Math.max(0, Number(si.totalQuantity) || 0),
         availableQuantity: avail,
         slotStockSyncedPlants: synced,
-        pendingSlotSync: computePendingSlotSync(avail, synced),
+        onSlotPlants: synced,
+        pendingSlotSync,
+        slotSyncStatus,
         dispatchEligible,
+        onSlot: synced > 0,
         readinessBypassAt: si.readinessBypassAt ?? null,
       });
       group.totalAvailableInShed += avail;
@@ -276,6 +346,7 @@ export async function getSlotSecondaryShedBreakdown(slotId) {
 
   const batches = [...batchGroups.values()]
     .filter((b) => b.lines.length > 0)
+    .map(enrichBatchGroupTimeline)
     .sort((a, b) =>
       String(a.batchNumber).localeCompare(String(b.batchNumber), undefined, {
         numeric: true,
