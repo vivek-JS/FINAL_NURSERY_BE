@@ -11,6 +11,7 @@
  */
 
 import moment from "moment";
+import { pickDispatchLegForBucket } from "./misOrderEnrichment.js";
 
 const IST_OFFSET_MINUTES = 330;
 
@@ -59,11 +60,38 @@ function num(value) {
 }
 
 /**
+ * Sales-sheet Batch cell: pipeline batch name/number + optional manual Lot/batch.
+ * @param {{ lotBatch?: string|null, dispatchBatchNumber?: string|null }} parts
+ */
+export function formatSalesSheetBatch({ lotBatch, dispatchBatchNumber } = {}) {
+  const lot = String(lotBatch ?? "").trim();
+  const name = String(dispatchBatchNumber ?? "").trim();
+  if (lot && name && lot !== name) return `${name} · ${lot}`;
+  return lot || name || "";
+}
+
+function resolveDispatchBatchNumber(order, dispatchBatchById) {
+  const leg = pickDispatchLegForBucket(order, order.bucketEventAt);
+  if (!leg) return "";
+
+  const fromLookup =
+    leg.dispatchBatchId && dispatchBatchById
+      ? dispatchBatchById.get(String(leg.dispatchBatchId))?.batchNumber
+      : null;
+  if (fromLookup != null && String(fromLookup).trim()) {
+    return String(fromLookup).trim();
+  }
+
+  const snap = leg.productSnapshot?.batchNumber;
+  return snap != null && String(snap).trim() ? String(snap).trim() : "";
+}
+
+/**
  * @param {object} order enriched + hydrated lean order
  * @param {{ referenceById?: Map<string, object>, trayById?: Map<string, object> }} lookups
  */
 export function buildSalesSheetRow(order, lookups = {}) {
-  const { referenceById, trayById } = lookups;
+  const { referenceById, trayById, dispatchBatchById } = lookups;
 
   const numberOfPlants = num(order.numberOfPlants);
   const additionalPlants = num(order.additionalPlants);
@@ -100,7 +128,10 @@ export function buildSalesSheetRow(order, lookups = {}) {
     media: trayDoc?.name || "",
     retail: "",
     shadeNo: "",
-    batch: order.batchNumber || "",
+    batch: formatSalesSheetBatch({
+      lotBatch: order.batchNumber,
+      dispatchBatchNumber: resolveDispatchBatchNumber(order, dispatchBatchById),
+    }),
     issuePlantQty,
     returnQty: returnedPlants,
     damagedQty: damagedPlants,

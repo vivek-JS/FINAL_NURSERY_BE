@@ -11,6 +11,7 @@ import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import Tray from "../models/tray.model.js";
 import User from "../models/user.model.js";
+import DispatchBatch from "../models/dispatchBatch.model.js";
 import { orderStatusExcludeMatch } from "../utility/istOrderDateStats.js";
 import { transitionDrawerFacetStages } from "../utility/misTransitionMetrics.js";
 import {
@@ -20,6 +21,7 @@ import { distinctOrderIdsWithTransitionEvents } from "../utility/misTransitionFr
 import {
   enrichMisOrderList,
   hydrateMisOrderDrawerList,
+  pickDispatchLegForBucket,
 } from "../utility/misOrderEnrichment.js";
 import {
   resolveDateWindow,
@@ -139,23 +141,35 @@ async function fetchDispatchedOrders(matchSpec, window, query) {
   return Order.aggregate(pipeline);
 }
 
-/** Batch-resolve Media (tray) + Reference (user) labels not covered by drawer hydration. */
+/** Batch-resolve Media (tray), Reference (user), and pipeline batch labels. */
 async function buildSalesSheetLookups(orders) {
   const trayIds = uniqObjectIds(orders.map((o) => o.cavity));
   const referenceIds = uniqObjectIds(orders.map((o) => o.reference));
+  const dispatchBatchIds = uniqObjectIds(
+    orders.flatMap((o) => {
+      const leg = pickDispatchLegForBucket(o, o.bucketEventAt);
+      return leg?.dispatchBatchId ? [leg.dispatchBatchId] : [];
+    })
+  );
 
-  const [trays, refUsers] = await Promise.all([
+  const [trays, refUsers, dispatchBatches] = await Promise.all([
     trayIds.length
       ? Tray.find({ _id: { $in: trayIds } }).select("name").lean()
       : [],
     referenceIds.length
       ? User.find({ _id: { $in: referenceIds } }).select("name").lean()
       : [],
+    dispatchBatchIds.length
+      ? DispatchBatch.find({ _id: { $in: dispatchBatchIds } })
+          .select("batchNumber")
+          .lean()
+      : [],
   ]);
 
   return {
     trayById: new Map(trays.map((t) => [String(t._id), t])),
     referenceById: new Map(refUsers.map((u) => [String(u._id), u])),
+    dispatchBatchById: new Map(dispatchBatches.map((b) => [String(b._id), b])),
   };
 }
 
