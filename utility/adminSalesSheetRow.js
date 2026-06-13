@@ -46,6 +46,7 @@ export const SALES_SHEET_COLUMNS = [
   { key: "totalInvoiceAmount", label: "Total Invoice Amount" },
   { key: "manualDc", label: "Manual DC" },
   { key: "systemDc", label: "System Generated DC" },
+  { key: "total", label: "Total" },
 ];
 
 function toIstYmd(dateVal) {
@@ -155,6 +156,7 @@ export function buildSalesSheetRow(order, lookups = {}) {
     totalInvoiceAmount,
     manualDc: order.deliveryChallanInvoiceNumber || "",
     systemDc: order.officialDeliveryChallanNumber || "",
+    total: totalInvoiceAmount,
   };
 }
 
