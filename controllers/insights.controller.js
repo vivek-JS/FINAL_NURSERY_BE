@@ -123,6 +123,41 @@ function istAddDaysYmd(ymd, days) {
   return istCalendarDateString(pivot);
 }
 
+export function buildKpiOrderMatchStage(reportDateStr) {
+  const next7EndYmd = istAddDaysYmd(reportDateStr, 7);
+  return {
+    dealerOrder: false,
+    farmer: { $exists: true, $ne: null },
+    orderStatus: { $nin: [...CLOSED_FOR_EXPECTED_KPI] },
+    deliveryDate: {
+      $ne: null,
+      $lte: endOfIstDay(next7EndYmd),
+    },
+  };
+}
+
+async function applyPlantSubtypeFilters(matchStage, { plantId, subtypeId, varietyName }) {
+  if (plantId && mongoose.Types.ObjectId.isValid(plantId)) {
+    matchStage.plantName = new mongoose.Types.ObjectId(plantId);
+  }
+  if (subtypeId && subtypeId !== "general" && mongoose.Types.ObjectId.isValid(subtypeId)) {
+    matchStage.plantSubtype = new mongoose.Types.ObjectId(subtypeId);
+  } else if (
+    plantId &&
+    varietyName &&
+    String(varietyName).trim() &&
+    mongoose.Types.ObjectId.isValid(plantId)
+  ) {
+    const cms = await PlantCms.findById(plantId).select("subtypes").lean();
+    const st = (cms?.subtypes || []).find(
+      (s) => s.name?.trim() === String(varietyName).trim()
+    );
+    if (st?._id) {
+      matchStage.plantSubtype = st._id;
+    }
+  }
+}
+
 function plantsForKpiOrder(row) {
   const rem = Number(row.remainingPlants);
   if (Number.isFinite(rem) && rem >= 0) return rem;
@@ -204,6 +239,146 @@ function computeDispatchKpiSummary(orders, dispatches, reportDateStr, options = 
   return { todayExpected, next7Expected, due, todayActual, reportDate: reportDateStr };
 }
 
+function pushDashboardOrderLookups(pipeline) {
+  pipeline.push({
+    $lookup: {
+      from: "farmers",
+      localField: "farmer",
+      foreignField: "_id",
+      pipeline: [
+        {
+          $project: {
+            _id: 0,
+            name: 1,
+            village: 1,
+            taluka: 1,
+            talukaName: 1,
+            district: 1,
+            districtName: 1,
+          },
+        },
+      ],
+      as: "farmerData",
+    },
+  });
+
+  pipeline.push({
+    $lookup: {
+      from: "users",
+      localField: "salesPerson",
+      foreignField: "_id",
+      pipeline: [{ $project: { _id: 0, name: 1, jobTitle: 1 } }],
+      as: "salesData",
+    },
+  });
+
+  pipeline.push({
+    $lookup: {
+      from: "plantcms",
+      localField: "plantName",
+      foreignField: "_id",
+      pipeline: [{ $project: { name: 1, subtypes: 1 } }],
+      as: "plantData",
+    },
+  });
+}
+
+function pushDashboardOrderComputedFields(pipeline) {
+  pipeline.push({
+    $addFields: {
+      varietyDoc: {
+        $arrayElemAt: [
+          {
+            $filter: {
+              input: { $ifNull: [{ $arrayElemAt: ["$plantData.subtypes", 0] }, []] },
+              as: "st",
+              cond: { $eq: ["$$st._id", "$plantSubtype"] },
+            },
+          },
+          0,
+        ],
+      },
+      qty: {
+        $add: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$additionalPlants", 0] }],
+      },
+      remainingPlants: { $ifNull: ["$remainingPlants", "$numberOfPlants"] },
+      expectedDispatch: "$deliveryDate",
+      farmerDistrict: {
+        $ifNull: [
+          { $arrayElemAt: ["$farmerData.districtName", 0] },
+          { $arrayElemAt: ["$farmerData.district", 0] },
+        ],
+      },
+      farmerTaluka: {
+        $ifNull: [
+          { $arrayElemAt: ["$farmerData.talukaName", 0] },
+          { $arrayElemAt: ["$farmerData.taluka", 0] },
+        ],
+      },
+      farmerVillage: { $arrayElemAt: ["$farmerData.village", 0] },
+      farmerName: { $arrayElemAt: ["$farmerData.name", 0] },
+      salesperson: { $arrayElemAt: ["$salesData.name", 0] },
+      plantDisplayName: { $arrayElemAt: ["$plantData.name", 0] },
+    },
+  });
+}
+
+function mapKpiOrderRow(row) {
+  const qty = row.qty || 0;
+  const remainingPlants = row.remainingPlants != null ? Number(row.remainingPlants) : qty;
+  return {
+    id: `ORD-${row.orderId}`,
+    orderId: row.orderId,
+    farmerName: row.farmerName || "",
+    salesperson: row.salesperson || "",
+    salesPersonId: row.salesPersonIdStr ? String(row.salesPersonIdStr) : "",
+    plantId: String(row.plantNameId),
+    variety: row.varietyName || "",
+    qty,
+    remainingPlants: Number.isFinite(remainingPlants) ? remainingPlants : qty,
+    rawOrderStatus: row.orderStatus || "",
+    district: row.farmerDistrict || "",
+    taluka: row.farmerTaluka || "",
+    village: row.farmerVillage || "",
+    deliveryDate: row.deliveryDate ? new Date(row.deliveryDate).toISOString() : null,
+  };
+}
+
+async function loadKpiOrders({ user, plantId, subtypeId, varietyName, reportDateStr }) {
+  const kpiPipeline = [];
+  applyRoleMatch(kpiPipeline, user);
+
+  const kpiMatchStage = buildKpiOrderMatchStage(reportDateStr);
+  await applyPlantSubtypeFilters(kpiMatchStage, { plantId, subtypeId, varietyName });
+
+  kpiPipeline.push({ $match: kpiMatchStage });
+  kpiPipeline.push({ $sort: { deliveryDate: 1 } });
+  kpiPipeline.push({ $limit: 10000 });
+  pushDashboardOrderLookups(kpiPipeline);
+  pushDashboardOrderComputedFields(kpiPipeline);
+  kpiPipeline.push({
+    $project: {
+      _id: 1,
+      orderId: 1,
+      orderStatus: 1,
+      qty: 1,
+      remainingPlants: 1,
+      deliveryDate: 1,
+      varietyName: "$varietyDoc.name",
+      plantNameId: "$plantName",
+      farmerName: 1,
+      salesperson: 1,
+      salesPersonIdStr: { $toString: "$salesPerson" },
+      farmerDistrict: 1,
+      farmerTaluka: 1,
+      farmerVillage: 1,
+    },
+  });
+
+  const rawKpiOrders = await Order.aggregate(kpiPipeline).allowDiskUse(true);
+  return rawKpiOrders.map(mapKpiOrderRow);
+}
+
 export const getInsightsDashboard = catchAsync(async (req, res) => {
   const { startDate, endDate, plantId, subtypeId, varietyName, dueOnly, excludeReadyForDispatch } =
     req.query;
@@ -254,109 +429,14 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
     },
   };
 
-  if (plantId && mongoose.Types.ObjectId.isValid(plantId)) {
-    matchStage.plantName = new mongoose.Types.ObjectId(plantId);
-  }
-  if (subtypeId && subtypeId !== "general" && mongoose.Types.ObjectId.isValid(subtypeId)) {
-    matchStage.plantSubtype = new mongoose.Types.ObjectId(subtypeId);
-  } else if (
-    plantId &&
-    varietyName &&
-    String(varietyName).trim() &&
-    mongoose.Types.ObjectId.isValid(plantId)
-  ) {
-    const cms = await PlantCms.findById(plantId).select("subtypes").lean();
-    const st = (cms?.subtypes || []).find(
-      (s) => s.name?.trim() === String(varietyName).trim()
-    );
-    if (st?._id) {
-      matchStage.plantSubtype = st._id;
-    }
-  }
+  await applyPlantSubtypeFilters(matchStage, { plantId, subtypeId, varietyName });
 
   pipeline.push({ $match: matchStage });
   pipeline.push({ $sort: { orderBookingDate: -1 } });
   pipeline.push({ $limit: 10000 });
 
-  pipeline.push({
-    $lookup: {
-      from: "farmers",
-      localField: "farmer",
-      foreignField: "_id",
-      pipeline: [
-        {
-          $project: {
-            _id: 0,
-            name: 1,
-            village: 1,
-            taluka: 1,
-            talukaName: 1,
-            district: 1,
-            districtName: 1,
-          },
-        },
-      ],
-      as: "farmerData",
-    },
-  });
-
-  pipeline.push({
-    $lookup: {
-      from: "users",
-      localField: "salesPerson",
-      foreignField: "_id",
-      pipeline: [{ $project: { _id: 0, name: 1, jobTitle: 1 } }],
-      as: "salesData",
-    },
-  });
-
-  pipeline.push({
-    $lookup: {
-      from: "plantcms",
-      localField: "plantName",
-      foreignField: "_id",
-      pipeline: [{ $project: { name: 1, subtypes: 1 } }],
-      as: "plantData",
-    },
-  });
-
-  pipeline.push({
-    $addFields: {
-      varietyDoc: {
-        $arrayElemAt: [
-          {
-            $filter: {
-              input: { $ifNull: [{ $arrayElemAt: ["$plantData.subtypes", 0] }, []] },
-              as: "st",
-              cond: { $eq: ["$$st._id", "$plantSubtype"] },
-            },
-          },
-          0,
-        ],
-      },
-      qty: {
-        $add: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$additionalPlants", 0] }],
-      },
-      remainingPlants: { $ifNull: ["$remainingPlants", "$numberOfPlants"] },
-      expectedDispatch: "$deliveryDate",
-      farmerDistrict: {
-        $ifNull: [
-          { $arrayElemAt: ["$farmerData.districtName", 0] },
-          { $arrayElemAt: ["$farmerData.district", 0] },
-        ],
-      },
-      farmerTaluka: {
-        $ifNull: [
-          { $arrayElemAt: ["$farmerData.talukaName", 0] },
-          { $arrayElemAt: ["$farmerData.taluka", 0] },
-        ],
-      },
-      farmerVillage: { $arrayElemAt: ["$farmerData.village", 0] },
-      farmerName: { $arrayElemAt: ["$farmerData.name", 0] },
-      salesperson: { $arrayElemAt: ["$salesData.name", 0] },
-      plantDisplayName: { $arrayElemAt: ["$plantData.name", 0] },
-    },
-  });
+  pushDashboardOrderLookups(pipeline);
+  pushDashboardOrderComputedFields(pipeline);
 
   if (String(dueOnly) === "true") {
     pipeline.push({
@@ -564,7 +644,14 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
     };
   });
 
-  const kpiSummary = computeDispatchKpiSummary(orders, dispatches, reportDateStr, {
+  const kpiOrders = await loadKpiOrders({
+    user: req.user,
+    plantId,
+    subtypeId,
+    varietyName,
+    reportDateStr,
+  });
+  const kpiSummary = computeDispatchKpiSummary(kpiOrders, dispatches, reportDateStr, {
     excludeReadyForDispatch: String(excludeReadyForDispatch) === "true",
   });
 
