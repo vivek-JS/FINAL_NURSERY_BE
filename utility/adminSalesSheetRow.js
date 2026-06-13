@@ -29,6 +29,8 @@ export const SALES_SHEET_COLUMNS = [
   { key: "media", label: "Media" },
   { key: "retail", label: "Retail" },
   { key: "shadeNo", label: "Shade No." },
+  { key: "nurseryRb", label: "Nursery RB" },
+  { key: "nurserySb", label: "Nursery SB" },
   { key: "batch", label: "Batch" },
   { key: "issuePlantQty", label: "Issue Plant Qty." },
   { key: "returnQty", label: "Return" },
@@ -86,6 +88,12 @@ function resolveDispatchBatchNumber(order, dispatchBatchById) {
   return snap != null && String(snap).trim() ? String(snap).trim() : "";
 }
 
+/** Issue qty in the matching nursery-site column (RB / SB); empty when another site. */
+function nurserySiteIssueQty(expectedNursery, siteCode, issuePlantQty) {
+  const site = String(expectedNursery || "RB").trim().toUpperCase();
+  return site === siteCode ? issuePlantQty : "";
+}
+
 /**
  * @param {object} order enriched + hydrated lean order
  * @param {{ referenceById?: Map<string, object>, trayById?: Map<string, object> }} lookups
@@ -128,6 +136,8 @@ export function buildSalesSheetRow(order, lookups = {}) {
     media: trayDoc?.name || "",
     retail: "",
     shadeNo: "",
+    nurseryRb: nurserySiteIssueQty(order.expectedNursery, "RB", issuePlantQty),
+    nurserySb: nurserySiteIssueQty(order.expectedNursery, "SB", issuePlantQty),
     batch: formatSalesSheetBatch({
       lotBatch: order.batchNumber,
       dispatchBatchNumber: resolveDispatchBatchNumber(order, dispatchBatchById),
