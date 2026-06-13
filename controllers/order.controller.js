@@ -5146,6 +5146,7 @@ const splitOrder = catchAsync(async (req, res, next) => {
     }).catch((e) => console.error("[OrderEvent] split parent emit:", e?.message || e));
     await emitPlantSplitEvents(parent._id, childOrder._id, {
       splitHistoryEntry: childOrder.splitHistory?.[0],
+      assignHistoryEntry,
       userId: performedBy,
       isChild: true,
     }).catch((e) => console.error("[OrderEvent] split child emit:", e?.message || e));

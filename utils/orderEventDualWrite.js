@@ -186,7 +186,7 @@ export async function emitPlantPaymentEvent(
 export async function emitPlantSplitEvents(
   parentId,
   childId,
-  { splitHistoryEntry, userId, actorName, isChild } = {}
+  { splitHistoryEntry, userId, actorName, isChild, assignHistoryEntry } = {}
 ) {
   const orderId = isChild ? childId : parentId;
   await emitOrderEvent({
@@ -210,6 +210,17 @@ export async function emitPlantSplitEvents(
     refs: { relatedOrderId: splitHistoryEntry?.relatedOrderId },
     metadata: splitHistoryEntry,
   });
+
+  if (isChild && assignHistoryEntry) {
+    await emitOrderEventsFromEditHistory({
+      orderDomain: ORDER_DOMAINS.PLANT,
+      orderId,
+      entries: [assignHistoryEntry],
+      actorId: userId || assignHistoryEntry.changedBy,
+      actorName,
+      source: ORDER_EVENT_SOURCE.LIVE,
+    });
+  }
 }
 
 /** Agri: push activityLog and mirror to OrderEvent. */

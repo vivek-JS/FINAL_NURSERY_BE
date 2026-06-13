@@ -22,6 +22,7 @@ const FIELD_CONFIG = {
   freightCharges: { label: "Freight charges", numeric: true },
   deliveryChallanInvoiceNumber: { label: "DC invoice label" },
   orderFor: { label: "Order for" },
+  farmer: { label: "Farmer", objectId: true },
   remainingPlants: { label: "Remaining plants", numeric: true },
   returnedPlants: { label: "Returned plants", numeric: true },
   damagedPlants: { label: "Damaged plants", numeric: true },
