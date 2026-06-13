@@ -3808,11 +3808,6 @@ const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
 
     const siPlainNew =
       typeof newSi.toObject === "function" ? newSi.toObject() : { ...newSi };
-    const eligInward = computeSecondaryDispatchEligibility(
-      siPlainNew,
-      secondaryDaysForReady,
-      moment().startOf("day")
-    );
     if (!siPlainNew.linkedBookingSlotId && expectedReadyDate && batchDocForReady) {
       const slotId = await resolveBookingSlotIdForSecondaryBatch(
         batchDocForReady,
@@ -3843,34 +3838,32 @@ const primaryToSecondaryInward = catchAsync(async (req, res, next) => {
         session,
       });
     }
-    if (eligInward.dispatchEligible) {
-      try {
-        const syncResult = await syncSecondaryInwardSlotStockAdd({
-          session,
+    try {
+      const syncResult = await syncSecondaryInwardSlotStockAdd({
+        session,
+        batchId,
+        secondaryInwardId: newSi._id,
+        batchLean: batchDocForReady,
+        siPlain: siPlainNew,
+        dispatchEligible: true,
+        force: true,
+        performedBy: mongoose.isValidObjectId(String(performedBy)) ? performedBy : undefined,
+      });
+      if (syncResult?.applied > 0) {
+        await recordShedActivity({
           batchId,
-          secondaryInwardId: newSi._id,
-          batchLean: batchDocForReady,
-          siPlain: siPlainNew,
-          dispatchEligible: true,
-          force: true,
-          performedBy: mongoose.isValidObjectId(String(performedBy)) ? performedBy : undefined,
+          stage: "secondary_inward",
+          subdocId: newSi._id,
+          action: SHED_ACTIVITY_ACTIONS.SECONDARY_SLOT_SYNC,
+          activityName: `स्लॉट स्टॉक +${syncResult.applied}`,
+          performedBy,
+          quantity: syncResult.applied,
+          newValue: { slotId: syncResult.slotId },
+          session,
         });
-        if (syncResult?.applied > 0) {
-          await recordShedActivity({
-            batchId,
-            stage: "secondary_inward",
-            subdocId: newSi._id,
-            action: SHED_ACTIVITY_ACTIONS.SECONDARY_SLOT_SYNC,
-            activityName: `स्लॉट स्टॉक +${syncResult.applied}`,
-            performedBy,
-            quantity: syncResult.applied,
-            newValue: { slotId: syncResult.slotId },
-            session,
-          });
-        }
-      } catch (slotErr) {
-        console.warn("[secondaryShedSlotStock] inward sync:", slotErr?.message || slotErr);
       }
+    } catch (slotErr) {
+      console.warn("[secondaryShedSlotStock] inward sync:", slotErr?.message || slotErr);
     }
 
     await session.commitTransaction();
@@ -4095,11 +4088,6 @@ const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next)
         performedBy: mongoose.isValidObjectId(String(performedBy)) ? performedBy : undefined,
       });
 
-      const eligInward = computeSecondaryDispatchEligibility(
-        siPlain,
-        secondaryDaysForReady,
-        moment().startOf("day")
-      );
       if (!siPlain.linkedBookingSlotId && expectedReadyDate && batchDocForReady) {
         const slotId = await resolveBookingSlotIdForSecondaryBatch(
           batchDocForReady,
@@ -4145,36 +4133,34 @@ const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next)
           session,
         });
       }
-      if (eligInward.dispatchEligible) {
-        try {
-          const syncResult = await syncSecondaryInwardSlotStockAdd({
-            session,
+      try {
+        const syncResult = await syncSecondaryInwardSlotStockAdd({
+          session,
+          batchId,
+          secondaryInwardId: row.secondaryInwardId,
+          batchLean: batchDocForReady,
+          siPlain,
+          dispatchEligible: true,
+          force: true,
+          performedBy: mongoose.isValidObjectId(String(performedBy))
+            ? performedBy
+            : undefined,
+        });
+        if (syncResult?.applied > 0) {
+          await recordShedActivity({
             batchId,
-            secondaryInwardId: row.secondaryInwardId,
-            batchLean: batchDocForReady,
-            siPlain,
-            dispatchEligible: true,
-            force: true,
-            performedBy: mongoose.isValidObjectId(String(performedBy))
-              ? performedBy
-              : undefined,
+            stage: "secondary_inward",
+            subdocId: row.secondaryInwardId,
+            action: SHED_ACTIVITY_ACTIONS.SECONDARY_SLOT_SYNC,
+            activityName: `स्लॉट स्टॉक +${syncResult.applied}`,
+            performedBy,
+            quantity: syncResult.applied,
+            newValue: { slotId: syncResult.slotId },
+            session,
           });
-          if (syncResult?.applied > 0) {
-            await recordShedActivity({
-              batchId,
-              stage: "secondary_inward",
-              subdocId: row.secondaryInwardId,
-              action: SHED_ACTIVITY_ACTIONS.SECONDARY_SLOT_SYNC,
-              activityName: `स्लॉट स्टॉक +${syncResult.applied}`,
-              performedBy,
-              quantity: syncResult.applied,
-              newValue: { slotId: syncResult.slotId },
-              session,
-            });
-          }
-        } catch (slotErr) {
-          console.warn("[secondaryShedSlotStock] batch lagwad sync:", slotErr?.message || slotErr);
         }
+      } catch (slotErr) {
+        console.warn("[secondaryShedSlotStock] batch lagwad sync:", slotErr?.message || slotErr);
       }
     }
 

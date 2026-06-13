@@ -87,6 +87,34 @@ export function resolveDateWindow(query) {
   };
 }
 
+/** Same-day Out/Done exclude rules (daily MIS cell or startDate === endDate). */
+export function isMisSingleDayWindow(query, window) {
+  const day = String(query?.date || "").slice(0, 10);
+  if (day && /^\d{4}-\d{2}-\d{2}$/.test(day) && day !== "past-due") return true;
+  const start = window?.startYmd;
+  const end = window?.endYmd;
+  return Boolean(start && end && start === end);
+}
+
+/** Order ids to drop from Out when they also belong in Done for this window. */
+export async function resolveDispatchedExcludeOrderIds(query, window, base) {
+  const { rangeStart, rangeEnd } = window;
+  if (isMisSingleDayWindow(query, window)) {
+    const rawIds = await orderIdsWithDispatchedAndCompletedSameDay(
+      rangeStart,
+      rangeEnd,
+      base
+    );
+    return rawIds.map((id) => toMongoIdIfValid(id)).filter(Boolean);
+  }
+  const rawIds = await distinctOrderIdsWithTransitionEvents(
+    "COMPLETED",
+    rangeStart,
+    rangeEnd
+  );
+  return rawIds.filter(Boolean);
+}
+
 function deliveryInRangeClause(rangeStart, rangeEnd) {
   return { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } };
 }
@@ -323,25 +351,7 @@ async function fetchTransitionOrders(matchSpec, window, query, { skip, limit }) 
 
   let excludeOrderIds = [];
   if (newStatus === "DISPATCHED") {
-    const day = String(query?.date || "").slice(0, 10);
-    const singleDay = day && /^\d{4}-\d{2}-\d{2}$/.test(day) && day !== "past-due";
-    if (singleDay) {
-      const rawIds = await orderIdsWithDispatchedAndCompletedSameDay(
-        rangeStart,
-        rangeEnd,
-        base
-      );
-      excludeOrderIds = rawIds
-        .map((id) => toMongoIdIfValid(id))
-        .filter(Boolean);
-    } else {
-      const rawIds = await distinctOrderIdsWithTransitionEvents(
-        "COMPLETED",
-        rangeStart,
-        rangeEnd
-      );
-      excludeOrderIds = rawIds.filter(Boolean);
-    }
+    excludeOrderIds = await resolveDispatchedExcludeOrderIds(query, window, base);
   }
 
   const idExclude =

@@ -15,10 +15,6 @@ import DispatchBatch from "../models/dispatchBatch.model.js";
 import { orderStatusExcludeMatch } from "../utility/istOrderDateStats.js";
 import { transitionDrawerFacetStages } from "../utility/misTransitionMetrics.js";
 import {
-  orderIdsWithDispatchedAndCompletedSameDay,
-} from "../utility/adminMisMetrics.js";
-import { distinctOrderIdsWithTransitionEvents } from "../utility/misTransitionFromEvents.js";
-import {
   enrichMisOrderList,
   hydrateMisOrderDrawerList,
   pickDispatchLegForBucket,
@@ -26,9 +22,11 @@ import {
 import {
   resolveDateWindow,
   buildMisOrdersMatch,
+  resolveDispatchedExcludeOrderIds,
 } from "./adminMisOrders.service.js";
 import {
   buildSalesSheetRows,
+  buildSalesSheetTotalsRow,
   SALES_SHEET_COLUMNS,
 } from "../utility/adminSalesSheetRow.js";
 
@@ -86,32 +84,15 @@ function uniqObjectIds(values) {
   return out;
 }
 
-/** Orders that also reached COMPLETED in range belong to the Completed bucket, not Out. */
-async function dispatchedExcludeIds(query, window, base) {
-  const { rangeStart, rangeEnd } = window;
-  const day = String(query?.date || "").slice(0, 10);
-  const singleDay = day && /^\d{4}-\d{2}-\d{2}$/.test(day) && day !== "past-due";
-  if (singleDay) {
-    const rawIds = await orderIdsWithDispatchedAndCompletedSameDay(
-      rangeStart,
-      rangeEnd,
-      base
-    );
-    return rawIds.map((id) => toMongoIdIfValid(id)).filter(Boolean);
-  }
-  const rawIds = await distinctOrderIdsWithTransitionEvents(
-    "COMPLETED",
-    rangeStart,
-    rangeEnd
-  );
-  return rawIds.filter(Boolean);
-}
-
 async function fetchDispatchedOrders(matchSpec, window, query) {
   const { rangeStart, rangeEnd } = window;
   const { newStatus, base, extra } = matchSpec;
 
-  const excludeOrderIds = await dispatchedExcludeIds(query, window, base);
+  const excludeOrderIds = await resolveDispatchedExcludeOrderIds(
+    query,
+    window,
+    base
+  );
   const idExclude =
     excludeOrderIds.length > 0 ? { _id: { $nin: excludeOrderIds } } : {};
 
@@ -200,11 +181,13 @@ export async function fetchAdminSalesSheet(query = {}) {
   );
   const lookups = await buildSalesSheetLookups(enriched);
   const rows = buildSalesSheetRows(enriched, lookups);
+  const totalsRow = buildSalesSheetTotalsRow(rows);
 
   return {
     data: {
       columns: SALES_SHEET_COLUMNS,
       rows,
+      totalsRow,
       total: rows.length,
       capped: rows.length >= MAX_SALES_SHEET_ROWS,
       startDate: window.startYmd,

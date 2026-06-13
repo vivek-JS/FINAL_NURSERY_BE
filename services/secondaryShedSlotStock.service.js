@@ -378,7 +378,8 @@ export function pickReadyDateForSlot(siPlain, batchLean) {
 }
 
 /**
- * Add unsynced dispatch-eligible plants from a secondary inward line to slot.actualPlants.
+ * Add unsynced plants from a secondary inward line to slot.actualPlants (target slot = inward + ready days).
+ * Called at lagwad/inward (force) and when calendar-dispatch-eligible unless already synced.
  */
 export async function syncSecondaryInwardSlotStockAdd({
   session,

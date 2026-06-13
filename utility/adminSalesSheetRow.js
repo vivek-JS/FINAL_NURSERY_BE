@@ -15,8 +15,22 @@ import { pickDispatchLegForBucket } from "./misOrderEnrichment.js";
 
 const IST_OFFSET_MINUTES = 330;
 
+/** Numeric columns summed in the footer Total row. */
+export const SALES_SHEET_SUM_KEYS = [
+  "issuePlantQty",
+  "returnQty",
+  "damagedQty",
+  "extraPlants",
+  "plantQty",
+  "invAmount",
+  "rentExtraCharge",
+  "totalInvoiceAmount",
+  "total",
+];
+
 /** Stable column keys + display labels (single source of truth, also used by FE). */
 export const SALES_SHEET_COLUMNS = [
+  { key: "srNo", label: "Sr. No." },
   { key: "delDate", label: "Del. Date" },
   { key: "bookingNo", label: "Booking No." },
   { key: "customerName", label: "Customer Name" },
@@ -161,5 +175,20 @@ export function buildSalesSheetRow(order, lookups = {}) {
 }
 
 export function buildSalesSheetRows(orders, lookups = {}) {
-  return (orders || []).map((order) => buildSalesSheetRow(order, lookups));
+  return (orders || []).map((order, index) => ({
+    srNo: index + 1,
+    ...buildSalesSheetRow(order, lookups),
+  }));
+}
+
+/** Footer row with column totals for qty / amount fields. */
+export function buildSalesSheetTotalsRow(rows) {
+  const totals = Object.fromEntries(
+    SALES_SHEET_COLUMNS.map(({ key }) => [key, ""])
+  );
+  totals.customerName = "Total";
+  for (const key of SALES_SHEET_SUM_KEYS) {
+    totals[key] = (rows || []).reduce((sum, row) => sum + num(row[key]), 0);
+  }
+  return totals;
 }

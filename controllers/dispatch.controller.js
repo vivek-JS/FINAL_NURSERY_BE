@@ -2,6 +2,7 @@ import generateResponse from "../utility/responseFormat.js";
 import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import Dispatch from "../models/dispatch.model.js";
+import { buildDispatchCreatedAtFilter } from "../utility/dispatchListQuery.js";
 import Order from "../models/order.model.js";
 import Farmer from "../models/farmer.model.js";
 import AgriSalesOrder from "../models/agriSalesOrder.model.js";
@@ -35,6 +36,7 @@ import {
   buildDeliveryChallanPdfBuffer,
   buildCompleteInvoicePdfBuffer,
 } from "../services/dispatchPdfDocuments.service.js";
+import { scheduleDispatchPdfGeneration } from "../services/dispatchPdfAutoGenerate.service.js";
 import {
   getOrderUpdateUserContext,
   resolveUserForOrderUpdatePermissions,
@@ -736,6 +738,8 @@ const createDispatch = catchAsync(async (req, res, next) => {
       }
     })();
 
+    scheduleDispatchPdfGeneration(dispatch[0]._id, ["delivery_challan", "complete_invoice"]);
+
     const dispatchDoc = dispatch[0]?.toObject ? dispatch[0].toObject() : dispatch[0];
     const stillPendingLinkedAgri =
       pendingLinkedAgriOrders.length > 0 && !autoMarkLinkedAgriLoaded;
@@ -1417,6 +1421,8 @@ const updateDispatch = catchAsync(async (req, res, next) => {
     );
     delete req._orderEditAlertQueue;
 
+    scheduleDispatchPdfGeneration(updated._id, ["delivery_challan", "complete_invoice"]);
+
     const response = generateResponse(
       "Success",
       "Dispatch updated successfully",
@@ -1828,6 +1834,7 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
       req.user?.name || req.user?.email || "Unknown"
     );
     delete req._orderEditAlertQueue;
+    scheduleDispatchPdfGeneration(updated._id, ["delivery_challan", "complete_invoice"]);
     return res.status(200).json(
       generateResponse("Success", "Order removed from dispatch", updated, undefined)
     );
@@ -2104,6 +2111,8 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
       })();
     }
 
+    scheduleDispatchPdfGeneration(dispatch._id, ["delivery_challan", "complete_invoice"]);
+
     const response = generateResponse(
       "Success",
       "Order added to dispatch successfully",
@@ -2260,6 +2269,8 @@ const getDispatches = catchAsync(async (req, res, next) => {
 
     const searchTrim = String(req.query.search || "").trim();
     const listFilter = { isDeleted: false };
+    const createdAtFilter = buildDispatchCreatedAtFilter(req.query);
+    if (createdAtFilter) listFilter.createdAt = createdAtFilter;
     if (req.query.transportStatus) {
       listFilter.transportStatus = String(req.query.transportStatus);
     }
@@ -2288,6 +2299,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
     let pagination = null;
     let idSortHint = null;
     let matchStage = { isDeleted: false };
+    if (createdAtFilter) matchStage.createdAt = createdAtFilter;
 
     if (hasPaging) {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -2354,6 +2366,14 @@ const getDispatches = catchAsync(async (req, res, next) => {
           localField: "orderDetails.farmer",
           foreignField: "_id",
           as: "farmerDetails",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "orderDetails.dealer",
+          foreignField: "_id",
+          as: "dealerDetails",
         },
       },
       {
@@ -2428,6 +2448,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
               remainingPlants: "$orderDetails.remainingPlants",
               deliveryDate: "$orderDetails.deliveryDate", // Delivery date from order
               rate: "$orderDetails.rate",
+              dealerOrder: "$orderDetails.dealerOrder",
               payment: "$orderDetails.payment",
               orderStatus: "$orderDetails.orderStatus",
               paymentCompleted: "$orderDetails.paymentCompleted",
@@ -2452,9 +2473,36 @@ const getDispatches = catchAsync(async (req, res, next) => {
                     $arrayElemAt: ["$farmerDetails.mobileNumber", 0],
                   },
                   village: { $arrayElemAt: ["$farmerDetails.village", 0] },
+                  talukaName: {
+                    $ifNull: [
+                      { $arrayElemAt: ["$farmerDetails.talukaName", 0] },
+                      { $arrayElemAt: ["$farmerDetails.taluka", 0] },
+                    ],
+                  },
+                  districtName: {
+                    $ifNull: [
+                      { $arrayElemAt: ["$farmerDetails.districtName", 0] },
+                      { $arrayElemAt: ["$farmerDetails.district", 0] },
+                    ],
+                  },
+                  stateName: {
+                    $ifNull: [
+                      { $arrayElemAt: ["$farmerDetails.stateName", 0] },
+                      { $arrayElemAt: ["$farmerDetails.state", 0] },
+                    ],
+                  },
+                  aadharNumber: { $arrayElemAt: ["$farmerDetails.aadharNumber", 0] },
+                  aadhaarNumber: { $arrayElemAt: ["$farmerDetails.aadhaarNumber", 0] },
                 },
                 contact: { $arrayElemAt: ["$farmerDetails.mobileNumber", 0] },
                 orderNotes: "$orderDetails.notes",
+                dealerOrder: "$orderDetails.dealerOrder",
+                dealer: {
+                  name: { $arrayElemAt: ["$dealerDetails.name", 0] },
+                  phoneNumber: { $arrayElemAt: ["$dealerDetails.phoneNumber", 0] },
+                  location: { $arrayElemAt: ["$dealerDetails.location", 0] },
+                  jobTitle: { $arrayElemAt: ["$dealerDetails.jobTitle", 0] },
+                },
                 payment: "$orderDetails.payment",
                 quotaSource: "$orderDetails.quotaSource",
                 orderid: "$orderDetails._id",
@@ -2664,11 +2712,16 @@ const getDispatch = catchAsync(async (req, res, next) => {
         populate: [
           {
             path: "farmer",
-            select: "name mobileNumber village",
+            select:
+              "name mobileNumber village taluka talukaName district districtName state stateName aadharNumber aadhaarNumber",
+          },
+          {
+            path: "dealer",
+            select: "name phoneNumber location jobTitle",
           },
           {
             path: "salesPerson",
-            select: "name phoneNumber",
+            select: "name phoneNumber location jobTitle",
           },
           {
             path: "plantName",
@@ -2851,11 +2904,16 @@ async function loadDispatchLeanForPdfGeneration(dispatchObjectId) {
       populate: [
         {
           path: "farmer",
-          select: "name mobileNumber village",
+          select:
+            "name mobileNumber village taluka talukaName district districtName state stateName aadharNumber aadhaarNumber",
+        },
+        {
+          path: "dealer",
+          select: "name phoneNumber location jobTitle",
         },
         {
           path: "salesPerson",
-          select: "name phoneNumber",
+          select: "name phoneNumber location jobTitle",
         },
         {
           path: "plantName",
@@ -2930,10 +2988,10 @@ const regenerateDispatchPdfs = catchAsync(async (req, res, next) => {
 
   const { dispatch } = loaded;
 
-  if (types.includes("complete_invoice") && dispatch.transportStatus !== "DELIVERED") {
+  if (types.includes("complete_invoice") && String(dispatch.transportStatus || "").toUpperCase() === "CANCELLED") {
     return next(
       new AppError(
-        "Complete invoice PDF is only available when transport status is DELIVERED",
+        "Invoice PDF is not available for cancelled dispatches",
         400
       )
     );
@@ -2953,7 +3011,9 @@ const regenerateDispatchPdfs = catchAsync(async (req, res, next) => {
   }
 
   if (types.includes("complete_invoice")) {
-    const buf = await buildCompleteInvoicePdfBuffer(dispatch);
+    const invoiceAadhars =
+      body.invoiceAadhars && typeof body.invoiceAadhars === "object" ? body.invoiceAadhars : {};
+    const buf = await buildCompleteInvoicePdfBuffer(dispatch, { aadharByOrderId: invoiceAadhars });
     const url = await uploadToS3(buf, `complete-invoice-${dispatchObjectId}.pdf`, {
       folder: `dispatch-pdfs/${dispatchObjectId}`,
     });
@@ -3675,6 +3735,8 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       req.user?.name || req.user?.email || "Unknown"
     );
     delete req._orderEditAlertQueue;
+
+    scheduleDispatchPdfGeneration(updatedDispatch._id, ["delivery_challan", "complete_invoice"]);
 
     const response = generateResponse(
       "Success",

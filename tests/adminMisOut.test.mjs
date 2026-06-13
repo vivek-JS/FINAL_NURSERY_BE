@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMisOrdersMatch } from "../services/adminMisOrders.service.js";
+import { buildMisOrdersMatch, isMisSingleDayWindow } from "../services/adminMisOrders.service.js";
 import { buildAdminDailyMisPayloadFromMetrics } from "../utility/adminMisMetrics.js";
 import {
   LEGACY_ORDER_STATUS_FOR_TRANSITION,
@@ -77,6 +77,27 @@ test("buildAdminDailyMisPayloadFromMetrics sums Out across days in totals", () =
   assert.equal(payload.days[1].delivery.vehicleDispatched.orders, 2);
   assert.equal(payload.totals.delivery.vehicleDispatched.orders, 3);
   assert.equal(payload.totals.delivery.vehicleDispatched.plants, 250);
+});
+
+test("isMisSingleDayWindow treats query.date as single day", () => {
+  assert.ok(
+    isMisSingleDayWindow({ date: "2026-05-26" }, { startYmd: "2026-05-01", endYmd: "2026-05-31" })
+  );
+});
+
+test("isMisSingleDayWindow treats startDate === endDate as single day (sales sheet)", () => {
+  assert.ok(
+    isMisSingleDayWindow(
+      { startDate: "2026-05-26", endDate: "2026-05-26" },
+      { startYmd: "2026-05-26", endYmd: "2026-05-26" }
+    )
+  );
+  assert.ok(
+    !isMisSingleDayWindow(
+      { startDate: "2026-05-01", endDate: "2026-05-31" },
+      { startYmd: "2026-05-01", endYmd: "2026-05-31" }
+    )
+  );
 });
 
 test("Out per-day cell uses transition day not delivery day", () => {
