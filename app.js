@@ -320,6 +320,7 @@ import {
   getCentralReportCatalog,
   getCentralReportById,
   getAdminMisOrders,
+  getAdminSalesSheet,
 } from "./controllers/order.controller.js";
 import {
   getCeoReportCatalogHandler,
@@ -593,6 +594,11 @@ server.get(
   "/api/v1/order/admin-mis-orders",
   ...adminMisAuth,
   getAdminMisOrders
+);
+server.get(
+  "/api/v1/order/admin-mis-sales-sheet",
+  ...adminMisAuth,
+  getAdminSalesSheet
 );
 server.get("/api/v1/ceo-report/catalog", ...adminMisAuth, getCeoReportCatalogHandler);
 server.get("/api/v1/ceo-report/order-delivery-flow", ...adminMisAuth, getCeoOrderDeliveryFlow);

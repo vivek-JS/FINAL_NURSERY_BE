@@ -54,7 +54,7 @@ function parsePageLimit(query = {}) {
   return { page, limit, skip: (page - 1) * limit };
 }
 
-function resolveDateWindow(query) {
+export function resolveDateWindow(query) {
   const month = String(query.month || "").trim();
   if (/^\d{4}-\d{2}$/.test(month)) {
     const bounds = monthBoundsFromYm(month);

@@ -56,6 +56,7 @@ import {
   getCentralReportEngineMeta,
 } from "../utility/centralReportEngine/index.js";
 import { fetchAdminMisOrders } from "../services/adminMisOrders.service.js";
+import { fetchAdminSalesSheet } from "../services/adminSalesSheet.service.js";
 import {
   resolveOrderStatusTokens,
   buildOrderStatusDateMatch,
@@ -6435,6 +6436,21 @@ const getAdminMisOrders = catchAsync(async (req, res) => {
   });
 });
 
+/** Sales Sheet export — all dispatched ("Out") orders for the range as flat rows. */
+const getAdminSalesSheet = catchAsync(async (req, res) => {
+  const result = await fetchAdminSalesSheet(req.query);
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({
+      success: false,
+      message: result.error,
+    });
+  }
+  return res.status(200).json({
+    success: true,
+    data: result.data,
+  });
+});
+
 export { 
   getOrdersBySlot, 
   getCsv, 
@@ -6481,4 +6497,5 @@ export {
   getAdminDealerMis,
   getAdminDueMis,
   getAdminMisOrders,
+  getAdminSalesSheet,
 };
