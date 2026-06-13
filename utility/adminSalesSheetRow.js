@@ -29,8 +29,7 @@ export const SALES_SHEET_COLUMNS = [
   { key: "media", label: "Media" },
   { key: "retail", label: "Retail" },
   { key: "shadeNo", label: "Shade No." },
-  { key: "nurseryRb", label: "Nursery RB" },
-  { key: "nurserySb", label: "Nursery SB" },
+  { key: "nursery", label: "Nursery" },
   { key: "batch", label: "Batch" },
   { key: "issuePlantQty", label: "Issue Plant Qty." },
   { key: "returnQty", label: "Return" },
@@ -88,10 +87,10 @@ function resolveDispatchBatchNumber(order, dispatchBatchById) {
   return snap != null && String(snap).trim() ? String(snap).trim() : "";
 }
 
-/** Issue qty in the matching nursery-site column (RB / SB); empty when another site. */
-function nurserySiteIssueQty(expectedNursery, siteCode, issuePlantQty) {
-  const site = String(expectedNursery || "RB").trim().toUpperCase();
-  return site === siteCode ? issuePlantQty : "";
+/** Nursery site code from order (RB, SB, GH, …). Defaults to RB when unset. */
+export function formatSalesSheetNursery(expectedNursery) {
+  const code = String(expectedNursery ?? "").trim().toUpperCase();
+  return code || "RB";
 }
 
 /**
@@ -136,8 +135,7 @@ export function buildSalesSheetRow(order, lookups = {}) {
     media: trayDoc?.name || "",
     retail: "",
     shadeNo: "",
-    nurseryRb: nurserySiteIssueQty(order.expectedNursery, "RB", issuePlantQty),
-    nurserySb: nurserySiteIssueQty(order.expectedNursery, "SB", issuePlantQty),
+    nursery: formatSalesSheetNursery(order.expectedNursery),
     batch: formatSalesSheetBatch({
       lotBatch: order.batchNumber,
       dispatchBatchNumber: resolveDispatchBatchNumber(order, dispatchBatchById),
