@@ -26,4 +26,23 @@ describe("farmer order transfer routes", () => {
       /\/farmer-plant-ledger\/transfer-requests\/:id\/reject\",\s*requirePaymentAccess,\s*rejectFarmerOrderTransferRequest/
     );
   });
+
+  it("payment status transfer delegation receives Express next", () => {
+    const controllerSource = readFileSync(
+      resolve(process.cwd(), "controllers/order.controller.js"),
+      "utf8"
+    );
+    assert.match(
+      controllerSource,
+      /const\s+updatePaymentStatus\s*=\s*async\s*\(\s*req\s*,\s*res\s*,\s*next\s*\)/
+    );
+    assert.match(
+      controllerSource,
+      /approveFarmerOrderTransferRequest\(req,\s*res,\s*next\)/
+    );
+    assert.match(
+      controllerSource,
+      /rejectFarmerOrderTransferRequest\(req,\s*res,\s*next\)/
+    );
+  });
 });
