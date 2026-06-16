@@ -1,5 +1,5 @@
 import express from "express";
-import { authenticateToken } from "../middlewares/auth.middleware.js";
+import { authenticateToken, authorizeRoles } from "../middlewares/auth.middleware.js";
 import {
   handleWhatsAppWebhook,
   startOrderFlow,
@@ -17,6 +17,7 @@ import {
 import { isWhatsappOrderFlowDisabled } from "../utility/whatsappOrderFlowFlags.js";
 
 const router = express.Router();
+const requireOrderBotAdmin = [authenticateToken, authorizeRoles(["SUPER_ADMIN", "ADMIN"])];
 
 /** Public — check if bot can reply (no auth). */
 router.get("/status", (req, res) => {
@@ -36,11 +37,11 @@ router.get("/status", (req, res) => {
 // Health check endpoint (GET - for testing webhook URL)
 router.get("/webhook", webhookHealthCheck);
 
-// Diagnostics endpoint (GET - to check WATI configuration)
-router.get("/diagnostics", webhookDiagnostics);
+// Diagnostics endpoint (GET - admin only; exposes WATI configuration metadata)
+router.get("/diagnostics", requireOrderBotAdmin, webhookDiagnostics);
 
 // Test WATI connectivity endpoint - Diagnose IP blocking
-router.get("/test-wati-connectivity", async (req, res) => {
+router.get("/test-wati-connectivity", requireOrderBotAdmin, async (req, res) => {
   try {
     const { getWatiBaseUrl, getWatiToken } = await import("../config/wati.config.js");
     const WATI_BASE_URL = getWatiBaseUrl();
@@ -163,8 +164,8 @@ router.get("/test-wati-connectivity", async (req, res) => {
   }
 });
 
-// Simple test endpoint - immediately returns (for debugging)
-router.post("/webhook-test", (req, res) => {
+// Simple test endpoint - immediately returns (for admin debugging)
+router.post("/webhook-test", requireOrderBotAdmin, (req, res) => {
   console.log("\n🧪🧪🧪 WEBHOOK TEST ENDPOINT HIT 🧪🧪🧪");
   console.log(`   Time: ${new Date().toISOString()}`);
   console.log(`   Body: ${JSON.stringify(req.body, null, 2)}`);
@@ -190,10 +191,10 @@ router.post("/webhook", (req, res, next) => {
 }, handleWhatsAppWebhook);
 
 // Manual trigger endpoint (for testing/admin - requires authentication)
-router.post("/start", authenticateToken, startOrderFlow);
+router.post("/start", requireOrderBotAdmin, startOrderFlow);
 
 /** Simulate a farmer message on the scanned WhatsApp session (no WATI). */
-router.post("/simulate-web", authenticateToken, async (req, res) => {
+router.post("/simulate-web", requireOrderBotAdmin, async (req, res) => {
   const { mobileNumber, text } = req.body || {};
   if (!mobileNumber || !text) {
     return res.status(400).json({
