@@ -494,7 +494,19 @@ export const deletePlant = async (req, res) => {
 // Add a new subtype to an existing plant
 export const addSubtype = async (req, res) => {
   const { plantId } = req.params;
-  const { name, description, characteristics } = req.body;
+  const {
+    name,
+    description,
+    characteristics,
+    rates,
+    monthlyRates,
+    buffer,
+    plantReadyDays,
+    slotDays,
+    slotStartDate,
+    slotEndDate,
+    slotCapacity,
+  } = req.body;
 
   try {
     const plant = await PlantCms.findById(plantId);
@@ -503,12 +515,65 @@ export const addSubtype = async (req, res) => {
       return res.status(404).json({ message: "Plant not found" });
     }
 
-    plant.subtypes.push({ name, description, characteristics });
-    const updatedPlant = await plant.save();
+    if (!name) {
+      return res.status(400).json({ message: "Subtype name is required" });
+    }
+    if (!slotDays) {
+      return res.status(400).json({ message: "slotDays is required" });
+    }
+    if (!slotStartDate) {
+      return res.status(400).json({ message: "slotStartDate is required" });
+    }
+    if (!slotEndDate) {
+      return res.status(400).json({ message: "slotEndDate is required" });
+    }
+    if (!slotCapacity) {
+      return res.status(400).json({ message: "slotCapacity is required" });
+    }
 
-    return res
-      .status(200)
-      .json({ message: "Subtype added successfully", data: updatedPlant });
+    const processedRates = Array.isArray(rates)
+      ? rates
+          .filter((r) => r !== "" && r !== null && r !== undefined)
+          .map((r) => Number(r) || 0)
+      : [];
+
+    const processedMonthlyRates = Array.isArray(monthlyRates)
+      ? monthlyRates
+          .filter((mr) => mr.month && mr.rate !== "" && mr.rate !== null && mr.rate !== undefined)
+          .map((mr) => ({ month: mr.month, rate: Number(mr.rate) || 0 }))
+      : [];
+
+    const newSubtype = {
+      name,
+      description: description || "",
+      characteristics: characteristics || {},
+      rates: processedRates,
+      monthlyRates: processedMonthlyRates,
+      buffer: Number(buffer) || 0,
+      plantReadyDays: Number(plantReadyDays) || 0,
+      slotDays: Number(slotDays),
+      slotStartDate,
+      slotEndDate,
+      slotCapacity: Number(slotCapacity),
+    };
+
+    plant.subtypes.push(newSubtype);
+    const updatedPlant = await plant.save();
+    const addedSubtype = updatedPlant.subtypes[updatedPlant.subtypes.length - 1];
+
+    const slotsCreated = await createSlotsForNewSubtype(
+      plantId,
+      addedSubtype._id,
+      addedSubtype
+    );
+
+    return res.status(201).json({
+      message: "Subtype added successfully",
+      data: updatedPlant,
+      slotsCreated: slotsCreated
+        ? "Slots created for new subtype"
+        : "Subtype saved but slot creation failed",
+    });
   } catch (error) {
     return res
       .status(500)

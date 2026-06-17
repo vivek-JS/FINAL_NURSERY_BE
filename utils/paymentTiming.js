@@ -205,3 +205,19 @@ export function patchPaymentUpdateOperation(update, order = {}) {
     sanitizePaymentArrayForOrder(update.$set.payment, order);
   }
 }
+
+/** Sum advance payment amounts: collected (completed) and pending (awaiting approval). */
+export function sumOrderAdvancePayments(order) {
+  const dispatchIso = firstDispatchAtIso(getFirstDispatchAt(order));
+  const payments = Array.isArray(order?.payment) ? order.payment : [];
+  let completed = 0;
+  let pending = 0;
+  for (const payment of payments) {
+    if (resolvePaymentTiming(payment, dispatchIso) !== "advance") continue;
+    const amt = Number(payment?.paidAmount) || 0;
+    if (!(amt > 0)) continue;
+    if (payment.paymentStatus === "COLLECTED") completed += amt;
+    else if (payment.paymentStatus === "PENDING") pending += amt;
+  }
+  return { completed, pending };
+}

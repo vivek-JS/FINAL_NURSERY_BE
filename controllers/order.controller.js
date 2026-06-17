@@ -72,7 +72,7 @@ import {
   approveFarmerOrderTransferRequest,
   rejectFarmerOrderTransferRequest,
 } from "./farmerPlantOrderLedger.controller.js";
-import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
+import { applyPaymentTimingToPayment, sumOrderAdvancePayments } from "../utils/paymentTiming.js";
 import { addPaymentsToOrder } from "../services/orderPayment.service.js";
 import {
   resolveSplitBookForAssign,
@@ -852,8 +852,10 @@ const getCsv = catchAsync(async (req, res, next) => {
       "Booked plants",
       "Returned plants",
       "Damaged plants",
-      "Billable plants (net)",
       "Rate",
+      "Billable plants (net)",
+      "Advance (Completed)",
+      "Advance (Pending)",
       "Delivery date",
       "Dispatched",
       "Dispatched date",
@@ -924,6 +926,8 @@ const getCsv = catchAsync(async (req, res, next) => {
         const dmg = Number(obj.damagedPlants) || 0;
         const billable = Math.max(0, (Number.isFinite(bookedTotal) ? bookedTotal : 0) - ret - dmg);
         const dispatchInfo = latestDispatchInfo(obj);
+        const { completed: advanceCompleted, pending: advancePending } =
+          sumOrderAdvancePayments(obj);
 
         // Farmer may be unset (dealer / legacy rows); use orderFor for customer + address fallback.
         const addr =
@@ -960,8 +964,10 @@ const getCsv = catchAsync(async (req, res, next) => {
           "Booked plants": Number.isFinite(bookedTotal) ? bookedTotal : "",
           "Returned plants": ret,
           "Damaged plants": dmg,
-          "Billable plants (net)": billable,
           Rate: obj.rate ?? 0,
+          "Billable plants (net)": billable,
+          "Advance (Completed)": advanceCompleted || "",
+          "Advance (Pending)": advancePending || "",
           "Delivery date": formatInDate(deliverySource(obj)),
           Dispatched: dispatchInfo.dispatched,
           "Dispatched date": formatInDate(dispatchInfo.date),
