@@ -206,6 +206,8 @@ export const requireBulkPaymentCreateAccess = (req, res, next) => {
     'SUPERADMIN',
     'CASHIER',
     'DEALER',
+    'OFFICE_ADMIN',
+    'OFFICEADMIN',
   ]);
   const candidates = [req.user.role, req.user.jobTitle].filter(Boolean);
   const ok = candidates.some((c) => allowed.has(c));
