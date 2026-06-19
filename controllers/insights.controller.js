@@ -102,12 +102,43 @@ function applyRoleMatch(pipeline, user) {
   }
 }
 
+function applyRoleCriteria(match, user) {
+  if (!user) return;
+  const { jobTitle, _id: userId } = user;
+  if (jobTitle === "SALES") {
+    match.salesPerson = userId;
+  } else if (jobTitle === "DEALER") {
+    match.$or = [{ dealer: userId }, { salesPerson: userId }];
+  }
+}
+
 /** IST midnight + dayOffset (dispatch window edges). */
 function istStartOfDayFrom(baseYmd, dayOffset = 0) {
   const pivot = new Date(`${baseYmd}T12:00:00+05:30`);
   pivot.setDate(pivot.getDate() + dayOffset);
   const cal = istCalendarDateString(pivot);
   return new Date(`${cal}T00:00:00+05:30`);
+}
+
+export function buildExpectedKpiMatchStage({
+  reportDateStr, plantId, subtypeObjectId, excludeReadyForDispatch = false, user,
+} = {}) {
+  const closedStatuses = [...CLOSED_FOR_EXPECTED_KPI];
+  if (excludeReadyForDispatch) closedStatuses.push("READY_FOR_DISPATCH");
+  const match = {
+    dealerOrder: false,
+    farmer: { $exists: true, $ne: null },
+    orderStatus: { $nin: closedStatuses },
+    deliveryDate: { $ne: null, $lt: istStartOfDayFrom(reportDateStr, 8) },
+  };
+  applyRoleCriteria(match, user);
+  if (plantId && mongoose.Types.ObjectId.isValid(plantId)) {
+    match.plantName = new mongoose.Types.ObjectId(plantId);
+  }
+  if (subtypeObjectId) {
+    match.plantSubtype = subtypeObjectId;
+  }
+  return match;
 }
 
 function istYmdFromValue(value) {
@@ -154,7 +185,7 @@ function slimOrderForKpi(row) {
 }
 
 /** Expected = deliveryDate; actual today = Dispatch trips on report calendar day. */
-function computeDispatchKpiSummary(orders, dispatches, reportDateStr, options = {}) {
+export function computeDispatchKpiSummary(orders, dispatches, reportDateStr, options = {}) {
   const excludeReadyForDispatch = Boolean(options.excludeReadyForDispatch);
   const next7EndYmd = istAddDaysYmd(reportDateStr, 7);
 
@@ -202,6 +233,62 @@ function computeDispatchKpiSummary(orders, dispatches, reportDateStr, options = 
   }
 
   return { todayExpected, next7Expected, due, todayActual, reportDate: reportDateStr };
+}
+
+function objectIdString(value) {
+  return value?.toString?.() ?? String(value || "");
+}
+
+function toIsoOrNull(value) {
+  return value ? new Date(value).toISOString() : null;
+}
+
+export function mapExpectedKpiOrder(row) {
+  const qty = (Number(row.numberOfPlants) || 0) + (Number(row.additionalPlants) || 0);
+  const remainingPlants = row.remainingPlants != null ? Number(row.remainingPlants) : qty;
+  const farmer = row.farmer && typeof row.farmer === "object" ? row.farmer : {};
+  const sales = row.salesPerson && typeof row.salesPerson === "object" ? row.salesPerson : {};
+  const plantDoc = row.plantName && typeof row.plantName === "object" ? row.plantName : null;
+  const plantId = objectIdString(plantDoc?._id || row.plantName);
+  const subtypeId = objectIdString(row.plantSubtype);
+  const varietyDoc = (plantDoc?.subtypes || []).find((s) => objectIdString(s?._id) === subtypeId);
+
+  return {
+    id: `ORD-${row.orderId}`,
+    orderId: row.orderId,
+    farmerName: farmer.name || "",
+    salesperson: sales.name || "",
+    plantId,
+    variety: varietyDoc?.name || "",
+    qty,
+    remainingPlants: Number.isFinite(remainingPlants) ? remainingPlants : qty,
+    rawOrderStatus: row.orderStatus || "",
+    district: farmer.districtName || farmer.district || "",
+    taluka: farmer.talukaName || farmer.taluka || "",
+    village: farmer.village || "",
+    deliveryDate: toIsoOrNull(row.deliveryDate),
+  };
+}
+
+async function loadExpectedKpiOrders({
+  user, reportDateStr, plantId, subtypeObjectId, excludeReadyForDispatch,
+}) {
+  const match = buildExpectedKpiMatchStage({
+    reportDateStr,
+    plantId,
+    subtypeObjectId,
+    excludeReadyForDispatch,
+    user,
+  });
+  const rows = await Order.find(match)
+    .select("orderId orderStatus numberOfPlants additionalPlants remainingPlants deliveryDate farmer salesPerson plantName plantSubtype")
+    .populate({ path: "farmer", select: "name village taluka talukaName district districtName" })
+    .populate({ path: "salesPerson", select: "name jobTitle" })
+    .populate({ path: "plantName", select: "name subtypes" })
+    .sort({ deliveryDate: 1, orderBookingDate: -1 })
+    .limit(10000)
+    .lean();
+  return rows.map(mapExpectedKpiOrder);
 }
 
 export const getInsightsDashboard = catchAsync(async (req, res) => {
@@ -254,11 +341,12 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
     },
   };
 
+  let resolvedSubtypeId = null;
   if (plantId && mongoose.Types.ObjectId.isValid(plantId)) {
     matchStage.plantName = new mongoose.Types.ObjectId(plantId);
   }
   if (subtypeId && subtypeId !== "general" && mongoose.Types.ObjectId.isValid(subtypeId)) {
-    matchStage.plantSubtype = new mongoose.Types.ObjectId(subtypeId);
+    resolvedSubtypeId = new mongoose.Types.ObjectId(subtypeId);
   } else if (
     plantId &&
     varietyName &&
@@ -270,8 +358,11 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       (s) => s.name?.trim() === String(varietyName).trim()
     );
     if (st?._id) {
-      matchStage.plantSubtype = st._id;
+      resolvedSubtypeId = st._id;
     }
+  }
+  if (resolvedSubtypeId) {
+    matchStage.plantSubtype = resolvedSubtypeId;
   }
 
   pipeline.push({ $match: matchStage });
@@ -337,7 +428,12 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
       qty: {
         $add: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$additionalPlants", 0] }],
       },
-      remainingPlants: { $ifNull: ["$remainingPlants", "$numberOfPlants"] },
+      remainingPlants: {
+        $ifNull: [
+          "$remainingPlants",
+          { $add: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$additionalPlants", 0] }] },
+        ],
+      },
       expectedDispatch: "$deliveryDate",
       farmerDistrict: {
         $ifNull: [
@@ -564,8 +660,17 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
     };
   });
 
-  const kpiSummary = computeDispatchKpiSummary(orders, dispatches, reportDateStr, {
-    excludeReadyForDispatch: String(excludeReadyForDispatch) === "true",
+  const excludeReady = String(excludeReadyForDispatch) === "true";
+  const expectedKpiOrders = await loadExpectedKpiOrders({
+    user: req.user,
+    reportDateStr,
+    plantId,
+    subtypeObjectId: resolvedSubtypeId,
+    excludeReadyForDispatch: excludeReady,
+  });
+
+  const kpiSummary = computeDispatchKpiSummary(expectedKpiOrders, dispatches, reportDateStr, {
+    excludeReadyForDispatch: excludeReady,
   });
 
   return res.status(200).json({
