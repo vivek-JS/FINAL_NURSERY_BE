@@ -24,6 +24,7 @@ import {
 import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
+  shouldLogFarmerPlantLedger,
   syncFarmerPlantLedgerForOrderUpdate,
   archiveFarmerPlantOrderBeforeDelete,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
@@ -1159,31 +1160,33 @@ const createOne = (Model, modelName) =>
         }
 
         if (modelName === "Order" && order[0]) {
-          try {
-            await ensureFarmerPlantOrderDebit(order[0], {
-              userId: req.user?._id,
-              session,
-            });
-            if (paymentArray.length > 0) {
-              for (const paymentItem of paymentArray) {
-                try {
-                  await recordFarmerPlantLedgerPaymentTransition(
-                    order[0],
-                    paymentItem,
-                    null,
-                    paymentItem.paymentStatus,
-                    { userId: req.user?._id, session }
-                  );
-                } catch (payLedgerErr) {
-                  console.error(
-                    "FarmerPlantOrderLedger payment on create:",
-                    payLedgerErr
-                  );
+          if (shouldLogFarmerPlantLedger(order[0])) {
+            try {
+              await ensureFarmerPlantOrderDebit(order[0], {
+                userId: req.user?._id,
+                session,
+              });
+              if (paymentArray.length > 0) {
+                for (const paymentItem of paymentArray) {
+                  try {
+                    await recordFarmerPlantLedgerPaymentTransition(
+                      order[0],
+                      paymentItem,
+                      null,
+                      paymentItem.paymentStatus,
+                      { userId: req.user?._id, session }
+                    );
+                  } catch (payLedgerErr) {
+                    console.error(
+                      "FarmerPlantOrderLedger payment on create:",
+                      payLedgerErr
+                    );
+                  }
                 }
               }
+            } catch (ledgerErr) {
+              console.error("FarmerPlantOrderLedger ORDER debit failed:", ledgerErr);
             }
-          } catch (ledgerErr) {
-            console.error("FarmerPlantOrderLedger ORDER debit failed:", ledgerErr);
           }
           try {
             await syncDealerLedgerForOrder(order[0], {
