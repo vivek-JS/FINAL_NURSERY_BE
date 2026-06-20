@@ -23,6 +23,7 @@ import {
   sendOrderAcceptedWhatsApp,
   sendOrderDispatchedWhatsAppDelivery1,
   buildWatiSendRecipient,
+  resolveWatiSendMobile,
 } from "../utility/watiMessaging.js";
 import { isBananaPlantName } from "../utility/watiPlantText.js";
 import { getUnclearedPayments as getUnclearedPaymentsService, getPaymentsForApproval as getPaymentsForApprovalService, reconcile as reconcileService } from "../services/paymentReconciliationService.js";
@@ -45,18 +46,18 @@ import {
 } from "./farmerPlantOrderLedger.controller.js";
 
 function watiDigitsOk(n) {
-  return n != null && String(n).replace(/\D/g, "").length >= 10;
+  return resolveWatiSendMobile({ mobileNumber: n }) != null;
 }
 
 function watiPhoneKey(n) {
-  const d = String(n).replace(/\D/g, "");
-  if (d.length >= 12 && d.startsWith("91")) return d.slice(-10);
-  return d.slice(-10);
+  return resolveWatiSendMobile({ mobileNumber: n });
 }
 
 function watiPhonesDiffer(a, b) {
-  if (!watiDigitsOk(a) || !watiDigitsOk(b)) return true;
-  return watiPhoneKey(a) !== watiPhoneKey(b);
+  const aKey = watiPhoneKey(a);
+  const bKey = watiPhoneKey(b);
+  if (!aKey || !bKey) return true;
+  return aKey !== bKey;
 }
 
 /** Farmer — required for WhatsApp on non–dealer orders. */

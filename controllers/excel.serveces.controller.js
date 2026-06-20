@@ -15,6 +15,7 @@ import { generateSlotsForYear } from "./slots.controller.js";
 import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
+  shouldLogFarmerPlantLedger,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 
 // Function to parse Excel date serial number
@@ -1630,7 +1631,7 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
           ? { _id: `dry-run-order-${rowIndex + 2}`, orderId: finalOrderId, ...orderData, payment: [] }
           : await Order.create(orderData);
 
-        if (!dryRun) {
+        if (!dryRun && shouldLogFarmerPlantLedger(order)) {
           try {
             await ensureFarmerPlantOrderDebit(order, {});
           } catch (ledgerError) {
@@ -1684,22 +1685,24 @@ export const importOrdersAndFarmers = async (fileBuffer, options = {}) => {
           } else {
             order.payment.push(paymentData);
             await order.save();
-            try {
-              const latestPayment = order.payment?.[order.payment.length - 1];
-              if (latestPayment) {
-                await recordFarmerPlantLedgerPaymentTransition(
-                  order,
-                  latestPayment,
-                  "PENDING",
-                  "COLLECTED",
-                  {}
+            if (shouldLogFarmerPlantLedger(order)) {
+              try {
+                const latestPayment = order.payment?.[order.payment.length - 1];
+                if (latestPayment) {
+                  await recordFarmerPlantLedgerPaymentTransition(
+                    order,
+                    latestPayment,
+                    "PENDING",
+                    "COLLECTED",
+                    {}
+                  );
+                }
+              } catch (ledgerError) {
+                console.error(
+                  `⚠️ Ledger PAYMENT credit ensure failed for order ${order.orderId}:`,
+                  ledgerError?.message || ledgerError
                 );
               }
-            } catch (ledgerError) {
-              console.error(
-                `⚠️ Ledger PAYMENT credit ensure failed for order ${order.orderId}:`,
-                ledgerError?.message || ledgerError
-              );
             }
           }
         }
