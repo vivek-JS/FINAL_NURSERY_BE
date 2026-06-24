@@ -494,6 +494,15 @@ const createOne = (Model, modelName) =>
       }
 
       const numPlants = Number(numberOfPlants);
+      /**
+       * Field reassignment orders (refused delivery handed to another farmer) skip
+       * all slot booking effects — the slot was already consumed by the original order.
+       */
+      const skipSlotBooking =
+        orderData.isFieldReassignment === true ||
+        orderData.isFieldReassignment === "true" ||
+        orderData.skipSlotBooking === true ||
+        orderData.skipSlotBooking === "true";
       if (!bookingSlot || !Number.isFinite(numPlants) || numPlants < 0) {
         return res.status(400).json({
           message: "bookingSlot and a valid non-negative numberOfPlants are required",
@@ -717,7 +726,14 @@ const createOne = (Model, modelName) =>
           }
         }
         // Case 3: Regular farmer order
-        else {
+        else if (skipSlotBooking) {
+          // Field reassignment order: plants already left the nursery on the
+          // original refused order's dispatch, so the slot was already consumed.
+          // Skip the slot availability decrement entirely.
+          console.log(
+            `🌾 Field reassignment order: skipping slot subtract for ${numPlants} plants (slot already consumed by refused order)`
+          );
+        } else {
           await updateSlot(bookingSlot, numPlants, "subtract", session);
         }
 
@@ -1045,18 +1061,24 @@ const createOne = (Model, modelName) =>
           }
         }
 
-        const slotUpdateResult = await PlantSlot.updateOne(
-          { "subtypeSlots.slots._id": bookingSlot },
-          slotUpdateOperation,
-          {
-            arrayFilters: [
-              { "subtypeSlot.slots._id": bookingSlot },
-              { "slot._id": bookingSlot }
-            ],
-            session: session
-          }
-        );
-        console.log(`✅ Slot update result: matched=${slotUpdateResult.matchedCount}, modified=${slotUpdateResult.modifiedCount}`);
+        if (skipSlotBooking) {
+          console.log(
+            `🌾 Field reassignment order: skipping slot booking counters (orders push / totalBookedPlants / availablePlants) for slot ${bookingSlot}`
+          );
+        } else {
+          const slotUpdateResult = await PlantSlot.updateOne(
+            { "subtypeSlots.slots._id": bookingSlot },
+            slotUpdateOperation,
+            {
+              arrayFilters: [
+                { "subtypeSlot.slots._id": bookingSlot },
+                { "slot._id": bookingSlot }
+              ],
+              session: session
+            }
+          );
+          console.log(`✅ Slot update result: matched=${slotUpdateResult.matchedCount}, modified=${slotUpdateResult.modifiedCount}`);
+        }
 
         // Create farmer from orderFor only when name + usable 10-digit mobile (optional book-for flow has no mobile)
         // Use orderData.orderFor (parsed object) — multipart may leave req.body.orderFor as a JSON string.

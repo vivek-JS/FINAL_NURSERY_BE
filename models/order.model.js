@@ -579,6 +579,28 @@ const orderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Dispatch",
     },
+    /**
+     * True when this order was created on the field during a refused-delivery
+     * reassignment (plants already physically on the vehicle). These orders must
+     * NOT decrement booking slots — the slot was already consumed by the original
+     * refused order. Used as the "Field order" tag in the UI.
+     */
+    isFieldReassignment: {
+      type: Boolean,
+      default: false,
+    },
+    /** Dispatch the reassigned plants came off of (audit link for field orders). */
+    reassignedFromDispatchId: {
+      type: Schema.Types.ObjectId,
+      ref: "Dispatch",
+    },
+    /** Original refused order(s) whose plants were handed to this farmer. */
+    reassignedFromOrderIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "Order",
+      },
+    ],
     plantName: {
       type: Schema.Types.ObjectId,
       ref: "PlantCms",

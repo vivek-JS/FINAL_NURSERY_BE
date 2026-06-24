@@ -12,6 +12,7 @@ import {
   bulkMarkReady,
   detachOrderFromDispatch,
 } from "../controllers/dispatch.controller.js";
+import { reassignRefusedDelivery } from "../controllers/dispatchReassign.controller.js";
 
 const router = express.Router();
 
@@ -38,6 +39,8 @@ router.patch("/:id", updateDispatch);
 // PATCH add a post-dispatch (quick) order to a vehicle — safe from mongo-sanitize
 router.patch("/:id/add-order", addOrderToDispatch);
 router.patch("/:id/detach-order", detachOrderFromDispatch);
+// PATCH reassign a refused delivery: cancel/keep original orders + create off-slot field orders
+router.patch("/:id/reassign-refused", reassignRefusedDelivery);
 router.delete("/transport/:transportId", removeTransport);
 router.patch("/complete/:id", handleDispatchReturns);
 

@@ -31,7 +31,6 @@ export const SALES_SHEET_SUM_KEYS = [
 /** Stable column keys + display labels (single source of truth, also used by FE). */
 export const SALES_SHEET_COLUMNS = [
   { key: "srNo", label: "Sr. No." },
-  { key: "delDate", label: "Del. Date" },
   { key: "bookingNo", label: "Booking No." },
   { key: "customerName", label: "Customer Name" },
   { key: "mobileNo", label: "Mo. No." },
@@ -40,6 +39,8 @@ export const SALES_SHEET_COLUMNS = [
   { key: "district", label: "District" },
   { key: "plant", label: "Plant" },
   { key: "variety", label: "Variety" },
+  { key: "delDate", label: "Delivery date" },
+  { key: "originalDelDate", label: "Original delivery date" },
   { key: "media", label: "Media" },
   { key: "retail", label: "Retail" },
   { key: "shadeNo", label: "Shade No." },
@@ -138,7 +139,6 @@ export function buildSalesSheetRow(order, lookups = {}) {
     order.cavity && trayById ? trayById.get(String(order.cavity)) : null;
 
   return {
-    delDate: toIstYmd(order.deliveryDate),
     bookingNo: order.orderId ?? "",
     customerName: order.farmerName || "",
     mobileNo: order.farmerMobile || "",
@@ -147,6 +147,8 @@ export function buildSalesSheetRow(order, lookups = {}) {
     district: order.farmerDistrict || "",
     plant: order.plantTypeName || "",
     variety: order.plantSubtypeName || "",
+    delDate: toIstYmd(order.deliveryDate),
+    originalDelDate: toIstYmd(order.oldDeliveryDate),
     media: trayDoc?.name || "",
     retail: "",
     shadeNo: "",

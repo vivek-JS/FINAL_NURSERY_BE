@@ -38,6 +38,7 @@ const SALES_SHEET_PROJECT = {
   orderStatus: 1,
   orderBookingDate: 1,
   deliveryDate: 1,
+  oldDeliveryDate: 1,
   numberOfPlants: 1,
   additionalPlants: 1,
   totalPlants: 1,

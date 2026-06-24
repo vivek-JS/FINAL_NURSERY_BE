@@ -51,7 +51,7 @@ import {
   emitPlantOrderUpdateEvents,
 } from "../utils/orderEventDualWrite.js";
 
-const updateOrderWithLedgerSync = async ({
+export const updateOrderWithLedgerSync = async ({
   orderId,
   updateOperation,
   session,
