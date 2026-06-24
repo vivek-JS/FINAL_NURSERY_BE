@@ -65,6 +65,11 @@ import {
 import { getMerchantLedger } from "../controllers/ramAgriMerchantLedger.controller.js";
 import { getRamAgriSalesTargets, upsertRamAgriSalesTarget } from "../controllers/ramAgriSalesTarget.controller.js";
 import { generateRamAgriVideoSummary } from "../controllers/ramAgriVideoSummary.controller.js";
+import {
+  getAllRamAgriBatches,
+  getRamAgriVarietyBatches,
+  getRamAgriBatchSummary,
+} from "../controllers/ramAgriBatch.controller.js";
 
 const router = express.Router();
 
@@ -287,7 +292,14 @@ router
     checkErrors,
     createCrop
   )
-  .get("/ram-agri-inputs", getAllCrops)
+  .get("/ram-agri-inputs", getAllCrops);
+
+router
+  .get("/ram-agri-inputs/batches/summary", getRamAgriBatchSummary)
+  .get("/ram-agri-inputs/batches", getAllRamAgriBatches)
+  .get("/ram-agri-inputs/:cropId/varieties/:varietyId/batches", getRamAgriVarietyBatches);
+
+router
   .get("/ram-agri-inputs/:id", getCropById)
   .patch(
     "/ram-agri-inputs/:id",

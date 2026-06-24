@@ -10,6 +10,10 @@ import AgriSalesOrder, {
 } from "../models/agriSalesOrder.model.js";
 import { InventoryProduct, InventoryOutwardTransaction, StockAdjustment } from "../models/inventory.model.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
+import {
+  deductStockFIFO,
+  returnToSourceBatches,
+} from "../services/ramAgriBatchInventory.service.js";
 import Order from "../models/order.model.js";
 import Farmer from "../models/farmer.model.js";
 import Vehicle from "../models/vehicleModel.model.js";
@@ -258,27 +262,61 @@ const resolveAgriOrderSalesPersonId = async (req, bodySalesPerson) => {
   return spRaw;
 };
 
+function persistLineBatchAllocations(order, lineIndex, allocations) {
+  const normalized = (allocations || []).map((a) => ({
+    batchId: a.batchId,
+    batchNumber: a.batchNumber,
+    quantityDeducted: a.quantityDeducted,
+    quantityReturned: a.quantityReturned || 0,
+  }));
+  if (Array.isArray(order.lineItems) && order.lineItems.length > lineIndex) {
+    order.lineItems[lineIndex].batchAllocations = normalized;
+    order.markModified("lineItems");
+  } else if (lineIndex === 0) {
+    order.batchAllocations = normalized;
+    order.markModified("batchAllocations");
+  }
+}
+
+function getLineBatchAllocations(order, lineIndex) {
+  if (Array.isArray(order.lineItems) && order.lineItems.length > lineIndex) {
+    return order.lineItems[lineIndex].batchAllocations || [];
+  }
+  if (lineIndex === 0 && Array.isArray(order.batchAllocations)) {
+    return order.batchAllocations;
+  }
+  return [];
+}
+
 /** Restore Ram Agri / inventory stock for every line (reject/cancel after dispatch deduction). */
 async function restoreStockForAgriOrder(order, notesSuffix, userId) {
   const lines = getAgriOrderLines(order);
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const qty = Number(line.quantity) || 0;
-    const rate = Number(line.rate) || 0;
     if (qty <= 0) continue;
 
     if (line.isRamAgriProduct || line.ramAgriCropId) {
-      const crop = await RamAgriInputsProduct.findById(line.ramAgriCropId);
-      if (!crop) continue;
-      const variety = crop.varieties.id(line.ramAgriVarietyId);
-      if (!variety) continue;
-      variety.currentStock = (variety.currentStock || 0) + qty;
-      variety.stockValue = (variety.stockValue || 0) + qty * rate;
-      if (variety.currentStock > 0) {
-        variety.averagePrice = variety.stockValue / variety.currentStock;
-      } else {
-        variety.averagePrice = 0;
+      const allocations = getLineBatchAllocations(order, li);
+      const allocCopy = allocations.map((a) => ({
+        batchId: a.batchId,
+        batchNumber: a.batchNumber,
+        quantityDeducted: a.quantityDeducted,
+        quantityReturned: a.quantityReturned || 0,
+      }));
+      const result = await returnToSourceBatches(allocCopy, qty, {
+        cropId: line.ramAgriCropId,
+        varietyId: line.ramAgriVarietyId,
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        userId,
+        reason: notesSuffix,
+      });
+      if (!result.ok) {
+        console.error(`restoreStockForAgriOrder batch restore failed: ${result.error}`);
+        continue;
       }
-      await crop.save();
+      persistLineBatchAllocations(order, li, allocCopy);
     } else if (line.productId) {
       await StockAdjustment.create({
         productId: line.productId,
@@ -303,7 +341,10 @@ async function restoreStockForAgriOrder(order, notesSuffix, userId) {
  */
 async function deductStockForAgriOrderLines(order, orderNumber, userId) {
   const lines = getAgriOrderLines(order);
-  for (const line of lines) {
+  const batchBreakdown = [];
+
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const qty = Number(line.quantity) || 0;
     const rate = Number(line.rate) || 0;
     if (qty <= 0) continue;
@@ -323,18 +364,24 @@ async function deductStockForAgriOrderLines(order, orderNumber, userId) {
           ),
         };
       }
-      const svBefore = Number(variety.stockValue) || 0;
-      variety.currentStock = stockBefore - qty;
-      // Reduce carrying value by the same fraction of units removed — do not use qty×sale rate,
-      // or stockValue can go negative when DB value is out of sync with units (legacy / manual stock).
-      variety.stockValue =
-        stockBefore > 0 ? Math.max(0, (svBefore * variety.currentStock) / stockBefore) : 0;
-      if (variety.currentStock > 0) {
-        variety.averagePrice = Math.max(0, variety.stockValue / variety.currentStock);
-      } else {
-        variety.averagePrice = 0;
+
+      const ded = await deductStockFIFO(line.ramAgriCropId, line.ramAgriVarietyId, qty, {
+        userId,
+        referenceType: "AgriSalesOrder",
+        referenceId: order._id,
+        referenceNumber: orderNumber,
+      });
+      if (!ded.ok) {
+        return {
+          ok: false,
+          error: new AppError(
+            `Insufficient batch stock for order ${orderNumber} (${line.productName || "item"}). ${ded.error}`,
+            400
+          ),
+        };
       }
-      await crop.save();
+      persistLineBatchAllocations(order, li, ded.allocations);
+      batchBreakdown.push({ lineIndex: li, productName: line.productName, allocations: ded.allocations });
     } else if (line.productId) {
       const product = await InventoryProduct.findById(line.productId);
       if (!product) continue;
@@ -368,7 +415,7 @@ async function deductStockForAgriOrderLines(order, orderNumber, userId) {
       });
     }
   }
-  return { ok: true };
+  return { ok: true, batchBreakdown };
 }
 
 const normalizeAgriOrderSalesPerson = (orderDoc) => {
@@ -3918,21 +3965,30 @@ const completeOrders = catchAsync(async (req, res, next) => {
           if (rq <= 0) continue;
           const rate = Number(line.rate) || 0;
           if (line.isRamAgriProduct || line.ramAgriCropId) {
-            const crop = await RamAgriInputsProduct.findById(line.ramAgriCropId);
-            if (!crop) continue;
-            const variety = crop.varieties.id(line.ramAgriVarietyId);
-            if (!variety) continue;
-            stockBefore = variety.currentStock || 0;
-            variety.currentStock = (variety.currentStock || 0) + rq;
-            variety.stockValue = (variety.stockValue || 0) + rq * rate;
-            if (variety.currentStock > 0) {
-              variety.averagePrice = variety.stockValue / variety.currentStock;
-            } else {
-              variety.averagePrice = 0;
+            const allocations = getLineBatchAllocations(order, li);
+            const allocCopy = allocations.map((a) => ({
+              batchId: a.batchId,
+              batchNumber: a.batchNumber,
+              quantityDeducted: a.quantityDeducted,
+              quantityReturned: a.quantityReturned || 0,
+            }));
+            const restoreResult = await returnToSourceBatches(allocCopy, rq, {
+              cropId: line.ramAgriCropId,
+              varietyId: line.ramAgriVarietyId,
+              orderId: order._id,
+              orderNumber: order.orderNumber,
+              userId,
+              reason: returnReason || "Customer return",
+            });
+            if (!restoreResult.ok) {
+              console.error(`Batch return failed for order ${order.orderNumber}: ${restoreResult.error}`);
+              continue;
             }
-            stockAfter = variety.currentStock;
-            await crop.save();
+            persistLineBatchAllocations(order, li, allocCopy);
             stockReturnSuccess = true;
+            if (restoreResult.legacyReturn) {
+              console.warn(`Legacy batch return for order ${order.orderNumber}`);
+            }
           } else if (line.productId) {
             const product = await InventoryProduct.findById(line.productId);
             if (!product) continue;

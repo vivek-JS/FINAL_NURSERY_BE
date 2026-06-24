@@ -512,45 +512,24 @@ export const updateVariety = catchAsync(async (req, res, next) => {
       return next(new AppError('currentStock must be a non-negative number', 400));
     }
 
-    const oldAveragePrice = Number(variety.averagePrice || 0);
-    const fallbackPrice = Number(variety.purchasePrice || variety.defaultRate || 0);
-    const effectiveAveragePrice =
-      oldAveragePrice > 0 ? oldAveragePrice : fallbackPrice > 0 ? fallbackPrice : 0;
-    const nextAveragePrice =
-      parsedStock > 0 && effectiveAveragePrice > 0
-        ? effectiveAveragePrice
-        : oldAveragePrice > 0
-          ? oldAveragePrice
-          : effectiveAveragePrice;
-    const nextStockValue =
-      parsedStock === 0
-        ? 0
-        : Number((parsedStock * Number(nextAveragePrice || 0)).toFixed(2));
-
-    await RamAgriInputsProduct.findOneAndUpdate(
-      { _id: id, 'varieties._id': varietyId },
-      {
-        $set: {
-          'varieties.$.currentStock': parsedStock,
-          'varieties.$.stockValue': nextStockValue,
-          'varieties.$.averagePrice': Number(nextAveragePrice || 0),
-          'varieties.$.stockUpdatedAt': new Date(),
-          updatedBy: req.user._id,
-        },
-      },
-      { new: true, runValidators: false }
-    );
+    const { applyManualStockAdjustment } = await import('../services/ramAgriBatchInventory.service.js');
+    const oldStock = Number(variety.currentStock) || 0;
+    try {
+      await applyManualStockAdjustment(id, varietyId, parsedStock, req.user._id);
+    } catch (err) {
+      return next(new AppError(err.message || 'Stock adjustment failed', 400));
+    }
 
     const changes = generateChangesArray(
       {
-        currentStock: variety.currentStock,
+        currentStock: oldStock,
         stockValue: variety.stockValue,
         averagePrice: variety.averagePrice,
       },
       {
         currentStock: parsedStock,
-        stockValue: nextStockValue,
-        averagePrice: Number(nextAveragePrice || 0),
+        stockValue: variety.stockValue,
+        averagePrice: variety.averagePrice,
       }
     );
     if (changes.length > 0) {
@@ -695,24 +674,19 @@ export const updateVariety = catchAsync(async (req, res, next) => {
       return next(new AppError('currentStock must be a non-negative number', 400));
     }
 
-    const oldAveragePrice = Number(variety.averagePrice || 0);
-    const fallbackPrice = Number(variety.purchasePrice || variety.defaultRate || 0);
-    const effectiveAveragePrice =
-      oldAveragePrice > 0 ? oldAveragePrice : fallbackPrice > 0 ? fallbackPrice : 0;
-
-    variety.currentStock = parsedStock;
-    variety.stockUpdatedAt = new Date();
-    if (parsedStock === 0) {
-      variety.stockValue = 0;
-      if (oldAveragePrice <= 0 && effectiveAveragePrice > 0) {
-        variety.averagePrice = effectiveAveragePrice;
-      }
-    } else {
-      if (effectiveAveragePrice > 0) {
-        variety.averagePrice = effectiveAveragePrice;
-      }
-      const unitPriceForValue = Number(variety.averagePrice || effectiveAveragePrice || 0);
-      variety.stockValue = Number((parsedStock * unitPriceForValue).toFixed(2));
+    const { applyManualStockAdjustment } = await import('../services/ramAgriBatchInventory.service.js');
+    try {
+      await applyManualStockAdjustment(id, varietyId, parsedStock, req.user._id);
+    } catch (err) {
+      return next(new AppError(err.message || 'Stock adjustment failed', 400));
+    }
+    await crop.populate('varieties.primaryUnit varieties.secondaryUnit');
+    const refreshed = crop.varieties.id(varietyId);
+    if (refreshed) {
+      variety.currentStock = refreshed.currentStock;
+      variety.stockValue = refreshed.stockValue;
+      variety.averagePrice = refreshed.averagePrice;
+      variety.stockUpdatedAt = refreshed.stockUpdatedAt;
     }
   }
 

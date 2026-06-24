@@ -261,6 +261,16 @@ export const approveGRN = async (req, res) => {
     // Create batches and update inventory
     for (const item of grn.items) {
       if (item.acceptedQuantity > 0) {
+        if (item.isRamAgriProduct && item.ramAgriCropId && item.ramAgriVarietyId) {
+          const { processRamAgriGrnItem } = await import('../services/ramAgriBatchInventory.service.js');
+          const ramBatch = await processRamAgriGrnItem(item, grn, req.user._id);
+          if (ramBatch) {
+            item.ramAgriBatch = ramBatch._id;
+            item.batchNumber = ramBatch.batchNumber;
+          }
+          continue;
+        }
+
         // Ensure batch number exists - auto-generate if blank
         // batchNumber and lotNumber are treated as the same field
         let batchNumber = item.batchNumber || item.lotNumber;

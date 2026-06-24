@@ -573,6 +573,7 @@ export const createPurchaseOrder = async (req, res) => {
               grnItem.ramAgriVarietyId = poItem.ramAgriVarietyId;
               grnItem.ramAgriCropName = poItem.ramAgriCropName;
               grnItem.ramAgriVarietyName = poItem.ramAgriVarietyName;
+              if (batchNumber) grnItem.batchNumber = batchNumber;
               // Add unit conversion fields for stock updates
               if (poItem.selectedUnitType) {
                 grnItem.selectedUnitType = poItem.selectedUnitType;
@@ -671,8 +672,16 @@ export const createPurchaseOrder = async (req, res) => {
         console.log(`📦 Processing ${savedGRN.items.length} items for GRN approval...`);
         for (const item of savedGRN.items) {
           if (item.acceptedQuantity > 0) {
-            // Skip batch creation for Ram Agri products (they don't use the batch system)
-            if (!item.isRamAgriProduct) {
+            // Ram Agri: create batch + sync variety stock via service
+            if (item.isRamAgriProduct && item.ramAgriCropId && item.ramAgriVarietyId) {
+              const { processRamAgriGrnItem } = await import('../services/ramAgriBatchInventory.service.js');
+              const ramBatch = await processRamAgriGrnItem(item, savedGRN, req.user._id);
+              if (ramBatch) {
+                item.ramAgriBatch = ramBatch._id;
+                item.batchNumber = ramBatch.batchNumber;
+                console.log(`✅ Ram Agri batch ${ramBatch.batchNumber} created for ${item.ramAgriCropName} - ${item.ramAgriVarietyName}`);
+              }
+            } else if (!item.isRamAgriProduct) {
               // Ensure batch number exists
               let batchNumber = item.batchNumber || item.lotNumber;
               if (!batchNumber || !batchNumber.trim()) {
@@ -727,65 +736,8 @@ export const createPurchaseOrder = async (req, res) => {
               item.batchNumber = batchNumber;
             }
             
-            // Update product stock (for regular products) or variety stock (for Ram Agri products)
-            if (item.isRamAgriProduct && item.ramAgriCropId && item.ramAgriVarietyId) {
-              // Update Ram Agri variety stock
-              const { default: RamAgriInputsProduct } = await import('../models/ramAgriInputsProduct.model.js');
-              const mongoose = await import('mongoose');
-              const crop = await RamAgriInputsProduct.findById(item.ramAgriCropId).populate('varieties.primaryUnit varieties.secondaryUnit');
-              if (crop) {
-                const variety = crop.varieties.id(item.ramAgriVarietyId);
-                if (variety) {
-                  const oldStock = variety.currentStock || 0;
-                  
-                  // Convert quantity to primary unit if secondary unit was used
-                  let quantityInPrimaryUnit = item.acceptedQuantity;
-                  
-                  // Method 1: Use selectedUnitType and conversionFactor from item if available (more reliable)
-                  if (item.selectedUnitType === 'secondary' && item.conversionFactor && item.conversionFactor > 0) {
-                    // Convert from secondary to primary: quantity * conversionFactor
-                    quantityInPrimaryUnit = item.acceptedQuantity * item.conversionFactor;
-                    console.log(`🔄 Converting quantity from secondary unit (using item.conversionFactor): ${item.acceptedQuantity} -> ${quantityInPrimaryUnit} (factor: ${item.conversionFactor})`);
-                  } else {
-                    // Method 2: Fallback to checking unit IDs (for backward compatibility)
-                    const itemUnitId = item.unit?._id?.toString() || item.unit?.toString() || item.unit;
-                    const varietyPrimaryUnitId = variety.primaryUnit?._id?.toString() || variety.primaryUnit?.toString() || variety.primaryUnit;
-                    const varietySecondaryUnitId = variety.secondaryUnit?._id?.toString() || variety.secondaryUnit?.toString() || variety.secondaryUnit;
-                    
-                    // If unit matches secondary unit, convert to primary unit
-                    if (varietySecondaryUnitId && itemUnitId && itemUnitId.toString() === varietySecondaryUnitId.toString() && variety.conversionFactor && variety.conversionFactor > 0) {
-                      // Convert from secondary to primary: quantity * conversionFactor
-                      quantityInPrimaryUnit = item.acceptedQuantity * variety.conversionFactor;
-                      console.log(`🔄 Converting quantity from secondary unit (using variety.conversionFactor): ${item.acceptedQuantity} -> ${quantityInPrimaryUnit} (factor: ${variety.conversionFactor})`);
-                    } else {
-                      console.log(`ℹ️ Quantity already in primary unit or no conversion needed. selectedUnitType: ${item.selectedUnitType}, itemUnitId: ${itemUnitId}, varietyPrimary: ${varietyPrimaryUnitId}, varietySecondary: ${varietySecondaryUnitId}`);
-                    }
-                  }
-                  
-                  // Update stock in primary unit (atomic operation)
-                  variety.currentStock = (variety.currentStock || 0) + quantityInPrimaryUnit;
-                  variety.stockValue = (variety.stockValue || 0) + item.amount;
-                  
-                  if (variety.currentStock > 0) {
-                    variety.averagePrice = variety.stockValue / variety.currentStock;
-                  } else {
-                    variety.averagePrice = 0;
-                  }
-                  
-                  crop.updatedBy = req.user._id;
-                  await crop.save();
-                  
-                  console.log(`✅ Updated Ram Agri variety stock: ${item.ramAgriCropName} - ${item.ramAgriVarietyName}: ${oldStock} -> ${variety.currentStock} (added ${quantityInPrimaryUnit} in primary unit)`);
-                  
-                  // Note: Inventory transactions for Ram Agri varieties can be added if needed
-                  // For now, we'll just update the stock
-                } else {
-                  console.warn(`⚠️ Variety ${item.ramAgriVarietyId} not found in crop ${item.ramAgriCropId}`);
-                }
-              } else {
-                console.warn(`⚠️ Crop ${item.ramAgriCropId} not found`);
-              }
-            } else {
+            // Regular product stock update (Ram Agri synced via batch service above)
+            if (!item.isRamAgriProduct) {
               // Update regular product stock
               const product = await Product.findById(item.product);
               if (product) {

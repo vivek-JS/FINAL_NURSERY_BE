@@ -220,6 +220,15 @@ const agriLineItemSchema = new Schema(
     /** Set on order completion when returns are split across lines. */
     returnQuantity: { type: Number, default: 0, min: 0 },
     deliveredQuantity: { type: Number, min: 0 },
+    /** FIFO batch allocations recorded at dispatch (primary unit qty). */
+    batchAllocations: [
+      {
+        batchId: { type: Schema.Types.ObjectId, ref: "RamAgriBatch" },
+        batchNumber: { type: String, trim: true },
+        quantityDeducted: { type: Number, default: 0, min: 0 },
+        quantityReturned: { type: Number, default: 0, min: 0 },
+      },
+    ],
   },
   { _id: true }
 );
@@ -741,6 +750,15 @@ const agriSalesOrderSchema = new Schema(
       default: 0,
       min: 0,
     },
+    /** Legacy single-line orders: batch allocations from dispatch (mirrors lineItems[0]). */
+    batchAllocations: [
+      {
+        batchId: { type: Schema.Types.ObjectId, ref: "RamAgriBatch" },
+        batchNumber: { type: String, trim: true },
+        quantityDeducted: { type: Number, default: 0, min: 0 },
+        quantityReturned: { type: Number, default: 0, min: 0 },
+      },
+    ],
     // Stock returned (added back to inventory)
     stockReturned: {
       type: Boolean,
