@@ -44,6 +44,11 @@ import {
   mergeEditHistoryIntoFilteredBody,
   fireOrderEditWhatsAppAlerts,
 } from "../utils/orderEditHistoryBuilder.js";
+import {
+  buildDispatchLinkClearedOrderPatch,
+  orderRemainingOrBookable,
+  orderStatusFromRemaining,
+} from "../utils/orderDispatchStatus.js";
 
 const updateOrderWithLedgerSync = async ({
   orderId,
@@ -714,33 +719,6 @@ const createDispatch = catchAsync(async (req, res, next) => {
   }
 });
 
-const bookablePlantsTotal = (order) =>
-  Number(order?.numberOfPlants || 0) + Number(order?.additionalPlants || 0);
-
-const orderRemainingOrBookable = (order) => {
-  const rem = order?.remainingPlants;
-  if (rem != null && Number.isFinite(Number(rem))) return Number(rem);
-  return bookablePlantsTotal(order);
-};
-
-/** Remaining plants after nursery dispatch leg: 0 = fully out, full bookable = ready queue. */
-const orderStatusFromRemaining = (order, remaining) => {
-  const r = Number(remaining);
-  if (!Number.isFinite(r) || r < 0) {
-    throw new AppError("Invalid remaining plants on order after dispatch update", 400);
-  }
-  if (r === 0) return "DISPATCHED";
-  const total = bookablePlantsTotal(order);
-  if (r > total) {
-    throw new AppError(
-      `Remaining plants (${r}) exceeds bookable total (${total}) for order ${order?.orderId ?? ""}`,
-      400
-    );
-  }
-  if (r >= total) return "READY_FOR_DISPATCH";
-  return "DISPATCH_PROCESS";
-};
-
 const computeCurrentDispatchIdAfterHistoryChange = (historyArray, dispatchOid) => {
   const hist = Array.isArray(historyArray)
     ? historyArray.filter(
@@ -1001,10 +979,9 @@ const updateDispatch = catchAsync(async (req, res, next) => {
           req,
             contextLabel: "update_dispatch_delete_all_clear_current",
             updateOperation: {
-              $set: {
-                currentDispatchId: null,
-                orderStatus: "READY_FOR_DISPATCH",
-              },
+              $set: buildDispatchLinkClearedOrderPatch(order, {
+                clearCurrentDispatchId: true,
+              }),
             },
           });
         }
@@ -1041,10 +1018,9 @@ const updateDispatch = catchAsync(async (req, res, next) => {
           req,
             contextLabel: "update_dispatch_remove_order_no_hist",
             updateOperation: {
-              $set: {
-                currentDispatchId: null,
-                orderStatus: "READY_FOR_DISPATCH",
-              },
+              $set: buildDispatchLinkClearedOrderPatch(order, {
+                clearCurrentDispatchId: true,
+              }),
             },
           });
         }
@@ -1632,10 +1608,9 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
           req,
             contextLabel: "detach_last_order_clear",
             updateOperation: {
-              $set: {
-                currentDispatchId: null,
-                orderStatus: "READY_FOR_DISPATCH",
-              },
+              $set: buildDispatchLinkClearedOrderPatch(ord, {
+                clearCurrentDispatchId: true,
+              }),
             },
           });
         }
@@ -1677,10 +1652,9 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
           req,
             contextLabel: "detach_order_no_hist",
             updateOperation: {
-              $set: {
-                currentDispatchId: null,
-                orderStatus: "READY_FOR_DISPATCH",
-              },
+              $set: buildDispatchLinkClearedOrderPatch(o, {
+                clearCurrentDispatchId: true,
+              }),
             },
           });
         }
@@ -3001,10 +2975,9 @@ const removeTransport = async (req, res) => {
           req,
             contextLabel: "remove_transport_no_history",
             updateOperation: {
-              $set: {
-                currentDispatchId: null,
-                orderStatus: "READY_FOR_DISPATCH",
-              },
+              $set: buildDispatchLinkClearedOrderPatch(order, {
+                clearCurrentDispatchId: true,
+              }),
             },
           });
         }
@@ -3014,13 +2987,10 @@ const removeTransport = async (req, res) => {
       for (const oid of ids) {
         const o = await Order.findById(oid).session(session);
         if (!o) continue;
-        const patch =
-          String(o.currentDispatchId || "") === String(dispatch._id)
-            ? {
-                currentDispatchId: null,
-                orderStatus: "READY_FOR_DISPATCH",
-              }
-            : { orderStatus: "READY_FOR_DISPATCH" };
+        const patch = buildDispatchLinkClearedOrderPatch(o, {
+          clearCurrentDispatchId:
+            String(o.currentDispatchId || "") === String(dispatch._id),
+        });
         await updateOrderWithLedgerSync({
           orderId: oid,
           existingDoc: o,
