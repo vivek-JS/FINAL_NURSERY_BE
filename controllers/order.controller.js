@@ -24,7 +24,10 @@ import {
   sendOrderDispatchedWhatsAppDelivery1,
   buildWatiSendRecipient,
 } from "../utility/watiMessaging.js";
-import { isBananaPlantName } from "../utility/watiPlantText.js";
+import {
+  isAcceptedWhatsAppPlantName,
+  isBananaPlantName,
+} from "../utility/watiPlantText.js";
 import { getUnclearedPayments as getUnclearedPaymentsService, getPaymentsForApproval as getPaymentsForApprovalService, reconcile as reconcileService } from "../services/paymentReconciliationService.js";
 import { generateQR } from "../services/iciciBankService.js";
 import { normalizeIciciError, saveIciciQrAuditRecord } from "../services/iciciQr.service.js";
@@ -231,6 +234,18 @@ async function sendOrderAcceptedWhatsAppForOrder(order) {
   }
 
   const orderDetails = await buildOrderAcceptedWhatsAppDetails(order);
+
+  if (!isAcceptedWhatsAppPlantName(orderDetails.plantName, orderDetails.plantSubtype)) {
+    return {
+      success: false,
+      skipped: true,
+      reason: "unsupported_plant",
+      statusCode: 400,
+      error: {
+        message: "Order accepted WhatsApp is only configured for Banana and Papaya orders",
+      },
+    };
+  }
 
   const watiTaluka = orderDetails.taluka || resolveOrderTalukaForWati(order);
 
@@ -3855,7 +3870,9 @@ export const sendOrderAcceptedWhatsAppController = catchAsync(async (req, res) =
     const msg =
       result.error?.message ||
       (typeof result.error === "string" ? result.error : "Failed to send message");
-    return res.status(500).json(generateResponse("Error", msg, null, result.error));
+    return res
+      .status(result.statusCode || 500)
+      .json(generateResponse("Error", msg, null, result.error));
   }
 
   return res.status(200).json(

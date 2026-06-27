@@ -4,6 +4,8 @@ import {
   watiPlantAndSubtypeParams,
   WATI_MERGED_SUBTYPE_PLACEHOLDER,
   isBananaPlantName,
+  isPapayaPlantName,
+  isAcceptedWhatsAppPlantName,
 } from "./watiPlantText.js";
 
 export { isBananaPlantName };
@@ -11,8 +13,9 @@ export { isBananaPlantName };
 /** Normalize to 10-digit Indian mobile for logs; API uses 91 prefix. */
 export function normalizeWatiMobile10(mobileNumber) {
   const clean = String(mobileNumber ?? "").replace(/\D/g, "");
+  if (clean.length === 10) return clean;
+  if (clean.length === 11 && clean.startsWith("0")) return clean.slice(1);
   if (clean.length === 12 && clean.startsWith("91")) return clean.slice(2);
-  if (clean.length > 10) return clean.slice(-10);
   return clean;
 }
 
@@ -201,13 +204,22 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
       totalAmount,
     } = orderDetails;
 
+    if (!isAcceptedWhatsAppPlantName(plantName, orderDetails.plantSubtype)) {
+      return {
+        success: false,
+        skipped: true,
+        reason: "unsupported_plant",
+        error: {
+          message: "Order accepted WhatsApp is only configured for Banana and Papaya orders",
+        },
+      };
+    }
+
     const { plantParam, subtypeParam } = watiPlantAndSubtypeParams(
       plantName,
       orderDetails.plantSubtype
     );
-    const isPapayaAccept = /papaya/i.test(
-      `${plantName || ""} ${orderDetails.plantSubtype || ""}`
-    );
+    const isPapayaAccept = isPapayaPlantName(plantName, orderDetails.plantSubtype);
     const acceptPlant = isPapayaAccept ? "Papaya" : plantParam;
     const acceptSubtype = isPapayaAccept ? WATI_MERGED_SUBTYPE_PLACEHOLDER : subtypeParam;
 
