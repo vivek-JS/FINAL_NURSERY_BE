@@ -47,7 +47,19 @@ export function watiPlantAndSubtypeParams(plantNameRaw, subtypeRaw) {
   };
 }
 
-/** Accept / collection WATI is sent only for Banana (केळी) orders. */
+/** Accept / collection WATI is sent for Banana (केळी) orders. */
 export function isBananaPlantName(plantNameRaw, subtypeRaw = "") {
   return /banana|keli|केळ/i.test(`${plantNameRaw ?? ""} ${subtypeRaw ?? ""}`);
+}
+
+/** Papaya accepted-message templates intentionally use merged subtype text. */
+export function isPapayaPlantName(plantNameRaw, subtypeRaw = "") {
+  return /papaya/i.test(`${plantNameRaw ?? ""} ${subtypeRaw ?? ""}`);
+}
+
+export function isAcceptedWhatsAppPlantName(plantNameRaw, subtypeRaw = "") {
+  return (
+    isBananaPlantName(plantNameRaw, subtypeRaw) ||
+    isPapayaPlantName(plantNameRaw, subtypeRaw)
+  );
 }
