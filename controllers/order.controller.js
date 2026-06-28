@@ -43,6 +43,10 @@ import {
   approveFarmerOrderTransferRequest,
   rejectFarmerOrderTransferRequest,
 } from "./farmerPlantOrderLedger.controller.js";
+import {
+  parsePositivePaymentAmount,
+  parseQrPaymentCallbackPayload,
+} from "../utils/paymentValidation.js";
 
 function watiDigitsOk(n) {
   return n != null && String(n).replace(/\D/g, "").length >= 10;
@@ -1098,9 +1102,9 @@ const addNewPayment = catchAsync(async (req, res, next) => {
       console.warn("Order has no dealer field, will check salesPerson");
     }
 
-    // Convert paidAmount to number
-    const amount = Number(paidAmount);
-    if (isNaN(amount)) {
+    // Payments drive wallet and ledger balances; non-positive values corrupt both.
+    const amount = parsePositivePaymentAmount(paidAmount);
+    if (amount == null) {
       console.error("Invalid payment amount");
       return res.status(400).json({ message: "Invalid payment amount" });
     }
@@ -1384,9 +1388,8 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
     console.log("- order.farmer name:", order.farmer?.name);
     console.log("- order.farmer village:", order.farmer?.village);
 
-    // Convert paidAmount to number
-    const amount = Number(paidAmount);
-    if (isNaN(amount)) {
+    const amount = parsePositivePaymentAmount(paidAmount);
+    if (amount == null) {
       return res.status(400).json({ message: "Invalid payment amount" });
     }
 
@@ -1541,9 +1544,15 @@ const updatePaymentStatus = async (req, res) => {
       }
     }
 
+    if (paidAmount !== undefined && parsePositivePaymentAmount(paidAmount) == null) {
+      return res
+        .status(400)
+        .json({ message: "Payment amount must be greater than 0" });
+    }
+
     // Update payment fields if provided
     if (paidAmount !== undefined) {
-      payment.paidAmount = Number(paidAmount);
+      payment.paidAmount = parsePositivePaymentAmount(paidAmount);
     }
     if (paymentDate !== undefined) {
       payment.paymentDate = new Date(paymentDate);
@@ -1567,9 +1576,9 @@ const updatePaymentStatus = async (req, res) => {
       payment.chequeNumber = chequeNumber;
     }
 
-    // Ensure amount is a number
-    const amount = Number(payment.paidAmount);
-    if (isNaN(amount)) {
+    // Ensure amount is a positive number before any wallet or ledger side effects.
+    const amount = parsePositivePaymentAmount(payment.paidAmount);
+    if (amount == null) {
       return res
         .status(400)
         .json({ message: "Invalid payment amount in record" });
@@ -4105,12 +4114,11 @@ const generatePaymentQR = catchAsync(async (req, res) => {
  * Body: { referenceId?, utr?, amount } (referenceId or utr+amount). Idempotent: already BANK_VERIFIED/COLLECTED returns 200.
  */
 const handleQRPaymentCallback = catchAsync(async (req, res) => {
-  const { referenceId, utr, amount } = req.body || {};
-  const ref = (referenceId && String(referenceId).trim()) || (utr && String(utr).trim());
-  const amt = amount != null ? Math.round(Number(amount) * 100) / 100 : null;
-  if (!ref && amt == null) {
-    return res.status(400).json({ success: false, message: "referenceId or (utr and amount) required" });
+  const parsed = parseQrPaymentCallbackPayload(req.body || {});
+  if (!parsed.ok) {
+    return res.status(parsed.status).json({ success: false, message: parsed.message });
   }
+  const { ref, utr, amount: amt } = parsed;
   const now = new Date();
   const buildQuery = () => {
     const q = { "payment.paymentStatus": "PENDING" };
