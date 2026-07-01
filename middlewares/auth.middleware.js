@@ -96,11 +96,10 @@ export const authorizeRoles = (roles) => {
       );
     }
 
-    // Prioritize role over jobTitle for authorization (role = security, jobTitle = display)
-    const userRole = req.user.role || req.user.jobTitle;
     const requiredRoles = Array.isArray(roles) ? roles : [roles];
+    const candidates = [req.user.role, req.user.jobTitle].filter(Boolean);
 
-    if (!requiredRoles.includes(userRole)) {
+    if (!candidates.some((c) => requiredRoles.includes(c))) {
       return res.status(403).json(
         generateResponse('error', 'Insufficient permissions', null, null)
       );

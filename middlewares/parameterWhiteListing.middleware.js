@@ -318,6 +318,7 @@ const parameterWhiteListing = (req, res, next) => {
       orderListPath.includes("/order/admin-mis-due") ||
       orderListPath.includes("/order/admin-mis-orders") ||
       orderListPath.includes("/order/central-report") ||
+      orderListPath.includes("/order/delivery-report") ||
       orderListPath.includes("/ceo-report"))
   ) {
     return next();

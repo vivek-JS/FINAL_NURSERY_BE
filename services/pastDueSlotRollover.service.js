@@ -463,7 +463,7 @@ export async function rolloverOneOrder(order, sourceDetails, targetMeta, session
   };
 
   const preservedOldDelivery = order.dispatchedFromAnotherSlot
-    ? order.oldDeliveryDate
+    ? order.oldDeliveryDate || order.deliveryDate || null
     : order.deliveryDate || null;
   const preservedOriginalSlot = order.dispatchedFromAnotherSlot
     ? order.originalBookingSlot || order.bookingSlot

@@ -3857,10 +3857,13 @@ const getAll = (Model, modelName) =>
             ],
           },
         });
-      } else if (
-        slotStatScope === "remaining" ||
-        slotStatScope === "remaining_native"
-      ) {
+      } else if (slotStatScope === "remaining") {
+        pipeline.push({
+          $match: {
+            orderStatus: { $in: ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH"] },
+          },
+        });
+      } else if (slotStatScope === "remaining_native") {
         pipeline.push({
           $match: {
             orderStatus: { $in: ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH"] },

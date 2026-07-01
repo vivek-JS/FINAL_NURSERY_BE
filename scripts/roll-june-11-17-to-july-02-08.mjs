@@ -106,7 +106,6 @@ async function main() {
     bookingSlot: { $in: sourceSlotIds },
     orderStatus: { $in: DUE_DELIVERY_STATUSES },
     $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
-    pastDueSlotRollover: { $ne: true },
   };
 
   const orders = await Order.find(eligibleMatch)
