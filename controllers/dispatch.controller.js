@@ -4131,5 +4131,4 @@ export {
   assignRoute,
   bulkMarkReady,
   detachOrderFromDispatch,
-  updateOrderWithLedgerSync,
 };
