@@ -67,11 +67,25 @@ function rolledCohortBranch(rangeStart, rangeEnd, includePastDue) {
   };
 }
 
-function deliveryChangedBranch(rangeStart, rangeEnd) {
-  return {
+function deliveryChangedBranch(rangeStart, rangeEnd, includePastDue) {
+  const changeInRange = {
     deliveryChanges: {
       $elemMatch: { createdAt: { $gte: rangeStart, $lte: rangeEnd } },
     },
+  };
+  if (!includePastDue) {
+    // deliveryDate range enforced on parent match; only need change-in-range here.
+    return changeInRange;
+  }
+  return {
+    $or: [
+      { ...deliveryInRange(rangeStart, rangeEnd), ...changeInRange },
+      {
+        ...duePipelineMatch(),
+        deliveryDate: { $lt: rangeStart, $ne: null },
+        ...changeInRange,
+      },
+    ],
   };
 }
 
@@ -286,7 +300,7 @@ export function parseDeliveryReportQuery(query = {}) {
     cohortBranches.push(rolledCohortBranch(start, end, includePastDue));
   }
   if (cohorts.includes("deliveryChanged")) {
-    cohortBranches.push(deliveryChangedBranch(start, end));
+    cohortBranches.push(deliveryChangedBranch(start, end, includePastDue));
   }
 
   const match = {
@@ -295,6 +309,8 @@ export function parseDeliveryReportQuery(query = {}) {
     plantName: plantId,
     ...(subtypeId ? { plantSubtype: subtypeId } : {}),
     ...(statuses.length ? { orderStatus: { $in: statuses } } : {}),
+    // Hard delivery-date window unless backlog toggle is on (cohort $or cannot bypass range).
+    ...(!includePastDue ? deliveryInRange(start, end) : {}),
     $or: cohortBranches,
   };
 
@@ -533,8 +549,8 @@ export async function fetchDeliveryReportOrders(query) {
       advanceCollected: adv.completed,
       advancePending: adv.pending,
       cohortTags: [
-        !o._isRolled ? "native" : null,
-        o._isRolled ? "rolled" : null,
+        o._deliveryInRange && !o._isRolled ? "native" : null,
+        o._deliveryInRange && o._isRolled ? "rolled" : null,
         o._hasChangeInRange ? "deliveryChanged" : null,
       ].filter(Boolean),
       plants: (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0),
