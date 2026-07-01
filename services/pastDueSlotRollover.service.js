@@ -446,7 +446,7 @@ async function shouldSkipRollover(order, asOfDate, slotById, rolloverTargetsByPs
   return !isDateOutsideSlotWindow(asOf, window);
 }
 
-async function rolloverOneOrder(order, sourceDetails, targetMeta, session) {
+export async function rolloverOneOrder(order, sourceDetails, targetMeta, session) {
   const sourceSlotId = order.bookingSlot;
   const targetSlotId = targetMeta.slotId;
   const orderPlants = orderPlantCount(order);
@@ -469,10 +469,10 @@ async function rolloverOneOrder(order, sourceDetails, targetMeta, session) {
     ? order.originalBookingSlot || order.bookingSlot
     : order.bookingSlot;
 
+  const now = new Date();
   const newDeliveryDate =
     targetMeta.deliveryDate ||
     deliveryDateForRolloverTarget(targetDetails.slot, now);
-  const now = new Date();
   const isReadyPlantsOrder = !!(order.productMappingId && order.productName);
 
   const sourceSlotObjectId = new mongoose.Types.ObjectId(String(sourceSlotId));

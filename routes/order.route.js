@@ -47,6 +47,8 @@ import {
   getAdminSalesMis,
   getAdminDealerMis,
   getAdminDueMis,
+  getDeliveryReportSummary,
+  getDeliveryReportOrders,
 } from "../controllers/order.controller.js";
 import {
   getFarmerPlantOrderDetails,
@@ -141,6 +143,30 @@ router
     "/admin-mis-due",
     authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
     getAdminDueMis
+  )
+  .get(
+    "/delivery-report/summary",
+    authorizeRoles([
+      "ADMIN",
+      "SUPER_ADMIN",
+      "SUPERADMIN",
+      "OFFICE_ADMIN",
+      "OFFICEADMIN",
+      "DISPATCH_MANAGER",
+    ]),
+    getDeliveryReportSummary
+  )
+  .get(
+    "/delivery-report/orders",
+    authorizeRoles([
+      "ADMIN",
+      "SUPER_ADMIN",
+      "SUPERADMIN",
+      "OFFICE_ADMIN",
+      "OFFICEADMIN",
+      "DISPATCH_MANAGER",
+    ]),
+    getDeliveryReportOrders
   )
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)

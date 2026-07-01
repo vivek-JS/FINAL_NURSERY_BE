@@ -58,6 +58,10 @@ import {
 import { fetchAdminMisOrders } from "../services/adminMisOrders.service.js";
 import { fetchAdminSalesSheet } from "../services/adminSalesSheet.service.js";
 import {
+  fetchDeliveryReportSummary,
+  fetchDeliveryReportOrders,
+} from "../services/deliveryReport.service.js";
+import {
   resolveOrderStatusTokens,
   buildOrderStatusDateMatch,
   parseOrderListDateDdMmYyyy,
@@ -6445,6 +6449,30 @@ const getAdminMisOrders = catchAsync(async (req, res) => {
   });
 });
 
+/** Delivery report stepper — summary KPIs for filtered cohort. */
+const getDeliveryReportSummary = catchAsync(async (req, res) => {
+  const result = await fetchDeliveryReportSummary(req.query);
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({
+      success: false,
+      message: result.error,
+    });
+  }
+  return res.status(200).json({ success: true, data: result.data });
+});
+
+/** Delivery report stepper — paginated order list. */
+const getDeliveryReportOrders = catchAsync(async (req, res) => {
+  const result = await fetchDeliveryReportOrders(req.query);
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({
+      success: false,
+      message: result.error,
+    });
+  }
+  return res.status(200).json({ success: true, data: result.data });
+});
+
 /** Sales Sheet export — all dispatched ("Out") orders for the range as flat rows. */
 const getAdminSalesSheet = catchAsync(async (req, res) => {
   const result = await fetchAdminSalesSheet(req.query);
@@ -6507,4 +6535,6 @@ export {
   getAdminDueMis,
   getAdminMisOrders,
   getAdminSalesSheet,
+  getDeliveryReportSummary,
+  getDeliveryReportOrders,
 };
