@@ -3949,24 +3949,6 @@ const getAll = (Model, modelName) =>
         }
       }
 
-      if (plantId) {
-        if (!mongoose.Types.ObjectId.isValid(plantId)) {
-          throw new AppError("Invalid plantId provided", 400);
-        }
-        pipeline.push({
-          $match: { plantName: new mongoose.Types.ObjectId(plantId) },
-        });
-      }
-
-      if (subtypeId) {
-        if (!mongoose.Types.ObjectId.isValid(subtypeId)) {
-          throw new AppError("Invalid subtypeId provided", 400);
-        }
-        pipeline.push({
-          $match: { plantSubtype: new mongoose.Types.ObjectId(subtypeId) },
-        });
-      }
-
       if (expectedNursery) {
         const nurseryCode = String(expectedNursery).trim().toUpperCase();
         if (nurseryCode) {
@@ -4071,6 +4053,25 @@ const getAll = (Model, modelName) =>
           });
         }
       }
+    }
+
+    // Plant/subtype scope — required for slot stat tiles (delivery-window cohort matches GET slots).
+    if (plantId) {
+      if (!mongoose.Types.ObjectId.isValid(plantId)) {
+        throw new AppError("Invalid plantId provided", 400);
+      }
+      pipeline.push({
+        $match: { plantName: new mongoose.Types.ObjectId(plantId) },
+      });
+    }
+
+    if (subtypeId) {
+      if (!mongoose.Types.ObjectId.isValid(subtypeId)) {
+        throw new AppError("Invalid subtypeId provided", 400);
+      }
+      pipeline.push({
+        $match: { plantSubtype: new mongoose.Types.ObjectId(subtypeId) },
+      });
     }
 
     // Dispatched orders: date range on order document (apply before heavy $lookups; same logic as legacy late-stage match)
