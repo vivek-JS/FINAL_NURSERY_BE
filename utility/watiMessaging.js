@@ -21,7 +21,7 @@ export function resolveWatiSendMobile(recipient) {
   if (!recipient) return null;
   const raw = recipient.mobileNumber ?? recipient.phoneNumber;
   const ten = normalizeWatiMobile10(raw);
-  return ten.length === 10 ? ten : null;
+  return ten?.length === 10 ? ten : null;
 }
 
 export function buildWatiSendRecipient(recipient, extra = {}) {
