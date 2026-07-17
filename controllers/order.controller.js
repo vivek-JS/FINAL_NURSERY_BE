@@ -23,6 +23,7 @@ import {
   sendOrderAcceptedWhatsApp,
   sendOrderDispatchedWhatsAppDelivery1,
   buildWatiSendRecipient,
+  normalizeWatiMobile10,
 } from "../utility/watiMessaging.js";
 import { isBananaPlantName } from "../utility/watiPlantText.js";
 import { getUnclearedPayments as getUnclearedPaymentsService, getPaymentsForApproval as getPaymentsForApprovalService, reconcile as reconcileService } from "../services/paymentReconciliationService.js";
@@ -45,13 +46,11 @@ import {
 } from "./farmerPlantOrderLedger.controller.js";
 
 function watiDigitsOk(n) {
-  return n != null && String(n).replace(/\D/g, "").length >= 10;
+  return normalizeWatiMobile10(n)?.length === 10;
 }
 
 function watiPhoneKey(n) {
-  const d = String(n).replace(/\D/g, "");
-  if (d.length >= 12 && d.startsWith("91")) return d.slice(-10);
-  return d.slice(-10);
+  return normalizeWatiMobile10(n) || "";
 }
 
 function watiPhonesDiffer(a, b) {
