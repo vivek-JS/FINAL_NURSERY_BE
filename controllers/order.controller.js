@@ -43,6 +43,12 @@ import {
   approveFarmerOrderTransferRequest,
   rejectFarmerOrderTransferRequest,
 } from "./farmerPlantOrderLedger.controller.js";
+import {
+  buildQrPaymentCallbackQuery,
+  normalizeQrPaymentCallbackInput,
+  parsePositivePaymentAmount,
+  qrPaymentMatchesCallback,
+} from "../utils/paymentGuards.js";
 
 function watiDigitsOk(n) {
   return n != null && String(n).replace(/\D/g, "").length >= 10;
@@ -1099,10 +1105,10 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     }
 
     // Convert paidAmount to number
-    const amount = Number(paidAmount);
-    if (isNaN(amount)) {
+    const amount = parsePositivePaymentAmount(paidAmount);
+    if (amount == null) {
       console.error("Invalid payment amount");
-      return res.status(400).json({ message: "Invalid payment amount" });
+      return res.status(400).json({ message: "Payment amount must be greater than 0" });
     }
 
     // Set payment status based on payment type and user role
@@ -4100,37 +4106,30 @@ const generatePaymentQR = catchAsync(async (req, res) => {
 
 /**
  * POST /api/v1/order/payment/qr-callback
- * Webhook for ICICI QR payment notification. Match by referenceId or UTR+amount; set BANK_VERIFIED if PENDING and not expired.
+ * Webhook for ICICI QR payment notification. Match by referenceId/UTR plus amount; set BANK_VERIFIED if PENDING and not expired.
  * referenceId should be ICICI merchantTranId (same value stored as payment.qrReferenceId when QR was generated).
- * Body: { referenceId?, utr?, amount } (referenceId or utr+amount). Idempotent: already BANK_VERIFIED/COLLECTED returns 200.
+ * Body: { referenceId?, utr?, amount } where a reference value and positive amount are required.
  */
 const handleQRPaymentCallback = catchAsync(async (req, res) => {
-  const { referenceId, utr, amount } = req.body || {};
-  const ref = (referenceId && String(referenceId).trim()) || (utr && String(utr).trim());
-  const amt = amount != null ? Math.round(Number(amount) * 100) / 100 : null;
-  if (!ref && amt == null) {
-    return res.status(400).json({ success: false, message: "referenceId or (utr and amount) required" });
+  const callbackInput = normalizeQrPaymentCallbackInput(req.body);
+  const { utr } = callbackInput;
+
+  if (!callbackInput.isValid) {
+    return res.status(400).json({
+      success: false,
+      message: "referenceId or utr plus positive amount required",
+    });
   }
+
   const now = new Date();
-  const buildQuery = () => {
-    const q = { "payment.paymentStatus": "PENDING" };
-    if (ref) q["payment.qrReferenceId"] = ref;
-    if (amt != null) q["payment.paidAmount"] = amt;
-    return q;
-  };
+  const buildQuery = () => buildQrPaymentCallbackQuery(callbackInput);
   const tryOrder = async () => {
     const orderDoc = await Order.findOne(buildQuery()).select("payment");
     if (!orderDoc) return false;
     for (const p of orderDoc.payment || []) {
-      if (p.paymentStatus !== "PENDING") continue;
-      if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
-      const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
-      const matchAmount = amt != null && p.paidAmount === amt;
-      if (!matchRef && !matchAmount) continue;
-      if (ref && !matchRef) continue;
-      if (amt != null && !matchAmount) continue;
+      if (!qrPaymentMatchesCallback(p, callbackInput, now)) continue;
       p.paymentStatus = "BANK_VERIFIED";
-      if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
+      if (utr) p.transactionId = utr;
       await orderDoc.save();
       return true;
     }
@@ -4142,15 +4141,9 @@ const handleQRPaymentCallback = catchAsync(async (req, res) => {
     const agriDoc = await AgriSalesOrder.findOne(buildQuery()).select("payment");
     if (agriDoc) {
       for (const p of agriDoc.payment || []) {
-        if (p.paymentStatus !== "PENDING") continue;
-        if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
-        const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
-        const matchAmount = amt != null && p.paidAmount === amt;
-        if (!matchRef && !matchAmount) continue;
-        if (ref && !matchRef) continue;
-        if (amt != null && !matchAmount) continue;
+        if (!qrPaymentMatchesCallback(p, callbackInput, now)) continue;
         p.paymentStatus = "BANK_VERIFIED";
-        if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
+        if (utr) p.transactionId = utr;
         await agriDoc.save();
         updated = true;
         break;
