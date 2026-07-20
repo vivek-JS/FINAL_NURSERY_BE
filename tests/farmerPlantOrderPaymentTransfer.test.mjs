@@ -41,6 +41,16 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
     );
   });
 
+  it("dealer orderFor identity does not make a dealer order eligible for farmer plant ledger", () => {
+    assert.equal(
+      shouldLogFarmerPlantLedger({
+        dealerOrder: true,
+        orderFor: { name: "Farmer Customer", mobileNumber: "9876543210" },
+      }),
+      false
+    );
+  });
+
   it("Order payment sub-schema includes transferredFrom trace fields", () => {
     const payPath = Order.schema.path("payment");
     const inner = payPath?.schema;
