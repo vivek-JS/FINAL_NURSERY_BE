@@ -11,9 +11,10 @@ export { isBananaPlantName };
 /** Normalize to 10-digit Indian mobile for logs; API uses 91 prefix. */
 export function normalizeWatiMobile10(mobileNumber) {
   const clean = String(mobileNumber ?? "").replace(/\D/g, "");
+  if (clean.length === 10) return clean;
   if (clean.length === 12 && clean.startsWith("91")) return clean.slice(2);
-  if (clean.length > 10) return clean.slice(-10);
-  return clean;
+  if (clean.length === 11 && clean.startsWith("0")) return clean.slice(1);
+  return clean.length < 10 ? clean : "";
 }
 
 /** Farmer uses mobileNumber; salesperson/dealer copy may use phoneNumber. */

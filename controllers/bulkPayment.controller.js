@@ -41,8 +41,20 @@ export const createBulkPayment = catchAsync(async (req, res, next) => {
     return next(new AppError("totalAmount and at least one allocation are required", 400));
   }
 
-  const sum = allocations.reduce((s, a) => s + (Number(a.amount) || 0), 0);
   const total = Number(totalAmount);
+  if (!Number.isFinite(total) || total <= 0) {
+    return next(new AppError("totalAmount must be greater than 0", 400));
+  }
+
+  const hasInvalidAllocation = allocations.some((a) => {
+    const amount = Number(a.amount);
+    return !Number.isFinite(amount) || amount <= 0;
+  });
+  if (hasInvalidAllocation) {
+    return next(new AppError("Each allocation amount must be greater than 0", 400));
+  }
+
+  const sum = allocations.reduce((s, a) => s + (Number(a.amount) || 0), 0);
   if (Math.abs(sum - total) > 0.01) {
     return next(new AppError(`Sum of allocations (${sum}) must equal totalAmount (${total})`, 400));
   }
