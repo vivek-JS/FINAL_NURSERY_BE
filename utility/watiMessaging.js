@@ -12,7 +12,8 @@ export { isBananaPlantName };
 export function normalizeWatiMobile10(mobileNumber) {
   const clean = String(mobileNumber ?? "").replace(/\D/g, "");
   if (clean.length === 12 && clean.startsWith("91")) return clean.slice(2);
-  if (clean.length > 10) return clean.slice(-10);
+  if (clean.length === 11 && clean.startsWith("0")) return clean.slice(1);
+  if (clean.length > 10) return "";
   return clean;
 }
 

@@ -19,6 +19,10 @@ import {
 import { formatPaymentStatsWhatsApp } from "../services/whatsappReportData.service.js";
 import { isPhoneAllowedForReportWizard } from "../utility/whatsappReportWizardAllowlist.js";
 import { normalizeWhatsAppNumberForWati } from "../utility/watiInboundPayload.js";
+import {
+  normalizeWatiMobile10,
+  resolveWatiSendMobile,
+} from "../utility/watiMessaging.js";
 
 test("report wizard allowlist (default numbers)", () => {
   assert.equal(isPhoneAllowedForReportWizard("7588686453"), true);
@@ -37,6 +41,14 @@ test("report wizard allowlist (default numbers)", () => {
   );
   assert.equal(isPhoneAllowedForReportWizard("9999999999"), false);
   assert.equal(isPhoneAllowedForReportWizard("7588686450"), false);
+});
+
+test("WATI outbound mobile normalization rejects ambiguous overlong numbers", () => {
+  assert.equal(normalizeWatiMobile10("9876543210"), "9876543210");
+  assert.equal(normalizeWatiMobile10("919876543210"), "9876543210");
+  assert.equal(normalizeWatiMobile10("09876543210"), "9876543210");
+  assert.equal(normalizeWatiMobile10("9198765432109"), "");
+  assert.equal(resolveWatiSendMobile({ phoneNumber: "9198765432109" }), null);
 });
 
 test("isReportEntry recognises starter phrases", () => {

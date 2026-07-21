@@ -26,4 +26,15 @@ describe("farmer order transfer routes", () => {
       /\/farmer-plant-ledger\/transfer-requests\/:id\/reject\",\s*requirePaymentAccess,\s*rejectFarmerOrderTransferRequest/
     );
   });
+
+  it("protects dealer ledger repair with SUPER_ADMIN authorization", () => {
+    const routeSource = readFileSync(
+      resolve(process.cwd(), "routes/user.route.js"),
+      "utf8"
+    );
+    assert.match(
+      routeSource,
+      /\/dealers\/:dealerId\/ledger\/repair\",\s*authenticateToken,\s*authorizeRoles\(\["SUPER_ADMIN"\]\),\s*postRepairDealerLedger/
+    );
+  });
 });

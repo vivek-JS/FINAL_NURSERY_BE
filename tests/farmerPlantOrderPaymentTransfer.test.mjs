@@ -41,6 +41,19 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
     );
   });
 
+  it("dealer orders with orderFor identity still do not use farmer plant ledger", () => {
+    assert.equal(
+      shouldLogFarmerPlantLedger({
+        dealerOrder: true,
+        orderFor: {
+          name: "Ram Patil",
+          mobileNumber: "9876543210",
+        },
+      }),
+      false
+    );
+  });
+
   it("Order payment sub-schema includes transferredFrom trace fields", () => {
     const payPath = Order.schema.path("payment");
     const inner = payPath?.schema;
