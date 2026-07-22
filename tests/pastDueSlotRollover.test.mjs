@@ -129,6 +129,58 @@ describe("pastDueSlotRollover", () => {
     assert.equal(isSlotContainingDate(slots[1], asOf), true);
   });
 
+  it("Off today window is still current and rollover target (not next open)", () => {
+    const july6 = new Date("2026-07-06T12:00:00+05:30");
+    const plantSlots = [
+      {
+        _id: "ps1",
+        plantId: "p1",
+        year: 2026,
+        subtypeSlots: [
+          {
+            subtypeId: "st1",
+            slots: [
+              {
+                _id: "jun",
+                startDay: "01-06-2026",
+                endDay: "10-06-2026",
+                status: true,
+              },
+              {
+                _id: "jul",
+                startDay: "01-07-2026",
+                endDay: "15-07-2026",
+                status: false,
+              },
+              {
+                _id: "aug",
+                startDay: "01-08-2026",
+                endDay: "15-08-2026",
+                status: true,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const slots = plantSlots[0].subtypeSlots[0].slots;
+    assert.equal(findCurrentSlotIdForGroup(slots, july6), "jul");
+
+    const { slotsByPlantSubtype, slotById } = buildSlotRolloverIndexes(
+      plantSlots,
+      july6
+    );
+    assert.ok(slotById.has("jul"), "Off today must remain in rollover index");
+    const target = findRolloverTargetSlotForSubtype(
+      slotsByPlantSubtype,
+      "p1",
+      "st1",
+      july6
+    );
+    assert.equal(target.slotId, "jul");
+    assert.notEqual(target.slotId, "aug");
+  });
+
   it("isSlotActive false when end before asOf", () => {
     assert.equal(
       isSlotActive({ startDay: "01-04-2026", endDay: "07-04-2026" }, asOf),

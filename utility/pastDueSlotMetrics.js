@@ -120,7 +120,7 @@ export function aggregatePastDueMetricsForSlotGroup(slots, ordersBySlot, asOfDat
   const pendingBySlotMap = new Map();
 
   for (const slot of slots || []) {
-    if (slot.status === false) continue;
+    // Include Off/closed — pending/rolled pills attach to running window regardless of status.
     const slotId = slot._id?.toString?.() || String(slot._id);
     const orders = ordersBySlot.get(slotId) || [];
     const isCurrent = slotId === currentSlotId;

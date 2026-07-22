@@ -75,6 +75,7 @@ import {
   emitPlantOrderCreatedEvents,
   emitPlantOrderUpdateEvents,
 } from "../utils/orderEventDualWrite.js";
+import { istTodayBounds } from "../utility/queryDateRange.js";
 
 const getSlotAvailableForBooking = (slot) =>
   Math.max(0, resolveSlotBufferFields(slot).availablePlants);
@@ -491,6 +492,25 @@ const createOne = (Model, modelName) =>
 
       if (orderData.orderFor != null) {
         req.body.orderFor = orderData.orderFor;
+      }
+
+      // Parse sowingPlan (seed source / company + raising packets) from FormData JSON
+      if (orderData.sowingPlan != null && typeof orderData.sowingPlan === "string") {
+        const raw = orderData.sowingPlan.trim();
+        if (raw === "" || raw === "null" || raw === "undefined") {
+          delete orderData.sowingPlan;
+        } else {
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              orderData.sowingPlan = parsed;
+            } else {
+              delete orderData.sowingPlan;
+            }
+          } catch (e) {
+            delete orderData.sowingPlan;
+          }
+        }
       }
 
       const numPlants = Number(numberOfPlants);
@@ -3512,11 +3532,10 @@ const getAll = (Model, modelName) =>
       }
     }
 
-    const todayUtcStart = new Date();
-    todayUtcStart.setUTCHours(0, 0, 0, 0);
+    const { start: todayIstStart } = istTodayBounds();
     const readyDispatchPastDueRankExpr = {
       $let: {
-        vars: { todayStart: { $literal: todayUtcStart } },
+        vars: { todayStart: { $literal: todayIstStart } },
         in: {
           $cond: [
             {

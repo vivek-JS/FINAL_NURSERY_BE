@@ -122,9 +122,112 @@ const sowingRequestSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    laboursLadies: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    laboursGents: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    completionPhotos: [
+      {
+        url: { type: String, required: true },
+        caption: { type: String, default: "" },
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
+    completionNotes: {
+      type: String,
+      default: "",
+    },
+    /** Pollyhouse / shade where sowing was done */
+    shedName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    completedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    /** Snapshot for packet vs sow reports */
+    packetsIssued: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    packetsUsed: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    packetsReturned: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    returnRequestIds: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "ReturnRequest",
+      },
+    ],
+    /** Append-only event log for audit / future reports */
+    completionEvents: [
+      {
+        type: {
+          type: String,
+          enum: [
+            "SOW_STARTED",
+            "PLANTS_SOWED",
+            "PACKETS_USED",
+            "PACKETS_RETURNED",
+            "INVENTORY_RESTORED",
+            "ORDERS_MARKED_SOWED",
+            "LABOUR_RECORDED",
+            "SOW_COMPLETED",
+            "PHOTO_ADDED",
+            "NOTE",
+          ],
+          required: true,
+        },
+        at: { type: Date, default: Date.now },
+        by: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        quantity: { type: Number, default: 0 },
+        unit: { type: String, default: "" },
+        message: { type: String, default: "" },
+        meta: { type: mongoose.Schema.Types.Mixed },
+      },
+    ],
     linkedSlotIds: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: 'PlantSlot',
+    }],
+    seedSource: {
+      type: String,
+      enum: ['COMPANY', 'RAISING', 'MIXED'],
+      default: 'COMPANY',
+    },
+    packetsFromCompany: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    packetsFromRaising: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    raisingIntakeIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'RaisingSeedIntake',
+    }],
+    linkedOrderIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Order',
     }],
     isExcessiveSowing: {
       type: Boolean,
@@ -162,6 +265,9 @@ sowingRequestSchema.index({ plantId: 1, subtypeId: 1 });
 sowingRequestSchema.index({ status: 1 });
 sowingRequestSchema.index({ requestedDate: -1 });
 sowingRequestSchema.index({ productId: 1 });
+sowingRequestSchema.index({ linkedOrderIds: 1 });
+sowingRequestSchema.index({ sowingCompleted: 1, sowingCompletedDate: -1 });
+sowingRequestSchema.index({ status: 1, sowingCompleted: 1 });
 
 const SowingRequest = mongoose.model('SowingRequest', sowingRequestSchema);
 

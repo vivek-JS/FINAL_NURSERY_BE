@@ -42,7 +42,7 @@ export const MIS_DELIVERY_METRICS = {
     label: "Delivery total",
     excludedStatuses: DELIVERY_TOTAL_EXCLUDED_STATUSES,
     description:
-      "Daily/sales footer: delivery in range (excl. DISPATCHED, COMPLETED) OR current FARM_READY OR RFD. Variety row: delivery in range only (excl. DISPATCHED, COMPLETED). Out/Done columns are separate.",
+      "Orders with delivery date in the selected IST range (excl. DISPATCHED, COMPLETED). Out/Done columns are separate transition metrics.",
   },
   accepted: {
     kind: "status_and_date",
@@ -52,16 +52,18 @@ export const MIS_DELIVERY_METRICS = {
     description: "Delivery date in range and orderStatus ACCEPTED.",
   },
   farmReady: {
-    kind: "global_status",
+    kind: "status_and_date",
     label: "Farm ready",
     status: "FARM_READY",
-    description: "All orders currently FARM_READY (no delivery-date filter). Same count on each daily row.",
+    dateField: "deliveryDate",
+    description: "Delivery date in range and orderStatus FARM_READY.",
   },
   readyForDispatch: {
-    kind: "global_status",
+    kind: "status_and_date",
     label: "Ready for dispatch",
     status: "READY_FOR_DISPATCH",
-    description: "All orders currently READY_FOR_DISPATCH (no delivery-date filter).",
+    dateField: "deliveryDate",
+    description: "Delivery date in range and orderStatus READY_FOR_DISPATCH.",
   },
   dispatchProcess: {
     kind: "pipeline_by_delivery",

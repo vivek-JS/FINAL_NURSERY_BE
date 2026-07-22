@@ -40,7 +40,20 @@ const enrichRequestsWithBufferContext = async (requests) => {
 // Create Sowing Request from today's sowing cards
 export const createSowingRequest = async (req, res) => {
   try {
-    const { plantId, subtypeId, packetsNeeded, packetsRequested, notes, slotIds } = req.body;
+    const {
+      plantId,
+      subtypeId,
+      productId,
+      packetsNeeded,
+      packetsRequested,
+      notes,
+      slotIds,
+      seedSource,
+      packetsFromCompany,
+      packetsFromRaising,
+      raisingIntakeIds,
+      linkedOrderIds,
+    } = req.body;
 
     if (!plantId || !subtypeId || !packetsNeeded) {
       return res.status(400).json({
@@ -49,9 +62,25 @@ export const createSowingRequest = async (req, res) => {
       });
     }
 
+    const fromCompany = Number(packetsFromCompany);
+    const fromRaising = Number(packetsFromRaising);
+    const hasSplit =
+      (Number.isFinite(fromCompany) && fromCompany > 0) ||
+      (Number.isFinite(fromRaising) && fromRaising > 0);
+
     // packetsRequested defaults to packetsNeeded if not provided
-    const requested = packetsRequested || packetsNeeded;
+    const requested = hasSplit
+      ? (Number.isFinite(fromCompany) ? fromCompany : 0) +
+        (Number.isFinite(fromRaising) ? fromRaising : 0)
+      : packetsRequested || packetsNeeded;
     const excess = Math.max(0, requested - packetsNeeded);
+
+    let resolvedSource = seedSource || 'COMPANY';
+    if (hasSplit) {
+      if ((fromCompany || 0) > 0 && (fromRaising || 0) > 0) resolvedSource = 'MIXED';
+      else if ((fromRaising || 0) > 0) resolvedSource = 'RAISING';
+      else resolvedSource = 'COMPANY';
+    }
 
     // Get plant and subtype info
     const plant = await PlantCms.findById(plantId).select('name subtypes').lean();
@@ -72,17 +101,38 @@ export const createSowingRequest = async (req, res) => {
       });
     }
 
-    // Find product linked to this plant and subtype
-    const product = await Product.findOne({
-      plantId: new mongoose.Types.ObjectId(plantId),
-      subtypeId: new mongoose.Types.ObjectId(subtypeId),
-      category: 'seeds',
-      isActive: true,
-    })
-      .select('_id conversionFactor primaryUnit secondaryUnit')
-      .populate('primaryUnit', 'name symbol')
-      .populate('secondaryUnit', 'name symbol')
-      .lean();
+    // Prefer explicit packing (productId) when subtype has multiple seed pack sizes
+    let product = null;
+    if (productId && mongoose.Types.ObjectId.isValid(productId)) {
+      product = await Product.findOne({
+        _id: new mongoose.Types.ObjectId(productId),
+        plantId: new mongoose.Types.ObjectId(plantId),
+        subtypeId: new mongoose.Types.ObjectId(subtypeId),
+        category: { $regex: /^seeds$/i },
+        isActive: true,
+      })
+        .select('_id name code conversionFactor primaryUnit secondaryUnit')
+        .populate('primaryUnit', 'name symbol')
+        .populate('secondaryUnit', 'name symbol')
+        .lean();
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          message: 'Selected seed packing not found for this plant/subtype',
+        });
+      }
+    } else {
+      product = await Product.findOne({
+        plantId: new mongoose.Types.ObjectId(plantId),
+        subtypeId: new mongoose.Types.ObjectId(subtypeId),
+        category: { $regex: /^seeds$/i },
+        isActive: true,
+      })
+        .select('_id name code conversionFactor primaryUnit secondaryUnit')
+        .populate('primaryUnit', 'name symbol')
+        .populate('secondaryUnit', 'name symbol')
+        .lean();
+    }
 
     if (!product) {
       return res.status(404).json({
@@ -91,28 +141,126 @@ export const createSowingRequest = async (req, res) => {
       });
     }
 
-    // Check if there's already a pending request for this plant/subtype
+    // Lock per packing while an active request exists (pending → issued / sowing)
     const existingRequest = await SowingRequest.findOne({
       plantId: new mongoose.Types.ObjectId(plantId),
       subtypeId: new mongoose.Types.ObjectId(subtypeId),
-      status: 'pending',
+      productId: product._id,
+      status: { $in: ['pending', 'processing', 'issued'] },
+      sowingCompleted: { $ne: true },
     });
 
     if (existingRequest) {
+      const msg =
+        existingRequest.status === 'issued'
+          ? `Stock already issued (${existingRequest.requestNumber}) — sowing in progress. Cannot request again for this packing.`
+          : `A ${existingRequest.status} request already exists for this seed packing (${existingRequest.requestNumber})`;
       return res.status(400).json({
         success: false,
-        message: 'A pending request already exists for this plant and subtype',
+        message: msg,
         data: existingRequest,
       });
     }
-
-    // Generate request number
-    const requestNumber = await SowingRequest.generateRequestNumber();
 
     // Convert slotIds to ObjectIds if provided
     const linkedSlotIds = slotIds && Array.isArray(slotIds) 
       ? slotIds.map(id => new mongoose.Types.ObjectId(id))
       : [];
+
+    const linkedOrderObjectIds = Array.isArray(linkedOrderIds)
+      ? linkedOrderIds
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+          .map((id) => new mongoose.Types.ObjectId(id))
+      : [];
+
+    // Same order cannot be included in another active sowing request
+    if (linkedOrderObjectIds.length) {
+      const ACTIVE_REQ = ['pending', 'processing', 'issued'];
+      const conflict = await SowingRequest.findOne({
+        linkedOrderIds: { $in: linkedOrderObjectIds },
+        status: { $in: ACTIVE_REQ },
+      })
+        .select('requestNumber status linkedOrderIds plantName subtypeName')
+        .lean();
+
+      if (conflict) {
+        const conflictIds = new Set(
+          (conflict.linkedOrderIds || []).map((id) => String(id))
+        );
+        const overlap = linkedOrderObjectIds.filter((id) =>
+          conflictIds.has(String(id))
+        );
+        return res.status(400).json({
+          success: false,
+          message: `Order(s) already requested in ${conflict.requestNumber} (${conflict.status}). Cannot request again for the same order.`,
+          data: {
+            existingRequestNumber: conflict.requestNumber,
+            existingStatus: conflict.status,
+            overlappingOrderIds: overlap,
+          },
+        });
+      }
+    }
+
+    // Generate request number
+    const requestNumber = await SowingRequest.generateRequestNumber();
+
+    const raisingNeed = hasSplit
+      ? Number.isFinite(fromRaising)
+        ? fromRaising
+        : 0
+      : 0;
+    let raisingObjectIds = Array.isArray(raisingIntakeIds)
+      ? raisingIntakeIds
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+          .map((id) => new mongoose.Types.ObjectId(id))
+      : [];
+
+    // Draw down customer-seed intakes (FIFO) when requesting raising packets
+    let raisingAllocated = raisingNeed;
+    if (raisingNeed > 0) {
+      const { allocateRaisingPackets } = await import(
+        "./raisingSeed.controller.js"
+      );
+      const alloc = await allocateRaisingPackets({
+        plantId,
+        subtypeId,
+        packetsNeeded: raisingNeed,
+        preferredIntakeIds: raisingObjectIds,
+        linkedOrderIds: linkedOrderObjectIds,
+      });
+      const companyShare = hasSplit
+        ? Number.isFinite(fromCompany)
+          ? fromCompany
+          : 0
+        : 0;
+      if (alloc.shortfall > 0.001 && companyShare <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Not enough raising seed in hand (need ${raisingNeed}, available ${alloc.allocated})`,
+        });
+      }
+      raisingAllocated = alloc.allocated;
+      raisingObjectIds = alloc.intakeIds.length
+        ? alloc.intakeIds
+        : raisingObjectIds;
+    }
+
+    const companyFinal = hasSplit
+      ? Number.isFinite(fromCompany)
+        ? fromCompany
+        : 0
+      : requested;
+    const raisingFinal = hasSplit ? raisingAllocated : 0;
+    const requestedFinal = hasSplit
+      ? companyFinal + raisingFinal
+      : requested;
+
+    if (hasSplit) {
+      if (companyFinal > 0 && raisingFinal > 0) resolvedSource = "MIXED";
+      else if (raisingFinal > 0) resolvedSource = "RAISING";
+      else resolvedSource = "COMPANY";
+    }
 
     // Create request
     const request = new SowingRequest({
@@ -123,8 +271,8 @@ export const createSowingRequest = async (req, res) => {
       subtypeName: subtype.name,
       productId: product._id,
       packetsNeeded,
-      packetsRequested: requested,
-      excessPackets: excess,
+      packetsRequested: requestedFinal,
+      excessPackets: Math.max(0, requestedFinal - packetsNeeded),
       primaryUnit: product.primaryUnit?._id,
       secondaryUnit: product.secondaryUnit?._id,
       conversionFactor: product.conversionFactor || 1,
@@ -133,10 +281,24 @@ export const createSowingRequest = async (req, res) => {
       requestedBy: req.user._id,
       linkedSlotIds,
       notes,
+      seedSource: resolvedSource,
+      packetsFromCompany: companyFinal,
+      packetsFromRaising: raisingFinal,
+      raisingIntakeIds: raisingObjectIds,
+      linkedOrderIds: linkedOrderObjectIds,
     });
 
     await request.save();
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'requestedBy']);
+
+    try {
+      const { bustTodaySowingCardsLiteCache } = await import(
+        "./sowingCardsLite.controller.js"
+      );
+      bustTodaySowingCardsLiteCache();
+    } catch (_) {
+      /* optional cache bust */
+    }
 
     res.status(201).json({
       success: true,

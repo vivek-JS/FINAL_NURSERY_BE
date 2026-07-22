@@ -3,6 +3,13 @@ import {
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
 } from "../../../utility/istOrderDateStats.js";
+import {
+  deliveryChangedMatch,
+  earlyDeliveryMatch,
+  deliveryDateInRangeOnly,
+} from "../../../utility/centralReportEngine/deliveryMatch.js";
+
+export { deliveryChangedMatch, earlyDeliveryMatch };
 
 function slotDateSortKey(slot) {
   if (!slot || typeof slot !== "object") return null;
@@ -31,7 +38,11 @@ function classifyChangeDirection(prev, next) {
  * Delivery change summary for CEO report (IST range on change createdAt).
  */
 export async function aggregateDeliveryChangeSummary(rangeStart, rangeEnd, extraMatch = {}) {
-  const base = { ...orderStatusExcludeMatch(), ...extraMatch };
+  const base = {
+    ...orderStatusExcludeMatch(),
+    ...extraMatch,
+    ...deliveryDateInRangeOnly(rangeStart, rangeEnd),
+  };
 
   const [changeRows, earlyDispatchRow, reasonRows] = await Promise.all([
     Order.aggregate([
@@ -72,7 +83,6 @@ export async function aggregateDeliveryChangeSummary(rangeStart, rangeEnd, extra
         $match: {
           ...base,
           dispatchedFromAnotherSlot: true,
-          deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
         },
       },
       { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
@@ -164,31 +174,5 @@ export async function aggregateDeliveryChangeSummary(rangeStart, rangeEnd, extra
       earlyOnly: { bucket: "earlyDelivery" },
       lateOnly: { bucket: "deliveryChanged", changeDirection: "late" },
     },
-  };
-}
-
-export function deliveryChangedMatch(rangeStart, rangeEnd) {
-  return {
-    ...orderStatusExcludeMatch(),
-    deliveryChanges: {
-      $elemMatch: { createdAt: { $gte: rangeStart, $lte: rangeEnd } },
-    },
-  };
-}
-
-export function earlyDeliveryMatch(rangeStart, rangeEnd) {
-  return {
-    ...orderStatusExcludeMatch(),
-    $or: [
-      {
-        dispatchedFromAnotherSlot: true,
-        deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
-      },
-      {
-        deliveryChanges: {
-          $elemMatch: { createdAt: { $gte: rangeStart, $lte: rangeEnd } },
-        },
-      },
-    ],
   };
 }

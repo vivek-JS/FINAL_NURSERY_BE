@@ -133,6 +133,104 @@ export async function aggregateAcceptedByDeliveryDay(
   return rowsToDayMap(rows);
 }
 
+/** Delivery in range + given status, grouped by delivery IST day. */
+export async function aggregateStatusByDeliveryDay(
+  status,
+  rangeStart,
+  rangeEnd,
+  statusMatch,
+  extraMatch = {}
+) {
+  const rows = await Order.aggregate([
+    {
+      $match: {
+        ...statusMatch,
+        ...extraMatch,
+        orderStatus: status,
+        deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
+      },
+    },
+    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+    {
+      $group: {
+        _id: {
+          day: {
+            $dateToString: {
+              format: "%Y-%m-%d",
+              date: "$deliveryDate",
+              timezone: IST,
+            },
+          },
+        },
+        orders: { $sum: 1 },
+        plants: { $sum: "$linePlantTotal" },
+      },
+    },
+  ]);
+  return rowsToDayMap(rows);
+}
+
+/** Delivery in range + status, grouped by entity (variety / salesperson / dealer). */
+export async function aggregateStatusByDeliveryAndGroup(
+  status,
+  rangeStart,
+  rangeEnd,
+  statusMatch,
+  groupStages,
+  groupIdFields,
+  extraMatch = {}
+) {
+  return Order.aggregate([
+    {
+      $match: {
+        ...statusMatch,
+        ...extraMatch,
+        orderStatus: status,
+        deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
+      },
+    },
+    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+    ...groupStages,
+    {
+      $group: {
+        _id: groupIdFields,
+        orders: { $sum: 1 },
+        plants: { $sum: "$linePlantTotal" },
+      },
+    },
+  ]);
+}
+
+/** Backlog before range + status, grouped by entity. */
+export async function aggregateStatusBeforeRangeByGroup(
+  status,
+  rangeStart,
+  statusMatch,
+  groupStages,
+  groupIdFields,
+  extraMatch = {}
+) {
+  return Order.aggregate([
+    {
+      $match: {
+        ...statusMatch,
+        ...extraMatch,
+        orderStatus: status,
+        ...matchDeliveryDateBeforeRange(rangeStart),
+      },
+    },
+    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+    ...groupStages,
+    {
+      $group: {
+        _id: groupIdFields,
+        orders: { $sum: 1 },
+        plants: { $sum: "$linePlantTotal" },
+      },
+    },
+  ]);
+}
+
 /**
  * Out / Done: OrderEvent first, then statusChanges, then legacy updatedAt.
  */
@@ -529,20 +627,13 @@ export async function aggregatePipelineByDeliveryDay(
   statusMatch,
   extraMatch = {}
 ) {
-  const activeInRangeStatuses = ["DISPATCH_PROCESS", "PARTIALLY_COMPLETED"];
   const rows = await Order.aggregate([
     {
       $match: {
         ...statusMatch,
         ...extraMatch,
         orderStatus: { $in: PIPELINE_DELIVERY_STATUSES },
-        $or: [
-          { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } },
-          {
-            orderStatus: { $in: activeInRangeStatuses },
-            updatedAt: { $gte: rangeStart, $lte: rangeEnd },
-          },
-        ],
+        deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
       },
     },
     { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
@@ -605,8 +696,8 @@ export async function aggregatePipelineByDeliveryDay(
 }
 
 /**
- * Delivery total (range): unique orders where
- * delivery in range (not DISPATCHED) OR FARM_READY OR READY_FOR_DISPATCH.
+ * Delivery total (range): unique orders with delivery date in IST range
+ * (excludes DISPATCHED / COMPLETED via matchDeliveryDateInRange).
  */
 export async function aggregateDeliveryUnionTotal(
   rangeStart,
@@ -614,17 +705,13 @@ export async function aggregateDeliveryUnionTotal(
   statusMatch
 ) {
   const rows = await Order.aggregate([
-    { $match: statusMatch },
-    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
     {
       $match: {
-        $or: [
-          matchDeliveryDateInRange(rangeStart, rangeEnd),
-          { orderStatus: "FARM_READY" },
-          { orderStatus: "READY_FOR_DISPATCH" },
-        ],
+        ...statusMatch,
+        ...matchDeliveryDateInRange(rangeStart, rangeEnd),
       },
     },
+    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
     {
       $group: {
         _id: "$_id",
@@ -645,8 +732,8 @@ export async function aggregateDeliveryUnionTotal(
 function buildDeliveryDayForDate(
   date,
   {
-    globalFarmReady,
-    globalRfd,
+    farmReadyByDay,
+    rfdByDay,
     acceptedByDay,
     dispatchedByDay,
     vehicleDispatchedByDay,
@@ -664,8 +751,8 @@ function buildDeliveryDayForDate(
   };
 
   delivery.accepted = { ...accepted };
-  delivery.farmReady = { ...globalFarmReady };
-  delivery.readyForDispatch = { ...globalRfd };
+  delivery.farmReady = { ...(farmReadyByDay.get(date) || emptyOrderPlants()) };
+  delivery.readyForDispatch = { ...(rfdByDay.get(date) || emptyOrderPlants()) };
   delivery.dispatched = { ...(dispatchedByDay.get(date) || emptyOrderPlants()) };
   delivery.vehicleDispatched = {
     ...(vehicleDispatchedByDay.get(date) || emptyOrderPlants()),
@@ -683,60 +770,35 @@ function buildDeliveryDayForDate(
 
 function sumDeliveryDaysAcrossRange(days) {
   const totals = emptyDeliveryDay();
-  let first = true;
   for (const day of days) {
-    if (first) {
-      totals.accepted = addOrderPlants(totals.accepted, day.delivery.accepted);
-      totals.farmReady = { ...day.delivery.farmReady };
-      totals.readyForDispatch = { ...day.delivery.readyForDispatch };
-      totals.dispatched = addOrderPlants(totals.dispatched, day.delivery.dispatched);
-      totals.vehicleDispatched = addOrderPlants(
-        totals.vehicleDispatched,
-        day.delivery.vehicleDispatched
-      );
-      totals.completed = addOrderPlants(totals.completed, day.delivery.completed);
-      totals.dispatchProcess = addOrderPlants(
-        totals.dispatchProcess,
-        day.delivery.dispatchProcess
-      );
-      totals.partiallyCompleted = {
-        orders:
-          (totals.partiallyCompleted.orders || 0) +
-          (day.delivery.partiallyCompleted.orders || 0),
-        plants:
-          (totals.partiallyCompleted.plants || 0) +
-          (day.delivery.partiallyCompleted.plants || 0),
-        plantsRemaining:
-          (totals.partiallyCompleted.plantsRemaining || 0) +
-          (day.delivery.partiallyCompleted.plantsRemaining || 0),
-      };
-      totals.other = addOrderPlants(totals.other, day.delivery.other);
-      first = false;
-    } else {
-      totals.accepted = addOrderPlants(totals.accepted, day.delivery.accepted);
-      totals.dispatched = addOrderPlants(totals.dispatched, day.delivery.dispatched);
-      totals.vehicleDispatched = addOrderPlants(
-        totals.vehicleDispatched,
-        day.delivery.vehicleDispatched
-      );
-      totals.completed = addOrderPlants(totals.completed, day.delivery.completed);
-      totals.dispatchProcess = addOrderPlants(
-        totals.dispatchProcess,
-        day.delivery.dispatchProcess
-      );
-      totals.partiallyCompleted = {
-        orders:
-          (totals.partiallyCompleted.orders || 0) +
-          (day.delivery.partiallyCompleted.orders || 0),
-        plants:
-          (totals.partiallyCompleted.plants || 0) +
-          (day.delivery.partiallyCompleted.plants || 0),
-        plantsRemaining:
-          (totals.partiallyCompleted.plantsRemaining || 0) +
-          (day.delivery.partiallyCompleted.plantsRemaining || 0),
-      };
-      totals.other = addOrderPlants(totals.other, day.delivery.other);
-    }
+    totals.accepted = addOrderPlants(totals.accepted, day.delivery.accepted);
+    totals.farmReady = addOrderPlants(totals.farmReady, day.delivery.farmReady);
+    totals.readyForDispatch = addOrderPlants(
+      totals.readyForDispatch,
+      day.delivery.readyForDispatch
+    );
+    totals.dispatched = addOrderPlants(totals.dispatched, day.delivery.dispatched);
+    totals.vehicleDispatched = addOrderPlants(
+      totals.vehicleDispatched,
+      day.delivery.vehicleDispatched
+    );
+    totals.completed = addOrderPlants(totals.completed, day.delivery.completed);
+    totals.dispatchProcess = addOrderPlants(
+      totals.dispatchProcess,
+      day.delivery.dispatchProcess
+    );
+    totals.partiallyCompleted = {
+      orders:
+        (totals.partiallyCompleted.orders || 0) +
+        (day.delivery.partiallyCompleted.orders || 0),
+      plants:
+        (totals.partiallyCompleted.plants || 0) +
+        (day.delivery.partiallyCompleted.plants || 0),
+      plantsRemaining:
+        (totals.partiallyCompleted.plantsRemaining || 0) +
+        (day.delivery.partiallyCompleted.plantsRemaining || 0),
+    };
+    totals.other = addOrderPlants(totals.other, day.delivery.other);
   }
   return totals;
 }
@@ -758,8 +820,8 @@ export function buildAdminDailyMisPayloadFromMetrics({
   bookingRows = [],
   uniquePerDayRows = [],
   rangeUniqueOrders = 0,
-  globalFarmReady,
-  globalRfd,
+  farmReadyByDay,
+  rfdByDay,
   acceptedByDay,
   dispatchedByDay,
   vehicleDispatchedByDay = new Map(),
@@ -776,8 +838,8 @@ export function buildAdminDailyMisPayloadFromMetrics({
     date,
     booking: bookingMap.get(date) || emptyOrderPlants(),
     delivery: buildDeliveryDayForDate(date, {
-      globalFarmReady,
-      globalRfd,
+      farmReadyByDay,
+      rfdByDay,
       acceptedByDay,
       dispatchedByDay,
       vehicleDispatchedByDay,
@@ -800,8 +862,8 @@ export function buildAdminDailyMisPayloadFromMetrics({
 
   const summed = sumDeliveryDaysAcrossRange(days);
   totals.delivery.accepted = summed.accepted;
-  totals.delivery.farmReady = { ...globalFarmReady };
-  totals.delivery.readyForDispatch = { ...globalRfd };
+  totals.delivery.farmReady = summed.farmReady;
+  totals.delivery.readyForDispatch = summed.readyForDispatch;
   totals.delivery.dispatched = summed.dispatched;
   totals.delivery.vehicleDispatched = summed.vehicleDispatched;
   totals.delivery.completed = summed.completed;
@@ -828,8 +890,8 @@ export async function fetchMisMetricSlices(
   const dueExtra = { ...extraMatch, ...(dueOnly ? duePipelineMatch() : {}) };
 
   const [
-    globalFarmReady,
-    globalRfd,
+    farmReadyByDay,
+    rfdByDay,
     acceptedByDay,
     dispatchedByDay,
     vehicleDispatchedByDay,
@@ -838,8 +900,14 @@ export async function fetchMisMetricSlices(
     deliveryInRangeByDay,
     deliveryUnionTotal,
   ] = await Promise.all([
-    aggregateGlobalStatus("FARM_READY", statusMatch, dueExtra),
-    aggregateGlobalStatus("READY_FOR_DISPATCH", statusMatch, dueExtra),
+    aggregateStatusByDeliveryDay("FARM_READY", rangeStart, rangeEnd, statusMatch, dueExtra),
+    aggregateStatusByDeliveryDay(
+      "READY_FOR_DISPATCH",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      dueExtra
+    ),
     aggregateAcceptedByDeliveryDay(rangeStart, rangeEnd, statusMatch, dueExtra),
     aggregateDispatchedByDay(rangeStart, rangeEnd, statusMatch, extraMatch),
     aggregateVehicleDispatchedByDay(rangeStart, rangeEnd, statusMatch, extraMatch),
@@ -852,8 +920,8 @@ export async function fetchMisMetricSlices(
   ]);
 
   return {
-    globalFarmReady,
-    globalRfd,
+    farmReadyByDay,
+    rfdByDay,
     acceptedByDay,
     dispatchedByDay,
     vehicleDispatchedByDay,
@@ -987,20 +1055,13 @@ export async function aggregatePipelineByGroup(
   groupIdFields,
   extraMatch = {}
 ) {
-  const activeInRangeStatuses = ["DISPATCH_PROCESS", "PARTIALLY_COMPLETED"];
   return Order.aggregate([
     {
       $match: {
         ...statusMatch,
         ...extraMatch,
         orderStatus: { $in: PIPELINE_DELIVERY_STATUSES },
-        $or: [
-          { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } },
-          {
-            orderStatus: { $in: activeInRangeStatuses },
-            updatedAt: { $gte: rangeStart, $lte: rangeEnd },
-          },
-        ],
+        deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null },
       },
     },
     { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
@@ -1074,7 +1135,7 @@ export async function aggregateDeliveryInRangeByGroup(
   return rows;
 }
 
-/** Delivery union total per entity (delivery in range OR FR OR RFD). */
+/** Delivery union total per entity — delivery date in IST range only. */
 export async function aggregateDeliveryUnionByGroup(
   rangeStart,
   rangeEnd,
@@ -1084,18 +1145,15 @@ export async function aggregateDeliveryUnionByGroup(
   extraMatch = {}
 ) {
   const rows = await Order.aggregate([
-    { $match: { ...statusMatch, ...extraMatch } },
-    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
-    ...groupStages,
     {
       $match: {
-        $or: [
-          matchDeliveryDateInRange(rangeStart, rangeEnd),
-          { orderStatus: "FARM_READY" },
-          { orderStatus: "READY_FOR_DISPATCH" },
-        ],
+        ...statusMatch,
+        ...extraMatch,
+        ...matchDeliveryDateInRange(rangeStart, rangeEnd),
       },
     },
+    { $addFields: LINE_PLANT_TOTAL_ADD_FIELDS },
+    ...groupStages,
     {
       $group: {
         _id: { ...groupIdFields, orderId: "$_id" },
@@ -1385,15 +1443,19 @@ export async function fetchVarietyTableMetrics(
         },
       },
     ]),
-    aggregateGlobalStatusByGroup(
+    aggregateStatusByDeliveryAndGroup(
       "FARM_READY",
+      rangeStart,
+      rangeEnd,
       statusMatch,
       groupStages,
       VARIETY_GROUP_ID,
       dueExtra
     ),
-    aggregateGlobalStatusByGroup(
+    aggregateStatusByDeliveryAndGroup(
       "READY_FOR_DISPATCH",
+      rangeStart,
+      rangeEnd,
       statusMatch,
       groupStages,
       VARIETY_GROUP_ID,
@@ -1524,15 +1586,17 @@ export async function fetchEntityPastDueBreakdown(
 
   const [globalFarmReadyRows, globalRfdRows, acceptedRows, deliveryBacklogRows] =
     await Promise.all([
-      aggregateGlobalStatusByGroup(
+      aggregateStatusBeforeRangeByGroup(
         "FARM_READY",
+        rangeStart,
         statusMatch,
         groupStages,
         groupIdFields,
         backlogExtra
       ),
-      aggregateGlobalStatusByGroup(
+      aggregateStatusBeforeRangeByGroup(
         "READY_FOR_DISPATCH",
+        rangeStart,
         statusMatch,
         groupStages,
         groupIdFields,

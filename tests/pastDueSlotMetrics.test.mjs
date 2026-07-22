@@ -36,6 +36,53 @@ describe("pastDueSlotMetrics — rolled-in on current slot only", () => {
     },
   ];
 
+  it("Off current window still receives past-due metrics", () => {
+    const offSlots = [
+      {
+        _id: EXPIRED,
+        status: true,
+        startDay: "01-05-2026",
+        endDay: "15-05-2026",
+      },
+      {
+        _id: CURRENT,
+        status: false,
+        startDay: "16-06-2026",
+        endDay: "30-06-2026",
+      },
+    ];
+    const ordersBySlot = new Map([
+      [
+        CURRENT,
+        [
+          {
+            _id: "o1",
+            orderId: 1,
+            orderStatus: "ACCEPTED",
+            numberOfPlants: 10000,
+            pastDueSlotRollover: true,
+          },
+        ],
+      ],
+      [
+        EXPIRED,
+        [
+          {
+            _id: "o2",
+            orderId: 2,
+            orderStatus: "ACCEPTED",
+            numberOfPlants: 5000,
+            pastDueSlotRollover: false,
+          },
+        ],
+      ],
+    ]);
+    const group = aggregatePastDueMetricsForSlotGroup(offSlots, ordersBySlot, asOf);
+    assert.strictEqual(group.currentSlotId, CURRENT);
+    assert.strictEqual(group.pastDueDetail.rolledInOnCurrentSlot.plants, 10000);
+    assert.strictEqual(group.pastDuePendingOnSlot, 5000);
+  });
+
   it("current-slot card uses rolledInOnCurrentSlot counts, not subtype-wide", () => {
     const ordersBySlot = new Map([
       [

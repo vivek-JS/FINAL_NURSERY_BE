@@ -441,6 +441,7 @@ import sellOrderRoute from "./routes/sellOrder.route.js";
 import returnRequestRoute from "./routes/returnRequest.route.js";
 import agriSalesOrderRoute from "./routes/agriSalesOrder.route.js";
 import motivationalQuoteRoute from "./routes/motivationalQuote.route.js";
+import dailyNoteRoute from "./routes/dailyNote.route.js";
 import agriLoadLinkRoute from "./routes/agriLoadLink.route.js";
 import rateChangeRequestRoute from "./routes/rateChangeRequest.route.js";
 import commissionRoute from "./routes/commission.route.js";
@@ -517,6 +518,7 @@ server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook + tod
 // WATI unified webhook (template sent/delivered/read/failed + messageReceived)
 server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
 server.use("/api/v1/motivational-quote", motivationalQuoteRoute); // Motivational quotes (today endpoint is public)
+server.use("/api/v1/daily-notes", dailyNoteRoute); // Per-user daily notes (JWT)
 server.use("/api/v1/agri-load-link", agriLoadLinkRoute); // Public one-click agri load link
 server.use("/api/v1/rate-change-requests", authenticateToken, rateChangeRequestRoute); // Rate change approval flow (by-token + approve-via-link are in publicPaths)
 server.use("/api/v1/commission", commissionRoute);

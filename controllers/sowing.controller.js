@@ -7185,7 +7185,6 @@ export const getPlantsGapSummary = async (req, res) => {
         const subtypes = plant?.subtypes || [];
         const subtypeDetails = subtypes.find(st => st._id.toString() === slot.subtypeId.toString());
         if (subtypeDetails?.name?.toLowerCase().includes("twinkle")) {
-          console.log(`[getPlantsGapSummary] Twinkle: slotEndDay=${slot.slotEndDay}, plantReadyDays=${slotReadyDays}, sowByDate=${sowByDate}, isOverdue=${isOverdue}, slotGap=${slotGap}`);
         }
       }
       
@@ -7222,7 +7221,6 @@ export const getPlantsGapSummary = async (req, res) => {
             const plant = plantMap.get(s.plantId.toString());
             const subtypes = plant?.subtypes || [];
             const subtypeDetails = subtypes.find(st => st._id.toString() === s.subtypeId.toString());
-            console.log(`[getPlantsGapSummary] Available slot: plant=${plant?.name || 'Unknown'}, subtype=${subtypeDetails?.name || 'Unknown'}, rawGap=${s.rawGap}, primarySowed=${s.primarySowed}, totalBooked=${s.totalBookedPlants}`);
           }
           return hasSurplus;
         })
@@ -7231,7 +7229,6 @@ export const getPlantsGapSummary = async (req, res) => {
           if (s.slotGap > 0 || s.isOverdue) {
             // Debug logging for overdue slots
             if (s.isOverdue) {
-              console.log(`[getPlantsGapSummary] Overdue slot found: plantId=${s.plantId}, subtypeId=${s.subtypeId}, slotGap=${s.slotGap}, sowByDate=${s.sowByDate}`);
             }
             return true;
           }
@@ -7445,7 +7442,6 @@ export const getPlantsGapSummary = async (req, res) => {
           
           // Debug logging for overdue subtypes
           if (hasOverdue) {
-            console.log(`[getPlantsGapSummary] Overdue subtype found: plant=${plant.name}, subtype=${st.subtypeName}, gap=${st.totalBookingGap}, overdueSlots=${st.overdueSlotCount}`);
           }
           
           return shouldInclude;
@@ -7588,6 +7584,9 @@ export const getSlotOrdersSummary = async (req, res) => {
           orderPaymentStatus: 1,
           deliveryDate: 1,
           createdAt: 1,
+          additionalPlants: 1,
+          sowingDone: 1,
+          sowingDoneAt: 1,
           farmer: {
             _id: { $ifNull: ["$farmer._id", null] },
             name: { $ifNull: ["$farmer.name", "Unknown"] },
@@ -7611,12 +7610,19 @@ export const getSlotOrdersSummary = async (req, res) => {
 
     // Calculate summary
     const totalOrders = orders.length;
-    const totalPlants = orders.reduce((sum, order) => sum + (order.numberOfPlants || 0), 0);
+    const totalPlants = orders.reduce(
+      (sum, order) =>
+        sum +
+        (order.numberOfPlants || 0) +
+        (order.additionalPlants || 0),
+      0
+    );
     const totalValue = orders.reduce((sum, order) => sum + ((order.numberOfPlants || 0) * (order.rate || 0)), 0);
     const pendingPaymentCount = orders.filter(o => o.orderPaymentStatus === "PENDING").length;
     const completedPaymentCount = orders.filter(o => o.orderPaymentStatus === "COMPLETED").length;
+    const sowedOrdersCount = orders.filter((o) => o.sowingDone).length;
 
-    // Get slot info
+    // Get slot info + sow batches
     const slotInfo = await PlantSlot.aggregate([
       {
         $unwind: "$subtypeSlots"
@@ -7654,12 +7660,35 @@ export const getSlotOrdersSummary = async (req, res) => {
             endDay: "$slot.endDay",
             month: "$slot.month",
             totalPlants: { $ifNull: ["$slot.totalPlants", 0] },
+            availablePlants: { $ifNull: ["$slot.availablePlants", 0] },
             primarySowed: { $ifNull: ["$slot.primarySowed", 0] },
             officeSowed: { $ifNull: ["$slot.officeSowed", 0] },
+            plantsSowed: { $ifNull: ["$slot.plantsSowed", 0] },
+            sowingDate: "$slot.sowingDate",
+            plantReadyDate: "$slot.plantReadyDate",
+            plantReadyDays: { $ifNull: ["$slot.plantReadyDays", 0] },
+            sowingBatches: { $ifNull: ["$slot.sowingBatches", []] },
           }
         }
       }
     ]);
+
+    const slot = slotInfo[0]?.slot || null;
+    const sowBatches = Array.isArray(slot?.sowingBatches)
+      ? [...slot.sowingBatches].sort(
+          (a, b) =>
+            new Date(b.sowedAt || 0).getTime() -
+            new Date(a.sowedAt || 0).getTime()
+        )
+      : [];
+    const totalSowedPlants = sowBatches.reduce(
+      (s, b) => s + (Number(b.plantsSowed) || 0),
+      0
+    );
+    const totalPacketsUsed = sowBatches.reduce(
+      (s, b) => s + (Number(b.packetsUsed) || 0),
+      0
+    );
 
     res.set({
       'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -7670,6 +7699,7 @@ export const getSlotOrdersSummary = async (req, res) => {
     return res.status(200).json({
       success: true,
       slotInfo: slotInfo[0] || null,
+      sowBatches,
       orders,
       summary: {
         totalOrders,
@@ -7677,6 +7707,15 @@ export const getSlotOrdersSummary = async (req, res) => {
         totalValue,
         pendingPaymentCount,
         completedPaymentCount,
+        sowedOrdersCount,
+        totalSowedPlants:
+          totalSowedPlants ||
+          (Number(slot?.primarySowed) || 0) + (Number(slot?.officeSowed) || 0),
+        totalPacketsUsed,
+        sowingDate: slot?.sowingDate || null,
+        plantReadyDate: slot?.plantReadyDate || null,
+        plantReadyDays: slot?.plantReadyDays || 0,
+        availablePlants: slot?.availablePlants || 0,
       },
       generatedAt: new Date(),
     });
@@ -8175,8 +8214,6 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
 
     // Step 2: Collect all slot IDs
     const slotIds = allSlots.map(s => s.slotId);
-    console.log(`[getAllPlantsTodaySowingCards] Step 2: Collected ${slotIds.length} slotIds from initial aggregation`);
-    console.log(`[getAllPlantsTodaySowingCards] Step 2: SlotIds:`, slotIds.map(id => id.toString()).slice(0, 10), slotIds.length > 10 ? '...' : '');
 
     // Step 2.5: Get sowing in progress details directly from slots
     // This ensures we use the correct plantsExpected calculation
@@ -8265,11 +8302,9 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         },
       },
     ]);
-    console.log(`[getAllPlantsTodaySowingCards] Step 2.5: Found ${slotsWithProgress.length} slots with sowingInProgress (across all plants)`);
 
     // Create map of slot IDs with sowing in progress details from slot data
     const sowingInProgressMap = new Map();
-    console.log(`[getAllPlantsTodaySowingCards] Processing ${slotsWithProgress.length} slots with sowingInProgress entries`);
     slotsWithProgress.forEach(slotData => {
       const slotIdStr = slotData.slotId.toString();
       const plantIdStr = slotData.plantId?.toString();
@@ -8299,10 +8334,8 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       });
       if (progressDetails.length > 0) {
         sowingInProgressMap.set(slotIdStr, progressDetails);
-        console.log(`[getAllPlantsTodaySowingCards] ✅ Slot ${slotIdStr} (plant=${plantIdStr}, subtype=${subtypeIdStr}) has ${progressDetails.length} sowingInProgress entry/entries, packetsIssued=${progressDetails[0]?.packetsIssued || 0}`);
       }
     });
-    console.log(`[getAllPlantsTodaySowingCards] Total slots in sowingInProgressMap: ${sowingInProgressMap.size}`);
     
     // Create a map of existing slots by slotId for quick lookup
     const existingSlotsMap = new Map();
@@ -8330,7 +8363,6 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
           gapFullyCovered: slotData.gapFullyCovered || false,
         });
         existingSlotsMap.set(slotIdStr, slotData);
-        console.log(`[getAllPlantsTodaySowingCards] ➕ Added slot ${slotIdStr} to allSlots (has sowingInProgress but wasn't in initial aggregation)`);
       }
     });
     
@@ -8340,7 +8372,6 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       const slotId = slotData.slotId;
       if (!slotIds.find(id => id.toString() === slotId.toString())) {
         slotIds.push(slotId);
-        console.log(`[getAllPlantsTodaySowingCards] ➕ Added slot ${slotId} to slotIds (has sowingInProgress but no bookings)`);
       }
     });
 
@@ -8433,7 +8464,6 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         const subtypeName = subtypeDetails?.name?.toLowerCase() || "";
         
         if (subtypeName.includes("twinkle") || (plantName.includes("muskmelon") && (subtypeName.includes("vijay") || subtypeName.includes("vivek")))) {
-          console.log(`[getAllPlantsTodaySowingCards] ${plantName}/${subtypeName}: slotStartDay=${slot.slotStartDay}, plantReadyDays=${slotReadyDays}, sowByDate=${sowByDate}, daysUntilSow=${daysUntilSow}, priority=${priority}, bookingGap=${bookingGap}, sowByDateISO=${sowByDateISO}, todayDate=${todayDate}`);
         }
       }
       
@@ -8493,46 +8523,6 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         const subtypeDetails = subtypes.find(st => st._id.toString() === slot.subtypeId.toString());
         const plantName = plant?.name || "";
         const subtypeName = subtypeDetails?.name || "";
-        
-        console.log(`\n[getAllPlantsTodaySowingCards] ==========================================`);
-        console.log(`[getAllPlantsTodaySowingCards] 📅 DECEMBER 24 SLOT DETAILS`);
-        console.log(`[getAllPlantsTodaySowingCards] ==========================================`);
-        console.log(`[getAllPlantsTodaySowingCards] Plant: ${plantName}`);
-        console.log(`[getAllPlantsTodaySowingCards] Subtype: ${subtypeName}`);
-        console.log(`[getAllPlantsTodaySowingCards] Slot ID: ${slot.slotId}`);
-        console.log(`[getAllPlantsTodaySowingCards] Slot Date: ${slot.slotStartDay} to ${slot.slotEndDay}`);
-        console.log(`[getAllPlantsTodaySowingCards] Month: ${slot.month}`);
-        console.log(`[getAllPlantsTodaySowingCards] ---`);
-        console.log(`[getAllPlantsTodaySowingCards] Total Booked Plants: ${totalBookedPlants}`);
-        console.log(`[getAllPlantsTodaySowingCards] Primary Sowed (from DB): ${primarySowed}`);
-        console.log(`[getAllPlantsTodaySowingCards] Slot Buffer: ${slotBuffer}%`);
-        console.log(`[getAllPlantsTodaySowingCards] Plant Sowing Buffer: ${plantLevelSowingBuffer}%`);
-        console.log(`[getAllPlantsTodaySowingCards] Effective Sowing Buffer: ${effectiveSowingBuffer}%`);
-        console.log(`[getAllPlantsTodaySowingCards] ---`);
-        console.log(`[getAllPlantsTodaySowingCards] Total Booked Plants With Buffer: ${totalBookedPlantsWithBuffer}`);
-        console.log(`[getAllPlantsTodaySowingCards] Total Booked Plants Buffer Count: ${totalBookedPlantsBufferCount}`);
-        console.log(`[getAllPlantsTodaySowingCards] ---`);
-        console.log(`[getAllPlantsTodaySowingCards] Plants To Sow With Buffer: ${plantsToSowWithBuffer}`);
-        console.log(`[getAllPlantsTodaySowingCards] Calculation: ${totalBookedPlantsWithBuffer} - ${primarySowed} = ${plantsToSowWithBuffer}`);
-        console.log(`[getAllPlantsTodaySowingCards] ---`);
-        console.log(`[getAllPlantsTodaySowingCards] Booking Gap: ${bookingGapWithBuffer}`);
-        console.log(`[getAllPlantsTodaySowingCards] Booking Gap Raw: ${rawBookingGap}`);
-        console.log(`[getAllPlantsTodaySowingCards] Booking Gap Effective: ${bookingGap}`);
-        console.log(`[getAllPlantsTodaySowingCards] Booking Gap Before Buffer: ${adjustedBookingGap}`);
-        console.log(`[getAllPlantsTodaySowingCards] Slot Buffer Count: ${slotBufferCount}`);
-        console.log(`[getAllPlantsTodaySowingCards] ---`);
-        console.log(`[getAllPlantsTodaySowingCards] Gap Covered Amount: ${gapCoveredAmount}`);
-        console.log(`[getAllPlantsTodaySowingCards] Gap Fully Covered: ${slot.gapFullyCovered}`);
-        console.log(`[getAllPlantsTodaySowingCards] ---`);
-        console.log(`[getAllPlantsTodaySowingCards] Sow By Date: ${sowByDate}`);
-        console.log(`[getAllPlantsTodaySowingCards] Days Until Sow: ${daysUntilSow}`);
-        console.log(`[getAllPlantsTodaySowingCards] Priority: ${priority}`);
-        console.log(`[getAllPlantsTodaySowingCards] Plant Ready Days: ${slotReadyDays}`);
-        console.log(`[getAllPlantsTodaySowingCards] ---`);
-        console.log(`[getAllPlantsTodaySowingCards] Sowing In Progress: ${sowingProgress ? true : false}`);
-        console.log(`[getAllPlantsTodaySowingCards] Total Packets Issued: ${totalPacketsIssued}`);
-        console.log(`[getAllPlantsTodaySowingCards] Total Plants In Progress: ${totalPlantsInProgress}`);
-        console.log(`[getAllPlantsTodaySowingCards] ==========================================\n`);
       }
       
       // Debug logging for December 3 slots
@@ -8542,8 +8532,6 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         const subtypeDetails = subtypes.find(st => st._id.toString() === slot.subtypeId.toString());
         const plantName = plant?.name || "";
         const subtypeName = subtypeDetails?.name || "";
-        
-        console.log(`[getAllPlantsTodaySowingCards] 🔍 Slot Debug (03 Dec): plant=${plantName}, subtype=${subtypeName}, slotId=${slot.slotId}, totalBookedPlants=${totalBookedPlants}, primarySowed=${primarySowed} (from slot), slotBuffer=${slotBuffer}%, totalBookedPlantsWithBuffer=${totalBookedPlantsWithBuffer}, plantsToSowWithBuffer=${plantsToSowWithBuffer}`);
       }
       
       return {
@@ -8585,7 +8573,6 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
     // Separate slots into two categories:
     // 1. Slots with plantsToSowWithBuffer > 0 AND NOT in progress (need action) - show in main cards
     // 2. Slots with sowing in progress (just tracking) - show separately in inProgressCards
-    console.log(`[getAllPlantsTodaySowingCards] Filtering ${allTodaySlots.length} total slots`);
     const slotsNeedingAction = allTodaySlots.filter(slot => {
       // CRITICAL FILTER: Only show urgent (daysUntilSow === 0) and overdue (daysUntilSow < 0) slots
       // Urgent: daysUntilSow === 0 (today only)
@@ -8594,7 +8581,6 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       if (slot.daysUntilSow === null || slot.daysUntilSow > 0) {
         // Debug log for excluded future slots
         if (slot.daysUntilSow !== null && slot.daysUntilSow > 0) {
-          console.log(`[getAllPlantsTodaySowingCards] ❌ Excluding future slot ${slot.slotId}: daysUntilSow=${slot.daysUntilSow}, slotEndDay=${slot.slotEndDay}`);
         }
         return false;
       }
@@ -8604,7 +8590,6 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         const pip = Number(slot.totalPlantsInProgress) || 0;
         const pkt = Number(slot.totalPacketsIssued) || 0;
         if (pip > 0 || pkt > 0) {
-          console.log(`[getAllPlantsTodaySowingCards] 🔄 Excluding in-progress slot ${slot.slotId} from main cards (inProgressCards): plants=${pip}, packets=${pkt}`);
           return false;
         }
       }
@@ -8616,11 +8601,9 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       }
       // Additional validation: ensure priority is set correctly
       if (slot.priority === null && slot.daysUntilSow !== null) {
-        console.log(`[getAllPlantsTodaySowingCards] ⚠️ Warning: Slot ${slot.slotId} has null priority but daysUntilSow=${slot.daysUntilSow}`);
       }
       return true;
     });
-    console.log(`[getAllPlantsTodaySowingCards] ✅ After filter: ${slotsNeedingAction.length} slots need action`);
     slotsNeedingAction.forEach(slot => {
       const plant = plantMap.get(slot.plantId?.toString());
       const plantName = plant?.name?.toLowerCase() || "";
@@ -8630,9 +8613,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       const isMuskmelonVijay = plantName.includes("muskmelon") && subtypeName.includes("vijay");
       
       if (isMuskmelonVijay) {
-        console.log(`[getAllPlantsTodaySowingCards] 🍈 Muskmelon/Vijay Slot ${slot.slotId}: bookingGap=${slot.bookingGap}, sowingInProgress=${slot.sowingInProgress}, daysUntilSow=${slot.daysUntilSow}, priority=${slot.priority}, slotEndDay=${slot.slotEndDay}`);
       } else {
-        console.log(`[getAllPlantsTodaySowingCards] 📋 Slot ${slot.slotId}: bookingGap=${slot.bookingGap}, sowingInProgress=${slot.sowingInProgress}, daysUntilSow=${slot.daysUntilSow}`);
       }
     });
 
@@ -8644,18 +8625,13 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       const plantsInProgress = Number(slot.totalPlantsInProgress) || 0;
       const packetsIssued = Number(slot.totalPacketsIssued) || 0;
       if (plantsInProgress <= 0 && packetsIssued <= 0) {
-        console.log(`[getAllPlantsTodaySowingCards] 🔄 Excluding in-progress slot ${slot.slotId} from inProgressCards (plants=${plantsInProgress}, packets=${packetsIssued})`);
         return false;
       }
       return true;
     });
-    console.log(`[getAllPlantsTodaySowingCards] ✅ Found ${slotsInProgressOnly.length} slots in progress only (has sowingInProgress, regardless of gap/date)`);
     slotsInProgressOnly.forEach(slot => {
-      console.log(`[getAllPlantsTodaySowingCards] 📋 InProgress Slot ${slot.slotId}: bookingGap=${slot.bookingGap}, sowingInProgress=${slot.sowingInProgress}, daysUntilSow=${slot.daysUntilSow}, slotEndDay=${slot.slotEndDay}, packetsIssued=${slot.totalPacketsIssued}`);
     });
-    console.log(`[getAllPlantsTodaySowingCards] ✅ Found ${slotsInProgressOnly.length} slots in progress only (0 gap, has sowingInProgress)`);
     slotsInProgressOnly.forEach(slot => {
-      console.log(`[getAllPlantsTodaySowingCards] 📋 InProgress Slot ${slot.slotId}: bookingGap=${slot.bookingGap}, sowingInProgress=${slot.sowingInProgress}, daysUntilSow=${slot.daysUntilSow}, slotEndDay=${slot.slotEndDay}`);
     });
 
     // Process results and group by plant/subtype for MAIN cards (with gap)
@@ -8685,14 +8661,12 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
           totalPrimarySowed: 0,
           sowingBuffer: plant?.sowingBuffer || 0,
         });
-        console.log(`[getAllPlantsTodaySowingCards] 🆕 Created new card for ${key}`);
       }
       
       const card = subtypeCardMap.get(key);
       card.slots.push(slot);
       card.totalBookedPlants += slot.totalBookedPlants || 0;
       card.totalPrimarySowed += slot.primarySowed || 0;
-      console.log(`[getAllPlantsTodaySowingCards] ➕ Added slot ${slot.slotId} to card ${key} (now ${card.slots.length} slots in card)`);
       
       // Use slot.bookingGap which already includes slot-level buffer
       if (slot.priority === "due") {
@@ -8706,10 +8680,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       }
       // Note: slots with priority === null are excluded by the filter above
     });
-    
-    console.log(`[getAllPlantsTodaySowingCards] 📊 Final cards: ${subtypeCardMap.size} cards created`);
     subtypeCardMap.forEach((card, key) => {
-      console.log(`[getAllPlantsTodaySowingCards] 📦 Card ${key}: ${card.slots.length} slots (slotIds: ${card.slots.map(s => s.slotId.toString()).join(', ')})`);
     });
 
     // Process each subtype card and enrich with product/batch data
@@ -8759,16 +8730,13 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         if (slot.daysUntilSow === null || slot.daysUntilSow > 0) {
           const isMuskmelonVijay = card.plantName?.toLowerCase().includes("muskmelon") && card.subtypeName?.toLowerCase().includes("vijay");
           if (isMuskmelonVijay) {
-            console.log(`[getAllPlantsTodaySowingCards] 🛡️ Safety filter: Removing future Muskmelon/Vijay slot ${slot.slotId} from card (daysUntilSow=${slot.daysUntilSow}, slotEndDay=${slot.slotEndDay}, priority=${slot.priority})`);
           } else {
-            console.log(`[getAllPlantsTodaySowingCards] 🛡️ Safety filter: Removing future slot ${slot.slotId} from card (daysUntilSow=${slot.daysUntilSow})`);
           }
           return false;
         }
         // Filter to only include slots where plantsToSowWithBuffer > 0
         const plantsToSow = (slot.plantsToSowWithBuffer || 0);
         if (plantsToSow <= 0) {
-          console.log(`[getAllPlantsTodaySowingCards] 🚫 Filtering out slot ${slot.slotId} (plantsToSowWithBuffer=${plantsToSow} <= 0)`);
           return false;
         }
         return true;

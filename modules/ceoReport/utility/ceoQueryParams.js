@@ -38,7 +38,7 @@ export function parseCeoReportQuery(query = {}) {
     includePastDue,
     includeFuture,
     dueOnly: dueFlags.dueOnly,
-    includeAllPastDue: dueFlags.includeAllPastDue || includePastDue,
+    includeAllPastDue: dueFlags.includeAllPastDue,
     extraMatch,
     plantId: query.plantId,
     year: query.year ? Number(query.year) : new Date().getFullYear(),

@@ -13,6 +13,7 @@ import {
   getPaymentTimingForApi,
   paymentMatchesTypes,
 } from "../utils/paymentTiming.js";
+import { parseCalendarQueryBound } from "../utility/istCalendar.js";
 
 const EXCLUDED_ORDER_STATUSES = ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"];
 
@@ -21,13 +22,6 @@ const EXCLUDED_FARMER_MOBILES = new Set([
   "7588686452",
   "7588686453",
 ]);
-
-const parseDate = (dateStr, isEnd = false) => {
-  const [day, month, year] = dateStr.split("-");
-  return isEnd
-    ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
-    : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-};
 
 function istCalendarDateString(d = new Date()) {
   const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -472,8 +466,8 @@ export const getCollectionsOverview = catchAsync(async (req, res) => {
   applyRoleMatch(pipeline, req.user);
 
   const dateRange = {
-    $gte: parseDate(startDate),
-    $lte: parseDate(endDate, true),
+    $gte: parseCalendarQueryBound(startDate, false),
+    $lte: parseCalendarQueryBound(endDate, true),
   };
 
   const matchStage = {
@@ -747,8 +741,8 @@ export const getCollectionsOverview = catchAsync(async (req, res) => {
         "../modules/finance/reports/orderCollectionsFromLedger.js"
       );
       ordersOut = await ledgerReports.applyLedgerBalancesToOrders(orders);
-      const rangeStart = parseDate(startDate);
-      const rangeEnd = parseDate(endDate, true);
+      const rangeStart = parseCalendarQueryBound(startDate, false);
+      const rangeEnd = parseCalendarQueryBound(endDate, true);
       ledgerMeta = {
         dataSource: "ledger",
         ledgerCollectedInRange: await ledgerReports.getLedgerCollectedTotalForDateRange(

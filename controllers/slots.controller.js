@@ -15,6 +15,7 @@ import {
   getSlotTrailActivityName,
   SLOT_TRAIL_ACTIONS,
   TRANSFER_TRAIL_ACTION_LIST,
+  ROLL_TRAIL_ACTION_LIST,
 } from "../constants/slotTrailActions.js";
 import {
   appendTransferSlotTrail,
@@ -3435,6 +3436,11 @@ export const getSlotTrail = async (req, res) => {
     if (types === "stock") {
       trailResponse = allTrailEntries.filter((entry) =>
         STOCK_TRAIL_ACTION_LIST.includes(entry.action)
+      );
+    } else if (types === "rolls") {
+      trailResponse = allTrailEntries.filter((entry) =>
+        ROLL_TRAIL_ACTION_LIST.includes(entry.action) ||
+        entry?.metadata?.transferType === "expired_available_roll"
       );
     } else if (types === "transfer") {
       trailResponse = allTrailEntries.filter((entry) =>

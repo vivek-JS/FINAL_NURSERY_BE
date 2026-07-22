@@ -4,12 +4,33 @@ import {
   SLOT_TRAIL_ACTION_ENUM,
   SLOT_TRAIL_ACTIONS,
   STOCK_TRAIL_ACTION_LIST,
+  TRANSFER_TRAIL_ACTION_LIST,
+  ROLL_TRAIL_ACTION_LIST,
   getSlotTrailActivityName,
 } from "../constants/slotTrailActions.js";
 import { logStockFieldChange } from "../utility/slotStockTrail.js";
 
 test("stock trail actions are valid slotTrail enum values", () => {
   for (const action of STOCK_TRAIL_ACTION_LIST) {
+    assert.ok(
+      SLOT_TRAIL_ACTION_ENUM.includes(action),
+      `${action} must be in SLOT_TRAIL_ACTION_ENUM`
+    );
+  }
+});
+
+test("transfer and roll trail lists include past-due hop actions", () => {
+  assert.ok(
+    TRANSFER_TRAIL_ACTION_LIST.includes(SLOT_TRAIL_ACTIONS.PAST_DUE_ROLLOUT_IN)
+  );
+  assert.ok(
+    TRANSFER_TRAIL_ACTION_LIST.includes(SLOT_TRAIL_ACTIONS.PAST_DUE_ROLLOUT_OUT)
+  );
+  assert.ok(ROLL_TRAIL_ACTION_LIST.includes(SLOT_TRAIL_ACTIONS.PAST_DUE_ROLLOUT_IN));
+  assert.ok(
+    ROLL_TRAIL_ACTION_LIST.includes(SLOT_TRAIL_ACTIONS.EXPIRED_ACTUAL_ROLL_IN)
+  );
+  for (const action of [...TRANSFER_TRAIL_ACTION_LIST, ...ROLL_TRAIL_ACTION_LIST]) {
     assert.ok(
       SLOT_TRAIL_ACTION_ENUM.includes(action),
       `${action} must be in SLOT_TRAIL_ACTION_ENUM`

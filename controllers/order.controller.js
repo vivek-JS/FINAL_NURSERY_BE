@@ -71,6 +71,7 @@ import {
   istYearBounds,
   istMonthBounds,
 } from "../utility/istCalendar.js";
+import { istTodayBounds, resolveIstQueryBounds } from "../utility/queryDateRange.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import {
   approveFarmerOrderTransferRequest,
@@ -775,24 +776,24 @@ const getCsv = catchAsync(async (req, res, next) => {
     let query = {};
 
     if (startDate && endDate) {
-      const start = new Date(startDate);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-      query.$or = [
-        { orderBookingDate: { $gte: start, $lte: end } },
-        {
-          $and: [
-            {
-              $or: [
-                { orderBookingDate: null },
-                { orderBookingDate: { $exists: false } },
-              ],
-            },
-            { createdAt: { $gte: start, $lte: end } },
-          ],
-        },
-      ];
+      const start = parseCalendarQueryBound(startDate, false);
+      const end = parseCalendarQueryBound(endDate, true);
+      if (start && end) {
+        query.$or = [
+          { orderBookingDate: { $gte: start, $lte: end } },
+          {
+            $and: [
+              {
+                $or: [
+                  { orderBookingDate: null },
+                  { orderBookingDate: { $exists: false } },
+                ],
+              },
+              { createdAt: { $gte: start, $lte: end } },
+            ],
+          },
+        ];
+      }
     }
 
     if (orderStatus) {
@@ -3005,21 +3006,15 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
       });
     }
 
-    // Parse dates
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0); // Set to start of day
-    
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999); // Set to end of day
-    
-    // Validate date format
-    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    const parsed = resolveIstQueryBounds(startDate, endDate);
+    if (parsed.error) {
       return res.status(400).json({
         success: false,
-        message: "Invalid date format. Please use YYYY-MM-DD format",
-        data: null
+        message: parsed.error,
+        data: null,
       });
     }
+    const { rangeStart: start, rangeEnd: end } = parsed;
 
     // Find orders with delivery date within the date range
     const orders = await Order.aggregate([
@@ -3027,10 +3022,11 @@ const getOrdersToBeDispatched = catchAsync(async (req, res, next) => {
         $match: {
           deliveryDate: {
             $gte: start,
-            $lte: end
-          }
+            $lte: end,
+            $ne: null,
+          },
           // Removed status filter - now shows all statuses
-        }
+        },
       },
       {
         $lookup: {
@@ -3286,14 +3282,16 @@ const getOrderBucketing = catchAsync(async (req, res, next) => {
     // Build match filter
     const matchFilter = {};
 
-    // Date filter
+    // Date filter (IST calendar bounds)
     if (startDate || endDate) {
       matchFilter.orderBookingDate = {};
       if (startDate) {
-        matchFilter.orderBookingDate.$gte = new Date(startDate);
+        const start = parseCalendarQueryBound(startDate, false);
+        if (start) matchFilter.orderBookingDate.$gte = start;
       }
       if (endDate) {
-        matchFilter.orderBookingDate.$lte = new Date(endDate);
+        const end = parseCalendarQueryBound(endDate, true);
+        if (end) matchFilter.orderBookingDate.$lte = end;
       }
     }
 
@@ -3546,14 +3544,16 @@ const getSalesmenBucketing = catchAsync(async (req, res, next) => {
     // Build match filter
     const matchFilter = {};
 
-    // Date filter
+    // Date filter (IST calendar bounds)
     if (startDate || endDate) {
       matchFilter.orderBookingDate = {};
       if (startDate) {
-        matchFilter.orderBookingDate.$gte = new Date(startDate);
+        const start = parseCalendarQueryBound(startDate, false);
+        if (start) matchFilter.orderBookingDate.$gte = start;
       }
       if (endDate) {
-        matchFilter.orderBookingDate.$lte = new Date(endDate);
+        const end = parseCalendarQueryBound(endDate, true);
+        if (end) matchFilter.orderBookingDate.$lte = end;
       }
     }
 
@@ -3803,10 +3803,14 @@ const getPaymentActivities = catchAsync(async (req, res, next) => {
     const query = {};
     
     if (startDate && endDate) {
-      query.timestamp = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
+      const rangeStart = parseCalendarQueryBound(startDate, false);
+      const rangeEnd = parseCalendarQueryBound(endDate, true);
+      if (rangeStart && rangeEnd) {
+        query.timestamp = {
+          $gte: rangeStart,
+          $lte: rangeEnd,
+        };
+      }
     }
 
     const activities = await PaymentActivity.find(query)
@@ -3832,17 +3836,13 @@ const getPaymentActivities = catchAsync(async (req, res, next) => {
 
 const getTodaysPaymentActivities = catchAsync(async (req, res, next) => {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const { start: todayStart, end: todayEnd } = istTodayBounds();
 
     const activities = await PaymentActivity.find({
       timestamp: {
-        $gte: today,
-        $lt: tomorrow
-      }
+        $gte: todayStart,
+        $lte: todayEnd,
+      },
     })
       .populate('orderId', 'orderId')
       .populate('performedBy.userId', 'name phoneNumber')
@@ -6159,11 +6159,7 @@ const getRemainingDispatchMatrixOrders = catchAsync(async (req, res) => {
 const getAdminDashboardStats = catchAsync(async (req, res) => {
   const { startDate, endDate } = req.query;
 
-  // IST today boundaries
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayEnd = new Date();
-  todayEnd.setHours(23, 59, 59, 999);
+  const { start: todayStart, end: todayEnd } = istTodayBounds();
 
   // ── Today's booking stats (use orderBookingDate — same field as the rest of the app) ─────
   const todayBookingAgg = await Order.aggregate([
@@ -6193,11 +6189,10 @@ const getAdminDashboardStats = catchAsync(async (req, res) => {
   let rangeDispatchStats = null;
 
   if (startDate && endDate) {
-    const rangeStart = new Date(startDate);
-    rangeStart.setHours(0, 0, 0, 0);
-    const rangeEnd = new Date(endDate);
-    rangeEnd.setHours(23, 59, 59, 999);
+    const rangeStart = parseCalendarQueryBound(startDate, false);
+    const rangeEnd = parseCalendarQueryBound(endDate, true);
 
+    if (rangeStart && rangeEnd) {
     const rangeMatch = {
       orderBookingDate: { $gte: rangeStart, $lte: rangeEnd },
       orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
@@ -6333,6 +6328,7 @@ const getAdminDashboardStats = catchAsync(async (req, res) => {
       createdAt: { $gte: rangeStart, $lte: rangeEnd },
     });
     rangeDispatchStats = { dispatchCount: dispatchInRange };
+    }
   }
 
   return res.status(200).json({

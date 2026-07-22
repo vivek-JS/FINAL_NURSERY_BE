@@ -67,7 +67,7 @@ async function listSubtypeSlots(plantId, subtypeId, year) {
   const subtypeSlot = (doc.subtypeSlots || []).find(
     (s) => s.subtypeId?.toString() === String(subtypeId)
   );
-  return (subtypeSlot?.slots || []).filter((s) => s?.status !== false);
+  return subtypeSlot?.slots || [];
 }
 
 export async function listRollExpiredAvailableSources(targetSlotId, asOfDate = new Date()) {
@@ -77,7 +77,7 @@ export async function listRollExpiredAvailableSources(targetSlotId, asOfDate = n
   }
 
   if (!isSlotContainingDate(targetDetails.slot, asOfDate)) {
-    throw new Error("Roll expired available is only allowed on today's active slot");
+    throw new Error("Roll expired available is only allowed on today's slot window");
   }
 
   const slots = await listSubtypeSlots(
@@ -370,7 +370,7 @@ export async function runRollExpiredSlotAvailable({
   const targetDetails = await findSlotDetails(targetSlotId);
   if (!targetDetails) throw new Error("Target slot not found");
   if (!isSlotContainingDate(targetDetails.slot, asOfDate)) {
-    throw new Error("Roll expired available is only allowed on today's active slot");
+    throw new Error("Roll expired available is only allowed on today's slot window");
   }
 
   const session = await mongoose.startSession();

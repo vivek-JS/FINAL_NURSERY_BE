@@ -395,6 +395,30 @@ const slotSchema = new Schema({
       type: Date,
     },
   }], // Array to track multiple sowing requests in progress for this slot
+  /** Complete-sow batches: plants + packets + ready date (sow + plantReadyDays) */
+  sowingBatches: [
+    {
+      sowedAt: { type: Date, default: Date.now },
+      sowingDate: { type: String }, // DD-MM-YYYY
+      plantReadyDate: { type: String }, // DD-MM-YYYY
+      plantReadyDays: { type: Number, default: 0 },
+      plantsSowed: { type: Number, default: 0 },
+      packetsUsed: { type: Number, default: 0 },
+      shedName: { type: String, default: "", trim: true },
+      sowingRequestId: {
+        type: Schema.Types.ObjectId,
+        ref: "SowingRequest",
+      },
+      requestNumber: { type: String },
+      isExcessiveSowing: { type: Boolean, default: false },
+      linkedOrderIds: [
+        {
+          type: Schema.Types.ObjectId,
+          ref: "Order",
+        },
+      ],
+    },
+  ],
   linkedSowingRequests: [{
     type: Schema.Types.ObjectId,
     ref: 'SowingRequest',

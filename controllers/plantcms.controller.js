@@ -581,10 +581,18 @@ export const addSubtype = async (req, res) => {
   }
 };
 
-// Update a specific subtype
+// Update a specific subtype (price/name/etc — does not touch slot generation fields)
 export const updateSubtype = async (req, res) => {
   const { plantId, subtypeId } = req.params;
-  const { name, description, characteristics, plantReadyDays, monthlyRates } = req.body;
+  const {
+    name,
+    description,
+    characteristics,
+    plantReadyDays,
+    monthlyRates,
+    rates,
+    buffer,
+  } = req.body;
 
   try {
     // Build the $set payload using the positional $ operator so we only update
@@ -596,6 +604,12 @@ export const updateSubtype = async (req, res) => {
     if (description !== undefined) setFields["subtypes.$.description"] = description;
     if (characteristics !== undefined) setFields["subtypes.$.characteristics"] = characteristics;
     if (plantReadyDays !== undefined) setFields["subtypes.$.plantReadyDays"] = Number(plantReadyDays) || 0;
+    if (buffer !== undefined) setFields["subtypes.$.buffer"] = Number(buffer) || 0;
+    if (rates !== undefined) {
+      setFields["subtypes.$.rates"] = Array.isArray(rates)
+        ? rates.filter((r) => r !== "" && r !== null && r !== undefined).map((r) => Number(r) || 0)
+        : [];
+    }
     if (monthlyRates !== undefined) {
       setFields["subtypes.$.monthlyRates"] = Array.isArray(monthlyRates)
         ? monthlyRates

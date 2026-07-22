@@ -9,7 +9,7 @@ import {
   duePipelineMatch,
 } from "../utility/adminMisDue.js";
 import {
-  aggregateGlobalStatusByGroup,
+  aggregateStatusByDeliveryAndGroup,
   aggregateAcceptedByDeliveryAndGroup,
   aggregateDispatchedByGroup,
   aggregateVehicleDispatchedByGroup,
@@ -137,15 +137,19 @@ async function fetchPersonBreakdownMetrics(
         },
       },
     ]),
-    aggregateGlobalStatusByGroup(
+    aggregateStatusByDeliveryAndGroup(
       "FARM_READY",
+      rangeStart,
+      rangeEnd,
       statusMatch,
       groupStages,
       groupIdFields,
       mergedExtra
     ),
-    aggregateGlobalStatusByGroup(
+    aggregateStatusByDeliveryAndGroup(
       "READY_FOR_DISPATCH",
+      rangeStart,
+      rangeEnd,
       statusMatch,
       groupStages,
       groupIdFields,

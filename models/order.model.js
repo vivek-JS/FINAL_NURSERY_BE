@@ -624,6 +624,61 @@ const orderSchema = new Schema(
       // Use aggregation or manual lookup instead
       required: true,
     },
+    /** Seed plan for sowing-allowed plants (company / customer raising / mixed). */
+    sowingPlan: {
+      seedSource: {
+        type: String,
+        enum: ["COMPANY", "RAISING", "MIXED"],
+        default: "COMPANY",
+      },
+      companySeedPackets: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      raisingSeedPackets: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      sowingNotes: {
+        type: String,
+        default: "",
+      },
+      /** One raising collect per order — set when intake is saved */
+      raisingIntakeCollected: {
+        type: Boolean,
+        default: false,
+      },
+      raisingIntakeId: {
+        type: Schema.Types.ObjectId,
+        ref: "RaisingSeedIntake",
+      },
+      /** Snapshot for order detail UI (kept in sync on create/edit) */
+      raisingIntake: {
+        intakeNumber: { type: String, default: "" },
+        packetsReceived: { type: Number, default: 0 },
+        packetsRemaining: { type: Number, default: 0 },
+        batchNumber: { type: String, default: "" },
+        expiryDate: { type: Date },
+        farmerName: { type: String, default: "" },
+        notes: { type: String, default: "" },
+        collectedAt: { type: Date },
+        updatedAt: { type: Date },
+      },
+    },
+    /** Seed sowing against a SowingRequest completed for this order */
+    sowingDone: {
+      type: Boolean,
+      default: false,
+    },
+    sowingDoneAt: {
+      type: Date,
+    },
+    sowingDoneRequestId: {
+      type: Schema.Types.ObjectId,
+      ref: "SowingRequest",
+    },
     cavity: {
       type: Schema.Types.ObjectId,
       ref: "Tray",
@@ -1021,6 +1076,8 @@ orderSchema.index({ orderSubmittedBy: 1, createdAt: -1 });
 orderSchema.index({ placedByOfficeAdmin: 1 });
 orderSchema.index({ plantName: 1 });
 orderSchema.index({ bookingSlot: 1 });
+orderSchema.index({ bookingSlot: 1, "sowingPlan.seedSource": 1 });
+orderSchema.index({ sowingDone: 1, sowingDoneAt: -1 });
 orderSchema.index({ orderStatus: 1 });
 orderSchema.index({ orderStatus: 1, deliveryDate: 1 });
 // Ascending delivery sorts (dispatch queue / mobile list)

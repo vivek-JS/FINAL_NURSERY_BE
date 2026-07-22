@@ -36,6 +36,7 @@ const allowedParams = [
   "paymentStatus",
   "plantId",
   "subtypeId",
+  "slotIds", // GET /sowing/order-wise — comma-separated booking slot ObjectIds
   "year",
   "onlyAvailable", // GET /slots/availability-overview
   "minNumberPerCrate",
@@ -212,6 +213,9 @@ const allowedParams = [
   // One-click agri load link params
   "orderNumber",
   "actorPhone",
+  // Daily notes list filters
+  "from",
+  "to",
 ];
 
 /** Effective whitelist: array + mandatory extras (survives accidental removal from `allowedParams`). */

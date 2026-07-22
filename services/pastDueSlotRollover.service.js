@@ -169,12 +169,13 @@ export function isSlotContainingDate(slot, asOfDate = new Date()) {
 }
 
 /**
- * The slot row that should show past-due UI totals: today's window, else first active slot.
+ * The slot row that should show past-due UI totals: today's window, else first non-expired slot.
+ * Active/Off (status) is ignored — a closed running window is still "current".
  */
 export function findCurrentSlotIdForGroup(slots, asOfDate = new Date()) {
-  const list = [...(slots || [])]
-    .filter((s) => s?.status !== false)
-    .sort((a, b) => slotStartMoment(a).valueOf() - slotStartMoment(b).valueOf());
+  const list = [...(slots || [])].sort(
+    (a, b) => slotStartMoment(a).valueOf() - slotStartMoment(b).valueOf()
+  );
 
   for (const slot of list) {
     if (isSlotContainingDate(slot, asOfDate)) {
@@ -223,8 +224,7 @@ export function buildSlotRolloverIndexes(plantSlots, asOfDate = new Date()) {
       const list = slotsByPlantSubtype.get(psKey);
 
       for (const slot of subtypeSlot.slots || []) {
-        if (slot.status === false) continue;
-
+        // Include Off/closed slots so past-due can land on today's running window.
         const slotId = slot._id?.toString?.() || String(slot._id);
         const startM = slotStartMoment(slot);
 

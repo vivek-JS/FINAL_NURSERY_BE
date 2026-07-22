@@ -9,6 +9,7 @@ import { NON_DEALER_QUOTA_MATCH } from "../utility/slotDispatchStats.js";
 import { duePipelineMatch } from "../utility/adminMisDue.js";
 import { hydrateMisOrderDrawerList } from "../utility/misOrderEnrichment.js";
 import { sumOrderAdvancePayments } from "../utils/paymentTiming.js";
+import { deliveryDateInRangeOnly } from "../utility/centralReportEngine/deliveryMatch.js";
 
 const ROLLED_NOR = [
   { pastDueSlotRollover: true },
@@ -28,7 +29,7 @@ function toOid(value) {
 }
 
 function deliveryInRange(rangeStart, rangeEnd) {
-  return { deliveryDate: { $gte: rangeStart, $lte: rangeEnd, $ne: null } };
+  return deliveryDateInRangeOnly(rangeStart, rangeEnd);
 }
 
 function nativeCohortBranch(rangeStart, rangeEnd, includePastDue) {

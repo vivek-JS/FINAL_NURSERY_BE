@@ -40,15 +40,9 @@ import {
   KPI_ORDER_CAP,
 } from "../utility/insightsKpi.js";
 import { fetchInsightsOperations } from "../services/insightsCentral.service.js";
+import { parseCalendarQueryBound } from "../utility/istCalendar.js";
 
 const EXCLUDED_ORDER_STATUSES = ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"];
-
-const parseDate = (dateStr, isEnd = false) => {
-  const [day, month, year] = dateStr.split("-");
-  return isEnd
-    ? new Date(`${year}-${month}-${day}T23:59:59.999Z`)
-    : new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-};
 
 /** End of calendar day in Asia/Kolkata (for due-only comparisons vs DB dates). */
 function endOfIstDay(ymd) {
@@ -357,8 +351,8 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
     farmer: { $exists: true, $ne: null },
     orderStatus: { $nin: EXCLUDED_ORDER_STATUSES },
     orderBookingDate: {
-      $gte: parseDate(startDate),
-      $lte: parseDate(endDate, true),
+      $gte: parseCalendarQueryBound(startDate, false),
+      $lte: parseCalendarQueryBound(endDate, true),
     },
   };
 

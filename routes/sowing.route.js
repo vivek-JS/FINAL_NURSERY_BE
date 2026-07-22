@@ -61,6 +61,26 @@ import {
   recalculateSowingRemaining,
   cancelSowingRequest as cancelSowingAndRevertStock,
 } from "../controllers/sowingRequestProgress.controller.js";
+import {
+  createRaisingIntake,
+  updateRaisingIntake,
+  getAvailableRaisingIntakes,
+  getRaisingIntakeById,
+  getRaisingIntakeByOrder,
+  getPendingRaisingOrders,
+  raisingUpload,
+} from "../controllers/raisingSeed.controller.js";
+import {
+  getTodaySowingCardsLite,
+  getOrderWiseSowing,
+} from "../controllers/sowingCardsLite.controller.js";
+import {
+  completeSowUpload,
+  completeSowingRequest,
+  getIssuedSowingQueue,
+  getSowingCompletions,
+} from "../controllers/sowingRequestComplete.controller.js";
+import { getDeliveryVsReadyAnalytics } from "../controllers/deliveryVsReady.controller.js";
 
 const router = express.Router();
 
@@ -82,6 +102,10 @@ router.get("/plants-gap-summary", getPlantsGapSummary); // Get all plants with s
 router.get("/slot-orders/:slotId", getSlotOrdersSummary); // Get orders summary for a specific slot
 router.get("/today-sowing-data", getTodaySowingData); // Get today's sowing data for all plants (due and current day)
 router.get("/today-sowing-cards", getAllPlantsTodaySowingCards); // Get all plants subtype cards for today and overdue (flat structure, no accordion)
+router.get("/today-sowing-cards-lite", getTodaySowingCardsLite); // Lean cards + order seed summary (fast UI)
+router.get("/order-wise", getOrderWiseSowing); // Order-wise rows for Request Packets drawer
+router.get("/completions", getSowingCompletions); // Completed sow history (paginated + order search)
+router.get("/analytics/delivery-vs-ready", getDeliveryVsReadyAnalytics); // Delivery vs ready/available chart
 router.get("/easy-30-days", getEasy30DaySowingCards); // Easy sowing cards for rolling day window
 router.post("/easy-30-days/ready-days", bulkUpdatePlantReadyDaysForFutureSlots); // Update plant ready days for future slots only
 router.get("/insights/records", getSowingInsightsRecords); // Unified sowing insights records for side drawer feed
@@ -92,10 +116,16 @@ router.get("/request/check", checkRequestExists); // Check if request exists for
 router.get("/request/all", getAllSowingRequests); // Get all sowing requests (with optional status filter)
 router.get("/request/pending", getPendingSowingRequests); // Get all pending sowing requests
 router.get("/request/active", getActiveSowingRequests); // Get all active sowing requests (issued/in-progress)
+router.get("/request/issued-queue", getIssuedSowingQueue); // Shed-ops: issued not yet completed
 router.get("/request/:id", getSowingRequestById); // Get sowing request by ID
 router.get("/request/:requestId/status", getSowingRequestStatus); // Get request status with progress
 router.put("/request/:id", updateSowingRequest); // Update sowing request (edit)
 router.post("/request/:id/issue", issueStockFromRequest); // Issue stock from sowing request (exact quantity)
+router.post(
+  "/request/:requestId/complete-sow",
+  completeSowUpload.array("photos", 5),
+  completeSowingRequest
+); // Complete sow: plants + labour + optional photos
 router.put("/request/:requestId/mark-issued", markRequestAsIssued); // Mark request as issued (after inventory outward)
 router.put("/request/:requestId/update-progress", updateSowingProgress); // Update sowing progress
 router.post("/request/:requestId/recalculate", recalculateSowingRemaining); // Recalculate sowing remaining
@@ -103,6 +133,22 @@ router.post("/request/:id/reject", rejectSowingRequest); // Reject sowing reques
 router.post("/request/:id/cancel", cancelSowingRequest); // Cancel sowing request (old - just marks as cancelled)
 router.post("/request/:requestId/cancel-and-revert", cancelSowingAndRevertStock); // Cancel and revert all changes (slots + inventory)
 router.post("/request/cancel-all", cancelAllSowingRequests); // Cancel all pending sowing requests (for testing)
+
+// Raising (customer-given) seed intake — Phase 1 until request
+router.post(
+  "/raising/intake",
+  raisingUpload.array("photos", 8),
+  createRaisingIntake
+);
+router.patch(
+  "/raising/intake/:id",
+  raisingUpload.array("photos", 8),
+  updateRaisingIntake
+);
+router.get("/raising/available", getAvailableRaisingIntakes);
+router.get("/raising/pending-orders", getPendingRaisingOrders);
+router.get("/raising/by-order/:orderId", getRaisingIntakeByOrder);
+router.get("/raising/:id", getRaisingIntakeById);
 
 // Excessive Sowing routes
 router.post("/excessive/create-request", createExcessiveSowingRequest); // Create excessive sowing request (no orders)

@@ -3,46 +3,37 @@ import generateResponse from "../utility/responseFormat.js";
 import MotivationalQuote from "../models/motivationalQuote.model.js";
 import AppError from "../utility/appError.js";
 
+/** Process-local cache — quotes rarely change */
+let quoteCache = { at: 0, quotes: null };
+const QUOTE_TTL_MS = 10 * 60 * 1000;
+
+async function getActiveQuotesCached() {
+  if (quoteCache.quotes && Date.now() - quoteCache.at < QUOTE_TTL_MS) {
+    return quoteCache.quotes;
+  }
+  const quotes = await MotivationalQuote.find({ isActive: true })
+    .select("id line1 line2")
+    .sort({ id: 1 })
+    .lean();
+  quoteCache = { at: Date.now(), quotes };
+  return quotes;
+}
+
 /**
  * Get today's motivational quote
  * Uses day of year (1-365/366) to cycle through quotes
  */
 export const getTodaysQuote = catchAsync(async (req, res, next) => {
-  // Get day of year (1-365 or 366 for leap years)
   const now = new Date();
   const start = new Date(now.getFullYear(), 0, 0);
-  const diff = now - start;
-  const dayOfYear = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const dayOfYear = Math.floor((now - start) / (1000 * 60 * 60 * 24));
 
-  // Get total active quotes
-  const totalQuotes = await MotivationalQuote.countDocuments({ isActive: true });
-
-  if (totalQuotes === 0) {
+  const quotes = await getActiveQuotesCached();
+  if (!quotes.length) {
     return next(new AppError("No motivational quotes available", 404));
   }
 
-  // Use modulo to cycle through quotes based on day of year
-  const quoteIndex = (dayOfYear % totalQuotes) + 1;
-
-  // Find quote by calculated index (using id field)
-  // If quote with that id doesn't exist, get the first active quote
-  let quote = await MotivationalQuote.findOne({
-    id: quoteIndex,
-    isActive: true,
-  });
-
-  // Fallback: if quote with calculated id doesn't exist, get quote by position
-  if (!quote) {
-    const quotes = await MotivationalQuote.find({ isActive: true }).sort({ id: 1 });
-    if (quotes.length > 0) {
-      const actualIndex = (dayOfYear - 1) % quotes.length;
-      quote = quotes[actualIndex];
-    }
-  }
-
-  if (!quote) {
-    return next(new AppError("No motivational quote found for today", 404));
-  }
+  const quote = quotes[(dayOfYear - 1) % quotes.length];
 
   return res.status(200).json(
     generateResponse(
