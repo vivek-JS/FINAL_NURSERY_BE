@@ -2,6 +2,7 @@ import multer from "multer";
 import mongoose from "mongoose";
 import SowingRequest from "../models/sowingRequest.model.js";
 import Order from "../models/order.model.js";
+import InventoryOutward from "../models/inventoryOutward.model.js";
 import {
   parseNum,
   pushEvent,
@@ -385,7 +386,7 @@ export const getSowingCompletions = async (req, res) => {
       SowingRequest.countDocuments(match),
       SowingRequest.find(match)
         .select(
-          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents completionPhotos completionNotes shedName sowingCompletedDate isExcessiveSowing linkedOrderIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned returnRequestIds completionEvents completedBy"
+          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents completionPhotos completionNotes shedName sowingCompletedDate isExcessiveSowing linkedOrderIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned returnRequestIds completionEvents completedBy outwardId"
         )
         .populate("completedBy", "name")
         .sort({ sowingCompletedDate: -1 })
@@ -399,16 +400,42 @@ export const getSowingCompletions = async (req, res) => {
         rows.flatMap((r) => (r.linkedOrderIds || []).map((id) => String(id)))
       ),
     ];
-    const orders = allOrderIds.length
-      ? await Order.find({ _id: { $in: allOrderIds } })
-          .select("orderId name farmer numberOfPlants additionalPlants sowingDone sowingDoneAt")
-          .populate("farmer", "name mobileNumber")
-          .lean()
-      : [];
+    const outwardIds = [
+      ...new Set(
+        rows.map((r) => r.outwardId).filter(Boolean).map((id) => String(id))
+      ),
+    ];
+
+    const [orders, outwards] = await Promise.all([
+      allOrderIds.length
+        ? Order.find({ _id: { $in: allOrderIds } })
+            .select(
+              "orderId name farmer numberOfPlants additionalPlants sowingDone sowingDoneAt deliveryDate"
+            )
+            .populate("farmer", "name mobileNumber")
+            .lean()
+        : Promise.resolve([]),
+      outwardIds.length
+        ? InventoryOutward.find({ _id: { $in: outwardIds } })
+            .select("outwardNumber outwardDate items.batch")
+            .populate("items.batch", "batchNumber")
+            .lean()
+        : Promise.resolve([]),
+    ]);
+
     const orderMap = new Map(orders.map((o) => [String(o._id), o]));
+    const outwardMap = new Map(outwards.map((o) => [String(o._id), o]));
 
     const items = rows.map((r) => {
       const cf = Number(r.conversionFactor) || 1;
+      const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
+      const batchNumbers = [
+        ...new Set(
+          (outward?.items || [])
+            .map((it) => it?.batch?.batchNumber || it?.batchNumber || "")
+            .filter(Boolean)
+        ),
+      ];
       const linkedOrders = (r.linkedOrderIds || []).map((id) => {
         const o = orderMap.get(String(id));
         if (!o) return { orderId: id };
@@ -416,12 +443,20 @@ export const getSowingCompletions = async (req, res) => {
           orderId: o._id,
           orderNumber: o.orderId,
           farmerName: o.farmer?.name || o.name || "",
+          farmerMobile: o.farmer?.mobileNumber || "",
           plants:
             (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0),
           sowingDone: Boolean(o.sowingDone),
           sowingDoneAt: o.sowingDoneAt,
+          deliveryDate: o.deliveryDate || null,
         };
       });
+      const sowingDate =
+        r.sowingCompletedDate ||
+        (Array.isArray(r.completionEvents)
+          ? r.completionEvents.find((e) => e?.type === "SOW_COMPLETED")?.at
+          : null) ||
+        null;
       return {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
@@ -429,6 +464,10 @@ export const getSowingCompletions = async (req, res) => {
         linkedOrders,
         labourTotal:
           (Number(r.laboursLadies) || 0) + (Number(r.laboursGents) || 0),
+        batchNumber: batchNumbers.join(", ") || "",
+        batchNumbers,
+        outwardNumber: outward?.outwardNumber || "",
+        sowingDate,
       };
     });
 
