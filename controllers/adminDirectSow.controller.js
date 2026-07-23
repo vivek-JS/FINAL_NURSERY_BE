@@ -31,6 +31,39 @@ function dayRange(dateStr) {
   return { start, end };
 }
 
+/** Parse YYYY-MM-DD or DD-MM-YYYY to local noon Date; null if invalid. */
+function parseLocalDate(input) {
+  if (input instanceof Date && !Number.isNaN(input.getTime())) return input;
+  const s = String(input || "").trim();
+  if (!s) return null;
+  const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymd) {
+    return new Date(
+      parseInt(ymd[1], 10),
+      parseInt(ymd[2], 10) - 1,
+      parseInt(ymd[3], 10),
+      12,
+      0,
+      0,
+      0
+    );
+  }
+  const dmy = s.match(/^(\d{2})-(\d{2})-(\d{4})/);
+  if (dmy) {
+    return new Date(
+      parseInt(dmy[3], 10),
+      parseInt(dmy[2], 10) - 1,
+      parseInt(dmy[1], 10),
+      12,
+      0,
+      0,
+      0
+    );
+  }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 async function resolveSeedProduct(plantId, subtypeId) {
   return Product.findOne({
     plantId: new mongoose.Types.ObjectId(plantId),
@@ -193,7 +226,10 @@ export const submitDirectSow = async (req, res) => {
     const batchNumber = String(req.body.batchNumber || "").trim();
     const laboursLadies = Math.max(0, parseNum(req.body.laboursLadies));
     const laboursGents = Math.max(0, parseNum(req.body.laboursGents));
-    const sowDateHint = String(req.body.date || "").trim();
+    const sowDateHint = String(
+      req.body.sowDate || req.body.sowingDate || req.body.date || ""
+    ).trim();
+    const sowedAt = parseLocalDate(sowDateHint) || new Date();
 
     const orders = await Order.find({
       _id: { $in: orderIds.map((id) => new mongoose.Types.ObjectId(id)) },
@@ -326,7 +362,7 @@ export const submitDirectSow = async (req, res) => {
         }`,
       completedBy: userId,
       sowingCompleted: true,
-      sowingCompletedDate: new Date(),
+      sowingCompletedDate: sowedAt,
       sowingInProgress: false,
       remainingSowingNeeded: 0,
       completionEvents: [],
@@ -361,11 +397,12 @@ export const submitDirectSow = async (req, res) => {
       linkedOrderIds: linkedOrderObjectIds,
       isExcessiveSowing: false,
       shedName,
+      sowedAt,
     });
 
     await request.save();
 
-    const orderResult = await markOrdersSowed(request);
+    const orderResult = await markOrdersSowed(request, { sowedAt });
     pushEvent(request, {
       type: "ORDERS_MARKED_SOWED",
       by: userId,

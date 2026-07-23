@@ -126,7 +126,10 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
     );
   }
 
-  const sowedAt = new Date();
+  const sowedAt =
+    meta.sowedAt instanceof Date && !Number.isNaN(meta.sowedAt.getTime())
+      ? meta.sowedAt
+      : new Date();
   const sowingDateStr = fmtDDMMYYYY(sowedAt);
 
   let weightSum = 0;
@@ -370,10 +373,15 @@ export async function settleOutwardAndReturns(
   return { used: usedTotal, returned: returnedTotal, returnRequestIds, events };
 }
 
-export async function markOrdersSowed(request) {
+export async function markOrdersSowed(request, opts = {}) {
   if (request.isExcessiveSowing) return { marked: 0 };
   const ids = request.linkedOrderIds || [];
   if (!ids.length) return { marked: 0 };
+
+  const sowedAt =
+    opts.sowedAt instanceof Date && !Number.isNaN(opts.sowedAt.getTime())
+      ? opts.sowedAt
+      : new Date();
 
   const result = await Order.updateMany(
     {
@@ -383,7 +391,7 @@ export async function markOrdersSowed(request) {
     {
       $set: {
         sowingDone: true,
-        sowingDoneAt: new Date(),
+        sowingDoneAt: sowedAt,
         sowingDoneRequestId: request._id,
       },
     }

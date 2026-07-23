@@ -4611,6 +4611,9 @@ const getAll = (Model, modelName) =>
           plantType: {
             id: { $arrayElemAt: ["$plantName._id", 0] },
             name: { $arrayElemAt: ["$plantName.name", 0] },
+            sowingAllowed: {
+              $ifNull: [{ $arrayElemAt: ["$plantName.sowingAllowed", 0] }, false],
+            },
           },
           plantSubtype: {
             id: "$plantSubtypeDetails._id",
@@ -4664,6 +4667,10 @@ const getAll = (Model, modelName) =>
           createdAt: 1,
           orderStatus: 1,
           assignedVehicle: 1,
+          sowingPlan: 1,
+          sowingDone: { $ifNull: ["$sowingDone", false] },
+          sowingDoneAt: 1,
+          sowingDoneRequestId: 1,
           payment: 1,
           numberOfPlants: 1,
           additionalPlants: { $ifNull: ["$additionalPlants", 0] },
