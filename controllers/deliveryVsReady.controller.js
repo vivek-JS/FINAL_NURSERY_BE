@@ -214,6 +214,7 @@ export const getDeliveryVsReadyAnalytics = async (req, res) => {
                 "PARTIALLY_COMPLETED",
               ],
             },
+            sowingDone: { $ne: true },
             $or: [
               { quotaSource: { $exists: false } },
               { quotaSource: null },

@@ -317,6 +317,22 @@ function attachClientHandlers(waClient) {
   });
 }
 
+function wipeSessionDir(dataPath, reason) {
+  const dir = sessionDirForClient(dataPath);
+  if (!fs.existsSync(dir)) return false;
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+    console.warn(`[WhatsApp] Removed broken session (${reason}): ${dir}`);
+    return true;
+  } catch (err) {
+    console.error(
+      `[WhatsApp] Failed to remove session dir ${dir}:`,
+      err?.message || err
+    );
+    return false;
+  }
+}
+
 function createClient(dataPath) {
   return new Client({
     authStrategy: new LocalAuth({
@@ -344,6 +360,13 @@ function createClient(dataPath) {
   });
 }
 
+async function initializeClientOnce(dataPath) {
+  client = createClient(dataPath);
+  attachClientHandlers(client);
+  await client.initialize();
+  return client;
+}
+
 /**
  * Start (or reconnect) the WhatsApp client. Safe to call after dotenv is loaded.
  * Idempotent — second call is a no-op while running.
@@ -357,28 +380,49 @@ export async function startWhatsAppClient() {
   const hasSession = hasPersistedWhatsAppSession(sessionPath);
   const chromeOnly =
     fs.existsSync(sessionDirForClient(sessionPath)) && !hasSession;
+
+  // Half-written Chrome profile (common after crash / restart mid-scan) blocks QR.
+  if (chromeOnly) {
+    wipeSessionDir(sessionPath, "chrome-profile-not-logged-in");
+  }
+
   console.log(
     `[WhatsApp] Session path: ${sessionPath} — ${
       hasSession
         ? "logged-in session on disk (restart should reuse, no QR)"
-        : chromeOnly
-          ? "Chrome profile exists but not logged in — scan QR (nodemon restarts during scan can wipe session)"
-          : "no session yet (QR will appear in logs)"
+        : "no valid session — QR will print in logs within ~1–2 min"
     }`
   );
 
   if (initStarted && client) return client;
   initStarted = true;
 
-  client = createClient(sessionPath);
-  attachClientHandlers(client);
-
   try {
-    await client.initialize();
+    await initializeClientOnce(sessionPath);
   } catch (err) {
     console.error("[WhatsApp] Initial initialization error:", err?.message || err);
-    initStarted = false;
+    await client?.destroy?.().catch(() => {});
     client = null;
+
+    // Corrupt LocalAuth / WhatsApp Web reload → wipe once and retry for a clean QR.
+    if (isWhatsAppDetachedError(err) || /Execution context was destroyed/i.test(String(err?.message || err))) {
+      wipeSessionDir(sessionPath, "init-protocol-error");
+      await sleep(REINIT_BACKOFF_MS);
+      try {
+        console.warn("[WhatsApp] Retrying initialize with clean session (QR should appear)...");
+        await initializeClientOnce(sessionPath);
+      } catch (retryErr) {
+        console.error(
+          "[WhatsApp] Retry initialization failed:",
+          retryErr?.message || retryErr
+        );
+        await client?.destroy?.().catch(() => {});
+        client = null;
+        initStarted = false;
+      }
+    } else {
+      initStarted = false;
+    }
   }
 
   return client;

@@ -382,6 +382,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
           $match: {
             bookingSlot: { $in: candidateSlotIds },
             orderStatus: { $in: ACTIVE_ORDER_STATUSES },
+            sowingDone: { $ne: true },
             $or: [
               { quotaSource: { $exists: false } },
               { quotaSource: null },
@@ -504,6 +505,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
           $match: {
             bookingSlot: { $in: allSlotIds },
             orderStatus: { $in: ACTIVE_ORDER_STATUSES },
+            sowingDone: { $ne: true },
           },
         },
         {
@@ -894,6 +896,7 @@ export const getOrderWiseSowing = async (req, res) => {
       plantName: plantId,
       plantSubtype: subtypeId,
       orderStatus: { $in: ACTIVE_ORDER_STATUSES },
+      sowingDone: { $ne: true },
     };
     if (slotIdList.length) {
       query.bookingSlot = { $in: slotIdList };
@@ -902,7 +905,7 @@ export const getOrderWiseSowing = async (req, res) => {
     const [orders, products, raisings, activeOrderReqs] = await Promise.all([
       Order.find(query)
         .select(
-          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderStatus"
+          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderStatus sowingDone"
         )
         .populate("farmer", "name mobileNumber")
         .sort({ createdAt: 1 })
