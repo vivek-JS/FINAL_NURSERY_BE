@@ -902,10 +902,10 @@ export const getOrderWiseSowing = async (req, res) => {
       query.bookingSlot = { $in: slotIdList };
     }
 
-    const [orders, products, raisings, activeOrderReqs] = await Promise.all([
+    const [orders, products, raisings, activeOrderReqs, plantDoc] = await Promise.all([
       Order.find(query)
         .select(
-          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderStatus sowingDone"
+          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderStatus sowingDone deliveryDate"
         )
         .populate("farmer", "name mobileNumber")
         .sort({ createdAt: 1 })
@@ -936,7 +936,58 @@ export const getOrderWiseSowing = async (req, res) => {
       })
         .select("requestNumber status linkedOrderIds")
         .lean(),
+      PlantCms.findById(plantId)
+        .select("subtypes._id subtypes.plantReadyDays sowingBuffer")
+        .lean(),
     ]);
+
+    const subtypeReadyDays =
+      Number(
+        plantDoc?.subtypes?.find((st) => String(st._id) === String(subtypeId))
+          ?.plantReadyDays
+      ) || 0;
+
+    // Slot startDay + plantReadyDays for sow-by calculation
+    const bookingSlotIds = [
+      ...new Set(
+        orders
+          .map((o) => o.bookingSlot)
+          .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
+          .map((id) => String(id))
+      ),
+    ].map((id) => new mongoose.Types.ObjectId(id));
+
+    const slotMetaById = new Map();
+    if (bookingSlotIds.length) {
+      const slotDocs = await PlantSlot.find({
+        "subtypeSlots.slots._id": { $in: bookingSlotIds },
+      })
+        .select("subtypeSlots.subtypeId subtypeSlots.slots._id subtypeSlots.slots.startDay subtypeSlots.slots.endDay subtypeSlots.slots.month subtypeSlots.slots.year subtypeSlots.slots.plantReadyDays")
+        .lean();
+      for (const doc of slotDocs) {
+        for (const st of doc.subtypeSlots || []) {
+          for (const sl of st.slots || []) {
+            const sid = String(sl._id);
+            if (!bookingSlotIds.some((id) => String(id) === sid)) continue;
+            slotMetaById.set(sid, {
+              startDay: sl.startDay,
+              endDay: sl.endDay,
+              month: sl.month,
+              year: sl.year,
+              plantReadyDays:
+                Number(sl.plantReadyDays) || subtypeReadyDays || 0,
+            });
+          }
+        }
+      }
+    }
+
+    const now = new Date();
+    const todayUtc = Date.UTC(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
 
     const orderRequestMap = new Map();
     (activeOrderReqs || []).forEach((r) => {
@@ -981,9 +1032,34 @@ export const getOrderWiseSowing = async (req, res) => {
       const prior = orderRequestMap.get(String(o._id)) || null;
       const alreadyRequested = Boolean(prior);
 
+      const slotMeta = slotMetaById.get(String(o.bookingSlot)) || null;
+      const readyDays =
+        Number(slotMeta?.plantReadyDays) || subtypeReadyDays || 0;
+      let deliveryMs = null;
+      if (o.deliveryDate) {
+        const d = new Date(o.deliveryDate);
+        if (!Number.isNaN(d.getTime())) {
+          deliveryMs = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+        }
+      }
+      if (deliveryMs == null && slotMeta?.startDay) {
+        deliveryMs = slotStartMs(
+          slotMeta.startDay,
+          slotMeta.month,
+          slotMeta.year
+        );
+      }
+      let daysUntilSow = null;
+      if (deliveryMs != null) {
+        const sowByMs = deliveryMs - readyDays * 86400000;
+        daysUntilSow = Math.floor((sowByMs - todayUtc) / 86400000);
+      }
+
       let priority = 2;
       if (alreadyRequested) {
         priority = 9;
+      } else if (daysUntilSow != null && daysUntilSow < 0) {
+        priority = seedSource === "RAISING" || seedSource === "MIXED" ? 0 : 0.5;
       } else if (seedSource === "RAISING" || seedSource === "MIXED") {
         priority = raisingInHand > 0 ? 0 : 1;
       }
@@ -995,6 +1071,10 @@ export const getOrderWiseSowing = async (req, res) => {
         farmerMobile: o.farmer?.mobileNumber || "",
         numberOfPlants: plants,
         bookingSlot: o.bookingSlot,
+        deliveryDate: o.deliveryDate || null,
+        slotStartDay: slotMeta?.startDay || null,
+        plantReadyDays: readyDays,
+        daysUntilSow,
         sowingPlan: {
           seedSource,
           companySeedPackets: Number(sp.companySeedPackets) || 0,
@@ -1019,7 +1099,12 @@ export const getOrderWiseSowing = async (req, res) => {
       };
     });
 
-    rows.sort((a, b) => a._sort - b._sort || b.numberOfPlants - a.numberOfPlants);
+    rows.sort(
+      (a, b) =>
+        a._sort - b._sort ||
+        (a.daysUntilSow ?? 999) - (b.daysUntilSow ?? 999) ||
+        b.numberOfPlants - a.numberOfPlants
+    );
     rows.forEach((r) => delete r._sort);
 
     const openOrders = rows.filter((r) => !r.alreadyRequested);
