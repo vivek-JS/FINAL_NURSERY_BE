@@ -55,6 +55,12 @@ import {
 } from "../utils/paymentTiming.js";
 import { normalizeOrderForLocationFields } from "../utils/orderForNormalize.js";
 import {
+  parsePlantLineItemsInput,
+  normalizePlantLineItemsForCreate,
+  applyPlantLineRollupToOrderData,
+  enrichPlantLineSnapshots,
+} from "../utils/plantLineItemsOrder.js";
+import {
   isDealerUser,
   lookupCommissionRateForPlantSubtype,
 } from "../services/dealerCommission.service.js";
@@ -427,7 +433,7 @@ const resolveTrayIdFromCavityInput = async (cavity, session) => {
 const createOne = (Model, modelName) =>
   catchAsync(async (req, res, next) => {
     if (modelName === "Order") {
-      const {
+      let {
         payment,
         bookingSlot,
         numberOfPlants,
@@ -513,6 +519,27 @@ const createOne = (Model, modelName) =>
         }
       }
 
+      // Instant multi-plant: parse plantLineItems, roll up root plant/qty/slot from lines
+      let multiPlantLines = null;
+      const rawPlantLines = parsePlantLineItemsInput(
+        orderData.plantLineItems ?? req.body.plantLineItems
+      );
+      delete orderData.plantLineItems;
+      if (rawPlantLines) {
+        const normalized = normalizePlantLineItemsForCreate(rawPlantLines);
+        if (normalized.error) {
+          return res.status(400).json({ message: normalized.error });
+        }
+        multiPlantLines = normalized.lines;
+        applyPlantLineRollupToOrderData(
+          orderData,
+          normalized.lines,
+          normalized.totalPlants
+        );
+        bookingSlot = multiPlantLines[0].bookingSlot;
+        numberOfPlants = normalized.totalPlants;
+      }
+
       const numPlants = Number(numberOfPlants);
       /**
        * Field reassignment orders (refused delivery handed to another farmer) skip
@@ -553,12 +580,132 @@ const createOne = (Model, modelName) =>
 
         const orderId = await allocateNextOrderId(Model, { session });
 
-        const trayId = await resolveTrayIdFromCavityInput(cavity, session);
+        const trayId = await resolveTrayIdFromCavityInput(
+          multiPlantLines?.[0]?.cavity || cavity,
+          session
+        );
 
-        // Case 1: If it's a dealer's own order (creating stock)
+        /**
+         * Book slot/quota for one plant line (farmer / dealer-attributed orders).
+         * Used once for legacy single-plant creates, or once per plantLineItems row.
+         */
+        const bookFarmerLineInventory = async (
+          linePlant,
+          lineSubtype,
+          lineSlot,
+          lineQty
+        ) => {
+          let pendingLedger = null;
+          const quotaPatch = {};
+
+          if (salesPerson.jobTitle === "DEALER" && normalizedComponyQuota === true) {
+            await updateSlot(lineSlot, lineQty, "subtract", session);
+          } else if (salesPerson.jobTitle === "DEALER") {
+            if (normalizedComponyQuota === false) {
+              const quotaValidation = await validateDealerQuota(
+                salesPerson._id,
+                linePlant,
+                lineSubtype,
+                lineSlot,
+                lineQty
+              );
+              if (!quotaValidation.isValid) {
+                throw new AppError(quotaValidation.message, 400);
+              }
+              const quotaAllocation = await allocateDealerQuota(
+                salesPerson._id,
+                linePlant,
+                lineSubtype,
+                lineSlot,
+                lineQty,
+                session
+              );
+              quotaPatch.quotaUsed = quotaAllocation.fromWallet;
+              quotaPatch.quotaSource = "dealer";
+              quotaPatch.walletEntryId = quotaAllocation.walletEntryId;
+              if (quotaAllocation.ledgerParams) {
+                pendingLedger = {
+                  ...quotaAllocation.ledgerParams,
+                  performedBy: req.user?._id || salesPerson._id,
+                };
+              }
+            } else {
+              const allocation = await handleQuantityAllocation(
+                salesPerson._id,
+                linePlant,
+                lineSubtype,
+                lineSlot,
+                lineQty,
+                session
+              );
+              if (allocation.fromSlot > 0) {
+                await updateSlot(
+                  lineSlot,
+                  allocation.fromSlot,
+                  "subtract",
+                  session
+                );
+              }
+              orderData.dealer = salesPerson._id;
+            }
+          } else if (orderData.dealer && normalizedComponyQuota === false) {
+            const quotaValidation = await validateDealerQuota(
+              orderData.dealer,
+              linePlant,
+              lineSubtype,
+              lineSlot,
+              lineQty
+            );
+            if (!quotaValidation.isValid) {
+              throw new AppError(quotaValidation.message, 400);
+            }
+            const quotaAllocation = await allocateDealerQuota(
+              orderData.dealer,
+              linePlant,
+              lineSubtype,
+              lineSlot,
+              lineQty,
+              session
+            );
+            quotaPatch.quotaUsed = quotaAllocation.fromWallet;
+            quotaPatch.quotaSource = "dealer";
+            quotaPatch.walletEntryId = quotaAllocation.walletEntryId;
+            if (quotaAllocation.ledgerParams) {
+              pendingLedger = {
+                ...quotaAllocation.ledgerParams,
+                performedBy: req.user?._id || orderData.dealer,
+              };
+            }
+            if (quotaAllocation.fromSlot > 0) {
+              await updateSlot(
+                lineSlot,
+                quotaAllocation.fromSlot,
+                "subtract",
+                session
+              );
+            }
+          } else if (skipSlotBooking) {
+            console.log(
+              `🌾 Field reassignment order: skipping slot subtract for ${lineQty} plants (slot already consumed by refused order)`
+            );
+          } else {
+            await updateSlot(lineSlot, lineQty, "subtract", session);
+          }
+
+          return { pendingLedger, quotaPatch };
+        };
+
+        // Case 1: dealer bulk (single plant) — multi-plant not supported on dealerOrder
         let pendingInventoryLedgerEntry = null;
+        let pendingInventoryLedgerEntries = [];
         if (orderData.dealerOrder) {
-          // Dealer bulk: >0 plants deduct slot + add wallet inventory; 0 plants = payment-only shell (no slot / no quota)
+          if (multiPlantLines?.length) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({
+              message: "plantLineItems is not supported for dealer bulk orders",
+            });
+          }
           if (numPlants > 0) {
             try {
               await updateSlot(bookingSlot, numPlants, "subtract", session);
@@ -616,145 +763,68 @@ const createOne = (Model, modelName) =>
               description: `Dealer bulk order: +${numPlants} plants`,
               performedBy: req.user?._id || orderData.dealer,
             };
+            pendingInventoryLedgerEntries = [pendingInventoryLedgerEntry];
           }
-        }
-        // Case 1.5: If it's a dealer order with componyQuota=true (new case)
-        else if (salesPerson.jobTitle === "DEALER" && normalizedComponyQuota === true) {
-          // Execute this code when DEALER selects company quota option
-          await updateSlot(bookingSlot, numPlants, "subtract", session);
-        }
-        // Case 2: If it's a farmer order through a dealer
-        else if (salesPerson.jobTitle === "DEALER") {
-          // Check if dealer quota is explicitly selected
-          if (normalizedComponyQuota === false) {
-            // Dealer quota selected - ONLY use dealer quota, don't touch slot
-            const quotaValidation = await validateDealerQuota(
-              salesPerson._id,
+        } else if (multiPlantLines?.length) {
+          // Instant (or farmer) multi-plant: book each line independently
+          try {
+            await enrichPlantLineSnapshots(multiPlantLines, session);
+            for (const line of multiPlantLines) {
+              const lineTrayId = line.cavity
+                ? await resolveTrayIdFromCavityInput(line.cavity, session)
+                : trayId;
+              if (lineTrayId) line.cavity = lineTrayId;
+
+              const { pendingLedger, quotaPatch } = await bookFarmerLineInventory(
+                line.plantName,
+                line.plantSubtype,
+                line.bookingSlot,
+                line.numberOfPlants
+              );
+              Object.assign(line, quotaPatch);
+              if (pendingLedger) pendingInventoryLedgerEntries.push(pendingLedger);
+            }
+            const firstDealerQuota = multiPlantLines.find(
+              (l) => l.quotaSource === "dealer"
+            );
+            if (firstDealerQuota) {
+              orderData.quotaUsed = firstDealerQuota.quotaUsed;
+              orderData.quotaSource = firstDealerQuota.quotaSource;
+              orderData.walletEntryId = firstDealerQuota.walletEntryId;
+            }
+            orderData.plantLineItems = multiPlantLines;
+            pendingInventoryLedgerEntry = pendingInventoryLedgerEntries[0] || null;
+          } catch (lineBookErr) {
+            await session.abortTransaction();
+            session.endSession();
+            const status = lineBookErr.statusCode || 400;
+            return res.status(status).json({
+              message: lineBookErr.message || "Failed to book plant line items",
+            });
+          }
+        } else {
+          try {
+            const { pendingLedger, quotaPatch } = await bookFarmerLineInventory(
               orderData.plantName,
               orderData.plantSubtype,
               bookingSlot,
               numPlants
             );
-
-            if (!quotaValidation.isValid) {
-              await session.abortTransaction();
-              session.endSession();
-              return res.status(400).json({
-                message: quotaValidation.message,
-              });
+            if (quotaPatch.quotaSource === "dealer") {
+              orderData.quotaUsed = quotaPatch.quotaUsed;
+              orderData.quotaSource = quotaPatch.quotaSource;
+              orderData.walletEntryId = quotaPatch.walletEntryId;
             }
-
-            // Allocate dealer quota ONLY
-            const quotaAllocation = await allocateDealerQuota(
-              salesPerson._id,
-              orderData.plantName,
-              orderData.plantSubtype,
-              bookingSlot,
-              numPlants,
-              session
-            );
-
-            // Store quota allocation in order data
-            orderData.quotaUsed = quotaAllocation.fromWallet;
-            orderData.quotaSource = "dealer";
-            orderData.originalQuotaAllocation = quotaAllocation;
-            orderData.walletEntryId = quotaAllocation.walletEntryId;
-            if (quotaAllocation.ledgerParams) {
-              pendingInventoryLedgerEntry = {
-                ...quotaAllocation.ledgerParams,
-                performedBy: req.user?._id || salesPerson._id,
-              };
-            }
-
-            // NO slot update - dealer quota only
-          } else {
-            // Company quota selected (default) - use slot allocation logic
-            const allocation = await handleQuantityAllocation(
-              salesPerson._id,
-              orderData.plantName,
-              orderData.plantSubtype,
-              bookingSlot,
-              numPlants,
-              session
-            );
-
-            if (allocation.fromSlot > 0) {
-              await updateSlot(
-                bookingSlot,
-                allocation.fromSlot,
-                "subtract",
-                session
-              );
-            }
-
-            // Set dealer in orderData
-            orderData.dealer = salesPerson._id;
+            pendingInventoryLedgerEntry = pendingLedger;
+            if (pendingLedger) pendingInventoryLedgerEntries = [pendingLedger];
+          } catch (lineBookErr) {
+            await session.abortTransaction();
+            session.endSession();
+            const status = lineBookErr.statusCode || 400;
+            return res.status(status).json({
+              message: lineBookErr.message || "Failed to update slot",
+            });
           }
-        }
-        // Case 2.5: If dealer is selected but salesPerson is not a dealer (e.g., office staff selects dealer)
-        else if (orderData.dealer && normalizedComponyQuota === false) {
-          // Validate dealer quota before creating order
-          const quotaValidation = await validateDealerQuota(
-            orderData.dealer,
-            orderData.plantName,
-            orderData.plantSubtype,
-            bookingSlot,
-            numPlants
-          );
-
-          if (!quotaValidation.isValid) {
-            throw new AppError(quotaValidation.message, 400);
-          }
-
-          // Allocate dealer quota
-          const quotaAllocation = await allocateDealerQuota(
-            orderData.dealer,
-            orderData.plantName,
-            orderData.plantSubtype,
-            bookingSlot,
-            numPlants,
-            session
-          );
-
-          // Store quota allocation in order data
-          orderData.quotaUsed = quotaAllocation.fromWallet;
-          orderData.quotaSource = "dealer";
-          orderData.originalQuotaAllocation = quotaAllocation;
-          orderData.walletEntryId = quotaAllocation.walletEntryId; // Link to wallet entry
-          if (quotaAllocation.ledgerParams) {
-            pendingInventoryLedgerEntry = {
-              ...quotaAllocation.ledgerParams,
-              performedBy: req.user?._id || orderData.dealer,
-            };
-          }
-          
-          console.log('💾 Saving order with quota data:', {
-            quotaUsed: orderData.quotaUsed,
-            quotaSource: orderData.quotaSource,
-            walletEntryId: orderData.walletEntryId?.toString(),
-            dealer: orderData.dealer?.toString()
-          });
-
-          // Update slot if needed
-          if (quotaAllocation.fromSlot > 0) {
-            await updateSlot(
-              bookingSlot,
-              quotaAllocation.fromSlot,
-              "subtract",
-              session
-            );
-          }
-        }
-        // Case 3: Regular farmer order
-        else if (skipSlotBooking) {
-          // Field reassignment order: plants already left the nursery on the
-          // original refused order's dispatch, so the slot was already consumed.
-          // Skip the slot availability decrement entirely.
-          console.log(
-            `🌾 Field reassignment order: skipping slot subtract for ${numPlants} plants (slot already consumed by refused order)`
-          );
-        } else {
-          await updateSlot(bookingSlot, numPlants, "subtract", session);
         }
 
         const isWhatsAppBooking =
@@ -881,7 +951,8 @@ const createOne = (Model, modelName) =>
         
         orderDocument.orderStatus = resolvedOrderStatus;
 
-        // Instant sale / walk-away dispatch: immutable plant+subtype official DC when fully DISPATCHED at create.
+        // Instant sale / walk-away dispatch: one official DC from root (first) plant+subtype.
+        // Multi-plant invoices still list all plantLineItems rows under this single DC number.
         if (resolvedOrderStatus === "DISPATCHED") {
           const official = await ensureOfficialDeliveryChallanForOrder(
             orderDocument,
@@ -926,58 +997,82 @@ const createOne = (Model, modelName) =>
         // Create the Order with all new fields
         const order = await Model.create([orderDocument], { session });
 
-        // Create plant inventory ledger entry (immutable, append-only)
-        if (pendingInventoryLedgerEntry) {
+        // Create plant inventory ledger entr(y|ies) (immutable, append-only)
+        const ledgerRows =
+          pendingInventoryLedgerEntries.length > 0
+            ? pendingInventoryLedgerEntries
+            : pendingInventoryLedgerEntry
+              ? [pendingInventoryLedgerEntry]
+              : [];
+        for (const ledgerRow of ledgerRows) {
           try {
             await DealerPlantInventoryLedger.createLedgerEntry(
               {
-                ...pendingInventoryLedgerEntry,
+                ...ledgerRow,
                 referenceId: order[0]._id,
               },
               session
             );
           } catch (ledgerErr) {
             console.error("DealerPlantInventoryLedger create failed:", ledgerErr);
-            // Don't fail order creation - ledger is for audit
           }
         }
 
-        // Fetch slot to check if sowing is allowed for this plant
-        const slotForUpdate = await PlantSlot.findOne(
-          { "subtypeSlots.slots._id": bookingSlot },
-          { "subtypeSlots.$": 1 }
-        ).populate("plantId", "sowingAllowed").session(session);
-
-        const isSowingAllowed = slotForUpdate?.plantId?.sowingAllowed || false;
-
-        // Check if this is a ready plants order
+        // Check if this is a ready plants order (single-product path; not used with multi-plant lines)
         const isReadyPlantsOrder = !!(orderData.productMappingId && orderData.productName);
 
-        // Add order to slot's orders array and update booking counts
-        let slotUpdateOperation = {
-          $push: { 
-            "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": order[0]._id 
-          },
-          $inc: {
-            // Always increment totalBookedPlants
-            "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants": numPlants
-          }
-        };
+        /** Push order id + booking counters onto one booking slot. */
+        const applySlotOrderBookingCounters = async (slotId, plantsForSlot) => {
+          const slotForUpdate = await PlantSlot.findOne(
+            { "subtypeSlots.slots._id": slotId },
+            { "subtypeSlots.$": 1 }
+          )
+            .populate("plantId", "sowingAllowed")
+            .session(session);
 
-        // For ready plants orders: INCREASE availablePlants (plants are already grown and available)
-        // For regular plants (non-sowing-allowed): DECREMENT availablePlants
-        // For sowing-allowed plants: NO change to availablePlants
-        if (isReadyPlantsOrder) {
-          // Ready plants are already grown and available from other nursery
-          // So we INCREASE availablePlants in the slot
-          slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = numPlants;
-          console.log(`📦 Ready Plants Order: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numPlants}, INCREMENTING availablePlants by ${numPlants} (plants already available from other nursery)`);
-        } else if (!isSowingAllowed) {
-          console.log(`📊 Regular plant: Updating slot ${bookingSlot} - incrementing totalBookedPlants by ${numPlants}, decrementing availablePlants by ${numPlants}`);
-          slotUpdateOperation.$inc["subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"] = -numPlants;
-        } else {
-          console.log(`📊 Sowing-allowed plant: Updating slot ${bookingSlot} - ONLY incrementing totalBookedPlants by ${numPlants} (availablePlants unchanged)`);
-        }
+          const isSowingAllowed = slotForUpdate?.plantId?.sowingAllowed || false;
+          const slotUpdateOperation = {
+            $push: {
+              "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": order[0]._id,
+            },
+            $inc: {
+              "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants":
+                plantsForSlot,
+            },
+          };
+
+          if (isReadyPlantsOrder && String(slotId) === String(bookingSlot)) {
+            slotUpdateOperation.$inc[
+              "subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"
+            ] = plantsForSlot;
+          } else if (!isSowingAllowed) {
+            slotUpdateOperation.$inc[
+              "subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"
+            ] = -plantsForSlot;
+          }
+
+          if (skipSlotBooking) {
+            console.log(
+              `🌾 Field reassignment order: skipping slot booking counters for slot ${slotId}`
+            );
+            return;
+          }
+
+          const slotUpdateResult = await PlantSlot.updateOne(
+            { "subtypeSlots.slots._id": slotId },
+            slotUpdateOperation,
+            {
+              arrayFilters: [
+                { "subtypeSlot.slots._id": slotId },
+                { "slot._id": slotId },
+              ],
+              session: session,
+            }
+          );
+          console.log(
+            `✅ Slot update result (${slotId}): matched=${slotUpdateResult.matchedCount}, modified=${slotUpdateResult.modifiedCount}`
+          );
+        };
 
         // Update PlantProductMapping and slot productStock if productMappingId is provided
         if (isReadyPlantsOrder) {
@@ -1081,23 +1176,15 @@ const createOne = (Model, modelName) =>
           }
         }
 
-        if (skipSlotBooking) {
-          console.log(
-            `🌾 Field reassignment order: skipping slot booking counters (orders push / totalBookedPlants / availablePlants) for slot ${bookingSlot}`
-          );
+        if (multiPlantLines?.length) {
+          for (const line of multiPlantLines) {
+            await applySlotOrderBookingCounters(
+              line.bookingSlot,
+              line.numberOfPlants
+            );
+          }
         } else {
-          const slotUpdateResult = await PlantSlot.updateOne(
-            { "subtypeSlots.slots._id": bookingSlot },
-            slotUpdateOperation,
-            {
-              arrayFilters: [
-                { "subtypeSlot.slots._id": bookingSlot },
-                { "slot._id": bookingSlot }
-              ],
-              session: session
-            }
-          );
-          console.log(`✅ Slot update result: matched=${slotUpdateResult.matchedCount}, modified=${slotUpdateResult.modifiedCount}`);
+          await applySlotOrderBookingCounters(bookingSlot, numPlants);
         }
 
         // Create farmer from orderFor only when name + usable 10-digit mobile (optional book-for flow has no mobile)
@@ -1298,6 +1385,14 @@ const createOne = (Model, modelName) =>
               console.error("voice-feedback ensure (order create):", e?.message || e);
             }
           })();
+          try {
+            const { scheduleOrderDeliveryChallanPdf } = await import(
+              "../services/orderDeliveryChallanPdf.service.js"
+            );
+            scheduleOrderDeliveryChallanPdf(order[0]._id);
+          } catch (e) {
+            console.error("order DC PDF schedule (create):", e?.message || e);
+          }
         }
 
         if (modelName === "Order" && order[0]) {
@@ -4521,6 +4616,7 @@ const getAll = (Model, modelName) =>
             id: "$plantSubtypeDetails._id",
             name: "$plantSubtypeDetails.name",
           },
+          plantLineItems: { $ifNull: ["$plantLineItems", []] },
           cavity: {
             $let: {
               vars: {
@@ -4590,8 +4686,11 @@ const getAll = (Model, modelName) =>
           currentDispatchId: 1, // Reference to current dispatch
           /** Manual / legacy DC label; also used when challan PDF should match edited number */
           deliveryChallanInvoiceNumber: 1,
-          /** Immutable plant+subtype system DC when fully DISPATCHED */
+          /** Immutable plant-scoped system DC when fully DISPATCHED */
           officialDeliveryChallanNumber: 1,
+          deliveryChallanPdfUrl: 1,
+          deliveryChallanPdfGeneratedAt: 1,
+          deliveryChallanPdfHistory: 1,
           orderId: 1,
           rate: 1,
           farmReadyDate: 1,

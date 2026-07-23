@@ -333,9 +333,26 @@ const dispatchSchema = new Schema(
     /** Public URL of server-generated delivery challan PDF (DigitalOcean Spaces or mock). */
     deliveryChallanPdfUrl: { type: String, default: "" },
     deliveryChallanPdfGeneratedAt: { type: Date, default: null },
+    /** Archived previous delivery challan PDFs (kept on regenerate; S3 not deleted). */
+    deliveryChallanPdfHistory: [
+      {
+        url: { type: String, trim: true },
+        generatedAt: { type: Date, default: null },
+        replacedAt: { type: Date, default: null },
+        generatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      },
+    ],
     /** Public URL of server-generated complete invoice PDF (only meaningful when DELIVERED). */
     completeInvoicePdfUrl: { type: String, default: "" },
     completeInvoicePdfGeneratedAt: { type: Date, default: null },
+    completeInvoicePdfHistory: [
+      {
+        url: { type: String, trim: true },
+        generatedAt: { type: Date, default: null },
+        replacedAt: { type: Date, default: null },
+        generatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      },
+    ],
   },
   {
     timestamps: true,

@@ -63,6 +63,7 @@ import {
   searchFarmersForLedgerTransfer,
   createManualFarmerPlantLedgerEntry,
 } from "../controllers/farmerPlantOrderLedger.controller.js";
+import { generateOrderDeliveryChallanPdf } from "../controllers/orderDeliveryChallanPdf.controller.js";
 import {
   createBulkPayment,
   getBulkPayments,
@@ -224,6 +225,7 @@ router
   .post("/:orderId/send-placed-whatsapp", sendOrderPlacedWhatsAppController)
   .post("/:orderId/send-dispatch-whatsapp", sendOrderDispatchWhatsAppController)
   .post("/:orderId/send-farm-ready-whatsapp", sendOrderFarmReadyWhatsAppController)
+  .post("/:orderId/generate-delivery-challan-pdf", generateOrderDeliveryChallanPdf)
   .post("/test-notification", authenticateToken, catchAsync(async (req, res) => {
     // Test endpoint to send a notification to current user
     const User = (await import("../models/user.model.js")).default;

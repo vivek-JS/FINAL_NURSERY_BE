@@ -40,6 +40,40 @@ let reinitAttempts = 0;
 let readyWatchdogExtensions = 0;
 const MAX_READY_EXTENSIONS = 2;
 
+/** Puppeteer/WhatsApp Web page died — client object is stale until reinit. */
+export function isWhatsAppDetachedError(err) {
+  const msg = String(err?.message || err || "");
+  return /detached Frame|Target closed|Session closed|Protocol error|Execution context was destroyed|Navigating frame was detached/i.test(
+    msg
+  );
+}
+
+/**
+ * Mark client unhealthy and schedule reinit when Chromium frame/page is gone.
+ * Returns true if the error was treated as a transport failure.
+ */
+export function reportWhatsAppTransportFailure(err, context = "send") {
+  if (!isWhatsAppDetachedError(err)) return false;
+  console.error(
+    `[WhatsApp] Transport dead (${context}): ${err?.message || err} — re-initializing session`
+  );
+  isWhatsAppReady = false;
+  if (!shuttingDown) {
+    void safeReinitialize(`detached:${context}`);
+  }
+  return true;
+}
+
+/** Wait until ready after reinit (or until timeout). */
+export async function waitUntilWhatsAppReady(timeoutMs = 90000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (isWhatsAppReady && client) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
 /** Absolute session directory — reads process.env when called (after dotenv). */
 export function resolveWhatsAppSessionPath() {
   const raw =
@@ -219,6 +253,23 @@ function attachClientHandlers(waClient) {
         "🟢 [WhatsApp] Order bot listening on scanned session (web.js). WATI webhook also active if not disabled."
       );
     }
+
+    // If Chromium tears down the page, mark unhealthy immediately (don't keep sending on dead frame).
+    try {
+      const page = waClient.pupPage;
+      if (page && typeof page.on === "function") {
+        page.on("close", () => {
+          if (!isWhatsAppReady) return;
+          console.warn("[WhatsApp] Browser page closed — marking not ready");
+          isWhatsAppReady = false;
+          if (!shuttingDown) {
+            void safeReinitialize("page-close");
+          }
+        });
+      }
+    } catch {
+      /* ignore */
+    }
   });
 
   const onInboundOrderMessage = (msg) => {
@@ -277,11 +328,10 @@ function createClient(dataPath) {
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
+        // Avoid --single-process / --no-zygote — they cause "detached Frame" crashes under load
         "--disable-dev-shm-usage",
         "--disable-accelerated-2d-canvas",
         "--no-first-run",
-        "--no-zygote",
-        "--single-process",
         "--disable-gpu",
       ],
     },

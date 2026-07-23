@@ -81,6 +81,10 @@ import {
   getSowingCompletions,
 } from "../controllers/sowingRequestComplete.controller.js";
 import { getDeliveryVsReadyAnalytics } from "../controllers/deliveryVsReady.controller.js";
+import {
+  listDirectSowOrders,
+  submitDirectSow,
+} from "../controllers/adminDirectSow.controller.js";
 
 const router = express.Router();
 
@@ -106,6 +110,8 @@ router.get("/today-sowing-cards-lite", getTodaySowingCardsLite); // Lean cards +
 router.get("/order-wise", getOrderWiseSowing); // Order-wise rows for Request Packets drawer
 router.get("/completions", getSowingCompletions); // Completed sow history (paginated + order search)
 router.get("/analytics/delivery-vs-ready", getDeliveryVsReadyAnalytics); // Delivery vs ready/available chart
+router.get("/admin-direct-sow/orders", listDirectSowOrders); // Office/Super Admin: orders by delivery date
+router.post("/admin-direct-sow", submitDirectSow); // Office/Super Admin: sow entry bypassing packet issue
 router.get("/easy-30-days", getEasy30DaySowingCards); // Easy sowing cards for rolling day window
 router.post("/easy-30-days/ready-days", bulkUpdatePlantReadyDaysForFutureSlots); // Update plant ready days for future slots only
 router.get("/insights/records", getSowingInsightsRecords); // Unified sowing insights records for side drawer feed

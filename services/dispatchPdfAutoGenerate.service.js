@@ -50,43 +50,77 @@ async function loadDispatchLeanForPdfGeneration(dispatchObjectId) {
 
 /**
  * Generate and persist dispatch PDF URLs (non-blocking helper).
+ * Archives previous current URLs into history arrays on regenerate.
  * @param {string|import('mongoose').Types.ObjectId} dispatchId
  * @param {Array<'delivery_challan'|'complete_invoice'>} types
+ * @param {{ force?: boolean }} [options]
  */
-export async function generateAndSaveDispatchPdfs(dispatchId, types = ["delivery_challan"]) {
+export async function generateAndSaveDispatchPdfs(dispatchId, types = ["delivery_challan"], options = {}) {
   const loaded = await loadDispatchLeanForPdfGeneration(dispatchId);
   if (!loaded) return null;
 
+  const force = Boolean(options.force);
   const dispatchObjectId = String(loaded._id);
   const now = new Date();
   const $set = {};
+  const $push = {};
 
   if (types.includes("delivery_challan")) {
-    const buf = await buildDeliveryChallanPdfBuffer(loaded);
-    const url = await uploadToS3(buf, `delivery-challan-${dispatchObjectId}.pdf`, {
-      folder: `dispatch-pdfs/${dispatchObjectId}`,
-    });
-    $set.deliveryChallanPdfUrl = url;
-    $set.deliveryChallanPdfGeneratedAt = now;
+    const prevUrl = String(loaded.deliveryChallanPdfUrl || "").trim();
+    if (prevUrl && !force) {
+      // reuse
+    } else {
+      const buf = await buildDeliveryChallanPdfBuffer(loaded);
+      const url = await uploadToS3(buf, `delivery-challan-${dispatchObjectId}-${Date.now()}.pdf`, {
+        folder: `dispatch-pdfs/${dispatchObjectId}`,
+      });
+      $set.deliveryChallanPdfUrl = url;
+      $set.deliveryChallanPdfGeneratedAt = now;
+      if (prevUrl) {
+        $push.deliveryChallanPdfHistory = {
+          url: prevUrl,
+          generatedAt: loaded.deliveryChallanPdfGeneratedAt || null,
+          replacedAt: now,
+        };
+      }
+    }
   }
 
   if (types.includes("complete_invoice")) {
     if (String(loaded.transportStatus || "").toUpperCase() === "CANCELLED") {
       throw new Error("Invoice PDF is not available for cancelled dispatches");
     }
-    const buf = await buildCompleteInvoicePdfBuffer(loaded);
-    const url = await uploadToS3(buf, `complete-invoice-${dispatchObjectId}.pdf`, {
-      folder: `dispatch-pdfs/${dispatchObjectId}`,
-    });
-    $set.completeInvoicePdfUrl = url;
-    $set.completeInvoicePdfGeneratedAt = now;
+    if (String(loaded.transportStatus || "").toUpperCase() !== "DELIVERED") {
+      throw new Error("Invoice PDF requires DELIVERED status (complete the order form first)");
+    }
+    const prevUrl = String(loaded.completeInvoicePdfUrl || "").trim();
+    if (prevUrl && !force) {
+      // reuse existing invoice PDF
+    } else {
+      const buf = await buildCompleteInvoicePdfBuffer(loaded);
+      const url = await uploadToS3(buf, `complete-invoice-${dispatchObjectId}-${Date.now()}.pdf`, {
+        folder: `dispatch-pdfs/${dispatchObjectId}`,
+      });
+      $set.completeInvoicePdfUrl = url;
+      $set.completeInvoicePdfGeneratedAt = now;
+      if (prevUrl) {
+        $push.completeInvoicePdfHistory = {
+          url: prevUrl,
+          generatedAt: loaded.completeInvoicePdfGeneratedAt || null,
+          replacedAt: now,
+        };
+      }
+    }
   }
 
   if (!Object.keys($set).length) return null;
 
-  return Dispatch.findByIdAndUpdate(loaded._id, { $set }, { new: true })
+  const update = { $set };
+  if (Object.keys($push).length) update.$push = $push;
+
+  return Dispatch.findByIdAndUpdate(loaded._id, update, { new: true })
     .select(
-      "deliveryChallanPdfUrl deliveryChallanPdfGeneratedAt completeInvoicePdfUrl completeInvoicePdfGeneratedAt"
+      "deliveryChallanPdfUrl deliveryChallanPdfGeneratedAt deliveryChallanPdfHistory completeInvoicePdfUrl completeInvoicePdfGeneratedAt completeInvoicePdfHistory"
     )
     .lean();
 }

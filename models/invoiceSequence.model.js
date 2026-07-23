@@ -30,5 +30,7 @@ const invoiceSequenceSchema = new Schema(
 const InvoiceSequence = model("InvoiceSequence", invoiceSequenceSchema);
 
 export const DELIVERY_CHALLAN_SEQUENCE_KEY = "delivery_challan";
+/** Plant-scoped official DC keys: `dc_plant:{plantCmsId}` */
+export const PLANT_DC_SEQUENCE_KEY_PREFIX = "dc_plant:";
 
 export default InvoiceSequence;

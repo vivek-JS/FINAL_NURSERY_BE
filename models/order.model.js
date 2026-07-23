@@ -358,6 +358,110 @@ const splitHistorySchema = new Schema(
   { timestamps: true }
 );
 
+/** One plant/subtype line on an instant multi-plant order. */
+const plantLineItemSchema = new Schema(
+  {
+    plantName: {
+      type: Schema.Types.ObjectId,
+      ref: "PlantCms",
+      required: true,
+    },
+    plantSubtype: {
+      type: Schema.Types.ObjectId,
+      required: true,
+    },
+    /** Denormalized labels for invoice / list UI without deep populate. */
+    plantNameSnapshot: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    plantSubtypeSnapshot: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    bookingSlot: {
+      type: Schema.Types.ObjectId,
+      required: true,
+    },
+    numberOfPlants: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+    rate: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    cavity: {
+      type: Schema.Types.ObjectId,
+      ref: "Tray",
+    },
+    deliveryDate: {
+      type: Date,
+    },
+    sortOrder: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    quotaUsed: {
+      type: Number,
+      default: 0,
+    },
+    quotaSource: {
+      type: String,
+      enum: ["dealer", "company", "none"],
+      default: "none",
+    },
+    walletEntryId: {
+      type: Schema.Types.ObjectId,
+    },
+  },
+  { _id: true }
+);
+
+export function hasPlantLineItems(doc) {
+  return Array.isArray(doc?.plantLineItems) && doc.plantLineItems.length > 0;
+}
+
+/**
+ * Sync root plant/qty/rate/slot from plantLineItems for legacy readers.
+ * Root plant/subtype/slot/rate ← first line; numberOfPlants ← sum of line qtys.
+ */
+export function rollupPlantLineItemsToRoot(doc) {
+  const lines = doc?.plantLineItems;
+  if (!Array.isArray(lines) || lines.length === 0) return;
+
+  lines.forEach((line, idx) => {
+    if (line && (line.sortOrder == null || line.sortOrder === undefined)) {
+      line.sortOrder = idx;
+    }
+  });
+
+  const first = lines[0];
+  let qtySum = 0;
+  for (const line of lines) {
+    qtySum += Number(line?.numberOfPlants) || 0;
+  }
+
+  doc.plantName = first.plantName;
+  doc.plantSubtype = first.plantSubtype;
+  doc.bookingSlot = first.bookingSlot;
+  doc.rate = Number(first.rate) || 0;
+  doc.numberOfPlants = qtySum;
+  if (first.cavity != null) doc.cavity = first.cavity;
+  if (first.deliveryDate != null) doc.deliveryDate = first.deliveryDate;
+
+  const additional = Number(doc.additionalPlants) || 0;
+  doc.totalPlants = qtySum + additional;
+  if (doc.isNew || doc.remainingPlants == null) {
+    doc.remainingPlants = qtySum + additional;
+  }
+}
+
 const orderSchema = new Schema(
   {
     orderId: {
@@ -611,6 +715,15 @@ const orderSchema = new Schema(
       // Note: This references a subdocument within PlantCms, cannot use .populate()
       // Use aggregation or manual lookup instead
       required: true,
+    },
+    /**
+     * Instant multi-plant lines. When present (length >= 1), root plantName /
+     * plantSubtype / bookingSlot / rate come from line 0; numberOfPlants is the sum.
+     * Legacy single-plant orders leave this undefined/empty.
+     */
+    plantLineItems: {
+      type: [plantLineItemSchema],
+      default: undefined,
     },
     /** Locked dealer commission rate per plant at order placement (null = legacy, use live rate). */
     commissionRatePerPlant: {
@@ -942,13 +1055,32 @@ const orderSchema = new Schema(
       trim: true,
     },
     /**
-     * Immutable system DC (plant+subtype scoped sequence). Set once when the order
+     * Immutable system DC (plant-scoped sequence). Set once when the order
      * first reaches fully DISPATCHED (remainingPlants === 0). Not user-editable.
      */
     officialDeliveryChallanNumber: {
       type: String,
       trim: true,
     },
+    /** Current server-generated per-order delivery challan PDF (S3). */
+    deliveryChallanPdfUrl: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    deliveryChallanPdfGeneratedAt: {
+      type: Date,
+      default: null,
+    },
+    /** Previous current PDFs kept on regenerate (S3 objects are not deleted). */
+    deliveryChallanPdfHistory: [
+      {
+        url: { type: String, trim: true },
+        generatedAt: { type: Date, default: null },
+        replacedAt: { type: Date, default: null },
+        generatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      },
+    ],
     // Reference field - reference to user/employee
     reference: {
       type: Schema.Types.ObjectId,
@@ -1075,6 +1207,8 @@ orderSchema.index({ salesPerson: 1 });
 orderSchema.index({ orderSubmittedBy: 1, createdAt: -1 });
 orderSchema.index({ placedByOfficeAdmin: 1 });
 orderSchema.index({ plantName: 1 });
+orderSchema.index({ "plantLineItems.plantName": 1 });
+orderSchema.index({ "plantLineItems.bookingSlot": 1 });
 orderSchema.index({ bookingSlot: 1 });
 orderSchema.index({ bookingSlot: 1, "sowingPlan.seedSource": 1 });
 orderSchema.index({ sowingDone: 1, sowingDoneAt: -1 });
@@ -1566,6 +1700,14 @@ orderSchema.pre("save", function (next) {
 
 // Add validation middleware to ensure proper business logic
 orderSchema.pre("validate", function (next) {
+  try {
+    if (hasPlantLineItems(this)) {
+      rollupPlantLineItemsToRoot(this);
+    }
+  } catch (err) {
+    return next(err);
+  }
+
   sanitizePaymentArrayForOrder(this.payment, this);
 
   const totalOrderedPlants =
@@ -1668,4 +1810,5 @@ orderSchema.post("findOneAndUpdate", async function(doc) {
 
 const Order = model("Order", orderSchema);
 
+export { plantLineItemSchema };
 export default Order;

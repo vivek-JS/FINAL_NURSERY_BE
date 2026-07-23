@@ -341,49 +341,107 @@ export const getTodaySowingCardsLite = async (req, res) => {
       };
     };
 
-    const cardMap = new Map();
-
+    // Candidate due/today slots (date filter only — booked comes from LIVE orders)
+    const dueCandidates = [];
     for (const slot of rawSlots) {
       const plant = plantMap.get(String(slot.plantId));
       if (!plant) continue;
-
       const subtype = plant.subtypes?.find(
         (st) => String(st._id) === String(slot.subtypeId)
       );
       const readyDays =
         Number(slot.plantReadyDays) || Number(subtype?.plantReadyDays) || 0;
-
       const startMs = slotStartMs(slot.startDay, slot.month, slot.year);
       if (startMs == null) continue;
-
       const sowByMs = startMs - readyDays * 86400000;
       const daysUntilSow = Math.floor((sowByMs - todayUtc) / 86400000);
-      // Due or today only
       if (daysUntilSow > 0) continue;
+      dueCandidates.push({
+        ...slot,
+        readyDays,
+        daysUntilSow,
+        plant,
+        subtype,
+        bufferPct:
+          Number(slot.buffer) ||
+          Number(subtype?.buffer) ||
+          Number(plant.sowingBuffer) ||
+          0,
+      });
+    }
 
-      const booked = Number(slot.totalBookedPlants) || 0;
+    const candidateSlotIds = dueCandidates
+      .map((s) => s.slotId)
+      .filter(Boolean);
+
+    // Live booked per slot (excludes DISPATCHED/COMPLETED/CANCELLED ghosts on totalBookedPlants)
+    const liveBookedBySlot = new Map();
+    if (candidateSlotIds.length) {
+      const liveRows = await Order.aggregate([
+        {
+          $match: {
+            bookingSlot: { $in: candidateSlotIds },
+            orderStatus: { $in: ACTIVE_ORDER_STATUSES },
+            $or: [
+              { quotaSource: { $exists: false } },
+              { quotaSource: null },
+              { quotaSource: { $ne: "dealer" } },
+            ],
+          },
+        },
+        {
+          $group: {
+            _id: "$bookingSlot",
+            bookedPlants: {
+              $sum: {
+                $add: [
+                  { $ifNull: ["$numberOfPlants", 0] },
+                  { $ifNull: ["$additionalPlants", 0] },
+                ],
+              },
+            },
+            orderCount: { $sum: 1 },
+          },
+        },
+      ]);
+      liveRows.forEach((r) => {
+        liveBookedBySlot.set(String(r._id), {
+          booked: Number(r.bookedPlants) || 0,
+          orderCount: Number(r.orderCount) || 0,
+        });
+      });
+    }
+
+    const cardMap = new Map();
+
+    for (const slot of dueCandidates) {
+      const live = liveBookedBySlot.get(String(slot.slotId)) || {
+        booked: 0,
+        orderCount: 0,
+      };
+      const booked = live.booked;
+      if (booked <= 0) continue; // drop stale stored-booked ghost slots
+
       const sowed =
         (Number(slot.primarySowed) || 0) + (Number(slot.officeSowed) || 0);
-      const bufferPct =
-        Number(slot.buffer) ||
-        Number(subtype?.buffer) ||
-        Number(plant.sowingBuffer) ||
-        0;
-      const plantsToSowWithBuffer = Math.max(
-        0,
-        Math.ceil(booked * (1 + bufferPct / 100)) - sowed
-      );
+      const rawGap = Math.max(0, booked - sowed);
+      const bufferPct = slot.bufferPct || 0;
+      // Match full sowing.controller: buffer on remaining gap, not on total booked
+      const plantsToSowWithBuffer =
+        rawGap > 0 && bufferPct > 0
+          ? Math.round(rawGap * (1 + bufferPct / 100))
+          : rawGap;
       if (plantsToSowWithBuffer <= 0) continue;
 
       const key = `${slot.plantId}-${slot.subtypeId}`;
       if (!cardMap.has(key)) {
         cardMap.set(key, {
           plantId: String(slot.plantId),
-          plantName: plant.name,
+          plantName: slot.plant.name,
           subtypeId: String(slot.subtypeId),
-          subtypeName: subtype?.name || "Subtype",
+          subtypeName: slot.subtype?.name || "Subtype",
           sowingBuffer: bufferPct,
-          plantReadyDays: readyDays,
+          plantReadyDays: slot.readyDays,
           primaryUnit: { symbol: "pkt", name: "packets" },
           secondaryUnit: null,
           slotIds: [],
@@ -391,28 +449,47 @@ export const getTodaySowingCardsLite = async (req, res) => {
           totalGap: 0,
           totalPlantsToSowWithBuffer: 0,
           totalBookedPlants: 0,
+          dueGap: 0,
+          todayGap: 0,
         });
       }
 
       const card = cardMap.get(key);
       card.slotIds.push(slot.slotId);
-      if (card.slots.length < 8) {
-        card.slots.push({
-          slotId: slot.slotId,
-          _id: slot.slotId,
-          startDay: slot.startDay,
-          endDay: slot.endDay,
-          month: slot.month,
-          year: slot.year,
-          plantsToSowWithBuffer,
-          daysUntilSow,
-          priority: daysUntilSow < 0 ? "due" : "urgent",
-        });
+      const dayRow = {
+        slotId: slot.slotId,
+        _id: slot.slotId,
+        startDay: slot.startDay,
+        endDay: slot.endDay,
+        month: slot.month,
+        year: slot.year,
+        bookedPlants: booked,
+        sowedPlants: sowed,
+        rawGap,
+        plantsToSowWithBuffer,
+        orderCount: live.orderCount,
+        daysUntilSow: slot.daysUntilSow,
+        priority: slot.daysUntilSow < 0 ? "due" : "urgent",
+      };
+      // Keep all due/today days for GAP date breakdown (cap 120)
+      if (card.slots.length < 120) {
+        card.slots.push(dayRow);
       }
       card.totalGap += plantsToSowWithBuffer;
       card.totalPlantsToSowWithBuffer += plantsToSowWithBuffer;
       card.totalBookedPlants += booked;
+      if (slot.daysUntilSow < 0) card.dueGap += plantsToSowWithBuffer;
+      else card.todayGap += plantsToSowWithBuffer;
     }
+
+    // Sort each card's days: most overdue first
+    cardMap.forEach((c) => {
+      c.slots.sort(
+        (a, b) =>
+          (a.daysUntilSow || 0) - (b.daysUntilSow || 0) ||
+          String(a.startDay || "").localeCompare(String(b.startDay || ""))
+      );
+    });
 
     // Cheap order counts + seed-plan sums by plant/subtype (no populate)
     const allSlotIds = [];
@@ -624,6 +701,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
         totalGap: card.totalGap,
         totalPlantsToSowWithBuffer: plants,
         totalBookedPlants: card.totalBookedPlants,
+        dueGap: Number(card.dueGap) || 0,
+        todayGap: Number(card.todayGap) || 0,
         packetsNeeded: def?.packetsNeeded || 0,
         availablePackets: def?.availablePackets || 0,
         stockShortfall: def?.stockShortfall || 0,
@@ -753,8 +832,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
       inProgressCards,
       summary: {
         totalSubtypes: requestCards.length,
-        totalDueGap: requestCards.reduce((s, c) => s + (c.totalGap || 0), 0),
-        totalTodayGap: requestCards.reduce((s, c) => s + (c.totalGap || 0), 0),
+        totalDueGap: requestCards.reduce((s, c) => s + (c.dueGap || 0), 0),
+        totalTodayGap: requestCards.reduce((s, c) => s + (c.todayGap || 0), 0),
         totalPlantsNeeded: requestCards.reduce(
           (s, c) => s + (c.totalPlantsToSowWithBuffer || 0),
           0

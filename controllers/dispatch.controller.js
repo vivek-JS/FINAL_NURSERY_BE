@@ -738,7 +738,17 @@ const createDispatch = catchAsync(async (req, res, next) => {
       }
     })();
 
-    scheduleDispatchPdfGeneration(dispatch[0]._id, ["delivery_challan", "complete_invoice"]);
+    scheduleDispatchPdfGeneration(dispatch[0]._id, ["delivery_challan"]);
+    try {
+      const { scheduleOrderDeliveryChallanPdf } = await import(
+        "../services/orderDeliveryChallanPdf.service.js"
+      );
+      for (const oid of orderIds || []) {
+        scheduleOrderDeliveryChallanPdf(oid);
+      }
+    } catch (e) {
+      console.error("per-order DC PDF schedule (create dispatch):", e?.message || e);
+    }
 
     const dispatchDoc = dispatch[0]?.toObject ? dispatch[0].toObject() : dispatch[0];
     const stillPendingLinkedAgri =
@@ -1421,7 +1431,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
     );
     delete req._orderEditAlertQueue;
 
-    scheduleDispatchPdfGeneration(updated._id, ["delivery_challan", "complete_invoice"]);
+    scheduleDispatchPdfGeneration(updated._id, ["delivery_challan"]);
 
     const response = generateResponse(
       "Success",
@@ -1834,7 +1844,7 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
       req.user?.name || req.user?.email || "Unknown"
     );
     delete req._orderEditAlertQueue;
-    scheduleDispatchPdfGeneration(updated._id, ["delivery_challan", "complete_invoice"]);
+    scheduleDispatchPdfGeneration(updated._id, ["delivery_challan"]);
     return res.status(200).json(
       generateResponse("Success", "Order removed from dispatch", updated, undefined)
     );
@@ -2111,7 +2121,7 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
       })();
     }
 
-    scheduleDispatchPdfGeneration(dispatch._id, ["delivery_challan", "complete_invoice"]);
+    scheduleDispatchPdfGeneration(dispatch._id, ["delivery_challan"]);
 
     const response = generateResponse(
       "Success",
@@ -2458,6 +2468,12 @@ const getDispatches = catchAsync(async (req, res, next) => {
               quotaSource: "$orderDetails.quotaSource",
               additionalPlants: "$orderDetails.additionalPlants",
               numberOfPlants: "$orderDetails.numberOfPlants",
+              plantLineItems: { $ifNull: ["$orderDetails.plantLineItems", []] },
+              deliveryChallanInvoiceNumber: "$orderDetails.deliveryChallanInvoiceNumber",
+              officialDeliveryChallanNumber: "$orderDetails.officialDeliveryChallanNumber",
+              deliveryChallanPdfUrl: { $ifNull: ["$orderDetails.deliveryChallanPdfUrl", ""] },
+              deliveryChallanPdfGeneratedAt: "$orderDetails.deliveryChallanPdfGeneratedAt",
+              deliveryChallanPdfHistory: { $ifNull: ["$orderDetails.deliveryChallanPdfHistory", []] },
               plantDetails: {
                 name: { $arrayElemAt: ["$plantDetails.name", 0] },
                 variety: { $arrayElemAt: ["$plantDetails.variety", 0] },
@@ -2497,6 +2513,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
                 contact: { $arrayElemAt: ["$farmerDetails.mobileNumber", 0] },
                 orderNotes: "$orderDetails.notes",
                 dealerOrder: "$orderDetails.dealerOrder",
+                plantLineItems: { $ifNull: ["$orderDetails.plantLineItems", []] },
                 dealer: {
                   name: { $arrayElemAt: ["$dealerDetails.name", 0] },
                   phoneNumber: { $arrayElemAt: ["$dealerDetails.phoneNumber", 0] },
@@ -2997,35 +3014,80 @@ const regenerateDispatchPdfs = catchAsync(async (req, res, next) => {
     );
   }
 
+  const force = Boolean(body.force);
+
   const dispatchObjectId = String(dispatch._id);
   const now = new Date();
   const $set = {};
+  const $push = {};
 
   if (types.includes("delivery_challan")) {
-    const buf = await buildDeliveryChallanPdfBuffer(dispatch);
-    const url = await uploadToS3(buf, `delivery-challan-${dispatchObjectId}.pdf`, {
-      folder: `dispatch-pdfs/${dispatchObjectId}`,
-    });
-    $set.deliveryChallanPdfUrl = url;
-    $set.deliveryChallanPdfGeneratedAt = now;
+    const prevUrl = String(dispatch.deliveryChallanPdfUrl || "").trim();
+    if (prevUrl && !force) {
+      // reuse existing DC PDF
+    } else {
+      const buf = await buildDeliveryChallanPdfBuffer(dispatch);
+      const url = await uploadToS3(buf, `delivery-challan-${dispatchObjectId}-${Date.now()}.pdf`, {
+        folder: `dispatch-pdfs/${dispatchObjectId}`,
+      });
+      $set.deliveryChallanPdfUrl = url;
+      $set.deliveryChallanPdfGeneratedAt = now;
+      if (prevUrl) {
+        $push.deliveryChallanPdfHistory = {
+          url: prevUrl,
+          generatedAt: dispatch.deliveryChallanPdfGeneratedAt || null,
+          replacedAt: now,
+          generatedBy: req.user?._id || undefined,
+        };
+      }
+    }
   }
 
   if (types.includes("complete_invoice")) {
-    const invoiceAadhars =
-      body.invoiceAadhars && typeof body.invoiceAadhars === "object" ? body.invoiceAadhars : {};
-    const buf = await buildCompleteInvoicePdfBuffer(dispatch, { aadharByOrderId: invoiceAadhars });
-    const url = await uploadToS3(buf, `complete-invoice-${dispatchObjectId}.pdf`, {
-      folder: `dispatch-pdfs/${dispatchObjectId}`,
-    });
-    $set.completeInvoicePdfUrl = url;
-    $set.completeInvoicePdfGeneratedAt = now;
+    if (String(dispatch.transportStatus || "").toUpperCase() !== "DELIVERED") {
+      return next(
+        new AppError(
+          "Complete the order form first to generate the invoice (dispatch must be DELIVERED)",
+          400
+        )
+      );
+    }
+    const prevUrl = String(dispatch.completeInvoicePdfUrl || "").trim();
+    if (prevUrl && !force) {
+      // reuse existing invoice PDF
+    } else {
+      const invoiceAadhars =
+        body.invoiceAadhars && typeof body.invoiceAadhars === "object" ? body.invoiceAadhars : {};
+      const buf = await buildCompleteInvoicePdfBuffer(dispatch, { aadharByOrderId: invoiceAadhars });
+      const url = await uploadToS3(buf, `complete-invoice-${dispatchObjectId}-${Date.now()}.pdf`, {
+        folder: `dispatch-pdfs/${dispatchObjectId}`,
+      });
+      $set.completeInvoicePdfUrl = url;
+      $set.completeInvoicePdfGeneratedAt = now;
+      if (prevUrl) {
+        $push.completeInvoicePdfHistory = {
+          url: prevUrl,
+          generatedAt: dispatch.completeInvoicePdfGeneratedAt || null,
+          replacedAt: now,
+          generatedBy: req.user?._id || undefined,
+        };
+      }
+    }
   }
 
-  const updated = await Dispatch.findByIdAndUpdate(dispatch._id, { $set }, { new: true })
-    .select(
-      "deliveryChallanPdfUrl deliveryChallanPdfGeneratedAt completeInvoicePdfUrl completeInvoicePdfGeneratedAt"
-    )
-    .lean();
+  const updateDoc = Object.keys($set).length || Object.keys($push).length ? { $set, ...(Object.keys($push).length ? { $push } : {}) } : null;
+
+  const updated = updateDoc
+    ? await Dispatch.findByIdAndUpdate(dispatch._id, updateDoc, { new: true })
+        .select(
+          "deliveryChallanPdfUrl deliveryChallanPdfGeneratedAt deliveryChallanPdfHistory completeInvoicePdfUrl completeInvoicePdfGeneratedAt completeInvoicePdfHistory"
+        )
+        .lean()
+    : await Dispatch.findById(dispatch._id)
+        .select(
+          "deliveryChallanPdfUrl deliveryChallanPdfGeneratedAt deliveryChallanPdfHistory completeInvoicePdfUrl completeInvoicePdfGeneratedAt completeInvoicePdfHistory"
+        )
+        .lean();
 
   if (!updated) {
     return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
@@ -3035,8 +3097,10 @@ const regenerateDispatchPdfs = catchAsync(async (req, res, next) => {
     generateResponse("Success", "Dispatch PDFs generated", {
       deliveryChallanPdfUrl: updated.deliveryChallanPdfUrl || "",
       deliveryChallanPdfGeneratedAt: updated.deliveryChallanPdfGeneratedAt || null,
+      deliveryChallanPdfHistory: updated.deliveryChallanPdfHistory || [],
       completeInvoicePdfUrl: updated.completeInvoicePdfUrl || "",
       completeInvoicePdfGeneratedAt: updated.completeInvoicePdfGeneratedAt || null,
+      completeInvoicePdfHistory: updated.completeInvoicePdfHistory || [],
     })
   );
 });
@@ -3736,7 +3800,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
     );
     delete req._orderEditAlertQueue;
 
-    scheduleDispatchPdfGeneration(updatedDispatch._id, ["delivery_challan", "complete_invoice"]);
+    scheduleDispatchPdfGeneration(updatedDispatch._id, ["complete_invoice"]);
 
     const response = generateResponse(
       "Success",

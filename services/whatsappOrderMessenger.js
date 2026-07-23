@@ -5,6 +5,8 @@
 import {
   getWhatsAppClient,
   isWhatsAppReady,
+  reportWhatsAppTransportFailure,
+  waitUntilWhatsAppReady,
 } from "./whatsappClient.js";
 import {
   isWhatsappOrderWebJsEnabled,
@@ -75,6 +77,11 @@ async function sendViaWebJs(phone, text) {
   if (resolved && !targets.includes(resolved)) targets.push(resolved);
 
   let lastError = directReply?.error || null;
+  let sawDetached = reportWhatsAppTransportFailure(
+    { message: lastError },
+    "order-direct-reply"
+  );
+
   for (const targetId of targets) {
     try {
       await wa.sendMessage(targetId, body);
@@ -83,6 +90,26 @@ async function sendViaWebJs(phone, text) {
     } catch (err) {
       lastError = err?.message || String(err);
       console.warn(`[WhatsApp Order] web.js send to ${targetId} failed:`, lastError);
+      if (reportWhatsAppTransportFailure(err, "order-send")) {
+        sawDetached = true;
+        break;
+      }
+    }
+  }
+
+  if (sawDetached) {
+    const ready = await waitUntilWhatsAppReady(90000);
+    const wa2 = getWhatsAppClient();
+    if (ready && wa2) {
+      try {
+        const targetId = targets[0] || (await resolveChatId(wa2, phone));
+        await wa2.sendMessage(targetId, body);
+        console.log(`[WhatsApp Order] ✅ Sent after reinit (web.js) to ${targetId}`);
+        return { success: true, channel: "webjs", targetId, retried: true };
+      } catch (retryErr) {
+        lastError = retryErr?.message || String(retryErr);
+        reportWhatsAppTransportFailure(retryErr, "order-retry");
+      }
     }
   }
 

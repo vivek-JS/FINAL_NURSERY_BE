@@ -2,8 +2,13 @@ import mongoose from "mongoose";
 import PlantCms from "../models/plantCms.model.js";
 import InvoiceSequence from "../models/invoiceSequence.model.js";
 
+/** @deprecated kept for reading legacy keys; new allocations use plantDcSequenceKey */
 export function officialDcSequenceKey(plantNameId, plantSubtypeId) {
   return `dc_ps:${String(plantNameId)}:${String(plantSubtypeId)}`;
+}
+
+export function plantDcSequenceKey(plantNameId) {
+  return `dc_plant:${String(plantNameId)}`;
 }
 
 function lettersOnlyUpper(s, maxLen) {
@@ -11,52 +16,35 @@ function lettersOnlyUpper(s, maxLen) {
   return t.slice(0, maxLen);
 }
 
-function fallbackPrefixFromIds(plantNameId, plantSubtypeId) {
-  const hex = (String(plantNameId) + String(plantSubtypeId)).replace(
-    /[^a-fA-F0-9]/g,
-    ""
-  );
+function fallbackPrefixFromPlantId(plantNameId) {
+  const hex = String(plantNameId).replace(/[^a-fA-F0-9]/g, "");
   let out = "";
-  for (let i = 0; i < hex.length && out.length < 4; i += 1) {
+  for (let i = 0; i < hex.length && out.length < 3; i += 1) {
     const n = parseInt(hex[i], 16);
     if (!Number.isFinite(n)) continue;
     out += String.fromCharCode(65 + (n % 26));
   }
-  return (out + "DCXX").slice(0, 4);
+  return (out + "PL").slice(0, 3);
 }
 
-async function resolveNamePrefix(plantNameId, plantSubtypeId, session) {
+async function resolvePlantPrefix(plantNameId, session) {
   const sess = session || undefined;
-  const plant = await PlantCms.findById(plantNameId)
-    .select("name subtypes")
-    .session(sess)
-    .lean();
-  const stId = String(plantSubtypeId);
-  let subName = "";
-  if (plant?.subtypes?.length) {
-    const st = plant.subtypes.find((x) => String(x._id) === stId);
-    subName = st?.name || "";
-  }
-  const pLetters = lettersOnlyUpper(plant?.name || "", 3) || "PL";
-  const sLetters = lettersOnlyUpper(subName || "", 2) || "ST";
-  let base = `${pLetters.slice(0, 2)}${sLetters.slice(0, 2)}`.slice(0, 4);
-  if (base.length < 2) {
-    base = fallbackPrefixFromIds(plantNameId, plantSubtypeId);
-  }
-  return base;
+  const plant = await PlantCms.findById(plantNameId).select("name").session(sess).lean();
+  const letters = lettersOnlyUpper(plant?.name || "", 3) || fallbackPrefixFromPlantId(plantNameId);
+  return letters.slice(0, 3) || "PL";
 }
 
-async function ensureUniquePrefix(candidate, fullKey, session) {
+async function ensureUniquePlantPrefix(candidate, fullKey, session) {
   const sess = session || undefined;
-  const candUpper = String(candidate || "DC")
+  const candUpper = String(candidate || "PL")
     .replace(/[^A-Za-z]/g, "")
     .toUpperCase();
-  let p = candUpper.slice(0, 4);
-  if (p.length < 2) p = "DC";
+  let p = candUpper.slice(0, 8);
+  if (!p) p = "PL";
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const clash = await InvoiceSequence.findOne({
       $and: [
-        { key: { $regex: /^dc_ps:/ } },
+        { key: { $regex: /^dc_plant:/ } },
         { prefix: p },
         { key: { $ne: fullKey } },
       ],
@@ -66,33 +54,26 @@ async function ensureUniquePrefix(candidate, fullKey, session) {
       .lean();
     if (!clash) return p;
     const suf = String.fromCharCode(65 + (attempt % 26));
-    const raw = `${candUpper.slice(0, 3)}${suf}`;
-    p = raw.slice(0, 4) || "DC";
+    p = `${candUpper.slice(0, 7)}${suf}`.slice(0, 8) || "PL";
   }
-  const parts = String(fullKey).split(":");
-  const pid = parts[1] || fullKey;
-  const sid = parts[2] || fullKey;
-  return fallbackPrefixFromIds(pid, sid);
+  return fallbackPrefixFromPlantId(String(fullKey).split(":")[1] || fullKey);
 }
 
 /**
- * Allocate next official DC string for this plant+subtype bucket (PREFIX-00001).
+ * Allocate next official DC for this plant bucket (PREFIX + number, e.g. B640).
  */
-export async function allocateOfficialDcNumber(session, plantNameId, plantSubtypeId) {
+export async function allocateOfficialDcNumber(session, plantNameId, _plantSubtypeIdIgnored) {
   const pid = plantNameId?._id ?? plantNameId;
-  const sid = plantSubtypeId?._id ?? plantSubtypeId;
-  if (!mongoose.isValidObjectId(String(pid)) || !mongoose.isValidObjectId(String(sid))) {
-    throw new Error("allocateOfficialDcNumber: invalid plantName or plantSubtype id");
+  if (!mongoose.isValidObjectId(String(pid))) {
+    throw new Error("allocateOfficialDcNumber: invalid plantName id");
   }
-  const fullKey = officialDcSequenceKey(pid, sid);
+  const fullKey = plantDcSequenceKey(pid);
   const sess = session || undefined;
 
-  const existing = await InvoiceSequence.findOne({ key: fullKey })
-    .session(sess)
-    .lean();
+  const existing = await InvoiceSequence.findOne({ key: fullKey }).session(sess).lean();
   if (!existing) {
-    const base = await resolveNamePrefix(pid, sid, session);
-    const prefix = await ensureUniquePrefix(base, fullKey, session);
+    const base = await resolvePlantPrefix(pid, session);
+    const prefix = await ensureUniquePlantPrefix(base, fullKey, session);
     await InvoiceSequence.updateOne(
       { key: fullKey },
       { $setOnInsert: { key: fullKey, prefix, nextNumber: 1 } },
@@ -106,39 +87,48 @@ export async function allocateOfficialDcNumber(session, plantNameId, plantSubtyp
     { new: true, session: sess }
   ).lean();
 
-  if (!updated?.prefix) {
+  if (!updated) {
     throw new Error("allocateOfficialDcNumber: sequence document missing");
   }
 
   const seq = Math.max(1, Number(updated.nextNumber) - 1);
   const prefix =
     updated.prefix != null && String(updated.prefix).trim() !== ""
-      ? String(updated.prefix).trim().toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4) || "DC"
-      : "DC";
-  const padded = String(seq).padStart(5, "0");
-  return `${prefix}-${padded}`;
+      ? String(updated.prefix).trim()
+      : "PL";
+  return `${prefix}${seq}`;
+}
+
+function resolvePlantIdFromOrder(orderDoc) {
+  const lines = Array.isArray(orderDoc?.plantLineItems) ? orderDoc.plantLineItems : [];
+  if (lines.length > 0) {
+    const first = lines[0];
+    const fromLine = first?.plantName?._id ?? first?.plantName;
+    if (mongoose.isValidObjectId(String(fromLine))) return fromLine;
+  }
+  return orderDoc?.plantName?._id ?? orderDoc?.plantName;
 }
 
 /**
  * Returns existing official DC, or allocates and returns a new one (caller persists on $set).
  * Idempotent: if order already has officialDeliveryChallanNumber, returns it without consuming a new number.
+ * Scope: one sequence per plant (Banana / Papaya / …); first line wins for multi-plant instant orders.
  */
 export async function ensureOfficialDeliveryChallanForOrder(orderDoc, session) {
   const existing = String(orderDoc?.officialDeliveryChallanNumber || "").trim();
   if (existing) return existing;
 
-  const plantRef = orderDoc.plantName?._id ?? orderDoc.plantName;
-  const subRef = orderDoc.plantSubtype?._id ?? orderDoc.plantSubtype;
-  if (!mongoose.isValidObjectId(String(plantRef)) || !mongoose.isValidObjectId(String(subRef))) {
+  const plantRef = resolvePlantIdFromOrder(orderDoc);
+  if (!mongoose.isValidObjectId(String(plantRef))) {
     console.error(
-      "ensureOfficialDeliveryChallanForOrder: missing plant/subtype on order",
+      "ensureOfficialDeliveryChallanForOrder: missing plant on order",
       orderDoc?._id
     );
     return null;
   }
 
   try {
-    return await allocateOfficialDcNumber(session, plantRef, subRef);
+    return await allocateOfficialDcNumber(session, plantRef);
   } catch (e) {
     console.error("ensureOfficialDeliveryChallanForOrder:", e?.message || e);
     return null;

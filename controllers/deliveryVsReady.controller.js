@@ -195,6 +195,51 @@ export const getDeliveryVsReadyAnalytics = async (req, res) => {
     let urgentPlants = 0;
     let urgentSlots = 0;
 
+    // Live booked by slot — ignore stale totalBookedPlants (DISPATCHED/CANCELLED ghosts)
+    const analyticsSlotIds = slotRows.map((s) => s.slotId).filter(Boolean);
+    const liveBookedBySlot = new Map();
+    if (analyticsSlotIds.length) {
+      const liveRows = await Order.aggregate([
+        {
+          $match: {
+            bookingSlot: { $in: analyticsSlotIds },
+            orderStatus: {
+              $in: [
+                "PENDING",
+                "PROCESSING",
+                "ACCEPTED",
+                "FARM_READY",
+                "READY_FOR_DISPATCH",
+                "DISPATCH_PROCESS",
+                "PARTIALLY_COMPLETED",
+              ],
+            },
+            $or: [
+              { quotaSource: { $exists: false } },
+              { quotaSource: null },
+              { quotaSource: { $ne: "dealer" } },
+            ],
+          },
+        },
+        {
+          $group: {
+            _id: "$bookingSlot",
+            booked: {
+              $sum: {
+                $add: [
+                  { $ifNull: ["$numberOfPlants", 0] },
+                  { $ifNull: ["$additionalPlants", 0] },
+                ],
+              },
+            },
+          },
+        },
+      ]);
+      liveRows.forEach((r) => {
+        liveBookedBySlot.set(String(r._id), Number(r.booked) || 0);
+      });
+    }
+
     const ensureSubtype = (key, plantId, subtypeId, slotReadyDays) => {
       if (bySubtypeMaps.has(key)) return bySubtypeMaps.get(key);
       let meta = subtypeMeta.get(key);
@@ -242,14 +287,16 @@ export const getDeliveryVsReadyAnalytics = async (req, res) => {
 
       const readyDays =
         Number(slot.plantReadyDays) || Number(entry.plantReadyDays) || 0;
-      const booked = Number(slot.totalBookedPlants) || 0;
+      const booked =
+        liveBookedBySlot.get(String(slot.slotId)) ?? 0;
       const sowed =
         (Number(slot.primarySowed) || 0) + (Number(slot.officeSowed) || 0);
       const bufferPct = Number(slot.buffer) || 0;
-      const gap = Math.max(
-        0,
-        Math.ceil(booked * (1 + bufferPct / 100)) - sowed
-      );
+      const rawGap = Math.max(0, booked - sowed);
+      const gap =
+        rawGap > 0 && bufferPct > 0
+          ? Math.round(rawGap * (1 + bufferPct / 100))
+          : rawGap;
       const avail = Math.max(0, Number(slot.availablePlants) || 0);
       const sowBy = start.clone().subtract(readyDays, "days");
       const daysUntilSow = sowBy.diff(todayStart, "days");

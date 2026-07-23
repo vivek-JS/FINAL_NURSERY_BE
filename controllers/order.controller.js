@@ -2127,6 +2127,7 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
             id: "$plantSubtypeDetails._id",
             name: "$plantSubtypeDetails.name",
           },
+          plantLineItems: { $ifNull: ["$plantLineItems", []] },
           cavity: {
             $let: {
               vars: {

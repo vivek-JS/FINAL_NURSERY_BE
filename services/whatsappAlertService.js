@@ -10,7 +10,13 @@
  */
 
 import mongoose from "mongoose";
-import { getWhatsAppClient, isWhatsAppReady } from "./whatsappClient.js";
+import {
+  getWhatsAppClient,
+  isWhatsAppReady,
+  isWhatsAppDetachedError,
+  reportWhatsAppTransportFailure,
+  waitUntilWhatsAppReady,
+} from "./whatsappClient.js";
 import { normalizePhoneForWhitelist } from "../utils/agriLoadLinkSigner.js";
 import Order from "../models/order.model.js";
 import { formatWatiDateEnIN } from "../utility/watiIstDateFormat.js";
@@ -123,6 +129,8 @@ async function resolveWhatsAppChatId(wa, number) {
       return registered._serialized;
     }
   } catch (err) {
+    // Dead Puppeteer page — don't pretend fallback send will work
+    if (isWhatsAppDetachedError(err)) throw err;
     console.warn(
       `[WhatsApp Alert] getNumberId(${digits}) failed, using ${fallback}:`,
       err?.message || err
@@ -132,9 +140,36 @@ async function resolveWhatsAppChatId(wa, number) {
   return fallback;
 }
 
+async function sendWhatsAppMessageOnce(number, message) {
+  const chatId = formatNumber(number);
+
+  if (!isWhatsAppReady) {
+    return { ok: false, chatId, reason: "not_ready" };
+  }
+
+  const wa = getWhatsAppClient();
+  if (!wa) {
+    return { ok: false, chatId, reason: "no_client" };
+  }
+
+  const targetId = await resolveWhatsAppChatId(wa, number);
+  const sent = await wa.sendMessage(targetId, message);
+  console.log(
+    `[WhatsApp Alert] ✅ Sent to ${targetId}`,
+    sent?.id?._serialized ? `(id ${sent.id._serialized})` : ""
+  );
+  return {
+    ok: true,
+    chatId,
+    resolvedId: targetId,
+    messageId: sent?.id?._serialized || null,
+  };
+}
+
 /**
  * Sends a WhatsApp message to a single number.
  * Never throws — returns { ok, chatId, resolvedId?, error?, reason? }.
+ * On detached Frame, re-inits client and retries once.
  */
 export async function sendWhatsAppMessage(number, message) {
   const chatId = formatNumber(number);
@@ -148,27 +183,29 @@ export async function sendWhatsAppMessage(number, message) {
     return { ok: false, chatId, reason: "not_ready" };
   }
 
-  const wa = getWhatsAppClient();
-  if (!wa) {
-    console.warn("[WhatsApp Alert] Client not started — skipping alert to", chatId);
-    return { ok: false, chatId, reason: "no_client" };
-  }
-
   try {
-    const targetId = await resolveWhatsAppChatId(wa, number);
-    const sent = await wa.sendMessage(targetId, message);
-    console.log(
-      `[WhatsApp Alert] ✅ Sent to ${targetId}`,
-      sent?.id?._serialized ? `(id ${sent.id._serialized})` : ""
-    );
-    return {
-      ok: true,
-      chatId,
-      resolvedId: targetId,
-      messageId: sent?.id?._serialized || null,
-    };
+    return await sendWhatsAppMessageOnce(number, message);
   } catch (err) {
     const error = err?.message || String(err);
+    if (reportWhatsAppTransportFailure(err, "alert-send")) {
+      console.warn(
+        `[WhatsApp Alert] Detached frame on ${chatId} — waiting for reinit then retry once`
+      );
+      const ready = await waitUntilWhatsAppReady(90000);
+      if (ready) {
+        try {
+          return await sendWhatsAppMessageOnce(number, message);
+        } catch (retryErr) {
+          const retryError = retryErr?.message || String(retryErr);
+          console.error(
+            `[WhatsApp Alert] ❌ Retry failed to ${chatId}:`,
+            retryError
+          );
+          reportWhatsAppTransportFailure(retryErr, "alert-retry");
+          return { ok: false, chatId, error: retryError };
+        }
+      }
+    }
     console.error(`[WhatsApp Alert] ❌ Failed to send to ${chatId}:`, error);
     return { ok: false, chatId, error };
   }
