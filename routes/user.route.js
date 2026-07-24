@@ -109,7 +109,12 @@ router
   .get("/dealers/transactions/:dealerId", getDealerWalletTransactions)
   .get("/dealers/transactions/:dealerId/csv", exportDealerWalletTransactionsCSV)
   .get("/dealers/:dealerId/ledger", getDealerLedger)
-  .post("/dealers/:dealerId/ledger/repair", authenticateToken, postRepairDealerLedger)
+  .post(
+    "/dealers/:dealerId/ledger/repair",
+    authenticateToken,
+    authorizeRoles(["SUPER_ADMIN"]),
+    postRepairDealerLedger
+  )
   .get("/dealers/:dealerId/plant-ledger", getDealerPlantLedger)
   .post(
     "/dealers/:dealerId/wallet/credit",
