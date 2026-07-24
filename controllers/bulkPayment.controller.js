@@ -12,6 +12,7 @@ import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { parsePositivePaymentAmount } from "../utils/paymentValidation.js";
 import { tryAutoSendOrderAcceptedWhatsApp } from "./order.controller.js";
 import { isBananaPlantName } from "../utility/watiPlantText.js";
 
@@ -37,21 +38,32 @@ export const createBulkPayment = catchAsync(async (req, res, next) => {
     source,
   } = req.body;
 
-  if (!totalAmount || !allocations || !Array.isArray(allocations) || allocations.length === 0) {
+  if (totalAmount == null || !allocations || !Array.isArray(allocations) || allocations.length === 0) {
     return next(new AppError("totalAmount and at least one allocation are required", 400));
   }
 
-  const sum = allocations.reduce((s, a) => s + (Number(a.amount) || 0), 0);
-  const total = Number(totalAmount);
+  const parsedTotal = parsePositivePaymentAmount(totalAmount, "totalAmount");
+  if (!parsedTotal.ok) {
+    return next(new AppError(parsedTotal.message, 400));
+  }
+  const total = parsedTotal.amount;
+  const normalizedAllocations = [];
+  for (const [index, allocation] of allocations.entries()) {
+    const parsedAllocation = parsePositivePaymentAmount(allocation.amount, `allocations[${index}].amount`);
+    if (!parsedAllocation.ok) {
+      return next(new AppError(parsedAllocation.message, 400));
+    }
+    normalizedAllocations.push({
+      orderId: new mongoose.Types.ObjectId(allocation.orderId),
+      amount: parsedAllocation.amount,
+      orderType: allocation.orderType === "AgriSalesOrder" ? "AgriSalesOrder" : "ORDER",
+    });
+  }
+
+  const sum = normalizedAllocations.reduce((s, a) => s + a.amount, 0);
   if (Math.abs(sum - total) > 0.01) {
     return next(new AppError(`Sum of allocations (${sum}) must equal totalAmount (${total})`, 400));
   }
-
-  const normalizedAllocations = allocations.map((a) => ({
-    orderId: new mongoose.Types.ObjectId(a.orderId),
-    amount: Number(a.amount),
-    orderType: a.orderType === "AgriSalesOrder" ? "AgriSalesOrder" : "ORDER",
-  }));
 
   const requesterId = req.user?._id || req.user?.id;
   const isDealer =
@@ -264,6 +276,9 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
     const userId = req.user?._id || req.user?.id;
 
     for (const alloc of bulk.allocations) {
+      const parsedAllocation = parsePositivePaymentAmount(alloc.amount, "allocation amount");
+      if (!parsedAllocation.ok) throw new AppError(parsedAllocation.message, 400);
+      alloc.amount = parsedAllocation.amount;
       paymentPayload.paidAmount = alloc.amount;
 
       if (alloc.orderType === "AgriSalesOrder") {

@@ -86,11 +86,20 @@ describe("dispatchCompleteOrderPayments — buildDispatchCompletePaymentSubdocs"
     );
   });
 
-  it("throws AppError for NaN or zero amount", () => {
+  it("throws AppError for NaN or non-positive amount", () => {
     assert.throws(
       () =>
         buildDispatchCompletePaymentSubdocs(
           [{ paidAmount: 0, isWalletPayment: true }],
+          { jobTitle: "ACCOUNTANT" },
+          farmerOrder
+        ),
+      (err) => err instanceof AppError
+    );
+    assert.throws(
+      () =>
+        buildDispatchCompletePaymentSubdocs(
+          [{ paidAmount: -10, isWalletPayment: true }],
           { jobTitle: "ACCOUNTANT" },
           farmerOrder
         ),
