@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/orderUpdatePermissions.test.mjs tests/dispatchCompleteCalculations.test.mjs tests/dispatchCompleteOrderPayments.test.mjs tests/dealerWalletReconcile.test.mjs tests/farmerPlantOrderPaymentTransfer.test.mjs tests/farmerOrderTransferRequest.model.test.mjs tests/farmerOrderTransferRoutes.test.mjs tests/voiceFeedbackWebhook.test.mjs tests/sowingBatchMatch.test.mjs tests/whatsappReportWizard.flow.test.mjs tests/pdfBookingReport.test.mjs tests/officialDeliveryChallan.service.test.mjs tests/agriSalesOrderLineItems.model.test.mjs tests/dispatchPdfDocuments.test.mjs tests/ramAgriOutstanding.service.test.mjs",
+    "test": "node --test tests/orderUpdatePermissions.test.mjs tests/paymentValidation.test.mjs tests/watiMessaging.test.mjs tests/dispatchCompleteCalculations.test.mjs tests/dispatchCompleteOrderPayments.test.mjs tests/dealerWalletReconcile.test.mjs tests/farmerPlantOrderPaymentTransfer.test.mjs tests/farmerOrderTransferRequest.model.test.mjs tests/farmerOrderTransferRoutes.test.mjs tests/voiceFeedbackWebhook.test.mjs tests/sowingBatchMatch.test.mjs tests/whatsappReportWizard.flow.test.mjs tests/pdfBookingReport.test.mjs tests/officialDeliveryChallan.service.test.mjs tests/agriSalesOrderLineItems.model.test.mjs tests/dispatchPdfDocuments.test.mjs tests/ramAgriOutstanding.service.test.mjs",
     "test:order-permissions": "node --test tests/orderUpdatePermissions.test.mjs",
     "test:dispatch-status-patch": "node scripts/test-dispatch-order-status-patch.js",
     "test:cancel-ledger-quota": "node scripts/test-cancel-ledger-and-quota-api.js",
