@@ -28,17 +28,18 @@ const sowingRequestSchema = new mongoose.Schema(
     productId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Product',
-      required: true,
+      // Optional: admin/order direct sow may record plants without a seed packing product
+      required: false,
     },
     packetsNeeded: {
       type: Number,
       required: true,
-      min: 0.01,
+      min: 0,
     },
     packetsRequested: {
       type: Number,
       required: true,
-      min: 0.01,
+      min: 0,
     },
     excessPackets: {
       type: Number,

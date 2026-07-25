@@ -380,6 +380,7 @@ import {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
+  getSowReadyEntries,
   getSecondaryPolyhouseStock,
   previewSecondaryVehicleLoadHandler,
   postSecondaryVehicleLoad,
@@ -779,6 +780,16 @@ server.get(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
   authenticateToken,
   getVehicleDispatchAllocationSuggestions
+);
+server.get(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/sow-ready-entries",
+  authenticateToken,
+  getSowReadyEntries
+);
+server.get(
+  "/api/v1/laboutward/secondary/sow-ready-entries",
+  authenticateToken,
+  getSowReadyEntries
 );
 server.get(
   "/api/v1/laboutward/secondary/polyhouse-stock",

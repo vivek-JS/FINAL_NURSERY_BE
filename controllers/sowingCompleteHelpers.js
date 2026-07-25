@@ -3,7 +3,14 @@ import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
 import InventoryOutward from "../models/inventoryOutward.model.js";
 import ReturnRequest from "../models/returnRequest.model.js";
-import PlantCms from "../models/plantCms.model.js";
+import {
+  fmtDDMMYYYY,
+  addDays,
+  resolveCmsReadyDays,
+  findSlotByPlantReadyDate,
+  resolveReadyDays,
+  parseLocalDate,
+} from "./sowingSlotReadyHelpers.js";
 
 export function parseNum(v, fallback = 0) {
   const n = Number(v);
@@ -30,20 +37,6 @@ function toObjectIds(ids) {
     .filter(Boolean);
 }
 
-function fmtDDMMYYYY(d) {
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}-${mm}-${yyyy}`;
-}
-
-function addDays(date, days) {
-  const d = new Date(date.getTime());
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + Math.max(0, Number(days) || 0));
-  return d;
-}
-
 function quickReturnRequestNumber(seq = 0) {
   const d = new Date();
   const ymd =
@@ -56,26 +49,52 @@ function quickReturnRequestNumber(seq = 0) {
   return `RR${ymd}${tail}`;
 }
 
-async function resolveCmsReadyDays(plantId, subtypeId) {
-  if (!plantId || !subtypeId) return 0;
-  try {
-    const plant = await PlantCms.findById(plantId).select("subtypes").lean();
-    const st = (plant?.subtypes || []).find(
-      (s) => String(s._id || s.subtypeId) === String(subtypeId)
-    );
-    return Number(st?.plantReadyDays) || 0;
-  } catch {
-    return 0;
+async function pushBatchToSlot(slotId, { inc, sowingDateStr, plantReadyDateStr, readyDays, batch }) {
+  const isExcess = Boolean(batch.isExcessiveSowing);
+  const incDoc = { ...inc };
+  if (isExcess) {
+    incDoc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] =
+      Number(batch.plantsSowed) || 0;
   }
+  await PlantSlot.updateOne(
+    { "subtypeSlots.slots._id": slotId },
+    {
+      $inc: incDoc,
+      $set: {
+        "subtypeSlots.$[st].slots.$[sl].sowingDate": sowingDateStr,
+        "subtypeSlots.$[st].slots.$[sl].plantReadyDate": plantReadyDateStr,
+        ...(readyDays > 0
+          ? { "subtypeSlots.$[st].slots.$[sl].plantReadyDays": readyDays }
+          : {}),
+      },
+      $push: {
+        "subtypeSlots.$[st].slots.$[sl].sowingBatches": {
+          $each: [batch],
+          $position: 0,
+          $slice: 200,
+        },
+      },
+      $addToSet: {
+        "subtypeSlots.$[st].slots.$[sl].linkedSowingRequests": batch.sowingRequestId,
+      },
+      $pull: {
+        "subtypeSlots.$[st].slots.$[sl].sowingInProgress": {
+          sowingRequestId: batch.sowingRequestId,
+        },
+      },
+    },
+    {
+      arrayFilters: [{ "st.slots._id": slotId }, { "sl._id": slotId }],
+    }
+  );
 }
 
 /**
  * Fast path: lean weight read + atomic $inc/$set/$push/$pull.
- * Immediate availablePlants; also stamps sowingDate / plantReadyDate + sowingBatches.
+ * plantReadyDate = sowDate + plantReadyDays; optionally map to calendar slot by ready date.
  */
 export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) {
-  const slotIds = toObjectIds(request.linkedSlotIds);
-  if (!slotIds.length || plantsSowed <= 0) return { slotsUpdated: 0 };
+  if (plantsSowed <= 0) return { slotsUpdated: 0 };
 
   const packetsUsedTotal = Math.max(0, Number(meta.packetsUsed) || 0);
   const requestNumber = meta.requestNumber || request.requestNumber || "";
@@ -86,6 +105,52 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
   const isExcess = Boolean(
     meta.isExcessiveSowing ?? request.isExcessiveSowing
   );
+  const bookingSlotIds = toObjectIds(request.linkedSlotIds);
+
+  const sowedAt =
+    meta.sowedAt instanceof Date && !Number.isNaN(meta.sowedAt.getTime())
+      ? meta.sowedAt
+      : new Date();
+  const sowingDateStr = fmtDDMMYYYY(sowedAt);
+
+  const plantId = request.plantId || meta.plantId;
+  const subtypeId = request.subtypeId || meta.subtypeId;
+  const cmsReadyDays = await resolveCmsReadyDays(plantId, subtypeId);
+  const overrideReady = Number(meta.plantReadyDays);
+  const readyDaysGlobal =
+    Number.isFinite(overrideReady) && overrideReady > 0
+      ? overrideReady
+      : cmsReadyDays;
+  const plantReadyDateStr = fmtDDMMYYYY(addDays(sowedAt, readyDaysGlobal || 0));
+
+  // Prefer calendar slot that contains plantReadyDate (create + edit path)
+  let resolvedReadySlot = null;
+  if (meta.resolveByReadyDate !== false && plantId && subtypeId && readyDaysGlobal > 0) {
+    resolvedReadySlot = await findSlotByPlantReadyDate(
+      plantId,
+      subtypeId,
+      plantReadyDateStr
+    );
+  }
+
+  let slotIds = bookingSlotIds;
+  if (resolvedReadySlot?.slotId) {
+    slotIds = [resolvedReadySlot.slotId];
+    // Keep booking slots on request; also track applied ready slot
+    const existing = new Set(
+      (request.linkedSlotIds || []).map((id) => String(id))
+    );
+    if (!existing.has(String(resolvedReadySlot.slotId))) {
+      request.linkedSlotIds = [
+        ...(request.linkedSlotIds || []),
+        resolvedReadySlot.slotId,
+      ];
+    }
+  }
+
+  if (!slotIds.length) {
+    throw new Error("No linked slots found to apply sowing");
+  }
 
   const rows = await PlantSlot.aggregate([
     { $match: { "subtypeSlots.slots._id": { $in: slotIds } } },
@@ -117,41 +182,29 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
   }
   if (!ordered.length) ordered.push(...rows);
 
-  let cmsReadyDays = null;
-  const needsCms = ordered.some((r) => !(Number(r.plantReadyDays) > 0));
-  if (needsCms) {
-    cmsReadyDays = await resolveCmsReadyDays(
-      request.plantId || ordered[0]?.plantId,
-      request.subtypeId || ordered[0]?.subtypeId
-    );
-  }
-
-  const sowedAt =
-    meta.sowedAt instanceof Date && !Number.isNaN(meta.sowedAt.getTime())
-      ? meta.sowedAt
-      : new Date();
-  const sowingDateStr = fmtDDMMYYYY(sowedAt);
-
   let weightSum = 0;
   const weights = ordered.map((row) => {
     let w = 1;
-    if (!isExcess) {
+    if (!isExcess && !resolvedReadySlot) {
       const booked = Number(row.totalBookedPlants) || 0;
       const sowed =
         (Number(row.primarySowed) || 0) + (Number(row.officeSowed) || 0);
       w = Math.max(1, booked - sowed);
     }
     weightSum += w;
-    const readyDays =
-      Number(row.plantReadyDays) > 0
-        ? Number(row.plantReadyDays)
-        : cmsReadyDays || 0;
+    const readyDays = resolveReadyDays(
+      meta.plantReadyDays,
+      row.plantReadyDays,
+      cmsReadyDays
+    );
     return { slotId: row.slotId, w, readyDays };
   });
 
   let remainingPlants = plantsSowed;
   let remainingPackets = packetsUsedTotal;
   const updates = [];
+  let appliedReadyDays = readyDaysGlobal;
+  let appliedReadyDate = plantReadyDateStr;
 
   for (let i = 0; i < weights.length; i++) {
     const row = weights[i];
@@ -172,7 +225,10 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
 
     if (addPlants <= 0) continue;
 
-    const plantReadyDateStr = fmtDDMMYYYY(addDays(sowedAt, row.readyDays));
+    const readyDays = row.readyDays || readyDaysGlobal || 0;
+    const readyDateStr = fmtDDMMYYYY(addDays(sowedAt, readyDays));
+    appliedReadyDays = readyDays;
+    appliedReadyDate = readyDateStr;
 
     const inc = {
       "subtypeSlots.$[st].slots.$[sl].primarySowed": addPlants,
@@ -180,67 +236,238 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
       "subtypeSlots.$[st].slots.$[sl].totalPlants": addPlants,
       "subtypeSlots.$[st].slots.$[sl].plantsSowed": addPlants,
     };
-    if (isExcess) {
-      inc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] = addPlants;
-    }
 
     updates.push(
-      PlantSlot.updateOne(
-        { "subtypeSlots.slots._id": row.slotId },
-        {
-          $inc: inc,
-          $set: {
-            "subtypeSlots.$[st].slots.$[sl].sowingDate": sowingDateStr,
-            "subtypeSlots.$[st].slots.$[sl].plantReadyDate": plantReadyDateStr,
-            ...(row.readyDays > 0
-              ? {
-                  "subtypeSlots.$[st].slots.$[sl].plantReadyDays":
-                    row.readyDays,
-                }
-              : {}),
-          },
-          $push: {
-            "subtypeSlots.$[st].slots.$[sl].sowingBatches": {
-              $each: [
-                {
-                  sowedAt,
-                  sowingDate: sowingDateStr,
-                  plantReadyDate: plantReadyDateStr,
-                  plantReadyDays: row.readyDays,
-                  plantsSowed: addPlants,
-                  packetsUsed: addPackets,
-                  shedName,
-                  sowingRequestId: request._id,
-                  requestNumber,
-                  isExcessiveSowing: isExcess,
-                  linkedOrderIds,
-                },
-              ],
-              $position: 0,
-              $slice: 200,
-            },
-          },
-          $addToSet: {
-            "subtypeSlots.$[st].slots.$[sl].linkedSowingRequests": request._id,
-          },
-          $pull: {
-            "subtypeSlots.$[st].slots.$[sl].sowingInProgress": {
-              sowingRequestId: request._id,
-            },
-          },
+      pushBatchToSlot(row.slotId, {
+        inc,
+        sowingDateStr,
+        plantReadyDateStr: readyDateStr,
+        readyDays,
+        batch: {
+          sowedAt,
+          sowingDate: sowingDateStr,
+          plantReadyDate: readyDateStr,
+          plantReadyDays: readyDays,
+          plantsSowed: addPlants,
+          packetsUsed: addPackets,
+          shedName,
+          sowingRequestId: request._id,
+          requestNumber,
+          isExcessiveSowing: isExcess,
+          linkedOrderIds,
+          slotHistory: [],
         },
-        {
-          arrayFilters: [
-            { "st.slots._id": row.slotId },
-            { "sl._id": row.slotId },
-          ],
-        }
-      )
+      })
     );
   }
 
   if (updates.length) await Promise.all(updates);
-  return { slotsUpdated: updates.length, sowingDate: sowingDateStr };
+  return {
+    slotsUpdated: updates.length,
+    sowingDate: sowingDateStr,
+    plantReadyDays: appliedReadyDays,
+    plantReadyDate: appliedReadyDate,
+    appliedSlotId: resolvedReadySlot?.slotId || slotIds[0] || null,
+    resolvedByReadyDate: Boolean(resolvedReadySlot),
+  };
+}
+
+/** Decrement plants / remove batch for a sowingRequest on a slot. */
+export async function reverseSowBatchFromSlot(slotId, sowingRequestId, plantsSowed) {
+  const qty = Math.max(0, Number(plantsSowed) || 0);
+  if (!slotId || !sowingRequestId || qty <= 0) return { reversed: 0 };
+
+  const id = new mongoose.Types.ObjectId(slotId);
+  const reqId = new mongoose.Types.ObjectId(sowingRequestId);
+
+  await PlantSlot.updateOne(
+    { "subtypeSlots.slots._id": id },
+    {
+      $inc: {
+        "subtypeSlots.$[st].slots.$[sl].primarySowed": -qty,
+        "subtypeSlots.$[st].slots.$[sl].availablePlants": -qty,
+        "subtypeSlots.$[st].slots.$[sl].totalPlants": -qty,
+        "subtypeSlots.$[st].slots.$[sl].plantsSowed": -qty,
+      },
+      $pull: {
+        "subtypeSlots.$[st].slots.$[sl].sowingBatches": {
+          sowingRequestId: reqId,
+        },
+      },
+    },
+    {
+      arrayFilters: [{ "st.slots._id": id }, { "sl._id": id }],
+    }
+  );
+  return { reversed: qty };
+}
+
+/**
+ * Find first sowingBatches entry for a request across plant slots.
+ */
+export async function findSowBatchForRequest(sowingRequestId) {
+  const reqId = new mongoose.Types.ObjectId(sowingRequestId);
+  const rows = await PlantSlot.aggregate([
+    { $match: { "subtypeSlots.slots.sowingBatches.sowingRequestId": reqId } },
+    { $unwind: "$subtypeSlots" },
+    { $unwind: "$subtypeSlots.slots" },
+    { $unwind: "$subtypeSlots.slots.sowingBatches" },
+    {
+      $match: {
+        "subtypeSlots.slots.sowingBatches.sowingRequestId": reqId,
+      },
+    },
+    {
+      $project: {
+        slotId: "$subtypeSlots.slots._id",
+        startDay: "$subtypeSlots.slots.startDay",
+        endDay: "$subtypeSlots.slots.endDay",
+        plantId: "$plantId",
+        subtypeId: "$subtypeSlots.subtypeId",
+        batch: "$subtypeSlots.slots.sowingBatches",
+      },
+    },
+    { $limit: 5 },
+  ]);
+  return rows;
+}
+
+/**
+ * Edit completed sow entry: update sow date / ready days; reslot by new ready date; append history.
+ */
+export async function editSowEntryOnSlots(request, opts = {}) {
+  const userId = opts.by;
+  const batches = await findSowBatchForRequest(request._id);
+  if (!batches.length) {
+    throw new Error("No sow batch found on slots for this request");
+  }
+
+  // Aggregate plants/packets from all batches of this request
+  let plantsTotal = 0;
+  let packetsTotal = 0;
+  let shedName = request.shedName || "";
+  let oldHistory = [];
+  for (const row of batches) {
+    plantsTotal += Number(row.batch?.plantsSowed) || 0;
+    packetsTotal += Number(row.batch?.packetsUsed) || 0;
+    if (row.batch?.shedName) shedName = row.batch.shedName;
+    if (Array.isArray(row.batch?.slotHistory)) {
+      oldHistory = oldHistory.concat(row.batch.slotHistory);
+    }
+  }
+  if (opts.plantsSowed != null && Number(opts.plantsSowed) > 0) {
+    plantsTotal = Number(opts.plantsSowed);
+  }
+
+  const fromSlotId = batches[0].slotId;
+  const fromReadyDate = batches[0].batch?.plantReadyDate || "";
+  const fromPlantReadyDays = Number(batches[0].batch?.plantReadyDays) || 0;
+  const fromSowDate = batches[0].batch?.sowingDate || "";
+
+  const sowedAt =
+    parseLocalDate(opts.sowDate) ||
+    parseLocalDate(fromSowDate) ||
+    (batches[0].batch?.sowedAt
+      ? new Date(batches[0].batch.sowedAt)
+      : new Date());
+
+  const cmsReady = await resolveCmsReadyDays(request.plantId, request.subtypeId);
+  const toPlantReadyDays = resolveReadyDays(
+    opts.plantReadyDays,
+    fromPlantReadyDays,
+    cmsReady
+  );
+  if (!(toPlantReadyDays > 0)) {
+    throw new Error("plantReadyDays must be > 0");
+  }
+
+  const sowingDateStr = fmtDDMMYYYY(sowedAt);
+  const toReadyDate = fmtDDMMYYYY(addDays(sowedAt, toPlantReadyDays));
+  const target = await findSlotByPlantReadyDate(
+    request.plantId,
+    request.subtypeId,
+    toReadyDate
+  );
+  if (!target?.slotId) {
+    throw new Error(`No calendar slot found for ready date ${toReadyDate}`);
+  }
+
+  const toSlotId = target.slotId;
+  const slotChanged = String(fromSlotId) !== String(toSlotId);
+  const reason =
+    opts.reason ||
+    (opts.plantReadyDays != null && Number(opts.plantReadyDays) !== fromPlantReadyDays
+      ? "EDIT_READY_DAYS"
+      : "EDIT_SOW_DATE");
+
+  // Reverse all old batches for this request
+  for (const row of batches) {
+    await reverseSowBatchFromSlot(
+      row.slotId,
+      request._id,
+      Number(row.batch?.plantsSowed) || 0
+    );
+  }
+
+  const histEntry = {
+    at: new Date(),
+    by: userId || null,
+    fromSlotId,
+    toSlotId,
+    fromReadyDate,
+    toReadyDate,
+    fromPlantReadyDays,
+    toPlantReadyDays,
+    sowDate: sowingDateStr,
+    plantsSowed: plantsTotal,
+    reason,
+  };
+
+  await pushBatchToSlot(toSlotId, {
+    inc: {
+      "subtypeSlots.$[st].slots.$[sl].primarySowed": plantsTotal,
+      "subtypeSlots.$[st].slots.$[sl].availablePlants": plantsTotal,
+      "subtypeSlots.$[st].slots.$[sl].totalPlants": plantsTotal,
+      "subtypeSlots.$[st].slots.$[sl].plantsSowed": plantsTotal,
+    },
+    sowingDateStr,
+    plantReadyDateStr: toReadyDate,
+    readyDays: toPlantReadyDays,
+    batch: {
+      sowedAt,
+      sowingDate: sowingDateStr,
+      plantReadyDate: toReadyDate,
+      plantReadyDays: toPlantReadyDays,
+      plantsSowed: plantsTotal,
+      packetsUsed: packetsTotal,
+      shedName,
+      sowingRequestId: request._id,
+      requestNumber: request.requestNumber,
+      isExcessiveSowing: Boolean(request.isExcessiveSowing),
+      linkedOrderIds: request.linkedOrderIds || [],
+      slotHistory: [...oldHistory, histEntry].slice(-50),
+    },
+  });
+
+  // Ensure ready slot is on request
+  const linked = new Set((request.linkedSlotIds || []).map((id) => String(id)));
+  linked.add(String(toSlotId));
+  request.linkedSlotIds = [...linked].map((id) => new mongoose.Types.ObjectId(id));
+  request.sowedQuantity = plantsTotal;
+  request.sowingCompletedDate = sowedAt;
+
+  return {
+    slotChanged,
+    fromSlotId,
+    toSlotId,
+    fromReadyDate,
+    toReadyDate,
+    fromPlantReadyDays,
+    toPlantReadyDays,
+    sowingDate: sowingDateStr,
+    plantsSowed: plantsTotal,
+    history: histEntry,
+  };
 }
 
 /**

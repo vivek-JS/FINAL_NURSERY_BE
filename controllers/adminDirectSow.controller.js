@@ -9,6 +9,7 @@ import {
   applyPlantsToLinkedSlots,
   markOrdersSowed,
 } from "./sowingCompleteHelpers.js";
+import { resolveCmsReadyDays } from "./sowingSlotReadyHelpers.js";
 
 function isOfficeOrSuper(user) {
   const t = String(user?.jobTitle || user?.role || "").toUpperCase();
@@ -276,13 +277,8 @@ export const submitDirectSow = async (req, res) => {
       return res.status(404).json({ success: false, message: "Subtype not found" });
     }
 
+    // Seed packing optional — order/admin sow can save plants + date without inventory product
     const product = await resolveSeedProduct(plantId, subtypeId);
-    if (!product) {
-      return res.status(400).json({
-        success: false,
-        message: "No active seed packing (product) for this plant/subtype",
-      });
-    }
 
     const orderPlantSum = orders.reduce(
       (s, o) =>
@@ -300,10 +296,11 @@ export const submitDirectSow = async (req, res) => {
       });
     }
 
-    const cf = Number(product.conversionFactor) || 1;
+    const cf = Number(product?.conversionFactor) || 1;
     let packetsUsed = Math.max(0, parseNum(req.body.packetsUsed, NaN));
     if (!Number.isFinite(packetsUsed)) {
-      packetsUsed = cf > 0 ? Math.ceil(plantsSowed / cf) : 0;
+      // Only auto-derive packets when a seed product exists
+      packetsUsed = product && cf > 0 ? Math.ceil(plantsSowed / cf) : 0;
     }
 
     const slotIds = [
@@ -312,9 +309,18 @@ export const submitDirectSow = async (req, res) => {
       ),
     ].map((id) => new mongoose.Types.ObjectId(id));
 
+    if (!slotIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: "Order has no booking slot — cannot apply sow to slots",
+      });
+    }
+
     const linkedOrderObjectIds = orders.map((o) => o._id);
     const requestNumber = await SowingRequest.generateRequestNumber();
     const userId = req.user._id;
+    const pktRecord = Math.max(0, packetsUsed);
+    const noProductHint = product ? "" : " · no seed product";
 
     const request = new SowingRequest({
       requestNumber,
@@ -322,34 +328,34 @@ export const submitDirectSow = async (req, res) => {
       plantName: plant.name,
       subtypeId: new mongoose.Types.ObjectId(subtypeId),
       subtypeName: subtype.name,
-      productId: product._id,
-      packetsNeeded: Math.max(0.01, packetsUsed || plantsSowed / (cf || 1)),
-      packetsRequested: Math.max(0.01, packetsUsed || plantsSowed / (cf || 1)),
+      ...(product?._id ? { productId: product._id } : {}),
+      packetsNeeded: pktRecord,
+      packetsRequested: pktRecord,
       excessPackets: 0,
-      primaryUnit: product.primaryUnit?._id,
-      secondaryUnit: product.secondaryUnit?._id,
+      primaryUnit: product?.primaryUnit?._id,
+      secondaryUnit: product?.secondaryUnit?._id,
       conversionFactor: cf,
       unitName:
-        product.primaryUnit?.symbol ||
-        product.primaryUnit?.name ||
+        product?.primaryUnit?.symbol ||
+        product?.primaryUnit?.name ||
         "packets",
       status: "issued",
       requestedBy: userId,
       issuedBy: userId,
-      issuedDate: new Date(),
+      issuedDate: sowedAt,
       notes:
         notes ||
-        `Admin direct sow${sowDateHint ? ` · delivery ${sowDateHint}` : ""}${
+        `Admin direct sow${sowDateHint ? ` · sow ${sowDateHint}` : ""}${
           batchNumber ? ` · batch ${batchNumber}` : ""
-        }`,
+        }${noProductHint}`,
       linkedSlotIds: slotIds,
       linkedOrderIds: linkedOrderObjectIds,
       isExcessiveSowing: false,
       seedSource: "COMPANY",
-      packetsFromCompany: packetsUsed,
+      packetsFromCompany: pktRecord,
       packetsFromRaising: 0,
-      packetsIssued: packetsUsed,
-      packetsUsed,
+      packetsIssued: pktRecord,
+      packetsUsed: pktRecord,
       packetsReturned: 0,
       sowedQuantity: plantsSowed,
       laboursLadies,
@@ -357,9 +363,9 @@ export const submitDirectSow = async (req, res) => {
       shedName: shedName || "Office",
       completionNotes:
         notes ||
-        `Office/Super Admin direct sow (bypassed packet issue)${
+        `Office/Super Admin direct sow (plants + date; inventory bypassed)${
           batchNumber ? ` · Batch ${batchNumber}` : ""
-        }`,
+        }${noProductHint}`,
       completedBy: userId,
       sowingCompleted: true,
       sowingCompletedDate: sowedAt,
@@ -373,31 +379,44 @@ export const submitDirectSow = async (req, res) => {
       by: userId,
       quantity: plantsSowed,
       unit: "plants",
-      message: `Admin direct sow: ${plantsSowed} plants, ${packetsUsed} pkt (no inventory issue)`,
+      message: `Admin direct sow: ${plantsSowed} plants, ${pktRecord} pkt (no inventory issue)${noProductHint}`,
       meta: {
         adminBypass: true,
-        deliveryDate: sowDateHint || null,
+        noSeedProduct: !product,
+        sowDate: sowDateHint || null,
+        plantReadyDays,
         orderCount: orders.length,
         batchNumber: batchNumber || null,
       },
     });
-    pushEvent(request, {
-      type: "PACKETS_USED",
-      by: userId,
-      quantity: packetsUsed,
-      unit: "pkt",
-      message: `${packetsUsed} packets recorded (inventory not deducted — admin bypass)`,
-      meta: { adminBypass: true, batchNumber: batchNumber || null },
-    });
+    if (pktRecord > 0) {
+      pushEvent(request, {
+        type: "PACKETS_USED",
+        by: userId,
+        quantity: pktRecord,
+        unit: "pkt",
+        message: `${pktRecord} packets recorded (inventory not deducted — admin bypass)`,
+        meta: { adminBypass: true, batchNumber: batchNumber || null },
+      });
+    }
 
-    // Slots first (same helper as complete-sow)
+    const cmsReady = await resolveCmsReadyDays(plantId, subtypeId);
+    const bodyReady = parseNum(req.body.plantReadyDays, NaN);
+    const plantReadyDays =
+      Number.isFinite(bodyReady) && bodyReady > 0
+        ? bodyReady
+        : Number(subtype.plantReadyDays) || cmsReady;
+
+    // Slots: map by plantReadyDate = sowDate + plantReadyDays
     const slotResult = await applyPlantsToLinkedSlots(request, plantsSowed, {
-      packetsUsed,
+      packetsUsed: pktRecord,
       requestNumber,
       linkedOrderIds: linkedOrderObjectIds,
       isExcessiveSowing: false,
       shedName,
       sowedAt,
+      plantReadyDays,
+      resolveByReadyDate: true,
     });
 
     await request.save();
@@ -421,16 +440,24 @@ export const submitDirectSow = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Direct sow saved (packet issue bypassed)",
+      message: product
+        ? "Direct sow saved (packet issue bypassed)"
+        : "Direct sow saved (plants + date; no seed product)",
       data: {
         requestId: request._id,
         requestNumber: request.requestNumber,
         plantsSowed,
-        packetsUsed,
+        packetsUsed: pktRecord,
+        noSeedProduct: !product,
         slotsUpdated: slotResult.slotsUpdated || 0,
         ordersMarked: orderResult.marked,
         sowingDate: slotResult.sowingDate,
-        plantReadyDays: Number(subtype.plantReadyDays) || 0,
+        plantReadyDays: slotResult.plantReadyDays ?? plantReadyDays,
+        plantReadyDate: slotResult.plantReadyDate,
+        appliedSlotId: slotResult.appliedSlotId
+          ? String(slotResult.appliedSlotId)
+          : null,
+        resolvedByReadyDate: Boolean(slotResult.resolvedByReadyDate),
       },
     });
   } catch (error) {

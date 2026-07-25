@@ -11,6 +11,7 @@ import {
   DISPATCH_SHED_ALLOWED_STATUSES,
 } from "./secondaryVehicleLoad.service.js";
 import { restoreSecondaryInwardSlotStock } from "./secondaryShedSlotStock.service.js";
+import { restoreSowReadySlotAvailable } from "./secondarySowReadyDispatch.service.js";
 import { recordSecondaryUnloadOnLedger } from "./secondaryDispatchAvailability.service.js";
 import {
   recordShedActivity,
@@ -79,6 +80,9 @@ export async function collectLoadedOutwardLinesForDispatch(dispatchId, linkedOrd
         secondaryInwardId: so.sourceSecondaryInwardId
           ? String(so.sourceSecondaryInwardId)
           : null,
+        stockSource: so.stockSource || "SECONDARY_INWARD",
+        sowReadySlotId: so.sowReadySlotId ? String(so.sowReadySlotId) : null,
+        sowReadyPlantReadyDate: so.sowReadyPlantReadyDate || null,
         linkedOrderId: so.linkedOrderId ? String(so.linkedOrderId) : null,
         plants,
         size: so.size,
@@ -156,9 +160,85 @@ async function executeOneSecondaryUnloadLine({
     );
   }
 
+  const isSowReady =
+    outward.stockSource === "SOW_READY" || Boolean(outward.sowReadySlotId);
   const sourceInwardId = outward.sourceSecondaryInwardId;
-  if (!sourceInwardId) {
+  const sowReadySlotId = outward.sowReadySlotId
+    ? String(outward.sowReadySlotId)
+    : null;
+
+  if (!isSowReady && !sourceInwardId) {
     throw new AppError("Outward line missing source secondary inward", 400);
+  }
+
+  const cav = Math.max(1, Math.floor(Number(outward.cavity) || 126));
+  const fullTrays = Math.floor(unloadQty / cav);
+  const partialPlants = unloadQty - fullTrays * cav;
+  const traysReturned = fullTrays + (partialPlants > 0 ? 1 : 0);
+  const fullUnload = unloadQty >= currentPlants;
+
+  /** Papaya / sowingAllowed: restore availablePlants on calendar slot. */
+  if (isSowReady) {
+    if (!sowReadySlotId) {
+      throw new AppError("Sow-ready outward missing sowReadySlotId", 400);
+    }
+
+    if (fullUnload) {
+      await PlantOutward.updateOne(
+        { batchId, "secondaryOutward._id": secondaryOutwardId },
+        { $pull: { secondaryOutward: { _id: secondaryOutwardId } } },
+        { session }
+      );
+    } else {
+      const remaining = currentPlants - unloadQty;
+      const remFullTrays = Math.floor(remaining / cav);
+      const remPartial = remaining - remFullTrays * cav;
+      const remTrays = remFullTrays + (remPartial > 0 ? 1 : 0);
+      await PlantOutward.updateOne(
+        { batchId, "secondaryOutward._id": secondaryOutwardId },
+        {
+          $set: {
+            "secondaryOutward.$.totalQuantity": remaining,
+            "secondaryOutward.$.numberOfPlants": remaining,
+            "secondaryOutward.$.availableQuantity": remaining,
+            "secondaryOutward.$.numberOfTrays": remTrays,
+            "secondaryOutward.$.numberOfFullTrays": remFullTrays,
+            "secondaryOutward.$.partialTrayPlants": remPartial,
+          },
+        },
+        { session }
+      );
+    }
+
+    let slotRestore = 0;
+    try {
+      const restoreResult = await restoreSowReadySlotAvailable({
+        session,
+        slotId: sowReadySlotId,
+        quantity: unloadQty,
+        performedBy,
+        remark: `Sow-ready vehicle unload (+${unloadQty})`,
+      });
+      slotRestore = restoreResult?.restored ?? 0;
+    } catch (slotErr) {
+      console.warn(
+        "[secondaryVehicleUnload] sow-ready slot restore:",
+        slotErr?.message || slotErr
+      );
+    }
+
+    return {
+      batchId,
+      secondaryOutwardId,
+      secondaryInwardId: null,
+      sowReadySlotId,
+      stockSource: "SOW_READY",
+      plants: unloadQty,
+      trays: traysReturned,
+      slotRestore,
+      linkedOrderId: outward.linkedOrderId ? String(outward.linkedOrderId) : null,
+      fullyRemoved: fullUnload,
+    };
   }
 
   const secondaryInward = plantOutward.secondaryInward.id(sourceInwardId);
@@ -176,11 +256,6 @@ async function executeOneSecondaryUnloadLine({
       ? secondaryInward.toObject()
       : secondaryInward;
 
-  const cav = Math.max(1, Math.floor(Number(outward.cavity) || 126));
-  const fullTrays = Math.floor(unloadQty / cav);
-  const partialPlants = unloadQty - fullTrays * cav;
-  const traysReturned = fullTrays + (partialPlants > 0 ? 1 : 0);
-
   const newInwardAvail = secondaryInward.availableQuantity + unloadQty;
   const inwardTotal = Math.max(
     Number(secondaryInward.totalQuantity) || 0,
@@ -195,8 +270,6 @@ async function executeOneSecondaryUnloadLine({
     quantityTransferred: unloadQty,
     remarks: "Vehicle unload — returned to shed",
   };
-
-  const fullUnload = unloadQty >= currentPlants;
 
   if (fullUnload) {
     await PlantOutward.updateOne(

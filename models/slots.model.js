@@ -417,6 +417,22 @@ const slotSchema = new Schema({
           ref: "Order",
         },
       ],
+      /** Audit when sow date / ready days edit moves plants between calendar slots */
+      slotHistory: [
+        {
+          at: { type: Date, default: Date.now },
+          by: { type: Schema.Types.ObjectId, ref: "User" },
+          fromSlotId: { type: Schema.Types.ObjectId },
+          toSlotId: { type: Schema.Types.ObjectId },
+          fromReadyDate: { type: String },
+          toReadyDate: { type: String },
+          fromPlantReadyDays: { type: Number },
+          toPlantReadyDays: { type: Number },
+          sowDate: { type: String },
+          plantsSowed: { type: Number },
+          reason: { type: String },
+        },
+      ],
     },
   ],
   linkedSowingRequests: [{

@@ -77,6 +77,7 @@ import {
 import {
   completeSowUpload,
   completeSowingRequest,
+  editSowEntry,
   getIssuedSowingQueue,
   getSowingCompletions,
 } from "../controllers/sowingRequestComplete.controller.js";
@@ -132,6 +133,7 @@ router.post(
   completeSowUpload.array("photos", 5),
   completeSowingRequest
 ); // Complete sow: plants + labour + optional photos
+router.patch("/request/:requestId/sow-entry", editSowEntry); // Edit sow date/ready days; reslot by ready date
 router.put("/request/:requestId/mark-issued", markRequestAsIssued); // Mark request as issued (after inventory outward)
 router.put("/request/:requestId/update-progress", updateSowingProgress); // Update sowing progress
 router.post("/request/:requestId/recalculate", recalculateSowingRemaining); // Recalculate sowing remaining

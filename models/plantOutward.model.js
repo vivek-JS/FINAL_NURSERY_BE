@@ -469,6 +469,20 @@ const secondaryOutwardSchema = new Schema({
   sourceSecondaryInwardId: {
     type: Schema.Types.ObjectId,
   },
+  /** SECONDARY_INWARD (default) | SOW_READY — papaya/sowingAllowed slot stock */
+  stockSource: {
+    type: String,
+    enum: ["SECONDARY_INWARD", "SOW_READY"],
+    default: "SECONDARY_INWARD",
+  },
+  /** Booking/calendar slot plants were taken from when stockSource=SOW_READY */
+  sowReadySlotId: {
+    type: Schema.Types.ObjectId,
+  },
+  sowReadyPlantReadyDate: {
+    type: String,
+    trim: true,
+  },
   linkedOrderId: {
     type: Schema.Types.ObjectId,
     ref: "Order",

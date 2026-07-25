@@ -10,7 +10,12 @@ import {
   settleOutwardAndReturns,
   markOrdersSowed,
   uploadCompleteSowPhotos,
+  editSowEntryOnSlots,
 } from "./sowingCompleteHelpers.js";
+import {
+  resolveCmsReadyDays,
+  parseLocalDate,
+} from "./sowingSlotReadyHelpers.js";
 
 export const completeSowUpload = multer({
   storage: multer.memoryStorage(),
@@ -131,6 +136,12 @@ export const completeSowingRequest = async (req, res) => {
       }
 
       const userId = req.user._id;
+      const cmsReady = await resolveCmsReadyDays(locked.plantId, locked.subtypeId);
+      const bodyReady = parseNum(req.body.plantReadyDays, NaN);
+      const plantReadyDays =
+        Number.isFinite(bodyReady) && bodyReady > 0 ? bodyReady : cmsReady;
+      const sowedAt =
+        parseLocalDate(req.body.sowDate || req.body.sowingDate) || new Date();
 
       // Slots first (fail before creating return requests), then inventory + photos in parallel
       const slotResult =
@@ -141,6 +152,9 @@ export const completeSowingRequest = async (req, res) => {
               linkedOrderIds: locked.linkedOrderIds,
               isExcessiveSowing: locked.isExcessiveSowing,
               shedName,
+              sowedAt,
+              plantReadyDays,
+              resolveByReadyDate: true,
             })
           : { slotsUpdated: 0 };
 
@@ -176,7 +190,7 @@ export const completeSowingRequest = async (req, res) => {
       if (completeSowing) {
         locked.remainingSowingNeeded = 0;
         locked.sowingCompleted = true;
-        locked.sowingCompletedDate = new Date();
+        locked.sowingCompletedDate = sowedAt;
         locked.sowingInProgress = false;
       } else {
         locked.remainingSowingNeeded = Math.max(
@@ -185,13 +199,13 @@ export const completeSowingRequest = async (req, res) => {
         );
         locked.sowingCompleted = locked.remainingSowingNeeded <= 0;
         if (locked.sowingCompleted) {
-          locked.sowingCompletedDate = new Date();
+          locked.sowingCompletedDate = sowedAt;
           locked.sowingInProgress = false;
         }
       }
 
       const orderResult = locked.sowingCompleted
-        ? await markOrdersSowed(locked)
+        ? await markOrdersSowed(locked, { sowedAt })
         : { marked: 0 };
 
       pushEvent(locked, {
@@ -206,6 +220,12 @@ export const completeSowingRequest = async (req, res) => {
           packetsReturned: locked.packetsReturned,
           sowedQuantity: locked.sowedQuantity,
           slotsUpdated: slotResult.slotsUpdated,
+          plantReadyDays: slotResult.plantReadyDays ?? plantReadyDays,
+          plantReadyDate: slotResult.plantReadyDate,
+          appliedSlotId: slotResult.appliedSlotId
+            ? String(slotResult.appliedSlotId)
+            : null,
+          resolvedByReadyDate: Boolean(slotResult.resolvedByReadyDate),
           laboursLadies,
           laboursGents,
           ordersMarked: orderResult.marked,
@@ -235,6 +255,11 @@ export const completeSowingRequest = async (req, res) => {
           packetsUsed: locked.packetsUsed,
           packetsReturned: locked.packetsReturned,
           slotsUpdated: slotResult.slotsUpdated,
+          plantReadyDays: slotResult.plantReadyDays ?? plantReadyDays,
+          plantReadyDate: slotResult.plantReadyDate,
+          appliedSlotId: slotResult.appliedSlotId
+            ? String(slotResult.appliedSlotId)
+            : null,
           inventory: {
             used: inv.used,
             returned: inv.returned,
@@ -255,6 +280,83 @@ export const completeSowingRequest = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to complete sowing",
+    });
+  }
+};
+
+function isOfficeOrSuper(user) {
+  const t = String(user?.jobTitle || user?.role || "").toUpperCase();
+  return (
+    t === "SUPER_ADMIN" ||
+    t === "SUPERADMIN" ||
+    t === "OFFICE_ADMIN" ||
+    t === "OFFICEADMIN"
+  );
+}
+
+/**
+ * PATCH /sowing/request/:requestId/sow-entry
+ * Edit sow date / plantReadyDays / plantsSowed; reslot by new ready date; append slotHistory.
+ */
+export const editSowEntry = async (req, res) => {
+  try {
+    if (!isOfficeOrSuper(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Office Admin or Super Admin can edit sow entry",
+      });
+    }
+    const { requestId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(requestId)) {
+      return res.status(400).json({ success: false, message: "Invalid requestId" });
+    }
+
+    const request = await SowingRequest.findById(requestId);
+    if (!request) {
+      return res.status(404).json({ success: false, message: "Request not found" });
+    }
+    if (!request.sowingCompleted) {
+      return res.status(400).json({
+        success: false,
+        message: "Sow entry can only be edited after sowing is completed",
+      });
+    }
+
+    const bodyReady = parseNum(req.body.plantReadyDays, NaN);
+    const bodyPlants = parseNum(req.body.plantsSowed, NaN);
+    const result = await editSowEntryOnSlots(request, {
+      by: req.user._id,
+      sowDate: req.body.sowDate || req.body.sowingDate,
+      plantReadyDays: Number.isFinite(bodyReady) && bodyReady > 0 ? bodyReady : undefined,
+      plantsSowed: Number.isFinite(bodyPlants) && bodyPlants > 0 ? bodyPlants : undefined,
+      reason: req.body.reason,
+    });
+
+    pushEvent(request, {
+      type: "SOW_ENTRY_EDITED",
+      by: req.user._id,
+      quantity: result.plantsSowed,
+      unit: "plants",
+      message: result.slotChanged
+        ? `Sow entry edited — moved slot (${result.fromReadyDate} → ${result.toReadyDate})`
+        : `Sow entry edited — ready ${result.toReadyDate}`,
+      meta: result,
+    });
+    await request.save();
+    bustLiteCacheAsync();
+
+    return res.json({
+      success: true,
+      message: result.slotChanged
+        ? "Sow entry updated and plants moved to ready-date slot"
+        : "Sow entry updated",
+      data: result,
+    });
+  } catch (error) {
+    console.error("editSowEntry:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to edit sow entry",
     });
   }
 };
@@ -287,6 +389,22 @@ export const getIssuedSowingQueue = async (req, res) => {
       : [];
     const orderMap = new Map(orders.map((o) => [String(o._id), o]));
 
+    const readyPairs = [
+      ...new Map(
+        rows.map((r) => [
+          `${r.plantId}-${r.subtypeId}`,
+          { plantId: r.plantId, subtypeId: r.subtypeId },
+        ])
+      ).values(),
+    ];
+    const readyMap = new Map();
+    await Promise.all(
+      readyPairs.map(async ({ plantId, subtypeId }) => {
+        const d = await resolveCmsReadyDays(plantId, subtypeId);
+        readyMap.set(`${plantId}-${subtypeId}`, d);
+      })
+    );
+
     const data = rows.map((r) => {
       const cf = Number(r.conversionFactor) || 1;
       const expectedPlants = Number(
@@ -316,6 +434,8 @@ export const getIssuedSowingQueue = async (req, res) => {
         ...r,
         expectedPlants,
         remainingPlants,
+        plantReadyDays:
+          readyMap.get(`${r.plantId}-${r.subtypeId}`) || 0,
         linkedOrderCount: linked.length,
         linkedOrders: linked,
         isExcess: Boolean(r.isExcessiveSowing),

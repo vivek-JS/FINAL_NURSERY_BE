@@ -13,6 +13,18 @@ const applySowingBuffer = (baseValue, bufferPercent) => {
   return buffer > 0 ? Math.round(qty * (1 + buffer / 100)) : qty;
 };
 
+/** Warehouse issue qty = company packets only (raising is allocated at create). */
+const resolveCompanyIssuePackets = (request) => {
+  if (
+    request?.packetsFromCompany != null &&
+    Number.isFinite(Number(request.packetsFromCompany))
+  ) {
+    return Math.max(0, Number(request.packetsFromCompany));
+  }
+  if (request?.seedSource === "RAISING") return 0;
+  return Math.max(0, Number(request?.packetsRequested || request?.packetsNeeded) || 0);
+};
+
 const enrichRequestsWithBufferContext = async (requests) => {
   const plantIds = [...new Set((requests || []).map((r) => String(r.plantId)).filter(Boolean))]
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
@@ -645,7 +657,8 @@ export const updateSowingRequest = async (req, res) => {
 export const issueStockFromRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const { batchAllocations, notes, purpose = 'production' } = req.body;
+    const { batchAllocations: rawAllocations, notes, purpose = 'production' } = req.body;
+    const batchAllocations = Array.isArray(rawAllocations) ? rawAllocations : [];
 
     if (purpose !== 'production') {
       return res.status(400).json({
@@ -669,16 +682,43 @@ export const issueStockFromRequest = async (req, res) => {
       });
     }
 
+    // Warehouse issues company packets only; raising was allocated at create.
+    const companyIssueQty = resolveCompanyIssuePackets(request);
+    const packetsRequested =
+      Number(request.packetsRequested || request.packetsNeeded) || companyIssueQty;
+    let totalAllocated = 0;
+    let outward = null;
+    let excessPackets = 0;
+
+    if (companyIssueQty < 0.01) {
+      if (batchAllocations.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'This request has no company packets to issue (raising-only / zero company). Send empty batchAllocations.',
+        });
+      }
+      // Raising-only: mark issued without warehouse outward.
+      request.status = 'issued';
+      request.issuedBy = req.user._id;
+      request.issuedDate = new Date();
+      request.packetsIssued = 0;
+      request.excessPackets = 0;
+      request.sowingInProgress = true;
+      if (!request.sowingStartedDate) {
+        request.sowingStartedDate = new Date();
+      }
+      await request.save();
+    } else {
     // Validate batch allocations
-    if (!batchAllocations || !Array.isArray(batchAllocations) || batchAllocations.length === 0) {
+    if (batchAllocations.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Batch allocations are required',
+        message: 'Batch allocations are required for company seed packets',
       });
     }
 
     // Calculate total quantity from allocations
-    let totalAllocated = 0;
     const primaryUnitId = request.primaryUnit?._id?.toString();
     const secondaryUnitId = request.secondaryUnit?._id?.toString();
 
@@ -723,17 +763,20 @@ export const issueStockFromRequest = async (req, res) => {
       }
     }
 
-    // Validate quantity match (must equal packetsRequested, not packetsNeeded)
-    const packetsRequested = request.packetsRequested || request.packetsNeeded;
-    if (Math.abs(totalAllocated - packetsRequested) > 0.01) {
+    // Must match company packets only (not company + raising)
+    if (Math.abs(totalAllocated - companyIssueQty) > 0.01) {
       return res.status(400).json({
         success: false,
-        message: `Total allocated quantity (${totalAllocated.toFixed(2)}) must exactly match requested quantity (${packetsRequested}). Not more, not less.`,
+        message: `Total allocated quantity (${totalAllocated.toFixed(2)}) must exactly match company packets to issue (${companyIssueQty}). Raising packets (${Number(request.packetsFromRaising) || 0}) are not issued from warehouse.`,
       });
     }
 
-    // Calculate excess packets
-    const excessPackets = Math.max(0, totalAllocated - request.packetsNeeded);
+    // Calculate excess packets vs needed company portion
+    const companyNeeded =
+      request.packetsFromCompany != null && Number.isFinite(Number(request.packetsFromCompany))
+        ? Number(request.packetsFromCompany)
+        : Math.max(0, Number(request.packetsNeeded) || 0);
+    excessPackets = Math.max(0, totalAllocated - companyNeeded);
 
     // Create outward entry and issue stock directly
     const outwardNumber = await InventoryOutward.generateOutwardNumber();
@@ -754,7 +797,7 @@ export const issueStockFromRequest = async (req, res) => {
       return item;
     });
 
-    const outward = new InventoryOutward({
+    outward = new InventoryOutward({
       outwardNumber,
       outwardDate: new Date(),
       purpose,
@@ -779,7 +822,7 @@ export const issueStockFromRequest = async (req, res) => {
     }
 
     // Helper to create inventory transaction
-    const createOutwardTransaction = async (item, outward, user) => {
+    const createOutwardTransaction = async (item, outwardDoc, user) => {
       const transactionNumber = await InventoryTransaction.generateTransactionNumber();
       const transaction = new InventoryTransaction({
         transactionNumber,
@@ -793,12 +836,12 @@ export const issueStockFromRequest = async (req, res) => {
         rate: 0,
         value: 0,
         referenceType: 'Outward',
-        referenceId: outward._id,
-        referenceNumber: outward.outwardNumber,
+        referenceId: outwardDoc._id,
+        referenceNumber: outwardDoc.outwardNumber,
         fromLocation: 'Main Warehouse',
-        toLocation: outward.destination || outward.department,
-        reason: outward.purpose,
-        remarks: outward.purposeDetails,
+        toLocation: outwardDoc.destination || outwardDoc.department,
+        reason: outwardDoc.purpose,
+        remarks: outwardDoc.purposeDetails,
         performedBy: user._id,
       });
       await transaction.save();
@@ -857,12 +900,17 @@ export const issueStockFromRequest = async (req, res) => {
     request.issuedBy = req.user._id;
     request.issuedDate = new Date();
     request.outwardId = outward._id;
+    request.packetsIssued = totalAllocated;
     request.excessPackets = excessPackets;
     request.sowingInProgress = true; // Mark sowing as in progress when stock is issued
     if (!request.sowingStartedDate) {
       request.sowingStartedDate = new Date(); // Set start date if not already set
     }
     await request.save();
+    } // end companyIssueQty > 0
+
+    // Packets for slot sowingInProgress: full request (company + raising) when available
+    const packetsForSlots = Math.max(companyIssueQty, packetsRequested) || packetsRequested;
 
     // Update slots' sowingInProgress array - DISTRIBUTE BASED ON EACH SLOT'S GAP
     /** @type {{ slotsWritten: number, plantSlotDocsSaved: number, fallbackUsed: boolean }} */
@@ -870,7 +918,7 @@ export const issueStockFromRequest = async (req, res) => {
     if (request.linkedSlotIds && request.linkedSlotIds.length > 0) {
       const conversionFactor = request.conversionFactor || 1;
       
-      console.log(`[IssueStock] Distributing ${packetsRequested} packets across ${request.linkedSlotIds.length} slots based on each slot's gap`);
+      console.log(`[IssueStock] Distributing ${packetsForSlots} packets across ${request.linkedSlotIds.length} slots based on each slot's gap`);
       
       // Step 1: Fetch all unique PlantSlot documents ONCE (avoid multiple instances of same document)
       const plantSlotsMap = new Map(); // Map<plantSlotId, plantSlotDoc>
@@ -936,7 +984,7 @@ export const issueStockFromRequest = async (req, res) => {
               // No gap calculation needed - just track the slot for allocation
               rawGap = 0; // No gap for excessive sowing
               gap = 1; // Use 1 as weight - will allocate all packets to this slot
-              console.log(`[IssueStock] [EXCESSIVE] Slot ${slotId}: Linked slot for excessive sowing, will allocate ALL ${packetsRequested} packets to this slot`);
+              console.log(`[IssueStock] [EXCESSIVE] Slot ${slotId}: Linked slot for excessive sowing, will allocate ALL ${packetsForSlots} packets to this slot`);
             } else {
               // Calculate gap for this slot (including buffer if applicable)
               const totalBookedPlants = foundSlot.totalBookedPlants || 0;
@@ -995,13 +1043,13 @@ export const issueStockFromRequest = async (req, res) => {
                   slot,
                   plantSlot: plantSlotDoc,
                   subtypeSlot,
-                  gap: Math.max(1, packetsRequested * conversionFactor),
+                  gap: Math.max(1, packetsForSlots * conversionFactor),
                   rawGap: 0,
                   isExcessiveSowing: isExcessiveSowing,
                 });
                 slotLinkage.fallbackUsed = true;
                 console.warn(
-                  `[IssueStock] Fallback: single slot ${fallbackSlotId} — full ${packetsRequested} pkt for today-sowing linkage`
+                  `[IssueStock] Fallback: single slot ${fallbackSlotId} — full ${packetsForSlots} pkt for today-sowing linkage`
                 );
                 break;
               }
@@ -1015,8 +1063,8 @@ export const issueStockFromRequest = async (req, res) => {
       }
       
       // Step 2: Distribute packets/plants based on slot gaps (or allocate all to specific slot for excessive sowing)
-      let remainingPackets = packetsRequested;
-      let remainingPlants = packetsRequested * conversionFactor;
+      let remainingPackets = packetsForSlots;
+      let remainingPlants = packetsForSlots * conversionFactor;
       
       // Step 3: Group slots by their parent PlantSlot document to avoid version conflicts
       const plantSlotUpdates = new Map(); // Map<plantSlotId, {plantSlot, slotsToUpdate: []}>
@@ -1031,8 +1079,8 @@ export const issueStockFromRequest = async (req, res) => {
         if (slotData.isExcessiveSowing) {
           // For excessive sowing: allocate ALL packets to this specific slot (linked based on creation date)
           // Excessive sowing requests are linked to one specific slot calculated from the sowing date
-          slotPackets = packetsRequested; // All packets go to this slot
-          slotPlants = packetsRequested * conversionFactor; // All plants go to this slot
+          slotPackets = packetsForSlots; // All packets go to this slot
+          slotPlants = packetsForSlots * conversionFactor; // All plants go to this slot
           console.log(`[IssueStock] [EXCESSIVE] Slot ${slotData.slotId}: Allocating ALL ${slotPackets} packets, ${slotPlants} plants to this linked slot (based on creation date)`);
         } else {
           // Regular sowing: proportional distribution based on gap
@@ -1043,7 +1091,7 @@ export const issueStockFromRequest = async (req, res) => {
           } else {
             // Proportional distribution: (slot gap / total gap) × total packets
             const proportion = totalGap > 0 ? slotData.gap / totalGap : 1 / slotGaps.length;
-            slotPackets = packetsRequested * proportion;
+            slotPackets = packetsForSlots * proportion;
             slotPlants = slotData.gap; // Booking-gap plants for this slot
             // If gap is 0 but this slot still got a packet share, expected plants must come from packets × CF
             if (slotPackets > 0 && (!slotPlants || slotPlants <= 0)) {
@@ -1181,14 +1229,17 @@ export const issueStockFromRequest = async (req, res) => {
         }
       }
       
-      console.log(`[IssueStock] ✅ Distribution complete: ${packetsRequested} packets distributed across ${slotGaps.length} slots`);
+      console.log(`[IssueStock] ✅ Distribution complete: ${packetsForSlots} packets distributed across ${slotGaps.length} slots`);
     }
 
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'issuedBy', 'outwardId']);
 
     res.json({
       success: true,
-      message: 'Stock issued successfully from sowing request',
+      message:
+        companyIssueQty < 0.01
+          ? 'Raising-only request marked issued (no warehouse stock)'
+          : 'Stock issued successfully from sowing request',
       data: {
         request,
         outward,

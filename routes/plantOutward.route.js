@@ -41,6 +41,7 @@ import {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
+  getSowReadyEntries,
   getSecondaryPolyhouseStock,
   getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,
@@ -136,6 +137,11 @@ router.get(
   "/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
   getVehicleDispatchAllocationSuggestions
 );
+router.get(
+  "/secondary/vehicle-dispatch/:dispatchId/sow-ready-entries",
+  getSowReadyEntries
+);
+router.get("/secondary/sow-ready-entries", getSowReadyEntries);
 router.post(
   "/secondary/vehicle-dispatch/:dispatchId/load-preview",
   previewSecondaryVehicleLoadHandler

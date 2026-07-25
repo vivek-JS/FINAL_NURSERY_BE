@@ -65,6 +65,14 @@ import {
   collectLoadedOutwardLinesForDispatch,
   executeSecondaryVehicleUnload,
 } from "../services/secondaryVehicleUnload.service.js";
+import {
+  listSowReadyEntries,
+  listSowReadyEntriesForDispatch,
+  listAllSowReadyEntriesByDate,
+  executeSowReadyVehicleLoad,
+  isPlantSowingAllowed,
+} from "../services/secondarySowReadyDispatch.service.js";
+import PlantCms from "../models/plantCms.model.js";
 
 const BATCH_SELECT_FIELDS =
   "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
@@ -5142,20 +5150,65 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
   );
   const loadedMap = new Map(loadedByDispatch.map((x) => [x.id, x]));
 
+  const plantIdSet = new Set();
+  for (const d of docs) {
+    for (const p of d.plantsDetails || []) {
+      if (p.plantId && mongoose.isValidObjectId(String(p.plantId))) {
+        plantIdSet.add(String(p.plantId));
+      }
+    }
+  }
+  const sowingAllowedByPlant = new Map();
+  const plantCmsById = new Map();
+  if (plantIdSet.size) {
+    const cmsRows = await PlantCms.find({
+      _id: { $in: [...plantIdSet].map((id) => new mongoose.Types.ObjectId(id)) },
+    })
+      .select("_id name sowingAllowed subtypes._id subtypes.name")
+      .lean();
+    for (const r of cmsRows) {
+      sowingAllowedByPlant.set(String(r._id), Boolean(r.sowingAllowed));
+      plantCmsById.set(String(r._id), r);
+    }
+  }
+
   const items = docs.map((d) => {
     let totalQty = 0;
-    let plantRows = (d.plantsDetails || []).map((p) => {
+    let plantRows = (d.plantsDetails || []).map((p, plantRowIndex) => {
       const q = Number(p.quantity ?? p.totalPlants ?? 0) || 0;
       totalQty += q;
       let cratePieces = 0;
-      for (const c of p.crates || []) {
-        cratePieces += Number(c.crateCount || 0) || 0;
-      }
+      const crates = (p.crates || []).map((c) => {
+        const crateCount = Number(c.crateCount || 0) || 0;
+        cratePieces += crateCount;
+        return {
+          cavityName: String(c.cavityName || c.cavity || "").trim() || "—",
+          crateCount,
+          plantCount: Number(c.plantCount || 0) || 0,
+        };
+      });
+      const pid = p.plantId ? String(p.plantId) : "";
+      const sid = p.subTypeId ? String(p.subTypeId) : "";
+      const cms = pid ? plantCmsById.get(pid) : null;
+      const subtypeDoc = (cms?.subtypes || []).find((st) => String(st._id) === sid);
+      const plantName = cms?.name || "";
+      const subtypeName = subtypeDoc?.name || "";
+      const label =
+        plantName && subtypeName
+          ? `${plantName} / ${subtypeName}`
+          : String(p.name || "").trim() || plantName || subtypeName || "Plant";
       return {
-        name: p.name,
+        plantRowIndex,
+        name: label,
+        plantName: plantName || label,
+        subtypeName: subtypeName || "",
         id: p.id,
+        plantId: p.plantId,
+        subTypeId: p.subTypeId,
         quantity: q,
         cratePieces,
+        crates,
+        sowingAllowed: pid ? Boolean(sowingAllowedByPlant.get(pid)) : false,
       };
     });
 
@@ -5512,12 +5565,36 @@ const getVehicleDispatchAllocationSuggestions = catchAsync(async (req, res, next
     dispatchDoc._id
   );
 
+  const sowingAllowed = await isPlantSowingAllowed(plantCmsId);
+
+  const rowPlantIds = [
+    ...new Set(
+      (dispatchDoc.plantsDetails || [])
+        .map((pr) => (pr.plantId ? String(pr.plantId) : ""))
+        .filter((id) => id && mongoose.isValidObjectId(id))
+    ),
+  ];
+  const rowSowingMap = new Map();
+  if (rowPlantIds.length) {
+    const cmsRows = await PlantCms.find({
+      _id: { $in: rowPlantIds.map((id) => new mongoose.Types.ObjectId(id)) },
+    })
+      .select("_id sowingAllowed")
+      .lean();
+    for (const r of cmsRows) {
+      rowSowingMap.set(String(r._id), Boolean(r.sowingAllowed));
+    }
+  }
+
   const plantRows = (dispatchDoc.plantsDetails || []).map((pr, idx) => ({
     plantRowIndex: idx,
     name: pr.name,
     plantId: pr.plantId,
     subTypeId: pr.subTypeId,
     quantity: Number(pr.quantity ?? pr.totalPlants ?? 0) || 0,
+    sowingAllowed: pr.plantId
+      ? Boolean(rowSowingMap.get(String(pr.plantId)))
+      : false,
   }));
 
   const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
@@ -5562,17 +5639,61 @@ const getVehicleDispatchAllocationSuggestions = catchAsync(async (req, res, next
       plantRowIndex,
       plantRowName: row.name,
       plantRowQuantity: needPlants,
+      sowingAllowed,
       crateInfo,
       matchingOrders,
-      suggestions: suggestionsOut,
-      batches,
+      suggestions: sowingAllowed ? [] : suggestionsOut,
+      batches: sowingAllowed ? [] : batches,
       plantRows,
       suggestedFulfillmentSequence,
-      otherBatchesWithSamePlant: batchDocs.map((b) => b.batchNumber).filter(Boolean),
+      otherBatchesWithSamePlant: sowingAllowed
+        ? []
+        : batchDocs.map((b) => b.batchNumber).filter(Boolean),
     },
     undefined
   );
   res.status(200).json(response);
+});
+
+/** GET sow-ready sellable slot entries (availablePlants > 0) for vehicle row, plantId+subtypeId, or all=1 date-wise. */
+const getSowReadyEntries = catchAsync(async (req, res, next) => {
+  const { dispatchId } = req.params;
+  if (dispatchId) {
+    const plantRowIndex = Math.max(
+      0,
+      Number(req.query.plantRowIndex ?? req.query.plantRow ?? 0) || 0
+    );
+    const data = await listSowReadyEntriesForDispatch(dispatchId, plantRowIndex);
+    return res.status(200).json(
+      generateResponse("Success", "Sow-ready entries for vehicle plant row", data, undefined)
+    );
+  }
+
+  const wantAll =
+    req.query.all === "1" ||
+    req.query.all === "true" ||
+    String(req.query.mode || "").toLowerCase() === "all";
+  if (wantAll) {
+    const data = await listAllSowReadyEntriesByDate();
+    return res.status(200).json(
+      generateResponse("Success", "All sow-ready entries date-wise", data, undefined)
+    );
+  }
+
+  const plantId = req.query.plantId ?? req.query.plantCmsId;
+  const subtypeId = req.query.subtypeId ?? req.query.plantSubtypeId ?? req.query.subTypeId;
+  if (!plantId || !subtypeId) {
+    return next(
+      new AppError(
+        "Query plantId and subtypeId required (or all=1 / vehicle-dispatch path)",
+        400
+      )
+    );
+  }
+  const data = await listSowReadyEntries(plantId, subtypeId);
+  return res.status(200).json(
+    generateResponse("Success", "Sow-ready entries", { ...data, plantId, subtypeId }, undefined)
+  );
 });
 
 /**
@@ -5650,7 +5771,7 @@ const previewSecondaryVehicleLoadHandler = catchAsync(async (req, res, next) => 
   );
 });
 
-/** POST atomic FIFO vehicle load from secondary shed. */
+/** POST atomic FIFO vehicle load from secondary shed (or sow-ready slots). */
 const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
   const { dispatchId } = req.params;
   const {
@@ -5661,8 +5782,31 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
     remarks,
     shedLoads,
     inwardSelections,
+    sowReadySelections,
+    source,
   } = req.body || {};
   const userId = req.user?._id || req.user?.id;
+  const performedBy =
+    userId && mongoose.isValidObjectId(String(userId)) ? userId : undefined;
+
+  const sowSels = Array.isArray(sowReadySelections) ? sowReadySelections : [];
+  const isSowReady =
+    source === "SOW_READY" || sowSels.some((s) => s?.slotId && Number(s?.plants) > 0);
+
+  if (isSowReady) {
+    const result = await executeSowReadyVehicleLoad({
+      dispatchId,
+      plantRowIndex,
+      sowReadySelections: sowSels,
+      linkedOrderId,
+      remarks,
+      performedBy,
+    });
+    return res.status(200).json(
+      generateResponse("Success", "Vehicle loaded from sow-ready slots", result, undefined)
+    );
+  }
+
   const result = await executeSecondaryVehicleLoad({
     dispatchId,
     pollyhouse,
@@ -5672,8 +5816,7 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
     plantRowIndex,
     linkedOrderId,
     remarks,
-    performedBy:
-      userId && mongoose.isValidObjectId(String(userId)) ? userId : undefined,
+    performedBy,
     collectSuggestionsFn: collectSecondaryInwardSuggestionsForPlantSubtype,
   });
   return res.status(200).json(
@@ -5938,6 +6081,7 @@ export {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
+  getSowReadyEntries,
   getSecondaryPolyhouseStock,
   getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,
