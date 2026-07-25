@@ -1,6 +1,7 @@
 import AppError from "../utility/appError.js";
 import User from "../models/user.model.js";
 import DealerWallet from "../models/dealerWallet.js";
+import { parsePositivePaymentAmount } from "./paymentValidation.js";
 
 /**
  * Build farmer/dealer description string for wallet transaction notes (aligned with order.controller addNewPayment).
@@ -36,10 +37,11 @@ export function buildDispatchCompletePaymentSubdocs(rawList, reqUser, order) {
   const out = [];
   for (let i = 0; i < rawList.length; i++) {
     const row = rawList[i];
-    const amount = Number(row.paidAmount);
-    if (Number.isNaN(amount) || amount === 0) {
-      throw new AppError(`Invalid payment amount at payment index ${i}`, 400);
+    const parsedAmount = parsePositivePaymentAmount(row.paidAmount, `payment index ${i} amount`);
+    if (!parsedAmount.ok) {
+      throw new AppError(parsedAmount.message, 400);
     }
+    const amount = parsedAmount.amount;
 
     const isWalletPayment = Boolean(row.isWalletPayment);
     if (!isWalletPayment && !row.modeOfPayment) {

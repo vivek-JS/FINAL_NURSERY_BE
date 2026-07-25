@@ -43,6 +43,10 @@ import {
   approveFarmerOrderTransferRequest,
   rejectFarmerOrderTransferRequest,
 } from "./farmerPlantOrderLedger.controller.js";
+import {
+  normalizeQrPaymentCallbackPayload,
+  parsePositivePaymentAmount,
+} from "../utils/paymentValidation.js";
 
 function watiDigitsOk(n) {
   return n != null && String(n).replace(/\D/g, "").length >= 10;
@@ -1099,11 +1103,12 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     }
 
     // Convert paidAmount to number
-    const amount = Number(paidAmount);
-    if (isNaN(amount)) {
+    const parsedAmount = parsePositivePaymentAmount(paidAmount, "paidAmount");
+    if (!parsedAmount.ok) {
       console.error("Invalid payment amount");
-      return res.status(400).json({ message: "Invalid payment amount" });
+      return res.status(400).json({ message: parsedAmount.message });
     }
+    const amount = parsedAmount.amount;
 
     // Set payment status based on payment type and user role
     // Prioritize jobTitle over role
@@ -1385,10 +1390,11 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
     console.log("- order.farmer village:", order.farmer?.village);
 
     // Convert paidAmount to number
-    const amount = Number(paidAmount);
-    if (isNaN(amount)) {
-      return res.status(400).json({ message: "Invalid payment amount" });
+    const parsedAmount = parsePositivePaymentAmount(paidAmount, "paidAmount");
+    if (!parsedAmount.ok) {
+      return res.status(400).json({ message: parsedAmount.message });
     }
+    const amount = parsedAmount.amount;
 
     // Create the payment object
     const newPayment = {
@@ -4100,21 +4106,19 @@ const generatePaymentQR = catchAsync(async (req, res) => {
 
 /**
  * POST /api/v1/order/payment/qr-callback
- * Webhook for ICICI QR payment notification. Match by referenceId or UTR+amount; set BANK_VERIFIED if PENDING and not expired.
+ * Webhook for ICICI QR payment notification. Match by stored reference plus optional amount; set BANK_VERIFIED if PENDING and not expired.
  * referenceId should be ICICI merchantTranId (same value stored as payment.qrReferenceId when QR was generated).
- * Body: { referenceId?, utr?, amount } (referenceId or utr+amount). Idempotent: already BANK_VERIFIED/COLLECTED returns 200.
+ * Body: { referenceId?, utr?, amount } (referenceId, or utr with amount). Idempotent: already BANK_VERIFIED/COLLECTED returns 200.
  */
 const handleQRPaymentCallback = catchAsync(async (req, res) => {
-  const { referenceId, utr, amount } = req.body || {};
-  const ref = (referenceId && String(referenceId).trim()) || (utr && String(utr).trim());
-  const amt = amount != null ? Math.round(Number(amount) * 100) / 100 : null;
-  if (!ref && amt == null) {
-    return res.status(400).json({ success: false, message: "referenceId or (utr and amount) required" });
+  const parsedPayload = normalizeQrPaymentCallbackPayload(req.body || {});
+  if (!parsedPayload.ok) {
+    return res.status(400).json({ success: false, message: parsedPayload.message });
   }
+  const { reference: ref, utr, amount: amt } = parsedPayload;
   const now = new Date();
   const buildQuery = () => {
-    const q = { "payment.paymentStatus": "PENDING" };
-    if (ref) q["payment.qrReferenceId"] = ref;
+    const q = { "payment.paymentStatus": "PENDING", "payment.qrReferenceId": ref };
     if (amt != null) q["payment.paidAmount"] = amt;
     return q;
   };
@@ -4126,8 +4130,7 @@ const handleQRPaymentCallback = catchAsync(async (req, res) => {
       if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
       const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
       const matchAmount = amt != null && p.paidAmount === amt;
-      if (!matchRef && !matchAmount) continue;
-      if (ref && !matchRef) continue;
+      if (!matchRef) continue;
       if (amt != null && !matchAmount) continue;
       p.paymentStatus = "BANK_VERIFIED";
       if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
@@ -4146,8 +4149,7 @@ const handleQRPaymentCallback = catchAsync(async (req, res) => {
         if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
         const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
         const matchAmount = amt != null && p.paidAmount === amt;
-        if (!matchRef && !matchAmount) continue;
-        if (ref && !matchRef) continue;
+        if (!matchRef) continue;
         if (amt != null && !matchAmount) continue;
         p.paymentStatus = "BANK_VERIFIED";
         if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
