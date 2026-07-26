@@ -140,7 +140,7 @@ export function hasFarmerPlantLedgerIdentity(order) {
 
 export const shouldLogFarmerPlantLedger = (order) => {
   if (!order) return false;
-  if (order.dealerOrder) return hasFarmerPlantLedgerIdentity(order);
+  if (order.dealerOrder) return false;
   return Boolean(order.farmer);
 };
 

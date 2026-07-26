@@ -38,6 +38,12 @@ import {
   syncDealerLedgerForOrder,
 } from "../utils/dealerLedgerHelper.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
+import {
+  buildQrPaymentCallbackQuery,
+  markPaymentBankVerified,
+  normalizeQrPaymentCallbackPayload,
+  paymentMatchesQrCallback,
+} from "../utils/qrPaymentCallback.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import {
   approveFarmerOrderTransferRequest,
@@ -4105,57 +4111,28 @@ const generatePaymentQR = catchAsync(async (req, res) => {
  * Body: { referenceId?, utr?, amount } (referenceId or utr+amount). Idempotent: already BANK_VERIFIED/COLLECTED returns 200.
  */
 const handleQRPaymentCallback = catchAsync(async (req, res) => {
-  const { referenceId, utr, amount } = req.body || {};
-  const ref = (referenceId && String(referenceId).trim()) || (utr && String(utr).trim());
-  const amt = amount != null ? Math.round(Number(amount) * 100) / 100 : null;
-  if (!ref && amt == null) {
-    return res.status(400).json({ success: false, message: "referenceId or (utr and amount) required" });
+  const criteria = normalizeQrPaymentCallbackPayload(req.body || {});
+  if (!criteria.ok) {
+    return res.status(400).json({ success: false, message: criteria.message });
   }
   const now = new Date();
-  const buildQuery = () => {
-    const q = { "payment.paymentStatus": "PENDING" };
-    if (ref) q["payment.qrReferenceId"] = ref;
-    if (amt != null) q["payment.paidAmount"] = amt;
-    return q;
-  };
-  const tryOrder = async () => {
-    const orderDoc = await Order.findOne(buildQuery()).select("payment");
-    if (!orderDoc) return false;
-    for (const p of orderDoc.payment || []) {
-      if (p.paymentStatus !== "PENDING") continue;
-      if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
-      const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
-      const matchAmount = amt != null && p.paidAmount === amt;
-      if (!matchRef && !matchAmount) continue;
-      if (ref && !matchRef) continue;
-      if (amt != null && !matchAmount) continue;
-      p.paymentStatus = "BANK_VERIFIED";
-      if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
-      await orderDoc.save();
+  const query = buildQrPaymentCallbackQuery(criteria);
+  const tryPaymentDoc = async (Model) => {
+    const doc = await Model.findOne(query).select("payment");
+    if (!doc) return false;
+    for (const p of doc.payment || []) {
+      if (!paymentMatchesQrCallback(p, criteria, now)) continue;
+      markPaymentBankVerified(p, criteria);
+      await doc.save();
       return true;
     }
     return false;
   };
-  let updated = await tryOrder();
+
+  let updated = await tryPaymentDoc(Order);
   if (!updated) {
     const AgriSalesOrder = (await import("../models/agriSalesOrder.model.js")).default;
-    const agriDoc = await AgriSalesOrder.findOne(buildQuery()).select("payment");
-    if (agriDoc) {
-      for (const p of agriDoc.payment || []) {
-        if (p.paymentStatus !== "PENDING") continue;
-        if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
-        const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
-        const matchAmount = amt != null && p.paidAmount === amt;
-        if (!matchRef && !matchAmount) continue;
-        if (ref && !matchRef) continue;
-        if (amt != null && !matchAmount) continue;
-        p.paymentStatus = "BANK_VERIFIED";
-        if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
-        await agriDoc.save();
-        updated = true;
-        break;
-      }
-    }
+    updated = await tryPaymentDoc(AgriSalesOrder);
   }
   return res.status(200).json({ success: true, updated });
 });
