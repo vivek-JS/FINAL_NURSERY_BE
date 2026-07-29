@@ -39,6 +39,13 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
       }),
       false
     );
+    assert.equal(
+      shouldLogFarmerPlantLedger({
+        dealerOrder: true,
+        orderFor: { name: "Dealer Customer", mobileNumber: "9876543210" },
+      }),
+      false
+    );
   });
 
   it("Order payment sub-schema includes transferredFrom trace fields", () => {

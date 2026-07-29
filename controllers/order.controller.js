@@ -37,6 +37,11 @@ import {
 import {
   syncDealerLedgerForOrder,
 } from "../utils/dealerLedgerHelper.js";
+import {
+  normalizePositiveAmount,
+  normalizeQrPaymentCallback,
+  qrPaymentSubdocMatches,
+} from "../utils/paymentValidation.js";
 import { appendStatusChangeToUpdate } from "../utils/orderStatusAuditHelper.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import {
@@ -1099,10 +1104,10 @@ const addNewPayment = catchAsync(async (req, res, next) => {
     }
 
     // Convert paidAmount to number
-    const amount = Number(paidAmount);
-    if (isNaN(amount)) {
+    const amount = normalizePositiveAmount(paidAmount);
+    if (amount == null) {
       console.error("Invalid payment amount");
-      return res.status(400).json({ message: "Invalid payment amount" });
+      return res.status(400).json({ message: "Payment amount must be greater than 0" });
     }
 
     // Set payment status based on payment type and user role
@@ -1385,9 +1390,9 @@ const addNewPaymentAlternative = catchAsync(async (req, res, next) => {
     console.log("- order.farmer village:", order.farmer?.village);
 
     // Convert paidAmount to number
-    const amount = Number(paidAmount);
-    if (isNaN(amount)) {
-      return res.status(400).json({ message: "Invalid payment amount" });
+    const amount = normalizePositiveAmount(paidAmount);
+    if (amount == null) {
+      return res.status(400).json({ message: "Payment amount must be greater than 0" });
     }
 
     // Create the payment object
@@ -1568,11 +1573,11 @@ const updatePaymentStatus = async (req, res) => {
     }
 
     // Ensure amount is a number
-    const amount = Number(payment.paidAmount);
-    if (isNaN(amount)) {
+    const amount = normalizePositiveAmount(payment.paidAmount);
+    if (amount == null) {
       return res
         .status(400)
-        .json({ message: "Invalid payment amount in record" });
+        .json({ message: "Payment amount must be greater than 0" });
     }
 
     // Prevent OFFICE_ADMIN from changing payment status to COLLECTED (accountant/super admin only)
@@ -4100,37 +4105,38 @@ const generatePaymentQR = catchAsync(async (req, res) => {
 
 /**
  * POST /api/v1/order/payment/qr-callback
- * Webhook for ICICI QR payment notification. Match by referenceId or UTR+amount; set BANK_VERIFIED if PENDING and not expired.
+ * Webhook for ICICI QR payment notification. Match by stored reference/UTR plus amount; set BANK_VERIFIED if PENDING and not expired.
  * referenceId should be ICICI merchantTranId (same value stored as payment.qrReferenceId when QR was generated).
- * Body: { referenceId?, utr?, amount } (referenceId or utr+amount). Idempotent: already BANK_VERIFIED/COLLECTED returns 200.
+ * Body: { referenceId?, utr?, amount } where amount is required. Idempotent: already BANK_VERIFIED/COLLECTED returns 200.
  */
 const handleQRPaymentCallback = catchAsync(async (req, res) => {
-  const { referenceId, utr, amount } = req.body || {};
-  const ref = (referenceId && String(referenceId).trim()) || (utr && String(utr).trim());
-  const amt = amount != null ? Math.round(Number(amount) * 100) / 100 : null;
-  if (!ref && amt == null) {
-    return res.status(400).json({ success: false, message: "referenceId or (utr and amount) required" });
+  const callback = normalizeQrPaymentCallback(req.body || {});
+  if (!callback.ok) {
+    return res.status(400).json({ success: false, message: callback.message });
   }
   const now = new Date();
   const buildQuery = () => {
-    const q = { "payment.paymentStatus": "PENDING" };
-    if (ref) q["payment.qrReferenceId"] = ref;
-    if (amt != null) q["payment.paidAmount"] = amt;
+    const identifiers = [];
+    if (callback.referenceId) identifiers.push({ "payment.qrReferenceId": callback.referenceId });
+    if (callback.utr) {
+      identifiers.push({ "payment.utrNumber": callback.utr });
+      identifiers.push({ "payment.transactionId": callback.utr });
+    }
+    const q = {
+      "payment.paymentStatus": "PENDING",
+      "payment.paidAmount": callback.amount,
+    };
+    if (identifiers.length === 1) Object.assign(q, identifiers[0]);
+    else q.$or = identifiers;
     return q;
   };
   const tryOrder = async () => {
     const orderDoc = await Order.findOne(buildQuery()).select("payment");
     if (!orderDoc) return false;
     for (const p of orderDoc.payment || []) {
-      if (p.paymentStatus !== "PENDING") continue;
-      if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
-      const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
-      const matchAmount = amt != null && p.paidAmount === amt;
-      if (!matchRef && !matchAmount) continue;
-      if (ref && !matchRef) continue;
-      if (amt != null && !matchAmount) continue;
+      if (!qrPaymentSubdocMatches(p, callback, now)) continue;
       p.paymentStatus = "BANK_VERIFIED";
-      if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
+      if (callback.utr) p.transactionId = callback.utr;
       await orderDoc.save();
       return true;
     }
@@ -4142,15 +4148,9 @@ const handleQRPaymentCallback = catchAsync(async (req, res) => {
     const agriDoc = await AgriSalesOrder.findOne(buildQuery()).select("payment");
     if (agriDoc) {
       for (const p of agriDoc.payment || []) {
-        if (p.paymentStatus !== "PENDING") continue;
-        if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
-        const matchRef = ref && p.qrReferenceId && String(p.qrReferenceId).trim() === ref;
-        const matchAmount = amt != null && p.paidAmount === amt;
-        if (!matchRef && !matchAmount) continue;
-        if (ref && !matchRef) continue;
-        if (amt != null && !matchAmount) continue;
+        if (!qrPaymentSubdocMatches(p, callback, now)) continue;
         p.paymentStatus = "BANK_VERIFIED";
-        if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
+        if (callback.utr) p.transactionId = callback.utr;
         await agriDoc.save();
         updated = true;
         break;

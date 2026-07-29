@@ -12,6 +12,7 @@ import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
+import { normalizePositiveAmount } from "../utils/paymentValidation.js";
 import { tryAutoSendOrderAcceptedWhatsApp } from "./order.controller.js";
 import { isBananaPlantName } from "../utility/watiPlantText.js";
 
@@ -41,17 +42,27 @@ export const createBulkPayment = catchAsync(async (req, res, next) => {
     return next(new AppError("totalAmount and at least one allocation are required", 400));
   }
 
-  const sum = allocations.reduce((s, a) => s + (Number(a.amount) || 0), 0);
-  const total = Number(totalAmount);
+  const total = normalizePositiveAmount(totalAmount);
+  if (total == null) {
+    return next(new AppError("totalAmount must be greater than 0", 400));
+  }
+
+  const normalizedAllocations = allocations.map((a) => {
+    const amount = normalizePositiveAmount(a.amount);
+    if (amount == null) {
+      throw new AppError("Allocation amounts must be greater than 0", 400);
+    }
+    return {
+      orderId: new mongoose.Types.ObjectId(a.orderId),
+      amount,
+      orderType: a.orderType === "AgriSalesOrder" ? "AgriSalesOrder" : "ORDER",
+    };
+  });
+
+  const sum = normalizedAllocations.reduce((s, a) => s + a.amount, 0);
   if (Math.abs(sum - total) > 0.01) {
     return next(new AppError(`Sum of allocations (${sum}) must equal totalAmount (${total})`, 400));
   }
-
-  const normalizedAllocations = allocations.map((a) => ({
-    orderId: new mongoose.Types.ObjectId(a.orderId),
-    amount: Number(a.amount),
-    orderType: a.orderType === "AgriSalesOrder" ? "AgriSalesOrder" : "ORDER",
-  }));
 
   const requesterId = req.user?._id || req.user?.id;
   const isDealer =
