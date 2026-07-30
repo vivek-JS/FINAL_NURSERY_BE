@@ -7,10 +7,13 @@
 
 const DEFAULT_SERVICE_URL = "http://127.0.0.1:8010";
 // Measured on the 1 vCPU production host: two-engine inference alone takes
-// ~2-3.6s, and can stretch further under CPU contention from other pm2 apps
-// (e.g. WhatsApp/Puppeteer). 5s was too tight and caused spurious Gemini
-// fallbacks; 9s balances that against not hanging requests indefinitely.
-const REQUEST_TIMEOUT_MS = 9000;
+// ~2-6s depending on source image size (very small/low-res images get
+// upscaled up to 6x before OCR, which costs more compute), and can stretch
+// further under CPU contention from other pm2 apps (e.g. WhatsApp/Puppeteer).
+// 5s and then 9s both proved too tight and caused spurious Gemini fallbacks
+// on real screenshots; 12s gives real headroom while still not hanging a
+// request indefinitely if the local service is genuinely stuck.
+const REQUEST_TIMEOUT_MS = 12000;
 
 /** Thrown for any local-OCR failure (service down, timeout, bad image, engine error). */
 export class LocalOcrError extends Error {
