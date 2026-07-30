@@ -28,20 +28,27 @@ export const BANK_NAME_PATTERNS = [
   { name: "Bank of Baroda", pattern: /bank\s*of\s*baroda|\bbob\b/i },
 ];
 
+/** Real UTR/txn-id/reference codes always contain at least one digit; a
+ * pure-letters capture (e.g. "Google") is almost always the OCR spilling
+ * over into an unrelated duplicate label on the next line — see the
+ * "Google transaction ID\n<real id>" case where two OCR passes produced
+ * overlapping, non-deduped lines. This lookahead rejects those. */
+const ALNUM_CODE = "(?=[0-9a-zA-Z]*\\d)[0-9a-zA-Z]{6,30}";
+
 /** Reference-number label variants (UTR / RRN / Txn ID / Reference No), in
  * priority order — first match wins for `utr`. Accepts 6-30 digit or
  * alphanumeric codes to cover different bank formats. */
 const UTR_LABEL_PATTERNS = [
-  /utr\s*(?:no\.?|number)?\s*[:\-]?\s*([0-9a-zA-Z]{6,30})/i,
-  /rrn\s*(?:no\.?)?\s*[:\-]?\s*([0-9a-zA-Z]{6,30})/i,
-  /upi\s*ref(?:erence)?(?:\s*no\.?)?\s*[:\-]?\s*([0-9a-zA-Z]{6,30})/i,
-  /reference\s*(?:no\.?|number)?\s*[:\-]?\s*([0-9a-zA-Z]{6,30})/i,
+  new RegExp(`utr\\s*(?:no\\.?|number)?\\s*[:\\-]?\\s*(${ALNUM_CODE})`, "i"),
+  new RegExp(`rrn\\s*(?:no\\.?)?\\s*[:\\-]?\\s*(${ALNUM_CODE})`, "i"),
+  new RegExp(`upi\\s*ref(?:erence)?(?:\\s*no\\.?)?\\s*[:\\-]?\\s*(${ALNUM_CODE})`, "i"),
+  new RegExp(`reference\\s*(?:no\\.?|number)?\\s*[:\\-]?\\s*(${ALNUM_CODE})`, "i"),
 ];
 
 const TRANSACTION_ID_LABEL_PATTERNS = [
-  /transaction\s*id\s*[:\-]?\s*([0-9a-zA-Z]{6,30})/i,
-  /txn\s*id\s*[:\-]?\s*([0-9a-zA-Z]{6,30})/i,
-  /upi\s*transaction\s*id\s*[:\-]?\s*([0-9a-zA-Z]{6,30})/i,
+  new RegExp(`transaction\\s*id\\s*[:\\-]?\\s*(${ALNUM_CODE})`, "i"),
+  new RegExp(`txn\\s*id\\s*[:\\-]?\\s*(${ALNUM_CODE})`, "i"),
+  new RegExp(`upi\\s*transaction\\s*id\\s*[:\\-]?\\s*(${ALNUM_CODE})`, "i"),
 ];
 
 /** Fallback: a bare 12-30 digit run with no label — most UPI apps show this
@@ -59,6 +66,11 @@ const AMOUNT_PATTERNS = [
  * Indian amounts are shown with exactly 2 decimal places, which is a fairly
  * distinctive signature even without a currency marker. */
 const BARE_DECIMAL_AMOUNT = /\b(\d{1,3}(?:,\d{2,3})*\.\d{2})\b/;
+/** Lowest-priority fallback: comma-grouped whole rupee amounts with no paise
+ * shown (e.g. "50,000" on a bank-transfer receipt where the ₹ symbol OCR'd
+ * away entirely). Requires at least one comma group so it can't accidentally
+ * match a bare transaction ID/phone number, which are never comma-grouped. */
+const BARE_GROUPED_AMOUNT = /\b(\d{1,3}(?:,\d{2,3}){1,})\b/;
 
 const DATE_PATTERNS = [
   // \s* (not \s+) between month and year tolerates OCR merging spaces, e.g. "Jul2026".
@@ -125,18 +137,34 @@ function extractUtrAndTransactionId(text) {
 }
 
 function extractAmount(text) {
-  const raw = firstMatch(AMOUNT_PATTERNS, text) || text.match(BARE_DECIMAL_AMOUNT)?.[1];
+  const raw =
+    firstMatch(AMOUNT_PATTERNS, text) ||
+    text.match(BARE_DECIMAL_AMOUNT)?.[1] ||
+    text.match(BARE_GROUPED_AMOUNT)?.[1];
   if (!raw) return null;
   const cleaned = raw.replace(/,/g, "");
   const value = Number.parseFloat(cleaned);
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
+/** Picks the dictionary entry with the most occurrences in the text rather
+ * than the first pattern that matches at all. A bank/app name can appear
+ * once incidentally inside an unrelated string (e.g. "icici" as a substring
+ * of a VPA domain like "eazypay@icici") while the *actual* bank is stated
+ * explicitly and repeatedly (e.g. "IDBI Bank" x3) — occurrence count is a
+ * much stronger signal than array order for picking the right one. */
 function extractDictionaryMatch(patterns, text) {
+  let best = null;
+  let bestCount = 0;
   for (const { name, pattern } of patterns) {
-    if (pattern.test(text)) return name;
+    const global = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+    const count = (text.match(global) || []).length;
+    if (count > bestCount) {
+      bestCount = count;
+      best = name;
+    }
   }
-  return null;
+  return best;
 }
 
 function extractUpiId(text) {

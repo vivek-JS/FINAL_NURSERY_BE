@@ -168,13 +168,33 @@ const cases = [
     ].join("\n"),
     expect: { amount: 90 },
   },
+  {
+    name: "Google Pay real-world: comma-grouped whole amount, no ₹, dup OCR lines from two engines",
+    lines: [
+      "M", "To", "ToM/S.RAM BIOTECH", "MIS.RAM", "BIOTECH", "50,000", "Completed",
+      "11 Apr", "3:24pm", "2026,", "11Apr2026,3:24pm", "IDBI", "Bank", "IDBIBankO373",
+      "transaction.", "UP1", "ID", "510118583522", "To:", "MIS.RAM", "To:M/S.RAM BIOTECH",
+      "BIOTECH", ".eazypayaicici", "msrambiotech.eazypay@icici", "msrambiotech.", "MUKUND",
+      "From:MANSI MUKUND PATIL (IDBI Bank", "From:", "MANSI", "PATIL", "IDB!", "Bank",
+      "Google", "mansimpati128", "Google Paymansimpatil281@okaxis", "Pay", "Qokaxis",
+      "Google", "transaction", "ID", "Google transaction ID", "CICAgNjszubfeg", "UPIX", "Pay",
+    ],
+    // Regression coverage for 3 real bugs found on a live droplet test:
+    // 1) transactionId must NOT become "Google" (regex crossing into a dup label line).
+    // 2) bank must be IDBI (mentioned 2x as a real word), not ICICI (1 incidental
+    //    substring hit inside a VPA domain "eazypay@icici").
+    // 3) amount "50,000" (no ₹, no decimals) must still be picked up.
+    expect: { utr: "510118583522", transactionId: null, amount: 50000, bank: "IDBI Bank" },
+  },
 ];
 
 let passed = 0;
 let failed = 0;
 
 for (const testCase of cases) {
-  const result = parseTransaction({ text: testCase.text });
+  const result = testCase.lines
+    ? parseTransaction({ lines: testCase.lines })
+    : parseTransaction({ text: testCase.text });
   const mismatches = [];
   for (const [key, expected] of Object.entries(testCase.expect)) {
     if (result[key] !== expected) {
