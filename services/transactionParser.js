@@ -53,6 +53,12 @@ const AMOUNT_PATTERNS = [
   /₹\s*([0-9,]+(?:\.\d{1,2})?)/,
   /(?:rs\.?|inr)\s*([0-9,]+(?:\.\d{1,2})?)/i,
 ];
+/** Last-resort fallback when the currency marker (₹/Rs/INR) itself gets
+ * dropped/garbled by OCR (common on low-res screenshots — seen in production
+ * where "Paid ₹90.00" was split into separate garbled lines, losing the ₹).
+ * Indian amounts are shown with exactly 2 decimal places, which is a fairly
+ * distinctive signature even without a currency marker. */
+const BARE_DECIMAL_AMOUNT = /\b(\d{1,3}(?:,\d{2,3})*\.\d{2})\b/;
 
 const DATE_PATTERNS = [
   // \s* (not \s+) between month and year tolerates OCR merging spaces, e.g. "Jul2026".
@@ -119,7 +125,7 @@ function extractUtrAndTransactionId(text) {
 }
 
 function extractAmount(text) {
-  const raw = firstMatch(AMOUNT_PATTERNS, text);
+  const raw = firstMatch(AMOUNT_PATTERNS, text) || text.match(BARE_DECIMAL_AMOUNT)?.[1];
   if (!raw) return null;
   const cleaned = raw.replace(/,/g, "");
   const value = Number.parseFloat(cleaned);

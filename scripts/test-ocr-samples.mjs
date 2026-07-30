@@ -153,6 +153,21 @@ const cases = [
     ].join("\n"),
     expect: { upiId: null },
   },
+  {
+    name: "BHIM real-world OCR garbling: ₹ symbol lost, bare decimal fallback",
+    text: [
+      "Poymst ap?",
+      "8HM-Brrats Cwn PaymentsApp",
+      "PROS",
+      "90.00",
+      "VONOTHNC",
+      "TnnD",
+      "7226822",
+      "NOREMARSS",
+      "SateDakofindn",
+    ].join("\n"),
+    expect: { amount: 90 },
+  },
 ];
 
 let passed = 0;
