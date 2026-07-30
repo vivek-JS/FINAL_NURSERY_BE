@@ -1,0 +1,16 @@
+# Local PaddleOCR microservice dependencies — pinned for reproducibility on the
+# production host (Ubuntu 24.04, Python 3.12, 1 vCPU / ~2GB RAM).
+#
+# paddleocr is pinned to 2.7.x (classic PaddleOCR().ocr() API used by
+# ocr_service.py); the 3.x line introduced a different pipeline/predict() API.
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+# paddlepaddle's cpp_extension module imports setuptools unconditionally even
+# when no compilation happens; Python 3.12 venvs no longer bundle it by default.
+setuptools==75.6.0
+paddlepaddle==2.6.2
+paddleocr==2.7.3
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+Pillow==10.4.0

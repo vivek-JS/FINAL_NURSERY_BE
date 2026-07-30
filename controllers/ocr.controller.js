@@ -1,4 +1,6 @@
 import { extractUpiFromImage } from "../services/gemini.service.js";
+import { runLocalOcr, LocalOcrError } from "../services/ocrService.js";
+import { parseTransaction } from "../services/transactionParser.js";
 import { devanagariToAsciiDigits } from "../utility/devanagariNumerals.js";
 import { readUploadBufferFromUrl } from "../utils/localStorageUtils.js";
 
@@ -6,32 +8,39 @@ const AMOUNT_NUMERIC = /^\d+(\.\d+)?$/;
 const ALLOWED_STATUS = new Set(["SUCCESS", "FAILED", "PENDING"]);
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30000;
+/** Local OCR ran fine but the image itself is invalid — don't waste a Gemini call. */
+const UNSALVAGEABLE_STATUS = 422;
+
+/** Some LLM JSON responses literally emit the strings "null"/"undefined"/"NaN"
+ * instead of a true null when a schema field has no value — treat those the
+ * same as empty. */
+const LITERAL_NULLISH = new Set(["null", "undefined", "nan", "n/a", "none"]);
 
 function toNullIfEmpty(val) {
   if (val === null || val === undefined) return null;
   const s = String(val).trim();
-  return s === "" ? null : s;
-}
-
-function cleanAmount(raw) {
-  if (raw == null) return null;
-  let s = devanagariToAsciiDigits(String(raw))
-    .replace(/₹/g, "")
-    .replace(/,/g, "")
-    .trim();
-  if (s === "") return null;
+  if (s === "" || LITERAL_NULLISH.has(s.toLowerCase())) return null;
   return s;
 }
 
+function cleanAmount(raw) {
+  const base = toNullIfEmpty(raw);
+  if (base == null) return null;
+  const s = devanagariToAsciiDigits(base).replace(/₹/g, "").replace(/,/g, "").trim();
+  return s === "" ? null : s;
+}
+
 function cleanUtr(raw) {
-  if (raw == null) return null;
-  const s = devanagariToAsciiDigits(String(raw)).replace(/\s/g, "");
+  const base = toNullIfEmpty(raw);
+  if (base == null) return null;
+  const s = devanagariToAsciiDigits(base).replace(/\s/g, "");
   return s === "" ? null : s;
 }
 
 function cleanNumericText(raw) {
-  if (raw == null) return null;
-  const s = devanagariToAsciiDigits(String(raw)).trim();
+  const base = toNullIfEmpty(raw);
+  if (base == null) return null;
+  const s = devanagariToAsciiDigits(base).trim();
   return s === "" ? null : s;
 }
 
@@ -95,6 +104,88 @@ async function fetchImageBufferFromUrl(imageUrl) {
   }
 }
 
+/** True once the parser found at least one field worth trusting — otherwise we
+ * treat the local OCR pass as "no signal" and fall back to Gemini. */
+function hasUsableParsedSignal(parsed) {
+  return Boolean(
+    parsed.utr ||
+      parsed.transactionId ||
+      parsed.amount != null ||
+      parsed.date ||
+      parsed.sender ||
+      parsed.receiver ||
+      parsed.upiId
+  );
+}
+
+/** Normalizes Gemini's raw schema into the same canonical shape transactionParser
+ * produces, so both OCR sources feed one shared response-building path. */
+function mapGeminiToCanonical(raw) {
+  const statusRaw = toNullIfEmpty(raw.status);
+  const amountRaw = cleanAmount(raw.amount);
+  const amount = amountRaw != null && AMOUNT_NUMERIC.test(amountRaw) ? Number(amountRaw) : null;
+  return {
+    utr: cleanUtr(raw.utr_number),
+    transactionId: cleanNumericText(raw.transaction_id),
+    amount,
+    date: cleanNumericText(raw.date),
+    time: cleanNumericText(raw.time),
+    bank: null, // Gemini's prompt does not distinguish bank vs UPI app
+    app: toNullIfEmpty(raw.app_name),
+    sender: null,
+    receiver: toNullIfEmpty(raw.name),
+    status: statusRaw ? statusRaw.toUpperCase() : null,
+    upiId: null,
+    referenceNumber: null,
+  };
+}
+
+/**
+ * Runs local PaddleOCR + regex parsing first; falls back to Gemini when the
+ * local service is unreachable/erroring or returns no usable signal.
+ * Image-format errors (422 from the local service) are NOT retried against
+ * Gemini — the image itself is the problem, not the OCR backend.
+ * @returns {Promise<{ source: "local"|"gemini", ocrText: string, parsed: object }>}
+ */
+async function runOcrPipeline(buffer, mimeType) {
+  try {
+    const local = await runLocalOcr(buffer, mimeType);
+    const parsed = parseTransaction(local);
+    if (hasUsableParsedSignal(parsed)) {
+      return { source: "local", ocrText: local.text, parsed };
+    }
+    console.warn("[OCR] Local pass returned no usable signal, falling back to Gemini");
+  } catch (err) {
+    if (err instanceof LocalOcrError && err.status === UNSALVAGEABLE_STATUS) {
+      throw err;
+    }
+    console.warn(`[OCR] Local service failed (${err?.message || err}), falling back to Gemini`);
+  }
+
+  const geminiRaw = await extractUpiFromImage(buffer, mimeType);
+  return {
+    source: "gemini",
+    ocrText: toNullIfEmpty(geminiRaw.raw_text) || "",
+    parsed: mapGeminiToCanonical(geminiRaw),
+  };
+}
+
+/** Builds the legacy Gemini-shaped `raw` object from the canonical parsed fields
+ * so `buildSuccessPayload()` (and every existing FE consumer) keeps working. */
+function canonicalToLegacyRaw(parsed, ocrText) {
+  return {
+    name: parsed.receiver || parsed.sender || null,
+    amount: parsed.amount != null ? String(parsed.amount) : null,
+    utr_number: parsed.utr || parsed.referenceNumber || null,
+    transaction_id: parsed.transactionId || null,
+    date: parsed.date || null,
+    time: parsed.time || null,
+    status: parsed.status || null,
+    app_name: parsed.app || null,
+    raw_text: ocrText || null,
+  };
+}
+
 function buildSuccessPayload(raw) {
   const name = toNullIfEmpty(raw.name);
   const amount = cleanAmount(raw.amount);
@@ -134,14 +225,17 @@ function buildSuccessPayload(raw) {
   };
 }
 
-function sendGeminiError(res, err) {
+function sendOcrError(res, err) {
   console.error("OCR:", err?.message || err);
   const msg = String(err?.message || err);
   if (msg.includes("GEMINI_API_KEY") || msg.includes("not configured")) {
     return res.status(503).json({
       success: false,
-      error: "OCR service is not configured (set GEMINI_API_KEY)",
+      error: "OCR is unavailable (local service down and GEMINI_API_KEY not configured)",
     });
+  }
+  if (err instanceof LocalOcrError && err.status === UNSALVAGEABLE_STATUS) {
+    return res.status(422).json({ success: false, error: msg });
   }
   return res.status(502).json({
     success: false,
@@ -158,10 +252,10 @@ export async function extractUpiReceipt(req, res) {
       });
     }
 
-    const raw = await extractUpiFromImage(req.file.buffer, req.file.mimetype);
-    return res.json({ success: true, data: buildSuccessPayload(raw) });
+    const { ocrText, parsed } = await runOcrPipeline(req.file.buffer, req.file.mimetype);
+    return res.json({ success: true, data: buildSuccessPayload(canonicalToLegacyRaw(parsed, ocrText)) });
   } catch (err) {
-    return sendGeminiError(res, err);
+    return sendOcrError(res, err);
   }
 }
 
@@ -176,8 +270,8 @@ export async function extractUpiReceiptByUrl(req, res) {
     }
 
     const { buffer, mimeType } = await fetchImageBufferFromUrl(imageUrl.trim());
-    const raw = await extractUpiFromImage(buffer, mimeType);
-    return res.json({ success: true, data: buildSuccessPayload(raw) });
+    const { ocrText, parsed } = await runOcrPipeline(buffer, mimeType);
+    return res.json({ success: true, data: buildSuccessPayload(canonicalToLegacyRaw(parsed, ocrText)) });
   } catch (err) {
     if (err?.name === "AbortError") {
       return res.status(504).json({ success: false, error: "Timed out fetching image URL" });
@@ -193,6 +287,42 @@ export async function extractUpiReceiptByUrl(req, res) {
     ) {
       return res.status(400).json({ success: false, error: msg });
     }
-    return sendGeminiError(res, err);
+    return sendOcrError(res, err);
+  }
+}
+
+/**
+ * POST /api/v1/ocr/transaction — additive endpoint returning the richer
+ * transaction schema directly (utr/amount/sender/receiver/status/bank),
+ * independent of the legacy `upi-receipt*` response shape above.
+ */
+export async function extractTransactionFromReceipt(req, res) {
+  try {
+    if (!req.file?.buffer) {
+      return res.status(400).json({
+        success: false,
+        error: 'Multipart form field "image" is required',
+      });
+    }
+
+    const { ocrText, parsed } = await runOcrPipeline(req.file.buffer, req.file.mimetype);
+    return res.json({
+      success: true,
+      ocrText: ocrText || "",
+      transaction: {
+        utr: parsed.utr || parsed.referenceNumber || "",
+        transactionId: parsed.transactionId || "",
+        amount: parsed.amount != null ? String(parsed.amount) : "",
+        date: parsed.date || "",
+        time: parsed.time || "",
+        bank: parsed.bank || "",
+        sender: parsed.sender || "",
+        receiver: parsed.receiver || "",
+        status: parsed.status || "",
+        upiId: parsed.upiId || "",
+      },
+    });
+  } catch (err) {
+    return sendOcrError(res, err);
   }
 }

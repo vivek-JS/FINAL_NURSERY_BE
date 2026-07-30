@@ -346,6 +346,8 @@ import {
 import cmsRoute from "./routes/cms.route.js";
 import employeeRoute from "./routes/employee.route.js";
 import attendanceRoute from "./routes/attendance.route.js";
+import faceAttendanceRoute from "./routes/faceAttendance.route.js";
+import faceAttendanceAdminRoute from "./routes/faceAttendanceAdmin.route.js";
 import reportingRoute from "./routes/reporting.route.js";
 import labRoute from "./routes/lab.route.js";
 import primaryHardeingRoute from "./routes/primaryHardening.route.js";
@@ -471,7 +473,7 @@ import healthRoute from "./routes/health.route.js";
 import ocrRoute from "./routes/ocr.routes.js";
 server.use("/health", healthRoute);
 
-// UPI receipt OCR (Gemini) — multipart image; no URL storage
+// UPI receipt OCR — local PaddleOCR service first, Gemini as automatic fallback.
 // Mount under /api/v1/ocr so it matches the same prefix as other APIs (proxies, env REACT_APP_BASE_URL).
 server.use("/api/v1/ocr", ocrRoute);
 server.use("/api/ocr", ocrRoute);
@@ -653,6 +655,10 @@ if (process.env.DISABLE_EMPLOYEE_AUTH === "true") {
 
 server.use("/api/v1/employee", employeeAuthMiddleware, employeeRoute);
 server.use("/api/v1/attendance", authenticateToken, attendanceRoute);
+// New Face Recognition Attendance app — separate collection/endpoints from the legacy /attendance CRUD above.
+// More specific "/admin" mount registered first so it doesn't fall through the base router.
+server.use("/api/v1/face-attendance/admin", authenticateToken, faceAttendanceAdminRoute);
+server.use("/api/v1/face-attendance", authenticateToken, faceAttendanceRoute);
 server.use("/api/v1/reporting", authenticateToken, reportingRoute);
 server.use("/api/v1/lab", authenticateToken, labRoute);
 server.use("/api/v1/primaryHardeingRoute", authenticateToken, primaryHardeingRoute);
@@ -920,6 +926,15 @@ server.use(errorHandler);
     initPastDueSlotRolloverCronJobs();
   } catch (e) {
     console.error("[PastDueRollover] Failed to init cron:", e?.message || e);
+  }
+})();
+
+(async () => {
+  try {
+    const { initAttendanceReminderCron } = await import("./jobs/attendanceReminderCron.js");
+    initAttendanceReminderCron();
+  } catch (e) {
+    console.error("[AttendanceReminder] Failed to init cron:", e?.message || e);
   }
 })();
 

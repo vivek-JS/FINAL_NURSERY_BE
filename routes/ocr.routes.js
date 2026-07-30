@@ -1,6 +1,10 @@
 import express from "express";
 import multer from "multer";
-import { extractUpiReceipt, extractUpiReceiptByUrl } from "../controllers/ocr.controller.js";
+import {
+  extractUpiReceipt,
+  extractUpiReceiptByUrl,
+  extractTransactionFromReceipt,
+} from "../controllers/ocr.controller.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -33,5 +37,18 @@ router.post("/upi-receipt", (req, res, next) => {
     next();
   });
 }, extractUpiReceipt);
+
+// Additive endpoint (spec section 7) — richer transaction schema, multipart "image".
+router.post("/transaction", (req, res, next) => {
+  upload.single("image")(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({
+        success: false,
+        error: err.message || "File upload failed",
+      });
+    }
+    next();
+  });
+}, extractTransactionFromReceipt);
 
 export default router;
