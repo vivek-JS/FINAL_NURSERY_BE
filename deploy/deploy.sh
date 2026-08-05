@@ -16,7 +16,8 @@ cp -f .env /tmp/final_nursery_be.env.bak 2>/dev/null || true
 git fetch origin
 git reset --hard origin/${BRANCH}
 cp -f /tmp/final_nursery_be.env.bak .env 2>/dev/null || true
-npm install --omit=dev
+export PUPPETEER_SKIP_DOWNLOAD=true
+npm install
 pm2 restart ${PM2_NAME} --update-env
 pm2 status ${PM2_NAME}
 REMOTE_SCRIPT
