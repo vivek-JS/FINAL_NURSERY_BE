@@ -8,6 +8,7 @@
 import cron from "node-cron";
 import Order from "../models/order.model.js";
 import { sendDailySummaryAlert } from "../services/whatsappAlertService.js";
+import { sendAdminDailyMisMarathiAlert } from "../services/adminDailyMisWhatsapp.service.js";
 import {
   runScheduledAlertEngine,
   runDailyOpsAlertEngine,
@@ -64,21 +65,44 @@ export function initAlertCronJobs() {
 
   const tz = "Asia/Kolkata";
 
-  // Daily summary at 8:00 PM IST
+  // Admin MIS digest (Marathi) — default 7:00 PM IST
+  const misCron = process.env.WHATSAPP_ADMIN_MIS_CRON || "30 13 * * *";
   cron.schedule(
-    "30 14 * * *",
+    misCron,
     async () => {
-      console.log("[WhatsApp Cron] Running daily summary job...");
+      console.log("[WhatsApp Cron] Running admin daily MIS (Marathi) job...");
       try {
-        const summary = await buildDailySummary();
-        await sendDailySummaryAlert(summary);
-        console.log("[WhatsApp Cron] Daily summary sent.");
+        const result = await sendAdminDailyMisMarathiAlert();
+        console.log("[WhatsApp Cron] Admin daily MIS done:", {
+          sent: result.sent,
+          delivered: result.delivered,
+          dateKey: result.dateKey,
+          chunks: result.chunks,
+        });
       } catch (err) {
-        console.error("[WhatsApp Cron] Daily summary job failed:", err?.message || err);
+        console.error("[WhatsApp Cron] Admin daily MIS job failed:", err?.message || err);
       }
     },
     { scheduled: true, timezone: tz }
   );
+
+  // Legacy short summary at 8:00 PM IST (optional — set WHATSAPP_LEGACY_DAILY_SUMMARY=true)
+  if (process.env.WHATSAPP_LEGACY_DAILY_SUMMARY === "true") {
+    cron.schedule(
+      "30 14 * * *",
+      async () => {
+        console.log("[WhatsApp Cron] Running legacy daily summary job...");
+        try {
+          const summary = await buildDailySummary();
+          await sendDailySummaryAlert(summary);
+          console.log("[WhatsApp Cron] Legacy daily summary sent.");
+        } catch (err) {
+          console.error("[WhatsApp Cron] Legacy daily summary job failed:", err?.message || err);
+        }
+      },
+      { scheduled: true, timezone: tz }
+    );
+  }
 
   // Ops backlog digest — 8:00 AM IST
   const opsCron = process.env.WHATSAPP_ALERT_OPS_CRON || "0 8 * * *";
@@ -112,7 +136,10 @@ export function initAlertCronJobs() {
     { scheduled: true, timezone: tz }
   );
 
-  console.log("✅ [WhatsApp Cron] Daily summary @ 8:00 PM IST.");
+  console.log(`✅ [WhatsApp Cron] Admin MIS (Marathi) @ ${misCron} (${tz}).`);
+  if (process.env.WHATSAPP_LEGACY_DAILY_SUMMARY === "true") {
+    console.log("✅ [WhatsApp Cron] Legacy daily summary @ 8:00 PM IST.");
+  }
   console.log(`✅ [WhatsApp Cron] Ops digest @ ${opsCron} (${tz}).`);
   console.log(`✅ [WhatsApp Cron] Slot scan @ ${slotCron} (${tz}).`);
 }

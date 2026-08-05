@@ -95,12 +95,14 @@ router.get("/status", (req, res) => {
     status: "Success",
     whatsappReady: isWhatsAppReady,
     alertsEnabled: process.env.WHATSAPP_ALERTS_ENABLED === "true",
+    agriLoadInboundEnabled: process.env.WHATSAPP_AGRI_LOAD_INBOUND_ENABLED !== "false",
+    orderFlowEnabled: process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true",
     linkedBotPhone: getWhatsAppLinkedPhone(),
     adminNumbers: getAdminNumbersFromEnv(),
     sessionPath,
     hasSavedSession: hasPersistedWhatsAppSession(sessionPath),
     hint:
-      "Messages are sent FROM linkedBotPhone. Recipients must use WhatsApp on adminNumbers. If test fails, run POST /whatsapp-alert/test and read results[].error.",
+      "Scan QR once in server logs if hasSavedSession is false. Messages send FROM linkedBotPhone. Agri admins reply LOADED or AGR-… loaded on the scanned number.",
   });
 });
 
@@ -139,6 +141,44 @@ router.post("/engine/big-order/:orderId", async (req, res) => {
   try {
     const result = await evaluateOrderAlertsOnCreate(orderId);
     return res.status(200).json({ status: "Success", result });
+  } catch (err) {
+    return res.status(500).json({
+      status: "Fail",
+      message: err?.message || String(err),
+    });
+  }
+});
+
+/** Manual trigger: Admin MIS daily digest (Marathi) — booking, dispatch, payments, Ram Agri stock. */
+router.post("/engine/admin-daily-mis", async (req, res) => {
+  try {
+    const { date } = req.body || {};
+    const { sendAdminDailyMisMarathiAlert, buildAdminDailyMisWhatsappSnapshot } =
+      await import("../services/adminDailyMisWhatsapp.service.js");
+    const { formatAdminDailyMisMarathiMessages } =
+      await import("../utility/adminDailyMisMarathiFormat.js");
+
+    if (req.query?.preview === "1" || req.body?.preview === true) {
+      const snapshot = await buildAdminDailyMisWhatsappSnapshot(date);
+      const messages = formatAdminDailyMisMarathiMessages(snapshot);
+      return res.status(200).json({
+        status: "Success",
+        preview: true,
+        dateKey: snapshot.dateKey,
+        messages,
+        snapshot,
+      });
+    }
+
+    const result = await sendAdminDailyMisMarathiAlert(date);
+    const ok = result.sent || (result.delivered || 0) > 0;
+    return res.status(ok ? 200 : 502).json({
+      status: ok ? "Success" : "Fail",
+      message: ok
+        ? `Admin MIS WhatsApp sent (${result.delivered} delivery hits, ${result.chunks} chunk(s)).`
+        : `Not delivered. Reason: ${result.reason || "unknown"}`,
+      result,
+    });
   } catch (err) {
     return res.status(500).json({
       status: "Fail",
