@@ -1,4 +1,34 @@
 import PurchaseOrder from '../models/purchaseOrder.model.js';
+import { uploadImageToLocalStorage } from '../utils/localStorageUtils.js';
+import { scheduleStockInwardAlert } from '../services/stockWhatsappAlert.service.js';
+
+function parseBodyJson(value, fallback) {
+  if (value == null || value === '') return fallback;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+async function uploadSupplierInvoiceFile(file) {
+  if (!file?.buffer) return null;
+  const uploaded = await uploadImageToLocalStorage(
+    file.buffer,
+    `purchase-orders/invoices/${Date.now()}`,
+    { mimetype: file.mimetype }
+  );
+  if (!uploaded?.success || !uploaded.url) {
+    throw new Error(uploaded?.error || 'Failed to upload supplier invoice file');
+  }
+  return {
+    url: uploaded.url,
+    originalName: file.originalname || '',
+    mimeType: file.mimetype || '',
+    uploadedAt: new Date(),
+  };
+}
 
 // Create Purchase Order
 export const createPurchaseOrder = async (req, res) => {
@@ -7,12 +37,46 @@ export const createPurchaseOrder = async (req, res) => {
       supplier,
       poDate,
       expectedDeliveryDate,
-      items,
       otherCharges,
       terms,
       notes,
+      supplierInvoiceNumber,
       autoGRN, // Auto GRN flag
     } = req.body;
+
+    const items = parseBodyJson(req.body.items, req.body.items);
+    if (!Array.isArray(items) || !items.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one purchase order item is required',
+      });
+    }
+
+    const invoiceNo = String(supplierInvoiceNumber || '').trim();
+    if (!invoiceNo) {
+      return res.status(400).json({
+        success: false,
+        message: 'Supplier invoice number is required',
+      });
+    }
+
+    let supplierInvoiceFile = null;
+    if (req.file) {
+      try {
+        supplierInvoiceFile = await uploadSupplierInvoiceFile(req.file);
+      } catch (uploadErr) {
+        return res.status(400).json({
+          success: false,
+          message: uploadErr.message || 'Supplier invoice upload failed',
+        });
+      }
+    }
+    if (!supplierInvoiceFile?.url) {
+      return res.status(400).json({
+        success: false,
+        message: 'Supplier invoice file is required (JPG/PNG/WEBP/PDF)',
+      });
+    }
 
     // Generate PO number
     const poNumber = await PurchaseOrder.generatePONumber();
@@ -48,6 +112,8 @@ export const createPurchaseOrder = async (req, res) => {
       totalAmount,
       terms,
       notes,
+      supplierInvoiceNumber: invoiceNo,
+      supplierInvoiceFile,
       autoGRN: autoGRN === true || autoGRN === 'true' || autoGRN === 1 || autoGRN === '1', // Store auto GRN flag (handle string/boolean)
       createdBy: req.user._id,
     });
@@ -680,6 +746,21 @@ export const createPurchaseOrder = async (req, res) => {
                 item.ramAgriBatch = ramBatch._id;
                 item.batchNumber = ramBatch.batchNumber;
                 console.log(`✅ Ram Agri batch ${ramBatch.batchNumber} created for ${item.ramAgriCropName} - ${item.ramAgriVarietyName}`);
+                scheduleStockInwardAlert({
+                  productName:
+                    [item.ramAgriCropName, item.ramAgriVarietyName].filter(Boolean).join(" - ") ||
+                    "Ram Agri Product",
+                  quantity: item.acceptedQuantity,
+                  unit: item.unit?.name || item.unit || "",
+                  referenceNumber: `${purchaseOrder.poNumber} / ${savedGRN.grnNumber}`,
+                  supplierName:
+                    purchaseOrder.supplier?.name ||
+                    purchaseOrder.supplier?.companyName ||
+                    "",
+                  newStock: ramBatch.remainingQuantity ?? item.acceptedQuantity,
+                  performedByName: req.user?.name || "System",
+                  source: "Purchase Order GRN (Ram Agri)",
+                });
               }
             } else if (!item.isRamAgriProduct) {
               // Ensure batch number exists
@@ -757,6 +838,20 @@ export const createPurchaseOrder = async (req, res) => {
                 
                 // Create inventory transaction
                 await createInventoryTransaction(item, savedGRN, req.user, oldStock, product.currentStock);
+
+                scheduleStockInwardAlert({
+                  productName: item.productName || product.name || "Product",
+                  quantity: item.acceptedQuantity,
+                  unit: item.unit?.name || item.unit || "",
+                  referenceNumber: `${purchaseOrder.poNumber} / ${savedGRN.grnNumber}`,
+                  supplierName:
+                    purchaseOrder.supplier?.name ||
+                    purchaseOrder.supplier?.companyName ||
+                    "",
+                  newStock: product.currentStock,
+                  performedByName: req.user?.name || "System",
+                  source: "Purchase Order GRN",
+                });
               }
               
               // Update slot availablePlants and productStock if slotId is provided (for regular products only)
@@ -1250,6 +1345,28 @@ export const updatePurchaseOrder = async (req, res) => {
       });
     }
 
+    if (req.body.supplierInvoiceNumber !== undefined) {
+      const invoiceNo = String(req.body.supplierInvoiceNumber || '').trim();
+      if (!invoiceNo) {
+        return res.status(400).json({
+          success: false,
+          message: 'Supplier invoice number is required',
+        });
+      }
+      purchaseOrder.supplierInvoiceNumber = invoiceNo;
+    }
+
+    if (req.file) {
+      try {
+        purchaseOrder.supplierInvoiceFile = await uploadSupplierInvoiceFile(req.file);
+      } catch (uploadErr) {
+        return res.status(400).json({
+          success: false,
+          message: uploadErr.message || 'Supplier invoice upload failed',
+        });
+      }
+    }
+
     const updateFields = [
       'expectedDeliveryDate',
       'items',
@@ -1260,12 +1377,14 @@ export const updatePurchaseOrder = async (req, res) => {
 
     updateFields.forEach((field) => {
       if (req.body[field] !== undefined) {
-        purchaseOrder[field] = req.body[field];
+        purchaseOrder[field] =
+          field === 'items' ? parseBodyJson(req.body[field], req.body[field]) : req.body[field];
       }
     });
 
     // Recalculate totals if items changed
     if (req.body.items) {
+      req.body.items = parseBodyJson(req.body.items, req.body.items);
       let subtotal = 0;
       let gstAmount = 0;
       let discountAmount = 0;

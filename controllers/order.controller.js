@@ -79,6 +79,7 @@ import {
 } from "./farmerPlantOrderLedger.controller.js";
 import { applyPaymentTimingToPayment, sumOrderAdvancePayments } from "../utils/paymentTiming.js";
 import { addPaymentsToOrder } from "../services/orderPayment.service.js";
+import { schedulePlantOrderPaymentWhatsApp } from "../services/orderPaymentWhatsapp.service.js";
 import {
   resolveSplitBookForAssign,
   validateSplitNewFarmerDetails,
@@ -224,13 +225,18 @@ function acceptedWhatsAppAutoSendSkipReason(order, plantSubtypeName = "") {
   return null;
 }
 
-/** Schedule auto WATI for Banana only — full plant/subtype check runs in tryAutoSend after populate. */
-function maybeScheduleAcceptedWhatsAppAfterCollect(order) {
-  if (!order?._id || order.whatsappAcceptedSentAt) return;
+/** Schedule WATI order_placed template when payment is COLLECTED (all plants, every payment). */
+function maybeSchedulePaymentWhatsAppAfterCollect(order, paymentInfo = {}) {
+  if (!order?._id) return;
   const status = String(order.orderStatus || "").toUpperCase();
   if (WATI_BLOCKED_ORDER_STATUSES_FOR_ACCEPT.has(status)) return;
   if (!order.payment?.some((p) => p.paymentStatus === "COLLECTED")) return;
-  scheduleAutoSendOrderAcceptedWhatsApp(order._id);
+  schedulePlantOrderPaymentWhatsApp(order._id, paymentInfo);
+}
+
+/** @deprecated Alias — use maybeSchedulePaymentWhatsAppAfterCollect */
+function maybeScheduleAcceptedWhatsAppAfterCollect(order, paymentInfo = {}) {
+  maybeSchedulePaymentWhatsAppAfterCollect(order, paymentInfo);
 }
 
 async function buildOrderAcceptedWhatsAppDetails(order) {
@@ -1227,7 +1233,13 @@ const addNewPayment = catchAsync(async (req, res) => {
   });
 
   if (result.hasCollected) {
-    maybeScheduleAcceptedWhatsAppAfterCollect(result.order);
+    const lastCollected =
+      [...result.savedPayments].reverse().find((p) => p.paymentStatus === "COLLECTED") ||
+      result.savedPayments[result.savedPayments.length - 1];
+    maybeSchedulePaymentWhatsAppAfterCollect(result.order, {
+      paidAmount: lastCollected?.paidAmount,
+      modeOfPayment: lastCollected?.modeOfPayment,
+    });
   }
 
   const message =
@@ -1282,7 +1294,13 @@ const addBatchPayments = catchAsync(async (req, res) => {
   });
 
   if (result.hasCollected) {
-    maybeScheduleAcceptedWhatsAppAfterCollect(result.order);
+    const lastCollected =
+      [...result.savedPayments].reverse().find((p) => p.paymentStatus === "COLLECTED") ||
+      result.savedPayments[result.savedPayments.length - 1];
+    maybeSchedulePaymentWhatsAppAfterCollect(result.order, {
+      paidAmount: lastCollected?.paidAmount,
+      modeOfPayment: lastCollected?.modeOfPayment,
+    });
   }
 
   const count = result.savedPayments.length;
@@ -1601,7 +1619,7 @@ const updatePaymentStatus = async (req, res, next) => {
     // Prevent OFFICE_ADMIN from changing payment status to COLLECTED (accountant/super admin only)
     // Prioritize jobTitle over role
     const userRole = req.user?.jobTitle || req.user?.role;
-    if (userRole === "OFFICE_ADMIN" && paymentStatus === "COLLECTED") {
+    if ((userRole === "OFFICE_ADMIN" || userRole === "RAM_AGRI_MASTER") && paymentStatus === "COLLECTED") {
       return res.status(403).json({
         message: "OFFICE_ADMIN cannot change payment status to COLLECTED. Contact an Accountant or Super Admin.",
       });
@@ -1690,9 +1708,6 @@ const updatePaymentStatus = async (req, res, next) => {
 
     const previousPaymentStatus = payment.paymentStatus;
     if (previousPaymentStatus === paymentStatus) {
-      if (paymentStatus === "COLLECTED") {
-        maybeScheduleAcceptedWhatsAppAfterCollect(order);
-      }
       return res.status(200).json({
         success: true,
         message: "Payment status unchanged.",
@@ -1820,8 +1835,11 @@ const updatePaymentStatus = async (req, res, next) => {
       console.error('   Stack:', notificationError.stack);
     }
 
-    if (paymentStatus === "COLLECTED") {
-      maybeScheduleAcceptedWhatsAppAfterCollect(order);
+    if (paymentStatus === "COLLECTED" && previousPaymentStatus !== "COLLECTED") {
+      maybeSchedulePaymentWhatsAppAfterCollect(order, {
+        paidAmount: payment.paidAmount,
+        modeOfPayment: payment.modeOfPayment,
+      });
     }
 
     return res.status(200).json({
@@ -2598,6 +2616,46 @@ const getAllPayments = catchAsync(async (req, res, next) => {
       });
     }
 
+    // Total count for pagination — computed on the filtered-but-not-yet-joined pipeline
+    // (before the display-only lookups/project below) so infinite scroll on the payments
+    // dashboard knows when it has reached the end.
+    const countPipeline = [...pipeline, { $count: "count" }];
+    const summaryPipeline = [
+      ...pipeline,
+      {
+        $group: {
+          _id: null,
+          paidAmountSum: {
+            $sum: { $toDouble: { $ifNull: ["$payment.paidAmount", 0] } },
+          },
+          pendingCount: {
+            $sum: {
+              $cond: [{ $eq: ["$payment.paymentStatus", "PENDING"] }, 1, 0],
+            },
+          },
+          collectedCount: {
+            $sum: {
+              $cond: [
+                {
+                  $in: [
+                    "$payment.paymentStatus",
+                    ["COLLECTED", "BANK_VERIFIED"],
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          rejectedCount: {
+            $sum: {
+              $cond: [{ $eq: ["$payment.paymentStatus", "REJECTED"] }, 1, 0],
+            },
+          },
+        },
+      },
+    ];
+
     // Common lookups
     pipeline.push(
       {
@@ -2708,12 +2766,22 @@ const getAllPayments = catchAsync(async (req, res, next) => {
       } 
     });
     pipeline.push({ $skip: skip });
-    pipeline.push({ $limit: parseInt(limit, 10) });
+    const limitNum = parseInt(limit, 10) || 25;
+    pipeline.push({ $limit: limitNum });
 
     // Execute the pipeline with error handling
     let results;
+    let total = 0;
+    let summary = null;
     try {
-      results = await Order.aggregate(pipeline);
+      const [dataResult, countResult, summaryResult] = await Promise.all([
+        Order.aggregate(pipeline),
+        Order.aggregate(countPipeline),
+        Order.aggregate(summaryPipeline),
+      ]);
+      results = dataResult;
+      total = countResult[0]?.count || 0;
+      summary = summaryResult[0] || null;
     } catch (aggregateError) {
       console.error("Aggregation error:", aggregateError);
       return res.status(500).json({ 
@@ -2729,11 +2797,26 @@ const getAllPayments = catchAsync(async (req, res, next) => {
       return { id: _id, _id, ...rest };
     });
 
+    const pageNum = parseInt(page, 10) || 1;
     const response = generateResponse(
       "Success",
       "Payments found successfully",
       transformedResults,
-      undefined
+      undefined,
+      {
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.max(1, Math.ceil(total / Math.max(1, limitNum))),
+        },
+        summary: {
+          paidAmountSum: Number(summary?.paidAmountSum) || 0,
+          pendingCount: Number(summary?.pendingCount) || 0,
+          collectedCount: Number(summary?.collectedCount) || 0,
+          rejectedCount: Number(summary?.rejectedCount) || 0,
+        },
+      }
     );
 
     return res.status(200).json(response);
@@ -4313,121 +4396,69 @@ export const listOrderWhatsappOutboundController = catchAsync(async (req, res) =
  */
 export const sendOrderDispatchWhatsAppController = catchAsync(async (req, res) => {
   const { orderId } = req.params;
-  const order = await Order.findById(orderId)
-    .populate("farmer", "name mobileNumber village")
-    .populate("salesPerson", "name phoneNumber jobTitle")
-    .populate("plantName", "name");
-  if (!order) {
+  const { ensureOrderDispatchWhatsAppOnce } = await import(
+    "../services/orderDispatchWhatsApp.service.js"
+  );
+  const allowManualResend = isWhatsappManualResendAllowed(req);
+  const result = await ensureOrderDispatchWhatsAppOnce(orderId, { allowManualResend });
+
+  if (result.reason === "order_not_found") {
     return res.status(404).json({ message: "Order not found" });
   }
-  if (order.whatsappDispatchSentAt && !isWhatsappManualResendAllowed(req)) {
+  if (result.alreadySent) {
     return res.status(200).json(
       generateResponse("Success", "WhatsApp dispatch message was already sent for this order", {
         alreadySent: true,
-        whatsappDispatchSentAt: order.whatsappDispatchSentAt,
-        whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
+        whatsappDispatchSentAt: result.whatsappDispatchSentAt,
+        whatsappDispatchMessageKey: result.whatsappDispatchMessageKey || null,
       }, undefined)
     );
   }
-  const history = Array.isArray(order.dispatchHistory) ? order.dispatchHistory : [];
-  const dispatchedSum = history.reduce((s, h) => s + (Number(h.quantity) || 0), 0);
-  const totalPlants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
-  const totalDispatched =
-    dispatchedSum > 0 ? dispatchedSum : order.orderStatus === "DISPATCHED" ? totalPlants : 0;
-  if (totalDispatched <= 0) {
+  if (result.reason === "no_dispatch_recorded") {
     return res.status(400).json({ message: "No dispatch recorded for this order yet" });
   }
-  if (!order.publicOrderCode) {
-    await Order.ensurePublicOrderCode(order);
-    await order.save();
+  if (result.reason === "dealer_no_phone") {
+    return res.status(400).json({
+      message: "Dealer order has no salesperson with a valid mobile number for WhatsApp",
+    });
   }
-  const latest = history.length > 0 ? history[history.length - 1] : null;
-  const dispatchDate = latest?.date || new Date();
-  const plantSubtypeName = await resolveOrderPlantSubtypeName(order);
-  const details = {
-    orderId: order.orderId,
-    publicOrderCode: order.publicOrderCode,
-    plantName: order.plantName?.name || "Plants",
-    plantSubtype: plantSubtypeName,
-    totalDispatched,
-    driverName: latest?.driverName || "N/A",
-    driverNumber: latest?.driverMobile || latest?.dispatch?.driverMobile || "N/A",
-    vehicleNumber: latest?.vehicleName || "N/A",
-    dispatchDate,
-    deliveryDate: order.deliveryDate,
-  };
-
-  if (order.dealerOrder) {
-    const dealerRec = dealerWhatsAppRecipient(order);
-    if (!dealerRec) {
-      return res.status(400).json({
-        message: "Dealer order has no salesperson with a valid mobile number for WhatsApp",
-      });
-    }
-    console.log(
-      `[WATI dispatch] Dealer order → ${dealerRec.sendToName || "dealer"} ${dealerRec.mobileNumber}; template customer: ${dealerRec.name} (${dealerRec.village})`
-    );
-    const result = await sendOrderDispatchedWhatsAppDelivery1(dealerRec, details);
-    if (result.success) {
-      order.whatsappDispatchSentAt = new Date();
-      const msgKey = extractWatiLocalMessageId(result.data);
-      if (msgKey) order.whatsappDispatchMessageKey = String(msgKey);
-      await order.save();
-      return res.status(200).json(
-        generateResponse("Success", "WhatsApp dispatch message sent successfully", {
-          ...result.data,
-          stored: {
-            whatsappDispatchSentAt: order.whatsappDispatchSentAt,
-            whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
-          },
-          farmerSent: false,
-          dealerSent: true,
-        }, undefined)
-      );
-    }
-    return res.status(500).json(generateResponse("Error", result.error?.message || "Failed to send message", null, result.error));
-  }
-
-  const farmerRec = farmerWhatsAppRecipient(order);
-  if (!farmerRec) {
+  if (result.reason === "farmer_no_phone") {
     return res.status(400).json({
       message: "Order has no farmer with mobile number — farmer WhatsApp is required for this order",
     });
   }
-  const farmerResult = await sendOrderDispatchedWhatsAppDelivery1(farmerRec, details);
-  if (!farmerResult.success) {
-    return res.status(500).json(
-      generateResponse("Error", farmerResult.error?.message || "Failed to send message", null, farmerResult.error)
-    );
+  if (result.reason === "wati_failed") {
+    const msg =
+      result.error?.message ||
+      (typeof result.error === "string" ? result.error : "Failed to send message");
+    return res.status(500).json(generateResponse("Error", msg, null, result.error));
   }
-  order.whatsappDispatchSentAt = new Date();
-  const farmerMsgKey = extractWatiLocalMessageId(farmerResult.data);
-  if (farmerMsgKey) order.whatsappDispatchMessageKey = String(farmerMsgKey);
-  await order.save();
+  if (result.skipped) {
+    return res.status(400).json({ message: result.reason || "Could not send WhatsApp" });
+  }
 
-  let dealerAlsoSent = false;
-  let dealerSendNote = null;
-  const dealerRec = dealerWhatsAppRecipient(order);
-  if (dealerRec && watiPhonesDiffer(farmerRec.mobileNumber, dealerRec.mobileNumber)) {
-    const dealerResult = await sendOrderDispatchedWhatsAppDelivery1(dealerRec, details);
-    dealerAlsoSent = Boolean(dealerResult.success);
-    if (!dealerResult.success) {
-      dealerSendNote =
-        dealerResult.error?.message ||
-        (typeof dealerResult.error === "string" ? dealerResult.error : "Dealer copy failed");
-    }
+  if (result.dealerSent && !result.farmerSent) {
+    return res.status(200).json(
+      generateResponse("Success", "WhatsApp dispatch message sent successfully", {
+        stored: {
+          whatsappDispatchSentAt: result.whatsappDispatchSentAt,
+          whatsappDispatchMessageKey: result.whatsappDispatchMessageKey || null,
+        },
+        farmerSent: false,
+        dealerSent: true,
+      }, undefined)
+    );
   }
 
   return res.status(200).json(
     generateResponse("Success", "WhatsApp dispatch message sent successfully", {
-      ...farmerResult.data,
       stored: {
-        whatsappDispatchSentAt: order.whatsappDispatchSentAt,
-        whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
+        whatsappDispatchSentAt: result.whatsappDispatchSentAt,
+        whatsappDispatchMessageKey: result.whatsappDispatchMessageKey || null,
       },
       farmerSent: true,
-      dealerAlsoSent,
-      ...(dealerSendNote ? { dealerSendWarning: dealerSendNote } : {}),
+      dealerAlsoSent: result.dealerAlsoSent,
+      ...(result.dealerSendWarning ? { dealerSendWarning: result.dealerSendWarning } : {}),
     }, undefined)
   );
 });

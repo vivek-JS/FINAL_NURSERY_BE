@@ -37,6 +37,24 @@ import {
   normalizePhoneForWhitelist,
 } from "../utils/agriLoadLinkSigner.js";
 import { pushAgriActivityAndEmit } from "../utils/orderEventDualWrite.js";
+import { mergeAgriOldFilter, resolveAgriOldFilter } from "../utils/agriOrderEra.util.js";
+import { scheduleAgriOrderPaymentWhatsApp } from "../services/orderPaymentWhatsapp.service.js";
+import { scheduleStockChangeAlert } from "../services/stockWhatsappAlert.service.js";
+
+const triggerNurseryDcRetryAfterAgriLoaded = (linkedNurseryOrderId, changedBy = "System") => {
+  const nurseryId = linkedNurseryOrderId?._id ?? linkedNurseryOrderId;
+  if (!nurseryId) return;
+  (async () => {
+    try {
+      const { retryNurseryOrderDcAfterAgriLoaded } = await import(
+        "../services/dispatchPostLoadFinalize.service.js"
+      );
+      await retryNurseryOrderDcAfterAgriLoaded(nurseryId, { changedBy });
+    } catch (e) {
+      console.error("agri-loaded DC retry:", e?.message || e);
+    }
+  })();
+};
 
 /** Push Agri activityLog entry and mirror to OrderEvent collection. */
 function logAgriActivity(order, entry, ctx = {}) {
@@ -208,6 +226,8 @@ const isRamAgriSalesProgramLead = (user) => {
   return (
     jt === "RAM_AGRI_SALES_MANAGER" ||
     r === "RAM_AGRI_SALES_MANAGER" ||
+    jt === "RAM_AGRI_MASTER" ||
+    r === "RAM_AGRI_MASTER" ||
     isRamAgriSalesOfficeManager(user)
   );
 };
@@ -218,6 +238,8 @@ const isRamAgriLoadAdmin = (user) => {
   return (
     role === "SUPER_ADMIN" ||
     role === "ADMIN" ||
+    role === "RAM_AGRI_MASTER" ||
+    jobTitle === "RAM_AGRI_MASTER" ||
     role === "RAM_AGRI_SALES_MANAGER" ||
     jobTitle === "RAM_AGRI_SALES_MANAGER" ||
     isRamAgriSalesOfficeManager(user)
@@ -382,6 +404,27 @@ async function deductStockForAgriOrderLines(order, orderNumber, userId) {
       }
       persistLineBatchAllocations(order, li, ded.allocations);
       batchBreakdown.push({ lineIndex: li, productName: line.productName, allocations: ded.allocations });
+
+      const cropAfter = await RamAgriInputsProduct.findById(line.ramAgriCropId)
+        .populate("varieties.primaryUnit", "name abbreviation");
+      const varietyAfter = cropAfter?.varieties?.id(line.ramAgriVarietyId);
+      const unitLabel =
+        varietyAfter?.primaryUnit?.abbreviation ||
+        varietyAfter?.primaryUnit?.name ||
+        "";
+      scheduleStockChangeAlert({
+        changeType: "outward",
+        productName:
+          [line.ramAgriCropName || cropAfter?.cropName, line.ramAgriVarietyName || varietyAfter?.name]
+            .filter(Boolean)
+            .join(" - ") || line.productName || "Ram Agri",
+        quantity: qty,
+        unit: unitLabel,
+        oldStock: stockBefore,
+        newStock: varietyAfter?.currentStock,
+        referenceNumber: orderNumber,
+        source: "Agri Sales Dispatch",
+      });
     } else if (line.productId) {
       const product = await InventoryProduct.findById(line.productId);
       if (!product) continue;
@@ -412,6 +455,17 @@ async function deductStockForAgriOrderLines(order, orderNumber, userId) {
         issuedBy: userId,
         notes: `Ram Agri Sales Order: ${orderNumber} (Dispatched)`,
         status: "issued",
+      });
+
+      scheduleStockChangeAlert({
+        changeType: "outward",
+        productName: line.productName || product.name,
+        quantity: qty,
+        unit: product.unit || "",
+        oldStock: stockBefore,
+        newStock: product.currentStock,
+        referenceNumber: orderNumber,
+        source: "Agri Sales Dispatch",
       });
     }
   }
@@ -597,6 +651,18 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
   const userId = req.user?._id || req.user?.id;
   if (!userId) {
     return next(new AppError("User authentication required. Please login to create orders.", 401));
+  }
+
+  if (
+    processedPayments.some((p) => p.paymentStatus === "COLLECTED") &&
+    !canCollectAgriPayment(req.user)
+  ) {
+    return next(
+      new AppError(
+        "Only Ram Agri Input Master, Accountant, or Super Admin can record collected agri payments on create",
+        403
+      )
+    );
   }
 
   const salesPersonId = await resolveAgriOrderSalesPersonId(req, salesPersonBody);
@@ -824,6 +890,13 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     }
   }
 
+  for (const payment of (order.payment || []).filter((p) => p.paymentStatus === "COLLECTED")) {
+    scheduleAgriOrderPaymentWhatsApp(order._id, {
+      paidAmount: payment.paidAmount,
+      modeOfPayment: payment.modeOfPayment,
+    });
+  }
+
   if (useMultiLine) {
     await order.populate([
       { path: "lineItems.productId" },
@@ -1011,78 +1084,14 @@ const markLinkedAgriLoaded = catchAsync(async (req, res, next) => {
   });
   await order.save();
 
+  triggerNurseryDcRetryAfterAgriLoaded(
+    order.linkedNurseryOrderId,
+    req.user?.name || req.user?.email || "Agri admin"
+  );
+
   return res.status(200).json(
     generateResponse("Success", "Linked agri order marked as loaded", order, undefined)
   );
-});
-
-const markLinkedAgriLoadedViaLink = catchAsync(async (req, res, next) => {
-  const { orderNumber, actorPhone } = req.query || {};
-  const normalizedOrderNumber = String(orderNumber || "").trim().toUpperCase();
-  const normalizedActorPhone = normalizePhoneForWhitelist(actorPhone || "");
-
-  if (!normalizedOrderNumber) {
-    return next(new AppError("orderNumber is required", 400));
-  }
-  const whitelist = new Set(getAgriLoadWhitelist());
-  if (!normalizedActorPhone || !whitelist.has(normalizedActorPhone)) {
-    console.warn("[Agri Load Link] denied (whitelist):", {
-      orderNumber: normalizedOrderNumber,
-      actorPhone: normalizedActorPhone,
-      whitelistCount: whitelist.size,
-    });
-    return res
-      .status(403)
-      .type("text/html")
-      .send("<h3>Not authorized for this action.</h3>");
-  }
-
-  const order = await AgriSalesOrder.findOne({ orderNumber: normalizedOrderNumber });
-  if (!order) {
-    return res.status(404).type("text/html").send("<h3>Agri order not found.</h3>");
-  }
-  if (!order.linkedNurseryOrderId) {
-    return res
-      .status(400)
-      .type("text/html")
-      .send("<h3>This agri order is not linked to nursery order.</h3>");
-  }
-
-  if (String(order.agriLoadStatus || "").toUpperCase() !== "LOADED") {
-    const fallbackUser = await User.findOne({
-      $or: [{ role: "SUPER_ADMIN" }, { jobTitle: "SUPER_ADMIN" }],
-    })
-      .select("_id name")
-      .lean();
-    if (!fallbackUser?._id) {
-      return res
-        .status(500)
-        .type("text/html")
-        .send("<h3>Cannot resolve audit user for one-click action.</h3>");
-    }
-
-    order.agriLoadStatus = "LOADED";
-    order.loadedAt = new Date();
-    order.loadedBy = fallbackUser._id;
-    logAgriActivity(order,{
-      action: "DISPATCH_UPDATED",
-      description: `Agri load marked as LOADED via one-click link by ${normalizedActorPhone}.`,
-      performedBy: fallbackUser._id,
-      performedByName: fallbackUser?.name || `LINK:${normalizedActorPhone}`,
-      metadata: {
-        agriLoadStatus: "LOADED",
-        loadedAt: order.loadedAt,
-        source: "WHATSAPP_ONE_CLICK",
-        actorPhone: normalizedActorPhone,
-      },
-    });
-    await order.save();
-  }
-
-  return res
-    .status(200)
-    .type("text/html")
-    .send(`<h3>Success: ${order.orderNumber} marked as LOADED.</h3>`);
 });
 
 const getLinkedOrdersByNurseryOrder = catchAsync(async (req, res, next) => {
@@ -1448,9 +1457,10 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
     customerVillage, // Filter by village
     customerTaluka, // Filter by taluka
     customerDistrict, // Filter by district
+    isOld,
   } = req.query;
 
-  let query = AgriSalesOrder.find();
+  let query = AgriSalesOrder.find(resolveAgriOldFilter(isOld));
 
   // User-wise filtering: Show only orders created by current user if myOrders=true
   if (myOrders === "true" || myOrders === true) {
@@ -1594,6 +1604,7 @@ const getOutstandingAgriSalesOrders = catchAsync(async (req, res, next) => {
     page = 1,
     limit = 20,
     createdBy,
+    isOld,
   } = req.query;
 
   // Build aggregation pipeline to calculate balanceAmount
@@ -1602,8 +1613,9 @@ const getOutstandingAgriSalesOrders = catchAsync(async (req, res, next) => {
   // Match only COMPLETED orders (no date filter for outstanding)
   pipeline.push({
     $match: {
-      orderStatus: "COMPLETED"
-    }
+      orderStatus: "COMPLETED",
+      ...resolveAgriOldFilter(isOld),
+    },
   });
 
   // Add search filter if provided
@@ -1951,6 +1963,21 @@ const generatePaymentQRAgri = catchAsync(async (req, res, next) => {
 
 // ==================== UPDATE PAYMENT STATUS ====================
 
+const canCollectAgriPayment = (user) => {
+  const jt = String(user?.jobTitle || "").toUpperCase().trim();
+  const role = String(user?.role || "").toUpperCase().trim();
+  return (
+    jt === "RAM_AGRI_MASTER" ||
+    role === "RAM_AGRI_MASTER" ||
+    jt === "ACCOUNTANT" ||
+    role === "ACCOUNTANT" ||
+    jt === "SUPER_ADMIN" ||
+    jt === "SUPERADMIN" ||
+    role === "SUPER_ADMIN" ||
+    role === "SUPERADMIN"
+  );
+};
+
 const updatePaymentStatus = catchAsync(async (req, res, next) => {
   const { id, paymentIndex } = req.params;
   const { paymentStatus } = req.body;
@@ -1973,9 +2000,36 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
     return next(new AppError("Invalid payment index", 400));
   }
 
-  // Store previous status for activity log
   const previousPaymentStatus = order.payment[index].paymentStatus;
   const paymentAmount = order.payment[index].paidAmount;
+
+  // Collect / reject / bank-verify: Master (agri only), accountant, or super admin
+  if (
+    ["COLLECTED", "REJECTED", "BANK_VERIFIED"].includes(paymentStatus) &&
+    !canCollectAgriPayment(req.user)
+  ) {
+    return next(
+      new AppError(
+        "Only Ram Agri Input Master, Accountant, or Super Admin can update agri payment status",
+        403
+      )
+    );
+  }
+
+  // Uncollect (revert COLLECTED → PENDING/REJECTED): Ram Agri Input collectors only
+  if (
+    previousPaymentStatus === "COLLECTED" &&
+    paymentStatus !== "COLLECTED" &&
+    !canCollectAgriPayment(req.user)
+  ) {
+    return next(
+      new AppError(
+        "Only Ram Agri Input Master, Accountant, or Super Admin can cancel collected agri payments",
+        403
+      )
+    );
+  }
+
   const activityLogLength = order.activityLog ? order.activityLog.length : 0;
 
   // Update payment status
@@ -2071,6 +2125,13 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
     order,
     undefined
   );
+
+  if (previousPaymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
+    scheduleAgriOrderPaymentWhatsApp(order._id, {
+      paidAmount: paymentAmount,
+      modeOfPayment: order.payment[index].modeOfPayment,
+    });
+  }
 
   return res.status(200).json(response);
 });
@@ -2488,9 +2549,10 @@ const getPendingPayments = catchAsync(async (req, res, next) => {
     startDate,
     endDate,
     paymentStatus = "PENDING",
+    isOld,
   } = req.query;
 
-  const query = {};
+  const query = mergeAgriOldFilter({}, isOld);
 
   // Search filtering (on order fields, not payment)
   if (search) {
@@ -2631,7 +2693,9 @@ const getPendingPayments = catchAsync(async (req, res, next) => {
 
 const getPendingPaymentsCount = catchAsync(async (req, res, next) => {
   try {
+    const { isOld } = req.query;
     const count = await AgriSalesOrder.aggregate([
+      { $match: resolveAgriOldFilter(isOld) },
       { $unwind: { path: "$payment", preserveNullAndEmptyArrays: false } },
       { $match: { "payment.paymentStatus": "PENDING" } },
       { $count: "total" },
@@ -2656,21 +2720,24 @@ const getPendingPaymentsCount = catchAsync(async (req, res, next) => {
 // Get outstanding amounts grouped by salesmen, district, taluka, villages
 
 const getOutstandingAnalysis = catchAsync(async (req, res, next) => {
-  const { startDate, endDate, createdBy } = req.query;
+  const { startDate, endDate, createdBy, isOld } = req.query;
 
   try {
     // Build match query
-    const matchQuery = {
-      balanceAmount: { $gt: 0 }, // Only orders with outstanding balance
-    };
+    const matchQuery = mergeAgriOldFilter(
+      {
+        balanceAmount: { $gt: 0 }, // Only orders with outstanding balance
+      },
+      isOld
+    );
 
-    // If logged-in user has jobTitle RAM_AGRI_SALES, filter by their user ID
-    // RAM_AGRI_SALES_MANAGER can see all orders (no filter)
-    // Otherwise, use the createdBy query parameter if provided
-    if (req.user && req.user.jobTitle === "RAM_AGRI_SALES") {
+    // Field sales: own outstanding only. Leads/master/superadmin: all (optional createdBy).
+    const jt = String(req.user?.jobTitle || "").toUpperCase().trim();
+    const role = String(req.user?.role || "").toUpperCase().trim();
+    if (req.user && (jt === "RAM_AGRI_SALES" || role === "RAM_AGRI_SALES") && !isRamAgriSalesProgramLead(req.user)) {
       matchQuery.createdBy = req.user._id;
     } else if (req.user && isRamAgriSalesProgramLead(req.user)) {
-      // Manager / Ram Agri office manager: all orders; optional createdBy filter
+      // Manager / Master / office manager: all orders; optional createdBy filter
       if (createdBy && mongoose.isValidObjectId(createdBy)) {
         matchQuery.createdBy = new mongoose.Types.ObjectId(createdBy);
       }
@@ -2797,11 +2864,11 @@ const getOutstandingAnalysis = catchAsync(async (req, res, next) => {
 // Get sales analysis grouped by salesmen, district, taluka, village
 
 const getSalesAnalysis = catchAsync(async (req, res, next) => {
-  const { startDate, endDate, createdBy } = req.query;
+  const { startDate, endDate, createdBy, isOld } = req.query;
 
   try {
     // Build match query (all orders, not just outstanding)
-    const matchQuery = {};
+    const matchQuery = mergeAgriOldFilter({}, isOld);
 
     if (createdBy && mongoose.isValidObjectId(createdBy)) {
       matchQuery.createdBy = new mongoose.Types.ObjectId(createdBy);
@@ -2931,12 +2998,23 @@ const getSalesAnalysis = catchAsync(async (req, res, next) => {
 // Get outstanding amounts grouped by customer (farmer)
 
 const getCustomerOutstanding = catchAsync(async (req, res, next) => {
-  const { startDate, endDate } = req.query;
+  const { startDate, endDate, createdBy, isOld } = req.query;
 
   try {
-    const matchQuery = {
-      balanceAmount: { $gt: 0 },
-    };
+    const matchQuery = mergeAgriOldFilter(
+      {
+        balanceAmount: { $gt: 0 },
+      },
+      isOld
+    );
+
+    const jt = String(req.user?.jobTitle || "").toUpperCase().trim();
+    const role = String(req.user?.role || "").toUpperCase().trim();
+    if (req.user && (jt === "RAM_AGRI_SALES" || role === "RAM_AGRI_SALES") && !isRamAgriSalesProgramLead(req.user)) {
+      matchQuery.createdBy = req.user._id;
+    } else if (createdBy && mongoose.isValidObjectId(createdBy)) {
+      matchQuery.createdBy = new mongoose.Types.ObjectId(createdBy);
+    }
 
     if (startDate || endDate) {
       matchQuery.orderDate = {};
@@ -3130,6 +3208,7 @@ const getAssignedOrders = catchAsync(async (req, res, next) => {
     limit = 100,
     search,
     assignedTo, // Optional: filter by specific user (admin view)
+    isOld,
   } = req.query;
 
   const userId = req.user?._id || req.user?.id;
@@ -3137,11 +3216,14 @@ const getAssignedOrders = catchAsync(async (req, res, next) => {
   const userJobTitle = req.user?.jobTitle;
 
   // Build query
-  let query = {
-    orderStatus: "ASSIGNED", // Only show orders with ASSIGNED status
-    dispatchStatus: "NOT_DISPATCHED", // Only show orders not yet dispatched
-    assignedTo: { $exists: true, $ne: null }, // Must be assigned
-  };
+  let query = mergeAgriOldFilter(
+    {
+      orderStatus: "ASSIGNED", // Only show orders with ASSIGNED status
+      dispatchStatus: "NOT_DISPATCHED", // Only show orders not yet dispatched
+      assignedTo: { $exists: true, $ne: null }, // Must be assigned
+    },
+    isOld
+  );
 
   // If user is a sales person, only show their assigned orders
   // RAM_AGRI_SALES_MANAGER can see all orders (no filter)
@@ -4784,12 +4866,18 @@ const getOrdersForDispatch = catchAsync(async (req, res, next) => {
     customerDistrict,
     startDate,
     endDate,
+    isOld,
   } = req.query;
 
-  let query = AgriSalesOrder.find({
-    orderStatus: "ACCEPTED",
-    dispatchStatus: "NOT_DISPATCHED",
-  });
+  let query = AgriSalesOrder.find(
+    mergeAgriOldFilter(
+      {
+        orderStatus: "ACCEPTED",
+        dispatchStatus: "NOT_DISPATCHED",
+      },
+      isOld
+    )
+  );
 
   // Search filter
   if (search) {
@@ -4879,11 +4967,12 @@ const getDispatchedOrders = catchAsync(async (req, res, next) => {
     dispatchStatus, // DISPATCHED, IN_TRANSIT, DELIVERED
     startDate,
     endDate,
+    isOld,
   } = req.query;
 
-  let query = AgriSalesOrder.find({
-    dispatchStatus: { $ne: "NOT_DISPATCHED" },
-  });
+  let query = AgriSalesOrder.find(
+    mergeAgriOldFilter({ dispatchStatus: { $ne: "NOT_DISPATCHED" } }, isOld)
+  );
 
   // Filter by specific dispatch status
   if (dispatchStatus && ["DISPATCHED", "IN_TRANSIT", "DELIVERED"].includes(dispatchStatus)) {
@@ -5102,7 +5191,6 @@ export {
   getOrdersForDispatch,
   getDispatchedOrders,
   markLinkedAgriLoaded,
-  markLinkedAgriLoadedViaLink,
   getLinkedOrdersByNurseryOrder,
   getTodayPendingLinkedLoads,
   getDispatchLoadStatus,

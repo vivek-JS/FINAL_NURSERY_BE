@@ -3,6 +3,7 @@ import Batch from '../models/batch.model.js';
 import Product from '../models/product.model.js';
 import PurchaseOrder from '../models/purchaseOrder.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
+import { scheduleStockInwardAlert } from '../services/stockWhatsappAlert.service.js';
 
 // Helper function to create inventory transaction
 const createInventoryTransaction = async (item, grn, user, balanceBefore, balanceAfter) => {
@@ -267,6 +268,17 @@ export const approveGRN = async (req, res) => {
           if (ramBatch) {
             item.ramAgriBatch = ramBatch._id;
             item.batchNumber = ramBatch.batchNumber;
+            scheduleStockInwardAlert({
+              productName:
+                [item.ramAgriCropName, item.ramAgriVarietyName].filter(Boolean).join(" - ") ||
+                "Ram Agri Product",
+              quantity: item.acceptedQuantity,
+              unit: item.unit?.name || item.unit || "",
+              referenceNumber: grn.grnNumber,
+              newStock: ramBatch.remainingQuantity ?? item.acceptedQuantity,
+              performedByName: req.user?.name || "System",
+              source: "GRN Approve (Ram Agri)",
+            });
           }
           continue;
         }
@@ -377,6 +389,16 @@ export const approveGRN = async (req, res) => {
 
         // Create inventory transaction with correct balance values
         await createInventoryTransaction(item, grn, req.user, oldStock, product.currentStock);
+
+        scheduleStockInwardAlert({
+          productName: item.productName || product.name || "Product",
+          quantity: item.acceptedQuantity,
+          unit: item.unit?.name || item.unit || "",
+          referenceNumber: grn.grnNumber,
+          newStock: product.currentStock,
+          performedByName: req.user?.name || "System",
+          source: "GRN Approve",
+        });
 
         // Update slot availablePlants and productStock if slotId is provided
         if (item.slotId) {

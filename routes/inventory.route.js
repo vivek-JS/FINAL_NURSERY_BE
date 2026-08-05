@@ -52,6 +52,10 @@ import {
   getCustomerOutstanding as getAgriSalesCustomerOutstanding,
 } from "../controllers/agriSalesOrder.controller.js";
 import { getRamAgriSalesDashboard } from "../controllers/ramAgriSalesDashboard.controller.js";
+import {
+  getRamAgriDailyClosingStock,
+  upsertRamAgriDailyClosingStock,
+} from "../controllers/ramAgriDailyClosingStock.controller.js";
 import { getRamAgriSalesRankboard } from "../controllers/ramAgriSalesRankboard.controller.js";
 import {
   getVarietyLedger,
@@ -376,6 +380,8 @@ router.get("/change-logs/:entityType/:entityId", getChangeLogsByEntity);
 
 // ==================== RAM AGRI SALES DASHBOARD ====================
 router.get("/ram-agri-sales-dashboard", getRamAgriSalesDashboard);
+router.get("/ram-agri-daily-closing-stock", getRamAgriDailyClosingStock);
+router.post("/ram-agri-daily-closing-stock", upsertRamAgriDailyClosingStock);
 router.get("/ram-agri-sales-rankboard", getRamAgriSalesRankboard);
 router
   .get("/ram-agri-sales-targets", getRamAgriSalesTargets)

@@ -4,6 +4,7 @@ import generateResponse from "../utility/responseFormat.js";
 import APIFeatures from "../utility/apiFeatures.js";
 import { InventoryProduct, InventoryBatch, InventoryInward, InventoryOutwardTransaction, StockAdjustment } from "../models/inventory.model.js";
 import mongoose from "mongoose";
+import { scheduleStockInwardAlert, scheduleStockChangeAlert } from "../services/stockWhatsappAlert.service.js";
 
 // ==================== PRODUCT CONTROLLERS ====================
 
@@ -451,8 +452,21 @@ const createInward = catchAsync(async (req, res, next) => {
   });
 
   // Update product current stock
-  await InventoryProduct.findByIdAndUpdate(productId, {
-    $inc: { currentStock: quantity },
+  const updatedProduct = await InventoryProduct.findByIdAndUpdate(
+    productId,
+    { $inc: { currentStock: quantity } },
+    { new: true }
+  );
+
+  scheduleStockInwardAlert({
+    productName: product.name,
+    quantity,
+    unit: product.unit || "",
+    referenceNumber: invoiceNumber || inward._id?.toString(),
+    supplierName: typeof supplier === "object" ? supplier?.name : supplier || "",
+    newStock: updatedProduct?.currentStock,
+    performedByName: req.user?.name || "System",
+    source: "Inventory Inward",
   });
 
   const response = generateResponse(
@@ -602,8 +616,22 @@ const createOutward = catchAsync(async (req, res, next) => {
   }
 
   // Update product current stock
-  await InventoryProduct.findByIdAndUpdate(productId, {
-    $inc: { currentStock: -quantity },
+  const updatedProduct = await InventoryProduct.findByIdAndUpdate(
+    productId,
+    { $inc: { currentStock: -quantity } },
+    { new: true }
+  );
+
+  scheduleStockChangeAlert({
+    changeType: "outward",
+    productName: product.name,
+    quantity,
+    unit: product.unit || "",
+    referenceNumber: outward._id?.toString(),
+    newStock: updatedProduct?.currentStock,
+    performedByName: req.user?.name || issuedBy || "System",
+    source: "Inventory Outward",
+    notes: purpose || notes || undefined,
   });
 
   const response = generateResponse(
@@ -749,9 +777,11 @@ const createStockAdjustment = catchAsync(async (req, res, next) => {
   });
 
   // Update product current stock
-  await InventoryProduct.findByIdAndUpdate(productId, {
-    $inc: { currentStock: stockChange },
-  });
+  const updatedProduct = await InventoryProduct.findByIdAndUpdate(
+    productId,
+    { $inc: { currentStock: stockChange } },
+    { new: true }
+  );
 
   // Update batch remaining quantity if batch is specified
   if (batch && adjustmentType !== "correction") {
@@ -759,6 +789,19 @@ const createStockAdjustment = catchAsync(async (req, res, next) => {
       $inc: { remainingQuantity: stockChange },
     });
   }
+
+  scheduleStockChangeAlert({
+    changeType: "adjustment",
+    productName: product.name,
+    quantity: stockChange,
+    unit: product.unit || "",
+    referenceNumber: adjustment._id?.toString(),
+    newStock: updatedProduct?.currentStock,
+    adjustmentType,
+    reason: reason || notes,
+    performedByName: req.user?.name || adjustedBy || "System",
+    source: "Stock Adjustment",
+  });
 
   const response = generateResponse(
     "Success",

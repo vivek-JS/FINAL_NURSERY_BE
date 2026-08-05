@@ -26,7 +26,9 @@ const toNumber = (value) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const buildOrderRef = (order = {}) =>
+import { buildAgriLoadConfirmPageUrl } from "./agriLoadLink.service.js";
+
+const buildNurseryOrderRef = (order = {}) =>
   String(
     order?.linkedNurseryOrderCode ||
       order?.linkedNurseryOrderId ||
@@ -34,6 +36,9 @@ const buildOrderRef = (order = {}) =>
       order?._id ||
       "—"
   ).trim();
+
+const buildAgriOrderNumber = (order = {}) =>
+  String(order?.orderNumber || order?.agriOrderNumber || "").trim();
 
 const resolveAgriQty = (order = {}) => {
   const directQty =
@@ -211,11 +216,7 @@ export async function sendWhatsAppMessage(number, message) {
   }
 }
 
-/**
- * Sends a message to ALL admin numbers defined in env.
- * Errors on individual sends are logged but do not abort the others.
- */
-async function alertAdmins(message, context = "alert") {
+export async function alertAdmins(message, context = "alert") {
   if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") {
     console.warn(`[WhatsApp Alert] ${context} skipped — WHATSAPP_ALERTS_ENABLED is not true`);
     return { delivered: 0, total: 0, results: [], reason: "alerts_disabled" };
@@ -474,8 +475,21 @@ const FIELD_LABELS = {
   orderFor: "Order For",
 };
 
+/** Only qty/rate edits trigger admin WhatsApp — not dispatch status, nursery, remaining qty, etc. */
+export const WHATSAPP_ORDER_EDIT_ALERT_FIELDS = new Set([
+  "numberOfPlants",
+  "rate",
+  "additionalPlants",
+]);
+
+export function filterEditHistoryForWhatsAppAlert(editHistory = []) {
+  return (Array.isArray(editHistory) ? editHistory : []).filter(
+    (e) => e?.field && WHATSAPP_ORDER_EDIT_ALERT_FIELDS.has(e.field)
+  );
+}
+
 /**
- * 🟡 Order Updated
+ * 🟡 Order Updated — qty / rate edits only (dispatch status changes are silent).
  * @param {object} order         - updated order document (plain object)
  * @param {string} changedBy     - name of user who made changes
  * @param {Array}  editHistory   - array of { field, previousValue, newValue, notes }
@@ -483,13 +497,18 @@ const FIELD_LABELS = {
  */
 export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHistory = [], existingDoc = null) {
   try {
+    const alertableHistory = filterEditHistoryForWhatsAppAlert(editHistory);
+    if (alertableHistory.length === 0) {
+      return;
+    }
+
     const src = existingDoc || order;
     const farmerName = src?.farmer?.name || src?.orderFor?.name || order?.farmer?.name || "—";
     const village = src?.farmer?.village || src?.orderFor?.village || order?.orderFor?.village || "—";
     const taluka = src?.farmer?.taluka || src?.orderFor?.taluka || order?.orderFor?.taluka || "—";
 
     // Build human-readable change lines from tracked edit history
-    const changeLines = editHistory
+    const changeLines = alertableHistory
       .filter((e) => e?.field && (e.previousValue !== undefined || e.newValue !== undefined))
       .map((e) => {
         const label = FIELD_LABELS[e.field] || e.field;
@@ -592,6 +611,166 @@ export async function sendPaymentReceivedAlert(payment) {
 }
 
 /**
+ * 📦 Stock change alerts — inward, outward, direct, closing, adjustment
+ * @param {object} params
+ * @param {"inward"|"outward"|"direct"|"closing"|"adjustment"} [params.changeType]
+ */
+export async function sendStockChangeAlert({
+  changeType = "inward",
+  productName,
+  quantity,
+  unit,
+  referenceNumber,
+  supplierName,
+  oldStock,
+  newStock,
+  performedByName,
+  source,
+  notes,
+  stockDate,
+  closingStock,
+  systemStock,
+  adjustmentType,
+  reason,
+} = {}) {
+  try {
+    const qty = Number(quantity);
+    const qtyLabel = Number.isFinite(qty)
+      ? qty.toLocaleString("en-IN")
+      : String(quantity ?? "—");
+    const fmt = (n) =>
+      n != null && Number.isFinite(Number(n))
+        ? Number(n).toLocaleString("en-IN")
+        : null;
+
+    let title = "📦 *Stock Inward*";
+    const lines = [`Product: ${productName || "—"}`];
+
+    switch (changeType) {
+      case "outward":
+        title = "📤 *Stock Outward*";
+        lines.push(`Removed: −${qtyLabel}${unit ? ` ${unit}` : ""}`);
+        break;
+      case "direct":
+        title = "🔄 *Direct Stock Update*";
+        if (oldStock != null && newStock != null) {
+          lines.push(`Previous: ${fmt(oldStock)} → New: ${fmt(newStock)}`);
+          const delta = Number(newStock) - Number(oldStock);
+          if (Number.isFinite(delta) && delta !== 0) {
+            lines.push(`Change: ${delta > 0 ? "+" : ""}${delta.toLocaleString("en-IN")}${unit ? ` ${unit}` : ""}`);
+          }
+        } else if (newStock != null) {
+          lines.push(`New stock: ${fmt(newStock)}${unit ? ` ${unit}` : ""}`);
+        }
+        break;
+      case "closing":
+        title = "📋 *Daily Closing Stock*";
+        if (stockDate) lines.unshift(`Date: ${stockDate}`);
+        if (closingStock != null) {
+          lines.push(`Closing count: ${fmt(closingStock)}${unit ? ` ${unit}` : ""}`);
+        }
+        if (systemStock != null) {
+          lines.push(`System stock: ${fmt(systemStock)}${unit ? ` ${unit}` : ""}`);
+        }
+        if (
+          closingStock != null &&
+          systemStock != null &&
+          Number(closingStock) !== Number(systemStock)
+        ) {
+          const diff = Number(closingStock) - Number(systemStock);
+          lines.push(
+            `Variance: ${diff > 0 ? "+" : ""}${diff.toLocaleString("en-IN")}${unit ? ` ${unit}` : ""}`
+          );
+        }
+        break;
+      case "adjustment":
+        title = "⚖️ *Stock Adjustment*";
+        lines.push(`Type: ${adjustmentType || "—"}`);
+        if (Number.isFinite(qty) && qty !== 0) {
+          lines.push(
+            `Change: ${qty > 0 ? "+" : ""}${qtyLabel}${unit ? ` ${unit}` : ""}`
+          );
+        }
+        if (reason) lines.push(`Reason: ${reason}`);
+        break;
+      default:
+        lines.push(`Added: +${qtyLabel}${unit ? ` ${unit}` : ""}`);
+    }
+
+    if (referenceNumber && changeType !== "closing") {
+      lines.push(`Ref: ${referenceNumber}`);
+    }
+    if (supplierName) lines.push(`Supplier: ${supplierName}`);
+    if (newStock != null && changeType !== "direct" && changeType !== "closing") {
+      lines.push(`Current stock: ${fmt(newStock)}${unit ? ` ${unit}` : ""}`);
+    }
+    if (notes) lines.push(`Notes: ${notes}`);
+    if (performedByName) lines.push(`Updated by: ${performedByName}`);
+    if (source) lines.push(`Via: ${source}`);
+
+    const message = [title, ...lines].join("\n");
+    const ctx = `${changeType} stock ${referenceNumber || productName || stockDate || ""}`.trim();
+    return await alertAdmins(message, ctx);
+  } catch (err) {
+    console.error("[WhatsApp Alert] sendStockChangeAlert error:", err?.message || err);
+    return { delivered: 0, total: 0, results: [], error: err?.message || String(err) };
+  }
+}
+
+/**
+ * 📦 Stock inward / purchase GRN — admin alert (alias)
+ */
+export async function sendStockInwardAlert(params = {}) {
+  return sendStockChangeAlert({ ...params, changeType: "inward" });
+}
+
+/**
+ * 📋 Bulk daily closing stock summary
+ */
+export async function sendDailyClosingStockSummaryAlert({
+  stockDate,
+  entries = [],
+  performedByName,
+} = {}) {
+  try {
+    if (!entries.length) return { delivered: 0, total: 0, results: [] };
+
+    const lines = entries.slice(0, 20).map((e) => {
+      const name = [e.cropName, e.varietyName].filter(Boolean).join(" - ") || "—";
+      const closing = Number(e.closingStock);
+      const system = Number(e.systemStock);
+      const unit = e.unit ? ` ${e.unit}` : "";
+      let line = `• ${name}: closing ${closing.toLocaleString("en-IN")}${unit}`;
+      if (Number.isFinite(system) && closing !== system) {
+        const diff = closing - system;
+        line += ` (system ${system.toLocaleString("en-IN")}, ${diff > 0 ? "+" : ""}${diff.toLocaleString("en-IN")})`;
+      }
+      return line;
+    });
+
+    if (entries.length > 20) {
+      lines.push(`… and ${entries.length - 20} more varieties`);
+    }
+
+    const message = [
+      "📋 *Daily Closing Stock Saved*",
+      `Date: ${stockDate || "—"}`,
+      `Varieties: ${entries.length}`,
+      "",
+      ...lines,
+      performedByName ? `\nSaved by: ${performedByName}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return await alertAdmins(message, `closing stock ${stockDate}`);
+  } catch (err) {
+    console.error("[WhatsApp Alert] sendDailyClosingStockSummaryAlert error:", err?.message || err);
+    return { delivered: 0, total: 0, results: [], error: err?.message || String(err) };
+  }
+}
+
+/**
  * 🔴 Low Stock Alert
  */
 export async function sendLowStockAlert(product) {
@@ -688,19 +867,16 @@ export async function sendLinkedAgriAlert(data = {}) {
     const productStr = products.length > 0 ? products.join(", ") : "—";
     const orderLines = [];
     const pendingOrderRefs = new Set();
+    const agriOrderNumbers = [];
     let itemIndex = 0;
 
     const actorPhone = normalizePhoneForWhitelist(process.env.WHATSAPP_ADMIN_NUMBERS?.split(",")?.[0] || "");
-    const rawBaseUrl = process.env.FRONTEND_URL || process.env.PUBLIC_ACTION_BASE_URL || process.env.API_BASE_URL || "";
-    const baseUrl = (
-      rawBaseUrl && !rawBaseUrl.includes("YOUR_DOMAIN")
-        ? rawBaseUrl
-        : "https://erp.rambiotechplants.com"
-    ).trim().replace(/\/+$/, "");
 
     (Array.isArray(linkedOrders) ? linkedOrders : []).forEach((o) => {
-      const orderRef = buildOrderRef(o);
-      if (orderRef && orderRef !== "—") pendingOrderRefs.add(orderRef);
+      const nurseryRef = buildNurseryOrderRef(o);
+      const agriNo = buildAgriOrderNumber(o);
+      if (nurseryRef && nurseryRef !== "—") pendingOrderRefs.add(nurseryRef);
+      if (agriNo) agriOrderNumbers.push(agriNo);
       const lineItems = Array.isArray(o?.lineItems) ? o.lineItems : [];
 
       if (lineItems.length > 0) {
@@ -716,7 +892,7 @@ export async function sendLinkedAgriAlert(data = {}) {
             0;
           const subtypeStr = subtype && subtype !== "—" ? ` | ${subtype}` : "";
           orderLines.push(
-            `${itemIndex}. ऑर्डर ${orderRef} | *${product}*${subtypeStr} | Qty: *${qty > 0 ? qty : "—"}*`
+            `${itemIndex}. Nursery #${nurseryRef} | Agri ${agriNo || "—"} | *${product}*${subtypeStr} | Qty: *${qty > 0 ? qty : "—"}*`
           );
         });
       } else {
@@ -726,35 +902,38 @@ export async function sendLinkedAgriAlert(data = {}) {
         const qty = resolveAgriQty(o);
         const subtypeStr = subtype && subtype !== "—" ? ` | ${subtype}` : "";
         orderLines.push(
-          `${itemIndex}. ऑर्डर ${orderRef} | *${product}*${subtypeStr} | Qty: *${qty > 0 ? qty : "—"}*`
+          `${itemIndex}. Nursery #${nurseryRef} | Agri ${agriNo || "—"} | *${product}*${subtypeStr} | Qty: *${qty > 0 ? qty : "—"}*`
         );
       }
     });
 
-    // Single mark-loaded link covering all pending orders (direct API action — no login needed)
-    const allOrderRefs = Array.from(pendingOrderRefs);
-    const primaryRef = allOrderRefs[0] || "";
-    const markLoadedUrl =
-      baseUrl && primaryRef
-        ? `${baseUrl}/api/v1/agri-load-link/mark-loaded?orderNumber=${encodeURIComponent(primaryRef)}&actorPhone=${encodeURIComponent(actorPhone)}`
+    const allNurseryRefs = Array.from(pendingOrderRefs);
+    const primaryRef = allNurseryRefs[0] || agriOrderNumbers[0] || "";
+    const confirmPageUrl =
+      primaryRef && actorPhone
+        ? buildAgriLoadConfirmPageUrl({
+            orderRef: primaryRef,
+            actorPhone,
+            agriOrderNumbers: [...new Set(agriOrderNumbers.filter(Boolean))],
+          })
         : "";
 
     const trimmedOrderLines = orderLines.slice(0, 10);
-    const pendingLabel = allOrderRefs.length > 0 ? allOrderRefs.join(", ") : "—";
+    const pendingLabel = allNurseryRefs.length > 0 ? allNurseryRefs.join(", ") : "—";
     const driverStr = String(driverName || "").trim() || "—";
 
     const messageLines = [
       "🚨 *Agri Load Pending*",
-      `Orders: ${linkedCount} | Pending: ${pendingLabel}`,
+      `Orders: ${linkedCount} | Nursery: ${pendingLabel}`,
       `Driver: ${driverStr} | Vehicle: ${vehicleStr}`,
       trimmedOrderLines.length ? "*Load items:*" : `Load: ${productStr}`,
       ...trimmedOrderLines,
     ];
 
-    if (markLoadedUrl) {
-      messageLines.push(`Mark Loaded: ${markLoadedUrl}`);
+    if (confirmPageUrl) {
+      messageLines.push(`Confirm load (Yes/No): ${confirmPageUrl}`);
     }
-    messageLines.push("After load, click link to mark LOADED.");
+    messageLines.push("Open link → tap *YES* after agri products are loaded on vehicle.");
 
     const message = messageLines.filter(Boolean).join("\n");
 

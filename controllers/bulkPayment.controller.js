@@ -12,8 +12,10 @@ import {
   ensureFarmerPlantOrderDebit,
   recordFarmerPlantLedgerPaymentTransition,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
-import { tryAutoSendOrderAcceptedWhatsApp } from "./order.controller.js";
-import { isBananaPlantName } from "../utility/watiPlantText.js";
+import {
+  schedulePlantOrderPaymentWhatsApp,
+  scheduleAgriOrderPaymentWhatsApp,
+} from "../services/orderPaymentWhatsapp.service.js";
 import { sanitizePaymentArrayForOrder } from "../utils/paymentTiming.js";
 
 const shouldLogRamAgriLedger = (order) =>
@@ -172,7 +174,21 @@ export const getBulkPayments = catchAsync(async (req, res, next) => {
     BulkPayment.countDocuments(filter),
     BulkPayment.aggregate([
       { $match: filter },
-      { $group: { _id: null, totalAmountSum: { $sum: "$totalAmount" } } },
+      {
+        $group: {
+          _id: null,
+          totalAmountSum: { $sum: "$totalAmount" },
+          pendingCount: {
+            $sum: { $cond: [{ $eq: ["$paymentStatus", "PENDING"] }, 1, 0] },
+          },
+          collectedCount: {
+            $sum: { $cond: [{ $eq: ["$paymentStatus", "ACCEPTED"] }, 1, 0] },
+          },
+          rejectedCount: {
+            $sum: { $cond: [{ $eq: ["$paymentStatus", "REJECTED"] }, 1, 0] },
+          },
+        },
+      },
     ]),
   ]);
 
@@ -221,6 +237,9 @@ export const getBulkPayments = catchAsync(async (req, res, next) => {
       page: Math.max(1, parseInt(page, 10)),
       limit: limitNum,
       totalAmountSum: totals?.[0]?.totalAmountSum || 0,
+      pendingCount: totals?.[0]?.pendingCount || 0,
+      collectedCount: totals?.[0]?.collectedCount || 0,
+      rejectedCount: totals?.[0]?.rejectedCount || 0,
     }
   );
   res.status(200).json(response);
@@ -246,6 +265,7 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   const plantOrderIdsForWati = [];
+  const agriOrderIdsForWati = [];
 
   try {
     const mainPaymentId = bulk._id;
@@ -279,6 +299,7 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
           agriOrder.paymentStatus = "PARTIAL";
         }
         await agriOrder.save({ session });
+        agriOrderIdsForWati.push({ orderId: agriOrder._id, amount: alloc.amount });
 
         if (shouldLogRamAgriLedger(agriOrder)) {
           const lastPayment = agriOrder.payment[agriOrder.payment.length - 1];
@@ -344,9 +365,11 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
           );
         }
 
-        if (isBananaPlantName(order.plantName?.name || "")) {
-          plantOrderIdsForWati.push(order._id);
-        }
+        plantOrderIdsForWati.push({
+          orderId: order._id,
+          amount: alloc.amount,
+          modeOfPayment: bulk.modeOfPayment,
+        });
       }
     }
 
@@ -363,8 +386,17 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
     session.endSession();
   }
 
-  for (const oid of plantOrderIdsForWati) {
-    void tryAutoSendOrderAcceptedWhatsApp(oid);
+  for (const row of plantOrderIdsForWati) {
+    schedulePlantOrderPaymentWhatsApp(row.orderId, {
+      paidAmount: row.amount,
+      modeOfPayment: row.modeOfPayment,
+    });
+  }
+  for (const row of agriOrderIdsForWati) {
+    scheduleAgriOrderPaymentWhatsApp(row.orderId, {
+      paidAmount: row.amount,
+      modeOfPayment: bulk.modeOfPayment,
+    });
   }
 
   const updated = await BulkPayment.findById(bulkId)

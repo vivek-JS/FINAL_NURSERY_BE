@@ -7,6 +7,7 @@ import {
   createChangeLog,
   generateChangesArray,
 } from '../utils/changeLogHelper.js';
+import { scheduleStockChangeAlert } from '../services/stockWhatsappAlert.service.js';
 
 const normalizeProductType = (value, { allowAll = false } = {}) => {
   if (value === undefined || value === null || value === '') {
@@ -35,6 +36,15 @@ const isSuperAdminUser = (user) => {
   const jobTitle = String(user?.jobTitle || '').toUpperCase().trim();
   return role === 'SUPER_ADMIN' || role === 'SUPERADMIN' || jobTitle === 'SUPER_ADMIN' || jobTitle === 'SUPERADMIN';
 };
+
+const isRamAgriMasterUser = (user) => {
+  const role = String(user?.role || '').toUpperCase().trim();
+  const jobTitle = String(user?.jobTitle || '').toUpperCase().trim();
+  return role === 'RAM_AGRI_MASTER' || jobTitle === 'RAM_AGRI_MASTER';
+};
+
+const canDirectStockUpdate = (user) =>
+  isSuperAdminUser(user) || isRamAgriMasterUser(user);
 
 /** 0 and null/undefined both mean "no explicit order" → sort to end */
 const effectiveOrder = (v) => (!v || v === 0 ? Infinity : v);
@@ -503,8 +513,8 @@ export const updateVariety = catchAsync(async (req, res, next) => {
     Object.keys(req.body).every((k) => k === 'currentStock');
 
   if (isStockOnlyUpdate) {
-    if (!isSuperAdminUser(req.user)) {
-      return next(new AppError('Only SUPER_ADMIN can directly update stock', 403));
+    if (!canDirectStockUpdate(req.user)) {
+      return next(new AppError('Only Ram Agri Master or Super Admin can directly update stock', 403));
     }
 
     const parsedStock = Number(currentStock);
@@ -553,6 +563,23 @@ export const updateVariety = catchAsync(async (req, res, next) => {
       .populate('varieties.secondaryUnit', 'name abbreviation type');
 
     sortVarietiesByDisplayOrder(refreshedCrop?.varieties);
+    const refreshedVariety = refreshedCrop?.varieties?.find(
+      (v) => String(v._id) === String(varietyId)
+    );
+    const unitLabel =
+      refreshedVariety?.primaryUnit?.abbreviation ||
+      refreshedVariety?.primaryUnit?.name ||
+      "";
+
+    scheduleStockChangeAlert({
+      changeType: "direct",
+      productName: `${crop.cropName} - ${variety.name}`,
+      oldStock,
+      newStock: Number(refreshedVariety?.currentStock ?? parsedStock),
+      unit: unitLabel,
+      performedByName: req.user?.name || "System",
+      source: "Ram Agri Direct Stock",
+    });
 
     const response = generateResponse(
       'Success',
@@ -665,8 +692,8 @@ export const updateVariety = catchAsync(async (req, res, next) => {
   }
 
   if (currentStock !== undefined) {
-    if (!isSuperAdminUser(req.user)) {
-      return next(new AppError('Only SUPER_ADMIN can directly update stock', 403));
+    if (!canDirectStockUpdate(req.user)) {
+      return next(new AppError('Only Ram Agri Master or Super Admin can directly update stock', 403));
     }
 
     const parsedStock = Number(currentStock);
@@ -674,6 +701,7 @@ export const updateVariety = catchAsync(async (req, res, next) => {
       return next(new AppError('currentStock must be a non-negative number', 400));
     }
 
+    const directOldStock = Number(variety.currentStock) || 0;
     const { applyManualStockAdjustment } = await import('../services/ramAgriBatchInventory.service.js');
     try {
       await applyManualStockAdjustment(id, varietyId, parsedStock, req.user._id);
@@ -688,6 +716,20 @@ export const updateVariety = catchAsync(async (req, res, next) => {
       variety.averagePrice = refreshed.averagePrice;
       variety.stockUpdatedAt = refreshed.stockUpdatedAt;
     }
+
+    const unitLabel =
+      variety.primaryUnit?.abbreviation ||
+      variety.primaryUnit?.name ||
+      "";
+    scheduleStockChangeAlert({
+      changeType: "direct",
+      productName: `${crop.cropName} - ${variety.name}`,
+      oldStock: directOldStock,
+      newStock: Number(variety.currentStock ?? parsedStock),
+      unit: unitLabel,
+      performedByName: req.user?.name || "System",
+      source: "Ram Agri Direct Stock",
+    });
   }
 
   if (displayOrder !== undefined) {
