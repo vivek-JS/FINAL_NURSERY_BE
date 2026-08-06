@@ -25,7 +25,10 @@ import {
   getWhatsAppSessionPath,
   hasPersistedWhatsAppSession,
   getWhatsAppLinkedPhone,
+  getWhatsAppQrStatus,
+  ensureWhatsAppConnected,
 } from "../services/whatsappClient.js";
+import { getPendingWhatsAppAlertCount } from "../services/whatsappAlertService.js";
 
 const router = express.Router();
 
@@ -91,6 +94,7 @@ router.post("/new-order/:orderId", async (req, res) => {
 
 router.get("/status", (req, res) => {
   const sessionPath = getWhatsAppSessionPath();
+  const qr = getWhatsAppQrStatus();
   return res.status(200).json({
     status: "Success",
     whatsappReady: isWhatsAppReady,
@@ -101,9 +105,31 @@ router.get("/status", (req, res) => {
     adminNumbers: getAdminNumbersFromEnv(),
     sessionPath,
     hasSavedSession: hasPersistedWhatsAppSession(sessionPath),
+    pendingAlertCount: getPendingWhatsAppAlertCount(),
+    qr,
     hint:
-      "Scan QR once in server logs if hasSavedSession is false. Messages send FROM linkedBotPhone. Agri admins reply LOADED or AGR-… loaded on the scanned number.",
+      "If whatsappReady is false: POST /reconnect, or scan QR from qr.qrFile on server. Messages send FROM linkedBotPhone.",
   });
+});
+
+/** Force reconnect + optional session restore from fallback path. */
+router.post("/reconnect", async (req, res) => {
+  try {
+    const result = await ensureWhatsAppConnected("manual-api");
+    return res.status(result.ok ? 200 : 502).json({
+      status: result.ok ? "Success" : "Fail",
+      whatsappReady: isWhatsAppReady,
+      linkedBotPhone: getWhatsAppLinkedPhone(),
+      pendingAlertCount: getPendingWhatsAppAlertCount(),
+      result,
+      qr: getWhatsAppQrStatus(),
+    });
+  } catch (err) {
+    return res.status(500).json({
+      status: "Fail",
+      message: err?.message || String(err),
+    });
+  }
 });
 
 /** Manual trigger: slot low/high/overbooked scan (SUPER_ADMIN). */

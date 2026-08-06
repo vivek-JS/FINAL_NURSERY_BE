@@ -21,6 +21,51 @@ import { normalizePhoneForWhitelist } from "../utils/agriLoadLinkSigner.js";
 import Order from "../models/order.model.js";
 import { formatWatiDateEnIN } from "../utility/watiIstDateFormat.js";
 
+const PENDING_ALERT_MAX = Number(process.env.WHATSAPP_PENDING_ALERT_MAX || 200);
+const PENDING_ALERT_TTL_MS = Number(process.env.WHATSAPP_PENDING_ALERT_TTL_MS || 86400000);
+const pendingAlerts = [];
+
+function prunePendingAlerts() {
+  const cutoff = Date.now() - PENDING_ALERT_TTL_MS;
+  while (pendingAlerts.length && pendingAlerts[0].at < cutoff) {
+    pendingAlerts.shift();
+  }
+  while (pendingAlerts.length > PENDING_ALERT_MAX) {
+    pendingAlerts.shift();
+  }
+}
+
+function queuePendingAlert(message, context) {
+  prunePendingAlerts();
+  pendingAlerts.push({ message, context, at: Date.now() });
+  console.warn(
+    `[WhatsApp Alert] ${context} queued — client not ready (${pendingAlerts.length} pending)`
+  );
+}
+
+export async function flushPendingWhatsAppAlerts() {
+  if (!isWhatsAppReady || pendingAlerts.length === 0) {
+    return { flushed: 0, remaining: pendingAlerts.length };
+  }
+  prunePendingAlerts();
+  const batch = pendingAlerts.splice(0, pendingAlerts.length);
+  console.log(`[WhatsApp Alert] Flushing ${batch.length} queued alert(s)...`);
+  let flushed = 0;
+  for (const item of batch) {
+    const result = await alertAdmins(item.message, `${item.context} (queued)`, {
+      fromQueue: true,
+    });
+    if ((result.delivered || 0) > 0) flushed += 1;
+  }
+  console.log(`[WhatsApp Alert] Queue flush done — ${flushed}/${batch.length} sent`);
+  return { flushed, remaining: pendingAlerts.length };
+}
+
+export function getPendingWhatsAppAlertCount() {
+  prunePendingAlerts();
+  return pendingAlerts.length;
+}
+
 const toNumber = (value) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -216,14 +261,21 @@ export async function sendWhatsAppMessage(number, message) {
   }
 }
 
-export async function alertAdmins(message, context = "alert") {
+export async function alertAdmins(message, context = "alert", options = {}) {
+  const { fromQueue = false } = options;
   if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") {
     console.warn(`[WhatsApp Alert] ${context} skipped — WHATSAPP_ALERTS_ENABLED is not true`);
     return { delivered: 0, total: 0, results: [], reason: "alerts_disabled" };
   }
   if (!isWhatsAppReady) {
-    console.warn(`[WhatsApp Alert] ${context} skipped — WhatsApp client not ready`);
-    return { delivered: 0, total: 0, results: [], reason: "not_ready" };
+    if (!fromQueue) queuePendingAlert(message, context);
+    return {
+      delivered: 0,
+      total: 0,
+      results: [],
+      reason: fromQueue ? "not_ready" : "not_ready_queued",
+      queued: !fromQueue,
+    };
   }
 
   const numbers = getAdminNumbersFromEnv();

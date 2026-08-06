@@ -39,6 +39,14 @@ let reinitInProgress = false;
 let reinitAttempts = 0;
 let readyWatchdogExtensions = 0;
 const MAX_READY_EXTENSIONS = 2;
+let lastQrPayload = null;
+let lastQrAt = null;
+
+/** Fallback dirs when WHATSAPP_SESSION_PATH was wiped but an older copy still exists on disk. */
+const SESSION_FALLBACK_ROOTS = [
+  path.join(PROJECT_ROOT, ".wwebjs_auth"),
+  "/var/www/FINAL_NURSERY_BE/.wwebjs_auth",
+];
 
 /** Puppeteer/WhatsApp Web page died — client object is stale until reinit. */
 export function isWhatsAppDetachedError(err) {
@@ -91,6 +99,64 @@ export function getWhatsAppSessionPath() {
 
 function sessionDirForClient(dataPath) {
   return path.join(dataPath, `session-${CLIENT_ID}`);
+}
+
+function isBrowserAlreadyRunningError(err) {
+  return /browser is already running/i.test(String(err?.message || err));
+}
+
+function readSingletonLockPid(sessionDir) {
+  try {
+    const lockPath = path.join(sessionDir, "SingletonLock");
+    if (!fs.existsSync(lockPath)) return null;
+    const target = fs.readlinkSync(lockPath);
+    const match = String(target).match(/-(\d+)$/);
+    return match ? Number(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function isProcessAlive(pid) {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeSingletonArtifacts(sessionDir) {
+  for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"]) {
+    const filePath = path.join(sessionDir, name);
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Nodemon restarts often leave Puppeteer Chrome + SingletonLock — blocks QR/reconnect. */
+function releaseStaleWhatsAppBrowserLock(dataPath) {
+  const sessionDir = sessionDirForClient(dataPath);
+  if (!fs.existsSync(sessionDir)) return false;
+
+  const pid = readSingletonLockPid(sessionDir);
+  if (pid && isProcessAlive(pid)) {
+    try {
+      process.kill(pid, "SIGKILL");
+      console.warn(`[WhatsApp] Killed stale Puppeteer Chrome (pid ${pid})`);
+    } catch (err) {
+      console.warn(`[WhatsApp] Could not kill pid ${pid}:`, err?.message || err);
+    }
+  } else if (pid) {
+    console.warn(`[WhatsApp] Clearing stale SingletonLock (pid ${pid} not running)`);
+  }
+
+  removeSingletonArtifacts(sessionDir);
+  return true;
 }
 
 /** Chrome profile on disk ≠ logged in; require WhatsApp IndexedDB + cookies. */
@@ -227,6 +293,7 @@ async function safeReinitialize(reason = "unknown") {
 
 function attachClientHandlers(waClient) {
   waClient.on("qr", (qr) => {
+    persistQrForScan(qr);
     console.log("\n📱 [WhatsApp] QR code received — scan with your phone:\n");
     qrcode.generate(qr, { small: true });
     console.log("\n⚠️  [WhatsApp] Scan once; session is saved for PM2 restarts.\n");
@@ -245,12 +312,19 @@ function attachClientHandlers(waClient) {
     isWhatsAppReady = true;
     reinitAttempts = 0;
     console.log("🟢 [WhatsApp] Client is ready. Alerts will now be delivered.");
+    lastQrPayload = null;
+    void flushPendingAlertsOnReady();
     if (
       process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true" &&
       process.env.DISABLE_WHATSAPP_ORDER_WEBJS !== "true"
     ) {
       console.log(
         "🟢 [WhatsApp] Order bot listening on scanned session (web.js). WATI webhook also active if not disabled."
+      );
+    }
+    if (process.env.WHATSAPP_AGRI_LOAD_INBOUND_ENABLED !== "false") {
+      console.log(
+        "🟢 [WhatsApp] Agri load inbound scan active — whitelisted admins can reply LOADED or AGR-… loaded."
       );
     }
 
@@ -272,21 +346,27 @@ function attachClientHandlers(waClient) {
     }
   });
 
-  const onInboundOrderMessage = (msg) => {
+  const onInboundMessage = (msg) => {
     void (async () => {
       try {
+        const { handleAgriLoadInboundMessage } = await import(
+          "./whatsappAgriLoadInbound.service.js"
+        );
+        const agriResult = await handleAgriLoadInboundMessage(msg);
+        if (agriResult?.handled) return;
+
         const { handleWebJsInboundMessage } = await import(
           "./whatsappOrderWebInbound.js"
         );
         await handleWebJsInboundMessage(msg);
       } catch (err) {
-        console.error("[WhatsApp] Order inbound handler error:", err?.message || err);
+        console.error("[WhatsApp] Inbound handler error:", err?.message || err);
       }
     })();
   };
 
-  waClient.on("message", onInboundOrderMessage);
-  waClient.on("message_create", onInboundOrderMessage);
+  waClient.on("message", onInboundMessage);
+  waClient.on("message_create", onInboundMessage);
 
   waClient.on("auth_failure", (msg) => {
     clearReadyWatchdog();
@@ -315,6 +395,89 @@ function attachClientHandlers(waClient) {
       }, REINIT_BACKOFF_MS);
     }
   });
+}
+
+function tryRestoreSessionFromFallback(primaryPath) {
+  if (hasPersistedWhatsAppSession(primaryPath)) return false;
+
+  for (const fallbackRoot of SESSION_FALLBACK_ROOTS) {
+    if (!fallbackRoot || path.resolve(fallbackRoot) === path.resolve(primaryPath)) continue;
+    if (!hasPersistedWhatsAppSession(fallbackRoot)) continue;
+
+    const src = sessionDirForClient(fallbackRoot);
+    const dest = sessionDirForClient(primaryPath);
+    try {
+      fs.mkdirSync(primaryPath, { recursive: true });
+      if (fs.existsSync(dest)) {
+        fs.rmSync(dest, { recursive: true, force: true });
+      }
+      fs.cpSync(src, dest, { recursive: true });
+      removeSingletonArtifacts(dest);
+      console.warn(`[WhatsApp] Restored logged-in session from fallback: ${fallbackRoot}`);
+      return true;
+    } catch (err) {
+      console.error(
+        `[WhatsApp] Failed to restore session from ${fallbackRoot}:`,
+        err?.message || err
+      );
+    }
+  }
+  return false;
+}
+
+function persistQrForScan(qr) {
+  lastQrPayload = qr;
+  lastQrAt = new Date();
+  try {
+    const qrFile = path.join(getWhatsAppSessionPath(), "last-qr.txt");
+    fs.mkdirSync(path.dirname(qrFile), { recursive: true });
+    fs.writeFileSync(
+      qrFile,
+      `Scan at ${lastQrAt.toISOString()}\n${qr}\n`,
+      "utf8"
+    );
+    console.log(`[WhatsApp] QR saved to ${qrFile} (also printed below)`);
+  } catch (err) {
+    console.warn("[WhatsApp] Could not save QR file:", err?.message || err);
+  }
+}
+
+export function getWhatsAppQrStatus() {
+  return {
+    hasQr: Boolean(lastQrPayload),
+    lastQrAt: lastQrAt?.toISOString() || null,
+    qrFile: path.join(getWhatsAppSessionPath(), "last-qr.txt"),
+  };
+}
+
+/** Watchdog / manual reconnect — safe to call from cron when client is not ready. */
+export async function ensureWhatsAppConnected(reason = "watchdog") {
+  if (shuttingDown) return { ok: false, reason: "shutting_down" };
+  if (isWhatsAppReady && client) return { ok: true, reason: "already_ready" };
+
+  reinitAttempts = 0;
+  initStarted = false;
+  if (client) {
+    await client.destroy().catch(() => {});
+    client = null;
+  }
+
+  tryRestoreSessionFromFallback(resolveWritableWhatsAppSessionPath());
+  await startWhatsAppClient();
+  const ready = await waitUntilWhatsAppReady(120000);
+  console.log(
+    `[WhatsApp] ensureWhatsAppConnected (${reason}): ${ready ? "ready" : "still not ready"}`
+  );
+  return { ok: ready, reason: ready ? "ready" : "timeout" };
+}
+
+async function flushPendingAlertsOnReady() {
+  try {
+    const { flushPendingWhatsAppAlerts } = await import("./whatsappAlertService.js");
+    await flushPendingWhatsAppAlerts();
+  } catch (err) {
+    console.warn("[WhatsApp] Pending alert flush failed:", err?.message || err);
+  }
 }
 
 function wipeSessionDir(dataPath, reason) {
@@ -377,13 +540,22 @@ export async function startWhatsAppClient() {
 
   sessionPath = resolveWritableWhatsAppSessionPath();
 
+  if (process.env.WHATSAPP_RESET_SESSION === "true") {
+    wipeSessionDir(sessionPath, "WHATSAPP_RESET_SESSION=true");
+  }
+
+  releaseStaleWhatsAppBrowserLock(sessionPath);
+  tryRestoreSessionFromFallback(sessionPath);
+
   const hasSession = hasPersistedWhatsAppSession(sessionPath);
   const chromeOnly =
     fs.existsSync(sessionDirForClient(sessionPath)) && !hasSession;
 
-  // Half-written Chrome profile (common after crash / restart mid-scan) blocks QR.
+  // Do not auto-wipe — deploy restarts were deleting valid sessions. Use WHATSAPP_RESET_SESSION=true.
   if (chromeOnly) {
-    wipeSessionDir(sessionPath, "chrome-profile-not-logged-in");
+    console.warn(
+      "[WhatsApp] Chrome profile present but login not detected — trying reconnect without wipe (set WHATSAPP_RESET_SESSION=true to force clear)"
+    );
   }
 
   console.log(
@@ -404,12 +576,29 @@ export async function startWhatsAppClient() {
     await client?.destroy?.().catch(() => {});
     client = null;
 
-    // Corrupt LocalAuth / WhatsApp Web reload → wipe once and retry for a clean QR.
-    if (isWhatsAppDetachedError(err) || /Execution context was destroyed/i.test(String(err?.message || err))) {
-      wipeSessionDir(sessionPath, "init-protocol-error");
+    if (isBrowserAlreadyRunningError(err)) {
+      releaseStaleWhatsAppBrowserLock(sessionPath);
       await sleep(REINIT_BACKOFF_MS);
       try {
-        console.warn("[WhatsApp] Retrying initialize with clean session (QR should appear)...");
+        console.warn("[WhatsApp] Retrying after clearing stale browser lock...");
+        await initializeClientOnce(sessionPath);
+      } catch (retryErr) {
+        console.error(
+          "[WhatsApp] Retry after browser lock failed:",
+          retryErr?.message || retryErr
+        );
+        await client?.destroy?.().catch(() => {});
+        client = null;
+        initStarted = false;
+      }
+    } else if (
+      isWhatsAppDetachedError(err) ||
+      /Execution context was destroyed/i.test(String(err?.message || err))
+    ) {
+      releaseStaleWhatsAppBrowserLock(sessionPath);
+      await sleep(REINIT_BACKOFF_MS);
+      try {
+        console.warn("[WhatsApp] Retrying initialize after protocol error (session kept)...");
         await initializeClientOnce(sessionPath);
       } catch (retryErr) {
         console.error(
