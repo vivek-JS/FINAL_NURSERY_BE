@@ -127,6 +127,7 @@ const allowedParams = [
     "createdBy", // For filtering orders by creator (employee who created)
   "mine", // For restricting list APIs to current user entries
     "myOrders", // Boolean: show only current user's orders
+    "isOld", // Ram Agri order era filter (true = archived pre-cutoff orders)
     "showonly", // For restricting getOrders to the logged-in user's own orders (overrides role-based access for admins)
     "paymentStatus", // For filtering by payment status (PENDING, PARTIAL, COMPLETED)
   "paymentTiming", // GET /order/payments — advance | balance
@@ -240,6 +241,10 @@ allowedQueryKeys.add("stockSort");
 allowedQueryKeys.add("stockOrder");
 allowedQueryKeys.add("stockCropId");
 allowedQueryKeys.add("stockSearch");
+allowedQueryKeys.add("month"); // GET /face-attendance/dashboard — YYYY-MM
+allowedQueryKeys.add("department"); // GET /face-attendance/admin/* — Department ObjectId filter
+allowedQueryKeys.add("isOld"); // GET agri-sales-orders — era filter (new vs archived)
+allowedQueryKeys.add("employeeId"); // GET /face-attendance/admin/logs — employee ObjectId filter
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
@@ -337,6 +342,17 @@ const parameterWhiteListing = (req, res, next) => {
   if (
     req.method === "GET" &&
     insightsPath.includes("/api/v1/inventory/ram-agri-sales-dashboard")
+  ) {
+    return next();
+  }
+
+  /**
+   * Agri sales order list + related GETs — era filter (isOld), dispatch filters, etc.
+   * Controllers read a fixed query set; skip global whitelist to avoid false 400s.
+   */
+  if (
+    req.method === "GET" &&
+    insightsPath.includes("/api/v1/inventory/agri-sales-orders")
   ) {
     return next();
   }
