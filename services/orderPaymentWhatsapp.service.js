@@ -10,9 +10,67 @@ import {
   buildWatiSendRecipient,
   watiDisplayOrderId,
 } from "../utility/watiMessaging.js";
+import {
+  collectPaymentAttachmentUrls,
+} from "../utility/paymentAttachmentUrl.js";
 import { sendPaymentReceivedAlert } from "./whatsappAlertService.js";
+import { markOutboundSentFromWatiResult } from "./orderWhatsappOutbound.service.js";
 
 const WATI_BLOCKED_ORDER_STATUSES = new Set(["PENDING", "REJECTED", "CANCELLED"]);
+
+function findCollectedPayment(order, paymentInfo = {}) {
+  const payments = order?.payment || [];
+  const pid = paymentInfo.paymentId ? String(paymentInfo.paymentId) : null;
+  if (pid) {
+    const match = payments.find((p) => String(p._id) === pid);
+    if (match) {
+      if (!match.receiptPhoto?.length && paymentInfo.receiptPhoto?.length) {
+        return { ...match.toObject?.() ?? match, receiptPhoto: paymentInfo.receiptPhoto };
+      }
+      return match;
+    }
+  }
+  const collected =
+    [...payments].reverse().find((p) => p.paymentStatus === "COLLECTED") || null;
+  if (collected && !collected.receiptPhoto?.length && paymentInfo.receiptPhoto?.length) {
+    return { ...collected.toObject?.() ?? collected, receiptPhoto: paymentInfo.receiptPhoto };
+  }
+  return collected;
+}
+
+async function notifyAdminPaymentReceived({
+  order,
+  recipient,
+  paymentInfo,
+  paymentRow,
+  watiResult,
+  orderNumber,
+}) {
+  const attachmentUrls = collectPaymentAttachmentUrls(
+    paymentRow || paymentInfo,
+    order?.screenshots
+  );
+  const watiMeta = watiResult?.skipped
+    ? { skipped: true, reason: watiResult.reason }
+    : {
+        success: watiResult?.success,
+        error: watiResult?.error,
+        outboundStatus: watiResult?.success ? "sent" : "failed",
+      };
+
+  void sendPaymentReceivedAlert({
+    farmer: order?.farmer,
+    customerName: recipient?.name,
+    paidAmount: paymentInfo.paidAmount ?? paymentRow?.paidAmount,
+    amount: paymentInfo.paidAmount ?? paymentRow?.paidAmount,
+    modeOfPayment: paymentInfo.modeOfPayment ?? paymentRow?.modeOfPayment,
+    paymentStatus: paymentRow?.paymentStatus || "COLLECTED",
+    orderNumber: orderNumber || watiDisplayOrderId(order),
+    order,
+    attachmentUrls,
+    wati: watiMeta,
+  }).catch((e) => console.error("[WhatsApp Alert] payment:", e?.message || e));
+}
 
 function watiDigitsOk(n) {
   return n != null && String(n).replace(/\D/g, "").length >= 10;
@@ -219,12 +277,21 @@ export async function tryAutoSendPlantOrderPaymentWhatsApp(orderId, paymentInfo 
       return { skipped: true, reason: "no_collected_payment" };
     }
 
+    const paymentRow = findCollectedPayment(order, paymentInfo);
     const orderDetails = await buildPlantOrderDetails(order);
     const recipient = order.dealerOrder ? dealerRecipient(order) : farmerRecipient(order);
     if (!recipient) {
       console.warn(
         `[WATI payment] No WhatsApp recipient for Order #${order.orderId || order._id}`
       );
+      await notifyAdminPaymentReceived({
+        order,
+        recipient: { name: orderCustomerForTemplate(order).name },
+        paymentInfo,
+        paymentRow,
+        watiResult: { skipped: true, reason: "no_recipient" },
+        orderNumber: watiDisplayOrderId(orderDetails),
+      });
       return { skipped: true, reason: "no_recipient" };
     }
 
@@ -233,6 +300,13 @@ export async function tryAutoSendPlantOrderPaymentWhatsApp(orderId, paymentInfo 
       console.log(
         `✅ [WATI payment] Sent order_placed template for Order #${order.orderId || order._id}`
       );
+      void markOutboundSentFromWatiResult(order._id, result, {
+        templateType: "payment_collected",
+        trigger: "payment_collected_wati",
+        orderSnapshot: order,
+      }).catch((e) =>
+        console.warn("[WATI payment] outbound log:", e?.message || e)
+      );
     } else {
       console.warn(
         `⚠️ [WATI payment] Failed for Order #${order.orderId || order._id}:`,
@@ -240,15 +314,14 @@ export async function tryAutoSendPlantOrderPaymentWhatsApp(orderId, paymentInfo 
       );
     }
 
-    void sendPaymentReceivedAlert({
-      farmer: order.farmer,
-      customerName: recipient.name,
-      paidAmount: paymentInfo.paidAmount,
-      amount: paymentInfo.paidAmount,
-      modeOfPayment: paymentInfo.modeOfPayment,
-      orderNumber: watiDisplayOrderId(orderDetails),
+    await notifyAdminPaymentReceived({
       order,
-    }).catch((e) => console.error("[WhatsApp Alert] payment:", e?.message || e));
+      recipient,
+      paymentInfo,
+      paymentRow,
+      watiResult: result,
+      orderNumber: watiDisplayOrderId(orderDetails),
+    });
 
     return result;
   } catch (err) {
@@ -275,11 +348,20 @@ export async function tryAutoSendAgriOrderPaymentWhatsApp(orderId, paymentInfo =
       return { skipped: true, reason: "no_collected_payment" };
     }
 
+    const paymentRow = findCollectedPayment(order, paymentInfo);
     const recipient = agriCustomerRecipient(order);
     if (!recipient) {
       console.warn(
         `[WATI agri payment] No customer mobile for order ${order.orderNumber || orderId}`
       );
+      await notifyAdminPaymentReceived({
+        order,
+        recipient: { name: order.customerName },
+        paymentInfo,
+        paymentRow,
+        watiResult: { skipped: true, reason: "no_recipient" },
+        orderNumber: order.orderNumber,
+      });
       return { skipped: true, reason: "no_recipient" };
     }
 
@@ -296,14 +378,14 @@ export async function tryAutoSendAgriOrderPaymentWhatsApp(orderId, paymentInfo =
       );
     }
 
-    void sendPaymentReceivedAlert({
-      customerName: order.customerName,
-      paidAmount: paymentInfo.paidAmount,
-      amount: paymentInfo.paidAmount,
-      modeOfPayment: paymentInfo.modeOfPayment,
-      orderNumber: order.orderNumber,
+    await notifyAdminPaymentReceived({
       order,
-    }).catch((e) => console.error("[WhatsApp Alert] agri payment:", e?.message || e));
+      recipient,
+      paymentInfo,
+      paymentRow,
+      watiResult: result,
+      orderNumber: order.orderNumber,
+    });
 
     return result;
   } catch (err) {

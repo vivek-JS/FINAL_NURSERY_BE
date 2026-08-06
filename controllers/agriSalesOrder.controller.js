@@ -894,6 +894,8 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     scheduleAgriOrderPaymentWhatsApp(order._id, {
       paidAmount: payment.paidAmount,
       modeOfPayment: payment.modeOfPayment,
+      paymentId: payment._id,
+      receiptPhoto: payment.receiptPhoto,
     });
   }
 
@@ -2130,6 +2132,8 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
     scheduleAgriOrderPaymentWhatsApp(order._id, {
       paidAmount: paymentAmount,
       modeOfPayment: order.payment[index].modeOfPayment,
+      paymentId: order.payment[index]._id,
+      receiptPhoto: order.payment[index].receiptPhoto,
     });
   }
 

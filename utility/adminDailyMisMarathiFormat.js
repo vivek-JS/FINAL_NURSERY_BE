@@ -76,7 +76,12 @@ export function formatAdminDailyMisMarathiMessages(snapshot) {
   if (pay.pendingSamples?.length) {
     paymentBlock.push("_Top pending:_");
     for (const p of pay.pendingSamples.slice(0, 5)) {
-      paymentBlock.push(`  • ${p.label}: ${rupee(p.amount)} (${p.source})`);
+      const st = p.paymentStatus ? ` · ${p.paymentStatus}` : "";
+      paymentBlock.push(`  • ${p.label}: ${rupee(p.amount)} (${p.source})${st}`);
+      const attach = (p.attachmentUrls || []).slice(0, 1);
+      if (attach.length) {
+        paymentBlock.push(`    📎 ${attach[0]}`);
+      }
     }
   }
 

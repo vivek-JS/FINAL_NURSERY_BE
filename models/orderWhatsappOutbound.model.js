@@ -25,7 +25,7 @@ const orderWhatsappOutboundSchema = new Schema(
     },
     templateType: {
       type: String,
-      enum: ["farm_ready"],
+      enum: ["farm_ready", "order_placed", "payment_collected", "order_accepted", "dispatch"],
       default: "farm_ready",
     },
     localMessageId: {

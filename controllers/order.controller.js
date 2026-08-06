@@ -1239,6 +1239,8 @@ const addNewPayment = catchAsync(async (req, res) => {
     maybeSchedulePaymentWhatsAppAfterCollect(result.order, {
       paidAmount: lastCollected?.paidAmount,
       modeOfPayment: lastCollected?.modeOfPayment,
+      paymentId: lastCollected?._id,
+      receiptPhoto: lastCollected?.receiptPhoto,
     });
   }
 
@@ -1300,6 +1302,8 @@ const addBatchPayments = catchAsync(async (req, res) => {
     maybeSchedulePaymentWhatsAppAfterCollect(result.order, {
       paidAmount: lastCollected?.paidAmount,
       modeOfPayment: lastCollected?.modeOfPayment,
+      paymentId: lastCollected?._id,
+      receiptPhoto: lastCollected?.receiptPhoto,
     });
   }
 
@@ -1839,6 +1843,8 @@ const updatePaymentStatus = async (req, res, next) => {
       maybeSchedulePaymentWhatsAppAfterCollect(order, {
         paidAmount: payment.paidAmount,
         modeOfPayment: payment.modeOfPayment,
+        paymentId: payment._id,
+        receiptPhoto: payment.receiptPhoto,
       });
     }
 

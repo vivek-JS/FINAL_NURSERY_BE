@@ -581,8 +581,33 @@ export async function sendOrderDispatchedAlert(order, changedBy = "Unknown") {
   }
 }
 
+function formatWatiFarmerMessageStatus(wati = {}) {
+  if (wati.skipped) {
+    return `⏭️ Skipped (${wati.reason || "—"})`;
+  }
+  if (wati.success === false) {
+    const err =
+      typeof wati.error === "string"
+        ? wati.error
+        : wati.error?.message || wati.error?.info || "send failed";
+    return `❌ Failed — ${String(err).slice(0, 120)}`;
+  }
+  if (wati.success) {
+    const st = String(wati.outboundStatus || wati.status || "sent").toLowerCase();
+    const labels = {
+      sent: "✅ Sent",
+      delivered: "✅ Delivered",
+      read: "✅ Read",
+      pending: "⏳ Pending",
+      failed: "❌ Failed",
+    };
+    return labels[st] || `✅ ${st}`;
+  }
+  return "—";
+}
+
 /**
- * 💰 Payment Received
+ * 💰 Payment Received — admin alert with receipt links + farmer WATI status.
  */
 export async function sendPaymentReceivedAlert(payment) {
   try {
@@ -595,16 +620,33 @@ export async function sendPaymentReceivedAlert(payment) {
     const mode = payment?.modeOfPayment || payment?.mode || "—";
     const orderNo =
       payment?.orderNumber || payment?.order?.orderNumber || payment?.order?._id || "—";
+    const payStatus = payment?.paymentStatus || "COLLECTED";
+    const attachmentUrls = Array.isArray(payment?.attachmentUrls)
+      ? payment.attachmentUrls.filter(Boolean)
+      : [];
 
-    const message = [
+    const lines = [
       "💰 *Payment Received*",
       `Customer: ${customer}`,
       `Amount: ₹${Number(amount).toLocaleString("en-IN")}`,
       `Mode: ${mode}`,
+      `Payment status: *${payStatus}*`,
       `Order No: ${orderNo}`,
-    ].join("\n");
+      `Farmer WATI msg: ${formatWatiFarmerMessageStatus(payment?.wati || {})}`,
+    ];
 
-    await alertAdmins(message);
+    if (attachmentUrls.length) {
+      lines.push("");
+      lines.push("*Receipt / attachment:*");
+      attachmentUrls.slice(0, 3).forEach((url, i) => {
+        lines.push(`📎 ${attachmentUrls.length > 1 ? `${i + 1}. ` : ""}${url}`);
+      });
+      if (attachmentUrls.length > 3) {
+        lines.push(`_+${attachmentUrls.length - 3} more in ERP_`);
+      }
+    }
+
+    await alertAdmins(lines.join("\n"), "payment received");
   } catch (err) {
     console.error("[WhatsApp Alert] sendPaymentReceivedAlert error:", err?.message || err);
   }

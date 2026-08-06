@@ -12,6 +12,9 @@ import { fetchAdminDailyMis } from "./adminDailyMis.service.js";
 import { getIstTodayYmd, istDayBoundsFromYmd } from "../utility/istOrderDateStats.js";
 import { formatAdminDailyMisMarathiMessages } from "../utility/adminDailyMisMarathiFormat.js";
 import { alertAdmins } from "./whatsappAlertService.js";
+import {
+  collectPaymentAttachmentUrls,
+} from "../utility/paymentAttachmentUrl.js";
 
 function sumDispatchPlants(delivery = {}) {
   const keys = ["dispatched", "vehicleDispatched", "completed", "dispatchProcess"];
@@ -168,6 +171,9 @@ async function fetchPaymentSnapshot(rangeStart, rangeEnd) {
       $project: {
         orderId: 1,
         amount: "$payment.paidAmount",
+        paymentStatus: "$payment.paymentStatus",
+        receiptPhoto: "$payment.receiptPhoto",
+        screenshots: 1,
         farmerName: { $arrayElemAt: ["$_farmer.name", 0] },
       },
     },
@@ -180,6 +186,11 @@ async function fetchPaymentSnapshot(rangeStart, rangeEnd) {
       label: `#${p.orderId || "—"}`,
       amount: p.amount,
       source: "Plant",
+      paymentStatus: p.paymentStatus || "PENDING",
+      attachmentUrls: collectPaymentAttachmentUrls(
+        { receiptPhoto: p.receiptPhoto },
+        p.screenshots
+      ),
     });
   }
 
@@ -196,6 +207,9 @@ async function fetchPaymentSnapshot(rangeStart, rangeEnd) {
       $project: {
         orderNumber: 1,
         amount: "$payment.paidAmount",
+        paymentStatus: "$payment.paymentStatus",
+        receiptPhoto: "$payment.receiptPhoto",
+        screenshots: 1,
         customerName: 1,
       },
     },
@@ -208,6 +222,11 @@ async function fetchPaymentSnapshot(rangeStart, rangeEnd) {
       label: p.orderNumber || p.customerName || "Agri",
       amount: p.amount,
       source: "Ram Agri",
+      paymentStatus: p.paymentStatus || "PENDING",
+      attachmentUrls: collectPaymentAttachmentUrls(
+        { receiptPhoto: p.receiptPhoto },
+        p.screenshots
+      ),
     });
   }
 

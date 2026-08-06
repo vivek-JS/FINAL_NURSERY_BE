@@ -299,7 +299,13 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
           agriOrder.paymentStatus = "PARTIAL";
         }
         await agriOrder.save({ session });
-        agriOrderIdsForWati.push({ orderId: agriOrder._id, amount: alloc.amount });
+        const agriLastPayment = agriOrder.payment[agriOrder.payment.length - 1];
+        agriOrderIdsForWati.push({
+          orderId: agriOrder._id,
+          amount: alloc.amount,
+          paymentId: agriLastPayment?._id,
+          receiptPhoto: agriLastPayment?.receiptPhoto,
+        });
 
         if (shouldLogRamAgriLedger(agriOrder)) {
           const lastPayment = agriOrder.payment[agriOrder.payment.length - 1];
@@ -365,10 +371,13 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
           );
         }
 
+        const lastPayment = order.payment[order.payment.length - 1];
         plantOrderIdsForWati.push({
           orderId: order._id,
           amount: alloc.amount,
           modeOfPayment: bulk.modeOfPayment,
+          paymentId: lastPayment?._id,
+          receiptPhoto: lastPayment?.receiptPhoto,
         });
       }
     }
@@ -390,12 +399,16 @@ export const acceptBulkPayment = catchAsync(async (req, res, next) => {
     schedulePlantOrderPaymentWhatsApp(row.orderId, {
       paidAmount: row.amount,
       modeOfPayment: row.modeOfPayment,
+      paymentId: row.paymentId,
+      receiptPhoto: row.receiptPhoto,
     });
   }
   for (const row of agriOrderIdsForWati) {
     scheduleAgriOrderPaymentWhatsApp(row.orderId, {
       paidAmount: row.amount,
       modeOfPayment: bulk.modeOfPayment,
+      paymentId: row.paymentId,
+      receiptPhoto: row.receiptPhoto,
     });
   }
 
