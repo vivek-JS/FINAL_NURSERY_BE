@@ -19,6 +19,7 @@ import {
 } from "./whatsappClient.js";
 import { normalizePhoneForWhitelist } from "../utils/agriLoadLinkSigner.js";
 import Order from "../models/order.model.js";
+import PlantCms from "../models/plantCms.model.js";
 import { formatWatiDateEnIN } from "../utility/watiIstDateFormat.js";
 
 const PENDING_ALERT_MAX = Number(process.env.WHATSAPP_PENDING_ALERT_MAX || 200);
@@ -298,14 +299,43 @@ export async function alertAdmins(message, context = "alert", options = {}) {
   return { delivered, total: numbers.length, results };
 }
 
-/** Reload order with farmer/sales names after create transaction commits. */
+/** Reload order with farmer/sales/plant names after create transaction commits. */
 async function loadOrderForWhatsAppAlert(orderOrId) {
   const orderId = orderOrId?._id || orderOrId;
   if (!orderId || !mongoose.isValidObjectId(String(orderId))) return null;
   return Order.findById(orderId)
     .populate("farmer", "name village taluka talukaName")
     .populate("salesPerson", "name")
+    .populate("plantName", "name")
     .lean();
+}
+
+function plantNameFromOrder(order = {}) {
+  return (
+    order?.plantName?.name ||
+    (typeof order?.plantName === "string" ? order.plantName : null) ||
+    "—"
+  );
+}
+
+async function resolvePlantSubtypeName(order = {}) {
+  const subtypeId = order.plantSubtype;
+  const plantRef = order.plantName;
+  const plantId = plantRef?._id || plantRef;
+  if (!plantId || !subtypeId) return "—";
+  const plant = await PlantCms.findById(plantId).select("subtypes").lean();
+  if (!plant?.subtypes?.length) return "—";
+  const sid = String(subtypeId);
+  const sub = plant.subtypes.find((s) => String(s._id) === sid);
+  return sub?.name || "—";
+}
+
+async function formatPlantSubtypeLabel(order = {}) {
+  const plant = plantNameFromOrder(order);
+  const subtype = await resolvePlantSubtypeName(order);
+  if (plant === "—" && subtype === "—") return "—";
+  if (subtype === "—") return plant;
+  return `${plant} / ${subtype}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -348,12 +378,14 @@ export async function sendOrderPlacedAlert(orderOrId) {
           ? plants * rate
           : rate || 0;
     const deliveryDate = formatWatiDateEnIN(order?.deliveryDate, "—");
+    const plantSubtype = await formatPlantSubtypeLabel(order);
 
     const message = [
       "🟢 *New Order Placed*",
       `Order No: ${orderNo}`,
       `Customer: ${farmerName}`,
       `Village: ${farmerVillage} | Taluka: ${farmerTaluka}`,
+      `Plant: ${plantSubtype}`,
       `Amount: ₹${Number(amount).toLocaleString("en-IN")}`,
       `Plants: ${plants || "—"}`,
       `Delivery Date: ${deliveryDate}`,
@@ -380,10 +412,7 @@ export async function sendBigOrderAlert(order, { qty, threshold } = {}) {
     const salesPersonName = order?.salesPerson?.name || "—";
     const farmerVillage =
       order?.farmer?.village || order?.orderFor?.village || "—";
-    const plantLabel =
-      order?.plantName?.name ||
-      (typeof order?.plantName === "string" ? order.plantName : null) ||
-      "—";
+    const plantSubtype = await formatPlantSubtypeLabel(order);
     const orderNo = order?.orderId || order?.publicOrderCode || order?._id || "—";
     const rate = Number(order?.rate) || 0;
     const amount =
@@ -401,7 +430,7 @@ export async function sendBigOrderAlert(order, { qty, threshold } = {}) {
       `Order No: *${orderNo}*`,
       `Customer: ${farmerName}`,
       `Village: ${farmerVillage}`,
-      `Plant: *${plantLabel}*`,
+      `Plant: *${plantSubtype}*`,
       `Plants: *${Number(plants).toLocaleString("en-IN")}*`,
       `Amount: ₹${Number(amount).toLocaleString("en-IN")}`,
       `Delivery: ${deliveryDate}`,
