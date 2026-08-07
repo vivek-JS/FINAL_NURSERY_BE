@@ -678,6 +678,14 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     });
   }
 
+  if (needsRamAgriOutstandingLimit) {
+    if (!deliveryDate || deliveryDate === "null" || deliveryDate === null) {
+      return next(
+        new AppError("Delivery date is required for Ram Agri orders (ऑर्डर कधी आणायचे)", 400)
+      );
+    }
+  }
+
   let orderData;
 
   if (useMultiLine) {
