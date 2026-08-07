@@ -44,3 +44,13 @@ export const requireSuperAdminForEmployeeDelete = (req, res, next) => {
   }
   next();
 };
+
+export const requireSuperAdmin = (req, res, next) => {
+  if (!isSuperAdmin(req.user)) {
+    return res.status(403).json({
+      status: "fail",
+      message: "Only Super Admin can access this feature",
+    });
+  }
+  next();
+};

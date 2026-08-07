@@ -247,11 +247,28 @@ export const deleteEmployeeDevice = catchAsync(async (req, res, next) => {
 
 /** GET /api/v1/admin/attendance/face-registration-status */
 export const listFaceRegistrationStatus = catchAsync(async (req, res) => {
-  const filter = {};
+  const filter = {
+    isDisabled: { $ne: true },
+    role: { $ne: "FARMER" },
+    jobTitle: { $exists: true, $ne: null },
+  };
   if (req.query.department) filter.department = req.query.department;
   if (req.query.status) filter.faceRegistrationStatus = req.query.status;
 
-  const employees = await User.find(filter).select(EMPLOYEE_LIST_FIELDS).populate("department", "name code").lean();
+  const search = String(req.query.search || "").trim();
+  if (search) {
+    const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    filter.$or = [{ name: searchRegex }, { employeeCode: searchRegex }];
+    if (/^\d+$/.test(search)) {
+      filter.$or.push({ phoneNumber: Number(search) });
+    }
+  }
+
+  const employees = await User.find(filter)
+    .select(EMPLOYEE_LIST_FIELDS)
+    .populate("department", "name code")
+    .sort({ name: 1 })
+    .lean();
   const profiles = await EmployeeFaceProfile.find({ employee_id: { $in: employees.map((e) => e._id) }, is_active: true }).lean();
   const profileByEmployee = new Map(profiles.map((p) => [String(p.employee_id), p]));
 

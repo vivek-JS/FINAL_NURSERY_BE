@@ -1,5 +1,5 @@
 import express from "express";
-import { requireEmployeeManager } from "../middlewares/employeeRole.middleware.js";
+import { requireEmployeeManager, requireSuperAdmin } from "../middlewares/employeeRole.middleware.js";
 import {
   listDailyAttendance,
   getDailyAttendanceById,
@@ -35,7 +35,7 @@ router.use(requireEmployeeManager);
 
 router.post("/kiosk/identify", kioskMarkUpload, kioskIdentify);
 router.post("/kiosk/verify-and-mark", kioskMarkUpload, kioskVerifyAndMarkHandler);
-router.post("/kiosk/register-face", kioskRegisterUpload, kioskRegisterFace);
+router.post("/kiosk/register-face", requireSuperAdmin, kioskRegisterUpload, kioskRegisterFace);
 
 router.get("/today-dashboard", getTodayDashboard);
 router.get("/office-groups", listOfficeGroups);
@@ -48,7 +48,7 @@ router.get("/export.csv", exportDailyAttendanceCsv);
 router.get("/attempts", listAttendanceAttempts);
 router.get("/summary/branch", branchAttendanceSummary);
 router.get("/reports/late-early", lateEarlyReport);
-router.get("/face-registration-status", listFaceRegistrationStatus);
+router.get("/face-registration-status", requireSuperAdmin, listFaceRegistrationStatus);
 
 router.get("/branch-locations", listBranchLocations);
 router.post("/branch-locations", upsertBranchLocation);
