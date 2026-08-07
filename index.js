@@ -2,6 +2,7 @@ import "dotenv/config";
 import mongoose from "mongoose";
 import server from "./app.js";
 import { attachVoiceFeedbackWebSocket } from "./services/voiceFeedback/voiceBridge.ws.js";
+import { warmUpFaceModels } from "./services/faceRecognition.service.js";
 import {
   startWhatsAppClient,
   shutdownWhatsAppClient,
@@ -87,6 +88,10 @@ mongoose
       httpServer.headersTimeout = 610000; // Slightly longer than keepAliveTimeout
       
       console.log('Server timeouts configured: 10 minutes');
+
+      // Load + JIT the face-api WASM kernels now so the first attendance of the
+      // day isn't the request that pays for a multi-second cold start.
+      void warmUpFaceModels();
 
       const gracefulShutdown = async (signal) => {
         console.log(`\n[${signal}] Graceful shutdown...`);

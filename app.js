@@ -348,6 +348,9 @@ import employeeRoute from "./routes/employee.route.js";
 import attendanceRoute from "./routes/attendance.route.js";
 import faceAttendanceRoute from "./routes/faceAttendance.route.js";
 import faceAttendanceAdminRoute from "./routes/faceAttendanceAdmin.route.js";
+import mobileFaceRoute from "./routes/mobileFace.route.js";
+import mobileAttendanceRoute from "./routes/mobileAttendance.route.js";
+import mobileAttendanceAdminRoute from "./routes/mobileAttendanceAdmin.route.js";
 import reportingRoute from "./routes/reporting.route.js";
 import labRoute from "./routes/lab.route.js";
 import primaryHardeingRoute from "./routes/primaryHardening.route.js";
@@ -659,6 +662,10 @@ server.use("/api/v1/attendance", authenticateToken, attendanceRoute);
 // More specific "/admin" mount registered first so it doesn't fall through the base router.
 server.use("/api/v1/face-attendance/admin", authenticateToken, faceAttendanceAdminRoute);
 server.use("/api/v1/face-attendance", authenticateToken, faceAttendanceRoute);
+// Face attendance v2 — InsightFace microservice + daily rollup models
+server.use("/api/v1/mobile/face", authenticateToken, mobileFaceRoute);
+server.use("/api/v1/mobile/attendance", authenticateToken, mobileAttendanceRoute);
+server.use("/api/v1/admin/attendance", authenticateToken, mobileAttendanceAdminRoute);
 server.use("/api/v1/reporting", authenticateToken, reportingRoute);
 server.use("/api/v1/lab", authenticateToken, labRoute);
 server.use("/api/v1/primaryHardeingRoute", authenticateToken, primaryHardeingRoute);

@@ -15,8 +15,14 @@ import {
   resetEmployeePasswordToDefault,
 } from "../controllers/employee.controller.js";
 import { createJobTitle } from "../controllers/cms.controller.js";
+import { authenticateToken } from "../middlewares/auth.middleware.js";
+import { getMyProfile } from "../controllers/employeeProfile.controller.js";
 
 const router = express.Router();
+
+// Own-profile endpoint for the attendance app — must be explicitly authenticated
+// (independent from the optional DISABLE_EMPLOYEE_AUTH bypass used for other routes below).
+router.get("/profile", authenticateToken, getMyProfile);
 
 // Custom middleware to handle both id and _id fields
 const validateEmployeeId = (req, res, next) => {

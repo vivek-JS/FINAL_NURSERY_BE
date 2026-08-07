@@ -1,0 +1,42 @@
+import AttendanceAttempt from "../models/attendanceAttempt.model.js";
+
+export async function logAttendanceAttempt({
+  employeeId,
+  attendanceType,
+  verificationStatus,
+  failureReason,
+  errorCode,
+  faceMatchScore,
+  faceQualityScore,
+  livenessPassed,
+  latitude,
+  longitude,
+  gpsAccuracy,
+  deviceId,
+  ipAddress,
+  auditImageUrl,
+  beardImageUrl,
+  source,
+  markedBy,
+}) {
+  return AttendanceAttempt.create({
+    employee_id: employeeId,
+    attendance_type: attendanceType || null,
+    attempted_at: new Date(),
+    verification_status: verificationStatus,
+    failure_reason: failureReason || null,
+    error_code: errorCode || null,
+    face_match_score: faceMatchScore ?? null,
+    face_quality_score: faceQualityScore ?? null,
+    liveness_passed: livenessPassed ?? false,
+    latitude: latitude ?? null,
+    longitude: longitude ?? null,
+    gps_accuracy: gpsAccuracy ?? null,
+    device_id: deviceId ?? null,
+    ip_address: ipAddress || null,
+    audit_image_url: auditImageUrl || null,
+    beard_image_url: beardImageUrl ?? null,
+    source: source || "MOBILE",
+    marked_by: markedBy ?? null,
+  });
+}

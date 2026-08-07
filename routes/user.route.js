@@ -43,6 +43,8 @@ import { getDealerPlantLedger } from "../controllers/dealerPlantInventoryLedger.
 import catchAsync from "../utility/catchAsync.js";
 import { savePushToken } from "../controllers/notification.controller.js";
 import multer from "multer";
+import { forgotPassword, resetPasswordWithOtp } from "../controllers/passwordReset.controller.js";
+import { loginRateLimiter, passwordResetRateLimiter } from "../middlewares/faceAttendanceRateLimit.middleware.js";
 
 const router = express.Router();
 
@@ -56,8 +58,10 @@ const uploadMediaFile = multer({
   },
 });
 
-router.post("/login", login);
+router.post("/login", loginRateLimiter, login);
 router.get("/test-login", testLogin);
+router.post("/forgot-password", passwordResetRateLimiter, forgotPassword);
+router.post("/reset-password", passwordResetRateLimiter, resetPasswordWithOtp);
 
 router
   .post("/refresh-token", refreshToken)
