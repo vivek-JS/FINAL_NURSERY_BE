@@ -6,6 +6,7 @@ import { verifyAccessToken } from "../utility/jwtUtils.js";
 
 /** Statuses a DISPATCH_MANAGER may set via updateOrder (narrow allowlist). */
 export const DISPATCH_MANAGER_ALLOWED_STATUSES = new Set([
+  "FARM_READY",
   "READY_FOR_DISPATCH",
   "DISPATCH_PROCESS",
 ]);

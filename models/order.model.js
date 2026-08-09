@@ -315,6 +315,10 @@ const paymentSchema = new Schema(
       type: String,
       enum: ["advance", "balance"],
     },
+    /** User who first recorded this payment row. */
+    paymentRecordedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    /** User who last changed payment status (collect / reject / verify). */
+    paymentUpdatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );
@@ -774,6 +778,13 @@ const orderSchema = new Schema(
         packetsRemaining: { type: Number, default: 0 },
         batchNumber: { type: String, default: "" },
         expiryDate: { type: Date },
+        batches: [
+          {
+            batchNumber: { type: String, default: "" },
+            packets: { type: Number, default: 0 },
+            expiryDate: { type: Date },
+          },
+        ],
         farmerName: { type: String, default: "" },
         notes: { type: String, default: "" },
         collectedAt: { type: Date },

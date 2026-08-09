@@ -164,6 +164,8 @@ const paymentSchema = new Schema({
   bankEntryDate: { type: Date },
   bankRawResponse: { type: Schema.Types.Mixed },
   bankReconciliationConflict: { type: Boolean, default: false },
+  paymentRecordedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+  paymentUpdatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
 }, {
   timestamps: true,
 });
@@ -426,6 +428,18 @@ const agriSalesOrderSchema = new Schema(
       required: true, // Required after generation in pre-validate hook
       trim: true,
     },
+    /** Soft-archive flag — pre–30-Jul-2026 booking era. */
+    isOld: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    /** UI sequence (#00001) within new or old era. */
+    displayOrderKey: {
+      type: Number,
+      min: 1,
+      sparse: true,
+    },
     // Customer/Employee Information
     customerName: {
       type: String,
@@ -452,6 +466,24 @@ const agriSalesOrderSchema = new Schema(
     customerState: {
       type: String,
       default: "Maharashtra",
+    },
+    /** Dealer booked this order for themselves (DEALER / AGRI_INPUT_DEALER). */
+    isDealerSelfOrder: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    dealer: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+    orderSource: {
+      type: String,
+      enum: ["FIELD", "DEALER_SELF"],
+      default: "FIELD",
+      index: true,
     },
     /** Multiple products per order; when set, root product fields are rolled up from lines in pre-validate. */
     lineItems: {
@@ -857,8 +889,57 @@ agriSalesOrderSchema.index({ orderDate: 1, orderStatus: 1 }); // Date and status
 agriSalesOrderSchema.index({ customerMobile: 1, orderDate: -1 }); // Customer orders by date
 agriSalesOrderSchema.index({ "lineItems.productId": 1 });
 agriSalesOrderSchema.index({ "lineItems.ramAgriVarietyId": 1 });
+agriSalesOrderSchema.index({ dealer: 1, orderDate: -1 });
+agriSalesOrderSchema.index({ isDealerSelfOrder: 1, orderStatus: 1 });
 
-// Generate order number before validation (runs before schema validation)
+function resolveAgriSalesOrderModel(doc) {
+  if (mongoose.models?.AgriSalesOrder) return mongoose.models.AgriSalesOrder;
+  if (doc?.constructor?.modelName === "AgriSalesOrder") return doc.constructor;
+  return mongoose.model("AgriSalesOrder");
+}
+
+async function allocateDisplayOrderKey(doc, AgriSalesOrderModel) {
+  const eraFilter = doc.isOld ? { isOld: true } : { isOld: { $ne: true } };
+  const last = await AgriSalesOrderModel.findOne(eraFilter)
+    .sort({ displayOrderKey: -1 })
+    .select("displayOrderKey")
+    .lean();
+  doc.displayOrderKey = (last?.displayOrderKey || 0) + 1;
+}
+
+async function generateAgriOrderNumber(AgriSalesOrderModel) {
+  const today = new Date();
+  const year = today.getFullYear().toString().slice(-2);
+  const month = (today.getMonth() + 1).toString().padStart(2, "0");
+  const day = today.getDate().toString().padStart(2, "0");
+  const datePrefix = `${year}${month}${day}`;
+
+  let lastOrder = null;
+  try {
+    lastOrder = await AgriSalesOrderModel.findOne({
+      orderNumber: new RegExp(`^AGR-${datePrefix}-`),
+    })
+      .sort({ orderNumber: -1 })
+      .lean()
+      .exec();
+  } catch (queryError) {
+    console.warn("Could not query for last order number, using timestamp fallback:", queryError.message);
+    const timestamp = Date.now().toString().slice(-6);
+    return `AGR-${datePrefix}-${timestamp}`;
+  }
+
+  let orderNum = 1;
+  if (lastOrder?.orderNumber) {
+    const parts = lastOrder.orderNumber.split("-");
+    if (parts.length === 3 && parts[2]) {
+      const lastNum = parseInt(parts[2], 10);
+      if (!isNaN(lastNum) && lastNum > 0) orderNum = lastNum + 1;
+    }
+  }
+  return `AGR-${datePrefix}-${orderNum.toString().padStart(3, "0")}`;
+}
+
+// Generate order number + display key before validation
 agriSalesOrderSchema.pre("validate", async function (next) {
   try {
     if (hasLineItems(this)) {
@@ -868,75 +949,42 @@ agriSalesOrderSchema.pre("validate", async function (next) {
     return next(err);
   }
 
-  // Only generate order number for new documents that don't have one
-  if (!this.isNew || (this.orderNumber && this.orderNumber.trim())) {
+  if (!this.isNew) return next();
+
+  let AgriSalesOrderModel;
+  try {
+    AgriSalesOrderModel = resolveAgriSalesOrderModel(this);
+  } catch (modelError) {
+    const today = new Date();
+    const y = today.getFullYear().toString().slice(-2);
+    const m = (today.getMonth() + 1).toString().padStart(2, "0");
+    const d = today.getDate().toString().padStart(2, "0");
+    if (!this.orderNumber?.trim()) {
+      this.orderNumber = `AGR-${y}${m}${d}-${Date.now().toString().slice(-6)}`;
+    }
     return next();
   }
 
   try {
-    const today = new Date();
-    const year = today.getFullYear().toString().slice(-2); // Last 2 digits of year
-    const month = (today.getMonth() + 1).toString().padStart(2, "0");
-    const day = today.getDate().toString().padStart(2, "0");
-    const datePrefix = `${year}${month}${day}`;
-
-    // Get the model for querying - try multiple methods
-    let AgriSalesOrderModel;
-    if (mongoose.models && mongoose.models.AgriSalesOrder) {
-      AgriSalesOrderModel = mongoose.models.AgriSalesOrder;
-    } else if (this.constructor && this.constructor.modelName === "AgriSalesOrder") {
-      AgriSalesOrderModel = this.constructor;
-    } else {
-      // Try to get model directly (might throw if not registered)
-      try {
-        AgriSalesOrderModel = mongoose.model("AgriSalesOrder");
-      } catch (modelError) {
-        // Model not registered yet - use timestamp fallback
-        const timestamp = Date.now().toString().slice(-6);
-        this.orderNumber = `AGR-${datePrefix}-${timestamp}`;
-        return next();
-      }
-    }
-    
-    // Find the last order for today's date
-    let lastOrder = null;
-    try {
-      lastOrder = await AgriSalesOrderModel
-        .findOne({ orderNumber: new RegExp(`^AGR-${datePrefix}-`) })
-        .sort({ orderNumber: -1 })
-        .lean()
-        .exec();
-    } catch (queryError) {
-      // If query fails, use timestamp fallback
-      console.warn("Could not query for last order number, using timestamp fallback:", queryError.message);
-      const timestamp = Date.now().toString().slice(-6);
-      this.orderNumber = `AGR-${datePrefix}-${timestamp}`;
-      return next();
+    if (!this.orderNumber?.trim()) {
+      this.orderNumber = await generateAgriOrderNumber(AgriSalesOrderModel);
     }
 
-    let orderNum = 1;
-    if (lastOrder && lastOrder.orderNumber) {
-      const parts = lastOrder.orderNumber.split("-");
-      if (parts.length === 3 && parts[2]) {
-        const lastNum = parseInt(parts[2], 10);
-        if (!isNaN(lastNum) && lastNum > 0) {
-          orderNum = lastNum + 1;
-        }
-      }
+    if (this.displayOrderKey == null && !this.isOld) {
+      await allocateDisplayOrderKey(this, AgriSalesOrderModel);
     }
 
-    this.orderNumber = `AGR-${datePrefix}-${orderNum.toString().padStart(3, "0")}`;
     next();
   } catch (error) {
-    console.error("Error generating order number:", error);
-    // Fallback: use timestamp-based order number if generation fails
+    console.error("Error in agri order pre-validate:", error);
     const today = new Date();
-    const year = today.getFullYear().toString().slice(-2);
-    const month = (today.getMonth() + 1).toString().padStart(2, "0");
-    const day = today.getDate().toString().padStart(2, "0");
-    const timestamp = Date.now().toString().slice(-6);
-    this.orderNumber = `AGR-${year}${month}${day}-${timestamp}`;
-    next(); // Don't fail - use fallback order number
+    const y = today.getFullYear().toString().slice(-2);
+    const m = (today.getMonth() + 1).toString().padStart(2, "0");
+    const d = today.getDate().toString().padStart(2, "0");
+    if (!this.orderNumber?.trim()) {
+      this.orderNumber = `AGR-${y}${m}${d}-${Date.now().toString().slice(-6)}`;
+    }
+    next();
   }
 });
 

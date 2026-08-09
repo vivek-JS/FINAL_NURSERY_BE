@@ -193,6 +193,16 @@ export function schedulePostShedLoadAlerts({ finalizeResult, changedBy = "Unknow
 
   (async () => {
     try {
+      const { notifyPlantOrderDispatched } = await import("../utility/mobileOrderPushNotify.js");
+      const plain = order || (await Order.findById(orderId).lean());
+      if (plain) notifyPlantOrderDispatched(plain);
+    } catch (e) {
+      console.error("post-shed-load push:", e?.message || e);
+    }
+  })();
+
+  (async () => {
+    try {
       const { ensureFeedbackCallForOrder } = await import("./feedbackCallScheduling.js");
       const o = order || (await Order.findById(orderId).lean());
       if (o?.orderStatus === "DISPATCHED") {

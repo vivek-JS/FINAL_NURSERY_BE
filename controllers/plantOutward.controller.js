@@ -53,6 +53,7 @@ import Dispatch from "../models/dispatch.model.js";
 import { updateOrderWithLedgerSync } from "./dispatch.controller.js";
 import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
 import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
+import { hasPendingLinkedAgriLoadForOrder } from "../services/linkedAgriLoadGuard.service.js";
 import {
   previewSecondaryVehicleLoad,
   executeSecondaryVehicleLoad,
@@ -4551,12 +4552,19 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
       const preAssignedSecondary = String(linkedOrderDoc?.deliveryChallanInvoiceNumber || "").trim();
       let official = null;
       let secondaryInvoiceLabel = preAssignedSecondary;
-      if (newOrderStatus === "DISPATCHED" && newRemaining === 0) {
+      const canAssignDc =
+        newOrderStatus === "DISPATCHED" &&
+        newRemaining === 0 &&
+        !(await hasPendingLinkedAgriLoadForOrder(linkedOrderId, session));
+      if (!canAssignDc && newOrderStatus === "DISPATCHED" && newRemaining === 0) {
+        newOrderStatus = "DISPATCH_PROCESS";
+      }
+      if (canAssignDc) {
         official = await ensureOfficialDeliveryChallanForOrder(linkedOrderDoc, session);
       }
       if (official) {
         secondaryInvoiceLabel = official;
-      } else if (!secondaryInvoiceLabel) {
+      } else if (!secondaryInvoiceLabel && canAssignDc) {
         const [freshSec] = await allocateNextInvoiceNumbers(session, 1);
         secondaryInvoiceLabel = freshSec || "";
       }
@@ -5095,6 +5103,9 @@ function unionDispatchOrderObjectIds(dispatchDoc) {
     .map((id) => new mongoose.Types.ObjectId(id));
 }
 
+/** Office qty edit within this window shows "recent" on shed app cards. */
+const OFFICE_EDIT_RECENT_MS = 24 * 60 * 60 * 1000;
+
 /** PENDING / IN_TRANSIT / LOADED vehicle dispatches for secondary shed fulfillment UI (paginated). */
 const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
   const ALLOWED = DISPATCH_SHED_ALLOWED_STATUSES;
@@ -5102,11 +5113,17 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
   const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
   const skip = (page - 1) * limit;
   const qSearch = String(req.query.search || "").trim();
+  const statusFilter = String(req.query.status || "").trim().toLowerCase();
 
   const filter = {
     isDeleted: { $ne: true },
     transportStatus: { $in: ALLOWED },
   };
+  if (statusFilter === "loaded") {
+    filter.transportStatus = "LOADED";
+  } else if (statusFilter === "pending") {
+    filter.transportStatus = { $in: ["PENDING", "IN_TRANSIT"] };
+  }
   if (qSearch) {
     filter.$or = [
       { transportId: new RegExp(qSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") },
@@ -5253,6 +5270,14 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
         };
       });
       const dispatchQuantity = Number(row.dispatchQuantity || 0) || 0;
+      const originalDispatchQuantity =
+        row.originalDispatchQuantity != null &&
+        Number.isFinite(Number(row.originalDispatchQuantity))
+          ? Number(row.originalDispatchQuantity)
+          : dispatchQuantity;
+      const officeQtyDeltaTotal = dispatchQuantity - originalDispatchQuantity;
+      const lastOfficeQtyDelta = Number(row.lastOfficeQtyDelta) || 0;
+      const lastOfficeEditedAt = row.lastOfficeEditedAt || null;
       const fromOutward = loadedInfo.byOrder?.get(oid) || 0;
       const shedLoadedQuantity = Math.max(
         Number(row.shedLoadedQuantity) || 0,
@@ -5266,12 +5291,17 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
         orderIdNumeric: label?.orderId ?? null,
         publicOrderCode: label?.publicOrderCode ?? "",
         dispatchQuantity,
+        originalDispatchQuantity,
+        officeQtyDeltaTotal,
+        lastOfficeQtyDelta,
+        lastOfficeEditedAt,
         shedLoadedQuantity,
         shedLoadedFromSecondary,
         isFullyLoadedFromShed:
           dispatchQuantity > 0 && shedLoadedQuantity >= dispatchQuantity,
         crates,
         cratePiecesOnLine: lineCratePieces,
+        plantQtyOnLine: dispatchQuantity,
       };
     });
 
@@ -5301,6 +5331,15 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
         ? Math.min(100, Math.round((shedLoadedPlantsTotal / vehiclePlantQty) * 100))
         : 0;
 
+    const officeQtyDeltaTotal = orderDispatchPreview.reduce(
+      (s, r) => s + (Number(r.officeQtyDeltaTotal) || 0),
+      0
+    );
+    const lastOfficeEditedAt = d.lastOfficeEditedAt || null;
+    const hasRecentOfficeEdit =
+      lastOfficeEditedAt != null &&
+      Date.now() - new Date(lastOfficeEditedAt).getTime() < OFFICE_EDIT_RECENT_MS;
+
     return {
       _id: d._id,
       transportId: d.transportId,
@@ -5315,6 +5354,9 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
       vehiclePlantQty,
       shedLoadedPlantsTotal,
       loadProgressPct,
+      officeQtyDeltaTotal,
+      lastOfficeEditedAt,
+      hasRecentOfficeEdit,
       plantRowsSummary: plantRows,
       plantsDetailPreview,
       orderDispatchPreview,
@@ -5784,6 +5826,7 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
     inwardSelections,
     sowReadySelections,
     source,
+    directShedLoad,
   } = req.body || {};
   const userId = req.user?._id || req.user?.id;
   const performedBy =
@@ -5791,13 +5834,15 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
 
   const sowSels = Array.isArray(sowReadySelections) ? sowReadySelections : [];
   const isSowReady =
-    source === "SOW_READY" || sowSels.some((s) => s?.slotId && Number(s?.plants) > 0);
+    source === "SOW_READY" ||
+    sowSels.some((s) => s?.slotId && Number(s?.plants) > 0);
 
   if (isSowReady) {
     const result = await executeSowReadyVehicleLoad({
       dispatchId,
       plantRowIndex,
       sowReadySelections: sowSels,
+      shedLoads,
       linkedOrderId,
       remarks,
       performedBy,
@@ -5817,6 +5862,8 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
     linkedOrderId,
     remarks,
     performedBy,
+    directShedLoad:
+      Boolean(directShedLoad) || source === "SHED_DISPATCH",
     collectSuggestionsFn: collectSecondaryInwardSuggestionsForPlantSubtype,
   });
   return res.status(200).json(

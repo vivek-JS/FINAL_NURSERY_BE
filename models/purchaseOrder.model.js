@@ -136,6 +136,15 @@ const purchaseOrderItemSchema = new mongoose.Schema({
     default: 1,
     // Conversion factor for converting secondary unit to primary unit
   },
+  /** Ram Agri → Ram Biotech nursery transfer (deduct Ram Agri, inward classic batch). */
+  isBiotechTransfer: {
+    type: Boolean,
+    default: false,
+  },
+  targetProduct: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+  },
   notes: String,
 });
 
@@ -201,9 +210,29 @@ const purchaseOrderSchema = new mongoose.Schema(
     notes: {
       type: String,
     },
+    /** Supplier / vendor invoice number — required on create (validated in controller). */
+    supplierInvoiceNumber: {
+      type: String,
+      trim: true,
+    },
+    /** Uploaded supplier invoice (image / PDF). */
+    supplierInvoiceFile: {
+      url: { type: String, default: "" },
+      originalName: { type: String, default: "" },
+      mimeType: { type: String, default: "" },
+      uploadedAt: { type: Date },
+    },
     autoGRN: {
       type: Boolean,
       default: false,
+    },
+    isInternalTransfer: {
+      type: Boolean,
+      default: false,
+    },
+    sowingRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SowingRequest',
     },
     approvedBy: {
       type: mongoose.Schema.Types.ObjectId,

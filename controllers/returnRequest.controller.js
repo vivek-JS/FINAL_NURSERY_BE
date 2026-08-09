@@ -233,6 +233,22 @@ export const approveReturnRequest = async (req, res) => {
     // Commit transaction
     await session.commitTransaction();
     session.endSession();
+
+    // Ram Agri sales-return equivalent: restore source lots for Biotech transfer batches
+    try {
+      const { restoreRamAgriFromBiotechReturn } = await import(
+        "../services/sowingRamAgriTransfer.service.js"
+      );
+      const ramRestore = await restoreRamAgriFromBiotechReturn(returnRequest, approvedBy);
+      if (ramRestore?.restored) {
+        console.log(
+          `✅ Ram Agri stock restored for return ${returnRequest.requestNumber}:`,
+          ramRestore.ramAgriRestored
+        );
+      }
+    } catch (ramErr) {
+      console.error("[ReturnApprove] Ram Agri restore failed:", ramErr?.message || ramErr);
+    }
     
     // Populate and return updated return request
     const updatedReturnRequest = await ReturnRequest.findById(id)

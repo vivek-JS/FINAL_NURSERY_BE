@@ -17,7 +17,9 @@ jobs:
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         script: |
           cd /var/www/FINAL_NURSERY_BE
-          git pull origin main
+          git fetch origin
+          git checkout prod
+          git pull origin prod
           npm install --production
-          pm2 restart nursery-backend
+          pm2 restart erp-backend --update-env
 

@@ -34,6 +34,11 @@ import {
   parseOrderListDateDdMmYyyy,
 } from "../utility/orderListQuery.js";
 import escapeRegex from "../utility/escapeRegex.js";
+import { appendOrderSearchPipelineStages } from "../utils/orderSearchMatch.util.js";
+import {
+  appendOrderSlotTrail,
+  captureSlotSnapshot,
+} from "../utility/orderSlotTrail.js";
 import {
   syncDealerLedgerForOrder,
 } from "../utils/dealerLedgerHelper.js";
@@ -1031,6 +1036,7 @@ const createOne = (Model, modelName) =>
             .session(session);
 
           const isSowingAllowed = slotForUpdate?.plantId?.sowingAllowed || false;
+          const beforeSnap = await captureSlotSnapshot(slotId, session);
           const slotUpdateOperation = {
             $push: {
               "subtypeSlots.$[subtypeSlot].slots.$[slot].orders": order[0]._id,
@@ -1072,6 +1078,24 @@ const createOne = (Model, modelName) =>
           console.log(
             `✅ Slot update result (${slotId}): matched=${slotUpdateResult.matchedCount}, modified=${slotUpdateResult.modifiedCount}`
           );
+
+          if (slotUpdateResult.modifiedCount > 0 && beforeSnap) {
+            try {
+              await appendOrderSlotTrail({
+                slotId,
+                orderId: order[0]._id,
+                quantity: plantsForSlot,
+                direction: "book",
+                performedBy: req.user?._id,
+                session,
+                isSowingAllowed,
+                affectsAvailable: isReadyPlantsOrder || !isSowingAllowed,
+                beforeSnap,
+              });
+            } catch (trailErr) {
+              console.error("Order booked slot trail failed:", trailErr);
+            }
+          }
         };
 
         // Update PlantProductMapping and slot productStock if productMappingId is provided
@@ -2491,6 +2515,7 @@ const updateOne = (Model, modelName, allowedFields) =>
         ).populate("plantId", "sowingAllowed").session(session);
 
         const isSowingAllowed = cancelSlot?.plantId?.sowingAllowed || false;
+        const beforeSnap = await captureSlotSnapshot(existingDoc.bookingSlot, session);
 
         let cancelUpdateOperation = {
           $inc: {
@@ -2518,20 +2543,83 @@ const updateOne = (Model, modelName, allowedFields) =>
           }
         );
         console.log(`✅ Slot update completed for cancelled order`);
+
+        if (beforeSnap) {
+          try {
+            await appendOrderSlotTrail({
+              slotId: existingDoc.bookingSlot,
+              orderId: existingDoc._id,
+              quantity: existingDoc.numberOfPlants,
+              direction: "release",
+              performedBy: req.user?._id,
+              session,
+              isSowingAllowed,
+              affectsAvailable: !isSowingAllowed,
+              beforeSnap,
+              reason: `Order #${existingDoc.orderId ?? "—"} cancelled — ${existingDoc.numberOfPlants} plants released`,
+            });
+          } catch (trailErr) {
+            console.error("Order cancel slot trail failed:", trailErr);
+          }
+        }
       }
 
       // Re-deduct slot when order status changes from CANCELLED/REJECTED back to PENDING (or any non-cancelled status)
       const wasCancelledOrRejected = isCancelLikeOrderStatus(existingDoc.orderStatus);
       const isNowActive = filteredBody.orderStatus && !isCancelLikeOrderStatus(filteredBody.orderStatus);
-      if (wasCancelledOrRejected && isNowActive) {
+      if (wasCancelledOrRejected && isNowActive && !existingDoc.dealerOrder) {
         try {
-          await updateSlot(
-            existingDoc.bookingSlot,
-            existingDoc.numberOfPlants,
-            "subtract",
-            session
+          const reopenSlot = await PlantSlot.findOne(
+            { "subtypeSlots.slots._id": existingDoc.bookingSlot },
+            { "subtypeSlots.$": 1 }
+          ).populate("plantId", "sowingAllowed").session(session);
+
+          const isSowingAllowed = reopenSlot?.plantId?.sowingAllowed || false;
+          const beforeSnap = await captureSlotSnapshot(existingDoc.bookingSlot, session);
+
+          const reopenUpdateOperation = {
+            $inc: {
+              "subtypeSlots.$[subtypeSlot].slots.$[slot].totalBookedPlants":
+                existingDoc.numberOfPlants,
+            },
+          };
+
+          if (!isSowingAllowed) {
+            reopenUpdateOperation.$inc[
+              "subtypeSlots.$[subtypeSlot].slots.$[slot].availablePlants"
+            ] = -existingDoc.numberOfPlants;
+          }
+
+          const reopenResult = await PlantSlot.updateOne(
+            { "subtypeSlots.slots._id": existingDoc.bookingSlot },
+            reopenUpdateOperation,
+            {
+              arrayFilters: [
+                { "subtypeSlot.slots._id": existingDoc.bookingSlot },
+                { "slot._id": existingDoc.bookingSlot },
+              ],
+              session: session,
+            }
           );
-          console.log(`✅ Slot re-deducted for order re-opened from ${existingDoc.orderStatus} → ${filteredBody.orderStatus}`);
+
+          if (beforeSnap && reopenResult.modifiedCount > 0) {
+            await appendOrderSlotTrail({
+              slotId: existingDoc.bookingSlot,
+              orderId: existingDoc._id,
+              quantity: existingDoc.numberOfPlants,
+              direction: "book",
+              performedBy: req.user?._id,
+              session,
+              isSowingAllowed,
+              affectsAvailable: !isSowingAllowed,
+              beforeSnap,
+              reason: `Order #${existingDoc.orderId ?? "—"} re-opened — ${existingDoc.numberOfPlants} plants booked`,
+            });
+          }
+
+          console.log(
+            `✅ Slot re-booked for order re-opened from ${existingDoc.orderStatus} → ${filteredBody.orderStatus}`
+          );
         } catch (slotErr) {
           console.error("Slot re-deduct failed (cancel→pending):", slotErr);
           await session.abortTransaction();
@@ -2980,15 +3068,23 @@ const updateOne = (Model, modelName, allowedFields) =>
             const {
               sendOrderEditedAlert,
               sendOrderDispatchedAlert,
+              filterEditHistoryForWhatsAppAlert,
             } = await import("../services/whatsappAlertService.js");
+            const { evaluateOrderAlertsOnUpdate } = await import(
+              "../services/whatsappAlertEngine.service.js"
+            );
             const plain = updatedDoc?.toObject ? updatedDoc.toObject() : updatedDoc;
             const changedBy = req.user?.name || req.user?.email || "Unknown";
-            await sendOrderEditedAlert(
-              plain,
-              changedBy,
-              editHistoryEntries,
-              existingDoc
-            );
+            const alertableEntries = filterEditHistoryForWhatsAppAlert(editHistoryEntries);
+            if (alertableEntries.length > 0) {
+              await sendOrderEditedAlert(
+                plain,
+                changedBy,
+                alertableEntries,
+                existingDoc
+              );
+              await evaluateOrderAlertsOnUpdate(plain, alertableEntries);
+            }
 
             const prevStatus = String(existingDoc?.orderStatus || "").toUpperCase();
             const nextStatus = String(plain?.orderStatus || "").toUpperCase();
@@ -3090,7 +3186,7 @@ const handleSlotUpdatesWithSession = async (
     };
 
     // Modified updateSlot function that works with a session
-    const updateSlotWithSession = async (slotId, plantsCount, action) => {
+    const updateSlotWithSession = async (slotId, plantsCount, action, orderIdForTrail = null) => {
       // Fetch slot to check if sowing is allowed
       const slotDoc = await PlantSlot.findOne(
         { "subtypeSlots.slots._id": slotId },
@@ -3098,6 +3194,7 @@ const handleSlotUpdatesWithSession = async (
       ).populate("plantId", "sowingAllowed").session(session);
 
       const isSowingAllowed = slotDoc?.plantId?.sowingAllowed || false;
+      const beforeSnap = orderIdForTrail ? await captureSlotSnapshot(slotId, session) : null;
       
       // Update totalBookedPlants based on action (add = decrement booked, subtract = increment booked)
       const bookingIncrement = action === "add" ? -plantsCount : plantsCount;
@@ -3130,6 +3227,25 @@ const handleSlotUpdatesWithSession = async (
       );
       
       console.log(`✅ Slot update result: matched=${updateResult.matchedCount}, modified=${updateResult.modifiedCount}`);
+
+      if (orderIdForTrail && beforeSnap && updateResult.modifiedCount > 0) {
+        try {
+          await appendOrderSlotTrail({
+            slotId,
+            orderId: orderIdForTrail,
+            quantity: plantsCount,
+            direction: action === "subtract" ? "book" : "release",
+            performedBy: req.user?._id,
+            session,
+            isSowingAllowed,
+            affectsAvailable: !isSowingAllowed,
+            beforeSnap,
+          });
+        } catch (trailErr) {
+          console.error("Order slot qty trail failed:", trailErr);
+        }
+      }
+
       return updateResult;
     };
 
@@ -3148,12 +3264,14 @@ const handleSlotUpdatesWithSession = async (
         updateSlotWithSession(
           existingDoc.bookingSlot,
           existingDoc.numberOfPlants,
-          "add"
+          "add",
+          existingDoc._id
         ),
         updateSlotWithSession(
           bookingSlot,
           numberOfPlants || existingDoc.numberOfPlants,
-          "subtract"
+          "subtract",
+          existingDoc._id
         ),
       ]);
     } else if (numberOfPlants) {
@@ -3170,7 +3288,8 @@ const handleSlotUpdatesWithSession = async (
         await updateSlotWithSession(
           existingDoc.bookingSlot,
           Math.abs(quantityDifference),
-          quantityDifference < 0 ? "add" : "subtract"
+          quantityDifference < 0 ? "add" : "subtract",
+          existingDoc._id
         );
       }
     }
@@ -4274,80 +4393,7 @@ const getAll = (Model, modelName) =>
     // Search filtering (ignore whitespace-only `search`)
     const searchTrimmed = search ? String(search).trim() : "";
     if (searchTrimmed) {
-      const searchRegex = new RegExp(escapeRegex(searchTrimmed), "i");
-
-      pipeline.push({
-        $lookup: {
-          from: "farmers",
-          localField: "farmer",
-          foreignField: "_id",
-          as: "farmer",
-        },
-      });
-
-      pipeline.push({
-        $addFields: {
-          "farmer.mobileNumberStr": {
-            $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
-          },
-          orderForMobileStr: {
-            $let: {
-              vars: { raw: "$orderFor.mobileNumber" },
-              in: {
-                $cond: [
-                  {
-                    $or: [
-                      { $eq: ["$$raw", null] },
-                      { $eq: ["$$raw", ""] },
-                      { $eq: ["$$raw", 0] },
-                    ],
-                  },
-                  "",
-                  { $toString: "$$raw" },
-                ],
-              },
-            },
-          },
-        },
-      });
-
-      const isNumericOrderIdQuery = /^\d+$/.test(searchTrimmed);
-      const orderIdExact = isNumericOrderIdQuery ? Number(searchTrimmed) : NaN;
-
-      // All-digit search: exact orderId (e.g. 1357). No substring on name/mobile for short numeric queries.
-      // 10+ digits: also allow exact mobile match (common full-phone search) alongside orderId exact.
-      // Non-numeric → substring on farmer name, mobile, book-for name/location.
-      if (isNumericOrderIdQuery) {
-        if (searchTrimmed.length >= 10) {
-          pipeline.push({
-            $match: {
-              $or: [
-                { orderId: orderIdExact },
-                { "farmer.mobileNumberStr": searchTrimmed },
-                { orderForMobileStr: searchTrimmed },
-              ],
-            },
-          });
-        } else {
-          pipeline.push({
-            $match: { orderId: orderIdExact },
-          });
-        }
-      } else {
-        pipeline.push({
-          $match: {
-            $or: [
-              { "farmer.name": searchRegex },
-              { "farmer.mobileNumberStr": searchRegex },
-              { "orderFor.name": searchRegex },
-              { "orderFor.village": searchRegex },
-              { "orderFor.talukaName": searchRegex },
-              { "orderFor.districtName": searchRegex },
-              { "orderFor.district": searchRegex },
-            ],
-          },
-        });
-      }
+      appendOrderSearchPipelineStages(pipeline, searchTrimmed);
       // Search + farmReady: match "farm ready" in UI sense (status or dated), after orderId/name match
       if (deferFarmReadyFilterAfterSearch) {
         pipeline.push({

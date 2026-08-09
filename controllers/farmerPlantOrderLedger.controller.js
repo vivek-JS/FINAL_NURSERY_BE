@@ -15,6 +15,7 @@ import FarmerPlantOrderLedgerEntry from "../models/farmerPlantOrderLedger.model.
 import FarmerPlantOrderArchive from "../models/farmerPlantOrderArchive.model.js";
 import Log from "../models/log.model.js";
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
+import { stampPaymentUpdatedBy, stampPaymentRecordedBy } from "../utils/paymentAudit.js";
 import {
   shouldLogFarmerPlantLedger,
   hasFarmerPlantLedgerIdentity,
@@ -811,6 +812,7 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     }
 
     newPayment.paymentStatus = "COLLECTED";
+    stampPaymentUpdatedBy(newPayment, req.user);
     recomputeOrderPaymentCompletion(sourceOrder);
     recomputeOrderPaymentCompletion(targetOrder);
     await targetOrder.save({ session });
@@ -1248,6 +1250,7 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
       if (existingTargetPayment) {
         existingTargetPayment.paidAmount = amount;
         existingTargetPayment.paymentStatus = "COLLECTED";
+        stampPaymentUpdatedBy(existingTargetPayment, req.user);
         existingTargetPayment.paymentDate = new Date();
         existingTargetPayment.modeOfPayment = mode;
         existingTargetPayment.remark = `[Transfer request #${requestDoc._id} approved from dealer order #${sourceNumericId}]`;
@@ -1267,6 +1270,8 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
           transferRequestId: requestDoc._id,
         };
         applyPaymentTimingToPayment(targetPaymentPayload, targetOrder);
+        stampPaymentRecordedBy(targetPaymentPayload, req.user);
+        stampPaymentUpdatedBy(targetPaymentPayload, req.user);
         targetOrder.payment.push(targetPaymentPayload);
         newPayment = targetOrder.payment[targetOrder.payment.length - 1];
       }
@@ -1351,6 +1356,7 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
       await targetOrder.save({ session });
       const previousStatus = newPayment.paymentStatus;
       newPayment.paymentStatus = "COLLECTED";
+      stampPaymentUpdatedBy(newPayment, req.user);
       applyPaymentTimingToPayment(newPayment, targetOrder, { force: true });
       await targetOrder.save({ session });
 

@@ -4,6 +4,7 @@ import User from "../models/user.model.js";
 import DealerWallet from "../models/dealerWallet.js";
 import AppError from "../utility/appError.js";
 import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
+import { stampPaymentRecordedBy, stampPaymentUpdatedBy } from "../utils/paymentAudit.js";
 import { formatOrderWalletDescriptionContext } from "../utils/dispatchCompleteOrderPayments.js";
 import {
   ensureFarmerPlantOrderDebit,
@@ -63,7 +64,7 @@ export function normalizePaymentRow(row, reqUser, order, { extraReceiptUrls = []
     ...extraReceiptUrls,
   ].filter(Boolean);
 
-  return {
+  const payment = {
     paidAmount: amount,
     paymentStatus: finalPaymentStatus,
     paymentDate: row.paymentDate ? new Date(row.paymentDate) : new Date(),
@@ -79,6 +80,11 @@ export function normalizePaymentRow(row, reqUser, order, { extraReceiptUrls = []
       row.customerName?.trim() ||
       (!order.dealerOrder && order.farmer?.name ? order.farmer.name : undefined),
   };
+  stampPaymentRecordedBy(payment, reqUser);
+  if (finalPaymentStatus !== "PENDING") {
+    stampPaymentUpdatedBy(payment, reqUser);
+  }
+  return payment;
 }
 
 export function validatePaymentRow(row, index = 0) {

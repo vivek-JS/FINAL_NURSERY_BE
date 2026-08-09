@@ -17,6 +17,7 @@ import {
   getRamAgriRunningBalanceAfterMobile,
   normalizeAgriCustomerMobile,
 } from "../utils/ramAgriLedgerHelper.js";
+import { buildVarietyLedgerFromMovements } from "../services/ramAgriStockMovement.service.js";
 
 // ==================== VARIETY/PRODUCT LEDGER ====================
 
@@ -61,6 +62,38 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
     });
   }
 
+  const movementLedger = await buildVarietyLedgerFromMovements({
+    cropId,
+    varietyId,
+    currentStock: variety.currentStock || 0,
+    startDate,
+    endDate,
+  });
+
+  if (movementLedger) {
+    const response = generateResponse(
+      "Success",
+      "Variety ledger fetched successfully",
+      {
+        variety: {
+          cropId: crop._id,
+          cropName: crop.cropName,
+          varietyId: variety._id,
+          varietyName: variety.name,
+          currentStock: variety.currentStock || 0,
+          stockValue: variety.stockValue || 0,
+          averagePrice: variety.averagePrice || 0,
+        },
+        summary: movementLedger.summary,
+        entries: movementLedger.entries,
+        ledgerSource: movementLedger.source,
+      },
+      undefined
+    );
+    return res.status(200).json(response);
+  }
+
+  // Legacy fallback when no persisted movements (pre-backfill data)
   // Date filter
   const dateFilter = {};
   const startDateObj = startDate ? new Date(startDate) : null;
@@ -318,6 +351,7 @@ export const getVarietyLedger = catchAsync(async (req, res, next) => {
         closingStock: variety.currentStock || 0,
       },
       entries: entriesWithBalance,
+      ledgerSource: "legacy",
     },
     undefined
   );

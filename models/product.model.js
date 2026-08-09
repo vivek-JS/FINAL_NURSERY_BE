@@ -58,6 +58,11 @@ const productSchema = new mongoose.Schema(
       type: Number,
       default: 1,
     },
+    /** Expected seedlings from 1 primary unit (e.g. packet) — sowing math only, not UOM */
+    tentativePlantsPerPacket: {
+      type: Number,
+      min: 0,
+    },
     minStockLevel: {
       type: Number,
       default: 0,

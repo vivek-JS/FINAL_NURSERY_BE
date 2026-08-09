@@ -3,19 +3,39 @@ import mongoose from "mongoose";
 import SowingRequest from "../models/sowingRequest.model.js";
 import Order from "../models/order.model.js";
 import InventoryOutward from "../models/inventoryOutward.model.js";
+import PlantSlot from "../models/slots.model.js";
 import {
   parseNum,
   pushEvent,
   applyPlantsToLinkedSlots,
   settleOutwardAndReturns,
   markOrdersSowed,
+  recordExcessPlantsOnSlot,
+  reclaimExcessForCoveredOrders,
   uploadCompleteSowPhotos,
   editSowEntryOnSlots,
+  companyPacketShare,
+  getRemainingCompanyPackets,
 } from "./sowingCompleteHelpers.js";
 import {
   resolveCmsReadyDays,
   parseLocalDate,
 } from "./sowingSlotReadyHelpers.js";
+import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
+
+/** Collect applied slot ids from completion meta + linkedSlotIds. */
+function collectSlotIdsFromRequest(r) {
+  const ids = new Set();
+  for (const id of r.linkedSlotIds || []) {
+    if (id && mongoose.Types.ObjectId.isValid(id)) ids.add(String(id));
+  }
+  for (const ev of r.completionEvents || []) {
+    const meta = ev?.meta || {};
+    const aid = meta.appliedSlotId || meta.toSlotId || meta.slotId;
+    if (aid && mongoose.Types.ObjectId.isValid(aid)) ids.add(String(aid));
+  }
+  return [...ids];
+}
 
 export const completeSowUpload = multer({
   storage: multer.memoryStorage(),
@@ -95,44 +115,51 @@ export const completeSowingRequest = async (req, res) => {
     }
 
     try {
-      const cf = Number(locked.conversionFactor) || 1;
+      const cf = resolveSowingPlantsPerPacket(locked);
       const expected = Number(
         ((Number(locked.packetsRequested) || 0) * cf).toFixed(0)
       );
 
-      let packetsUsed = parseNum(req.body.packetsUsed, NaN);
-      let packetsToReturn = hasReturnInput ? Math.max(0, packetsToReturnRaw) : NaN;
-      const companyPkts =
-        Number(locked.packetsFromCompany) ||
-        (locked.seedSource === "RAISING" ? 0 : Number(locked.packetsRequested) || 0);
+      const companyPkts = companyPacketShare(locked);
       const packetsIssued =
-        Number(locked.packetsRequested) || companyPkts || 0;
+        Number(locked.packetsIssued) ||
+        Number(locked.packetsRequested) ||
+        companyPkts ||
+        0;
+      const remainingPkt = await getRemainingCompanyPackets(locked);
 
-      if (Number.isFinite(packetsToReturn)) {
-        packetsToReturn = Math.min(companyPkts, packetsToReturn);
-        if (!Number.isFinite(packetsUsed)) {
-          packetsUsed = Math.max(0, companyPkts - packetsToReturn);
-        }
-      }
+      // Prefer explicit packetsUsed. Do NOT infer used = remaining − return
+      // just because packetsToReturn was sent (0 used to burn all bags).
+      let packetsUsed = parseNum(req.body.packetsUsed, NaN);
+      let packetsToReturn = hasReturnInput
+        ? Math.max(0, packetsToReturnRaw)
+        : NaN;
 
       if (!Number.isFinite(packetsUsed)) {
         const fromPlants = cf > 0 ? plantsSowed / cf : 0;
-        packetsUsed = Math.min(
-          companyPkts || Number(locked.packetsRequested) || 0,
-          fromPlants
+        packetsUsed = Math.min(remainingPkt, Math.max(0, fromPlants));
+      } else {
+        packetsUsed = Math.min(remainingPkt, Math.max(0, packetsUsed));
+      }
+
+      if (!Number.isFinite(packetsToReturn)) {
+        // Complete: auto-return leftover. Partial: leave bags open.
+        packetsToReturn = completeSowing
+          ? Math.max(0, remainingPkt - packetsUsed)
+          : 0;
+      } else {
+        packetsToReturn = Math.min(
+          Math.max(0, remainingPkt - packetsUsed),
+          packetsToReturn
         );
         if (completeSowing) {
-          packetsUsed =
-            companyPkts || Number(locked.packetsRequested) || packetsUsed;
+          // Force-close: any unused after this use must be returned.
+          packetsToReturn = Math.max(0, remainingPkt - packetsUsed);
         }
       }
-      if (!Number.isFinite(packetsToReturn)) {
-        packetsToReturn = completeSowing
-          ? Math.max(0, companyPkts - packetsUsed)
-          : 0;
-      }
-      if (packetsUsed + packetsToReturn > companyPkts && companyPkts > 0) {
-        packetsToReturn = Math.max(0, companyPkts - packetsUsed);
+
+      if (packetsUsed + packetsToReturn > remainingPkt && remainingPkt >= 0) {
+        packetsToReturn = Math.max(0, remainingPkt - packetsUsed);
       }
 
       const userId = req.user._id;
@@ -155,6 +182,7 @@ export const completeSowingRequest = async (req, res) => {
               sowedAt,
               plantReadyDays,
               resolveByReadyDate: true,
+              userId,
             })
           : { slotsUpdated: 0 };
 
@@ -187,38 +215,88 @@ export const completeSowingRequest = async (req, res) => {
       }
       locked.completedBy = userId;
 
-      if (completeSowing) {
+      // Remaining open bags after this settle (0 → auto-complete).
+      const remainingAfter = Math.max(
+        0,
+        remainingPkt - (inv.used || 0) - (inv.returned || 0)
+      );
+      locked.remainingSowingNeeded = Math.max(
+        0,
+        expected - locked.sowedQuantity
+      );
+
+      const noCompanyLeft =
+        companyPkts <= 0
+          ? locked.remainingSowingNeeded <= 0
+          : remainingAfter <= 0;
+
+      locked.sowingCompleted = Boolean(completeSowing || noCompanyLeft);
+      if (locked.sowingCompleted) {
         locked.remainingSowingNeeded = 0;
-        locked.sowingCompleted = true;
         locked.sowingCompletedDate = sowedAt;
-        locked.sowingInProgress = false;
-      } else {
-        locked.remainingSowingNeeded = Math.max(
-          0,
-          expected - locked.sowedQuantity
-        );
-        locked.sowingCompleted = locked.remainingSowingNeeded <= 0;
-        if (locked.sowingCompleted) {
-          locked.sowingCompletedDate = sowedAt;
-          locked.sowingInProgress = false;
+      }
+      // Always release lock so the next partial entry can re-acquire.
+      locked.sowingInProgress = false;
+
+      // Mark only orders linked / included on this sowing request (no ±4d auto-cover)
+      const orderResult =
+        plantsSowed > 0
+          ? await markOrdersSowed(locked, {
+              sowedAt,
+              plantsSowed,
+              plantReadyDays,
+              orderIds: locked.linkedOrderIds || [],
+            })
+          : { marked: 0, remainingUncovered: plantsSowed || 0 };
+
+      // Leftover after included orders → saleable availablePlants; covered → orderReservedPlants
+      const excessPlants = Math.max(
+        0,
+        Number(orderResult.remainingUncovered) || 0
+      );
+      const orderCoveredPlants = Math.max(0, plantsSowed - excessPlants);
+      let excessSlotResult = { excessPlants: 0 };
+      if (slotResult.appliedSlotId) {
+        if (locked.isExcessiveSowing) {
+          // Apply already counted all as excess — reclaim what covered nearby orders
+          if (orderCoveredPlants > 0) {
+            excessSlotResult = await reclaimExcessForCoveredOrders(
+              slotResult.appliedSlotId,
+              locked._id,
+              orderCoveredPlants,
+              excessPlants
+            );
+          } else {
+            excessSlotResult = { excessPlants, orderCoveredPlants: 0 };
+          }
+        } else if (excessPlants > 0 || orderCoveredPlants >= 0) {
+          excessSlotResult = await recordExcessPlantsOnSlot(
+            slotResult.appliedSlotId,
+            locked._id,
+            excessPlants,
+            orderCoveredPlants,
+            orderResult.markedIds || locked.linkedOrderIds || []
+          );
         }
       }
 
-      const orderResult = locked.sowingCompleted
-        ? await markOrdersSowed(locked, { sowedAt })
-        : { marked: 0 };
-
       pushEvent(locked, {
-        type: "SOW_COMPLETED",
+        type: locked.sowingCompleted ? "SOW_COMPLETED" : "PLANTS_SOWED",
         by: userId,
         quantity: plantsSowed,
         unit: "plants",
-        message: "Sowing completed for the day",
+        message: locked.sowingCompleted
+          ? "Sowing completed"
+          : "Sowing progress saved (bags still open)",
         meta: {
           packetsIssued: locked.packetsIssued,
           packetsUsed: locked.packetsUsed,
           packetsReturned: locked.packetsReturned,
+          packetsRemaining: remainingAfter,
+          completeSowing,
           sowedQuantity: locked.sowedQuantity,
+          orderCoveredPlants,
+          excessPlants: excessSlotResult.excessPlants || excessPlants,
           slotsUpdated: slotResult.slotsUpdated,
           plantReadyDays: slotResult.plantReadyDays ?? plantReadyDays,
           plantReadyDate: slotResult.plantReadyDate,
@@ -229,6 +307,12 @@ export const completeSowingRequest = async (req, res) => {
           laboursLadies,
           laboursGents,
           ordersMarked: orderResult.marked,
+          remainingUncovered: orderResult.remainingUncovered ?? 0,
+          orderReadyDate: orderResult.readyDate || null,
+          orderPlantReadyDays: orderResult.plantReadyDays ?? plantReadyDays,
+          orderCoverWindowDays: orderResult.coverWindowDays ?? 0,
+          orderCoverFrom: orderResult.coverFrom || null,
+          orderCoverTo: orderResult.coverTo || null,
           photoCount: photos.length,
           shedName,
           notes: notes || undefined,
@@ -238,6 +322,32 @@ export const completeSowingRequest = async (req, res) => {
 
       await locked.save();
       bustLiteCacheAsync();
+
+      let uncoveredLinkedOrders = [];
+      let suggestCoverFromStock = false;
+      const finalExcess = excessSlotResult.excessPlants || excessPlants;
+      if (finalExcess > 0 && (locked.linkedOrderIds || []).length) {
+        const pendingLinked = await Order.find({
+          _id: { $in: locked.linkedOrderIds },
+          sowingDone: { $ne: true },
+          orderStatus: {
+            $nin: ["CANCELLED", "TEMPORARY_CANCELLED", "REJECTED", "DELETED"],
+          },
+        })
+          .select("orderId numberOfPlants additionalPlants deliveryDate")
+          .lean();
+        uncoveredLinkedOrders = pendingLinked.map((o) => ({
+          orderMongoId: String(o._id),
+          orderId: o.orderId,
+          plantsNeeded:
+            (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0),
+          deliveryDate: o.deliveryDate || null,
+        }));
+        suggestCoverFromStock =
+          uncoveredLinkedOrders.length > 0 || finalExcess > 0;
+      } else if (finalExcess > 0) {
+        suggestCoverFromStock = true;
+      }
 
       return res.status(200).json({
         success: true,
@@ -254,6 +364,7 @@ export const completeSowingRequest = async (req, res) => {
           packetsIssued: locked.packetsIssued,
           packetsUsed: locked.packetsUsed,
           packetsReturned: locked.packetsReturned,
+          packetsRemaining: remainingAfter,
           slotsUpdated: slotResult.slotsUpdated,
           plantReadyDays: slotResult.plantReadyDays ?? plantReadyDays,
           plantReadyDate: slotResult.plantReadyDate,
@@ -266,6 +377,14 @@ export const completeSowingRequest = async (req, res) => {
             returnRequestIds: inv.returnRequestIds,
           },
           ordersMarked: orderResult.marked,
+          orderCoveredPlants,
+          excessPlants: finalExcess,
+          uncoveredLinkedOrders,
+          suggestCoverFromStock,
+          orderCoverWindowDays: orderResult.coverWindowDays ?? 0,
+          orderCoverFrom: orderResult.coverFrom || null,
+          orderCoverTo: orderResult.coverTo || null,
+          orderReadyDate: orderResult.readyDate || null,
         },
       });
     } catch (inner) {
@@ -371,7 +490,7 @@ export const getIssuedSowingQueue = async (req, res) => {
       sowingCompleted: { $ne: true },
     })
       .select(
-        "requestNumber plantId plantName subtypeId subtypeName productId packetsNeeded packetsRequested conversionFactor seedSource packetsFromCompany packetsFromRaising linkedOrderIds linkedSlotIds isExcessiveSowing sowedQuantity remainingSowingNeeded issuedDate sowingStartedDate sowingInProgress"
+        "requestNumber plantId plantName subtypeId subtypeName productId packetsNeeded packetsRequested packetsIssued packetsUsed packetsReturned conversionFactor tentativePlantsPerPacket seedSource packetsFromCompany packetsFromRaising linkedOrderIds linkedSlotIds isExcessiveSowing sowedQuantity remainingSowingNeeded issuedDate sowingStartedDate sowingInProgress outwardId"
       )
       .sort({ issuedDate: 1 })
       .lean();
@@ -405,8 +524,9 @@ export const getIssuedSowingQueue = async (req, res) => {
       })
     );
 
-    const data = rows.map((r) => {
-      const cf = Number(r.conversionFactor) || 1;
+    const data = await Promise.all(
+      rows.map(async (r) => {
+      const cf = resolveSowingPlantsPerPacket(r);
       const expectedPlants = Number(
         ((Number(r.packetsRequested) || 0) * cf).toFixed(0)
       );
@@ -415,6 +535,12 @@ export const getIssuedSowingQueue = async (req, res) => {
         0,
         Number(r.remainingSowingNeeded) || expectedPlants - already
       );
+      const companyPkts = companyPacketShare(r);
+      const packetsIssued =
+        Number(r.packetsIssued) || Number(r.packetsRequested) || companyPkts || 0;
+      const packetsUsed = Number(r.packetsUsed) || 0;
+      const packetsReturned = Number(r.packetsReturned) || 0;
+      const packetsRemaining = await getRemainingCompanyPackets(r);
       const linked = (r.linkedOrderIds || []).map((id) => {
         const o = orderMap.get(String(id));
         return o
@@ -432,15 +558,22 @@ export const getIssuedSowingQueue = async (req, res) => {
 
       return {
         ...r,
+        conversionFactor: cf,
+        tentativePlantsPerPacket: r.tentativePlantsPerPacket ?? null,
         expectedPlants,
         remainingPlants,
+        packetsIssued,
+        packetsUsed,
+        packetsReturned,
+        packetsRemaining,
         plantReadyDays:
           readyMap.get(`${r.plantId}-${r.subtypeId}`) || 0,
         linkedOrderCount: linked.length,
         linkedOrders: linked,
         isExcess: Boolean(r.isExcessiveSowing),
       };
-    });
+    })
+    );
 
     return res.json({ success: true, data, count: data.length });
   } catch (error) {
@@ -506,7 +639,7 @@ export const getSowingCompletions = async (req, res) => {
       SowingRequest.countDocuments(match),
       SowingRequest.find(match)
         .select(
-          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents completionPhotos completionNotes shedName sowingCompletedDate isExcessiveSowing linkedOrderIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned returnRequestIds completionEvents completedBy outwardId"
+          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents completionPhotos completionNotes shedName sowingCompletedDate isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned returnRequestIds completionEvents completedBy outwardId"
         )
         .populate("completedBy", "name")
         .sort({ sowingCompletedDate: -1 })
@@ -515,24 +648,25 @@ export const getSowingCompletions = async (req, res) => {
         .lean(),
     ]);
 
-    const allOrderIds = [
-      ...new Set(
-        rows.flatMap((r) => (r.linkedOrderIds || []).map((id) => String(id)))
-      ),
-    ];
+    const requestIds = rows.map((r) => r._id).filter(Boolean);
     const outwardIds = [
       ...new Set(
         rows.map((r) => r.outwardId).filter(Boolean).map((id) => String(id))
       ),
     ];
+    const allSlotIds = [
+      ...new Set(rows.flatMap((r) => collectSlotIdsFromRequest(r))),
+    ].map((id) => new mongoose.Types.ObjectId(id));
 
-    const [orders, outwards] = await Promise.all([
-      allOrderIds.length
-        ? Order.find({ _id: { $in: allOrderIds } })
+    const [ordersByRequest, outwards, slotRows] = await Promise.all([
+      // Orders actually covered by each completion (delivery matched at mark time)
+      requestIds.length
+        ? Order.find({ sowingDoneRequestId: { $in: requestIds } })
             .select(
-              "orderId name farmer numberOfPlants additionalPlants sowingDone sowingDoneAt deliveryDate"
+              "orderId name farmer numberOfPlants additionalPlants sowingDone sowingDoneAt sowingDoneRequestId deliveryDate orderBookingDate createdAt"
             )
             .populate("farmer", "name mobileNumber")
+            .sort({ deliveryDate: 1, createdAt: 1 })
             .lean()
         : Promise.resolve([]),
       outwardIds.length
@@ -541,13 +675,57 @@ export const getSowingCompletions = async (req, res) => {
             .populate("items.batch", "batchNumber")
             .lean()
         : Promise.resolve([]),
+      allSlotIds.length
+        ? PlantSlot.aggregate([
+            { $match: { "subtypeSlots.slots._id": { $in: allSlotIds } } },
+            { $unwind: "$subtypeSlots" },
+            { $unwind: "$subtypeSlots.slots" },
+            { $match: { "subtypeSlots.slots._id": { $in: allSlotIds } } },
+            {
+              $project: {
+                slotId: "$subtypeSlots.slots._id",
+                startDay: "$subtypeSlots.slots.startDay",
+                endDay: "$subtypeSlots.slots.endDay",
+                month: "$subtypeSlots.slots.month",
+                year: { $ifNull: ["$subtypeSlots.slots.year", "$year"] },
+                primarySowed: "$subtypeSlots.slots.primarySowed",
+                officeSowed: "$subtypeSlots.slots.officeSowed",
+                plantsSowed: "$subtypeSlots.slots.plantsSowed",
+                availablePlants: "$subtypeSlots.slots.availablePlants",
+                orderReservedPlants: {
+                  $ifNull: ["$subtypeSlots.slots.orderReservedPlants", 0],
+                },
+                totalBookedPlants: "$subtypeSlots.slots.totalBookedPlants",
+                totalPlants: "$subtypeSlots.slots.totalPlants",
+                sowingDate: "$subtypeSlots.slots.sowingDate",
+                plantReadyDate: "$subtypeSlots.slots.plantReadyDate",
+                plantReadyDays: "$subtypeSlots.slots.plantReadyDays",
+                excessivePlants: {
+                  $ifNull: ["$subtypeSlots.slots.excessiveSowing.plants", 0],
+                },
+                sowingBatches: {
+                  $slice: [
+                    { $ifNull: ["$subtypeSlots.slots.sowingBatches", []] },
+                    8,
+                  ],
+                },
+              },
+            },
+          ])
+        : Promise.resolve([]),
     ]);
 
-    const orderMap = new Map(orders.map((o) => [String(o._id), o]));
+    const ordersByReqMap = new Map();
+    for (const o of ordersByRequest) {
+      const key = String(o.sowingDoneRequestId);
+      if (!ordersByReqMap.has(key)) ordersByReqMap.set(key, []);
+      ordersByReqMap.get(key).push(o);
+    }
     const outwardMap = new Map(outwards.map((o) => [String(o._id), o]));
+    const slotMap = new Map(slotRows.map((s) => [String(s.slotId), s]));
 
     const items = rows.map((r) => {
-      const cf = Number(r.conversionFactor) || 1;
+      const cf = resolveSowingPlantsPerPacket(r);
       const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
       const batchNumbers = [
         ...new Set(
@@ -556,9 +734,60 @@ export const getSowingCompletions = async (req, res) => {
             .filter(Boolean)
         ),
       ];
-      const linkedOrders = (r.linkedOrderIds || []).map((id) => {
-        const o = orderMap.get(String(id));
-        if (!o) return { orderId: id };
+      const covered = ordersByReqMap.get(String(r._id)) || [];
+      const sowCompletedEv = Array.isArray(r.completionEvents)
+        ? r.completionEvents.find((e) => e?.type === "SOW_COMPLETED")
+        : null;
+      const sowingDate = r.sowingCompletedDate || sowCompletedEv?.at || null;
+      const readyDateMeta =
+        sowCompletedEv?.meta?.orderReadyDate ||
+        sowCompletedEv?.meta?.plantReadyDate ||
+        null;
+      const coverWindowDays = Number(
+        sowCompletedEv?.meta?.orderCoverWindowDays ?? 4
+      );
+      const linkedOrders = covered.map((o) => {
+        let coverOffsetDays = null;
+        if (o.deliveryDate && readyDateMeta) {
+          try {
+            const del = new Date(o.deliveryDate);
+            let ready = null;
+            const dmy = String(readyDateMeta).match(
+              /^(\d{2})-(\d{2})-(\d{4})$/
+            );
+            if (dmy) {
+              ready = new Date(
+                Number(dmy[3]),
+                Number(dmy[2]) - 1,
+                Number(dmy[1]),
+                12,
+                0,
+                0
+              );
+            } else {
+              ready = new Date(readyDateMeta);
+            }
+            if (
+              !Number.isNaN(del.getTime()) &&
+              ready &&
+              !Number.isNaN(ready.getTime())
+            ) {
+              const d0 = Date.UTC(
+                del.getFullYear(),
+                del.getMonth(),
+                del.getDate()
+              );
+              const r0 = Date.UTC(
+                ready.getFullYear(),
+                ready.getMonth(),
+                ready.getDate()
+              );
+              coverOffsetDays = Math.round((d0 - r0) / 86400000);
+            }
+          } catch {
+            coverOffsetDays = null;
+          }
+        }
         return {
           orderId: o._id,
           orderNumber: o.orderId,
@@ -568,15 +797,56 @@ export const getSowingCompletions = async (req, res) => {
             (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0),
           sowingDone: Boolean(o.sowingDone),
           sowingDoneAt: o.sowingDoneAt,
+          bookingDate: o.orderBookingDate || o.createdAt || null,
           deliveryDate: o.deliveryDate || null,
+          coverOffsetDays,
+          inCoverWindow:
+            coverOffsetDays == null
+              ? true
+              : Math.abs(coverOffsetDays) <= coverWindowDays,
         };
       });
-      const sowingDate =
-        r.sowingCompletedDate ||
-        (Array.isArray(r.completionEvents)
-          ? r.completionEvents.find((e) => e?.type === "SOW_COMPLETED")?.at
-          : null) ||
+
+      const preferredSlotId =
+        sowCompletedEv?.meta?.appliedSlotId ||
+        collectSlotIdsFromRequest(r)[0] ||
         null;
+      const slotRaw = preferredSlotId
+        ? slotMap.get(String(preferredSlotId))
+        : null;
+      const reqBatch = (slotRaw?.sowingBatches || []).find(
+        (b) => String(b.sowingRequestId) === String(r._id)
+      );
+      const affectedSlot = slotRaw
+        ? {
+            slotId: String(slotRaw.slotId),
+            label:
+              slotRaw.startDay === slotRaw.endDay
+                ? slotRaw.startDay || "—"
+                : `${slotRaw.startDay || "—"} → ${slotRaw.endDay || "—"}`,
+            startDay: slotRaw.startDay || null,
+            endDay: slotRaw.endDay || null,
+            month: slotRaw.month || null,
+            year: slotRaw.year || null,
+            primarySowed: Number(slotRaw.primarySowed) || 0,
+            officeSowed: Number(slotRaw.officeSowed) || 0,
+            plantsSowed: Number(slotRaw.plantsSowed) || 0,
+            availablePlants: Number(slotRaw.availablePlants) || 0,
+            orderReservedPlants: Number(slotRaw.orderReservedPlants) || 0,
+            totalBookedPlants: Number(slotRaw.totalBookedPlants) || 0,
+            totalPlants: Number(slotRaw.totalPlants) || 0,
+            excessivePlants: Number(slotRaw.excessivePlants) || 0,
+            sowingDate: reqBatch?.sowingDate || slotRaw.sowingDate || null,
+            plantReadyDate:
+              reqBatch?.plantReadyDate || slotRaw.plantReadyDate || null,
+            plantReadyDays:
+              reqBatch?.plantReadyDays ?? slotRaw.plantReadyDays ?? null,
+            batchPlantsSowed: Number(reqBatch?.plantsSowed) || 0,
+            batchPacketsUsed: Number(reqBatch?.packetsUsed) || 0,
+            shedName: reqBatch?.shedName || r.shedName || "",
+          }
+        : null;
+
       return {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
@@ -588,6 +858,7 @@ export const getSowingCompletions = async (req, res) => {
         batchNumbers,
         outwardNumber: outward?.outwardNumber || "",
         sowingDate,
+        affectedSlot,
       };
     });
 

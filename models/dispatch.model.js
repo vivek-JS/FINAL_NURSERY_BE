@@ -95,11 +95,14 @@ const plantDetailSchema = new Schema({
     type: [pickupDetailSchema],
     validate: {
       validator: function (array) {
-        return array.length >= 1;
+        const pickups = Array.isArray(array) ? array : [];
+        if (pickups.length >= 1) return true;
+        // Office dispatch: crates set at office; shed assigns shades on load
+        return Array.isArray(this.crates) && this.crates.length >= 1;
       },
-      message: "At least one pickup detail is required per plant",
+      message: "At least one pickup detail or crate target is required per plant",
     },
-    required: true,
+    default: [],
   },
   crates: {
     type: [crateSchema],
@@ -251,6 +254,17 @@ const dispatchSchema = new Schema(
             type: Boolean,
             default: false,
           },
+          originalDispatchQuantity: {
+            type: Number,
+            min: 0,
+          },
+          lastOfficeQtyDelta: {
+            type: Number,
+            default: 0,
+          },
+          lastOfficeEditedAt: {
+            type: Date,
+          },
         },
       ],
       default: [], // Optional for backward compatibility
@@ -303,6 +317,9 @@ const dispatchSchema = new Schema(
     routeNotes: {
       type: String,
       default: "",
+    },
+    lastOfficeEditedAt: {
+      type: Date,
     },
     isDeleted: {
       type: Boolean,

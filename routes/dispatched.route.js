@@ -11,6 +11,8 @@ import {
   assignRoute,
   bulkMarkReady,
   detachOrderFromDispatch,
+  getGiftProductsInStock,
+  syncDispatchOrderGifts,
 } from "../controllers/dispatch.controller.js";
 import { reassignRefusedDelivery } from "../controllers/dispatchReassign.controller.js";
 
@@ -18,6 +20,12 @@ const router = express.Router();
 
 // GET all dispatches
 router.get("/", getDispatches);
+
+// GET gift inventory products with stock > 0 (for dispatch order gifts)
+router.get("/gift-products-in-stock", getGiftProductsInStock);
+
+// POST sync linked gift lines for nursery orders on a dispatch
+router.post("/sync-order-gifts", syncDispatchOrderGifts);
 
 // POST generate PDFs (before GET /:id so "generate-pdfs" is never captured as :id)
 router.post("/:id/generate-pdfs", regenerateDispatchPdfs);

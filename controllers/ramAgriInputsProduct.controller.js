@@ -8,6 +8,7 @@ import {
   generateChangesArray,
 } from '../utils/changeLogHelper.js';
 import { scheduleStockChangeAlert } from '../services/stockWhatsappAlert.service.js';
+import { attachInventoryLinksToCrops } from '../services/ramAgriVarietyInventoryLink.service.js';
 
 const normalizeProductType = (value, { allowAll = false } = {}) => {
   if (value === undefined || value === null || value === '') {
@@ -16,7 +17,8 @@ const normalizeProductType = (value, { allowAll = false } = {}) => {
   const normalized = String(value).trim().toLowerCase();
   if (normalized === 'seeds') return 'seed';
   if (normalized === 'chemicals') return 'chemical';
-  if (normalized === 'seed' || normalized === 'chemical') {
+  if (normalized === 'gifts') return 'gift';
+  if (normalized === 'seed' || normalized === 'chemical' || normalized === 'gift') {
     return normalized;
   }
   if (normalized === 'all') return allowAll ? 'all' : null;
@@ -85,7 +87,7 @@ export const createCrop = catchAsync(async (req, res, next) => {
 
   const normalizedType = normalizeProductType(productType);
   if (productType && (!normalizedType || normalizedType === 'all')) {
-    return next(new AppError('Invalid product type. Use "seed" or "chemical"', 400));
+    return next(new AppError('Invalid product type. Use "seed", "chemical", or "gift"', 400));
   }
   const finalProductType = normalizedType || 'seed';
 
@@ -152,14 +154,14 @@ export const getAllCrops = catchAsync(async (req, res, next) => {
   if (productType !== undefined) {
     const normalizedType = normalizeProductType(productType, { allowAll: true });
     if (!normalizedType) {
-      return next(new AppError('Invalid product type. Use "seed" or "chemical"', 400));
+      return next(new AppError('Invalid product type. Use "seed", "chemical", or "gift"', 400));
     }
     if (normalizedType === 'seed') {
       typeFilter = {
         $or: [{ productType: 'seed' }, { productType: { $exists: false } }],
       };
-    } else if (normalizedType === 'chemical') {
-      typeFilter = { productType: 'chemical' };
+    } else if (normalizedType === 'chemical' || normalizedType === 'gift') {
+      typeFilter = { productType: normalizedType };
     }
   }
 
@@ -179,11 +181,12 @@ export const getAllCrops = catchAsync(async (req, res, next) => {
     .populate('varieties.secondaryUnit', 'name abbreviation type');
 
   const ordered = sortProductsForApi(crops);
+  const withLinks = await attachInventoryLinksToCrops(ordered);
 
   const response = generateResponse(
     'Success',
     'Crops fetched successfully',
-    ordered,
+    withLinks,
     undefined
   );
 
@@ -237,7 +240,7 @@ export const updateCrop = catchAsync(async (req, res, next) => {
 
   const normalizedType = productType !== undefined ? normalizeProductType(productType) : null;
   if (productType !== undefined && (!normalizedType || normalizedType === 'all')) {
-    return next(new AppError('Invalid product type. Use "seed" or "chemical"', 400));
+    return next(new AppError('Invalid product type. Use "seed", "chemical", or "gift"', 400));
   }
   const nextProductType = normalizedType || crop.productType || 'seed';
 
@@ -782,7 +785,7 @@ export const updateVariety = catchAsync(async (req, res, next) => {
   const response = generateResponse(
     'Success',
     'Variety updated successfully',
-    crop,
+    (await attachInventoryLinksToCrops([crop]))[0],
     undefined
   );
 

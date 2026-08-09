@@ -86,6 +86,18 @@ import {
   listDirectSowOrders,
   submitDirectSow,
 } from "../controllers/adminDirectSow.controller.js";
+import {
+  getOrderSlotExcess,
+  completeOrderFromSlotExcess,
+} from "../controllers/orderSowFromExcess.controller.js";
+import {
+  getSlotCoverableOrders,
+  allocateSlotToOrders,
+} from "../controllers/slotExcessAllocation.controller.js";
+import {
+  getSlotTransferTargets,
+  transferSlotToSlot,
+} from "../controllers/slotTransfer.controller.js";
 
 const router = express.Router();
 
@@ -113,6 +125,12 @@ router.get("/completions", getSowingCompletions); // Completed sow history (pagi
 router.get("/analytics/delivery-vs-ready", getDeliveryVsReadyAnalytics); // Delivery vs ready/available chart
 router.get("/admin-direct-sow/orders", listDirectSowOrders); // Office/Super Admin: orders by delivery date
 router.post("/admin-direct-sow", submitDirectSow); // Office/Super Admin: sow entry bypassing packet issue
+router.get("/order/:orderId/slot-excess", getOrderSlotExcess); // Preview saleable excess on delivery slot
+router.post("/order/:orderId/complete-from-excess", completeOrderFromSlotExcess); // Mark sow done from slot excess
+router.get("/slot/:slotId/coverable-orders", getSlotCoverableOrders); // Slot-first: pending orders for surplus slot
+router.post("/slot/:slotId/allocate-to-orders", allocateSlotToOrders); // Bulk allocate excess → orders
+router.get("/slot/:slotId/transfer-targets", getSlotTransferTargets); // Slot-to-slot transfer targets
+router.post("/slot/:fromSlotId/transfer-to-slot", transferSlotToSlot); // Move available plants between slots
 router.get("/easy-30-days", getEasy30DaySowingCards); // Easy sowing cards for rolling day window
 router.post("/easy-30-days/ready-days", bulkUpdatePlantReadyDaysForFutureSlots); // Update plant ready days for future slots only
 router.get("/insights/records", getSowingInsightsRecords); // Unified sowing insights records for side drawer feed

@@ -3,6 +3,7 @@ import FarmerLead from "../models/farmerLead.model.js";
 import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
+import { expandLocationRulesVillages } from "../services/publicLinkLocation.service.js";
 
 const normalizeSlug = (value) => {
   if (!value) return "";
@@ -27,11 +28,13 @@ export const createPublicFarmerLink = catchAsync(async (req, res, next) => {
     return next(new AppError("Slug already in use. Please choose another.", 400));
   }
 
+  const expandedRules = await expandLocationRulesVillages(locationRules);
+
   const link = await PublicFarmerLink.create({
     name: name.trim(),
     slug: finalSlug,
     description: description || "",
-    locationRules,
+    locationRules: expandedRules,
     maxSubmissions,
     meta,
     isActive: isActive !== undefined ? Boolean(isActive) : true,
@@ -103,6 +106,10 @@ export const updatePublicFarmerLink = catchAsync(async (req, res, next) => {
     }
   }
 
+  if (Array.isArray(updates.locationRules)) {
+    updates.locationRules = await expandLocationRulesVillages(updates.locationRules);
+  }
+
   const link = await PublicFarmerLink.findByIdAndUpdate(
     id,
     updates,
@@ -133,12 +140,15 @@ export const getPublicLinkConfigBySlug = catchAsync(async (req, res, next) => {
     return next(new AppError("Public farmer link not found or inactive", 404));
   }
 
+  // Always return full village lists for selected talukas (master location data)
+  const locationRules = await expandLocationRulesVillages(link.locationRules || []);
+
   // Only expose fields required for public form
   const publicData = {
     name: link.name,
     slug: link.slug,
     description: link.description,
-    locationRules: link.locationRules
+    locationRules
   };
 
   return res.status(200).json(
@@ -355,7 +365,8 @@ export const createFarmerLead = catchAsync(async (req, res, next) => {
     villageName
   };
 
-  if (!isLocationAllowed(link.locationRules, locationPayload)) {
+  const allowedRules = await expandLocationRulesVillages(link.locationRules || []);
+  if (!isLocationAllowed(allowedRules, locationPayload)) {
     return next(new AppError("Selected location is not allowed for this link", 400));
   }
 

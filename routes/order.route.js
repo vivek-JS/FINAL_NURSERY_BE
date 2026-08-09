@@ -127,22 +127,22 @@ router
   .get("/admin-dashboard-stats", getAdminDashboardStats)
   .get(
     "/admin-daily-mis",
-    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN", "RAM_AGRI_MASTER"]),
     getAdminDailyMis
   )
   .get(
     "/admin-mis-sales",
-    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN", "RAM_AGRI_MASTER"]),
     getAdminSalesMis
   )
   .get(
     "/admin-mis-dealer",
-    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN", "RAM_AGRI_MASTER"]),
     getAdminDealerMis
   )
   .get(
     "/admin-mis-due",
-    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN"]),
+    authorizeRoles(["ADMIN", "SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "OFFICEADMIN", "RAM_AGRI_MASTER"]),
     getAdminDueMis
   )
   .get(
@@ -153,6 +153,7 @@ router
       "SUPERADMIN",
       "OFFICE_ADMIN",
       "OFFICEADMIN",
+      "RAM_AGRI_MASTER",
       "DISPATCH_MANAGER",
     ]),
     getDeliveryReportSummary
@@ -165,6 +166,7 @@ router
       "SUPERADMIN",
       "OFFICE_ADMIN",
       "OFFICEADMIN",
+      "RAM_AGRI_MASTER",
       "DISPATCH_MANAGER",
     ]),
     getDeliveryReportOrders

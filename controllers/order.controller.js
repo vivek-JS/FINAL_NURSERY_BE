@@ -1,6 +1,7 @@
 import { Parser as CsvParser } from "json2csv";
 import catchAsync from "../utility/catchAsync.js";
 import escapeRegex from "../utility/escapeRegex.js";
+import { appendOrderSearchPipelineStages } from "../utils/orderSearchMatch.util.js";
 import {
   isWhatsappUnlimitedSendEnabled,
   isWhatsappManualResendAllowed,
@@ -20,12 +21,7 @@ import User from "../models/user.model.js";
 import Farmer from "../models/farmer.model.js";
 import Tray from "../models/tray.model.js";
 import PaymentActivity from "../models/paymentActivity.model.js";
-import {
-  sendPaymentAcceptedNotification,
-  sendPaymentRejectedNotification,
-  sendPaymentCollectedNotification,
-  sendPaymentPendingNotification,
-} from "../utility/pushNotification.js";
+import { notifyPlantOrderPaymentStatus } from "../utility/mobileOrderPushNotify.js";
 import {
   sendOrderAcceptedWhatsApp,
   sendOrderPlacedWhatsApp,
@@ -80,6 +76,7 @@ import {
 import { applyPaymentTimingToPayment, sumOrderAdvancePayments } from "../utils/paymentTiming.js";
 import { addPaymentsToOrder } from "../services/orderPayment.service.js";
 import { schedulePlantOrderPaymentWhatsApp } from "../services/orderPaymentWhatsapp.service.js";
+import { stampPaymentUpdatedBy } from "../utils/paymentAudit.js";
 import {
   resolveSplitBookForAssign,
   validateSplitNewFarmerDetails,
@@ -1719,6 +1716,7 @@ const updatePaymentStatus = async (req, res, next) => {
       });
     }
     payment.paymentStatus = paymentStatus;
+    stampPaymentUpdatedBy(payment, req.user);
     applyPaymentTimingToPayment(payment, order, { force: true });
     await order.save();
 
@@ -1791,53 +1789,7 @@ const updatePaymentStatus = async (req, res, next) => {
     }
 
     // Send push notification based on payment status change
-    try {
-      let userToNotify = null;
-      
-      // Determine who to notify based on order type
-      if (order.dealer) {
-        // For dealer orders, notify the dealer
-        userToNotify = await User.findById(order.dealer);
-        console.log(`📱 Dealer order detected. Dealer ID: ${order.dealer}`);
-      } else if (order.salesPerson) {
-        // For farmer orders, notify the sales person
-        userToNotify = await User.findById(order.salesPerson);
-        console.log(`📱 Farmer order detected. Sales Person ID: ${order.salesPerson}`);
-      }
-
-      console.log(`📱 User to notify:`, {
-        name: userToNotify?.name,
-        phone: userToNotify?.phoneNumber,
-        hasPushToken: !!userToNotify?.expoPushToken,
-        pushToken: userToNotify?.expoPushToken ? `${userToNotify.expoPushToken.substring(0, 30)}...` : 'NONE'
-      });
-
-      if (userToNotify && userToNotify.expoPushToken) {
-        const orderId = order.orderId || order._id;
-        const pushToken = userToNotify.expoPushToken;
-
-        console.log(`📤 Sending ${paymentStatus} notification for Order #${orderId}, Amount: ₹${amount}`);
-
-        // Send notification based on new payment status
-        if (paymentStatus === 'COLLECTED') {
-          const result = await sendPaymentCollectedNotification(pushToken, orderId, amount);
-          console.log(`✅ Payment collected notification sent for Order #${orderId}`, result);
-        } else if (paymentStatus === 'REJECTED') {
-          const result = await sendPaymentRejectedNotification(pushToken, orderId, amount, remark || '');
-          console.log(`❌ Payment rejected notification sent for Order #${orderId}`, result);
-        } else if (paymentStatus === 'PENDING') {
-          const result = await sendPaymentPendingNotification(pushToken, orderId, amount);
-          console.log(`⏳ Payment pending notification sent for Order #${orderId}`, result);
-        }
-      } else {
-        console.log('⚠️ No push token found for user, skipping notification');
-        console.log('   User needs to open the mobile app to register for notifications');
-      }
-    } catch (notificationError) {
-      // Don't fail the request if notification fails
-      console.error('❌ Error sending push notification:', notificationError);
-      console.error('   Stack:', notificationError.stack);
-    }
+    notifyPlantOrderPaymentStatus(order, paymentStatus, amount, remark || "");
 
     if (paymentStatus === "COLLECTED" && previousPaymentStatus !== "COLLECTED") {
       maybeSchedulePaymentWhatsAppAfterCollect(order, {
@@ -1941,66 +1893,7 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
 
     // Search filtering
     if (search) {
-      const searchTrimmed = String(search).trim();
-      const searchRegex = new RegExp(escapeRegex(searchTrimmed), "i");
-
-      pipeline.push({
-        $lookup: {
-          from: "farmers",
-          localField: "farmer",
-          foreignField: "_id",
-          as: "farmer",
-        },
-      });
-
-      pipeline.push({
-        $addFields: {
-          "farmer.mobileNumberStr": {
-            $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
-          },
-          orderForMobileStr: {
-            $let: {
-              vars: { raw: "$orderFor.mobileNumber" },
-              in: {
-                $cond: [
-                  {
-                    $or: [
-                      { $eq: ["$$raw", null] },
-                      { $eq: ["$$raw", ""] },
-                      { $eq: ["$$raw", 0] },
-                    ],
-                  },
-                  "",
-                  { $toString: "$$raw" },
-                ],
-              },
-            },
-          },
-        },
-      });
-
-      const isNumeric = /^\d+$/.test(searchTrimmed);
-      const searchAsNumber = isNumeric ? Number(searchTrimmed) : NaN;
-
-      const searchOr = [
-        { orderId: isNumeric ? searchAsNumber : search },
-        { "farmer.name": searchRegex },
-        { "farmer.mobileNumberStr": searchRegex },
-        { "orderFor.name": searchRegex },
-        { "orderFor.village": searchRegex },
-        { "orderFor.talukaName": searchRegex },
-        { "orderFor.districtName": searchRegex },
-        { "orderFor.district": searchRegex },
-      ];
-      if (isNumeric && searchTrimmed.length >= 10) {
-        searchOr.push({ orderForMobileStr: searchTrimmed });
-      }
-
-      pipeline.push({
-        $match: {
-          $or: searchOr,
-        },
-      });
+      appendOrderSearchPipelineStages(pipeline, search);
     } else {
       pipeline.push({
         $lookup: {
@@ -2551,66 +2444,7 @@ const getAllPayments = catchAsync(async (req, res, next) => {
 
     // Search filtering
     if (search) {
-      const searchTrimmed = String(search).trim();
-      const searchRegex = new RegExp(escapeRegex(searchTrimmed), "i");
-
-      pipeline.push({
-        $lookup: {
-          from: "farmers",
-          localField: "farmer",
-          foreignField: "_id",
-          as: "farmer",
-        },
-      });
-
-      pipeline.push({
-        $addFields: {
-          "farmer.mobileNumberStr": {
-            $toString: { $arrayElemAt: ["$farmer.mobileNumber", 0] },
-          },
-          orderForMobileStr: {
-            $let: {
-              vars: { raw: "$orderFor.mobileNumber" },
-              in: {
-                $cond: [
-                  {
-                    $or: [
-                      { $eq: ["$$raw", null] },
-                      { $eq: ["$$raw", ""] },
-                      { $eq: ["$$raw", 0] },
-                    ],
-                  },
-                  "",
-                  { $toString: "$$raw" },
-                ],
-              },
-            },
-          },
-        },
-      });
-
-      const isNumeric = /^\d+$/.test(searchTrimmed);
-      const searchAsNumber = isNumeric ? Number(searchTrimmed) : NaN;
-
-      const searchOr = [
-        { orderId: isNumeric ? searchAsNumber : search },
-        { "farmer.name": searchRegex },
-        { "farmer.mobileNumberStr": searchRegex },
-        { "orderFor.name": searchRegex },
-        { "orderFor.village": searchRegex },
-        { "orderFor.talukaName": searchRegex },
-        { "orderFor.districtName": searchRegex },
-        { "orderFor.district": searchRegex },
-      ];
-      if (isNumeric && searchTrimmed.length >= 10) {
-        searchOr.push({ orderForMobileStr: searchTrimmed });
-      }
-
-      pipeline.push({
-        $match: {
-          $or: searchOr,
-        },
-      });
+      appendOrderSearchPipelineStages(pipeline, search);
     } else {
       pipeline.push({
         $lookup: {
@@ -2679,6 +2513,22 @@ const getAllPayments = catchAsync(async (req, res, next) => {
           foreignField: "_id",
           as: "salesPerson",
         },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "payment.paymentUpdatedBy",
+          foreignField: "_id",
+          as: "_paymentUpdatedByUser",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "payment.paymentRecordedBy",
+          foreignField: "_id",
+          as: "_paymentRecordedByUser",
+        },
       }
     );
 
@@ -2745,6 +2595,50 @@ const getAllPayments = catchAsync(async (req, res, next) => {
             },
             0,
           ],
+        },
+        paymentUpdatedBy: {
+          $let: {
+            vars: { u: { $arrayElemAt: ["$_paymentUpdatedByUser", 0] } },
+            in: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$$u", null] },
+                    { $ne: ["$$u.name", null] },
+                    { $ne: ["$$u.name", ""] },
+                  ],
+                },
+                {
+                  name: "$$u.name",
+                  phoneNumber: { $ifNull: ["$$u.phoneNumber", ""] },
+                  role: { $ifNull: ["$$u.jobTitle", { $ifNull: ["$$u.role", ""] }] },
+                },
+                null,
+              ],
+            },
+          },
+        },
+        paymentRecordedBy: {
+          $let: {
+            vars: { u: { $arrayElemAt: ["$_paymentRecordedByUser", 0] } },
+            in: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$$u", null] },
+                    { $ne: ["$$u.name", null] },
+                    { $ne: ["$$u.name", ""] },
+                  ],
+                },
+                {
+                  name: "$$u.name",
+                  phoneNumber: { $ifNull: ["$$u.phoneNumber", ""] },
+                  role: { $ifNull: ["$$u.jobTitle", { $ifNull: ["$$u.role", ""] }] },
+                },
+                null,
+              ],
+            },
+          },
         },
         payment: 1,
         screenshots: 1,
@@ -4971,6 +4865,9 @@ const splitOrder = catchAsync(async (req, res, next) => {
     orderFor: orderForBody,
     assignMode,
     farmerId,
+    salesPerson: salesPersonBody,
+    dealer: dealerBody,
+    dealerOrder: dealerOrderBody,
   } = req.body;
 
   if (!splitQuantity || isNaN(Number(splitQuantity)) || Number(splitQuantity) < 1) {
@@ -5080,13 +4977,24 @@ const splitOrder = catchAsync(async (req, res, next) => {
       };
     }
 
-    // Build child order — clone all dispatch-relevant fields from the parent
+    // Build child order — clone dispatch-relevant fields; attribution defaults to parent
+    const childDealerOrder =
+      dealerOrderBody !== undefined ? Boolean(dealerOrderBody) : parent.dealerOrder;
+    const childDealer =
+      dealerBody && mongoose.isValidObjectId(String(dealerBody))
+        ? dealerBody
+        : parent.dealer;
+    const childSalesPerson =
+      salesPersonBody && mongoose.isValidObjectId(String(salesPersonBody))
+        ? salesPersonBody
+        : parent.salesPerson;
+
     const childData = {
       orderId: nextOrderId,
       farmer: childFarmer,
-      dealer: parent.dealer,
-      dealerOrder: parent.dealerOrder,
-      salesPerson: parent.salesPerson,
+      dealer: childDealer,
+      dealerOrder: childDealerOrder,
+      salesPerson: childSalesPerson,
       plantName: parent.plantName,
       plantSubtype: parent.plantSubtype,
       commissionRatePerPlant: parent.commissionRatePerPlant ?? null,

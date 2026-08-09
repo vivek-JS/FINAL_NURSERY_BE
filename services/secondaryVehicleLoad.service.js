@@ -22,6 +22,11 @@ import {
 import { updateOrderWithLedgerSync } from "../controllers/dispatch.controller.js";
 import { allocateNextInvoiceNumbers } from "./invoiceSequence.service.js";
 import { ensureOfficialDeliveryChallanForOrder } from "./officialDeliveryChallan.service.js";
+import { hasPendingLinkedAgriLoadForOrder } from "./linkedAgriLoadGuard.service.js";
+import {
+  finalizeOrderOnShedLineLoaded,
+  schedulePostShedLoadAlerts,
+} from "./dispatchPostLoadFinalize.service.js";
 
 const BATCH_SELECT_FIELDS =
   "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
@@ -249,6 +254,169 @@ export function allocateMultiShedFifoLoads(suggestions, shedInputs) {
       requestedBySize: sizeSplit || undefined,
       shedAvailablePlants: shedAvailable,
       byBatch: groupPolyhouseStockByBatch(inShed),
+      ok: shedErrors.length === 0 && shedAllocated === shedRequested,
+      error: shedErrors.length ? shedErrors.join("; ") : undefined,
+      allocations: shedAllocations,
+      totalAllocated: shedAllocated,
+    });
+    errors.push(...shedErrors);
+  }
+
+  const ok = errors.length === 0 && totalAllocated === requested;
+  return {
+    ok,
+    error: errors.length ? errors.join("; ") : undefined,
+    allocations,
+    byShed,
+    totalAllocated,
+    requested,
+    partial: totalAllocated > 0 && totalAllocated < requested,
+  };
+}
+
+/**
+ * Shed dispatch load: user picks shed names + qty; stock comes FIFO from entire pool
+ * (not filtered by shed tag on inward lines). Outward records use the chosen pollyhouse.
+ */
+export function allocateDirectShedLoads(suggestions, shedInputs, opts = {}) {
+  const inputs = (shedInputs || []).filter((row) => row?.pollyhouse);
+  const fifoRows = expandShedLoadsToFifoRows(inputs);
+  if (!fifoRows.length) {
+    return {
+      ok: false,
+      error: "At least one shed with plants is required",
+      allocations: [],
+      byShed: [],
+      totalAllocated: 0,
+      requested: 0,
+    };
+  }
+
+  const pool = (suggestions || [])
+    .filter((s) => s?.secondaryInwardId && s.dispatchEligible !== false)
+    .map((s) => ({
+      ...s,
+      _remaining: Math.max(
+        0,
+        Number(s.remainingPlants ?? s.availableQuantity) || 0
+      ),
+    }));
+
+  const takeFromPool = (linePool, wanted, pollyhouse) => {
+    const budget = Math.max(0, Math.floor(Number(wanted) || 0));
+    if (budget < 1) return { ok: true, allocations: [], totalAllocated: 0 };
+
+    let left = budget;
+    const allocations = [];
+    for (const line of linePool) {
+      if (left <= 0) break;
+      const cav = Math.max(1, Math.floor(Number(line.cavity) || 126));
+      const avail = Math.max(0, Number(line._remaining) || 0);
+      if (avail < 1) continue;
+
+      const takeCap = Math.min(left, avail);
+      const maxFullTraysOnLine = Math.floor(avail / cav);
+      const fullTrays = Math.min(maxFullTraysOnLine, Math.floor(takeCap / cav));
+      const plantsFromFull = fullTrays * cav;
+      let partialTrayPlants = 0;
+      const stillNeed = takeCap - plantsFromFull;
+      const stillAvailOnLine = avail - plantsFromFull;
+      if (stillNeed > 0 && stillNeed < cav && stillNeed <= stillAvailOnLine) {
+        partialTrayPlants = stillNeed;
+      }
+      const plants = plantsFromFull + partialTrayPlants;
+      if (plants < 1) continue;
+
+      const numberOfFullTrays = fullTrays;
+      const numberOfTrays = fullTrays + (partialTrayPlants > 0 ? 1 : 0);
+      line._remaining = avail - plants;
+      allocations.push({
+        batchId: String(line.batchId),
+        secondaryInwardId: String(line.secondaryInwardId),
+        batchNumber: line.batchNumber,
+        cavity: cav,
+        size: line.size || "R1",
+        numberOfFullTrays,
+        partialTrayPlants,
+        numberOfTrays,
+        plants,
+        pollyhouse,
+        numberOfBottles: bottlesForVehicleLoadMove(line, numberOfTrays, plants),
+      });
+      left -= plants;
+    }
+
+    const totalAllocated = budget - left;
+    if (totalAllocated < 1) {
+      return {
+        ok: false,
+        error: "No eligible stock for requested quantity",
+        allocations: [],
+        totalAllocated: 0,
+      };
+    }
+    if (left > 0) {
+      return {
+        ok: false,
+        error: `Only ${totalAllocated} plants available (FIFO)`,
+        allocations,
+        partial: true,
+        totalAllocated,
+        requested: budget,
+      };
+    }
+    return { ok: true, allocations, totalAllocated };
+  };
+
+  const allocations = [];
+  const byShed = [];
+  const errors = [];
+  let totalAllocated = 0;
+  const requested = fifoRows.reduce((s, row) => s + row.plants, 0);
+  const capPlants = Math.max(
+    0,
+    Math.floor(Number(opts.capPlants ?? requested) || 0)
+  );
+
+  if (requested > capPlants) {
+    return {
+      ok: false,
+      error: `Selection ${requested} exceeds remaining vehicle need ${capPlants}`,
+      allocations: [],
+      byShed: [],
+      totalAllocated: 0,
+      requested,
+    };
+  }
+
+  for (const input of inputs) {
+    const pollyhouse = input.pollyhouse;
+    const rowsForShed = fifoRows.filter((r) => r.pollyhouse === pollyhouse);
+    const shedAllocations = [];
+    let shedRequested = 0;
+    let shedAllocated = 0;
+    const shedErrors = [];
+
+    for (const { size, plants } of rowsForShed) {
+      shedRequested += plants;
+      const linePool = size
+        ? pool.filter((ln) => ln.size === size)
+        : pool;
+      const fifo = takeFromPool(linePool, plants, pollyhouse);
+      shedAllocations.push(...(fifo.allocations || []));
+      shedAllocated += fifo.totalAllocated || 0;
+      if (!fifo.ok) {
+        const label = size ? `${pollyhouse} ${size}` : pollyhouse;
+        shedErrors.push(`${label}: ${fifo.error}`);
+      }
+    }
+
+    allocations.push(...shedAllocations);
+    totalAllocated += shedAllocated;
+    byShed.push({
+      pollyhouse,
+      requested: shedRequested,
+      shedAvailablePlants: pool.reduce((s, ln) => s + (Number(ln._remaining) || 0), 0),
       ok: shedErrors.length === 0 && shedAllocated === shedRequested,
       error: shedErrors.length ? shedErrors.join("; ") : undefined,
       allocations: shedAllocations,
@@ -504,6 +672,25 @@ const orderRemainingPlantsValue = (doc) => {
   );
 };
 
+const dispatchLineRemainingPlants = (dispatchDoc, orderId) => {
+  const row = (dispatchDoc?.orderDispatchDetails || []).find(
+    (d) => String(d.orderId) === String(orderId)
+  );
+  if (!row) return null;
+  const target = Math.max(0, Number(row.dispatchQuantity) || 0);
+  const loaded = Math.max(0, Number(row.shedLoadedQuantity) || 0);
+  return Math.max(0, target - loaded);
+};
+
+const orderReservedAtOfficeDispatch = (orderDoc) => {
+  const remaining = orderRemainingPlantsValue(orderDoc);
+  return (
+    remaining === 0 &&
+    (orderDoc.orderStatus === "DISPATCH_PROCESS" ||
+      orderDoc.orderStatus === "READY_FOR_DISPATCH")
+  );
+};
+
 const orderMatchesDispatchBatch = (orderDoc, batchLean) => {
   if (!batchLean?.plantCmsId || !batchLean?.plantSubtypeId) return false;
   return (
@@ -575,6 +762,20 @@ export function computeSecondaryDispatchEligibility(
       : false;
   const dispatchEligible = Boolean(calendarEligible || bypass);
   return { dispatchEligible, expectedReadyByCalendar, calendarEligible };
+}
+
+/** Total plants required on vehicle (all plant rows, else order dispatch lines). */
+export function computeTotalVehiclePlantNeed(dispatchDoc) {
+  const plain = dispatchDoc?.toObject?.() ?? dispatchDoc;
+  let fromRows = 0;
+  for (const p of plain.plantsDetails || []) {
+    fromRows += Math.max(0, Number(p.quantity ?? p.totalPlants ?? 0) || 0);
+  }
+  if (fromRows > 0) return fromRows;
+  return (plain.orderDispatchDetails || []).reduce(
+    (s, r) => s + Math.max(0, Number(r.dispatchQuantity ?? 0) || 0),
+    0
+  );
 }
 
 export async function resolvePlantRowFromDispatch(dispatchDoc, plantRowIndex) {
@@ -696,9 +897,17 @@ async function executeOneSecondaryOutwardLine({
       throw new AppError("Order plant/subtype does not match batch", 400);
     }
     const currentOrderRemaining = orderRemainingPlantsValue(linkedOrderDoc);
-    if (plantsMoving > currentOrderRemaining) {
+    const lineRemaining = dispatchLineRemainingPlants(
+      linkedDispatchDoc,
+      linkedOrderId
+    );
+    const loadCap =
+      lineRemaining != null && lineRemaining > 0
+        ? lineRemaining
+        : currentOrderRemaining;
+    if (plantsMoving > loadCap) {
       throw new AppError(
-        `Quantity (${plantsMoving}) exceeds order remaining (${currentOrderRemaining})`,
+        `Quantity (${plantsMoving}) exceeds load cap (${loadCap}) for this dispatch line`,
         400
       );
     }
@@ -840,73 +1049,84 @@ async function executeOneSecondaryOutwardLine({
 
   if (linkedOrderDoc) {
     const currentOrderRemaining = orderRemainingPlantsValue(linkedOrderDoc);
-    const newRemaining = currentOrderRemaining - plantsMoving;
-    let newOrderStatus = linkedOrderDoc.orderStatus;
-    if (newRemaining === 0) {
-      newOrderStatus = "DISPATCHED";
-    } else if (newRemaining < currentOrderRemaining) {
-      newOrderStatus = "DISPATCH_PROCESS";
-    }
+    const reservedAtOffice = orderReservedAtOfficeDispatch(linkedOrderDoc);
 
-    const preAssignedSecondary = String(
-      linkedOrderDoc?.deliveryChallanInvoiceNumber || ""
-    ).trim();
-    let official = null;
-    let secondaryInvoiceLabel = preAssignedSecondary;
-    if (newOrderStatus === "DISPATCHED" && newRemaining === 0) {
-      official = await ensureOfficialDeliveryChallanForOrder(
-        linkedOrderDoc,
-        session
-      );
-    }
-    if (official) {
-      secondaryInvoiceLabel = official;
-    } else if (!secondaryInvoiceLabel) {
-      const [freshSec] = await allocateNextInvoiceNumbers(session, 1);
-      secondaryInvoiceLabel = freshSec || "";
-    }
+    if (!reservedAtOffice) {
+      const newRemaining = currentOrderRemaining - plantsMoving;
+      let newOrderStatus = linkedOrderDoc.orderStatus;
+      if (newRemaining === 0) {
+        newOrderStatus = "DISPATCHED";
+      } else if (newRemaining < currentOrderRemaining) {
+        newOrderStatus = "DISPATCH_PROCESS";
+      }
 
-    const dispatchHistoryEntry = {
-      date: new Date(),
-      quantity: plantsMoving,
-      remainingAfterDispatch: newRemaining,
-      processedBy:
-        performedBy && mongoose.isValidObjectId(String(performedBy))
-          ? performedBy
-          : undefined,
-      driverName: linkedDispatchDoc?.driverName || "",
-      vehicleName: linkedDispatchDoc?.vehicleName || "",
-      dispatchId: linkedDispatchDoc._id,
-      source: "SECONDARY_SHED",
-      secondaryOutwardId: newSo._id,
-      plantOutwardId: updatedDoc._id,
-      dispatchBatchId: plantOutward.batchId,
-      productSnapshot: orderLinkSnapshot,
-      ...(secondaryInvoiceLabel ? { invoiceNumber: secondaryInvoiceLabel } : {}),
-    };
+      const preAssignedSecondary = String(
+        linkedOrderDoc?.deliveryChallanInvoiceNumber || ""
+      ).trim();
+      let official = null;
+      let secondaryInvoiceLabel = preAssignedSecondary;
+      const canAssignDc =
+        newOrderStatus === "DISPATCHED" &&
+        newRemaining === 0 &&
+        !(await hasPendingLinkedAgriLoadForOrder(linkedOrderId, session));
+      if (!canAssignDc && newOrderStatus === "DISPATCHED" && newRemaining === 0) {
+        newOrderStatus = "DISPATCH_PROCESS";
+      }
+      if (canAssignDc) {
+        official = await ensureOfficialDeliveryChallanForOrder(
+          linkedOrderDoc,
+          session
+        );
+      }
+      if (official) {
+        secondaryInvoiceLabel = official;
+      } else if (!secondaryInvoiceLabel && canAssignDc) {
+        const [freshSec] = await allocateNextInvoiceNumbers(session, 1);
+        secondaryInvoiceLabel = freshSec || "";
+      }
 
-    const secondaryOrderSet = {
-      remainingPlants: newRemaining,
-      orderStatus: newOrderStatus,
-    };
-    if (official) {
-      secondaryOrderSet.officialDeliveryChallanNumber = official;
-    }
-    if (!preAssignedSecondary && secondaryInvoiceLabel && !official) {
-      secondaryOrderSet.deliveryChallanInvoiceNumber = secondaryInvoiceLabel;
-    }
+      const dispatchHistoryEntry = {
+        date: new Date(),
+        quantity: plantsMoving,
+        remainingAfterDispatch: newRemaining,
+        processedBy:
+          performedBy && mongoose.isValidObjectId(String(performedBy))
+            ? performedBy
+            : undefined,
+        driverName: linkedDispatchDoc?.driverName || "",
+        vehicleName: linkedDispatchDoc?.vehicleName || "",
+        dispatchId: linkedDispatchDoc._id,
+        source: "SECONDARY_SHED",
+        secondaryOutwardId: newSo._id,
+        plantOutwardId: updatedDoc._id,
+        dispatchBatchId: plantOutward.batchId,
+        productSnapshot: orderLinkSnapshot,
+        ...(secondaryInvoiceLabel ? { invoiceNumber: secondaryInvoiceLabel } : {}),
+      };
 
-    await updateOrderWithLedgerSync({
-      orderId: linkedOrderId,
-      existingDoc: linkedOrderDoc,
-      session,
-      userId: performedBy,
-      contextLabel: "secondary_vehicle_load",
-      updateOperation: {
-        $set: secondaryOrderSet,
-        $push: { dispatchHistory: dispatchHistoryEntry },
-      },
-    });
+      const secondaryOrderSet = {
+        remainingPlants: newRemaining,
+        orderStatus: newOrderStatus,
+      };
+      if (official) {
+        secondaryOrderSet.officialDeliveryChallanNumber = official;
+      }
+      if (!preAssignedSecondary && secondaryInvoiceLabel && !official) {
+        secondaryOrderSet.deliveryChallanInvoiceNumber = secondaryInvoiceLabel;
+      }
+
+      await updateOrderWithLedgerSync({
+        orderId: linkedOrderId,
+        existingDoc: linkedOrderDoc,
+        session,
+        userId: performedBy,
+        contextLabel: "secondary_vehicle_load",
+        updateOperation: {
+          $set: secondaryOrderSet,
+          $push: { dispatchHistory: dispatchHistoryEntry },
+        },
+      });
+    }
   }
 
   await recordShedActivity({
@@ -972,8 +1192,8 @@ export async function syncDispatchTransportStatusAfterShedChange({
   dispatchDoc,
   plantRowIndex = 0,
 }) {
-  const row = await resolvePlantRowFromDispatch(dispatchDoc, plantRowIndex);
-  const vehicleNeed = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
+  void plantRowIndex;
+  const vehicleNeed = computeTotalVehiclePlantNeed(dispatchDoc);
   const { total: loaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
 
   if (vehicleNeed > 0 && loaded >= vehicleNeed) {
@@ -1080,6 +1300,7 @@ export async function executeSecondaryVehicleLoad({
   linkedOrderId,
   remarks,
   performedBy,
+  directShedLoad = false,
   collectSuggestionsFn,
 }) {
   const dispatchDoc = await findDispatchActiveByIdOrTransport(dispatchId);
@@ -1097,14 +1318,38 @@ export async function executeSecondaryVehicleLoad({
 
   const { suggestions } = await collectSuggestionsFn(plantCmsId, plantSubtypeId);
 
+  let resolvedOrderId = linkedOrderId;
+  if (!resolvedOrderId) {
+    const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
+    const statusIn = { $in: ["READY_FOR_DISPATCH", "DISPATCH_PROCESS"] };
+    const matching = await Order.find({
+      _id: { $in: unionIds },
+      plantName: plantCmsId,
+      plantSubtype: plantSubtypeId,
+      orderStatus: statusIn,
+    })
+      .select("_id")
+      .sort({ orderId: -1 })
+      .limit(1)
+      .lean();
+    if (matching.length === 1) {
+      resolvedOrderId = String(matching[0]._id);
+    }
+  }
+
+  const { total: alreadyLoaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const vehicleNeedTotal = computeTotalVehiclePlantNeed(dispatchDoc);
+  let capPlants = Math.max(0, vehicleNeedTotal - alreadyLoaded);
+  if (resolvedOrderId) {
+    const lineRem = dispatchLineRemainingPlants(dispatchDoc, resolvedOrderId);
+    if (lineRem != null && lineRem > 0) {
+      capPlants = capPlants > 0 ? Math.min(capPlants, lineRem) : lineRem;
+    }
+  }
+
   const useManual = Array.isArray(inwardSelections) && inwardSelections.length > 0;
   let fifo;
   if (useManual) {
-    const { total: alreadyLoaded } = await sumPlantsLoadedOnDispatch(
-      dispatchDoc._id
-    );
-    const vehicleNeed = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
-    const capPlants = Math.max(0, vehicleNeed - alreadyLoaded);
     const enriched = await enrichSuggestionsWithPerCrate(suggestions);
     fifo = allocateManualSecondaryLoads(enriched, inwardSelections, {
       capPlants,
@@ -1117,30 +1362,21 @@ export async function executeSecondaryVehicleLoad({
         400
       );
     }
-    fifo = allocateMultiShedFifoLoads(suggestions, normalizedInputs);
+    if (directShedLoad) {
+      fifo = allocateDirectShedLoads(suggestions, normalizedInputs, { capPlants });
+    } else {
+      fifo = allocateMultiShedFifoLoads(suggestions, normalizedInputs);
+    }
   }
   if (!fifo.ok) {
     throw new AppError(fifo.error || "Allocation failed", 400);
   }
 
-  let resolvedOrderId = linkedOrderId;
-  if (!resolvedOrderId) {
-    const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
-    const statusIn = { $in: ["READY_FOR_DISPATCH", "DISPATCH_PROCESS"] };
-    const matching = await Order.find({
-      _id: { $in: unionIds },
-      plantName: plantCmsId,
-      plantSubtype: plantSubtypeId,
-      remainingPlants: { $gt: 0 },
-      orderStatus: statusIn,
-    })
-      .select("_id")
-      .sort({ orderId: -1 })
-      .limit(1)
-      .lean();
-    if (matching.length === 1) {
-      resolvedOrderId = String(matching[0]._id);
-    }
+  if (resolvedOrderId && fifo.totalAllocated > capPlants) {
+    throw new AppError(
+      `Selection ${fifo.totalAllocated} exceeds remaining cap ${capPlants}`,
+      400
+    );
   }
 
   const session = await mongoose.startSession();
@@ -1175,12 +1411,20 @@ export async function executeSecondaryVehicleLoad({
     }
 
     let orderLoaded = null;
+    let finalizeResult = null;
     if (resolvedOrderId) {
       orderLoaded = await updateDispatchOrderShedLoaded({
         session,
         dispatchDoc: freshDispatch,
         orderId: resolvedOrderId,
         plantsLoaded: fifo.totalAllocated,
+      });
+      finalizeResult = await finalizeOrderOnShedLineLoaded({
+        session,
+        orderId: resolvedOrderId,
+        dispatchDoc: freshDispatch,
+        orderLoaded,
+        performedBy,
       });
     }
 
@@ -1192,12 +1436,22 @@ export async function executeSecondaryVehicleLoad({
 
     await session.commitTransaction();
 
+    schedulePostShedLoadAlerts({
+      finalizeResult,
+      changedBy: performedBy ? String(performedBy) : "Secondary shed",
+    });
+
+    const { total: shedLoadedPlantsTotal } = await sumPlantsLoadedOnDispatch(
+      dispatchDoc._id
+    );
+
     return {
       allocations: results,
       totalLoaded: fifo.totalAllocated,
       slotSubtractTotal,
       orderLoaded,
       transportStatus,
+      shedLoadedPlantsTotal,
       suggestedFulfillmentSequence: seq - fifo.allocations.length,
       linkedOrderId: resolvedOrderId || null,
     };

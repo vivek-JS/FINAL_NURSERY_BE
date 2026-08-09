@@ -106,6 +106,11 @@ function mapRow(employee, daily, dateYmd) {
     attendance_status: daily?.attendance_status || rowStatus,
     source: hasCheckIn ? punchSource(daily.check_in) : null,
     face_match_score: daily?.check_in?.face_match_score ?? null,
+    check_out_face_match_score: daily?.check_out?.face_match_score ?? null,
+    check_in_photo_url: daily?.check_in?.audit_image_url || null,
+    check_out_photo_url: daily?.check_out?.audit_image_url || null,
+    is_regularized: daily?.status === "CORRECTED",
+    correction_note: daily?.correction_reason || null,
     office_group_id: hours.office_group_id ? String(hours.office_group_id) : null,
     daily,
   };

@@ -3,6 +3,31 @@ import Batch from '../models/batch.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
 import mongoose from 'mongoose';
 
+function isSeedsCategory(cat) {
+  if (!cat) return false;
+  return cat.toLowerCase().trim().replace(/_/g, ' ') === 'seeds';
+}
+
+/** Validate/set tentativePlantsPerPacket for seeds linked to sowingAllowed plants. */
+async function resolveTentativePlantsField({ category, plantId, tentativePlantsPerPacket }) {
+  if (!isSeedsCategory(category) || !plantId || !mongoose.isValidObjectId(plantId)) {
+    return { clear: true };
+  }
+  const { default: PlantCms } = await import('../models/plantCms.model.js');
+  const plant = await PlantCms.findById(plantId).select('sowingAllowed').lean();
+  if (!plant?.sowingAllowed) {
+    return { clear: true };
+  }
+  const tpp = Number(tentativePlantsPerPacket);
+  if (!Number.isFinite(tpp) || tpp <= 0) {
+    return {
+      error:
+        'Tentative plants per packet is required and must be greater than 0 for sowing-enabled seed products',
+    };
+  }
+  return { value: tpp };
+}
+
 // Create product
 export const createProduct = async (req, res) => {
   try {
@@ -21,6 +46,7 @@ export const createProduct = async (req, res) => {
       gst,
       plantId, // For seeds category
       subtypeId, // For seeds category
+      tentativePlantsPerPacket,
       isRamAgriSales,
       ramAgriCropId, // For Ram Agri Sales products
       ramAgriVarietyId, // For Ram Agri Sales products
@@ -138,6 +164,20 @@ export const createProduct = async (req, res) => {
       
       // Log for debugging
       console.log('Product creation - category:', category, 'plantId:', plantId, 'subtypeId:', subtypeId, 'validPlantId:', validPlantId, 'validSubtypeId:', validSubtypeId);
+    }
+
+    const tppResult = await resolveTentativePlantsField({
+      category,
+      plantId: productData.plantId,
+      tentativePlantsPerPacket,
+    });
+    if (tppResult.error) {
+      return res.status(400).json({ success: false, message: tppResult.error });
+    }
+    if (tppResult.clear) {
+      productData.tentativePlantsPerPacket = undefined;
+    } else if (tppResult.value != null) {
+      productData.tentativePlantsPerPacket = tppResult.value;
     }
 
     const product = new Product(productData);
@@ -492,6 +532,7 @@ export const updateProduct = async (req, res) => {
       isActive,
       plantId, // For seeds category
       subtypeId, // For seeds category
+      tentativePlantsPerPacket,
       isRamAgriSales,
       ramAgriCropId, // For Ram Agri Sales products
       ramAgriVarietyId, // For Ram Agri Sales products
@@ -592,6 +633,27 @@ export const updateProduct = async (req, res) => {
       // Clear plantId and subtypeId if category is not "seeds", "plants", or "ready plants"
       product.plantId = null;
       product.subtypeId = null;
+    }
+
+    const effectiveCategory = category || product.category;
+    const effectivePlantId =
+      plantId !== undefined ? plantId || null : product.plantId;
+    const tppInput =
+      tentativePlantsPerPacket !== undefined
+        ? tentativePlantsPerPacket
+        : product.tentativePlantsPerPacket;
+    const tppResult = await resolveTentativePlantsField({
+      category: effectiveCategory,
+      plantId: effectivePlantId,
+      tentativePlantsPerPacket: tppInput,
+    });
+    if (tppResult.error) {
+      return res.status(400).json({ success: false, message: tppResult.error });
+    }
+    if (tppResult.clear) {
+      product.tentativePlantsPerPacket = undefined;
+    } else if (tppResult.value != null) {
+      product.tentativePlantsPerPacket = tppResult.value;
     }
 
     product.updatedBy = req.user._id;

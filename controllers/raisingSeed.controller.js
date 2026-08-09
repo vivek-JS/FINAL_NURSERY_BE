@@ -49,13 +49,88 @@ function parseLinkedSlotIds(linkedSlotIds) {
     .map((id) => new mongoose.Types.ObjectId(id));
 }
 
+function parseBatchesPayload(raw, fallback = {}) {
+  let list = [];
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      list = JSON.parse(raw);
+    } catch {
+      list = [];
+    }
+  } else if (Array.isArray(raw)) {
+    list = raw;
+  }
+
+  const normalized = (Array.isArray(list) ? list : [])
+    .map((b) => {
+      const batchNumber = String(b?.batchNumber || "").trim();
+      const packets = Number(b?.packets ?? b?.packetsReceived);
+      const exp = b?.expiryDate;
+      return {
+        batchNumber,
+        packets,
+        expiryDate:
+          exp === "" || exp == null
+            ? undefined
+            : new Date(exp),
+      };
+    })
+    .filter(
+      (b) =>
+        b.batchNumber &&
+        Number.isFinite(b.packets) &&
+        b.packets > 0 &&
+        (!b.expiryDate || !Number.isNaN(b.expiryDate.getTime()))
+    );
+
+  if (normalized.length) return normalized;
+
+  // Legacy single-batch body
+  const batchNumber = String(fallback.batchNumber || "").trim();
+  const packets = Number(fallback.packetsReceived);
+  if (batchNumber && Number.isFinite(packets) && packets > 0) {
+    return [
+      {
+        batchNumber,
+        packets,
+        expiryDate: fallback.expiryDate
+          ? new Date(fallback.expiryDate)
+          : undefined,
+      },
+    ];
+  }
+  return [];
+}
+
+function summarizeBatches(batches) {
+  const total = batches.reduce((s, b) => s + Number(b.packets || 0), 0);
+  const batchNumber = batches.map((b) => b.batchNumber).join(" · ");
+  const withExp = batches
+    .map((b) => b.expiryDate)
+    .filter(Boolean)
+    .sort((a, b) => new Date(a) - new Date(b));
+  return {
+    packetsReceived: Number(total.toFixed(4)),
+    batchNumber: batchNumber.slice(0, 200) || batches[0]?.batchNumber || "",
+    expiryDate: withExp[0] || undefined,
+  };
+}
+
 function orderRaisingSnapshot(intake) {
+  const batches = Array.isArray(intake.batches)
+    ? intake.batches.map((b) => ({
+        batchNumber: b.batchNumber || "",
+        packets: Number(b.packets) || 0,
+        expiryDate: b.expiryDate || undefined,
+      }))
+    : [];
   return {
     intakeNumber: intake.intakeNumber || "",
     packetsReceived: Number(intake.packetsReceived) || 0,
     packetsRemaining: Number(intake.packetsRemaining) || 0,
     batchNumber: intake.batchNumber || "",
     expiryDate: intake.expiryDate || undefined,
+    batches,
     farmerName: intake.farmerName || "",
     notes: intake.notes || "",
     collectedAt: intake.createdAt || new Date(),
@@ -86,17 +161,25 @@ export const createRaisingIntake = async (req, res) => {
       packetsReceived,
       batchNumber,
       expiryDate,
+      batches: batchesRaw,
       notes,
       linkedSlotIds,
     } = req.body;
 
-    const packets = Number(packetsReceived);
-    if (!plantId || !subtypeId || !batchNumber || !Number.isFinite(packets) || packets <= 0) {
+    const batches = parseBatchesPayload(batchesRaw, {
+      batchNumber,
+      packetsReceived,
+      expiryDate,
+    });
+    if (!plantId || !subtypeId || !batches.length) {
       return res.status(400).json({
         success: false,
-        message: "plantId, subtypeId, batchNumber, and packetsReceived (>0) are required",
+        message:
+          "plantId, subtypeId, and at least one batch (batchNumber + packets > 0) are required",
       });
     }
+    const summary = summarizeBatches(batches);
+    const packets = summary.packetsReceived;
 
     const plant = await PlantCms.findById(plantId).select("name subtypes").lean();
     if (!plant) {
@@ -193,17 +276,18 @@ export const createRaisingIntake = async (req, res) => {
         subtypeId,
         subtypeName: subtype.name,
         productId: product?._id,
-        packetsReceived: packets,
-        packetsRemaining: packets,
-        conversionFactor: product?.conversionFactor || 1,
-        batchNumber: String(batchNumber).trim(),
-        expiryDate: expiryDate ? new Date(expiryDate) : undefined,
-        photos,
-        linkedSlotIds: slotIds,
-        notes: notes || "",
-        status: "received",
-        receivedBy: req.user?._id,
-      });
+      packetsReceived: packets,
+      packetsRemaining: packets,
+      conversionFactor: product?.conversionFactor || 1,
+      batchNumber: summary.batchNumber,
+      expiryDate: summary.expiryDate,
+      batches,
+      photos,
+      linkedSlotIds: slotIds,
+      notes: notes || "",
+      status: "received",
+      receivedBy: req.user?._id,
+    });
     } catch (err) {
       if (err?.code === 11000 && orderDoc?._id) {
         return res.status(409).json({
@@ -255,45 +339,54 @@ export const updateRaisingIntake = async (req, res) => {
       packetsReceived,
       batchNumber,
       expiryDate,
+      batches: batchesRaw,
       notes,
       farmerName,
       linkedSlotIds,
     } = req.body;
 
-    if (batchNumber != null && String(batchNumber).trim()) {
-      intake.batchNumber = String(batchNumber).trim();
-    }
     if (farmerName != null) intake.farmerName = String(farmerName).trim();
     if (notes != null) intake.notes = String(notes);
-    if (expiryDate === "" || expiryDate === null) {
-      intake.expiryDate = undefined;
-    } else if (expiryDate) {
-      intake.expiryDate = new Date(expiryDate);
-    }
     if (linkedSlotIds != null) {
       intake.linkedSlotIds = parseLinkedSlotIds(linkedSlotIds);
     }
 
-    if (packetsReceived != null && packetsReceived !== "") {
-      const packets = Number(packetsReceived);
-      if (!Number.isFinite(packets) || packets <= 0) {
+    const hasBatchesField =
+      batchesRaw != null &&
+      !(typeof batchesRaw === "string" && !String(batchesRaw).trim());
+    const batches = hasBatchesField
+      ? parseBatchesPayload(batchesRaw, {
+          batchNumber,
+          packetsReceived,
+          expiryDate,
+        })
+      : null;
+
+    if (batches) {
+      if (!batches.length) {
         return res.status(400).json({
           success: false,
-          message: "packetsReceived must be > 0",
+          message: "At least one batch with batchNumber and packets > 0 is required",
         });
       }
+      const summary = summarizeBatches(batches);
       const used = Math.max(
         0,
         Number(intake.packetsReceived) - Number(intake.packetsRemaining)
       );
-      if (packets < used) {
+      if (summary.packetsReceived < used) {
         return res.status(400).json({
           success: false,
           message: `Cannot set packets below already used (${used})`,
         });
       }
-      intake.packetsReceived = packets;
-      intake.packetsRemaining = Number((packets - used).toFixed(4));
+      intake.batches = batches;
+      intake.packetsReceived = summary.packetsReceived;
+      intake.packetsRemaining = Number(
+        (summary.packetsReceived - used).toFixed(4)
+      );
+      intake.batchNumber = summary.batchNumber;
+      intake.expiryDate = summary.expiryDate;
       if (intake.packetsRemaining <= 0) {
         intake.packetsRemaining = 0;
         intake.status = "used";
@@ -301,6 +394,53 @@ export const updateRaisingIntake = async (req, res) => {
         intake.status = "partially_used";
       } else {
         intake.status = "received";
+      }
+    } else {
+      if (batchNumber != null && String(batchNumber).trim()) {
+        intake.batchNumber = String(batchNumber).trim();
+      }
+      if (expiryDate === "" || expiryDate === null) {
+        intake.expiryDate = undefined;
+      } else if (expiryDate) {
+        intake.expiryDate = new Date(expiryDate);
+      }
+      if (packetsReceived != null && packetsReceived !== "") {
+        const packets = Number(packetsReceived);
+        if (!Number.isFinite(packets) || packets <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: "packetsReceived must be > 0",
+          });
+        }
+        const used = Math.max(
+          0,
+          Number(intake.packetsReceived) - Number(intake.packetsRemaining)
+        );
+        if (packets < used) {
+          return res.status(400).json({
+            success: false,
+            message: `Cannot set packets below already used (${used})`,
+          });
+        }
+        intake.packetsReceived = packets;
+        intake.packetsRemaining = Number((packets - used).toFixed(4));
+        if (!intake.batches?.length) {
+          intake.batches = [
+            {
+              batchNumber: intake.batchNumber,
+              packets,
+              expiryDate: intake.expiryDate,
+            },
+          ];
+        }
+        if (intake.packetsRemaining <= 0) {
+          intake.packetsRemaining = 0;
+          intake.status = "used";
+        } else if (used > 0) {
+          intake.status = "partially_used";
+        } else {
+          intake.status = "received";
+        }
       }
     }
 

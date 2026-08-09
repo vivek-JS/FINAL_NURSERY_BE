@@ -8,8 +8,15 @@ import {
   pushEvent,
   applyPlantsToLinkedSlots,
   markOrdersSowed,
+  recordExcessPlantsOnSlot,
 } from "./sowingCompleteHelpers.js";
-import { resolveCmsReadyDays } from "./sowingSlotReadyHelpers.js";
+import {
+  resolveCmsReadyDays,
+  fmtDDMMYYYY,
+  addDays,
+  parseLocalDate as parseLocalDateHelper,
+} from "./sowingSlotReadyHelpers.js";
+import { fetchSlotsBySubtype } from "../services/directSowSlotDays.service.js";
 
 function isOfficeOrSuper(user) {
   const t = String(user?.jobTitle || user?.role || "").toUpperCase();
@@ -22,7 +29,6 @@ function isOfficeOrSuper(user) {
 }
 
 function dayRange(dateStr) {
-  // dateStr: YYYY-MM-DD (local calendar day → UTC bounds for Date fields)
   const [y, m, d] = String(dateStr || "")
     .split("-")
     .map((n) => parseInt(n, 10));
@@ -32,37 +38,21 @@ function dayRange(dateStr) {
   return { start, end };
 }
 
-/** Parse YYYY-MM-DD or DD-MM-YYYY to local noon Date; null if invalid. */
 function parseLocalDate(input) {
-  if (input instanceof Date && !Number.isNaN(input.getTime())) return input;
-  const s = String(input || "").trim();
-  if (!s) return null;
-  const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (ymd) {
-    return new Date(
-      parseInt(ymd[1], 10),
-      parseInt(ymd[2], 10) - 1,
-      parseInt(ymd[3], 10),
-      12,
-      0,
-      0,
-      0
-    );
-  }
-  const dmy = s.match(/^(\d{2})-(\d{2})-(\d{4})/);
-  if (dmy) {
-    return new Date(
-      parseInt(dmy[3], 10),
-      parseInt(dmy[2], 10) - 1,
-      parseInt(dmy[1], 10),
-      12,
-      0,
-      0,
-      0
-    );
-  }
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
+  return parseLocalDateHelper(input);
+}
+
+/** Ready-date helper for UI chips (no auto-cover window). */
+function coverWindowForSow(sowStart, plantReadyDays) {
+  const rd = Math.max(0, Number(plantReadyDays) || 0);
+  const ready = addDays(sowStart, rd);
+  return {
+    readyDate: fmtDDMMYYYY(ready),
+    plantReadyDays: rd,
+    coverFrom: fmtDDMMYYYY(ready),
+    coverTo: fmtDDMMYYYY(ready),
+    coverWindowDays: 0,
+  };
 }
 
 async function resolveSeedProduct(plantId, subtypeId) {
@@ -79,8 +69,9 @@ async function resolveSeedProduct(plantId, subtypeId) {
 }
 
 /**
- * GET /sowing/admin-direct-sow/orders?date=YYYY-MM-DD
- * Orders with deliveryDate on that day (sowing-allowed plants), not yet sowingDone.
+ * GET /sowing/admin-direct-sow/orders?date=YYYY-MM-DD&plantId=
+ * date = optional default sow hint (defaults today). Lists all unsowed orders for plant.
+ * Marking on submit only covers selected/included orderIds (no ±4d auto-cover).
  */
 export const listDirectSowOrders = async (req, res) => {
   try {
@@ -91,29 +82,60 @@ export const listDirectSowOrders = async (req, res) => {
       });
     }
 
-    const range = dayRange(req.query.date);
-    if (!range) {
+    const dateStr =
+      req.query.date ||
+      (() => {
+        const d = new Date();
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${day}`;
+      })();
+
+    const sowRange = dayRange(dateStr);
+    if (!sowRange) {
       return res.status(400).json({
         success: false,
-        message: "Query date=YYYY-MM-DD is required",
+        message: "Query date must be YYYY-MM-DD when provided (default sow hint)",
       });
     }
 
-    const plants = await PlantCms.find({ sowingAllowed: true })
+    const plantFilter =
+      req.query.plantId && mongoose.Types.ObjectId.isValid(req.query.plantId)
+        ? new mongoose.Types.ObjectId(req.query.plantId)
+        : null;
+
+    const plantQuery = { sowingAllowed: true };
+    if (plantFilter) plantQuery._id = plantFilter;
+
+    const plants = await PlantCms.find(plantQuery)
       .select("_id name subtypes._id subtypes.name subtypes.plantReadyDays")
       .lean();
     const plantIds = plants.map((p) => p._id);
     if (!plantIds.length) {
-      return res.json({ success: true, date: req.query.date, items: [], total: 0 });
+      return res.json({
+        success: true,
+        date: dateStr,
+        plantId: plantFilter ? String(plantFilter) : null,
+        items: [],
+        groups: [],
+        total: 0,
+        coverWindowDays: 0,
+      });
     }
 
     const plantMap = new Map(plants.map((p) => [String(p._id), p]));
+    const subtypeIds = plants.flatMap((p) =>
+      (p.subtypes || []).map((st) => st._id)
+    );
 
     const orders = await Order.find({
       plantName: { $in: plantIds },
-      deliveryDate: { $gte: range.start, $lte: range.end },
+      ...(subtypeIds.length ? { plantSubtype: { $in: subtypeIds } } : {}),
       sowingDone: { $ne: true },
-      orderStatus: { $nin: ["CANCELLED", "TEMPORARY_CANCELLED", "REJECTED", "DELETED"] },
+      orderStatus: {
+        $nin: ["CANCELLED", "TEMPORARY_CANCELLED", "REJECTED", "DELETED"],
+      },
     })
       .select(
         "orderId name farmer plantName plantSubtype bookingSlot numberOfPlants additionalPlants deliveryDate sowingPlan orderStatus"
@@ -129,6 +151,8 @@ export const listDirectSowOrders = async (req, res) => {
       );
       const plantsQty =
         (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0);
+      const plantReadyDays = Number(st?.plantReadyDays) || 0;
+      const win = coverWindowForSow(sowRange.start, plantReadyDays);
       return {
         orderId: o._id,
         orderNumber: o.orderId,
@@ -138,7 +162,12 @@ export const listDirectSowOrders = async (req, res) => {
         plantName: plant?.name || "",
         subtypeId: o.plantSubtype,
         subtypeName: st?.name || "",
-        plantReadyDays: Number(st?.plantReadyDays) || 0,
+        plantReadyDays,
+        readyDate: win.readyDate,
+        coverFrom: win.readyDate,
+        coverTo: win.readyDate,
+        coverWindowDays: 0,
+        availableDay: o.deliveryDate || null,
         slotId: o.bookingSlot,
         plants: plantsQty,
         deliveryDate: o.deliveryDate,
@@ -148,7 +177,6 @@ export const listDirectSowOrders = async (req, res) => {
       };
     });
 
-    // Group helper for UI
     const groupsMap = new Map();
     for (const it of items) {
       const key = `${it.plantId}-${it.subtypeId}`;
@@ -159,6 +187,10 @@ export const listDirectSowOrders = async (req, res) => {
           subtypeId: it.subtypeId,
           subtypeName: it.subtypeName,
           plantReadyDays: it.plantReadyDays,
+          readyDate: it.readyDate,
+          coverFrom: it.coverFrom,
+          coverTo: it.coverTo,
+          coverWindowDays: 0,
           orderCount: 0,
           totalPlants: 0,
           slotIds: new Set(),
@@ -172,14 +204,77 @@ export const listDirectSowOrders = async (req, res) => {
       g.orders.push(it);
     }
 
-    const groups = [...groupsMap.values()].map((g) => ({
-      ...g,
-      slotIds: [...g.slotIds],
-    }));
+    // When plant filtered: include subtypes with zero unsowed orders (excess sow)
+    if (plantFilter) {
+      for (const p of plants) {
+        for (const st of p.subtypes || []) {
+          const key = `${p._id}-${st._id}`;
+          if (groupsMap.has(key)) continue;
+          const rd = Math.max(0, Number(st.plantReadyDays) || 0);
+          const win = coverWindowForSow(sowRange.start, rd);
+          groupsMap.set(key, {
+            plantId: p._id,
+            plantName: p.name,
+            subtypeId: st._id,
+            subtypeName: st.name,
+            plantReadyDays: rd,
+            readyDate: win.readyDate,
+            coverFrom: win.readyDate,
+            coverTo: win.readyDate,
+            coverWindowDays: 0,
+            orderCount: 0,
+            totalPlants: 0,
+            slotIds: new Set(),
+            orders: [],
+          });
+        }
+      }
+    }
+
+    const groups = [...groupsMap.values()]
+      .map((g) => ({
+        ...g,
+        slotIds: [...g.slotIds],
+      }))
+      .sort((a, b) => {
+        const byPlant = String(a.plantName).localeCompare(String(b.plantName));
+        if (byPlant) return byPlant;
+        return String(a.subtypeName).localeCompare(String(b.subtypeName));
+      });
+
+    const productCache = new Map();
+    for (const g of groups) {
+      const pk = `${g.plantId}-${g.subtypeId}`;
+      if (!productCache.has(pk)) {
+        productCache.set(pk, await resolveSeedProduct(g.plantId, g.subtypeId));
+      }
+      const product = productCache.get(pk);
+      g.conversionFactor = Number(product?.conversionFactor) || 1;
+      g.hasSeedProduct = Boolean(product?._id);
+      g.seedProductName = product?.name || null;
+    }
+
+    if (plantFilter && groups.length) {
+      const slotDaysMap = await fetchSlotsBySubtype(
+        plantFilter,
+        groups.map((g) => g.subtypeId)
+      );
+      for (const g of groups) {
+        g.slots = slotDaysMap.get(String(g.subtypeId)) || [];
+        g.slotDays = g.slots;
+      }
+    } else {
+      for (const g of groups) {
+        g.slots = [];
+        g.slotDays = [];
+      }
+    }
 
     return res.json({
       success: true,
-      date: req.query.date,
+      date: dateStr,
+      plantId: plantFilter ? String(plantFilter) : null,
+      coverWindowDays: 0,
       total: items.length,
       items,
       groups,
@@ -196,9 +291,8 @@ export const listDirectSowOrders = async (req, res) => {
 
 /**
  * POST /sowing/admin-direct-sow
- * Bypass request → issue. Creates completed sow entry + applies slots + marks orders.
- * Body: { date, orderIds[], plantsSowed?, packetsUsed?, shedName, notes?, laboursLadies?, laboursGents? }
- * Plants default = sum of selected order plants. Packets optional (recorded only — no inventory).
+ * Bypass request → issue. Creates completed sow + applies slots + marks orders.
+ * Body: orderIds[] and/or plantId+subtypeId for excess-only.
  */
 export const submitDirectSow = async (req, res) => {
   try {
@@ -212,16 +306,27 @@ export const submitDirectSow = async (req, res) => {
     const orderIds = Array.isArray(req.body.orderIds)
       ? req.body.orderIds.filter((id) => mongoose.Types.ObjectId.isValid(id))
       : [];
-    if (!orderIds.length) {
+
+    const bodyPlantId =
+      req.body.plantId && mongoose.Types.ObjectId.isValid(req.body.plantId)
+        ? String(req.body.plantId)
+        : null;
+    const bodySubtypeId =
+      req.body.subtypeId && mongoose.Types.ObjectId.isValid(req.body.subtypeId)
+        ? String(req.body.subtypeId)
+        : null;
+
+    if (!orderIds.length && !(bodyPlantId && bodySubtypeId)) {
       return res.status(400).json({
         success: false,
-        message: "Select at least one order",
+        message: "Select orders, or pass plantId + subtypeId for excess sow",
       });
     }
 
-    const shedName = String(
-      req.body.shedName || req.body.pollyhouse || req.body.shed || "Office"
-    ).trim() || "Office";
+    const shedName =
+      String(
+        req.body.shedName || req.body.pollyhouse || req.body.shed || "Office"
+      ).trim() || "Office";
 
     const notes = String(req.body.notes || req.body.completionNotes || "").trim();
     const batchNumber = String(req.body.batchNumber || "").trim();
@@ -232,38 +337,48 @@ export const submitDirectSow = async (req, res) => {
     ).trim();
     const sowedAt = parseLocalDate(sowDateHint) || new Date();
 
-    const orders = await Order.find({
-      _id: { $in: orderIds.map((id) => new mongoose.Types.ObjectId(id)) },
-      sowingDone: { $ne: true },
-      orderStatus: { $nin: ["CANCELLED", "TEMPORARY_CANCELLED", "REJECTED", "DELETED"] },
-    })
-      .select(
-        "orderId plantName plantSubtype bookingSlot numberOfPlants additionalPlants deliveryDate"
-      )
+    let orders = [];
+    if (orderIds.length) {
+      orders = await Order.find({
+        _id: { $in: orderIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        sowingDone: { $ne: true },
+        orderStatus: {
+          $nin: ["CANCELLED", "TEMPORARY_CANCELLED", "REJECTED", "DELETED"],
+        },
+      })
+        .select(
+          "orderId plantName plantSubtype bookingSlot numberOfPlants additionalPlants deliveryDate"
+        )
+        .lean();
+
+      if (!orders.length) {
+        return res.status(400).json({
+          success: false,
+          message: "No eligible unsowed orders found",
+        });
+      }
+    }
+
+    let plantId = bodyPlantId;
+    let subtypeId = bodySubtypeId;
+    if (orders.length) {
+      plantId = String(orders[0].plantName);
+      subtypeId = String(orders[0].plantSubtype);
+      const mixed = orders.some(
+        (o) =>
+          String(o.plantName) !== plantId || String(o.plantSubtype) !== subtypeId
+      );
+      if (mixed) {
+        return res.status(400).json({
+          success: false,
+          message: "Select orders from one plant + subtype only",
+        });
+      }
+    }
+
+    const plant = await PlantCms.findById(plantId)
+      .select("name subtypes sowingAllowed")
       .lean();
-
-    if (!orders.length) {
-      return res.status(400).json({
-        success: false,
-        message: "No eligible unsowed orders found",
-      });
-    }
-
-    // One plant+subtype per submit (UI groups that way)
-    const plantId = String(orders[0].plantName);
-    const subtypeId = String(orders[0].plantSubtype);
-    const mixed = orders.some(
-      (o) =>
-        String(o.plantName) !== plantId || String(o.plantSubtype) !== subtypeId
-    );
-    if (mixed) {
-      return res.status(400).json({
-        success: false,
-        message: "Select orders from one plant + subtype only",
-      });
-    }
-
-    const plant = await PlantCms.findById(plantId).select("name subtypes sowingAllowed").lean();
     if (!plant?.sowingAllowed) {
       return res.status(400).json({
         success: false,
@@ -277,7 +392,6 @@ export const submitDirectSow = async (req, res) => {
       return res.status(404).json({ success: false, message: "Subtype not found" });
     }
 
-    // Seed packing optional — order/admin sow can save plants + date without inventory product
     const product = await resolveSeedProduct(plantId, subtypeId);
 
     const orderPlantSum = orders.reduce(
@@ -296,20 +410,26 @@ export const submitDirectSow = async (req, res) => {
       });
     }
 
+    const isExcessOnly = orders.length === 0;
     const cf = Number(product?.conversionFactor) || 1;
     let packetsUsed = Math.max(0, parseNum(req.body.packetsUsed, NaN));
     if (!Number.isFinite(packetsUsed)) {
-      // Only auto-derive packets when a seed product exists
       packetsUsed = product && cf > 0 ? Math.ceil(plantsSowed / cf) : 0;
     }
 
-    const slotIds = [
-      ...new Set(
-        orders.map((o) => String(o.bookingSlot)).filter(Boolean)
-      ),
+    let slotIds = [
+      ...new Set(orders.map((o) => String(o.bookingSlot)).filter(Boolean)),
     ].map((id) => new mongoose.Types.ObjectId(id));
 
-    if (!slotIds.length) {
+    const bodySlotId =
+      req.body.slotId && mongoose.Types.ObjectId.isValid(req.body.slotId)
+        ? new mongoose.Types.ObjectId(req.body.slotId)
+        : null;
+    if (bodySlotId && (isExcessOnly || !slotIds.length)) {
+      slotIds = [bodySlotId];
+    }
+
+    if (!isExcessOnly && !slotIds.length) {
       return res.status(400).json({
         success: false,
         message: "Order has no booking slot — cannot apply sow to slots",
@@ -347,10 +467,10 @@ export const submitDirectSow = async (req, res) => {
         notes ||
         `Admin direct sow${sowDateHint ? ` · sow ${sowDateHint}` : ""}${
           batchNumber ? ` · batch ${batchNumber}` : ""
-        }${noProductHint}`,
+        }${isExcessOnly ? " · excess only" : ""}${noProductHint}`,
       linkedSlotIds: slotIds,
       linkedOrderIds: linkedOrderObjectIds,
-      isExcessiveSowing: false,
+      isExcessiveSowing: isExcessOnly,
       seedSource: "COMPANY",
       packetsFromCompany: pktRecord,
       packetsFromRaising: 0,
@@ -365,13 +485,74 @@ export const submitDirectSow = async (req, res) => {
         notes ||
         `Office/Super Admin direct sow (plants + date; inventory bypassed)${
           batchNumber ? ` · Batch ${batchNumber}` : ""
-        }${noProductHint}`,
+        }${isExcessOnly ? " · excess only" : ""}${noProductHint}`,
       completedBy: userId,
       sowingCompleted: true,
       sowingCompletedDate: sowedAt,
       sowingInProgress: false,
       remainingSowingNeeded: 0,
       completionEvents: [],
+    });
+
+    const cmsReady = await resolveCmsReadyDays(plantId, subtypeId);
+    const bodyReady = parseNum(req.body.plantReadyDays, NaN);
+    const readyDateHint = String(
+      req.body.readyDate || req.body.plantReadyDate || ""
+    ).trim();
+    const readyDateParsed = parseLocalDate(readyDateHint);
+
+    let plantReadyDays;
+    if (readyDateParsed && sowedAt) {
+      const s0 = new Date(sowedAt);
+      s0.setHours(0, 0, 0, 0);
+      const r0 = new Date(readyDateParsed);
+      r0.setHours(0, 0, 0, 0);
+      const diff = Math.round((r0.getTime() - s0.getTime()) / 86400000);
+      if (diff < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "readyDate cannot be before sow date",
+        });
+      }
+      plantReadyDays = diff;
+    } else if (Number.isFinite(bodyReady) && bodyReady >= 0) {
+      plantReadyDays = bodyReady;
+    } else {
+      plantReadyDays = Number(subtype.plantReadyDays) || cmsReady;
+    }
+
+    if (!(plantReadyDays >= 0) || !Number.isFinite(plantReadyDays)) {
+      return res.status(400).json({
+        success: false,
+        message: "plantReadyDays must be ≥ 0 (or pass readyDate)",
+      });
+    }
+    if (
+      plantReadyDays === 0 &&
+      !readyDateParsed &&
+      !(Number.isFinite(bodyReady) && bodyReady === 0)
+    ) {
+      // CMS/default must still be > 0 unless explicit readyDate / days=0
+      const fallback = Number(subtype.plantReadyDays) || cmsReady;
+      if (!(fallback > 0)) {
+        return res.status(400).json({
+          success: false,
+          message: "plantReadyDays must be > 0",
+        });
+      }
+      plantReadyDays = fallback;
+    }
+
+    const slotResult = await applyPlantsToLinkedSlots(request, plantsSowed, {
+      packetsUsed: pktRecord,
+      requestNumber,
+      linkedOrderIds: linkedOrderObjectIds,
+      isExcessiveSowing: isExcessOnly,
+      shedName,
+      sowedAt,
+      plantReadyDays,
+      resolveByReadyDate: true,
+      userId,
     });
 
     pushEvent(request, {
@@ -383,8 +564,13 @@ export const submitDirectSow = async (req, res) => {
       meta: {
         adminBypass: true,
         noSeedProduct: !product,
+        excessOnly: isExcessOnly,
         sowDate: sowDateHint || null,
-        plantReadyDays,
+        plantReadyDays: slotResult.plantReadyDays ?? plantReadyDays,
+        plantReadyDate: slotResult.plantReadyDate || null,
+        appliedSlotId: slotResult.appliedSlotId
+          ? String(slotResult.appliedSlotId)
+          : null,
         orderCount: orders.length,
         batchNumber: batchNumber || null,
       },
@@ -400,38 +586,46 @@ export const submitDirectSow = async (req, res) => {
       });
     }
 
-    const cmsReady = await resolveCmsReadyDays(plantId, subtypeId);
-    const bodyReady = parseNum(req.body.plantReadyDays, NaN);
-    const plantReadyDays =
-      Number.isFinite(bodyReady) && bodyReady > 0
-        ? bodyReady
-        : Number(subtype.plantReadyDays) || cmsReady;
-
-    // Slots: map by plantReadyDate = sowDate + plantReadyDays
-    const slotResult = await applyPlantsToLinkedSlots(request, plantsSowed, {
-      packetsUsed: pktRecord,
-      requestNumber,
-      linkedOrderIds: linkedOrderObjectIds,
-      isExcessiveSowing: false,
-      shedName,
-      sowedAt,
-      plantReadyDays,
-      resolveByReadyDate: true,
-    });
-
     await request.save();
 
-    const orderResult = await markOrdersSowed(request, { sowedAt });
+    const orderResult = await markOrdersSowed(request, {
+      sowedAt,
+      plantsSowed,
+      plantReadyDays,
+      orderIds: linkedOrderObjectIds,
+    });
+    const excessPlants = Math.max(
+      0,
+      Number(orderResult.remainingUncovered) || 0
+    );
+    const orderCoveredPlants = Math.max(0, plantsSowed - excessPlants);
+    if (slotResult.appliedSlotId) {
+      await recordExcessPlantsOnSlot(
+        slotResult.appliedSlotId,
+        request._id,
+        excessPlants,
+        orderCoveredPlants,
+        orderResult.markedIds || request.linkedOrderIds || []
+      );
+    }
     pushEvent(request, {
       type: "ORDERS_MARKED_SOWED",
       by: userId,
       quantity: orderResult.marked,
       unit: "orders",
-      message: `${orderResult.marked} orders marked sowingDone`,
+      message: `${orderResult.marked} included orders marked sowingDone`,
+      meta: {
+        remainingUncovered: orderResult.remainingUncovered ?? 0,
+        plantsSowed,
+        orderCoveredPlants,
+        excessPlants,
+        readyDate: orderResult.readyDate || null,
+        plantReadyDays: orderResult.plantReadyDays ?? plantReadyDays,
+        eligibleCount: orderResult.eligibleCount ?? 0,
+      },
     });
     await request.save();
 
-    // Bust lite cache
     setImmediate(() => {
       import("./sowingCardsLite.controller.js")
         .then((m) => m.bustTodaySowingCardsLiteCache?.())
@@ -449,6 +643,9 @@ export const submitDirectSow = async (req, res) => {
         plantsSowed,
         packetsUsed: pktRecord,
         noSeedProduct: !product,
+        excessOnly: isExcessOnly,
+        orderCoveredPlants,
+        excessPlants,
         slotsUpdated: slotResult.slotsUpdated || 0,
         ordersMarked: orderResult.marked,
         sowingDate: slotResult.sowingDate,

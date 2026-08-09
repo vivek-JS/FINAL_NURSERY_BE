@@ -30,6 +30,10 @@ async function uploadSupplierInvoiceFile(file) {
   };
 }
 
+function isAutoGRNEnabled(value) {
+  return value === true || value === 'true' || value === 1 || value === '1';
+}
+
 // Create Purchase Order
 export const createPurchaseOrder = async (req, res) => {
   try {
@@ -52,11 +56,13 @@ export const createPurchaseOrder = async (req, res) => {
       });
     }
 
+    const isAutoGRN = isAutoGRNEnabled(autoGRN);
+
     const invoiceNo = String(supplierInvoiceNumber || '').trim();
-    if (!invoiceNo) {
+    if (isAutoGRN && !invoiceNo) {
       return res.status(400).json({
         success: false,
-        message: 'Supplier invoice number is required',
+        message: 'Supplier invoice number is required when Auto GRN is enabled',
       });
     }
 
@@ -71,10 +77,10 @@ export const createPurchaseOrder = async (req, res) => {
         });
       }
     }
-    if (!supplierInvoiceFile?.url) {
+    if (isAutoGRN && !supplierInvoiceFile?.url) {
       return res.status(400).json({
         success: false,
-        message: 'Supplier invoice file is required (JPG/PNG/WEBP/PDF)',
+        message: 'Supplier invoice file is required when Auto GRN is enabled (JPG/PNG/WEBP/PDF)',
       });
     }
 
@@ -112,9 +118,9 @@ export const createPurchaseOrder = async (req, res) => {
       totalAmount,
       terms,
       notes,
-      supplierInvoiceNumber: invoiceNo,
-      supplierInvoiceFile,
-      autoGRN: autoGRN === true || autoGRN === 'true' || autoGRN === 1 || autoGRN === '1', // Store auto GRN flag (handle string/boolean)
+      supplierInvoiceNumber: invoiceNo || undefined,
+      supplierInvoiceFile: supplierInvoiceFile || undefined,
+      autoGRN: isAutoGRN,
       createdBy: req.user._id,
     });
 
@@ -1345,15 +1351,21 @@ export const updatePurchaseOrder = async (req, res) => {
       });
     }
 
+    if (req.body.autoGRN !== undefined) {
+      purchaseOrder.autoGRN = isAutoGRNEnabled(req.body.autoGRN);
+    }
+
+    const invoiceRequired = isAutoGRNEnabled(purchaseOrder.autoGRN);
+
     if (req.body.supplierInvoiceNumber !== undefined) {
       const invoiceNo = String(req.body.supplierInvoiceNumber || '').trim();
-      if (!invoiceNo) {
+      if (invoiceRequired && !invoiceNo) {
         return res.status(400).json({
           success: false,
-          message: 'Supplier invoice number is required',
+          message: 'Supplier invoice number is required when Auto GRN is enabled',
         });
       }
-      purchaseOrder.supplierInvoiceNumber = invoiceNo;
+      purchaseOrder.supplierInvoiceNumber = invoiceNo || undefined;
     }
 
     if (req.file) {
@@ -1363,6 +1375,21 @@ export const updatePurchaseOrder = async (req, res) => {
         return res.status(400).json({
           success: false,
           message: uploadErr.message || 'Supplier invoice upload failed',
+        });
+      }
+    }
+
+    if (invoiceRequired) {
+      if (!String(purchaseOrder.supplierInvoiceNumber || '').trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Supplier invoice number is required when Auto GRN is enabled',
+        });
+      }
+      if (!purchaseOrder.supplierInvoiceFile?.url) {
+        return res.status(400).json({
+          success: false,
+          message: 'Supplier invoice file is required when Auto GRN is enabled',
         });
       }
     }

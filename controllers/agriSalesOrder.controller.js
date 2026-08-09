@@ -11,6 +11,14 @@ import AgriSalesOrder, {
 import { InventoryProduct, InventoryOutwardTransaction, StockAdjustment } from "../models/inventory.model.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
 import {
+  isGiftInventoryCategory,
+  mapLinkedOrdersForDispatchStatus,
+} from "../utils/linkedDispatchLoad.util.js";
+import {
+  findGiftProductById,
+  resolveGiftProductRate,
+} from "../services/giftProductResolve.service.js";
+import {
   deductStockFIFO,
   returnToSourceBatches,
 } from "../services/ramAgriBatchInventory.service.js";
@@ -40,6 +48,16 @@ import { pushAgriActivityAndEmit } from "../utils/orderEventDualWrite.js";
 import { mergeAgriOldFilter, resolveAgriOldFilter } from "../utils/agriOrderEra.util.js";
 import { scheduleAgriOrderPaymentWhatsApp } from "../services/orderPaymentWhatsapp.service.js";
 import { scheduleStockChangeAlert } from "../services/stockWhatsappAlert.service.js";
+import { stampPaymentUpdatedBy, stampPaymentRecordedBy } from "../utils/paymentAudit.js";
+import {
+  isAgriDealerSelf,
+  mergeDealerCustomerFields,
+  dealerOwnOrdersFilter,
+} from "../utils/agriDealerOrder.util.js";
+import {
+  normalizeFarmerMobile,
+  resolveFarmerIdentity,
+} from "../utils/farmerPlantOrderLedgerHelper.js";
 
 const triggerNurseryDcRetryAfterAgriLoaded = (linkedNurseryOrderId, changedBy = "System") => {
   const nurseryId = linkedNurseryOrderId?._id ?? linkedNurseryOrderId;
@@ -258,6 +276,35 @@ const isEligibleAgriSalesPerson = (userLike) => {
   return jt === "RAM_AGRI_SALES" || role === "RAM_AGRI_SALES" || jt === "SALES" || role === "SALES";
 };
 
+/** Field rep → always self; dealer → self with no sales person; others → body.salesPerson required. */
+const resolveAgriOrderAttribution = async (req, bodySalesPerson) => {
+  const user = req.user;
+  const userId = user?._id || user?.id;
+  if (!userId) {
+    throw new AppError("User authentication required", 401);
+  }
+  if (isAgriDealerSelf(user) || req.body?.isDealerSelfOrder === true) {
+    if (!isAgriDealerSelf(user)) {
+      throw new AppError("Only dealers can create dealer self orders", 403);
+    }
+    return {
+      salesPersonId: null,
+      dealerId: userId,
+      isDealerSelfOrder: true,
+      orderSource: "DEALER_SELF",
+      outstandingUserId: userId,
+    };
+  }
+  const salesPersonId = await resolveAgriOrderSalesPersonId(req, bodySalesPerson);
+  return {
+    salesPersonId,
+    dealerId: null,
+    isDealerSelfOrder: false,
+    orderSource: "FIELD",
+    outstandingUserId: salesPersonId,
+  };
+};
+
 /** Field rep → always self; others → body.salesPerson must be RAM_AGRI_SALES or SALES user. */
 const resolveAgriOrderSalesPersonId = async (req, bodySalesPerson) => {
   const user = req.user;
@@ -333,6 +380,8 @@ async function restoreStockForAgriOrder(order, notesSuffix, userId) {
         orderNumber: order.orderNumber,
         userId,
         reason: notesSuffix,
+        movementType: "ORDER_CANCEL_RESTORE_IN",
+        description: `Order cancel restore — ${order.orderNumber || order._id}`,
       });
       if (!result.ok) {
         console.error(`restoreStockForAgriOrder batch restore failed: ${result.error}`);
@@ -392,6 +441,8 @@ async function deductStockForAgriOrderLines(order, orderNumber, userId) {
         referenceType: "AgriSalesOrder",
         referenceId: order._id,
         referenceNumber: orderNumber,
+        movementType: "SALE_DISPATCH_OUT",
+        description: `Sale dispatch — ${orderNumber} (${line.productName || "item"})`,
       });
       if (!ded.ok) {
         return {
@@ -426,9 +477,11 @@ async function deductStockForAgriOrderLines(order, orderNumber, userId) {
         source: "Agri Sales Dispatch",
       });
     } else if (line.productId) {
-      const product = await InventoryProduct.findById(line.productId);
+      const giftResolved = await findGiftProductById(line.productId);
+      const product = giftResolved?.product;
       if (!product) continue;
-      const stockBefore = product.currentStock || 0;
+
+      const stockBefore = Number(product.currentStock) || 0;
       if (stockBefore < qty) {
         return {
           ok: false,
@@ -440,28 +493,34 @@ async function deductStockForAgriOrderLines(order, orderNumber, userId) {
       }
       product.currentStock = stockBefore - qty;
       await product.save();
-      await InventoryOutwardTransaction.create({
-        productId: line.productId,
-        quantity: qty,
-        sellingPrice: rate,
-        totalAmount: qty * rate,
-        customer: {
-          name: order.customerName,
-          contact: order.customerMobile,
-        },
-        purpose: "sale",
-        destination: "customer",
-        outwardDate: new Date(),
-        issuedBy: userId,
-        notes: `Ram Agri Sales Order: ${orderNumber} (Dispatched)`,
-        status: "issued",
-      });
+
+      if (giftResolved.source === "inventory") {
+        await InventoryOutwardTransaction.create({
+          productId: line.productId,
+          quantity: qty,
+          sellingPrice: rate,
+          totalAmount: qty * rate,
+          customer: {
+            name: order.customerName,
+            contact: order.customerMobile,
+          },
+          purpose: "sale",
+          destination: "customer",
+          outwardDate: new Date(),
+          issuedBy: userId,
+          notes: `Ram Agri Sales Order: ${orderNumber} (Dispatched)`,
+          status: "issued",
+        });
+      }
 
       scheduleStockChangeAlert({
         changeType: "outward",
         productName: line.productName || product.name,
         quantity: qty,
-        unit: product.unit || "",
+        unit:
+          giftResolved.source === "product"
+            ? product.primaryUnit?.abbreviation || product.primaryUnit?.name || ""
+            : product.unit || "",
         oldStock: stockBefore,
         newStock: product.currentStock,
         referenceNumber: orderNumber,
@@ -521,7 +580,29 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   const useMultiLine = Array.isArray(rawLineItems) && rawLineItems.length > 0;
 
-  if (!customerName || !customerMobile) {
+  const dealerSelf = isAgriDealerSelf(req.user) || req.body?.isDealerSelfOrder === true;
+  const customerFields = dealerSelf
+    ? mergeDealerCustomerFields(
+        {
+          customerName,
+          customerMobile,
+          customerVillage,
+          customerTaluka,
+          customerDistrict,
+          customerState,
+        },
+        req.user
+      )
+    : {
+        customerName,
+        customerMobile,
+        customerVillage,
+        customerTaluka,
+        customerDistrict,
+        customerState,
+      };
+
+  if (!customerFields.customerName || !customerFields.customerMobile) {
     return next(new AppError("Customer name and mobile are required", 400));
   }
 
@@ -529,7 +610,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     return next(new AppError("Customer name, mobile, and quantity are required", 400));
   }
 
-  if (customerMobile.length !== 10 || !/^\d{10}$/.test(customerMobile)) {
+  if (customerFields.customerMobile.length !== 10 || !/^\d{10}$/.test(customerFields.customerMobile)) {
     return next(new AppError("Mobile number must be exactly 10 digits", 400));
   }
 
@@ -665,7 +746,8 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     );
   }
 
-  const salesPersonId = await resolveAgriOrderSalesPersonId(req, salesPersonBody);
+  const attribution = await resolveAgriOrderAttribution(req, salesPersonBody);
+  const { salesPersonId, dealerId, isDealerSelfOrder, orderSource, outstandingUserId } = attribution;
 
   const newExposure = Math.max(0, Math.round((totalAmount - initialPaidAmount) * 100) / 100);
   const needsRamAgriOutstandingLimit = useMultiLine
@@ -673,7 +755,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     : Boolean(isRamAgriProduct);
   if (needsRamAgriOutstandingLimit && newExposure > 0) {
     await assertOutstandingAllowsNewExposure({
-      salesPersonId,
+      salesPersonId: outstandingUserId,
       additionalExposureRupees: newExposure,
     });
   }
@@ -688,14 +770,20 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   let orderData;
 
+  const dealerOrderFields = {
+    isDealerSelfOrder,
+    dealer: dealerId,
+    orderSource,
+  };
+
   if (useMultiLine) {
     orderData = {
-      customerName: customerName.trim(),
-      customerMobile: customerMobile.trim(),
-      customerVillage: customerVillage?.trim() || "",
-      customerTaluka: customerTaluka?.trim() || "",
-      customerDistrict: customerDistrict?.trim() || "",
-      customerState: (customerState || "Maharashtra").trim(),
+      customerName: customerFields.customerName.trim(),
+      customerMobile: customerFields.customerMobile.trim(),
+      customerVillage: customerFields.customerVillage?.trim() || "",
+      customerTaluka: customerFields.customerTaluka?.trim() || "",
+      customerDistrict: customerFields.customerDistrict?.trim() || "",
+      customerState: (customerFields.customerState || "Maharashtra").trim(),
       lineItems: normalizedLines,
       orderDate: orderDate ? new Date(orderDate) : new Date(),
       deliveryDate:
@@ -705,6 +793,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
       screenshots: screenshots || [],
       createdBy: userId,
       salesPerson: salesPersonId,
+      ...dealerOrderFields,
       orderStatus: "ACCEPTED",
       acceptedBy: userId,
       acceptedAt: new Date(),
@@ -714,12 +803,12 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     };
   } else {
     orderData = {
-      customerName: customerName.trim(),
-      customerMobile: customerMobile.trim(),
-      customerVillage: customerVillage?.trim() || "",
-      customerTaluka: customerTaluka?.trim() || "",
-      customerDistrict: customerDistrict?.trim() || "",
-      customerState: (customerState || "Maharashtra").trim(),
+      customerName: customerFields.customerName.trim(),
+      customerMobile: customerFields.customerMobile.trim(),
+      customerVillage: customerFields.customerVillage?.trim() || "",
+      customerTaluka: customerFields.customerTaluka?.trim() || "",
+      customerDistrict: customerFields.customerDistrict?.trim() || "",
+      customerState: (customerFields.customerState || "Maharashtra").trim(),
       isRamAgriProduct: isRamAgriProduct || false,
       productName,
       quantity,
@@ -733,6 +822,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
       screenshots: screenshots || [],
       createdBy: userId,
       salesPerson: salesPersonId,
+      ...dealerOrderFields,
       orderStatus: "ACCEPTED",
       acceptedBy: userId,
       acceptedAt: new Date(),
@@ -939,6 +1029,7 @@ const createLinkedAgriOrderFromNurseryOrder = catchAsync(async (req, res, next) 
     linkedNurseryOrderId,
     ramAgriCropId,
     ramAgriVarietyId,
+    productId,
     quantity,
     rate,
     notes,
@@ -948,78 +1039,184 @@ const createLinkedAgriOrderFromNurseryOrder = catchAsync(async (req, res, next) 
   if (!mongoose.isValidObjectId(linkedNurseryOrderId)) {
     return next(new AppError("Valid linked nursery order ID is required", 400));
   }
-  if (!mongoose.isValidObjectId(ramAgriCropId) || !mongoose.isValidObjectId(ramAgriVarietyId)) {
-    return next(new AppError("Valid crop and variety IDs are required", 400));
-  }
   const numericQuantity = Number(quantity);
   if (Number.isNaN(numericQuantity) || numericQuantity <= 0) {
     return next(new AppError("Quantity must be greater than 0", 400));
   }
 
+  const hasRamAgriPair =
+    mongoose.isValidObjectId(ramAgriCropId) && mongoose.isValidObjectId(ramAgriVarietyId);
+  const hasGiftProduct = mongoose.isValidObjectId(productId);
+  if (!hasRamAgriPair && !hasGiftProduct) {
+    return next(
+      new AppError("Provide Ram Agri crop + variety, or a gift inventory productId", 400)
+    );
+  }
+  if (hasRamAgriPair && hasGiftProduct) {
+    return next(new AppError("Use either Ram Agri crop/variety or gift productId, not both", 400));
+  }
+
   const nurseryOrder = await Order.findById(linkedNurseryOrderId)
-    .populate("farmer", "name mobileNumber village taluka district state");
+    .select("orderId deliveryDate orderFor whatsappBookingMobile farmer")
+    .populate(
+      "farmer",
+      "name mobileNumber alternateNumber village taluka district state"
+    );
   if (!nurseryOrder) {
     return next(new AppError("Linked nursery order not found", 404));
   }
 
-  const crop = await RamAgriInputsProduct.findById(ramAgriCropId)
-    .populate("varieties.primaryUnit", "name abbreviation")
-    .populate("varieties.secondaryUnit", "name abbreviation");
-  if (!crop) return next(new AppError("Crop not found", 404));
-
-  const variety = crop.varieties.id(ramAgriVarietyId);
-  if (!variety || variety.isActive === false) {
-    return next(new AppError("Selected variety not found or inactive", 400));
-  }
-
-  let resolvedRate = Number(rate);
-  if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
-    resolvedRate = resolveRamAgriRateForDate(variety, nurseryOrder.deliveryDate || new Date());
-  }
-  if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
-    return next(new AppError("Unable to resolve valid rate for selected variety", 400));
-  }
-
   const farmer = nurseryOrder.farmer || {};
+  const orderFor = nurseryOrder.orderFor || {};
+  const identity = await resolveFarmerIdentity(nurseryOrder);
+  const customerMobile =
+    identity.customerMobile ||
+    normalizeFarmerMobile(nurseryOrder.whatsappBookingMobile) ||
+    normalizeFarmerMobile(orderFor.mobileNumber) ||
+    (nurseryOrder._id ? `ORDER-${String(nurseryOrder._id).slice(-10)}` : null);
+  if (!customerMobile) {
+    return next(
+      new AppError(
+        "Linked nursery order has no customer mobile — add farmer mobile or order contact",
+        400
+      )
+    );
+  }
+  const customerName =
+    identity.customerName ||
+    String(farmer.name || orderFor.name || "").trim() ||
+    "Nursery Customer";
+  const customerVillage = String(farmer.village || orderFor.village || "").trim();
+  const customerTaluka = String(farmer.taluka || orderFor.taluka || "").trim();
+  const customerDistrict = String(farmer.district || orderFor.district || "").trim();
+  const customerState = String(farmer.state || orderFor.state || "Maharashtra").trim();
+
   const userId = req.user?._id || req.user?.id;
   if (!userId) return next(new AppError("User authentication required", 401));
 
   const salesPersonId = await resolveAgriOrderSalesPersonId(req, linkedSalesPersonBody);
-
-  const totalAmount = numericQuantity * resolvedRate;
   const linkedOrderCode = String(nurseryOrder.orderId || nurseryOrder._id);
 
-  const order = await AgriSalesOrder.create({
-    customerName: String(farmer.name || "").trim() || "Nursery Customer",
-    customerMobile: String(farmer.mobileNumber || "").trim(),
-    customerVillage: String(farmer.village || "").trim(),
-    customerTaluka: String(farmer.taluka || "").trim(),
-    customerDistrict: String(farmer.district || "").trim(),
-    customerState: String(farmer.state || "Maharashtra").trim(),
-    isRamAgriProduct: true,
-    ramAgriCropId,
-    ramAgriVarietyId,
-    ramAgriCropName: crop.cropName,
-    ramAgriVarietyName: variety.name,
-    primaryUnit: variety.primaryUnit?._id || null,
-    secondaryUnit: variety.secondaryUnit?._id || null,
-    conversionFactor: variety.conversionFactor || 1,
-    productName: `${crop.cropName} - ${variety.name}`,
-    quantity: numericQuantity,
-    rate: resolvedRate,
-    totalAmount,
-    orderDate: new Date(),
-    deliveryDate: nurseryOrder.deliveryDate || null,
-    notes: notes || "",
-    createdBy: userId,
-    salesPerson: salesPersonId,
-    orderStatus: "ACCEPTED",
-    acceptedBy: userId,
-    acceptedAt: new Date(),
-    linkedNurseryOrderId: nurseryOrder._id,
-    linkedNurseryOrderCode: linkedOrderCode,
-    agriLoadStatus: "PENDING_LOAD",
-  });
+  let orderPayload;
+
+  if (hasGiftProduct) {
+    const resolved = await findGiftProductById(productId, { populateUnit: true });
+    const product = resolved?.product;
+    if (!product || product.isActive === false) {
+      return next(new AppError("Gift product not found or inactive", 404));
+    }
+    if (!isGiftInventoryCategory(product.category)) {
+      return next(new AppError("Linked dispatch loads require inventory category gift", 400));
+    }
+
+    const stockAvailable = Number(product.currentStock) || 0;
+    if (stockAvailable < numericQuantity) {
+      return next(
+        new AppError(
+          `Insufficient stock for ${product.name}. Available: ${stockAvailable}, Required: ${numericQuantity}`,
+          400
+        )
+      );
+    }
+
+    let resolvedRate = resolveGiftProductRate(product, rate);
+    if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+      return next(new AppError("Rate is required for gift product", 400));
+    }
+
+    const totalAmount = numericQuantity * resolvedRate;
+    orderPayload = {
+      customerName,
+      customerMobile,
+      customerVillage,
+      customerTaluka,
+      customerDistrict,
+      customerState,
+      isRamAgriProduct: false,
+      productId: product._id,
+      productName: product.name,
+      primaryUnit: product.primaryUnit?._id || null,
+      conversionFactor: product.conversionFactor || 1,
+      quantity: numericQuantity,
+      rate: resolvedRate,
+      totalAmount,
+      lineItems: [
+        {
+          isRamAgriProduct: false,
+          productId: product._id,
+          productName: product.name,
+          primaryUnit: product.primaryUnit?._id || null,
+          conversionFactor: product.conversionFactor || 1,
+          quantity: numericQuantity,
+          rate: resolvedRate,
+        },
+      ],
+      orderDate: new Date(),
+      deliveryDate: nurseryOrder.deliveryDate || null,
+      notes: notes || "",
+      createdBy: userId,
+      salesPerson: salesPersonId,
+      orderStatus: "ACCEPTED",
+      acceptedBy: userId,
+      acceptedAt: new Date(),
+      linkedNurseryOrderId: nurseryOrder._id,
+      linkedNurseryOrderCode: linkedOrderCode,
+      agriLoadStatus: "PENDING_LOAD",
+    };
+  } else {
+    const crop = await RamAgriInputsProduct.findById(ramAgriCropId)
+      .populate("varieties.primaryUnit", "name abbreviation")
+      .populate("varieties.secondaryUnit", "name abbreviation");
+    if (!crop) return next(new AppError("Crop not found", 404));
+
+    const variety = crop.varieties.id(ramAgriVarietyId);
+    if (!variety || variety.isActive === false) {
+      return next(new AppError("Selected variety not found or inactive", 400));
+    }
+
+    let resolvedRate = Number(rate);
+    if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+      resolvedRate = resolveRamAgriRateForDate(variety, nurseryOrder.deliveryDate || new Date());
+    }
+    if (Number.isNaN(resolvedRate) || resolvedRate <= 0) {
+      return next(new AppError("Unable to resolve valid rate for selected variety", 400));
+    }
+
+    const totalAmount = numericQuantity * resolvedRate;
+    orderPayload = {
+      customerName,
+      customerMobile,
+      customerVillage,
+      customerTaluka,
+      customerDistrict,
+      customerState,
+      isRamAgriProduct: true,
+      ramAgriCropId,
+      ramAgriVarietyId,
+      ramAgriCropName: crop.cropName,
+      ramAgriVarietyName: variety.name,
+      primaryUnit: variety.primaryUnit?._id || null,
+      secondaryUnit: variety.secondaryUnit?._id || null,
+      conversionFactor: variety.conversionFactor || 1,
+      productName: `${crop.cropName} - ${variety.name}`,
+      quantity: numericQuantity,
+      rate: resolvedRate,
+      totalAmount,
+      orderDate: new Date(),
+      deliveryDate: nurseryOrder.deliveryDate || null,
+      notes: notes || "",
+      createdBy: userId,
+      salesPerson: salesPersonId,
+      orderStatus: "ACCEPTED",
+      acceptedBy: userId,
+      acceptedAt: new Date(),
+      linkedNurseryOrderId: nurseryOrder._id,
+      linkedNurseryOrderCode: linkedOrderCode,
+      agriLoadStatus: "PENDING_LOAD",
+    };
+  }
+
+  const order = await AgriSalesOrder.create(orderPayload);
 
   logAgriActivity(order,{
     action: "ORDER_CREATED",
@@ -1159,23 +1356,32 @@ const getDispatchLoadStatus = catchAsync(async (req, res, next) => {
   const linkedOrders = await AgriSalesOrder.find({
     linkedNurseryOrderId: { $in: normalizedIds },
     orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
-  }).lean();
+  })
+    .populate("lineItems.productId", "name category primaryUnit")
+    .populate("productId", "name category primaryUnit")
+    .lean();
+
+  const productIds = new Set();
+  linkedOrders.forEach((order) => {
+    getAgriOrderLines(order).forEach((line) => {
+      const pid = line.productId?._id || line.productId;
+      if (pid) productIds.add(String(pid));
+    });
+  });
+  const products = productIds.size
+    ? await (async () => {
+        const { default: Product } = await import("../models/product.model.js");
+        return Product.find({ _id: { $in: [...productIds] } })
+          .populate("primaryUnit", "name abbreviation")
+          .lean();
+      })()
+    : [];
+  const productById = new Map(products.map((p) => [String(p._id), p]));
 
   const blocking = linkedOrders.filter((order) => !isLinkedAgriLoadSatisfied(order));
   const responseData = {
     isBlocked: blocking.length > 0,
-    blockedBy: blocking.map((order) => ({
-      agriOrderId: order._id,
-      agriOrderNumber: order.orderNumber,
-      linkedNurseryOrderId: order.linkedNurseryOrderId,
-      linkedNurseryOrderCode: order.linkedNurseryOrderCode || "",
-      agriLoadStatus: order.agriLoadStatus || "PENDING_LOAD",
-      dispatchStatus: order.dispatchStatus,
-      orderStatus: order.orderStatus,
-      customerName: order.customerName,
-      productName: order.productName,
-      quantity: order.quantity,
-    })),
+    blockedBy: mapLinkedOrdersForDispatchStatus(blocking, productById),
   };
 
   return res.status(200).json(
@@ -1464,6 +1670,8 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
     startDate,
     endDate,
     myOrders, // Boolean: if true, show only orders created by current user
+    orderSource, // FIELD | DEALER_SELF
+    isDealerSelfOrder,
     customerVillage, // Filter by village
     customerTaluka, // Filter by taluka
     customerDistrict, // Filter by district
@@ -1476,8 +1684,19 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
   if (myOrders === "true" || myOrders === true) {
     const userId = req.user?._id || req.user?.id;
     if (userId) {
-      query = query.where("createdBy").equals(userId);
+      if (isAgriDealerSelf(req.user)) {
+        query = query.find(dealerOwnOrdersFilter(userId));
+      } else {
+        query = query.where("createdBy").equals(userId);
+      }
     }
+  }
+
+  if (orderSource && ["FIELD", "DEALER_SELF"].includes(String(orderSource))) {
+    query = query.where("orderSource").equals(orderSource);
+  }
+  if (isDealerSelfOrder === "true" || isDealerSelfOrder === true) {
+    query = query.where("isDealerSelfOrder").equals(true);
   }
 
   // Filter by specific createdBy (employee ID) - for admin/manager view
@@ -1574,6 +1793,7 @@ const getAllAgriSalesOrders = catchAsync(async (req, res, next) => {
     .populate("lineItems.ramAgriCropId")
     .populate("createdBy")
     .populate("salesPerson", "name phoneNumber jobTitle")
+    .populate("dealer", "name phoneNumber jobTitle role")
     .populate("acceptedBy")
     .populate("dispatchedBy")
     .populate("vehicleId")
@@ -1749,11 +1969,15 @@ const getAgriSalesOrderById = catchAsync(async (req, res, next) => {
 
   const order = await AgriSalesOrder.findById(id)
     .populate("productId")
+    .populate("lineItems.productId")
+    .populate("lineItems.ramAgriCropId")
     .populate("createdBy")
     .populate("salesPerson", "name phoneNumber jobTitle")
+    .populate("dealer", "name phoneNumber jobTitle role")
     .populate("acceptedBy")
     .populate("dispatchedBy")
-    .populate("vehicleId");
+    .populate("vehicleId")
+    .populate("assignedTo", "name phoneNumber jobTitle");
 
   if (!order) {
     return next(new AppError("Order not found", 404));
@@ -1827,6 +2051,7 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
   };
 
   if (!order.payment) order.payment = [];
+  stampPaymentRecordedBy(newPayment, req.user);
   order.payment.push(newPayment);
 
   // Update payment totals
@@ -1944,6 +2169,7 @@ const generatePaymentQRAgri = catchAsync(async (req, res, next) => {
     qrPayload: qrResult.qrString || undefined,
   };
   if (!order.payment) order.payment = [];
+  stampPaymentRecordedBy(newPayment, req.user);
   order.payment.push(newPayment);
   await order.save();
   await saveIciciQrAuditRecord({
@@ -2044,6 +2270,7 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
 
   // Update payment status
   order.payment[index].paymentStatus = paymentStatus;
+  stampPaymentUpdatedBy(order.payment[index], req.user);
 
   // Add activity log
   logAgriActivity(order,{
@@ -2627,6 +2854,22 @@ const getPendingPayments = catchAsync(async (req, res, next) => {
     },
     {
       $lookup: {
+        from: "users",
+        localField: "payment.paymentUpdatedBy",
+        foreignField: "_id",
+        as: "_paymentUpdatedByUser",
+      },
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "payment.paymentRecordedBy",
+        foreignField: "_id",
+        as: "_paymentRecordedByUser",
+      },
+    },
+    {
+      $lookup: {
         from: "inventoryproducts",
         localField: "productId",
         foreignField: "_id",
@@ -2659,6 +2902,50 @@ const getPendingPayments = catchAsync(async (req, res, next) => {
         paymentIndex: 1, // Include payment index for status updates
         screenshots: 1, // Include screenshots for image viewing
         createdBy: { $arrayElemAt: ["$createdByData", 0] },
+        paymentUpdatedBy: {
+          $let: {
+            vars: { u: { $arrayElemAt: ["$_paymentUpdatedByUser", 0] } },
+            in: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$$u", null] },
+                    { $ne: ["$$u.name", null] },
+                    { $ne: ["$$u.name", ""] },
+                  ],
+                },
+                {
+                  name: "$$u.name",
+                  phoneNumber: { $ifNull: ["$$u.phoneNumber", ""] },
+                  role: { $ifNull: ["$$u.jobTitle", { $ifNull: ["$$u.role", ""] }] },
+                },
+                null,
+              ],
+            },
+          },
+        },
+        paymentRecordedBy: {
+          $let: {
+            vars: { u: { $arrayElemAt: ["$_paymentRecordedByUser", 0] } },
+            in: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$$u", null] },
+                    { $ne: ["$$u.name", null] },
+                    { $ne: ["$$u.name", ""] },
+                  ],
+                },
+                {
+                  name: "$$u.name",
+                  phoneNumber: { $ifNull: ["$$u.phoneNumber", ""] },
+                  role: { $ifNull: ["$$u.jobTitle", { $ifNull: ["$$u.role", ""] }] },
+                },
+                null,
+              ],
+            },
+          },
+        },
         acceptedBy: 1,
         createdAt: 1,
       },
@@ -4073,6 +4360,8 @@ const completeOrders = catchAsync(async (req, res, next) => {
               orderNumber: order.orderNumber,
               userId,
               reason: returnReason || "Customer return",
+              movementType: "SALES_RETURN_IN",
+              description: `Sales return — ${order.orderNumber || order._id}`,
             });
             if (!restoreResult.ok) {
               console.error(`Batch return failed for order ${order.orderNumber}: ${restoreResult.error}`);
@@ -4986,6 +5275,11 @@ const getDispatchedOrders = catchAsync(async (req, res, next) => {
     mergeAgriOldFilter({ dispatchStatus: { $ne: "NOT_DISPATCHED" } }, isOld)
   );
 
+  const userId = req.user?._id || req.user?.id;
+  if (userId && isAgriDealerSelf(req.user)) {
+    query = query.find(dealerOwnOrdersFilter(userId));
+  }
+
   // Filter by specific dispatch status
   if (dispatchStatus && ["DISPATCHED", "IN_TRANSIT", "DELIVERED"].includes(dispatchStatus)) {
     query = query.where("dispatchStatus").equals(dispatchStatus);
@@ -5035,6 +5329,7 @@ const getDispatchedOrders = catchAsync(async (req, res, next) => {
     .populate("productId")
     .populate("createdBy")
     .populate("salesPerson", "name phoneNumber jobTitle")
+    .populate("dealer", "name phoneNumber jobTitle role")
     .populate("dispatchedBy")
     .populate("vehicleId");
 

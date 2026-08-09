@@ -45,6 +45,26 @@ import {
   deleteRate,
 } from "../controllers/ramAgriInputsProduct.controller.js";
 import {
+  getInventoryLink,
+  upsertInventoryLink,
+  clearAllInventoryLinks,
+} from "../controllers/ramAgriVarietyLink.controller.js";
+import {
+  getBiotechSeedMaster,
+  getSeedDualInventoryLinks,
+  postAssignSubtypeSeed,
+} from "../controllers/biotechSeedMaster.controller.js";
+import {
+  createBiotechPlant,
+  getAllBiotechPlants,
+  getBiotechPlantById,
+  updateBiotechPlant,
+  deleteBiotechPlant,
+  addBiotechVariety,
+  updateBiotechVariety,
+  deleteBiotechVariety,
+} from "../controllers/ramBiotechSeedProduct.controller.js";
+import {
   getPendingPayments as getAgriSalesPendingPayments,
   getPendingPaymentsCount as getAgriSalesPendingPaymentsCount,
   getOutstandingAnalysis as getAgriSalesOutstandingAnalysis,
@@ -343,6 +363,9 @@ router
     updateVariety
   )
   .delete("/ram-agri-inputs/:id/varieties/:varietyId", deleteVariety)
+  .get("/ram-agri-inputs/:id/varieties/:varietyId/inventory-link", getInventoryLink)
+  .patch("/ram-agri-inputs/:id/varieties/:varietyId/inventory-link", upsertInventoryLink)
+  .post("/ram-agri-inputs/inventory-links/clear-all", clearAllInventoryLinks)
   .post(
     "/ram-agri-inputs/:id/varieties/:varietyId/rates",
     [
@@ -377,6 +400,43 @@ import {
 router.get("/change-logs", getAllChangeLogs);
 router.get("/change-logs/stats", getChangeLogStats);
 router.get("/change-logs/:entityType/:entityId", getChangeLogsByEntity);
+
+// ==================== BIOTECH SEED MASTER (same UX as Ram Agri Inputs master) ====================
+router.get("/biotech-seed-master", getBiotechSeedMaster);
+router.get("/seed-dual-links", getSeedDualInventoryLinks);
+router.post(
+  "/seed-dual-links/assign",
+  [
+    check("plantId").notEmpty().withMessage("plantId is required"),
+    check("subtypeId").notEmpty().withMessage("subtypeId is required"),
+    check("source").isIn(["biotech", "agri"]).withMessage("source must be biotech or agri"),
+  ],
+  checkErrors,
+  postAssignSubtypeSeed
+);
+router
+  .get("/biotech-seed-products", getAllBiotechPlants)
+  .post(
+    "/biotech-seed-products",
+    [check("plantName").notEmpty().withMessage("Plant name is required")],
+    checkErrors,
+    createBiotechPlant
+  );
+router
+  .get("/biotech-seed-products/:id", getBiotechPlantById)
+  .patch("/biotech-seed-products/:id", updateBiotechPlant)
+  .delete("/biotech-seed-products/:id", deleteBiotechPlant)
+  .post(
+    "/biotech-seed-products/:id/varieties",
+    [
+      check("name").notEmpty().withMessage("Variety name is required"),
+      check("primaryUnit").notEmpty().withMessage("Primary unit is required"),
+    ],
+    checkErrors,
+    addBiotechVariety
+  )
+  .patch("/biotech-seed-products/:id/varieties/:varietyId", updateBiotechVariety)
+  .delete("/biotech-seed-products/:id/varieties/:varietyId", deleteBiotechVariety);
 
 // ==================== RAM AGRI SALES DASHBOARD ====================
 router.get("/ram-agri-sales-dashboard", getRamAgriSalesDashboard);

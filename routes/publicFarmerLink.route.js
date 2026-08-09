@@ -41,6 +41,7 @@ router.get(
 router.get(
   "/links/all-leads",
   authenticateToken,
+  requireOfficeAdmin,
   getAllFarmerLeads
 );
 

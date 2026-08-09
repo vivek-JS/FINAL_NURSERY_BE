@@ -6,6 +6,7 @@ import AgriSalesOrder from "../models/agriSalesOrder.model.js";
 import PurchaseOrder from "../models/purchaseOrder.model.js";
 import Merchant from "../models/merchant.model.js";
 import mongoose from "mongoose";
+import { mergeAgriOldFilter } from "../utils/agriOrderEra.util.js";
 
 // ==================== RAM AGRI SALES DASHBOARD ====================
 
@@ -94,6 +95,7 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
     stockSearch,
     stockSort = 'updated',
     stockOrder = 'desc',
+    isOld,
   } = req.query;
 
   // Parse status filters (comma-separated or single)
@@ -123,11 +125,14 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
   if (varietyId) cropVarietyFilter['ramAgriVarietyId'] = new mongoose.Types.ObjectId(varietyId);
 
   // Combine filters for agri sales orders
-  const orderFilter = {
-    isRamAgriProduct: true,
-    ...cropVarietyFilter,
-    ...(Object.keys(dateFilter).length > 0 ? dateFilter : {}),
-  };
+  const orderFilter = mergeAgriOldFilter(
+    {
+      isRamAgriProduct: true,
+      ...cropVarietyFilter,
+      ...(Object.keys(dateFilter).length > 0 ? dateFilter : {}),
+    },
+    isOld
+  );
 
   // ==================== STOCK DATA (RAM AGRI ONLY) ====================
 
@@ -208,7 +213,10 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
 
   let stockItems = buildFlatStockItems(crops, stockChangeLogMap);
 
-  const stockProductType = productType === 'chemical' || productType === 'seed' ? productType : null;
+  const stockProductType =
+    productType === 'chemical' || productType === 'seed' || productType === 'gift'
+      ? productType
+      : null;
   if (stockProductType) {
     stockItems = stockItems.filter((item) => item.productType === stockProductType);
   }
@@ -230,10 +238,7 @@ export const getRamAgriSalesDashboard = catchAsync(async (req, res, next) => {
   // ==================== SALES DATA (RAM AGRI ORDERS ONLY) ====================
 
   // Get all Ram Agri sales orders
-  const agriSalesOrders = await AgriSalesOrder.find({
-    isRamAgriProduct: true,
-    ...cropVarietyFilter,
-  })
+  const agriSalesOrders = await AgriSalesOrder.find(orderFilter)
     .populate('ramAgriCropId')
     .sort({ orderDate: -1 })
     .lean();

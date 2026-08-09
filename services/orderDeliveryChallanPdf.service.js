@@ -1,6 +1,7 @@
 import Order from "../models/order.model.js";
 import { uploadToS3 } from "./uploadService.js";
 import { buildDeliveryChallanPdfBuffer } from "./dispatchPdfDocuments.service.js";
+import { assertLinkedAgriLoadForDc } from "./linkedAgriLoadGuard.service.js";
 
 /**
  * Load order lean with populates needed for DC HTML.
@@ -51,6 +52,8 @@ export async function generateAndSaveOrderDeliveryChallanPdf(orderId, options = 
     err.statusCode = 404;
     throw err;
   }
+
+  await assertLinkedAgriLoadForDc(orderId);
 
   const hasDc =
     String(order.officialDeliveryChallanNumber || "").trim() ||
@@ -115,11 +118,19 @@ export async function generateAndSaveOrderDeliveryChallanPdf(orderId, options = 
 export function scheduleOrderDeliveryChallanPdf(orderId) {
   if (!orderId) return;
   setImmediate(() => {
-    generateAndSaveOrderDeliveryChallanPdf(orderId, { force: false }).catch((err) => {
-      console.error(
-        `[scheduleOrderDeliveryChallanPdf] order=${orderId}:`,
-        err?.message || err
-      );
-    });
+    (async () => {
+      try {
+        await generateAndSaveOrderDeliveryChallanPdf(orderId, { force: false });
+        const { ensureOrderDispatchWhatsAppOnce } = await import(
+          "./orderDispatchWhatsApp.service.js"
+        );
+        await ensureOrderDispatchWhatsAppOnce(orderId, { allowManualResend: false });
+      } catch (err) {
+        console.error(
+          `[scheduleOrderDeliveryChallanPdf] order=${orderId}:`,
+          err?.message || err
+        );
+      }
+    })();
   });
 }

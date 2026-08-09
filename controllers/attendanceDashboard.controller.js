@@ -1,9 +1,15 @@
 import moment from "moment";
 import AttendanceRecord from "../models/attendanceRecord.model.js";
+import AttendanceDaily from "../models/attendanceDaily.model.js";
 import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
 import { getIstTodayYmd } from "../utility/istCalendar.js";
 import { getTodayEvents, buildTodaySummary, computeWorkingMinutes } from "../services/attendanceSequence.service.js";
+import {
+  enrichDayRollup,
+  enrichTodaySummary,
+  fetchDailyByDate,
+} from "../services/attendanceDashboardMerge.service.js";
 
 const FULL_DAY_MINUTES = 360; // >=6h counted as a full present day
 const YMD_RE = /^\d{4}-\d{2}$/;
@@ -51,7 +57,7 @@ export const getDashboard = catchAsync(async (req, res) => {
   const monthStartYmd = monthStart.format("YYYY-MM-DD");
   const monthEndYmd = monthStart.clone().endOf("month").format("YYYY-MM-DD");
 
-  const [todayEvents, monthRecords] = await Promise.all([
+  const [todayEvents, monthRecords, todayDaily, dailyByDate] = await Promise.all([
     getTodayEvents(employeeId, todayYmd),
     AttendanceRecord.find({
       employee: employeeId,
@@ -59,6 +65,8 @@ export const getDashboard = catchAsync(async (req, res) => {
     })
       .sort({ time: 1 })
       .lean(),
+    AttendanceDaily.findOne({ employee_id: employeeId, attendance_date: todayYmd }).lean(),
+    fetchDailyByDate(employeeId, monthStartYmd, monthEndYmd),
   ]);
 
   const eventsByDate = new Map();
@@ -72,7 +80,9 @@ export const getDashboard = catchAsync(async (req, res) => {
   const lastDateToInclude = monthEndYmd < todayYmd ? monthEndYmd : todayYmd;
   while (cursor.format("YYYY-MM-DD") <= lastDateToInclude) {
     const dateYmd = cursor.format("YYYY-MM-DD");
-    days.push(classifyDay(dateYmd, eventsByDate.get(dateYmd) || [], todayYmd));
+    const events = eventsByDate.get(dateYmd) || [];
+    const base = classifyDay(dateYmd, events, todayYmd);
+    days.push(enrichDayRollup(base, dailyByDate.get(dateYmd), events));
     cursor.add(1, "day");
   }
 
@@ -82,7 +92,7 @@ export const getDashboard = catchAsync(async (req, res) => {
   const presentDaysThisMonth = days.filter((d) => d.status === "PRESENT" || d.status === "HALF_DAY").length;
 
   const summary = {
-    today: buildTodaySummary(todayEvents, todayYmd),
+    today: enrichTodaySummary(buildTodaySummary(todayEvents, todayYmd), todayDaily, todayEvents),
     last30Days: days,
     totalWorkingHoursThisMonth: Math.round((totalWorkingMinutes / 60) * 10) / 10,
     lateCountThisMonth,

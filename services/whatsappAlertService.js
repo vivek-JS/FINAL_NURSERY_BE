@@ -16,7 +16,10 @@ import {
   isWhatsAppDetachedError,
   reportWhatsAppTransportFailure,
   waitUntilWhatsAppReady,
+  ensureWhatsAppConnected,
+  isWhatsAppConnectionInProgress,
 } from "./whatsappClient.js";
+import { getPendingLinkedAgriLoads } from "./linkedAgriLoadGuard.service.js";
 import { normalizePhoneForWhitelist } from "../utils/agriLoadLinkSigner.js";
 import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
@@ -262,11 +265,35 @@ export async function sendWhatsAppMessage(number, message) {
   }
 }
 
+async function tryAutoReconnectForAlert(context) {
+  if (process.env.WHATSAPP_ALERTS_AUTO_RECONNECT === "false") return false;
+  if (isWhatsAppReady) return true;
+  if (isWhatsAppConnectionInProgress()) {
+    console.warn(`[WhatsApp Alert] ${context} — waiting for QR scan / auth, not forcing reconnect`);
+    return await waitUntilWhatsAppReady(Number(process.env.WHATSAPP_ALERT_RECONNECT_MS || 45000));
+  }
+  const timeoutMs = Number(process.env.WHATSAPP_ALERT_RECONNECT_MS || 45000);
+  console.warn(`[WhatsApp Alert] ${context} — client not ready, attempting reconnect (${timeoutMs}ms)...`);
+  try {
+    await ensureWhatsAppConnected(`alert:${context}`);
+    return await waitUntilWhatsAppReady(timeoutMs);
+  } catch (err) {
+    console.warn(
+      `[WhatsApp Alert] ${context} reconnect failed:`,
+      err?.message || err
+    );
+    return false;
+  }
+}
+
 export async function alertAdmins(message, context = "alert", options = {}) {
-  const { fromQueue = false } = options;
+  const { fromQueue = false, skipReconnect = false } = options;
   if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") {
     console.warn(`[WhatsApp Alert] ${context} skipped — WHATSAPP_ALERTS_ENABLED is not true`);
     return { delivered: 0, total: 0, results: [], reason: "alerts_disabled" };
+  }
+  if (!isWhatsAppReady && !skipReconnect && !fromQueue) {
+    await tryAutoReconnectForAlert(context);
   }
   if (!isWhatsAppReady) {
     if (!fromQueue) queuePendingAlert(message, context);
@@ -973,7 +1000,64 @@ export async function sendDispatchAlert(data = {}) {
  * @param {string}   data.vehicleName
  * @param {string}   data.vehicleNumber
  * @param {string}   data.loadedBy       - name of the user who triggered the dispatch
+ * @param {string}   data.actorPhone     - phone for signed confirm link (whitelist)
  */
+export function mapLinkedAgriOrdersForAlert(pendingLinkedAgriOrders = []) {
+  return (Array.isArray(pendingLinkedAgriOrders) ? pendingLinkedAgriOrders : []).map((o) => ({
+    orderNumber: o?.orderNumber,
+    linkedNurseryOrderCode: o?.linkedNurseryOrderCode,
+    linkedNurseryOrderId: o?.linkedNurseryOrderId,
+    productName: o?.productName,
+    ramAgriVarietyName: o?.ramAgriVarietyName,
+    subtypeName: o?.subtypeName,
+    quantity: o?.quantity,
+    deliveredQuantity: o?.deliveredQuantity,
+    lineItems: Array.isArray(o?.lineItems)
+      ? o.lineItems.map((li) => ({
+          name: li?.name,
+          productName: li?.productName,
+          ramAgriVarietyName: li?.ramAgriVarietyName,
+          subtypeName: li?.subtypeName,
+          subtype: li?.subtype,
+          type: li?.type,
+          quantity: li?.quantity ?? li?.qty ?? li?.requestedQuantity,
+        }))
+      : [],
+  }));
+}
+
+export async function sendLinkedAgriAlertForOrderIds(orderIds = [], meta = {}) {
+  const pending = await getPendingLinkedAgriLoads(orderIds);
+  if (!pending.length) {
+    return { ok: false, reason: "no_pending_linked_agri", pendingCount: 0 };
+  }
+
+  const products = [
+    ...new Set(
+      pending.map((o) => o?.productName || o?.lineItems?.[0]?.name || "").filter(Boolean)
+    ),
+  ];
+
+  const delivery = await sendLinkedAgriAlert({
+    linkedCount: pending.length,
+    products,
+    linkedOrders: mapLinkedAgriOrdersForAlert(pending),
+    vehicleName: meta.vehicleName || "",
+    vehicleNumber: meta.vehicleNumber || "",
+    driverName: meta.driverName || "",
+    loadedBy: meta.loadedBy || "System",
+    actorPhone: meta.actorPhone || "",
+  });
+
+  const delivered = delivery?.delivered ?? 0;
+  return {
+    ok: delivered > 0,
+    reason: delivered > 0 ? "sent" : delivery?.reason || "not_delivered",
+    pendingCount: pending.length,
+    delivery,
+  };
+}
+
 export async function sendLinkedAgriAlert(data = {}) {
   try {
     const {
@@ -984,6 +1068,7 @@ export async function sendLinkedAgriAlert(data = {}) {
       vehicleNumber,
       driverName = "",
       loadedBy = "System",
+      actorPhone: actorPhoneInput = "",
     } = data;
 
     const vehicleStr = [vehicleName, vehicleNumber].filter(Boolean).join(" — ") || "—";
@@ -993,7 +1078,9 @@ export async function sendLinkedAgriAlert(data = {}) {
     const agriOrderNumbers = [];
     let itemIndex = 0;
 
-    const actorPhone = normalizePhoneForWhitelist(process.env.WHATSAPP_ADMIN_NUMBERS?.split(",")?.[0] || "");
+    const actorPhone =
+      normalizePhoneForWhitelist(actorPhoneInput) ||
+      normalizePhoneForWhitelist(process.env.WHATSAPP_ADMIN_NUMBERS?.split(",")?.[0] || "");
 
     (Array.isArray(linkedOrders) ? linkedOrders : []).forEach((o) => {
       const nurseryRef = buildNurseryOrderRef(o);
@@ -1060,9 +1147,10 @@ export async function sendLinkedAgriAlert(data = {}) {
 
     const message = messageLines.filter(Boolean).join("\n");
 
-    await alertAdmins(message);
+    return alertAdmins(message, "linked-agri-load");
   } catch (err) {
     console.error("[WhatsApp Alert] sendLinkedAgriAlert error:", err?.message || err);
+    return { delivered: 0, total: 0, results: [], reason: err?.message || "error" };
   }
 }
 

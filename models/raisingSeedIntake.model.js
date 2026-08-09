@@ -9,6 +9,16 @@ const photoSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/** One or more seed batches per intake (packets + optional expiry each). */
+const batchLineSchema = new mongoose.Schema(
+  {
+    batchNumber: { type: String, required: true, trim: true },
+    packets: { type: Number, required: true, min: 0.01 },
+    expiryDate: { type: Date },
+  },
+  { _id: true }
+);
+
 const raisingSeedIntakeSchema = new mongoose.Schema(
   {
     intakeNumber: {
@@ -67,6 +77,7 @@ const raisingSeedIntakeSchema = new mongoose.Schema(
       type: Number,
       default: 1,
     },
+    /** Legacy / summary: first batch or joined labels */
     batchNumber: {
       type: String,
       required: true,
@@ -74,6 +85,11 @@ const raisingSeedIntakeSchema = new mongoose.Schema(
     },
     expiryDate: {
       type: Date,
+    },
+    /** Multi-batch lines (preferred). Empty/legacy → use batchNumber + packetsReceived. */
+    batches: {
+      type: [batchLineSchema],
+      default: [],
     },
     photos: [photoSchema],
     linkedSlotIds: [

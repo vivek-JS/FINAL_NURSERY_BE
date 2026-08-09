@@ -27,6 +27,8 @@ const ramAgriCustomerLedgerSchema = new mongoose.Schema(
         "PAYMENT_ADJUSTMENT",
         "ORDER_ADJUSTMENT",
         "BALANCE_ADJUSTMENT",
+        "SALES_RETURN",
+        "ORDER_COMPLETION",
       ],
       required: true,
     },

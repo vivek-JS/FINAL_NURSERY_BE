@@ -134,6 +134,18 @@ const varietySchema = new mongoose.Schema({
     type: Number,
     min: 0,
   },
+  /** Nursery plant/subtype for sowing packings (no Ram Agri stock mirror). */
+  sowingPlantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PlantCms',
+  },
+  sowingSubtypeId: {
+    type: mongoose.Schema.Types.ObjectId,
+  },
+  linkedInventoryProductId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+  },
 }, {
   _id: true,
   timestamps: false,
@@ -143,7 +155,7 @@ const ramAgriInputsProductSchema = new mongoose.Schema(
   {
     productType: {
       type: String,
-      enum: ['seed', 'chemical'],
+      enum: ['seed', 'chemical', 'gift'],
       default: 'seed',
       index: true,
     },

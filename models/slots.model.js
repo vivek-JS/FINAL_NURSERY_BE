@@ -348,6 +348,16 @@ const slotSchema = new Schema({
       default: 0,
     }, // Excessive plants sowed (plants beyond orders)
   },
+  /**
+   * Plants reserved for covered farmer orders (sowingDone) on this ready-date slot.
+   * Not open for sale. Order bookingSlot may be previous/next day.
+   * Saleable free stock = availablePlants (excess only after complete-sow split).
+   */
+  orderReservedPlants: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
   // Sowing completion tracking
   sowingCompleted: {
     type: Boolean,
@@ -404,6 +414,10 @@ const slotSchema = new Schema({
       plantReadyDays: { type: Number, default: 0 },
       plantsSowed: { type: Number, default: 0 },
       packetsUsed: { type: Number, default: 0 },
+      /** Plants from this batch that covered farmer orders */
+      orderCoveredPlants: { type: Number, default: 0 },
+      /** Plants beyond order cover — saleable: excessiveSowing.plants + availablePlants */
+      excessPlants: { type: Number, default: 0 },
       shedName: { type: String, default: "", trim: true },
       sowingRequestId: {
         type: Schema.Types.ObjectId,

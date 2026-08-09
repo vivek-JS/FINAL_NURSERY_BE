@@ -24,6 +24,8 @@ const CLIENT_ID = "erp-alert-bot";
 const READY_TIMEOUT_MS = Number(process.env.WHATSAPP_READY_TIMEOUT_MS || 120000);
 const REINIT_BACKOFF_MS = Number(process.env.WHATSAPP_REINIT_BACKOFF_MS || 8000);
 const MAX_REINIT_ATTEMPTS = Number(process.env.WHATSAPP_MAX_REINIT_ATTEMPTS || 5);
+/** Do not destroy client / re-print QR while user may still be scanning (watchdog + alert reconnect). */
+const QR_SCAN_GRACE_MS = Number(process.env.WHATSAPP_QR_SCAN_GRACE_MS || 180000);
 const WEB_VERSION_REMOTE =
   process.env.WHATSAPP_WEB_VERSION_URL ||
   "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html";
@@ -41,6 +43,18 @@ let readyWatchdogExtensions = 0;
 const MAX_READY_EXTENSIONS = 2;
 let lastQrPayload = null;
 let lastQrAt = null;
+let authenticatedPendingReady = false;
+
+/** True while QR scan or post-scan auth is in flight — watchdog must not kill the browser. */
+export function isWhatsAppConnectionInProgress() {
+  if (isWhatsAppReady) return false;
+  if (reinitInProgress) return true;
+  if (authenticatedPendingReady) return true;
+  if (readyWatchdog) return true;
+  if (client && initStarted) return true;
+  if (lastQrAt && Date.now() - lastQrAt.getTime() < QR_SCAN_GRACE_MS) return true;
+  return false;
+}
 
 /** Fallback dirs when WHATSAPP_SESSION_PATH was wiped but an older copy still exists on disk. */
 const SESSION_FALLBACK_ROOTS = [
@@ -301,6 +315,7 @@ function attachClientHandlers(waClient) {
 
   waClient.on("authenticated", () => {
     console.log("✅ [WhatsApp] Authenticated — session saved to", getWhatsAppSessionPath());
+    authenticatedPendingReady = true;
     isWhatsAppReady = false;
     readyWatchdogExtensions = 0;
     scheduleReadyWatchdog();
@@ -309,6 +324,7 @@ function attachClientHandlers(waClient) {
   waClient.on("ready", () => {
     clearReadyWatchdog();
     readyWatchdogExtensions = 0;
+    authenticatedPendingReady = false;
     isWhatsAppReady = true;
     reinitAttempts = 0;
     console.log("🟢 [WhatsApp] Client is ready. Alerts will now be delivered.");
@@ -370,6 +386,7 @@ function attachClientHandlers(waClient) {
 
   waClient.on("auth_failure", (msg) => {
     clearReadyWatchdog();
+    authenticatedPendingReady = false;
     isWhatsAppReady = false;
     console.error("❌ [WhatsApp] Authentication failed:", msg);
     console.error(
@@ -380,6 +397,7 @@ function attachClientHandlers(waClient) {
 
   waClient.on("disconnected", (reason) => {
     clearReadyWatchdog();
+    authenticatedPendingReady = false;
     isWhatsAppReady = false;
     console.warn("🔴 [WhatsApp] Client disconnected:", reason);
     if (reason === "LOGOUT") {
@@ -454,6 +472,19 @@ export function getWhatsAppQrStatus() {
 export async function ensureWhatsAppConnected(reason = "watchdog") {
   if (shuttingDown) return { ok: false, reason: "shutting_down" };
   if (isWhatsAppReady && client) return { ok: true, reason: "already_ready" };
+
+  if (isWhatsAppConnectionInProgress()) {
+    console.warn(
+      `[WhatsApp] ensureWhatsAppConnected (${reason}) skipped — QR scan or auth still in progress`
+    );
+    if (client) {
+      const ready = await waitUntilWhatsAppReady(
+        Number(process.env.WHATSAPP_MANUAL_RECONNECT_WAIT_MS || 90000)
+      );
+      return { ok: ready, reason: ready ? "ready" : "waiting_for_scan_or_auth" };
+    }
+    return { ok: false, reason: "connection_in_progress" };
+  }
 
   reinitAttempts = 0;
   initStarted = false;

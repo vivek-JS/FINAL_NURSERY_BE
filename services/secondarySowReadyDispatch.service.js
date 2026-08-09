@@ -18,7 +18,12 @@ import {
   computeSuggestedFulfillmentSequence,
   DISPATCH_SHED_ALLOWED_STATUSES,
   sumPlantsLoadedOnDispatch,
+  normalizeShedLoadInputs,
 } from "./secondaryVehicleLoad.service.js";
+import {
+  finalizeOrderOnShedLineLoaded,
+  schedulePostShedLoadAlerts,
+} from "./dispatchPostLoadFinalize.service.js";
 
 function parseDdMmYyyy(str) {
   const m = moment(str, ["DD-MM-YYYY", "YYYY-MM-DD"], true);
@@ -376,17 +381,62 @@ async function resolveDefaultCavity() {
 }
 
 /**
+ * FIFO slot picks from a mutable sow-ready pool (oldest ready date first).
+ */
+export function allocateSowReadyFromPool(poolEntries, plantsWanted) {
+  const wanted = Math.max(0, Math.floor(Number(plantsWanted) || 0));
+  if (wanted < 1) {
+    return { ok: false, error: "Enter plants to load", selections: [] };
+  }
+
+  let budget = wanted;
+  const selections = [];
+  const sorted = [...(poolEntries || [])].sort((a, b) => {
+    const da = String(a.plantReadyDate || a.startDay || "");
+    const db = String(b.plantReadyDate || b.startDay || "");
+    if (da && db && da !== db) return da.localeCompare(db);
+    return String(a.slotId).localeCompare(String(b.slotId));
+  });
+
+  for (const ent of sorted) {
+    if (budget <= 0) break;
+    const avail = Math.max(0, Number(ent._remaining ?? ent.availablePlants) || 0);
+    if (avail < 1) continue;
+    const take = Math.min(budget, avail);
+    selections.push({ slotId: String(ent.slotId), plants: take, entry: ent });
+    ent._remaining = avail - take;
+    budget -= take;
+  }
+
+  const allocated = wanted - budget;
+  if (allocated < 1) {
+    return { ok: false, error: "No sow-ready stock available", selections: [] };
+  }
+  if (budget > 0) {
+    return {
+      ok: false,
+      error: `Only ${allocated} plants available in sow-ready pool`,
+      selections,
+      partial: true,
+    };
+  }
+  return { ok: true, selections, allocated };
+}
+
+/**
  * Load sow-ready slot plants onto a vehicle (papaya / sowingAllowed).
- * Body selections: [{ slotId, plants }]
+ * Body: sowReadySelections [{ slotId, plants }] OR shedLoads [{ pollyhouse, plants }].
  */
 export async function executeSowReadyVehicleLoad({
   dispatchId,
   plantRowIndex = 0,
   sowReadySelections,
+  shedLoads,
   linkedOrderId,
   remarks,
   performedBy,
 }) {
+  const shedPlan = normalizeShedLoadInputs({ shedLoads });
   const merged = new Map();
   for (const s of Array.isArray(sowReadySelections) ? sowReadySelections : []) {
     const slotId = String(s?.slotId || "").trim();
@@ -394,12 +444,16 @@ export async function executeSowReadyVehicleLoad({
     if (!slotId || plants < 1) continue;
     merged.set(slotId, (merged.get(slotId) || 0) + plants);
   }
-  const selections = [...merged.entries()].map(([slotId, plants]) => ({
+  const legacySelections = [...merged.entries()].map(([slotId, plants]) => ({
     slotId,
     plants,
   }));
-  if (!selections.length) {
-    throw new AppError("sowReadySelections with slotId + plants required", 400);
+
+  if (!shedPlan.length && !legacySelections.length) {
+    throw new AppError(
+      "shedLoads or sowReadySelections with slotId + plants required",
+      400
+    );
   }
 
   const dispatchDoc = await findDispatchActiveByIdOrTransport(dispatchId);
@@ -420,7 +474,45 @@ export async function executeSowReadyVehicleLoad({
   const { total: alreadyLoaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
   const vehicleNeed = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
   const capPlants = Math.max(0, vehicleNeed - alreadyLoaded);
-  const requested = selections.reduce((s, x) => s + x.plants, 0);
+
+  const listed = await listSowReadyEntries(plantCmsId, plantSubtypeId);
+  const bySlot = new Map(listed.entries.map((e) => [String(e.slotId), e]));
+
+  /** @type {{ pollyhouse: string, slotId: string, plants: number, entry?: object }[]} */
+  let loadPlan = [];
+
+  if (shedPlan.length > 0) {
+    const pool = listed.entries.map((e) => ({
+      ...e,
+      _remaining: Number(e.availablePlants) || 0,
+    }));
+    for (const shed of shedPlan) {
+      const fifo = allocateSowReadyFromPool(pool, shed.plants);
+      if (!fifo.ok) {
+        throw new AppError(
+          fifo.error || `Shed ${shed.pollyhouse}: allocation failed`,
+          400
+        );
+      }
+      for (const sel of fifo.selections) {
+        loadPlan.push({
+          pollyhouse: shed.pollyhouse,
+          slotId: sel.slotId,
+          plants: sel.plants,
+          entry: sel.entry,
+        });
+      }
+    }
+  } else {
+    loadPlan = legacySelections.map((sel) => ({
+      pollyhouse: bySlot.get(sel.slotId)?.shedName || "SowReady",
+      slotId: sel.slotId,
+      plants: sel.plants,
+      entry: bySlot.get(sel.slotId),
+    }));
+  }
+
+  const requested = loadPlan.reduce((s, x) => s + x.plants, 0);
   if (requested > capPlants) {
     throw new AppError(
       `Selection ${requested} exceeds remaining vehicle need ${capPlants}`,
@@ -428,18 +520,12 @@ export async function executeSowReadyVehicleLoad({
     );
   }
 
-  // Validate entries still have sellable stock
-  const listed = await listSowReadyEntries(plantCmsId, plantSubtypeId);
-  const bySlot = new Map(listed.entries.map((e) => [String(e.slotId), e]));
-  for (const sel of selections) {
-    const ent = bySlot.get(sel.slotId);
+  for (const item of loadPlan) {
+    const ent = item.entry || bySlot.get(item.slotId);
     if (!ent) {
-      throw new AppError(
-        `Slot ${sel.slotId} has no available plants to sell`,
-        400
-      );
+      throw new AppError(`Slot ${item.slotId} has no available plants to sell`, 400);
     }
-    if (sel.plants > ent.availablePlants) {
+    if (item.plants > ent.availablePlants) {
       throw new AppError(
         `Slot ready ${ent.plantReadyDate}: only ${ent.availablePlants} available`,
         400
@@ -454,7 +540,6 @@ export async function executeSowReadyVehicleLoad({
       _id: { $in: unionIds },
       plantName: plantCmsId,
       plantSubtype: plantSubtypeId,
-      remainingPlants: { $gt: 0 },
       orderStatus: { $in: ["READY_FOR_DISPATCH", "DISPATCH_PROCESS"] },
     })
       .select("_id")
@@ -483,19 +568,19 @@ export async function executeSowReadyVehicleLoad({
     let slotSubtractTotal = 0;
     let totalLoaded = 0;
 
-    for (const sel of selections) {
-      const ent = bySlot.get(sel.slotId);
-      const plantsMoving = sel.plants;
+    for (const item of loadPlan) {
+      const ent = item.entry || bySlot.get(item.slotId);
+      const plantsMoving = item.plants;
       const fullTrays = Math.floor(plantsMoving / cavity);
       const partialPlants = plantsMoving % cavity;
       const numberOfTrays = Math.max(1, fullTrays + (partialPlants > 0 ? 1 : 0));
 
       await subtractSowReadySlotAvailable({
         session,
-        slotId: sel.slotId,
+        slotId: item.slotId,
         quantity: plantsMoving,
         performedBy,
-        remark: `Sow-ready load · ${plantName}/${subtypeName} · vehicle ${freshDispatch.transportId || ""}`,
+        remark: `Sow-ready load · ${plantName}/${subtypeName} · ${item.pollyhouse} · vehicle ${freshDispatch.transportId || ""}`,
       });
       slotSubtractTotal += plantsMoving;
 
@@ -510,11 +595,11 @@ export async function executeSowReadyVehicleLoad({
         totalQuantity: plantsMoving,
         numberOfPlants: plantsMoving,
         availableQuantity: plantsMoving,
-        pollyhouse: ent?.shedName || "SowReady",
+        pollyhouse: item.pollyhouse || ent?.shedName || "SowReady",
         laboursEngaged: 1,
         transferStatus: "available",
         stockSource: "SOW_READY",
-        sowReadySlotId: new mongoose.Types.ObjectId(sel.slotId),
+        sowReadySlotId: new mongoose.Types.ObjectId(item.slotId),
         sowReadyPlantReadyDate: ent?.plantReadyDate || "",
         ...(resolvedOrderId
           ? { linkedOrderId: new mongoose.Types.ObjectId(resolvedOrderId) }
@@ -528,7 +613,7 @@ export async function executeSowReadyVehicleLoad({
           vehicleName: freshDispatch.vehicleName,
           vehicleNumber: freshDispatch.vehicleNumber,
           stockSource: "SOW_READY",
-          sowReadySlotId: sel.slotId,
+          sowReadySlotId: item.slotId,
           remarks: remarks || undefined,
         },
       };
@@ -539,7 +624,8 @@ export async function executeSowReadyVehicleLoad({
 
       results.push({
         secondaryOutwardId: String(newSo._id),
-        slotId: sel.slotId,
+        slotId: item.slotId,
+        pollyhouse: item.pollyhouse,
         plants: plantsMoving,
         plantReadyDate: ent?.plantReadyDate || null,
         stockSource: "SOW_READY",
@@ -550,12 +636,20 @@ export async function executeSowReadyVehicleLoad({
     }
 
     let orderLoaded = null;
+    let finalizeResult = null;
     if (resolvedOrderId) {
       orderLoaded = await updateDispatchOrderShedLoaded({
         session,
         dispatchDoc: freshDispatch,
         orderId: resolvedOrderId,
         plantsLoaded: totalLoaded,
+      });
+      finalizeResult = await finalizeOrderOnShedLineLoaded({
+        session,
+        orderId: resolvedOrderId,
+        dispatchDoc: freshDispatch,
+        orderLoaded,
+        performedBy,
       });
     }
 
@@ -566,6 +660,11 @@ export async function executeSowReadyVehicleLoad({
     });
 
     await session.commitTransaction();
+
+    schedulePostShedLoadAlerts({
+      finalizeResult,
+      changedBy: performedBy ? String(performedBy) : "Secondary shed",
+    });
 
     return {
       allocations: results,

@@ -16,6 +16,7 @@ import {
   validateTransition,
   buildTodaySummary,
   getNextSuggestedType,
+  VALID_TYPES,
 } from "../services/attendanceSequence.service.js";
 import { verifyFaceEmbedding, getMatchThreshold, FaceServiceError } from "../services/faceServiceClient.js";
 import { decryptProfileEmbedding } from "../utility/faceProfileUtils.js";
@@ -243,7 +244,13 @@ export const verifyAndMark = catchAsync(async (req, res) => {
 
   const todayEvents = await getTodayEvents(user._id, dateYmd);
   const currentStatus = computeCurrentStatus(todayEvents);
-  const attendanceType = getNextSuggestedType(currentStatus);
+  const requestedType = String(req.body.attendance_type || req.body.attendanceType || "")
+    .trim()
+    .toUpperCase();
+  const attendanceType =
+    requestedType && VALID_TYPES.includes(requestedType)
+      ? requestedType
+      : getNextSuggestedType(currentStatus);
 
   const officeHours = resolveOfficeHours(user);
 

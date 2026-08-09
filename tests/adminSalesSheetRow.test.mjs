@@ -5,9 +5,17 @@ import {
   SALES_SHEET_COLUMNS,
 } from "../utility/adminSalesSheetRow.js";
 
-test("sales sheet columns start with Sr. No.", () => {
-  assert.equal(SALES_SHEET_COLUMNS[0].key, "srNo");
-  assert.equal(SALES_SHEET_COLUMNS[0].label, "Sr. No.");
+test("sales sheet columns include Dispatch date after delivery dates", () => {
+  const keys = SALES_SHEET_COLUMNS.map((c) => c.key);
+  assert.ok(keys.includes("dispatchDate"));
+  assert.equal(
+    keys.indexOf("dispatchDate"),
+    keys.indexOf("originalDelDate") + 1
+  );
+  assert.equal(
+    SALES_SHEET_COLUMNS.find((c) => c.key === "dispatchDate")?.label,
+    "Dispatch date"
+  );
 });
 
 test("buildSalesSheetTotalsRow sums qty and amount columns", () => {

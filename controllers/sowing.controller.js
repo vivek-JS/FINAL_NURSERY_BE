@@ -10,6 +10,7 @@ import ReturnRequest from "../models/returnRequest.model.js";
 import SowingRequest from "../models/sowingRequest.model.js";
 import moment from "moment";
 import mongoose from "mongoose";
+import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
 
 // Create a new sowing record
 export const createSowing = async (req, res) => {
@@ -2741,6 +2742,7 @@ export const getPendingReminders = async (req, res) => {
                     $and: [
                       { $eq: ["$bookingSlot", "$$slotId"] },
                       { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                      { $ne: ["$sowingDone", true] },
                       {
                         $or: [
                           { $ne: ["$quotaSource", "dealer"] },
@@ -2754,7 +2756,14 @@ export const getPendingReminders = async (req, res) => {
               {
                 $group: {
                   _id: null,
-                  totalBookedPlants: { $sum: "$numberOfPlants" }
+                  totalBookedPlants: {
+                    $sum: {
+                      $add: [
+                        { $ifNull: ["$numberOfPlants", 0] },
+                        { $ifNull: ["$additionalPlants", 0] },
+                      ],
+                    },
+                  },
                 }
               }
             ],
@@ -5210,7 +5219,7 @@ export const getPlantReminders = async (req, res) => {
           },
         },
       },
-      // Dynamically calculate totalBookedPlants from actual orders
+      // Dynamically calculate totalBookedPlants from unsown orders only
       {
         $lookup: {
           from: "orders",
@@ -5222,6 +5231,7 @@ export const getPlantReminders = async (req, res) => {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
                     { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $ne: ["$sowingDone", true] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -5235,7 +5245,14 @@ export const getPlantReminders = async (req, res) => {
             {
               $group: {
                 _id: null,
-                totalBookedPlants: { $sum: "$numberOfPlants" }
+                totalBookedPlants: {
+                  $sum: {
+                    $add: [
+                      { $ifNull: ["$numberOfPlants", 0] },
+                      { $ifNull: ["$additionalPlants", 0] },
+                    ],
+                  },
+                },
               }
             }
           ],
@@ -5901,7 +5918,7 @@ export const getPlantAlerts = async (req, res) => {
           },
         },
       },
-      // Dynamically calculate totalBookedPlants from actual orders
+      // Gap / pending: unsown order plants only (sowingDone excluded)
       {
         $lookup: {
           from: "orders",
@@ -5913,6 +5930,7 @@ export const getPlantAlerts = async (req, res) => {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
                     { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $ne: ["$sowingDone", true] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -5926,7 +5944,14 @@ export const getPlantAlerts = async (req, res) => {
             {
               $group: {
                 _id: null,
-                totalBookedPlants: { $sum: "$numberOfPlants" }
+                totalBookedPlants: {
+                  $sum: {
+                    $add: [
+                      { $ifNull: ["$numberOfPlants", 0] },
+                      { $ifNull: ["$additionalPlants", 0] },
+                    ],
+                  },
+                },
               }
             }
           ],
@@ -6114,7 +6139,7 @@ export const getPlantAlerts = async (req, res) => {
           primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
         },
       },
-      // Dynamically calculate totalBookedPlants from actual orders for subtype summary
+      // Gap / pending by subtype: unsown order plants only
       {
         $lookup: {
           from: "orders",
@@ -6126,6 +6151,7 @@ export const getPlantAlerts = async (req, res) => {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
                     { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $ne: ["$sowingDone", true] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -6139,7 +6165,14 @@ export const getPlantAlerts = async (req, res) => {
             {
               $group: {
                 _id: null,
-                totalBookedPlants: { $sum: "$numberOfPlants" }
+                totalBookedPlants: {
+                  $sum: {
+                    $add: [
+                      { $ifNull: ["$numberOfPlants", 0] },
+                      { $ifNull: ["$additionalPlants", 0] },
+                    ],
+                  },
+                },
               }
             }
           ],
@@ -6950,7 +6983,7 @@ export const getAllPlantsAvailability = async (req, res) => {
 // NEW API: Get Plants Gap Summary (all plants with subtype-wise totalBookingGap) - OPTIMIZED
 export const getPlantsGapSummary = async (req, res) => {
   try {
-    const { available, startDate, endDate } = req.query; // If "true", return negative gaps (available/surplus) instead of positive gaps
+    const { available, startDate, endDate, board } = req.query; // available=surplus, board=all stock slots
     
     // Get all plants with sowingAllowed = true (including sowingBuffer) - single query
     const plants = await PlantCms.find({ sowingAllowed: true })
@@ -7214,7 +7247,15 @@ export const getPlantsGapSummary = async (req, res) => {
     // Step 6: Filter slots based on available parameter
     // For critical mode: include slots with positive gap OR overdue slots (even with 0 gap)
     // For available mode: only negative gap slots (primarySowed > totalBookedPlants = surplus)
-    const filteredSlots = available === "true"
+    const isBoard = board === "true";
+    const filteredSlots = isBoard
+      ? slotsWithBookings.filter(
+          (s) =>
+            (s.primarySowed || 0) > 0 ||
+            (s.totalBookedPlants || 0) > 0 ||
+            (s.availablePlants || 0) > 0
+        )
+      : available === "true"
       ? slotsWithBookings.filter(s => {
           const hasSurplus = s.rawGap < 0;
           if (hasSurplus) {
@@ -7265,7 +7306,7 @@ export const getPlantsGapSummary = async (req, res) => {
           plantReadyDays: slot.plantReadyDays || 0,
           minPlantReadyDays: slot.plantReadyDays || 0,
           maxPlantReadyDays: slot.plantReadyDays || 0,
-          slots: available === "true" ? [] : undefined, // Store slot details for available mode
+          slots: available === "true" || isBoard ? [] : undefined, // Slot details for board / available mode
         });
       }
       const group = subtypeGroupMap.get(key);
@@ -7282,7 +7323,7 @@ export const getPlantsGapSummary = async (req, res) => {
         group.plantReadyDays = group.maxPlantReadyDays;
       }
       // Store slot details for available mode (for grouping on frontend)
-      if (available === "true" && group.slots) {
+      if ((available === "true" || isBoard) && group.slots) {
         group.slots.push({
           slotId: slot.slotId,
           slotStartDay: slot.slotStartDay,
@@ -7292,6 +7333,7 @@ export const getPlantsGapSummary = async (req, res) => {
           totalBookedPlants: slot.totalBookedPlants,
           primarySowed: slot.primarySowed,
           rawGap: slot.rawGap,
+          slotGap: slot.slotGap,
         });
       }
     });
@@ -7429,7 +7471,9 @@ export const getPlantsGapSummary = async (req, res) => {
       // For critical mode: show subtypes with positive gap OR overdue slots
       // For available mode: show subtypes with negative gap
       let filteredSubtypes = subtypesWithGaps;
-      if (available === "true") {
+      if (isBoard) {
+        filteredSubtypes = subtypesWithGaps.filter((st) => (st.slots?.length || 0) > 0);
+      } else if (available === "true") {
         filteredSubtypes = subtypesWithGaps.filter((st) => {
           const rawGap = (st.totalBookedPlants || 0) - (st.totalPrimarySowed || 0);
           return rawGap < 0;
@@ -7448,7 +7492,12 @@ export const getPlantsGapSummary = async (req, res) => {
         });
       }
 
-      const plantTotalGap = available === "true"
+      const plantTotalGap = isBoard
+        ? filteredSubtypes.reduce(
+            (sum, st) => sum + Math.max(0, (st.totalBookedPlants || 0) - (st.totalPrimarySowed || 0)),
+            0
+          )
+        : available === "true"
         ? filteredSubtypes.reduce((sum, st) => sum + (st.totalAvailableGap || 0), 0)
         : filteredSubtypes.reduce((sum, st) => sum + (st.totalBookingGap || 0), 0);
 
@@ -7456,20 +7505,38 @@ export const getPlantsGapSummary = async (req, res) => {
         _id: plant._id,
         plantName: plant.name,
         subtypes: filteredSubtypes,
-        totalBookingGap: available === "true" ? 0 : plantTotalGap,
-        totalAvailableGap: available === "true" ? plantTotalGap : 0,
+        totalBookingGap: isBoard
+          ? plantTotalGap
+          : available === "true"
+          ? 0
+          : plantTotalGap,
+        totalAvailableGap: isBoard
+          ? filteredSubtypes.reduce((sum, st) => sum + (st.totalAvailableGap || 0), 0)
+          : available === "true"
+          ? plantTotalGap
+          : 0,
       };
     });
 
-    // Filter out plants with no subtypes when in available mode (only show plants with actual surplus)
-    if (available === "true") {
+    // Filter out plants with no subtypes when in available / board mode
+    if (isBoard) {
+      plantsWithGaps = plantsWithGaps.filter(
+        (plant) => plant.subtypes && plant.subtypes.length > 0
+      );
+    } else if (available === "true") {
       plantsWithGaps = plantsWithGaps.filter(plant => 
         plant.subtypes && plant.subtypes.length > 0 && (plant.totalAvailableGap || 0) > 0
       );
     }
     
     // Sort by appropriate gap type
-    if (available === "true") {
+    if (isBoard) {
+      plantsWithGaps.sort(
+        (a, b) =>
+          (b.totalAvailableGap || 0) + (b.totalBookingGap || 0) -
+          ((a.totalAvailableGap || 0) + (a.totalBookingGap || 0))
+      );
+    } else if (available === "true") {
       plantsWithGaps.sort((a, b) => (b.totalAvailableGap || 0) - (a.totalAvailableGap || 0));
     } else {
       plantsWithGaps.sort((a, b) => (b.totalBookingGap || 0) - (a.totalBookingGap || 0));
@@ -7501,10 +7568,10 @@ export const getPlantsGapSummary = async (req, res) => {
       summary: {
         totalPlants: plantsWithGaps.length,
         totalSubtypes,
-        totalBookingGap: available === "true" ? 0 : totalBookingGap,
-        totalAvailableGap: available === "true" ? totalAvailableGap : 0,
+        totalBookingGap: isBoard ? totalBookingGap : available === "true" ? 0 : totalBookingGap,
+        totalAvailableGap: isBoard ? totalAvailableGap : available === "true" ? totalAvailableGap : 0,
       },
-      mode: available === "true" ? "available" : "critical", // Indicate which mode
+      mode: isBoard ? "board" : available === "true" ? "available" : "critical",
       generatedAt: new Date(),
     });
   } catch (error) {
@@ -7587,6 +7654,8 @@ export const getSlotOrdersSummary = async (req, res) => {
           additionalPlants: 1,
           sowingDone: 1,
           sowingDoneAt: 1,
+          sowingDoneRequestId: 1,
+          bookingSlot: 1,
           farmer: {
             _id: { $ifNull: ["$farmer._id", null] },
             name: { $ifNull: ["$farmer.name", "Unknown"] },
@@ -7659,8 +7728,13 @@ export const getSlotOrdersSummary = async (req, res) => {
             startDay: "$slot.startDay",
             endDay: "$slot.endDay",
             month: "$slot.month",
+            year: "$slot.year",
             totalPlants: { $ifNull: ["$slot.totalPlants", 0] },
             availablePlants: { $ifNull: ["$slot.availablePlants", 0] },
+            orderReservedPlants: { $ifNull: ["$slot.orderReservedPlants", 0] },
+            excessivePlants: {
+              $ifNull: ["$slot.excessiveSowing.plants", 0],
+            },
             primarySowed: { $ifNull: ["$slot.primarySowed", 0] },
             officeSowed: { $ifNull: ["$slot.officeSowed", 0] },
             plantsSowed: { $ifNull: ["$slot.plantsSowed", 0] },
@@ -7689,6 +7763,222 @@ export const getSlotOrdersSummary = async (req, res) => {
       (s, b) => s + (Number(b.packetsUsed) || 0),
       0
     );
+    const orderReservedPlants =
+      Number(slot?.orderReservedPlants) ||
+      sowBatches.reduce(
+        (s, b) => s + (Number(b.orderCoveredPlants) || 0),
+        0
+      );
+    const availableForSale = Number(slot?.availablePlants) || 0;
+    const excessivePlants = Number(slot?.excessivePlants) || 0;
+
+    // Covered orders reserved on THIS ready slot (booking may be prev/next)
+    const batchReqIds = [
+      ...new Set(
+        sowBatches
+          .map((b) => b.sowingRequestId)
+          .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
+          .map((id) => String(id))
+      ),
+    ].map((id) => new mongoose.Types.ObjectId(id));
+
+    let coveredOrders = [];
+    if (batchReqIds.length) {
+      coveredOrders = await Order.aggregate([
+        {
+          $match: {
+            sowingDone: true,
+            sowingDoneRequestId: { $in: batchReqIds },
+            orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+          },
+        },
+        {
+          $lookup: {
+            from: "farmers",
+            localField: "farmer",
+            foreignField: "_id",
+            as: "farmer",
+          },
+        },
+        { $unwind: { path: "$farmer", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "plantslots",
+            let: { bid: "$bookingSlot" },
+            pipeline: [
+              { $unwind: "$subtypeSlots" },
+              { $unwind: "$subtypeSlots.slots" },
+              {
+                $match: {
+                  $expr: { $eq: ["$subtypeSlots.slots._id", "$$bid"] },
+                },
+              },
+              {
+                $project: {
+                  startDay: "$subtypeSlots.slots.startDay",
+                  endDay: "$subtypeSlots.slots.endDay",
+                  month: "$subtypeSlots.slots.month",
+                  year: "$subtypeSlots.slots.year",
+                },
+              },
+              { $limit: 1 },
+            ],
+            as: "bookingSlotMeta",
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            orderId: 1,
+            numberOfPlants: 1,
+            additionalPlants: 1,
+            deliveryDate: 1,
+            sowingDone: 1,
+            sowingDoneAt: 1,
+            sowingDoneRequestId: 1,
+            bookingSlot: 1,
+            farmer: {
+              name: { $ifNull: ["$farmer.name", "Unknown"] },
+              mobileNumber: { $ifNull: ["$farmer.mobileNumber", ""] },
+            },
+            bookingSlotMeta: { $arrayElemAt: ["$bookingSlotMeta", 0] },
+          },
+        },
+        { $sort: { deliveryDate: 1, orderId: 1 } },
+      ]);
+    }
+
+    const readySlotLabel =
+      slot?.startDay === slot?.endDay || !slot?.endDay
+        ? slot?.startDay || slot?.plantReadyDate || "—"
+        : `${slot?.startDay || "—"} → ${slot?.endDay || "—"}`;
+
+    const coveredMapped = coveredOrders.map((o) => {
+      const plants =
+        (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0);
+      const bm = o.bookingSlotMeta;
+      const bookedLabel = bm?.startDay
+        ? bm.startDay === bm.endDay || !bm.endDay
+          ? bm.startDay
+          : `${bm.startDay} → ${bm.endDay}`
+        : null;
+      const bookedHere =
+        o.bookingSlot && String(o.bookingSlot) === String(slotId);
+      return {
+        ...o,
+        plants,
+        farmerName: o.farmer?.name || "Unknown",
+        farmerMobile: o.farmer?.mobileNumber || "",
+        tab: "reserved",
+        statusKey: "reserved_here",
+        statusLabel: "Reserved here",
+        bookedOnThisSlot: bookedHere,
+        bookingSlotLabel: bookedLabel,
+        reservedOnReadyLabel: readySlotLabel,
+      };
+    });
+
+    // Resolve ready-slot label for sowed orders booked here but reserved elsewhere
+    const sowedElsewhereReqIds = [
+      ...new Set(
+        orders
+          .filter((o) => o.sowingDone && o.sowingDoneRequestId)
+          .map((o) => String(o.sowingDoneRequestId))
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      ),
+    ].map((id) => new mongoose.Types.ObjectId(id));
+
+    const readyLabelByReq = new Map();
+    if (sowedElsewhereReqIds.length) {
+      const readyRows = await PlantSlot.aggregate([
+        {
+          $match: {
+            "subtypeSlots.slots.sowingBatches.sowingRequestId": {
+              $in: sowedElsewhereReqIds,
+            },
+          },
+        },
+        { $unwind: "$subtypeSlots" },
+        { $unwind: "$subtypeSlots.slots" },
+        { $unwind: "$subtypeSlots.slots.sowingBatches" },
+        {
+          $match: {
+            "subtypeSlots.slots.sowingBatches.sowingRequestId": {
+              $in: sowedElsewhereReqIds,
+            },
+          },
+        },
+        {
+          $project: {
+            reqId: "$subtypeSlots.slots.sowingBatches.sowingRequestId",
+            startDay: "$subtypeSlots.slots.startDay",
+            endDay: "$subtypeSlots.slots.endDay",
+            plantReadyDate: {
+              $ifNull: [
+                "$subtypeSlots.slots.sowingBatches.plantReadyDate",
+                "$subtypeSlots.slots.plantReadyDate",
+              ],
+            },
+          },
+        },
+      ]);
+      for (const r of readyRows) {
+        const key = String(r.reqId);
+        if (readyLabelByReq.has(key)) continue;
+        const label =
+          r.plantReadyDate ||
+          (r.startDay === r.endDay || !r.endDay
+            ? r.startDay
+            : `${r.startDay} → ${r.endDay}`);
+        readyLabelByReq.set(key, label || "—");
+      }
+    }
+
+    const bookedMapped = orders.map((o) => {
+      const plants =
+        (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0);
+      const coveredHere = coveredMapped.some(
+        (c) => String(c._id) === String(o._id)
+      );
+      let statusKey = "need_sow";
+      let statusLabel = "Need sow";
+      let reservedOnReadyLabel = null;
+      if (o.sowingDone) {
+        if (coveredHere) {
+          statusKey = "reserved_here";
+          statusLabel = "Reserved here";
+          reservedOnReadyLabel = readySlotLabel;
+        } else {
+          statusKey = "reserved_elsewhere";
+          reservedOnReadyLabel =
+            readyLabelByReq.get(String(o.sowingDoneRequestId)) || null;
+          statusLabel = reservedOnReadyLabel
+            ? `Sowed · reserved on ${reservedOnReadyLabel}`
+            : "Sowed";
+        }
+      }
+      return {
+        ...o,
+        plants,
+        farmerName: o.farmer?.name || "Unknown",
+        farmerMobile: o.farmer?.mobileNumber || "",
+        tab: o.sowingDone ? "booked_sowed" : "pending",
+        statusKey,
+        statusLabel,
+        reservedOnReadyLabel,
+        bookedOnThisSlot: true,
+      };
+    });
+
+    const pendingOrders = bookedMapped.filter((o) => !o.sowingDone);
+    const pendingPlants = pendingOrders.reduce(
+      (s, o) => s + (Number(o.plants) || 0),
+      0
+    );
+    const coveredPlants = coveredMapped.reduce(
+      (s, o) => s + (Number(o.plants) || 0),
+      0
+    );
 
     res.set({
       'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -7700,7 +7990,9 @@ export const getSlotOrdersSummary = async (req, res) => {
       success: true,
       slotInfo: slotInfo[0] || null,
       sowBatches,
-      orders,
+      orders: bookedMapped,
+      pendingOrders,
+      coveredOrders: coveredMapped,
       summary: {
         totalOrders,
         totalPlants,
@@ -7708,6 +8000,14 @@ export const getSlotOrdersSummary = async (req, res) => {
         pendingPaymentCount,
         completedPaymentCount,
         sowedOrdersCount,
+        pendingOrdersCount: pendingOrders.length,
+        pendingPlants,
+        coveredOrdersCount: coveredMapped.length,
+        coveredPlants,
+        orderReservedPlants,
+        availablePlants: availableForSale,
+        availableForSale,
+        excessivePlants,
         totalSowedPlants:
           totalSowedPlants ||
           (Number(slot?.primarySowed) || 0) + (Number(slot?.officeSowed) || 0),
@@ -7715,7 +8015,7 @@ export const getSlotOrdersSummary = async (req, res) => {
         sowingDate: slot?.sowingDate || null,
         plantReadyDate: slot?.plantReadyDate || null,
         plantReadyDays: slot?.plantReadyDays || 0,
-        availablePlants: slot?.availablePlants || 0,
+        readySlotLabel,
       },
       generatedAt: new Date(),
     });
@@ -8311,7 +8611,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       const subtypeIdStr = slotData.subtypeId?.toString();
       const productKeyForProgress = `${plantIdStr}-${subtypeIdStr}`;
       const productForProgress = productMap.get(productKeyForProgress);
-      const cfProgress = productForProgress?.conversionFactor || 1;
+      const cfProgress = resolveSowingPlantsPerPacket(productForProgress || {});
       const progressDetails = (slotData.sowingInProgress || []).map((prog) => {
         const packetsIssued = prog.packetsIssued || 0;
         const plantsExpected = prog.plantsExpected || 0;
@@ -9018,7 +9318,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
         category: { $regex: SEEDS_CATEGORY_REGEX },
         isActive: true,
       })
-        .select('_id name code plantId subtypeId conversionFactor')
+        .select('_id name code plantId subtypeId conversionFactor tentativePlantsPerPacket')
         .populate('plantId', 'name')
         .lean();
 
@@ -9059,7 +9359,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
             _id: { $in: extraProductIds },
             category: { $regex: SEEDS_CATEGORY_REGEX },
           })
-            .select('_id name code plantId subtypeId conversionFactor')
+            .select('_id name code plantId subtypeId conversionFactor tentativePlantsPerPacket')
             .populate('plantId', 'name')
             .lean();
           const merged = [...seedsProducts, ...extraProducts];
@@ -9123,7 +9423,8 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
             plantId: plantId && plantId.toString() !== 'unknown' ? plantId : null,
             plantName: product.plantId?.name || 'Unknown Plant',
             subtypeId: product.subtypeId || null,
-            conversionFactor: product.conversionFactor || 1,
+            conversionFactor: resolveSowingPlantsPerPacket(product),
+            tentativePlantsPerPacket: product.tentativePlantsPerPacket ?? null,
           });
         });
 
@@ -9145,7 +9446,9 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
                 const finalPlantId = populatedProduct?.plantId?._id?.toString() || populatedProduct?.plantId?.toString() || productInfo.plantId?.toString();
                 const finalPlantName = populatedProduct?.plantId?.name || productInfo.plantName;
                 const finalSubtypeId = populatedProduct?.subtypeId?.toString() || productInfo.subtypeId?.toString();
-                const finalConversionFactor = populatedProduct?.conversionFactor || productInfo.conversionFactor || 1;
+                const finalConversionFactor = resolveSowingPlantsPerPacket(
+                  populatedProduct || productInfo
+                );
 
                 const isExcessiveSowing = outward.purposeDetails && 
                   Array.from(excessiveSowingMap.keys()).some(reqNum => 

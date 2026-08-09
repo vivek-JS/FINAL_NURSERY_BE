@@ -30,13 +30,19 @@ export const generateOrderDeliveryChallanPdf = catchAsync(async (req, res, next)
       force,
       generatedBy: req.user?._id || null,
     });
+    const { ensureOrderDispatchWhatsAppOnce } = await import(
+      "../services/orderDispatchWhatsApp.service.js"
+    );
+    const whatsappDispatch = await ensureOrderDispatchWhatsAppOnce(orderId, {
+      allowManualResend: false,
+    });
     res.status(200).json(
       generateResponse(
         "Success",
         force
           ? "Delivery challan PDF regenerated. Previous PDF kept in history."
           : "Delivery challan PDF ready",
-        data
+        { ...data, whatsappDispatch }
       )
     );
   } catch (e) {

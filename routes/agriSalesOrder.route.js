@@ -40,6 +40,14 @@ import {
   patchRamAgriOutstandingLimitUser,
 } from "../controllers/agriSalesOrder.controller.js";
 import { getAgriOrderTimeline } from "../modules/orderEvents/api/orderEvents.controller.js";
+import {
+  getAgriOrderBatchSummary,
+  requestAgriSalesReturn,
+  listAgriSalesReturnRequests,
+  approveAgriSalesReturnRequest,
+  rejectAgriSalesReturnRequest,
+  getAgriSalesReturnRequestsForOrder,
+} from "../controllers/agriSalesReturnRequest.controller.js";
 
 const router = express.Router();
 
@@ -161,14 +169,39 @@ router.patch(
   processSalesReturn
 );
 
+// ==================== SALES RETURN REQUESTS (Dealer submit → Office approve) ====================
+router.post(
+  "/returns/request",
+  [
+    check("orderId").isMongoId().withMessage("Valid order ID is required"),
+    check("lineReturns").isArray({ min: 1 }).withMessage("At least one line return is required"),
+  ],
+  checkErrors,
+  requestAgriSalesReturn
+);
+router.get("/returns", listAgriSalesReturnRequests);
+router.patch("/returns/:id/approve", approveAgriSalesReturnRequest);
+router.patch("/returns/:id/reject", rejectAgriSalesReturnRequest);
+router.get("/returns/by-order/:orderId", getAgriSalesReturnRequestsForOrder);
+
 // ==================== ORDER ROUTES ====================
 router
   .post(
     "/linked/create",
     [
       check("linkedNurseryOrderId").isMongoId().withMessage("Valid linked nursery order ID is required"),
-      check("ramAgriCropId").isMongoId().withMessage("Valid crop ID is required"),
-      check("ramAgriVarietyId").isMongoId().withMessage("Valid variety ID is required"),
+      check("ramAgriCropId")
+        .optional({ values: "null" })
+        .isMongoId()
+        .withMessage("Valid crop ID is required when productId is not used"),
+      check("ramAgriVarietyId")
+        .optional({ values: "null" })
+        .isMongoId()
+        .withMessage("Valid variety ID is required when productId is not used"),
+      check("productId")
+        .optional({ values: "null" })
+        .isMongoId()
+        .withMessage("Valid gift product ID is required when Ram Agri crop is not used"),
       check("quantity").isNumeric().withMessage("Quantity must be numeric").isFloat({ min: 0.01 }).withMessage("Quantity must be > 0"),
       check("rate").optional().isNumeric().withMessage("Rate must be numeric"),
     ],
@@ -318,6 +351,7 @@ router
   )
   .get("/", getAllAgriSalesOrders)
   .get("/:id/timeline", getAgriOrderTimeline)
+  .get("/:id/batch-summary", getAgriOrderBatchSummary)
   .get("/:id", getAgriSalesOrderById)
   .patch(
     "/:id",

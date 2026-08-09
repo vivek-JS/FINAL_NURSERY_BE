@@ -58,6 +58,11 @@ const sowingRequestSchema = new mongoose.Schema(
       type: Number,
       default: 1,
     },
+    /** Snapshot: plants per primary unit for sowing (not UOM conversionFactor) */
+    tentativePlantsPerPacket: {
+      type: Number,
+      min: 0,
+    },
     unitName: {
       type: String,
       default: 'packets',
@@ -244,6 +249,16 @@ const sowingRequestSchema = new mongoose.Schema(
     },
     cancellationReason: {
       type: String,
+    },
+    /** Auto PO when company packets exceed Biotech stock (Ram Agri → Biotech transfer). */
+    transferPurchaseOrderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'PurchaseOrder',
+    },
+    transferShortfallQty: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
   },
   {

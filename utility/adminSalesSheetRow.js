@@ -41,6 +41,7 @@ export const SALES_SHEET_COLUMNS = [
   { key: "variety", label: "Variety" },
   { key: "delDate", label: "Delivery date" },
   { key: "originalDelDate", label: "Original delivery date" },
+  { key: "dispatchDate", label: "Dispatch date" },
   { key: "media", label: "Media" },
   { key: "retail", label: "Retail" },
   { key: "shadeNo", label: "Shade No." },
@@ -109,6 +110,13 @@ export function formatSalesSheetNursery(expectedNursery) {
   return code || "RB";
 }
 
+function resolveDispatchDate(order) {
+  if (order?.dispatchedDate) return order.dispatchedDate;
+  if (order?.bucketEventAt) return order.bucketEventAt;
+  const leg = pickDispatchLegForBucket(order, order?.bucketEventAt);
+  return leg?.date || leg?.createdAt || null;
+}
+
 /**
  * @param {object} order enriched + hydrated lean order
  * @param {{ referenceById?: Map<string, object>, trayById?: Map<string, object> }} lookups
@@ -149,6 +157,7 @@ export function buildSalesSheetRow(order, lookups = {}) {
     variety: order.plantSubtypeName || "",
     delDate: toIstYmd(order.deliveryDate),
     originalDelDate: toIstYmd(order.oldDeliveryDate),
+    dispatchDate: toIstYmd(resolveDispatchDate(order)),
     media: trayDoc?.name || "",
     retail: "",
     shadeNo: "",

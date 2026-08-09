@@ -3178,31 +3178,78 @@ async function enrichTrailEntriesWithOrderInfo(entries) {
   const orderDocs = await Order.find({
     _id: { $in: [...idSet].map((id) => new mongoose.Types.ObjectId(id)) },
   })
-    .select("_id orderId farmer")
+    .select("_id orderId orderFor farmer")
     .populate("farmer", "name mobileNumber")
     .lean();
 
   const orderMap = new Map(
-    orderDocs.map((o) => [
-      String(o._id),
-      {
-        orderNumber: o.orderId ?? null,
-        farmerName: o.farmer?.name ?? null,
-        farmerMobile: o.farmer?.mobileNumber ?? null,
-      },
-    ])
+    orderDocs.map((o) => {
+      const of =
+        o.orderFor && typeof o.orderFor === "object" && !Array.isArray(o.orderFor)
+          ? o.orderFor
+          : null;
+      const bookingName = o.farmer?.name ? String(o.farmer.name).trim() : "";
+      const orderForName = of?.name ? String(of.name).trim() : "";
+      const displayName = orderForName
+        ? `${orderForName} · Booking: ${bookingName || "Unknown"}`
+        : bookingName || null;
+      const orderForMobile =
+        of?.mobileNumber != null && of.mobileNumber !== "" && of.mobileNumber !== 0
+          ? String(of.mobileNumber)
+          : null;
+      return [
+        String(o._id),
+        {
+          orderNumber: o.orderId ?? null,
+          farmerName: bookingName || null,
+          farmerMobile: o.farmer?.mobileNumber ?? null,
+          orderForName: orderForName || null,
+          bookingFarmerName: bookingName || null,
+          orderForMobile,
+          customerDisplayName: displayName,
+        },
+      ];
+    })
   );
 
   return entries.map((entry) => {
     const orderMongoId =
       entry.orderId?._id?.toString?.() ?? entry.orderId?.toString?.() ?? null;
+    const meta = entry.metadata || {};
     const info = orderMongoId ? orderMap.get(orderMongoId) : null;
+
+    const customerDisplayName =
+      meta.customerDisplayName ?? info?.customerDisplayName ?? null;
+    const orderForName = meta.orderForName ?? info?.orderForName ?? null;
+    const bookingFarmerName =
+      meta.bookingFarmerName ?? meta.farmerName ?? info?.bookingFarmerName ?? info?.farmerName ?? null;
+    const farmerName = bookingFarmerName;
+    const farmerMobile = meta.farmerMobile ?? info?.farmerMobile ?? null;
+    const orderForMobile = meta.orderForMobile ?? info?.orderForMobile ?? null;
+
+    const whoParts = [];
+    if (orderForName) whoParts.push(orderForName);
+    if (bookingFarmerName) {
+      whoParts.push(`Booking: ${bookingFarmerName}`);
+    } else if (farmerName) {
+      whoParts.push(farmerName);
+    }
+    const mobileParts = [farmerMobile, orderForMobile].filter(Boolean);
+    if (mobileParts.length) {
+      whoParts.push(mobileParts.join(" / "));
+    }
+
     return {
       ...entry,
       orderMongoId,
-      orderNumber: info?.orderNumber ?? null,
-      farmerName: info?.farmerName ?? null,
-      farmerMobile: info?.farmerMobile ?? null,
+      orderNumber: meta.orderNumber ?? info?.orderNumber ?? null,
+      farmerName,
+      farmerMobile,
+      orderForName,
+      bookingFarmerName,
+      orderForMobile,
+      customerDisplayName,
+      customerLine: customerDisplayName || whoParts.join(" · ") || null,
     };
   });
 }

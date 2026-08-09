@@ -6,6 +6,8 @@ import Batch from "../models/batch.model.js";
 import Order from "../models/order.model.js";
 import SowingRequest from "../models/sowingRequest.model.js";
 import RaisingSeedIntake from "../models/raisingSeedIntake.model.js";
+import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
+import { enrichSeedProductsFromRamAgriLinks } from "../services/sowingSeedProductResolve.service.js";
 
 const ACTIVE_ORDER_STATUSES = [
   "PENDING",
@@ -44,12 +46,13 @@ const MONTH_INDEX = {
   dec: 11,
 };
 
-/** In-memory cache — 2 minutes. Only bust on request create / refresh=1 */
-let cardsLiteCache = { at: 0, payload: null };
+/** In-memory cache per horizon days — 2 minutes. Bust on request create / refresh */
+let cardsLiteCacheByDays = new Map(); // days -> { at, payload }
 const CARDS_TTL_MS = 120_000;
+const MAX_HORIZON_DAYS = 7;
 
 export function bustTodaySowingCardsLiteCache() {
-  cardsLiteCache = { at: 0, payload: null };
+  cardsLiteCacheByDays = new Map();
 }
 
 function slotStartMs(day, month, year) {
@@ -71,17 +74,26 @@ function slotStartMs(day, month, year) {
 export const getTodaySowingCardsLite = async (req, res) => {
   const t0 = Date.now();
   try {
+    // days=0 → overdue + today; days=3 → include sow-by through +3 (combine multi-day orders)
+    const horizon = Math.max(
+      0,
+      Math.min(MAX_HORIZON_DAYS, Number(req.query.days) || 0)
+    );
+    const cacheKey = String(horizon);
+
     // Bust via header only (query params are sanitized by global validator)
     const force =
       String(req.headers["x-sowing-cache-bust"] || "") === "1" ||
       String(req.headers["x-cache-bust"] || "") === "1";
+    const cached = cardsLiteCacheByDays.get(cacheKey);
     if (
       !force &&
-      cardsLiteCache.payload &&
-      Date.now() - cardsLiteCache.at < CARDS_TTL_MS
+      cached?.payload &&
+      Date.now() - cached.at < CARDS_TTL_MS
     ) {
       return res.json({
-        ...cardsLiteCache.payload,
+        ...cached.payload,
+        days: horizon,
         cached: true,
         ms: Date.now() - t0,
       });
@@ -106,6 +118,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
     if (!plants.length) {
       const empty = {
         success: true,
+        days: horizon,
         subtypeCards: [],
         requestCards: [],
         inProgressCards: [],
@@ -113,6 +126,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
           totalSubtypes: 0,
           totalDueGap: 0,
           totalTodayGap: 0,
+          totalUpcomingGap: 0,
           requestCardCount: 0,
           inProgressCardCount: 0,
         },
@@ -120,7 +134,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         ms: Date.now() - t0,
         cached: false,
       };
-      cardsLiteCache = { at: Date.now(), payload: empty };
+      cardsLiteCacheByDays.set(cacheKey, { at: Date.now(), payload: empty });
       return res.json(empty);
     }
 
@@ -128,13 +142,13 @@ export const getTodaySowingCardsLite = async (req, res) => {
     const plantMap = new Map(plants.map((p) => [String(p._id), p]));
 
     // Parallel: products, slots, pending requests, raising stock
-    const [products, rawSlots, pendingRequests, raisingStockRows] = await Promise.all([
+    const [baseProducts, rawSlots, pendingRequests, raisingStockRows] = await Promise.all([
       Product.find({
         plantId: { $in: plantIds },
         category: { $regex: /^seeds$/i },
         isActive: true,
       })
-        .select("_id plantId subtypeId name code conversionFactor")
+        .select("_id plantId subtypeId name code conversionFactor tentativePlantsPerPacket")
         .lean(),
       PlantSlot.aggregate([
         {
@@ -228,7 +242,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         sowingCompleted: { $ne: true },
       })
         .select(
-          "plantId subtypeId productId requestNumber packetsRequested packetsFromCompany packetsFromRaising seedSource conversionFactor status sowingInProgress issuedDate sowingCompleted linkedOrderIds isExcessiveSowing"
+          "plantId subtypeId productId requestNumber packetsRequested packetsFromCompany packetsFromRaising seedSource conversionFactor tentativePlantsPerPacket status sowingInProgress issuedDate sowingCompleted linkedOrderIds isExcessiveSowing"
         )
         .lean(),
       RaisingSeedIntake.aggregate([
@@ -251,6 +265,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
         },
       ]),
     ]);
+
+    const products = await enrichSeedProductsFromRamAgriLinks(baseProducts, plantIds);
 
     const raisingByKey = new Map();
     (raisingStockRows || []).forEach((r) => {
@@ -278,7 +294,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
         {
           $match: {
             product: { $in: productIds },
-            status: "active",
+            // Include expired lots that still have remaining qty (Ram Agri linked seed)
+            status: { $in: ["active", "expired"] },
             remainingQuantity: { $gt: 0 },
           },
         },
@@ -341,7 +358,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
       };
     };
 
-    // Candidate due/today slots (date filter only — booked comes from LIVE orders)
+    // Candidate slots within sow-by horizon (booked comes from LIVE orders)
     const dueCandidates = [];
     for (const slot of rawSlots) {
       const plant = plantMap.get(String(slot.plantId));
@@ -355,7 +372,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
       if (startMs == null) continue;
       const sowByMs = startMs - readyDays * 86400000;
       const daysUntilSow = Math.floor((sowByMs - todayUtc) / 86400000);
-      if (daysUntilSow > 0) continue;
+      // Include overdue + today + upcoming through +horizon
+      if (daysUntilSow > horizon) continue;
       dueCandidates.push({
         ...slot,
         readyDays,
@@ -449,14 +467,17 @@ export const getTodaySowingCardsLite = async (req, res) => {
           slots: [],
           totalGap: 0,
           totalPlantsToSowWithBuffer: 0,
+          totalPlantsToSowRaw: 0,
           totalBookedPlants: 0,
           dueGap: 0,
           todayGap: 0,
+          upcomingGap: 0,
         });
       }
 
       const card = cardMap.get(key);
       card.slotIds.push(slot.slotId);
+      const dus = slot.daysUntilSow;
       const dayRow = {
         slotId: slot.slotId,
         _id: slot.slotId,
@@ -469,18 +490,20 @@ export const getTodaySowingCardsLite = async (req, res) => {
         rawGap,
         plantsToSowWithBuffer,
         orderCount: live.orderCount,
-        daysUntilSow: slot.daysUntilSow,
-        priority: slot.daysUntilSow < 0 ? "due" : "urgent",
+        daysUntilSow: dus,
+        priority: dus < 0 ? "due" : dus === 0 ? "urgent" : "upcoming",
       };
-      // Keep all due/today days for GAP date breakdown (cap 120)
+      // Keep all horizon days for GAP date breakdown (cap 120)
       if (card.slots.length < 120) {
         card.slots.push(dayRow);
       }
       card.totalGap += plantsToSowWithBuffer;
       card.totalPlantsToSowWithBuffer += plantsToSowWithBuffer;
+      card.totalPlantsToSowRaw += rawGap;
       card.totalBookedPlants += booked;
-      if (slot.daysUntilSow < 0) card.dueGap += plantsToSowWithBuffer;
-      else card.todayGap += plantsToSowWithBuffer;
+      if (dus < 0) card.dueGap += plantsToSowWithBuffer;
+      else if (dus === 0) card.todayGap += plantsToSowWithBuffer;
+      else card.upcomingGap += plantsToSowWithBuffer;
     }
 
     // Sort each card's days: most overdue first
@@ -595,7 +618,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
             },
           ]
       ).map((p) => {
-        const cf = Number(p.conversionFactor) || 1;
+        const cf = resolveSowingPlantsPerPacket(p);
         const packetsNeeded = Number((plants / cf).toFixed(2));
         const availablePackets = p._id
           ? Number((stockByProduct.get(String(p._id)) || 0).toFixed(2))
@@ -615,6 +638,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
           name: p.name || "Seed",
           code: p.code || "",
           conversionFactor: cf,
+          tentativePlantsPerPacket: p.tentativePlantsPerPacket ?? null,
           label: `${p.name || p.code || "Seed"} · 1 pkt ≈ ${cf} plants`,
           packetsNeeded,
           availablePackets,
@@ -702,9 +726,11 @@ export const getTodaySowingCardsLite = async (req, res) => {
         slots: card.slots,
         totalGap: card.totalGap,
         totalPlantsToSowWithBuffer: plants,
+        totalPlantsToSowRaw: Number(card.totalPlantsToSowRaw) || 0,
         totalBookedPlants: card.totalBookedPlants,
         dueGap: Number(card.dueGap) || 0,
         todayGap: Number(card.todayGap) || 0,
+        upcomingGap: Number(card.upcomingGap) || 0,
         packetsNeeded: def?.packetsNeeded || 0,
         availablePackets: def?.availablePackets || 0,
         stockShortfall: def?.stockShortfall || 0,
@@ -790,7 +816,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
         subtypeName: subtype?.name || "Subtype",
         sowingBuffer: Number(plant.sowingBuffer) || 0,
         plantReadyDays: Number(subtype?.plantReadyDays) || 0,
-        conversionFactor: Number(r.conversionFactor) || 1,
+        conversionFactor: resolveSowingPlantsPerPacket(r),
+        tentativePlantsPerPacket: r.tentativePlantsPerPacket ?? null,
         primaryUnit: { symbol: "pkt", name: "packets" },
         secondaryUnit: null,
         productId: r.productId || null,
@@ -800,6 +827,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         slots: [],
         totalGap: 0,
         totalPlantsToSowWithBuffer: 0,
+        totalPlantsToSowRaw: 0,
         totalBookedPlants: 0,
         packetsNeeded: 0,
         availablePackets: 0,
@@ -821,7 +849,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         isExcessiveSowing: Boolean(r.isExcessiveSowing),
         totalPacketsInProgress: Number(r.packetsRequested) || 0,
         totalPlantsInProgress: Math.round(
-          (Number(r.packetsRequested) || 0) * (Number(r.conversionFactor) || 1)
+          (Number(r.packetsRequested) || 0) * resolveSowingPlantsPerPacket(r)
         ),
       });
       progressKeys.add(key);
@@ -829,6 +857,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
 
     const payload = {
       success: true,
+      days: horizon,
       subtypeCards: requestCards,
       requestCards,
       inProgressCards,
@@ -836,6 +865,10 @@ export const getTodaySowingCardsLite = async (req, res) => {
         totalSubtypes: requestCards.length,
         totalDueGap: requestCards.reduce((s, c) => s + (c.dueGap || 0), 0),
         totalTodayGap: requestCards.reduce((s, c) => s + (c.todayGap || 0), 0),
+        totalUpcomingGap: requestCards.reduce(
+          (s, c) => s + (c.upcomingGap || 0),
+          0
+        ),
         totalPlantsNeeded: requestCards.reduce(
           (s, c) => s + (c.totalPlantsToSowWithBuffer || 0),
           0
@@ -856,7 +889,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
       cached: false,
     };
 
-    cardsLiteCache = { at: Date.now(), payload };
+    cardsLiteCacheByDays.set(cacheKey, { at: Date.now(), payload });
     return res.json(payload);
   } catch (error) {
     console.error("getTodaySowingCardsLite:", error);
@@ -875,7 +908,17 @@ export const getTodaySowingCardsLite = async (req, res) => {
 export const getOrderWiseSowing = async (req, res) => {
   const t0 = Date.now();
   try {
-    const { plantId, subtypeId, slotIds } = req.query;
+    const { plantId, subtypeId, slotIds, orderIds } = req.query;
+    // days=0 → overdue + today only; days=3 → include sow-by through +3d (matches cards lite)
+    const horizon = Math.max(
+      0,
+      Math.min(
+        MAX_HORIZON_DAYS,
+        req.query.days === undefined || req.query.days === ""
+          ? 0
+          : Number(req.query.days) || 0
+      )
+    );
     if (!plantId || !subtypeId) {
       return res.status(400).json({
         success: false,
@@ -892,24 +935,38 @@ export const getOrderWiseSowing = async (req, res) => {
         .map((s) => new mongoose.Types.ObjectId(s));
     }
 
+    // Explicit orderIds = covered / linked rows (include already sowingDone)
+    let orderIdList = [];
+    if (orderIds) {
+      orderIdList = String(orderIds)
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => mongoose.Types.ObjectId.isValid(s))
+        .map((s) => new mongoose.Types.ObjectId(s));
+    }
+
     const query = {
       plantName: plantId,
       plantSubtype: subtypeId,
-      orderStatus: { $in: ACTIVE_ORDER_STATUSES },
-      sowingDone: { $ne: true },
     };
-    if (slotIdList.length) {
-      query.bookingSlot = { $in: slotIdList };
+    if (orderIdList.length) {
+      query._id = { $in: orderIdList };
+    } else {
+      query.orderStatus = { $in: ACTIVE_ORDER_STATUSES };
+      query.sowingDone = { $ne: true };
+      if (slotIdList.length) {
+        query.bookingSlot = { $in: slotIdList };
+      }
     }
 
     const [orders, products, raisings, activeOrderReqs, plantDoc] = await Promise.all([
       Order.find(query)
         .select(
-          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderStatus sowingDone deliveryDate"
+          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderStatus sowingDone sowingDoneAt deliveryDate"
         )
         .populate("farmer", "name mobileNumber")
-        .sort({ createdAt: 1 })
-        .limit(80)
+        .sort({ deliveryDate: 1, createdAt: 1 })
+        .limit(orderIdList.length ? Math.min(200, orderIdList.length) : 80)
         .lean(),
       Product.find({
         plantId,
@@ -917,7 +974,7 @@ export const getOrderWiseSowing = async (req, res) => {
         category: { $regex: /^seeds$/i },
         isActive: true,
       })
-        .select("_id name code conversionFactor")
+        .select("_id name code conversionFactor tentativePlantsPerPacket")
         .lean(),
       RaisingSeedIntake.find({
         plantId,
@@ -1010,14 +1067,18 @@ export const getOrderWiseSowing = async (req, res) => {
       raisingMap.get(k).push(r);
     });
 
-    const cf = products[0]?.conversionFactor || 1;
-    const packings = products.map((p) => ({
+    const cf = resolveSowingPlantsPerPacket(products[0] || {});
+    const packings = products.map((p) => {
+      const pp = resolveSowingPlantsPerPacket(p);
+      return {
       productId: p._id,
       name: p.name,
       code: p.code,
-      conversionFactor: Number(p.conversionFactor) || 1,
-      label: `${p.name || p.code || "Seed"} · 1 pkt ≈ ${Number(p.conversionFactor) || 1} plants`,
-    }));
+      conversionFactor: pp,
+      tentativePlantsPerPacket: p.tentativePlantsPerPacket ?? null,
+      label: `${p.name || p.code || "Seed"} · 1 pkt ≈ ${pp} plants`,
+    };
+    });
 
     const rows = orders.map((o) => {
       const plants =
@@ -1050,9 +1111,17 @@ export const getOrderWiseSowing = async (req, res) => {
         );
       }
       let daysUntilSow = null;
+      let sowByDate = null;
       if (deliveryMs != null) {
         const sowByMs = deliveryMs - readyDays * 86400000;
         daysUntilSow = Math.floor((sowByMs - todayUtc) / 86400000);
+        if (readyDays > 0) {
+          const sd = new Date(sowByMs);
+          const dd = String(sd.getUTCDate()).padStart(2, "0");
+          const mm = String(sd.getUTCMonth() + 1).padStart(2, "0");
+          const yyyy = sd.getUTCFullYear();
+          sowByDate = `${dd}-${mm}-${yyyy}`;
+        }
       }
 
       let priority = 2;
@@ -1074,6 +1143,7 @@ export const getOrderWiseSowing = async (req, res) => {
         deliveryDate: o.deliveryDate || null,
         slotStartDay: slotMeta?.startDay || null,
         plantReadyDays: readyDays,
+        sowByDate,
         daysUntilSow,
         sowingPlan: {
           seedSource,
@@ -1093,6 +1163,8 @@ export const getOrderWiseSowing = async (req, res) => {
         alreadyRequested,
         existingRequestNumber: prior?.requestNumber || null,
         existingRequestStatus: prior?.status || null,
+        sowingDone: Boolean(o.sowingDone),
+        sowingDoneAt: o.sowingDoneAt || null,
         createdAt: o.createdAt,
         orderStatus: o.orderStatus,
         _sort: priority,
@@ -1107,13 +1179,23 @@ export const getOrderWiseSowing = async (req, res) => {
     );
     rows.forEach((r) => delete r._sort);
 
-    const openOrders = rows.filter((r) => !r.alreadyRequested);
+    // Explicit orderIds (linked drawer) skip horizon; slot browse respects days
+    const horizonFiltered =
+      orderIdList.length > 0
+        ? rows
+        : rows.filter(
+            (r) =>
+              r.daysUntilSow != null && Number(r.daysUntilSow) <= horizon
+          );
+
+    const openOrders = horizonFiltered.filter((r) => !r.alreadyRequested);
 
     return res.json({
       success: true,
-      data: rows,
+      data: horizonFiltered,
+      days: horizon,
       openOrderCount: openOrders.length,
-      alreadyRequestedCount: rows.length - openOrders.length,
+      alreadyRequestedCount: horizonFiltered.length - openOrders.length,
       conversionFactor: cf,
       packings,
       ms: Date.now() - t0,

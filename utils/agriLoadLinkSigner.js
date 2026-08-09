@@ -87,10 +87,10 @@ export const buildAgriLoadActionUrl = ({
 
   const { exp, sig } = createAgriLoadLinkToken({ orderNumber, actorPhone, ttlSeconds });
   const params = new URLSearchParams({
-    orderNumber: String(orderNumber || "").trim(),
+    orderRef: String(orderNumber || "").trim(),
     actorPhone: normalizePhoneForWhitelist(actorPhone),
     exp: String(exp),
     sig,
   });
-  return `${cleanBase}/api/v1/agri-load-link/mark-loaded?${params.toString()}`;
+  return `${cleanBase}/agri-load?${params.toString()}`;
 };

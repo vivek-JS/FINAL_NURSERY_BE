@@ -12,15 +12,20 @@ const locationRuleSchema = new Schema(
     ],
     talukas: [
       {
+        talukaId: { type: String, required: false },
         talukaCode: { type: String, required: true },
         talukaName: { type: String, required: true },
-        districtCode: { type: String, required: false }
+        districtId: { type: String, required: false },
+        districtCode: { type: String, required: false },
+        districtName: { type: String, required: false }
       }
     ],
     villages: [
       {
+        villageId: { type: String, required: false },
         villageCode: { type: String, required: false },
         villageName: { type: String, required: true },
+        talukaId: { type: String, required: false },
         talukaCode: { type: String, required: false },
         districtCode: { type: String, required: false }
       }

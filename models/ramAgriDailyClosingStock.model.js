@@ -22,7 +22,7 @@ const ramAgriDailyClosingStockSchema = new mongoose.Schema(
     varietyName: { type: String, trim: true, default: "" },
     productType: {
       type: String,
-      enum: ["seed", "chemical"],
+      enum: ["seed", "chemical", "gift"],
       default: "seed",
     },
     closingStock: {

@@ -6,6 +6,7 @@ import Batch from '../models/batch.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
 import PlantSlot from '../models/slots.model.js';
 import mongoose from 'mongoose';
+import { resolveSowingPlantsPerPacket } from '../utility/sowingPlantsPerPacket.js';
 
 const applySowingBuffer = (baseValue, bufferPercent) => {
   const qty = Number(baseValue) || 0;
@@ -123,7 +124,9 @@ export const createSowingRequest = async (req, res) => {
         category: { $regex: /^seeds$/i },
         isActive: true,
       })
-        .select('_id name code conversionFactor primaryUnit secondaryUnit')
+        .select(
+          '_id name code plantId subtypeId ramAgriCropId ramAgriVarietyId conversionFactor tentativePlantsPerPacket primaryUnit secondaryUnit'
+        )
         .populate('primaryUnit', 'name symbol')
         .populate('secondaryUnit', 'name symbol')
         .lean();
@@ -140,7 +143,9 @@ export const createSowingRequest = async (req, res) => {
         category: { $regex: /^seeds$/i },
         isActive: true,
       })
-        .select('_id name code conversionFactor primaryUnit secondaryUnit')
+        .select(
+          '_id name code plantId subtypeId ramAgriCropId ramAgriVarietyId conversionFactor tentativePlantsPerPacket primaryUnit secondaryUnit'
+        )
         .populate('primaryUnit', 'name symbol')
         .populate('secondaryUnit', 'name symbol')
         .lean();
@@ -288,6 +293,7 @@ export const createSowingRequest = async (req, res) => {
       primaryUnit: product.primaryUnit?._id,
       secondaryUnit: product.secondaryUnit?._id,
       conversionFactor: product.conversionFactor || 1,
+      tentativePlantsPerPacket: resolveSowingPlantsPerPacket(product),
       unitName: product.primaryUnit?.symbol || product.primaryUnit?.name || product.secondaryUnit?.symbol || product.secondaryUnit?.name || 'packets',
       status: 'pending',
       requestedBy: req.user._id,
@@ -303,6 +309,31 @@ export const createSowingRequest = async (req, res) => {
     await request.save();
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'requestedBy']);
 
+    let transferResult = null;
+    if (companyFinal > 0.001) {
+      try {
+        const { maybeCreateSowingTransferPurchaseOrder } = await import(
+          '../services/sowingRamAgriTransfer.service.js'
+        );
+        transferResult = await maybeCreateSowingTransferPurchaseOrder({
+          product,
+          companyPackets: companyFinal,
+          sowingRequest: request,
+          userId: req.user._id,
+        });
+        if (transferResult?.purchaseOrder?._id) {
+          request.transferPurchaseOrderId = transferResult.purchaseOrder._id;
+          request.transferShortfallQty = transferResult.shortfall || 0;
+          await request.save();
+        }
+      } catch (transferErr) {
+        console.error('[CreateSowingRequest] Ram Agri transfer PO failed:', transferErr?.message || transferErr);
+        transferResult = {
+          error: transferErr?.message || 'Failed to create internal transfer PO',
+        };
+      }
+    }
+
     try {
       const { bustTodaySowingCardsLiteCache } = await import(
         "./sowingCardsLite.controller.js"
@@ -316,6 +347,17 @@ export const createSowingRequest = async (req, res) => {
       success: true,
       message: 'Sowing request created successfully',
       data: request,
+      transfer: transferResult
+        ? {
+            purchaseOrderId: transferResult.purchaseOrder?._id,
+            poNumber: transferResult.purchaseOrder?.poNumber,
+            shortfall: transferResult.shortfall,
+            availableBefore: transferResult.availableBefore,
+            skipped: transferResult.skipped,
+            skipReason: transferResult.reason,
+            error: transferResult.error,
+          }
+        : null,
     });
   } catch (error) {
     console.error('Error creating sowing request:', error);
@@ -342,6 +384,7 @@ export const getAllSowingRequests = async (req, res) => {
       .populate('productId', 'name code')
       .populate('requestedBy', 'name')
       .populate('issuedBy', 'name')
+      .populate('transferPurchaseOrderId', 'poNumber status')
       .sort({ requestedDate: -1 })
       .lean();
 
@@ -352,7 +395,7 @@ export const getAllSowingRequests = async (req, res) => {
         try {
           const batches = await Batch.find({
             product: request.productId._id,
-            status: 'active',
+            status: { $in: ['active', 'expired'] },
             remainingQuantity: { $gt: 0 },
           })
             .select('remainingQuantity unit')
@@ -421,7 +464,7 @@ export const getPendingSowingRequests = async (req, res) => {
         try {
           const batches = await Batch.find({
             product: request.productId._id,
-            status: 'active',
+            status: { $in: ['active', 'expired'] },
             remainingQuantity: { $gt: 0 },
           })
             .select('remainingQuantity unit')
@@ -493,10 +536,10 @@ export const getSowingRequestById = async (req, res) => {
       });
     }
 
-    // Get available batches for this product (warehouse stock)
+    // Get available batches for this product (warehouse / Ram Agri mirrors)
     const batches = await Batch.find({
       product: request.productId._id,
-      status: 'active',
+      status: { $in: ['active', 'expired'] },
       remainingQuantity: { $gt: 0 },
     })
       .select('batchNumber product receivedDate supplier purchasePrice quantity remainingQuantity unit status grn expiryDate manufactureDate')
@@ -734,10 +777,10 @@ export const issueStockFromRequest = async (req, res) => {
         });
       }
 
-      if (batch.status !== 'active') {
+      if (!['active', 'expired'].includes(batch.status)) {
         return res.status(400).json({
           success: false,
-          message: `Batch ${batch.batchNumber} is not active`,
+          message: `Batch ${batch.batchNumber} is not issuable (status: ${batch.status})`,
         });
       }
 
@@ -859,8 +902,8 @@ export const issueStockFromRequest = async (req, res) => {
         throw new Error(`Insufficient stock in batch ${batch.batchNumber}`);
       }
 
-      if (batch.status !== 'active') {
-        throw new Error(`Batch ${batch.batchNumber} is not active`);
+      if (!['active', 'expired'].includes(batch.status)) {
+        throw new Error(`Batch ${batch.batchNumber} is not issuable (status: ${batch.status})`);
       }
 
       // Update batch
@@ -870,19 +913,46 @@ export const issueStockFromRequest = async (req, res) => {
       }
       await batch.save();
 
-      // Validate and update product stock
-      if (product.currentStock < item.quantity) {
-        throw new Error(`Insufficient stock. Available: ${product.currentStock}, Required: ${item.quantity}`);
+      // If this Product is linked to Ram Agri, deduct source lot + resync product.currentStock
+      let ramAgriLinked = false;
+      try {
+        const { deductLinkedRamAgriBatchForClassicBatch, isRamAgriLinkedProduct } =
+          await import('../services/ramAgriLinkedProductSync.service.js');
+        ramAgriLinked = isRamAgriLinkedProduct(product);
+        if (ramAgriLinked) {
+          await deductLinkedRamAgriBatchForClassicBatch(
+            batch,
+            item.quantity,
+            req.user._id
+          );
+          const refreshed = await Product.findById(product._id);
+          if (refreshed) {
+            product.currentStock = refreshed.currentStock;
+            product.stockValue = refreshed.stockValue;
+            product.averagePrice = refreshed.averagePrice;
+          }
+        }
+      } catch (linkErr) {
+        console.error('[IssueStock] Ram Agri linked deduct failed:', linkErr?.message || linkErr);
+        throw linkErr;
       }
 
-      product.currentStock -= item.quantity;
-      if (product.currentStock > 0 && product.stockValue > 0) {
-        product.averagePrice = product.stockValue / product.currentStock;
-      } else {
-        product.averagePrice = 0;
+      if (!ramAgriLinked) {
+        // Classic-only product: deduct Product.currentStock here
+        if (product.currentStock < item.quantity) {
+          throw new Error(
+            `Insufficient stock. Available: ${product.currentStock}, Required: ${item.quantity}`
+          );
+        }
+        product.currentStock -= item.quantity;
+        if (product.currentStock > 0 && product.stockValue > 0) {
+          product.averagePrice = product.stockValue / product.currentStock;
+        } else {
+          product.averagePrice = 0;
+        }
+        product.updatedBy = req.user._id;
+        await product.save();
       }
-      product.updatedBy = req.user._id;
-      await product.save();
 
       // Create inventory transaction
       await createOutwardTransaction(item, outward, req.user);
@@ -916,7 +986,7 @@ export const issueStockFromRequest = async (req, res) => {
     /** @type {{ slotsWritten: number, plantSlotDocsSaved: number, fallbackUsed: boolean }} */
     const slotLinkage = { slotsWritten: 0, plantSlotDocsSaved: 0, fallbackUsed: false };
     if (request.linkedSlotIds && request.linkedSlotIds.length > 0) {
-      const conversionFactor = request.conversionFactor || 1;
+      const plantsPerPacket = resolveSowingPlantsPerPacket(request);
       
       console.log(`[IssueStock] Distributing ${packetsForSlots} packets across ${request.linkedSlotIds.length} slots based on each slot's gap`);
       
@@ -1043,7 +1113,7 @@ export const issueStockFromRequest = async (req, res) => {
                   slot,
                   plantSlot: plantSlotDoc,
                   subtypeSlot,
-                  gap: Math.max(1, packetsForSlots * conversionFactor),
+                  gap: Math.max(1, packetsForSlots * plantsPerPacket),
                   rawGap: 0,
                   isExcessiveSowing: isExcessiveSowing,
                 });
@@ -1064,7 +1134,7 @@ export const issueStockFromRequest = async (req, res) => {
       
       // Step 2: Distribute packets/plants based on slot gaps (or allocate all to specific slot for excessive sowing)
       let remainingPackets = packetsForSlots;
-      let remainingPlants = packetsForSlots * conversionFactor;
+      let remainingPlants = packetsForSlots * plantsPerPacket;
       
       // Step 3: Group slots by their parent PlantSlot document to avoid version conflicts
       const plantSlotUpdates = new Map(); // Map<plantSlotId, {plantSlot, slotsToUpdate: []}>
@@ -1080,7 +1150,7 @@ export const issueStockFromRequest = async (req, res) => {
           // For excessive sowing: allocate ALL packets to this specific slot (linked based on creation date)
           // Excessive sowing requests are linked to one specific slot calculated from the sowing date
           slotPackets = packetsForSlots; // All packets go to this slot
-          slotPlants = packetsForSlots * conversionFactor; // All plants go to this slot
+          slotPlants = packetsForSlots * plantsPerPacket; // All plants go to this slot
           console.log(`[IssueStock] [EXCESSIVE] Slot ${slotData.slotId}: Allocating ALL ${slotPackets} packets, ${slotPlants} plants to this linked slot (based on creation date)`);
         } else {
           // Regular sowing: proportional distribution based on gap
@@ -1095,7 +1165,7 @@ export const issueStockFromRequest = async (req, res) => {
             slotPlants = slotData.gap; // Booking-gap plants for this slot
             // If gap is 0 but this slot still got a packet share, expected plants must come from packets × CF
             if (slotPackets > 0 && (!slotPlants || slotPlants <= 0)) {
-              slotPlants = slotPackets * conversionFactor;
+              slotPlants = slotPackets * plantsPerPacket;
             }
             remainingPackets -= slotPackets;
             remainingPlants -= slotPlants;
@@ -1107,7 +1177,7 @@ export const issueStockFromRequest = async (req, res) => {
         slotPackets = Math.round(slotPackets * 100) / 100;
         // After rounding, re-sync plants if gap was 0
         if (!slotData.isExcessiveSowing && slotPackets > 0 && (!slotPlants || slotPlants <= 0)) {
-          slotPlants = Math.round(slotPackets * conversionFactor * 100) / 100;
+          slotPlants = Math.round(slotPackets * plantsPerPacket * 100) / 100;
         }
         
         // Group by plantSlot document
@@ -1148,7 +1218,7 @@ export const issueStockFromRequest = async (req, res) => {
           const previousProgressLength = slot.sowingInProgress.length;
           
           const impliedPlantsFromPackets =
-            slotPackets > 0 ? Math.round(slotPackets * conversionFactor * 100) / 100 : 0;
+            slotPackets > 0 ? Math.round(slotPackets * plantsPerPacket * 100) / 100 : 0;
           const sowingProgressEntry = {
             requestNumber: request.requestNumber,
             packetsIssued: slotPackets,

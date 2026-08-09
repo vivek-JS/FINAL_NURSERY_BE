@@ -7,6 +7,7 @@
 
 import cron from "node-cron";
 import Order from "../models/order.model.js";
+import { isWhatsAppReady, isWhatsAppConnectionInProgress } from "../services/whatsappClient.js";
 import { sendDailySummaryAlert } from "../services/whatsappAlertService.js";
 import { sendAdminDailyMisMarathiAlert } from "../services/adminDailyMisWhatsapp.service.js";
 import {
@@ -143,24 +144,36 @@ export function initAlertCronJobs() {
   console.log(`✅ [WhatsApp Cron] Ops digest @ ${opsCron} (${tz}).`);
   console.log(`✅ [WhatsApp Cron] Slot scan @ ${slotCron} (${tz}).`);
 
-  // Session watchdog — reconnect if web.js client drops (every 5 min)
+  // Session watchdog — reconnect if web.js client drops (every 5 min).
+  // Disabled in local dev by default: nodemon restarts + watchdog were invalidating QR mid-scan.
   const watchdogCron = process.env.WHATSAPP_SESSION_WATCHDOG_CRON || "*/5 * * * *";
-  cron.schedule(
-    watchdogCron,
-    async () => {
-      if (isWhatsAppReady) return;
-      console.warn("[WhatsApp Cron] Session watchdog — client not ready, attempting reconnect...");
-      try {
-        const { ensureWhatsAppConnected } = await import("../services/whatsappClient.js");
-        const result = await ensureWhatsAppConnected("cron-watchdog");
-        if (!result.ok) {
-          console.warn("[WhatsApp Cron] Session watchdog reconnect failed:", result.reason);
+  const watchdogEnabled =
+    process.env.WHATSAPP_SESSION_WATCHDOG_ENABLED === "true" ||
+    (process.env.NODE_ENV === "production" &&
+      process.env.WHATSAPP_SESSION_WATCHDOG_ENABLED !== "false");
+
+  if (!watchdogEnabled) {
+    console.log(
+      "[WhatsApp Cron] Session watchdog off in development (set WHATSAPP_SESSION_WATCHDOG_ENABLED=true to enable)."
+    );
+  } else {
+    cron.schedule(
+      watchdogCron,
+      async () => {
+        if (isWhatsAppReady || isWhatsAppConnectionInProgress()) return;
+        console.warn("[WhatsApp Cron] Session watchdog — client not ready, attempting reconnect...");
+        try {
+          const { ensureWhatsAppConnected } = await import("../services/whatsappClient.js");
+          const result = await ensureWhatsAppConnected("cron-watchdog");
+          if (!result.ok) {
+            console.warn("[WhatsApp Cron] Session watchdog reconnect failed:", result.reason);
+          }
+        } catch (err) {
+          console.error("[WhatsApp Cron] Session watchdog error:", err?.message || err);
         }
-      } catch (err) {
-        console.error("[WhatsApp Cron] Session watchdog error:", err?.message || err);
-      }
-    },
-    { scheduled: true, timezone: tz }
-  );
-  console.log(`✅ [WhatsApp Cron] Session watchdog @ ${watchdogCron} (${tz}).`);
+      },
+      { scheduled: true, timezone: tz }
+    );
+    console.log(`✅ [WhatsApp Cron] Session watchdog @ ${watchdogCron} (${tz}).`);
+  }
 }
