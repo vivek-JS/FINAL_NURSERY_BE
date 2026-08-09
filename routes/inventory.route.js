@@ -53,6 +53,8 @@ import {
   getBiotechSeedMaster,
   getSeedDualInventoryLinks,
   postAssignSubtypeSeed,
+  postRemoveSubtypeSeedLink,
+  getSubtypeInventoryLinksHandler,
 } from "../controllers/biotechSeedMaster.controller.js";
 import {
   createBiotechPlant,
@@ -154,20 +156,8 @@ router.get("/videos/:filename", async (req, res) => {
 
 // ==================== PRODUCT ROUTES ====================
 
-// Apply RAM_AGRI_SALES_MANAGER restriction to all routes except allowed ones
-// Note: Ram Agri routes are allowed, but other inventory routes are restricted
-router.use((req, res, next) => {
-  // Skip restriction for Ram Agri routes (they're explicitly allowed)
-  const path = req.path || req.originalUrl || '';
-  const isRamAgriRoute = path.includes('ram-agri') || path === '/dashboard' || path.startsWith('/videos/');
-  
-  if (isRamAgriRoute) {
-    return next(); // Ram Agri routes are allowed, skip restriction
-  }
-  
-  // Apply restriction for all other routes
-  restrictRamAgriSalesManager(req, res, next);
-});
+// Apply RAM_AGRI_SALES_MANAGER restriction — block biotech-only inventory modules only
+router.use(restrictRamAgriSalesManager);
 
 // POST /products, GET list/detail, PUT/DELETE — mounted in app.js at /api/v1/inventory/products
 // via product.route.js (product.controller, Product model).
@@ -404,6 +394,7 @@ router.get("/change-logs/:entityType/:entityId", getChangeLogsByEntity);
 // ==================== BIOTECH SEED MASTER (same UX as Ram Agri Inputs master) ====================
 router.get("/biotech-seed-master", getBiotechSeedMaster);
 router.get("/seed-dual-links", getSeedDualInventoryLinks);
+router.get("/seed-dual-links/by-subtype", getSubtypeInventoryLinksHandler);
 router.post(
   "/seed-dual-links/assign",
   [
@@ -413,6 +404,11 @@ router.post(
   ],
   checkErrors,
   postAssignSubtypeSeed
+);
+router.post(
+  "/seed-dual-links/remove",
+  checkErrors,
+  postRemoveSubtypeSeedLink
 );
 router
   .get("/biotech-seed-products", getAllBiotechPlants)

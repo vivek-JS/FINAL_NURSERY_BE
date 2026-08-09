@@ -2,7 +2,9 @@ import mongoose from "mongoose";
 import Product from "../models/product.model.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
 import RamBiotechSeedProduct from "../models/ramBiotechSeedProduct.model.js";
+import SubtypeInventoryLink from "../models/subtypeInventoryLink.model.js";
 import { buildAgriLinkByProductIdMap } from "./biotechSeedMaster.service.js";
+import { enrichLinkRows } from "./subtypeInventoryLink.service.js";
 
 function key(plantId, subtypeId) {
   return `${plantId}:${subtypeId}`;
@@ -201,18 +203,20 @@ function mergeAgriFromProducts(products, agriVarieties) {
   return Array.from(byVariety.values());
 }
 
-function rowLinkStatus(products) {
+function rowLinkStatus(products, agriVarieties = []) {
   const hasSeed = products.length > 0;
-  const agriLinked = products.some((p) => p.agriLink?.linked);
+  const agriLinked =
+    products.some((p) => p.agriLink?.linked) || (agriVarieties?.length || 0) > 0;
   if (hasSeed && agriLinked) return "linked";
-  if (hasSeed) return "seed_only";
+  if (hasSeed || agriLinked) return hasSeed ? "seed_only" : "agri_only";
   return "empty";
 }
 
 export async function buildSeedDualInventoryLinks({ unlinkedOnly = false, search = "" } = {}) {
   const { default: PlantCms } = await import("../models/plantCms.model.js");
 
-  const [cmsPlants, seedProducts, agriCrops, biotechMaster, agriLinkMap] = await Promise.all([
+  const [cmsPlants, seedProducts, agriCrops, biotechMaster, agriLinkMap, multiLinks] =
+    await Promise.all([
     PlantCms.find({ sowingAllowed: { $ne: false } })
       .select("name subtypes.name subtypes._id subtypes.isActive")
       .sort({ name: 1 })
@@ -227,7 +231,19 @@ export async function buildSeedDualInventoryLinks({ unlinkedOnly = false, search
       .select("plantName varieties")
       .lean(),
     buildAgriLinkByProductIdMap(),
+    SubtypeInventoryLink.find({ isActive: true })
+      .populate("productId", "name code currentStock category")
+      .populate("ramAgriCropId", "cropName varieties")
+      .lean(),
   ]);
+
+  const enrichedMulti = enrichLinkRows(multiLinks);
+  const multiByKey = new Map();
+  for (const link of enrichedMulti) {
+    const k = key(link.plantId, link.subtypeId);
+    if (!multiByKey.has(k)) multiByKey.set(k, []);
+    multiByKey.get(k).push(link);
+  }
 
   const productById = new Map(seedProducts.map((p) => [String(p._id), p]));
   const batchMap = await batchCountByProduct(seedProducts.map((p) => p._id));
@@ -278,11 +294,13 @@ export async function buildSeedDualInventoryLinks({ unlinkedOnly = false, search
           const allProducts = (productsByKey.get(k) || []).sort((a, b) =>
             String(a.code).localeCompare(String(b.code))
           );
-          const products = allProducts.length > 0 ? [allProducts[0]] : [];
-          const extraProductCount = Math.max(0, allProducts.length - 1);
-          const agriVarieties = mergeAgriFromProducts(products, agriByKey.get(k) || []);
+          // Multi-link: expose all seed products (no truncate to first)
+          const products = allProducts;
+          const extraProductCount = 0;
+          const agriVarieties = mergeAgriFromProducts(allProducts, agriByKey.get(k) || []);
           const biotechMasterVarieties = biotechMasterByKey.get(k) || [];
-          const status = rowLinkStatus(products);
+          const multiLinksForSubtype = multiByKey.get(k) || [];
+          const status = rowLinkStatus(products, agriVarieties);
 
           totalRows += 1;
           if (status === "linked") linkedRows += 1;
@@ -294,6 +312,7 @@ export async function buildSeedDualInventoryLinks({ unlinkedOnly = false, search
             products,
             agriVarieties,
             biotechMasterVarieties,
+            inventoryLinks: multiLinksForSubtype,
             linkStatus: status,
             productCount: products.length,
             extraProductCount,

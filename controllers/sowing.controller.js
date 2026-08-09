@@ -6983,7 +6983,12 @@ export const getAllPlantsAvailability = async (req, res) => {
 // NEW API: Get Plants Gap Summary (all plants with subtype-wise totalBookingGap) - OPTIMIZED
 export const getPlantsGapSummary = async (req, res) => {
   try {
-    const { available, startDate, endDate, board } = req.query; // available=surplus, board=all stock slots
+    const { available, startDate, endDate, board, month, includeEmpty, fullMonth } = req.query;
+    const showOverdue = req.query.overdue !== "false";
+    const showToday = req.query.today !== "false";
+    const horizonDays = Math.min(7, Math.max(0, parseInt(req.query.horizonDays, 10) || 0));
+    const isFullMonth = fullMonth === "true";
+    const boardIncludeEmpty = includeEmpty === "true";
     
     // Get all plants with sowingAllowed = true (including sowingBuffer) - single query
     const plants = await PlantCms.find({ sowingAllowed: true })
@@ -7248,7 +7253,7 @@ export const getPlantsGapSummary = async (req, res) => {
     // For critical mode: include slots with positive gap OR overdue slots (even with 0 gap)
     // For available mode: only negative gap slots (primarySowed > totalBookedPlants = surplus)
     const isBoard = board === "true";
-    const filteredSlots = isBoard
+    let filteredSlots = isBoard
       ? slotsWithBookings
       : available === "true"
       ? slotsWithBookings.filter(s => {
@@ -7270,6 +7275,57 @@ export const getPlantsGapSummary = async (req, res) => {
           }
           return false;
         });
+
+    if (isBoard) {
+      // Month scope (YYYY-MM) — filter by slot delivery/end day
+      const monthParam = month && /^\d{4}-\d{2}$/.test(String(month)) ? String(month) : null;
+      if (monthParam) {
+        const monthStart = moment(`${monthParam}-01`, "YYYY-MM-DD", true).startOf("day");
+        const monthEnd = monthStart.clone().endOf("month");
+        filteredSlots = filteredSlots.filter((s) => {
+          const end = moment(s.slotEndDay, "DD-MM-YYYY", true);
+          if (!end.isValid()) return false;
+          return end.isBetween(monthStart, monthEnd, "day", "[]");
+        });
+      } else if (startDate && endDate) {
+        const rangeStart = moment(startDate, "DD-MM-YYYY", true);
+        const rangeEnd = moment(endDate, "DD-MM-YYYY", true);
+        if (rangeStart.isValid() && rangeEnd.isValid()) {
+          filteredSlots = filteredSlots.filter((s) => {
+            const end = moment(s.slotEndDay, "DD-MM-YYYY", true);
+            if (!end.isValid()) return false;
+            return end.isBetween(rangeStart, rangeEnd, "day", "[]");
+          });
+        }
+      }
+
+      if (!boardIncludeEmpty) {
+        filteredSlots = filteredSlots.filter(
+          (s) =>
+            (s.totalBookedPlants || 0) > 0 ||
+            (s.primarySowed || 0) > 0 ||
+            (s.availablePlants || 0) > 0 ||
+            (s.slotGap || 0) > 0 ||
+            s.isOverdue
+        );
+      }
+
+      if (!isFullMonth) {
+        filteredSlots = filteredSlots.filter((s) => {
+          if ((s.availablePlants || 0) > 0 || (s.slotGap || 0) > 0) return true;
+          if (!s.sowByDate) return (s.totalBookedPlants || 0) > 0 || (s.primarySowed || 0) > 0;
+          const sowBy = moment(s.sowByDate, "DD-MM-YYYY", true);
+          if (!sowBy.isValid()) return false;
+          if (showOverdue && sowBy.isBefore(today, "day")) return true;
+          if (showToday && sowBy.isSame(today, "day")) return true;
+          if (horizonDays > 0) {
+            const daysOut = sowBy.diff(today, "days");
+            if (daysOut > 0 && daysOut <= horizonDays) return true;
+          }
+          return false;
+        });
+      }
+    }
     
     // Debug: Log summary of filtered slots by plant
     if (available === "true") {
@@ -7329,6 +7385,8 @@ export const getPlantsGapSummary = async (req, res) => {
           primarySowed: slot.primarySowed,
           rawGap: slot.rawGap,
           slotGap: slot.slotGap,
+          sowByDate: slot.sowByDate,
+          isOverdue: slot.isOverdue,
         });
       }
     });
@@ -7567,6 +7625,16 @@ export const getPlantsGapSummary = async (req, res) => {
         totalAvailableGap: isBoard ? totalAvailableGap : available === "true" ? totalAvailableGap : 0,
       },
       mode: isBoard ? "board" : available === "true" ? "available" : "critical",
+      filters: isBoard
+        ? {
+            month: month && /^\d{4}-\d{2}$/.test(String(month)) ? String(month) : null,
+            overdue: showOverdue,
+            today: showToday,
+            horizonDays,
+            includeEmpty: boardIncludeEmpty,
+            fullMonth: isFullMonth,
+          }
+        : undefined,
       generatedAt: new Date(),
     });
   } catch (error) {

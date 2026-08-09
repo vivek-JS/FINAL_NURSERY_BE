@@ -385,16 +385,23 @@ export const checkUserStatus = async (req, res, next) => {
 };
 
 /**
- * Middleware to restrict RAM_AGRI_SALES_MANAGER to only allowed routes
- * RAM_AGRI_SALES_MANAGER can only access:
- * - Ram Agri Inputs Master (CRUD)
- * - Ram Agri Sales Dashboard
- * - Ram Agri Sales Rankboard
- * - Ram Agri Sales Targets
- * - Ram Agri Ledgers (Variety, Customer, Merchant)
- * - Agri Sales Orders (view/create)
- * - Inventory Dashboard (limited view)
+ * Middleware to restrict RAM_AGRI_SALES_MANAGER / RAM_AGRI_SALES_OFFICE_MANAGER
+ * to the Ram Agri Input workspace on inventory APIs.
+ * Full agri ops access; biotech-only modules blocked. Payment collect is enforced in controllers.
  */
+const RAM_AGRI_SALES_MANAGER_BLOCKED_PATHS = [
+  '/suppliers',
+  '/merchants',
+  '/grn',
+  '/sell-orders',
+  '/outward',
+  '/transactions',
+  '/batches',
+  '/inwards',
+  '/outwards',
+  '/adjustments',
+];
+
 export const restrictRamAgriSalesManager = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json(
@@ -402,47 +409,35 @@ export const restrictRamAgriSalesManager = (req, res, next) => {
     );
   }
 
-  // Allow SUPER_ADMIN and ADMIN to access all routes - check role first (role = security)
   const userRole = req.user.role || req.user.jobTitle;
   if (['SUPER_ADMIN', 'ADMIN'].includes(userRole)) {
     return next();
   }
 
-  // Check if user is RAM_AGRI_SALES_MANAGER - prioritize jobTitle
-  const isRamAgriSalesManager = req.user.jobTitle === 'RAM_AGRI_SALES_MANAGER' || req.user.role === 'RAM_AGRI_SALES_MANAGER';
-  
+  const isRamAgriSalesManager =
+    req.user.jobTitle === 'RAM_AGRI_SALES_MANAGER' ||
+    req.user.role === 'RAM_AGRI_SALES_MANAGER' ||
+    req.user.jobTitle === 'RAM_AGRI_SALES_OFFICE_MANAGER' ||
+    req.user.role === 'RAM_AGRI_SALES_OFFICE_MANAGER';
+
   if (!isRamAgriSalesManager) {
-    // Not a RAM_AGRI_SALES_MANAGER, allow access
     return next();
   }
 
-  // Get the route path
-  const path = req.path || req.originalUrl || '';
-  
-  // Allowed routes for RAM_AGRI_SALES_MANAGER
-  const allowedRoutes = [
-    '/ram-agri-inputs',           // Ram Agri Inputs Master (all operations)
-    '/ram-agri-sales-dashboard',  // Dashboard
-    '/ram-agri-sales-rankboard',  // Rankboard
-    '/ram-agri-sales-targets',   // Targets (GET and POST)
-    '/ram-agri-variety-ledger',   // Variety Ledger
-    '/ram-agri-customer-ledger',  // Customer Ledger
-    '/ram-agri-merchant-ledger',  // Merchant Ledger
-    '/agri-sales-orders',         // Agri Sales Orders (view/create/manage)
-    '/dashboard',                 // Inventory Dashboard (limited view)
-  ];
+  const path = req.path || '';
+  const originalUrl = req.originalUrl || '';
 
-  // Check if the route is allowed
-  const isAllowed = allowedRoutes.some(route => {
-    // Exact match or starts with (for routes with IDs like /ram-agri-inputs/:id)
-    return path === route || path.startsWith(route + '/');
-  });
+  const isBlocked = RAM_AGRI_SALES_MANAGER_BLOCKED_PATHS.some(
+    (prefix) =>
+      path.startsWith(prefix) ||
+      originalUrl.includes(`/inventory${prefix}`)
+  );
 
-  if (!isAllowed) {
+  if (isBlocked) {
     return res.status(403).json(
       generateResponse(
         'error',
-        'Access denied. RAM_AGRI_SALES_MANAGER can only access Ram Agri Input related routes.',
+        'Access denied. This module is not available in the Ram Agri Input workspace.',
         null,
         null
       )

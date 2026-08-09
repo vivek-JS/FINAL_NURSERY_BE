@@ -1,6 +1,7 @@
 import PurchaseOrder from '../models/purchaseOrder.model.js';
 import { uploadImageToLocalStorage } from '../utils/localStorageUtils.js';
 import { scheduleStockInwardAlert } from '../services/stockWhatsappAlert.service.js';
+import { canPurchaseOrderAutoAccept } from '../utils/purchaseOrderAccess.js';
 
 function parseBodyJson(value, fallback) {
   if (value == null || value === '') return fallback;
@@ -56,7 +57,16 @@ export const createPurchaseOrder = async (req, res) => {
       });
     }
 
-    const isAutoGRN = isAutoGRNEnabled(autoGRN);
+    const wantsAutoGRN = isAutoGRNEnabled(autoGRN);
+    const canAutoAccept = canPurchaseOrderAutoAccept(req.user);
+    if (wantsAutoGRN && !canAutoAccept) {
+      return res.status(403).json({
+        success: false,
+        message:
+          'Auto GRN / auto-approve is only available for Super Admin, Ram Agri Master, or Ram Agri Sales Manager',
+      });
+    }
+    const isAutoGRN = wantsAutoGRN && canAutoAccept;
 
     const invoiceNo = String(supplierInvoiceNumber || '').trim();
     if (isAutoGRN && !invoiceNo) {
@@ -549,21 +559,16 @@ export const createPurchaseOrder = async (req, res) => {
     }
 
     // Auto-approve and create GRN if autoGRN is enabled
-    const isAutoGRNEnabled = purchaseOrder.autoGRN === true || 
-                              purchaseOrder.autoGRN === 'true' || 
-                              purchaseOrder.autoGRN === 1 || 
-                              purchaseOrder.autoGRN === '1' ||
-                              autoGRN === true || 
-                              autoGRN === 'true' || 
-                              autoGRN === 1 ||
-                              autoGRN === '1';
-    console.log('🔍 Checking autoGRN flag:', { 
-      autoGRN, 
+    // (do not name this binding isAutoGRNEnabled — shadows helper + TDZ on create)
+    const shouldRunAutoGRN =
+      isAutoGRNEnabled(purchaseOrder.autoGRN) || isAutoGRNEnabled(autoGRN);
+    console.log('🔍 Checking autoGRN flag:', {
+      autoGRN,
       purchaseOrderAutoGRN: purchaseOrder.autoGRN,
-      isAutoGRNEnabled 
+      shouldRunAutoGRN,
     });
-    
-    if (isAutoGRNEnabled) {
+
+    if (shouldRunAutoGRN) {
       console.log('✅ Auto-GRN enabled, proceeding with auto-approval and GRN creation...');
       try {
         // First, approve the purchase order
@@ -1352,7 +1357,15 @@ export const updatePurchaseOrder = async (req, res) => {
     }
 
     if (req.body.autoGRN !== undefined) {
-      purchaseOrder.autoGRN = isAutoGRNEnabled(req.body.autoGRN);
+      const wantsAutoGRN = isAutoGRNEnabled(req.body.autoGRN);
+      if (wantsAutoGRN && !canPurchaseOrderAutoAccept(req.user)) {
+        return res.status(403).json({
+          success: false,
+          message:
+            'Auto GRN / auto-approve is only available for Super Admin, Ram Agri Master, or Ram Agri Sales Manager',
+        });
+      }
+      purchaseOrder.autoGRN = wantsAutoGRN;
     }
 
     const invoiceRequired = isAutoGRNEnabled(purchaseOrder.autoGRN);

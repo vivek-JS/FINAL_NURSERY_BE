@@ -53,6 +53,41 @@ export const postAssignSubtypeSeed = catchAsync(async (req, res, next) => {
   }
 });
 
+export const postRemoveSubtypeSeedLink = catchAsync(async (req, res, next) => {
+  const { linkId, plantId, subtypeId, source, productId, cropId, varietyId } = req.body;
+  const userId = req.user?._id || req.user?.id;
+  try {
+    const { unassignSubtypeSeed } = await import("../services/subtypeSeedLink.service.js");
+    const result = await unassignSubtypeSeed({
+      linkId,
+      plantId,
+      subtypeId,
+      source: source === "agri" ? "RAM_AGRI" : source === "biotech" ? "BIOTECH" : source,
+      productId,
+      cropId,
+      varietyId,
+      userId,
+    });
+    return res.status(200).json(
+      generateResponse("Success", "Seed link removed", result, undefined)
+    );
+  } catch (err) {
+    return next(new AppError(err.message || "Failed to remove link", 400));
+  }
+});
+
+export const getSubtypeInventoryLinksHandler = catchAsync(async (req, res, next) => {
+  const { plantId, subtypeId } = req.query;
+  if (!plantId || !subtypeId) {
+    return next(new AppError("plantId and subtypeId are required", 400));
+  }
+  const { listLinksForSubtype } = await import("../services/subtypeSeedLink.service.js");
+  const data = await listLinksForSubtype(plantId, subtypeId);
+  return res.status(200).json(
+    generateResponse("Success", "Subtype inventory links", data, undefined)
+  );
+});
+
 export const getProductAgriLinkHandler = catchAsync(async (req, res, next) => {
   const { productId } = req.params;
   if (!mongoose.isValidObjectId(productId)) {

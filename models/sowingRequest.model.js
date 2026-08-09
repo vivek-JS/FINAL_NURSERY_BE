@@ -260,6 +260,50 @@ const sowingRequestSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    /**
+     * Warehouse pool chosen at issue time (Office Admin).
+     * Independent of seedSource (COMPANY / RAISING / MIXED).
+     */
+    issueInventorySource: {
+      type: String,
+      enum: ["BIOTECH", "RAM_AGRI", "BOTH", null],
+      default: null,
+    },
+    packetsIssuedFromBiotech: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    packetsIssuedFromRamAgri: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    biotechBatchAllocations: [
+      {
+        batchId: { type: mongoose.Schema.Types.ObjectId, ref: "Batch" },
+        batchNumber: { type: String },
+        quantity: { type: Number, default: 0 },
+        productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
+      },
+    ],
+    ramAgriBatchAllocations: [
+      {
+        batchId: { type: mongoose.Schema.Types.ObjectId, ref: "RamAgriBatch" },
+        batchNumber: { type: String },
+        quantityDeducted: { type: Number, default: 0 },
+        quantityReturned: { type: Number, default: 0 },
+        ramAgriCropId: { type: mongoose.Schema.Types.ObjectId },
+        ramAgriVarietyId: { type: mongoose.Schema.Types.ObjectId },
+      },
+    ],
+    /** Which SubtypeInventoryLink rows were used at issue (optional audit). */
+    issueLinkIds: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "SubtypeInventoryLink",
+      },
+    ],
   },
   {
     timestamps: true,

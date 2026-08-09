@@ -2,14 +2,16 @@ import mongoose from "mongoose";
 import Product from "../models/product.model.js";
 import { upsertVarietyInventoryLink } from "./ramAgriVarietyInventoryLink.service.js";
 import {
-  clearOtherSeedProductsOnSubtype,
-  clearOtherAgriVarietiesOnPlantSubtype,
-  clearAllAgriVarietiesOnPlantSubtype,
-} from "./subtypeSeedEnforcement.service.js";
+  addBiotechSubtypeLink,
+  addRamAgriSubtypeLink,
+  removeSubtypeInventoryLink,
+  listSubtypeInventoryLinks,
+  enrichLinkRows,
+} from "./subtypeInventoryLink.service.js";
 
 /**
- * Assign exactly one seed to a nursery plant + subtype.
- * source: 'biotech' = pick existing Biotech SKU | 'agri' = Ram Agri Input variety
+ * Add a seed link to a nursery plant + subtype (1:N — biotech and agri can coexist).
+ * source: 'biotech' | 'agri'
  */
 export async function assignSubtypeSeed({
   plantId,
@@ -29,7 +31,7 @@ export async function assignSubtypeSeed({
     if (!cropId || !varietyId) {
       throw new Error("Select Ram Agri crop and variety");
     }
-    await clearOtherAgriVarietiesOnPlantSubtype(cropId, varietyId, plantId, subtypeId, userId);
+    // Keep product sync for sowing cards when plant packing product is needed.
     const result = await upsertVarietyInventoryLink({
       cropId,
       varietyId,
@@ -38,8 +40,29 @@ export async function assignSubtypeSeed({
       productId: productId || undefined,
       tentativePlantsPerPacket,
       userId,
+      allowMultiLink: true,
     });
-    return { source: "agri", ...result };
+    const link = await addRamAgriSubtypeLink({
+      plantId,
+      subtypeId,
+      cropId,
+      varietyId,
+      userId,
+    });
+    // If upsert created/updated a Biotech SKU, also register BIOTECH link.
+    if (result?.product?._id) {
+      try {
+        await addBiotechSubtypeLink({
+          plantId,
+          subtypeId,
+          productId: result.product._id,
+          userId,
+        });
+      } catch {
+        /* already linked */
+      }
+    }
+    return { source: "agri", link, ...result };
   }
 
   if (source === "biotech") {
@@ -52,19 +75,27 @@ export async function assignSubtypeSeed({
       throw new Error("Only seed products can be assigned to a subtype");
     }
 
-    product.plantId = plantId;
-    product.subtypeId = subtypeId;
-    product.updatedBy = userId;
-    await product.save({ validateBeforeSave: false });
-
-    await clearOtherSeedProductsOnSubtype(product._id, plantId, subtypeId, userId);
-    await clearAllAgriVarietiesOnPlantSubtype(plantId, subtypeId, userId);
+    const link = await addBiotechSubtypeLink({
+      plantId,
+      subtypeId,
+      productId: product._id,
+      userId,
+    });
 
     return {
       source: "biotech",
+      link,
       product: product.toObject ? product.toObject() : product,
     };
   }
 
   throw new Error('Invalid source — use "biotech" or "agri"');
+}
+
+export async function unassignSubtypeSeed(params) {
+  return removeSubtypeInventoryLink(params);
+}
+
+export async function listLinksForSubtype(plantId, subtypeId) {
+  return enrichLinkRows(await listSubtypeInventoryLinks(plantId, subtypeId));
 }

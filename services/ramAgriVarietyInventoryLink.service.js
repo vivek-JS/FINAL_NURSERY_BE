@@ -232,6 +232,7 @@ export async function upsertVarietyInventoryLink({
   productId,
   tentativePlantsPerPacket,
   userId,
+  allowMultiLink = true,
 }) {
   if (!mongoose.isValidObjectId(cropId) || !mongoose.isValidObjectId(varietyId)) {
     throw new Error("Invalid crop or variety ID");
@@ -316,25 +317,26 @@ export async function upsertVarietyInventoryLink({
 
   await product.save({ validateBeforeSave: false });
 
-  await clearOtherAgriVarietiesOnPlantSubtype(cropId, varietyId, plantId, subtypeId, userId);
-
-  // Avoid duplicate 0-stock packings on same plant+subtype in sowing cards
-  await Product.updateMany(
-    {
-      _id: { $ne: product._id },
-      plantId,
-      subtypeId,
-      category: { $regex: /^seeds$/i },
-    },
-    {
-      $set: {
-        plantId: null,
-        subtypeId: null,
-        plantSubtypeInfo: [],
-        updatedBy: userId,
+  // Legacy 1:1 clears — skipped when multi-link is enabled (default).
+  if (!allowMultiLink) {
+    await clearOtherAgriVarietiesOnPlantSubtype(cropId, varietyId, plantId, subtypeId, userId);
+    await Product.updateMany(
+      {
+        _id: { $ne: product._id },
+        plantId,
+        subtypeId,
+        category: { $regex: /^seeds$/i },
       },
-    }
-  );
+      {
+        $set: {
+          plantId: null,
+          subtypeId: null,
+          plantSubtypeInfo: [],
+          updatedBy: userId,
+        },
+      }
+    );
+  }
 
   variety.sowingPlantId = plantId;
   variety.sowingSubtypeId = subtypeId;
