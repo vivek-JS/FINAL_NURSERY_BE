@@ -38,6 +38,7 @@ import {
   getRamAgriOutstandingLimitSettings,
   patchRamAgriOutstandingLimitGlobal,
   patchRamAgriOutstandingLimitUser,
+  generateAgriDeliveryChallanPdf,
 } from "../controllers/agriSalesOrder.controller.js";
 import { getAgriOrderTimeline } from "../modules/orderEvents/api/orderEvents.controller.js";
 import {
@@ -380,6 +381,12 @@ router
   .get("/", getAllAgriSalesOrders)
   .get("/:id/timeline", getAgriOrderTimeline)
   .get("/:id/batch-summary", getAgriOrderBatchSummary)
+  .post(
+    "/:id/delivery-challan-pdf",
+    [check("id").isMongoId().withMessage("Valid order ID is required")],
+    checkErrors,
+    generateAgriDeliveryChallanPdf
+  )
   .get("/:id", getAgriSalesOrderById)
   .patch(
     "/:id",

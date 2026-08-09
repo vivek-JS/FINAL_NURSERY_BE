@@ -576,6 +576,8 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     screenshots,
     salesPerson: salesPersonBody,
     lineItems: rawLineItems,
+    merchant: merchantBody,
+    orderChannel: orderChannelBody,
   } = req.body;
 
   const useMultiLine = Array.isArray(rawLineItems) && rawLineItems.length > 0;
@@ -768,12 +770,31 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     }
   }
 
+  let merchantId = null;
+  let orderChannel = String(orderChannelBody || "RETAIL").toUpperCase() === "B2B" ? "B2B" : "RETAIL";
+  if (merchantBody) {
+    if (!mongoose.isValidObjectId(merchantBody)) {
+      return next(new AppError("Invalid merchant ID", 400));
+    }
+    const Merchant = (await import("../models/merchant.model.js")).default;
+    const merchantDoc = await Merchant.findById(merchantBody).select("_id name phone");
+    if (!merchantDoc) {
+      return next(new AppError("Merchant not found", 404));
+    }
+    merchantId = merchantDoc._id;
+    orderChannel = "B2B";
+  }
+
   let orderData;
 
   const dealerOrderFields = {
     isDealerSelfOrder,
     dealer: dealerId,
     orderSource,
+  };
+  const merchantOrderFields = {
+    merchant: merchantId,
+    orderChannel,
   };
 
   if (useMultiLine) {
@@ -794,6 +815,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
       createdBy: userId,
       salesPerson: salesPersonId,
       ...dealerOrderFields,
+      ...merchantOrderFields,
       orderStatus: "ACCEPTED",
       acceptedBy: userId,
       acceptedAt: new Date(),
@@ -823,6 +845,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
       createdBy: userId,
       salesPerson: salesPersonId,
       ...dealerOrderFields,
+      ...merchantOrderFields,
       orderStatus: "ACCEPTED",
       acceptedBy: userId,
       acceptedAt: new Date(),
@@ -850,6 +873,21 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
   }
 
   const order = await AgriSalesOrder.create(orderData);
+
+  if (merchantId) {
+    try {
+      const Merchant = (await import("../models/merchant.model.js")).default;
+      await Merchant.findByIdAndUpdate(merchantId, {
+        $inc: {
+          totalOrderValue: totalAmount,
+          totalPaidAmount: initialPaidAmount,
+          outstandingAmount: totalAmount - initialPaidAmount,
+        },
+      });
+    } catch (merchantErr) {
+      console.error("[createAgriSalesOrder] merchant balance update failed:", merchantErr?.message);
+    }
+  }
 
   if (shouldLogRamAgriLedger(order)) {
     await createCustomerLedgerEntry({
@@ -1615,6 +1653,23 @@ const cancelAgriSalesOrder = catchAsync(async (req, res, next) => {
     order.remarks.push(`Cancelled: ${reason}`);
   }
   await order.save();
+
+  if (order.merchant) {
+    try {
+      const Merchant = (await import("../models/merchant.model.js")).default;
+      const paid = Number(order.totalPaidAmount) || 0;
+      const total = Number(order.totalAmount) || 0;
+      await Merchant.findByIdAndUpdate(order.merchant, {
+        $inc: {
+          totalOrderValue: -total,
+          totalPaidAmount: -paid,
+          outstandingAmount: -(total - paid),
+        },
+      });
+    } catch (merchantErr) {
+      console.error("[cancelAgriSalesOrder] merchant balance reverse failed:", merchantErr?.message);
+    }
+  }
 
   if (shouldLogRamAgriLedger(order)) {
     await createCustomerLedgerEntry({
@@ -4117,6 +4172,16 @@ const dispatchOrders = catchAsync(async (req, res, next) => {
     updatedOrders.push(order);
   }
 
+  // A5 Ram Agri delivery challan PDFs (non-blocking)
+  try {
+    const { scheduleAgriDeliveryChallanPdfs } = await import(
+      "../services/agriDeliveryChallanPdf.service.js"
+    );
+    scheduleAgriDeliveryChallanPdfs(updatedOrders.map((o) => o._id));
+  } catch (dcErr) {
+    console.error("[dispatchOrders] agri DC schedule failed:", dcErr?.message || dcErr);
+  }
+
   // Populate fields for response
   await AgriSalesOrder.populate(updatedOrders, [
     { path: "productId" },
@@ -5469,6 +5534,25 @@ const patchRamAgriOutstandingLimitUser = catchAsync(async (req, res, next) => {
   );
 });
 
+const generateAgriDeliveryChallanPdf = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const force = String(req.query.force || req.body?.force || "").toLowerCase() === "true";
+  const { generateAndSaveAgriDeliveryChallanPdf } = await import(
+    "../services/agriDeliveryChallanPdf.service.js"
+  );
+  const result = await generateAndSaveAgriDeliveryChallanPdf(id, {
+    force,
+    swallow: false,
+    generatedBy: req.user?._id,
+  });
+  if (!result?.deliveryChallanPdfUrl) {
+    return next(new AppError(result?.error || "Failed to generate delivery challan", 400));
+  }
+  return res.status(200).json(
+    generateResponse("Success", "Delivery challan generated", result, undefined)
+  );
+});
+
 export {
   createAgriSalesOrder,
   createLinkedAgriOrderFromNurseryOrder,
@@ -5505,5 +5589,6 @@ export {
   getRamAgriOutstandingLimitSettings,
   patchRamAgriOutstandingLimitGlobal,
   patchRamAgriOutstandingLimitUser,
+  generateAgriDeliveryChallanPdf,
 };
 

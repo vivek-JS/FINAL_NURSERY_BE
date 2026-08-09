@@ -473,6 +473,31 @@ const agriSalesOrderSchema = new Schema(
       default: false,
       index: true,
     },
+    /** B2B trade party (inventory merchant) — mirrors sell-order merchant link. */
+    merchant: {
+      type: Schema.Types.ObjectId,
+      ref: "Merchant",
+      default: null,
+      index: true,
+    },
+    orderChannel: {
+      type: String,
+      enum: ["RETAIL", "B2B"],
+      default: "RETAIL",
+      index: true,
+    },
+    /** A5 delivery challan PDF after dispatch. */
+    deliveryChallanPdfUrl: {
+      type: String,
+      trim: true,
+    },
+    dcNumber: {
+      type: String,
+      trim: true,
+    },
+    dcGeneratedAt: {
+      type: Date,
+    },
     dealer: {
       type: Schema.Types.ObjectId,
       ref: "User",

@@ -231,6 +231,7 @@ export const getMerchantLedger = async (req, res) => {
 
     // Import models dynamically to avoid circular dependencies
     const MerchantSellOrder = (await import('../models/sellOrder.model.js')).default;
+    const AgriSalesOrder = (await import('../models/agriSalesOrder.model.js')).default;
     const Payment = (await import('../models/payment.model.js')).default || null;
 
     // Build date filter
@@ -241,10 +242,21 @@ export const getMerchantLedger = async (req, res) => {
       if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
     }
 
-    // Get orders
-    const orders = await MerchantSellOrder.find({ merchant: id, ...dateFilter })
-      .populate('items.product', 'name code category')
-      .sort({ createdAt: -1 });
+    // Get classic sell orders + Ram Agri B2B orders
+    const [orders, agriOrders] = await Promise.all([
+      MerchantSellOrder.find({ merchant: id, ...dateFilter })
+        .populate('items.product', 'name code category')
+        .sort({ createdAt: -1 }),
+      AgriSalesOrder.find({
+        merchant: id,
+        orderChannel: 'B2B',
+        orderStatus: { $ne: 'CANCELLED' },
+        ...dateFilter,
+      })
+        .populate('lineItems.productId', 'name code')
+        .populate('lineItems.ramAgriCropId', 'cropName')
+        .sort({ createdAt: -1 }),
+    ]);
 
     // Get all payments from sell orders (unwind payments array)
     const ordersWithPayments = await MerchantSellOrder.find({ merchant: id, ...dateFilter })
@@ -261,6 +273,22 @@ export const getMerchantLedger = async (req, res) => {
             orderNumber: order.orderNumber,
             orderDate: order.orderDate,
             orderTotalAmount: order.totalAmount,
+            source: 'SELL_ORDER',
+          });
+        });
+      }
+    });
+
+    agriOrders.forEach((order) => {
+      if (order.payment && Array.isArray(order.payment)) {
+        order.payment.forEach((payment) => {
+          const p = payment.toObject ? payment.toObject() : payment;
+          payments.push({
+            ...p,
+            orderNumber: order.orderNumber,
+            orderDate: order.orderDate,
+            orderTotalAmount: order.totalAmount,
+            source: 'AGRI_B2B',
           });
         });
       }
@@ -269,8 +297,10 @@ export const getMerchantLedger = async (req, res) => {
     // Sort payments by date (most recent first)
     payments.sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate));
 
-    // Calculate totals
-    const totalOrderValue = orders.reduce((sum, order) => sum + (order.totalAmount || 0), 0);
+    // Calculate totals (sell + agri B2B)
+    const sellOrderValue = orders.reduce((sum, order) => sum + (order.totalAmount || 0), 0);
+    const agriOrderValue = agriOrders.reduce((sum, order) => sum + (order.totalAmount || 0), 0);
+    const totalOrderValue = sellOrderValue + agriOrderValue;
     const totalPaidAmount = payments.reduce((sum, payment) => {
       return sum + (payment.paymentStatus === 'COLLECTED' ? (payment.paidAmount || 0) : 0);
     }, 0);
@@ -279,7 +309,7 @@ export const getMerchantLedger = async (req, res) => {
     }, 0);
     const outstandingAmount = totalOrderValue - totalPaidAmount;
 
-    // Product ledger - aggregate by product
+    // Product ledger - aggregate by product / agri variety
     const productLedger = {};
     orders.forEach(order => {
       order.items.forEach(item => {
@@ -292,6 +322,7 @@ export const getMerchantLedger = async (req, res) => {
             totalQuantity: 0,
             totalValue: 0,
             orders: [],
+            source: 'SELL_ORDER',
           };
         }
         productLedger[productId].totalQuantity += item.quantity || 0;
@@ -305,6 +336,77 @@ export const getMerchantLedger = async (req, res) => {
       });
     });
 
+    agriOrders.forEach((order) => {
+      const lines =
+        Array.isArray(order.lineItems) && order.lineItems.length > 0
+          ? order.lineItems
+          : [
+              {
+                ramAgriCropName: order.ramAgriCropName,
+                ramAgriVarietyName: order.ramAgriVarietyName,
+                ramAgriVarietyId: order.ramAgriVarietyId,
+                quantity: order.quantity,
+                amount: order.totalAmount,
+                productId: order.productId,
+              },
+            ];
+      lines.forEach((line) => {
+        const key =
+          line.ramAgriVarietyId ||
+          line.productId?._id ||
+          line.productId ||
+          `${line.ramAgriCropName}-${line.ramAgriVarietyName}` ||
+          order._id;
+        const productName =
+          line.ramAgriCropName && line.ramAgriVarietyName
+            ? `${line.ramAgriCropName} — ${line.ramAgriVarietyName}`
+            : line.productId?.name || line.productName || 'Ram Agri product';
+        if (!productLedger[key]) {
+          productLedger[key] = {
+            productId: key,
+            productName,
+            totalQuantity: 0,
+            totalValue: 0,
+            orders: [],
+            source: 'AGRI_B2B',
+          };
+        }
+        const qty = Number(line.quantity) || 0;
+        const amt = Number(line.amount) || Number(line.lineTotal) || 0;
+        productLedger[key].totalQuantity += qty;
+        productLedger[key].totalValue += amt;
+        productLedger[key].orders.push({
+          orderId: order.orderNumber,
+          quantity: qty,
+          amount: amt,
+          date: order.createdAt,
+        });
+      });
+    });
+
+    const mappedSellOrders = orders.map(order => ({
+      orderNumber: order.orderNumber,
+      orderDate: order.orderDate,
+      totalAmount: order.totalAmount,
+      paymentStatus: order.paymentStatus,
+      status: order.status,
+      items: order.items,
+      source: 'SELL_ORDER',
+    }));
+
+    const mappedAgriOrders = agriOrders.map((order) => ({
+      orderNumber: order.orderNumber,
+      orderDate: order.orderDate,
+      totalAmount: order.totalAmount,
+      paymentStatus: order.paymentStatus,
+      status: order.orderStatus,
+      items: order.lineItems?.length
+        ? order.lineItems
+        : [{ quantity: order.quantity, amount: order.totalAmount, productName: order.productName }],
+      source: 'AGRI_B2B',
+      deliveryChallanPdfUrl: order.deliveryChallanPdfUrl || null,
+    }));
+
     res.json({
       success: true,
       data: {
@@ -314,14 +416,9 @@ export const getMerchantLedger = async (req, res) => {
           totalPaidAmount,
           outstandingAmount,
         },
-        orders: orders.map(order => ({
-          orderNumber: order.orderNumber,
-          orderDate: order.orderDate,
-          totalAmount: order.totalAmount,
-          paymentStatus: order.paymentStatus,
-          status: order.status,
-          items: order.items,
-        })),
+        orders: [...mappedSellOrders, ...mappedAgriOrders].sort(
+          (a, b) => new Date(b.orderDate) - new Date(a.orderDate)
+        ),
         payments: payments.map(payment => ({
           paymentId: payment._id,
           paidAmount: payment.paidAmount,
@@ -339,10 +436,11 @@ export const getMerchantLedger = async (req, res) => {
           orderTotalAmount: payment.orderTotalAmount,
           collectedBy: payment.collectedBy,
           collectedAt: payment.collectedAt,
+          source: payment.source || 'SELL_ORDER',
         })),
         productLedger: Object.values(productLedger),
         summary: {
-          totalOrders: orders.length,
+          totalOrders: orders.length + agriOrders.length,
           totalOrderValue,
           totalPaidAmount,
           totalPendingPayments,
@@ -351,6 +449,8 @@ export const getMerchantLedger = async (req, res) => {
           totalPayments: payments.length,
           collectedPayments: payments.filter(p => p.paymentStatus === 'COLLECTED').length,
           pendingPayments: payments.filter(p => p.paymentStatus === 'PENDING').length,
+          agriB2BOrders: agriOrders.length,
+          sellOrders: orders.length,
         },
       },
     });
