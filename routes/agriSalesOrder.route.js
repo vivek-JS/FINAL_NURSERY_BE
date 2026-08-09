@@ -48,6 +48,8 @@ import {
   approveAgriSalesReturnRequest,
   rejectAgriSalesReturnRequest,
   getAgriSalesReturnRequestsForOrder,
+  getMerchantReturnableBatchesHandler,
+  processMerchantBatchReturnHandler,
 } from "../controllers/agriSalesReturnRequest.controller.js";
 
 const router = express.Router();
@@ -223,6 +225,22 @@ router.post(
   requestAgriSalesReturn
 );
 router.get("/returns", listAgriSalesReturnRequests);
+router.get("/returns/merchant-batches", getMerchantReturnableBatchesHandler);
+router.post(
+  "/returns/merchant-batch-return",
+  [
+    check("merchantId").isMongoId().withMessage("Valid merchant ID is required"),
+    check("batchReturns").isArray({ min: 1 }).withMessage("At least one batch return is required"),
+    check("batchReturns.*.batchId").isMongoId().withMessage("Valid batch ID is required"),
+    check("batchReturns.*.returnQuantity")
+      .isFloat({ min: 0.01 })
+      .withMessage("Return qty must be > 0"),
+    check("returnReason").optional().isString(),
+    check("returnNotes").optional().isString(),
+  ],
+  checkErrors,
+  processMerchantBatchReturnHandler
+);
 router.patch("/returns/:id/approve", approveAgriSalesReturnRequest);
 router.patch("/returns/:id/reject", rejectAgriSalesReturnRequest);
 router.get("/returns/by-order/:orderId", getAgriSalesReturnRequestsForOrder);

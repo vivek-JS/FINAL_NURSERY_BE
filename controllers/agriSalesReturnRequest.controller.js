@@ -11,6 +11,11 @@ import { returnToExplicitBatches, returnToSourceBatches } from "../services/ramA
 import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
 import { isAgriDealerSelf } from "../utils/agriDealerOrder.util.js";
 import RamAgriBatch from "../models/ramAgriBatch.model.js";
+import {
+  getMerchantReturnableBatches,
+  isOfficeReturnUser,
+  processMerchantBatchReturn,
+} from "../services/agriMerchantBatchReturn.service.js";
 
 function getLineBatchAllocations(order, lineIndex) {
   if (Array.isArray(order.lineItems) && order.lineItems.length > lineIndex) {
@@ -366,4 +371,42 @@ export const getAgriSalesReturnRequestsForOrder = catchAsync(async (req, res, ne
     .sort({ requestedAt: -1 })
     .lean();
   return res.status(200).json(generateResponse("Success", "Return requests for order", data));
+});
+
+/** GET returnable batches aggregated for a B2B merchant (office). */
+export const getMerchantReturnableBatchesHandler = catchAsync(async (req, res, next) => {
+  if (!isOfficeReturnUser(req.user)) {
+    return next(new AppError("Only office roles can view merchant returnable batches", 403));
+  }
+  const merchantId = req.query.merchantId;
+  const result = await getMerchantReturnableBatches(merchantId);
+  if (!result.ok) {
+    return next(new AppError(result.error || "Failed to load batches", result.status || 400));
+  }
+  return res.status(200).json(generateResponse("Success", "Merchant returnable batches", result.data));
+});
+
+/** POST immediate merchant-batch sale return (office): stock + ledger + merchant money. */
+export const processMerchantBatchReturnHandler = catchAsync(async (req, res, next) => {
+  if (!isOfficeReturnUser(req.user)) {
+    return next(new AppError("Only office roles can process merchant batch returns", 403));
+  }
+  if (isAgriDealerSelf(req.user)) {
+    return next(new AppError("Dealers cannot use office merchant-batch return", 403));
+  }
+  const userId = req.user?._id || req.user?.id;
+  const { merchantId, batchReturns, returnReason, returnNotes } = req.body || {};
+  const result = await processMerchantBatchReturn({
+    merchantId,
+    batchReturns,
+    returnReason,
+    returnNotes,
+    userId,
+  });
+  if (!result.ok) {
+    return next(new AppError(result.error || "Merchant batch return failed", result.status || 400));
+  }
+  return res
+    .status(200)
+    .json(generateResponse("Success", "Merchant batch sale return applied", result.data));
 });
