@@ -355,6 +355,51 @@ const splitHistorySchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "User",
     },
+    /** Display name of user who performed the split (snapshot at split time). */
+    performedByName: {
+      type: String,
+      trim: true,
+    },
+    /** Parent order attribution at split time. */
+    originalSalesPerson: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    originalSalesPersonName: {
+      type: String,
+      trim: true,
+    },
+    originalDealer: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    originalDealerName: {
+      type: String,
+      trim: true,
+    },
+    originalDealerOrder: {
+      type: Boolean,
+    },
+    /** Child order attribution assigned at split time. */
+    childSalesPerson: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    childSalesPersonName: {
+      type: String,
+      trim: true,
+    },
+    childDealer: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    childDealerName: {
+      type: String,
+      trim: true,
+    },
+    childDealerOrder: {
+      type: Boolean,
+    },
     notes: {
       type: String,
     },

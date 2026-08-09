@@ -4978,6 +4978,9 @@ const splitOrder = catchAsync(async (req, res, next) => {
     }
 
     // Build child order — clone dispatch-relevant fields; attribution defaults to parent
+    const originalSalesPerson = parent.salesPerson ?? null;
+    const originalDealer = parent.dealer ?? null;
+    const originalDealerOrder = Boolean(parent.dealerOrder);
     const childDealerOrder =
       dealerOrderBody !== undefined ? Boolean(dealerOrderBody) : parent.dealerOrder;
     const childDealer =
@@ -4988,6 +4991,72 @@ const splitOrder = catchAsync(async (req, res, next) => {
       salesPersonBody && mongoose.isValidObjectId(String(salesPersonBody))
         ? salesPersonBody
         : parent.salesPerson;
+
+    const resolveUserName = async (userId) => {
+      if (!userId || !mongoose.isValidObjectId(String(userId))) return "";
+      const u = await User.findById(userId).select("name").session(session).lean();
+      return u?.name ? String(u.name).trim() : "";
+    };
+
+    const [
+      performedByName,
+      originalSalesPersonName,
+      originalDealerName,
+      childSalesPersonName,
+      childDealerName,
+    ] = await Promise.all([
+      performedBy ? resolveUserName(performedBy) : Promise.resolve(""),
+      resolveUserName(originalSalesPerson),
+      resolveUserName(originalDealer),
+      resolveUserName(childSalesPerson),
+      resolveUserName(childDealer),
+    ]);
+
+    const attributionAudit = {
+      originalSalesPerson,
+      originalSalesPersonName,
+      originalDealer,
+      originalDealerName,
+      originalDealerOrder,
+      childSalesPerson,
+      childSalesPersonName,
+      childDealer,
+      childDealerName,
+      childDealerOrder,
+      performedByName,
+    };
+
+    const childAttributionEditHistory = [];
+    if (String(childSalesPerson || "") !== String(originalSalesPerson || "")) {
+      childAttributionEditHistory.push({
+        field: "salesPerson",
+        previousValue: originalSalesPerson,
+        newValue: childSalesPerson,
+        changedBy: performedBy,
+        notes: `Split from order #${parent.orderId}: child assigned to ${
+          childSalesPersonName || "sales person"
+        } (was ${originalSalesPersonName || "parent sales"})`,
+      });
+    }
+    if (
+      String(childDealer || "") !== String(originalDealer || "") ||
+      childDealerOrder !== originalDealerOrder
+    ) {
+      childAttributionEditHistory.push({
+        field: "dealer",
+        previousValue: originalDealer,
+        newValue: childDealer,
+        changedBy: performedBy,
+        notes: `Split from order #${parent.orderId}: child dealer scope ${
+          childDealerOrder ? "dealer" : "sales"
+        } — ${childDealerName || childSalesPersonName || "updated"}`,
+      });
+    }
+
+    const childOrderEditHistory = [
+      ...(assignHistoryEntry ? [assignHistoryEntry] : []),
+      ...childAttributionEditHistory,
+    ];
 
     const childData = {
       orderId: nextOrderId,
@@ -5039,6 +5108,7 @@ const splitOrder = catchAsync(async (req, res, next) => {
           splitQuantity: qty,
           performedBy,
           notes: notes || null,
+          ...attributionAudit,
         },
       ],
       statusChanges: [
@@ -5049,8 +5119,8 @@ const splitOrder = catchAsync(async (req, res, next) => {
           changedBy: performedBy,
         },
       ],
-      ...(assignHistoryEntry
-        ? { orderEditHistory: [assignHistoryEntry] }
+      ...(childOrderEditHistory.length
+        ? { orderEditHistory: childOrderEditHistory }
         : {}),
     };
 
@@ -5067,6 +5137,7 @@ const splitOrder = catchAsync(async (req, res, next) => {
       splitQuantity: qty,
       performedBy,
       notes: notes || null,
+      ...attributionAudit,
     };
 
     const editHistoryEntry = {
