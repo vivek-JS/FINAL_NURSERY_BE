@@ -7249,12 +7249,7 @@ export const getPlantsGapSummary = async (req, res) => {
     // For available mode: only negative gap slots (primarySowed > totalBookedPlants = surplus)
     const isBoard = board === "true";
     const filteredSlots = isBoard
-      ? slotsWithBookings.filter(
-          (s) =>
-            (s.primarySowed || 0) > 0 ||
-            (s.totalBookedPlants || 0) > 0 ||
-            (s.availablePlants || 0) > 0
-        )
+      ? slotsWithBookings
       : available === "true"
       ? slotsWithBookings.filter(s => {
           const hasSurplus = s.rawGap < 0;

@@ -13,6 +13,20 @@ import {
   writeTransferAudit,
   writePartialTransferRecord,
 } from "./sowingTransferAudit.helpers.js";
+import { parseLocalDate } from "./sowingSlotReadyHelpers.js";
+import { ORDER_COVER_WINDOW_DAYS } from "./sowingCompleteHelpers.js";
+
+function dayStartMs(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x.getTime();
+}
+
+function offsetLabel(off) {
+  if (off === 0) return "delivery day";
+  if (off > 0) return `+${off}d`;
+  return `${off}d`;
+}
 
 function slotLabel(slot) {
   if (!slot) return "—";
@@ -109,7 +123,7 @@ export const getSlotCoverableOrders = async (req, res) => {
         orders.map((o) => o.bookingSlot).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)))
       ),
     ];
-    const bookingLabels = new Map();
+    const bookingMeta = new Map();
     if (bookingIds.length) {
       const slots = await PlantSlot.aggregate([
         { $match: { plantId: source.plantId } },
@@ -132,17 +146,48 @@ export const getSlotCoverableOrders = async (req, res) => {
         },
       ]);
       for (const sl of slots) {
-        bookingLabels.set(String(sl.slotId), slotLabel(sl));
+        bookingMeta.set(String(sl.slotId), {
+          label: slotLabel(sl),
+          endDay: sl.endDay || sl.startDay,
+          startDay: sl.startDay,
+        });
       }
     }
+
+    const win = Math.max(
+      0,
+      Math.min(
+        14,
+        req.query.windowDays === undefined || req.query.windowDays === ""
+          ? ORDER_COVER_WINDOW_DAYS
+          : Number(req.query.windowDays) || ORDER_COVER_WINDOW_DAYS
+      )
+    );
+    const windowOnly = req.query.windowOnly === "true";
+
+    const sourceAnchor = parseLocalDate(source.endDay || source.startDay);
+    const sourceMs = sourceAnchor ? dayStartMs(sourceAnchor) : null;
 
     let remainingSource = source.availablePlants;
     const coverableOrders = orders.map((o) => {
       const need = orderPlantsNeed(o);
-      const suggestedTake = Math.min(need, remainingSource);
-      const bookingSlotLabel = o.bookingSlot
-        ? bookingLabels.get(String(o.bookingSlot)) || "—"
-        : "—";
+      const meta = o.bookingSlot ? bookingMeta.get(String(o.bookingSlot)) : null;
+      const bookingSlotLabel = meta?.label || "—";
+      let offsetDays = null;
+      let inCoverWindow = false;
+      if (sourceMs != null) {
+        const anchor =
+          parseLocalDate(o.deliveryDate) ||
+          parseLocalDate(meta?.endDay) ||
+          parseLocalDate(meta?.startDay);
+        if (anchor) {
+          offsetDays = Math.round((sourceMs - dayStartMs(anchor)) / 86400000);
+          inCoverWindow = offsetDays <= 0 && offsetDays >= -win;
+        }
+      }
+      const suggestedTake = inCoverWindow
+        ? Math.min(need, remainingSource)
+        : 0;
       if (suggestedTake > 0) remainingSource -= suggestedTake;
       return {
         orderMongoId: String(o._id),
@@ -152,10 +197,22 @@ export const getSlotCoverableOrders = async (req, res) => {
         deliveryDate: o.deliveryDate || null,
         bookingSlotId: o.bookingSlot ? String(o.bookingSlot) : null,
         bookingSlotLabel,
+        offsetDays,
+        offsetLabel: offsetDays != null ? offsetLabel(offsetDays) : null,
+        inCoverWindow,
         suggestedTake,
         canFullyCover: suggestedTake >= need,
       };
     });
+
+    const sorted = [...coverableOrders].sort(
+      (a, b) =>
+        Number(b.inCoverWindow) - Number(a.inCoverWindow) ||
+        (b.offsetDays ?? -99) - (a.offsetDays ?? -99) ||
+        b.plantsNeeded - a.plantsNeeded
+    );
+
+    const filtered = windowOnly ? sorted.filter((o) => o.inCoverWindow) : sorted;
 
     return res.status(200).json({
       success: true,
@@ -168,10 +225,13 @@ export const getSlotCoverableOrders = async (req, res) => {
         },
         plantId: String(source.plantId),
         subtypeId: String(source.subtypeId),
+        windowDays: win,
+        windowOnly,
         totalPendingOrders: orders.length,
-        totalPlantsNeeded: coverableOrders.reduce((s, o) => s + o.plantsNeeded, 0),
+        inWindowCount: coverableOrders.filter((o) => o.inCoverWindow).length,
+        totalPlantsNeeded: filtered.reduce((s, o) => s + o.plantsNeeded, 0),
         remainingAfterSuggest: remainingSource,
-        orders: coverableOrders,
+        orders: filtered,
       },
     });
   } catch (error) {
