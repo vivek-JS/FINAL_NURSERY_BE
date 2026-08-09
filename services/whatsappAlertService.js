@@ -16,7 +16,6 @@ import {
   isWhatsAppDetachedError,
   reportWhatsAppTransportFailure,
   waitUntilWhatsAppReady,
-  ensureWhatsAppConnected,
   isWhatsAppConnectionInProgress,
 } from "./whatsappClient.js";
 import { getPendingLinkedAgriLoads } from "./linkedAgriLoadGuard.service.js";
@@ -268,22 +267,13 @@ export async function sendWhatsAppMessage(number, message) {
 async function tryAutoReconnectForAlert(context) {
   if (process.env.WHATSAPP_ALERTS_AUTO_RECONNECT === "false") return false;
   if (isWhatsAppReady) return true;
+  const timeoutMs = Number(process.env.WHATSAPP_ALERT_RECONNECT_MS || 120000);
   if (isWhatsAppConnectionInProgress()) {
-    console.warn(`[WhatsApp Alert] ${context} — waiting for QR scan / auth, not forcing reconnect`);
-    return await waitUntilWhatsAppReady(Number(process.env.WHATSAPP_ALERT_RECONNECT_MS || 45000));
-  }
-  const timeoutMs = Number(process.env.WHATSAPP_ALERT_RECONNECT_MS || 45000);
-  console.warn(`[WhatsApp Alert] ${context} — client not ready, attempting reconnect (${timeoutMs}ms)...`);
-  try {
-    await ensureWhatsAppConnected(`alert:${context}`);
+    console.warn(`[WhatsApp Alert] ${context} — waiting for startup / auth (${timeoutMs}ms)...`);
     return await waitUntilWhatsAppReady(timeoutMs);
-  } catch (err) {
-    console.warn(
-      `[WhatsApp Alert] ${context} reconnect failed:`,
-      err?.message || err
-    );
-    return false;
   }
+  console.warn(`[WhatsApp Alert] ${context} — waiting for client ready (${timeoutMs}ms)...`);
+  return await waitUntilWhatsAppReady(timeoutMs);
 }
 
 export async function alertAdmins(message, context = "alert", options = {}) {

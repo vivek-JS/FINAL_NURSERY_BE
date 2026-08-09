@@ -20,6 +20,10 @@ jobs:
           git fetch origin
           git checkout prod
           git pull origin prod
+          mkdir -p /var/www/erp-whatsapp/.wwebjs_auth
+          grep -q '^NODE_ENV=' .env || echo 'NODE_ENV=production' >> .env
+          grep -q '^WHATSAPP_SESSION_PATH=' .env || echo 'WHATSAPP_SESSION_PATH=/var/www/erp-whatsapp/.wwebjs_auth' >> .env
           npm install --production
-          pm2 restart erp-backend --update-env
+          pm2 reload ecosystem.config.cjs --only erp-backend --update-env || pm2 start ecosystem.config.cjs --only erp-backend --update-env
+          pm2 save
 

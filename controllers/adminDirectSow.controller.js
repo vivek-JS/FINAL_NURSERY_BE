@@ -75,13 +75,6 @@ async function resolveSeedProduct(plantId, subtypeId) {
  */
 export const listDirectSowOrders = async (req, res) => {
   try {
-    if (!isOfficeOrSuper(req.user)) {
-      return res.status(403).json({
-        success: false,
-        message: "Only Office Admin or Super Admin can use direct sow portal",
-      });
-    }
-
     const dateStr =
       req.query.date ||
       (() => {
@@ -174,6 +167,7 @@ export const listDirectSowOrders = async (req, res) => {
         seedSource: o.sowingPlan?.seedSource || "COMPANY",
         companySeedPackets: Number(o.sowingPlan?.companySeedPackets) || 0,
         raisingSeedPackets: Number(o.sowingPlan?.raisingSeedPackets) || 0,
+        sowingPlan: o.sowingPlan || null,
       };
     });
 
@@ -347,7 +341,7 @@ export const submitDirectSow = async (req, res) => {
         },
       })
         .select(
-          "orderId plantName plantSubtype bookingSlot numberOfPlants additionalPlants deliveryDate"
+          "orderId plantName plantSubtype bookingSlot numberOfPlants additionalPlants deliveryDate sowingPlan"
         )
         .lean();
 
@@ -412,9 +406,100 @@ export const submitDirectSow = async (req, res) => {
 
     const isExcessOnly = orders.length === 0;
     const cf = Number(product?.conversionFactor) || 1;
+    const orderPlan = orders.length === 1 ? orders[0].sowingPlan || null : null;
+
+    let packetsFromCompany = Math.max(0, parseNum(req.body.packetsFromCompany, NaN));
+    let packetsFromRaising = Math.max(0, parseNum(req.body.packetsFromRaising, NaN));
     let packetsUsed = Math.max(0, parseNum(req.body.packetsUsed, NaN));
-    if (!Number.isFinite(packetsUsed)) {
+
+    const bodyHasSplit =
+      Number.isFinite(parseNum(req.body.packetsFromCompany, NaN)) ||
+      Number.isFinite(parseNum(req.body.packetsFromRaising, NaN));
+
+    if (bodyHasSplit) {
+      if (!Number.isFinite(packetsFromCompany)) packetsFromCompany = 0;
+      if (!Number.isFinite(packetsFromRaising)) packetsFromRaising = 0;
+      packetsUsed = packetsFromCompany + packetsFromRaising;
+    } else if (!Number.isFinite(packetsUsed)) {
       packetsUsed = product && cf > 0 ? Math.ceil(plantsSowed / cf) : 0;
+    }
+
+    if (packetsUsed <= 0 && orderPlan) {
+      const planCompany = Number(orderPlan.companySeedPackets) || 0;
+      const planRaising = Number(orderPlan.raisingSeedPackets) || 0;
+      if (planCompany + planRaising > 0) {
+        packetsFromCompany = planCompany;
+        packetsFromRaising = planRaising;
+        packetsUsed = planCompany + planRaising;
+      }
+    }
+
+    if (!bodyHasSplit && packetsUsed > 0) {
+      const src = String(
+        req.body.seedSource || orderPlan?.seedSource || "COMPANY"
+      ).toUpperCase();
+      if (src === "RAISING") {
+        packetsFromRaising = packetsUsed;
+        packetsFromCompany = 0;
+      } else if (src === "MIXED" && orderPlan) {
+        packetsFromCompany = Number(orderPlan.companySeedPackets) || 0;
+        packetsFromRaising = Number(orderPlan.raisingSeedPackets) || 0;
+        if (packetsFromCompany + packetsFromRaising <= 0) {
+          packetsFromCompany = packetsUsed;
+          packetsFromRaising = 0;
+        } else {
+          packetsUsed = packetsFromCompany + packetsFromRaising;
+        }
+      } else {
+        packetsFromCompany = packetsUsed;
+        packetsFromRaising = 0;
+      }
+    }
+
+    let seedSource = String(
+      req.body.seedSource || orderPlan?.seedSource || "COMPANY"
+    ).toUpperCase();
+    if (packetsFromCompany > 0 && packetsFromRaising > 0) seedSource = "MIXED";
+    else if (packetsFromRaising > 0) seedSource = "RAISING";
+    else seedSource = "COMPANY";
+
+    const linkedOrderObjectIds = orders.map((o) => o._id);
+
+    let raisingIntakeIds = [];
+    if (packetsFromRaising > 0) {
+      const { allocateRaisingPackets } = await import(
+        "./raisingSeed.controller.js"
+      );
+      const preferredIds = orderPlan?.raisingIntakeId
+        ? [orderPlan.raisingIntakeId]
+        : [];
+      const alloc = await allocateRaisingPackets({
+        plantId,
+        subtypeId,
+        packetsNeeded: packetsFromRaising,
+        preferredIntakeIds: preferredIds,
+        linkedOrderIds: linkedOrderObjectIds,
+      });
+      if (alloc.shortfall > 0.001 && packetsFromCompany <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Not enough raising seed in hand (need ${packetsFromRaising}, available ${alloc.allocated})`,
+        });
+      }
+      raisingIntakeIds = alloc.intakeIds || [];
+      packetsFromRaising = alloc.allocated;
+      packetsUsed = packetsFromCompany + packetsFromRaising;
+    }
+
+    if (packetsUsed <= 0) {
+      packetsUsed = product && cf > 0 ? Math.ceil(plantsSowed / cf) : 0;
+      if (seedSource === "RAISING") {
+        packetsFromRaising = packetsUsed;
+        packetsFromCompany = 0;
+      } else {
+        packetsFromCompany = packetsUsed;
+        packetsFromRaising = 0;
+      }
     }
 
     let slotIds = [
@@ -436,7 +521,6 @@ export const submitDirectSow = async (req, res) => {
       });
     }
 
-    const linkedOrderObjectIds = orders.map((o) => o._id);
     const requestNumber = await SowingRequest.generateRequestNumber();
     const userId = req.user._id;
     const pktRecord = Math.max(0, packetsUsed);
@@ -471,10 +555,11 @@ export const submitDirectSow = async (req, res) => {
       linkedSlotIds: slotIds,
       linkedOrderIds: linkedOrderObjectIds,
       isExcessiveSowing: isExcessOnly,
-      seedSource: "COMPANY",
-      packetsFromCompany: pktRecord,
-      packetsFromRaising: 0,
-      packetsIssued: pktRecord,
+      seedSource,
+      packetsFromCompany,
+      packetsFromRaising,
+      raisingIntakeIds,
+      packetsIssued: packetsFromCompany,
       packetsUsed: pktRecord,
       packetsReturned: 0,
       sowedQuantity: plantsSowed,

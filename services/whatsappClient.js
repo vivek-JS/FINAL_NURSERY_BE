@@ -9,6 +9,7 @@
  * Run PM2 with instances: 1 (see ecosystem.config.cjs).
  */
 
+import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -35,6 +36,8 @@ export let isWhatsAppReady = false;
 let client = null;
 let sessionPath = null;
 let initStarted = false;
+/** Prevents parallel initialize() calls (prod alerts + watchdog racing → duplicate Chrome). */
+let initPromise = null;
 let shuttingDown = false;
 let readyWatchdog = null;
 let reinitInProgress = false;
@@ -49,9 +52,11 @@ let authenticatedPendingReady = false;
 export function isWhatsAppConnectionInProgress() {
   if (isWhatsAppReady) return false;
   if (reinitInProgress) return true;
+  if (initPromise) return true;
   if (authenticatedPendingReady) return true;
   if (readyWatchdog) return true;
   if (client && initStarted) return true;
+  if (isChromeRunningForSession()) return true;
   if (lastQrAt && Date.now() - lastQrAt.getTime() < QR_SCAN_GRACE_MS) return true;
   return false;
 }
@@ -152,7 +157,59 @@ function removeSingletonArtifacts(sessionDir) {
   }
 }
 
-/** Nodemon restarts often leave Puppeteer Chrome + SingletonLock — blocks QR/reconnect. */
+/**
+ * Snap Chromium on Linux often skips SingletonLock — find Chrome by user-data-dir instead.
+ * Orphan processes after PM2 restart block new sessions ("browser is already running").
+ */
+function killChromeProcessesUsingSessionDir(sessionDir) {
+  if (!sessionDir) return 0;
+  const marker = `user-data-dir=${sessionDir}`;
+  let killed = 0;
+
+  try {
+    const out = execSync(`pgrep -f "${marker.replace(/"/g, '\\"')}" 2>/dev/null || true`, {
+      encoding: "utf8",
+      timeout: 8000,
+    }).trim();
+    if (!out) return 0;
+
+    const pids = new Set();
+    for (const line of out.split("\n")) {
+      const match = line.trim().match(/^(\d+)/);
+      if (match) pids.add(Number(match[1]));
+    }
+
+    for (const pid of pids) {
+      if (!pid || pid === process.pid) continue;
+      try {
+        process.kill(pid, "SIGKILL");
+        killed += 1;
+        console.warn(`[WhatsApp] Killed orphan Chrome (pid ${pid}) holding ${sessionDir}`);
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    console.warn("[WhatsApp] Orphan Chrome scan failed:", err?.message || err);
+  }
+
+  return killed;
+}
+
+function isChromeRunningForSession(dataPath = getWhatsAppSessionPath()) {
+  const sessionDir = sessionDirForClient(dataPath);
+  try {
+    const out = execSync(`pgrep -f "user-data-dir=${sessionDir}" 2>/dev/null || true`, {
+      encoding: "utf8",
+      timeout: 5000,
+    }).trim();
+    return Boolean(out);
+  } catch {
+    return false;
+  }
+}
+
+/** Nodemon/PM2 restarts often leave Puppeteer Chrome — blocks QR/reconnect. */
 function releaseStaleWhatsAppBrowserLock(dataPath) {
   const sessionDir = sessionDirForClient(dataPath);
   if (!fs.existsSync(sessionDir)) return false;
@@ -169,6 +226,7 @@ function releaseStaleWhatsAppBrowserLock(dataPath) {
     console.warn(`[WhatsApp] Clearing stale SingletonLock (pid ${pid} not running)`);
   }
 
+  killChromeProcessesUsingSessionDir(sessionDir);
   removeSingletonArtifacts(sessionDir);
   return true;
 }
@@ -209,10 +267,17 @@ function canWriteSessionDir(dir) {
   }
 }
 
-/** Prefer WHATSAPP_SESSION_PATH; fall back to project data/ if not writable (fixes EACCES on Mac / bad perms). */
+/** Prefer WHATSAPP_SESSION_PATH; dev-only fallback to project data/ (prod must use persistent path). */
 export function resolveWritableWhatsAppSessionPath() {
   const preferred = resolveWhatsAppSessionPath();
   if (canWriteSessionDir(preferred)) return preferred;
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      `[WhatsApp] Production session path not writable: ${preferred}. ` +
+        `Run: sudo mkdir -p ${preferred} && sudo chown -R $(whoami) ${path.dirname(preferred)}`
+    );
+  }
 
   console.warn(
     `[WhatsApp] Cannot write session to ${preferred} — using ${FALLBACK_SESSION_PATH}`
@@ -473,11 +538,16 @@ export async function ensureWhatsAppConnected(reason = "watchdog") {
   if (shuttingDown) return { ok: false, reason: "shutting_down" };
   if (isWhatsAppReady && client) return { ok: true, reason: "already_ready" };
 
+  if (initPromise) {
+    await initPromise.catch(() => {});
+    if (isWhatsAppReady && client) return { ok: true, reason: "ready" };
+  }
+
   if (isWhatsAppConnectionInProgress()) {
     console.warn(
       `[WhatsApp] ensureWhatsAppConnected (${reason}) skipped — QR scan or auth still in progress`
     );
-    if (client) {
+    if (client || initPromise) {
       const ready = await waitUntilWhatsAppReady(
         Number(process.env.WHATSAPP_MANUAL_RECONNECT_WAIT_MS || 90000)
       );
@@ -486,14 +556,38 @@ export async function ensureWhatsAppConnected(reason = "watchdog") {
     return { ok: false, reason: "connection_in_progress" };
   }
 
+  const dataPath = resolveWritableWhatsAppSessionPath();
+  const chromeRunning = isChromeRunningForSession(dataPath);
+  const forceHardReset =
+    reason.startsWith("manual") ||
+    reason.startsWith("watchdog") ||
+    reason.startsWith("cron") ||
+    reason.startsWith("detached");
+
+  if ((client || chromeRunning || initPromise) && !forceHardReset) {
+    const ready = await waitUntilWhatsAppReady(
+      Number(process.env.WHATSAPP_MANUAL_RECONNECT_WAIT_MS || 120000)
+    );
+    return { ok: ready, reason: ready ? "ready_after_wait" : "still_initializing" };
+  }
+
+  if (client && hasPersistedWhatsAppSession(dataPath)) {
+    const ready = await waitUntilWhatsAppReady(
+      Number(process.env.WHATSAPP_MANUAL_RECONNECT_WAIT_MS || 90000)
+    );
+    if (ready) return { ok: true, reason: "ready_after_wait" };
+  }
+
   reinitAttempts = 0;
   initStarted = false;
   if (client) {
     await client.destroy().catch(() => {});
     client = null;
   }
+  releaseStaleWhatsAppBrowserLock(dataPath);
+  await sleep(1500);
 
-  tryRestoreSessionFromFallback(resolveWritableWhatsAppSessionPath());
+  tryRestoreSessionFromFallback(dataPath);
   await startWhatsAppClient();
   const ready = await waitUntilWhatsAppReady(120000);
   console.log(
@@ -568,6 +662,19 @@ async function initializeClientOnce(dataPath) {
 export async function startWhatsAppClient() {
   if (shuttingDown) return null;
   if (client) return client;
+  if (initPromise) return initPromise;
+
+  initPromise = startWhatsAppClientInner();
+  try {
+    return await initPromise;
+  } finally {
+    initPromise = null;
+  }
+}
+
+async function startWhatsAppClientInner() {
+  if (shuttingDown) return null;
+  if (client) return client;
 
   sessionPath = resolveWritableWhatsAppSessionPath();
 
@@ -577,6 +684,23 @@ export async function startWhatsAppClient() {
 
   releaseStaleWhatsAppBrowserLock(sessionPath);
   tryRestoreSessionFromFallback(sessionPath);
+
+  if (!client && isChromeRunningForSession(sessionPath)) {
+    console.warn(
+      "[WhatsApp] Chrome still running — waiting for prior PM2 process to shut down..."
+    );
+    for (let i = 0; i < 20; i += 1) {
+      await sleep(1000);
+      if (!isChromeRunningForSession(sessionPath)) break;
+    }
+    if (isChromeRunningForSession(sessionPath)) {
+      console.warn(
+        "[WhatsApp] Stale Chrome after wait — clearing orphan before init (session files kept)"
+      );
+      releaseStaleWhatsAppBrowserLock(sessionPath);
+      await sleep(2000);
+    }
+  }
 
   const hasSession = hasPersistedWhatsAppSession(sessionPath);
   const chromeOnly =
@@ -668,5 +792,6 @@ export async function shutdownWhatsAppClient() {
   }
 
   initStarted = false;
+  initPromise = null;
   shuttingDown = false;
 }

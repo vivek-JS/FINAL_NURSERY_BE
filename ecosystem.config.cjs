@@ -23,9 +23,10 @@ module.exports = {
       cwd: __dirname,
       instances: 1,
       exec_mode: "fork",
-      kill_timeout: 30000,
-      listen_timeout: 10000,
-      max_memory_restart: "450M",
+      kill_timeout: 45000,
+      listen_timeout: 15000,
+      // whatsapp-web.js + Puppeteer Chrome needs headroom; 450M caused PM2 restarts → orphan Chrome → repeated QR
+      max_memory_restart: "900M",
       env_file: path.join(__dirname, ".env"),
       env: {
         NODE_ENV: "production",
