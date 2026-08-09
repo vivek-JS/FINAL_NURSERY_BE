@@ -56,6 +56,48 @@ function agriCreateHasLineItems(req) {
   return Array.isArray(req.body?.lineItems) && req.body.lineItems.length > 0;
 }
 
+/** Accept YYYY-MM-DD, full ISO (± offset / Z), or DD-MM-YYYY from clients. */
+function isValidAgriCalendarDate(value) {
+  if (value === null || value === undefined || value === "") return true;
+  if (value instanceof Date) return !Number.isNaN(value.getTime());
+  if (typeof value !== "string") return !Number.isNaN(Date.parse(value));
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [y, m, d] = trimmed.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    return (
+      dt.getUTCFullYear() === y &&
+      dt.getUTCMonth() === m - 1 &&
+      dt.getUTCDate() === d
+    );
+  }
+  if (!Number.isNaN(Date.parse(trimmed))) return true;
+  const dmy = trimmed.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const year = Number(dmy[3]);
+    const dt = new Date(year, month - 1, day);
+    return (
+      dt.getFullYear() === year &&
+      dt.getMonth() === month - 1 &&
+      dt.getDate() === day
+    );
+  }
+  return false;
+}
+
+function agriDeliveryDateCheck() {
+  return check("deliveryDate")
+    .optional({ nullable: true, checkFalsy: true })
+    .custom((value) => {
+      if (!isValidAgriCalendarDate(value)) {
+        throw new Error("Invalid delivery date format");
+      }
+      return true;
+    });
+}
+
 // Multer for images (memory storage for Cloudinary)
 const uploadImages = multer({
   storage: multer.memoryStorage(),
@@ -297,21 +339,7 @@ router
           return true;
         }),
       check("orderDate").optional().isISO8601().withMessage("Invalid order date format"),
-      check("deliveryDate")
-        .optional({ nullable: true, checkFalsy: false })
-        .custom((value) => {
-          // Allow null, undefined, or empty string
-          if (value === null || value === undefined || value === "") {
-            return true;
-          }
-          // If value exists, validate it's a valid ISO8601 date
-          const dateRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?$/;
-          if (typeof value === "string" && dateRegex.test(value)) {
-            return !isNaN(Date.parse(value));
-          }
-          return false;
-        })
-        .withMessage("Invalid delivery date format"),
+      agriDeliveryDateCheck(),
     ],
     checkErrors,
     createAgriSalesOrder
@@ -362,21 +390,7 @@ router
       check("quantity").optional().isNumeric().withMessage("Quantity must be a number").isFloat({ min: 0.01 }).withMessage("Quantity must be greater than 0"),
       check("rate").optional().isNumeric().withMessage("Rate must be a number").isFloat({ min: 0 }).withMessage("Rate must be greater than or equal to 0"),
       check("orderDate").optional().isISO8601().withMessage("Invalid order date format"),
-      check("deliveryDate")
-        .optional({ nullable: true, checkFalsy: false })
-        .custom((value) => {
-          // Allow null, undefined, or empty string
-          if (value === null || value === undefined || value === "") {
-            return true;
-          }
-          // If value exists, validate it's a valid ISO8601 date
-          const dateRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?$/;
-          if (typeof value === "string" && dateRegex.test(value)) {
-            return !isNaN(Date.parse(value));
-          }
-          return false;
-        })
-        .withMessage("Invalid delivery date format"),
+      agriDeliveryDateCheck(),
     ],
     checkErrors,
     updateAgriSalesOrder
