@@ -1,5 +1,5 @@
 import AgriSalesOrder from "../models/agriSalesOrder.model.js";
-import { uploadToS3 } from "./uploadService.js";
+import { isUnusablePublicFileUrl, uploadToS3 } from "./uploadService.js";
 import { htmlToPdfBuffer } from "./htmlToPdf.service.js";
 import { mapAgriOrderToChallanPage } from "../../shared/dispatch-documents/agriDispatchDocumentMappers.js";
 import { renderAgriDeliveryChallanDocument } from "../../shared/dispatch-documents/agriDeliveryChallanTemplate.js";
@@ -17,6 +17,7 @@ async function nextAgriDcNumber(order) {
 /**
  * Generate A5 delivery challan PDF for a Ram Agri sales order and persist URL.
  * Safe to call after dispatch; returns null-ish fields on soft failure when swallow=true.
+ * Back-dated / mock example.com URLs are treated as missing and regenerated.
  */
 export async function generateAndSaveAgriDeliveryChallanPdf(orderId, options = {}) {
   const force = Boolean(options.force);
@@ -28,6 +29,14 @@ export async function generateAndSaveAgriDeliveryChallanPdf(orderId, options = {
       .populate("ramAgriCropId", "cropName")
       .populate("lineItems.productId", "name code")
       .populate("lineItems.ramAgriCropId", "cropName")
+      .populate({
+        path: "lineItems.batchAllocations.batchId",
+        select: "batchNumber expiryDate",
+      })
+      .populate({
+        path: "batchAllocations.batchId",
+        select: "batchNumber expiryDate",
+      })
       .lean();
 
     if (!order) {
@@ -37,7 +46,8 @@ export async function generateAndSaveAgriDeliveryChallanPdf(orderId, options = {
     }
 
     const existingUrl = String(order.deliveryChallanPdfUrl || "").trim();
-    if (existingUrl && !force) {
+    const existingUsable = existingUrl && !isUnusablePublicFileUrl(existingUrl);
+    if (existingUsable && !force) {
       return {
         deliveryChallanPdfUrl: existingUrl,
         dcNumber: order.dcNumber || null,
@@ -56,6 +66,9 @@ export async function generateAndSaveAgriDeliveryChallanPdf(orderId, options = {
     const url = await uploadToS3(buf, `agri-delivery-challan-${oid}-${Date.now()}.pdf`, {
       folder: `agri-order-pdfs/${oid}`,
     });
+    if (isUnusablePublicFileUrl(url)) {
+      throw new Error("Generated delivery challan URL is not publicly reachable");
+    }
     const now = new Date();
 
     await AgriSalesOrder.findByIdAndUpdate(order._id, {
