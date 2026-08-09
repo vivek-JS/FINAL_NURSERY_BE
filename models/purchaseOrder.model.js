@@ -44,6 +44,7 @@ const purchaseOrderItemSchema = new mongoose.Schema({
   },
   expiryDate: {
     type: Date,
+    required: [true, 'Expiry date is required for each purchase order item'],
   },
   slotId: {
     type: mongoose.Schema.Types.ObjectId,

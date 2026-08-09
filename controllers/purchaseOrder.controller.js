@@ -35,6 +35,23 @@ function isAutoGRNEnabled(value) {
   return value === true || value === 'true' || value === 1 || value === '1';
 }
 
+function hasValidExpiryDate(value) {
+  if (value == null || value === '') return false;
+  const d = value instanceof Date ? value : new Date(value);
+  return !Number.isNaN(d.getTime());
+}
+
+/** Every PO line must have a usable expiry date. */
+function validateItemsExpiry(items) {
+  if (!Array.isArray(items) || !items.length) return null;
+  for (let i = 0; i < items.length; i++) {
+    if (!hasValidExpiryDate(items[i]?.expiryDate)) {
+      return `Expiry date is required on every line (missing on line ${i + 1})`;
+    }
+  }
+  return null;
+}
+
 // Create Purchase Order
 export const createPurchaseOrder = async (req, res) => {
   try {
@@ -54,6 +71,14 @@ export const createPurchaseOrder = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'At least one purchase order item is required',
+      });
+    }
+
+    const expiryError = validateItemsExpiry(items);
+    if (expiryError) {
+      return res.status(400).json({
+        success: false,
+        message: expiryError,
       });
     }
 
@@ -1425,6 +1450,14 @@ export const updatePurchaseOrder = async (req, res) => {
     // Recalculate totals if items changed
     if (req.body.items) {
       req.body.items = parseBodyJson(req.body.items, req.body.items);
+      const expiryError = validateItemsExpiry(req.body.items);
+      if (expiryError) {
+        return res.status(400).json({
+          success: false,
+          message: expiryError,
+        });
+      }
+      purchaseOrder.items = req.body.items;
       let subtotal = 0;
       let gstAmount = 0;
       let discountAmount = 0;
