@@ -37,6 +37,7 @@ export const addPlant = async (req, res) => {
         characteristics: subtype.characteristics || {},
         rates: Array.isArray(subtype.rates) ? subtype.rates : [], // Ensure rates is an array
         monthlyRates: Array.isArray(subtype.monthlyRates) ? subtype.monthlyRates : [],
+        raisingRate: Number(subtype.raisingRate) || 0,
         buffer: subtype.buffer || 0,
         plantReadyDays: subtype.plantReadyDays || 0, // Plant ready days for sowing
         slotDays: subtype.slotDays, // Slot days for this subtype
@@ -275,6 +276,7 @@ export const updatePlant = async (req, res) => {
           characteristics: subtype.characteristics || {},
           rates: Array.isArray(subtype.rates) ? subtype.rates : [],
           monthlyRates: Array.isArray(subtype.monthlyRates) ? subtype.monthlyRates : [],
+          raisingRate: Number(subtype.raisingRate) || 0,
           buffer: subtype.buffer || 0,
           plantReadyDays: subtype.plantReadyDays || 0,
           slotDays: subtype.slotDays || subtype.slotSize || plant.slotSize,
@@ -500,12 +502,14 @@ export const addSubtype = async (req, res) => {
     characteristics,
     rates,
     monthlyRates,
+    raisingRate,
     buffer,
     plantReadyDays,
     slotDays,
     slotStartDate,
     slotEndDate,
     slotCapacity,
+    isBillable,
   } = req.body;
 
   try {
@@ -549,12 +553,14 @@ export const addSubtype = async (req, res) => {
       characteristics: characteristics || {},
       rates: processedRates,
       monthlyRates: processedMonthlyRates,
+      raisingRate: Number(raisingRate) || 0,
       buffer: Number(buffer) || 0,
       plantReadyDays: Number(plantReadyDays) || 0,
       slotDays: Number(slotDays),
       slotStartDate,
       slotEndDate,
       slotCapacity: Number(slotCapacity),
+      isBillable: isBillable === false || isBillable === "false" ? false : true,
     };
 
     plant.subtypes.push(newSubtype);
@@ -591,7 +597,9 @@ export const updateSubtype = async (req, res) => {
     plantReadyDays,
     monthlyRates,
     rates,
+    raisingRate,
     buffer,
+    isBillable,
   } = req.body;
 
   try {
@@ -604,7 +612,12 @@ export const updateSubtype = async (req, res) => {
     if (description !== undefined) setFields["subtypes.$.description"] = description;
     if (characteristics !== undefined) setFields["subtypes.$.characteristics"] = characteristics;
     if (plantReadyDays !== undefined) setFields["subtypes.$.plantReadyDays"] = Number(plantReadyDays) || 0;
+    if (raisingRate !== undefined) setFields["subtypes.$.raisingRate"] = Number(raisingRate) || 0;
     if (buffer !== undefined) setFields["subtypes.$.buffer"] = Number(buffer) || 0;
+    if (isBillable !== undefined) {
+      setFields["subtypes.$.isBillable"] =
+        isBillable === false || isBillable === "false" ? false : true;
+    }
     if (rates !== undefined) {
       setFields["subtypes.$.rates"] = Array.isArray(rates)
         ? rates.filter((r) => r !== "" && r !== null && r !== undefined).map((r) => Number(r) || 0)
@@ -806,6 +819,7 @@ export const getPlants = async (req, res) => {
         characteristics: subtype.characteristics || {},
         rates: subtype.rates || [],
         monthlyRates: subtype.monthlyRates || [],
+        raisingRate: subtype.raisingRate || 0,
         dailyDispatch: subtype.dailyDispatch || 0,
         buffer: subtype.buffer || 0,
         plantReadyDays: subtype.plantReadyDays || 0, // Explicitly include plantReadyDays with default
@@ -813,6 +827,7 @@ export const getPlants = async (req, res) => {
         slotStartDate: subtype.slotStartDate || '',
         slotEndDate: subtype.slotEndDate || '',
         slotCapacity: subtype.slotCapacity || 0,
+        isBillable: subtype.isBillable !== false,
       }))
     }));
 

@@ -17,6 +17,7 @@ const plantSubtypeSchema = new Schema({
     }],
     default: [],
   }, // Per-month rate overrides; if set for a month, takes priority over rates[0]
+  raisingRate: { type: Number, default: 0 }, // Rate when farmer gives seed (RAISING)
   /**
    * When false, subtype uses the global non-billable DC sequence and DC plant
    * labels omit variety / "15 No" style subtype names (plant name only).
