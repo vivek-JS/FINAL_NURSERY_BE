@@ -374,8 +374,6 @@ import dispatchRoute from "./routes/dispatched.route.js";
 import {
   getDeliveryChallanInvoiceSequence,
   putDeliveryChallanInvoiceSequence,
-  getPlantInvoiceSequences,
-  putPlantInvoiceSequence,
 } from "./controllers/invoiceSequence.controller.js";
 import msgRoute from "./routes/msg.route.js";
 import batchRoute from "./routes/batch.route.js";
@@ -711,17 +709,6 @@ server.put(
   authenticateToken,
   authorizeRoles(["SUPER_ADMIN", "ADMIN", "ACCOUNTANT"]),
   putDeliveryChallanInvoiceSequence
-);
-server.get(
-  "/api/v1/invoice-sequence/plants",
-  authenticateToken,
-  getPlantInvoiceSequences
-);
-server.put(
-  "/api/v1/invoice-sequence/plants",
-  authenticateToken,
-  authorizeRoles(["SUPER_ADMIN", "ADMIN", "ACCOUNTANT"]),
-  putPlantInvoiceSequence
 );
 server.use("/api/v1/msg", authenticateToken, msgRoute);
 server.use("/api/v1/maps", mapsRoute); // Maps API proxy (requires auth)

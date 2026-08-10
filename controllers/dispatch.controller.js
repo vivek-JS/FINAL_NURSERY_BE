@@ -14,6 +14,7 @@ import Tray from "../models/tray.model.js";
 import Vehicle from "../models/vehicleModel.model.js";
 import VehicleDriver from "../models/vehicleDriver.model.js";
 import Trip from "../models/trip.model.js";
+import { allocateTripNumber } from "../utility/tripNumber.js";
 import {
   bookablePlantsTotal,
   orderRemainingOrBookable,
@@ -39,8 +40,12 @@ import {
   formatOrderWalletDescriptionContext,
   sumCollectedFromNewPaymentSubdocs,
 } from "../utils/dispatchCompleteOrderPayments.js";
-import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
-import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
+import { ensureOfficialDcSetFields } from "../services/officialDeliveryChallan.service.js";
+import {
+  ensureOfficialInvoiceSetFields,
+  normalizeInvoiceNumberOverrides,
+  applyInvoiceNumberOverrides,
+} from "../services/officialInvoice.service.js";
 import {
   getPendingLinkedAgriLoads,
   hasPendingLinkedAgriLoadForOrder,
@@ -1120,19 +1125,18 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       });
       newStatus = agriDcGuard.orderStatus;
       const preAssignedInv = String(order.deliveryChallanInvoiceNumber || "").trim();
-      let official = null;
+      let officialPrimary = null;
+      let officialSet = {};
       let legInvoice = "";
       if (agriDcGuard.canAssignDc) {
-        official = await ensureOfficialDeliveryChallanForOrder(order, session);
+        const ensured = await ensureOfficialDcSetFields(order, session);
+        officialSet = ensured.setFields;
+        officialPrimary = ensured.primaryLabel;
       }
-      if (official) {
-        legInvoice = official;
+      if (officialPrimary) {
+        legInvoice = officialPrimary;
       } else {
         legInvoice = preAssignedInv;
-        if (!legInvoice && agriDcGuard.canAssignDc) {
-          const [g] = await allocateNextInvoiceNumbers(session, 1);
-          legInvoice = g || "";
-        }
       }
       const dispatchHistoryEntry = {
         date: new Date(),
@@ -1148,15 +1152,13 @@ const updateDispatch = catchAsync(async (req, res, next) => {
         remainingPlants: newRemaining,
         orderStatus: newStatus,
         currentDispatchId: dispatchOid,
+        ...officialSet,
       };
       if (extraPlants > 0) {
         setUpdateDispatchAdd.additionalPlants =
           Number(order.additionalPlants || 0) + extraPlants;
       }
-      if (official) {
-        setUpdateDispatchAdd.officialDeliveryChallanNumber = official;
-      }
-      if (!preAssignedInv && legInvoice && !official) {
+      if (!preAssignedInv && legInvoice && !officialPrimary) {
         setUpdateDispatchAdd.deliveryChallanInvoiceNumber = legInvoice;
       }
       const updatedOrder = await updateOrderWithLedgerSync({
@@ -1239,24 +1241,21 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       });
       newStatus = agriDcGuard.orderStatus;
 
-      let official = null;
+      let officialPrimary = null;
+      let officialSet = {};
       if (agriDcGuard.canAssignDc) {
-        official = await ensureOfficialDeliveryChallanForOrder(order, session);
-      }
-      let fallbackLegInvoice = "";
-      if (agriDcGuard.canAssignDc && !official) {
-        const [g] = await allocateNextInvoiceNumbers(session, 1);
-        fallbackLegInvoice = g || "";
+        const ensured = await ensureOfficialDcSetFields(order, session);
+        officialSet = ensured.setFields;
+        officialPrimary = ensured.primaryLabel;
       }
 
       const nextHist = (order.dispatchHistory || []).map((h) => {
         const plain = h?.toObject ? h.toObject() : { ...h };
         if (String(plain.dispatchId) !== String(dispatchOid)) return plain;
         const inv =
-          official ||
+          officialPrimary ||
           plain.invoiceNumber ||
           String(order.deliveryChallanInvoiceNumber || "").trim() ||
-          fallbackLegInvoice ||
           "";
         return {
           ...plain,
@@ -1280,19 +1279,10 @@ const updateDispatch = catchAsync(async (req, res, next) => {
         remainingPlants: newRemaining,
         orderStatus: newStatus,
         currentDispatchId: nextCurrent,
+        ...officialSet,
       };
       if (extraPlants > 0) {
         setPayload.additionalPlants = Number(order.additionalPlants || 0) + extraPlants;
-      }
-      if (official) {
-        setPayload.officialDeliveryChallanNumber = official;
-      }
-      if (
-        !official &&
-        fallbackLegInvoice &&
-        !String(order.deliveryChallanInvoiceNumber || "").trim()
-      ) {
-        setPayload.deliveryChallanInvoiceNumber = fallbackLegInvoice;
       }
 
       const updatedOrder = await updateOrderWithLedgerSync({
@@ -2064,7 +2054,8 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     }
 
     const preAssignedQuick = String(order.deliveryChallanInvoiceNumber || "").trim();
-    let official = null;
+    let officialPrimary = null;
+    let officialSet = {};
     let quickInvoiceLabel = preAssignedQuick;
     const agriDcGuard = await resolveDispatchedStatusWithAgriGuard({
       orderId,
@@ -2074,13 +2065,12 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     });
     newStatus = agriDcGuard.orderStatus;
     if (agriDcGuard.canAssignDc) {
-      official = await ensureOfficialDeliveryChallanForOrder(order, session);
+      const ensured = await ensureOfficialDcSetFields(order, session);
+      officialSet = ensured.setFields;
+      officialPrimary = ensured.primaryLabel;
     }
-    if (official) {
-      quickInvoiceLabel = official;
-    } else if (!quickInvoiceLabel && agriDcGuard.canAssignDc) {
-      const [freshQuick] = await allocateNextInvoiceNumbers(session, 1);
-      quickInvoiceLabel = freshQuick || "";
+    if (officialPrimary) {
+      quickInvoiceLabel = officialPrimary;
     }
 
     const dispatchHistoryEntry = {
@@ -2099,13 +2089,8 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
       orderStatus: newStatus,
       currentDispatchId: dispatchOid,
       cavity: trayLean._id,
+      ...officialSet,
     };
-    if (official) {
-      quickAddSet.officialDeliveryChallanNumber = official;
-    }
-    if (!preAssignedQuick && quickInvoiceLabel && !official) {
-      quickAddSet.deliveryChallanInvoiceNumber = quickInvoiceLabel;
-    }
 
     const updatedOrder = await updateOrderWithLedgerSync({
       orderId,
@@ -2482,6 +2467,9 @@ const getDispatches = catchAsync(async (req, res, next) => {
               deliveryChallanInvoiceNumber: "$orderDetails.deliveryChallanInvoiceNumber",
               officialDeliveryChallanNumber:
                 "$orderDetails.officialDeliveryChallanNumber",
+              officialNonBillableDeliveryChallanNumber: {
+                $ifNull: ["$orderDetails.officialNonBillableDeliveryChallanNumber", ""],
+              },
               quantity: "$orderDetails.numberOfPlants",
               remainingPlants: "$orderDetails.remainingPlants",
               deliveryDate: "$orderDetails.deliveryDate", // Delivery date from order
@@ -2499,6 +2487,9 @@ const getDispatches = catchAsync(async (req, res, next) => {
               plantLineItems: { $ifNull: ["$orderDetails.plantLineItems", []] },
               deliveryChallanInvoiceNumber: "$orderDetails.deliveryChallanInvoiceNumber",
               officialDeliveryChallanNumber: "$orderDetails.officialDeliveryChallanNumber",
+              officialNonBillableDeliveryChallanNumber: {
+                $ifNull: ["$orderDetails.officialNonBillableDeliveryChallanNumber", ""],
+              },
               deliveryChallanPdfUrl: { $ifNull: ["$orderDetails.deliveryChallanPdfUrl", ""] },
               deliveryChallanPdfGeneratedAt: "$orderDetails.deliveryChallanPdfGeneratedAt",
               deliveryChallanPdfHistory: { $ifNull: ["$orderDetails.deliveryChallanPdfHistory", []] },
@@ -2564,6 +2555,9 @@ const getDispatches = catchAsync(async (req, res, next) => {
                   "$orderDetails.deliveryChallanInvoiceNumber",
                 officialDeliveryChallanNumber:
                   "$orderDetails.officialDeliveryChallanNumber",
+                officialNonBillableDeliveryChallanNumber: {
+                  $ifNull: ["$orderDetails.officialNonBillableDeliveryChallanNumber", ""],
+                },
                 bookingSlot: {
                   startDay: {
                     $arrayElemAt: ["$bookingSlotDetails.startDay", 0],
@@ -2901,10 +2895,13 @@ const getDispatch = catchAsync(async (req, res, next) => {
         orderId: order.orderId,
         deliveryChallanInvoiceNumber: order.deliveryChallanInvoiceNumber || "",
         officialDeliveryChallanNumber: order.officialDeliveryChallanNumber || "",
+        officialNonBillableDeliveryChallanNumber:
+          order.officialNonBillableDeliveryChallanNumber || "",
         farmer: order.farmer,
         salesPerson: order.salesPerson,
         plantName: order.plantName,
         plantSubtype: order.plantSubtype,
+        plantLineItems: order.plantLineItems || [],
         cavity: order.cavity,
         bookingSlot: order.bookingSlot,
         numberOfPlants: order.numberOfPlants,
@@ -3086,7 +3083,43 @@ const regenerateDispatchPdfs = catchAsync(async (req, res, next) => {
     } else {
       const invoiceAadhars =
         body.invoiceAadhars && typeof body.invoiceAadhars === "object" ? body.invoiceAadhars : {};
-      const buf = await buildCompleteInvoicePdfBuffer(dispatch, { aadharByOrderId: invoiceAadhars });
+      const overrideMap = normalizeInvoiceNumberOverrides(body.invoiceNumberOverrides);
+
+      // Allocate official invoice numbers (once) + apply duplicate overrides on orders
+      const orders = Array.isArray(dispatch.orderIds) ? dispatch.orderIds : [];
+      for (const order of orders) {
+        const orderId = order?._id || order;
+        if (!orderId) continue;
+        const oid = String(orderId);
+        const override = overrideMap.get(oid);
+        if (override) {
+          await applyInvoiceNumberOverrides(oid, override);
+        }
+        const fullOrder =
+          order && typeof order === "object" && order.plantName
+            ? order
+            : await Order.findById(orderId).lean();
+        if (!fullOrder) continue;
+        // Re-read after override so mapper sees manual* fields
+        const refreshed = await Order.findById(orderId)
+          .select(
+            "officialInvoiceNumber officialNonBillableInvoiceNumber manualInvoiceNumber manualNonBillableInvoiceNumber plantLineItems plantName plantSubtype"
+          )
+          .lean();
+        const orderForEnsure = { ...fullOrder, ...(refreshed || {}) };
+        const { setFields } = await ensureOfficialInvoiceSetFields(orderForEnsure);
+        if (Object.keys(setFields).length) {
+          await Order.findByIdAndUpdate(orderId, { $set: setFields });
+        }
+      }
+
+      // Reload orders with invoice fields for PDF mapping
+      const reloaded = await loadDispatchLeanForPdfGeneration(resolved._id);
+      const dispatchForPdf = reloaded?.dispatch || dispatch;
+
+      const buf = await buildCompleteInvoicePdfBuffer(dispatchForPdf, {
+        aadharByOrderId: invoiceAadhars,
+      });
       const url = await uploadToS3(buf, `complete-invoice-${dispatchObjectId}-${Date.now()}.pdf`, {
         folder: `dispatch-pdfs/${dispatchObjectId}`,
       });
@@ -3376,11 +3409,25 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       if (tripData.rent != null && tripData.rent !== "") tripSet.rent = Number(tripData.rent);
       if (tripData.otherCharges != null && tripData.otherCharges !== "") tripSet.otherCharges = Number(tripData.otherCharges);
       if (tripData.remark) tripSet.tripRemark = String(tripData.remark);
+
+      const existingTrip = await Trip.findOne({ dispatchId: dispatchOid })
+        .select("tripNumber")
+        .session(session);
+      const tripNumber =
+        existingTrip?.tripNumber ||
+        (await allocateTripNumber(Trip, { transportId: dispatch.transportId }));
+
       const trip = await Trip.findOneAndUpdate(
         { dispatchId: dispatchOid },
-        { $set: tripSet },
+        {
+          $set: tripSet,
+          $setOnInsert: { tripNumber },
+        },
         { new: true, upsert: true, session, setDefaultsOnInsert: true }
       );
+      if (!trip.tripNumber) {
+        await Trip.findByIdAndUpdate(trip._id, { tripNumber }, { session });
+      }
       await Dispatch.findByIdAndUpdate(dispatchOid, { tripId: trip._id }, { session });
     }
 

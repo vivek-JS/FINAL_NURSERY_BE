@@ -1,156 +1,213 @@
-import InvoiceSequence, { DELIVERY_CHALLAN_SEQUENCE_KEY } from "../models/invoiceSequence.model.js";
-import PlantCms from "../models/plantCms.model.js";
-import mongoose from "mongoose";
-import { plantDcSequenceKey } from "./officialDeliveryChallan.service.js";
+import InvoiceSequence, {
+  DELIVERY_CHALLAN_SEQUENCE_KEY,
+  DC_BILLABLE_SEQUENCE_KEY,
+  DC_NON_BILLABLE_SEQUENCE_KEY,
+  INV_BILLABLE_SEQUENCE_KEY,
+  INV_NON_BILLABLE_SEQUENCE_KEY,
+  PLANT_DC_SEQUENCE_KEY_PREFIX,
+  PLANT_NB_DC_SEQUENCE_KEY_PREFIX,
+} from "../models/invoiceSequence.model.js";
+import Order from "../models/order.model.js";
+import { globalDcSequenceKey } from "./officialDeliveryChallan.service.js";
+import { globalInvoiceSequenceKey } from "./officialInvoice.service.js";
 
-/**
- * Atomically reserve `count` consecutive invoice numbers. Returns formatted strings, e.g. ["R640","R641"].
- * Does not change already-issued values on orders; only moves the global counter.
- */
-export async function allocateNextInvoiceNumbers(session, count) {
-  const n = Math.max(0, Math.floor(Number(count) || 0));
-  if (n < 1) return [];
+const GLOBAL_BUCKETS = [
+  { kind: "dc", billable: true, key: DC_BILLABLE_SEQUENCE_KEY, defaultPrefix: "B", legacyKeyRegex: /^dc_plant:/ },
+  {
+    kind: "dc",
+    billable: false,
+    key: DC_NON_BILLABLE_SEQUENCE_KEY,
+    defaultPrefix: "BN",
+    legacyKeyRegex: /^dc_plant_nb:/,
+  },
+  {
+    kind: "invoice",
+    billable: true,
+    key: INV_BILLABLE_SEQUENCE_KEY,
+    defaultPrefix: "INV",
+    legacyKeyRegex: /^inv_plant:/,
+  },
+  {
+    kind: "invoice",
+    billable: false,
+    key: INV_NON_BILLABLE_SEQUENCE_KEY,
+    defaultPrefix: "INN",
+    legacyKeyRegex: /^inv_plant_nb:/,
+  },
+];
 
-  const sess = session || undefined;
+function normalizeKind(kind) {
+  const k = String(kind || "dc").trim().toLowerCase();
+  return k === "invoice" || k === "inv" || k === "tax_invoice" ? "invoice" : "dc";
+}
 
-  await InvoiceSequence.updateOne(
-    { key: DELIVERY_CHALLAN_SEQUENCE_KEY },
-    { $setOnInsert: { prefix: "R", nextNumber: 1 } },
-    { upsert: true, session: sess }
+function globalKeyFor(kind, billable) {
+  return kind === "invoice"
+    ? globalInvoiceSequenceKey(billable)
+    : globalDcSequenceKey(billable);
+}
+
+function defaultPrefixFor(kind, billable) {
+  const bucket = GLOBAL_BUCKETS.find(
+    (b) => b.kind === kind && b.billable === (billable !== false)
   );
-
-  const updated = await InvoiceSequence.findOneAndUpdate(
-    { key: DELIVERY_CHALLAN_SEQUENCE_KEY },
-    { $inc: { nextNumber: n } },
-    { new: true, session: sess }
-  ).lean();
-
-  if (!updated) {
-    throw new Error("Failed to reserve invoice numbers");
-  }
-
-  const endExclusive = updated.nextNumber;
-  const start = endExclusive - n;
-  const prefix =
-    updated.prefix != null && String(updated.prefix).trim() !== ""
-      ? String(updated.prefix).trim()
-      : "R";
-
-  const out = [];
-  for (let v = start; v < endExclusive; v += 1) {
-    out.push(`${prefix}${v}`);
-  }
-  return out;
+  return bucket?.defaultPrefix || (billable !== false ? "B" : "BN");
 }
 
-export async function getInvoiceSequenceSettings() {
-  const doc = await InvoiceSequence.findOne({ key: DELIVERY_CHALLAN_SEQUENCE_KEY }).lean();
-  if (!doc) {
-    return { key: DELIVERY_CHALLAN_SEQUENCE_KEY, prefix: "R", nextNumber: 1 };
+function parseTrailingNumber(label, prefix) {
+  const s = String(label || "").trim();
+  const p = String(prefix || "").trim();
+  if (!s) return 0;
+  if (p && s.toUpperCase().startsWith(p.toUpperCase())) {
+    const n = Number(s.slice(p.length));
+    return Number.isFinite(n) && n > 0 ? n : 0;
   }
-  return {
-    key: doc.key,
-    prefix: doc.prefix != null && String(doc.prefix).trim() !== "" ? String(doc.prefix).trim() : "R",
-    nextNumber: Number(doc.nextNumber) || 1,
-    updatedAt: doc.updatedAt,
-  };
+  const m = s.match(/(\d+)$/);
+  return m ? Math.max(0, Number(m[1]) || 0) : 0;
 }
 
-export async function setInvoiceSequenceSettings({ prefix, nextNumber }) {
-  const p =
-    prefix != null && String(prefix).trim() !== ""
-      ? String(prefix).trim().slice(0, 24)
-      : "R";
-  const nn = Math.max(1, Math.floor(Number(nextNumber) || 1));
+async function maxIssuedFromOrders(kind, billable) {
+  const fields =
+    kind === "invoice"
+      ? billable
+        ? ["officialInvoiceNumber", "manualInvoiceNumber"]
+        : ["officialNonBillableInvoiceNumber", "manualNonBillableInvoiceNumber"]
+      : billable
+        ? ["officialDeliveryChallanNumber", "deliveryChallanInvoiceNumber"]
+        : ["officialNonBillableDeliveryChallanNumber"];
 
-  const updated = await InvoiceSequence.findOneAndUpdate(
-    { key: DELIVERY_CHALLAN_SEQUENCE_KEY },
-    { $set: { prefix: p, nextNumber: nn } },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
-  ).lean();
-
-  return {
-    key: updated.key,
-    prefix: updated.prefix,
-    nextNumber: updated.nextNumber,
-    updatedAt: updated.updatedAt,
-  };
-}
-
-function defaultPrefixFromPlantName(name) {
-  const t = String(name || "").replace(/[^A-Za-z]/g, "").toUpperCase();
-  return (t.slice(0, 3) || "PL").slice(0, 8);
-}
-
-/**
- * List all PlantCms plants with their dc_plant:* sequence (defaults if missing).
- */
-export async function listPlantInvoiceSequences() {
-  const plants = await PlantCms.find({}).select("name").sort({ name: 1 }).lean();
-  const keys = plants.map((p) => plantDcSequenceKey(p._id));
-  const seqDocs = keys.length
-    ? await InvoiceSequence.find({ key: { $in: keys } }).lean()
-    : [];
-  const byKey = new Map(seqDocs.map((d) => [d.key, d]));
-
-  return plants.map((p) => {
-    const key = plantDcSequenceKey(p._id);
-    const doc = byKey.get(key);
-    const prefix =
-      doc?.prefix != null && String(doc.prefix).trim() !== ""
-        ? String(doc.prefix).trim()
-        : defaultPrefixFromPlantName(p.name);
-    const nextNumber = doc ? Math.max(1, Number(doc.nextNumber) || 1) : 1;
-    return {
-      plantId: String(p._id),
-      plantName: p.name || "—",
-      key,
-      prefix,
-      nextNumber,
-      preview: `${prefix}${nextNumber}`,
-      exists: Boolean(doc),
-      updatedAt: doc?.updatedAt || null,
-    };
-  });
-}
-
-/**
- * Upsert prefix + nextNumber for one plant sequence. Does not rewrite issued order numbers.
- */
-export async function setPlantInvoiceSequence({ plantId, prefix, nextNumber }) {
-  if (!mongoose.isValidObjectId(String(plantId))) {
-    const err = new Error("Invalid plantId");
-    err.statusCode = 400;
-    throw err;
-  }
-  const plant = await PlantCms.findById(plantId).select("name").lean();
-  if (!plant) {
-    const err = new Error("Plant not found");
-    err.statusCode = 404;
-    throw err;
-  }
-  const key = plantDcSequenceKey(plantId);
-  const p =
-    prefix != null && String(prefix).trim() !== ""
-      ? String(prefix).trim().slice(0, 24)
-      : defaultPrefixFromPlantName(plant.name);
-  const nn = Math.max(1, Math.floor(Number(nextNumber) || 1));
-
-  const prefixClash = await InvoiceSequence.findOne({
-    $and: [
-      { key: { $regex: /^dc_plant:/ } },
-      { prefix: p },
-      { key: { $ne: key } },
-    ],
+  const orders = await Order.find({
+    $or: fields.map((f) => ({ [f]: { $exists: true, $nin: [null, ""] } })),
   })
-    .select("key")
+    .select(fields.join(" "))
     .lean();
 
-  if (prefixClash) {
-    const err = new Error(`Prefix "${p}" is already used by another plant sequence`);
-    err.statusCode = 400;
-    throw err;
+  let max = 0;
+  for (const o of orders) {
+    for (const f of fields) {
+      const v = String(o[f] || "").trim();
+      if (!v) continue;
+      max = Math.max(max, parseTrailingNumber(v));
+    }
   }
+  return max;
+}
+
+/**
+ * One-time migration: seed global counters from legacy plant-scoped keys and issued order numbers.
+ */
+export async function migrateGlobalSequencesFromPlantKeys() {
+  const legacyDocs = await InvoiceSequence.find({
+    $or: [
+      { key: { $regex: /^dc_plant(_nb)?:/ } },
+      { key: { $regex: /^inv_plant(_nb)?:/ } },
+      { key: DELIVERY_CHALLAN_SEQUENCE_KEY },
+    ],
+  }).lean();
+
+  const legacyDeliveryChallan = legacyDocs.find((d) => d.key === DELIVERY_CHALLAN_SEQUENCE_KEY);
+
+  for (const bucket of GLOBAL_BUCKETS) {
+    const existing = await InvoiceSequence.findOne({ key: bucket.key }).lean();
+    if (existing) continue;
+
+    const matchingLegacy = legacyDocs.filter((d) => bucket.legacyKeyRegex.test(d.key));
+    let maxNext = 1;
+    let prefix = bucket.defaultPrefix;
+
+    for (const doc of matchingLegacy) {
+      maxNext = Math.max(maxNext, Number(doc.nextNumber) || 1);
+      if (doc.prefix && String(doc.prefix).trim()) {
+        prefix = String(doc.prefix).trim();
+      }
+    }
+
+    if (bucket.kind === "dc" && bucket.billable && legacyDeliveryChallan) {
+      maxNext = Math.max(maxNext, Number(legacyDeliveryChallan.nextNumber) || 1);
+      if (legacyDeliveryChallan.prefix && String(legacyDeliveryChallan.prefix).trim()) {
+        prefix = String(legacyDeliveryChallan.prefix).trim();
+      }
+    }
+
+    const issuedMax = await maxIssuedFromOrders(bucket.kind, bucket.billable);
+    maxNext = Math.max(maxNext, issuedMax + 1);
+
+    await InvoiceSequence.updateOne(
+      { key: bucket.key },
+      {
+        $setOnInsert: {
+          key: bucket.key,
+          prefix,
+          nextNumber: Math.max(1, maxNext),
+        },
+      },
+      { upsert: true }
+    );
+  }
+}
+
+function serializeBucket(kind, billable, doc) {
+  const key = globalKeyFor(kind, billable);
+  const prefix =
+    doc?.prefix != null && String(doc.prefix).trim() !== ""
+      ? String(doc.prefix).trim()
+      : defaultPrefixFor(kind, billable);
+  const nextNumber = doc ? Math.max(1, Number(doc.nextNumber) || 1) : 1;
+  return {
+    key,
+    kind,
+    billable: billable !== false,
+    prefix,
+    nextNumber,
+    preview: `${prefix}${nextNumber}`,
+    exists: Boolean(doc),
+    updatedAt: doc?.updatedAt || null,
+  };
+}
+
+/**
+ * List all 4 global document sequences (DC + invoice × billable/non-billable).
+ */
+export async function listGlobalDocumentSequences() {
+  await migrateGlobalSequencesFromPlantKeys();
+
+  const keys = GLOBAL_BUCKETS.map((b) => b.key);
+  const docs = await InvoiceSequence.find({ key: { $in: keys } }).lean();
+  const byKey = new Map(docs.map((d) => [d.key, d]));
+
+  return {
+    dc: {
+      billable: serializeBucket("dc", true, byKey.get(DC_BILLABLE_SEQUENCE_KEY)),
+      nonBillable: serializeBucket("dc", false, byKey.get(DC_NON_BILLABLE_SEQUENCE_KEY)),
+    },
+    invoice: {
+      billable: serializeBucket("invoice", true, byKey.get(INV_BILLABLE_SEQUENCE_KEY)),
+      nonBillable: serializeBucket(
+        "invoice",
+        false,
+        byKey.get(INV_NON_BILLABLE_SEQUENCE_KEY)
+      ),
+    },
+  };
+}
+
+/**
+ * Upsert prefix + nextNumber for one global sequence bucket.
+ */
+export async function setGlobalDocumentSequence({
+  kind,
+  billable = true,
+  prefix,
+  nextNumber,
+}) {
+  const seqKind = normalizeKind(kind);
+  const isBillable = billable !== false && billable !== "false" && billable !== "nonBillable";
+  const key = globalKeyFor(seqKind, isBillable);
+  const p =
+    prefix != null && String(prefix).trim() !== ""
+      ? String(prefix).trim().slice(0, 24)
+      : defaultPrefixFor(seqKind, isBillable);
+  const nn = Math.max(1, Math.floor(Number(nextNumber) || 1));
 
   const updated = await InvoiceSequence.findOneAndUpdate(
     { key },
@@ -158,14 +215,36 @@ export async function setPlantInvoiceSequence({ plantId, prefix, nextNumber }) {
     { new: true, upsert: true, setDefaultsOnInsert: true }
   ).lean();
 
-  return {
-    plantId: String(plantId),
-    plantName: plant.name || "—",
-    key: updated.key,
-    prefix: updated.prefix,
-    nextNumber: updated.nextNumber,
-    preview: `${updated.prefix}${updated.nextNumber}`,
-    exists: true,
-    updatedAt: updated.updatedAt,
-  };
+  return serializeBucket(seqKind, isBillable, updated);
 }
+
+/** @deprecated Use listGlobalDocumentSequences */
+export async function getInvoiceSequenceSettings() {
+  const data = await listGlobalDocumentSequences();
+  return data.dc.billable;
+}
+
+/** @deprecated Use setGlobalDocumentSequence */
+export async function setInvoiceSequenceSettings({ prefix, nextNumber, kind, billable }) {
+  return setGlobalDocumentSequence({
+    kind: kind || "dc",
+    billable: billable !== false,
+    prefix,
+    nextNumber,
+  });
+}
+
+/** @deprecated Plant-scoped sequences removed */
+export async function listPlantInvoiceSequences() {
+  return [];
+}
+
+/** @deprecated Plant-scoped sequences removed — redirects to global */
+export async function setPlantInvoiceSequence({ kind, billable, prefix, nextNumber }) {
+  return setGlobalDocumentSequence({ kind, billable, prefix, nextNumber });
+}
+
+export {
+  PLANT_DC_SEQUENCE_KEY_PREFIX,
+  PLANT_NB_DC_SEQUENCE_KEY_PREFIX,
+};

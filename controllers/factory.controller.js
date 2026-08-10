@@ -47,13 +47,12 @@ import {
   resolveFarmerIdentity,
   roundMoney,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
-import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
 import { resolveSlotBufferFields } from "../utility/bufferUtils.js";
 import {
   slotWindowToDeliveryUtcRange,
   getBookingSlotDetailsForOrderList,
 } from "../utility/findDeliverySlot.js";
-import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
+import { ensureOfficialDcSetFields } from "../services/officialDeliveryChallan.service.js";
 import {
   applyPaymentTimingToPayment,
   sanitizePaymentArrayForOrder,
@@ -956,20 +955,15 @@ const createOne = (Model, modelName) =>
         
         orderDocument.orderStatus = resolvedOrderStatus;
 
-        // Instant sale / walk-away dispatch: one official DC from root (first) plant+subtype.
-        // Multi-plant invoices still list all plantLineItems rows under this single DC number.
+        // Instant sale / walk-away dispatch: allocate billable and/or non-billable DCs.
+        // Mixed subtype orders get two numbers; DC PDF emits two pages.
         if (resolvedOrderStatus === "DISPATCHED") {
-          const official = await ensureOfficialDeliveryChallanForOrder(
-            orderDocument,
-            session
-          );
-          if (official) {
-            orderDocument.officialDeliveryChallanNumber = official;
-          } else {
-            const [instantInv] = await allocateNextInvoiceNumbers(session, 1);
-            if (instantInv) {
-              orderDocument.deliveryChallanInvoiceNumber = instantInv;
-            }
+          const ensured = await ensureOfficialDcSetFields(orderDocument, session);
+          if (ensured.billable) {
+            orderDocument.officialDeliveryChallanNumber = ensured.billable;
+          }
+          if (ensured.nonBillable) {
+            orderDocument.officialNonBillableDeliveryChallanNumber = ensured.nonBillable;
           }
         }
 

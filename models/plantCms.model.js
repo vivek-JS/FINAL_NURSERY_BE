@@ -17,6 +17,12 @@ const plantSubtypeSchema = new Schema({
     }],
     default: [],
   }, // Per-month rate overrides; if set for a month, takes priority over rates[0]
+  /**
+   * When false, subtype uses the global non-billable DC sequence and DC plant
+   * labels omit variety / "15 No" style subtype names (plant name only).
+   * Existing subtypes default to billable.
+   */
+  isBillable: { type: Boolean, default: true },
   dailyDispatch: { type: Number, default: 0 }, // Daily dispatch capacity for this subtype
   buffer: { type: Number, default: 0 }, // Buffer at plant subtype level
   plantReadyDays: { type: Number, default: 0 }, // Number of days for plant to be ready from sowing

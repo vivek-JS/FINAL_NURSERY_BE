@@ -2,8 +2,7 @@ import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import { updateOrderWithLedgerSync } from "../controllers/dispatch.controller.js";
-import { allocateNextInvoiceNumbers } from "./invoiceSequence.service.js";
-import { ensureOfficialDeliveryChallanForOrder } from "./officialDeliveryChallan.service.js";
+import { ensureOfficialDcSetFields } from "./officialDeliveryChallan.service.js";
 import { scheduleDispatchPdfGeneration } from "./dispatchPdfAutoGenerate.service.js";
 import { hasPendingLinkedAgriLoadForOrder } from "./linkedAgriLoadGuard.service.js";
 
@@ -14,7 +13,10 @@ const orderRemainingPlantsValue = (doc) => {
 };
 
 /**
- * When shed load completes an order line on a dispatch, set DISPATCHED + official DC.
+ * When shed load completes an order line on a dispatch, set DISPATCHED + official DC(s).
+ * Billable subtypes → officialDeliveryChallanNumber (global dc_billable).
+ * Non-billable subtypes → officialNonBillableDeliveryChallanNumber (global dc_non_billable).
+ * Mixed orders get both numbers; PDF emits two pages.
  * Returns { orderId, dispatchId } for post-commit PDF/WhatsApp hooks.
  */
 export async function finalizeOrderOnShedLineLoaded({
@@ -46,16 +48,16 @@ export async function finalizeOrderOnShedLineLoaded({
 
   const remaining = orderRemainingPlantsValue(order);
   const preAssigned = String(order.deliveryChallanInvoiceNumber || "").trim();
-  let official = null;
+  let officialPrimary = null;
+  let officialSet = {};
   let invoiceLabel = preAssigned;
 
   if (remaining <= 0) {
-    official = await ensureOfficialDeliveryChallanForOrder(order, session);
-    if (official) {
-      invoiceLabel = official;
-    } else if (!invoiceLabel) {
-      const [fresh] = await allocateNextInvoiceNumbers(session, 1);
-      invoiceLabel = fresh || "";
+    const ensured = await ensureOfficialDcSetFields(order, session);
+    officialSet = ensured.setFields;
+    officialPrimary = ensured.primaryLabel;
+    if (officialPrimary) {
+      invoiceLabel = officialPrimary;
     }
   }
 
@@ -74,13 +76,8 @@ export async function finalizeOrderOnShedLineLoaded({
 
   const setFields = {
     orderStatus: remaining <= 0 ? "DISPATCHED" : order.orderStatus,
+    ...officialSet,
   };
-  if (official) {
-    setFields.officialDeliveryChallanNumber = official;
-  }
-  if (!preAssigned && invoiceLabel && !official) {
-    setFields.deliveryChallanInvoiceNumber = invoiceLabel;
-  }
 
   const updatedOrder = await updateOrderWithLedgerSync({
     orderId,

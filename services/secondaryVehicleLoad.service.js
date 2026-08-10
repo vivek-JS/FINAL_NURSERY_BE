@@ -20,8 +20,7 @@ import {
   SHED_ACTIVITY_ACTIONS,
 } from "./shedActivity.service.js";
 import { updateOrderWithLedgerSync } from "../controllers/dispatch.controller.js";
-import { allocateNextInvoiceNumbers } from "./invoiceSequence.service.js";
-import { ensureOfficialDeliveryChallanForOrder } from "./officialDeliveryChallan.service.js";
+import { ensureOfficialDcSetFields } from "./officialDeliveryChallan.service.js";
 import { hasPendingLinkedAgriLoadForOrder } from "./linkedAgriLoadGuard.service.js";
 import {
   finalizeOrderOnShedLineLoaded,
@@ -614,30 +613,46 @@ export function groupPolyhouseStockByBatch(lines) {
 }
 
 export async function sumPlantsLoadedOnDispatch(dispatchId) {
-  if (!mongoose.isValidObjectId(String(dispatchId))) {
-    return { total: 0, byOrder: new Map() };
+  const map = await sumPlantsLoadedOnDispatches([dispatchId]);
+  return map.get(String(dispatchId)) || { total: 0, byOrder: new Map() };
+}
+
+/** One PlantOutward scan for many dispatches — avoids N+1 on list APIs. */
+export async function sumPlantsLoadedOnDispatches(dispatchIds) {
+  const result = new Map();
+  const oids = [];
+  for (const id of dispatchIds || []) {
+    const key = String(id || "");
+    if (!key || !mongoose.isValidObjectId(key)) continue;
+    if (!result.has(key)) {
+      result.set(key, { total: 0, byOrder: new Map() });
+      oids.push(new mongoose.Types.ObjectId(key));
+    }
   }
-  const oid = new mongoose.Types.ObjectId(String(dispatchId));
+  if (!oids.length) return result;
+
+  const idSet = new Set(oids.map(String));
   const pos = await PlantOutward.find({
-    "secondaryOutward.linkedDispatchId": oid,
+    "secondaryOutward.linkedDispatchId": { $in: oids },
   })
     .select("secondaryOutward")
     .lean();
 
-  let total = 0;
-  const byOrder = new Map();
   for (const po of pos) {
     for (const so of po.secondaryOutward || []) {
-      if (String(so.linkedDispatchId) !== String(dispatchId)) continue;
+      const did = String(so.linkedDispatchId || "");
+      if (!idSet.has(did)) continue;
+      const bucket = result.get(did);
+      if (!bucket) continue;
       const q = Number(so.totalQuantity) || 0;
-      total += q;
+      bucket.total += q;
       if (so.linkedOrderId) {
         const key = String(so.linkedOrderId);
-        byOrder.set(key, (byOrder.get(key) || 0) + q);
+        bucket.byOrder.set(key, (bucket.byOrder.get(key) || 0) + q);
       }
     }
   }
-  return { total, byOrder };
+  return result;
 }
 
 export async function findDispatchActiveByIdOrTransport(idParam) {
@@ -1063,7 +1078,8 @@ async function executeOneSecondaryOutwardLine({
       const preAssignedSecondary = String(
         linkedOrderDoc?.deliveryChallanInvoiceNumber || ""
       ).trim();
-      let official = null;
+      let officialPrimary = null;
+      let officialSet = {};
       let secondaryInvoiceLabel = preAssignedSecondary;
       const canAssignDc =
         newOrderStatus === "DISPATCHED" &&
@@ -1073,16 +1089,12 @@ async function executeOneSecondaryOutwardLine({
         newOrderStatus = "DISPATCH_PROCESS";
       }
       if (canAssignDc) {
-        official = await ensureOfficialDeliveryChallanForOrder(
-          linkedOrderDoc,
-          session
-        );
+        const ensured = await ensureOfficialDcSetFields(linkedOrderDoc, session);
+        officialSet = ensured.setFields;
+        officialPrimary = ensured.primaryLabel;
       }
-      if (official) {
-        secondaryInvoiceLabel = official;
-      } else if (!secondaryInvoiceLabel && canAssignDc) {
-        const [freshSec] = await allocateNextInvoiceNumbers(session, 1);
-        secondaryInvoiceLabel = freshSec || "";
+      if (officialPrimary) {
+        secondaryInvoiceLabel = officialPrimary;
       }
 
       const dispatchHistoryEntry = {
@@ -1107,13 +1119,8 @@ async function executeOneSecondaryOutwardLine({
       const secondaryOrderSet = {
         remainingPlants: newRemaining,
         orderStatus: newOrderStatus,
+        ...officialSet,
       };
-      if (official) {
-        secondaryOrderSet.officialDeliveryChallanNumber = official;
-      }
-      if (!preAssignedSecondary && secondaryInvoiceLabel && !official) {
-        secondaryOrderSet.deliveryChallanInvoiceNumber = secondaryInvoiceLabel;
-      }
 
       await updateOrderWithLedgerSync({
         orderId: linkedOrderId,

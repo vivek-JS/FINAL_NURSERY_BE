@@ -51,17 +51,17 @@ import {
 import Order from "../models/order.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import { updateOrderWithLedgerSync } from "./dispatch.controller.js";
-import { allocateNextInvoiceNumbers } from "../services/invoiceSequence.service.js";
-import { ensureOfficialDeliveryChallanForOrder } from "../services/officialDeliveryChallan.service.js";
+import { ensureOfficialDcSetFields } from "../services/officialDeliveryChallan.service.js";
 import { hasPendingLinkedAgriLoadForOrder } from "../services/linkedAgriLoadGuard.service.js";
 import {
   previewSecondaryVehicleLoad,
   executeSecondaryVehicleLoad,
-  sumPlantsLoadedOnDispatch,
   groupPolyhouseStockByBatch,
   DISPATCH_SHED_ALLOWED_STATUSES,
   findDispatchActiveByIdOrTransport,
+  unionDispatchOrderObjectIds,
 } from "../services/secondaryVehicleLoad.service.js";
+import { listSecondaryVehicleDispatches } from "../services/secondaryVehicleDispatchesList.service.js";
 import {
   collectLoadedOutwardLinesForDispatch,
   executeSecondaryVehicleUnload,
@@ -4550,7 +4550,8 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
 
       const processedByRaw = req.user?._id || req.user?.id;
       const preAssignedSecondary = String(linkedOrderDoc?.deliveryChallanInvoiceNumber || "").trim();
-      let official = null;
+      let officialPrimary = null;
+      let officialSet = {};
       let secondaryInvoiceLabel = preAssignedSecondary;
       const canAssignDc =
         newOrderStatus === "DISPATCHED" &&
@@ -4560,13 +4561,12 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
         newOrderStatus = "DISPATCH_PROCESS";
       }
       if (canAssignDc) {
-        official = await ensureOfficialDeliveryChallanForOrder(linkedOrderDoc, session);
+        const ensured = await ensureOfficialDcSetFields(linkedOrderDoc, session);
+        officialSet = ensured.setFields;
+        officialPrimary = ensured.primaryLabel;
       }
-      if (official) {
-        secondaryInvoiceLabel = official;
-      } else if (!secondaryInvoiceLabel && canAssignDc) {
-        const [freshSec] = await allocateNextInvoiceNumbers(session, 1);
-        secondaryInvoiceLabel = freshSec || "";
+      if (officialPrimary) {
+        secondaryInvoiceLabel = officialPrimary;
       }
 
       const dispatchHistoryEntry = {
@@ -4590,13 +4590,8 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
       const secondaryOrderSet = {
         remainingPlants: newRemaining,
         orderStatus: newOrderStatus,
+        ...officialSet,
       };
-      if (official) {
-        secondaryOrderSet.officialDeliveryChallanNumber = official;
-      }
-      if (!preAssignedSecondary && secondaryInvoiceLabel && !official) {
-        secondaryOrderSet.deliveryChallanInvoiceNumber = secondaryInvoiceLabel;
-      }
 
       await updateOrderWithLedgerSync({
         orderId: linkedOrderId,
@@ -5088,295 +5083,24 @@ const getSecondaryInwardById = catchAsync(async (req, res, next) => {
   res.status(200).json(response);
 });
 
-/** All order ObjectIds tied to a dispatch (top-level list + per-line orderDispatchDetails). */
-function unionDispatchOrderObjectIds(dispatchDoc) {
-  const plain = dispatchDoc?.toObject?.() ?? dispatchDoc;
-  const ids = new Set();
-  for (const id of plain.orderIds || []) {
-    if (id) ids.add(String(id));
-  }
-  for (const ord of plain.orderDispatchDetails || []) {
-    if (ord?.orderId) ids.add(String(ord.orderId));
-  }
-  return [...ids]
-    .filter((id) => mongoose.isValidObjectId(id))
-    .map((id) => new mongoose.Types.ObjectId(id));
-}
-
-/** Office qty edit within this window shows "recent" on shed app cards. */
-const OFFICE_EDIT_RECENT_MS = 24 * 60 * 60 * 1000;
-
 /** PENDING / IN_TRANSIT / LOADED vehicle dispatches for secondary shed fulfillment UI (paginated). */
-const getSecondaryVehicleDispatches = catchAsync(async (req, res, next) => {
-  const ALLOWED = DISPATCH_SHED_ALLOWED_STATUSES;
-  const page = Math.max(1, Number(req.query.page) || 1);
-  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
-  const skip = (page - 1) * limit;
-  const qSearch = String(req.query.search || "").trim();
-  const statusFilter = String(req.query.status || "").trim().toLowerCase();
-
-  const filter = {
-    isDeleted: { $ne: true },
-    transportStatus: { $in: ALLOWED },
-  };
-  if (statusFilter === "loaded") {
-    filter.transportStatus = "LOADED";
-  } else if (statusFilter === "pending") {
-    filter.transportStatus = { $in: ["PENDING", "IN_TRANSIT"] };
-  }
-  if (qSearch) {
-    filter.$or = [
-      { transportId: new RegExp(qSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") },
-      { driverName: new RegExp(qSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") },
-      { vehicleName: new RegExp(qSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") },
-    ];
-  }
-
-  const total = await Dispatch.countDocuments(filter);
-  const docs = await Dispatch.find(filter)
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .select(
-      "transportId transportStatus driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds createdAt updatedAt"
-    )
-    .lean();
-
-  const previewOrderIdSet = new Set();
-  for (const d of docs) {
-    for (const ord of d.orderDispatchDetails || []) {
-      if (ord.orderId && mongoose.isValidObjectId(String(ord.orderId))) {
-        previewOrderIdSet.add(String(ord.orderId));
-      }
-    }
-  }
-  const previewOrderOids = [...previewOrderIdSet].map((id) => new mongoose.Types.ObjectId(id));
-  const previewOrderLabels =
-    previewOrderOids.length > 0
-      ? await Order.find({ _id: { $in: previewOrderOids } })
-          .select("_id orderId publicOrderCode")
-          .lean()
-      : [];
-  const orderLabelById = new Map(previewOrderLabels.map((o) => [String(o._id), o]));
-
-  const loadedByDispatch = await Promise.all(
-    docs.map(async (d) => ({
-      id: String(d._id),
-      ...(await sumPlantsLoadedOnDispatch(d._id)),
-    }))
-  );
-  const loadedMap = new Map(loadedByDispatch.map((x) => [x.id, x]));
-
-  const plantIdSet = new Set();
-  for (const d of docs) {
-    for (const p of d.plantsDetails || []) {
-      if (p.plantId && mongoose.isValidObjectId(String(p.plantId))) {
-        plantIdSet.add(String(p.plantId));
-      }
-    }
-  }
-  const sowingAllowedByPlant = new Map();
-  const plantCmsById = new Map();
-  if (plantIdSet.size) {
-    const cmsRows = await PlantCms.find({
-      _id: { $in: [...plantIdSet].map((id) => new mongoose.Types.ObjectId(id)) },
-    })
-      .select("_id name sowingAllowed subtypes._id subtypes.name")
-      .lean();
-    for (const r of cmsRows) {
-      sowingAllowedByPlant.set(String(r._id), Boolean(r.sowingAllowed));
-      plantCmsById.set(String(r._id), r);
-    }
-  }
-
-  const items = docs.map((d) => {
-    let totalQty = 0;
-    let plantRows = (d.plantsDetails || []).map((p, plantRowIndex) => {
-      const q = Number(p.quantity ?? p.totalPlants ?? 0) || 0;
-      totalQty += q;
-      let cratePieces = 0;
-      const crates = (p.crates || []).map((c) => {
-        const crateCount = Number(c.crateCount || 0) || 0;
-        cratePieces += crateCount;
-        return {
-          cavityName: String(c.cavityName || c.cavity || "").trim() || "—",
-          crateCount,
-          plantCount: Number(c.plantCount || 0) || 0,
-        };
-      });
-      const pid = p.plantId ? String(p.plantId) : "";
-      const sid = p.subTypeId ? String(p.subTypeId) : "";
-      const cms = pid ? plantCmsById.get(pid) : null;
-      const subtypeDoc = (cms?.subtypes || []).find((st) => String(st._id) === sid);
-      const plantName = cms?.name || "";
-      const subtypeName = subtypeDoc?.name || "";
-      const label =
-        plantName && subtypeName
-          ? `${plantName} / ${subtypeName}`
-          : String(p.name || "").trim() || plantName || subtypeName || "Plant";
-      return {
-        plantRowIndex,
-        name: label,
-        plantName: plantName || label,
-        subtypeName: subtypeName || "",
-        id: p.id,
-        plantId: p.plantId,
-        subTypeId: p.subTypeId,
-        quantity: q,
-        cratePieces,
-        crates,
-        sowingAllowed: pid ? Boolean(sowingAllowedByPlant.get(pid)) : false,
-      };
-    });
-
-    const plantsDetailPreview = (d.plantsDetails || []).map((p) => {
-      const q = Number(p.quantity ?? p.totalPlants ?? 0) || 0;
-      const crates = (p.crates || []).map((c) => ({
-        cavityName: String(c.cavityName || "").trim(),
-        crateCount: Number(c.crateCount || 0) || 0,
-        plantCount: Number(c.plantCount || 0) || 0,
-      }));
-      const shadeMap = new Map();
-      for (const pd of p.pickupDetails || []) {
-        const label = String(pd.shadeName || pd.shade || "").trim() || "—";
-        const qty = Number(pd.quantity || 0) || 0;
-        shadeMap.set(label, (shadeMap.get(label) || 0) + qty);
-      }
-      const pickupByShade = [...shadeMap.entries()].map(([shadeName, quantity]) => ({
-        shadeName,
-        quantity,
-      }));
-      return {
-        name: p.name,
-        quantity: q,
-        crates,
-        pickupByShade,
-      };
-    });
-
-    const loadedInfo = loadedMap.get(String(d._id)) || { total: 0, byOrder: new Map() };
-
-    const orderDispatchPreview = (d.orderDispatchDetails || []).map((row) => {
-      const oid = String(row.orderId || "");
-      const label = orderLabelById.get(oid);
-      let lineCratePieces = 0;
-      const crates = (row.crates || []).map((c) => {
-        const cc = Number(c.crateCount || 0) || 0;
-        lineCratePieces += cc;
-        return {
-          cavityName: String(c.cavityName || c.cavity || "").trim() || "—",
-          crateCount: cc,
-          plantCount: Number(c.plantCount || 0) || 0,
-        };
-      });
-      const dispatchQuantity = Number(row.dispatchQuantity || 0) || 0;
-      const originalDispatchQuantity =
-        row.originalDispatchQuantity != null &&
-        Number.isFinite(Number(row.originalDispatchQuantity))
-          ? Number(row.originalDispatchQuantity)
-          : dispatchQuantity;
-      const officeQtyDeltaTotal = dispatchQuantity - originalDispatchQuantity;
-      const lastOfficeQtyDelta = Number(row.lastOfficeQtyDelta) || 0;
-      const lastOfficeEditedAt = row.lastOfficeEditedAt || null;
-      const fromOutward = loadedInfo.byOrder?.get(oid) || 0;
-      const shedLoadedQuantity = Math.max(
-        Number(row.shedLoadedQuantity) || 0,
-        fromOutward
-      );
-      const shedLoadedFromSecondary = Boolean(
-        row.shedLoadedFromSecondary || fromOutward > 0
-      );
-      return {
-        orderId: row.orderId,
-        orderIdNumeric: label?.orderId ?? null,
-        publicOrderCode: label?.publicOrderCode ?? "",
-        dispatchQuantity,
-        originalDispatchQuantity,
-        officeQtyDeltaTotal,
-        lastOfficeQtyDelta,
-        lastOfficeEditedAt,
-        shedLoadedQuantity,
-        shedLoadedFromSecondary,
-        isFullyLoadedFromShed:
-          dispatchQuantity > 0 && shedLoadedQuantity >= dispatchQuantity,
-        crates,
-        cratePiecesOnLine: lineCratePieces,
-        plantQtyOnLine: dispatchQuantity,
-      };
-    });
-
-    const odPlantTotal = orderDispatchPreview.reduce((s, r) => s + r.dispatchQuantity, 0);
-    let odCratePieces = 0;
-    for (const line of orderDispatchPreview) {
-      odCratePieces += line.cratePiecesOnLine;
-    }
-
-    if (plantRows.length === 0 && odPlantTotal > 0) {
-      plantRows = [
-        {
-          name: "Orders on vehicle (collection slip)",
-          id: "orderLines",
-          quantity: odPlantTotal,
-          cratePieces: odCratePieces,
-        },
-      ];
-      totalQty = odPlantTotal;
-    }
-
-    const unionCount = unionDispatchOrderObjectIds(d).length;
-    const vehiclePlantQty = totalQty || odPlantTotal;
-    const shedLoadedPlantsTotal = loadedInfo.total || 0;
-    const loadProgressPct =
-      vehiclePlantQty > 0
-        ? Math.min(100, Math.round((shedLoadedPlantsTotal / vehiclePlantQty) * 100))
-        : 0;
-
-    const officeQtyDeltaTotal = orderDispatchPreview.reduce(
-      (s, r) => s + (Number(r.officeQtyDeltaTotal) || 0),
-      0
-    );
-    const lastOfficeEditedAt = d.lastOfficeEditedAt || null;
-    const hasRecentOfficeEdit =
-      lastOfficeEditedAt != null &&
-      Date.now() - new Date(lastOfficeEditedAt).getTime() < OFFICE_EDIT_RECENT_MS;
-
-    return {
-      _id: d._id,
-      transportId: d.transportId,
-      transportStatus: d.transportStatus,
-      driverName: d.driverName,
-      driverMobile: d.driverMobile,
-      vehicleName: d.vehicleName,
-      vehicleNumber: d.vehicleNumber,
-      createdAt: d.createdAt,
-      updatedAt: d.updatedAt,
-      totalPlantQty: vehiclePlantQty,
-      vehiclePlantQty,
-      shedLoadedPlantsTotal,
-      loadProgressPct,
-      officeQtyDeltaTotal,
-      lastOfficeEditedAt,
-      hasRecentOfficeEdit,
-      plantRowsSummary: plantRows,
-      plantsDetailPreview,
-      orderDispatchPreview,
-      orderCount: unionCount || (d.orderIds || []).length,
-    };
+const getSecondaryVehicleDispatches = catchAsync(async (req, res) => {
+  const payload = await listSecondaryVehicleDispatches({
+    page: req.query.page,
+    limit: req.query.limit,
+    search: req.query.search,
+    status: req.query.status,
   });
-
-  const response = generateResponse(
-    "Success",
-    "Vehicle dispatches for secondary ops",
-    {
-      items,
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit) || 1,
-    },
-    undefined
-  );
-  res.status(200).json(response);
+  res
+    .status(200)
+    .json(
+      generateResponse(
+        "Success",
+        "Vehicle dispatches for secondary ops",
+        payload,
+        undefined
+      )
+    );
 });
 
 /**

@@ -2,20 +2,27 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import {
-  getInvoiceSequenceSettings,
-  setInvoiceSequenceSettings,
-  listPlantInvoiceSequences,
-  setPlantInvoiceSequence,
+  listGlobalDocumentSequences,
+  setGlobalDocumentSequence,
+  migrateGlobalSequencesFromPlantKeys,
 } from "../services/invoiceSequence.service.js";
 
 export const getDeliveryChallanInvoiceSequence = catchAsync(async (req, res) => {
-  const data = await getInvoiceSequenceSettings();
-  res.status(200).json(generateResponse("Success", "Invoice sequence settings", data));
+  const data = await listGlobalDocumentSequences();
+  res.status(200).json(generateResponse("Success", "Document sequence settings", data));
 });
 
 export const putDeliveryChallanInvoiceSequence = catchAsync(async (req, res, next) => {
   const prefix = req.body?.prefix;
   const nextNumber = req.body?.nextNumber;
+  const kindRaw = req.body?.kind ?? req.body?.sequenceKind ?? req.body?.type ?? "dc";
+  const billableRaw = req.body?.billable ?? req.body?.bucket ?? true;
+  let billable = true;
+  if (billableRaw === false || billableRaw === "false" || billableRaw === "nonBillable") {
+    billable = false;
+  } else if (billableRaw === "billable") {
+    billable = true;
+  }
 
   if (nextNumber !== undefined && nextNumber !== null) {
     const nn = Number(nextNumber);
@@ -28,54 +35,48 @@ export const putDeliveryChallanInvoiceSequence = catchAsync(async (req, res, nex
     return next(new AppError("prefix cannot be empty (omit to keep current)", 400));
   }
 
-  const current = await getInvoiceSequenceSettings();
-  const data = await setInvoiceSequenceSettings({
-    prefix: prefix !== undefined ? prefix : current.prefix,
-    nextNumber: nextNumber !== undefined && nextNumber !== null ? nextNumber : current.nextNumber,
+  const data = await setGlobalDocumentSequence({
+    kind: kindRaw,
+    billable,
+    prefix,
+    nextNumber,
   });
 
+  const kindLabel = data?.kind === "invoice" ? "invoice" : "DC";
   res.status(200).json(
     generateResponse(
       "Success",
-      "Invoice sequence updated. Existing issued numbers on orders are unchanged.",
+      `Global ${kindLabel} sequence (${billable ? "billable" : "non-billable"}) updated. Existing issued numbers on orders are unchanged.`,
       data
     )
   );
 });
 
+/** @deprecated Plant-scoped sequences removed — returns empty list */
 export const getPlantInvoiceSequences = catchAsync(async (req, res) => {
-  const data = await listPlantInvoiceSequences();
-  res.status(200).json(generateResponse("Success", "Plant invoice sequences", data));
+  res.status(200).json(
+    generateResponse("Success", "Plant sequences deprecated; use global invoice-sequence API", [])
+  );
 });
 
+/** @deprecated Redirects to global bucket update when plantId omitted */
 export const putPlantInvoiceSequence = catchAsync(async (req, res, next) => {
   const plantId = req.body?.plantId || req.params?.plantId;
-  const prefix = req.body?.prefix;
-  const nextNumber = req.body?.nextNumber;
-
-  if (!plantId) {
-    return next(new AppError("plantId is required", 400));
-  }
-  if (nextNumber !== undefined && nextNumber !== null) {
-    const nn = Number(nextNumber);
-    if (!Number.isFinite(nn) || nn < 1 || !Number.isInteger(nn)) {
-      return next(new AppError("nextNumber must be a positive integer", 400));
-    }
-  }
-  if (prefix !== undefined && prefix !== null && String(prefix).trim() === "") {
-    return next(new AppError("prefix cannot be empty", 400));
-  }
-
-  try {
-    const data = await setPlantInvoiceSequence({ plantId, prefix, nextNumber });
-    res.status(200).json(
-      generateResponse(
-        "Success",
-        "Plant invoice sequence updated. Existing issued numbers on orders are unchanged. Cancelled legs do not free numbers.",
-        data
+  if (plantId) {
+    return next(
+      new AppError(
+        "Per-plant sequences are no longer supported. Use PUT /invoice-sequence with kind and billable.",
+        400
       )
     );
-  } catch (e) {
-    return next(new AppError(e.message || "Failed to update plant sequence", e.statusCode || 400));
   }
+  return putDeliveryChallanInvoiceSequence(req, res, next);
+});
+
+export const postMigrateGlobalSequences = catchAsync(async (req, res) => {
+  await migrateGlobalSequencesFromPlantKeys();
+  const data = await listGlobalDocumentSequences();
+  res.status(200).json(
+    generateResponse("Success", "Global sequences migrated from legacy plant counters", data)
+  );
 });

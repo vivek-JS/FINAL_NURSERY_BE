@@ -1,82 +1,50 @@
 import mongoose from "mongoose";
 import PlantCms from "../models/plantCms.model.js";
-import InvoiceSequence from "../models/invoiceSequence.model.js";
+import InvoiceSequence, {
+  DC_BILLABLE_SEQUENCE_KEY,
+  DC_NON_BILLABLE_SEQUENCE_KEY,
+} from "../models/invoiceSequence.model.js";
 
-/** @deprecated kept for reading legacy keys; new allocations use plantDcSequenceKey */
+/** @deprecated kept for reading legacy keys */
 export function officialDcSequenceKey(plantNameId, plantSubtypeId) {
   return `dc_ps:${String(plantNameId)}:${String(plantSubtypeId)}`;
 }
 
-export function plantDcSequenceKey(plantNameId) {
-  return `dc_plant:${String(plantNameId)}`;
+/** @deprecated Plant-scoped keys — use globalDcSequenceKey */
+export function plantDcSequenceKey(plantNameId, billable = true) {
+  const id = String(plantNameId);
+  return billable ? `dc_plant:${id}` : `dc_plant_nb:${id}`;
 }
 
-function lettersOnlyUpper(s, maxLen) {
-  const t = String(s || "").replace(/[^A-Za-z]/g, "").toUpperCase();
-  return t.slice(0, maxLen);
+const DEFAULT_DC_PREFIX = { billable: "B", nonBillable: "BN" };
+
+export function globalDcSequenceKey(billable = true) {
+  return billable !== false ? DC_BILLABLE_SEQUENCE_KEY : DC_NON_BILLABLE_SEQUENCE_KEY;
 }
 
-function fallbackPrefixFromPlantId(plantNameId) {
-  const hex = String(plantNameId).replace(/[^a-fA-F0-9]/g, "");
-  let out = "";
-  for (let i = 0; i < hex.length && out.length < 3; i += 1) {
-    const n = parseInt(hex[i], 16);
-    if (!Number.isFinite(n)) continue;
-    out += String.fromCharCode(65 + (n % 26));
-  }
-  return (out + "PL").slice(0, 3);
-}
-
-async function resolvePlantPrefix(plantNameId, session) {
-  const sess = session || undefined;
-  const plant = await PlantCms.findById(plantNameId).select("name").session(sess).lean();
-  const letters = lettersOnlyUpper(plant?.name || "", 3) || fallbackPrefixFromPlantId(plantNameId);
-  return letters.slice(0, 3) || "PL";
-}
-
-async function ensureUniquePlantPrefix(candidate, fullKey, session) {
-  const sess = session || undefined;
-  const candUpper = String(candidate || "PL")
-    .replace(/[^A-Za-z]/g, "")
-    .toUpperCase();
-  let p = candUpper.slice(0, 8);
-  if (!p) p = "PL";
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const clash = await InvoiceSequence.findOne({
-      $and: [
-        { key: { $regex: /^dc_plant:/ } },
-        { prefix: p },
-        { key: { $ne: fullKey } },
-      ],
-    })
-      .session(sess)
-      .select("key")
-      .lean();
-    if (!clash) return p;
-    const suf = String.fromCharCode(65 + (attempt % 26));
-    p = `${candUpper.slice(0, 7)}${suf}`.slice(0, 8) || "PL";
-  }
-  return fallbackPrefixFromPlantId(String(fullKey).split(":")[1] || fullKey);
+function defaultDcPrefix(billable = true) {
+  return billable !== false ? DEFAULT_DC_PREFIX.billable : DEFAULT_DC_PREFIX.nonBillable;
 }
 
 /**
- * Allocate next official DC for this plant bucket (PREFIX + number, e.g. B640).
+ * Allocate next official DC from the global billable or non-billable bucket.
  */
-export async function allocateOfficialDcNumber(session, plantNameId, _plantSubtypeIdIgnored) {
-  const pid = plantNameId?._id ?? plantNameId;
-  if (!mongoose.isValidObjectId(String(pid))) {
-    throw new Error("allocateOfficialDcNumber: invalid plantName id");
-  }
-  const fullKey = plantDcSequenceKey(pid);
+export async function allocateOfficialDcNumber(session, billable = true) {
+  const isBillable = billable !== false;
+  const fullKey = globalDcSequenceKey(isBillable);
   const sess = session || undefined;
 
   const existing = await InvoiceSequence.findOne({ key: fullKey }).session(sess).lean();
   if (!existing) {
-    const base = await resolvePlantPrefix(pid, session);
-    const prefix = await ensureUniquePlantPrefix(base, fullKey, session);
     await InvoiceSequence.updateOne(
       { key: fullKey },
-      { $setOnInsert: { key: fullKey, prefix, nextNumber: 1 } },
+      {
+        $setOnInsert: {
+          key: fullKey,
+          prefix: defaultDcPrefix(isBillable),
+          nextNumber: 1,
+        },
+      },
       { upsert: true, session: sess }
     );
   }
@@ -95,42 +63,154 @@ export async function allocateOfficialDcNumber(session, plantNameId, _plantSubty
   const prefix =
     updated.prefix != null && String(updated.prefix).trim() !== ""
       ? String(updated.prefix).trim()
-      : "PL";
+      : defaultDcPrefix(isBillable);
   return `${prefix}${seq}`;
 }
 
-function resolvePlantIdFromOrder(orderDoc) {
-  const lines = Array.isArray(orderDoc?.plantLineItems) ? orderDoc.plantLineItems : [];
-  if (lines.length > 0) {
-    const first = lines[0];
-    const fromLine = first?.plantName?._id ?? first?.plantName;
-    if (mongoose.isValidObjectId(String(fromLine))) return fromLine;
-  }
-  return orderDoc?.plantName?._id ?? orderDoc?.plantName;
+function plantIdFromRef(ref) {
+  if (ref == null) return null;
+  const id = ref?._id ?? ref;
+  return mongoose.isValidObjectId(String(id)) ? id : null;
+}
+
+function subtypeIdFromRef(ref) {
+  if (ref == null) return null;
+  const id = ref?._id ?? ref;
+  return id != null ? String(id) : null;
 }
 
 /**
- * Returns existing official DC, or allocates and returns a new one (caller persists on $set).
- * Idempotent: if order already has officialDeliveryChallanNumber, returns it without consuming a new number.
- * Scope: one sequence per plant (Banana / Papaya / …); first line wins for multi-plant instant orders.
+ * Resolve billable vs non-billable plant buckets for an order.
+ * Uses line.isBillable snapshot when set; otherwise PlantCms subtype.isBillable (default true).
  */
-export async function ensureOfficialDeliveryChallanForOrder(orderDoc, session) {
-  const existing = String(orderDoc?.officialDeliveryChallanNumber || "").trim();
-  if (existing) return existing;
+export async function resolveOrderDcBillableBuckets(orderDoc, session) {
+  const sess = session || undefined;
+  const lines = Array.isArray(orderDoc?.plantLineItems) ? orderDoc.plantLineItems : [];
 
-  const plantRef = resolvePlantIdFromOrder(orderDoc);
-  if (!mongoose.isValidObjectId(String(plantRef))) {
-    console.error(
-      "ensureOfficialDeliveryChallanForOrder: missing plant on order",
-      orderDoc?._id
-    );
-    return null;
+  const entries = [];
+  if (lines.length > 0) {
+    for (const line of lines) {
+      const plantId = plantIdFromRef(line?.plantName);
+      const subtypeId = subtypeIdFromRef(line?.plantSubtype);
+      if (!plantId) continue;
+      entries.push({
+        plantId,
+        subtypeId,
+        lineIsBillable:
+          typeof line?.isBillable === "boolean" ? line.isBillable : null,
+      });
+    }
+  } else {
+    const plantId = plantIdFromRef(orderDoc?.plantName);
+    const subtypeId = subtypeIdFromRef(orderDoc?.plantSubtype);
+    if (plantId) {
+      entries.push({ plantId, subtypeId, lineIsBillable: null });
+    }
   }
+
+  if (entries.length === 0) {
+    return { hasBillable: false, hasNonBillable: false, billablePlantId: null, nonBillablePlantId: null };
+  }
+
+  const plantIds = [...new Set(entries.map((e) => String(e.plantId)))];
+  const plants = await PlantCms.find({ _id: { $in: plantIds } })
+    .select("subtypes._id subtypes.isBillable")
+    .session(sess)
+    .lean();
+  const subtypeBillable = new Map();
+  for (const p of plants) {
+    for (const s of p.subtypes || []) {
+      subtypeBillable.set(String(s._id), s.isBillable !== false);
+    }
+  }
+
+  let hasBillable = false;
+  let hasNonBillable = false;
+  let billablePlantId = null;
+  let nonBillablePlantId = null;
+
+  for (const e of entries) {
+    let billable = true;
+    if (typeof e.lineIsBillable === "boolean") {
+      billable = e.lineIsBillable;
+    } else if (e.subtypeId && subtypeBillable.has(e.subtypeId)) {
+      billable = subtypeBillable.get(e.subtypeId);
+    }
+    if (billable) {
+      hasBillable = true;
+      if (!billablePlantId) billablePlantId = e.plantId;
+    } else {
+      hasNonBillable = true;
+      if (!nonBillablePlantId) nonBillablePlantId = e.plantId;
+    }
+  }
+
+  if (!hasBillable && !hasNonBillable) {
+    hasBillable = true;
+    billablePlantId = entries[0].plantId;
+  }
+
+  return { hasBillable, hasNonBillable, billablePlantId, nonBillablePlantId };
+}
+
+/**
+ * Allocate billable and/or non-billable official DCs as needed (idempotent per field).
+ * @returns {{ billable: string|null, nonBillable: string|null }}
+ */
+export async function ensureOfficialDeliveryChallansForOrder(orderDoc, session) {
+  const existingBillable = String(orderDoc?.officialDeliveryChallanNumber || "").trim();
+  const existingNonBillable = String(
+    orderDoc?.officialNonBillableDeliveryChallanNumber || ""
+  ).trim();
+
+  let buckets;
+  try {
+    buckets = await resolveOrderDcBillableBuckets(orderDoc, session);
+  } catch (e) {
+    console.error("ensureOfficialDeliveryChallansForOrder: classify failed", e?.message || e);
+    return {
+      billable: existingBillable || null,
+      nonBillable: existingNonBillable || null,
+    };
+  }
+
+  let billable = existingBillable || null;
+  let nonBillable = existingNonBillable || null;
 
   try {
-    return await allocateOfficialDcNumber(session, plantRef);
+    if (buckets.hasBillable && !billable) {
+      billable = await allocateOfficialDcNumber(session, true);
+    }
+    if (buckets.hasNonBillable && !nonBillable) {
+      nonBillable = await allocateOfficialDcNumber(session, false);
+    }
   } catch (e) {
-    console.error("ensureOfficialDeliveryChallanForOrder:", e?.message || e);
-    return null;
+    console.error("ensureOfficialDeliveryChallansForOrder:", e?.message || e);
   }
+
+  return { billable, nonBillable };
+}
+
+/**
+ * Apply ensure result onto a `$set` object (mutates and returns setFields).
+ * @returns {{ billable: string|null, nonBillable: string|null, primaryLabel: string|null, setFields: object }}
+ */
+export async function ensureOfficialDcSetFields(orderDoc, session) {
+  const dcs = await ensureOfficialDeliveryChallansForOrder(orderDoc, session);
+  const setFields = {};
+  if (dcs.billable) setFields.officialDeliveryChallanNumber = dcs.billable;
+  if (dcs.nonBillable) setFields.officialNonBillableDeliveryChallanNumber = dcs.nonBillable;
+  const primaryLabel = dcs.billable || dcs.nonBillable || null;
+  return { ...dcs, primaryLabel, setFields };
+}
+
+/**
+ * @deprecated Prefer ensureOfficialDeliveryChallansForOrder / ensureOfficialDcSetFields.
+ */
+export async function ensureOfficialDeliveryChallanForOrder(orderDoc, session) {
+  const { billable, nonBillable } = await ensureOfficialDeliveryChallansForOrder(
+    orderDoc,
+    session
+  );
+  return billable || nonBillable || null;
 }
