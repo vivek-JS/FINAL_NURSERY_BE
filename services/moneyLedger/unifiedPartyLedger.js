@@ -142,8 +142,9 @@ export async function getUnifiedBookPartyStatement(
 
   const enriched = await enrichStatementProducts(entries);
 
+  // Running balance oldest → newest, then reverse so latest entry is first
   let running = 0;
-  const rows = enriched.map((e) => {
+  const chronological = enriched.map((e) => {
     running = roundMoney(running + (Number(e.debit) || 0) - (Number(e.credit) || 0));
     return {
       ...e,
@@ -151,9 +152,10 @@ export async function getUnifiedBookPartyStatement(
       runningBalance: running,
     };
   });
+  const rows = chronological.slice().reverse();
 
-  const debit = roundMoney(rows.reduce((s, e) => s + (Number(e.debit) || 0), 0));
-  const credit = roundMoney(rows.reduce((s, e) => s + (Number(e.credit) || 0), 0));
+  const debit = roundMoney(chronological.reduce((s, e) => s + (Number(e.debit) || 0), 0));
+  const credit = roundMoney(chronological.reduce((s, e) => s + (Number(e.credit) || 0), 0));
 
   return {
     ok: true,

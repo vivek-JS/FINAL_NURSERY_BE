@@ -40,8 +40,19 @@ function grossSaleAmount(order) {
   return total + ret;
 }
 
-/** Farmer / walk-in customer parties from legacy Ram Agri customer ledger. */
+/** Farmer / walk-in customer parties from legacy Ram Agri customer ledger.
+ * Excludes mobiles that already belong to a Merchant (B2B) so Dharti etc. are merchant-only.
+ */
 export async function listRamAgriFarmerParties({ q = "", limit = 100 } = {}) {
+  const merchantPhones = await Merchant.find({ isActive: { $ne: false } })
+    .select("phone")
+    .lean();
+  const excludeMobiles = new Set(
+    merchantPhones
+      .map((m) => normalizeAgriCustomerMobile(m.phone))
+      .filter((p) => p && p.length >= 10 && !/^0+$/.test(p))
+  );
+
   const match = {};
   if (q) {
     const mobile = normalizeAgriCustomerMobile(q);
@@ -66,17 +77,22 @@ export async function listRamAgriFarmerParties({ q = "", limit = 100 } = {}) {
     { $limit: Math.min(200, Number(limit) || 100) },
   ]);
 
-  return agg.map((r) => ({
-    partyType: "CUSTOMER",
-    partyKind: "FARMER",
-    partyId: r._id,
-    partyKey: r._id,
-    partyName: r.partyName || "",
-    debit: rm(r.debit),
-    credit: rm(r.credit),
-    balance: rm(r.balance),
-    lastEntryAt: r.lastEntryAt,
-  }));
+  return agg
+    .filter((r) => {
+      const mob = normalizeAgriCustomerMobile(r._id);
+      return !excludeMobiles.has(mob);
+    })
+    .map((r) => ({
+      partyType: "CUSTOMER",
+      partyKind: "FARMER",
+      partyId: r._id,
+      partyKey: r._id,
+      partyName: r.partyName || "",
+      debit: rm(r.debit),
+      credit: rm(r.credit),
+      balance: rm(r.balance),
+      lastEntryAt: r.lastEntryAt,
+    }));
 }
 
 /** B2B merchant receivables from durable MoneyLedgerEntry (fallback: agri orders). */
@@ -198,7 +214,7 @@ export async function getRamAgriFarmerStatement(partyId, { limit = 500 } = {}) {
     .limit(Math.min(1000, Number(limit) || 500))
     .lean();
   let running = 0;
-  const rows = entries.map((e) => {
+  const chronological = entries.map((e) => {
     running = rm(running + (Number(e.debit) || 0) - (Number(e.credit) || 0));
     return {
       ...e,
@@ -211,6 +227,7 @@ export async function getRamAgriFarmerStatement(partyId, { limit = 500 } = {}) {
       runningBalance: running,
     };
   });
+  const rows = chronological.slice().reverse();
   return {
     party: {
       book: "RAM_AGRI",

@@ -37,6 +37,30 @@ export async function postAgriSalesOrderAr(order, userId) {
   const merchant = await Merchant.findById(merchantId).select("name").lean();
   const partyName = merchant?.name || order.customerName || "";
 
+  const products = (Array.isArray(order.lineItems) && order.lineItems.length
+    ? order.lineItems
+    : [
+        {
+          productName: order.productName,
+          ramAgriCropName: order.ramAgriCropName,
+          ramAgriVarietyName: order.ramAgriVarietyName,
+          quantity: order.quantity,
+          rate: order.rate,
+          amount: order.totalAmount,
+        },
+      ]
+  )
+    .map((l) => ({
+      productName:
+        l.productName || l.ramAgriVarietyName || l.ramAgriCropName || "Item",
+      qty: Number(l.quantity) || 0,
+      rate: Number(l.rate) || 0,
+      amount: Number(l.amount) || Number(l.quantity || 0) * Number(l.rate || 0),
+      crop: l.ramAgriCropName || "",
+      variety: l.ramAgriVarietyName || "",
+    }))
+    .filter((p) => p.productName);
+
   const sellPost = await postEntry({
     book: "RAM_AGRI",
     side: "AR",
@@ -53,6 +77,7 @@ export async function postAgriSalesOrderAr(order, userId) {
     reference: order.orderNumber || "",
     idempotencyKey: `ram_agri:ar:sell:${order._id}`,
     createdBy: userId,
+    metadata: { products },
   });
 
   const paymentResults = [];

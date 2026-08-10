@@ -887,9 +887,16 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     } catch (merchantErr) {
       console.error("[createAgriSalesOrder] merchant balance update failed:", merchantErr?.message);
     }
+    try {
+      const { postAgriSalesOrderAr } = await import("../services/moneyLedger/index.js");
+      await postAgriSalesOrderAr(order, userId);
+    } catch (ledgerErr) {
+      console.error("[createAgriSalesOrder] money ledger AR post failed:", ledgerErr?.message || ledgerErr);
+    }
   }
 
-  if (shouldLogRamAgriLedger(order)) {
+  // Money ledger for B2B is MoneyLedgerEntry only — skip farmer/customer ledger duplicate
+  if (shouldLogRamAgriLedger(order) && !merchantId) {
     await createCustomerLedgerEntry({
       customerMobile: order.customerMobile,
       customerName: order.customerName,
@@ -902,6 +909,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
       description: `Order created for ${useMultiLine ? productName : order.ramAgriCropName || productName}`,
       entryDate: order.orderDate || order.createdAt,
       createdBy: userId,
+      idempotencyKey: `ram_agri:ar:order:${order._id}`,
       metadata: {
         cropId: order.ramAgriCropId,
         varietyId: order.ramAgriVarietyId,
@@ -960,7 +968,8 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   await order.save();
 
-  // Create farmer from customer data if farmer doesn't exist
+  // Create farmer from retail customer data only (B2B merchants stay merchant-only)
+  if (!merchantId) {
   try {
     console.log("🔍 Checking if farmer exists for customer mobile:", customerMobile);
     
@@ -999,8 +1008,9 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     console.error("Full error:", error);
     // Don't fail the order creation if farmer creation fails
   }
+  }
 
-  if (shouldLogRamAgriLedger(order) && order.payment && Array.isArray(order.payment)) {
+  if (shouldLogRamAgriLedger(order) && !merchantId && order.payment && Array.isArray(order.payment)) {
     const collectedPayments = order.payment.filter(
       (payment) => payment.paymentStatus === "COLLECTED"
     );
@@ -1018,6 +1028,7 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
         description: `Payment via ${payment.modeOfPayment || "N/A"}`,
         entryDate: payment.paymentDate || order.orderDate || order.createdAt,
         createdBy: userId,
+        idempotencyKey: `ram_agri:ar:order:${order._id}:payment:${payment._id}`,
         metadata: {
           paymentStatus: payment.paymentStatus,
           modeOfPayment: payment.modeOfPayment,
@@ -1668,6 +1679,16 @@ const cancelAgriSalesOrder = catchAsync(async (req, res, next) => {
       });
     } catch (merchantErr) {
       console.error("[cancelAgriSalesOrder] merchant balance reverse failed:", merchantErr?.message);
+    }
+    try {
+      const { reverseAgriSalesOrderAr } = await import("../services/moneyLedger/index.js");
+      await reverseAgriSalesOrderAr(
+        order,
+        req.user?._id || req.user?.id,
+        reason || "Order cancelled"
+      );
+    } catch (ledgerErr) {
+      console.error("[cancelAgriSalesOrder] money ledger reverse failed:", ledgerErr?.message || ledgerErr);
     }
   }
 
@@ -2402,6 +2423,35 @@ const updatePaymentStatus = catchAsync(async (req, res, next) => {
       }
       await order.save();
       return next(new AppError("Ledger entry failed, payment status rolled back", 500));
+    }
+  }
+
+  // B2B merchant → durable Money Ledger AR (Ram Agri)
+  if (order.merchant) {
+    try {
+      const {
+        postAgriSalesPaymentAr,
+        reverseAgriSalesPaymentAr,
+      } = await import("../services/moneyLedger/index.js");
+      if (previousPaymentStatus !== "COLLECTED" && paymentStatus === "COLLECTED") {
+        await postAgriSalesPaymentAr(
+          order,
+          order.payment[index],
+          req.user?._id || req.user?.id
+        );
+      } else if (previousPaymentStatus === "COLLECTED" && paymentStatus !== "COLLECTED") {
+        await reverseAgriSalesPaymentAr(
+          order,
+          order.payment[index],
+          req.user?._id || req.user?.id,
+          `Payment status → ${paymentStatus}`
+        );
+      }
+    } catch (moneyErr) {
+      console.error(
+        "[updatePaymentStatus] money ledger AR failed:",
+        moneyErr?.message || moneyErr
+      );
     }
   }
 
@@ -4876,6 +4926,29 @@ const completeOrders = catchAsync(async (req, res, next) => {
       }, { userId, actorName: userName });
     }
 
+    if (returnQty > 0) {
+      try {
+        const { createOrderWiseSaleReturnAudit } = await import(
+          "../services/agriOrderWiseReturnAudit.service.js"
+        );
+        const creditAmt = Math.max(
+          0,
+          previousTotalAmount - (Number(order.totalAmount) || 0)
+        );
+        await createOrderWiseSaleReturnAudit({
+          order,
+          returnQuantity: returnQty,
+          creditAmount: creditAmt,
+          returnReason,
+          returnNotes,
+          userId,
+          stockReturned: !!stockReturnSuccess,
+        });
+      } catch (auditErr) {
+        console.error("[completeWithReturn] list audit:", auditErr?.message || auditErr);
+      }
+    }
+
     await order.save();
     updatedOrders.push(order);
   }
@@ -5103,29 +5176,41 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
   const amountReduced = returnCreditAmount > 0 && order.totalAmount < previousTotalAmount;
   if (shouldLogRamAgriLedger(order) && amountReduced) {
     try {
-      await createCustomerLedgerEntry({
-        customerMobile: order.customerMobile,
-        customerName: order.customerName,
-        refType: "SALES_RETURN",
+      const { postAgriSalesReturnLedgers, applyOrderReturnCreditFields } = await import(
+        "../services/salesReturnLedger.service.js"
+      );
+      if (!(Number(order.originalTotalAmount) > 0)) {
+        order.originalTotalAmount = previousTotalAmount;
+      }
+      applyOrderReturnCreditFields(order, returnCreditAmount);
+      const ledgerResult = await postAgriSalesReturnLedgers({
+        order,
+        creditAmount: returnCreditAmount,
+        userId,
         refId: order._id,
-        orderId: order._id,
-        credit: returnCreditAmount,
-        reference: order.orderNumber,
-        category: "Sales Return",
-        description: `Sales return: ${returnQty} unit(s) returned. Bill reduced from ₹${previousTotalAmount.toFixed(2)} to ₹${order.totalAmount.toFixed(2)}`,
-        entryDate: new Date(),
-        createdBy: userId,
+        idempotencyKey: `ram_agri:ar:sales_return:order:${order._id}:qty:${returnQty}:amt:${returnCreditAmount}`,
+        description: `Sales return: ${returnQty} unit(s) returned. Bill reduced from ₹${previousTotalAmount.toFixed(2)} to ₹${Number(order.totalAmount).toFixed(2)}`,
         metadata: {
           returnQuantity: returnQty,
           salesDeliveredQty,
           previousTotalAmount,
           newTotalAmount: order.totalAmount,
-          previousBalanceAmount,
-          newBalanceAmount: order.balanceAmount,
+          source: "PROCESS_SALES_RETURN",
           returnReason: returnReason || "",
         },
       });
+      order.salesReturnLedgerStatus =
+        ledgerResult.ledgerStatus || (ledgerResult.ok ? "POSTED" : "FAILED");
+      order.salesReturnLedgerError = ledgerResult.ledgerError || ledgerResult.error || "";
+      if (!ledgerResult.ok) {
+        console.error(
+          "[processSalesReturn] ledger failed:",
+          ledgerResult.ledgerError || ledgerResult.error
+        );
+      }
     } catch (ledgerError) {
+      order.salesReturnLedgerStatus = "FAILED";
+      order.salesReturnLedgerError = ledgerError?.message || String(ledgerError);
       console.error("Error creating ledger entry for sales return:", ledgerError);
     }
   }
@@ -5190,6 +5275,23 @@ const processSalesReturn = catchAsync(async (req, res, next) => {
   }
 
   await order.save();
+
+  try {
+    const { createOrderWiseSaleReturnAudit } = await import(
+      "../services/agriOrderWiseReturnAudit.service.js"
+    );
+    await createOrderWiseSaleReturnAudit({
+      order,
+      returnQuantity: returnQty,
+      creditAmount: returnCreditAmount || Math.max(0, previousTotalAmount - (Number(order.totalAmount) || 0)),
+      returnReason,
+      returnNotes,
+      userId,
+      stockReturned: false,
+    });
+  } catch (auditErr) {
+    console.error("[processSalesReturn] list audit:", auditErr?.message || auditErr);
+  }
 
   // Populate fields for response
   await order.populate("productId");
