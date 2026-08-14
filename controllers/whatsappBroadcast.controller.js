@@ -113,7 +113,7 @@ export const getBroadcastById = catchAsync(async (req, res) => {
   return res.status(200).json(generateResponse("Success", "Broadcast detail", {
     ...b,
     contacts: contactsWithStatus,
-    counts: { sent, delivered, read, failed, totalRecipients: (b.contacts || []).length }
+    counts: { sent, delivered, read, failed, replied, totalRecipients: (b.contacts || []).length }
   }, undefined));
 });
 

@@ -106,13 +106,37 @@ export const sendTemplateMessages = catchAsync(async (req, res) => {
   // Create a Broadcast record for UI/aggregation (best-effort, do not fail on error)
   try {
     const isValidObjectId = (id) => id && /^[a-f0-9]{24}$/i.test(String(id));
+    const watiData = response.data || {};
+    const receivers = Array.isArray(watiData.receivers) ? watiData.receivers : [];
+    const receiverByPhone = new Map();
+    for (const receiver of receivers) {
+      const digits = String(receiver.waId || receiver.whatsappNumber || "")
+        .replace(/\D/g, "");
+      if (!digits) continue;
+      const phone10 = digits.length >= 10 ? digits.slice(-10) : digits;
+      const fullPhone = phone10.length === 10 ? `91${phone10}` : digits;
+      receiverByPhone.set(fullPhone, receiver);
+      receiverByPhone.set(phone10, receiver);
+    }
+
     const broadcastContacts = contacts.map((c) => {
-      const phone = String(c.whatsappMsisdn || c.phone || c.mobile || "").replace(/\D/g, "").replace(/^(\d{10})$/, "91$1") || "";
+      const phone =
+        String(c.whatsappMsisdn || c.phone || c.mobile || "")
+          .replace(/\D/g, "")
+          .replace(/^(\d{10})$/, "91$1") || "";
+      const phone10 = phone.length >= 10 ? phone.slice(-10) : phone;
+      const receiver = receiverByPhone.get(phone) || receiverByPhone.get(phone10) || null;
+      const localMessageId =
+        receiver?.localMessageId || receiver?.local_message_id || watiData.localMessageId || null;
+      const whatsappMessageId = receiver?.whatsappMessageId || receiver?.id || null;
       return {
         phone: phone || "unknown",
         name: c.name || "",
         farmerId: isValidObjectId(c.farmerId) ? c.farmerId : null,
         leadId: isValidObjectId(c.leadId) ? c.leadId : null,
+        status: localMessageId ? "sent" : "pending",
+        localMessageId,
+        whatsappMessageId,
       };
     });
     await WhatsAppBroadcast.create({

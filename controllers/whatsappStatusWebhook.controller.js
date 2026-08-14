@@ -1,7 +1,6 @@
 import catchAsync from "../utility/catchAsync.js";
 import Farmer from "../models/farmer.model.js";
 import FarmerLead from "../models/farmerLead.model.js";
-import WhatsAppBroadcast from "../models/whatsappBroadcast.model.js";
 import { runFarmReadyWebhookFromBody } from "../services/whatsappFarmReadyReschedule.service.js";
 import { runCancelReviveWebhookFromBody } from "../services/whatsappOrderCancelRevive.service.js";
 import { runWhatsappReportWizardFromWebhookBody } from "../services/whatsappReportWizard.service.js";
@@ -14,6 +13,10 @@ import {
   extractInboundMessage,
 } from "../utility/watiInboundPayload.js";
 import { recordBroadcastContactReply } from "../services/whatsappBroadcastReply.service.js";
+import {
+  classifyWatiStatusEvent,
+  updateBroadcastContactStatus,
+} from "../services/whatsappBroadcastStatus.service.js";
 
 const WATI_STATUS_DEBUG =
   process.env.WATI_STATUS_WEBHOOK_DEBUG !== "false";
@@ -121,11 +124,14 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
     body.localMessageId || body.data?.localMessageId || watiWebhookId || null;
   const waId = body.waId || body.whatsappId || body.data?.waId || body.data?.from || null;
   const statusString = body.statusString || body.status || null;
-  const whatsappMessageId = body.whatsappMessageId || null;
+  const whatsappMessageId =
+    body.whatsappMessageId || body.data?.whatsappMessageId || body.messageId || null;
   const timestampRaw =
     body.timestamp || body.created || body.data?.timestamp || new Date().toISOString();
   const failedCode = body.failedCode || body.data?.failedCode || null;
   const failedDetail = body.failedDetail || body.data?.failedDetail || null;
+  const broadcastName =
+    body.broadcastName || body.broadcast_name || body.data?.broadcastName || body.data?.broadcast_name || null;
 
   const normalizedPhone = normalizeWaId(waId);
   const inbound = extractInboundMessage(body);
@@ -197,287 +203,165 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
       return res.status(200).json({ success: true, message: "message event delegated" });
     }
 
-    // Handle templateMessageSent_v2 (mark pending activity as sent and store localMessageId)
-    if (eventType === 'templateMessageSent_v2' || String(statusString).toLowerCase() === 'sent') {
-      if (normalizedPhone) {
-        const phone10 = normalizedPhone;
-        const fullPhone = phone10.length === 10 ? `91${phone10}` : phone10;
-        // Find pending activity first to get broadcastName for WhatsAppBroadcast update
-        let broadcastName = null;
-        const farmer = await Farmer.findOne({ mobileNumber: parseInt(phone10) }).lean().catch(() => null);
-        if (farmer) {
-          const act = (farmer.whatsappAutomationActivities || []).find(a => a.status === 'pending' && !a.localMessageId);
-          if (act) broadcastName = act.broadcastName || null;
-        }
-        if (!broadcastName) {
-          const lead = await FarmerLead.findOne({ mobileNumber: phone10 }).lean().catch(() => null);
-          if (lead) {
-            const act = (lead.whatsappAutomationActivities || []).find(a => a.status === 'pending' && !a.localMessageId);
-            if (act) broadcastName = act.broadcastName || null;
-          }
-        }
-        // Update Farmer activities
-        const update = {
-          $set: {
-            'whatsappAutomationActivities.$[elem].status': 'sent',
-            'whatsappAutomationActivities.$[elem].localMessageId': localMessageId || null,
-            'whatsappAutomationActivities.$[elem].whatsappMessageId': whatsappMessageId || null,
-            'whatsappAutomationActivities.$[elem].timestamp': parseTimestamp(timestampRaw)
-          }
-        };
-        const arrayFilters = [{ 'elem.status': { $in: ['pending'] }, 'elem.localMessageId': { $in: [null, ''] } }];
-        await Farmer.updateOne({ mobileNumber: parseInt(phone10) }, update, { arrayFilters }).catch(() => {});
-        await FarmerLead.updateOne({ mobileNumber: phone10 }, update, { arrayFilters }).catch(() => {});
-        statusLog("templateMessageSent_v2", { phone10, localMessageId, broadcastName: broadcastName || "(none)" });
-        // Update WhatsAppBroadcast contact status for proper counts
-        if (broadcastName && localMessageId) {
-          await WhatsAppBroadcast.updateOne(
-            { name: broadcastName },
-            { $set: { 'contacts.$[c].status': 'sent', 'contacts.$[c].localMessageId': localMessageId, 'contacts.$[c].whatsappMessageId': whatsappMessageId || null } },
-            { arrayFilters: [{ 'c.phone': { $in: [fullPhone, phone10] } }] }
-          ).catch(() => {});
-        } else if (localMessageId) {
-          // Fallback: no Farmer/Lead activity - find broadcast by contact phone (most recent)
-          const b = await WhatsAppBroadcast.findOne({
-            'contacts.phone': { $in: [fullPhone, phone10] }
-          }).sort({ sentAt: -1 }).select('name').lean().catch(() => null);
-          if (b) {
-            await WhatsAppBroadcast.updateOne(
-              { name: b.name },
-              { $set: { 'contacts.$[c].status': 'sent', 'contacts.$[c].localMessageId': localMessageId, 'contacts.$[c].whatsappMessageId': whatsappMessageId || null } },
-              { arrayFilters: [{ 'c.phone': { $in: [fullPhone, phone10] } }] }
-            ).catch(() => {});
-          }
-        }
-      }
-      await applyOutboundStatusUpdate({
-        localMessageId: body.localMessageId || body.data?.localMessageId || null,
-        watiWebhookId,
-        whatsappMessageId,
-        event: "delivered",
-        timestamp: parseTimestamp(timestampRaw),
-      });
-      return res.status(200).json({ success: true, message: 'processed templateMessageSent_v2' });
-    }
+    const statusKind = classifyWatiStatusEvent(eventType, statusString);
+    const contactPhone = normalizedPhone || normalizeWaId(inbound.waId);
+    const eventTs = parseTimestamp(timestampRaw);
 
-    // For delivered/read/failed events, use localMessageId or id to find and update
-    if (eventType === 'sentMessageDELIVERED' || eventType === 'sentMessageDELIVERED_v2' || String(statusString).toLowerCase() === 'delivered') {
-      if (!localMessageId && !whatsappMessageId) {
-        return res.status(200).json({ success: false, message: 'no message id' });
-      }
-      const deliveredAt = parseTimestamp(timestampRaw);
-      // Find activity to get broadcastName and phone for WhatsAppBroadcast update
-      let broadcastName = null, contactPhone = null;
-      const f = await Farmer.findOne({ 'whatsappAutomationActivities.localMessageId': localMessageId }).lean().catch(() => null);
-      if (f) {
-        const act = (f.whatsappAutomationActivities || []).find(a => a.localMessageId === localMessageId);
-        if (act) { broadcastName = act.broadcastName; contactPhone = act.phone || String(f.mobileNumber || ''); }
-      }
-      if (!broadcastName) {
-        const l = await FarmerLead.findOne({ 'whatsappAutomationActivities.localMessageId': localMessageId }).lean().catch(() => null);
-        if (l) {
-          const act = (l.whatsappAutomationActivities || []).find(a => a.localMessageId === localMessageId);
-          if (act) { broadcastName = act.broadcastName; contactPhone = act.phone || String(l.mobileNumber || ''); }
-        }
-      }
-      if (!broadcastName) {
-        const b = await WhatsAppBroadcast.findOne({ 'contacts.localMessageId': localMessageId }).select('name').lean().catch(() => null);
-        if (b) broadcastName = b.name;
-      }
-      if (!broadcastName && whatsappMessageId) {
-        const b = await WhatsAppBroadcast.findOne({ 'contacts.whatsappMessageId': whatsappMessageId }).select('name').lean().catch(() => null);
-        if (b) broadcastName = b.name;
-      }
+    const syncFarmerLeadActivity = async (status, extraSet = {}) => {
+      if (!localMessageId) return;
+      const $set = {
+        "whatsappAutomationActivities.$.status": status,
+        ...extraSet,
+      };
       await Farmer.updateOne(
-        { 'whatsappAutomationActivities.localMessageId': localMessageId },
-        { $set: { 'whatsappAutomationActivities.$.status': 'delivered', 'whatsappAutomationActivities.$.deliveredAt': deliveredAt } }
+        { "whatsappAutomationActivities.localMessageId": localMessageId },
+        { $set }
       ).catch(() => {});
       await FarmerLead.updateOne(
-        { 'whatsappAutomationActivities.localMessageId': localMessageId },
-        { $set: { 'whatsappAutomationActivities.$.status': 'delivered', 'whatsappAutomationActivities.$.deliveredAt': deliveredAt } }
+        { "whatsappAutomationActivities.localMessageId": localMessageId },
+        { $set }
       ).catch(() => {});
-      if (broadcastName) {
-        const digits = String(contactPhone || '').replace(/\D/g, '');
-        const phone10 = digits.length >= 10 ? digits.slice(-10) : digits;
-        const fullPhone = digits.length === 10 ? `91${digits}` : digits;
-        const phoneMatch = [fullPhone, phone10, contactPhone].filter(Boolean);
-        const arrayFilter = {
-          $or: [
-            { 'c.localMessageId': localMessageId },
-            ...(whatsappMessageId ? [{ 'c.whatsappMessageId': whatsappMessageId }] : []),
-            ...(phoneMatch.length ? [{ 'c.phone': { $in: phoneMatch } }] : [])
-          ]
-        };
-        await WhatsAppBroadcast.updateOne(
-          { name: broadcastName },
-          { $set: { 'contacts.$[c].status': 'delivered', 'contacts.$[c].deliveredAt': deliveredAt } },
-          { arrayFilters: [arrayFilter] }
-        ).catch(() => {});
+    };
+
+    const markPendingActivitySent = async () => {
+      if (!contactPhone) return;
+      const phone10 = contactPhone.length >= 10 ? contactPhone.slice(-10) : contactPhone;
+      const update = {
+        $set: {
+          "whatsappAutomationActivities.$[elem].status": "sent",
+          "whatsappAutomationActivities.$[elem].localMessageId": localMessageId || null,
+          "whatsappAutomationActivities.$[elem].whatsappMessageId": whatsappMessageId || null,
+          "whatsappAutomationActivities.$[elem].timestamp": eventTs,
+        },
+      };
+      const arrayFilters = [
+        { "elem.status": { $in: ["pending"] }, "elem.localMessageId": { $in: [null, ""] } },
+      ];
+      await Farmer.updateOne({ mobileNumber: parseInt(phone10, 10) }, update, { arrayFilters }).catch(() => {});
+      await FarmerLead.updateOne({ mobileNumber: phone10 }, update, { arrayFilters }).catch(() => {});
+    };
+
+    if (statusKind === "sent") {
+      await markPendingActivitySent();
+      const broadcastResult = await updateBroadcastContactStatus({
+        localMessageId,
+        whatsappMessageId,
+        phone: contactPhone,
+        status: "sent",
+        broadcastName,
+      });
+      statusLog("sent", {
+        eventType,
+        localMessageId,
+        whatsappMessageId,
+        contactPhone,
+        broadcastResult,
+      });
+      return res.status(200).json({ success: true, message: "processed sent" });
+    }
+
+    if (statusKind === "delivered") {
+      if (!localMessageId && !whatsappMessageId && !contactPhone) {
+        return res.status(200).json({ success: false, message: "no identifier" });
       }
-      statusLog("delivered", { localMessageId, watiWebhookId, broadcastName: broadcastName || "(none)" });
+      await syncFarmerLeadActivity("delivered", {
+        "whatsappAutomationActivities.$.deliveredAt": eventTs,
+      });
+      const broadcastResult = await updateBroadcastContactStatus({
+        localMessageId,
+        whatsappMessageId,
+        phone: contactPhone,
+        status: "delivered",
+        deliveredAt: eventTs,
+        broadcastName,
+      });
+      statusLog("delivered", { eventType, localMessageId, whatsappMessageId, contactPhone, broadcastResult });
       if (shouldUpdateFarmReadyOutboundStatus(body, eventType)) {
         await applyOutboundStatusUpdate({
-          localMessageId: body.localMessageId || body.data?.localMessageId || null,
+          localMessageId,
           watiWebhookId,
           whatsappMessageId,
           event: "delivered",
-          timestamp: deliveredAt,
-        });
-      } else {
-        statusLog("skip outbound log — not farm-ready template status", {
-          eventType,
-          messageType,
-          reason: "session_text_or_confirmation",
+          timestamp: eventTs,
         });
       }
       return res.status(200).json({ success: true, message: "processed delivered" });
     }
 
-    if (eventType === 'sentMessageREAD' || eventType === 'sentMessageREAD_v2' || String(statusString).toLowerCase() === 'read') {
-      if (!localMessageId && !whatsappMessageId) {
-        return res.status(200).json({ success: false, message: 'no message id' });
+    if (statusKind === "read") {
+      if (!localMessageId && !whatsappMessageId && !contactPhone) {
+        return res.status(200).json({ success: false, message: "no identifier" });
       }
-      const readAt = parseTimestamp(timestampRaw);
-      let broadcastName = null, contactPhone = null;
-      const f = await Farmer.findOne({ 'whatsappAutomationActivities.localMessageId': localMessageId }).lean().catch(() => null);
-      if (f) {
-        const act = (f.whatsappAutomationActivities || []).find(a => a.localMessageId === localMessageId);
-        if (act) { broadcastName = act.broadcastName; contactPhone = act.phone || String(f.mobileNumber || ''); }
-      }
-      if (!broadcastName) {
-        const l = await FarmerLead.findOne({ 'whatsappAutomationActivities.localMessageId': localMessageId }).lean().catch(() => null);
-        if (l) {
-          const act = (l.whatsappAutomationActivities || []).find(a => a.localMessageId === localMessageId);
-          if (act) { broadcastName = act.broadcastName; contactPhone = act.phone || String(l.mobileNumber || ''); }
-        }
-      }
-      if (!broadcastName) {
-        const b = await WhatsAppBroadcast.findOne({ 'contacts.localMessageId': localMessageId }).select('name').lean().catch(() => null);
-        if (b) broadcastName = b.name;
-      }
-      if (!broadcastName && whatsappMessageId) {
-        const b = await WhatsAppBroadcast.findOne({ 'contacts.whatsappMessageId': whatsappMessageId }).select('name').lean().catch(() => null);
-        if (b) broadcastName = b.name;
-      }
-      await Farmer.updateOne(
-        { 'whatsappAutomationActivities.localMessageId': localMessageId },
-        { $set: { 'whatsappAutomationActivities.$.status': 'read', 'whatsappAutomationActivities.$.readAt': readAt } }
-      ).catch(() => {});
-      await FarmerLead.updateOne(
-        { 'whatsappAutomationActivities.localMessageId': localMessageId },
-        { $set: { 'whatsappAutomationActivities.$.status': 'read', 'whatsappAutomationActivities.$.readAt': readAt } }
-      ).catch(() => {});
-      if (broadcastName) {
-        const digits = String(contactPhone || '').replace(/\D/g, '');
-        const phone10 = digits.length >= 10 ? digits.slice(-10) : digits;
-        const fullPhone = digits.length === 10 ? `91${digits}` : digits;
-        const phoneMatch = [fullPhone, phone10, contactPhone].filter(Boolean);
-        const arrayFilter = {
-          $or: [
-            { 'c.localMessageId': localMessageId },
-            ...(whatsappMessageId ? [{ 'c.whatsappMessageId': whatsappMessageId }] : []),
-            ...(phoneMatch.length ? [{ 'c.phone': { $in: phoneMatch } }] : [])
-          ]
-        };
-        await WhatsAppBroadcast.updateOne(
-          { name: broadcastName },
-          { $set: { 'contacts.$[c].status': 'read', 'contacts.$[c].readAt': readAt } },
-          { arrayFilters: [arrayFilter] }
-        ).catch(() => {});
-      }
-      statusLog("read", { localMessageId, watiWebhookId, broadcastName: broadcastName || "(none)" });
+      await syncFarmerLeadActivity("read", {
+        "whatsappAutomationActivities.$.readAt": eventTs,
+      });
+      const broadcastResult = await updateBroadcastContactStatus({
+        localMessageId,
+        whatsappMessageId,
+        phone: contactPhone,
+        status: "read",
+        readAt: eventTs,
+        deliveredAt: eventTs,
+        broadcastName,
+      });
+      statusLog("read", { eventType, localMessageId, whatsappMessageId, contactPhone, broadcastResult });
       if (shouldUpdateFarmReadyOutboundStatus(body, eventType)) {
         await applyOutboundStatusUpdate({
-          localMessageId: body.localMessageId || body.data?.localMessageId || null,
+          localMessageId,
           watiWebhookId,
           whatsappMessageId,
           event: "read",
-          timestamp: readAt,
-        });
-      } else {
-        statusLog("skip outbound log — not farm-ready template status", {
-          eventType,
-          messageType,
-          reason: "session_text_or_confirmation",
+          timestamp: eventTs,
         });
       }
       return res.status(200).json({ success: true, message: "processed read" });
     }
 
-    if (eventType === 'templateMessageFailed' || String(statusString).toLowerCase() === 'failed') {
-      if (!localMessageId && !normalizedPhone) return res.status(200).json({ success: false, message: 'no identifier' });
-      const setObj = {
-        'whatsappAutomationActivities.$.status': 'failed',
-        'whatsappAutomationActivities.$.failedCode': failedCode || null,
-        'whatsappAutomationActivities.$.failedDetail': failedDetail || null
-      };
-      let broadcastName = null, contactPhone = null;
+    if (statusKind === "failed") {
+      if (!localMessageId && !contactPhone) {
+        return res.status(200).json({ success: false, message: "no identifier" });
+      }
       if (localMessageId) {
-        await Farmer.updateOne({ 'whatsappAutomationActivities.localMessageId': localMessageId }, { $set: setObj }).catch(() => {});
-        await FarmerLead.updateOne({ 'whatsappAutomationActivities.localMessageId': localMessageId }, { $set: setObj }).catch(() => {});
-        const f = await Farmer.findOne({ 'whatsappAutomationActivities.localMessageId': localMessageId }).lean().catch(() => null);
-        if (f) {
-          const act = (f.whatsappAutomationActivities || []).find(a => a.localMessageId === localMessageId);
-          if (act) { broadcastName = act.broadcastName; contactPhone = act.phone || String(f.mobileNumber || ''); }
-        }
-        if (!broadcastName) {
-          const l = await FarmerLead.findOne({ 'whatsappAutomationActivities.localMessageId': localMessageId }).lean().catch(() => null);
-          if (l) {
-            const act = (l.whatsappAutomationActivities || []).find(a => a.localMessageId === localMessageId);
-            if (act) { broadcastName = act.broadcastName; contactPhone = act.phone || String(l.mobileNumber || ''); }
-          }
-        }
-        if (!broadcastName) {
-          const b = await WhatsAppBroadcast.findOne({ 'contacts.localMessageId': localMessageId }).select('name').lean().catch(() => null);
-          if (b) broadcastName = b.name;
-        }
-      } else if (normalizedPhone) {
-        const f = await Farmer.findOne({ mobileNumber: parseInt(normalizedPhone) }).lean().catch(() => null);
-        if (f) {
-          const act = (f.whatsappAutomationActivities || []).find(a => a.status === 'pending');
-          if (act) { broadcastName = act.broadcastName; contactPhone = String(f.mobileNumber || ''); }
-        }
-        if (!broadcastName) {
-          const l = await FarmerLead.findOne({ mobileNumber: normalizedPhone }).lean().catch(() => null);
-          if (l) {
-            const act = (l.whatsappAutomationActivities || []).find(a => a.status === 'pending');
-            if (act) { broadcastName = act.broadcastName; contactPhone = String(l.mobileNumber || ''); }
-          }
-        }
-        const update = { $set: { 'whatsappAutomationActivities.$[elem].status': 'failed', 'whatsappAutomationActivities.$[elem].failedCode': failedCode || null, 'whatsappAutomationActivities.$[elem].failedDetail': failedDetail || null } };
-        const arrayFilters = [{ 'elem.status': { $in: ['pending'] } }];
-        await Farmer.updateOne({ mobileNumber: parseInt(normalizedPhone) }, update, { arrayFilters }).catch(() => {});
-        await FarmerLead.updateOne({ mobileNumber: normalizedPhone }, update, { arrayFilters }).catch(() => {});
+        await syncFarmerLeadActivity("failed", {
+          "whatsappAutomationActivities.$.failedCode": failedCode || null,
+          "whatsappAutomationActivities.$.failedDetail": failedDetail || null,
+        });
+      } else if (contactPhone) {
+        const phone10 = contactPhone.length >= 10 ? contactPhone.slice(-10) : contactPhone;
+        const update = {
+          $set: {
+            "whatsappAutomationActivities.$[elem].status": "failed",
+            "whatsappAutomationActivities.$[elem].failedCode": failedCode || null,
+            "whatsappAutomationActivities.$[elem].failedDetail": failedDetail || null,
+          },
+        };
+        const arrayFilters = [{ "elem.status": { $in: ["pending", "sent"] } }];
+        await Farmer.updateOne({ mobileNumber: parseInt(phone10, 10) }, update, { arrayFilters }).catch(() => {});
+        await FarmerLead.updateOne({ mobileNumber: phone10 }, update, { arrayFilters }).catch(() => {});
       }
-      if (broadcastName) {
-        const digits = String(contactPhone || normalizedPhone || '').replace(/\D/g, '');
-        const phone10 = digits.length >= 10 ? digits.slice(-10) : digits;
-        const fullPhone = digits.length === 10 ? `91${digits}` : digits;
-        const phoneMatch = [fullPhone, phone10, contactPhone, normalizedPhone].filter(Boolean);
-        await WhatsAppBroadcast.updateOne(
-          { name: broadcastName },
-          { $set: { 'contacts.$[c].status': 'failed' } },
-          { arrayFilters: [{ $or: [{ 'c.localMessageId': localMessageId }, ...(phoneMatch.length ? [{ 'c.phone': { $in: phoneMatch } }] : [])] }] }
-        ).catch(() => {});
-      }
-      statusLog("failed", { localMessageId, normalizedPhone, failedCode, failedDetail });
+      const broadcastResult = await updateBroadcastContactStatus({
+        localMessageId,
+        whatsappMessageId,
+        phone: contactPhone,
+        status: "failed",
+        failedCode,
+        failedDetail,
+        broadcastName,
+      });
+      statusLog("failed", { eventType, localMessageId, contactPhone, failedCode, failedDetail, broadcastResult });
       await applyOutboundStatusUpdate({
-        localMessageId: body.localMessageId || body.data?.localMessageId || null,
+        localMessageId,
         watiWebhookId,
         whatsappMessageId,
         event: "failed",
-        timestamp: parseTimestamp(timestampRaw),
+        timestamp: eventTs,
         failedCode,
         failedDetail,
       });
       return res.status(200).json({ success: true, message: "processed failed" });
     }
 
-    if (
-      eventType === "sentMessageReplied_v2" ||
-      eventType === "sentMessageREPLIED_v2" ||
-      String(statusString).toLowerCase() === "replied"
-    ) {
+    if (statusKind === "replied") {
       const replyText =
         body.text ||
         body.replyText ||
@@ -485,18 +369,23 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
         inbound.text ||
         inbound.buttonText ||
         "";
-      const repliedAt = parseTimestamp(timestampRaw);
       await recordBroadcastContactReply({
-        phone: normalizedPhone || inbound.waId,
+        phone: contactPhone,
         replyText,
-        repliedAt,
+        repliedAt: eventTs,
         localMessageId,
+        broadcastName,
       });
-      statusLog("replied", { localMessageId, normalizedPhone, replyText: String(replyText).slice(0, 80) });
+      statusLog("replied", {
+        eventType,
+        localMessageId,
+        contactPhone,
+        replyText: String(replyText).slice(0, 80),
+      });
       return res.status(200).json({ success: true, message: "processed reply" });
     }
 
-    statusLog("ignored event", { eventType, statusString });
+    statusLog("ignored event", { eventType, statusString, statusKind });
     return res.status(200).json({ success: true, message: "ignored event", eventType });
   } catch (err) {
     console.error('❌ [WATI STATUS WEBHOOK] Error:', err.message);
