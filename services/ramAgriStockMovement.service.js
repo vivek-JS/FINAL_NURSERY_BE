@@ -14,6 +14,7 @@ export function movementTypeToDirection(movementType) {
     RAM_AGRI_MOVEMENT_TYPES.MANUAL_OUT,
     RAM_AGRI_MOVEMENT_TYPES.SALE_DISPATCH_OUT,
     RAM_AGRI_MOVEMENT_TYPES.SOWING_RAISING_OUT,
+    RAM_AGRI_MOVEMENT_TYPES.PURCHASE_RETURN_OUT,
   ]);
   if (outTypes.has(movementType)) return "OUT";
   return "IN";

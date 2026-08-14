@@ -4,7 +4,10 @@ import generateResponse from "../utility/responseFormat.js";
 import {
   addDocumentPayment,
   runMoneyLedgerBackfill,
-  postPartyAdjustment,
+  createPartyPendingAdjustment,
+  listPartyPendingAdjustments,
+  acceptPartyPendingAdjustment,
+  rejectPartyPendingAdjustment,
 } from "../services/moneyLedger/index.js";
 
 const SUPER_ROLES = new Set(["SuperAdmin", "SUPER_ADMIN", "Master", "MASTER", "Admin", "ADMIN"]);
@@ -32,7 +35,7 @@ export const listBooks = catchAsync(async (_req, res) => {
           label: "Biotech Master",
           sides: ["ALL"],
           description:
-            "Biotech plant inventory single debit/credit ledger (sell orders, GRN purchase, payments)",
+            "Biotech plant inventory single debit/credit ledger (sell orders, GRN purchase, payments, discount)",
         },
       ],
     })
@@ -109,9 +112,9 @@ export const addPayment = catchAsync(async (req, res, next) => {
     entryDate,
   } = req.body || {};
 
-  // Party payment / discount without PO or order
+  // Party payment / discount without PO or order → pending until accountant accepts
   if (partyType && partyId && !documentId) {
-    const result = await postPartyAdjustment({
+    const result = await createPartyPendingAdjustment({
       book: book || "RAM_AGRI",
       partyType,
       partyId,
@@ -130,8 +133,8 @@ export const addPayment = catchAsync(async (req, res, next) => {
       generateResponse(
         "Success",
         String(kind || "PAYMENT").toUpperCase() === "DISCOUNT"
-          ? "Discount recorded"
-          : "Payment recorded",
+          ? "Discount submitted for approval"
+          : "Payment submitted for approval",
         result.data
       )
     );
@@ -163,7 +166,7 @@ export const addPayment = catchAsync(async (req, res, next) => {
   return res.status(201).json(generateResponse("Success", "Payment recorded", result.data));
 });
 
-/** Explicit party discount endpoint (same engine, kind=DISCOUNT). */
+/** Explicit party discount endpoint — pending until accountant accepts. */
 export const addPartyDiscount = catchAsync(async (req, res, next) => {
   const userId = req.user?._id || req.user?.id;
   if (!userId) return next(new AppError("Authentication required", 401));
@@ -171,7 +174,7 @@ export const addPartyDiscount = catchAsync(async (req, res, next) => {
   if (!partyType || !partyId) {
     return next(new AppError("partyType and partyId are required", 400));
   }
-  const result = await postPartyAdjustment({
+  const result = await createPartyPendingAdjustment({
     book: book || "RAM_AGRI",
     partyType,
     partyId,
@@ -185,7 +188,52 @@ export const addPartyDiscount = catchAsync(async (req, res, next) => {
   if (!result.ok) {
     return next(new AppError(result.error || "Discount failed", result.status || 400));
   }
-  return res.status(201).json(generateResponse("Success", "Discount recorded", result.data));
+  return res
+    .status(201)
+    .json(generateResponse("Success", "Discount submitted for approval", result.data));
+});
+
+export const listPendingAdjustments = catchAsync(async (req, res, next) => {
+  const result = await listPartyPendingAdjustments({
+    book: req.query.book,
+    status: req.query.status || "PENDING",
+    q: req.query.q || req.query.search || "",
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+  if (!result.ok) {
+    return next(new AppError(result.error || "Failed to list", result.status || 400));
+  }
+  return res.status(200).json(generateResponse("Success", "Pending adjustments", result.data));
+});
+
+export const acceptPendingAdjustment = catchAsync(async (req, res, next) => {
+  const userId = req.user?._id || req.user?.id;
+  if (!userId) return next(new AppError("Authentication required", 401));
+  const result = await acceptPartyPendingAdjustment({
+    id: req.params.id,
+    userId,
+    user: req.user,
+  });
+  if (!result.ok) {
+    return next(new AppError(result.error || "Accept failed", result.status || 400));
+  }
+  return res.status(200).json(generateResponse("Success", "Adjustment accepted and posted to ledger", result.data));
+});
+
+export const rejectPendingAdjustment = catchAsync(async (req, res, next) => {
+  const userId = req.user?._id || req.user?.id;
+  if (!userId) return next(new AppError("Authentication required", 401));
+  const result = await rejectPartyPendingAdjustment({
+    id: req.params.id,
+    userId,
+    user: req.user,
+    reason: req.body?.reason || req.body?.remark || "",
+  });
+  if (!result.ok) {
+    return next(new AppError(result.error || "Reject failed", result.status || 400));
+  }
+  return res.status(200).json(generateResponse("Success", "Adjustment rejected", result.data));
 });
 
 export const addDocumentScopedPayment = catchAsync(async (req, res, next) => {

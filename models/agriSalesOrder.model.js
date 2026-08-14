@@ -845,6 +845,28 @@ const agriSalesOrderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "User",
     },
+    /** Gross bill before sales returns (set on first return) */
+    originalTotalAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    /** Cumulative sales-return credit (Money Ledger AR interlocking) */
+    returnCreditAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    /** Last sales-return money ledger status */
+    salesReturnLedgerStatus: {
+      type: String,
+      enum: ["PENDING", "POSTED", "SKIPPED", "FAILED"],
+    },
+    salesReturnLedgerError: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     // Payment adjustments for sales returns (can be negative for refunds/credits)
     paymentAdjustments: [
       {

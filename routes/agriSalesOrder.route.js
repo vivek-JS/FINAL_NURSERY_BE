@@ -5,6 +5,7 @@ import multer from "multer";
 import mongoose from "mongoose";
 import {
   createAgriSalesOrder,
+  retryAgriSalesOrderMoneyLedger,
   createLinkedAgriOrderFromNurseryOrder,
   updateAgriSalesOrder,
   acceptAgriSalesOrder,
@@ -50,6 +51,7 @@ import {
   getAgriSalesReturnRequestsForOrder,
   getMerchantReturnableBatchesHandler,
   processMerchantBatchReturnHandler,
+  downloadSaleReturnInvoice,
 } from "../controllers/agriSalesReturnRequest.controller.js";
 
 const router = express.Router();
@@ -243,6 +245,7 @@ router.post(
 );
 router.patch("/returns/:id/approve", approveAgriSalesReturnRequest);
 router.patch("/returns/:id/reject", rejectAgriSalesReturnRequest);
+router.get("/returns/:id/invoice", downloadSaleReturnInvoice);
 router.get("/returns/by-order/:orderId", getAgriSalesReturnRequestsForOrder);
 
 // ==================== ORDER ROUTES ====================
@@ -359,6 +362,36 @@ router
         }),
       check("orderDate").optional().isISO8601().withMessage("Invalid order date format"),
       agriDeliveryDateCheck(),
+      check("orderChannel")
+        .optional()
+        .isIn(["RETAIL", "B2B", "retail", "b2b"])
+        .withMessage("orderChannel must be RETAIL or B2B"),
+      check("merchant")
+        .optional({ nullable: true })
+        .custom((value, { req }) => {
+          const channel = String(req.body.orderChannel || "RETAIL").toUpperCase();
+          const mid = value || req.body.merchantId;
+          if (channel === "B2B" && !mid) {
+            throw new Error("Merchant is required for B2B agri sales orders");
+          }
+          if (mid && !mongoose.Types.ObjectId.isValid(mid)) {
+            throw new Error("Valid merchant ID is required");
+          }
+          return true;
+        }),
+      check("merchantId")
+        .optional({ nullable: true })
+        .custom((value, { req }) => {
+          if (!value) return true;
+          if (!mongoose.Types.ObjectId.isValid(value)) {
+            throw new Error("Valid merchantId is required");
+          }
+          const channel = String(req.body.orderChannel || "RETAIL").toUpperCase();
+          if (channel === "B2B" && !(req.body.merchant || value)) {
+            throw new Error("Merchant is required for B2B agri sales orders");
+          }
+          return true;
+        }),
     ],
     checkErrors,
     createAgriSalesOrder
@@ -406,6 +439,12 @@ router
     generateAgriDeliveryChallanPdf
   )
   .get("/:id", getAgriSalesOrderById)
+  .post(
+    "/:id/retry-money-ledger",
+    [check("id").isMongoId().withMessage("Valid order ID is required")],
+    checkErrors,
+    retryAgriSalesOrderMoneyLedger
+  )
   .patch(
     "/:id",
     [

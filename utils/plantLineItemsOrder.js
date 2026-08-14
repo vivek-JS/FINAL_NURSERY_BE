@@ -112,19 +112,13 @@ export function normalizePlantLineItemsForCreate(rawLines) {
   return { lines, totalPlants };
 }
 
-/** Fill missing plant/subtype name snapshots from PlantCms (for invoice/list). */
+/** Fill missing plant/subtype name snapshots + isBillable from PlantCms. */
 export async function enrichPlantLineSnapshots(lines, session) {
   if (!Array.isArray(lines) || lines.length === 0) return lines;
-  const needIds = [
-    ...new Set(
-      lines
-        .filter((l) => !l.plantNameSnapshot || !l.plantSubtypeSnapshot)
-        .map((l) => String(l.plantName))
-    ),
-  ];
-  if (needIds.length === 0) return lines;
+  const plantIds = [...new Set(lines.map((l) => String(l.plantName)).filter(Boolean))];
+  if (plantIds.length === 0) return lines;
 
-  const plants = await PlantCms.find({ _id: { $in: needIds } })
+  const plants = await PlantCms.find({ _id: { $in: plantIds } })
     .select("name subtypes")
     .session(session || undefined)
     .lean();
@@ -132,13 +126,17 @@ export async function enrichPlantLineSnapshots(lines, session) {
 
   for (const line of lines) {
     const plant = byId.get(String(line.plantName));
-    if (!plant) continue;
+    if (!plant) {
+      if (typeof line.isBillable !== "boolean") line.isBillable = true;
+      continue;
+    }
     if (!line.plantNameSnapshot) line.plantNameSnapshot = plant.name || "";
-    if (!line.plantSubtypeSnapshot && Array.isArray(plant.subtypes)) {
-      const st = plant.subtypes.find(
-        (s) => String(s._id) === String(line.plantSubtype)
-      );
-      line.plantSubtypeSnapshot = st?.name || "";
+    const st = Array.isArray(plant.subtypes)
+      ? plant.subtypes.find((s) => String(s._id) === String(line.plantSubtype))
+      : null;
+    if (!line.plantSubtypeSnapshot) line.plantSubtypeSnapshot = st?.name || "";
+    if (typeof line.isBillable !== "boolean") {
+      line.isBillable = st?.isBillable !== false;
     }
   }
   return lines;

@@ -29,6 +29,36 @@ const agriSalesReturnRequestSchema = new mongoose.Schema(
       index: true,
     },
     orderNumber: { type: String, trim: true, index: true },
+    /** MERCHANT_BATCH = one office return spanning N orders; DEALER / ORDER_WISE = single order */
+    source: {
+      type: String,
+      enum: ["DEALER", "MERCHANT_BATCH", "ORDER_WISE"],
+      default: "DEALER",
+      index: true,
+    },
+    merchantBatchGroupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      index: true,
+    },
+    /** When source=MERCHANT_BATCH: all orders touched by this one return action */
+    affectedOrders: [
+      {
+        orderId: { type: mongoose.Schema.Types.ObjectId, ref: "AgriSalesOrder" },
+        orderNumber: { type: String, trim: true },
+        customerName: { type: String, trim: true },
+        returnQuantity: { type: Number, default: 0 },
+        creditAmount: { type: Number, default: 0 },
+      },
+    ],
+    /** Batches returned in this action (list / expand) */
+    appliedBatches: [
+      {
+        batchId: { type: mongoose.Schema.Types.ObjectId },
+        batchNumber: { type: String, trim: true },
+        quantity: { type: Number, default: 0 },
+        productName: { type: String, trim: true },
+      },
+    ],
     dealer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -52,6 +82,9 @@ const agriSalesReturnRequestSchema = new mongoose.Schema(
     ledgerRefId: { type: mongoose.Schema.Types.ObjectId },
     stockReturned: { type: Boolean, default: false },
     creditAmount: { type: Number, default: 0, min: 0 },
+    /** Generated credit-note invoice # (SRIYY#####) */
+    invoiceNumber: { type: String, trim: true, index: true, sparse: true },
+    invoiceGeneratedAt: { type: Date },
   },
   { timestamps: true }
 );

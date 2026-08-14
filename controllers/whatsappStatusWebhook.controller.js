@@ -13,6 +13,7 @@ import {
 import {
   extractInboundMessage,
 } from "../utility/watiInboundPayload.js";
+import { recordBroadcastContactReply } from "../services/whatsappBroadcastReply.service.js";
 
 const WATI_STATUS_DEBUG =
   process.env.WATI_STATUS_WEBHOOK_DEBUG !== "false";
@@ -164,6 +165,13 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
         if (wizard.handled) {
           statusLog("report wizard forward result:", wizard);
           return;
+        }
+        if (inbound.text?.trim() && (inbound.waId || normalizedPhone)) {
+          await recordBroadcastContactReply({
+            phone: inbound.waId || normalizedPhone,
+            replyText: inbound.text,
+            repliedAt: parseTimestamp(timestampRaw),
+          });
         }
         if (process.env.WHATSAPP_LEGACY_INSTANT_BOOKING_PDF === "true") {
           void runTodayBookingPdfJob(body).catch((err) => {
@@ -465,6 +473,29 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
       return res.status(200).json({ success: true, message: "processed failed" });
     }
 
+    if (
+      eventType === "sentMessageReplied_v2" ||
+      eventType === "sentMessageREPLIED_v2" ||
+      String(statusString).toLowerCase() === "replied"
+    ) {
+      const replyText =
+        body.text ||
+        body.replyText ||
+        body.data?.text ||
+        inbound.text ||
+        inbound.buttonText ||
+        "";
+      const repliedAt = parseTimestamp(timestampRaw);
+      await recordBroadcastContactReply({
+        phone: normalizedPhone || inbound.waId,
+        replyText,
+        repliedAt,
+        localMessageId,
+      });
+      statusLog("replied", { localMessageId, normalizedPhone, replyText: String(replyText).slice(0, 80) });
+      return res.status(200).json({ success: true, message: "processed reply" });
+    }
+
     statusLog("ignored event", { eventType, statusString });
     return res.status(200).json({ success: true, message: "ignored event", eventType });
   } catch (err) {
@@ -483,6 +514,7 @@ export const statusWebhookHealth = catchAsync(async (req, res) => {
       "sentMessageDELIVERED_v2",
       "sentMessageREAD_v2",
       "templateMessageFailed",
+      "sentMessageReplied_v2",
       "messageReceived",
     ],
     timestamp: new Date().toISOString(),

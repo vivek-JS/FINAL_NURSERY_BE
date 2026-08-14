@@ -8,7 +8,6 @@ import AgriSalesOrder, {
 } from "../models/agriSalesOrder.model.js";
 import AgriSalesReturnRequest from "../models/agriSalesReturnRequest.model.js";
 import { returnToExplicitBatches, returnToSourceBatches } from "../services/ramAgriBatchInventory.service.js";
-import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
 import { isAgriDealerSelf } from "../utils/agriDealerOrder.util.js";
 import RamAgriBatch from "../models/ramAgriBatch.model.js";
 import {
@@ -187,6 +186,16 @@ export const requestAgriSalesReturn = catchAsync(async (req, res, next) => {
   const doc = await AgriSalesReturnRequest.create({
     orderId,
     orderNumber: order.orderNumber,
+    source: "DEALER",
+    affectedOrders: [
+      {
+        orderId,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName || "",
+        returnQuantity: normalizedLineReturns.reduce((s, l) => s + Number(l.returnQuantity || 0), 0),
+        creditAmount: 0,
+      },
+    ],
     dealer: userId,
     status: "PENDING",
     lineReturns: normalizedLineReturns,
@@ -199,27 +208,180 @@ export const requestAgriSalesReturn = catchAsync(async (req, res, next) => {
 });
 
 export const listAgriSalesReturnRequests = catchAsync(async (req, res, next) => {
-  const { status = "PENDING", page = 1, limit = 50 } = req.query;
+  const {
+    status = "ALL",
+    page = 1,
+    limit = 50,
+    search = "",
+    dateFrom,
+    dateTo,
+    source,
+  } = req.query;
   const filter = {};
-  if (status && status !== "ALL") filter.status = status;
+  if (status && status !== "ALL") filter.status = String(status).toUpperCase();
+
+  const q = String(search || "").trim();
+  if (q) {
+    filter.$or = [
+      { orderNumber: { $regex: q, $options: "i" } },
+      { returnReason: { $regex: q, $options: "i" } },
+      { returnNotes: { $regex: q, $options: "i" } },
+      { reviewNotes: { $regex: q, $options: "i" } },
+    ];
+  }
+
+  if (dateFrom || dateTo) {
+    filter.requestedAt = {};
+    if (dateFrom) {
+      const from = new Date(dateFrom);
+      if (!Number.isNaN(from.getTime())) filter.requestedAt.$gte = from;
+    }
+    if (dateTo) {
+      const to = new Date(dateTo);
+      if (!Number.isNaN(to.getTime())) {
+        to.setHours(23, 59, 59, 999);
+        filter.requestedAt.$lte = to;
+      }
+    }
+    if (!Object.keys(filter.requestedAt).length) delete filter.requestedAt;
+  }
+
+  const src = String(source || "").trim().toUpperCase();
+  if (src === "MERCHANT_BATCH") {
+    filter.$or = [
+      { source: "MERCHANT_BATCH" },
+      { reviewNotes: /merchant-batch/i },
+    ];
+  } else if (src === "DEALER") {
+    filter.$and = [
+      {
+        $or: [{ source: "DEALER" }, { source: { $exists: false } }, { source: null }],
+      },
+      { source: { $ne: "ORDER_WISE" } },
+      { source: { $ne: "MERCHANT_BATCH" } },
+      { reviewNotes: { $not: /merchant-batch/i } },
+    ];
+  } else if (src === "ORDER_WISE") {
+    filter.source = "ORDER_WISE";
+  }
 
   const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+  const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
   const [data, total] = await Promise.all([
     AgriSalesReturnRequest.find(filter)
       .populate("dealer", "name phoneNumber")
       .populate("requestedBy", "name phoneNumber")
       .populate("reviewedBy", "name phoneNumber")
+      .populate({
+        path: "orderId",
+        select:
+          "orderNumber customerName customerMobile merchant orderStatus dispatchStatus totalAmount balanceAmount salesReturnQuantity quantity",
+        populate: { path: "merchant", select: "name phone" },
+      })
+      .populate({
+        path: "affectedOrders.orderId",
+        select: "orderNumber customerName orderStatus dispatchStatus",
+      })
       .sort({ requestedAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit, 10))
+      .limit(lim)
       .lean(),
     AgriSalesReturnRequest.countDocuments(filter),
   ]);
 
+  const enriched = data.map((row) => {
+    const qty =
+      (row.lineReturns || []).reduce((s, l) => s + Number(l.returnQuantity || 0), 0) ||
+      (row.affectedOrders || []).reduce((s, o) => s + Number(o.returnQuantity || 0), 0);
+    const batches = [];
+    if (Array.isArray(row.appliedBatches) && row.appliedBatches.length) {
+      for (const b of row.appliedBatches) {
+        batches.push({
+          batchId: b.batchId,
+          batchNumber: b.batchNumber,
+          quantity: Number(b.quantity) || 0,
+          productName: b.productName,
+        });
+      }
+    } else {
+      for (const lr of row.lineReturns || []) {
+        for (const br of lr.batchReturns || []) {
+          if (br?.batchNumber || br?.batchId) {
+            batches.push({
+              batchId: br.batchId,
+              batchNumber: br.batchNumber,
+              quantity: Number(br.quantity) || 0,
+              productName: lr.productName,
+            });
+          }
+        }
+      }
+    }
+
+    let sourceLabel = row.source;
+    if (!sourceLabel) {
+      sourceLabel = /merchant-batch/i.test(String(row.reviewNotes || ""))
+        ? "MERCHANT_BATCH"
+        : /order-wise/i.test(String(row.reviewNotes || ""))
+          ? "ORDER_WISE"
+          : "DEALER";
+    }
+
+    let affectedOrders = Array.isArray(row.affectedOrders) ? [...row.affectedOrders] : [];
+    if (!affectedOrders.length) {
+      affectedOrders = [
+        {
+          orderId: row.orderId?._id || row.orderId,
+          orderNumber: row.orderId?.orderNumber || row.orderNumber,
+          customerName: row.orderId?.customerName || "",
+          returnQuantity: qty,
+          creditAmount: row.creditAmount || 0,
+          orderStatus: row.orderId?.orderStatus,
+          dispatchStatus: row.orderId?.dispatchStatus,
+        },
+      ];
+    } else {
+      affectedOrders = affectedOrders.map((o) => ({
+        orderId: o.orderId?._id || o.orderId,
+        orderNumber: o.orderNumber || o.orderId?.orderNumber,
+        customerName: o.customerName || o.orderId?.customerName || "",
+        returnQuantity: Number(o.returnQuantity) || 0,
+        creditAmount: Number(o.creditAmount) || 0,
+        orderStatus: o.orderId?.orderStatus,
+        dispatchStatus: o.orderId?.dispatchStatus,
+      }));
+    }
+
+    const primary = affectedOrders[0] || {};
+    return {
+      ...row,
+      totalReturnQty: qty,
+      batchSummary: batches,
+      source: sourceLabel,
+      affectedOrderCount: affectedOrders.length,
+      affectedOrders,
+      affectedOrder: {
+        _id: primary.orderId,
+        orderNumber: primary.orderNumber,
+        customerName: primary.customerName,
+        merchantName: row.orderId?.merchant?.name || null,
+        orderStatus: primary.orderStatus || row.orderId?.orderStatus,
+        dispatchStatus: primary.dispatchStatus || row.orderId?.dispatchStatus,
+        totalAmount: row.orderId?.totalAmount,
+        balanceAmount: row.orderId?.balanceAmount,
+      },
+    };
+  });
+
   return res.status(200).json(
     generateResponse("Success", "Return requests", {
-      data,
-      pagination: { total, page: parseInt(page, 10), limit: parseInt(limit, 10) },
+      data: enriched,
+      pagination: {
+        total,
+        page: parseInt(page, 10) || 1,
+        limit: lim,
+        pages: Math.ceil(total / lim) || 1,
+      },
     })
   );
 });
@@ -307,26 +469,36 @@ export const approveAgriSalesReturnRequest = catchAsync(async (req, res, next) =
   }
 
   order.salesReturnQuantity = (Number(order.salesReturnQuantity) || 0) + totalReturnQty;
+
+  const {
+    postAgriSalesReturnLedgers,
+    applyOrderReturnCreditFields,
+  } = await import("../services/salesReturnLedger.service.js");
+
+  applyOrderReturnCreditFields(order, creditAmount);
+  order.totalAmount = Math.max(0, (Number(order.totalAmount) || 0) - creditAmount);
   order.balanceAmount = Math.max(0, (Number(order.balanceAmount) || 0) - creditAmount);
-  if (order.balanceAmount <= 0 && order.paymentStatus !== "PAID") {
-    order.paymentStatus = order.totalPaidAmount >= order.totalAmount ? "PAID" : order.paymentStatus;
+  if (order.balanceAmount <= 0) {
+    order.paymentStatus = "COMPLETED";
+  } else if ((Number(order.totalPaidAmount) || 0) > 0) {
+    order.paymentStatus = "PARTIAL";
+  } else {
+    order.paymentStatus = "PENDING";
   }
   await order.save();
 
-  const ledgerEntry = await createCustomerLedgerEntry({
-    customerMobile: order.customerMobile,
-    customerName: order.customerName,
-    refType: "SALES_RETURN",
+  const ledgerResult = await postAgriSalesReturnLedgers({
+    order,
+    creditAmount,
+    userId,
     refId: request._id,
-    orderId: order._id,
-    credit: creditAmount,
-    reference: order.orderNumber,
-    category: "Sales Return",
+    idempotencyKey: `ram_agri:ar:sales_return:request:${request._id}`,
     description: `Sales return approved for order ${order.orderNumber}`,
-    entryDate: new Date(),
-    createdBy: userId,
-    metadata: { returnRequestId: request._id, totalReturnQty },
+    metadata: { returnRequestId: request._id, totalReturnQty, source: "DEALER_APPROVE" },
   });
+  order.salesReturnLedgerStatus = ledgerResult.ledgerStatus || (ledgerResult.ok ? "POSTED" : "FAILED");
+  order.salesReturnLedgerError = ledgerResult.ledgerError || ledgerResult.error || "";
+  await order.save();
 
   request.status = "APPROVED";
   request.reviewedBy = userId;
@@ -334,10 +506,19 @@ export const approveAgriSalesReturnRequest = catchAsync(async (req, res, next) =
   request.reviewNotes = reviewNotes?.trim() || "";
   request.stockReturned = true;
   request.creditAmount = creditAmount;
-  request.ledgerRefId = ledgerEntry?._id;
+  request.ledgerRefId = ledgerResult.customerLedger?.entry?._id || null;
   await request.save();
 
-  return res.status(200).json(generateResponse("Success", "Return approved", { request, order }));
+  return res.status(200).json(
+    generateResponse("Success", "Return approved", {
+      request,
+      order,
+      ledgerStatus: ledgerResult.ledgerStatus,
+      warning: ledgerResult.ok
+        ? undefined
+        : ledgerResult.ledgerError || ledgerResult.error || "Ledger post failed",
+    })
+  );
 });
 
 export const rejectAgriSalesReturnRequest = catchAsync(async (req, res, next) => {
@@ -409,4 +590,15 @@ export const processMerchantBatchReturnHandler = catchAsync(async (req, res, nex
   return res
     .status(200)
     .json(generateResponse("Success", "Merchant batch sale return applied", result.data));
+});
+
+/** GET PDF sale-return invoice (download). */
+export const downloadSaleReturnInvoice = catchAsync(async (req, res, next) => {
+  const { buildSaleReturnInvoicePdf } = await import("../services/returnInvoicePdf.service.js");
+  const result = await buildSaleReturnInvoicePdf(req.params.id);
+  if (!result.ok) return next(new AppError(result.error || "Invoice failed", result.status || 400));
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${result.filename}"`);
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(200).send(result.buffer);
 });

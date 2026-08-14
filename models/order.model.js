@@ -430,6 +430,14 @@ const plantLineItemSchema = new Schema(
       trim: true,
       default: "",
     },
+    /**
+     * Snapshot of PlantCms subtype.isBillable at booking time.
+     * Missing / undefined ⇒ treat as billable (legacy rows).
+     */
+    isBillable: {
+      type: Boolean,
+      default: true,
+    },
     bookingSlot: {
       type: Schema.Types.ObjectId,
       required: true,
@@ -1111,10 +1119,47 @@ const orderSchema = new Schema(
       trim: true,
     },
     /**
-     * Immutable system DC (plant-scoped sequence). Set once when the order
-     * first reaches fully DISPATCHED (remainingPlants === 0). Not user-editable.
+     * Immutable system DC for billable plant lines (plant-scoped billable sequence).
+     * Set once when the order first reaches fully DISPATCHED. Not user-editable.
      */
     officialDeliveryChallanNumber: {
+      type: String,
+      trim: true,
+    },
+    /**
+     * Immutable system DC for non-billable plant lines (separate plant sequence).
+     * Issued alongside officialDeliveryChallanNumber when the order has both buckets.
+     */
+    officialNonBillableDeliveryChallanNumber: {
+      type: String,
+      trim: true,
+    },
+    /**
+     * Immutable system tax-invoice number for billable plant lines (plant-scoped invoice sequence).
+     * Set once on first complete-invoice PDF generate. Not the DC number.
+     */
+    officialInvoiceNumber: {
+      type: String,
+      trim: true,
+    },
+    /**
+     * Immutable system tax-invoice number for non-billable plant lines (separate invoice sequence).
+     */
+    officialNonBillableInvoiceNumber: {
+      type: String,
+      trim: true,
+    },
+    /**
+     * Manual / duplicate override for billable invoice label (does not consume sequence).
+     */
+    manualInvoiceNumber: {
+      type: String,
+      trim: true,
+    },
+    /**
+     * Manual / duplicate override for non-billable invoice label.
+     */
+    manualNonBillableInvoiceNumber: {
       type: String,
       trim: true,
     },

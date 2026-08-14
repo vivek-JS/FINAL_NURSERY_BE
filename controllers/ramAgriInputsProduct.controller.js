@@ -511,9 +511,10 @@ export const updateVariety = catchAsync(async (req, res, next) => {
   }
 
   const hasCurrentStockInBody = Object.prototype.hasOwnProperty.call(req.body, 'currentStock');
+  const bodyKeys = Object.keys(req.body || {});
   const isStockOnlyUpdate =
     hasCurrentStockInBody &&
-    Object.keys(req.body).every((k) => k === 'currentStock');
+    bodyKeys.every((k) => ['currentStock', 'batches', 'notes'].includes(k));
 
   if (isStockOnlyUpdate) {
     if (!canDirectStockUpdate(req.user)) {
@@ -527,8 +528,9 @@ export const updateVariety = catchAsync(async (req, res, next) => {
 
     const { applyManualStockAdjustment } = await import('../services/ramAgriBatchInventory.service.js');
     const oldStock = Number(variety.currentStock) || 0;
+    const batches = Array.isArray(req.body.batches) ? req.body.batches : [];
     try {
-      await applyManualStockAdjustment(id, varietyId, parsedStock, req.user._id);
+      await applyManualStockAdjustment(id, varietyId, parsedStock, req.user._id, { batches });
     } catch (err) {
       return next(new AppError(err.message || 'Stock adjustment failed', 400));
     }

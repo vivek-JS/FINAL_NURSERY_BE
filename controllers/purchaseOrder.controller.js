@@ -693,7 +693,11 @@ export const createPurchaseOrder = async (req, res) => {
             if (poItem.productName) {
               grnItem.productName = poItem.productName;
             }
-            
+            // Durable link for receivedQty / ledger matching (classic + Ram Agri)
+            if (poItem._id) {
+              grnItem.poItem = poItem._id;
+            }
+
             return grnItem;
           })
         );
@@ -1066,34 +1070,37 @@ export const createPurchaseOrder = async (req, res) => {
         savedGRN.qualityCheckRemarks = 'Auto-approved from Purchase Order';
         savedGRN.updatedBy = req.user._id;
         await savedGRN.save();
+
+        // Money ledger: PURCHASE AP (same as approveGRN) — must run after approved
+        try {
+          const { postPurchaseFromGrn } = await import("../services/moneyLedger/index.js");
+          await postPurchaseFromGrn(savedGRN, req.user._id);
+        } catch (ledgerErr) {
+          console.error(
+            "[createPO autoGRN] money ledger post failed:",
+            ledgerErr?.message || ledgerErr
+          );
+        }
         
         console.log(`✅ GRN ${grnNumber} approved successfully`);
         
-        // Update PO received quantities
+        // Update PO received quantities (classic product OR Ram Agri crop/variety)
         if (savedGRN.purchaseOrder) {
           const po = await PurchaseOrder.findById(savedGRN.purchaseOrder);
           if (po) {
-            savedGRN.items.forEach((grnItem) => {
-              const poItem = po.items.find(
-                (item) => item.product.toString() === grnItem.product.toString()
-              );
-              if (poItem) {
-                poItem.receivedQuantity = (poItem.receivedQuantity || 0) + grnItem.acceptedQuantity;
-              }
-            });
-            
-            // Check if PO is fully received
-            const allReceived = po.items.every(
-              (item) => (item.receivedQuantity || 0) >= item.quantity
+            const { applyGrnAcceptedQtyToPurchaseOrder } = await import(
+              "../services/grnPoLink.helpers.js"
             );
-            if (allReceived) {
-              po.status = 'received';
-            } else {
-              po.status = 'partial_received';
-            }
-            
+            const applied = applyGrnAcceptedQtyToPurchaseOrder(po, savedGRN.items);
+            po.markModified("items");
             await po.save();
-            console.log(`✅ Purchase Order ${po.poNumber} received quantities updated`);
+            console.log(
+              `✅ Purchase Order ${po.poNumber} received qty updated (${applied.updated} lines → ${applied.status})`
+            );
+            // Keep response PO in sync (avoid stale ordered/received=0)
+            purchaseOrder.items = po.items;
+            purchaseOrder.status = po.status;
+            purchaseOrder.markModified?.("items");
           }
         }
         

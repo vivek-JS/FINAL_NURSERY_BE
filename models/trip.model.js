@@ -1,4 +1,5 @@
 import { Schema, model } from "mongoose";
+import { allocateTripNumber } from "../utility/tripNumber.js";
 
 const tripSchema = new Schema(
   {
@@ -91,11 +92,33 @@ const tripSchema = new Schema(
 // Pre-save middleware to generate trip number
 tripSchema.pre("save", async function (next) {
   if (this.isNew && !this.tripNumber) {
-    const count = await this.constructor.countDocuments();
-    const year = new Date().getFullYear();
-    this.tripNumber = `TRIP-${year}-${String(count + 1).padStart(4, "0")}`;
+    this.tripNumber = await allocateTripNumber(this.constructor);
   }
   next();
+});
+
+// findOneAndUpdate upsert bypasses save — set tripNumber on insert only
+tripSchema.pre("findOneAndUpdate", async function (next) {
+  try {
+    const opts = this.getOptions();
+    if (!opts?.upsert) return next();
+    const update = this.getUpdate() || {};
+    const setOnInsert = update.$setOnInsert || {};
+    const set = update.$set || {};
+    if (setOnInsert.tripNumber || set.tripNumber) return next();
+    const transportId =
+      set.transportId ??
+      setOnInsert.transportId ??
+      this.getQuery()?.transportId;
+    update.$setOnInsert = {
+      ...setOnInsert,
+      tripNumber: await allocateTripNumber(this.model, { transportId }),
+    };
+    this.setUpdate(update);
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Indexes

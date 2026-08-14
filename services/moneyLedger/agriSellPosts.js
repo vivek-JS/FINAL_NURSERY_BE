@@ -1,9 +1,7 @@
-/**
- * Ram Agri B2B merchant AR — durable MoneyLedgerEntry posts for agri sales orders.
- */
+import { postEntry, getPartyBalance, roundMoney } from "./postEntry.js";
+import { resolveDocumentLedgerEntryDate } from "../../utility/istLedgerDate.js";
 import Merchant from "../../models/merchant.model.js";
 import MoneyLedgerEntry from "../../models/moneyLedgerEntry.model.js";
-import { postEntry, getPartyBalance, roundMoney } from "./postEntry.js";
 import { postLedgerReversal } from "./reversals.js";
 
 export async function syncRamAgriMerchantAr(merchantId) {
@@ -36,6 +34,9 @@ export async function postAgriSalesOrderAr(order, userId) {
 
   const merchant = await Merchant.findById(merchantId).select("name").lean();
   const partyName = merchant?.name || order.customerName || "";
+  const entryDate = resolveDocumentLedgerEntryDate(
+    order.orderDate || order.createdAt || new Date()
+  );
 
   const products = (Array.isArray(order.lineItems) && order.lineItems.length
     ? order.lineItems
@@ -67,7 +68,7 @@ export async function postAgriSalesOrderAr(order, userId) {
     partyType: "MERCHANT",
     partyId: merchantId,
     partyName,
-    entryDate: order.orderDate || order.createdAt || new Date(),
+    entryDate,
     refType: "SELL",
     documentType: "AgriSalesOrder",
     documentId: order._id,

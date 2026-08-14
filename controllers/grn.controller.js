@@ -539,31 +539,23 @@ export const approveGRN = async (req, res) => {
 
     await grn.save();
 
-    // Update PO if linked
+    // Money ledger: PURCHASE AP credit (Biotech classic + Ram Agri split)
+    try {
+      const { postPurchaseFromGrn } = await import("../services/moneyLedger/index.js");
+      await postPurchaseFromGrn(grn, req.user._id);
+    } catch (ledgerErr) {
+      console.error("[approveGRN] money ledger post failed:", ledgerErr?.message || ledgerErr);
+    }
+
+    // Update PO if linked (classic + Ram Agri safe match)
     if (grn.purchaseOrder) {
       const po = await PurchaseOrder.findById(grn.purchaseOrder);
       if (po) {
-        // Update received quantities
-        grn.items.forEach((grnItem) => {
-          const poItem = po.items.find(
-            (item) => item.product.toString() === grnItem.product.toString()
-          );
-          if (poItem) {
-            poItem.receivedQuantity += grnItem.acceptedQuantity;
-          }
-        });
-
-        // Check if PO is fully received
-        const allReceived = po.items.every(
-          (item) => item.receivedQuantity >= item.quantity
+        const { applyGrnAcceptedQtyToPurchaseOrder } = await import(
+          "../services/grnPoLink.helpers.js"
         );
-
-        if (allReceived) {
-          po.status = 'received';
-        } else {
-          po.status = 'partial_received';
-        }
-
+        applyGrnAcceptedQtyToPurchaseOrder(po, grn.items);
+        po.markModified("items");
         await po.save();
       }
     }

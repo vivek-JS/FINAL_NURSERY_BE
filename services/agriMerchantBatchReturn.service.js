@@ -11,7 +11,6 @@ import AgriSalesReturnRequest from "../models/agriSalesReturnRequest.model.js";
 import RamAgriBatch from "../models/ramAgriBatch.model.js";
 import Merchant from "../models/merchant.model.js";
 import { returnToExplicitBatches } from "./ramAgriBatchInventory.service.js";
-import { createCustomerLedgerEntry } from "../utils/ramAgriLedgerHelper.js";
 
 export const OFFICE_RETURN_ROLES = new Set([
   "SUPER_ADMIN",
@@ -184,18 +183,8 @@ export async function getMerchantReturnableBatches(merchantId) {
   };
 }
 
-async function adjustMerchantMoney(merchantId, creditAmount) {
-  if (!merchantId || !(creditAmount > 0)) return;
-  await Merchant.findByIdAndUpdate(merchantId, {
-    $inc: {
-      totalOrderValue: -creditAmount,
-      outstandingAmount: -creditAmount,
-    },
-  });
-}
-
 /**
- * Apply office merchant-batch return immediately (stock + ledger + merchant money).
+ * Apply office merchant-batch return immediately (stock + one Money Ledger credit).
  * body: { merchantId, batchReturns: [{ batchId, returnQuantity }], returnReason, returnNotes }
  */
 export async function processMerchantBatchReturn({
@@ -320,6 +309,9 @@ export async function processMerchantBatchReturn({
 
   const auditRequests = [];
   const updatedOrders = [];
+  const allLineReturns = [];
+  const appliedBatchRows = [];
+  const groupId = new mongoose.Types.ObjectId();
 
   for (const work of perOrderWork.values()) {
     const order = work.order;
@@ -368,9 +360,23 @@ export async function processMerchantBatchReturn({
         returnQuantity,
         batchReturns,
       });
+      for (const br of batchReturns) {
+        appliedBatchRows.push({
+          batchId: br.batchId,
+          batchNumber: br.batchNumber,
+          quantity: br.quantity,
+          productName: bucket.productName,
+        });
+      }
     }
 
     const previousTotal = Number(order.totalAmount) || 0;
+    const { applyOrderReturnCreditFields } = await import("./salesReturnLedger.service.js");
+    applyOrderReturnCreditFields(order, orderCredit);
+    if (!(Number(order.originalTotalAmount) > 0)) {
+      order.originalTotalAmount = previousTotal;
+    }
+
     order.salesReturnQuantity = (Number(order.salesReturnQuantity) || 0) + orderQty;
     order.returnQuantity = (Number(order.returnQuantity) || 0) + orderQty;
     order.deliveredQuantity = Math.max(
@@ -380,69 +386,104 @@ export async function processMerchantBatchReturn({
     order.totalAmount = Math.max(0, previousTotal - orderCredit);
     order.balanceAmount = Math.max(
       0,
-      (Number(order.balanceAmount) || previousTotal - (Number(order.totalPaidAmount) || 0)) - orderCredit
+      (Number(order.balanceAmount) || previousTotal - (Number(order.totalPaidAmount) || 0)) -
+        orderCredit
     );
     if (order.balanceAmount <= 0) {
-      order.paymentStatus =
-        (Number(order.totalPaidAmount) || 0) >= (Number(order.totalAmount) || 0)
-          ? "PAID"
-          : order.paymentStatus;
+      order.paymentStatus = "COMPLETED";
+    } else if ((Number(order.totalPaidAmount) || 0) > 0) {
+      order.paymentStatus = "PARTIAL";
+    } else {
+      order.paymentStatus = "PENDING";
     }
+    // Ledger posts once after FIFO loop (one Money Ledger row for whole batch return)
+    order.salesReturnLedgerStatus = "PENDING";
+    order.salesReturnLedgerError = "";
     await order.save();
-
-    await adjustMerchantMoney(merchantId, orderCredit);
-
-    const audit = await AgriSalesReturnRequest.create({
-      orderId: order._id,
-      orderNumber: order.orderNumber,
-      dealer: order.dealer || userId,
-      status: "APPROVED",
-      lineReturns: auditLineReturns,
-      returnReason: returnReason?.trim() || "Merchant batch sale return",
-      returnNotes: returnNotes?.trim() || "",
-      requestedBy: userId,
-      reviewedBy: userId,
-      reviewedAt: new Date(),
-      reviewNotes: "Office merchant-batch return (immediate)",
-      stockReturned: true,
-      creditAmount: orderCredit,
-    });
-
-    const ledgerEntry = await createCustomerLedgerEntry({
-      customerMobile: order.customerMobile,
-      customerName: order.customerName,
-      refType: "SALES_RETURN",
-      refId: audit._id,
-      orderId: order._id,
-      credit: orderCredit,
-      reference: order.orderNumber,
-      category: "Sales Return",
-      description: `Merchant batch sale return for order ${order.orderNumber}`,
-      entryDate: new Date(),
-      createdBy: userId,
-      metadata: {
-        returnRequestId: audit._id,
-        merchantId: String(merchantId),
-        source: "MERCHANT_BATCH_RETURN",
-        totalReturnQty: orderQty,
-      },
-    });
-
-    if (ledgerEntry?._id) {
-      audit.ledgerRefId = ledgerEntry._id;
-      await audit.save();
-    }
 
     totalCredit += orderCredit;
     totalQty += orderQty;
-    auditRequests.push(audit);
+    allLineReturns.push(...auditLineReturns);
     updatedOrders.push({
       orderId: order._id,
       orderNumber: order.orderNumber,
+      customerName: order.customerName || "",
       returnQuantity: orderQty,
       creditAmount: orderCredit,
+      ledgerRefId: null,
     });
   }
+
+  if (!updatedOrders.length) {
+    return { ok: false, error: "No orders updated", status: 400 };
+  }
+
+  const {
+    postMerchantBatchSalesReturnMoneyLedger,
+  } = await import("./salesReturnLedger.service.js");
+  const ledgerResult = await postMerchantBatchSalesReturnMoneyLedger({
+    merchantId,
+    creditAmount: totalCredit,
+    userId,
+    groupId,
+    orderNumbers: updatedOrders.map((o) => o.orderNumber),
+    orderIds: updatedOrders.map((o) => o.orderId),
+    metadata: {
+      totalReturnQty: totalQty,
+      merchantId: String(merchantId),
+    },
+  });
+
+  // outstandingAmount comes from Money Ledger sync inside post above
+  if (totalCredit > 0) {
+    await Merchant.findByIdAndUpdate(merchantId, {
+      $inc: { totalOrderValue: -totalCredit },
+    });
+  }
+
+  const ledgerOk = Boolean(ledgerResult?.ok);
+  const ledgerStatus = ledgerResult?.ledgerStatus || (ledgerOk ? "POSTED" : "FAILED");
+  const ledgerError = ledgerResult?.ledgerError || ledgerResult?.error || "";
+  const moneyEntryId = ledgerResult?.moneyLedger?.entry?._id || null;
+
+  for (const u of updatedOrders) {
+    u.ledgerRefId = moneyEntryId;
+    await AgriSalesOrder.findByIdAndUpdate(u.orderId, {
+      salesReturnLedgerStatus: ledgerStatus,
+      salesReturnLedgerError: ledgerError,
+    });
+  }
+
+  // One list entry for the whole merchant-batch action; expand → affected orders
+  const audit = await AgriSalesReturnRequest.create({
+    orderId: updatedOrders[0].orderId,
+    orderNumber:
+      updatedOrders.length === 1
+        ? updatedOrders[0].orderNumber
+        : `${updatedOrders[0].orderNumber} +${updatedOrders.length - 1} more`,
+    source: "MERCHANT_BATCH",
+    merchantBatchGroupId: groupId,
+    affectedOrders: updatedOrders.map((o) => ({
+      orderId: o.orderId,
+      orderNumber: o.orderNumber,
+      customerName: o.customerName,
+      returnQuantity: o.returnQuantity,
+      creditAmount: o.creditAmount,
+    })),
+    appliedBatches: appliedBatchRows,
+    dealer: userId,
+    status: "APPROVED",
+    lineReturns: allLineReturns,
+    returnReason: returnReason?.trim() || "Merchant batch sale return",
+    returnNotes: returnNotes?.trim() || "",
+    requestedBy: userId,
+    reviewedBy: userId,
+    reviewedAt: new Date(),
+    reviewNotes: "Office merchant-batch return (immediate)",
+    stockReturned: true,
+    creditAmount: totalCredit,
+  });
+  auditRequests.push(audit);
 
   return {
     ok: true,
@@ -454,6 +495,14 @@ export async function processMerchantBatchReturn({
       appliedBatches,
       orders: updatedOrders,
       returnRequests: auditRequests.map((r) => r._id),
+      merchantBatchGroupId: groupId,
+      moneyLedger: {
+        posted: ledgerOk && !ledgerResult?.skipped,
+        skipped: Boolean(ledgerResult?.skipped),
+        status: ledgerStatus,
+        error: ledgerError || null,
+        entryId: moneyEntryId,
+      },
     },
   };
 }

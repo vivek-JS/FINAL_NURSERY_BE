@@ -34,6 +34,10 @@ function attachVarietyInventoryMeta(variety, productMap, linkMap, batchMap) {
           batchCount: batchMap.get(String(product._id)) || 0,
           plantId: variety.sowingPlantId || product.plantId,
           subtypeId: variety.sowingSubtypeId || product.subtypeId,
+          primaryUnit: product.primaryUnit || null,
+          secondaryUnit: product.secondaryUnit || null,
+          conversionFactor: product.conversionFactor || 1,
+          category: product.category || 'seeds',
         }
       : { linked: false },
     agriLink: agri
@@ -62,9 +66,13 @@ export async function enrichBiotechSeedPlants(plants) {
   const [products, linkMap, batchMap] = await Promise.all([
     productIds.length
       ? Product.find({ _id: { $in: productIds } })
-          .select('_id code name currentStock plantId subtypeId')
+          .select(
+            '_id code name currentStock plantId subtypeId primaryUnit secondaryUnit conversionFactor category'
+          )
+          .populate('primaryUnit', 'name abbreviation type requiresSecondaryUnit')
+          .populate('secondaryUnit', 'name abbreviation type')
           .lean()
-      : [],
+      : Promise.resolve([]),
     buildAgriLinkByProductIdMap(),
     batchCountByProduct(productIds),
   ]);

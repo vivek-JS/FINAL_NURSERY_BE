@@ -12,6 +12,8 @@ const contactSchema = new Schema(
     whatsappMessageId: { type: String, default: null },
     deliveredAt: { type: Date, default: null },
     readAt: { type: Date, default: null },
+    replyText: { type: String, default: null },
+    repliedAt: { type: Date, default: null },
   },
   { _id: false }
 );

@@ -10,6 +10,9 @@ import {
   addPartyDiscount,
   addDocumentScopedPayment,
   runBackfill,
+  listPendingAdjustments,
+  acceptPendingAdjustment,
+  rejectPendingAdjustment,
 } from "../controllers/moneyLedger.controller.js";
 
 const router = express.Router();
@@ -18,6 +21,19 @@ router.use(authenticateToken);
 router.get("/books", listBooks);
 router.get("/parties", listParties);
 router.get("/parties/:partyType/:partyId", getPartyStatement);
+router.get("/pending-adjustments", listPendingAdjustments);
+router.post(
+  "/pending-adjustments/:id/accept",
+  [check("id").isMongoId().withMessage("Valid id is required")],
+  checkErrors,
+  acceptPendingAdjustment
+);
+router.post(
+  "/pending-adjustments/:id/reject",
+  [check("id").isMongoId().withMessage("Valid id is required")],
+  checkErrors,
+  rejectPendingAdjustment
+);
 router.post(
   "/payments",
   [

@@ -205,6 +205,30 @@ const purchaseOrderSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    /** Append-only style payment rows; ledger MoneyLedgerEntry is source of truth for AP. */
+    payments: [
+      {
+        paidAmount: { type: Number, required: true },
+        paymentDate: { type: Date, required: true, default: Date.now },
+        modeOfPayment: {
+          type: String,
+          enum: ['Cash', 'UPI', 'Cheque', 'NEFT/RTGS', 'Card', 'Bank Transfer'],
+          default: 'Cash',
+        },
+        paymentStatus: {
+          type: String,
+          enum: ['PENDING', 'COLLECTED', 'REJECTED'],
+          default: 'COLLECTED',
+        },
+        bankName: String,
+        transactionId: String,
+        chequeNumber: String,
+        upiId: String,
+        remark: String,
+        createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     terms: {
       type: String,
     },

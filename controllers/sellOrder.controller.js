@@ -156,6 +156,13 @@ export const createSellOrder = async (req, res) => {
       });
     }
 
+    try {
+      const { postSellOrderAr } = await import("../services/moneyLedger/index.js");
+      await postSellOrderAr(sellOrder, req.user._id);
+    } catch (ledgerErr) {
+      console.error("[createSellOrder] money ledger post failed:", ledgerErr?.message || ledgerErr);
+    }
+
     res.status(201).json({
       success: true,
       message: 'Sell Order created successfully',
@@ -359,6 +366,14 @@ export const addPayment = async (req, res) => {
           outstandingAmount: -paymentData.paidAmount,
         },
       });
+    }
+
+    try {
+      const savedPayment = order.payment[order.payment.length - 1];
+      const { postSellPaymentAr } = await import("../services/moneyLedger/index.js");
+      await postSellPaymentAr(order, savedPayment, req.user._id);
+    } catch (ledgerErr) {
+      console.error("[addPayment] money ledger post failed:", ledgerErr?.message || ledgerErr);
     }
 
     await order.populate(['merchant', 'items.product', 'items.unit', 'createdBy']);
@@ -750,6 +765,15 @@ export const updateSellOrderPaymentStatus = async (req, res) => {
           outstandingAmount: paymentTotals.remaining,
         },
       });
+    }
+
+    try {
+      if (String(paymentStatus).toUpperCase() === "COLLECTED") {
+        const { postSellPaymentAr } = await import("../services/moneyLedger/index.js");
+        await postSellPaymentAr(order, order.payment[paymentIndex], req.user._id);
+      }
+    } catch (ledgerErr) {
+      console.error("[updateSellOrderPaymentStatus] ledger:", ledgerErr?.message || ledgerErr);
     }
 
     await order.populate(['merchant', 'items.product', 'items.unit', 'createdBy']);

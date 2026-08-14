@@ -576,9 +576,12 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     screenshots,
     salesPerson: salesPersonBody,
     lineItems: rawLineItems,
-    merchant: merchantBody,
+    merchant: merchantFromBody,
+    merchantId: merchantIdFromBody,
     orderChannel: orderChannelBody,
   } = req.body;
+
+  const merchantBody = merchantFromBody || merchantIdFromBody || null;
 
   const useMultiLine = Array.isArray(rawLineItems) && rawLineItems.length > 0;
 
@@ -770,22 +773,22 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     }
   }
 
-  let merchantId = null;
-  let orderChannel = String(orderChannelBody || "RETAIL").toUpperCase() === "B2B" ? "B2B" : "RETAIL";
-  if (merchantBody) {
-    if (!mongoose.isValidObjectId(merchantBody)) {
-      return next(new AppError("Invalid merchant ID", 400));
-    }
-    const Merchant = (await import("../models/merchant.model.js")).default;
-    const merchantDoc = await Merchant.findById(merchantBody).select("_id name phone");
-    if (!merchantDoc) {
-      return next(new AppError("Merchant not found", 404));
-    }
-    merchantId = merchantDoc._id;
-    orderChannel = "B2B";
+  const {
+    resolveAgriB2bMerchant,
+    postAgriB2bMoneyLedgerSoft,
+  } = await import("../services/moneyLedger/agriOrderMoneyLedger.helpers.js");
+  const merchantResolved = await resolveAgriB2bMerchant({
+    orderChannelBody,
+    merchantBody,
+  });
+  if (merchantResolved.error) {
+    return next(new AppError(merchantResolved.error, merchantResolved.status || 400));
   }
+  const merchantId = merchantResolved.merchantId;
+  const orderChannel = merchantResolved.orderChannel;
 
   let orderData;
+  let moneyLedgerMeta = null;
 
   const dealerOrderFields = {
     isDealerSelfOrder,
@@ -887,11 +890,12 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
     } catch (merchantErr) {
       console.error("[createAgriSalesOrder] merchant balance update failed:", merchantErr?.message);
     }
-    try {
-      const { postAgriSalesOrderAr } = await import("../services/moneyLedger/index.js");
-      await postAgriSalesOrderAr(order, userId);
-    } catch (ledgerErr) {
-      console.error("[createAgriSalesOrder] money ledger AR post failed:", ledgerErr?.message || ledgerErr);
+    moneyLedgerMeta = await postAgriB2bMoneyLedgerSoft(order, userId, { attempts: 2 });
+    if (!moneyLedgerMeta.posted && !moneyLedgerMeta.skipped) {
+      console.error(
+        "[createAgriSalesOrder] money ledger AR post failed:",
+        moneyLedgerMeta.error || moneyLedgerMeta
+      );
     }
   }
 
@@ -1063,14 +1067,49 @@ const createAgriSalesOrder = catchAsync(async (req, res, next) => {
   await order.populate("createdBy");
   await order.populate("salesPerson", "name phoneNumber jobTitle");
 
-  const response = generateResponse(
-    "Success",
-    "Agri Sales Order created successfully",
-    order,
-    undefined
-  );
+  const extras =
+    moneyLedgerMeta != null
+      ? {
+          moneyLedger: {
+            posted: Boolean(moneyLedgerMeta.posted),
+            skipped: Boolean(moneyLedgerMeta.skipped),
+            error: moneyLedgerMeta.error || null,
+            reason: moneyLedgerMeta.reason || null,
+            retryAvailable: Boolean(moneyLedgerMeta.retryAvailable),
+          },
+        }
+      : undefined;
+
+  const createMessage =
+    moneyLedgerMeta && !moneyLedgerMeta.posted && !moneyLedgerMeta.skipped
+      ? "Agri Sales Order created, but money ledger post failed — use retry-money-ledger"
+      : "Agri Sales Order created successfully";
+
+  const response = generateResponse("Success", createMessage, order, undefined, extras);
 
   return res.status(201).json(response);
+});
+
+/** Soft-retry MoneyLedger SELL for an existing B2B agri sales order. */
+const retryAgriSalesOrderMoneyLedger = catchAsync(async (req, res, next) => {
+  const { retryAgriSalesOrderMoneyLedgerById } = await import(
+    "../services/moneyLedger/agriOrderMoneyLedger.helpers.js"
+  );
+  const result = await retryAgriSalesOrderMoneyLedgerById(req.params.id, req.user?._id || req.user?.id);
+  if (!result.ok) {
+    return next(new AppError(result.error || "Money ledger retry failed", result.status || 400));
+  }
+  return res.status(200).json(
+    generateResponse("Success", "Money ledger posted for agri sales order", result.order, undefined, {
+      moneyLedger: {
+        posted: Boolean(result.moneyLedger?.posted),
+        skipped: Boolean(result.moneyLedger?.skipped),
+        error: result.moneyLedger?.error || null,
+        reason: result.moneyLedger?.reason || null,
+        retryAvailable: false,
+      },
+    })
+  );
 });
 
 const createLinkedAgriOrderFromNurseryOrder = catchAsync(async (req, res, next) => {
@@ -5657,6 +5696,7 @@ const generateAgriDeliveryChallanPdf = catchAsync(async (req, res, next) => {
 
 export {
   createAgriSalesOrder,
+  retryAgriSalesOrderMoneyLedger,
   createLinkedAgriOrderFromNurseryOrder,
   updateAgriSalesOrder,
   acceptAgriSalesOrder,

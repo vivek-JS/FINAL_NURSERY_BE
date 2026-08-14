@@ -45,9 +45,24 @@ export const createCustomerLedgerEntry = async ({
   createdBy,
   metadata = {},
   session,
+  idempotencyKey,
 }) => {
   if (!customerMobile) {
     return null;
+  }
+
+  const mobile =
+    normalizeAgriCustomerMobile(customerMobile) || String(customerMobile).trim();
+  if (!mobile) return null;
+
+  const key = idempotencyKey || metadata?.idempotencyKey || null;
+  if (key) {
+    const existing = await RamAgriCustomerLedgerEntry.findOne({
+      "metadata.idempotencyKey": key,
+    })
+      .session(session || null)
+      .lean();
+    if (existing) return existing;
   }
 
   const normalizedDebit = Math.abs(Number(debit || 0));
@@ -58,7 +73,7 @@ export const createCustomerLedgerEntry = async ({
   }
 
   const entryPayload = {
-    customerMobile: customerMobile.trim(),
+    customerMobile: mobile,
     customerName: customerName?.trim() || "",
     entryDate: entryDate ? new Date(entryDate) : new Date(),
     refType,
@@ -71,7 +86,7 @@ export const createCustomerLedgerEntry = async ({
     category,
     description,
     createdBy,
-    metadata,
+    metadata: key ? { ...metadata, idempotencyKey: key } : metadata,
   };
 
   let entry;

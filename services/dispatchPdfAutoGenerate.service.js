@@ -1,9 +1,12 @@
 import Dispatch from "../models/dispatch.model.js";
+import Order from "../models/order.model.js";
 import { uploadToS3 } from "./uploadService.js";
 import {
   buildDeliveryChallanPdfBuffer,
   buildCompleteInvoicePdfBuffer,
 } from "./dispatchPdfDocuments.service.js";
+import { ensureOfficialInvoiceSetFields } from "./officialInvoice.service.js";
+import { ensureDispatchOrdersDcNumbers } from "./ensureOrderDcForChallan.service.js";
 
 /**
  * Load dispatch lean document for PDF generation (mirrors controller helper).
@@ -70,7 +73,9 @@ export async function generateAndSaveDispatchPdfs(dispatchId, types = ["delivery
     if (prevUrl && !force) {
       // reuse
     } else {
-      const buf = await buildDeliveryChallanPdfBuffer(loaded);
+      await ensureDispatchOrdersDcNumbers(loaded);
+      const reloadedForDc = (await loadDispatchLeanForPdfGeneration(dispatchId)) || loaded;
+      const buf = await buildDeliveryChallanPdfBuffer(reloadedForDc);
       const url = await uploadToS3(buf, `delivery-challan-${dispatchObjectId}-${Date.now()}.pdf`, {
         folder: `dispatch-pdfs/${dispatchObjectId}`,
       });
@@ -97,7 +102,23 @@ export async function generateAndSaveDispatchPdfs(dispatchId, types = ["delivery
     if (prevUrl && !force) {
       // reuse existing invoice PDF
     } else {
-      const buf = await buildCompleteInvoicePdfBuffer(loaded);
+      const orders = Array.isArray(loaded.orderIds) ? loaded.orderIds : [];
+      for (const order of orders) {
+        const orderId = order?._id || order;
+        if (!orderId) continue;
+        const fullOrder =
+          order && typeof order === "object" && (order.plantName || order.plantLineItems)
+            ? order
+            : await Order.findById(orderId).lean();
+        if (!fullOrder) continue;
+        const { setFields } = await ensureOfficialInvoiceSetFields(fullOrder);
+        if (Object.keys(setFields).length) {
+          await Order.findByIdAndUpdate(orderId, { $set: setFields });
+        }
+      }
+      const reloaded = await loadDispatchLeanForPdfGeneration(dispatchId);
+      const dispatchForPdf = reloaded || loaded;
+      const buf = await buildCompleteInvoicePdfBuffer(dispatchForPdf);
       const url = await uploadToS3(buf, `complete-invoice-${dispatchObjectId}-${Date.now()}.pdf`, {
         folder: `dispatch-pdfs/${dispatchObjectId}`,
       });

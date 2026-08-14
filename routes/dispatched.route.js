@@ -6,6 +6,7 @@ import {
   getDispatches,
   getDispatch,
   regenerateDispatchPdfs,
+  ensureDispatchDeliveryChallanNumbers,
   removeTransport,
   handleDispatchReturns,
   assignRoute,
@@ -29,6 +30,9 @@ router.post("/sync-order-gifts", syncDispatchOrderGifts);
 
 // POST generate PDFs (before GET /:id so "generate-pdfs" is never captured as :id)
 router.post("/:id/generate-pdfs", regenerateDispatchPdfs);
+
+// POST ensure CMS DC numbers on dispatch orders (before challan preview)
+router.post("/:id/ensure-delivery-challan-numbers", ensureDispatchDeliveryChallanNumbers);
 
 // GET single dispatch
 router.get("/:id", getDispatch);

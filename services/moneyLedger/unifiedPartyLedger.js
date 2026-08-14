@@ -10,6 +10,7 @@ import Supplier from "../../models/supplier.model.js";
 import { roundMoney } from "./postEntry.js";
 import { listRamAgriFarmerParties, getRamAgriFarmerStatement } from "../ramAgriMoneyLedgerAr.service.js";
 import { enrichStatementProducts } from "./enrichStatementProducts.js";
+import { ledgerEntrySortTime } from "../../utility/istLedgerDate.js";
 
 const BOOKS = new Set(["BIOTECH", "RAM_AGRI"]);
 
@@ -131,16 +132,22 @@ export async function getUnifiedBookPartyStatement(
     return { ok: false, error: "Unsupported partyType", status: 400 };
   }
 
-  const entries = await MoneyLedgerEntry.find({
+  const lim = Math.min(2000, Number(limit) || 500);
+  const rawEntries = await MoneyLedgerEntry.find({
     book: b,
     partyType: pt,
     partyId,
   })
-    .sort({ entryDate: 1, createdAt: 1 })
-    .limit(Math.min(2000, Number(limit) || 500))
+    .limit(lim)
     .lean();
 
-  const enriched = await enrichStatementProducts(entries);
+  rawEntries.sort((a, b2) => {
+    const d = ledgerEntrySortTime(a) - ledgerEntrySortTime(b2);
+    if (d !== 0) return d;
+    return String(a._id || "").localeCompare(String(b2._id || ""));
+  });
+
+  const enriched = await enrichStatementProducts(rawEntries);
 
   // Running balance oldest → newest, then reverse so latest entry is first
   let running = 0;
@@ -150,6 +157,7 @@ export async function getUnifiedBookPartyStatement(
       ...e,
       book: b,
       runningBalance: running,
+      sortTime: ledgerEntrySortTime(e),
     };
   });
   const rows = chronological.slice().reverse();

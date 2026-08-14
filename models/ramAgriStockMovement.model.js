@@ -9,6 +9,8 @@ export const RAM_AGRI_MOVEMENT_TYPES = {
   SALES_RETURN_IN: "SALES_RETURN_IN",
   DEALER_RETURN_IN: "DEALER_RETURN_IN",
   ORDER_CANCEL_RESTORE_IN: "ORDER_CANCEL_RESTORE_IN",
+  /** Stock returned to supplier (purchase return) — OUT */
+  PURCHASE_RETURN_OUT: "PURCHASE_RETURN_OUT",
 };
 
 export const RAM_AGRI_MOVEMENT_TYPE_LIST = Object.values(RAM_AGRI_MOVEMENT_TYPES);
@@ -22,6 +24,7 @@ export const RAM_AGRI_MOVEMENT_CATEGORY_LABELS = {
   SALES_RETURN_IN: "Sales return",
   DEALER_RETURN_IN: "Dealer return",
   ORDER_CANCEL_RESTORE_IN: "Order cancel restore",
+  PURCHASE_RETURN_OUT: "Purchase return",
 };
 
 const ramAgriStockMovementSchema = new mongoose.Schema(

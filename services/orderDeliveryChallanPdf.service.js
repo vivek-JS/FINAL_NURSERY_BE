@@ -2,6 +2,7 @@ import Order from "../models/order.model.js";
 import { uploadToS3 } from "./uploadService.js";
 import { buildDeliveryChallanPdfBuffer } from "./dispatchPdfDocuments.service.js";
 import { assertLinkedAgriLoadForDc } from "./linkedAgriLoadGuard.service.js";
+import { ensureOrderDcNumbersIfEligible } from "./ensureOrderDcForChallan.service.js";
 
 /**
  * Load order lean with populates needed for DC HTML.
@@ -55,8 +56,15 @@ export async function generateAndSaveOrderDeliveryChallanPdf(orderId, options = 
 
   await assertLinkedAgriLoadForDc(orderId);
 
+  const ensured = await ensureOrderDcNumbersIfEligible(order, null);
+  if (Object.keys(ensured.setFields || {}).length) {
+    await Order.findByIdAndUpdate(order._id, { $set: ensured.setFields });
+    Object.assign(order, ensured.setFields);
+  }
+
   const hasDc =
     String(order.officialDeliveryChallanNumber || "").trim() ||
+    String(order.officialNonBillableDeliveryChallanNumber || "").trim() ||
     String(order.deliveryChallanInvoiceNumber || "").trim();
   if (!hasDc) {
     const err = new Error("Order has no delivery challan number yet");

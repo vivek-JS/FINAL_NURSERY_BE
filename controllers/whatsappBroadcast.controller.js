@@ -20,9 +20,10 @@ export const listBroadcasts = catchAsync(async (req, res) => {
   // Count by broadcast contact status (updated by webhook); fallback to Farmer/Lead activities for legacy
   const results = [];
   for (const b of broadcasts) {
-    let sent = 0, delivered = 0, read = 0, failed = 0;
+    let sent = 0, delivered = 0, read = 0, failed = 0, replied = 0;
     for (const c of (b.contacts || [])) {
       const s = (c.status || "pending").toLowerCase();
+      if (c.replyText) replied++;
       if (s === "sent") sent++;
       else if (s === "delivered") delivered++;
       else if (s === "read") read++;
@@ -56,7 +57,7 @@ export const listBroadcasts = catchAsync(async (req, res) => {
     }
     results.push({
       ...b,
-      counts: { sent, delivered, read, failed, totalRecipients: (b.contacts || []).length }
+      counts: { sent, delivered, read, failed, replied, totalRecipients: (b.contacts || []).length }
     });
   }
 
@@ -90,17 +91,23 @@ export const getBroadcastById = catchAsync(async (req, res) => {
         }
       }
     }
-    contactsWithStatus.push({ ...c, statusRecord });
+    contactsWithStatus.push({
+      ...c,
+      statusRecord,
+      replyText: c.replyText || null,
+      repliedAt: c.repliedAt || null,
+    });
   }
 
   // Compute counts from contact status
-  let sent = 0, delivered = 0, read = 0, failed = 0;
+  let sent = 0, delivered = 0, read = 0, failed = 0, replied = 0;
   for (const c of contactsWithStatus) {
     const s = (c.statusRecord?.status || c.status || "pending").toLowerCase();
     if (s === "sent") sent++;
     else if (s === "delivered") delivered++;
     else if (s === "read") read++;
     else if (s === "failed") failed++;
+    if (c.replyText) replied++;
   }
 
   return res.status(200).json(generateResponse("Success", "Broadcast detail", {

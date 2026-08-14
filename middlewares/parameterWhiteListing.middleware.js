@@ -179,6 +179,7 @@ const allowedParams = [
   "q",
   // Call assignment combined list
   "source", // farmer | lead | farmerForm | all
+  "sources", // GET /farmer/all-contacts — farmer,oldSales,publicLink
   "stateName",
   "linkId", // public farmer link id for farmer form filter
   "opt_in", // filter by opt-in status (true/false)
@@ -218,6 +219,14 @@ const allowedParams = [
   // Daily notes list filters
   "from",
   "to",
+  // Money ledger (GET /inventory/money-ledger/parties*)
+  "book",
+  "side",
+  // Purchase returns
+  "purchaseOrderId",
+  "supplierId",
+  // Money ledger party filter
+  "partyKind",
 ];
 
 /** Effective whitelist: array + mandatory extras (survives accidental removal from `allowedParams`). */
@@ -246,6 +255,11 @@ allowedQueryKeys.add("month"); // GET /face-attendance/dashboard — YYYY-MM
 allowedQueryKeys.add("department"); // GET /face-attendance/admin/* — Department ObjectId filter
 allowedQueryKeys.add("isOld"); // GET agri-sales-orders — era filter (new vs archived)
 allowedQueryKeys.add("employeeId"); // GET /face-attendance/admin/logs — employee ObjectId filter
+allowedQueryKeys.add("book"); // GET /inventory/money-ledger — BIOTECH | RAM_AGRI
+allowedQueryKeys.add("side"); // GET /inventory/money-ledger — AR | AP | ALL
+allowedQueryKeys.add("purchaseOrderId"); // GET /inventory/purchase-returns/returnable-batches
+allowedQueryKeys.add("supplierId"); // GET /inventory/purchase-returns/returnable-batches (supplier-wise)
+allowedQueryKeys.add("partyKind"); // GET /inventory/money-ledger/parties — ALL|FARMER|MERCHANT
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)

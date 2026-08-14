@@ -57,6 +57,7 @@ import {
   buildCompleteInvoicePdfBuffer,
 } from "../services/dispatchPdfDocuments.service.js";
 import { scheduleDispatchPdfGeneration } from "../services/dispatchPdfAutoGenerate.service.js";
+import { ensureDispatchOrdersDcNumbers } from "../services/ensureOrderDcForChallan.service.js";
 import {
   getOrderUpdateUserContext,
   resolveUserForOrderUpdatePermissions,
@@ -3051,7 +3052,10 @@ const regenerateDispatchPdfs = catchAsync(async (req, res, next) => {
     if (prevUrl && !force) {
       // reuse existing DC PDF
     } else {
-      const buf = await buildDeliveryChallanPdfBuffer(dispatch);
+      await ensureDispatchOrdersDcNumbers(dispatch);
+      const reloadedForDc =
+        (await loadDispatchLeanForPdfGeneration(resolved._id))?.dispatch || dispatch;
+      const buf = await buildDeliveryChallanPdfBuffer(reloadedForDc);
       const url = await uploadToS3(buf, `delivery-challan-${dispatchObjectId}-${Date.now()}.pdf`, {
         folder: `dispatch-pdfs/${dispatchObjectId}`,
       });
@@ -4293,6 +4297,49 @@ const syncDispatchOrderGifts = catchAsync(async (req, res, next) => {
   );
 });
 
+/** Allocate CMS DC numbers for dispatch orders before challan preview/PDF. */
+const ensureDispatchDeliveryChallanNumbers = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const perm = getOrderUpdateUserContext(
+    resolveUserForOrderUpdatePermissions(req) || req.user
+  );
+  if (!perm.canEditOrderCore) {
+    return next(new AppError("You are not allowed to update delivery challan numbers", 403));
+  }
+
+  const resolved = await findDispatchDocumentFlexible(id);
+  if (!resolved) {
+    return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
+  }
+
+  const loaded = await loadDispatchLeanForPdfGeneration(resolved._id);
+  if (!loaded?.dispatch) {
+    return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
+  }
+
+  const updatedCount = await ensureDispatchOrdersDcNumbers(loaded.dispatch);
+  const refreshed = await loadDispatchLeanForPdfGeneration(resolved._id);
+  const dispatch = refreshed?.dispatch;
+
+  const orders = Array.isArray(dispatch?.orderIds) ? dispatch.orderIds : [];
+  const orderDcNumbers = orders.map((order) => ({
+    _id: order._id,
+    orderId: order.orderId,
+    officialDeliveryChallanNumber: order.officialDeliveryChallanNumber || "",
+    officialNonBillableDeliveryChallanNumber:
+      order.officialNonBillableDeliveryChallanNumber || "",
+    deliveryChallanInvoiceNumber: order.deliveryChallanInvoiceNumber || "",
+  }));
+
+  return res.status(200).json(
+    generateResponse("Success", "Delivery challan numbers ensured", {
+      updatedCount,
+      orderDcNumbers,
+      dispatchId: dispatch?._id,
+    })
+  );
+});
+
 export {
   createDispatch,
   updateDispatch,
@@ -4300,6 +4347,7 @@ export {
   getDispatches,
   getDispatch,
   regenerateDispatchPdfs,
+  ensureDispatchDeliveryChallanNumbers,
   removeTransport,
   assignRoute,
   bulkMarkReady,

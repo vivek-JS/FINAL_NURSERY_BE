@@ -13,6 +13,7 @@ import {
   recordWhatsappHistory,
   getFarmerWhatsappHistory
 } from "../controllers/farmer.controller.js";
+import { getAllFarmerContacts } from "../controllers/farmerContacts.controller.js";
 import { createOrder } from "../controllers/order.controller.js";
 import express from "express";
 import { check } from "express-validator";
@@ -66,6 +67,7 @@ const uploadImages = multer({
 router
   .get("/getfarmer/:mobileNumber", findFarmer)
   .get("/getFarmers", getFarmers)
+  .get("/all-contacts", getAllFarmerContacts)
   .get("/filter-options", getFarmerFilterOptions)
   .get("/farmers/:farmerId/orders/:orderId?", getFarmerOrder)
   .get("/get/:id", getFarmerById)

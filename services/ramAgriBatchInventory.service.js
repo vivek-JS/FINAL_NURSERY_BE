@@ -474,7 +474,7 @@ async function createLegacyReturnBatch(meta, returnQty) {
   };
 }
 
-export async function applyManualStockAdjustment(cropId, varietyId, newStock, userId) {
+export async function applyManualStockAdjustment(cropId, varietyId, newStock, userId, options = {}) {
   const parsedStock = Number(newStock);
   if (!Number.isFinite(parsedStock) || parsedStock < 0) {
     throw new Error('currentStock must be a non-negative number');
@@ -483,30 +483,80 @@ export async function applyManualStockAdjustment(cropId, varietyId, newStock, us
   const { crop, variety } = await resolveVariety(cropId, varietyId);
   const oldStock = Number(variety.currentStock) || 0;
   const delta = parsedStock - oldStock;
+  const inboundBatches = Array.isArray(options.batches) ? options.batches : [];
 
   if (delta === 0) {
     return { currentStock: oldStock, delta: 0 };
   }
 
   if (delta > 0) {
-    const price =
+    if (!inboundBatches.length) {
+      throw new Error(
+        'Stock increase requires one or more batches with batchNumber, expiryDate, and quantity'
+      );
+    }
+
+    const normalized = [];
+    let qtySum = 0;
+    for (const row of inboundBatches) {
+      const batchNumber = String(row?.batchNumber || '').trim();
+      const expiryRaw = row?.expiryDate;
+      const quantity = Number(row?.quantity);
+      if (!batchNumber) {
+        throw new Error('Each inbound batch requires batchNumber');
+      }
+      if (!expiryRaw) {
+        throw new Error(`Expiry date is required for batch ${batchNumber}`);
+      }
+      const expiryDate = expiryRaw instanceof Date ? expiryRaw : new Date(expiryRaw);
+      if (Number.isNaN(expiryDate.getTime())) {
+        throw new Error(`Invalid expiry date for batch ${batchNumber}`);
+      }
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new Error(`Quantity must be > 0 for batch ${batchNumber}`);
+      }
+      qtySum += quantity;
+      normalized.push({
+        batchNumber,
+        expiryDate,
+        quantity,
+        purchasePrice: Number(row?.purchasePrice),
+      });
+    }
+
+    const roundedDelta = Math.round(delta * 1000) / 1000;
+    const roundedSum = Math.round(qtySum * 1000) / 1000;
+    if (Math.abs(roundedSum - roundedDelta) > 0.001) {
+      throw new Error(
+        `Batch quantities (${roundedSum}) must equal stock increase (${roundedDelta})`
+      );
+    }
+
+    const defaultPrice =
       Number(variety.averagePrice || variety.purchasePrice || variety.defaultRate) || 0;
-    await createInboundBatch({
-      cropId,
-      varietyId,
-      quantityPrimary: delta,
-      purchasePrice: price,
-      unitId: variety.primaryUnit?._id || variety.primaryUnit,
-      source: 'MANUAL_ADJUSTMENT',
-      referenceType: 'ManualAdjustment',
-      userId,
-      cropName: crop.cropName,
-      varietyName: variety.name,
-      movementMeta: {
-        movementType: RAM_AGRI_MOVEMENT_TYPES.MANUAL_IN,
-        description: `Manual stock increase (+${delta})`,
-      },
-    });
+
+    for (const row of normalized) {
+      await createInboundBatch({
+        cropId,
+        varietyId,
+        quantityPrimary: row.quantity,
+        batchNumber: row.batchNumber,
+        expiryDate: row.expiryDate,
+        purchasePrice: Number.isFinite(row.purchasePrice) && row.purchasePrice > 0
+          ? row.purchasePrice
+          : defaultPrice,
+        unitId: variety.primaryUnit?._id || variety.primaryUnit,
+        source: 'MANUAL_ADJUSTMENT',
+        referenceType: 'ManualAdjustment',
+        userId,
+        cropName: crop.cropName,
+        varietyName: variety.name,
+        movementMeta: {
+          movementType: RAM_AGRI_MOVEMENT_TYPES.MANUAL_IN,
+          description: `Manual stock in ${row.batchNumber} (+${row.quantity})`,
+        },
+      });
+    }
   } else {
     const result = await deductStockFIFO(cropId, varietyId, Math.abs(delta), {
       userId,

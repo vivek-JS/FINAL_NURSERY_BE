@@ -394,6 +394,7 @@ export const getCustomerLedger = catchAsync(async (req, res, next) => {
     .sort({ entryDate: 1 })
     .lean();
 
+  // Historical gaps are repaired via POST /money-ledger/backfill (no GET-time insertMany).
   const orders = await AgriSalesOrder.find({
     $and: [
       customerFilter,
@@ -405,107 +406,15 @@ export const getCustomerLedger = catchAsync(async (req, res, next) => {
         ],
       },
     ],
-  }).lean();
+  })
+    .select("orderNumber customerMobile customerName totalAmount orderStatus")
+    .lean();
 
   if (orders.length === 0 && allEntries.length === 0) {
     return res.status(404).json({
       status: "Error",
       message: "No ledger entries found for this customer",
     });
-  }
-
-  const existingOrderRefs = new Set(
-    allEntries.filter((entry) => entry.refType === "ORDER").map((entry) => entry.refId?.toString())
-  );
-  const existingPaymentRefs = new Set(
-    allEntries.filter((entry) => entry.refType === "PAYMENT").map((entry) => entry.refId?.toString())
-  );
-  const existingOrderReversals = new Set(
-    allEntries
-      .filter((entry) => entry.refType === "REVERSAL" && entry.orderId)
-      .map((entry) => entry.refId?.toString())
-  );
-
-  const newEntries = [];
-  orders.forEach((order) => {
-    const orderId = order._id?.toString();
-    if (orderId && !existingOrderRefs.has(orderId)) {
-      newEntries.push({
-        customerMobile: order.customerMobile,
-        customerName: order.customerName,
-        entryDate: order.orderDate || order.createdAt,
-        refType: "ORDER",
-        refId: order._id,
-        orderId: order._id,
-        debit: order.totalAmount || 0,
-        reference: order.orderNumber,
-        category: "Order",
-        description: `Order: ${order.ramAgriCropName || "Unknown"} - ${order.ramAgriVarietyName || "Unknown"}`,
-        createdBy: order.createdBy,
-        metadata: {
-          customerVillage: order.customerVillage,
-          customerTaluka: order.customerTaluka,
-          customerDistrict: order.customerDistrict,
-          orderStatus: order.orderStatus,
-        },
-      });
-    }
-
-    if (order.payment && Array.isArray(order.payment)) {
-      order.payment
-        .filter((payment) => payment.paymentStatus === "COLLECTED")
-        .forEach((payment) => {
-          const paymentId = payment._id?.toString();
-          if (paymentId && !existingPaymentRefs.has(paymentId)) {
-            newEntries.push({
-              customerMobile: order.customerMobile,
-              customerName: order.customerName,
-              entryDate: payment.paymentDate || order.orderDate || order.createdAt,
-              refType: "PAYMENT",
-              refId: payment._id,
-              orderId: order._id,
-              paymentId: payment._id,
-              credit: payment.paidAmount || 0,
-              reference: order.orderNumber,
-              category: "Payment",
-              description: `Payment via ${payment.modeOfPayment || "N/A"}`,
-              createdBy: order.createdBy,
-              metadata: {
-                paymentStatus: payment.paymentStatus,
-                modeOfPayment: payment.modeOfPayment,
-              },
-            });
-          }
-        });
-    }
-
-    if (["CANCELLED", "REJECTED"].includes(order.orderStatus) && orderId) {
-      if (!existingOrderReversals.has(orderId)) {
-        newEntries.push({
-          customerMobile: order.customerMobile,
-          customerName: order.customerName,
-          entryDate: order.updatedAt || order.createdAt,
-          refType: "REVERSAL",
-          refId: order._id,
-          orderId: order._id,
-          credit: order.totalAmount || 0,
-          reference: order.orderNumber,
-          category: "Order Reversal",
-          description: `Order ${order.orderStatus.toLowerCase()}`,
-          createdBy: order.createdBy,
-          metadata: {
-            orderStatus: order.orderStatus,
-          },
-        });
-      }
-    }
-  });
-
-  if (newEntries.length > 0) {
-    await RamAgriCustomerLedgerEntry.insertMany(newEntries);
-    allEntries = await RamAgriCustomerLedgerEntry.find(customerFilter)
-      .sort({ entryDate: 1 })
-      .lean();
   }
 
   const startDateObj = startDate ? new Date(startDate) : null;
