@@ -148,10 +148,16 @@ export function classifyWatiStatusEvent(eventType, statusString) {
   const et = String(eventType || "").toLowerCase().replace(/[\s_-]/g, "");
   const ss = String(statusString || "").toLowerCase().trim();
 
-  if (et.includes("templatemessagesent") || ss === "sent") return "sent";
-  if (et.includes("sentmessagereplied") || ss === "replied") return "replied";
-  if (et.includes("sentmessagedelivered") || ss === "delivered") return "delivered";
-  if (et.includes("sentmessageread") || ss === "read") return "read";
-  if (et.includes("templatemessagefailed") || ss === "failed") return "failed";
+  if (et.includes("templatemessagesent")) return "sent";
+  if (et.includes("sentmessagereplied")) return "replied";
+  if (et.includes("sentmessagedelivered")) return "delivered";
+  if (et.includes("sentmessageread")) return "read";
+  if (et.includes("templatemessagefailed")) return "failed";
+
+  if (ss === "replied") return "replied";
+  if (ss === "sent") return "sent";
+  if (ss === "delivered") return "delivered";
+  if (ss === "read") return "read";
+  if (ss === "failed") return "failed";
   return null;
 }

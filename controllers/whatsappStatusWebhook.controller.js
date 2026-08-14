@@ -235,7 +235,11 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
         },
       };
       const arrayFilters = [
-        { "elem.status": { $in: ["pending"] }, "elem.localMessageId": { $in: [null, ""] } },
+        {
+          "elem.status": { $in: ["pending"] },
+          "elem.localMessageId": { $in: [null, ""] },
+          ...(broadcastName ? { "elem.broadcastName": broadcastName } : {}),
+        },
       ];
       await Farmer.updateOne({ mobileNumber: parseInt(phone10, 10) }, update, { arrayFilters }).catch(() => {});
       await FarmerLead.updateOne({ mobileNumber: phone10 }, update, { arrayFilters }).catch(() => {});

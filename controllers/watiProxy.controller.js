@@ -139,14 +139,20 @@ export const sendTemplateMessages = catchAsync(async (req, res) => {
         whatsappMessageId,
       };
     });
-    await WhatsAppBroadcast.create({
+    const createdBroadcast = await WhatsAppBroadcast.create({
       name: payload.broadcast_name || `Campaign_${Date.now()}`,
       templateName: payload.template_name || body.templateName,
       contacts: broadcastContacts,
       sentAt: new Date(),
       status: "sent",
-      meta: { watiResponse: response.data || null }
+      meta: { watiResponse: response.data || null },
     });
+    const payloadData = {
+      ...(response.data || {}),
+      broadcastId: createdBroadcast._id,
+      broadcastName: payload.broadcast_name,
+    };
+    return res.status(200).json(generateResponse("Success", "Messages sent", payloadData, undefined));
   } catch (e) {
     console.warn("Could not create WhatsAppBroadcast:", e.message);
   }
