@@ -33,8 +33,17 @@ function buildContactArrayFilter({ localMessageId, whatsappMessageId, phoneMatch
   return or.length === 1 ? or[0] : { $or: or };
 }
 
-async function findBroadcastForContact({ localMessageId, whatsappMessageId, phone }) {
+async function findBroadcastForContact({ localMessageId, whatsappMessageId, phone, broadcastName }) {
   const phoneMatch = phoneVariants(phone);
+
+  if (broadcastName) {
+    const byName = await WhatsAppBroadcast.findOne({ name: broadcastName })
+      .sort({ sentAt: -1 })
+      .select("_id name")
+      .lean()
+      .catch(() => null);
+    if (byName) return byName;
+  }
 
   if (localMessageId) {
     const byLocal = await WhatsAppBroadcast.findOne({ "contacts.localMessageId": localMessageId })
@@ -55,12 +64,26 @@ async function findBroadcastForContact({ localMessageId, whatsappMessageId, phon
   }
 
   if (phoneMatch.length) {
-    const byPhone = await WhatsAppBroadcast.findOne({ "contacts.phone": { $in: phoneMatch } })
+    const byPhone = await WhatsAppBroadcast.findOne({
+      contacts: {
+        $elemMatch: {
+          phone: { $in: phoneMatch },
+          status: { $in: ["pending", "sent"] },
+        },
+      },
+    })
       .sort({ sentAt: -1 })
       .select("_id name")
       .lean()
       .catch(() => null);
     if (byPhone) return byPhone;
+
+    const byPhoneAny = await WhatsAppBroadcast.findOne({ "contacts.phone": { $in: phoneMatch } })
+      .sort({ sentAt: -1 })
+      .select("_id name")
+      .lean()
+      .catch(() => null);
+    if (byPhoneAny) return byPhoneAny;
   }
 
   return null;
@@ -93,7 +116,12 @@ export async function updateBroadcastContactStatus({
       .catch(() => null);
   }
   if (!broadcast) {
-    broadcast = await findBroadcastForContact({ localMessageId, whatsappMessageId, phone });
+    broadcast = await findBroadcastForContact({
+      localMessageId,
+      whatsappMessageId,
+      phone,
+      broadcastName,
+    });
   }
   if (!broadcast) return { matched: false };
 

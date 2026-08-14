@@ -60,17 +60,27 @@ const INBOUND_EVENT_TYPES = new Set([
 
 /** Template / delivery lifecycle — never treat as farmer inbound even if `text` is present. */
 const OUTBOUND_STATUS_EVENT_TYPES = new Set([
+  "templatemessagesent",
   "templatemessagesent_v2",
   "templatemessagefailed",
+  "templatemessagefailed_v2",
   "sentmessagedelivered",
   "sentmessagedelivered_v2",
   "sentmessageread",
   "sentmessageread_v2",
+  "sentmessagereplied",
   "sentmessagereplied_v2",
 ]);
 
 function isOutboundStatusEvent(eventType) {
-  return OUTBOUND_STATUS_EVENT_TYPES.has(String(eventType || "").toLowerCase());
+  const et = String(eventType || "").toLowerCase().replace(/[\s_-]/g, "");
+  if (OUTBOUND_STATUS_EVENT_TYPES.has(et)) return true;
+  if (et.includes("templatemessagesent")) return true;
+  if (et.includes("sentmessagedelivered")) return true;
+  if (et.includes("sentmessageread")) return true;
+  if (et.includes("templatemessagefailed")) return true;
+  if (et.includes("sentmessagereplied")) return true;
+  return false;
 }
 
 function isInboundMessageEvent(body, eventType) {
@@ -119,10 +129,18 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
 
   const eventType = body.eventType || body.event;
   const messageType = body.type || body.data?.type || null;
-  const watiWebhookId = body.id || body.data?.id || null;
+  const watiEventId = body.id || body.data?.id || null;
+  const watiWebhookId = watiEventId;
   const localMessageId =
-    body.localMessageId || body.data?.localMessageId || watiWebhookId || null;
-  const waId = body.waId || body.whatsappId || body.data?.waId || body.data?.from || null;
+    body.localMessageId || body.data?.localMessageId || watiEventId || null;
+  const waId =
+    body.waId ||
+    body.whatsappId ||
+    body.data?.waId ||
+    body.data?.from ||
+    body.recipientWaId ||
+    body.data?.recipientWaId ||
+    null;
   const statusString = body.statusString || body.status || null;
   const whatsappMessageId =
     body.whatsappMessageId || body.data?.whatsappMessageId || body.messageId || null;
@@ -131,7 +149,11 @@ export const handleWatiStatusWebhook = catchAsync(async (req, res) => {
   const failedCode = body.failedCode || body.data?.failedCode || null;
   const failedDetail = body.failedDetail || body.data?.failedDetail || null;
   const broadcastName =
-    body.broadcastName || body.broadcast_name || body.data?.broadcastName || body.data?.broadcast_name || null;
+    body.broadcastName ||
+    body.broadcast_name ||
+    body.data?.broadcastName ||
+    body.data?.broadcast_name ||
+    null;
 
   const normalizedPhone = normalizeWaId(waId);
   const inbound = extractInboundMessage(body);
@@ -403,8 +425,10 @@ export const statusWebhookHealth = catchAsync(async (req, res) => {
     message: "WATI unified webhook active (template status + messageReceived)",
     url: "/api/v1/whatsapp-status/webhook",
     events: [
-      "templateMessageSent_v2",
-      "sentMessageDELIVERED_v2",
+    "templateMessageSent",
+    "templateMessageSent_v2",
+    "sentMessageDELIVERED",
+    "sentMessageDELIVERED_v2",
       "sentMessageREAD_v2",
       "templateMessageFailed",
       "sentMessageReplied_v2",
