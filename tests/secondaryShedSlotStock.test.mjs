@@ -70,6 +70,36 @@ describe("secondaryShedSlotStock — shed rollup", () => {
     assert.strictEqual(b.shedSyncedPlants, 0);
     assert.strictEqual(b.linkedBatchCount, 1);
     assert.strictEqual(b.lineCount, 1);
+    assert.strictEqual(a.actualReadyPlants, 0);
+    assert.strictEqual(b.actualReadyPlants, 0);
+  });
+
+  it("rollupShedStockForSlots counts calendar-ready synced plants as actualReadyPlants", () => {
+    const pastInward = moment().subtract(30, "days").startOf("day").toDate();
+    const pos = [
+      {
+        batchId: { _id: batch1, secondaryPlantReadyDays: 14 },
+        secondaryInward: [
+          {
+            linkedBookingSlotId: slotA,
+            secondaryInwardDate: pastInward,
+            availableQuantity: 80,
+            slotStockSyncedPlants: 75,
+          },
+          {
+            linkedBookingSlotId: slotA,
+            secondaryInwardDate: moment().subtract(2, "days").toDate(),
+            availableQuantity: 40,
+            slotStockSyncedPlants: 30,
+          },
+        ],
+      },
+    ];
+    const map = rollupShedStockForSlots(pos, [slotA]);
+    const a = map.get(slotA);
+    assert.strictEqual(a.shedSyncedPlants, 105);
+    assert.strictEqual(a.actualReadyPlants, 75);
+    assert.strictEqual(a.shedReadyInShed, 80);
   });
 
   it("ignores lines for slots not in the requested list", () => {
@@ -132,6 +162,7 @@ describe("secondaryShedSlotStock — breakdown response shape", () => {
     ];
     const requiredSummaryKeys = [
       "actualPlants",
+      "actualReadyPlants",
       "shedAvailableInShed",
       "shedSyncedToSlot",
       "pendingSlotSync",

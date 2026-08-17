@@ -160,6 +160,16 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
       shedLoadedFromSecondary,
       isFullyLoadedFromShed:
         dispatchQuantity > 0 && shedLoadedQuantity >= dispatchQuantity,
+      shedLoadedBatches: Array.isArray(row.shedLoadedBatches)
+        ? row.shedLoadedBatches.map((b) => ({
+            batchId: b.batchId,
+            batchNumber: b.batchNumber != null ? String(b.batchNumber) : "",
+            plants: Number(b.plants) || 0,
+            secondaryInwardId: b.secondaryInwardId,
+            pollyhouse: b.pollyhouse != null ? String(b.pollyhouse) : "",
+            loadedAt: b.loadedAt || null,
+          }))
+        : [],
       crates,
       cratePiecesOnLine: lineCratePieces,
       plantQtyOnLine: dispatchQuantity,

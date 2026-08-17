@@ -9,6 +9,8 @@ import {
   normalizeShedLoadInputs,
   normalizeShedLoads,
   pollyhouseMatchesFilter,
+  splitPlantsAcrossOrdersFifo,
+  resolveOrderAllocationsForSelection,
 } from "../services/secondaryVehicleLoad.service.js";
 
 describe("secondaryVehicleLoad — FIFO allocation", () => {
@@ -297,5 +299,112 @@ describe("secondaryVehicleLoad — order loaded flags", () => {
     const shedLoadedQuantity = 200;
     const fullyLoaded = dispatchQuantity > 0 && shedLoadedQuantity >= dispatchQuantity;
     assert.equal(fullyLoaded, false);
+  });
+});
+
+describe("secondaryVehicleLoad — order ↔ batch allocations", () => {
+  it("normalizeInwardSelections keeps orderAllocations and orderIds", () => {
+    const rows = normalizeInwardSelections([
+      {
+        secondaryInwardId: "s1",
+        batchId: "b1",
+        plants: 100,
+        orderIds: ["o1", "o2"],
+        orderAllocations: [
+          { orderId: "o1", plants: 60 },
+          { orderId: "o2", plants: 40 },
+        ],
+      },
+      {
+        secondaryInwardId: "s1",
+        plants: 20,
+        orderAllocations: [{ orderId: "o1", plants: 20 }],
+      },
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].plants, 120);
+    assert.deepEqual(rows[0].orderIds, ["o1", "o2"]);
+    assert.equal(rows[0].orderAllocations.length, 2);
+    assert.equal(
+      rows[0].orderAllocations.find((a) => a.orderId === "o1").plants,
+      80
+    );
+  });
+
+  it("allocateManualSecondaryLoads carries orderAllocations onto lines", () => {
+    const r = allocateManualSecondaryLoads(
+      [
+        {
+          batchId: "b1",
+          secondaryInwardId: "s1",
+          batchNumber: "100",
+          cavity: 8,
+          remainingPlants: 400,
+          dispatchEligible: true,
+          pollyhouse: "Shed A",
+        },
+      ],
+      [
+        {
+          secondaryInwardId: "s1",
+          batchId: "b1",
+          plants: 100,
+          orderAllocations: [
+            { orderId: "o1", plants: 70 },
+            { orderId: "o2", plants: 30 },
+          ],
+        },
+      ],
+      { capPlants: 400 }
+    );
+    assert.equal(r.ok, true);
+    assert.equal(r.allocations[0].orderAllocations.length, 2);
+  });
+
+  it("splitPlantsAcrossOrdersFifo respects remaining need", () => {
+    const rem = new Map([
+      ["o1", 50],
+      ["o2", 80],
+    ]);
+    const parts = splitPlantsAcrossOrdersFifo(100, ["o1", "o2"], rem);
+    assert.equal(parts.length, 2);
+    assert.equal(parts[0].orderId, "o1");
+    assert.equal(parts[0].plants, 50);
+    assert.equal(parts[1].orderId, "o2");
+    assert.equal(parts[1].plants, 50);
+  });
+
+  it("resolveOrderAllocationsForSelection errors when sums mismatch", () => {
+    const r = resolveOrderAllocationsForSelection({
+      plants: 100,
+      orderAllocations: [{ orderId: "o1", plants: 40 }],
+    });
+    assert.match(r.error || "", /must equal/);
+  });
+
+  it("resolveOrderAllocationsForSelection uses linkedOrderId fallback", () => {
+    const r = resolveOrderAllocationsForSelection(
+      { plants: 25 },
+      { linkedOrderId: "o9" }
+    );
+    assert.deepEqual(r.allocations, [{ orderId: "o9", plants: 25 }]);
+  });
+
+  it("complete autofill joins unique shedLoadedBatches numbers", () => {
+    const batches = [
+      { batchNumber: "12" },
+      { batchNumber: "15" },
+      { batchNumber: "12" },
+      { batchNumber: "  " },
+    ];
+    const seen = new Set();
+    const ordered = [];
+    for (const b of batches) {
+      const n = String(b?.batchNumber ?? "").trim();
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      ordered.push(n);
+    }
+    assert.equal(ordered.join(", "), "12, 15");
   });
 });

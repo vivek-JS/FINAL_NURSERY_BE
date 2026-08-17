@@ -13,6 +13,27 @@ const normBatchNumber = (v) => {
   return s || null;
 };
 
+/** R1/R2 lagwad → shorter secondary hardening; R3 → longer (different booking slot). */
+export const DEFAULT_SECONDARY_R1_READY_DAYS = 30;
+export const DEFAULT_SECONDARY_R3_READY_DAYS = 40;
+
+export function secondaryReadyDaysForSize(size, batchLean) {
+  const base = Number(batchLean?.secondaryPlantReadyDays) || 0;
+  const r1Days = base > 0 ? base : DEFAULT_SECONDARY_R1_READY_DAYS;
+  const r3Explicit = Number(batchLean?.secondaryR3PlantReadyDays) || 0;
+  const r3Days =
+    r3Explicit > 0 ? r3Explicit : DEFAULT_SECONDARY_R3_READY_DAYS;
+  if (String(size ?? "").toUpperCase() === "R3") return r3Days;
+  return r1Days;
+}
+
+export function expectedReadyDateForSecondarySize(inwardDate, size, batchLean) {
+  const inward = inwardDate ? moment(inwardDate).startOf("day") : null;
+  if (!inward?.isValid()) return null;
+  const days = secondaryReadyDaysForSize(size, batchLean);
+  return inward.clone().add(days, "days").toDate();
+}
+
 /** ERP sellable position: actual plants minus booked-but-not-dispatched. */
 export function computeActualAvailable(actualPlants, remainingToDispatch) {
   return Math.max(
@@ -31,26 +52,52 @@ export function computePendingSlotSync(availableQuantity, slotStockSyncedPlants)
 /**
  * Pure rollup of secondary inward lines → per-slot shed totals (no DB).
  */
+function secondaryInwardCalendarReady(si, batchLean, todayStart) {
+  if (si?.readinessBypassAt != null && moment(si.readinessBypassAt).isValid()) {
+    return true;
+  }
+  const days = secondaryReadyDaysForSize(si?.size, batchLean);
+  const inward = si?.secondaryInwardDate
+    ? moment(si.secondaryInwardDate).startOf("day")
+    : null;
+  if (!inward?.isValid()) return false;
+  const expected =
+    si?.expectedReadyDate && moment(si.expectedReadyDate).isValid()
+      ? moment(si.expectedReadyDate).startOf("day")
+      : inward.clone().add(days, "days");
+  return todayStart.isSameOrAfter(expected, "day");
+}
+
 export function rollupShedStockForSlots(posLean, slotIdStrings) {
+  const todayStart = moment().startOf("day");
   const map = new Map();
   for (const sid of slotIdStrings || []) {
     map.set(String(sid), {
       shedSyncedPlants: 0,
       shedAvailableInShed: 0,
+      actualReadyPlants: 0,
+      shedReadyInShed: 0,
       linkedBatchIds: new Set(),
       lineCount: 0,
     });
   }
   for (const po of posLean || []) {
     const batchId = po.batchId?._id ?? po.batchId;
+    const batchLean =
+      po.batchId && typeof po.batchId === "object" ? po.batchId : null;
     for (const si of po.secondaryInward || []) {
       const slotKey = si.linkedBookingSlotId ? String(si.linkedBookingSlotId) : "";
       if (!map.has(slotKey)) continue;
       const agg = map.get(slotKey);
       const avail = Math.max(0, Number(si.availableQuantity) || 0);
       const synced = Math.max(0, Number(si.slotStockSyncedPlants) || 0);
+      const calendarReady = secondaryInwardCalendarReady(si, batchLean, todayStart);
       agg.shedAvailableInShed += avail;
       agg.shedSyncedPlants += synced;
+      if (calendarReady) {
+        agg.actualReadyPlants += synced;
+        agg.shedReadyInShed += avail;
+      }
       agg.lineCount += 1;
       if (batchId) agg.linkedBatchIds.add(String(batchId));
     }
@@ -60,6 +107,8 @@ export function rollupShedStockForSlots(posLean, slotIdStrings) {
     out.set(k, {
       shedSyncedPlants: v.shedSyncedPlants,
       shedAvailableInShed: v.shedAvailableInShed,
+      actualReadyPlants: v.actualReadyPlants,
+      shedReadyInShed: v.shedReadyInShed,
       linkedBatchCount: v.linkedBatchIds.size,
       lineCount: v.lineCount,
     });
@@ -193,6 +242,7 @@ export async function aggregateShedStockBySlotIds(slotObjectIds) {
     "secondaryInward.linkedBookingSlotId": { $in: oids },
   })
     .select("batchId secondaryInward")
+    .populate({ path: "batchId", select: BATCH_SELECT })
     .lean();
 
   return rollupShedStockForSlots(
@@ -361,11 +411,19 @@ export async function getSlotSecondaryShedBreakdown(slotId) {
         (s, ln) => s + (ln.pendingSlotSync || 0),
         0
       );
+      for (const ln of b.lines) {
+        if (ln.dispatchEligible) {
+          acc.actualReadyPlants += ln.slotStockSyncedPlants || 0;
+          acc.shedReadyInShed += ln.availableQuantity || 0;
+        }
+      }
       return acc;
     },
     {
       shedAvailableInShed: 0,
       shedSyncedToSlot: 0,
+      actualReadyPlants: 0,
+      shedReadyInShed: 0,
       pendingSlotSync: 0,
       batchCount: batches.length,
       lineCount: batches.reduce((s, b) => s + b.lines.length, 0),
@@ -443,7 +501,7 @@ export function pickReadyDateForSlot(siPlain, batchLean) {
   const inward = siPlain?.secondaryInwardDate
     ? moment(siPlain.secondaryInwardDate).startOf("day")
     : null;
-  const days = Number(batchLean?.secondaryPlantReadyDays) || 0;
+  const days = secondaryReadyDaysForSize(siPlain?.size, batchLean);
   if (inward?.isValid()) return inward.clone().add(days, "days");
   return null;
 }
@@ -704,4 +762,192 @@ export async function relocateSecondaryInwardSlotOnBypass({
     oldSlotId,
     newSlotId: String(todaySlotId),
   };
+}
+
+/** API detail payload: slot sync status + human booking-slot label for ERP / mobile. */
+export async function buildBookingSlotLabelMap(slotIds) {
+  const oids = [
+    ...new Set(
+      (slotIds || [])
+        .filter((id) => id && mongoose.isValidObjectId(String(id)))
+        .map((id) => new mongoose.Types.ObjectId(String(id)))
+    ),
+  ];
+  const map = new Map();
+  if (!oids.length) return map;
+
+  const wanted = new Set(oids.map((o) => String(o)));
+  const plantSlotDocs = await PlantSlot.find({
+    "subtypeSlots.slots._id": { $in: oids },
+  })
+    .populate("plantId", "name")
+    .lean();
+
+  for (const plantSlotDoc of plantSlotDocs) {
+    const plantName =
+      plantSlotDoc.plantId && typeof plantSlotDoc.plantId === "object"
+        ? plantSlotDoc.plantId.name || ""
+        : "";
+    for (const st of plantSlotDoc.subtypeSlots || []) {
+      for (const slot of st.slots || []) {
+        const sid = String(slot._id);
+        if (!wanted.has(sid)) continue;
+        const window =
+          slot?.startDay && slot?.endDay
+            ? `${slot.startDay}-${slot.endDay}`
+            : slot?.startDay || slot?.endDay || "";
+        const label = [window, slot?.month, plantSlotDoc.year]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        map.set(sid, {
+          slotId: sid,
+          label: label || `Slot …${sid.slice(-6)}`,
+          startDay: slot.startDay ?? null,
+          endDay: slot.endDay ?? null,
+          month: slot.month ?? null,
+          year: plantSlotDoc.year ?? null,
+          plantName,
+        });
+      }
+    }
+  }
+
+  for (const oid of oids) {
+    const sid = String(oid);
+    if (!map.has(sid)) {
+      map.set(sid, { slotId: sid, label: `Slot …${sid.slice(-6)}` });
+    }
+  }
+  return map;
+}
+
+export function applyBookingSlotLabelToPlain(siPlain, labelMap) {
+  const out = { ...(siPlain || {}) };
+  const slotId = out.linkedBookingSlotId
+    ? String(out.linkedBookingSlotId)
+    : null;
+  if (!slotId) {
+    out.bookingSlot = null;
+    out.bookingSlotLabel = null;
+    return out;
+  }
+  const info = labelMap.get(slotId) || {
+    slotId,
+    label: `Slot …${slotId.slice(-6)}`,
+  };
+  out.bookingSlot = info;
+  out.bookingSlotLabel = info.label;
+  return out;
+}
+
+/** Attach booking-slot labels to secondaryInward[] on outward list payloads. */
+export async function enrichPlantOutwardsWithBookingSlotLabels(outwards) {
+  const slotIds = [];
+  for (const po of outwards || []) {
+    const o = typeof po.toObject === "function" ? po.toObject() : po;
+    for (const si of o.secondaryInward || []) {
+      if (si?.linkedBookingSlotId) slotIds.push(si.linkedBookingSlotId);
+    }
+  }
+  const labelMap = await buildBookingSlotLabelMap(slotIds);
+  return (outwards || []).map((po) => {
+    const o = typeof po.toObject === "function" ? po.toObject() : { ...po };
+    if (Array.isArray(o.secondaryInward)) {
+      o.secondaryInward = o.secondaryInward.map((si) =>
+        applyBookingSlotLabelToPlain(
+          typeof si.toObject === "function" ? si.toObject() : si,
+          labelMap
+        )
+      );
+    }
+    return o;
+  });
+}
+
+/** Dashboard secondary lines: label on line + nested secondaryInward. */
+export async function attachBookingSlotLabelsToDashboardLines(lines) {
+  const slotIds = (lines || []).map((l) => l.secondaryInward?.linkedBookingSlotId);
+  const labelMap = await buildBookingSlotLabelMap(slotIds);
+  return (lines || []).map((line) => {
+    const si =
+      line.secondaryInward &&
+      typeof line.secondaryInward.toObject === "function"
+        ? line.secondaryInward.toObject()
+        : { ...(line.secondaryInward || {}) };
+    const enriched = applyBookingSlotLabelToPlain(si, labelMap);
+    return {
+      ...line,
+      secondaryInward: enriched,
+      bookingSlot: enriched.bookingSlot,
+      bookingSlotLabel: enriched.bookingSlotLabel,
+      linkedBookingSlotId:
+        enriched.linkedBookingSlotId ?? line.linkedBookingSlotId,
+    };
+  });
+}
+
+export async function enrichSecondaryInwardDetail(siPlain) {
+  const plain = { ...(siPlain || {}) };
+  const avail = Math.max(0, Number(plain.availableQuantity) || 0);
+  const synced = Math.max(0, Number(plain.slotStockSyncedPlants) || 0);
+  const pending = computePendingSlotSync(avail, synced);
+  plain.pendingSlotSync = pending;
+  plain.slotSyncStatus =
+    synced <= 0 ? "pending" : pending > 0 ? "partial" : "synced";
+
+  const slotId = plain.linkedBookingSlotId;
+  if (!slotId || !mongoose.isValidObjectId(String(slotId))) {
+    plain.bookingSlot = null;
+    return plain;
+  }
+
+  const plantSlotDoc = await PlantSlot.findOne({
+    "subtypeSlots.slots._id": slotId,
+  })
+    .populate("plantId", "name")
+    .lean();
+
+  if (!plantSlotDoc) {
+    plain.bookingSlot = {
+      slotId: String(slotId),
+      label: `Slot …${String(slotId).slice(-6)}`,
+    };
+    return plain;
+  }
+
+  let slot = null;
+  for (const st of plantSlotDoc.subtypeSlots || []) {
+    const found = (st.slots || []).find((s) => String(s._id) === String(slotId));
+    if (found) {
+      slot = found;
+      break;
+    }
+  }
+
+  const plantName =
+    plantSlotDoc.plantId && typeof plantSlotDoc.plantId === "object"
+      ? plantSlotDoc.plantId.name || ""
+      : "";
+
+  const window =
+    slot?.startDay && slot?.endDay
+      ? `${slot.startDay}-${slot.endDay}`
+      : slot?.startDay || slot?.endDay || "";
+  const label = [window, slot?.month, plantSlotDoc.year]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  plain.bookingSlot = {
+    slotId: String(slotId),
+    label: label || `Slot …${String(slotId).slice(-6)}`,
+    startDay: slot?.startDay ?? null,
+    endDay: slot?.endDay ?? null,
+    month: slot?.month ?? null,
+    year: plantSlotDoc.year ?? null,
+    actualPlants: Math.max(0, Number(slot?.actualPlants) || 0),
+    plantName,
+  };
+  return plain;
 }

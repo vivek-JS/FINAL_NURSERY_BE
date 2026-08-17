@@ -20,6 +20,9 @@ import {
 import {
   resolveCmsReadyDays,
   parseLocalDate,
+  findSlotByPlantReadyDate,
+  addDays,
+  fmtDDMMYYYY,
 } from "./sowingSlotReadyHelpers.js";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
 
@@ -49,6 +52,114 @@ function bustLiteCacheAsync() {
       .catch(() => {});
   });
 }
+
+/**
+ * GET /sowing/request/:requestId/slot-preview?sowDate=&plantReadyDays=
+ * Preview which calendar slot will receive plants (no DB writes).
+ */
+export const getSowSlotPreview = async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(requestId)) {
+      return res.status(400).json({ success: false, message: "Invalid requestId" });
+    }
+
+    const request = await SowingRequest.findById(requestId)
+      .select("plantId subtypeId linkedSlotIds isExcessiveSowing")
+      .lean();
+    if (!request) {
+      return res.status(404).json({ success: false, message: "Request not found" });
+    }
+
+    const cmsReady = await resolveCmsReadyDays(request.plantId, request.subtypeId);
+    const bodyReady = parseNum(req.query.plantReadyDays, NaN);
+    const plantReadyDays =
+      Number.isFinite(bodyReady) && bodyReady > 0 ? bodyReady : cmsReady;
+
+    const sowedAt =
+      parseLocalDate(req.query.sowDate || req.query.sowingDate) || new Date();
+    const plantReadyDateStr = fmtDDMMYYYY(addDays(sowedAt, plantReadyDays || 0));
+
+    let resolved = null;
+    if (request.plantId && request.subtypeId && plantReadyDays > 0) {
+      resolved = await findSlotByPlantReadyDate(
+        request.plantId,
+        request.subtypeId,
+        plantReadyDateStr
+      );
+    }
+
+    const slotId = resolved?.slotId || request.linkedSlotIds?.[0] || null;
+    if (!slotId) {
+      return res.json({
+        success: true,
+        data: {
+          found: false,
+          plantReadyDays,
+          plantReadyDate: plantReadyDateStr,
+          sowDate: fmtDDMMYYYY(sowedAt),
+          resolvedByReadyDate: Boolean(resolved),
+          message: "No calendar slot found for this ready date",
+        },
+      });
+    }
+
+    const slotRows = await PlantSlot.aggregate([
+      { $match: { "subtypeSlots.slots._id": new mongoose.Types.ObjectId(slotId) } },
+      { $unwind: "$subtypeSlots" },
+      { $unwind: "$subtypeSlots.slots" },
+      { $match: { "subtypeSlots.slots._id": new mongoose.Types.ObjectId(slotId) } },
+      {
+        $project: {
+          slotId: "$subtypeSlots.slots._id",
+          startDay: "$subtypeSlots.slots.startDay",
+          endDay: "$subtypeSlots.slots.endDay",
+          month: "$subtypeSlots.slots.month",
+          year: { $ifNull: ["$subtypeSlots.slots.year", "$year"] },
+          actualPlants: { $ifNull: ["$subtypeSlots.slots.actualPlants", 0] },
+          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          availablePlants: { $ifNull: ["$subtypeSlots.slots.availablePlants", 0] },
+          plantsSowed: { $ifNull: ["$subtypeSlots.slots.plantsSowed", 0] },
+        },
+      },
+    ]);
+
+    const slot = slotRows[0] || null;
+    const label =
+      slot?.startDay && slot?.endDay
+        ? slot.startDay === slot.endDay
+          ? slot.startDay
+          : `${slot.startDay} → ${slot.endDay}`
+        : null;
+
+    return res.json({
+      success: true,
+      data: {
+        found: true,
+        slotId: String(slotId),
+        startDay: slot?.startDay || resolved?.startDay || null,
+        endDay: slot?.endDay || resolved?.endDay || null,
+        month: slot?.month || null,
+        year: slot?.year || null,
+        label,
+        plantReadyDays,
+        plantReadyDate: plantReadyDateStr,
+        sowDate: fmtDDMMYYYY(sowedAt),
+        actualPlants: Number(slot?.actualPlants) || 0,
+        primarySowed: Number(slot?.primarySowed) || 0,
+        availablePlants: Number(slot?.availablePlants) || 0,
+        plantsSowed: Number(slot?.plantsSowed) || 0,
+        resolvedByReadyDate: Boolean(resolved),
+      },
+    });
+  } catch (error) {
+    console.error("getSowSlotPreview:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to preview slot",
+    });
+  }
+};
 
 /**
  * POST /sowing/request/:requestId/complete-sow

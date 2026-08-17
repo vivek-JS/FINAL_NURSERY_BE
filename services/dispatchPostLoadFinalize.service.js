@@ -178,13 +178,25 @@ export function schedulePostShedLoadAlerts({ finalizeResult, changedBy = "Unknow
     }
   })();
 
+  // Farmer WATI template delivery_final_revamp (driver, vehicle, plants, etc.)
+  (async () => {
+    try {
+      const { scheduleEnsureOrderDispatchWhatsApp } = await import(
+        "./orderDispatchWhatsApp.service.js"
+      );
+      scheduleEnsureOrderDispatchWhatsApp(orderId);
+    } catch (e) {
+      console.error("post-shed-load WATI delivery_final_revamp:", e?.message || e);
+    }
+  })();
+
   (async () => {
     try {
       const { sendOrderDispatchedAlert } = await import("./whatsappAlertService.js");
       const plain = order || (await Order.findById(orderId).lean());
       if (plain) await sendOrderDispatchedAlert(plain, changedBy);
     } catch (e) {
-      console.error("post-shed-load WhatsApp:", e?.message || e);
+      console.error("post-shed-load admin alert:", e?.message || e);
     }
   })();
 
@@ -209,4 +221,51 @@ export function schedulePostShedLoadAlerts({ finalizeResult, changedBy = "Unknow
       console.error("post-shed-load voice feedback:", e?.message || e);
     }
   })();
+}
+
+/**
+ * Farmer delivery WhatsApp (WATI) for every DISPATCHED order on a vehicle that has not been sent yet.
+ * Covers multi-order vehicles and orders that missed alerts on prior loads.
+ */
+export function schedulePendingDispatchWhatsAppForVehicle(dispatchId, { changedBy = "Unknown" } = {}) {
+  if (!dispatchId) return;
+  setImmediate(() => {
+    (async () => {
+      try {
+        const dispatch = await Dispatch.findById(dispatchId)
+          .select("orderDispatchDetails")
+          .lean();
+        if (!dispatch) return;
+
+        const orderIds = [
+          ...new Set(
+            (dispatch.orderDispatchDetails || [])
+              .map((d) => String(d.orderId || "").trim())
+              .filter(Boolean)
+          ),
+        ];
+        if (!orderIds.length) return;
+
+        const orders = await Order.find({
+          _id: { $in: orderIds },
+          orderStatus: "DISPATCHED",
+          $or: [
+            { whatsappDispatchSentAt: null },
+            { whatsappDispatchSentAt: { $exists: false } },
+          ],
+        })
+          .select("_id")
+          .lean();
+
+        const { scheduleEnsureOrderDispatchWhatsApp } = await import(
+          "./orderDispatchWhatsApp.service.js"
+        );
+        for (const o of orders) {
+          scheduleEnsureOrderDispatchWhatsApp(o._id);
+        }
+      } catch (e) {
+        console.error("schedulePendingDispatchWhatsAppForVehicle:", e?.message || e);
+      }
+    })();
+  });
 }

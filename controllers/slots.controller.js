@@ -2549,6 +2549,9 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       });
     });
 
+    const shedBySlot =
+      slotIds.length > 0 ? await aggregateShedStockBySlotIds(slotIds) : new Map();
+
     // Group orders by slot
     const ordersBySlot = new Map();
     for (const order of allOrders) {
@@ -2657,6 +2660,14 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         slot.bufferMaterialized = resolved.bufferMaterialized;
         slot.inheritedBufferOnly = resolved.inheritedBufferOnly;
         slot.availablePlantsMaterialized = resolved.availablePlantsMaterialized;
+
+        const shed = shedBySlot.get(slotId) || {};
+        slot.shedSyncedPlants = shed.shedSyncedPlants ?? 0;
+        slot.shedAvailableInShed = shed.shedAvailableInShed ?? 0;
+        slot.actualReadyPlants = shed.actualReadyPlants ?? 0;
+        slot.shedReadyInShed = shed.shedReadyInShed ?? 0;
+        slot.linkedBatchCount = shed.linkedBatchCount ?? 0;
+        slot.shedLineCount = shed.lineCount ?? 0;
 
         slot.isOverflow = slot.availablePlants < 0;
         slot.overflow = slot.availablePlants < 0;
@@ -2949,6 +2960,8 @@ export const getStockEntry = async (req, res) => {
         closingStock: Number(slot.closingStock) || 0,
         shedSyncedPlants: shed.shedSyncedPlants ?? 0,
         shedAvailableInShed: shed.shedAvailableInShed ?? 0,
+        actualReadyPlants: shed.actualReadyPlants ?? 0,
+        shedReadyInShed: shed.shedReadyInShed ?? 0,
         linkedBatchCount: shed.linkedBatchCount ?? 0,
         shedLineCount: shed.lineCount ?? 0,
         status: slot.status,

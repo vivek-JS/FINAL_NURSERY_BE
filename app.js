@@ -393,6 +393,7 @@ import {
   recordSecondaryPrimaryOutwardMortality,
   markSecondaryPrimaryOutwardSowingComplete,
   secondaryBatchLagwadFromPrimaryOutward,
+  secondaryDirectLagwad,
   patchSecondaryInwardReadinessBypass,
   patchPrimaryInwardReadinessBypass,
   primaryInwardFifoPreviewGlobal,
@@ -755,6 +756,11 @@ server.post(
   "/api/v1/laboutward/secondary/:batchId/batch-lagwad",
   authenticateToken,
   secondaryBatchLagwadFromPrimaryOutward
+);
+server.post(
+  "/api/v1/laboutward/secondary/:batchId/direct-lagwad",
+  authenticateToken,
+  secondaryDirectLagwad
 );
 server.patch(
   "/api/v1/laboutward/secondary/:batchId/secondary-inward/:secondaryInwardId/readiness-bypass",

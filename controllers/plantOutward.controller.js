@@ -30,6 +30,7 @@ import {
   validateBottlesForInward,
   validateFifoPlantsVsSown,
   getAvailableLabStock,
+  buildDirectEntryFifoAllocations,
   computeLabLineStock as computeLabLineStockFifo,
   isLabLineAcceptedForPrimary as isLabAcceptedFifo,
 } from "../utility/primaryInwardFifo.js";
@@ -38,6 +39,11 @@ import {
   subtractSecondaryInwardSlotStock,
   resolveBookingSlotIdForSecondaryBatch,
   relocateSecondaryInwardSlotOnBypass,
+  enrichSecondaryInwardDetail,
+  enrichPlantOutwardsWithBookingSlotLabels,
+  attachBookingSlotLabelsToDashboardLines,
+  secondaryReadyDaysForSize,
+  expectedReadyDateForSecondarySize,
 } from "../services/secondaryShedSlotStock.service.js";
 import {
   recordSecondaryInwardOnLedger,
@@ -1004,7 +1010,7 @@ const getAllPlantOutwards = catchAsync(async (req, res, next) => {
   return res.status(200).json({
     status: "Success",
     message: "Plant outwards retrieved successfully",
-    data: outwards,
+    data: await enrichPlantOutwardsWithBookingSlotLabels(outwards),
   });
 });
 
@@ -1463,8 +1469,10 @@ const getSecondaryMobileDashboard = catchAsync(async (req, res, next) => {
     }
   }
 
-  const enrichedSecondaryLines = availableSecondaryInwardLines.map((line) =>
-    enrichSecondaryInwardLineForDashboard(line, today)
+  const enrichedSecondaryLines = await attachBookingSlotLabelsToDashboardLines(
+    availableSecondaryInwardLines.map((line) =>
+      enrichSecondaryInwardLineForDashboard(line, today)
+    )
   );
 
   const dispatchReadyByBatch = buildDispatchReadyByBatch(enrichedSecondaryLines);
@@ -2308,10 +2316,13 @@ const primaryInwardFifoPreviewGlobal = catchAsync(async (req, res, next) => {
     cavity: cavityRaw,
     sizeSplit: clientSplit,
     primaryInwardDate: previewInwardDate,
+    directEntry,
+    anchorBatchId: clientAnchorBatchId,
   } = req.body ?? {};
 
   const total = safeNonNegativeInt(totalPlantsSown, 0);
   const enteredBottles = safeNonNegativeInt(totalBottlesRaw, 0);
+  const isDirectEntry = Boolean(directEntry);
 
   if (total < 1) {
     return next(new AppError("totalPlantsSown must be at least 1", 400));
@@ -2324,24 +2335,50 @@ const primaryInwardFifoPreviewGlobal = catchAsync(async (req, res, next) => {
   const pool = collectGlobalAcceptedLabPool(plantOutwards);
   const stock = getAvailableLabStock(pool);
 
-  const bottleCheck = validateBottlesForInward(pool, enteredBottles);
-  if (!bottleCheck.ok) {
-    return next(new AppError(bottleCheck.error, 400));
+  let fifoResult;
+  if (isDirectEntry) {
+    const anchorId = String(clientAnchorBatchId ?? "");
+    if (!anchorId) {
+      return next(
+        new AppError("anchorBatchId is required when directEntry is true", 400)
+      );
+    }
+    fifoResult = buildDirectEntryFifoAllocations(
+      plantOutwards,
+      anchorId,
+      enteredBottles,
+      total
+    );
+    if (!fifoResult.ok) {
+      return next(new AppError(fifoResult.error, 400));
+    }
+  } else {
+    const bottleCheck = validateBottlesForInward(pool, enteredBottles);
+    if (!bottleCheck.ok) {
+      return next(new AppError(bottleCheck.error, 400));
+    }
+
+    fifoResult = allocateFifoByBottles(pool, enteredBottles);
+    if (!fifoResult.ok) {
+      return next(new AppError(fifoResult.error, 400));
+    }
+
+    const fifoPlants = fifoResult.allocations.reduce(
+      (s, a) => s + safeNonNegativeInt(a.plantsTaken, 0),
+      0
+    );
+    const plantsCheck = validateFifoPlantsVsSown(total, fifoPlants);
+    if (!plantsCheck.ok) {
+      return next(new AppError(plantsCheck.error, 400));
+    }
   }
 
-  const fifoResult = allocateFifoByBottles(pool, enteredBottles);
-  if (!fifoResult.ok) {
-    return next(new AppError(fifoResult.error, 400));
-  }
-
-  const fifoPlants = fifoResult.allocations.reduce(
-    (s, a) => s + safeNonNegativeInt(a.plantsTaken, 0),
-    0
-  );
-  const plantsCheck = validateFifoPlantsVsSown(total, fifoPlants);
-  if (!plantsCheck.ok) {
-    return next(new AppError(plantsCheck.error, 400));
-  }
+  const fifoPlants = isDirectEntry
+    ? total
+    : fifoResult.allocations.reduce(
+        (s, a) => s + safeNonNegativeInt(a.plantsTaken, 0),
+        0
+      );
 
   const cavity = Math.max(1, safeNonNegativeInt(cavityRaw, 126));
   const sizeSplit = {
@@ -2378,14 +2415,16 @@ const primaryInwardFifoPreviewGlobal = catchAsync(async (req, res, next) => {
     allocationsByBatch[bid].lines.push(a);
   }
 
-  const anchorBatchId = String(fifoResult.allocations[0]?.batchId ?? "");
+  const anchorBatchId = isDirectEntry
+    ? String(clientAnchorBatchId ?? fifoResult.allocations[0]?.batchId ?? "")
+    : String(fifoResult.allocations[0]?.batchId ?? "");
   const plantReady =
     anchorBatchId
       ? await buildSuggestedPlantReady(anchorBatchId, previewInwardDate || new Date())
       : null;
 
   return res.status(200).json(
-    generateResponse("Success", "Global FIFO preview", {
+    generateResponse("Success", isDirectEntry ? "Direct lagwad preview" : "Global FIFO preview", {
       fifoAllocations: fifoResult.allocations,
       totalBottlesSuggested: enteredBottles,
       fifoPlantsDerived: fifoPlants,
@@ -2414,6 +2453,8 @@ const labToPrimaryInwardBulkGlobal = catchAsync(async (req, res, next) => {
     primaryPlantReadyDays,
     primaryOutwardExpectedDate: clientExpectedDate,
     numberOfLabTrays: clientLabTrays,
+    directEntry,
+    anchorBatchId: clientAnchorBatchId,
   } = req.body ?? {};
 
   const total = safeNonNegativeInt(totalPlantsSown, 0);
@@ -2428,6 +2469,7 @@ const labToPrimaryInwardBulkGlobal = catchAsync(async (req, res, next) => {
   const ladies = safeNonNegativeInt(laboursLadies, 0);
   const gents = safeNonNegativeInt(laboursGents, 0);
   const laboursEngaged = ladies + gents;
+  const isDirectEntry = Boolean(directEntry);
 
   if (
     !primaryInwardDate ||
@@ -2486,6 +2528,12 @@ const labToPrimaryInwardBulkGlobal = catchAsync(async (req, res, next) => {
     );
   }
 
+  if (isDirectEntry && !String(clientAnchorBatchId ?? "")) {
+    return next(
+      new AppError("anchorBatchId is required when directEntry is true", 400)
+    );
+  }
+
   for (const row of sizeRows) {
     const sz = String(row.size ?? "");
     const expected = safeNonNegativeInt(sizeSplit[sz], 0);
@@ -2507,83 +2555,100 @@ const labToPrimaryInwardBulkGlobal = catchAsync(async (req, res, next) => {
     const plantOutwards = await PlantOutward.find({}).session(session);
     const poById = new Map(plantOutwards.map((po) => [String(po._id), po]));
 
-    const pool = collectGlobalAcceptedLabPool(plantOutwards);
-    const bottleCheck = validateBottlesForInward(pool, totalBottles);
-    if (!bottleCheck.ok) {
-      throw new AppError(bottleCheck.error, 400);
-    }
-
-    const fifoResult = allocateFifoByBottles(pool, totalBottles);
-    if (!fifoResult.ok) {
-      throw new AppError(fifoResult.error, 400);
-    }
-
-    const fifoPlantsBulk = fifoResult.allocations.reduce(
-      (s, a) => s + safeNonNegativeInt(a.plantsTaken, 0),
-      0
-    );
-    const plantsCheckBulk = validateFifoPlantsVsSown(total, fifoPlantsBulk);
-    if (!plantsCheckBulk.ok) {
-      throw new AppError(plantsCheckBulk.error, 400);
-    }
-
-    if (!fifoAllocationsMatch(clientFifo, fifoResult.allocations)) {
-      throw new AppError(
-        "FIFO allocation is stale; refresh preview and try again",
-        409
+    let fifoAllocations;
+    if (isDirectEntry) {
+      const directResult = buildDirectEntryFifoAllocations(
+        plantOutwards,
+        String(clientAnchorBatchId),
+        totalBottles,
+        total
       );
+      if (!directResult.ok) {
+        throw new AppError(directResult.error, 400);
+      }
+      fifoAllocations = directResult.allocations;
+    } else {
+      const pool = collectGlobalAcceptedLabPool(plantOutwards);
+      const bottleCheck = validateBottlesForInward(pool, totalBottles);
+      if (!bottleCheck.ok) {
+        throw new AppError(bottleCheck.error, 400);
+      }
+
+      const fifoResult = allocateFifoByBottles(pool, totalBottles);
+      if (!fifoResult.ok) {
+        throw new AppError(fifoResult.error, 400);
+      }
+
+      const fifoPlantsBulk = fifoResult.allocations.reduce(
+        (s, a) => s + safeNonNegativeInt(a.plantsTaken, 0),
+        0
+      );
+      const plantsCheckBulk = validateFifoPlantsVsSown(total, fifoPlantsBulk);
+      if (!plantsCheckBulk.ok) {
+        throw new AppError(plantsCheckBulk.error, 400);
+      }
+
+      if (!fifoAllocationsMatch(clientFifo, fifoResult.allocations)) {
+        throw new AppError(
+          "FIFO allocation is stale; refresh preview and try again",
+          409
+        );
+      }
+
+      fifoAllocations = fifoResult.allocations;
     }
 
-    const fifoAllocations = fifoResult.allocations;
     const inwardSessionId = new mongoose.Types.ObjectId();
     const createdIds = [];
     const touchedPoIds = new Set();
 
-    for (const alloc of fifoAllocations) {
-      const plantOutward = poById.get(String(alloc.plantOutwardId));
-      if (!plantOutward) {
-        throw new AppError(`Plant outward ${alloc.plantOutwardId} not found`, 404);
-      }
+    if (!isDirectEntry) {
+      for (const alloc of fifoAllocations) {
+        const plantOutward = poById.get(String(alloc.plantOutwardId));
+        if (!plantOutward) {
+          throw new AppError(`Plant outward ${alloc.plantOutwardId} not found`, 404);
+        }
 
-      const labEntry = plantOutward.outward.id(alloc.labEntryId);
-      if (!labEntry) {
-        throw new AppError(`Lab entry ${alloc.labEntryId} not found`, 404);
-      }
-      if (!isLabAcceptedFifo(labEntry)) {
-        throw new AppError("Lab line must be accepted before inward", 403);
-      }
+        const labEntry = plantOutward.outward.id(alloc.labEntryId);
+        if (!labEntry) {
+          throw new AppError(`Lab entry ${alloc.labEntryId} not found`, 404);
+        }
+        if (!isLabAcceptedFifo(labEntry)) {
+          throw new AppError("Lab line must be accepted before inward", 403);
+        }
 
-      const stock = computeLabLineStockFifo(labEntry);
-      if (alloc.plantsTaken > stock.plantsRemaining) {
-        throw new AppError(
-          `Plants exceed remaining on lab line ${alloc.labEntryId}`,
-          400
-        );
+        const stock = computeLabLineStockFifo(labEntry);
+        if (alloc.plantsTaken > stock.plantsRemaining) {
+          throw new AppError(
+            `Plants exceed remaining on lab line ${alloc.labEntryId}`,
+            400
+          );
+        }
+        if (alloc.bottlesTaken > stock.bottlesRemaining) {
+          throw new AppError(
+            `Bottles exceed remaining on lab line ${alloc.labEntryId}`,
+            400
+          );
+        }
+
+        labEntry.transferHistory.push({
+          transferDate: primaryInwardDate,
+          bottlesTransferred: alloc.bottlesTaken,
+          plantsTransferred: alloc.plantsTaken,
+          remarks: remarks || "",
+        });
+
+        const newPlants = safeSubtractNonNegative(stock.plantsRemaining, alloc.plantsTaken);
+        const newBottles = safeSubtractNonNegative(stock.bottlesRemaining, alloc.bottlesTaken);
+        labEntry.availablePlants = clampUintForDb(newPlants);
+        labEntry.availableBottles = clampUintForDb(newBottles);
+        labEntry.transferStatus =
+          newPlants === 0 && newBottles === 0
+            ? "fully_transferred"
+            : "partially_transferred";
+
+        touchedPoIds.add(String(plantOutward._id));
       }
-      if (alloc.bottlesTaken > stock.bottlesRemaining) {
-        throw new AppError(
-          `Bottles exceed remaining on lab line ${alloc.labEntryId}`,
-          400
-        );
-      }
-
-      labEntry.transferHistory.push({
-        transferDate: primaryInwardDate,
-        bottlesTransferred: alloc.bottlesTaken,
-        plantsTransferred: alloc.plantsTaken,
-        remarks: remarks || "",
-      });
-
-      const newPlants = safeSubtractNonNegative(stock.plantsRemaining, alloc.plantsTaken);
-      const newBottles = safeSubtractNonNegative(stock.bottlesRemaining, alloc.bottlesTaken);
-      labEntry.availablePlants = clampUintForDb(newPlants);
-      labEntry.availableBottles = clampUintForDb(newBottles);
-      labEntry.transferStatus =
-        newPlants === 0 && newBottles === 0
-          ? "fully_transferred"
-          : "partially_transferred";
-
-      touchedPoIds.add(String(plantOutward._id));
     }
 
     const anchorAlloc = fifoAllocations[0];
@@ -2591,10 +2656,16 @@ const labToPrimaryInwardBulkGlobal = catchAsync(async (req, res, next) => {
       throw new AppError("FIFO produced no allocations", 400);
     }
 
-    const anchorBatchId = String(anchorAlloc.batchId);
-    const anchorPlantOutward = poById.get(String(anchorAlloc.plantOutwardId));
+    const anchorBatchId = isDirectEntry
+      ? String(clientAnchorBatchId)
+      : String(anchorAlloc.batchId);
+    const anchorPlantOutward = isDirectEntry
+      ? plantOutwards.find(
+          (po) => String(po.batchId?._id ?? po.batchId) === anchorBatchId
+        )
+      : poById.get(String(anchorAlloc.plantOutwardId));
     if (!anchorPlantOutward) {
-      throw new AppError(`Plant outward ${anchorAlloc.plantOutwardId} not found`, 404);
+      throw new AppError(`Plant outward for batch ${anchorBatchId} not found`, 404);
     }
 
     const primaryOutwardExpectedDate = await resolvePrimaryOutwardExpectedDate({
@@ -2614,7 +2685,9 @@ const labToPrimaryInwardBulkGlobal = catchAsync(async (req, res, next) => {
       .filter(Boolean)
       .join(" · ");
 
-    const primaryFifoLabId = anchorAlloc.labEntryId;
+    const primaryFifoLabId = anchorAlloc.labEntryId
+      ? String(anchorAlloc.labEntryId)
+      : "";
 
     for (const row of sizeRows) {
       const size = String(row.size ?? "");
@@ -2647,7 +2720,7 @@ const labToPrimaryInwardBulkGlobal = catchAsync(async (req, res, next) => {
         laboursLadies: ladies,
         laboursGents: gents,
         transferStatus: "available",
-        sourceLabId: primaryFifoLabId,
+        ...(primaryFifoLabId && { sourceLabId: primaryFifoLabId }),
         inwardSessionId,
         remarks: sessionRemarks || undefined,
         ...(primaryOutwardExpectedDate && { primaryOutwardExpectedDate }),
@@ -3911,6 +3984,113 @@ const allocateFifoPlantsFromPrimaryOutwardPool = (pool, plantsNeeded) => {
   return { allocations, remaining };
 };
 
+/** Post-create: ledger, slot link, activity, slot.actualPlants sync for lagwad lines. */
+async function finalizeSecondaryLagwadCreatedRows({
+  session,
+  batchId,
+  plantOutward,
+  batchDocForReady,
+  expectedReadyDate,
+  pollyhouse,
+  performedBy,
+  created,
+}) {
+  for (const row of created) {
+    const rowExpectedReady = row.expectedReadyDate ?? expectedReadyDate;
+    const siPlain =
+      typeof plantOutward.secondaryInward.id(row.secondaryInwardId)?.toObject ===
+      "function"
+        ? plantOutward.secondaryInward.id(row.secondaryInwardId).toObject()
+        : plantOutward.secondaryInward.id(row.secondaryInwardId);
+    if (!siPlain) continue;
+
+    await recordSecondaryInwardOnLedger(session, {
+      dispatchBatchId: batchId,
+      plantOutwardId: plantOutward._id,
+      secondaryInwardId: row.secondaryInwardId,
+      secondaryInwardDate: siPlain.secondaryInwardDate,
+      plants: row.plants,
+      size: row.size,
+      performedBy: mongoose.isValidObjectId(String(performedBy)) ? performedBy : undefined,
+    });
+
+    if (!siPlain.linkedBookingSlotId && rowExpectedReady && batchDocForReady) {
+      const slotId = await resolveBookingSlotIdForSecondaryBatch(
+        batchDocForReady,
+        rowExpectedReady
+      );
+      if (slotId) {
+        await PlantOutward.updateOne(
+          { batchId, "secondaryInward._id": row.secondaryInwardId },
+          { $set: { "secondaryInward.$.linkedBookingSlotId": slotId } },
+          { session }
+        );
+        siPlain.linkedBookingSlotId = slotId;
+      }
+    }
+    await recordShedActivity({
+      batchId,
+      stage: "secondary_inward",
+      subdocId: row.secondaryInwardId,
+      action: SHED_ACTIVITY_ACTIONS.SECONDARY_LAGWAD_RECORDED,
+      activityName: `लागवड नोंद · ${row.plants} रोप · ${row.size}`,
+      performedBy,
+      quantity: row.plants,
+      newValue: {
+        size: row.size,
+        expectedReadyDate: rowExpectedReady,
+        pollyhouse: String(pollyhouse).trim(),
+      },
+      session,
+    });
+    if (siPlain.linkedBookingSlotId) {
+      await recordShedActivity({
+        batchId,
+        stage: "secondary_inward",
+        subdocId: row.secondaryInwardId,
+        action: SHED_ACTIVITY_ACTIONS.SECONDARY_SLOT_LINKED,
+        activityName: `स्लॉट जोडला · ${moment(rowExpectedReady).format("DD MMM YYYY")}`,
+        performedBy,
+        quantity: row.plants,
+        newValue: {
+          linkedBookingSlotId: siPlain.linkedBookingSlotId,
+          expectedReadyDate: rowExpectedReady,
+        },
+        session,
+      });
+    }
+    try {
+      const syncResult = await syncSecondaryInwardSlotStockAdd({
+        session,
+        batchId,
+        secondaryInwardId: row.secondaryInwardId,
+        batchLean: batchDocForReady,
+        siPlain,
+        dispatchEligible: true,
+        force: true,
+        performedBy: mongoose.isValidObjectId(String(performedBy))
+          ? performedBy
+          : undefined,
+      });
+      if (syncResult?.applied > 0) {
+        await recordShedActivity({
+          batchId,
+          stage: "secondary_inward",
+          subdocId: row.secondaryInwardId,
+          action: SHED_ACTIVITY_ACTIONS.SECONDARY_SLOT_SYNC,
+          activityName: `स्लॉट स्टॉक +${syncResult.applied}`,
+          performedBy,
+          quantity: syncResult.applied,
+          newValue: { slotId: syncResult.slotId },
+          session,
+        });
+      }
+    } catch (slotErr) {
+      console.warn("[secondaryShedSlotStock] lagwad sync:", slotErr?.message || slotErr);
+    }
+  }
+}
+
 /** Batch lagwad: primary outward → secondary inward with secondary-level R1/R2/R3 split. */
 const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next) => {
   const { batchId } = req.params;
@@ -3942,14 +4122,9 @@ const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next)
     .filter((r) => r.plants > 0);
 
   const totalPlants = sizeRows.reduce((s, r) => s + r.plants, 0);
-  const hasR3 = sizeRows.some((r) => r.size === "R3");
-  const hasR1R2 = sizeRows.some((r) => r.size === "R1" || r.size === "R2");
 
   if (totalPlants < 1) {
     return next(new AppError("At least 1 plant required in size split", 400));
-  }
-  if (hasR3 && hasR1R2) {
-    return next(new AppError("R3 cannot be mixed with R1/R2 in one lagwad session", 400));
   }
   if (
     !secondaryInwardDate ||
@@ -3994,19 +4169,20 @@ const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next)
       .select(BATCH_SELECT_FIELDS)
       .session(session)
       .lean();
-    const secondaryDaysForReady = batchDocForReady
-      ? Number(safeMongooseNumber(batchDocForReady.secondaryPlantReadyDays)) || 0
-      : 0;
-    const inwardMoment = moment(secondaryInwardDate).startOf("day");
-    const expectedReadyDate =
-      inwardMoment.isValid() && secondaryDaysForReady >= 0
-        ? inwardMoment.clone().add(secondaryDaysForReady, "days").toDate()
-        : null;
 
     const created = [];
     const performedBy = req.user?._id || req.user?.id;
 
     for (const sr of sizeRows) {
+      const rowExpectedReady = expectedReadyDateForSecondarySize(
+        secondaryInwardDate,
+        sr.size,
+        batchDocForReady
+      );
+      const rowDispatchDate =
+        rowExpectedReady ??
+        (dateOfDispatch ? moment(dateOfDispatch).toDate() : null);
+
       const { allocations, remaining } = allocateFifoPlantsFromPrimaryOutwardPool(
         pool,
         sr.plants
@@ -4062,9 +4238,9 @@ const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next)
         laboursEngaged,
         transferStatus: "available",
         sourcePrimaryOutwardId: allocations[0]?.item?.doc?._id ?? null,
-        dateOfDispatch,
+        dateOfDispatch: rowDispatchDate ?? dateOfDispatch,
         remarks: remarksStr || `Lagwad · ${sr.size}`,
-        ...(expectedReadyDate ? { expectedReadyDate } : {}),
+        ...(rowExpectedReady ? { expectedReadyDate: rowExpectedReady } : {}),
       };
 
       plantOutward.secondaryInward.push(secondaryInwardEntry);
@@ -4074,104 +4250,22 @@ const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next)
         size: sr.size,
         plants: sr.plants,
         secondaryInwardId: String(pushed._id),
+        expectedReadyDate: rowExpectedReady,
       });
     }
 
     await plantOutward.save({ session, validateModifiedOnly: true });
 
-    for (const row of created) {
-      const siPlain =
-        typeof plantOutward.secondaryInward.id(row.secondaryInwardId)?.toObject ===
-        "function"
-          ? plantOutward.secondaryInward.id(row.secondaryInwardId).toObject()
-          : plantOutward.secondaryInward.id(row.secondaryInwardId);
-      if (!siPlain) continue;
-
-      await recordSecondaryInwardOnLedger(session, {
-        dispatchBatchId: batchId,
-        plantOutwardId: plantOutward._id,
-        secondaryInwardId: row.secondaryInwardId,
-        secondaryInwardDate: siPlain.secondaryInwardDate,
-        plants: row.plants,
-        size: row.size,
-        performedBy: mongoose.isValidObjectId(String(performedBy)) ? performedBy : undefined,
-      });
-
-      if (!siPlain.linkedBookingSlotId && expectedReadyDate && batchDocForReady) {
-        const slotId = await resolveBookingSlotIdForSecondaryBatch(
-          batchDocForReady,
-          expectedReadyDate
-        );
-        if (slotId) {
-          await PlantOutward.updateOne(
-            { batchId, "secondaryInward._id": row.secondaryInwardId },
-            { $set: { "secondaryInward.$.linkedBookingSlotId": slotId } },
-            { session }
-          );
-          siPlain.linkedBookingSlotId = slotId;
-        }
-      }
-      await recordShedActivity({
-        batchId,
-        stage: "secondary_inward",
-        subdocId: row.secondaryInwardId,
-        action: SHED_ACTIVITY_ACTIONS.SECONDARY_LAGWAD_RECORDED,
-        activityName: `लागवड नोंद · ${row.plants} रोप · ${row.size}`,
-        performedBy,
-        quantity: row.plants,
-        newValue: {
-          size: row.size,
-          expectedReadyDate,
-          pollyhouse: String(pollyhouse).trim(),
-        },
-        session,
-      });
-      if (siPlain.linkedBookingSlotId) {
-        await recordShedActivity({
-          batchId,
-          stage: "secondary_inward",
-          subdocId: row.secondaryInwardId,
-          action: SHED_ACTIVITY_ACTIONS.SECONDARY_SLOT_LINKED,
-          activityName: `स्लॉट जोडला · ${moment(expectedReadyDate).format("DD MMM YYYY")}`,
-          performedBy,
-          quantity: row.plants,
-          newValue: {
-            linkedBookingSlotId: siPlain.linkedBookingSlotId,
-            expectedReadyDate,
-          },
-          session,
-        });
-      }
-      try {
-        const syncResult = await syncSecondaryInwardSlotStockAdd({
-          session,
-          batchId,
-          secondaryInwardId: row.secondaryInwardId,
-          batchLean: batchDocForReady,
-          siPlain,
-          dispatchEligible: true,
-          force: true,
-          performedBy: mongoose.isValidObjectId(String(performedBy))
-            ? performedBy
-            : undefined,
-        });
-        if (syncResult?.applied > 0) {
-          await recordShedActivity({
-            batchId,
-            stage: "secondary_inward",
-            subdocId: row.secondaryInwardId,
-            action: SHED_ACTIVITY_ACTIONS.SECONDARY_SLOT_SYNC,
-            activityName: `स्लॉट स्टॉक +${syncResult.applied}`,
-            performedBy,
-            quantity: syncResult.applied,
-            newValue: { slotId: syncResult.slotId },
-            session,
-          });
-        }
-      } catch (slotErr) {
-        console.warn("[secondaryShedSlotStock] batch lagwad sync:", slotErr?.message || slotErr);
-      }
-    }
+    await finalizeSecondaryLagwadCreatedRows({
+      session,
+      batchId,
+      plantOutward,
+      batchDocForReady,
+      expectedReadyDate: null,
+      pollyhouse,
+      performedBy,
+      created,
+    });
 
     await session.commitTransaction();
 
@@ -4180,6 +4274,202 @@ const secondaryBatchLagwadFromPrimaryOutward = catchAsync(async (req, res, next)
         batchId: String(batchId),
         totalPlants,
         created,
+      })
+    );
+  } catch (error) {
+    await session.abortTransaction();
+    return next(error);
+  } finally {
+    session.endSession();
+  }
+});
+
+/** Resolve dispatch batch from Mongo id or batch number string. */
+async function resolveDispatchBatchRef(batchParam, session) {
+  const raw = String(batchParam || "").trim();
+  if (!raw) return null;
+
+  if (mongoose.isValidObjectId(raw)) {
+    const byId = await DispatchBatch.findById(raw)
+      .select(BATCH_SELECT_FIELDS)
+      .session(session)
+      .lean();
+    if (byId) return { batch: byId, batchId: String(byId._id) };
+  }
+
+  let byNum = await DispatchBatch.findOne({ batchNumber: raw })
+    .select(BATCH_SELECT_FIELDS)
+    .session(session)
+    .lean();
+  if (byNum) return { batch: byNum, batchId: String(byNum._id) };
+
+  const asNum = Number(raw);
+  if (Number.isFinite(asNum) && String(asNum) === raw) {
+    byNum = await DispatchBatch.findOne({ batchNumber: asNum })
+      .select(BATCH_SELECT_FIELDS)
+      .session(session)
+      .lean();
+    if (byNum) return { batch: byNum, batchId: String(byNum._id) };
+  }
+
+  return null;
+}
+
+/**
+ * Direct lagwad: record secondary inward + slot sync without primary outward stock.
+ * Bypasses Accept / primary-outward pool for field ops prod-lite flow.
+ */
+const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
+  const { batchId: batchParam } = req.params;
+  const {
+    sizeSplit,
+    cavity: cavityRaw,
+    numberOfTrays: traysOverrideRaw,
+    secondaryInwardDate,
+    dateOfDispatch,
+    pollyhouse,
+    laboursLadies,
+    laboursGents,
+    laboursEngaged: laboursRaw,
+    remarks,
+  } = req.body ?? {};
+
+  const cavityNum = Math.max(1, safeNonNegativeInt(cavityRaw, 126));
+  const ladies = safeNonNegativeInt(laboursLadies, 0);
+  const gents = safeNonNegativeInt(laboursGents, 0);
+  const laboursEngaged =
+    ladies + gents > 0 ? ladies + gents : safeNonNegativeInt(laboursRaw, 0);
+  const remarksStr =
+    remarks === undefined || remarks === null ? "" : String(remarks).trim();
+
+  const sizeRows = ["R1", "R2", "R3"]
+    .map((size) => ({
+      size,
+      plants: safeNonNegativeInt(sizeSplit?.[size], 0),
+    }))
+    .filter((r) => r.plants > 0);
+
+  const totalPlants = sizeRows.reduce((s, r) => s + r.plants, 0);
+
+  if (totalPlants < 1) {
+    return next(new AppError("At least 1 plant required in size split", 400));
+  }
+  if (
+    !secondaryInwardDate ||
+    !dateOfDispatch ||
+    !pollyhouse ||
+    String(pollyhouse).trim() === "" ||
+    laboursEngaged < 1
+  ) {
+    return next(
+      new AppError(
+        "secondaryInwardDate, dateOfDispatch, pollyhouse, and labours (≥1) are required",
+        400
+      )
+    );
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const resolvedBatch = await resolveDispatchBatchRef(batchParam, session);
+    if (!resolvedBatch) {
+      throw new AppError("No dispatch batch found with this batch ID", 404);
+    }
+    const batchId = resolvedBatch.batchId;
+
+    let plantOutward = await PlantOutward.findOne({ batchId }).session(session);
+    if (!plantOutward) {
+      const batch = resolvedBatch.batch;
+      if (!batch) {
+        throw new AppError("No dispatch batch found with this batch ID", 404);
+      }
+      const [createdDoc] = await PlantOutward.create(
+        [
+          {
+            batchId: batch._id,
+            dateAdded: batch.dateAdded || new Date(),
+          },
+        ],
+        { session }
+      );
+      plantOutward = createdDoc;
+    }
+
+    const batchDocForReady = await DispatchBatch.findById(batchId)
+      .select(BATCH_SELECT_FIELDS)
+      .session(session)
+      .lean();
+
+    const created = [];
+    const performedBy = req.user?._id || req.user?.id;
+    const traysOverride = safeNonNegativeInt(traysOverrideRaw, 0);
+
+    for (const sr of sizeRows) {
+      const rowExpectedReady = expectedReadyDateForSecondarySize(
+        secondaryInwardDate,
+        sr.size,
+        batchDocForReady
+      );
+      const rowDispatchDate =
+        rowExpectedReady ??
+        (dateOfDispatch ? moment(dateOfDispatch).toDate() : null);
+
+      const traysNum =
+        traysOverride >= 1 && sizeRows.length === 1
+          ? traysOverride
+          : Math.max(1, Math.ceil(sr.plants / cavityNum));
+      const bottlesNum = traysNum;
+
+      const secondaryInwardEntry = {
+        secondaryInwardDate,
+        numberOfBottles: bottlesNum,
+        size: sr.size,
+        cavity: cavityNum,
+        numberOfTrays: traysNum,
+        totalQuantity: sr.plants,
+        availableQuantity: sr.plants,
+        pollyhouse: String(pollyhouse).trim(),
+        laboursEngaged,
+        transferStatus: "available",
+        dateOfDispatch: rowDispatchDate ?? dateOfDispatch,
+        remarks: remarksStr || `Direct lagwad · ${sr.size}`,
+        ...(rowExpectedReady ? { expectedReadyDate: rowExpectedReady } : {}),
+      };
+
+      plantOutward.secondaryInward.push(secondaryInwardEntry);
+      const pushed =
+        plantOutward.secondaryInward[plantOutward.secondaryInward.length - 1];
+      created.push({
+        size: sr.size,
+        plants: sr.plants,
+        secondaryInwardId: String(pushed._id),
+        expectedReadyDate: rowExpectedReady,
+      });
+    }
+
+    await plantOutward.save({ session, validateModifiedOnly: true });
+
+    await finalizeSecondaryLagwadCreatedRows({
+      session,
+      batchId,
+      plantOutward,
+      batchDocForReady,
+      expectedReadyDate: null,
+      pollyhouse,
+      performedBy,
+      created,
+    });
+
+    await session.commitTransaction();
+
+    return res.status(200).json(
+      generateResponse("Success", "Direct secondary lagwad recorded", {
+        batchId: String(batchId),
+        totalPlants,
+        created,
+        standalone: true,
       })
     );
   } catch (error) {
@@ -5073,10 +5363,16 @@ const getSecondaryInwardById = catchAsync(async (req, res, next) => {
     return next(new AppError("Secondary inward entry not found", 404));
   }
 
+  const plain =
+    typeof secondaryInward.toObject === "function"
+      ? secondaryInward.toObject()
+      : { ...secondaryInward };
+  const enriched = await enrichSecondaryInwardDetail(plain);
+
   const response = generateResponse(
     "Success",
     "Secondary inward entry retrieved successfully",
-    secondaryInward,
+    enriched,
     undefined
   );
 
@@ -5291,12 +5587,15 @@ const getVehicleDispatchAllocationSuggestions = catchAsync(async (req, res, next
     suggestionsOut = suggestionsOut.filter((s) => s.dispatchEligible);
   }
 
+  // Lagwad / mark-ready stock must match this vehicle row's plant + subtype only.
+  const finalSuggestions = suggestionsOut;
+
   const needPlants = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
 
   // numberPerCrate per distinct inward cavity size (each entry converts crates with its own tray).
   const cavitySizes = [
     ...new Set(
-      suggestionsOut.map((s) => Math.floor(Number(s.cavity) || 0)).filter((n) => n > 0)
+      finalSuggestions.map((s) => Math.floor(Number(s.cavity) || 0)).filter((n) => n > 0)
     ),
   ];
   const perCrateByCavity = new Map();
@@ -5310,7 +5609,7 @@ const getVehicleDispatchAllocationSuggestions = catchAsync(async (req, res, next
       if (c > 0 && per > 0 && !perCrateByCavity.has(c)) perCrateByCavity.set(c, per);
     }
   }
-  suggestionsOut = suggestionsOut.map((s) => {
+  suggestionsOut = finalSuggestions.map((s) => {
     const c = Math.floor(Number(s.cavity) || 0);
     return { ...s, numberPerCrate: perCrateByCavity.get(c) || s.numberPerCrate || 0 };
   });
@@ -5408,13 +5707,11 @@ const getVehicleDispatchAllocationSuggestions = catchAsync(async (req, res, next
       sowingAllowed,
       crateInfo,
       matchingOrders,
-      suggestions: sowingAllowed ? [] : suggestionsOut,
-      batches: sowingAllowed ? [] : batches,
+      suggestions: suggestionsOut,
+      batches,
       plantRows,
       suggestedFulfillmentSequence,
-      otherBatchesWithSamePlant: sowingAllowed
-        ? []
-        : batchDocs.map((b) => b.batchNumber).filter(Boolean),
+      otherBatchesWithSamePlant: batchDocs.map((b) => b.batchNumber).filter(Boolean),
     },
     undefined
   );
@@ -5836,6 +6133,7 @@ export {
   markSecondaryPrimaryOutwardSowingComplete,
   primaryToSecondaryInward,
   secondaryBatchLagwadFromPrimaryOutward,
+  secondaryDirectLagwad,
   secondaryInwardToSecondaryOutward,
   getTransferHistory,
   getShedActivityByBatch,

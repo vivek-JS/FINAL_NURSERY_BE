@@ -19,6 +19,7 @@ import {
   labToPrimaryInwardBulkGlobal,
   primaryToSecondaryInward,
   secondaryBatchLagwadFromPrimaryOutward,
+  secondaryDirectLagwad,
   acknowledgePrimaryOutwardForSecondary,
   recordSecondaryPrimaryOutwardMortality,
   markSecondaryPrimaryOutwardSowingComplete,
@@ -116,6 +117,7 @@ router.post(
   "/secondary/:batchId/batch-lagwad",
   secondaryBatchLagwadFromPrimaryOutward
 );
+router.post("/secondary/:batchId/direct-lagwad", secondaryDirectLagwad);
 router.post(
   "/secondary/acknowledge-primary-outward/:batchId/:primaryOutwardId",
   acknowledgePrimaryOutwardForSecondary

@@ -1359,6 +1359,9 @@ const updateDispatch = catchAsync(async (req, res, next) => {
           ? { shedLoadedFromSecondary: oldRow.shedLoadedFromSecondary }
           : {}),
         ...(oldRow?.shedLoadedAt ? { shedLoadedAt: oldRow.shedLoadedAt } : {}),
+        ...(Array.isArray(oldRow?.shedLoadedBatches) && oldRow.shedLoadedBatches.length
+          ? { shedLoadedBatches: oldRow.shedLoadedBatches }
+          : {}),
       };
     });
 

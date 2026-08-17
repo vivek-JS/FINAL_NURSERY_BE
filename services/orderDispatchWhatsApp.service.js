@@ -123,6 +123,24 @@ async function resolveDriverMobileFromDispatch(latest) {
   }
 }
 
+async function resolveDispatchVehicleFromHistory(latest) {
+  if (!latest?.dispatchId) return { vehicleName: null, vehicleNumber: null, driverName: null };
+  try {
+    const doc = await Dispatch.findById(latest.dispatchId)
+      .select("vehicleName vehicleNumber driverName driverMobile")
+      .lean();
+    if (!doc) return { vehicleName: null, vehicleNumber: null, driverName: null };
+    return {
+      vehicleName: doc.vehicleName || null,
+      vehicleNumber: doc.vehicleNumber || null,
+      driverName: doc.driverName || null,
+      driverMobile: doc.driverMobile || null,
+    };
+  } catch {
+    return { vehicleName: null, vehicleNumber: null, driverName: null };
+  }
+}
+
 async function buildDispatchWhatsAppDetails(order) {
   const history = Array.isArray(order.dispatchHistory) ? order.dispatchHistory : [];
   const dispatchedSum = history.reduce((s, h) => s + (Number(h.quantity) || 0), 0);
@@ -130,12 +148,19 @@ async function buildDispatchWhatsAppDetails(order) {
   const totalDispatched =
     dispatchedSum > 0 ? dispatchedSum : order.orderStatus === "DISPATCHED" ? totalPlants : 0;
   const latest = history.length > 0 ? history[history.length - 1] : null;
+  const dispatchVehicle = await resolveDispatchVehicleFromHistory(latest);
   const driverMobile =
     (await resolveDriverMobileFromDispatch(latest)) ||
+    dispatchVehicle.driverMobile ||
     latest?.driverMobile ||
     latest?.dispatch?.driverMobile ||
     "N/A";
   const plantSubtypeName = await resolveOrderPlantSubtypeName(order);
+  const vehicleLabel =
+    dispatchVehicle.vehicleNumber ||
+    dispatchVehicle.vehicleName ||
+    latest?.vehicleName ||
+    "N/A";
   return {
     totalDispatched,
     details: {
@@ -144,9 +169,9 @@ async function buildDispatchWhatsAppDetails(order) {
       plantName: order.plantName?.name || "Plants",
       plantSubtype: plantSubtypeName,
       totalDispatched,
-      driverName: latest?.driverName || "N/A",
+      driverName: dispatchVehicle.driverName || latest?.driverName || "N/A",
       driverNumber: driverMobile,
-      vehicleNumber: latest?.vehicleName || "N/A",
+      vehicleNumber: vehicleLabel,
       dispatchDate: latest?.date || new Date(),
       deliveryDate: order.deliveryDate,
     },

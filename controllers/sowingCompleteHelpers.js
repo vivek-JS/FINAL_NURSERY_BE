@@ -317,6 +317,7 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
       "subtypeSlots.$[st].slots.$[sl].primarySowed": addPlants,
       "subtypeSlots.$[st].slots.$[sl].totalPlants": addPlants,
       "subtypeSlots.$[st].slots.$[sl].plantsSowed": addPlants,
+      "subtypeSlots.$[st].slots.$[sl].actualPlants": addPlants,
     };
     if (isExcess) {
       inc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = addPlants;
@@ -411,6 +412,7 @@ export async function reverseSowBatchFromSlot(slotId, sowingRequestId, plantsSow
     "subtypeSlots.$[st].slots.$[sl].primarySowed": -qty,
     "subtypeSlots.$[st].slots.$[sl].totalPlants": -qty,
     "subtypeSlots.$[st].slots.$[sl].plantsSowed": -qty,
+    "subtypeSlots.$[st].slots.$[sl].actualPlants": -qty,
   };
   if (saleableRev > 0) {
     inc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = -saleableRev;
@@ -580,6 +582,7 @@ export async function editSowEntryOnSlots(request, opts = {}) {
     "subtypeSlots.$[st].slots.$[sl].primarySowed": plantsTotal,
     "subtypeSlots.$[st].slots.$[sl].totalPlants": plantsTotal,
     "subtypeSlots.$[st].slots.$[sl].plantsSowed": plantsTotal,
+    "subtypeSlots.$[st].slots.$[sl].actualPlants": plantsTotal,
   };
   if (excessTotal > 0) {
     editInc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = excessTotal;

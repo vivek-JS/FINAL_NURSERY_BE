@@ -165,6 +165,63 @@ export const getAvailableLabStock = (pool) => ({
   plants: pool.reduce((s, e) => s + e.plantsRemaining, 0),
 });
 
+/**
+ * Direct lagwad entry — record user-entered bottles/plants on anchor batch
+ * without enforcing global lab stock availability.
+ */
+export const buildDirectEntryFifoAllocations = (
+  plantOutwards,
+  anchorBatchId,
+  totalBottles,
+  totalPlants,
+) => {
+  const bid = String(anchorBatchId ?? "");
+  const bottles = safeNonNegativeInt(totalBottles, 0);
+  const plants = safeNonNegativeInt(totalPlants, 0);
+  if (!bid) {
+    return { ok: false, error: "anchorBatchId is required for direct entry" };
+  }
+  if (bottles < 1 || plants < 1) {
+    return {
+      ok: false,
+      error: "totalBottlesSown and totalPlantsSown must be at least 1",
+    };
+  }
+
+  const po = (plantOutwards || []).find(
+    (p) => String(p.batchId?._id ?? p.batchId) === bid
+  );
+  if (!po) {
+    return { ok: false, error: `No plant outward found for batch ${bid}` };
+  }
+
+  let lab = null;
+  for (const l of po.outward || []) {
+    if (!isLabLineAcceptedForPrimary(l)) continue;
+    lab = l;
+    break;
+  }
+
+  const stock = lab ? computeLabLineStock(lab) : null;
+
+  return {
+    ok: true,
+    allocations: [
+      {
+        labEntryId: lab ? String(lab._id) : "",
+        plantOutwardId: String(po._id),
+        batchId: bid,
+        labSize: lab?.size ?? null,
+        outwardDate: lab?.outwardDate ?? null,
+        bottlesTaken: bottles,
+        plantsTaken: plants,
+        plantsRemainingBefore: stock?.plantsRemaining ?? plants,
+        bottlesRemainingBefore: stock?.bottlesRemaining ?? bottles,
+      },
+    ],
+  };
+};
+
 export const validateBottlesForInward = (pool, bottlesNeeded) => {
   const { bottles: available } = getAvailableLabStock(pool);
   const need = safeNonNegativeInt(bottlesNeeded, 0);

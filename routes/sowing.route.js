@@ -80,6 +80,7 @@ import {
   editSowEntry,
   getIssuedSowingQueue,
   getSowingCompletions,
+  getSowSlotPreview,
 } from "../controllers/sowingRequestComplete.controller.js";
 import { getDeliveryVsReadyAnalytics } from "../controllers/deliveryVsReady.controller.js";
 import {
@@ -142,6 +143,7 @@ router.get("/request/all", getAllSowingRequests); // Get all sowing requests (wi
 router.get("/request/pending", getPendingSowingRequests); // Get all pending sowing requests
 router.get("/request/active", getActiveSowingRequests); // Get all active sowing requests (issued/in-progress)
 router.get("/request/issued-queue", getIssuedSowingQueue); // Shed-ops: issued not yet completed
+router.get("/request/:requestId/slot-preview", getSowSlotPreview); // Preview target slot by sow + ready days
 router.get("/request/:id", getSowingRequestById); // Get sowing request by ID
 router.get("/request/:requestId/status", getSowingRequestStatus); // Get request status with progress
 router.put("/request/:id", updateSowingRequest); // Update sowing request (edit)

@@ -254,6 +254,23 @@ const dispatchSchema = new Schema(
             type: Boolean,
             default: false,
           },
+          /** Batches loaded from secondary shed for this order (traceability + complete autofill). */
+          shedLoadedBatches: {
+            type: [
+              {
+                batchId: {
+                  type: Schema.Types.ObjectId,
+                  ref: "DispatchBatch",
+                },
+                batchNumber: { type: String, default: "" },
+                plants: { type: Number, default: 0, min: 0 },
+                secondaryInwardId: { type: Schema.Types.ObjectId },
+                pollyhouse: { type: String, default: "" },
+                loadedAt: { type: Date },
+              },
+            ],
+            default: [],
+          },
           originalDispatchQuantity: {
             type: Number,
             min: 0,
