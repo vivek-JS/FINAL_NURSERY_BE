@@ -1,5 +1,8 @@
 import mongoose from "mongoose";
 import { getSubtypeInventoryCandidates } from "./subtypeInventoryLink.service.js";
+import Product from "../models/product.model.js";
+import RamAgriBatch from "../models/ramAgriBatch.model.js";
+import { resolveRamAgriForSeedProduct } from "./ramAgriVarietyInventoryLink.service.js";
 import { deductStockFIFO } from "./ramAgriBatchInventory.service.js";
 import { RAM_AGRI_MOVEMENT_TYPES } from "./ramAgriStockMovement.service.js";
 
@@ -64,18 +67,75 @@ export function resolveIssueInventorySplit({
 /**
  * Availability payload for issue dialog (multi-link).
  */
-export async function buildIssueInventoryAvailability(plantId, subtypeId) {
+export async function buildIssueInventoryAvailability(plantId, subtypeId, productId) {
   const candidates = await getSubtypeInventoryCandidates(plantId, subtypeId);
-  const biotechAvailable = candidates.biotech.reduce(
-    (s, l) => s + (Number(l.availableStock) || 0),
-    0
-  );
-  const ramAgriAvailable = candidates.ramAgri.reduce(
-    (s, l) => s + (Number(l.availableStock) || 0),
-    0
-  );
+
+  let biotechLinks = candidates.biotech || [];
+  let ramAgriLinks = candidates.ramAgri || [];
+
+  // Fallback:
+  // Some plant/subtype pairs may have no active SubtypeInventoryLink rows yet.
+  // In that case, still compute availability from the underlying inventory sources.
+  // This prevents the issue dialog from showing 0 stock when Agri/Biotech stock exists.
+  if (biotechLinks.length === 0 && ramAgriLinks.length === 0) {
+    // Biotech fallback from seed products stored against plant/subtype.
+    // (Only applies if those legacy fields are present.)
+    const biotechProducts = await Product.find({
+      plantId: plantId,
+      subtypeId: subtypeId,
+    })
+      .select("_id name currentStock")
+      .lean();
+
+    biotechLinks = (biotechProducts || []).map((p) => ({
+      source: "BIOTECH",
+      displayName: p?.name,
+      productId: p?._id,
+      availableStock: Number(p?.currentStock) || 0,
+    }));
+
+    // Ram Agri fallback: map seed product -> Ram Agri crop/variety using the inventory link
+    // service, then compute availability from RamAgriBatch remainingQuantity.
+    // NOTE: this dialog selection ultimately depends on seed variety, not solely plant/subtype.
+    if (productId) {
+      const product = await Product.findById(productId).lean();
+      const resolved = await resolveRamAgriForSeedProduct(product);
+      if (resolved?.cropId && resolved?.varietyId) {
+        const agriQty = await RamAgriBatch.aggregate([
+          {
+            $match: {
+              ramAgriCropId: resolved.cropId,
+              ramAgriVarietyId: resolved.varietyId,
+              status: "active",
+              remainingQuantity: { $gt: 0 },
+            },
+          },
+          { $group: { _id: null, total: { $sum: "$remainingQuantity" } } },
+        ]);
+        const total = Number(agriQty?.[0]?.total) || 0;
+        ramAgriLinks = [
+          {
+            source: "RAM_AGRI",
+            displayName:
+              resolved?.crop?.cropName && resolved?.variety?.name
+                ? `${resolved.crop.cropName} — ${resolved.variety.name}`
+                : "Ram Agri variety",
+            ramAgriCropId: resolved.cropId,
+            ramAgriVarietyId: resolved.varietyId,
+            availableStock: total,
+          },
+        ];
+      }
+    }
+  }
+
+  const biotechAvailable = biotechLinks.reduce((s, l) => s + (Number(l.availableStock) || 0), 0);
+  const ramAgriAvailable = ramAgriLinks.reduce((s, l) => s + (Number(l.availableStock) || 0), 0);
+
   return {
     ...candidates,
+    biotech: biotechLinks,
+    ramAgri: ramAgriLinks,
     totals: {
       biotechAvailable,
       ramAgriAvailable,

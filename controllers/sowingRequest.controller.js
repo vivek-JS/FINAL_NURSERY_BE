@@ -598,7 +598,8 @@ export const getSowingRequestById = async (req, res) => {
       );
       inventoryAvailability = await buildIssueInventoryAvailability(
         request.plantId,
-        request.subtypeId
+        request.subtypeId,
+        request.productId
       );
     } catch (availErr) {
       console.error('[getSowingRequestById] inventoryAvailability:', availErr?.message || availErr);
