@@ -25,11 +25,12 @@ export async function listSubtypeInventoryLinks(plantId, subtypeId) {
 export function enrichLinkRows(links = []) {
   return (links || []).map((link) => {
     const row = { ...link };
-    if (link.source === "BIOTECH" && link.productId) {
-      const p = link.productId;
-      row.displayName = p?.name || link.label || "Biotech product";
-      row.availableStock = Number(p?.currentStock) || 0;
-    } else if (link.source === "RAM_AGRI") {
+    // Some existing records may have an incorrect `source` value.
+    // Prefer inferring pool type from the presence of linked IDs.
+    const hasRamAgri = Boolean(link.ramAgriCropId) || Boolean(link.ramAgriVarietyId);
+    const hasBiotech = Boolean(link.productId);
+
+    if (link.source === "RAM_AGRI" || hasRamAgri) {
       const crop = link.ramAgriCropId;
       const variety = (crop?.varieties || []).find(
         (v) => String(v._id) === String(link.ramAgriVarietyId)
@@ -41,6 +42,10 @@ export function enrichLinkRows(links = []) {
           : "Ram Agri variety");
       row.ramAgriVarietyName = variety?.name || "";
       row.availableStock = Number(variety?.currentStock) || 0;
+    } else if ((link.source === "BIOTECH" || hasBiotech) && link.productId) {
+      const p = link.productId;
+      row.displayName = p?.name || link.label || "Biotech product";
+      row.availableStock = Number(p?.currentStock) || 0;
     }
     return row;
   });
@@ -239,9 +244,14 @@ export async function removeSubtypeInventoryLink({
  */
 export async function getSubtypeInventoryCandidates(plantId, subtypeId) {
   const links = enrichLinkRows(await listSubtypeInventoryLinks(plantId, subtypeId));
+  // Prefer pool inference from linked IDs.
+  // If both exist (shouldn't), Ram Agri wins because the deduction path relies on these fields.
+  const isRamAgri = (l) => Boolean(l.ramAgriCropId) || Boolean(l.ramAgriVarietyId) || l.source === "RAM_AGRI";
+  const isBiotech = (l) => Boolean(l.productId) || l.source === "BIOTECH";
+
   return {
-    biotech: links.filter((l) => l.source === "BIOTECH"),
-    ramAgri: links.filter((l) => l.source === "RAM_AGRI"),
+    biotech: links.filter((l) => isBiotech(l) && !isRamAgri(l)),
+    ramAgri: links.filter((l) => isRamAgri(l)),
     links,
   };
 }
