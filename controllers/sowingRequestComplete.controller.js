@@ -25,6 +25,7 @@ import {
   fmtDDMMYYYY,
 } from "./sowingSlotReadyHelpers.js";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
+import { settleSowPackets, isSowingRequestClosed } from "../utility/sowPacketSettlement.js";
 
 /** Collect applied slot ids from completion meta + linkedSlotIds. */
 function collectSlotIdsFromRequest(r) {
@@ -44,6 +45,16 @@ export const completeSowUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024, files: 5 },
 });
+
+/** Photos are optional — JSON complete-sow (no multipart) skips multer. */
+export function optionalCompleteSowUpload(req, res, next) {
+  const ct = String(req.headers["content-type"] || "");
+  if (!ct.includes("multipart/form-data")) return next();
+  return completeSowUpload.array("photos", 5)(req, res, (err) => {
+    if (err) return next(err);
+    next();
+  });
+}
 
 function bustLiteCacheAsync() {
   setImmediate(() => {
@@ -239,39 +250,22 @@ export const completeSowingRequest = async (req, res) => {
         0;
       const remainingPkt = await getRemainingCompanyPackets(locked);
 
-      // Prefer explicit packetsUsed. Do NOT infer used = remaining − return
-      // just because packetsToReturn was sent (0 used to burn all bags).
-      let packetsUsed = parseNum(req.body.packetsUsed, NaN);
-      let packetsToReturn = hasReturnInput
-        ? Math.max(0, packetsToReturnRaw)
-        : NaN;
-
-      if (!Number.isFinite(packetsUsed)) {
+      // Prefer explicit packetsUsed. Honor explicit packetsToReturn even when
+      // plant/cf used-hint would consume every remaining bag.
+      let packetsUsedHint = parseNum(req.body.packetsUsed, NaN);
+      if (!Number.isFinite(packetsUsedHint)) {
         const fromPlants = cf > 0 ? plantsSowed / cf : 0;
-        packetsUsed = Math.min(remainingPkt, Math.max(0, fromPlants));
-      } else {
-        packetsUsed = Math.min(remainingPkt, Math.max(0, packetsUsed));
+        packetsUsedHint = Math.min(remainingPkt, Math.max(0, fromPlants));
       }
 
-      if (!Number.isFinite(packetsToReturn)) {
-        // Complete: auto-return leftover. Partial: leave bags open.
-        packetsToReturn = completeSowing
-          ? Math.max(0, remainingPkt - packetsUsed)
-          : 0;
-      } else {
-        packetsToReturn = Math.min(
-          Math.max(0, remainingPkt - packetsUsed),
-          packetsToReturn
-        );
-        if (completeSowing) {
-          // Force-close: any unused after this use must be returned.
-          packetsToReturn = Math.max(0, remainingPkt - packetsUsed);
-        }
-      }
-
-      if (packetsUsed + packetsToReturn > remainingPkt && remainingPkt >= 0) {
-        packetsToReturn = Math.max(0, remainingPkt - packetsUsed);
-      }
+      const settled = settleSowPackets({
+        remaining: remainingPkt,
+        usedHint: packetsUsedHint,
+        packetsToReturn: hasReturnInput ? packetsToReturnRaw : 0,
+        completeSowing,
+      });
+      const packetsUsed = settled.packetsUsed;
+      const packetsToReturn = settled.packetsToReturn;
 
       const userId = req.user._id;
       const cmsReady = await resolveCmsReadyDays(locked.plantId, locked.subtypeId);
@@ -336,12 +330,12 @@ export const completeSowingRequest = async (req, res) => {
         expected - locked.sowedQuantity
       );
 
-      const noCompanyLeft =
-        companyPkts <= 0
-          ? locked.remainingSowingNeeded <= 0
-          : remainingAfter <= 0;
-
-      locked.sowingCompleted = Boolean(completeSowing || noCompanyLeft);
+      locked.sowingCompleted = isSowingRequestClosed({
+        completeSowing,
+        remainingAfter,
+        companyPackets: companyPkts,
+        remainingSowingNeeded: locked.remainingSowingNeeded,
+      });
       if (locked.sowingCompleted) {
         locked.remainingSowingNeeded = 0;
         locked.sowingCompletedDate = sowedAt;

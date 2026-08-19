@@ -6,7 +6,12 @@ import DispatchBatch from "../models/dispatchBatch.model.js";
 import Sowing from "../models/sowing.model.js";
 import { findDeliverySlotByDate } from "../utility/findDeliverySlot.js";
 import { applyStockFieldUpdates } from "../utility/slotStockTrail.js";
+import {
+  computeLagwadPendingSlotSync,
+  splitLagwadQtyForSlot,
+} from "../utility/lagwadSlotPlantsSplit.js";
 import { buildSowingMatchForSingleBatch } from "../utility/sowingBatchMatch.js";
+import { isSlotContainingDate } from "./pastDueSlotRollover.service.js";
 
 const normBatchNumber = (v) => {
   const s = v != null ? String(v).trim() : "";
@@ -49,10 +54,108 @@ export function computePendingSlotSync(availableQuantity, slotStockSyncedPlants)
   return Math.max(0, avail - synced);
 }
 
+/** Dispatch/unload math for slotStockSyncedPlants (ready position). */
+export function computeReadyPositionSubtract(syncedPlants, quantity) {
+  const synced = Math.max(0, Math.floor(Number(syncedPlants) || 0));
+  const qty = Math.max(0, Math.floor(Number(quantity) || 0));
+  const subtracted = Math.min(qty, synced);
+  return {
+    subtracted,
+    newSynced: Math.max(0, synced - subtracted),
+  };
+}
+
+export function computeReadyPositionRestore(availableQuantity, syncedPlants, quantity) {
+  const avail = Math.max(0, Math.floor(Number(availableQuantity) || 0));
+  const synced = Math.max(0, Math.floor(Number(syncedPlants) || 0));
+  const qty = Math.max(0, Math.floor(Number(quantity) || 0));
+  const headroom = Math.max(0, avail - synced);
+  const restored = Math.min(qty, headroom);
+  return {
+    restored,
+    newSynced: synced + restored,
+  };
+}
+
+/** Normal lagwad sync: 90% → actual + ready; 10% → expected mortality. */
+export function simulateLagwadSlotSync(availableQuantity, slotStockSyncedPlants) {
+  const lagwadSync = computeLagwadPendingSlotSync(
+    availableQuantity,
+    slotStockSyncedPlants
+  );
+  const split = splitLagwadQtyForSlot(availableQuantity);
+  const mortalityInc =
+    lagwadSync.pending > 0 && split.actualPlants > 0
+      ? Math.round(
+          (split.expectedMortality * lagwadSync.pending) / split.actualPlants
+        )
+      : 0;
+  return {
+    pending: lagwadSync.pending,
+    actualPlantsDelta: lagwadSync.actualPlantsDelta,
+    expectedMortalityDelta: mortalityInc,
+    readyDelta: lagwadSync.readyDelta,
+    lagwadRemainingDelta: lagwadSync.lagwadRemainingDelta,
+    syncedAfter: lagwadSync.syncedAfter,
+    readyOnly: false,
+  };
+}
+
+/** Dispatch subtracts actualReadyPlants on slot — not actualPlants. */
+export function simulateDispatchLagwadRemaining(slotActualReady, dispatchQty) {
+  const ready = Math.max(0, Math.floor(Number(slotActualReady) || 0));
+  const qty = Math.max(0, Math.floor(Number(dispatchQty) || 0));
+  const subtracted = Math.min(qty, ready);
+  const actualReadyAfter = Math.max(0, ready - subtracted);
+  return {
+    subtracted,
+    actualReadyAfter,
+    lagwadRemainingAfter: actualReadyAfter,
+    actualPlantsDelta: 0,
+    actualReadyDelta: -subtracted,
+  };
+}
+
+/**
+ * Vehicle dispatch path: readyPositionOnly sync then subtract ready — actualPlants unchanged.
+ */
+export function simulateDispatchReadyOnSlot(line, dispatchQty) {
+  const avail = Math.max(0, Number(line?.availableQuantity) || 0);
+  const syncedBefore = Math.max(0, Number(line?.slotStockSyncedPlants) || 0);
+  const dispatch = Math.max(0, Math.floor(Number(dispatchQty) || 0));
+  const pending = computePendingSlotSync(avail, syncedBefore);
+  const syncedAfterSync = syncedBefore + pending;
+  const sub = computeReadyPositionSubtract(syncedAfterSync, dispatch);
+  return {
+    availBefore: avail,
+    availAfter: Math.max(0, avail - dispatch),
+    syncedBefore,
+    syncApplied: pending,
+    syncedAfterSync,
+    subtracted: sub.subtracted,
+    syncedAfter: sub.newSynced,
+    actualPlantsDelta: 0,
+  };
+}
+
+/** Vehicle unload path: restore ready synced only. */
+export function simulateUnloadReadyOnSlot(line, unloadQty) {
+  const avail = Math.max(0, Number(line?.availableQuantity) || 0);
+  const syncedBefore = Math.max(0, Number(line?.slotStockSyncedPlants) || 0);
+  const rest = computeReadyPositionRestore(avail, syncedBefore, unloadQty);
+  return {
+    avail,
+    syncedBefore,
+    restored: rest.restored,
+    syncedAfter: rest.newSynced,
+    actualPlantsDelta: 0,
+  };
+}
+
 /**
  * Pure rollup of secondary inward lines → per-slot shed totals (no DB).
  */
-function secondaryInwardCalendarReady(si, batchLean, todayStart) {
+export function secondaryInwardCalendarReady(si, batchLean, todayStart) {
   if (si?.readinessBypassAt != null && moment(si.readinessBypassAt).isValid()) {
     return true;
   }
@@ -251,6 +354,117 @@ export async function aggregateShedStockBySlotIds(slotObjectIds) {
   );
 }
 
+/** Days a line is past its expected ready date (0 when not yet due). */
+export function overdueDaysForExpectedReady(expectedMoment, todayStart) {
+  if (!expectedMoment?.isValid?.()) return 0;
+  if (todayStart.isBefore(expectedMoment, "day")) return 0;
+  return todayStart.diff(expectedMoment, "days");
+}
+
+/**
+ * One lagwad inward line as the ERP UI consumes it (drill-down + analysis).
+ * Shared by the single-slot breakdown and the multi-slot lagwad analysis.
+ */
+export function buildSecondaryInwardLine(si, po, batchLean, todayStart) {
+  const secDays = Number(batchLean?.secondaryPlantReadyDays) || 0;
+  const avail = Math.max(0, Number(si.availableQuantity) || 0);
+  const synced = Math.max(0, Number(si.slotStockSyncedPlants) || 0);
+  const totalQuantity = Math.max(0, Number(si.totalQuantity) || 0);
+  const inward = si.secondaryInwardDate
+    ? moment(si.secondaryInwardDate).startOf("day")
+    : null;
+  const expected =
+    si.expectedReadyDate && moment(si.expectedReadyDate).isValid()
+      ? moment(si.expectedReadyDate).startOf("day")
+      : inward
+        ? inward.clone().add(secDays, "days")
+        : null;
+  const bypass = si.readinessBypassAt != null;
+  const calendarEligible = Boolean(expected && todayStart.isSameOrAfter(expected, "day"));
+  const dispatchEligible = calendarEligible || bypass;
+  const pendingSlotSync = computePendingSlotSync(avail, synced);
+  const slotSyncStatus =
+    synced <= 0 ? "pending" : pendingSlotSync > 0 ? "partial" : "synced";
+  const split = splitLagwadQtyForSlot(totalQuantity);
+
+  return {
+    secondaryInwardId: si._id,
+    plantOutwardId: po._id,
+    secondaryInwardDate: si.secondaryInwardDate,
+    lagwadDate: si.secondaryInwardDate,
+    lagwadLabel: fmtDayLabel(si.secondaryInwardDate),
+    expectedReadyDate: expected ? expected.toISOString() : null,
+    expectedReadyLabel: expected ? expected.format("DD MMM YYYY") : null,
+    dateOfDispatch: si.dateOfDispatch ?? null,
+    dateOfDispatchLabel: fmtDayLabel(si.dateOfDispatch),
+    pollyhouse: si.pollyhouse,
+    size: si.size,
+    cavity: si.cavity,
+    numberOfTrays: si.numberOfTrays,
+    totalQuantity,
+    availableQuantity: avail,
+    slotStockSyncedPlants: synced,
+    onSlotPlants: synced,
+    pendingSlotSync,
+    slotSyncStatus,
+    dispatchEligible,
+    onSlot: synced > 0,
+    readinessBypassAt: si.readinessBypassAt ?? null,
+    // Lagwad analysis additions — 90/10 split, ready age and readiness state.
+    sell90: split.actualPlants,
+    mort10: split.expectedMortality,
+    calendarReady: calendarEligible,
+    overdueDays: calendarEligible ? overdueDaysForExpectedReady(expected, todayStart) : 0,
+    readyStatus: calendarEligible ? "ready" : bypass ? "legacy_bypass" : "awaiting",
+  };
+}
+
+/**
+ * Flat lagwad lines across many booking slots, each tagged with its slotId.
+ * One PlantOutward query for the whole selection (month / multi-slot analysis).
+ */
+export async function getSecondaryShedLinesForSlots(slotIds) {
+  const oids = (slotIds || [])
+    .filter((id) => id && mongoose.isValidObjectId(String(id)))
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
+  if (!oids.length) return [];
+
+  const wanted = new Set(oids.map((id) => String(id)));
+  const pos = await PlantOutward.find({
+    "secondaryInward.linkedBookingSlotId": { $in: oids },
+  })
+    .populate({
+      path: "batchId",
+      select: BATCH_SELECT,
+      populate: { path: "plantCmsId", select: "name subtypes" },
+    })
+    .lean();
+
+  const todayStart = moment().startOf("day");
+  const lines = [];
+
+  for (const po of pos) {
+    const batchLean = po.batchId && typeof po.batchId === "object" ? po.batchId : null;
+    const batchIdStr = batchLean?._id ? String(batchLean._id) : String(po.batchId || "");
+    const labels = plantSubtypeLabels(batchLean);
+
+    for (const si of po.secondaryInward || []) {
+      const slotKey = si.linkedBookingSlotId ? String(si.linkedBookingSlotId) : "";
+      if (!wanted.has(slotKey)) continue;
+      lines.push({
+        ...buildSecondaryInwardLine(si, po, batchLean, todayStart),
+        slotId: slotKey,
+        batchId: batchIdStr,
+        batchNumber: batchLean?.batchNumber ?? batchIdStr,
+        plantLabel: labels.plantLabel,
+        subtypeLabel: labels.subtypeLabel,
+      });
+    }
+  }
+
+  return lines;
+}
+
 /**
  * Batch-wise secondary shed lines linked to a booking slot (for ERP UI drill-down).
  */
@@ -337,60 +551,14 @@ export async function getSlotSecondaryShedBreakdown(slotId) {
       });
     }
     const group = batchGroups.get(batchIdStr);
-    const secDays = Number(batchLean?.secondaryPlantReadyDays) || 0;
 
     for (const si of po.secondaryInward || []) {
       if (String(si.linkedBookingSlotId) !== String(slotId)) continue;
-      const avail = Math.max(0, Number(si.availableQuantity) || 0);
-      const synced = Math.max(0, Number(si.slotStockSyncedPlants) || 0);
-      const inward = si.secondaryInwardDate
-        ? moment(si.secondaryInwardDate).startOf("day")
-        : null;
-      const expected =
-        si.expectedReadyDate && moment(si.expectedReadyDate).isValid()
-          ? moment(si.expectedReadyDate).startOf("day")
-          : inward
-            ? inward.clone().add(secDays, "days")
-            : null;
-      const bypass = si.readinessBypassAt != null;
-      const calendarEligible =
-        expected && today.isSameOrAfter(expected, "day");
-      const dispatchEligible = calendarEligible || bypass;
-      const pendingSlotSync = computePendingSlotSync(avail, synced);
-      const slotSyncStatus =
-        synced <= 0
-          ? "pending"
-          : pendingSlotSync > 0
-            ? "partial"
-            : "synced";
-
-      group.lines.push({
-        secondaryInwardId: si._id,
-        plantOutwardId: po._id,
-        secondaryInwardDate: si.secondaryInwardDate,
-        lagwadDate: si.secondaryInwardDate,
-        lagwadLabel: fmtDayLabel(si.secondaryInwardDate),
-        expectedReadyDate: expected ? expected.toISOString() : null,
-        expectedReadyLabel: expected ? expected.format("DD MMM YYYY") : null,
-        dateOfDispatch: si.dateOfDispatch ?? null,
-        dateOfDispatchLabel: fmtDayLabel(si.dateOfDispatch),
-        pollyhouse: si.pollyhouse,
-        size: si.size,
-        cavity: si.cavity,
-        numberOfTrays: si.numberOfTrays,
-        totalQuantity: Math.max(0, Number(si.totalQuantity) || 0),
-        availableQuantity: avail,
-        slotStockSyncedPlants: synced,
-        onSlotPlants: synced,
-        pendingSlotSync,
-        slotSyncStatus,
-        dispatchEligible,
-        onSlot: synced > 0,
-        readinessBypassAt: si.readinessBypassAt ?? null,
-      });
-      group.totalAvailableInShed += avail;
-      group.totalSyncedToSlot += synced;
-      group.totalPlantsInward += Math.max(0, Number(si.totalQuantity) || 0);
+      const line = buildSecondaryInwardLine(si, po, batchLean, today);
+      group.lines.push(line);
+      group.totalAvailableInShed += line.availableQuantity;
+      group.totalSyncedToSlot += line.slotStockSyncedPlants;
+      group.totalPlantsInward += line.totalQuantity;
     }
   }
 
@@ -432,6 +600,9 @@ export async function getSlotSecondaryShedBreakdown(slotId) {
 
   const actualPlants = Math.max(0, Number(slot.actualPlants) || 0);
   summary.actualPlants = actualPlants;
+  summary.expectedMortality = Math.max(0, Number(slot.expectedMortality) || 0);
+  summary.actualReadyPlantsStored = Math.max(0, Number(slot.actualReadyPlants) || 0);
+  summary.lagwadRemaining = Math.max(0, Number(slot.lagwadRemaining) || 0);
 
   return {
     slot: {
@@ -443,6 +614,9 @@ export async function getSlotSecondaryShedBreakdown(slotId) {
       subtypeName,
       year: plantSlotDoc.year,
       actualPlants,
+      expectedMortality: summary.expectedMortality,
+      actualReadyPlants: summary.actualReadyPlantsStored,
+      lagwadRemaining: summary.lagwadRemaining,
       availablePlants: Number(slot.availablePlants) || 0,
       plantsSowed: Number(slot.plantsSowed) || 0,
     },
@@ -519,14 +693,38 @@ export async function syncSecondaryInwardSlotStockAdd({
   dispatchEligible,
   force = false,
   performedBy,
+  /** Late ready: bump actualReady only (not actual/mortality again). */
+  readyPositionOnly = false,
 }) {
   const avail = Math.max(0, Number(siPlain?.availableQuantity) || 0);
   const synced = Math.max(0, Number(siPlain?.slotStockSyncedPlants) || 0);
-  const pending = computePendingSlotSync(avail, synced);
+  const lagwadSync = computeLagwadPendingSlotSync(avail, synced);
+  const pending = lagwadSync.pending;
   if (pending < 1) return { applied: 0, slotId: siPlain?.linkedBookingSlotId ?? null };
 
   if (!force && !dispatchEligible) {
     return { applied: 0, slotId: siPlain?.linkedBookingSlotId ?? null, skipped: "not_eligible" };
+  }
+
+  const todayStart = moment().startOf("day");
+  if (secondaryInwardCalendarReady(siPlain, batchLean, todayStart)) {
+    const currentSlotId = await resolveBookingSlotIdForSecondaryBatch(
+      batchLean,
+      todayStart.toDate()
+    );
+    const linked = siPlain?.linkedBookingSlotId
+      ? String(siPlain.linkedBookingSlotId)
+      : null;
+    if (currentSlotId && linked && linked !== String(currentSlotId)) {
+      return await relocateSecondaryInwardSlotOnCalendarReady({
+        session,
+        batchId,
+        secondaryInwardId,
+        batchLean,
+        siPlain,
+        performedBy,
+      });
+    }
   }
 
   let slotId = siPlain?.linkedBookingSlotId;
@@ -538,21 +736,70 @@ export async function syncSecondaryInwardSlotStockAdd({
     return { applied: 0, slotId: null, skipped: "no_slot" };
   }
 
+  const bn =
+    batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
+
+  if (readyPositionOnly) {
+    const loaded = await loadSlotSubdoc(slotId, session);
+    if (loaded && pending > 0) {
+      const { plantSlot, slot } = loaded;
+      const prevReady = Math.max(0, Number(slot.actualReadyPlants) || 0);
+      applyStockFieldUpdates(
+        slot,
+        {
+          actualReadyPlants: prevReady + pending,
+        },
+        performedBy,
+        `Secondary ready · batch ${bn} (+${pending} ready)`
+      );
+      if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
+        slot.setPerformer?.(performedBy);
+      }
+      await plantSlot.save({ session: session || undefined, validateBeforeSave: true });
+    }
+
+    await PlantOutward.updateOne(
+      { batchId, "secondaryInward._id": secondaryInwardId },
+      {
+        $set: {
+          "secondaryInward.$.linkedBookingSlotId": slotId,
+          "secondaryInward.$.slotStockSyncedPlants": synced + pending,
+        },
+      },
+      { session: session || undefined }
+    );
+    return { applied: pending, slotId: String(slotId), readyOnly: true };
+  }
+
   const loaded = await loadSlotSubdoc(slotId, session);
   if (!loaded) {
     return { applied: 0, slotId, skipped: "slot_not_found" };
   }
 
   const { plantSlot, slot } = loaded;
+  const split = splitLagwadQtyForSlot(avail);
+  const mortalityInc =
+    pending > 0 && split.actualPlants > 0
+      ? Math.round((split.expectedMortality * pending) / split.actualPlants)
+      : 0;
+  const eligibleReady = dispatchEligible;
   const prevActual = Math.max(0, Number(slot.actualPlants) || 0);
-  const nextActual = prevActual + pending;
-  const bn = batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
+  const prevMortality = Math.max(0, Number(slot.expectedMortality) || 0);
+  const prevReady = Math.max(0, Number(slot.actualReadyPlants) || 0);
+
+  const updates = {
+    actualPlants: prevActual + pending,
+    expectedMortality: prevMortality + mortalityInc,
+  };
+  if (eligibleReady && pending > 0) {
+    updates.actualReadyPlants = prevReady + pending;
+  }
 
   applyStockFieldUpdates(
     slot,
-    { actualPlants: nextActual },
+    updates,
     performedBy,
-    `Secondary shed ready · batch ${bn} (+${pending} plants)`
+    `Secondary lagwad · batch ${bn} (+${pending} actual, +${mortalityInc} exp. mortality)`
   );
 
   if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
@@ -572,11 +819,15 @@ export async function syncSecondaryInwardSlotStockAdd({
     { session: session || undefined }
   );
 
-  return { applied: pending, slotId: String(slotId) };
+  return {
+    applied: pending,
+    mortalityApplied: mortalityInc,
+    slotId: String(slotId),
+  };
 }
 
 /**
- * Subtract plants leaving secondary shed from slot.actualPlants (ERP sellable position).
+ * Dispatch: subtract actualReadyPlants on slot — actualPlants unchanged.
  */
 export async function subtractSecondaryInwardSlotStock({
   session,
@@ -597,21 +848,24 @@ export async function subtractSecondaryInwardSlotStock({
 
   const loaded = await loadSlotSubdoc(slotId, session);
   if (!loaded) {
-    return { subtracted: 0, skipped: "slot_not_found" };
+    return { subtracted: 0, skipped: "slot_not_found", slotId: String(slotId) };
   }
 
   const { plantSlot, slot } = loaded;
-  const prevActual = Math.max(0, Number(slot.actualPlants) || 0);
-  const nextActual = Math.max(0, prevActual - qty);
-  const synced = Math.max(0, Number(siPlain?.slotStockSyncedPlants) || 0);
-  const newSynced = Math.max(0, synced - qty);
-  const bn = batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
+  const prevReady = Math.max(0, Number(slot.actualReadyPlants) || 0);
+  const subtracted = Math.min(qty, prevReady);
+  if (subtracted < 1) {
+    return { subtracted: 0, skipped: "no_actual_ready", slotId: String(slotId) };
+  }
+
+  const bn =
+    batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
 
   applyStockFieldUpdates(
     slot,
-    { actualPlants: nextActual },
+    { actualReadyPlants: prevReady - subtracted },
     performedBy,
-    `Secondary dispatch · batch ${bn} (−${qty} plants)`
+    `Dispatch · batch ${bn} (−${subtracted} actual ready)`
   );
 
   if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
@@ -620,21 +874,16 @@ export async function subtractSecondaryInwardSlotStock({
 
   await plantSlot.save({ session: session || undefined, validateBeforeSave: true });
 
-  await PlantOutward.updateOne(
-    { batchId, "secondaryInward._id": secondaryInwardId },
-    {
-      $set: {
-        "secondaryInward.$.slotStockSyncedPlants": newSynced,
-      },
-    },
-    { session: session || undefined }
-  );
-
-  return { subtracted: qty, slotId: String(slotId) };
+  return {
+    subtracted,
+    slotId: String(slotId),
+    actualReadyOnly: true,
+    message: `Actual ready −${subtracted} (batch ${bn}); actualPlants unchanged`,
+  };
 }
 
 /**
- * Return plants unloaded from a vehicle back to the source booking slot (mirror of subtract).
+ * Unload: restore actualReadyPlants on slot (not actualPlants).
  */
 export async function restoreSecondaryInwardSlotStock({
   session,
@@ -655,21 +904,20 @@ export async function restoreSecondaryInwardSlotStock({
 
   const loaded = await loadSlotSubdoc(slotId, session);
   if (!loaded) {
-    return { restored: 0, skipped: "slot_not_found" };
+    return { restored: 0, skipped: "slot_not_found", slotId: String(slotId) };
   }
 
   const { plantSlot, slot } = loaded;
-  const prevActual = Math.max(0, Number(slot.actualPlants) || 0);
-  const nextActual = prevActual + qty;
-  const synced = Math.max(0, Number(siPlain?.slotStockSyncedPlants) || 0);
-  const newSynced = synced + qty;
-  const bn = batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
+  const prevReady = Math.max(0, Number(slot.actualReadyPlants) || 0);
+  const restored = qty;
+  const bn =
+    batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
 
   applyStockFieldUpdates(
     slot,
-    { actualPlants: nextActual },
+    { actualReadyPlants: prevReady + restored },
     performedBy,
-    `Secondary unload · batch ${bn} (+${qty} plants)`
+    `Unload · batch ${bn} (+${restored} actual ready)`
   );
 
   if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
@@ -678,17 +926,206 @@ export async function restoreSecondaryInwardSlotStock({
 
   await plantSlot.save({ session: session || undefined, validateBeforeSave: true });
 
-  await PlantOutward.updateOne(
-    { batchId, "secondaryInward._id": secondaryInwardId },
+  return {
+    restored,
+    slotId: String(slotId),
+    actualReadyOnly: true,
+    message: `Actual ready +${restored} (batch ${bn}); actualPlants unchanged`,
+  };
+}
+
+/** Move expected mortality → actual ready when plants survive. */
+export async function transferSlotExpectedMortalityToReady({
+  session,
+  slotId,
+  quantity,
+  performedBy,
+  source = "Mortality transfer to ready",
+}) {
+  const qty = Math.max(0, Math.floor(Number(quantity) || 0));
+  if (qty < 1) return { transferred: 0 };
+
+  const loaded = await loadSlotSubdoc(slotId, session);
+  if (!loaded) return { transferred: 0, skipped: "slot_not_found" };
+
+  const { plantSlot, slot } = loaded;
+  const prevMortality = Math.max(0, Number(slot.expectedMortality) || 0);
+  const transferred = Math.min(qty, prevMortality);
+  if (transferred < 1) {
+    return { transferred: 0, skipped: "no_expected_mortality" };
+  }
+
+  const prevReady = Math.max(0, Number(slot.actualReadyPlants) || 0);
+
+  applyStockFieldUpdates(
+    slot,
     {
-      $set: {
-        "secondaryInward.$.slotStockSyncedPlants": newSynced,
-      },
+      expectedMortality: prevMortality - transferred,
+      actualReadyPlants: prevReady + transferred,
     },
-    { session: session || undefined }
+    performedBy,
+    source
   );
 
-  return { restored: qty, slotId: String(slotId) };
+  if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
+    slot.setPerformer?.(performedBy);
+  }
+
+  await plantSlot.save({ session: session || undefined, validateBeforeSave: true });
+
+  return { transferred, slotId: String(slotId) };
+}
+
+/**
+ * Undo full lagwad sync on a slot: actual + mortality + ready for synced portion.
+ */
+export async function undoSecondaryInwardFullSlotSync({
+  session,
+  batchId,
+  secondaryInwardId,
+  batchLean,
+  siPlain,
+  performedBy,
+}) {
+  const synced = Math.max(0, Number(siPlain?.slotStockSyncedPlants) || 0);
+  if (synced < 1) return { undone: 0 };
+
+  const slotId = siPlain?.linkedBookingSlotId;
+  if (!slotId) return { undone: 0, skipped: "no_linked_slot" };
+
+  const avail = Math.max(0, Number(siPlain?.availableQuantity) || 0);
+  const split = splitLagwadQtyForSlot(avail);
+  const mortalityCalc =
+    split.actualPlants > 0
+      ? Math.round((split.expectedMortality * synced) / split.actualPlants)
+      : 0;
+
+  const loaded = await loadSlotSubdoc(slotId, session);
+  if (!loaded) {
+    return { undone: 0, skipped: "slot_not_found", slotId: String(slotId) };
+  }
+
+  const { plantSlot, slot } = loaded;
+  const prevActual = Math.max(0, Number(slot.actualPlants) || 0);
+  const prevMortality = Math.max(0, Number(slot.expectedMortality) || 0);
+  const prevReady = Math.max(0, Number(slot.actualReadyPlants) || 0);
+
+  const actualDec = Math.min(synced, prevActual);
+  const mortalityDec = Math.min(mortalityCalc, prevMortality);
+  const readyDec = Math.min(synced, prevReady);
+
+  const bn =
+    batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
+
+  applyStockFieldUpdates(
+    slot,
+    {
+      actualPlants: prevActual - actualDec,
+      expectedMortality: prevMortality - mortalityDec,
+      actualReadyPlants: prevReady - readyDec,
+    },
+    performedBy,
+    `Secondary slot undo · batch ${bn} (−${actualDec} actual, −${mortalityDec} mort, −${readyDec} ready)`
+  );
+
+  if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
+    slot.setPerformer?.(performedBy);
+  }
+
+  await plantSlot.save({ session: session || undefined, validateBeforeSave: true });
+
+  return {
+    undone: synced,
+    actualDec,
+    mortalityDec,
+    readyDec,
+    slotId: String(slotId),
+  };
+}
+
+/** Calendar ready: move full inward sync to current ongoing booking slot. */
+export async function relocateSecondaryInwardSlotOnCalendarReady({
+  session,
+  batchId,
+  secondaryInwardId,
+  batchLean,
+  siPlain,
+  performedBy,
+}) {
+  const today = moment().startOf("day");
+  if (!secondaryInwardCalendarReady(siPlain, batchLean, today)) {
+    return { applied: 0, skipped: "not_calendar_ready" };
+  }
+
+  const currentSlotId = await resolveBookingSlotIdForSecondaryBatch(
+    batchLean,
+    today.toDate()
+  );
+  if (!currentSlotId) {
+    return { applied: 0, skipped: "no_current_slot" };
+  }
+
+  const oldSlotId = siPlain?.linkedBookingSlotId
+    ? String(siPlain.linkedBookingSlotId)
+    : null;
+  const currentStr = String(currentSlotId);
+
+  if (oldSlotId === currentStr) {
+    return await syncSecondaryInwardSlotStockAdd({
+      session,
+      batchId,
+      secondaryInwardId,
+      batchLean,
+      siPlain,
+      dispatchEligible: true,
+      force: false,
+      performedBy,
+    });
+  }
+
+  const synced = Math.max(0, Number(siPlain?.slotStockSyncedPlants) || 0);
+  if (synced > 0 && oldSlotId) {
+    await undoSecondaryInwardFullSlotSync({
+      session,
+      batchId,
+      secondaryInwardId,
+      batchLean,
+      siPlain,
+      performedBy,
+    });
+    await PlantOutward.updateOne(
+      { batchId, "secondaryInward._id": secondaryInwardId },
+      { $set: { "secondaryInward.$.slotStockSyncedPlants": 0 } },
+      { session: session || undefined }
+    );
+    siPlain.slotStockSyncedPlants = 0;
+  }
+
+  await PlantOutward.updateOne(
+    { batchId, "secondaryInward._id": secondaryInwardId },
+    { $set: { "secondaryInward.$.linkedBookingSlotId": currentSlotId } },
+    { session: session || undefined }
+  );
+  siPlain.linkedBookingSlotId = currentSlotId;
+
+  const syncResult = await syncSecondaryInwardSlotStockAdd({
+    session,
+    batchId,
+    secondaryInwardId,
+    batchLean,
+    siPlain,
+    dispatchEligible: true,
+    force: true,
+    performedBy,
+  });
+
+  return {
+    ...syncResult,
+    oldSlotId,
+    newSlotId: currentStr,
+    relocated: true,
+    reason: "Calendar ready → current slot",
+  };
 }
 
 /**
@@ -707,12 +1144,11 @@ export async function relocateSecondaryInwardSlotOnBypass({
     : null;
 
   if (synced > 0 && oldSlotId) {
-    await subtractSecondaryInwardSlotStock({
+    await undoSecondaryInwardFullSlotSync({
       batchId,
       secondaryInwardId,
       batchLean,
       siPlain,
-      quantity: synced,
       performedBy,
     });
     await PlantOutward.updateOne(

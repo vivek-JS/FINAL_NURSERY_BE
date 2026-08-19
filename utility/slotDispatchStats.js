@@ -12,6 +12,8 @@ const EMPTY_STATS = {
   remainingToDispatch: 0,
   remainingRolledIn: 0,
   remainingNative: 0,
+  bookedCoveredPlants: 0,
+  bookedUncoveredPlants: 0,
 };
 
 /** Dispatched & completed column — DISPATCHED + COMPLETED only (full order qty). */
@@ -110,6 +112,12 @@ export function computeSlotDispatchStatsFromOrders(
     const remaining = getRemainingToDispatchQty(order);
     stats.remainingToDispatch += remaining;
     stats.remainingNative += remaining;
+    const qty = getOrderTotalPlants(order);
+    if (getDispatchedAndCompletedQty(order) > 0 || order?.sowingDone) {
+      stats.bookedCoveredPlants += qty;
+    } else if (remaining > 0) {
+      stats.bookedUncoveredPlants += remaining;
+    }
   }
 
   stats.totalBookedPlants = computeBookedPlantsFromOrders(
@@ -236,6 +244,10 @@ export function aggregateSlotDispatchStats(orders) {
       remainingToDispatch: prev.remainingToDispatch + orderStats.remainingToDispatch,
       remainingRolledIn: prev.remainingRolledIn + orderStats.remainingRolledIn,
       remainingNative: prev.remainingNative + orderStats.remainingNative,
+      bookedCoveredPlants:
+        (prev.bookedCoveredPlants || 0) + (orderStats.bookedCoveredPlants || 0),
+      bookedUncoveredPlants:
+        (prev.bookedUncoveredPlants || 0) + (orderStats.bookedUncoveredPlants || 0),
     });
   }
 

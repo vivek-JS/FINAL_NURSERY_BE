@@ -75,7 +75,7 @@ import {
   getOrderWiseSowing,
 } from "../controllers/sowingCardsLite.controller.js";
 import {
-  completeSowUpload,
+  optionalCompleteSowUpload,
   completeSowingRequest,
   editSowEntry,
   getIssuedSowingQueue,
@@ -150,9 +150,9 @@ router.put("/request/:id", updateSowingRequest); // Update sowing request (edit)
 router.post("/request/:id/issue", issueStockFromRequest); // Issue stock from sowing request (exact quantity)
 router.post(
   "/request/:requestId/complete-sow",
-  completeSowUpload.array("photos", 5),
+  optionalCompleteSowUpload,
   completeSowingRequest
-); // Complete sow: plants + labour + optional photos
+); // Complete sow: plants + labour + optional photos (JSON or multipart)
 router.patch("/request/:requestId/sow-entry", editSowEntry); // Edit sow date/ready days; reslot by ready date
 router.put("/request/:requestId/mark-issued", markRequestAsIssued); // Mark request as issued (after inventory outward)
 router.put("/request/:requestId/update-progress", updateSowingProgress); // Update sowing progress

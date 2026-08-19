@@ -10,6 +10,48 @@ import {
 /** Office qty edit within this window shows "recent" on shed app cards. */
 const OFFICE_EDIT_RECENT_MS = 24 * 60 * 60 * 1000;
 
+function inferCavitySize(crateRow) {
+  const name = String(crateRow?.cavityName || crateRow?.cavity || "").trim();
+  const parsed = parseInt(name, 10);
+  if (parsed > 0) return parsed;
+  const crateCount = Number(crateRow?.crateCount) || 0;
+  const plantCount = Number(crateRow?.plantCount) || 0;
+  if (crateCount > 0 && plantCount > 0) {
+    return Math.max(1, Math.round(plantCount / crateCount));
+  }
+  return 0;
+}
+
+function mapCrateForShedList(crateRow) {
+  if (!crateRow) return null;
+  const crateCount = Number(crateRow.crateCount) || 0;
+  const plantCount = Number(crateRow.plantCount) || 0;
+  const cavityName = String(crateRow.cavityName || crateRow.cavity || "").trim() || "—";
+  const cavitySize =
+    Number(crateRow.cavitySize) > 0
+      ? Number(crateRow.cavitySize)
+      : inferCavitySize(crateRow);
+  const numberPerCrate =
+    Number(crateRow.numberPerCrate) > 0 ? Number(crateRow.numberPerCrate) : 1;
+  const rawDetails = Array.isArray(crateRow.crateDetails) ? crateRow.crateDetails : [];
+  const crateDetails =
+    rawDetails.length > 0
+      ? rawDetails.map((d) => ({
+          crateCount: Number(d.crateCount) || 0,
+          plantCount: Number(d.plantCount) || 0,
+        }))
+      : undefined;
+
+  return {
+    cavityName,
+    crateCount,
+    plantCount,
+    cavitySize,
+    numberPerCrate,
+    crateDetails,
+  };
+}
+
 function unionDispatchOrderObjectIds(dispatchDoc) {
   const plain = dispatchDoc?.toObject?.() ?? dispatchDoc;
   const ids = new Set();
@@ -57,14 +99,11 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
     totalQty += q;
     let cratePieces = 0;
     const crates = (p.crates || []).map((c) => {
-      const crateCount = Number(c.crateCount || 0) || 0;
-      cratePieces += crateCount;
-      return {
-        cavityName: String(c.cavityName || c.cavity || "").trim() || "—",
-        crateCount,
-        plantCount: Number(c.plantCount || 0) || 0,
-      };
-    });
+      const mapped = mapCrateForShedList(c);
+      if (!mapped) return null;
+      cratePieces += mapped.crateCount;
+      return mapped;
+    }).filter(Boolean);
     const pid = p.plantId ? String(p.plantId) : "";
     const sid = p.subTypeId ? String(p.subTypeId) : "";
     const cms = pid ? plantCmsById.get(pid) : null;
@@ -92,11 +131,7 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
 
   const plantsDetailPreview = (d.plantsDetails || []).map((p) => {
     const q = Number(p.quantity ?? p.totalPlants ?? 0) || 0;
-    const crates = (p.crates || []).map((c) => ({
-      cavityName: String(c.cavityName || "").trim(),
-      crateCount: Number(c.crateCount || 0) || 0,
-      plantCount: Number(c.plantCount || 0) || 0,
-    }));
+    const crates = (p.crates || []).map((c) => mapCrateForShedList(c)).filter(Boolean);
     const shadeMap = new Map();
     for (const pd of p.pickupDetails || []) {
       const label = String(pd.shadeName || pd.shade || "").trim() || "—";
@@ -122,14 +157,11 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
     const label = orderLabelById.get(oid);
     let lineCratePieces = 0;
     const crates = (row.crates || []).map((c) => {
-      const cc = Number(c.crateCount || 0) || 0;
-      lineCratePieces += cc;
-      return {
-        cavityName: String(c.cavityName || c.cavity || "").trim() || "—",
-        crateCount: cc,
-        plantCount: Number(c.plantCount || 0) || 0,
-      };
-    });
+      const mapped = mapCrateForShedList(c);
+      if (!mapped) return null;
+      lineCratePieces += mapped.crateCount;
+      return mapped;
+    }).filter(Boolean);
     const dispatchQuantity = Number(row.dispatchQuantity || 0) || 0;
     const originalDispatchQuantity =
       row.originalDispatchQuantity != null &&

@@ -102,6 +102,42 @@ describe("secondaryShedSlotStock — shed rollup", () => {
     assert.strictEqual(a.shedReadyInShed, 80);
   });
 
+  it("rollup actualReadyPlants drops when slotStockSyncedPlants decreases (dispatch)", () => {
+    const pastInward = moment().subtract(30, "days").startOf("day").toDate();
+    const before = [
+      {
+        batchId: { _id: batch1, secondaryPlantReadyDays: 14 },
+        secondaryInward: [
+          {
+            linkedBookingSlotId: slotA,
+            secondaryInwardDate: pastInward,
+            availableQuantity: 100,
+            slotStockSyncedPlants: 100,
+          },
+        ],
+      },
+    ];
+    const mapBefore = rollupShedStockForSlots(before, [slotA]);
+    assert.strictEqual(mapBefore.get(slotA).actualReadyPlants, 100);
+
+    const after = [
+      {
+        batchId: { _id: batch1, secondaryPlantReadyDays: 14 },
+        secondaryInward: [
+          {
+            linkedBookingSlotId: slotA,
+            secondaryInwardDate: pastInward,
+            availableQuantity: 40,
+            slotStockSyncedPlants: 40,
+          },
+        ],
+      },
+    ];
+    const mapAfter = rollupShedStockForSlots(after, [slotA]);
+    assert.strictEqual(mapAfter.get(slotA).actualReadyPlants, 40);
+    assert.strictEqual(mapAfter.get(slotA).shedSyncedPlants, 40);
+  });
+
   it("ignores lines for slots not in the requested list", () => {
     const pos = [
       {

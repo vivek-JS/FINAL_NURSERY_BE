@@ -15,7 +15,7 @@ describe("computeSlotPhysicalMetrics", () => {
     assert.strictEqual(m.actualGapPlants, 100);
     assert.strictEqual(m.actualGapPct, 13);
     assert.strictEqual(m.actualSurplusPlants, 0);
-    assert.strictEqual(m.actualAvailable, 0);
+    assert.strictEqual(m.actualAvailable, 800);
     assert.strictEqual(m.rolledInAvailablePlants, 100);
   });
 
@@ -26,6 +26,21 @@ describe("computeSlotPhysicalMetrics", () => {
     );
     assert.strictEqual(m.actualGapPlants, 0);
     assert.strictEqual(m.actualSurplusPlants, 800);
-    assert.strictEqual(m.actualAvailable, 800);
+    assert.strictEqual(m.actualAvailable, 1200);
+  });
+
+  it("actualAvailable is actual minus dispatched even when queue is larger", () => {
+    const m = computeSlotPhysicalMetrics(
+      { actualPlants: 800 },
+      {
+        remainingNative: 900,
+        remainingRolledIn: 0,
+        remainingToDispatch: 900,
+        totalDispatchedPlants: 150,
+        totalAllDispatchedPlants: 150,
+      }
+    );
+    assert.strictEqual(m.actualAvailable, 650);
+    assert.strictEqual(m.actualGapPlants, 100);
   });
 });

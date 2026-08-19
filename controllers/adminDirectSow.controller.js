@@ -684,7 +684,7 @@ export const submitDirectSow = async (req, res) => {
       Number(orderResult.remainingUncovered) || 0
     );
     const orderCoveredPlants = Math.max(0, plantsSowed - excessPlants);
-    if (slotResult.appliedSlotId) {
+    if (slotResult.appliedSlotId && !isExcessOnly) {
       await recordExcessPlantsOnSlot(
         slotResult.appliedSlotId,
         request._id,
@@ -740,6 +740,8 @@ export const submitDirectSow = async (req, res) => {
           ? String(slotResult.appliedSlotId)
           : null,
         resolvedByReadyDate: Boolean(slotResult.resolvedByReadyDate),
+        actualPlants: slotResult.actualPlants ?? null,
+        expectedMortality: slotResult.expectedMortality ?? null,
       },
     });
   } catch (error) {

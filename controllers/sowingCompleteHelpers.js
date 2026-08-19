@@ -11,6 +11,41 @@ import {
   resolveReadyDays,
   parseLocalDate,
 } from "./sowingSlotReadyHelpers.js";
+import { sowQtySlotImpact, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
+
+function hasAppliedSplit(batch) {
+  return (
+    batch != null &&
+    (batch.actualPlantsApplied != null || batch.expectedMortalityApplied != null)
+  );
+}
+
+function reverseActualFromBatch(batch, qty) {
+  if (hasAppliedSplit(batch)) {
+    return Math.max(0, Number(batch.actualPlantsApplied) || 0);
+  }
+  return Math.max(0, Number(qty) || 0);
+}
+
+function reverseMortFromBatch(batch) {
+  return Math.max(0, Number(batch?.expectedMortalityApplied) || 0);
+}
+
+function reverseAvailableFromBatch(batch, qty) {
+  if (hasAppliedSplit(batch)) {
+    return Math.max(0, Number(batch.availablePlantsApplied) || 0);
+  }
+  const excess = Math.max(0, Number(batch?.excessPlants) || 0);
+  if (batch?.isExcessiveSowing) return Math.max(0, Number(qty) || 0);
+  return excess;
+}
+
+function reverseReservedFromBatch(batch) {
+  if (hasAppliedSplit(batch)) {
+    return Math.max(0, Number(batch.orderReservedPlantsApplied) || 0);
+  }
+  return Math.max(0, Number(batch?.orderCoveredPlants) || 0);
+}
 
 export function parseNum(v, fallback = 0) {
   const n = Number(v);
@@ -85,11 +120,22 @@ export async function recordExcessPlantsOnSlot(
   const rid = new mongoose.Types.ObjectId(sowingRequestId);
   const orderIds = toObjectIds(coveredOrderIds);
 
+  const impact = sowQtySlotImpact(qty + covered, {
+    excessPlants: qty,
+    orderCoveredPlants: covered,
+  });
+  const availInc = impact.availablePlants;
+  const reservedInc = impact.orderReservedPlants;
+
   const update = {
     $set: {
       "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].orderCoveredPlants":
         covered,
       "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].excessPlants": qty,
+      "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].availablePlantsApplied":
+        availInc,
+      "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].orderReservedPlantsApplied":
+        reservedInc,
       ...(orderIds.length
         ? {
             "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].linkedOrderIds":
@@ -99,12 +145,12 @@ export async function recordExcessPlantsOnSlot(
     },
   };
   const inc = {};
-  if (qty > 0) {
-    inc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] = qty;
-    inc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = qty;
+  if (availInc > 0) {
+    inc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] = availInc;
+    inc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = availInc;
   }
-  if (covered > 0) {
-    inc["subtypeSlots.$[st].slots.$[sl].orderReservedPlants"] = covered;
+  if (reservedInc > 0) {
+    inc["subtypeSlots.$[st].slots.$[sl].orderReservedPlants"] = reservedInc;
   }
   if (Object.keys(inc).length) update.$inc = inc;
 
@@ -127,15 +173,19 @@ export async function recordExcessPlantsOnSlot(
 
 async function pushBatchToSlot(slotId, { inc, sowingDateStr, plantReadyDateStr, readyDays, batch }) {
   const isExcess = Boolean(batch.isExcessiveSowing);
-  const partialExcess = Math.max(0, Number(batch.excessPlants) || 0);
+  const appliedAvail = batch.availablePlantsApplied;
+  const saleable =
+    appliedAvail != null && Number.isFinite(Number(appliedAvail))
+      ? Math.max(0, Number(appliedAvail) || 0)
+      : isExcess
+        ? sowQtySlotImpact(Number(batch.plantsSowed) || 0, { isExcess: true })
+            .availablePlants
+        : sowQtySlotImpact(0, {
+            excessPlants: Number(batch.excessPlants) || 0,
+          }).availablePlants;
   const incDoc = { ...inc };
-  if (isExcess) {
-    // Whole batch is excess sowing
-    incDoc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] =
-      Number(batch.plantsSowed) || 0;
-  } else if (partialExcess > 0) {
-    incDoc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] =
-      partialExcess;
+  if (saleable > 0) {
+    incDoc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] = saleable;
   }
   await PlantSlot.updateOne(
     { "subtypeSlots.slots._id": slotId },
@@ -286,6 +336,8 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
   const updates = [];
   let appliedReadyDays = readyDaysGlobal;
   let appliedReadyDate = plantReadyDateStr;
+  let appliedActual = 0;
+  let appliedMortality = 0;
 
   for (let i = 0; i < weights.length; i++) {
     const row = weights[i];
@@ -311,16 +363,19 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
     appliedReadyDays = readyDays;
     appliedReadyDate = readyDateStr;
 
-    // Physical always; saleable availablePlants only for full excess
-    // (order-cover path adds available/reserved after markOrdersSowed)
+    const impact = sowQtySlotImpact(addPlants, { isExcess });
+    appliedActual += impact.actualPlants;
+    appliedMortality += impact.expectedMortality;
+    // Physical sowed stays gross; usable pool is 90% actual + 10% expected mortality
     const inc = {
       "subtypeSlots.$[st].slots.$[sl].primarySowed": addPlants,
       "subtypeSlots.$[st].slots.$[sl].totalPlants": addPlants,
       "subtypeSlots.$[st].slots.$[sl].plantsSowed": addPlants,
-      "subtypeSlots.$[st].slots.$[sl].actualPlants": addPlants,
+      "subtypeSlots.$[st].slots.$[sl].actualPlants": impact.actualPlants,
+      "subtypeSlots.$[st].slots.$[sl].expectedMortality": impact.expectedMortality,
     };
-    if (isExcess) {
-      inc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = addPlants;
+    if (isExcess && impact.availablePlants > 0) {
+      inc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = impact.availablePlants;
     }
 
     const sowHistoryEntry = {
@@ -363,6 +418,10 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
           excessPlants: isExcess
             ? addPlants
             : Math.max(0, Number(meta.excessPlants) || 0),
+          actualPlantsApplied: impact.actualPlants,
+          expectedMortalityApplied: impact.expectedMortality,
+          availablePlantsApplied: isExcess ? impact.availablePlants : 0,
+          orderReservedPlantsApplied: 0,
           linkedOrderIds,
           slotHistory: [sowHistoryEntry],
         },
@@ -378,6 +437,8 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
     plantReadyDate: appliedReadyDate,
     appliedSlotId: resolvedReadySlot?.slotId || slotIds[0] || null,
     resolvedByReadyDate: Boolean(resolvedReadySlot),
+    actualPlants: appliedActual,
+    expectedMortality: appliedMortality,
   };
 }
 
@@ -395,31 +456,26 @@ export async function reverseSowBatchFromSlot(slotId, sowingRequestId, plantsSow
     (r) => String(r.slotId) === String(slotId)
   );
   const batch = found?.batch || null;
-  const covered = Math.max(0, Number(batch?.orderCoveredPlants) || 0);
-  const excess = Math.max(
-    0,
-    Number(batch?.excessPlants) ||
-      (batch?.isExcessiveSowing ? qty : 0) ||
-      0
-  );
-  const saleableRev = batch?.isExcessiveSowing
-    ? qty
-    : excess > 0
-      ? excess
-      : 0;
+  const actualRev = reverseActualFromBatch(batch, qty);
+  const mortRev = reverseMortFromBatch(batch);
+  const saleableRev = reverseAvailableFromBatch(batch, qty);
+  const reservedRev = reverseReservedFromBatch(batch);
 
   const inc = {
     "subtypeSlots.$[st].slots.$[sl].primarySowed": -qty,
     "subtypeSlots.$[st].slots.$[sl].totalPlants": -qty,
     "subtypeSlots.$[st].slots.$[sl].plantsSowed": -qty,
-    "subtypeSlots.$[st].slots.$[sl].actualPlants": -qty,
+    "subtypeSlots.$[st].slots.$[sl].actualPlants": -actualRev,
   };
+  if (mortRev > 0) {
+    inc["subtypeSlots.$[st].slots.$[sl].expectedMortality"] = -mortRev;
+  }
   if (saleableRev > 0) {
     inc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = -saleableRev;
     inc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] = -saleableRev;
   }
-  if (covered > 0) {
-    inc["subtypeSlots.$[st].slots.$[sl].orderReservedPlants"] = -covered;
+  if (reservedRev > 0) {
+    inc["subtypeSlots.$[st].slots.$[sl].orderReservedPlants"] = -reservedRev;
   }
 
   await PlantSlot.updateOne(
@@ -578,20 +634,28 @@ export async function editSowEntryOnSlots(request, opts = {}) {
     }
   }
 
+  const isExcess =
+    Boolean(request.isExcessiveSowing) && coveredTotal <= 0;
+  const impact = sowQtySlotImpact(plantsTotal, {
+    isExcess,
+    excessPlants: excessTotal,
+    orderCoveredPlants: coveredTotal,
+  });
+
   const editInc = {
     "subtypeSlots.$[st].slots.$[sl].primarySowed": plantsTotal,
     "subtypeSlots.$[st].slots.$[sl].totalPlants": plantsTotal,
     "subtypeSlots.$[st].slots.$[sl].plantsSowed": plantsTotal,
-    "subtypeSlots.$[st].slots.$[sl].actualPlants": plantsTotal,
+    "subtypeSlots.$[st].slots.$[sl].actualPlants": impact.actualPlants,
+    "subtypeSlots.$[st].slots.$[sl].expectedMortality": impact.expectedMortality,
   };
-  if (excessTotal > 0) {
-    editInc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = excessTotal;
-    editInc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] =
-      excessTotal;
+  if (impact.availablePlants > 0) {
+    editInc["subtypeSlots.$[st].slots.$[sl].availablePlants"] =
+      impact.availablePlants;
   }
-  if (coveredTotal > 0) {
+  if (impact.orderReservedPlants > 0) {
     editInc["subtypeSlots.$[st].slots.$[sl].orderReservedPlants"] =
-      coveredTotal;
+      impact.orderReservedPlants;
   }
 
   await pushBatchToSlot(toSlotId, {
@@ -608,6 +672,10 @@ export async function editSowEntryOnSlots(request, opts = {}) {
       packetsUsed: packetsTotal,
       orderCoveredPlants: coveredTotal,
       excessPlants: excessTotal,
+      actualPlantsApplied: impact.actualPlants,
+      expectedMortalityApplied: impact.expectedMortality,
+      availablePlantsApplied: impact.availablePlants,
+      orderReservedPlantsApplied: impact.orderReservedPlants,
       shedName,
       sowingRequestId: request._id,
       requestNumber: request.requestNumber,
@@ -634,6 +702,8 @@ export async function editSowEntryOnSlots(request, opts = {}) {
     toPlantReadyDays,
     sowingDate: sowingDateStr,
     plantsSowed: plantsTotal,
+    actualPlants: impact.actualPlants,
+    expectedMortality: impact.expectedMortality,
     history: histEntry,
   };
 }
@@ -689,10 +759,7 @@ export async function settleOutwardAndReturns(
   if (!request.outwardId) {
     return { used: 0, returned: 0, returnRequestIds: [], events: [] };
   }
-  const companyShare =
-    Number(request.packetsFromCompany) ||
-    (request.seedSource === "RAISING" ? 0 : Number(request.packetsRequested) || 0);
-  const canReturn = request.seedSource !== "RAISING" && companyShare > 0;
+  const canReturn = companyPacketShare(request) > 0;
 
   const outward = await InventoryOutward.findById(request.outwardId)
     .select("items")
@@ -947,6 +1014,8 @@ export async function reclaimExcessForCoveredOrders(
   }
   const sid = new mongoose.Types.ObjectId(slotId);
   const rid = new mongoose.Types.ObjectId(sowingRequestId);
+  const move = splitLagwadQtyForSlot(covered).actualPlants;
+  const leftoverAvail = splitLagwadQtyForSlot(excessLeft).actualPlants;
 
   await PlantSlot.updateOne(
     {
@@ -959,11 +1028,15 @@ export async function reclaimExcessForCoveredOrders(
           covered,
         "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].excessPlants":
           excessLeft,
+        "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].availablePlantsApplied":
+          leftoverAvail,
+        "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].orderReservedPlantsApplied":
+          move,
       },
       $inc: {
-        "subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants": -covered,
-        "subtypeSlots.$[st].slots.$[sl].availablePlants": -covered,
-        "subtypeSlots.$[st].slots.$[sl].orderReservedPlants": covered,
+        "subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants": -move,
+        "subtypeSlots.$[st].slots.$[sl].availablePlants": -move,
+        "subtypeSlots.$[st].slots.$[sl].orderReservedPlants": move,
       },
     },
     {

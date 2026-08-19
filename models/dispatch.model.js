@@ -387,6 +387,24 @@ const dispatchSchema = new Schema(
         generatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
       },
     ],
+    /** Load photos from shed mobile app (camera captures per load session). */
+    shedLoadPhotoLog: {
+      type: [
+        {
+          photos: [
+            {
+              url: { type: String, trim: true, required: true },
+              uploadedAt: { type: Date, default: Date.now },
+            },
+          ],
+          plantsLoaded: { type: Number, default: 0, min: 0 },
+          remarks: { type: String, default: "" },
+          uploadedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+          uploadedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
   },
   {
     timestamps: true,

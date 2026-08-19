@@ -28,11 +28,14 @@ import {
   getOrdersTransferTargets,
   transferOrders,
   getStockEntry,
+  getLagwadAnalysisHandler,
   getSlotSecondaryShedBreakdownHandler,
+  transferSlotExpectedMortalityHandler,
   bulkStockEntry,
   runPastDueSlotRolloverController,
   getRollExpiredAvailableSources,
   postRollExpiredAvailable,
+  getSlotReadyRollLog,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -43,9 +46,15 @@ slotRouter.get("/slots/get-plants", getPlantNames);
 slotRouter.get("/slots/subtyps", getSubtypesByPlant);
 slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.get("/slots/stock-entry", getStockEntry);
+slotRouter.get("/slots/lagwad-analysis", getLagwadAnalysisHandler);
 slotRouter.get(
   "/slots/:slotId/secondary-shed-breakdown",
   getSlotSecondaryShedBreakdownHandler
+);
+slotRouter.get("/slots/:slotId/ready-roll-log", getSlotReadyRollLog);
+slotRouter.post(
+  "/slots/:slotId/transfer-expected-mortality",
+  transferSlotExpectedMortalityHandler
 );
 slotRouter.put("/slots/stock-entry/bulk", bulkStockEntry);
 slotRouter.get("/slots/simple", getSimpleSlots);

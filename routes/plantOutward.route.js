@@ -43,6 +43,7 @@ import {
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
   getSowReadyEntries,
+  getDispatchStockLines,
   getSecondaryPolyhouseStock,
   getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,
@@ -51,6 +52,7 @@ import {
   getSecondaryVehicleLoadedLines,
   postSecondaryVehicleUnload,
 } from "../controllers/plantOutward.controller.js";
+import { optionalVehicleLoadPhotosUpload } from "../middleware/vehicleLoadPhotos.middleware.js";
 
 const router = express.Router();
 
@@ -150,6 +152,7 @@ router.post(
 );
 router.post(
   "/secondary/vehicle-dispatch/:dispatchId/load",
+  optionalVehicleLoadPhotosUpload,
   postSecondaryVehicleLoad
 );
 router.get(
@@ -160,6 +163,7 @@ router.post(
   "/secondary/vehicle-dispatch/:dispatchId/unload",
   postSecondaryVehicleUnload
 );
+router.get("/secondary/dispatch-stock-lines", getDispatchStockLines);
 router.get("/secondary/polyhouse-stock", getSecondaryPolyhouseStock);
 router.get(
   "/secondary/farmer-dispatch/pickup-batch-suggestions",

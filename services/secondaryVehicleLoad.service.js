@@ -504,17 +504,11 @@ export function splitPlantsAcrossOrdersFifo(plants, orderIds, remainingByOrderId
     const rem =
       remainingByOrderId && remainingByOrderId.has(oid)
         ? Math.max(0, Math.floor(Number(remainingByOrderId.get(oid)) || 0))
-        : budget;
-    const take = Math.min(budget, rem > 0 ? rem : budget);
-    if (take < 1) continue;
+        : 0;
+    if (rem < 1) continue;
+    const take = Math.min(budget, rem);
     out.push({ orderId: oid, plants: take });
     budget -= take;
-  }
-  if (budget > 0 && out.length) {
-    out[out.length - 1].plants += budget;
-    budget = 0;
-  } else if (budget > 0 && ids.length) {
-    out.push({ orderId: ids[0], plants: budget });
   }
   return out;
 }
@@ -561,11 +555,16 @@ export function resolveOrderAllocationsForSelection(
     const remMap = new Map();
     for (const oid of orderIds) {
       const rem = dispatchLineRemainingPlants(dispatchDoc, oid);
-      remMap.set(oid, rem != null ? rem : plants);
+      remMap.set(oid, rem != null ? rem : 0);
     }
-    return {
-      allocations: splitPlantsAcrossOrdersFifo(plants, orderIds, remMap),
-    };
+    const allocations = splitPlantsAcrossOrdersFifo(plants, orderIds, remMap);
+    const sum = allocations.reduce((s, a) => s + a.plants, 0);
+    if (sum < plants) {
+      return {
+        error: `Only ${sum} plants can be assigned across selected orders (requested ${plants})`,
+      };
+    }
+    return { allocations };
   }
 
   if (linkedOrderId) {
@@ -1147,6 +1146,7 @@ async function executeOneSecondaryOutwardLine({
       siPlain,
       dispatchEligible: dispatchElig.dispatchEligible,
       force: true,
+      readyPositionOnly: true,
       performedBy,
     });
     const siForSubtract = {

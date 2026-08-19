@@ -372,6 +372,19 @@ describe("secondaryVehicleLoad — order ↔ batch allocations", () => {
     assert.equal(parts[0].plants, 50);
     assert.equal(parts[1].orderId, "o2");
     assert.equal(parts[1].plants, 50);
+    const total = parts.reduce((s, p) => s + p.plants, 0);
+    assert.equal(total, 100);
+  });
+
+  it("splitPlantsAcrossOrdersFifo does not exceed order caps", () => {
+    const rem = new Map([
+      ["o1", 50],
+      ["o2", 30],
+    ]);
+    const parts = splitPlantsAcrossOrdersFifo(100, ["o1", "o2"], rem);
+    assert.equal(parts[0].plants, 50);
+    assert.equal(parts[1].plants, 30);
+    assert.equal(parts.reduce((s, p) => s + p.plants, 0), 80);
   });
 
   it("resolveOrderAllocationsForSelection errors when sums mismatch", () => {

@@ -26,6 +26,7 @@ import {
   aggregateShedStockBySlotIds,
   computeActualAvailable,
   getSlotSecondaryShedBreakdown,
+  transferSlotExpectedMortalityToReady,
 } from "../services/secondaryShedSlotStock.service.js";
 import { slotWindowToDeliveryUtcRange } from "../utility/findDeliverySlot.js";
 import {
@@ -40,12 +41,15 @@ import {
   sumDispatchedCrossSlotOntoSlot,
 } from "../utility/slotDispatchStats.js";
 import { fetchSlotAvailabilityReport } from "../services/availabilityOverview.service.js";
+import { getLagwadAnalysis } from "../services/lagwadAnalysis.service.js";
 import {
   runPastDueSlotRollover,
 } from "../services/pastDueSlotRollover.service.js";
 import {
   listRollExpiredAvailableSources,
   runRollExpiredSlotAvailable,
+  listReadyRollLogForSlot,
+  summarizeReadyRollForSlot,
 } from "../services/rollExpiredSlotAvailable.service.js";
 import {
   aggregatePastDueMetricsForSlotGroup,
@@ -392,7 +396,14 @@ export const getPlantNames = async (req, res) => {
           totalPlants: plantWithSlots ? plantWithSlots.totalPlants : 0,
           totalBookedPlants: plantWithSlots ? plantWithSlots.totalBookedPlants : 0,
           hasSlots: !!plantWithSlots,
-          sowingAllowed: plant.sowingAllowed || false // Include sowingAllowed flag
+          sowingAllowed: plant.sowingAllowed || false,
+          subtypes: (plant.subtypes || []).map((s) => ({
+            _id: s._id,
+            name: s.name,
+            rates: s.rates,
+            monthlyRates: s.monthlyRates,
+            raisingRate: Number(s.raisingRate) || 0,
+          })),
         };
       });
 
@@ -405,7 +416,14 @@ export const getPlantNames = async (req, res) => {
         totalPlants: 0,
         totalBookedPlants: 0,
         hasSlots: false,
-        sowingAllowed: plant.sowingAllowed || false // Include sowingAllowed flag
+        sowingAllowed: plant.sowingAllowed || false,
+        subtypes: (plant.subtypes || []).map((s) => ({
+          _id: s._id,
+          name: s.name,
+          rates: s.rates,
+          monthlyRates: s.monthlyRates,
+          raisingRate: Number(s.raisingRate) || 0,
+        })),
       }));
 
       res.status(200).json(result);
@@ -451,6 +469,10 @@ export const getSubtypesByPlant = async (req, res) => {
           _id: "$subtypeSlots.subtypeId", // Group by subtypeId
           totalPlants: { $sum: "$subtypeSlots.slots.totalPlants" }, // Sum totalPlants across all slots for this subtype
           totalBookedPlants: { $sum: "$subtypeSlots.slots.totalBookedPlants" }, // Sum totalBookedPlants across all slots for this subtype
+          totalActualPlants: { $sum: "$subtypeSlots.slots.actualPlants" },
+          totalExpectedMortality: { $sum: "$subtypeSlots.slots.expectedMortality" },
+          totalActualReadyPlants: { $sum: "$subtypeSlots.slots.actualReadyPlants" },
+          totalLagwadRemaining: { $sum: "$subtypeSlots.slots.lagwadRemaining" },
         },
       },
       {
@@ -490,6 +512,10 @@ export const getSubtypesByPlant = async (req, res) => {
           raisingRate: "$subtypeData.raisingRate", // Rate when farmer gives seed
           totalPlants: 1, // Include the sum of totalPlants
           totalBookedPlants: 1, // Include the sum of totalBookedPlants
+          totalActualPlants: 1,
+          totalExpectedMortality: 1,
+          totalActualReadyPlants: 1,
+          totalLagwadRemaining: 1,
         },
       },
       {
@@ -521,6 +547,10 @@ export const getSubtypesByPlant = async (req, res) => {
             raisingRate: s.raisingRate || 0,
             totalPlants: 0,
             totalBookedPlants: 0,
+            totalActualPlants: 0,
+            totalExpectedMortality: 0,
+            totalActualReadyPlants: 0,
+            totalLagwadRemaining: 0,
           }))
           .sort((a, b) =>
             String(a.subtypeName).localeCompare(String(b.subtypeName))
@@ -528,14 +558,41 @@ export const getSubtypesByPlant = async (req, res) => {
       );
     }
 
+    const plantCms = await PlantCms.findById(plantObjectId).select("subtypes").lean();
+    const cmsById = new Map(
+      (plantCms?.subtypes || []).map((s) => [String(s._id), s])
+    );
+    for (const st of stats) {
+      const cms = cmsById.get(String(st.subtypeId));
+      if (!cms) continue;
+      st.raisingRate = Number(cms.raisingRate) || 0;
+      if (!st.monthlyRates?.length && cms.monthlyRates?.length) {
+        st.monthlyRates = cms.monthlyRates;
+      }
+      if ((st.rate == null || (Array.isArray(st.rate) && !st.rate.length)) && cms.rates?.length) {
+        st.rate = cms.rates;
+      }
+    }
+
     // Calculate the overall totals for all subtypes
     const overallTotals = stats.reduce(
       (totals, subtype) => {
         totals.totalPlants += subtype.totalPlants;
         totals.totalBookedPlants += subtype.totalBookedPlants;
+        totals.totalActualPlants += subtype.totalActualPlants || 0;
+        totals.totalExpectedMortality += subtype.totalExpectedMortality || 0;
+        totals.totalActualReadyPlants += subtype.totalActualReadyPlants || 0;
+        totals.totalLagwadRemaining += subtype.totalLagwadRemaining || 0;
         return totals;
       },
-      { totalPlants: 0, totalBookedPlants: 0 }
+      {
+        totalPlants: 0,
+        totalBookedPlants: 0,
+        totalActualPlants: 0,
+        totalExpectedMortality: 0,
+        totalActualReadyPlants: 0,
+        totalLagwadRemaining: 0,
+      }
     );
 
     // Response with subtypes and overall totals
@@ -2432,7 +2489,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       ]
     })
       .select(
-        "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover pastDueSlotRolloverAt deliveryDate plantName plantSubtype"
+        "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover pastDueSlotRolloverAt deliveryDate plantName plantSubtype sowingDone"
       )
       .lean();
 
@@ -2472,7 +2529,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
       }
       deliveryDateOrders = await Order.find(deliveryMatch)
         .select(
-          "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover pastDueSlotRolloverAt deliveryDate plantName plantSubtype"
+          "_id orderId numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus dealer quotaSource bookingSlot oldDeliveryDate originalBookingSlot dispatchedFromAnotherSlot pastDueSlotRollover pastDueSlotRolloverAt deliveryDate plantName plantSubtype sowingDone"
         )
         .lean();
     }
@@ -2664,10 +2721,29 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         const shed = shedBySlot.get(slotId) || {};
         slot.shedSyncedPlants = shed.shedSyncedPlants ?? 0;
         slot.shedAvailableInShed = shed.shedAvailableInShed ?? 0;
-        slot.actualReadyPlants = shed.actualReadyPlants ?? 0;
+        slot.shedRollupReadyPlants = shed.actualReadyPlants ?? 0;
+        slot.actualReadyPlants =
+          Math.max(
+            Number(slot.actualReadyPlants) || 0,
+            shed.actualReadyPlants ?? 0
+          );
         slot.shedReadyInShed = shed.shedReadyInShed ?? 0;
+        slot.expectedMortality = Number(slot.expectedMortality) || 0;
+        slot.lagwadRemaining = Number(slot.lagwadRemaining) || 0;
         slot.linkedBatchCount = shed.linkedBatchCount ?? 0;
         slot.shedLineCount = shed.lineCount ?? 0;
+
+        slot.rolledInActualReadyPlants =
+          Number(slot.rolledInActualReadyPlants) || 0;
+        try {
+          slot.readyRollSummary = await summarizeReadyRollForSlot(slotId);
+        } catch {
+          slot.readyRollSummary = {
+            totalRolledReady: 0,
+            overdueLines: 0,
+            latestRollAt: null,
+          };
+        }
 
         slot.isOverflow = slot.availablePlants < 0;
         slot.overflow = slot.availablePlants < 0;
@@ -2984,6 +3060,40 @@ export const getStockEntry = async (req, res) => {
   }
 };
 
+/**
+ * GET /slots/lagwad-analysis
+ * Combined lagwad view across any set of months / slot windows for one subtype.
+ * `months` and `slotIds` accept comma-separated values; both are optional.
+ */
+export const getLagwadAnalysisHandler = async (req, res) => {
+  try {
+    const { plantId, subtypeId, year, months, slotIds, metaOnly } = req.query;
+    if (!plantId || !subtypeId || !year) {
+      return res.status(400).json({
+        success: false,
+        message: "plantId, subtypeId and year are required.",
+      });
+    }
+
+    const data = await getLagwadAnalysis({
+      plantId,
+      subtypeId,
+      year,
+      months,
+      slotIds,
+      metaOnly: metaOnly === "1" || metaOnly === "true",
+    });
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("getLagwadAnalysisHandler:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to build lagwad analysis",
+    });
+  }
+};
+
 /** Secondary shed batches + sowing dates linked to a booking slot (ERP drill-down). */
 export const getSlotSecondaryShedBreakdownHandler = async (req, res) => {
   try {
@@ -3009,6 +3119,58 @@ export const getSlotSecondaryShedBreakdownHandler = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching slot secondary shed breakdown:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error.",
+      error: error.message,
+    });
+  }
+};
+
+/** Transfer expected mortality → actual ready (plants survived). */
+export const transferSlotExpectedMortalityHandler = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    const quantity = req.body?.quantity;
+    if (!slotId || !mongoose.Types.ObjectId.isValid(String(slotId))) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid slotId is required.",
+      });
+    }
+
+    const performedBy = req.user?._id;
+    const result = await transferSlotExpectedMortalityToReady({
+      slotId,
+      quantity,
+      performedBy,
+      source: "Expected mortality → ready (ERP)",
+    });
+
+    if (result.skipped === "slot_not_found") {
+      return res.status(404).json({ success: false, message: "Slot not found." });
+    }
+    if (result.skipped === "no_expected_mortality") {
+      return res.status(400).json({
+        success: false,
+        message: "No expected mortality on this slot to transfer.",
+      });
+    }
+    if (result.transferred < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid transfer quantity.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      transferred: result.transferred,
+      slotId: result.slotId,
+      message: `Transferred ${result.transferred} plants from expected mortality to actual ready.`,
+    });
+  } catch (error) {
+    console.error("Error transferring expected mortality:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error.",
@@ -5084,6 +5246,29 @@ export const postRollExpiredAvailable = async (req, res) => {
     return res.status(400).json({
       success: false,
       message: error.message || "Roll expired available failed",
+    });
+  }
+};
+
+/** GET /slots/:slotId/ready-roll-log */
+export const getSlotReadyRollLog = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    if (!slotId) {
+      return res.status(400).json({ success: false, message: "slotId is required" });
+    }
+    const limit = Math.min(500, Math.max(1, Number(req.query?.limit) || 100));
+    const entries = await listReadyRollLogForSlot(slotId, { limit });
+    const summary = await summarizeReadyRollForSlot(slotId);
+    return res.status(200).json({
+      success: true,
+      data: { entries, summary },
+    });
+  } catch (error) {
+    console.error("getSlotReadyRollLog:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to load ready roll log",
     });
   }
 };

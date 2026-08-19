@@ -79,6 +79,8 @@ import {
   executeSowReadyVehicleLoad,
   isPlantSowingAllowed,
 } from "../services/secondarySowReadyDispatch.service.js";
+import { appendVehicleLoadPhotos } from "../services/vehicleLoadPhotos.service.js";
+import { parseVehicleLoadRequestBody } from "../middleware/vehicleLoadPhotos.middleware.js";
 import PlantCms from "../models/plantCms.model.js";
 
 const BATCH_SELECT_FIELDS =
@@ -4787,6 +4789,7 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
         siPlain,
         dispatchEligible: dispatchElig.dispatchEligible,
         force: dispatchElig.dispatchEligible || skipReadinessBecauseVehicle,
+        readyPositionOnly: true,
         performedBy: performedByOid,
       });
       syncApplied = syncResult?.applied ?? 0;
@@ -5760,6 +5763,87 @@ const getSowReadyEntries = catchAsync(async (req, res, next) => {
 });
 
 /**
+ * Paginated FIFO lagwad stock lines for shed dispatch load (search + shed filter).
+ */
+const getDispatchStockLines = catchAsync(async (req, res, next) => {
+  const plantCmsId = req.query.plantCmsId ?? req.query.plantName;
+  const plantSubtypeId = req.query.plantSubtypeId ?? req.query.plantSubtype;
+
+  if (!plantCmsId || !plantSubtypeId) {
+    return next(new AppError("plantCmsId and plantSubtypeId are required", 400));
+  }
+  if (
+    !mongoose.isValidObjectId(String(plantCmsId)) ||
+    !mongoose.isValidObjectId(String(plantSubtypeId))
+  ) {
+    return next(new AppError("plantCmsId and plantSubtypeId must be valid ObjectIds", 400));
+  }
+
+  const pageNum = Math.max(1, Number(req.query.page) || 1);
+  const limitNum = Math.min(50, Math.max(1, Number(req.query.limit) || 25));
+  const pollyhouse = String(req.query.pollyhouse ?? req.query.pollyHouse ?? "").trim();
+  const search = String(req.query.search ?? "").trim();
+  const dispatchEligibleOnly =
+    req.query.dispatchEligibleOnly !== "false" && req.query.dispatchEligibleOnly !== "0";
+
+  let lines = (
+    await collectSecondaryInwardSuggestionsForPlantSubtype(plantCmsId, plantSubtypeId)
+  ).suggestions;
+
+  if (dispatchEligibleOnly) {
+    lines = lines.filter((ln) => ln.dispatchEligible);
+  }
+  if (pollyhouse) {
+    lines = lines.filter((ln) => pollyhouseMatchesFilter(ln.pollyhouse, pollyhouse));
+  }
+  if (search) {
+    const q = search.toLowerCase();
+    lines = lines.filter((ln) => {
+      const parts = [
+        ln.pollyhouse,
+        ln.batchNumber,
+        ln.plantLabel,
+        ln.subtypeLabel,
+      ].map((s) => String(s ?? "").toLowerCase());
+      return parts.some((p) => p && p.includes(q));
+    });
+  }
+
+  const total = lines.length;
+  const totalPages = Math.max(1, Math.ceil(total / limitNum));
+  const skip = (pageNum - 1) * limitNum;
+  const items = lines.slice(skip, skip + limitNum);
+
+  const shedMap = new Map();
+  for (const ln of lines) {
+    const ph = String(ln.pollyhouse || "").trim();
+    if (!ph) continue;
+    const cur = shedMap.get(ph) || { pollyhouse: ph, plants: 0, lineCount: 0 };
+    cur.plants += Number(ln.availableQuantity) || 0;
+    cur.lineCount += 1;
+    shedMap.set(ph, cur);
+  }
+  const byShed = [...shedMap.values()].sort((a, b) => b.plants - a.plants);
+
+  return res.status(200).json(
+    generateResponse(
+      "Success",
+      "Dispatch stock lines",
+      {
+        items,
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages,
+        hasMore: pageNum < totalPages,
+        byShed,
+      },
+      undefined
+    )
+  );
+});
+
+/**
  * Live secondary shed stock for a pollyhouse (optional plant/subtype filter).
  */
 const getSecondaryPolyhouseStock = catchAsync(async (req, res, next) => {
@@ -5837,6 +5921,7 @@ const previewSecondaryVehicleLoadHandler = catchAsync(async (req, res, next) => 
 /** POST atomic FIFO vehicle load from secondary shed (or sow-ready slots). */
 const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
   const { dispatchId } = req.params;
+  const body = parseVehicleLoadRequestBody(req.body || {});
   const {
     pollyhouse,
     plants,
@@ -5848,7 +5933,7 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
     sowReadySelections,
     source,
     directShedLoad,
-  } = req.body || {};
+  } = body;
   const userId = req.user?._id || req.user?.id;
   const performedBy =
     userId && mongoose.isValidObjectId(String(userId)) ? userId : undefined;
@@ -5858,8 +5943,9 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
     source === "SOW_READY" ||
     sowSels.some((s) => s?.slotId && Number(s?.plants) > 0);
 
+  let result;
   if (isSowReady) {
-    const result = await executeSowReadyVehicleLoad({
+    result = await executeSowReadyVehicleLoad({
       dispatchId,
       plantRowIndex,
       sowReadySelections: sowSels,
@@ -5868,27 +5954,40 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
       remarks,
       performedBy,
     });
-    return res.status(200).json(
-      generateResponse("Success", "Vehicle loaded from sow-ready slots", result, undefined)
-    );
+  } else {
+    result = await executeSecondaryVehicleLoad({
+      dispatchId,
+      pollyhouse,
+      plants,
+      shedLoads,
+      inwardSelections,
+      plantRowIndex,
+      linkedOrderId,
+      remarks,
+      performedBy,
+      directShedLoad:
+        Boolean(directShedLoad) || source === "SHED_DISPATCH",
+      collectSuggestionsFn: collectSecondaryInwardSuggestionsForPlantSubtype,
+    });
   }
 
-  const result = await executeSecondaryVehicleLoad({
+  const photoSave = await appendVehicleLoadPhotos({
     dispatchId,
-    pollyhouse,
-    plants,
-    shedLoads,
-    inwardSelections,
-    plantRowIndex,
-    linkedOrderId,
+    files: req.files,
+    plantsLoaded: result?.totalLoaded,
     remarks,
     performedBy,
-    directShedLoad:
-      Boolean(directShedLoad) || source === "SHED_DISPATCH",
-    collectSuggestionsFn: collectSecondaryInwardSuggestionsForPlantSubtype,
   });
+  if (photoSave.urls.length) {
+    result = { ...result, photoUrls: photoSave.urls };
+  }
+
+  const message = isSowReady
+    ? "Vehicle loaded from sow-ready slots"
+    : "Vehicle loaded from shed";
+
   return res.status(200).json(
-    generateResponse("Success", "Vehicle loaded from shed", result, undefined)
+    generateResponse("Success", message, result, undefined)
   );
 });
 
@@ -6151,6 +6250,7 @@ export {
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
   getSowReadyEntries,
+  getDispatchStockLines,
   getSecondaryPolyhouseStock,
   getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,

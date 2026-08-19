@@ -195,7 +195,9 @@ export const createProduct = async (req, res) => {
         const { default: PlantCms } = await import('../models/plantCms.model.js');
         const plant = await PlantCms.findById(productObj.plantId).select('name subtypes').lean();
         if (plant) {
-          const subtype = plant.subtypes?.id(productObj.subtypeId);
+          const subtype = plant.subtypes?.find?.(
+            (st) => String(st._id) === String(productObj.subtypeId)
+          );
           if (subtype) {
             productObj.subtype = {
               _id: subtype._id,
@@ -266,7 +268,9 @@ export const getAllProducts = async (req, res) => {
           try {
             const plant = await PlantCms.findById(product.plantId).select('name subtypes').lean();
             if (plant) {
-              const subtype = plant.subtypes?.id(product.subtypeId);
+              const subtype = plant.subtypes?.find?.(
+                (st) => String(st._id) === String(product.subtypeId)
+              );
               if (subtype) {
                 product.subtype = {
                   _id: subtype._id,
@@ -324,7 +328,9 @@ export const getProductById = async (req, res) => {
           
           // Add subtype if subtypeId exists
           if (product.subtypeId) {
-            const subtype = plant.subtypes?.id(product.subtypeId);
+            const subtype = plant.subtypes?.find?.(
+              (st) => String(st._id) === String(product.subtypeId)
+            );
             if (subtype) {
               product.subtype = {
                 _id: subtype._id,
@@ -670,7 +676,9 @@ export const updateProduct = async (req, res) => {
         const { default: PlantCms } = await import('../models/plantCms.model.js');
         const plant = await PlantCms.findById(productObj.plantId).select('name subtypes').lean();
         if (plant) {
-          const subtype = plant.subtypes?.id(productObj.subtypeId);
+          const subtype = plant.subtypes?.find?.(
+            (st) => String(st._id) === String(productObj.subtypeId)
+          );
           if (subtype) {
             productObj.subtype = {
               _id: subtype._id,
@@ -756,7 +764,9 @@ export const getLowStockProducts = async (req, res) => {
           try {
             const plant = await PlantCms.findById(product.plantId).select('name subtypes').lean();
             if (plant) {
-              const subtype = plant.subtypes?.id(product.subtypeId);
+              const subtype = plant.subtypes?.find?.(
+                (st) => String(st._id) === String(product.subtypeId)
+              );
               if (subtype) {
                 product.subtype = {
                   _id: subtype._id,

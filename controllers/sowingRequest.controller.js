@@ -693,12 +693,8 @@ export const issueStockFromRequest = async (req, res) => {
       inventorySource,
       packetsFromBiotech: bodyPacketsBio,
       packetsFromRamAgri: bodyPacketsAgri,
-      ramAgriBatchAllocations: rawAgriAlloc,
-      ramAgriCropId: preferredCropId,
-      ramAgriVarietyId: preferredVarietyId,
     } = req.body;
     const batchAllocations = Array.isArray(rawAllocations) ? rawAllocations : [];
-    const ramAgriBatchAllocations = Array.isArray(rawAgriAlloc) ? rawAgriAlloc : [];
 
     if (purpose !== 'production') {
       return res.status(400).json({
@@ -850,36 +846,72 @@ export const issueStockFromRequest = async (req, res) => {
         : Math.max(0, Number(request.packetsNeeded) || 0);
     excessPackets = Math.max(0, companyIssueQty - companyNeeded);
 
-    // Deduct Ram Agri Input pool first (so failure won't leave Biotech deducted)
+    // Ram Agri packets: create internal PO (Ram Agri → Biotech), then issue from transferred batch.
     let agriAllocations = [];
+    const transferBatchAllocations = [];
     if (needAgri) {
-      const { deductRamAgriForSowingIssue } = await import(
-        '../services/sowingIssueInventory.service.js'
-      );
-      const agriResult = await deductRamAgriForSowingIssue({
-        plantId: request.plantId,
-        subtypeId: request.subtypeId,
-        qtyPrimary: issueSplit.packetsFromRamAgri,
-        ramAgriBatchAllocations,
-        preferredCropId,
-        preferredVarietyId,
-        userId: req.user._id,
-        sowingRequestId: request._id,
-        requestNumber: request.requestNumber,
-      });
-      if (!agriResult.ok) {
-        return res.status(400).json({
+      const transferProduct = await Product.findById(request.productId);
+      if (!transferProduct) {
+        return res.status(404).json({
           success: false,
-          message: agriResult.error || 'Failed to deduct Ram Agri stock',
+          message: 'Product not found',
         });
       }
-      agriAllocations = agriResult.allocations || [];
+      try {
+        const { maybeCreateSowingTransferPurchaseOrder } = await import(
+          '../services/sowingRamAgriTransfer.service.js'
+        );
+        const transferResult = await maybeCreateSowingTransferPurchaseOrder({
+          product: transferProduct,
+          companyPackets: issueSplit.packetsFromRamAgri,
+          sowingRequest: request,
+          userId: req.user._id,
+          forceQty: true,
+        });
+        if (!transferResult || transferResult.skipped) {
+          return res.status(400).json({
+            success: false,
+            message:
+              transferResult?.reason ||
+              'Cannot create internal PO. Link this packing to a Ram Agri seed variety first.',
+          });
+        }
+        request.transferPurchaseOrderId = transferResult.purchaseOrder?._id;
+        request.transferShortfallQty = transferResult.shortfall || issueSplit.packetsFromRamAgri;
+        agriAllocations = (transferResult.agriAllocations || []).map((a) => ({
+          batchId: a.batchId,
+          batchNumber: a.batchNumber,
+          quantityDeducted: a.quantityDeducted,
+          ramAgriCropId: a.ramAgriCropId,
+          ramAgriVarietyId: a.ramAgriVarietyId,
+        }));
+        const tb = transferResult.batch;
+        if (!tb?._id) {
+          return res.status(400).json({
+            success: false,
+            message: 'Internal PO created but no Biotech batch was inwarded',
+          });
+        }
+        transferBatchAllocations.push({
+          batchId: tb._id,
+          batchNumber: tb.batchNumber,
+          quantity: issueSplit.packetsFromRamAgri,
+        });
+      } catch (transferErr) {
+        return res.status(400).json({
+          success: false,
+          message: transferErr.message || 'Failed to create internal transfer PO',
+        });
+      }
     }
 
-    if (needBiotech) {
+    const outwardAllocations = [...batchAllocations, ...transferBatchAllocations];
+    const shouldCreateOutward = outwardAllocations.length > 0;
+
+    if (shouldCreateOutward) {
     // Create outward entry and issue stock directly
     const outwardNumber = await InventoryOutward.generateOutwardNumber();
-    const outwardItems = batchAllocations.map((allocation) => {
+    const outwardItems = outwardAllocations.map((allocation) => {
       const item = {
         product: request.productId,
         batch: allocation.batchId,
@@ -993,7 +1025,7 @@ export const issueStockFromRequest = async (req, res) => {
     outward.issuedDate = new Date();
     outward.updatedBy = req.user._id;
     await outward.save();
-    } // end needBiotech
+    } // end shouldCreateOutward
 
     // Update request status and excess packets
     request.status = 'issued';
@@ -1004,8 +1036,8 @@ export const issueStockFromRequest = async (req, res) => {
     request.packetsIssuedFromBiotech = issueSplit.packetsFromBiotech;
     request.packetsIssuedFromRamAgri = issueSplit.packetsFromRamAgri;
     request.issueInventorySource = issueSplit.source;
-    request.biotechBatchAllocations = needBiotech
-      ? batchAllocations.map((a) => ({
+    request.biotechBatchAllocations = shouldCreateOutward
+      ? outwardAllocations.map((a) => ({
           batchId: a.batchId,
           batchNumber: a.batchNumber,
           quantity: a.quantity,
@@ -1351,10 +1383,14 @@ export const issueStockFromRequest = async (req, res) => {
       message:
         companyIssueQty < 0.01
           ? 'Raising-only request marked issued (no warehouse stock)'
-          : 'Stock issued successfully from sowing request',
+          : request.transferPurchaseOrderId
+            ? 'Stock issued successfully. Internal PO created for Ram Agri packets.'
+            : 'Stock issued successfully from sowing request',
       data: {
         request,
         outward,
+        transferPurchaseOrderId: request.transferPurchaseOrderId || null,
+        transferShortfallQty: request.transferShortfallQty || 0,
         slotLinkage: {
           linkedSlotIdsCount: request.linkedSlotIds?.length || 0,
           ...slotLinkage,

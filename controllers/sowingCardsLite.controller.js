@@ -586,6 +586,46 @@ export const getTodaySowingCardsLite = async (req, res) => {
                 ],
               },
             },
+            raisingCollectedOrderCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      {
+                        $in: [
+                          { $ifNull: ["$sowingPlan.seedSource", "COMPANY"] },
+                          ["MIXED", "RAISING"],
+                        ],
+                      },
+                      {
+                        $or: [
+                          { $eq: ["$sowingPlan.raisingIntakeCollected", true] },
+                          {
+                            $ne: [
+                              { $ifNull: ["$sowingPlan.raisingIntakeId", null] },
+                              null,
+                            ],
+                          },
+                          {
+                            $gt: [
+                              {
+                                $ifNull: [
+                                  "$sowingPlan.raisingIntake.packetsRemaining",
+                                  0,
+                                ],
+                              },
+                              0,
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
           },
         },
       ]);
@@ -739,6 +779,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         raisingOrderCount:
           (Number(o.raisingOrderCount) || 0) +
           (Number(o.pureMixedOrderCount) || 0),
+        raisingCollectedOrderCount: Number(o.raisingCollectedOrderCount) || 0,
         // Company plant-equiv + raising plant-equiv
         availablePlants: availablePlants + raisingPlants,
         companyAvailablePlants: availablePlants,
@@ -749,6 +790,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
           raisingPackets: Number(o.raisingPackets) || 0,
           mixedOrderCount: o.mixedOrderCount || 0,
           raisingOrderCount: Number(o.raisingOrderCount) || 0,
+          raisingCollectedOrderCount: Number(o.raisingCollectedOrderCount) || 0,
           pureMixedOrderCount: Number(o.pureMixedOrderCount) || 0,
           raisingInHandPackets: raisingInHand,
           raisingIntakeCount: raisingInfo.intakeCount || 0,
@@ -1090,6 +1132,11 @@ export const getOrderWiseSowing = async (req, res) => {
         (s, i) => s + (Number(i.packetsRemaining) || 0),
         0
       );
+      const raisingCollected = Boolean(
+        sp.raisingIntakeCollected ||
+          sp.raisingIntakeId ||
+          raisingInHand > 0
+      );
       const prior = orderRequestMap.get(String(o._id)) || null;
       const alreadyRequested = Boolean(prior);
 
@@ -1150,9 +1197,12 @@ export const getOrderWiseSowing = async (req, res) => {
           companySeedPackets: Number(sp.companySeedPackets) || 0,
           raisingSeedPackets: Number(sp.raisingSeedPackets) || 0,
           sowingNotes: sp.sowingNotes || "",
+          raisingIntakeCollected: Boolean(sp.raisingIntakeCollected),
+          raisingIntakeId: sp.raisingIntakeId || null,
         },
         suggestedPackets: Math.ceil(plants / cf) || 0,
-        raisingInHandPackets: raisingInHand,
+        raisingCollected,
+        raisingInHandPackets: raisingCollected ? raisingInHand : 0,
         raisingIntakes: intakes.map((i) => ({
           _id: i._id,
           intakeNumber: i.intakeNumber,

@@ -161,6 +161,7 @@ export function buildSlotSnapshot(slot) {
     totalBookedPlants: parseNum(slot.totalBookedPlants),
     inProgressCount: Array.isArray(slot.sowingInProgress) ? slot.sowingInProgress.length : 0,
     actualPlants: parseNum(slot.actualPlants),
+    actualReadyPlants: parseNum(slot.actualReadyPlants),
     closingStock: parseNum(slot.closingStock),
   };
 }

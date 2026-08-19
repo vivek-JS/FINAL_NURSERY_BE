@@ -7,6 +7,10 @@ import moment from "moment";
 import PlantSlot from "../models/slots.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import SlotTransferLog from "../models/slotTransfer.model.js";
+import SlotReadyRollLog from "../models/slotReadyRollLog.model.js";
+import PlantOutward from "../models/plantOutward.model.js";
+import { computeOverdueDays } from "./calendarReadySlotRelocate.service.js";
+import { secondaryInwardCalendarReady } from "./secondaryShedSlotStock.service.js";
 import { resolveSlotBufferFields } from "../utility/bufferUtils.js";
 import { SLOT_TRAIL_ACTIONS } from "../constants/slotTrailActions.js";
 import {
@@ -94,7 +98,8 @@ export async function listRollExpiredAvailableSources(targetSlotId, asOfDate = n
 
     const availablePlants = getSlotEffectiveAvailablePlants(slot);
     const actualPlants = Number(slot.actualPlants) || 0;
-    if (availablePlants <= 0 && actualPlants <= 0) continue;
+    const actualReadyPlants = Number(slot.actualReadyPlants) || 0;
+    if (availablePlants <= 0 && actualPlants <= 0 && actualReadyPlants <= 0) continue;
 
     sources.push({
       slotId,
@@ -104,6 +109,7 @@ export async function listRollExpiredAvailableSources(targetSlotId, asOfDate = n
       label: slotLabel(slot),
       availablePlants,
       actualPlants,
+      actualReadyPlants,
       totalPlants: Number(slot.totalPlants) || 0,
       isExpired: true,
     });
@@ -121,7 +127,9 @@ export async function listRollExpiredAvailableSources(targetSlotId, asOfDate = n
       label: slotLabel(targetDetails.slot),
       availablePlants: targetAvailable,
       actualPlants: Number(targetDetails.slot.actualPlants) || 0,
+      actualReadyPlants: Number(targetDetails.slot.actualReadyPlants) || 0,
       rolledInAvailablePlants: Number(targetDetails.slot.rolledInAvailablePlants) || 0,
+      rolledInActualReadyPlants: Number(targetDetails.slot.rolledInActualReadyPlants) || 0,
     },
     sources,
   };
@@ -356,12 +364,306 @@ async function applyActualTransfer({
   return { actualQty };
 }
 
+async function applyReadyTransfer({
+  sourceDetails,
+  targetDetails,
+  sourceSlotId,
+  targetSlotId,
+  readyQty,
+  reason,
+  performedBy,
+  session,
+  transferKind,
+  rollKind = "expired_manual",
+}) {
+  if (readyQty <= 0) return { readyQty: 0 };
+
+  const sourceReady = Number(sourceDetails.slot.actualReadyPlants) || 0;
+  const targetReady = Number(targetDetails.slot.actualReadyPlants) || 0;
+
+  if (readyQty > sourceReady) {
+    throw new Error(`Source slot max actualReadyPlants is ${sourceReady}`);
+  }
+
+  const newSourceReady = sourceReady - readyQty;
+  const newTargetReady = targetReady + readyQty;
+
+  const sourceSubtypeOid = new mongoose.Types.ObjectId(sourceDetails.subtypeId.toString());
+  const targetSubtypeOid = new mongoose.Types.ObjectId(targetDetails.subtypeId.toString());
+  const sourceSlotOid = new mongoose.Types.ObjectId(sourceSlotId);
+  const targetSlotOid = new mongoose.Types.ObjectId(targetSlotId);
+
+  await PlantSlot.updateOne(
+    { _id: sourceDetails.plantSlotId },
+    {
+      $set: {
+        "subtypeSlots.$[st].slots.$[sl].actualReadyPlants": newSourceReady,
+      },
+    },
+    {
+      arrayFilters: [{ "st.subtypeId": sourceSubtypeOid }, { "sl._id": sourceSlotOid }],
+      session,
+    }
+  );
+
+  await PlantSlot.updateOne(
+    { _id: targetDetails.plantSlotId },
+    {
+      $set: {
+        "subtypeSlots.$[st].slots.$[sl].actualReadyPlants": newTargetReady,
+      },
+      $inc: {
+        "subtypeSlots.$[st].slots.$[sl].rolledInActualReadyPlants": readyQty,
+      },
+    },
+    {
+      arrayFilters: [{ "st.subtypeId": targetSubtypeOid }, { "sl._id": targetSlotOid }],
+      session,
+    }
+  );
+
+  const sourceBefore = buildSlotSnapshot({
+    ...sourceDetails.slot,
+    actualReadyPlants: sourceReady,
+  });
+  const sourceAfter = buildSlotSnapshot({
+    ...sourceDetails.slot,
+    actualReadyPlants: newSourceReady,
+  });
+  const targetBefore = buildSlotSnapshot({
+    ...targetDetails.slot,
+    actualReadyPlants: targetReady,
+  });
+  const targetAfter = buildSlotSnapshot({
+    ...targetDetails.slot,
+    actualReadyPlants: newTargetReady,
+    rolledInActualReadyPlants:
+      (Number(targetDetails.slot.rolledInActualReadyPlants) || 0) + readyQty,
+  });
+
+  const meta = { transferKind, peerSlotId: null, rollKind };
+
+  await appendTransferSlotTrail({
+    slotId: sourceSlotId,
+    action: SLOT_TRAIL_ACTIONS.EXPIRED_READY_ROLL_OUT,
+    quantity: readyQty,
+    performedBy,
+    notes: reason || "Expired slot ready plants rolled out",
+    reason: `Ready plants rolled to ${slotLabel(targetDetails.slot)}`,
+    metadata: { ...meta, peerSlotId: targetSlotId },
+    before: sourceBefore,
+    after: sourceAfter,
+    session,
+  });
+
+  await appendTransferSlotTrail({
+    slotId: targetSlotId,
+    action: SLOT_TRAIL_ACTIONS.EXPIRED_READY_ROLL_IN,
+    quantity: readyQty,
+    performedBy,
+    notes: reason || "Expired slot ready plants rolled in",
+    reason: `Ready plants rolled from ${slotLabel(sourceDetails.slot)}`,
+    metadata: { ...meta, peerSlotId: sourceSlotId },
+    before: targetBefore,
+    after: targetAfter,
+    session,
+  });
+
+  sourceDetails.slot.actualReadyPlants = newSourceReady;
+  targetDetails.slot.actualReadyPlants = newTargetReady;
+  targetDetails.slot.rolledInActualReadyPlants =
+    (Number(targetDetails.slot.rolledInActualReadyPlants) || 0) + readyQty;
+
+  await recordReadyRollLogsForTransfer({
+    sourceSlotId,
+    targetSlotId,
+    sourceDetails,
+    targetDetails,
+    readyQty,
+    reason,
+    performedBy,
+    rollKind,
+    session,
+  });
+
+  return { readyQty };
+}
+
+async function recordReadyRollLogsForTransfer({
+  sourceSlotId,
+  targetSlotId,
+  sourceDetails,
+  targetDetails,
+  readyQty,
+  reason,
+  performedBy,
+  rollKind,
+  session,
+}) {
+  const asOf = new Date();
+  const pos = await PlantOutward.find({
+    "secondaryInward.linkedBookingSlotId": new mongoose.Types.ObjectId(sourceSlotId),
+  })
+    .populate({ path: "batchId", select: "batchNumber plantCmsId plantSubtypeId secondaryPlantReadyDays" })
+    .session(session)
+    .lean();
+
+  const lines = [];
+  for (const po of pos) {
+    const batchLean = po.batchId && typeof po.batchId === "object" ? po.batchId : null;
+    const batchId = batchLean?._id ?? po.batchId;
+    for (const si of po.secondaryInward || []) {
+      if (String(si.linkedBookingSlotId) !== String(sourceSlotId)) continue;
+      if (!secondaryInwardCalendarReady(si, batchLean, moment(asOf).startOf("day"))) continue;
+      const synced = Math.max(0, Number(si.slotStockSyncedPlants) || 0);
+      if (synced < 1) continue;
+      lines.push({
+        batchId,
+        batchNumber: batchLean?.batchNumber ?? "",
+        secondaryInwardId: si._id,
+        plantOutwardId: po._id,
+        pollyhouse: si.pollyhouse ?? "",
+        quantityReady: synced,
+        expectedReadyDate: si.expectedReadyDate ?? null,
+      });
+    }
+  }
+
+  let remaining = readyQty;
+  const docs = [];
+  for (const ln of lines) {
+    if (remaining < 1) break;
+    const qty = Math.min(ln.quantityReady, remaining);
+    remaining -= qty;
+    docs.push({
+      sourceSlotId: new mongoose.Types.ObjectId(sourceSlotId),
+      targetSlotId: new mongoose.Types.ObjectId(targetSlotId),
+      plantId: targetDetails.plantId,
+      subtypeId: targetDetails.subtypeId,
+      batchId: ln.batchId,
+      secondaryInwardId: ln.secondaryInwardId,
+      plantOutwardId: ln.plantOutwardId,
+      batchNumber: ln.batchNumber,
+      pollyhouse: ln.pollyhouse,
+      quantityReady: qty,
+      expectedReadyDate: ln.expectedReadyDate,
+      overdueDays: computeOverdueDays(ln.expectedReadyDate, asOf),
+      rollKind,
+      sourceSlotLabel: slotLabel(sourceDetails.slot),
+      targetSlotLabel: slotLabel(targetDetails.slot),
+      reason: reason || "",
+      performedBy,
+    });
+  }
+
+  if (docs.length) {
+    await SlotReadyRollLog.create(docs, { session });
+  }
+}
+
+export async function listReadyRollLogForSlot(targetSlotId, { limit = 100 } = {}) {
+  if (!mongoose.Types.ObjectId.isValid(String(targetSlotId))) return [];
+  const rows = await SlotReadyRollLog.find({
+    targetSlotId: new mongoose.Types.ObjectId(targetSlotId),
+  })
+    .sort({ createdAt: -1 })
+    .limit(Math.min(500, Math.max(1, Number(limit) || 100)))
+    .lean();
+  return rows;
+}
+
+export async function summarizeReadyRollForSlot(targetSlotId) {
+  if (!mongoose.Types.ObjectId.isValid(String(targetSlotId))) {
+    return { totalRolledReady: 0, overdueLines: 0, latestRollAt: null };
+  }
+  const oid = new mongoose.Types.ObjectId(targetSlotId);
+  const agg = await SlotReadyRollLog.aggregate([
+    { $match: { targetSlotId: oid } },
+    {
+      $group: {
+        _id: null,
+        totalRolledReady: { $sum: "$quantityReady" },
+        overdueLines: {
+          $sum: { $cond: [{ $gt: ["$overdueDays", 0] }, 1, 0] },
+        },
+        latestRollAt: { $max: "$createdAt" },
+      },
+    },
+  ]);
+  const row = agg[0] || {};
+  return {
+    totalRolledReady: Number(row.totalRolledReady) || 0,
+    overdueLines: Number(row.overdueLines) || 0,
+    latestRollAt: row.latestRollAt ?? null,
+  };
+}
+
+export async function runExpiredReadyRollAuto({ asOfDate = new Date() } = {}) {
+  const plantSlots = await PlantSlot.find({}).lean();
+  let rolled = 0;
+  let errors = 0;
+
+  for (const doc of plantSlots) {
+    for (const st of doc.subtypeSlots || []) {
+      for (const slot of st.slots || []) {
+        if (!isSlotExpiredByEndDay(slot, asOfDate)) continue;
+        const ready = Number(slot.actualReadyPlants) || 0;
+        if (ready < 1) continue;
+
+        const targetId = findCurrentSlotIdForExpiredRoll(
+          st.slots || [],
+          asOfDate
+        );
+        if (!targetId || targetId === String(slot._id)) continue;
+
+        try {
+          await runRollExpiredSlotAvailable({
+            targetSlotId: targetId,
+            transfers: [
+              {
+                sourceSlotId: String(slot._id),
+                availableQty: 0,
+                readyQty: ready,
+              },
+            ],
+            reason: "Auto expired ready roll",
+            performedBy: null,
+            asOfDate,
+            rollKind: "expired_auto",
+          });
+          rolled += 1;
+        } catch (err) {
+          errors += 1;
+          console.warn("[ExpiredReadyRoll] auto", slot._id, err?.message || err);
+        }
+      }
+    }
+  }
+
+  return { slotsRolled: rolled, errors, asOf: moment(asOfDate).format("YYYY-MM-DD") };
+}
+
+function findCurrentSlotIdForExpiredRoll(slots, asOfDate) {
+  for (const slot of slots || []) {
+    if (isSlotContainingDate(slot, asOfDate)) {
+      return slot._id?.toString?.() || String(slot._id);
+    }
+  }
+  for (const slot of slots || []) {
+    if (!isSlotExpiredByEndDay(slot, asOfDate)) {
+      return slot._id?.toString?.() || String(slot._id);
+    }
+  }
+  return null;
+}
+
 export async function runRollExpiredSlotAvailable({
   targetSlotId,
   transfers,
   reason = "",
   performedBy = null,
   asOfDate = new Date(),
+  rollKind = "expired_manual",
 }) {
   if (!targetSlotId || !Array.isArray(transfers) || transfers.length === 0) {
     throw new Error("targetSlotId and transfers are required");
@@ -378,7 +680,7 @@ export async function runRollExpiredSlotAvailable({
 
   const results = [];
   let totalAvailable = 0;
-  let totalActual = 0;
+  let totalReady = 0;
 
   try {
     const plantInfo = await PlantCms.findById(targetDetails.plantId).select("name subtypes").lean();
@@ -387,12 +689,13 @@ export async function runRollExpiredSlotAvailable({
     );
 
     for (const row of transfers) {
-      const { sourceSlotId, availableQty, actualQty = 0 } = row || {};
+      const { sourceSlotId, availableQty, actualQty = 0, readyQty = 0 } = row || {};
       const availQty = Math.floor(Number(availableQty) || 0);
       const actQty = Math.floor(Number(actualQty) || 0);
+      const rdQty = Math.floor(Number(readyQty) || 0);
 
       if (!sourceSlotId) throw new Error("Each transfer requires sourceSlotId");
-      if (availQty <= 0 && actQty <= 0) continue;
+      if (availQty <= 0 && actQty <= 0 && rdQty <= 0) continue;
 
       const sourceDetails = await findSlotDetails(sourceSlotId);
       if (!sourceDetails) throw new Error(`Source slot not found: ${sourceSlotId}`);
@@ -436,7 +739,22 @@ export async function runRollExpiredSlotAvailable({
           session,
           transferKind,
         });
-        totalActual += actQty;
+      }
+
+      if (rdQty > 0) {
+        await applyReadyTransfer({
+          sourceDetails,
+          targetDetails,
+          sourceSlotId,
+          targetSlotId,
+          readyQty: rdQty,
+          reason,
+          performedBy,
+          session,
+          transferKind,
+          rollKind,
+        });
+        totalReady += rdQty;
       }
 
       await SlotTransferLog.create(
@@ -454,7 +772,7 @@ export async function runRollExpiredSlotAvailable({
             targetSubtypeName:
               subtypeNameMap.get(targetDetails.subtypeId.toString()) || "Subtype",
             quantity: availQty,
-            reason: `${reason} | actualQty=${actQty}`,
+            reason: `${reason} | readyQty=${rdQty} actualQty=${actQty}`,
             performedBy,
             sourceBefore: {
               availablePlants: getSlotEffectiveAvailablePlants(sourceDetails.slot),
@@ -469,7 +787,7 @@ export async function runRollExpiredSlotAvailable({
         { session }
       );
 
-      results.push({ sourceSlotId, availableQty: availQty, actualQty: actQty });
+      results.push({ sourceSlotId, availableQty: availQty, actualQty: actQty, readyQty: rdQty });
     }
 
     if (results.length === 0) {
@@ -482,7 +800,8 @@ export async function runRollExpiredSlotAvailable({
       targetSlotId: String(targetSlotId),
       transfers: results,
       totalAvailableRolled: totalAvailable,
-      totalActualRolled: totalActual,
+      totalActualRolled: results.reduce((s, r) => s + (r.actualQty || 0), 0),
+      totalReadyRolled: totalReady,
     };
   } catch (err) {
     await session.abortTransaction();

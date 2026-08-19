@@ -384,6 +384,7 @@ import {
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
   getSowReadyEntries,
+  getDispatchStockLines,
   getSecondaryPolyhouseStock,
   previewSecondaryVehicleLoadHandler,
   postSecondaryVehicleLoad,
@@ -419,6 +420,7 @@ import stateRoute from "./routes/state.route.js";
 import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
 import whatsappOrderBotRoute from "./routes/whatsappOrderBot.route.js";
+import whatsappAlertRoute from "./routes/whatsappAlert.route.js";
 import optInWebhookRoute from "./routes/optInWebhook.route.js";
 import whatsappStatusWebhookRoute from "./routes/whatsappStatusWebhook.route.js";
 import sowingRoute from "./routes/sowing.route.js";
@@ -430,7 +432,7 @@ import iciciPaymentRoute from "./routes/icici.routes.js";
 import paymentReconciliationRoute from "./routes/payment.routes.js";
 import bankingRoute from "./modules/banking/routes/banking.routes.js";
 import iciciCorporateRoute from "./src/routes/icici.routes.js";
-import whatsappAlertRoute from "./routes/whatsappAlert.route.js";
+import { optionalVehicleLoadPhotosUpload } from "./middleware/vehicleLoadPhotos.middleware.js";
 
 // Inventory Management Routes
 import productRoute from "./routes/product.route.js";
@@ -800,6 +802,11 @@ server.get(
   getSowReadyEntries
 );
 server.get(
+  "/api/v1/laboutward/secondary/dispatch-stock-lines",
+  authenticateToken,
+  getDispatchStockLines
+);
+server.get(
   "/api/v1/laboutward/secondary/polyhouse-stock",
   authenticateToken,
   getSecondaryPolyhouseStock
@@ -812,6 +819,7 @@ server.post(
 server.post(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/load",
   authenticateToken,
+  optionalVehicleLoadPhotosUpload,
   postSecondaryVehicleLoad
 );
 server.get(
@@ -930,6 +938,17 @@ server.use(errorHandler);
     initPastDueSlotRolloverCronJobs();
   } catch (e) {
     console.error("[PastDueRollover] Failed to init cron:", e?.message || e);
+  }
+})();
+
+(async () => {
+  try {
+    const { initCalendarReadySlotRelocateCronJobs } = await import(
+      "./jobs/calendarReadySlotRelocateCron.js"
+    );
+    initCalendarReadySlotRelocateCronJobs();
+  } catch (e) {
+    console.error("[CalendarReadyRelocate] Failed to init cron:", e?.message || e);
   }
 })();
 

@@ -198,14 +198,37 @@ const slotSchema = new Schema({
     type: Boolean,
     default: false,
   },
-  /** Physically counted / actual plants in this slot window */
+  /** Physically counted / actual plants in this slot window (90% of lagwad qty). */
   actualPlants: {
+    type: Number,
+    default: 0,
+  },
+  /** 10% lagwad reserve — expected mortality before transfer to ready. */
+  expectedMortality: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  /** Lagwad plants calendar-ready on slot (90% portion; not reduced by dispatch). */
+  actualReadyPlants: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  /** Sellable lagwad pool — vehicle load / dispatch subtracts here only. */
+  lagwadRemaining: {
     type: Number,
     default: 0,
     min: 0,
   },
   /** Booking capacity rolled in from expired slot windows (not order rollover). */
   rolledInAvailablePlants: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  /** actualReadyPlants rolled in from expired slot windows (dispatch-ready pool). */
+  rolledInActualReadyPlants: {
     type: Number,
     default: 0,
     min: 0,
@@ -260,6 +283,11 @@ const slotSchema = new Schema({
   overflow: {
     type: Boolean,
     default: false,
+    /** Legacy docs stored overflow as [] — Boolean cast used to 500 the whole PlantSlot save. */
+    set(v) {
+      if (Array.isArray(v)) return v.length > 0;
+      return Boolean(v);
+    },
   },
   status: {
     type: Boolean,
@@ -418,6 +446,14 @@ const slotSchema = new Schema({
       orderCoveredPlants: { type: Number, default: 0 },
       /** Plants beyond order cover — saleable: excessiveSowing.plants + availablePlants */
       excessPlants: { type: Number, default: 0 },
+      /** 90% of plantsSowed applied to slot.actualPlants */
+      actualPlantsApplied: { type: Number },
+      /** 10% of plantsSowed applied to slot.expectedMortality */
+      expectedMortalityApplied: { type: Number },
+      /** 90% of excess applied to slot.availablePlants */
+      availablePlantsApplied: { type: Number },
+      /** 90% of covered applied to slot.orderReservedPlants */
+      orderReservedPlantsApplied: { type: Number },
       shedName: { type: String, default: "", trim: true },
       sowingRequestId: {
         type: Schema.Types.ObjectId,
@@ -1050,6 +1086,31 @@ const plantSlotSchema = new Schema({
 plantSlotSchema.index({ plantId: 1, year: 1 }); // Compound index for getSlotsByPlantAndSubtype query
 plantSlotSchema.index({ "subtypeSlots.subtypeId": 1 }); // Index for filtering by subtypeId
 plantSlotSchema.index({ "subtypeSlots.slots._id": 1 }); // Index for finding slots by _id
+
+function coerceLegacyOverflowInRaw(raw) {
+  if (!raw || typeof raw !== "object") return;
+  const walkSlots = (slots) => {
+    if (!Array.isArray(slots)) return;
+    for (const s of slots) {
+      if (s && Array.isArray(s.overflow)) {
+        s.overflow = s.overflow.length > 0;
+      }
+    }
+  };
+  if (Array.isArray(raw.subtypeSlots)) {
+    for (const st of raw.subtypeSlots) {
+      if (st) walkSlots(st.slots);
+    }
+  }
+  walkSlots(raw.slots);
+  if (Array.isArray(raw.overflow)) {
+    raw.overflow = raw.overflow.length > 0;
+  }
+}
+
+plantSlotSchema.pre("init", function coerceLegacyOverflow(raw) {
+  coerceLegacyOverflowInRaw(raw);
+});
 
 plantSlotSchema.pre("validate", function normalizeSlotTrailBeforeValidate(next) {
   normalizeSlotTrailInPlantSlot(this);

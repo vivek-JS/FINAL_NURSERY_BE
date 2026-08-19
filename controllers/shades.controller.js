@@ -7,7 +7,7 @@ import mongoose from "mongoose";
 
 // Create Shade
 const createShade = catchAsync(async (req, res, next) => {
-  const { name, number } = req.body;
+  const { name, number, is_primary: isPrimaryBody } = req.body;
 
   // Check if shade with same number already exists
   const existingShade = await Shade.findOne({ number });
@@ -18,6 +18,7 @@ const createShade = catchAsync(async (req, res, next) => {
   const doc = await Shade.create({
     name,
     number,
+    ...(typeof isPrimaryBody === "boolean" && { is_primary: isPrimaryBody }),
   });
 
   const response = generateResponse(
@@ -131,6 +132,9 @@ const updateShade = catchAsync(async (req, res, next) => {
     ...(req.body.number && { number: req.body.number }),
     ...(typeof req.body.isActive !== "undefined" && {
       isActive: req.body.isActive,
+    }),
+    ...(typeof req.body.is_primary === "boolean" && {
+      is_primary: req.body.is_primary,
     }),
   };
 

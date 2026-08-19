@@ -190,6 +190,29 @@ export function aggregatePastDueMetricsForSlotGroup(slots, ordersBySlot, asOfDat
   };
 }
 
+function summarizeSowingEntries(slot) {
+  const batches = Array.isArray(slot?.sowingBatches) ? slot.sowingBatches : [];
+  return batches.slice(0, 40).map((b) => ({
+    requestNumber: b.requestNumber || "",
+    sowingDate: b.sowingDate || "",
+    plantReadyDate: b.plantReadyDate || "",
+    plantsSowed: Number(b.plantsSowed) || 0,
+    orderCoveredPlants: Number(b.orderCoveredPlants) || 0,
+    excessPlants: Number(b.excessPlants) || 0,
+    packetsUsed: Number(b.packetsUsed) || 0,
+    isExcessiveSowing: Boolean(b.isExcessiveSowing),
+  }));
+}
+
+function dispatchedOnSlot(dispatchStats) {
+  const all = Number(dispatchStats?.totalAllDispatchedPlants);
+  if (Number.isFinite(all) && all > 0) return all;
+  return (
+    (Number(dispatchStats?.totalDispatchedPlants) || 0) +
+    (Number(dispatchStats?.dispatchedOtherPlants) || 0)
+  );
+}
+
 /** Physical stock vs dispatch queue metrics for slot list API. */
 export function computeSlotPhysicalMetrics(slot, dispatchStats) {
   const actualPlants = Number(slot?.actualPlants) || 0;
@@ -197,6 +220,7 @@ export function computeSlotPhysicalMetrics(slot, dispatchStats) {
     (Number(dispatchStats?.remainingNative) || 0) +
     (Number(dispatchStats?.remainingRolledIn) || 0);
   const remainingToDispatch = Number(dispatchStats?.remainingToDispatch) || 0;
+  const dispatched = dispatchedOnSlot(dispatchStats);
   const actualGapRaw = actualRemaining - actualPlants;
   const actualGapPlants = Math.max(0, actualGapRaw);
   const actualSurplusPlants = Math.max(0, -actualGapRaw);
@@ -205,7 +229,10 @@ export function computeSlotPhysicalMetrics(slot, dispatchStats) {
 
   return {
     actualPlants,
-    actualAvailable: Math.max(0, actualPlants - remainingToDispatch),
+    /** Physical remaining = actual plants minus already dispatched (not minus next-day queue). */
+    actualAvailable: Math.max(0, actualPlants - dispatched),
+    /** Headroom vs dispatch queue (can be 0 when nearby days are covering this slot). */
+    queueAvailable: Math.max(0, actualPlants - remainingToDispatch),
     actualRemainingPlants: actualRemaining,
     actualGapPlants,
     actualGapPct,
@@ -242,6 +269,9 @@ export function buildSlotOrderMetrics({
     remainingToDispatch: dispatchStats.remainingToDispatch,
     remainingRolledIn: dispatchStats.remainingRolledIn,
     remainingNative: dispatchStats.remainingNative,
+    bookedCoveredPlants: Number(dispatchStats.bookedCoveredPlants) || 0,
+    bookedUncoveredPlants: Number(dispatchStats.bookedUncoveredPlants) || 0,
+    sowingEntries: summarizeSowingEntries(slot),
     dispatchedFromOtherSlots: dispatchedFromOtherBySlot.get(slotId) || 0,
     releasedForEarlyDispatch: releasedForEarlyBySlot.get(slotId) || 0,
     isCurrentDateSlot: isCurrentSlot,

@@ -46,3 +46,4 @@ config/certs/*.pem
 config/certs/icici_public.crt
 config/certs/*.jks
 config/certs/*.p12
+.wwebjs_auth/

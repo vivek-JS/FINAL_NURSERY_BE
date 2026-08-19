@@ -15,6 +15,10 @@ const shadeSchema = new Schema(
       type: Boolean,
       default: true,
     },
+    is_primary: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

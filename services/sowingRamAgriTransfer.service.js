@@ -185,10 +185,19 @@ export async function processBiotechTransferGrnItem(item, grn, poItem, userId) {
   item.product = targetProductId;
   item.batch = batch._id;
   item.batchNumber = batchNumber;
-  return batch;
+  return {
+    batch,
+    allocations: (deduct.allocations || []).map((a) => ({
+      ...a,
+      ramAgriCropId: cropId,
+      ramAgriVarietyId: varietyId,
+    })),
+  };
 }
 
 async function approveGrnWithBiotechTransfer(grn, purchaseOrder, userId) {
+  const batches = [];
+  const agriAllocations = [];
   for (const item of grn.items) {
     if (!(item.acceptedQuantity > 0)) continue;
 
@@ -201,7 +210,9 @@ async function approveGrnWithBiotechTransfer(grn, purchaseOrder, userId) {
       );
 
     if (poItem?.isBiotechTransfer) {
-      await processBiotechTransferGrnItem(item, grn, poItem, userId);
+      const result = await processBiotechTransferGrnItem(item, grn, poItem, userId);
+      if (result?.batch) batches.push(result.batch);
+      if (result?.allocations?.length) agriAllocations.push(...result.allocations);
     }
   }
 
@@ -210,22 +221,27 @@ async function approveGrnWithBiotechTransfer(grn, purchaseOrder, userId) {
   grn.approvedDate = new Date();
   grn.markModified("items");
   await grn.save();
+  return { batches, agriAllocations };
 }
 
 /**
- * Create + auto-approve internal PO when sowing request needs more company packets than in stock.
+ * Create + auto-approve internal PO when inventory issues Ram Agri packets
+ * (or Biotech warehouse is short) so stock moves Ram Agri → Ram Biotech.
  */
 export async function maybeCreateSowingTransferPurchaseOrder({
   product,
   companyPackets,
   sowingRequest,
   userId,
+  forceQty = false,
 }) {
   const qty = Number(companyPackets) || 0;
   if (qty <= 0) return null;
 
   const available = await getAvailablePacketsForProduct(product);
-  const shortfall = Number(Math.max(0, qty - available).toFixed(4));
+  const shortfall = forceQty
+    ? Number(qty.toFixed(4))
+    : Number(Math.max(0, qty - available).toFixed(4));
   if (shortfall <= 0.001) return null;
 
   const productForResolve = {
@@ -350,17 +366,23 @@ export async function maybeCreateSowingTransferPurchaseOrder({
   });
   await grn.save();
 
-  await approveGrnWithBiotechTransfer(grn, purchaseOrder, userId);
+  const approved = await approveGrnWithBiotechTransfer(grn, purchaseOrder, userId);
 
   purchaseOrder.status = "received";
   purchaseOrder.updatedBy = userId;
   await purchaseOrder.save();
+
+  const batch =
+    approved?.batches?.[0] ||
+    (grn.items?.[0]?.batch ? await Batch.findById(grn.items[0].batch) : null);
 
   return {
     purchaseOrder,
     grn,
     shortfall,
     availableBefore: available,
+    batch,
+    agriAllocations: approved?.agriAllocations || [],
   };
 }
 

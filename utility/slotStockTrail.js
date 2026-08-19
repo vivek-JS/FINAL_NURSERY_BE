@@ -35,6 +35,18 @@ const buildSnapshot = (slot, field, fieldValue) => {
       field === "actualPlants"
         ? fieldValue
         : Number(slot.actualPlants) || 0,
+    expectedMortality:
+      field === "expectedMortality"
+        ? fieldValue
+        : Number(slot.expectedMortality) || 0,
+    actualReadyPlants:
+      field === "actualReadyPlants"
+        ? fieldValue
+        : Number(slot.actualReadyPlants) || 0,
+    lagwadRemaining:
+      field === "lagwadRemaining"
+        ? fieldValue
+        : Number(slot.lagwadRemaining) || 0,
     closingStock:
       field === "closingStock"
         ? fieldValue
@@ -122,7 +134,14 @@ export function logStockFieldChange(
  */
 export function applyStockFieldUpdates(slot, updates, performedBy, source) {
   let changed = false;
-  for (const field of ["actualPlants", "closingStock", "availablePlants"]) {
+  for (const field of [
+    "actualPlants",
+    "expectedMortality",
+    "actualReadyPlants",
+    "lagwadRemaining",
+    "closingStock",
+    "availablePlants",
+  ]) {
     if (updates[field] === undefined) continue;
     const prev = parseStockNumber(slot[field]);
     const next =

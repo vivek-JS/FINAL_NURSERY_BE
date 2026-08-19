@@ -1,6 +1,7 @@
 /**
- * Map Ram Agri Input Master seed varieties to nursery plant/subtype packings.
- * Stock moves via internal PO (Ram Agri → Ram Biotech), not mirror sync.
+ * Map Ram Agri Input Master seed varieties to nursery plant/subtype for packet requests.
+ * Stock is not mirrored at link time. Inventory approve of a sowing request creates
+ * an internal PO (Ram Agri → Ram Biotech).
  */
 import mongoose from "mongoose";
 import Product from "../models/product.model.js";

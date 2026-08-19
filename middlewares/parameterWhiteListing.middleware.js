@@ -59,6 +59,9 @@ const allowedParams = [
   "orderIds",
   "userId",
   "date",
+  "sowDate", // GET /sowing/request/:id/slot-preview
+  "sowingDate", // alias of sowDate
+  "plantReadyDays", // GET /sowing/request/:id/slot-preview
   "fromDate",
   "dispatched",
   "includePastDueBeyondRange",
@@ -105,8 +108,15 @@ const allowedParams = [
   "toDate", // End date for date range filters
   "available", // For plants-gap-summary: return negative gaps (available/surplus) instead of positive gaps
   "board", // For plants-gap-summary: all slots with sow/booking/available activity
+  "overdue", // GET /sowing/plants-gap-summary board: include overdue sow-by slots
+  "today", // GET /sowing/plants-gap-summary board: include today's sow-by slots
+  "horizonDays", // GET /sowing/plants-gap-summary board: 0–7 future sow window
+  "includeEmpty", // GET /sowing/plants-gap-summary board: include empty slots
+  "fullMonth", // GET /sowing/plants-gap-summary board: ignore sow window, return full month
   "level", // For bucketing endpoints (order/inventory bucketing)
   "month", // For bucketing endpoints (month-level grouping)
+  "months", // GET /slots/lagwad-analysis — comma-separated month names
+  "metaOnly", // GET /slots/lagwad-analysis — month/slot picker data without the heavy joins
   "day", // For bucketing endpoints (day-level grouping)
   "salesPersonId", // For salesmen bucketing endpoints
   "taluka", // For salesmen bucketing endpoints (geographical grouping)
