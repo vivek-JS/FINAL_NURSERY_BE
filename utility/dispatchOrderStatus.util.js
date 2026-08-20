@@ -70,14 +70,17 @@ export function assertDispatchQuantityAllowed(order, dispatchQuantity, req) {
   return { currentRemaining, maxAllowed, qty };
 }
 
-/** Build $set fields when reverting an order after dispatch cancel/remove. */
+/** Build $set / $unset fields when reverting an order after dispatch cancel/remove. */
 export async function buildDispatchCancelRevertSet(order, restoredRemaining, session, userId) {
   const nextStatus = orderStatusAfterDispatchCancel(order, restoredRemaining);
+  // Clear day-key via $unset — schema enum rejects `null`.
   const setFields = {
     remainingPlants: restoredRemaining,
     orderStatus: nextStatus,
-    dispatchDayKey: null,
-    dispatchTargetDate: null,
+  };
+  const unsetFields = {
+    dispatchDayKey: 1,
+    dispatchTargetDate: 1,
   };
 
   const filteredBody = { ...setFields };
@@ -90,6 +93,9 @@ export async function buildDispatchCancelRevertSet(order, restoredRemaining, ses
 
   Object.assign(setFields, filteredBody);
   delete setFields.__earlyDispatchSlotHandled;
+  // Ensure early-dispatch helpers cannot reintroduce invalid null enums.
+  delete setFields.dispatchDayKey;
+  delete setFields.dispatchTargetDate;
 
-  return { nextStatus, setFields };
+  return { nextStatus, setFields, unsetFields };
 }

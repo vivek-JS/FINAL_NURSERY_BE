@@ -116,8 +116,9 @@ export function buildOrderEditHistoryEntries({
 
     entries.push({
       field,
-      previousValue,
-      newValue,
+      previousValue: previousValue === undefined ? "" : previousValue,
+      // Schema requires newValue; Mixed + required rejects null/undefined.
+      newValue: newValue === null || newValue === undefined ? "" : newValue,
       changedBy: userId || null,
       notes,
     });

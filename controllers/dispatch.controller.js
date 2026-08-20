@@ -106,8 +106,13 @@ export const updateOrderWithLedgerSync = async ({
   );
 
   const setFields = opWithAudit.$set || {};
+  const unsetFields = opWithAudit.$unset || {};
   const previousPlain = previousOrder?.toObject?.() ?? previousOrder;
   const syntheticNext = { ...previousPlain, ...setFields };
+  // Treat $unset as cleared so edit-history still records the change.
+  for (const key of Object.keys(unsetFields)) {
+    syntheticNext[key] = "";
+  }
   const dispatchHistoryEntries = buildOrderEditHistoryFromDocDiff(
     previousPlain,
     syntheticNext,
@@ -760,7 +765,7 @@ const applyDispatchCancelOrderRevert = async ({
   contextLabel,
   pullDispatchId = null,
 }) => {
-  const { setFields } = await buildDispatchCancelRevertSet(
+  const { setFields, unsetFields } = await buildDispatchCancelRevertSet(
     order,
     restoredRemaining,
     session,
@@ -769,6 +774,9 @@ const applyDispatchCancelOrderRevert = async ({
   setFields.currentDispatchId = nextCurrent ?? null;
 
   const updateOperation = { $set: setFields };
+  if (unsetFields && Object.keys(unsetFields).length > 0) {
+    updateOperation.$unset = { ...(updateOperation.$unset || {}), ...unsetFields };
+  }
   if (pullDispatchId) {
     updateOperation.$pull = { dispatchHistory: { dispatchId: pullDispatchId } };
   }
@@ -3268,13 +3276,9 @@ const removeTransport = async (req, res) => {
             ? {
                 currentDispatchId: null,
                 orderStatus: "FARM_READY",
-                dispatchDayKey: null,
-                dispatchTargetDate: null,
               }
             : {
                 orderStatus: "FARM_READY",
-                dispatchDayKey: null,
-                dispatchTargetDate: null,
               };
         await updateOrderWithLedgerSync({
           orderId: oid,
@@ -3283,7 +3287,11 @@ const removeTransport = async (req, res) => {
           userId: req.user?._id,
           req,
           contextLabel: "remove_transport_legacy_bulk",
-          updateOperation: { $set: patch },
+          updateOperation: {
+            $set: patch,
+            // Schema enum rejects dispatchDayKey: null — clear with $unset.
+            $unset: { dispatchDayKey: 1, dispatchTargetDate: 1 },
+          },
         });
       }
     }
