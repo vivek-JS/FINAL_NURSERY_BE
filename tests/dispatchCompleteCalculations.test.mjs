@@ -6,13 +6,24 @@ import {
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 
 describe("dispatch complete — payment vs ledger totals", () => {
-  it("getPlantOrderLineTotal matches roundMoney(rate * plantCount)", () => {
+  it("getPlantOrderLineTotal matches roundMoney(rate * plantCount) when freight is zero", () => {
     const order = { rate: 12.345, numberOfPlants: 100, additionalPlants: 7 };
     const n = 107;
     assert.equal(
       getPlantOrderLineTotal(order),
       roundMoney(order.rate * n)
     );
+  });
+
+  it("getPlantOrderLineTotal adds farmer freight share only", () => {
+    const order = {
+      rate: 10,
+      numberOfPlants: 100,
+      additionalPlants: 0,
+      freight: { totalAmount: 400, farmerShareAmount: 200, companyShareAmount: 200 },
+      freightCharges: 200,
+    };
+    assert.equal(getPlantOrderLineTotal(order), 1200);
   });
 
   it("roundMoney stabilizes dispatch payment comparison inputs", () => {

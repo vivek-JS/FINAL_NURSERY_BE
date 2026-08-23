@@ -43,10 +43,31 @@ export function getOrderUpdateUserContext(user) {
 
   return {
     userRole,
+    roleKey: ur,
     isDispatchManagerUser,
     canEditOrderCore,
     canChangeOrderStatusFull,
   };
+}
+
+/** Roles whose rate edits apply immediately instead of creating a RateChangeRequest. */
+export const RATE_DIRECT_APPLY_ROLES = new Set([
+  "SUPER_ADMIN",
+  "SUPERADMIN",
+  "OFFICE_ADMIN",
+  "OFFICEADMIN",
+]);
+
+/**
+ * True when the user may set an order rate without super-admin approval.
+ * Checks `role` and `jobTitle` independently so either one grants the bypass.
+ */
+export function canApplyRateDirectly(user) {
+  if (!user) return false;
+  return (
+    RATE_DIRECT_APPLY_ROLES.has(normalizeRoleKey(user.role)) ||
+    RATE_DIRECT_APPLY_ROLES.has(normalizeRoleKey(user.jobTitle))
+  );
 }
 
 export function isDispatchManagerAllowedStatus(orderStatus) {

@@ -72,7 +72,9 @@ import {
   getOrderUpdateUserContext,
   DISPATCH_MANAGER_ALLOWED_STATUSES,
   resolveUserForOrderUpdatePermissions,
+  canApplyRateDirectly,
 } from "../utils/orderUpdatePermissions.js";
+import { canDispatchBeyondRemaining } from "../utility/dispatchOrderStatus.util.js";
 import {
   buildOrderEditHistoryEntries,
   mergeEditHistoryIntoFilteredBody,
@@ -129,13 +131,6 @@ const userCanCreateOrderAsAccepted = (user) => {
     role === "SUPERADMIN" ||
     role === "SUPER_ADMIN"
   );
-};
-
-const isSuperAdminUser = (user) => {
-  if (!user) return false;
-  const role = String(user.role || "").toUpperCase().trim();
-  const jt = String(user.jobTitle || "").toUpperCase().trim();
-  return role === "SUPER_ADMIN" || role === "SUPERADMIN" || jt === "SUPER_ADMIN" || jt === "SUPERADMIN";
 };
 
 const authUserObjectIdForOrderAudit = (user) => {
@@ -835,6 +830,22 @@ const createOne = (Model, modelName) =>
           orderData.orderSource === "WHATSAPP" ||
           orderData.bookedViaWhatsApp === true ||
           orderData.bookedViaWhatsApp === "true";
+
+        // A DISPATCHED order must either be attached to a dispatch (vehicle) right away or
+        // explicitly declare itself an instant dispatch. Otherwise it becomes an orphan
+        // that shows as dispatched with no vehicle behind it.
+        if (!isWhatsAppBooking && req.body.orderStatus === "DISPATCHED") {
+          const hasDispatch = Boolean(String(req.body.dispatchId || "").trim());
+          const isInstantDispatch =
+            req.body.instantDispatch === true ||
+            String(req.body.instantDispatch || "").toLowerCase() === "true";
+          if (!hasDispatch && !isInstantDispatch) {
+            throw new AppError(
+              "Cannot create a DISPATCHED order without a vehicle. Provide dispatchId to attach it to a dispatch, or set instantDispatch for an instant order.",
+              400
+            );
+          }
+        }
 
         const resolvedOrderStatus = isWhatsAppBooking
           ? "PENDING"
@@ -2103,13 +2114,13 @@ const updateOne = (Model, modelName, allowedFields) =>
       // Track general order field edits (rate, numberOfPlants, deliveryDate)
       const editHistoryEntries = [];
 
-      // Rate change approval gate: non-super-admins trigger a pending approval request
-      // instead of applying the rate immediately. Super admins bypass this and apply directly.
+      // Rate change approval gate: roles outside RATE_DIRECT_APPLY_ROLES trigger a pending
+      // approval request instead of applying the rate immediately.
       let pendingRateApprovalCreated = false;
       if (
         filteredBody.rate !== undefined &&
         Number(filteredBody.rate) !== Number(existingDoc.rate) &&
-        !isSuperAdminUser(req.user)
+        !canApplyRateDirectly(resolveUserForOrderUpdatePermissions(req))
       ) {
         try {
           await createRateChangeRequest({
@@ -2129,7 +2140,7 @@ const updateOne = (Model, modelName, allowedFields) =>
         delete filteredBody.rate;
       }
 
-      // Super admin applying rate directly: track in edit history
+      // Rate applied directly (no approval needed): track in edit history
       if (filteredBody.rate && filteredBody.rate !== existingDoc.rate) {
         editHistoryEntries.push({
           field: "rate",
@@ -2907,7 +2918,8 @@ const updateOne = (Model, modelName, allowedFields) =>
           await handleSlotUpdatesWithSession(
             existingDoc,
             filteredBody,
-            session
+            session,
+            { req, allowOverflow: canDispatchBeyondRemaining(req) }
           );
         } catch (error) {
           await session.abortTransaction();
@@ -3130,13 +3142,18 @@ const updateOne = (Model, modelName, allowedFields) =>
 const handleSlotUpdatesWithSession = async (
   existingDoc,
   filteredBody,
-  session
+  session,
+  { req = null, allowOverflow = false } = {}
 ) => {
   const { bookingSlot, numberOfPlants } = filteredBody;
 
   try {
     // Check slot availability before any updates
     const checkSlotAvailability = async (slotId, plantsNeeded) => {
+      // Privileged roles may overbook a slot on order edit (slot goes negative on purpose).
+      if (allowOverflow) {
+        return;
+      }
       const currentSlot = await PlantSlot.findOne(
         { "subtypeSlots.slots._id": slotId },
         { "subtypeSlots.$": 1 }
@@ -3229,7 +3246,7 @@ const handleSlotUpdatesWithSession = async (
             orderId: orderIdForTrail,
             quantity: plantsCount,
             direction: action === "subtract" ? "book" : "release",
-            performedBy: req.user?._id,
+            performedBy: req?.user?._id,
             session,
             isSowingAllowed,
             affectsAvailable: !isSowingAllowed,

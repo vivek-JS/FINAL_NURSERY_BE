@@ -195,6 +195,50 @@ export function watiDisplayOrderId({ orderId, publicOrderCode } = {}) {
 }
 
 /**
+ * "Pimpalgaon Bk, Niphad, Nashik" — village, taluka and district in one string.
+ *
+ * The WATI template body renders only {{village}}, so the full address has to travel in that
+ * one parameter. Blank parts are dropped and duplicates collapsed.
+ */
+export function buildWatiLocationLabel(source = {}) {
+  const parts = [
+    source.village,
+    source.talukaName || source.taluka,
+    source.districtName || source.district,
+  ];
+  const seen = new Set();
+  const cleaned = [];
+  for (const part of parts) {
+    const value = String(part ?? "").trim();
+    if (!value || value === "N/A") continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(value);
+  }
+  return cleaned.join(", ") || "N/A";
+}
+
+/**
+ * Village / taluka / district for a WATI recipient, falling back to the order when the
+ * farmer document was fetched without those fields.
+ */
+export function buildWatiRecipientLocation(farmer, orderDetails = {}) {
+  const pick = (...candidates) => {
+    for (const c of candidates) {
+      const v = String(c ?? "").trim();
+      if (v && v !== "N/A") return v;
+    }
+    return "N/A";
+  };
+  return {
+    village: pick(farmer?.village, orderDetails?.village),
+    taluka: pick(farmer?.talukaName, farmer?.taluka, orderDetails?.taluka),
+    district: pick(farmer?.districtName, farmer?.district, orderDetails?.district),
+  };
+}
+
+/**
  * Shared params for order_accpeted_revamped / order_placed_revamped (IST dates).
  */
 export function buildOrderConfirmationTemplateParameters(sendTo, orderDetails) {
@@ -229,8 +273,9 @@ export function buildOrderConfirmationTemplateParameters(sendTo, orderDetails) {
   return watiTemplateParameters([
     { name: "name", value: sendTo.name || "Farmer" },
     { name: "id", value: templateOrderId },
-    { name: "village", value: sendTo.village || "N/A" },
-    { name: "taluka", value: sendTo.taluka || "N/A" },
+    { name: "village", value: buildWatiLocationLabel(sendTo) },
+    { name: "taluka", value: sendTo.talukaName || sendTo.taluka || "N/A" },
+    { name: "district", value: sendTo.districtName || sendTo.district || "N/A" },
     { name: "number", value: sendTo.mobileNumber?.toString() || "N/A" },
     { name: "plant", value: acceptPlant },
     { name: "subtype", value: acceptSubtype },
@@ -254,13 +299,10 @@ export function buildOrderConfirmationTemplateParameters(sendTo, orderDetails) {
  */
 export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
   try {
-    const sendTo = buildWatiSendRecipient(farmer, {
-      taluka:
-        farmer?.talukaName ||
-        farmer?.taluka ||
-        orderDetails?.taluka ||
-        "N/A",
-    });
+    const sendTo = buildWatiSendRecipient(
+      farmer,
+      buildWatiRecipientLocation(farmer, orderDetails)
+    );
     if (!sendTo) {
       console.warn("⚠️ No farmer mobile number provided");
       return { success: false, error: "No mobile number" };
@@ -286,13 +328,10 @@ export async function sendOrderAcceptedWhatsApp(farmer, orderDetails) {
  */
 export async function sendOrderPlacedWhatsApp(farmer, orderDetails) {
   try {
-    const sendTo = buildWatiSendRecipient(farmer, {
-      taluka:
-        farmer?.talukaName ||
-        farmer?.taluka ||
-        orderDetails?.taluka ||
-        "N/A",
-    });
+    const sendTo = buildWatiSendRecipient(
+      farmer,
+      buildWatiRecipientLocation(farmer, orderDetails)
+    );
     if (!sendTo) {
       console.warn("⚠️ No farmer mobile number provided");
       return { success: false, error: "No mobile number" };

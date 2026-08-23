@@ -1,6 +1,7 @@
 import AppError from "../utility/appError.js";
 import User from "../models/user.model.js";
 import DealerWallet from "../models/dealerWallet.js";
+import { DISCOUNT_PAYMENT_MODE, isDiscountPayment } from "./orderDiscountPayment.js";
 
 /**
  * Build farmer/dealer description string for wallet transaction notes (aligned with order.controller addNewPayment).
@@ -60,6 +61,10 @@ export function buildDispatchCompletePaymentSubdocs(rawList, reqUser, order) {
       finalPaymentStatus = row.paymentStatus;
     }
 
+    const discountRow = isDiscountPayment(row);
+    if (discountRow && isWalletPayment) {
+      throw new AppError(`Discount cannot be a wallet payment at index ${i}`, 400);
+    }
     const modeOfPayment = isWalletPayment ? "Wallet" : row.modeOfPayment;
     const paymentDate = row.paymentDate ? new Date(row.paymentDate) : new Date();
     const utrTrim = row.utrNumber?.trim() || undefined;
@@ -72,14 +77,16 @@ export function buildDispatchCompletePaymentSubdocs(rawList, reqUser, order) {
       paidAmount: amount,
       paymentStatus: finalPaymentStatus,
       paymentDate,
-      bankName: row.bankName || "",
-      receiptPhoto: Array.isArray(row.receiptPhoto) ? row.receiptPhoto : [],
-      modeOfPayment,
-      isWalletPayment,
-      remark: row.remark || "",
-      transactionId: txnTrim || utrTrim || undefined,
-      chequeNumber: row.chequeNumber || undefined,
-      utrNumber: utrTrim,
+      bankName: discountRow ? "" : row.bankName || "",
+      receiptPhoto: discountRow ? [] : Array.isArray(row.receiptPhoto) ? row.receiptPhoto : [],
+      modeOfPayment: discountRow ? DISCOUNT_PAYMENT_MODE : modeOfPayment,
+      isWalletPayment: discountRow ? false : isWalletPayment,
+      isDiscount: discountRow,
+      remark: row.remark || (discountRow ? "Delivery complete discount" : ""),
+      transactionId: discountRow ? undefined : txnTrim || utrTrim || undefined,
+      chequeNumber: discountRow ? undefined : row.chequeNumber || undefined,
+      utrNumber: discountRow ? undefined : utrTrim,
+      bankVerificationStatus: discountRow ? "NOT_REQUIRED" : undefined,
       customerName:
         row.customerName?.trim() ||
         (!order.dealerOrder && order.farmer?.name ? order.farmer.name : undefined),

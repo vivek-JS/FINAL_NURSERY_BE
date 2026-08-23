@@ -20,6 +20,7 @@ const FIELD_CONFIG = {
   expectedNursery: { label: "Expected nursery" },
   batchNumber: { label: "Batch number" },
   freightCharges: { label: "Freight charges", numeric: true },
+  freight: { label: "Freight split" },
   deliveryChallanInvoiceNumber: { label: "DC invoice label" },
   orderFor: { label: "Order for" },
   farmer: { label: "Farmer", objectId: true },

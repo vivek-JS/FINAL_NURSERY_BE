@@ -22,8 +22,8 @@ import {
   orderStatusAfterDispatchCancel,
   assertDispatchQuantityAllowed,
   buildDispatchCancelRevertSet,
-  isDispatchManagerRequest,
-  DISPATCH_MANAGER_EXTRA_QTY,
+  canDispatchBeyondRemaining,
+  dispatchExtraQtyForRequest,
 } from "../utility/dispatchOrderStatus.util.js";
 import {
   syncFarmerPlantLedgerForOrderUpdate,
@@ -40,6 +40,7 @@ import {
   formatOrderWalletDescriptionContext,
   sumCollectedFromNewPaymentSubdocs,
 } from "../utils/dispatchCompleteOrderPayments.js";
+import { normalizeFreightInput, resolveFarmerFreightShare } from "../utils/orderFreight.js";
 import { ensureOfficialDcSetFields } from "../services/officialDeliveryChallan.service.js";
 import {
   ensureOfficialInvoiceSetFields,
@@ -518,7 +519,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
 
         const dispatchQty = Number(orderDispatch.dispatchQuantity) || 0;
         let extraPlants = 0;
-        if (isDispatchManagerRequest(req) && dispatchQty > currentRemaining) {
+        if (canDispatchBeyondRemaining(req) && dispatchQty > currentRemaining) {
           extraPlants = dispatchQty - currentRemaining;
         }
 
@@ -1122,7 +1123,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       const { currentRemaining } = assertDispatchQuantityAllowed(order, newQty, req);
       const newRemaining = currentRemaining - newQty;
       let extraPlants = 0;
-      if (isDispatchManagerRequest(req) && newQty > currentRemaining) {
+      if (canDispatchBeyondRemaining(req) && newQty > currentRemaining) {
         extraPlants = newQty - currentRemaining;
       }
       let newStatus = orderStatusFromRemaining(order, newRemaining);
@@ -1213,10 +1214,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       }
 
       const currentRemaining = orderRemainingOrBookable(order);
-      const maxNewQty =
-        oldQty +
-        currentRemaining +
-        (isDispatchManagerRequest(req) ? DISPATCH_MANAGER_EXTRA_QTY : 0);
+      const maxNewQty = oldQty + currentRemaining + dispatchExtraQtyForRequest(req);
       if (newQty > maxNewQty) {
         throw new AppError(
           `Dispatch quantity (${newQty}) exceeds allowed plants (${maxNewQty}) for order ${order.orderId}`,
@@ -1225,7 +1223,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       }
 
       let extraPlants = 0;
-      if (isDispatchManagerRequest(req) && newQty > oldQty + currentRemaining) {
+      if (canDispatchBeyondRemaining(req) && newQty > oldQty + currentRemaining) {
         extraPlants = newQty - (oldQty + currentRemaining);
       }
 
@@ -1945,7 +1943,7 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     assertDispatchQuantityAllowed(order, qty, req);
     const currentRemaining = orderRemainingOrBookable(order);
     let extraPlants = 0;
-    if (isDispatchManagerRequest(req) && qty > currentRemaining) {
+    if (canDispatchBeyondRemaining(req) && qty > currentRemaining) {
       extraPlants = qty - currentRemaining;
     }
 
@@ -2151,7 +2149,19 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     const response = generateResponse(
       "Success",
       "Order added to dispatch successfully",
-      dispatch
+      dispatch,
+      undefined,
+      {
+        linkedOrder: {
+          _id: orderId,
+          orderStatus: newStatus,
+          currentDispatchId: dispatchOid,
+          remainingPlants: newRemainingPlants,
+          vehicleName: existingDispatch.vehicleName || "",
+          vehicleNumber: existingDispatch.vehicleNumber || "",
+          driverName: existingDispatch.driverName || "",
+        },
+      }
     );
     res.status(200).json(response);
   } catch (error) {
@@ -3610,11 +3620,20 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         orderUpdateData.remainingPlants = Math.max(0, prevRem + deltaAdd);
       }
 
-      let freightForTotal = Math.max(0, Number(order.freightCharges) || 0);
-      if (orderUpdate.freightCharges !== undefined && orderUpdate.freightCharges !== null) {
-        freightForTotal = Math.max(0, Number(orderUpdate.freightCharges) || 0);
-        if (freightForTotal !== (order.freightCharges || 0)) {
-          orderUpdateData.freightCharges = freightForTotal;
+      const previousFarmerFreight = resolveFarmerFreightShare(order);
+      let freightForTotal = previousFarmerFreight;
+      const freightPayload =
+        orderUpdate.freight !== undefined && orderUpdate.freight !== null
+          ? orderUpdate.freight
+          : orderUpdate.freightCharges;
+      if (freightPayload !== undefined && freightPayload !== null) {
+        const normalizedFreight = normalizeFreightInput(freightPayload, {
+          userId: req.user?._id,
+        });
+        if (normalizedFreight) {
+          freightForTotal = normalizedFreight.freightCharges;
+          orderUpdateData.freight = normalizedFreight.freight;
+          orderUpdateData.freightCharges = normalizedFreight.freightCharges;
         }
       }
 
@@ -3736,14 +3755,15 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       }
       if (
         orderUpdateData.freightCharges !== undefined &&
-        orderUpdateData.freightCharges !== (order.freightCharges || 0)
+        orderUpdateData.freightCharges !== previousFarmerFreight
       ) {
+        const nextFreight = orderUpdateData.freight || {};
         pushPayload.orderEditHistory = {
           field: "freightCharges",
-          previousValue: order.freightCharges || 0,
+          previousValue: previousFarmerFreight,
           newValue: orderUpdateData.freightCharges,
           changedBy: req.user ? req.user._id : undefined,
-          notes: `Freight charges set to ₹${orderUpdateData.freightCharges}`,
+          notes: `Freight farmer share set to ₹${orderUpdateData.freightCharges} of ₹${nextFreight.totalAmount ?? orderUpdateData.freightCharges} (company ₹${nextFreight.companyShareAmount ?? 0})`,
         };
       }
       if (newPaymentSubdocs.length > 0) {

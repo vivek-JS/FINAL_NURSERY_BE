@@ -74,6 +74,27 @@ describe("buildJournalLines — all financial event types", () => {
     assert.ok(sumAccount(lines, ACCOUNT_CODES.AR_FARMER).dr > 0);
   });
 
+  it("FARMER_DISCOUNT reduces AR via SALES_DISCOUNT, not cash", () => {
+    const lines = buildJournalLines(FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT, {
+      amount: 400,
+      customerMobile: mobile,
+    });
+    assertBalanced(lines, "farmer discount");
+    assert.ok(sumAccount(lines, ACCOUNT_CODES.SALES_DISCOUNT).dr > 0);
+    assert.ok(sumAccount(lines, ACCOUNT_CODES.AR_FARMER).cr > 0);
+    assert.equal(sumAccount(lines, ACCOUNT_CODES.CASH).dr, 0);
+  });
+
+  it("FARMER_DISCOUNT_REVERSED restores AR", () => {
+    const lines = buildJournalLines(FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT_REVERSED, {
+      amount: 400,
+      customerMobile: mobile,
+    });
+    assertBalanced(lines, "farmer discount rev");
+    assert.ok(sumAccount(lines, ACCOUNT_CODES.AR_FARMER).dr > 0);
+    assert.ok(sumAccount(lines, ACCOUNT_CODES.SALES_DISCOUNT).cr > 0);
+  });
+
   it("FARMER_ORDER_DELTA increase", () => {
     const lines = buildJournalLines(FINANCIAL_EVENT_TYPES.FARMER_ORDER_DELTA, {
       amount: 200,

@@ -7,6 +7,8 @@ import FarmerPlantOrderArchive from "../models/farmerPlantOrderArchive.model.js"
 import FarmerOrderTransferRequest from "../models/farmerOrderTransferRequest.model.js";
 import { isDealerScopedTransferPair } from "../utility/orderTransferEligibility.js";
 import { applyPaymentTimingToPayment } from "./paymentTiming.js";
+import { resolveFarmerFreightShare } from "./orderFreight.js";
+import { isDiscountPayment } from "./orderDiscountPayment.js";
 
 const TERMINAL_PLANT_ORDER_STATUSES = new Set([
   "CANCELLED",
@@ -167,7 +169,8 @@ export const shouldLogFarmerPlantLedger = (order) => {
 
 export const getPlantOrderLineTotal = (order) => {
   const n = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
-  return Math.round((order.rate || 0) * n * 100) / 100;
+  const freight = resolveFarmerFreightShare(order);
+  return Math.round(((order.rate || 0) * n + freight) * 100) / 100;
 };
 
 export const normalizeFarmerMobile = (mobile) => {
@@ -492,6 +495,7 @@ export async function recordFarmerPlantLedgerPaymentTransition(
   const amount = Math.abs(Number(payment.paidAmount || 0));
   const fundingDealerId = await resolveFundingDealerId(order);
   if (!(amount > 0)) return null;
+  const discountRow = isDiscountPayment(payment);
 
   /**
    * Transition de-dupe key must allow repeated flips (PENDING→COLLECTED→PENDING→COLLECTED).
@@ -528,6 +532,7 @@ export async function recordFarmerPlantLedgerPaymentTransition(
     previousStatus: previousStatus || null,
     newStatus,
     isWalletPayment: Boolean(payment.isWalletPayment),
+    isDiscount: discountRow,
     fundingDealerId:
       payment.isWalletPayment && fundingDealerId
         ? typeof fundingDealerId === "string"
@@ -541,9 +546,11 @@ export async function recordFarmerPlantLedgerPaymentTransition(
     : new Date();
 
   if (action === "CREDIT") {
-    const defaultCreditDesc = payment.isWalletPayment
-      ? `Payment collected (dealer wallet) — ${payment.modeOfPayment || "wallet"}`
-      : `Payment collected — ${payment.modeOfPayment || "—"}`;
+    const defaultCreditDesc = discountRow
+      ? `Discount approved — ₹${amount}`
+      : payment.isWalletPayment
+        ? `Payment collected (dealer wallet) — ${payment.modeOfPayment || "wallet"}`
+        : `Payment collected — ${payment.modeOfPayment || "—"}`;
     const row = await createFarmerPlantLedgerEntry({
       customerMobile,
       customerName,
@@ -554,7 +561,7 @@ export async function recordFarmerPlantLedgerPaymentTransition(
       paymentId: pid,
       credit: amount,
       reference: String(order.orderId ?? ""),
-      category: "Payment",
+      category: discountRow ? "Discount" : "Payment",
       description:
         descriptionOverride != null && String(descriptionOverride).trim()
           ? String(descriptionOverride).trim()
@@ -1145,7 +1152,7 @@ export async function archiveFarmerPlantOrderBeforeDelete(doc, deletedBy) {
 export async function computeOrderPaymentTotals(order) {
   const totalOrderedPlants =
     (order.numberOfPlants || 0) + (order.additionalPlants || 0);
-  const freight = Math.max(0, Number(order.freightCharges) || 0);
+  const freight = resolveFarmerFreightShare(order);
   const orderTotal =
     Math.round(((order.rate || 0) * totalOrderedPlants + freight) * 100) / 100;
   const totalCollected = (order.payment || [])
@@ -1198,7 +1205,7 @@ export function findPaymentInOrder(order, paymentId) {
 
 export function recomputeOrderPaymentCompletion(order) {
   const plants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
-  const freight = Math.max(0, Number(order.freightCharges) || 0);
+  const freight = resolveFarmerFreightShare(order);
   const total = roundMoney((order.rate || 0) * plants + freight);
   const collected = roundMoney(
     (order.payment || []).reduce((sum, p) => {

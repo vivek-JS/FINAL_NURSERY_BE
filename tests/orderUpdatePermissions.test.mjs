@@ -4,6 +4,7 @@ import {
   getOrderUpdateUserContext,
   DISPATCH_MANAGER_ALLOWED_STATUSES,
   isDispatchManagerAllowedStatus,
+  canApplyRateDirectly,
 } from "../utils/orderUpdatePermissions.js";
 
 describe("orderUpdatePermissions", () => {
@@ -72,5 +73,13 @@ describe("orderUpdatePermissions", () => {
   it("DISPATCH_MANAGER_ALLOWED_STATUSES includes expected values", () => {
     assert.equal(DISPATCH_MANAGER_ALLOWED_STATUSES.has("READY_FOR_DISPATCH"), true);
     assert.equal(DISPATCH_MANAGER_ALLOWED_STATUSES.has("DISPATCH_PROCESS"), true);
+  });
+
+  it("office admin and super admin apply rate directly", () => {
+    assert.equal(canApplyRateDirectly({ jobTitle: "OFFICE_ADMIN" }), true);
+    assert.equal(canApplyRateDirectly({ role: "SUPER_ADMIN" }), true);
+    assert.equal(canApplyRateDirectly({ role: "FARMER", jobTitle: "OFFICE_ADMIN" }), true);
+    assert.equal(canApplyRateDirectly({ jobTitle: "ACCOUNTANT" }), false);
+    assert.equal(canApplyRateDirectly(null), false);
   });
 });

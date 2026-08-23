@@ -107,6 +107,40 @@ describe("dispatchCompleteOrderPayments — buildDispatchCompletePaymentSubdocs"
     );
   });
 
+  it("normalizes Discount rows as pending concession without bank fields", () => {
+    const [row] = buildDispatchCompletePaymentSubdocs(
+      [
+        {
+          paidAmount: 250,
+          modeOfPayment: "Discount",
+          isDiscount: true,
+          paymentStatus: "COLLECTED",
+          remark: "Festival concession",
+        },
+      ],
+      { jobTitle: "OFFICE_ADMIN" },
+      farmerOrder
+    );
+    assert.equal(row.modeOfPayment, "Discount");
+    assert.equal(row.isDiscount, true);
+    assert.equal(row.paymentStatus, "PENDING");
+    assert.equal(row.isWalletPayment, false);
+    assert.equal(row.bankVerificationStatus, "NOT_REQUIRED");
+    assert.equal(row.remark, "Festival concession");
+  });
+
+  it("rejects Discount as a wallet payment", () => {
+    assert.throws(
+      () =>
+        buildDispatchCompletePaymentSubdocs(
+          [{ paidAmount: 100, modeOfPayment: "Discount", isWalletPayment: true }],
+          { jobTitle: "ACCOUNTANT" },
+          farmerOrder
+        ),
+      (err) => err instanceof AppError && err.statusCode === 400
+    );
+  });
+
   it("trims utrNumber and maps to transactionId", () => {
     const [row] = buildDispatchCompletePaymentSubdocs(
       [

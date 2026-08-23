@@ -14,6 +14,7 @@ export const DEFAULT_CHART_ACCOUNTS = [
   { code: ACCOUNT_CODES.SALES_PLANTS, name: "Sales — Plants", accountType: ACCOUNT_TYPES.INCOME, isControl: false },
   { code: ACCOUNT_CODES.SALES_AGRI, name: "Sales — Agri Inputs", accountType: ACCOUNT_TYPES.INCOME, isControl: false },
   { code: ACCOUNT_CODES.SALES_RETURN, name: "Sales Return", accountType: ACCOUNT_TYPES.INCOME, isControl: false },
+  { code: ACCOUNT_CODES.SALES_DISCOUNT, name: "Sales Discount — Plants", accountType: ACCOUNT_TYPES.INCOME, isControl: false },
   { code: ACCOUNT_CODES.COMMISSION_EXPENSE, name: "Commission Expense", accountType: ACCOUNT_TYPES.EXPENSE, isControl: false },
   { code: ACCOUNT_CODES.TRANSPORT_EXPENSE, name: "Transport Expense", accountType: ACCOUNT_TYPES.EXPENSE, isControl: false },
 ];

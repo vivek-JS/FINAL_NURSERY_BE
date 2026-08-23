@@ -264,6 +264,11 @@ const paymentSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    /** True when this row is a concession, not cash/bank. Accountant still approves it. */
+    isDiscount: {
+      type: Boolean,
+      default: false,
+    },
     mainPaymentId: {
       type: Schema.Types.ObjectId,
       ref: "BulkPayment",
@@ -865,11 +870,29 @@ const orderSchema = new Schema(
       type: Number,
       required: true,
     },
-    /** Per-order freight / transport charges added at delivery complete (₹). */
+    /** Per-order freight / transport charges added at delivery complete (₹).
+     *  Legacy mirror of `freight.farmerShareAmount` — do not use for new writes. */
     freightCharges: {
       type: Number,
       default: 0,
       min: 0,
+    },
+    /** Split freight: only farmerShareAmount is billed to the farmer. */
+    freight: {
+      totalAmount: { type: Number, default: 0, min: 0 },
+      farmerShareAmount: { type: Number, default: 0, min: 0 },
+      companyShareAmount: { type: Number, default: 0, min: 0 },
+      farmerSharePercent: { type: Number, default: 100, min: 0, max: 100 },
+      paidBy: {
+        type: String,
+        enum: ["FARMER", "COMPANY", "TRANSPORTER", "DEALER"],
+        default: "FARMER",
+      },
+      transporterName: { type: String, trim: true },
+      vehicleNumber: { type: String, trim: true },
+      remark: { type: String, trim: true },
+      recordedBy: { type: Schema.Types.ObjectId, ref: "User" },
+      recordedAt: { type: Date },
     },
     orderPaymentStatus: {
       type: String,
@@ -1400,18 +1423,22 @@ orderSchema.pre("save", async function (next) {
   }
 });
 
-// Pre-save middleware to calculate orderPaymentStatus based on paymentStatus "COLLECTED"
+// Pre-save: keep freightCharges mirrored to the farmer share, then recompute payment status.
 orderSchema.pre("save", function (next) {
-  // Filter payments with paymentStatus "COLLECTED"
+  if (this.freight && typeof this.freight === "object") {
+    const farmerShare = Math.max(0, Number(this.freight.farmerShareAmount) || 0);
+    this.freightCharges = farmerShare;
+  }
+
   const totalCollected = this.payment
     .filter((p) => p.paymentStatus === "COLLECTED")
     .reduce((sum, p) => sum + (p.paidAmount || 0), 0);
 
   const totalOrderedPlants =
     (this.numberOfPlants || 0) + (this.additionalPlants || 0);
-  const totalAmount = this.rate * totalOrderedPlants;
+  const farmerFreight = Math.max(0, Number(this.freightCharges) || 0);
+  const totalAmount = (this.rate || 0) * totalOrderedPlants + farmerFreight;
 
-  // Update orderPaymentStatus and paymentCompleted
   this.orderPaymentStatus =
     totalCollected >= totalAmount ? "COMPLETED" : "PENDING";
   this.paymentCompleted = totalCollected >= totalAmount;

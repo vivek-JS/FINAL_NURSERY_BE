@@ -4,6 +4,7 @@ import {
 } from "../events/emitFinancialEvent.js";
 import { FINANCIAL_EVENT_TYPES } from "../domain/constants.js";
 import { roundMoney } from "../domain/roundMoney.js";
+import { isDiscountPayment } from "../../../utils/orderDiscountPayment.js";
 
 /** Live shadow (async) or backfill replay (awaitPost: true). */
 function shadowEmit(params, options) {
@@ -48,10 +49,15 @@ export function shadowFarmerPayment({ order, payment, customerMobile, previousSt
   if (amount <= 0) return;
   const isCollected = newStatus === "COLLECTED";
   const wasCollected = previousStatus === "COLLECTED";
+  const discount = isDiscountPayment(payment);
   if (isCollected && !wasCollected) {
     return shadowEmit({
-      idempotencyKey: `farmer:payment:${payment._id}:collected`,
-      eventType: FINANCIAL_EVENT_TYPES.FARMER_PAYMENT_COLLECTED,
+      idempotencyKey: discount
+        ? `farmer:discount:${payment._id}:collected`
+        : `farmer:payment:${payment._id}:collected`,
+      eventType: discount
+        ? FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT
+        : FINANCIAL_EVENT_TYPES.FARMER_PAYMENT_COLLECTED,
       sourceDomain: "Order",
       sourceId: order._id,
       entryDate: payment.paymentDate || new Date(),
@@ -61,13 +67,17 @@ export function shadowFarmerPayment({ order, payment, customerMobile, previousSt
         partyId: customerMobile,
         customerMobile,
         modeOfPayment: payment.modeOfPayment,
-        sourceLineRef: `payment:${payment._id}`,
+        sourceLineRef: discount ? `discount:${payment._id}` : `payment:${payment._id}`,
       },
     }, options);
   } else if (wasCollected && !isCollected) {
     return shadowEmit({
-      idempotencyKey: `farmer:payment:${payment._id}:rev:${newStatus}`,
-      eventType: FINANCIAL_EVENT_TYPES.FARMER_PAYMENT_REVERSED,
+      idempotencyKey: discount
+        ? `farmer:discount:${payment._id}:rev:${newStatus}`
+        : `farmer:payment:${payment._id}:rev:${newStatus}`,
+      eventType: discount
+        ? FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT_REVERSED
+        : FINANCIAL_EVENT_TYPES.FARMER_PAYMENT_REVERSED,
       sourceDomain: "Order",
       sourceId: order._id,
       entryDate: payment.paymentDate || new Date(),
@@ -77,7 +87,7 @@ export function shadowFarmerPayment({ order, payment, customerMobile, previousSt
         partyId: customerMobile,
         customerMobile,
         modeOfPayment: payment.modeOfPayment,
-        sourceLineRef: `payment:${payment._id}:rev`,
+        sourceLineRef: discount ? `discount:${payment._id}:rev` : `payment:${payment._id}:rev`,
       },
     }, options);
   }

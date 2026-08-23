@@ -110,17 +110,39 @@ function farmerWhatsAppRecipient(order) {
  * Customer shown in WATI template body (farmer / book-for name), not the WhatsApp recipient.
  */
 function resolveOrderTalukaForWati(order) {
-  const of = order?.orderFor;
-  if (of && typeof of === "object") {
-    const t = String(of.talukaName || of.taluka || "").trim();
-    if (t) return t;
-  }
-  const farmer = order?.farmer;
-  if (farmer && typeof farmer === "object") {
-    const t = String(farmer.talukaName || farmer.taluka || "").trim();
-    if (t) return t;
-  }
-  return "N/A";
+  return resolveOrderLocationForWati(order).taluka;
+}
+
+/**
+ * Village / taluka / district shown in the WATI body. A book-for-someone-else order uses the
+ * beneficiary's address; otherwise the farmer's. All name variants are filled in so downstream
+ * WATI helpers read a consistent value whichever key they prefer.
+ */
+function resolveOrderLocationForWati(order) {
+  const pickFrom = (source) => {
+    if (!source || typeof source !== "object") return null;
+    const village = String(source.village || source.villageName || "").trim();
+    const taluka = String(source.talukaName || source.taluka || "").trim();
+    const district = String(source.districtName || source.district || "").trim();
+    if (!village && !taluka && !district) return null;
+    return {
+      village: village || "N/A",
+      taluka: taluka || "N/A",
+      talukaName: taluka || "N/A",
+      district: district || "N/A",
+      districtName: district || "N/A",
+    };
+  };
+  return (
+    pickFrom(order?.orderFor) ||
+    pickFrom(order?.farmer) || {
+      village: "N/A",
+      taluka: "N/A",
+      talukaName: "N/A",
+      district: "N/A",
+      districtName: "N/A",
+    }
+  );
 }
 
 function orderCustomerForWatiTemplate(order) {
@@ -282,7 +304,7 @@ async function sendOrderAcceptedWhatsAppForOrder(order, { allowResend = false } 
 
   const orderDetails = await buildOrderAcceptedWhatsAppDetails(order);
 
-  const watiTaluka = orderDetails.taluka || resolveOrderTalukaForWati(order);
+  const watiLocation = resolveOrderLocationForWati(order);
 
   if (order.dealerOrder) {
     const dealerRec = dealerWhatsAppRecipient(order);
@@ -295,7 +317,7 @@ async function sendOrderAcceptedWhatsAppForOrder(order, { allowResend = false } 
         },
       };
     }
-    const dealerSendTo = buildWatiSendRecipient(dealerRec, { taluka: watiTaluka });
+    const dealerSendTo = buildWatiSendRecipient(dealerRec, watiLocation);
     if (!dealerSendTo) {
       return {
         success: false,
@@ -332,7 +354,7 @@ async function sendOrderAcceptedWhatsAppForOrder(order, { allowResend = false } 
       },
     };
   }
-  const farmerSendTo = buildWatiSendRecipient(farmerRec, { taluka: watiTaluka });
+  const farmerSendTo = buildWatiSendRecipient(farmerRec, watiLocation);
   if (!farmerSendTo) {
     return {
       success: false,
@@ -442,7 +464,7 @@ async function sendOrderPlacedWhatsAppForOrder(order, { allowResend = false } = 
   }
 
   const orderDetails = await buildOrderAcceptedWhatsAppDetails(order);
-  const watiTaluka = orderDetails.taluka || resolveOrderTalukaForWati(order);
+  const watiLocation = resolveOrderLocationForWati(order);
   const farmerRec = farmerWhatsAppRecipient(order);
   if (!farmerRec) {
     return {
@@ -453,7 +475,7 @@ async function sendOrderPlacedWhatsAppForOrder(order, { allowResend = false } = 
       },
     };
   }
-  const farmerSendTo = buildWatiSendRecipient(farmerRec, { taluka: watiTaluka });
+  const farmerSendTo = buildWatiSendRecipient(farmerRec, watiLocation);
   if (!farmerSendTo) {
     return {
       success: false,
@@ -491,7 +513,10 @@ export async function tryAutoSendOrderPlacedWhatsApp(orderId) {
   }
   try {
     const order = await Order.findById(orderId)
-      .populate("farmer", "name mobileNumber village taluka talukaName")
+      .populate(
+        "farmer",
+        "name mobileNumber village taluka talukaName district districtName"
+      )
       .populate("salesPerson", "name phoneNumber jobTitle")
       .populate("plantName", "name");
     if (!order) {
@@ -1191,7 +1216,8 @@ const updateOrder = updateOne(Order, "Order", [
   "expectedNursery", // Nursery site code from CMS (RB, GH, …)
   "batchNumber", // Lot / batch from complete-delivery form or manual edit
   "deliveryChallanInvoiceNumber", // Legacy / manual DC label when dispatch legs have no sequenced invoice #
-  "freightCharges", // Per-order freight at delivery complete
+  "freightCharges", // Per-order freight at delivery complete (legacy farmer-share mirror)
+  "freight", // Split freight object (total / farmer / company / paidBy)
 ]);
 /**
  * Add a new payment to an order and update dealer wallet accordingly

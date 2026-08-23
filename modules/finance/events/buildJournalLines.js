@@ -8,6 +8,8 @@ const FARMER_EVENTS = new Set([
   FINANCIAL_EVENT_TYPES.FARMER_ORDER_CREATED,
   FINANCIAL_EVENT_TYPES.FARMER_PAYMENT_COLLECTED,
   FINANCIAL_EVENT_TYPES.FARMER_PAYMENT_REVERSED,
+  FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT,
+  FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT_REVERSED,
   FINANCIAL_EVENT_TYPES.FARMER_ORDER_DELTA,
   FINANCIAL_EVENT_TYPES.FARMER_ORDER_CANCEL,
   FINANCIAL_EVENT_TYPES.FARMER_ORDER_REOPEN,
@@ -66,7 +68,7 @@ export function voucherTypeForEvent(eventType) {
   if (eventType.includes("REVERSAL") || eventType.includes("REVERSED")) {
     return "REVERSAL";
   }
-  if (eventType.includes("SALES_RETURN") || eventType.includes("REFUND")) {
+  if (eventType.includes("SALES_RETURN") || eventType.includes("REFUND") || eventType.includes("DISCOUNT")) {
     return "CREDIT_NOTE";
   }
   if (eventType.includes("COMMISSION")) {

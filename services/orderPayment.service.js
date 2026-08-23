@@ -12,6 +12,7 @@ import {
   shouldLogFarmerPlantLedger,
 } from "../utils/farmerPlantOrderLedgerHelper.js";
 import { syncDealerLedgerForOrder } from "../utils/dealerLedgerHelper.js";
+import { DISCOUNT_PAYMENT_MODE, isDiscountPayment } from "../utils/orderDiscountPayment.js";
 
 export function mergeRemarkWithPayee(remark, receiptPayeeName) {
   const r = String(remark || "").trim();
@@ -64,18 +65,25 @@ export function normalizePaymentRow(row, reqUser, order, { extraReceiptUrls = []
     ...extraReceiptUrls,
   ].filter(Boolean);
 
+  const isDiscount = isDiscountPayment(row);
+  if (isDiscount && isWalletPayment) {
+    throw new AppError("Discount cannot be a wallet payment", 400);
+  }
+
   const payment = {
     paidAmount: amount,
     paymentStatus: finalPaymentStatus,
     paymentDate: row.paymentDate ? new Date(row.paymentDate) : new Date(),
-    bankName: row.bankName || "",
-    receiptPhoto,
-    modeOfPayment,
-    isWalletPayment,
+    bankName: isDiscount ? "" : row.bankName || "",
+    receiptPhoto: isDiscount ? [] : receiptPhoto,
+    modeOfPayment: isDiscount ? DISCOUNT_PAYMENT_MODE : modeOfPayment,
+    isWalletPayment: isDiscount ? false : isWalletPayment,
+    isDiscount,
     remark: mergeRemarkWithPayee(row.remark, row.receiptPayeeName),
-    transactionId: txnTrim || utrTrim || undefined,
-    chequeNumber: row.chequeNumber?.trim() || undefined,
-    utrNumber: utrTrim,
+    transactionId: isDiscount ? undefined : txnTrim || utrTrim || undefined,
+    chequeNumber: isDiscount ? undefined : row.chequeNumber?.trim() || undefined,
+    utrNumber: isDiscount ? undefined : utrTrim,
+    bankVerificationStatus: isDiscount ? "NOT_REQUIRED" : undefined,
     customerName:
       row.customerName?.trim() ||
       (!order.dealerOrder && order.farmer?.name ? order.farmer.name : undefined),
@@ -86,6 +94,15 @@ export function normalizePaymentRow(row, reqUser, order, { extraReceiptUrls = []
   }
   return payment;
 }
+
+/** Payment modes that do not require a receipt photo. Cheque carries its own cheque number. */
+export const RECEIPT_OPTIONAL_MODES = new Set([
+  "Cash",
+  "NEFT/RTGS",
+  "UPI",
+  "Cheque",
+  DISCOUNT_PAYMENT_MODE,
+]);
 
 export function validatePaymentRow(row, index = 0) {
   const amount = Number(row.paidAmount);
@@ -100,13 +117,17 @@ export function validatePaymentRow(row, index = 0) {
     throw new AppError(`Payment mode required at index ${index}`, 400);
   }
 
-  if (
-    !isWalletPayment &&
-    mode &&
-    mode !== "Cash" &&
-    mode !== "NEFT/RTGS" &&
-    mode !== "UPI"
-  ) {
+  if (isDiscountPayment({ ...row, modeOfPayment: mode })) {
+    if (isWalletPayment) {
+      throw new AppError(`Discount cannot be a wallet payment at index ${index}`, 400);
+    }
+    if (!String(row.remark || "").trim()) {
+      throw new AppError(`Remark required for Discount at index ${index}`, 400);
+    }
+    return;
+  }
+
+  if (!isWalletPayment && mode && !RECEIPT_OPTIONAL_MODES.has(mode)) {
     const photos = Array.isArray(row.receiptPhoto) ? row.receiptPhoto : [];
     if (!photos.length) {
       throw new AppError(`Receipt photo required for ${mode} at index ${index}`, 400);

@@ -2,8 +2,17 @@ import AppError from "../utility/appError.js";
 import { revertEarlyDispatch } from "../services/earlyDispatch.service.js";
 import { getOrderUpdateUserContext, resolveUserForOrderUpdatePermissions } from "../utils/orderUpdatePermissions.js";
 
-/** Dispatch manager may dispatch up to remaining + this many extra plants per order. */
-export const DISPATCH_MANAGER_EXTRA_QTY = 1000;
+/**
+ * Extra plants (beyond an order's remaining) each role may dispatch per order.
+ * Overflow is pushed onto `additionalPlants` and lets the slot go negative.
+ */
+export const DISPATCH_EXTRA_QTY_BY_ROLE = {
+  DISPATCH_MANAGER: 1000,
+  SUPER_ADMIN: 1000,
+  SUPERADMIN: 1000,
+  OFFICE_ADMIN: 500,
+  OFFICEADMIN: 500,
+};
 
 export const bookablePlantsTotal = (order) =>
   Number(order?.numberOfPlants || 0) + Number(order?.additionalPlants || 0);
@@ -49,12 +58,37 @@ export function isDispatchManagerRequest(req) {
   return Boolean(getOrderUpdateUserContext(user).isDispatchManagerUser);
 }
 
+function roleKey(r) {
+  if (r == null || r === "") return "";
+  return String(r).trim().toUpperCase().replace(/\s+/g, "_");
+}
+
+/** Extra-plant allowance for a user object. Checks role and jobTitle independently. */
+export function dispatchExtraQtyForUser(user) {
+  if (!user) return 0;
+  const ctx = getOrderUpdateUserContext(user);
+  if (ctx.isDispatchManagerUser) {
+    return DISPATCH_EXTRA_QTY_BY_ROLE.DISPATCH_MANAGER;
+  }
+  const fromRole = DISPATCH_EXTRA_QTY_BY_ROLE[roleKey(user.role)] ?? 0;
+  const fromJob = DISPATCH_EXTRA_QTY_BY_ROLE[roleKey(user.jobTitle)] ?? 0;
+  return Math.max(fromRole, fromJob);
+}
+
+/** Extra-plant allowance for the requesting user, 0 when the role has none. */
+export function dispatchExtraQtyForRequest(req) {
+  const user = resolveUserForOrderUpdatePermissions(req);
+  return dispatchExtraQtyForUser(user);
+}
+
+/** True when the requesting role may dispatch past an order's remaining plants. */
+export function canDispatchBeyondRemaining(req) {
+  return dispatchExtraQtyForRequest(req) > 0;
+}
+
 export function maxDispatchQuantityForOrder(currentRemaining, req) {
   const base = Number(currentRemaining) || 0;
-  if (isDispatchManagerRequest(req)) {
-    return base + DISPATCH_MANAGER_EXTRA_QTY;
-  }
-  return base;
+  return base + dispatchExtraQtyForRequest(req);
 }
 
 export function assertDispatchQuantityAllowed(order, dispatchQuantity, req) {

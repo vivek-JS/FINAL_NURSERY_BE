@@ -43,6 +43,16 @@ export function buildJournalForFarmerEvent(eventType, payload) {
       );
       break;
 
+    case FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT:
+      b.dr(ACCOUNT_CODES.SALES_DISCOUNT, amount, { sourceLineRef: payload.sourceLineRef });
+      b.cr(ACCOUNT_CODES.AR_FARMER, amount, partyExtras);
+      break;
+
+    case FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT_REVERSED:
+      b.dr(ACCOUNT_CODES.AR_FARMER, amount, partyExtras);
+      b.cr(ACCOUNT_CODES.SALES_DISCOUNT, amount, { sourceLineRef: payload.sourceLineRef });
+      break;
+
     case FINANCIAL_EVENT_TYPES.FARMER_ORDER_DELTA:
       if (payload.isIncrease) {
         b.dr(ACCOUNT_CODES.AR_FARMER, amount, partyExtras);

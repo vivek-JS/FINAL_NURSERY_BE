@@ -321,7 +321,7 @@ async function loadOrderForWhatsAppAlert(orderOrId) {
   const orderId = orderOrId?._id || orderOrId;
   if (!orderId || !mongoose.isValidObjectId(String(orderId))) return null;
   return Order.findById(orderId)
-    .populate("farmer", "name village taluka talukaName")
+    .populate("farmer", "name village taluka talukaName district districtName")
     .populate("salesPerson", "name")
     .populate("plantName", "name")
     .lean();
@@ -384,6 +384,12 @@ export async function sendOrderPlacedAlert(orderOrId) {
       order?.orderFor?.taluka ||
       order?.orderFor?.talukaName ||
       "—";
+    const farmerDistrict =
+      order?.farmer?.districtName ||
+      order?.farmer?.district ||
+      order?.orderFor?.district ||
+      order?.orderFor?.districtName ||
+      "—";
 
     const orderNo = order?.orderId || order?.publicOrderCode || order?._id || "—";
     const plants = Number(order?.numberOfPlants) || 0;
@@ -401,7 +407,7 @@ export async function sendOrderPlacedAlert(orderOrId) {
       "🟢 *New Order Placed*",
       `Order No: ${orderNo}`,
       `Customer: ${farmerName}`,
-      `Village: ${farmerVillage} | Taluka: ${farmerTaluka}`,
+      `Village: ${farmerVillage} | Taluka: ${farmerTaluka} | District: ${farmerDistrict}`,
       `Plant: ${plantSubtype}`,
       `Amount: ₹${Number(amount).toLocaleString("en-IN")}`,
       `Plants: ${plants || "—"}`,

@@ -41,6 +41,7 @@ export async function getUnclearedPayments(options = {}) {
     for (const order of orders) {
       for (const p of order.payment || []) {
         if (p.paymentStatus !== "PENDING") continue;
+        if (p.isDiscount === true || p.modeOfPayment === "Discount") continue;
         if (p.bankVerificationStatus && p.bankVerificationStatus !== "PENDING") continue;
         const hasRef =
           (p.transactionId && String(p.transactionId).trim()) ||

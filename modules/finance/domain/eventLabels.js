@@ -34,6 +34,10 @@ export function describeFinancialEvent(eventType, payload = {}) {
       return `Payment collected ${amt}`.trim();
     case FINANCIAL_EVENT_TYPES.FARMER_PAYMENT_REVERSED:
       return `Payment reversed ${amt}`.trim();
+    case FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT:
+      return `Discount approved ${amt}`.trim();
+    case FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT_REVERSED:
+      return `Discount reversed ${amt}`.trim();
     case FINANCIAL_EVENT_TYPES.AGRI_ORDER_CREATED:
       return `Agri order booked ${amt}`.trim();
     case FINANCIAL_EVENT_TYPES.AGRI_PAYMENT_COLLECTED:
@@ -52,6 +56,12 @@ export function centralEntryCategoryLabel(line) {
   }
   if (eventType === FINANCIAL_EVENT_TYPES.FARMER_PAYMENT_TRANSFER) {
     return "Payment transfer";
+  }
+  if (
+    eventType === FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT ||
+    eventType === FINANCIAL_EVENT_TYPES.FARMER_DISCOUNT_REVERSED
+  ) {
+    return "Discount";
   }
   if (isTransferEventType(eventType)) {
     return "Transfer";
