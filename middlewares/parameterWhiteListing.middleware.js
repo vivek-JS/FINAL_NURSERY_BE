@@ -33,6 +33,7 @@ const allowedParams = [
   "limit",
   "aggregate", // GET dispatch-outstanding-orders — aggregate=villages
   "status",
+  "excludePrimary", // GET /shade/all — omit is_primary sheds (secondary lagwad picker)
   "paymentStatus",
   "plantId",
   "subtypeId",
