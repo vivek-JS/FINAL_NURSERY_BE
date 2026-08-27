@@ -38,9 +38,16 @@ const getAllShades = catchAsync(async (req, res, next) => {
     sortOrder = "desc",
     search,
     page = 1,
-    limit = 10,
+    limit: limitRaw,
     status,
+    excludePrimary,
   } = req.query;
+
+  const limitStr = limitRaw === undefined || limitRaw === null ? "" : String(limitRaw).trim();
+  const unlimited =
+    limitStr === "" || limitStr === "0" || limitStr.toLowerCase() === "all";
+  const limit = unlimited ? null : Math.max(1, parseInt(limitStr, 10) || 10);
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
 
   let query = Shade.find();
 
@@ -55,19 +62,26 @@ const getAllShades = catchAsync(async (req, res, next) => {
     query = query.where("isActive").equals(status === "true");
   }
 
+  if (excludePrimary === "true" || excludePrimary === true) {
+    query = query.where("is_primary").ne(true);
+  }
+
   // Apply sorting
   const sort = {};
   sort[sortKey] = sortOrder === "desc" ? -1 : 1;
   query = query.sort(sort);
 
-  // Apply pagination
-  const skip = (parseInt(page) - 1) * parseInt(limit);
-  query = query.skip(skip).limit(parseInt(limit));
+  const filter = query.getFilter();
+
+  if (limit != null) {
+    const skip = (pageNum - 1) * limit;
+    query = query.skip(skip).limit(limit);
+  }
 
   // Execute query
   const [shades, total] = await Promise.all([
     query.exec(),
-    Shade.countDocuments(query.getFilter()),
+    Shade.countDocuments(filter),
   ]);
 
   const transformedShades = shades.map((shade) => {
@@ -82,9 +96,9 @@ const getAllShades = catchAsync(async (req, res, next) => {
       data: transformedShades,
       pagination: {
         total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit)),
+        page: limit != null ? pageNum : 1,
+        limit: limit ?? total,
+        pages: limit != null ? Math.ceil(total / limit) : 1,
       },
     },
     undefined
