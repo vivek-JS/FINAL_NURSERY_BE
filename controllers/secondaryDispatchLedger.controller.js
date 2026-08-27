@@ -1,5 +1,6 @@
 import catchAsync from "../utility/catchAsync.js";
 import generateResponse from "../utility/responseFormat.js";
+import Order from "../models/order.model.js";
 import {
   buildCounterPatchSet,
   ensureSecondaryDispatchLedgerIndexes,
@@ -78,6 +79,32 @@ export const writeSecondaryDispatchLedgerController = catchAsync(
   },
 );
 
+async function enrichLedgerLineItems(items = []) {
+  const orderIds = [
+    ...new Set(
+      items.map((ln) => ln?.linkedOrderId).filter((id) => id != null && String(id).trim()),
+    ),
+  ];
+  if (!orderIds.length) return items;
+
+  const orders = await Order.find({ _id: { $in: orderIds } })
+    .select("orderId farmer")
+    .populate("farmer", "name")
+    .lean();
+  const byMongoId = new Map(orders.map((o) => [String(o._id), o]));
+
+  return items.map((ln) => {
+    const ord = ln?.linkedOrderId ? byMongoId.get(String(ln.linkedOrderId)) : null;
+    return {
+      ...ln,
+      orderNumber: ord?.orderId ?? null,
+      farmerName: ord?.farmer?.name ?? null,
+      pollyhouse: ln?.metadata?.pollyhouse ?? ln?.pollyhouse ?? null,
+      remarks: ln?.metadata?.remarks ?? ln?.remarks ?? null,
+    };
+  });
+}
+
 /**
  * List ledger lines with filters.
  */
@@ -96,9 +123,13 @@ export const listSecondaryDispatchLedgerController = catchAsync(
       page: req.query.page,
       limit: req.query.limit,
     });
-    return res
-      .status(200)
-      .json(generateResponse(true, "Secondary dispatch ledger lines", data));
+    const items = await enrichLedgerLineItems(data?.items || []);
+    return res.status(200).json(
+      generateResponse(true, "Secondary dispatch ledger lines", {
+        ...data,
+        items,
+      }),
+    );
   },
 );
 

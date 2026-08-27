@@ -400,6 +400,10 @@ import {
   primaryInwardFifoPreviewGlobal,
   labToPrimaryInwardBulkGlobal,
 } from "./controllers/plantOutward.controller.js";
+import {
+  listSecondaryDispatchLedgerController,
+  summarySecondaryDispatchLedgerController,
+} from "./controllers/secondaryDispatchLedger.controller.js";
 import PollyHouse from "./routes/pollyhouse.route.js";
 import DelaerRoutes from "./routes/dealer.route.js";
 import {
@@ -836,6 +840,16 @@ server.get(
   "/api/v1/laboutward/secondary/farmer-dispatch/pickup-batch-suggestions",
   authenticateToken,
   getFarmerDispatchPickupBatchSuggestions
+);
+server.get(
+  "/api/v1/laboutward/secondary/dispatch-ledger/lines",
+  authenticateToken,
+  listSecondaryDispatchLedgerController
+);
+server.get(
+  "/api/v1/laboutward/secondary/dispatch-ledger/summary",
+  authenticateToken,
+  summarySecondaryDispatchLedgerController
 );
 /** Explicit GET — same pattern as readiness-bypass (always resolves on nested laboutward paths). */
 server.get(
