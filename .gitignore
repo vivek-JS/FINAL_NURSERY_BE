@@ -25,6 +25,8 @@ scripts/whatsapp-chrome-profile/
 
 # whatsapp-web.js LocalAuth (dev); production uses WHATSAPP_SESSION_PATH outside repo
 data/whatsapp-auth/
+.wwebjs_auth/
+whatsapp-profile/
 
 # Campaign run PIDs
 .campaign-pids/

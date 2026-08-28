@@ -151,7 +151,7 @@ export async function getLastOutstandingAfterForCustomer(customerMobile, session
   return computed;
 }
 
-/** Customer identity for farmer-plant ledger (farmer ref or orderFor on dealer orders). */
+/** Customer identity for non-dealer farmer-plant ledger rows. */
 export function hasFarmerPlantLedgerIdentity(order) {
   if (!order) return false;
   if (order.farmer?._id || order.farmer) return true;
@@ -161,7 +161,7 @@ export function hasFarmerPlantLedgerIdentity(order) {
 
 export const shouldLogFarmerPlantLedger = (order) => {
   if (!order) return false;
-  if (order.dealerOrder) return hasFarmerPlantLedgerIdentity(order);
+  if (order.dealerOrder) return false;
   return Boolean(order.farmer);
 };
 
