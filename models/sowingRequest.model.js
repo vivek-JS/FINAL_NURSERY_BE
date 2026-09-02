@@ -310,14 +310,55 @@ const sowingRequestSchema = new mongoose.Schema(
   }
 );
 
-// Generate request number
+// Generate request number — use max daily suffix + 1 (count breaks after deletes/gaps)
 sowingRequestSchema.statics.generateRequestNumber = async function () {
-  const today = new Date();
-  const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
-  const count = await this.countDocuments({
-    requestNumber: new RegExp(`^SR${dateStr}`),
-  });
-  return `SR${dateStr}${String(count + 1).padStart(4, '0')}`;
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const prefix = `SR${dateStr}`;
+
+  const latest = await this.findOne({
+    requestNumber: new RegExp(`^${prefix}\\d{4}$`),
+  })
+    .sort({ requestNumber: -1 })
+    .select("requestNumber")
+    .lean();
+
+  let nextSeq = 1;
+  if (latest?.requestNumber?.startsWith(prefix)) {
+    const parsed = parseInt(latest.requestNumber.slice(prefix.length), 10);
+    if (Number.isFinite(parsed) && parsed >= 0) nextSeq = parsed + 1;
+  }
+
+  return `${prefix}${String(nextSeq).padStart(4, "0")}`;
+};
+
+sowingRequestSchema.statics.isDuplicateRequestNumberError = function (err) {
+  if (err?.code !== 11000) return false;
+  if (err.keyPattern?.requestNumber !== undefined) return true;
+  if (err.keyValue?.requestNumber !== undefined) return true;
+  return /requestNumber/.test(String(err.message));
+};
+
+sowingRequestSchema.methods.saveWithUniqueRequestNumber = async function (
+  maxAttempts = 5
+) {
+  const Model = this.constructor;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      this.requestNumber = await Model.generateRequestNumber();
+    }
+    try {
+      return await this.save();
+    } catch (err) {
+      if (
+        Model.isDuplicateRequestNumberError(err) &&
+        attempt < maxAttempts - 1
+      ) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Failed to allocate unique sowing request number");
 };
 
 // Indexes

@@ -671,7 +671,7 @@ export const submitDirectSow = async (req, res) => {
       });
     }
 
-    await request.save();
+    await request.saveWithUniqueRequestNumber();
 
     const orderResult = await markOrdersSowed(request, {
       sowedAt,

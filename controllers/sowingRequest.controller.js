@@ -306,7 +306,7 @@ export const createSowingRequest = async (req, res) => {
       linkedOrderIds: linkedOrderObjectIds,
     });
 
-    await request.save();
+    await request.saveWithUniqueRequestNumber();
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'requestedBy']);
 
     // Auto Ram Agri → Biotech transfer on create is DISABLED so Office Admin
