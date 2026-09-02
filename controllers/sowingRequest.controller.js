@@ -66,6 +66,7 @@ export const createSowingRequest = async (req, res) => {
       packetsFromRaising,
       raisingIntakeIds,
       linkedOrderIds,
+      isExcessiveSowing,
     } = req.body;
 
     if (!plantId || !subtypeId || !packetsNeeded) {
@@ -304,6 +305,7 @@ export const createSowingRequest = async (req, res) => {
       packetsFromRaising: raisingFinal,
       raisingIntakeIds: raisingObjectIds,
       linkedOrderIds: linkedOrderObjectIds,
+      isExcessiveSowing: Boolean(isExcessiveSowing),
     });
 
     await request.saveWithUniqueRequestNumber();

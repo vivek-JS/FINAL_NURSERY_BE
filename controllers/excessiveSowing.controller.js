@@ -6,287 +6,49 @@ import InventoryOutward from '../models/inventoryOutward.model.js';
 import Batch from '../models/batch.model.js';
 import moment from 'moment';
 import mongoose from 'mongoose';
-import {
-  logSowingRequestCreated,
-  logExcessiveSowingAdded,
-} from '../helpers/slotTransactionLogger.js';
+import { createSowingRequest } from './sowingRequest.controller.js';
 
 /**
- * Create excessive sowing request (no orders, just want to sow extra plants)
+ * Excessive sowing = packet request with no orders (same pending → issue → sow flow).
+ * sowingDate / plantReadyBy are ignored here; set at sow-complete time in shed ops.
  * POST /api/v1/sowing/excessive/create-request
  */
 export const createExcessiveSowingRequest = async (req, res) => {
-  try {
-    const {
-      plantId,
-      subtypeId,
-      packetsRequested,
-      sowingDate, // Expected sowing date
-      notes,
-    } = req.body;
+  const {
+    plantId,
+    subtypeId,
+    productId,
+    packetsRequested,
+    packetsNeeded,
+    slotIds,
+    notes,
+  } = req.body;
 
-    // Validate required fields
-    if (!plantId || !subtypeId || !packetsRequested || packetsRequested <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Plant ID, Subtype ID, and Packets Requested (> 0) are required',
-      });
-    }
-
-    // Validate plant and subtype
-    const plant = await PlantCms.findById(plantId);
-    if (!plant) {
-      return res.status(404).json({
-        success: false,
-        message: 'Plant not found',
-      });
-    }
-
-    if (!plant.sowingAllowed) {
-      return res.status(400).json({
-        success: false,
-        message: 'Sowing is not allowed for this plant',
-      });
-    }
-
-    const subtype = plant.subtypes.id(subtypeId);
-    if (!subtype) {
-      return res.status(404).json({
-        success: false,
-        message: 'Subtype not found',
-      });
-    }
-
-    // Get product (seed) for this subtype (removed purpose: 'production' filter)
-    // Try multiple strategies to find a matching product
-    let product = await Product.findOne({
-      plantId,
-      'plantSubtypeInfo.subtypeId': subtypeId,
-      isActive: true,
-    }).populate('primaryUnit secondaryUnit');
-
-    // Fallback 1: Find by plantId only
-    if (!product) {
-      product = await Product.findOne({
-        plantId,
-        isActive: true,
-      }).populate('primaryUnit secondaryUnit');
-    }
-
-    // Fallback 2: Find any active product for this plant
-    if (!product) {
-      const products = await Product.find({
-        plantId,
-        isActive: true,
-      }).populate('primaryUnit secondaryUnit').limit(1);
-      product = products[0];
-    }
-
-    if (!product) {
-      return res.status(404).json({
-        success: false,
-        message: 'No active product found for this plant/subtype. Please ensure products are linked to plants and are active.',
-      });
-    }
-
-    // Get conversion factor
-    let conversionFactor = 1;
-    if (product.plantSubtypeInfo && product.plantSubtypeInfo.length > 0) {
-      const plantSubtypeInfo = product.plantSubtypeInfo.find(
-        (info) => info.subtypeId?.toString() === subtypeId.toString()
-      );
-      conversionFactor = plantSubtypeInfo?.conversionFactor || product.conversionFactor || 1;
-    } else {
-      conversionFactor = product.conversionFactor || 1;
-    }
-
-    // Get plantReadyDays from subtype
-    const plantReadyDays = subtype.plantReadyDays || 0;
-
-    // Calculate plant ready by date (sowingDate + plantReadyDays)
-    let plantReadyBy = null;
-    if (sowingDate) {
-      const sowingDateMoment = moment(sowingDate, 'DD-MM-YYYY');
-      if (sowingDateMoment.isValid() && plantReadyDays > 0) {
-        plantReadyBy = sowingDateMoment.clone().add(plantReadyDays, 'days').format('DD-MM-YYYY');
-      } else if (sowingDateMoment.isValid()) {
-        // If plantReadyDays is 0, plants are ready on sowing date
-        plantReadyBy = sowingDateMoment.format('DD-MM-YYYY');
-      }
-    }
-
-    // Generate request number
-    const requestNumber = await SowingRequest.generateRequestNumber();
-
-    // Create request
-    const requestData = {
-      requestNumber,
-      plantId,
-      plantName: plant.name,
-      subtypeId,
-      subtypeName: subtype.name,
-      productId: product._id,
-      packetsNeeded: packetsRequested,
-      packetsRequested,
-      excessPackets: 0,
-      primaryUnit: product.primaryUnit,
-      secondaryUnit: product.secondaryUnit,
-      conversionFactor,
-      unitName: product.primaryUnit?.symbol || product.secondaryUnit?.symbol || 'packets',
-      status: 'pending',
-      requestedDate: new Date(),
-      requestedBy: req.user._id,
-      isExcessiveSowing: true,
-      notes: notes || 'Excessive sowing request (no orders)',
-      remainingSowingNeeded: packetsRequested * conversionFactor,
-      plantReadyDays: plantReadyDays,
-      plantReadyBy: plantReadyBy, // Date when plants will be ready (sowingDate + plantReadyDays)
-      actualSowingDate: sowingDate ? moment(sowingDate, 'DD-MM-YYYY').format('DD-MM-YYYY') : null, // Store actual sowing date for stock issue reference
-    };
-
-    const newRequest = await SowingRequest.create(requestData);
-
-    // Find or create slot for this request
-    // Slot date = sowingDate + plantReadyDays (when plants will be ready)
-    const sowingDateMoment = sowingDate
-      ? moment(sowingDate, 'DD-MM-YYYY')
-      : moment().add(7, 'days');
-    
-    // Calculate slot date: sowing date + plant ready days
-    const slotDate = sowingDateMoment.clone().add(plantReadyDays, 'days');
-    const startDay = slotDate.format('DD-MM-YYYY');
-    const endDay = startDay; // Single-day slot
-    const month = slotDate.format('MMMM');
-    const year = slotDate.year();
-    
-    console.log(`[DEBUG] Slot creation: sowingDate=${sowingDateMoment.format('DD-MM-YYYY')}, plantReadyDays=${plantReadyDays}, slotDate=${startDay}`);
-
-    // Try to find existing slot for this date
-    let plantSlotDoc = await PlantSlot.findOne({
-      plantId,
-      year,
-    });
-
-    if (!plantSlotDoc) {
-      // Create new plant slot document
-      plantSlotDoc = await PlantSlot.create({
-        plantId,
-        year,
-        subtypeSlots: [],
-      });
-    }
-
-    // Find or create subtype slot
-    let subtypeSlot = plantSlotDoc.subtypeSlots.find(
-      (st) => st.subtypeId?.toString() === subtypeId.toString()
-    );
-
-    if (!subtypeSlot) {
-      subtypeSlot = {
-        subtypeId,
-        slots: [],
-      };
-      plantSlotDoc.subtypeSlots.push(subtypeSlot);
-    }
-
-    // Find or create slot for the target date
-    let slot = subtypeSlot.slots.find(
-      (s) => s.startDay === startDay && s.endDay === endDay
-    );
-
-    if (!slot) {
-      // Create new slot
-      const expectedPlants = packetsRequested * conversionFactor;
-      slot = {
-        startDay,
-        endDay,
-        totalPlants: expectedPlants,
-        availablePlants: expectedPlants,
-        buffer: 0,
-        effectiveBuffer: 0,
-        bufferAdjustedCapacity: expectedPlants,
-        bufferAmount: 0,
-        originalTotalPlants: expectedPlants,
-        month,
-        isManual: true,
-        plantReadyDays: subtype.plantReadyDays || 0,
-        actualSowingDate: sowingDate ? moment(sowingDate, 'DD-MM-YYYY').format('DD-MM-YYYY') : null, // Store actual sowing date
-        excessiveSowing: {
-          packets: packetsRequested,
-          plants: expectedPlants,
-        },
-        sowingInProgress: false,
-        sowingCompleted: false,
-        linkedSowingRequests: [newRequest._id],
-        slotTrail: [],
-      };
-      subtypeSlot.slots.push(slot);
-    } else {
-      // Update existing slot with excessive sowing
-      const expectedPlants = packetsRequested * conversionFactor;
-      if (!slot.excessiveSowing) {
-        slot.excessiveSowing = { packets: 0, plants: 0 };
-      }
-      slot.excessiveSowing.packets += packetsRequested;
-      slot.excessiveSowing.plants += expectedPlants;
-      slot.totalPlants += expectedPlants;
-      slot.availablePlants += expectedPlants;
-      
-      // Store actual sowing date if not already set
-      if (!slot.actualSowingDate && sowingDate) {
-        slot.actualSowingDate = moment(sowingDate, 'DD-MM-YYYY').format('DD-MM-YYYY');
-      }
-      
-      if (!slot.linkedSowingRequests) {
-        slot.linkedSowingRequests = [];
-      }
-      slot.linkedSowingRequests.push(newRequest._id);
-    }
-
-    // Log transaction
-    logSowingRequestCreated(
-      slot,
-      newRequest._id,
-      packetsRequested,
-      req.user._id,
-      {
-        isExcessive: true,
-        notes: `Excessive sowing request: ${packetsRequested} packets`,
-      }
-    );
-
-    await plantSlotDoc.save();
-
-    // Link request to slot
-    newRequest.linkedSlotIds = [slot._id];
-    await newRequest.save();
-
-    return res.status(201).json({
-      success: true,
-      message: 'Excessive sowing request created successfully',
-      data: {
-        request: newRequest,
-        slot: {
-          slotId: slot._id,
-          startDay: slot.startDay, // This is sowingDate + plantReadyDays (when plants will be ready)
-          endDay: slot.endDay,
-          totalPlants: slot.totalPlants,
-          excessiveSowing: slot.excessiveSowing,
-          actualSowingDate: slot.actualSowingDate, // Actual sowing date (for stock issue)
-        },
-        plantReadyBy: plantReadyBy, // Date when plants will be ready (sowingDate + plantReadyDays)
-        plantReadyDays: plantReadyDays,
-        sowingDate: sowingDate ? moment(sowingDate, 'DD-MM-YYYY').format('DD-MM-YYYY') : null, // Actual sowing date
-      },
-    });
-  } catch (error) {
-    console.error('Error creating excessive sowing request:', error);
-    return res.status(500).json({
+  const packets = Number(packetsRequested ?? packetsNeeded);
+  if (!plantId || !subtypeId || !Number.isFinite(packets) || packets <= 0) {
+    return res.status(400).json({
       success: false,
-      message: 'Failed to create excessive sowing request',
-      error: error.message,
+      message: 'Plant ID, Subtype ID, and Packets Requested (> 0) are required',
     });
   }
+
+  req.body = {
+    plantId,
+    subtypeId,
+    productId,
+    packetsNeeded: packets,
+    packetsRequested: packets,
+    packetsFromCompany: packets,
+    packetsFromRaising: 0,
+    seedSource: 'COMPANY',
+    raisingIntakeIds: [],
+    linkedOrderIds: [],
+    slotIds: Array.isArray(slotIds) ? slotIds : [],
+    notes: notes || 'Excessive sowing (no orders)',
+    isExcessiveSowing: true,
+  };
+
+  return createSowingRequest(req, res);
 };
 
 /**
