@@ -1387,3 +1387,127 @@ export async function enrichSecondaryInwardDetail(siPlain) {
   };
   return plain;
 }
+
+/**
+ * Move ready position (slotStockSyncedPlants) from source slot inward lines → target.
+ * Keeps actualPlants on slot unchanged; slot.actualReadyPlants is updated separately in roll service.
+ */
+export async function transferSecondaryReadyShedBetweenSlots({
+  session,
+  sourceSlotId,
+  targetSlotId,
+  quantity,
+}) {
+  const qty = Math.max(0, Math.floor(Number(quantity) || 0));
+  if (qty < 1) return { transferred: 0, shortfall: qty };
+
+  const sourceOid = new mongoose.Types.ObjectId(String(sourceSlotId));
+  const targetOid = new mongoose.Types.ObjectId(String(targetSlotId));
+
+  const pos = await PlantOutward.find({
+    "secondaryInward.linkedBookingSlotId": sourceOid,
+  })
+    .populate({ path: "batchId", select: BATCH_SELECT })
+    .session(session)
+    .lean();
+
+  const lines = [];
+  for (const po of pos) {
+    const batchLean = po.batchId && typeof po.batchId === "object" ? po.batchId : null;
+    const batchId = batchLean?._id ?? po.batchId;
+    for (const si of po.secondaryInward || []) {
+      if (String(si.linkedBookingSlotId) !== String(sourceSlotId)) continue;
+      const synced = Math.max(0, Number(si.slotStockSyncedPlants) || 0);
+      if (synced < 1) continue;
+      lines.push({
+        plantOutwardId: po._id,
+        batchId,
+        batchLean,
+        secondaryInwardId: si._id,
+        synced,
+        siPlain: si,
+      });
+    }
+  }
+
+  lines.sort((a, b) => {
+    const da = a.siPlain?.expectedReadyDate
+      ? new Date(a.siPlain.expectedReadyDate).getTime()
+      : 0;
+    const db = b.siPlain?.expectedReadyDate
+      ? new Date(b.siPlain.expectedReadyDate).getTime()
+      : 0;
+    return da - db;
+  });
+
+  let remaining = qty;
+  let transferred = 0;
+
+  for (const ln of lines) {
+    if (remaining < 1) break;
+    const take = Math.min(remaining, ln.synced);
+    const newSourceSynced = ln.synced - take;
+    const fullLineMove = newSourceSynced === 0 && take === ln.synced;
+
+    if (fullLineMove) {
+      await PlantOutward.updateOne(
+        { _id: ln.plantOutwardId, "secondaryInward._id": ln.secondaryInwardId },
+        {
+          $set: {
+            "secondaryInward.$.linkedBookingSlotId": targetOid,
+            "secondaryInward.$.slotStockSyncedPlants": take,
+          },
+        },
+        { session: session || undefined }
+      );
+    } else {
+      await PlantOutward.updateOne(
+        { _id: ln.plantOutwardId, "secondaryInward._id": ln.secondaryInwardId },
+        {
+          $set: {
+            "secondaryInward.$.slotStockSyncedPlants": newSourceSynced,
+          },
+        },
+        { session: session || undefined }
+      );
+
+      const targetPo = await PlantOutward.findOne({
+        batchId: ln.batchId,
+        "secondaryInward.linkedBookingSlotId": targetOid,
+      }).session(session);
+
+      const targetLine = (targetPo?.secondaryInward || []).find(
+        (si) => String(si.linkedBookingSlotId) === String(targetSlotId)
+      );
+
+      if (targetLine) {
+        const curSynced = Math.max(0, Number(targetLine.slotStockSyncedPlants) || 0);
+        await PlantOutward.updateOne(
+          { _id: targetPo._id, "secondaryInward._id": targetLine._id },
+          {
+            $set: {
+              "secondaryInward.$.slotStockSyncedPlants": curSynced + take,
+            },
+          },
+          { session: session || undefined }
+        );
+      }
+    }
+
+    remaining -= take;
+    transferred += take;
+  }
+
+  return { transferred, shortfall: remaining };
+}
+
+/** Max rollable ready = max(slot field, shed synced rollup on calendar-ready lines). */
+export async function getSlotReadyRollCapacity(slotId, slotLean = null) {
+  const slotReady = Math.max(0, Number(slotLean?.actualReadyPlants) || 0);
+  if (!slotId || !mongoose.isValidObjectId(String(slotId))) return slotReady;
+  const shedMap = await aggregateShedStockBySlotIds([
+    new mongoose.Types.ObjectId(String(slotId)),
+  ]);
+  const shedReady = shedMap.get(String(slotId))?.actualReadyPlants ?? 0;
+  return Math.max(slotReady, shedReady);
+}
