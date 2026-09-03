@@ -16,7 +16,7 @@ const slotTransferSchema = new Schema(
   {
     transferType: {
       type: String,
-      enum: ["sowing", "capacity", "orders"],
+      enum: ["sowing", "capacity", "orders", "expired_available_roll"],
       default: "sowing",
     },
     orderIds: [{ type: Schema.Types.ObjectId, ref: "Order" }],
@@ -43,6 +43,11 @@ const slotTransferSchema = new Schema(
           targetSlotStartDay: String,
           targetSlotEndDay: String,
           daysDifference: Number,
+          availableQty: { type: Number, default: 0 },
+          actualQty: { type: Number, default: 0 },
+          readyQty: { type: Number, default: 0 },
+          rollKind: String,
+          transferKind: String,
         },
         { _id: false }
       ),

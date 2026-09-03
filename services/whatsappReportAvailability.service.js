@@ -9,6 +9,43 @@ import {
   sortAvailabilityRows,
   summarizeAvailabilityRows,
 } from "../utility/slotAvailabilityOverview.js";
+import {
+  aggregateSlotDispatchStats,
+  getSlotDispatchStats,
+} from "../utility/slotDispatchStats.js";
+import {
+  aggregateShedStockBySlotIds,
+  computeActualAvailable,
+} from "./secondaryShedSlotStock.service.js";
+
+const NON_DEALER_QUOTA_MATCH = {
+  $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
+};
+
+function summarizeEnrichedRows(rows) {
+  let actualAvailable = 0;
+  let actualPlants = 0;
+  let remainingToDispatch = 0;
+  let shedAvailableInShed = 0;
+  let actualReadyPlants = 0;
+  let linkedBatchCount = 0;
+  for (const row of rows || []) {
+    actualAvailable += row.actualAvailable || 0;
+    actualPlants += row.actualPlants || 0;
+    remainingToDispatch += row.remainingToDispatch || 0;
+    shedAvailableInShed += row.shedAvailableInShed || 0;
+    actualReadyPlants += row.actualReadyPlants || 0;
+    linkedBatchCount += row.linkedBatchCount || 0;
+  }
+  return {
+    actualAvailable,
+    actualPlants,
+    remainingToDispatch,
+    shedAvailableInShed,
+    actualReadyPlants,
+    linkedBatchCount,
+  };
+}
 
 export const AVAILABILITY_MONTHS = [
   "January",
@@ -90,38 +127,64 @@ export async function fetchAvailabilityOverviewData(filters = {}) {
     }
   }
 
-  const bookingsMap = {};
+  let statsBySlot = new Map();
+  let shedBySlot = new Map();
   if (allSlotIds.length > 0) {
     const orders = await Order.find({
       bookingSlot: { $in: allSlotIds },
       orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+      ...NON_DEALER_QUOTA_MATCH,
     })
-      .select("bookingSlot numberOfPlants")
+      .select(
+        "bookingSlot numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus"
+      )
       .lean();
 
-    for (const order of orders) {
-      const slotId = order.bookingSlot?.toString();
-      if (!slotId) continue;
-      bookingsMap[slotId] =
-        (bookingsMap[slotId] || 0) + (Number(order.numberOfPlants) || 0);
-    }
+    statsBySlot = aggregateSlotDispatchStats(orders);
+    shedBySlot = await aggregateShedStockBySlotIds(allSlotIds);
   }
 
-  let rows = slotMeta.map((meta) =>
-    buildAvailabilityOverviewRow({
+  let rows = slotMeta.map((meta) => {
+    const slotId = meta.slot._id.toString();
+    const dispatchStats = getSlotDispatchStats(statsBySlot, slotId);
+    const actualPlants = Number(meta.slot.actualPlants) || 0;
+    const remainingToDispatch = dispatchStats.remainingToDispatch;
+    const shed = shedBySlot.get(slotId) || {};
+
+    const base = buildAvailabilityOverviewRow({
       plantId: meta.plantId,
       plantName: meta.plantName,
       subtypeId: meta.subtypeId,
       subtypeName: meta.subtypeName,
       slot: meta.slot,
-      bookedPlants: bookingsMap[meta.slot._id.toString()] || 0,
+      bookedPlants: dispatchStats.totalBookedPlants,
       sowingAllowed: meta.sowingAllowed,
-    })
-  );
+    });
+
+    return {
+      ...base,
+      totalBookedPlants: dispatchStats.totalBookedPlants,
+      totalDispatchedPlants: dispatchStats.totalDispatchedPlants,
+      remainingToDispatch,
+      actualPlants,
+      actualAvailable: computeActualAvailable(actualPlants, remainingToDispatch),
+      expectedMortality: Number(meta.slot.expectedMortality) || 0,
+      actualReadyPlants:
+        (shed.actualReadyPlants ?? Number(meta.slot.actualReadyPlants)) || 0,
+      shedAvailableInShed: shed.shedAvailableInShed ?? 0,
+      shedSyncedPlants: shed.shedSyncedPlants ?? 0,
+      shedReadyInShed: shed.shedReadyInShed ?? 0,
+      linkedBatchCount: shed.linkedBatchCount ?? 0,
+      shedLineCount: shed.lineCount ?? 0,
+    };
+  });
 
   rows = sortAvailabilityRows(rows);
   rows = filterNonPastAvailabilityRows(rows);
-  const summaryAll = summarizeAvailabilityRows(rows);
+  const summaryAll = {
+    ...summarizeAvailabilityRows(rows),
+    ...summarizeEnrichedRows(rows),
+  };
 
   rows = filterAvailabilityRows(rows, {
     month: filters.month,
@@ -132,7 +195,10 @@ export async function fetchAvailabilityOverviewData(filters = {}) {
 
   return {
     year,
-    summary: summarizeAvailabilityRows(rows),
+    summary: {
+      ...summarizeAvailabilityRows(rows),
+      ...summarizeEnrichedRows(rows),
+    },
     summaryAll,
     rows,
   };

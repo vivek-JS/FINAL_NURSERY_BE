@@ -10,7 +10,11 @@ import SlotTransferLog from "../models/slotTransfer.model.js";
 import SlotReadyRollLog from "../models/slotReadyRollLog.model.js";
 import PlantOutward from "../models/plantOutward.model.js";
 import { computeOverdueDays } from "./calendarReadySlotRelocate.service.js";
-import { secondaryInwardCalendarReady } from "./secondaryShedSlotStock.service.js";
+import {
+  secondaryInwardCalendarReady,
+  transferSecondaryReadyShedBetweenSlots,
+  getSlotReadyRollCapacity,
+} from "./secondaryShedSlotStock.service.js";
 import { resolveSlotBufferFields } from "../utility/bufferUtils.js";
 import { SLOT_TRAIL_ACTIONS } from "../constants/slotTrailActions.js";
 import {
@@ -98,7 +102,7 @@ export async function listRollExpiredAvailableSources(targetSlotId, asOfDate = n
 
     const availablePlants = getSlotEffectiveAvailablePlants(slot);
     const actualPlants = Number(slot.actualPlants) || 0;
-    const actualReadyPlants = Number(slot.actualReadyPlants) || 0;
+    const actualReadyPlants = await getSlotReadyRollCapacity(slotId, slot);
     if (availablePlants <= 0 && actualPlants <= 0 && actualReadyPlants <= 0) continue;
 
     sources.push({
@@ -378,14 +382,14 @@ async function applyReadyTransfer({
 }) {
   if (readyQty <= 0) return { readyQty: 0 };
 
-  const sourceReady = Number(sourceDetails.slot.actualReadyPlants) || 0;
+  const sourceReady = await getSlotReadyRollCapacity(sourceSlotId, sourceDetails.slot);
   const targetReady = Number(targetDetails.slot.actualReadyPlants) || 0;
 
   if (readyQty > sourceReady) {
     throw new Error(`Source slot max actualReadyPlants is ${sourceReady}`);
   }
 
-  const newSourceReady = sourceReady - readyQty;
+  const newSourceReady = Math.max(0, sourceReady - readyQty);
   const newTargetReady = targetReady + readyQty;
 
   const sourceSubtypeOid = new mongoose.Types.ObjectId(sourceDetails.subtypeId.toString());
@@ -473,6 +477,18 @@ async function applyReadyTransfer({
   targetDetails.slot.actualReadyPlants = newTargetReady;
   targetDetails.slot.rolledInActualReadyPlants =
     (Number(targetDetails.slot.rolledInActualReadyPlants) || 0) + readyQty;
+
+  const shedXfer = await transferSecondaryReadyShedBetweenSlots({
+    session,
+    sourceSlotId,
+    targetSlotId,
+    quantity: readyQty,
+  });
+  if (shedXfer.shortfall > 0) {
+    console.warn(
+      `[rollReady] shed sync shortfall ${shedXfer.shortfall} on source ${sourceSlotId} (transferred ${shedXfer.transferred})`
+    );
+  }
 
   await recordReadyRollLogsForTransfer({
     sourceSlotId,
@@ -757,35 +773,49 @@ export async function runRollExpiredSlotAvailable({
         totalReady += rdQty;
       }
 
-      await SlotTransferLog.create(
-        [
-          {
-            transferType: "expired_available_roll",
-            plantId: targetDetails.plantId,
-            plantName: plantInfo?.name || "",
-            sourceSlotId: new mongoose.Types.ObjectId(sourceSlotId),
-            sourceSubtypeId: sourceDetails.subtypeId,
-            sourceSubtypeName:
-              subtypeNameMap.get(sourceDetails.subtypeId.toString()) || "Subtype",
-            targetSlotId: new mongoose.Types.ObjectId(targetSlotId),
-            targetSubtypeId: targetDetails.subtypeId,
-            targetSubtypeName:
-              subtypeNameMap.get(targetDetails.subtypeId.toString()) || "Subtype",
-            quantity: availQty,
-            reason: `${reason} | readyQty=${rdQty} actualQty=${actQty}`,
-            performedBy,
-            sourceBefore: {
-              availablePlants: getSlotEffectiveAvailablePlants(sourceDetails.slot),
-              actualPlants: Number(sourceDetails.slot.actualPlants) || 0,
+      const logQty = availQty + actQty + rdQty;
+      if (logQty > 0) {
+        await SlotTransferLog.create(
+          [
+            {
+              transferType: "expired_available_roll",
+              plantId: targetDetails.plantId,
+              plantName: plantInfo?.name || "",
+              sourceSlotId: new mongoose.Types.ObjectId(sourceSlotId),
+              sourceSubtypeId: sourceDetails.subtypeId,
+              sourceSubtypeName:
+                subtypeNameMap.get(sourceDetails.subtypeId.toString()) || "Subtype",
+              targetSlotId: new mongoose.Types.ObjectId(targetSlotId),
+              targetSubtypeId: targetDetails.subtypeId,
+              targetSubtypeName:
+                subtypeNameMap.get(targetDetails.subtypeId.toString()) || "Subtype",
+              quantity: logQty,
+              reason: reason || "",
+              performedBy,
+              metadata: {
+                sourceSlotStartDay: sourceDetails.slot.startDay,
+                sourceSlotEndDay: sourceDetails.slot.endDay,
+                targetSlotStartDay: targetDetails.slot.startDay,
+                targetSlotEndDay: targetDetails.slot.endDay,
+                availableQty: availQty,
+                actualQty: actQty,
+                readyQty: rdQty,
+                rollKind,
+                transferKind,
+              },
+              sourceBefore: {
+                availablePlants: getSlotEffectiveAvailablePlants(sourceDetails.slot),
+                actualPlants: Number(sourceDetails.slot.actualPlants) || 0,
+              },
+              targetBefore: {
+                availablePlants: getSlotEffectiveAvailablePlants(targetDetails.slot),
+                actualPlants: Number(targetDetails.slot.actualPlants) || 0,
+              },
             },
-            targetBefore: {
-              availablePlants: getSlotEffectiveAvailablePlants(targetDetails.slot),
-              actualPlants: Number(targetDetails.slot.actualPlants) || 0,
-            },
-          },
-        ],
-        { session }
-      );
+          ],
+          { session }
+        );
+      }
 
       results.push({ sourceSlotId, availableQty: availQty, actualQty: actQty, readyQty: rdQty });
     }
