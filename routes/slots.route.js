@@ -36,6 +36,7 @@ import {
   getRollExpiredAvailableSources,
   postRollExpiredAvailable,
   getSlotReadyRollLog,
+  getSlotOrderDispatchByBatchHandler,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -52,6 +53,10 @@ slotRouter.get(
   getSlotSecondaryShedBreakdownHandler
 );
 slotRouter.get("/slots/:slotId/ready-roll-log", getSlotReadyRollLog);
+slotRouter.get(
+  "/slots/:slotId/order-dispatch-by-batch",
+  getSlotOrderDispatchByBatchHandler
+);
 slotRouter.post(
   "/slots/:slotId/transfer-expected-mortality",
   transferSlotExpectedMortalityHandler
