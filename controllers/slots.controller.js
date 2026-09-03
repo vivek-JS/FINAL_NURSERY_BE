@@ -51,6 +51,7 @@ import {
   listReadyRollLogForSlot,
   summarizeReadyRollForSlot,
 } from "../services/rollExpiredSlotAvailable.service.js";
+import { getSlotOrderDispatchByBatch } from "../services/slotOrderDispatchByBatch.service.js";
 import {
   aggregatePastDueMetricsForSlotGroup,
   buildCrossSlotDetailBySlot,
@@ -5246,6 +5247,27 @@ export const postRollExpiredAvailable = async (req, res) => {
     return res.status(400).json({
       success: false,
       message: error.message || "Roll expired available failed",
+    });
+  }
+};
+
+/** GET /slots/:slotId/order-dispatch-by-batch */
+export const getSlotOrderDispatchByBatchHandler = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    if (!slotId) {
+      return res.status(400).json({ success: false, message: "slotId is required" });
+    }
+    const data = await getSlotOrderDispatchByBatch(slotId);
+    if (!data) {
+      return res.status(404).json({ success: false, message: "Slot not found or invalid id" });
+    }
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("getSlotOrderDispatchByBatch:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to load order dispatch by batch",
     });
   }
 };
