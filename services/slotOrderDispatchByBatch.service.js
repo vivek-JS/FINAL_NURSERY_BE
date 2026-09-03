@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Order from "../models/order.model.js";
+import "../models/farmer.model.js";
 import {
   SECONDARY_DISPATCH_LEDGER_ACTIONS,
   SECONDARY_DISPATCH_LEDGER_COLLECTIONS,
