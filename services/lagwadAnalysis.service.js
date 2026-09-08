@@ -27,6 +27,47 @@ export const MONTH_ORDER = [
 
 const ROLL_LOG_LIMIT = 300;
 
+const dateTs = (value) => {
+  if (!value) return null;
+  const ts = new Date(value).getTime();
+  return Number.isFinite(ts) ? ts : null;
+};
+
+const lineLagwadTs = (line) =>
+  dateTs(line?.lagwadDate) ?? dateTs(line?.secondaryInwardDate) ?? null;
+
+const lineReadyTs = (line) =>
+  dateTs(line?.expectedReadyDate) ?? dateTs(line?.dateOfDispatch) ?? null;
+
+const compareNullable = (a, b, dir) => {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return dir === "asc" ? a - b : b - a;
+};
+
+/** Default: latest lagwad first; tie-break by ready date then inward id. */
+export function sortLagwadLines(
+  lines,
+  { sortBy = "lagwadDate", sortDir = "desc" } = {}
+) {
+  const dir = sortDir === "asc" ? "asc" : "desc";
+  return [...(lines || [])].sort((a, b) => {
+    let cmp = 0;
+    if (sortBy === "readyDate") {
+      cmp = compareNullable(lineReadyTs(a), lineReadyTs(b), dir);
+      if (cmp === 0) cmp = compareNullable(lineLagwadTs(a), lineLagwadTs(b), "desc");
+    } else {
+      cmp = compareNullable(lineLagwadTs(a), lineLagwadTs(b), dir);
+      if (cmp === 0) cmp = compareNullable(lineReadyTs(a), lineReadyTs(b), "desc");
+    }
+    if (cmp !== 0) return cmp;
+    return String(b.secondaryInwardId || "").localeCompare(
+      String(a.secondaryInwardId || "")
+    );
+  });
+}
+
 const num = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -174,6 +215,8 @@ export async function getLagwadAnalysis({
   months,
   slotIds,
   metaOnly = false,
+  sortBy = "lagwadDate",
+  sortDir = "desc",
 } = {}) {
   if (!mongoose.isValidObjectId(String(plantId))) {
     throw new Error("Valid plantId is required");
@@ -254,8 +297,10 @@ export async function getLagwadAnalysis({
     },
   };
 
-  // The picker only needs meta — skip the order / lagwad / roll joins on that first call.
-  if (metaOnly || !selected.length) return base;
+  // Legacy FE sent metaOnly on first paint; full-year loads must always include lines.
+  const skipHeavyLoad =
+    metaOnly && (monthFilter.length > 0 || slotFilter.length > 0);
+  if (skipHeavyLoad || !selected.length) return base;
 
   const slotObjectIds = selected
     .map((s) => s._id)
@@ -361,10 +406,13 @@ export async function getLagwadAnalysis({
   });
 
   const slotLabelById = new Map(slotPayload.map((s) => [s._id, s.label]));
-  const enrichedLines = lines.map((line) => ({
-    ...line,
-    slotLabel: slotLabelById.get(line.slotId) || "",
-  }));
+  const enrichedLines = sortLagwadLines(
+    lines.map((line) => ({
+      ...line,
+      slotLabel: slotLabelById.get(line.slotId) || "",
+    })),
+    { sortBy, sortDir }
+  );
 
   const rolls = rollLogs.map((log) => ({
     _id: String(log._id),

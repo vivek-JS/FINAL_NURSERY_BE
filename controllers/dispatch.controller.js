@@ -3905,6 +3905,11 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
 
     scheduleDispatchPdfGeneration(updatedDispatch._id, ["complete_invoice"]);
 
+    const { scheduleAfterDeliveryWhatsAppForDispatch } = await import(
+      "../services/afterDeliveryWhatsapp.service.js"
+    );
+    scheduleAfterDeliveryWhatsAppForDispatch(String(updatedDispatch._id));
+
     const response = generateResponse(
       "Success",
       "Dispatch completed, delivery status updated, and returns processed successfully",

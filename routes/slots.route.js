@@ -37,6 +37,7 @@ import {
   postRollExpiredAvailable,
   getSlotReadyRollLog,
   getSlotOrderDispatchByBatchHandler,
+  getSubtypeVillageStats,
 } from "../controllers/slots.controller.js";
 import { getDashboardInsights } from "../controllers/stats.controller.js";
 const slotRouter = express.Router();
@@ -45,6 +46,7 @@ const slotRouter = express.Router();
 slotRouter.get("/slots", getAllSlots);
 slotRouter.get("/slots/get-plants", getPlantNames);
 slotRouter.get("/slots/subtyps", getSubtypesByPlant);
+slotRouter.get("/slots/subtype-village-stats", getSubtypeVillageStats);
 slotRouter.get("/slots/getslots", getSlotsByPlantAndSubtype);
 slotRouter.get("/slots/stock-entry", getStockEntry);
 slotRouter.get("/slots/lagwad-analysis", getLagwadAnalysisHandler);

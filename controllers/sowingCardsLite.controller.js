@@ -1143,24 +1143,27 @@ export const getOrderWiseSowing = async (req, res) => {
       const slotMeta = slotMetaById.get(String(o.bookingSlot)) || null;
       const readyDays =
         Number(slotMeta?.plantReadyDays) || subtypeReadyDays || 0;
-      let deliveryMs = null;
-      if (o.deliveryDate) {
-        const d = new Date(o.deliveryDate);
-        if (!Number.isNaN(d.getTime())) {
-          deliveryMs = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
-        }
-      }
-      if (deliveryMs == null && slotMeta?.startDay) {
-        deliveryMs = slotStartMs(
+      // Prefer slot startDay for sow-by — same as cards-lite horizon.
+      // Using deliveryDate first pushed daysUntilSow past days=0 while the
+      // slot card still showed a gap → empty order-wise drawer.
+      let windowMs = null;
+      if (slotMeta?.startDay) {
+        windowMs = slotStartMs(
           slotMeta.startDay,
           slotMeta.month,
           slotMeta.year
         );
       }
+      if (windowMs == null && o.deliveryDate) {
+        const d = new Date(o.deliveryDate);
+        if (!Number.isNaN(d.getTime())) {
+          windowMs = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+        }
+      }
       let daysUntilSow = null;
       let sowByDate = null;
-      if (deliveryMs != null) {
-        const sowByMs = deliveryMs - readyDays * 86400000;
+      if (windowMs != null) {
+        const sowByMs = windowMs - readyDays * 86400000;
         daysUntilSow = Math.floor((sowByMs - todayUtc) / 86400000);
         if (readyDays > 0) {
           const sd = new Date(sowByMs);
@@ -1229,14 +1232,16 @@ export const getOrderWiseSowing = async (req, res) => {
     );
     rows.forEach((r) => delete r._sort);
 
-    // Explicit orderIds (linked drawer) skip horizon; slot browse respects days
+    // Explicit orderIds (linked drawer) skip horizon.
+    // SlotIds already come from a horizon-filtered card — keep those orders even
+    // if sow-by date is missing (slot meta lookup miss).
     const horizonFiltered =
       orderIdList.length > 0
         ? rows
-        : rows.filter(
-            (r) =>
-              r.daysUntilSow != null && Number(r.daysUntilSow) <= horizon
-          );
+        : rows.filter((r) => {
+            if (r.daysUntilSow == null) return slotIdList.length > 0;
+            return Number(r.daysUntilSow) <= horizon;
+          });
 
     const openOrders = horizonFiltered.filter((r) => !r.alreadyRequested);
 

@@ -1,6 +1,11 @@
 import { getOrderTotalPlants } from "../services/dealerCommission.service.js";
 import { isPastDueRolledInOrder } from "./pastDueSlotMetrics.js";
 import { isDeliveryDateInSlotWindow } from "./findDeliverySlot.js";
+import {
+  SOWING_GAP_PIPELINE_STATUSES,
+  SOWING_GAP_PIPELINE_STATUS_SET,
+  isSowingGapPipelineOrder as isGapPipelineOrder,
+} from "../constants/sowingGapOrderStatuses.js";
 
 const EMPTY_STATS = {
   totalBookedPlants: 0,
@@ -19,12 +24,11 @@ const EMPTY_STATS = {
 /** Dispatched & completed column — DISPATCHED + COMPLETED only (full order qty). */
 const DISPATCHED_AND_COMPLETED_STATUSES = new Set(["DISPATCHED", "COMPLETED"]);
 
-/** Remaining to dispatch — pre-dispatch queue only. */
-const REMAINING_TO_DISPATCH_STATUSES = new Set([
-  "ACCEPTED",
-  "FARM_READY",
-  "READY_FOR_DISPATCH",
-]);
+/** @deprecated import from constants/sowingGapOrderStatuses.js */
+export { SOWING_GAP_PIPELINE_STATUSES, SOWING_GAP_PIPELINE_STATUS_SET };
+
+/** @deprecated use SOWING_GAP_PIPELINE_STATUS_SET */
+const REMAINING_TO_DISPATCH_STATUSES = SOWING_GAP_PIPELINE_STATUS_SET;
 
 const EXCLUDED_ORDER_STATUSES = new Set([
   "CANCELLED",
@@ -55,17 +59,21 @@ export function getDispatchedAndCompletedQty(order) {
 }
 
 /**
- * Plants still to dispatch (ACCEPTED, FARM_READY, READY_FOR_DISPATCH only).
- * CANCELLED / REJECTED → 0. Other statuses (e.g. DISPATCH_PROCESS, PENDING) → 0.
+ * Plants still to dispatch — ACCEPTED, READY_FOR_DISPATCH, PENDING, DISPATCH_PROCESS only.
+ * DISPATCHED / COMPLETED / CANCELLED / TEMPORARY_CANCELLED / REJECTED → 0.
  */
 export function getRemainingToDispatchQty(order) {
   if (EXCLUDED_ORDER_STATUSES.has(order?.orderStatus)) {
     return 0;
   }
-  if (!REMAINING_TO_DISPATCH_STATUSES.has(order?.orderStatus)) {
+  if (!SOWING_GAP_PIPELINE_STATUS_SET.has(order?.orderStatus)) {
     return 0;
   }
   return getOrderTotalPlants(order);
+}
+
+export function isSowingGapPipelineOrder(order) {
+  return isGapPipelineOrder(order);
 }
 
 /**
@@ -112,11 +120,14 @@ export function computeSlotDispatchStatsFromOrders(
     const remaining = getRemainingToDispatchQty(order);
     stats.remainingToDispatch += remaining;
     stats.remainingNative += remaining;
+
+    if (!isSowingGapPipelineOrder(order)) continue;
+
     const qty = getOrderTotalPlants(order);
-    if (getDispatchedAndCompletedQty(order) > 0 || order?.sowingDone) {
+    if (order?.sowingDone) {
       stats.bookedCoveredPlants += qty;
-    } else if (remaining > 0) {
-      stats.bookedUncoveredPlants += remaining;
+    } else {
+      stats.bookedUncoveredPlants += qty;
     }
   }
 

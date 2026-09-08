@@ -14,6 +14,14 @@ import {
   calculateRemainingSowing,
 } from '../helpers/slotTransactionLogger.js';
 
+function bustSowingCardsLiteCache() {
+  setImmediate(() => {
+    import("./sowingCardsLite.controller.js")
+      .then((m) => m.bustTodaySowingCardsLiteCache?.())
+      .catch(() => {});
+  });
+}
+
 /**
  * Update request status to "issued" when stock is issued from inventory
  * PUT /api/v1/sowing/request/:requestId/mark-issued
@@ -79,6 +87,8 @@ export const markRequestAsIssued = async (req, res) => {
         }
       }
     }
+
+    bustSowingCardsLiteCache();
 
     return res.status(200).json({
       success: true,
