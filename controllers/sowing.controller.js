@@ -11,6 +11,11 @@ import SowingRequest from "../models/sowingRequest.model.js";
 import moment from "moment";
 import mongoose from "mongoose";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
+import { SOWING_GAP_PIPELINE_STATUSES } from "../constants/sowingGapOrderStatuses.js";
+import {
+  applySowingGapBoardMetrics,
+  fetchDeliveryOrdersForPlants,
+} from "../utility/sowingGapSummaryMetrics.js";
 
 // Create a new sowing record
 export const createSowing = async (req, res) => {
@@ -7123,6 +7128,10 @@ export const getPlantsGapSummary = async (req, res) => {
           subtypeId: "$subtypeSlots.subtypeId",
           slotId: "$subtypeSlots.slots._id",
           primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
+          availablePlants: { $ifNull: ["$subtypeSlots.slots.availablePlants", 0] },
+          sowingBatches: { $ifNull: ["$subtypeSlots.slots.sowingBatches", []] },
+          gapCovered: { $ifNull: ["$subtypeSlots.slots.gapCovered", []] },
+          gapFullyCovered: { $ifNull: ["$subtypeSlots.slots.gapFullyCovered", false] },
           slotStartDay: "$subtypeSlots.slots.startDay",
           slotEndDay: "$subtypeSlots.slots.endDay",
           slotReadyDays: 1,
@@ -7139,49 +7148,26 @@ export const getPlantsGapSummary = async (req, res) => {
       slotMap.set(slot.slotId.toString(), slot);
     });
 
-    // Step 3: Single aggregation on orders to get all bookings grouped by slot - MUCH FASTER
-    const orderBookings = await Order.aggregate([
-      {
-        $match: {
-          bookingSlot: { $in: slotIds },
-          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
-          $or: [
-            { quotaSource: { $ne: "dealer" } },
-            { quotaSource: { $exists: false } },
-            { quotaSource: null },
-          ],
-        },
-      },
-      {
-        $group: {
-          _id: "$bookingSlot",
-          totalBookedPlants: { $sum: "$numberOfPlants" },
-        },
-      },
-    ]);
+    // Step 3: Delivery-window orders + slots-page gap/excess metrics
+    const deliveryOrders = await fetchDeliveryOrdersForPlants(plantIds, Order);
+    const boardMetrics = applySowingGapBoardMetrics(allSlots, deliveryOrders);
 
-    // Step 4: Create booking map for fast lookup
-    const bookingMap = new Map();
-    orderBookings.forEach(booking => {
-      bookingMap.set(booking._id.toString(), booking.totalBookedPlants);
-    });
-
-    // Step 5: Join slots with bookings in memory and calculate gaps, overdue status
+    // Step 4: Join slots with metrics in memory and calculate overdue status
     const today = moment().startOf("day");
     
     const slotsWithBookings = allSlots.map(slot => {
       const slotIdStr = slot.slotId.toString();
-      const totalBookedPlants = bookingMap.get(slotIdStr) || 0;
+      const metrics = boardMetrics.get(slotIdStr) || {};
+      const totalBookedPlants = metrics.totalBookedPlants || 0;
       const primarySowed = slot.primarySowed || 0;
-      
-      // Calculate gap covered by later slots
+      const slotGap = metrics.slotGap || 0;
+      const excessAvailableForBooking = metrics.excessAvailableForBooking || 0;
+
       const gapCoveredAmount = (slot.gapCovered || []).reduce((sum, coverage) => {
         return sum + (coverage.plantsCovered || 0);
       }, 0);
-      
-      // Effective gap = raw gap - covered amount
+
       const rawGap = totalBookedPlants - primarySowed;
-      const slotGap = Math.max(0, rawGap - gapCoveredAmount);
       
       // Calculate overdue status
       // A slot is overdue if: sowByDate (slotEndDay - plantReadyDays) is in the past
@@ -7226,8 +7212,8 @@ export const getPlantsGapSummary = async (req, res) => {
         }
       }
       
-      // Calculate available plants (negative of rawGap when rawGap < 0)
-      const availablePlants = rawGap < 0 ? Math.abs(rawGap) : 0;
+      // Excess for sowing-allowed board = saleable after gross order cover (matches slots page)
+      const availablePlants = excessAvailableForBooking;
       
       return {
         slotId: slot.slotId,
@@ -7236,8 +7222,11 @@ export const getPlantsGapSummary = async (req, res) => {
         totalBookedPlants,
         primarySowed,
         slotGap,
-        rawGap, // Include raw gap for comparison
-        availablePlants, // Available plants (surplus) - only when rawGap < 0
+        rawGap,
+        availablePlants,
+        excessAvailableForBooking,
+        bookedUncoveredPlants: slotGap,
+        bookedCoveredPlants: metrics.bookedCoveredPlants || 0,
         slotStartDay: slot.slotStartDay, // Include start day for grouping
         slotEndDay: slot.slotEndDay, // Include end day for grouping
         gapCovered: slot.gapCovered || [], // Gap coverage details
@@ -7301,12 +7290,7 @@ export const getPlantsGapSummary = async (req, res) => {
 
       if (!boardIncludeEmpty) {
         filteredSlots = filteredSlots.filter(
-          (s) =>
-            (s.totalBookedPlants || 0) > 0 ||
-            (s.primarySowed || 0) > 0 ||
-            (s.availablePlants || 0) > 0 ||
-            (s.slotGap || 0) > 0 ||
-            s.isOverdue
+          (s) => (s.slotGap || 0) > 0 || (s.excessAvailableForBooking || 0) > 0
         );
       }
 
@@ -7381,10 +7365,12 @@ export const getPlantsGapSummary = async (req, res) => {
           slotEndDay: slot.slotEndDay,
           plantReadyDays: slot.plantReadyDays || 0,
           availablePlants: slot.availablePlants,
+          excessAvailableForBooking: slot.excessAvailableForBooking,
           totalBookedPlants: slot.totalBookedPlants,
           primarySowed: slot.primarySowed,
           rawGap: slot.rawGap,
           slotGap: slot.slotGap,
+          bookedUncoveredPlants: slot.slotGap,
           sowByDate: slot.sowByDate,
           isOverdue: slot.isOverdue,
         });
@@ -7393,8 +7379,27 @@ export const getPlantsGapSummary = async (req, res) => {
 
     // Step 8: Convert to array and calculate gaps
     const allSubtypeSummary = Array.from(subtypeGroupMap.values()).map(item => {
-      const totalBookingGap = Math.max(0, item.totalBookedPlants - item.totalPrimarySowed);
-      const totalAvailableGap = Math.max(0, item.totalPrimarySowed - item.totalBookedPlants);
+      const slotGapSum = (item.slots || []).reduce(
+        (sum, sl) => sum + Math.max(0, Number(sl.slotGap) || 0),
+        0
+      );
+      const excessSum = (item.slots || []).reduce(
+        (sum, sl) =>
+          sum +
+          Math.max(
+            0,
+            Number(sl.excessAvailableForBooking ?? sl.availablePlants) || 0
+          ),
+        0
+      );
+      const totalBookingGap =
+        item.slots?.length > 0
+          ? slotGapSum
+          : Math.max(0, item.totalBookedPlants - item.totalPrimarySowed);
+      const totalAvailableGap =
+        item.slots?.length > 0
+          ? excessSum
+          : Math.max(0, item.totalPrimarySowed - item.totalBookedPlants);
       const rawGap = item.totalBookedPlants - item.totalPrimarySowed;
       
       return {
@@ -7547,7 +7552,7 @@ export const getPlantsGapSummary = async (req, res) => {
 
       const plantTotalGap = isBoard
         ? filteredSubtypes.reduce(
-            (sum, st) => sum + Math.max(0, (st.totalBookedPlants || 0) - (st.totalPrimarySowed || 0)),
+            (sum, st) => sum + Math.max(0, st.totalBookingGap || 0),
             0
           )
         : available === "true"
@@ -8743,7 +8748,8 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       {
         $match: {
           bookingSlot: { $in: slotIds },
-          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+          orderStatus: { $in: SOWING_GAP_PIPELINE_STATUSES },
+          sowingDone: { $ne: true },
           $or: [
             { quotaSource: { $ne: "dealer" } },
             { quotaSource: { $exists: false } },
@@ -8754,7 +8760,14 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       {
         $group: {
           _id: "$bookingSlot",
-          totalBookedPlants: { $sum: "$numberOfPlants" },
+          totalBookedPlants: {
+            $sum: {
+              $add: [
+                { $ifNull: ["$numberOfPlants", 0] },
+                { $ifNull: ["$additionalPlants", 0] },
+              ],
+            },
+          },
         },
       },
     ]);
@@ -9813,11 +9826,24 @@ export const getEasy30DaySowingCards = async (req, res) => {
         {
           $match: {
             bookingSlot: { $in: slotIds },
-            orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+            orderStatus: { $in: SOWING_GAP_PIPELINE_STATUSES },
+            sowingDone: { $ne: true },
             $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }, { quotaSource: null }],
           },
         },
-        { $group: { _id: "$bookingSlot", totalBookedPlants: { $sum: "$numberOfPlants" } } },
+        {
+          $group: {
+            _id: "$bookingSlot",
+            totalBookedPlants: {
+              $sum: {
+                $add: [
+                  { $ifNull: ["$numberOfPlants", 0] },
+                  { $ifNull: ["$additionalPlants", 0] },
+                ],
+              },
+            },
+          },
+        },
       ]);
       orderBookings.forEach((ob) => bookingMap.set(ob._id.toString(), Number(ob.totalBookedPlants) || 0));
     }

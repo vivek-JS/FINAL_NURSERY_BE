@@ -35,11 +35,14 @@ import {
   aggregateSlotDispatchStats,
   computeSlotDispatchStatsFromOrders,
   finalizeDispatchedBifurcation,
+  getDispatchedAndCompletedQty,
   getNativeDeliveryCohortOrders,
+  getRemainingToDispatchQty,
   getSlotDispatchStats,
   groupOrdersByDeliverySlot,
   sumDispatchedCrossSlotOntoSlot,
 } from "../utility/slotDispatchStats.js";
+import { getOrderTotalPlants } from "../services/dealerCommission.service.js";
 import { fetchSlotAvailabilityReport } from "../services/availabilityOverview.service.js";
 import { getLagwadAnalysis } from "../services/lagwadAnalysis.service.js";
 import {
@@ -54,8 +57,13 @@ import {
 import { getSlotOrderDispatchByBatch } from "../services/slotOrderDispatchByBatch.service.js";
 import {
   aggregatePastDueMetricsForSlotGroup,
+  applySowingAllowedSlotMetrics,
   buildCrossSlotDetailBySlot,
+  buildOrderSowingSlotIndex,
+  buildSowingFromOtherSlotDetail,
+  buildSowingGapDetail,
   buildSlotOrderMetrics,
+  isPastDueRolledInOrder,
   sumEarlyDispatchOntoSlot,
 } from "../utility/pastDueSlotMetrics.js";
 
@@ -575,6 +583,53 @@ export const getSubtypesByPlant = async (req, res) => {
       }
     }
 
+    // Enrich subtypes with dispatch remaining + expected lagwad synced on slots
+    const plantSlotDoc = await PlantSlot.findOne({
+      plantId: plantObjectId,
+      year: parseInt(year, 10),
+    }).lean();
+
+    if (plantSlotDoc) {
+      const subtypeSlotIds = new Map();
+      for (const st of plantSlotDoc.subtypeSlots || []) {
+        subtypeSlotIds.set(
+          String(st.subtypeId),
+          (st.slots || []).map((s) => s._id).filter(Boolean)
+        );
+      }
+      const allSlotIds = [...subtypeSlotIds.values()].flat();
+      if (allSlotIds.length) {
+        const orders = await Order.find({
+          bookingSlot: { $in: allSlotIds },
+          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+          $or: [
+            { quotaSource: { $ne: "dealer" } },
+            { quotaSource: { $exists: false } },
+          ],
+        })
+          .select(
+            "bookingSlot numberOfPlants additionalPlants remainingPlants dispatchHistory orderStatus sowingDone"
+          )
+          .lean();
+        const statsBySlot = aggregateSlotDispatchStats(orders);
+        const shedBySlot = await aggregateShedStockBySlotIds(allSlotIds);
+
+        for (const st of stats) {
+          const slotIds = subtypeSlotIds.get(String(st.subtypeId)) || [];
+          let totalRemainingToDispatch = 0;
+          let totalExpectedInSlots = 0;
+          for (const id of slotIds) {
+            totalRemainingToDispatch +=
+              getSlotDispatchStats(statsBySlot, id).remainingToDispatch || 0;
+            const shed = shedBySlot.get(String(id)) || {};
+            totalExpectedInSlots += Number(shed.shedSyncedPlants) || 0;
+          }
+          st.totalRemainingToDispatch = totalRemainingToDispatch;
+          st.totalExpectedInSlots = totalExpectedInSlots;
+        }
+      }
+    }
+
     // Calculate the overall totals for all subtypes
     const overallTotals = stats.reduce(
       (totals, subtype) => {
@@ -584,6 +639,8 @@ export const getSubtypesByPlant = async (req, res) => {
         totals.totalExpectedMortality += subtype.totalExpectedMortality || 0;
         totals.totalActualReadyPlants += subtype.totalActualReadyPlants || 0;
         totals.totalLagwadRemaining += subtype.totalLagwadRemaining || 0;
+        totals.totalRemainingToDispatch += subtype.totalRemainingToDispatch || 0;
+        totals.totalExpectedInSlots += subtype.totalExpectedInSlots || 0;
         return totals;
       },
       {
@@ -593,6 +650,8 @@ export const getSubtypesByPlant = async (req, res) => {
         totalExpectedMortality: 0,
         totalActualReadyPlants: 0,
         totalLagwadRemaining: 0,
+        totalRemainingToDispatch: 0,
+        totalExpectedInSlots: 0,
       }
     );
 
@@ -733,11 +792,13 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
     // Fetch plant and subtype information for buffer calculations
     let plantBuffer = 0;
     let subtypeBuffer = 0;
+    let sowingAllowed = false;
     
     if (plantId) {
       const plant = await PlantCms.findById(plantId);
       if (plant) {
         plantBuffer = plant.buffer || 0;
+        sowingAllowed = Boolean(plant.sowingAllowed);
         
         // Find subtype buffer if subtypeId is provided
         if (subtypeId) {
@@ -799,6 +860,7 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
     const slotsWithOrders = await populateSlotsWithOrders(slots, {
       subtypeBuffer,
       plantBuffer,
+      sowingAllowed,
     });
 
     // Recalculate month-wise summary with actual orders data
@@ -813,9 +875,14 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
     }
 
     // Return the filtered slots and the month-wise summary (even if empty)
+    const slotsPayload = slotsWithOrders.map((group) => ({
+      ...group,
+      sowingAllowed,
+    }));
     res.status(200).json({ 
       monthwiseSummary, 
-      slots: slotsWithOrders,
+      slots: slotsPayload,
+      sowingAllowed,
       message: slotsWithOrders.length === 0 ? "No slots found for the given plant, subtype, and year." : null
     });
   } catch (error) {
@@ -2432,7 +2499,7 @@ const calculateTotalBookedPlantsFromOrders = async (slotId) => {
 // Function to populate slots with orders and calculate totalBookedPlants
 // OPTIMIZED: Batches all queries instead of N+1 queries
 const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
-  const { subtypeBuffer = 0, plantBuffer = 0 } = bufferContext;
+  const { subtypeBuffer = 0, plantBuffer = 0, sowingAllowed = false } = bufferContext;
   try {
     // Collect all slot information for batch querying
     const slotIds = [];
@@ -2664,6 +2731,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         slotIdSet,
         slotGroup.slots
       );
+      const orderSowingIndex = buildOrderSowingSlotIndex(slotGroup.slots, slotMap);
 
       for (const slot of slotGroup.slots) {
         const slotId = slot._id?.toString ? slot._id.toString() : slot._id;
@@ -2690,6 +2758,19 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         
         slot.orders = orders;
         slot.dealerQuota = dealerQuota;
+        const sowingFromOtherSlotDetail = buildSowingFromOtherSlotDetail({
+          slot,
+          deliveryOrders,
+          orderSowingIndex,
+          slotMap,
+        });
+        const sowingGapDetail = buildSowingGapDetail({
+          slot,
+          deliveryOrders,
+          orderSowingIndex,
+          slotMap,
+          sowingAllowed,
+        });
         Object.assign(
           slot,
           buildSlotOrderMetrics({
@@ -2701,6 +2782,8 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
             dispatchedFromOtherBySlot,
             releasedForEarlyBySlot,
             crossSlotDetailBySlot,
+            sowingFromOtherSlotDetail,
+            sowingGapDetail,
           })
         );
 
@@ -2748,6 +2831,8 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
 
         slot.isOverflow = slot.availablePlants < 0;
         slot.overflow = slot.availablePlants < 0;
+        applySowingAllowedSlotMetrics(slot);
+        slot.sowingAllowed = Boolean(sowingAllowed);
       }
     }
     
@@ -3068,7 +3153,8 @@ export const getStockEntry = async (req, res) => {
  */
 export const getLagwadAnalysisHandler = async (req, res) => {
   try {
-    const { plantId, subtypeId, year, months, slotIds, metaOnly } = req.query;
+    const { plantId, subtypeId, year, months, slotIds, metaOnly, sortBy, sortDir } =
+      req.query;
     if (!plantId || !subtypeId || !year) {
       return res.status(400).json({
         success: false,
@@ -3083,6 +3169,8 @@ export const getLagwadAnalysisHandler = async (req, res) => {
       months,
       slotIds,
       metaOnly: metaOnly === "1" || metaOnly === "true",
+      sortBy: sortBy === "readyDate" ? "readyDate" : "lagwadDate",
+      sortDir: sortDir === "asc" ? "asc" : "desc",
     });
 
     return res.status(200).json({ success: true, data });
@@ -5070,7 +5158,14 @@ export const getSimpleSlots = async (req, res) => {
           plantReadyDays,
           // Gap = booked plants - primary sowed (not booked - total capacity)
           gap: actualBookings - primarySowed,
-          availablePlants: Number(slot.availablePlants || slot.totalPlants) || 0,
+          availablePlants: Math.max(
+            0,
+            resolveSlotBufferFields({
+              ...slot,
+              totalBookedPlants: actualBookings,
+            }).availablePlants
+          ),
+          availablePlantsMaterialized: slot.availablePlantsMaterialized,
           status: slot.status !== false,
           isManual: Boolean(slot.isManual),
           // Include productStock for products ordered from other nurseries
@@ -5291,6 +5386,269 @@ export const getSlotReadyRollLog = async (req, res) => {
     return res.status(400).json({
       success: false,
       message: error.message || "Failed to load ready roll log",
+    });
+  }
+};
+
+const NON_DEALER_QUOTA_FILTER = {
+  $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }],
+};
+
+const normalizeVillageLabel = (order) => {
+  const village = order?.farmer?.village;
+  const trimmed = village != null ? String(village).trim() : "";
+  return trimmed || "Unknown";
+};
+
+const normalizeSalesPersonKey = (order) => {
+  const sp = order?.salesPerson;
+  if (!sp) return "__unassigned__";
+  if (typeof sp === "object" && sp._id) return String(sp._id);
+  return String(sp);
+};
+
+const normalizeSalesPersonName = (order) => {
+  const sp = order?.salesPerson;
+  if (typeof sp === "object" && sp?.name) {
+    const name = String(sp.name).trim();
+    if (name) return name;
+  }
+  return "Unassigned";
+};
+
+const bumpAggregateRow = (map, key, label, qty, orderId, { nativeQty = 0, rolledQty = 0 } = {}) => {
+  const row = map.get(key) || {
+    key,
+    label,
+    plants: 0,
+    nativePlants: 0,
+    rolledPlants: 0,
+    orders: 0,
+    orderIds: [],
+  };
+  row.plants += qty;
+  row.nativePlants += nativeQty;
+  row.rolledPlants += rolledQty;
+  row.orders += 1;
+  const oid = orderId?.toString?.() ?? (orderId ? String(orderId) : "");
+  if (oid && !row.orderIds.includes(oid)) row.orderIds.push(oid);
+  map.set(key, row);
+  return row;
+};
+
+const topFiveVillages = (map) =>
+  [...map.values()]
+    .sort((a, b) => b.plants - a.plants || b.orders - a.orders)
+    .slice(0, 5)
+    .map((row) => ({
+      village: row.label,
+      plants: row.plants,
+      nativePlants: row.nativePlants,
+      rolledPlants: row.rolledPlants,
+      orders: row.orders,
+      orderIds: row.orderIds,
+    }));
+
+const topFiveSales = (map) =>
+  [...map.values()]
+    .sort((a, b) => b.plants - a.plants || b.orders - a.orders)
+    .slice(0, 5)
+    .map((row) => ({
+      salesPersonId: row.key === "__unassigned__" ? null : row.key,
+      salesPersonName: row.label,
+      plants: row.plants,
+      nativePlants: row.nativePlants,
+      rolledPlants: row.rolledPlants,
+      orders: row.orders,
+      orderIds: row.orderIds,
+    }));
+
+/** Top villages / sales by remaining-to-dispatch and dispatched for a plant subtype/month. */
+export const getSubtypeVillageStats = async (req, res) => {
+  try {
+    const { plantId, year, subtypeId, month } = req.query;
+
+    if (!plantId || !year || !subtypeId) {
+      return res.status(400).json({
+        success: false,
+        message: "plantId, year, and subtypeId are required.",
+      });
+    }
+
+    const plantObjectId = new mongoose.Types.ObjectId(plantId);
+    const subtypeObjectId = new mongoose.Types.ObjectId(subtypeId);
+    const yearNum = parseInt(year, 10);
+
+    const plantSlotDoc = await PlantSlot.findOne({
+      plantId: plantObjectId,
+      year: yearNum,
+    }).lean();
+
+    if (!plantSlotDoc) {
+      return res.status(404).json({
+        success: false,
+        message: "No slots found for this plant and year.",
+      });
+    }
+
+    const subtypeSlot = (plantSlotDoc.subtypeSlots || []).find(
+      (st) => String(st.subtypeId) === String(subtypeId)
+    );
+    if (!subtypeSlot) {
+      return res.status(404).json({
+        success: false,
+        message: "Subtype not found for this plant/year.",
+      });
+    }
+
+    let slots = subtypeSlot.slots || [];
+    if (month) {
+      slots = slots.filter((s) => String(s.month || "") === String(month));
+    }
+    const slotIds = slots.map((s) => s._id).filter(Boolean);
+    if (!slotIds.length) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          subtypeName: null,
+          month: month || null,
+          topByDispatch: [],
+          topByRemaining: [],
+          topByDispatched: [],
+          topBySales: [],
+        },
+      });
+    }
+
+    const slotDateMap = new Map();
+    for (const slot of slots) {
+      if (!slot.startDay || !slot.endDay) continue;
+      const dateKey = `${slot.startDay}|${slot.endDay}`;
+      if (!slotDateMap.has(dateKey)) slotDateMap.set(dateKey, []);
+      slotDateMap.get(dateKey).push(slot);
+    }
+
+    const bookingOr = [{ bookingSlot: { $in: slotIds } }];
+    for (const dateKey of slotDateMap.keys()) {
+      const [startDay, endDay] = dateKey.split("|");
+      bookingOr.push({ "bookingSlot.startDay": startDay, "bookingSlot.endDay": endDay });
+    }
+
+    const orderSelect =
+      "numberOfPlants additionalPlants remainingPlants orderStatus quotaSource deliveryDate bookingSlot pastDueSlotRollover farmer salesPerson";
+    const farmerPopulate = { path: "farmer", select: "village taluka district name" };
+    const salesPopulate = { path: "salesPerson", select: "name phone jobTitle" };
+
+    const populateOrder = (query) =>
+      query.select(orderSelect).populate(farmerPopulate).populate(salesPopulate).lean();
+
+    const allOrders = await populateOrder(
+      Order.find({
+        $and: [{ $or: bookingOr }, NON_DEALER_QUOTA_FILTER],
+        orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+      })
+    );
+
+    const deliveryRangeConditions = [];
+    for (const slot of slots) {
+      const range = slotWindowToDeliveryUtcRange(slot);
+      if (range) {
+        deliveryRangeConditions.push({
+          deliveryDate: { $gte: range.start, $lte: range.end },
+        });
+      }
+    }
+
+    let deliveryDateOrders = [];
+    if (deliveryRangeConditions.length) {
+      deliveryDateOrders = await populateOrder(
+        Order.find({
+          $and: [{ $or: deliveryRangeConditions }, NON_DEALER_QUOTA_FILTER],
+          deliveryDate: { $exists: true, $ne: null },
+          plantName: plantObjectId,
+          plantSubtype: subtypeObjectId,
+          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+        })
+      );
+    }
+
+    const ordersById = new Map();
+    for (const order of [...allOrders, ...deliveryDateOrders]) {
+      ordersById.set(order._id?.toString?.() ?? String(order._id), order);
+    }
+    const mergedOrders = [...ordersById.values()];
+    const ordersByDelivery = groupOrdersByDeliverySlot(mergedOrders, slots);
+
+    const villageRemaining = new Map();
+    const villageDispatched = new Map();
+    const salesRemaining = new Map();
+
+    for (const slot of slots) {
+      const slotId = slot._id?.toString?.() ?? String(slot._id);
+      const deliveryOrders = ordersByDelivery.get(slotId) || [];
+
+      for (const order of deliveryOrders) {
+        if (["CANCELLED", "REJECTED"].includes(order?.orderStatus)) continue;
+
+        const isRolled = isPastDueRolledInOrder(order);
+        const village = normalizeVillageLabel(order);
+        const salesKey = normalizeSalesPersonKey(order);
+        const salesName = normalizeSalesPersonName(order);
+        const oid = order._id;
+
+        const remaining = getRemainingToDispatchQty(order);
+        if (remaining > 0) {
+          bumpAggregateRow(villageRemaining, village, village, remaining, oid, {
+            nativeQty: isRolled ? 0 : remaining,
+            rolledQty: isRolled ? remaining : 0,
+          });
+          bumpAggregateRow(salesRemaining, salesKey, salesName, remaining, oid, {
+            nativeQty: isRolled ? 0 : remaining,
+            rolledQty: isRolled ? remaining : 0,
+          });
+        }
+
+        const dispatched = getDispatchedAndCompletedQty(order);
+        if (dispatched > 0) {
+          bumpAggregateRow(villageDispatched, village, village, dispatched, oid, {
+            nativeQty: isRolled ? 0 : dispatched,
+            rolledQty: isRolled ? dispatched : 0,
+          });
+        }
+      }
+    }
+
+    const topByRemaining = topFiveVillages(villageRemaining);
+    const topByDispatch = topByRemaining;
+    const topByDispatched = topFiveVillages(villageDispatched);
+    const topBySales = topFiveSales(salesRemaining);
+
+    let subtypeName = null;
+    const plantCms = await PlantCms.findById(plantObjectId).select("subtypes").lean();
+    const cmsSubtype = (plantCms?.subtypes || []).find(
+      (s) => String(s._id) === String(subtypeId)
+    );
+    if (cmsSubtype?.name) subtypeName = cmsSubtype.name;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        plantId,
+        year: yearNum,
+        subtypeId,
+        subtypeName,
+        month: month || null,
+        topByDispatch,
+        topByRemaining,
+        topByDispatched,
+        topBySales,
+      },
+    });
+  } catch (error) {
+    console.error("getSubtypeVillageStats:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to load village stats",
     });
   }
 };

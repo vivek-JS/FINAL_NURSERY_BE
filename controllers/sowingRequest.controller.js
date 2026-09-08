@@ -14,6 +14,15 @@ const applySowingBuffer = (baseValue, bufferPercent) => {
   return buffer > 0 ? Math.round(qty * (1 + buffer / 100)) : qty;
 };
 
+/** Bust Request Packets / Sowing in progress cards cache (2min TTL). */
+function bustSowingCardsLiteCache() {
+  setImmediate(() => {
+    import("./sowingCardsLite.controller.js")
+      .then((m) => m.bustTodaySowingCardsLiteCache?.())
+      .catch(() => {});
+  });
+}
+
 /** Warehouse issue qty = company packets only (raising is allocated at create). */
 const resolveCompanyIssuePackets = (request) => {
   if (
@@ -315,14 +324,7 @@ export const createSowingRequest = async (req, res) => {
     // chooses Biotech / Input / Both at issue time (avoids double stock moves).
     const transferResult = null;
 
-    try {
-      const { bustTodaySowingCardsLiteCache } = await import(
-        "./sowingCardsLite.controller.js"
-      );
-      bustTodaySowingCardsLiteCache();
-    } catch (_) {
-      /* optional cache bust */
-    }
+    bustSowingCardsLiteCache();
 
     res.status(201).json({
       success: true,
@@ -1381,6 +1383,8 @@ export const issueStockFromRequest = async (req, res) => {
 
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'issuedBy', 'outwardId']);
 
+    bustSowingCardsLiteCache();
+
     res.json({
       success: true,
       message:
@@ -1443,6 +1447,8 @@ export const rejectSowingRequest = async (req, res) => {
 
     await request.populate(['rejectedBy']);
 
+    bustSowingCardsLiteCache();
+
     res.json({
       success: true,
       message: 'Sowing request rejected successfully',
@@ -1498,6 +1504,8 @@ export const cancelSowingRequest = async (req, res) => {
       request.cancelledDate = new Date();
       request.cancellationReason = reason || 'Request cancelled before stock issuance';
       await request.save();
+
+      bustSowingCardsLiteCache();
 
       return res.json({
         success: true,
@@ -1662,6 +1670,8 @@ export const cancelSowingRequest = async (req, res) => {
 
     console.log(`✅ Successfully cancelled sowing request ${request.requestNumber}`);
 
+    bustSowingCardsLiteCache();
+
     return res.json({
       success: true,
       message: 'Sowing request cancelled successfully. All changes reverted.',
@@ -1712,6 +1722,8 @@ export const cancelAllSowingRequests = async (req, res) => {
         },
       }
     );
+
+    bustSowingCardsLiteCache();
 
     res.json({
       success: true,
