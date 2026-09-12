@@ -5,8 +5,10 @@ import InventoryOutward from '../models/inventoryOutward.model.js';
 import Batch from '../models/batch.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
 import PlantSlot from '../models/slots.model.js';
+import Order from '../models/order.model.js';
 import mongoose from 'mongoose';
 import { resolveSowingPlantsPerPacket } from '../utility/sowingPlantsPerPacket.js';
+import { validateLinkedOrderScope } from '../utility/sowingRequestOrderScope.js';
 
 const applySowingBuffer = (baseValue, bufferPercent) => {
   const qty = Number(baseValue) || 0;
@@ -189,16 +191,56 @@ export const createSowingRequest = async (req, res) => {
       });
     }
 
-    // Convert slotIds to ObjectIds if provided
-    const linkedSlotIds = slotIds && Array.isArray(slotIds) 
-      ? slotIds.map(id => new mongoose.Types.ObjectId(id))
+    const suppliedOrderIds = Array.isArray(linkedOrderIds)
+      ? [...new Set(linkedOrderIds.map(String))]
       : [];
+    const invalidOrderIds = suppliedOrderIds.filter(
+      (id) => !mongoose.Types.ObjectId.isValid(id)
+    );
+    if (invalidOrderIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'One or more selected order IDs are invalid',
+        data: { invalidOrderIds },
+      });
+    }
 
-    const linkedOrderObjectIds = Array.isArray(linkedOrderIds)
-      ? linkedOrderIds
-          .filter((id) => mongoose.Types.ObjectId.isValid(id))
-          .map((id) => new mongoose.Types.ObjectId(id))
-      : [];
+    const linkedOrderObjectIds = suppliedOrderIds.map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+    let linkedSlotIds = [];
+
+    if (linkedOrderObjectIds.length) {
+      const linkedOrders = await Order.find({
+        _id: { $in: linkedOrderObjectIds },
+      })
+        .select('_id plantName plantSubtype bookingSlot orderStatus sowingDone')
+        .lean();
+      const orderScope = validateLinkedOrderScope({
+        requestedOrderIds: suppliedOrderIds,
+        orders: linkedOrders,
+        plantId,
+        subtypeId,
+      });
+
+      if (!orderScope.valid) {
+        return res.status(400).json({
+          success: false,
+          message: orderScope.message,
+          data: orderScope,
+        });
+      }
+
+      linkedSlotIds = orderScope.linkedSlotIds.map(
+        (id) => new mongoose.Types.ObjectId(id)
+      );
+    } else {
+      linkedSlotIds = Array.isArray(slotIds)
+        ? [...new Set(slotIds.map(String))]
+            .filter((id) => mongoose.Types.ObjectId.isValid(id))
+            .map((id) => new mongoose.Types.ObjectId(id))
+        : [];
+    }
 
     // Same order cannot be included in another active sowing request
     if (linkedOrderObjectIds.length) {
