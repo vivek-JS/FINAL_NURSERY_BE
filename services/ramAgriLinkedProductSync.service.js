@@ -4,6 +4,7 @@
  */
 import mongoose from "mongoose";
 import RamAgriBatch from "../models/ramAgriBatch.model.js";
+import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
 import Product from "../models/product.model.js";
 import Batch from "../models/batch.model.js";
 
@@ -34,12 +35,30 @@ export async function syncLinkedInventoryFromRamAgri(
 ) {
   if (!cropId || !varietyId) return { products: 0, batches: 0 };
 
+  const crop = await RamAgriInputsProduct.findOne({
+    _id: cropId,
+    "varieties._id": varietyId,
+  })
+    .select("varieties.$")
+    .lean();
+  const linkedProductId = crop?.varieties?.[0]?.linkedInventoryProductId;
+  const identityFilters = [
+    {
+      isRamAgriSales: true,
+      ramAgriCropId: cropId,
+      ramAgriVarietyId: varietyId,
+    },
+  ];
+  if (linkedProductId && mongoose.Types.ObjectId.isValid(linkedProductId)) {
+    identityFilters.push({
+      _id: new mongoose.Types.ObjectId(linkedProductId),
+    });
+  }
+
   const products = await Product.find({
     isActive: true,
-    isRamAgriSales: true,
-    ramAgriCropId: cropId,
-    ramAgriVarietyId: varietyId,
     category: { $regex: /^seeds$/i },
+    $or: identityFilters,
   });
 
   if (!products.length) return { products: 0, batches: 0 };
@@ -64,6 +83,9 @@ export async function syncLinkedInventoryFromRamAgri(
     new mongoose.Types.ObjectId("000000000000000000000001");
 
   for (const product of products) {
+    product.isRamAgriSales = true;
+    product.ramAgriCropId = cropId;
+    product.ramAgriVarietyId = varietyId;
     product.currentStock = activeRem;
     product.stockUpdatedAt = new Date();
     if (userId) product.updatedBy = userId;
