@@ -37,6 +37,17 @@ const resolveCompanyIssuePackets = (request) => {
   return Math.max(0, Number(request?.packetsRequested || request?.packetsNeeded) || 0);
 };
 
+const restoreCancelledRequestRaisingPackets = async (request) => {
+  const packets = Math.max(0, Number(request?.packetsFromRaising) || 0);
+  const intakeIds = request?.raisingIntakeIds || [];
+  if (!packets || !intakeIds.length) return { restored: 0 };
+  const { restoreRaisingPackets } = await import("./raisingSeed.controller.js");
+  return restoreRaisingPackets({
+    intakeIds,
+    packetsToRestore: packets,
+  });
+};
+
 const enrichRequestsWithBufferContext = async (requests) => {
   const plantIds = [...new Set((requests || []).map((r) => String(r.plantId)).filter(Boolean))]
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
@@ -1541,6 +1552,8 @@ export const cancelSowingRequest = async (req, res) => {
 
     // If no stock was issued, just mark as cancelled
     if (!request.outwardId) {
+      const raisingRestore =
+        await restoreCancelledRequestRaisingPackets(request);
       request.status = 'cancelled';
       request.cancelledBy = req.user?._id;
       request.cancelledDate = new Date();
@@ -1553,6 +1566,7 @@ export const cancelSowingRequest = async (req, res) => {
         success: true,
         message: 'Sowing request cancelled successfully (no stock was issued)',
         data: request,
+        raisingRestore,
       });
     }
 
@@ -1703,6 +1717,8 @@ export const cancelSowingRequest = async (req, res) => {
     await outward.save();
 
     // Step 5: Mark request as cancelled
+    const raisingRestore =
+      await restoreCancelledRequestRaisingPackets(request);
     request.status = 'cancelled';
     request.sowingInProgress = false;
     request.cancelledBy = req.user?._id;
@@ -1738,6 +1754,7 @@ export const cancelSowingRequest = async (req, res) => {
           slots: revertedSlots,
           totalPacketsReturned: revertedBatches.reduce((sum, b) => sum + b.quantityReturned, 0),
           totalSlotsUpdated: revertedSlots.length,
+          raisingPacketsReturned: raisingRestore.restored,
         },
       },
     });
