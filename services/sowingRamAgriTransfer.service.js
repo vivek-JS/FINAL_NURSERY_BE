@@ -355,6 +355,8 @@ export async function maybeCreateSowingTransferPurchaseOrder({
   const poItem = {
     isRamAgriProduct: true,
     isBiotechTransfer: true,
+    product: product._id,
+    productName: product.name,
     targetProduct: product._id,
     ramAgriCropId: resolved.cropId,
     ramAgriVarietyId: resolved.varietyId,
@@ -412,6 +414,7 @@ export async function maybeCreateSowingTransferPurchaseOrder({
     ramAgriVarietyId: resolved.varietyId,
     ramAgriCropName: crop.cropName,
     ramAgriVarietyName: variety.name,
+    product: product._id,
     quantity: shortfall,
     unit: primaryUnit,
     rate,
@@ -448,6 +451,9 @@ export async function maybeCreateSowingTransferPurchaseOrder({
 
   purchaseOrder.status = "received";
   purchaseOrder.updatedBy = userId;
+  if (purchaseOrder.items?.[0]) {
+    purchaseOrder.items[0].receivedQuantity = shortfall;
+  }
   await purchaseOrder.save();
 
   const batch =

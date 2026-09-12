@@ -1316,6 +1316,7 @@ export const getPurchaseOrderById = async (req, res) => {
     const purchaseOrder = await PurchaseOrder.findById(req.params.id)
       .populate([
         'items.product',
+        'items.targetProduct',
         'items.unit',
         'createdBy',
         'updatedBy',
