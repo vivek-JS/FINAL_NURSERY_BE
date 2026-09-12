@@ -793,3 +793,36 @@ export async function allocateRaisingPackets({
     shortfall: Math.max(0, remaining),
   };
 }
+
+/** Return packets allocated at request creation when that request is cancelled. */
+export async function restoreRaisingPackets({
+  intakeIds = [],
+  packetsToRestore = 0,
+}) {
+  let remaining = Math.max(0, Number(packetsToRestore) || 0);
+  if (!remaining || !intakeIds.length) return { restored: 0 };
+
+  const intakes = await RaisingSeedIntake.find({
+    _id: { $in: intakeIds },
+  }).sort({ createdAt: -1 });
+
+  for (const intake of intakes) {
+    if (remaining <= 0) break;
+    const received = Number(intake.packetsReceived) || 0;
+    const current = Number(intake.packetsRemaining) || 0;
+    const restorable = Math.max(0, received - current);
+    const returned = Math.min(restorable, remaining);
+    if (returned <= 0) continue;
+
+    intake.packetsRemaining = Number((current + returned).toFixed(4));
+    intake.status =
+      intake.packetsRemaining >= received ? "received" : "partially_used";
+    await intake.save();
+    remaining = Number((remaining - returned).toFixed(4));
+  }
+
+  return {
+    restored: Number((Number(packetsToRestore) - remaining).toFixed(4)),
+    shortfall: remaining,
+  };
+}
