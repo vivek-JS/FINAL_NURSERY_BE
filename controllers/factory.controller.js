@@ -1912,6 +1912,17 @@ const updateOne = (Model, modelName, allowedFields) =>
             userId: req.user?._id,
           });
         }
+
+        const { applyPostDispatchDeliveryDateSync } = await import(
+          "../utility/syncDeliveryDateToDispatchDay.js"
+        );
+        await applyPostDispatchDeliveryDateSync({
+          previousOrder: existingDoc,
+          nextStatus,
+          setFields: filteredBody,
+          session,
+          userId: req.user?._id,
+        });
       }
 
       // Special handling for statusChanges - update with user info
