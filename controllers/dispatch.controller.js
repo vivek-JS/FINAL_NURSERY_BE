@@ -74,6 +74,7 @@ import {
 } from "../utils/orderEventDualWrite.js";
 import { rebuildDispatchTargets } from "../services/dispatchTargetBuilder.service.js";
 import { syncDispatchTransportStatusAfterShedChange } from "../services/secondaryVehicleLoad.service.js";
+import { applyPostDispatchDeliveryDateSync } from "../utility/syncDeliveryDateToDispatchDay.js";
 
 export const updateOrderWithLedgerSync = async ({
   orderId,
@@ -96,6 +97,16 @@ export const updateOrderWithLedgerSync = async ({
   if (!previousOrder) {
     throw new AppError(`Order not found: ${orderId}`, 404);
   }
+
+  if (!updateOperation.$set) updateOperation.$set = {};
+  await applyPostDispatchDeliveryDateSync({
+    previousOrder,
+    nextStatus: updateOperation.$set.orderStatus ?? previousOrder.orderStatus,
+    setFields: updateOperation.$set,
+    updateOperation,
+    session,
+    userId,
+  });
 
   const opWithAudit = appendStatusChangeToUpdate(
     updateOperation,
