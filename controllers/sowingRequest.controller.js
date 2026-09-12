@@ -6,6 +6,7 @@ import Batch from '../models/batch.model.js';
 import InventoryTransaction from '../models/inventoryTransaction.model.js';
 import PlantSlot from '../models/slots.model.js';
 import Order from '../models/order.model.js';
+import RaisingSeedIntake from '../models/raisingSeedIntake.model.js';
 import mongoose from 'mongoose';
 import { resolveSowingPlantsPerPacket } from '../utility/sowingPlantsPerPacket.js';
 import { validateLinkedOrderScope } from '../utility/sowingRequestOrderScope.js';
@@ -661,6 +662,15 @@ export const getSowingRequestById = async (req, res) => {
     } catch (availErr) {
       console.error('[getSowingRequestById] inventoryAvailability:', availErr?.message || availErr);
     }
+    const raisingIntakes = request.raisingIntakeIds?.length
+      ? await RaisingSeedIntake.find({
+          _id: { $in: request.raisingIntakeIds },
+        })
+          .select(
+            "intakeNumber orderId farmerName packetsReceived packetsRemaining batchNumber batches expiryDate status"
+          )
+          .lean()
+      : [];
 
     res.json({
       success: true,
@@ -673,6 +683,7 @@ export const getSowingRequestById = async (req, res) => {
         availablePacketsFromOutward: Math.floor(availablePacketsFromOutward),
         batches,
         inventoryAvailability,
+        raisingIntakes,
       },
     });
   } catch (error) {

@@ -69,6 +69,17 @@ export function resolveIssueInventorySplit({
  */
 export async function buildIssueInventoryAvailability(plantId, subtypeId, productId) {
   const candidates = await getSubtypeInventoryCandidates(plantId, subtypeId);
+  const exactProductId = productId?._id || productId;
+  const exactProduct = exactProductId
+    ? await Product.findById(exactProductId).lean()
+    : null;
+  const exactRamAgri = exactProduct
+    ? await resolveRamAgriForSeedProduct(exactProduct)
+    : null;
+  const preferredSource =
+    exactRamAgri?.cropId && exactRamAgri?.varietyId
+      ? "RAM_AGRI"
+      : "BIOTECH";
 
   let biotechLinks = candidates.biotech || [];
   let ramAgriLinks = candidates.ramAgri || [];
@@ -97,15 +108,12 @@ export async function buildIssueInventoryAvailability(plantId, subtypeId, produc
     // Ram Agri fallback: map seed product -> Ram Agri crop/variety using the inventory link
     // service, then compute availability from RamAgriBatch remainingQuantity.
     // NOTE: this dialog selection ultimately depends on seed variety, not solely plant/subtype.
-    if (productId) {
-      const product = await Product.findById(productId).lean();
-      const resolved = await resolveRamAgriForSeedProduct(product);
-      if (resolved?.cropId && resolved?.varietyId) {
+    if (exactRamAgri?.cropId && exactRamAgri?.varietyId) {
         const agriQty = await RamAgriBatch.aggregate([
           {
             $match: {
-              ramAgriCropId: resolved.cropId,
-              ramAgriVarietyId: resolved.varietyId,
+              ramAgriCropId: exactRamAgri.cropId,
+              ramAgriVarietyId: exactRamAgri.varietyId,
               status: "active",
               remainingQuantity: { $gt: 0 },
             },
@@ -117,25 +125,44 @@ export async function buildIssueInventoryAvailability(plantId, subtypeId, produc
           {
             source: "RAM_AGRI",
             displayName:
-              resolved?.crop?.cropName && resolved?.variety?.name
-                ? `${resolved.crop.cropName} — ${resolved.variety.name}`
+              exactRamAgri?.crop?.cropName && exactRamAgri?.variety?.name
+                ? `${exactRamAgri.crop.cropName} — ${exactRamAgri.variety.name}`
                 : "Ram Agri variety",
-            ramAgriCropId: resolved.cropId,
-            ramAgriVarietyId: resolved.varietyId,
+            ramAgriCropId: exactRamAgri.cropId,
+            ramAgriVarietyId: exactRamAgri.varietyId,
             availableStock: total,
           },
         ];
-      }
     }
   }
 
   const biotechAvailable = biotechLinks.reduce((s, l) => s + (Number(l.availableStock) || 0), 0);
   const ramAgriAvailable = ramAgriLinks.reduce((s, l) => s + (Number(l.availableStock) || 0), 0);
+  const ramAgriBatchFilters = ramAgriLinks
+    .map((link) => ({
+      ramAgriCropId: link.ramAgriCropId?._id || link.ramAgriCropId,
+      ramAgriVarietyId: link.ramAgriVarietyId?._id || link.ramAgriVarietyId,
+    }))
+    .filter((link) => link.ramAgriCropId && link.ramAgriVarietyId);
+  const ramAgriBatches = ramAgriBatchFilters.length
+    ? await RamAgriBatch.find({
+        $or: ramAgriBatchFilters,
+        status: { $in: ["active", "expired"] },
+        remainingQuantity: { $gt: 0 },
+      })
+        .select(
+          "batchNumber ramAgriCropId ramAgriVarietyId remainingQuantity expiryDate status"
+        )
+        .sort({ expiryDate: 1, receivedDate: 1 })
+        .lean()
+    : [];
 
   return {
     ...candidates,
     biotech: biotechLinks,
     ramAgri: ramAgriLinks,
+    ramAgriBatches,
+    preferredSource,
     totals: {
       biotechAvailable,
       ramAgriAvailable,

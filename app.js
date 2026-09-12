@@ -156,6 +156,8 @@ const corsOptions = {
     'Authorization',
     'X-Requested-With',
     'X-API-Version',
+    'X-Sowing-Cache-Bust',
+    'X-Cache-Bust',
     'Origin',
     'Accept',
     'Accept-Language',
