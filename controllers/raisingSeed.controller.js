@@ -5,6 +5,7 @@ import PlantCms from "../models/plantCms.model.js";
 import Product from "../models/product.model.js";
 import Order from "../models/order.model.js";
 import { uploadMultipleImagesToLocalStorage } from "../utils/localStorageUtils.js";
+import { overrideOrdersWithCompanySeed } from "../services/raisingSeedCompanyOverride.service.js";
 
 const ACTIVE_ORDER_STATUSES = [
   "PENDING",
@@ -31,6 +32,47 @@ async function bustLiteCache() {
     /* optional */
   }
 }
+
+export const useCompanySeedForOrders = async (req, res) => {
+  try {
+    const { orderIds, plantId, subtypeId } = req.body || {};
+    if (
+      !Array.isArray(orderIds) ||
+      orderIds.length === 0 ||
+      orderIds.length > 80 ||
+      !mongoose.Types.ObjectId.isValid(plantId) ||
+      !mongoose.Types.ObjectId.isValid(subtypeId) ||
+      orderIds.some((id) => !mongoose.Types.ObjectId.isValid(id))
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "orderIds (1-80 valid IDs), plantId, and subtypeId are required",
+      });
+    }
+
+    const converted = await overrideOrdersWithCompanySeed({
+      orderIds,
+      plantId,
+      subtypeId,
+      userId: req.user?._id,
+    });
+    await bustLiteCache();
+
+    return res.json({
+      success: true,
+      message: `${converted.length} order(s) switched to company seed`,
+      data: { converted },
+    });
+  } catch (error) {
+    console.error("useCompanySeedForOrders:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to switch orders to company seed",
+      details: error.details || undefined,
+    });
+  }
+};
 
 function parseLinkedSlotIds(linkedSlotIds) {
   let slotIds = [];
