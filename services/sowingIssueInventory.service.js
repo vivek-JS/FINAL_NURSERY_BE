@@ -9,6 +9,22 @@ import { RAM_AGRI_MOVEMENT_TYPES } from "./ramAgriStockMovement.service.js";
 const SOURCES = new Set(["BIOTECH", "RAM_AGRI", "BOTH"]);
 
 /**
+ * Prefer Ram Agri only when this exact product originates from a linked
+ * Ram Agri Input variety. A plant/subtype fallback must not flip Biotech
+ * warehouse products to Ram Agri.
+ */
+export function resolvePreferredIssueSource(ramAgriMatch) {
+  if (
+    ramAgriMatch?.cropId &&
+    ramAgriMatch?.varietyId &&
+    ramAgriMatch.matchedBy !== "plantSubtype"
+  ) {
+    return "RAM_AGRI";
+  }
+  return "BIOTECH";
+}
+
+/**
  * Normalize office inventory-pool choice for sowing issue.
  * @returns {{ source, packetsFromBiotech, packetsFromRamAgri }}
  */
@@ -76,10 +92,7 @@ export async function buildIssueInventoryAvailability(plantId, subtypeId, produc
   const exactRamAgri = exactProduct
     ? await resolveRamAgriForSeedProduct(exactProduct)
     : null;
-  const preferredSource =
-    exactRamAgri?.cropId && exactRamAgri?.varietyId
-      ? "RAM_AGRI"
-      : "BIOTECH";
+  const preferredSource = resolvePreferredIssueSource(exactRamAgri);
 
   let biotechLinks = candidates.biotech || [];
   let ramAgriLinks = candidates.ramAgri || [];

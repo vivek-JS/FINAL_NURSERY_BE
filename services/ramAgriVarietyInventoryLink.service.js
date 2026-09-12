@@ -171,6 +171,7 @@ export async function resolveRamAgriForSeedProduct(product) {
     return {
       cropId: product.ramAgriCropId,
       varietyId: product.ramAgriVarietyId,
+      matchedBy: "productFields",
     };
   }
   if (product._id) {
@@ -193,6 +194,7 @@ export async function resolveRamAgriForSeedProduct(product) {
           varietyId: linkedVariety._id,
           crop: byLinkedProduct,
           variety: linkedVariety,
+          matchedBy: "linkedProduct",
         };
       }
     }
@@ -219,7 +221,13 @@ export async function resolveRamAgriForSeedProduct(product) {
   );
   if (!variety) return null;
 
-  return { cropId: crop._id, varietyId: variety._id, crop, variety };
+  return {
+    cropId: crop._id,
+    varietyId: variety._id,
+    crop,
+    variety,
+    matchedBy: "plantSubtype",
+  };
 }
 
 /**
