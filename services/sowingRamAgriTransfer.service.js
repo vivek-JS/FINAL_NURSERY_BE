@@ -12,6 +12,7 @@ import Supplier from "../models/supplier.model.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
 import {
   deductStockFIFO,
+  deductStockFromBatches,
   toPrimaryUnitQuantity,
   returnToSourceBatches,
 } from "./ramAgriBatchInventory.service.js";
@@ -102,7 +103,7 @@ export function parseTransferAllocFromNotes(notes) {
 }
 
 /** Deduct Ram Agri + inward classic batch on Biotech product. */
-export async function processBiotechTransferGrnItem(item, grn, poItem, userId) {
+export async function processBiotechTransferGrnItem(item, grn, poItem, userId, deductOptions = {}) {
   if (!item.isRamAgriProduct || !poItem?.isBiotechTransfer || !poItem?.targetProduct) {
     return null;
   }
@@ -119,14 +120,41 @@ export async function processBiotechTransferGrnItem(item, grn, poItem, userId) {
   if (!variety) throw new Error("Ram Agri variety not found for transfer");
 
   const qtyPrimary = toPrimaryUnitQuantity(item, variety);
-  const deduct = await deductStockFIFO(cropId, varietyId, qtyPrimary, {
+  const deductMeta = {
     userId,
+    cropId,
+    varietyId,
     referenceNumber: grn.grnNumber,
     referenceType: "BiotechTransfer",
     referenceId: grn._id,
     movementType: "SOWING_RAISING_OUT",
     description: `Raising / sowing transfer — GRN ${grn.grnNumber || ""}`.trim(),
+    expiryOrder: deductOptions.expiryOrder === "latest" ? "latest" : "fifo",
+  };
+  const scopedPicks = (Array.isArray(deductOptions.ramAgriBatchAllocations)
+    ? deductOptions.ramAgriBatchAllocations
+    : []
+  ).filter((row) => {
+    const qty = Number(row.quantity || row.quantityDeducted) || 0;
+    if (qty <= 0 || !(row.batchId || row._id)) return false;
+    if (row.ramAgriCropId && String(row.ramAgriCropId) !== String(cropId)) return false;
+    if (row.ramAgriVarietyId && String(row.ramAgriVarietyId) !== String(varietyId)) return false;
+    return true;
   });
+  if (scopedPicks.length) {
+    const pickedQty = scopedPicks.reduce(
+      (sum, row) => sum + (Number(row.quantity || row.quantityDeducted) || 0),
+      0
+    );
+    if (Math.abs(pickedQty - qtyPrimary) > 0.01) {
+      throw new Error(
+        `Ram Agri batch picks (${pickedQty}) must match packets to transfer (${qtyPrimary})`
+      );
+    }
+  }
+  const deduct = scopedPicks.length
+    ? await deductStockFromBatches(scopedPicks, deductMeta)
+    : await deductStockFIFO(cropId, varietyId, qtyPrimary, deductMeta);
   if (!deduct.ok) {
     throw new Error(deduct.error || "Insufficient Ram Agri stock for internal transfer");
   }
@@ -195,7 +223,7 @@ export async function processBiotechTransferGrnItem(item, grn, poItem, userId) {
   };
 }
 
-async function approveGrnWithBiotechTransfer(grn, purchaseOrder, userId) {
+async function approveGrnWithBiotechTransfer(grn, purchaseOrder, userId, deductOptions = {}) {
   const batches = [];
   const agriAllocations = [];
   for (const item of grn.items) {
@@ -210,7 +238,13 @@ async function approveGrnWithBiotechTransfer(grn, purchaseOrder, userId) {
       );
 
     if (poItem?.isBiotechTransfer) {
-      const result = await processBiotechTransferGrnItem(item, grn, poItem, userId);
+      const result = await processBiotechTransferGrnItem(
+        item,
+        grn,
+        poItem,
+        userId,
+        deductOptions
+      );
       if (result?.batch) batches.push(result.batch);
       if (result?.allocations?.length) agriAllocations.push(...result.allocations);
     }
@@ -234,6 +268,8 @@ export async function maybeCreateSowingTransferPurchaseOrder({
   sowingRequest,
   userId,
   forceQty = false,
+  ramAgriBatchAllocations,
+  expiryOrder,
 }) {
   const qty = Number(companyPackets) || 0;
   if (qty <= 0) return null;
@@ -366,7 +402,10 @@ export async function maybeCreateSowingTransferPurchaseOrder({
   });
   await grn.save();
 
-  const approved = await approveGrnWithBiotechTransfer(grn, purchaseOrder, userId);
+  const approved = await approveGrnWithBiotechTransfer(grn, purchaseOrder, userId, {
+    ramAgriBatchAllocations,
+    expiryOrder,
+  });
 
   purchaseOrder.status = "received";
   purchaseOrder.updatedBy = userId;

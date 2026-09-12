@@ -8,6 +8,7 @@ import {
   restoredToBatchRows,
   safeAppendRamAgriStockMovements,
 } from './ramAgriStockMovement.service.js';
+import { sortBatchesByExpiry } from './batchExpiryOrder.js';
 
 function sourceToMovementType(source, meta = {}) {
   if (meta.movementType) return meta.movementType;
@@ -210,23 +211,15 @@ export async function deductStockFIFO(cropId, varietyId, qtyPrimary, meta = {}) 
   const qty = Number(qtyPrimary) || 0;
   if (qty <= 0) return { ok: true, allocations: [] };
 
-  const batches = await RamAgriBatch.find({
-    ramAgriCropId: cropId,
-    ramAgriVarietyId: varietyId,
-    status: 'active',
-    remainingQuantity: { $gt: 0 },
-  }).exec();
-
-  // FEFO: nearest expiry first (null expiry last), then oldest received
-  batches.sort((a, b) => {
-    const aExp = a.expiryDate ? new Date(a.expiryDate).getTime() : Number.MAX_SAFE_INTEGER;
-    const bExp = b.expiryDate ? new Date(b.expiryDate).getTime() : Number.MAX_SAFE_INTEGER;
-    if (aExp !== bExp) return aExp - bExp;
-    const aRec = a.receivedDate ? new Date(a.receivedDate).getTime() : 0;
-    const bRec = b.receivedDate ? new Date(b.receivedDate).getTime() : 0;
-    if (aRec !== bRec) return aRec - bRec;
-    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-  });
+  const batches = sortBatchesByExpiry(
+    await RamAgriBatch.find({
+      ramAgriCropId: cropId,
+      ramAgriVarietyId: varietyId,
+      status: 'active',
+      remainingQuantity: { $gt: 0 },
+    }).exec(),
+    meta.expiryOrder === 'latest' ? 'latest' : 'fifo'
+  );
 
   const totalAvailable = batches.reduce((s, b) => s + b.remainingQuantity, 0);
   if (totalAvailable < qty) {
@@ -271,6 +264,90 @@ export async function deductStockFIFO(cropId, varietyId, qtyPrimary, meta = {}) 
     performedBy: meta.userId,
     metadata: meta.metadata || {},
   });
+
+  return { ok: true, allocations };
+}
+
+/**
+ * Deduct specific Ram Agri batches in the order the user picked.
+ * Used when issue UI sends non-FIFO / edited allocations.
+ */
+export async function deductStockFromBatches(picks, meta = {}) {
+  const list = (Array.isArray(picks) ? picks : [])
+    .map((row) => ({
+      batchId: row.batchId || row._id,
+      quantity: Number(row.quantity || row.quantityDeducted) || 0,
+    }))
+    .filter((row) => row.batchId && row.quantity > 0);
+
+  if (!list.length) return { ok: true, allocations: [] };
+
+  const allocations = [];
+  const byVariety = new Map();
+
+  for (const pick of list) {
+    const batch = await RamAgriBatch.findById(pick.batchId);
+    if (!batch) {
+      return { ok: false, error: `Batch not found: ${pick.batchId}` };
+    }
+    if (meta.cropId && String(batch.ramAgriCropId) !== String(meta.cropId)) {
+      return { ok: false, error: `Batch ${batch.batchNumber} is not for this crop` };
+    }
+    if (meta.varietyId && String(batch.ramAgriVarietyId) !== String(meta.varietyId)) {
+      return { ok: false, error: `Batch ${batch.batchNumber} is not for this variety` };
+    }
+    if (!['active', 'expired'].includes(batch.status)) {
+      return {
+        ok: false,
+        error: `Batch ${batch.batchNumber} is not issuable (status: ${batch.status})`,
+      };
+    }
+    if (batch.remainingQuantity + 0.0001 < pick.quantity) {
+      return {
+        ok: false,
+        error: `Insufficient quantity in batch ${batch.batchNumber}. Available: ${batch.remainingQuantity}, Required: ${pick.quantity}`,
+      };
+    }
+
+    batch.remainingQuantity -= pick.quantity;
+    if (batch.remainingQuantity <= 0) batch.status = 'exhausted';
+    await batch.save();
+
+    const allocation = {
+      batchId: batch._id,
+      batchNumber: batch.batchNumber,
+      quantityDeducted: pick.quantity,
+      quantityReturned: 0,
+      ramAgriCropId: batch.ramAgriCropId,
+      ramAgriVarietyId: batch.ramAgriVarietyId,
+    };
+    allocations.push(allocation);
+    const key = `${batch.ramAgriCropId}:${batch.ramAgriVarietyId}`;
+    if (!byVariety.has(key)) {
+      byVariety.set(key, {
+        cropId: batch.ramAgriCropId,
+        varietyId: batch.ramAgriVarietyId,
+        rows: [],
+      });
+    }
+    byVariety.get(key).rows.push(allocation);
+  }
+
+  for (const { cropId, varietyId, rows } of byVariety.values()) {
+    await syncVarietyStockFromBatches(cropId, varietyId, meta.userId);
+    await safeAppendRamAgriStockMovements({
+      cropId,
+      varietyId,
+      movementType: meta.movementType || RAM_AGRI_MOVEMENT_TYPES.SALE_DISPATCH_OUT,
+      batchRows: allocationsToBatchRows(rows),
+      referenceType: meta.referenceType,
+      referenceId: meta.referenceId,
+      referenceNumber: meta.referenceNumber,
+      description: meta.description,
+      performedBy: meta.userId,
+      metadata: meta.metadata || {},
+    });
+  }
 
   return { ok: true, allocations };
 }
