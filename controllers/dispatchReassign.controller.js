@@ -122,9 +122,15 @@ export const reassignRefusedDelivery = catchAsync(async (req, res, next) => {
     return next(new AppError("originalOrders is required", 400));
   }
   if (normalizedMode !== "RETURNED" && (!Array.isArray(newFarmers) || newFarmers.length === 0)) {
-    return next(
-      new AppError("At least one receiving farmer is required for this mode", 400)
-    );
+    const allOriginalDispatched = (originalOrders || []).every((e) => {
+      const d = String(e?.disposition || "").toUpperCase();
+      return d === "DISPATCHED" || d === "DISPATCH";
+    });
+    if (!allOriginalDispatched) {
+      return next(
+        new AppError("At least one receiving farmer is required for this mode", 400)
+      );
+    }
   }
 
   const userId = req.user?._id || req.user?.id || null;
@@ -171,14 +177,30 @@ export const reassignRefusedDelivery = catchAsync(async (req, res, next) => {
       (sum, f) => sum + Math.max(0, Number(f?.numberOfPlants) || 0),
       0
     );
+    const totalOriginalDispatched = originalOrders.reduce((sum, e) => {
+      const disposition = String(e?.disposition || "").toUpperCase();
+      if (disposition !== "DISPATCHED" && disposition !== "DISPATCH") return sum;
+      const order = originalById.get(String(e?.orderId || ""));
+      if (!order) return sum;
+      const returnedQty = Math.max(0, Number(e?.returnedQty) || 0);
+      return sum + Math.max(0, onVehicleQty(order) - returnedQty);
+    }, 0);
 
-    if (totalReassigned + totalReturned !== vehiclePlants) {
+    if (totalReassigned + totalReturned + totalOriginalDispatched !== vehiclePlants) {
       await session.abortTransaction();
       return next(
         new AppError(
-          `Plant count mismatch: reassigned (${totalReassigned}) + returned (${totalReturned}) must equal plants on vehicle (${vehiclePlants})`,
+          `Plant count mismatch: reassigned (${totalReassigned}) + returned (${totalReturned}) + dispatched (${totalOriginalDispatched}) must equal plants on vehicle (${vehiclePlants})`,
           400
         )
+      );
+    }
+
+    const leftoverForNewFarmers = vehiclePlants - totalReturned - totalOriginalDispatched;
+    if (leftoverForNewFarmers > 0 && totalReassigned === 0) {
+      await session.abortTransaction();
+      return next(
+        new AppError("At least one receiving farmer is required for the remaining plants", 400)
       );
     }
 
@@ -191,6 +213,7 @@ export const reassignRefusedDelivery = catchAsync(async (req, res, next) => {
       const returnedQty = Math.max(0, Number(entry?.returnedQty) || 0);
       const disposition = String(entry?.disposition || "").toUpperCase();
       const keepOrder = disposition === "KEEP" || disposition === "ACCEPTED";
+      const dispatchOrder = disposition === "DISPATCHED" || disposition === "DISPATCH";
 
       // Plants that came back to the nursery release the booking slot.
       if (returnedQty > 0) {
@@ -200,7 +223,11 @@ export const reassignRefusedDelivery = catchAsync(async (req, res, next) => {
       const $set = {};
       const $push = {};
 
-      if (keepOrder) {
+      if (dispatchOrder) {
+        // Original farmer took the plants on this vehicle.
+        $set.orderStatus = "DISPATCHED";
+        $set.remainingPlants = 0;
+      } else if (keepOrder) {
         // Farmer still wants the plants — re-send later. Return to ready-for-dispatch.
         $set.orderStatus = "ACCEPTED";
         $set.remainingPlants =
