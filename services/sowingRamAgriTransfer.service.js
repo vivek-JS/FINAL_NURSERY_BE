@@ -10,6 +10,7 @@ import Batch from "../models/batch.model.js";
 import InventoryTransaction from "../models/inventoryTransaction.model.js";
 import Supplier from "../models/supplier.model.js";
 import RamAgriInputsProduct from "../models/ramAgriInputsProduct.model.js";
+import RamAgriBatch from "../models/ramAgriBatch.model.js";
 import {
   deductStockFIFO,
   deductStockFromBatches,
@@ -17,6 +18,36 @@ import {
   returnToSourceBatches,
 } from "./ramAgriBatchInventory.service.js";
 import { resolveRamAgriForSeedProduct } from "./ramAgriVarietyInventoryLink.service.js";
+
+async function resolveTransferExpiryDate({ ramAgriBatchAllocations, cropId, varietyId }) {
+  const pickIds = (Array.isArray(ramAgriBatchAllocations) ? ramAgriBatchAllocations : [])
+    .map((row) => row.batchId || row._id)
+    .filter(Boolean);
+  if (pickIds.length) {
+    const batches = await RamAgriBatch.find({ _id: { $in: pickIds } })
+      .select("expiryDate")
+      .lean();
+    const dates = batches
+      .map((batch) => (batch.expiryDate ? new Date(batch.expiryDate) : null))
+      .filter((date) => date && !Number.isNaN(date.getTime()))
+      .sort((a, b) => a.getTime() - b.getTime());
+    if (dates[0]) return dates[0];
+  }
+  const fifo = await RamAgriBatch.findOne({
+    ramAgriCropId: cropId,
+    ramAgriVarietyId: varietyId,
+    status: "active",
+    remainingQuantity: { $gt: 0 },
+    expiryDate: { $ne: null },
+  })
+    .sort({ expiryDate: 1 })
+    .select("expiryDate")
+    .lean();
+  if (fifo?.expiryDate) return new Date(fifo.expiryDate);
+  const fallback = new Date();
+  fallback.setFullYear(fallback.getFullYear() + 1);
+  return fallback;
+}
 
 const TRANSFER_NOTE_PREFIX = "biotechTransferAlloc:";
 
@@ -314,6 +345,12 @@ export async function maybeCreateSowingTransferPurchaseOrder({
   const amount = shortfall * rate;
   const primaryUnit = variety.primaryUnit?._id || variety.primaryUnit;
 
+  const expiryDate = await resolveTransferExpiryDate({
+    ramAgriBatchAllocations,
+    cropId: resolved.cropId,
+    varietyId: resolved.varietyId,
+  });
+
   const poNumber = await PurchaseOrder.generatePONumber();
   const poItem = {
     isRamAgriProduct: true,
@@ -329,6 +366,7 @@ export async function maybeCreateSowingTransferPurchaseOrder({
     gst: 0,
     discount: 0,
     amount,
+    expiryDate,
     selectedUnitType: "primary",
     conversionFactor: variety.conversionFactor || 1,
     notes: `Sowing transfer for ${sowingRequest.requestNumber}`,
@@ -381,6 +419,7 @@ export async function maybeCreateSowingTransferPurchaseOrder({
     rejectedQuantity: 0,
     damageQuantity: 0,
     amount,
+    expiryDate,
     selectedUnitType: "primary",
     conversionFactor: variety.conversionFactor || 1,
   };
