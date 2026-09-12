@@ -141,8 +141,9 @@ export const getTodaySowingCardsLite = async (req, res) => {
     const plantIds = plants.map((p) => p._id);
     const plantMap = new Map(plants.map((p) => [String(p._id), p]));
 
-    // Parallel: products, slots, pending requests, raising stock
-    const [baseProducts, rawSlots, pendingRequests, raisingStockRows] = await Promise.all([
+    // Parallel: products, slots, pending requests. Raising stock is scoped to
+    // eligible order ids after the horizon slots are known.
+    const [baseProducts, rawSlots, pendingRequests] = await Promise.all([
       Product.find({
         plantId: { $in: plantIds },
         category: { $regex: /^seeds$/i },
@@ -245,36 +246,9 @@ export const getTodaySowingCardsLite = async (req, res) => {
           "plantId subtypeId productId requestNumber packetsRequested packetsFromCompany packetsFromRaising seedSource conversionFactor tentativePlantsPerPacket status sowingInProgress issuedDate sowingCompleted linkedOrderIds isExcessiveSowing"
         )
         .lean(),
-      RaisingSeedIntake.aggregate([
-        {
-          $match: {
-            plantId: { $in: plantIds },
-            packetsRemaining: { $gt: 0 },
-            status: { $in: ["received", "allocated", "partially_used"] },
-          },
-        },
-        {
-          $group: {
-            _id: {
-              plantId: { $toString: "$plantId" },
-              subtypeId: { $toString: "$subtypeId" },
-            },
-            packets: { $sum: "$packetsRemaining" },
-            intakeCount: { $sum: 1 },
-          },
-        },
-      ]),
     ]);
 
     const products = await enrichSeedProductsFromRamAgriLinks(baseProducts, plantIds);
-
-    const raisingByKey = new Map();
-    (raisingStockRows || []).forEach((r) => {
-      raisingByKey.set(`${r._id.plantId}-${r._id.subtypeId}`, {
-        packets: Number(r.packets) || 0,
-        intakeCount: r.intakeCount || 0,
-      });
-    });
 
     // Multiple seed products (packings) can share the same plant+subtype
     const productsByKey = new Map();
@@ -537,6 +511,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
               plantId: { $toString: "$plantName" },
               subtypeId: { $toString: "$plantSubtype" },
             },
+            eligibleOrderIds: { $push: "$_id" },
             orderCount: { $sum: 1 },
             companyPackets: {
               $sum: { $ifNull: ["$sowingPlan.companySeedPackets", 0] },
@@ -634,6 +609,38 @@ export const getTodaySowingCardsLite = async (req, res) => {
     const orderMap = new Map();
     orderAgg.forEach((row) => {
       orderMap.set(`${row._id.plantId}-${row._id.subtypeId}`, row);
+    });
+
+    const eligibleOrderIds = orderAgg.flatMap(
+      (row) => row.eligibleOrderIds || []
+    );
+    const raisingStockRows = eligibleOrderIds.length
+      ? await RaisingSeedIntake.aggregate([
+          {
+            $match: {
+              orderId: { $in: eligibleOrderIds },
+              packetsRemaining: { $gt: 0 },
+              status: { $in: ["received", "allocated", "partially_used"] },
+            },
+          },
+          {
+            $group: {
+              _id: {
+                plantId: { $toString: "$plantId" },
+                subtypeId: { $toString: "$subtypeId" },
+              },
+              packets: { $sum: "$packetsRemaining" },
+              intakeCount: { $sum: 1 },
+            },
+          },
+        ])
+      : [];
+    const raisingByKey = new Map();
+    raisingStockRows.forEach((row) => {
+      raisingByKey.set(`${row._id.plantId}-${row._id.subtypeId}`, {
+        packets: Number(row.packets) || 0,
+        intakeCount: row.intakeCount || 0,
+      });
     });
 
     const subtypeCards = Array.from(cardMap.values()).map((card) => {
