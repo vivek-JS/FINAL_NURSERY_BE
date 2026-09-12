@@ -1031,7 +1031,9 @@ export const getOrderWiseSowing = async (req, res) => {
         packetsRemaining: { $gt: 0 },
         status: { $in: ["received", "allocated", "partially_used"] },
       })
-        .select("orderId packetsRemaining batchNumber photos intakeNumber")
+        .select(
+          "orderId packetsReceived packetsRemaining batchNumber batches expiryDate photos intakeNumber"
+        )
         .limit(80)
         .lean(),
       SowingRequest.find({
@@ -1217,7 +1219,10 @@ export const getOrderWiseSowing = async (req, res) => {
           _id: i._id,
           intakeNumber: i.intakeNumber,
           batchNumber: i.batchNumber,
+          batches: i.batches || [],
+          packetsReceived: i.packetsReceived,
           packetsRemaining: i.packetsRemaining,
+          expiryDate: i.expiryDate || null,
           photoCount: i.photos?.length || 0,
         })),
         alreadyRequested,
