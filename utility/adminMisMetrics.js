@@ -426,8 +426,36 @@ async function aggregateTransitionsByEntityPerOrder(
 }
 
 /**
- * Out (dispatched): exclude orders that also have Done (completed) on the same IST day.
+ * Out = Dispatched ∪ Completed, one order once.
+ * Prefer the Dispatched event; add Completed-only orders on their Done day.
  */
+export function unionDispatchedWithCompletedByDay(dispatchedMap, completedMap) {
+  const outOrderIds = new Set();
+  for (const entry of dispatchedMap.values()) {
+    outOrderIds.add(String(entry.orderId));
+  }
+  const merged = new Map(dispatchedMap);
+  for (const [key, entry] of completedMap) {
+    if (outOrderIds.has(String(entry.orderId))) continue;
+    merged.set(key, entry);
+  }
+  return merged;
+}
+
+/** Out by entity: unique orders, Completed-only added if not already Out. */
+export function unionDispatchedWithCompletedByEntity(dispatchedMap, completedMap) {
+  const outOrderIds = new Set();
+  for (const row of dispatchedMap.values()) {
+    outOrderIds.add(String(row._id?.orderId));
+  }
+  const merged = new Map(dispatchedMap);
+  for (const [key, row] of completedMap) {
+    if (outOrderIds.has(String(row._id?.orderId))) continue;
+    merged.set(key, row);
+  }
+  return merged;
+}
+
 export async function aggregateDispatchedByDay(
   rangeStart,
   rangeEnd,
@@ -438,13 +466,9 @@ export async function aggregateDispatchedByDay(
     aggregateTransitionsByDayPerOrder("DISPATCHED", rangeStart, rangeEnd, statusMatch, extraMatch),
     aggregateTransitionsByDayPerOrder("COMPLETED", rangeStart, rangeEnd, statusMatch, extraMatch),
   ]);
-  const completedKeys = new Set(completed.keys());
-  const filtered = new Map();
-  for (const [key, entry] of dispatched) {
-    if (completedKeys.has(key)) continue;
-    filtered.set(key, entry);
-  }
-  return rollupOrderDayMapToDayTotals(filtered);
+  return rollupOrderDayMapToDayTotals(
+    unionDispatchedWithCompletedByDay(dispatched, completed)
+  );
 }
 
 /**
@@ -465,21 +489,20 @@ export async function aggregateVehicleDispatchedByDay(
       statusMatch,
       { ...extraMatch, ...vehicleMatch }
     ),
-    aggregateTransitionsByDayPerOrder("COMPLETED", rangeStart, rangeEnd, statusMatch, extraMatch),
+    aggregateTransitionsByDayPerOrder(
+      "COMPLETED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      { ...extraMatch, ...vehicleMatch }
+    ),
   ]);
-  const completedKeys = new Set(completed.keys());
-  const filtered = new Map();
-  for (const [key, entry] of dispatched) {
-    if (completedKeys.has(key)) continue;
-    filtered.set(key, entry);
-  }
-  return rollupOrderDayMapToDayTotals(filtered);
+  return rollupOrderDayMapToDayTotals(
+    unionDispatchedWithCompletedByDay(dispatched, completed)
+  );
 }
 
-/**
- * Out by entity: exclude orders that have any Done transition in the range.
- */
-/** Order ids that have both Out and Done on the same IST day (count Done only). */
+/** Order ids that have both Out and Done on the same IST day. */
 export async function orderIdsWithDispatchedAndCompletedSameDay(
   rangeStart,
   rangeEnd,
@@ -504,7 +527,7 @@ export async function aggregateDispatchedByGroup(
   groupIdFields,
   extraMatch = {}
 ) {
-  const [dispatched, completedOrderIds] = await Promise.all([
+  const [dispatched, completed] = await Promise.all([
     aggregateTransitionsByEntityPerOrder(
       "DISPATCHED",
       rangeStart,
@@ -514,15 +537,19 @@ export async function aggregateDispatchedByGroup(
       groupIdFields,
       extraMatch
     ),
-    distinctOrderIdsWithTransitionEvents("COMPLETED", rangeStart, rangeEnd),
+    aggregateTransitionsByEntityPerOrder(
+      "COMPLETED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      extraMatch
+    ),
   ]);
-  const completedSet = new Set(completedOrderIds.map((id) => String(id)));
-  const filtered = new Map();
-  for (const [key, row] of dispatched) {
-    if (completedSet.has(String(row._id.orderId))) continue;
-    filtered.set(key, row);
-  }
-  return rollupEntityOrderMapToRows(filtered);
+  return rollupEntityOrderMapToRows(
+    unionDispatchedWithCompletedByEntity(dispatched, completed)
+  );
 }
 
 export async function aggregateVehicleDispatchedByGroup(
@@ -534,7 +561,7 @@ export async function aggregateVehicleDispatchedByGroup(
   extraMatch = {}
 ) {
   const vehicleMatch = matchOrderHasVehicleDispatchDetails();
-  const [dispatched, completedOrderIds] = await Promise.all([
+  const [dispatched, completed] = await Promise.all([
     aggregateTransitionsByEntityPerOrder(
       "DISPATCHED",
       rangeStart,
@@ -544,15 +571,19 @@ export async function aggregateVehicleDispatchedByGroup(
       groupIdFields,
       { ...extraMatch, ...vehicleMatch }
     ),
-    distinctOrderIdsWithTransitionEvents("COMPLETED", rangeStart, rangeEnd),
+    aggregateTransitionsByEntityPerOrder(
+      "COMPLETED",
+      rangeStart,
+      rangeEnd,
+      statusMatch,
+      groupStages,
+      groupIdFields,
+      { ...extraMatch, ...vehicleMatch }
+    ),
   ]);
-  const completedSet = new Set(completedOrderIds.map((id) => String(id)));
-  const filtered = new Map();
-  for (const [key, row] of dispatched) {
-    if (completedSet.has(String(row._id.orderId))) continue;
-    filtered.set(key, row);
-  }
-  return rollupEntityOrderMapToRows(filtered);
+  return rollupEntityOrderMapToRows(
+    unionDispatchedWithCompletedByEntity(dispatched, completed)
+  );
 }
 
 export async function aggregateTransitionsByDay(
