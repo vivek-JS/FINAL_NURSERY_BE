@@ -52,6 +52,16 @@ function validateItemsExpiry(items) {
   return null;
 }
 
+function validateItemsBatch(items) {
+  if (!Array.isArray(items) || !items.length) return null;
+  for (let i = 0; i < items.length; i++) {
+    if (!String(items[i]?.batchNumber || items[i]?.lotNumber || '').trim()) {
+      return `Batch / lot number is required on every line (missing on line ${i + 1})`;
+    }
+  }
+  return null;
+}
+
 // Create Purchase Order
 export const createPurchaseOrder = async (req, res) => {
   try {
@@ -92,6 +102,13 @@ export const createPurchaseOrder = async (req, res) => {
       });
     }
     const isAutoGRN = wantsAutoGRN && canAutoAccept;
+    const batchError = isAutoGRN ? validateItemsBatch(items) : null;
+    if (batchError) {
+      return res.status(400).json({
+        success: false,
+        message: batchError,
+      });
+    }
 
     const invoiceNo = String(supplierInvoiceNumber || '').trim();
     if (isAutoGRN && !invoiceNo) {
@@ -1462,6 +1479,15 @@ export const updatePurchaseOrder = async (req, res) => {
         return res.status(400).json({
           success: false,
           message: expiryError,
+        });
+      }
+      const batchError = invoiceRequired
+        ? validateItemsBatch(req.body.items)
+        : null;
+      if (batchError) {
+        return res.status(400).json({
+          success: false,
+          message: batchError,
         });
       }
       purchaseOrder.items = req.body.items;
