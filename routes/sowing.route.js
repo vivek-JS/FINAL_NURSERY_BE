@@ -68,6 +68,7 @@ import {
   getRaisingIntakeById,
   getRaisingIntakeByOrder,
   getPendingRaisingOrders,
+  useCompanySeedForOrders,
   raisingUpload,
 } from "../controllers/raisingSeed.controller.js";
 import {
@@ -175,6 +176,7 @@ router.patch(
 );
 router.get("/raising/available", getAvailableRaisingIntakes);
 router.get("/raising/pending-orders", getPendingRaisingOrders);
+router.patch("/raising/use-company-seed", useCompanySeedForOrders);
 router.get("/raising/by-order/:orderId", getRaisingIntakeByOrder);
 router.get("/raising/:id", getRaisingIntakeById);
 
