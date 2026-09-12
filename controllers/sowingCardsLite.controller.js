@@ -1068,7 +1068,7 @@ export const getOrderWiseSowing = async (req, res) => {
       const slotDocs = await PlantSlot.find({
         "subtypeSlots.slots._id": { $in: bookingSlotIds },
       })
-        .select("subtypeSlots.subtypeId subtypeSlots.slots._id subtypeSlots.slots.startDay subtypeSlots.slots.endDay subtypeSlots.slots.month subtypeSlots.slots.year subtypeSlots.slots.plantReadyDays")
+        .select("year subtypeSlots.subtypeId subtypeSlots.slots._id subtypeSlots.slots.startDay subtypeSlots.slots.endDay subtypeSlots.slots.month subtypeSlots.slots.year subtypeSlots.slots.plantReadyDays")
         .lean();
       for (const doc of slotDocs) {
         for (const st of doc.subtypeSlots || []) {
@@ -1079,7 +1079,7 @@ export const getOrderWiseSowing = async (req, res) => {
               startDay: sl.startDay,
               endDay: sl.endDay,
               month: sl.month,
-              year: sl.year,
+              year: sl.year || doc.year,
               plantReadyDays:
                 Number(sl.plantReadyDays) || subtypeReadyDays || 0,
             });
