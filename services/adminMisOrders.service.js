@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import {
-  LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
   istDayBoundsFromYmd,
 } from "../utility/istOrderDateStats.js";
@@ -9,11 +8,7 @@ import { parseCentralReportDateRange } from "../utility/centralReportEngine/date
 import { duePipelineMatch } from "../utility/adminMisDue.js";
 import { matchDeliveryDateInRange } from "../utility/centralReportEngine/deliveryMatch.js";
 import { transitionDrawerFacetStages } from "../utility/misTransitionMetrics.js";
-import {
-  orderIdsWithDispatchedAndCompletedSameDay,
-  matchOrderHasVehicleDispatchDetails,
-} from "../utility/adminMisMetrics.js";
-import { distinctOrderIdsWithTransitionEvents } from "../utility/misTransitionFromEvents.js";
+import { matchOrderHasVehicleDispatchDetails } from "../utility/adminMisMetrics.js";
 import {
   enrichMisOrderList,
   hydrateMisOrderDrawerList,
@@ -24,8 +19,6 @@ import {
   earlyDeliveryMatch,
 } from "../modules/ceoReport/utility/ceoDeliveryChanges.js";
 import { futureDeliveryMatch } from "../modules/ceoReport/utility/ceoFutureDelivery.js";
-
-const IST = "Asia/Kolkata";
 
 const PIPELINE_OTHER_STATUSES = ["PENDING", "PROCESSING", "ASSIGNED"];
 
@@ -96,23 +89,9 @@ export function isMisSingleDayWindow(query, window) {
   return Boolean(start && end && start === end);
 }
 
-/** Order ids to drop from Out when they also belong in Done for this window. */
-export async function resolveDispatchedExcludeOrderIds(query, window, base) {
-  const { rangeStart, rangeEnd } = window;
-  if (isMisSingleDayWindow(query, window)) {
-    const rawIds = await orderIdsWithDispatchedAndCompletedSameDay(
-      rangeStart,
-      rangeEnd,
-      base
-    );
-    return rawIds.map((id) => toMongoIdIfValid(id)).filter(Boolean);
-  }
-  const rawIds = await distinctOrderIdsWithTransitionEvents(
-    "COMPLETED",
-    rangeStart,
-    rangeEnd
-  );
-  return rawIds.filter(Boolean);
+/** Out now includes Completed (unique). Kept for older callers — always empty. */
+export async function resolveDispatchedExcludeOrderIds() {
+  return [];
 }
 
 function deliveryInRangeClause(rangeStart, rangeEnd) {
@@ -345,20 +324,66 @@ export function buildMisOrdersMatch(query, window) {
   }
 }
 
-async function fetchTransitionOrders(matchSpec, window, query, { skip, limit }) {
+async function fetchTransitionIdRows(newStatus, rangeStart, rangeEnd, match) {
+  return Order.aggregate([
+    { $match: match },
+    ...transitionDrawerFacetStages(newStatus, rangeStart, rangeEnd),
+  ]);
+}
+
+async function hydrateTransitionPage(rows, { skip, limit }) {
+  const total = rows.length;
+  const pageIds = rows.slice(skip, skip + limit);
+  if (pageIds.length === 0) return { data: [], total };
+
+  const docs = await Order.find({ _id: { $in: pageIds.map((r) => r._id) } })
+    .select(ORDER_LIST_PROJECT)
+    .lean();
+  const byId = new Map(docs.map((doc) => [String(doc._id), doc]));
+  const data = pageIds
+    .map((row) => {
+      const doc = byId.get(String(row._id));
+      if (!doc) return null;
+      return { ...doc, bucketEventAt: row.bucketEventAt };
+    })
+    .filter(Boolean);
+  return { data, total };
+}
+
+function mergeTransitionRowsUnique(primaryRows, extraRows) {
+  const byId = new Map();
+  for (const row of primaryRows || []) {
+    byId.set(String(row._id), row);
+  }
+  for (const row of extraRows || []) {
+    const key = String(row._id);
+    if (!byId.has(key)) byId.set(key, row);
+  }
+  return [...byId.values()].sort((a, b) => {
+    const tb = new Date(b.bucketEventAt || 0) - new Date(a.bucketEventAt || 0);
+    if (tb !== 0) return tb;
+    return String(b._id).localeCompare(String(a._id));
+  });
+}
+
+async function fetchTransitionOrders(matchSpec, window, _query, { skip, limit }) {
   const { rangeStart, rangeEnd } = window;
   const { newStatus, base, extra } = matchSpec;
+  const match = { ...base, ...extra };
 
-  let excludeOrderIds = [];
   if (newStatus === "DISPATCHED") {
-    excludeOrderIds = await resolveDispatchedExcludeOrderIds(query, window, base);
+    const [dispatched, completed] = await Promise.all([
+      fetchTransitionIdRows("DISPATCHED", rangeStart, rangeEnd, match),
+      fetchTransitionIdRows("COMPLETED", rangeStart, rangeEnd, match),
+    ]);
+    return hydrateTransitionPage(mergeTransitionRowsUnique(dispatched, completed), {
+      skip,
+      limit,
+    });
   }
 
-  const idExclude =
-    excludeOrderIds.length > 0 ? { _id: { $nin: excludeOrderIds } } : {};
-
   const pipeline = [
-    { $match: { ...base, ...extra, ...idExclude } },
+    { $match: match },
     ...transitionDrawerFacetStages(newStatus, rangeStart, rangeEnd),
     { $sort: { bucketEventAt: -1 } },
     {
