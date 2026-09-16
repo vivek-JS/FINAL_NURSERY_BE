@@ -427,6 +427,7 @@ import locationRoute from "./routes/location.route.js";
 import notificationRoute from "./routes/notification.route.js";
 import whatsappOrderBotRoute from "./routes/whatsappOrderBot.route.js";
 import whatsappAlertRoute from "./routes/whatsappAlert.route.js";
+import whatsappCampaignBridgeRoute from "./routes/whatsappCampaignBridge.route.js";
 import optInWebhookRoute from "./routes/optInWebhook.route.js";
 import whatsappStatusWebhookRoute from "./routes/whatsappStatusWebhook.route.js";
 import sowingRoute from "./routes/sowing.route.js";
@@ -531,6 +532,7 @@ server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
+server.use("/api/v1/whatsapp-campaign-bridge", whatsappCampaignBridgeRoute); // Internal key — campaign app uses ERP WA session
 server.use("/api/v1/opt-in", optInWebhookRoute); // Opt-in/opt-out webhook + today's booking PDF report (same POST URL)
 // WATI unified webhook (template sent/delivered/read/failed + messageReceived)
 server.use("/api/v1/whatsapp-status", whatsappStatusWebhookRoute);
