@@ -75,6 +75,7 @@ import {
 import { rebuildDispatchTargets } from "../services/dispatchTargetBuilder.service.js";
 import { syncDispatchTransportStatusAfterShedChange } from "../services/secondaryVehicleLoad.service.js";
 import { applyPostDispatchDeliveryDateSync } from "../utility/syncDeliveryDateToDispatchDay.js";
+import { resolveCompleteDispatchBatch } from "../services/completeDispatchBatch.service.js";
 
 export const updateOrderWithLedgerSync = async ({
   orderId,
@@ -3687,9 +3688,20 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         orderUpdateData.expectedNursery = nurseryToSet;
       }
 
-      if (orderUpdate.batchNumber !== undefined) {
-        orderUpdateData.batchNumber = String(orderUpdate.batchNumber ?? "").trim();
-      }
+      const batchSnapshot = resolveCompleteDispatchBatch({
+        dispatch,
+        orderId: order._id,
+        clientPayload: {
+          batchNumber: orderUpdate.batchNumber,
+          batchId: orderUpdate.batchId,
+          pollyhouse: orderUpdate.pollyhouse,
+          secondaryInwardId: orderUpdate.secondaryInwardId,
+          batchSource: orderUpdate.batchSource,
+          requiresPollyhouse: orderUpdate.requiresPollyhouse === true,
+        },
+      });
+      orderUpdateData.batchNumber = batchSnapshot.batchNumber;
+      orderUpdateData.deliveryCompleteBatch = batchSnapshot;
 
       // Split returns between dealer plant quota vs nursery slot (hybrid orders)
       const fromWallet =
@@ -3945,11 +3957,18 @@ Example payload:
     {
       "orderId": "6773f61461f4388d1bb59b7b",
       "returnedPlants": 100,
-      "returnReason": "Quality issues with plants"
+      "returnReason": "Quality issues with plants",
+      "batchNumber": "B-2026-042",
+      "batchId": "65f1234567890abcdef12345",
+      "pollyhouse": "PH-3",
+      "secondaryInwardId": "65f1234567890abcdef12346",
+      "batchSource": "shed_stock",
+      "requiresPollyhouse": false,
+      "actions": { "completeOrder": true, "finalStatus": "COMPLETED" }
     }
-    // ... other orders with returns
   ]
 }
+When shedLoadedBatches has one row, server ignores client batch fields and uses vehicle load.
 */
 
 /*
