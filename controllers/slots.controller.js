@@ -5236,6 +5236,75 @@ function canRunPastDueSlotRollover(user) {
   return ["SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "ADMIN"].includes(role);
 }
 
+/** POST /slots/slot-end-nightly/run — unified slot-end automation (admin). */
+export const runSlotEndNightlyController = async (req, res) => {
+  try {
+    if (!canRunPastDueSlotRollover(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only SUPER_ADMIN or OFFICE_ADMIN may run slot-end nightly automation",
+      });
+    }
+
+    const dryRun =
+      req.body?.dryRun === true ||
+      String(req.query?.dryRun || "").toLowerCase() === "true";
+    const asOfRaw = req.body?.asOfDate || req.query?.asOfDate;
+    const asOfDate = asOfRaw ? new Date(asOfRaw) : undefined;
+
+    const plantId = req.body?.plantId || req.query?.plantId;
+    const subtypeId = req.body?.subtypeId || req.query?.subtypeId;
+
+    const steps = {};
+    if (req.body?.orders !== undefined || req.query?.orders !== undefined) {
+      steps.orders =
+        req.body?.orders === true ||
+        String(req.query?.orders || "").toLowerCase() === "true";
+    }
+    if (
+      req.body?.capacityRoll !== undefined ||
+      req.query?.capacityRoll !== undefined
+    ) {
+      steps.capacityRoll =
+        req.body?.capacityRoll === true ||
+        String(req.query?.capacityRoll || "").toLowerCase() === "true";
+    }
+    if (
+      req.body?.lagwadRelocate !== undefined ||
+      req.query?.lagwadRelocate !== undefined
+    ) {
+      steps.lagwadRelocate =
+        req.body?.lagwadRelocate === true ||
+        String(req.query?.lagwadRelocate || "").toLowerCase() === "true";
+    }
+
+    const { runSlotEndNightlyAutomation } = await import(
+      "../services/slotEndNightlyAutomation.service.js"
+    );
+    const summary = await runSlotEndNightlyAutomation({
+      asOfDate,
+      dryRun,
+      steps: Object.keys(steps).length ? steps : undefined,
+      plantId: plantId ? String(plantId) : undefined,
+      subtypeId: subtypeId ? String(subtypeId) : undefined,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: dryRun
+        ? "Slot-end nightly dry-run completed"
+        : "Slot-end nightly automation completed",
+      data: summary,
+    });
+  } catch (error) {
+    console.error("Error in runSlotEndNightlyController:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Slot-end nightly automation failed",
+    });
+  }
+};
+
 /** POST /slots/past-due-rollover/run — manual past-due slot rollover (admin). */
 export const runPastDueSlotRolloverController = async (req, res) => {
   try {

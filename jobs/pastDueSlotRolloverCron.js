@@ -2,13 +2,28 @@
  * Cron: move open-pipeline orders off expired booking slots to the next slot window.
  */
 
+import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 import cron from "node-cron";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, "../.env") });
 import { runPastDueSlotRollover } from "../services/pastDueSlotRollover.service.js";
+import { isSlotEndNightlyMasterEnabled } from "./slotEndNightlyCron.js";
 
 export function initPastDueSlotRolloverCronJobs() {
-  if (process.env.PAST_DUE_SLOT_ROLLOVER_ENABLED !== "true") {
+  if (isSlotEndNightlyMasterEnabled()) {
     console.log(
-      "[PastDueRollover] cron off (set PAST_DUE_SLOT_ROLLOVER_ENABLED=true to enable)."
+      "[PastDueRollover] legacy cron skipped (SLOT_END_NIGHTLY_ENABLED=true — use unified SlotEndNightly job)."
+    );
+    return;
+  }
+
+  const enabledFlag = String(process.env.PAST_DUE_SLOT_ROLLOVER_ENABLED || "").trim();
+  if (enabledFlag !== "true") {
+    console.log(
+      `[PastDueRollover] cron off (PAST_DUE_SLOT_ROLLOVER_ENABLED=${enabledFlag || "unset"}). Set true in .env to enable.`
     );
     return;
   }

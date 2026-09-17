@@ -950,6 +950,17 @@ server.use(errorHandler);
 
 (async () => {
   try {
+    const { initSlotEndNightlyCronJobs } = await import(
+      "./jobs/slotEndNightlyCron.js"
+    );
+    initSlotEndNightlyCronJobs();
+  } catch (e) {
+    console.error("[SlotEndNightly] Failed to init cron:", e?.message || e);
+  }
+})();
+
+(async () => {
+  try {
     const { initPastDueSlotRolloverCronJobs } = await import(
       "./jobs/pastDueSlotRolloverCron.js"
     );

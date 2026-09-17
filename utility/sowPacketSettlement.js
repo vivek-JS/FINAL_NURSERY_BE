@@ -26,15 +26,18 @@ export function settleSowPackets({
   return { packetsUsed: used, packetsToReturn: ret };
 }
 
-/** Request is closed when the worker marks complete, or no company bags remain. */
+/** Request is closed when the worker marks complete, or no company/raising bags remain. */
 export function isSowingRequestClosed({
   completeSowing = false,
   remainingAfter = 0,
   companyPackets = 0,
+  raisingPackets = 0,
   remainingSowingNeeded = 0,
 } = {}) {
   if (completeSowing) return true;
-  if ((Number(companyPackets) || 0) <= 0) {
+  const company = Number(companyPackets) || 0;
+  const raising = Number(raisingPackets) || 0;
+  if (company <= 0 && raising <= 0) {
     return (Number(remainingSowingNeeded) || 0) <= 0;
   }
   return (Number(remainingAfter) || 0) <= 0;

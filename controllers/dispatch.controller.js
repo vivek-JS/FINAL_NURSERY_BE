@@ -2519,6 +2519,8 @@ const getDispatches = catchAsync(async (req, res, next) => {
               additionalPlants: "$orderDetails.additionalPlants",
               numberOfPlants: "$orderDetails.numberOfPlants",
               plantLineItems: { $ifNull: ["$orderDetails.plantLineItems", []] },
+              plantNameId: "$orderDetails.plantName",
+              plantSubtypeId: "$orderDetails.plantSubtype",
               deliveryChallanInvoiceNumber: "$orderDetails.deliveryChallanInvoiceNumber",
               officialDeliveryChallanNumber: "$orderDetails.officialDeliveryChallanNumber",
               officialNonBillableDeliveryChallanNumber: {
@@ -2656,6 +2658,72 @@ const getDispatches = catchAsync(async (req, res, next) => {
       return map;
     }, {});
 
+    const plantNameIds = [
+      ...new Set(
+        dispatches.flatMap((d) =>
+          (d.orderIds || [])
+            .map((o) => o.plantNameId)
+            .filter(Boolean)
+            .map((id) => String(id))
+        )
+      ),
+    ];
+    const plantCmsById = new Map();
+    if (plantNameIds.length) {
+      const cmsRows = await PlantCms.find({
+        _id: { $in: plantNameIds.map((id) => new mongoose.Types.ObjectId(id)) },
+      })
+        .select("name subtypes")
+        .lean();
+      for (const row of cmsRows) {
+        plantCmsById.set(String(row._id), row);
+      }
+    }
+
+    const enrichListOrderPlantFields = (order) => {
+      const line0 = Array.isArray(order.plantLineItems) ? order.plantLineItems[0] : null;
+      const plantNameId = order.plantNameId || line0?.plantName;
+      const plantSubtypeId = order.plantSubtypeId || line0?.plantSubtype;
+      const cms = plantNameId ? plantCmsById.get(String(plantNameId)) : null;
+      const subtypeDoc = cms?.subtypes?.find(
+        (st) => String(st._id) === String(plantSubtypeId)
+      );
+      const plantName =
+        cms?.name ||
+        line0?.plantNameSnapshot ||
+        order.plantDetails?.name ||
+        "";
+      const subtypeName =
+        subtypeDoc?.name || line0?.plantSubtypeSnapshot || "";
+      return {
+        ...order,
+        plantType: plantNameId
+          ? { _id: plantNameId, name: plantName }
+          : plantName
+            ? { name: plantName }
+            : order.plantType,
+        plantSubtype: plantSubtypeId
+          ? { _id: plantSubtypeId, name: subtypeName }
+          : subtypeName
+            ? { name: subtypeName }
+            : order.plantSubtype,
+        plantDetails: {
+          ...(order.plantDetails || {}),
+          name: plantName || order.plantDetails?.name,
+          subtypeName,
+        },
+        details: {
+          ...(order.details || {}),
+          plantID: plantNameId || order.details?.plantID,
+          plantSubtypeID: plantSubtypeId || order.details?.plantSubtypeID,
+          plant: plantName ? { name: plantName } : order.details?.plant,
+          plantSubtype: subtypeName
+            ? { name: subtypeName }
+            : order.details?.plantSubtype,
+        },
+      };
+    };
+
     // Transform dispatches with tray information
     const transformedDispatches = dispatches.map((dispatch) => {
       // Process plant details with cavity information
@@ -2725,24 +2793,27 @@ const getDispatches = catchAsync(async (req, res, next) => {
         // Format dates for display
         createdAt: dispatch.createdAt.toISOString(),
         updatedAt: dispatch.updatedAt.toISOString(),
-        orderIds: dispatch.orderIds.map((order) => ({
-          ...order,
-          deliveryDate: order.deliveryDate?.toISOString(),
-          total: `₹ ${order.rate * order.quantity}`,
+        orderIds: dispatch.orderIds.map((order) => {
+          const enriched = enrichListOrderPlantFields(order);
+          return {
+          ...enriched,
+          deliveryDate: enriched.deliveryDate?.toISOString(),
+          total: `₹ ${enriched.rate * enriched.quantity}`,
           "Paid Amt": `₹ ${
-            order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0
+            enriched.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) || 0
           }`,
           "remaining Amt": `₹ ${
-            order.rate * order.quantity -
-            (order.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) ||
+            enriched.rate * enriched.quantity -
+            (enriched.payment?.reduce((sum, p) => sum + (p.paidAmount || 0), 0) ||
               0)
           }`,
-          Delivery: order.details.bookingSlot
-            ? `${order.details.bookingSlot.startDay} - ${
-                order.details.bookingSlot.endDay
-              } ${order.details.bookingSlot.month}, ${new Date().getFullYear()}`
+          Delivery: enriched.details?.bookingSlot
+            ? `${enriched.details.bookingSlot.startDay} - ${
+                enriched.details.bookingSlot.endDay
+              } ${enriched.details.bookingSlot.month}, ${new Date().getFullYear()}`
             : "",
-        })),
+        };
+        }),
       };
     });
 
@@ -2924,9 +2995,35 @@ const getDispatch = catchAsync(async (req, res, next) => {
             : [],
         };
       }),
-      orderIds: dispatch.orderIds.map((order) => ({
+      orderIds: dispatch.orderIds.map((order) => {
+        const pn = order.plantName;
+        const plantNameId =
+          pn && typeof pn === "object" ? pn._id : pn;
+        const plantSubtypeId = order.plantSubtype;
+        const subtypeDoc =
+          typeof pn === "object" && pn?.subtypes && plantSubtypeId
+            ? pn.subtypes.find(
+                (st) => String(st._id) === String(plantSubtypeId)
+              )
+            : null;
+        const plantDisplayName =
+          typeof pn === "object" && pn?.name ? pn.name : "";
+        const subtypeDisplayName = subtypeDoc?.name || "";
+        const line0 = Array.isArray(order.plantLineItems)
+          ? order.plantLineItems[0]
+          : null;
+        const resolvedPlantName =
+          plantDisplayName ||
+          line0?.plantNameSnapshot ||
+          "";
+        const resolvedSubtypeName =
+          subtypeDisplayName ||
+          line0?.plantSubtypeSnapshot ||
+          "";
+        return {
         _id: order._id,
         orderId: order.orderId,
+        order: order.orderId,
         deliveryChallanInvoiceNumber: order.deliveryChallanInvoiceNumber || "",
         officialDeliveryChallanNumber: order.officialDeliveryChallanNumber || "",
         officialNonBillableDeliveryChallanNumber:
@@ -2934,8 +3031,31 @@ const getDispatch = catchAsync(async (req, res, next) => {
         farmer: order.farmer,
         salesPerson: order.salesPerson,
         plantName: order.plantName,
-        plantSubtype: order.plantSubtype,
+        plantNameId,
+        plantSubtype: plantSubtypeId
+          ? { _id: plantSubtypeId, name: resolvedSubtypeName }
+          : plantSubtypeId,
+        plantSubtypeId,
+        plantType: plantNameId
+          ? { _id: plantNameId, name: resolvedPlantName }
+          : resolvedPlantName
+            ? { name: resolvedPlantName }
+            : undefined,
         plantLineItems: order.plantLineItems || [],
+        plantDetails: {
+          name: resolvedPlantName,
+          subtypeName: resolvedSubtypeName,
+        },
+        details: {
+          plantID: plantNameId,
+          plantSubtypeID: plantSubtypeId,
+          plant: resolvedPlantName ? { name: resolvedPlantName } : undefined,
+          plantSubtype: resolvedSubtypeName
+            ? { name: resolvedSubtypeName }
+            : undefined,
+          farmer: order.farmer,
+          orderid: order._id,
+        },
         cavity: order.cavity,
         bookingSlot: order.bookingSlot,
         numberOfPlants: order.numberOfPlants,
@@ -2953,7 +3073,8 @@ const getDispatch = catchAsync(async (req, res, next) => {
         deliveryDate: order.deliveryDate,
         notes: order.notes,
         dispatchHistory: order.dispatchHistory || [],
-      })),
+        };
+      }),
       createdAt: dispatch.createdAt,
       updatedAt: dispatch.updatedAt,
     };

@@ -568,26 +568,28 @@ export async function applyManualStockAdjustment(cropId, varietyId, newStock, us
 
   if (delta > 0) {
     if (!inboundBatches.length) {
-      throw new Error(
-        'Stock increase requires one or more batches with batchNumber, expiryDate, and quantity'
-      );
+      inboundBatches.push({ quantity: delta });
     }
 
     const normalized = [];
     let qtySum = 0;
     for (const row of inboundBatches) {
-      const batchNumber = String(row?.batchNumber || '').trim();
+      let batchNumber = String(row?.batchNumber || '').trim();
       const expiryRaw = row?.expiryDate;
       const quantity = Number(row?.quantity);
       if (!batchNumber) {
-        throw new Error('Each inbound batch requires batchNumber');
+        batchNumber = await generateRamAgriBatchNumber(
+          crop.cropName,
+          variety.name,
+          crop._id
+        );
       }
-      if (!expiryRaw) {
-        throw new Error(`Expiry date is required for batch ${batchNumber}`);
-      }
-      const expiryDate = expiryRaw instanceof Date ? expiryRaw : new Date(expiryRaw);
-      if (Number.isNaN(expiryDate.getTime())) {
-        throw new Error(`Invalid expiry date for batch ${batchNumber}`);
+      let expiryDate = null;
+      if (expiryRaw) {
+        expiryDate = expiryRaw instanceof Date ? expiryRaw : new Date(expiryRaw);
+        if (Number.isNaN(expiryDate.getTime())) {
+          throw new Error(`Invalid expiry date for batch ${batchNumber}`);
+        }
       }
       if (!Number.isFinite(quantity) || quantity <= 0) {
         throw new Error(`Quantity must be > 0 for batch ${batchNumber}`);

@@ -11,6 +11,8 @@ import {
   linkProductToAgriVariety,
   clearProductAgriLink,
 } from "../services/ramAgriVarietyInventoryLink.service.js";
+import { canDirectStockUpdate } from "../utility/directStockAccess.js";
+import { applyBiotechProductManualStock } from "../services/biotechProductManualStock.service.js";
 
 export const getBiotechSeedMaster = catchAsync(async (req, res) => {
   const unlinkedOnly = String(req.query.unlinkedOnly || "").toLowerCase() === "true";
@@ -136,6 +138,33 @@ export const patchProductAgriLinkHandler = catchAsync(async (req, res, next) => 
     );
   } catch (err) {
     return next(new AppError(err.message || "Failed to link product", 400));
+  }
+});
+
+export const postProductManualStockHandler = catchAsync(async (req, res, next) => {
+  if (!canDirectStockUpdate(req.user)) {
+    return next(new AppError("You do not have permission to directly update stock", 403));
+  }
+
+  const { productId } = req.params;
+  const { quantityDelta, batchNumber, expiryDate } = req.body;
+
+  if (!mongoose.isValidObjectId(productId)) {
+    return next(new AppError("Invalid product ID", 400));
+  }
+
+  try {
+    const result = await applyBiotechProductManualStock(
+      productId,
+      quantityDelta,
+      req.user?._id || req.user?.id,
+      { batchNumber, expiryDate }
+    );
+    return res.status(200).json(
+      generateResponse("Success", "Stock updated", result, undefined)
+    );
+  } catch (err) {
+    return next(new AppError(err.message || "Stock adjustment failed", 400));
   }
 });
 

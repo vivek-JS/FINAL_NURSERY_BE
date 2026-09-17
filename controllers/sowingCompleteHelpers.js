@@ -711,7 +711,7 @@ export async function editSowEntryOnSlots(request, opts = {}) {
 /**
  * Mark outward used + create pending ReturnRequest for inventory manager approval.
  */
-/** Company share of issued packets (raising seed is never returned). */
+/** Company share of issued packets (warehouse / Ram Agri). */
 export function companyPacketShare(request) {
   const fromCompany = Number(request?.packetsFromCompany) || 0;
   if (fromCompany > 0) return fromCompany;
@@ -721,6 +721,19 @@ export function companyPacketShare(request) {
     Number(request?.packetsRequested) ||
     0
   );
+}
+
+/** Customer-seed packets allocated on the request. */
+export function raisingPacketShare(request) {
+  return Math.max(0, Number(request?.packetsFromRaising) || 0);
+}
+
+export function getRemainingRaisingPackets(request) {
+  const total = raisingPacketShare(request);
+  if (total <= 0) return 0;
+  const used = Number(request?.raisingPacketsUsed) || 0;
+  const returned = Number(request?.raisingPacketsReturned) || 0;
+  return Math.max(0, Number((total - used - returned).toFixed(4)));
 }
 
 /**

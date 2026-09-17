@@ -591,7 +591,15 @@ export function buildSlotOrderMetrics({
     pastDueRolledInOrders: isCurrentSlot ? rolledOnCurrent.orderCount || 0 : 0,
     pastDuePendingOnSlot: isCurrentSlot ? pastDueGroup.pastDuePendingOnSlot : 0,
     pastDuePendingOrders: isCurrentSlot ? pastDueGroup.pastDuePendingOrders : 0,
-    pastDueDetail: isCurrentSlot ? pastDueGroup.pastDueDetail : null,
+    pastDueDetail: isCurrentSlot
+      ? {
+          ...pastDueGroup.pastDueDetail,
+          rolledInCapacity: {
+            availablePlants: Number(slot?.rolledInAvailablePlants) || 0,
+            readyPlants: Number(slot?.rolledInActualReadyPlants) || 0,
+          },
+        }
+      : null,
     pastDueRolledInPlantsSubtype: isCurrentSlot ? pastDueGroup.pastDueRolledInPlants : 0,
     pastDuePendingOnSlotSubtype: isCurrentSlot ? pastDueGroup.pastDuePendingOnSlot : 0,
     crossSlotDetail,
