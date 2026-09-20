@@ -22,8 +22,10 @@ deployment/aws/terraform/cost-optimized/.terraform/
 
 # WhatsApp Selenium bot – Chrome profile (session data, do not commit)
 scripts/whatsapp-chrome-profile/
+whatsapp-profile/
 
 # whatsapp-web.js LocalAuth (dev); production uses WHATSAPP_SESSION_PATH outside repo
+.wwebjs_auth/
 data/whatsapp-auth/
 
 # Campaign run PIDs
