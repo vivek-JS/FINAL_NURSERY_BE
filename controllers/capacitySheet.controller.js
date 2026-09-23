@@ -21,6 +21,7 @@ import {
   defaultCapacityRange,
   majoritySeedPlan,
   parseRangeBound,
+  seedSourceTotals,
   slotDaySortKey,
   slotOverlapsRange,
 } from "../utility/capacitySheetMetrics.js";
@@ -274,6 +275,7 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
     slotsBySubtype.get(key).push(slot);
   }
   const cohortBySlot = new Map();
+  const seedOrders = [];
   for (const [key, subtypeSlots] of slotsBySubtype) {
     const grouped = groupOrdersByDeliverySlot(
       ordersBySubtype.get(key) || [],
@@ -318,6 +320,7 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
     const slotId = String(slot.slotId);
     const cohort = cohortBySlot.get(slotId) || [];
     subtype.orders.push(...cohort);
+    seedOrders.push(...cohort);
     subtype.slots.push(rowFromMetrics(slot, metricsBySlot.get(slotId) || {}, cohort));
   }
 
@@ -357,7 +360,7 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
     });
   }
   plantRows.sort((a, b) => a.plantName.localeCompare(b.plantName));
-  return plantRows;
+  return { plants: plantRows, seedSources: seedSourceTotals(seedOrders) };
 }
 
 export const getCapacitySheet = async (req, res) => {
@@ -375,21 +378,22 @@ export const getCapacitySheet = async (req, res) => {
     const plantId = req.query.plantId || null;
     const subtypeId = req.query.subtypeId || null;
     const ctx = await loadSheetContext({ from, to, plantId, subtypeId });
-    const plants = buildSheet({
+    const sheet = buildSheet({
       ...ctx,
       from,
       to,
       plantId,
       subtypeId,
     });
-    const totals = sumRows(plants);
+    const totals = sumRows(sheet.plants);
 
     return res.status(200).json({
       success: true,
       from: from.format("YYYY-MM-DD"),
       to: to.format("YYYY-MM-DD"),
       totals: { ...totals, status: capacityStatus(totals) },
-      plants,
+      seedSources: sheet.seedSources,
+      plants: sheet.plants,
     });
   } catch (error) {
     console.error("getCapacitySheet:", error);

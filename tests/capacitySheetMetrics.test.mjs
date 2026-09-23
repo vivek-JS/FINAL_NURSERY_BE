@@ -6,6 +6,7 @@ import {
   capacityStatus,
   majoritySeedPlan,
   capacityYearsForRange,
+  seedSourceTotals,
   slotDaySortKey,
   slotOverlapsRange,
 } from "../utility/capacitySheetMetrics.js";
@@ -31,6 +32,20 @@ test("majority seed plan uses pipeline orders", () => {
   ];
   assert.equal(majoritySeedPlan(orders), "RAISING");
   assert.equal(majoritySeedPlan([]), "COMPANY");
+});
+
+test("seed totals keep company and raising plants separate", () => {
+  const totals = seedSourceTotals([
+    { orderStatus: "ACCEPTED", numberOfPlants: 1000, sowingDone: false, sowingPlan: { seedSource: "COMPANY" } },
+    { orderStatus: "ACCEPTED", numberOfPlants: 400, sowingDone: true, sowingPlan: { seedSource: "RAISING" } },
+    { orderStatus: "PENDING", numberOfPlants: 100, additionalPlants: 50, sowingDone: false, sowingPlan: { seedSource: "RAISING" } },
+    { orderStatus: "CANCELLED", numberOfPlants: 9000, sowingPlan: { seedSource: "COMPANY" } },
+  ]);
+  assert.equal(totals.COMPANY.plants, 1000);
+  assert.equal(totals.COMPANY.gap, 1000);
+  assert.equal(totals.RAISING.plants, 550);
+  assert.equal(totals.RAISING.covered, 400);
+  assert.equal(totals.RAISING.gap, 150);
 });
 
 test("capacity years include the boundary year when the range touches January or December", () => {

@@ -14,6 +14,31 @@ export function capacityStatusLabel(status) {
   return "Fulfilled";
 }
 
+function orderPlantQty(order) {
+  return (Number(order?.numberOfPlants) || 0) + (Number(order?.additionalPlants) || 0);
+}
+
+function seedKey(order) {
+  const src = String(order?.sowingPlan?.seedSource || "COMPANY").toUpperCase();
+  if (src === "RAISING" || src === "MIXED") return src;
+  return "COMPANY";
+}
+
+/** Booked plants on pipeline orders, split by company / raising / mixed. */
+export function seedSourceTotals(orders) {
+  const empty = () => ({ plants: 0, covered: 0, gap: 0 });
+  const totals = { COMPANY: empty(), RAISING: empty(), MIXED: empty() };
+  for (const order of orders || []) {
+    if (!isSowingGapPipelineOrder(order)) continue;
+    const bucket = totals[seedKey(order)];
+    const qty = orderPlantQty(order);
+    bucket.plants += qty;
+    if (order?.sowingDone) bucket.covered += qty;
+    else bucket.gap += qty;
+  }
+  return totals;
+}
+
 /** Majority seed source on pipeline orders. Empty set stays Company. */
 export function majoritySeedPlan(orders) {
   const counts = { COMPANY: 0, RAISING: 0, MIXED: 0 };
