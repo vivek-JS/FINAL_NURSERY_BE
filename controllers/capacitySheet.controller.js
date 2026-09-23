@@ -15,7 +15,7 @@ import {
   slotWindowToDeliveryUtcRange,
 } from "../utility/istSlotDate.js";
 import {
-  canBookPlants,
+  canBookFromExcess,
   capacityStatus,
   capacityYearsForRange,
   defaultCapacityRange,
@@ -98,7 +98,7 @@ function rowFromMetrics(slot, metrics, orders) {
   const sowed = num(metrics.bookedCoveredPlants);
   const gap = num(metrics.bookedUncoveredPlants);
   const excess = num(metrics.excessAvailableForBooking);
-  const bookable = canBookPlants(slot.totalPlants, booked, slot.bufferAmount);
+  const bookable = canBookFromExcess(excess);
   const status = capacityStatus({ gap, excess });
   return {
     slotId: String(slot.slotId),
@@ -111,8 +111,6 @@ function rowFromMetrics(slot, metrics, orders) {
     canBook: bookable,
     status,
     seedPlan: majoritySeedPlan(orders),
-    totalPlants: num(slot.totalPlants),
-    bufferAmount: num(slot.bufferAmount),
   };
 }
 
@@ -194,10 +192,7 @@ async function loadSheetContext({ from, to, plantId, subtypeId }) {
                     slotId: "$$slot._id",
                     slotStartDay: "$$slot.startDay",
                     slotEndDay: "$$slot.endDay",
-                    totalPlants: { $ifNull: ["$$slot.totalPlants", 0] },
-                    bufferAmount: { $ifNull: ["$$slot.bufferAmount", 0] },
                     primarySowed: { $ifNull: ["$$slot.primarySowed", 0] },
-                    availablePlants: { $ifNull: ["$$slot.availablePlants", 0] },
                     orderCoveredPlants: {
                       $sum: {
                         $map: {
@@ -226,10 +221,7 @@ async function loadSheetContext({ from, to, plantId, subtypeId }) {
         slotId: "$subtypeSlots.slots.slotId",
         slotStartDay: "$subtypeSlots.slots.slotStartDay",
         slotEndDay: "$subtypeSlots.slots.slotEndDay",
-        totalPlants: "$subtypeSlots.slots.totalPlants",
-        bufferAmount: "$subtypeSlots.slots.bufferAmount",
         primarySowed: "$subtypeSlots.slots.primarySowed",
-        availablePlants: "$subtypeSlots.slots.availablePlants",
         sowingBatches: [
           { orderCoveredPlants: "$subtypeSlots.slots.orderCoveredPlants" },
         ],
@@ -424,10 +416,7 @@ export const getCapacitySlotDetail = async (req, res) => {
         slotId: found._id,
         slotStartDay: found.startDay,
         slotEndDay: found.endDay,
-        totalPlants: num(found.totalPlants),
-        bufferAmount: num(found.bufferAmount),
         primarySowed: num(found.primarySowed),
-        availablePlants: num(found.availablePlants),
         orderReservedPlants: num(found.orderReservedPlants),
         sowingBatches: found.sowingBatches || [],
       };

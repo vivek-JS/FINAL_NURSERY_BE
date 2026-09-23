@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import moment from "moment";
 import {
+  canBookFromExcess,
   canBookPlants,
   capacityStatus,
   majoritySeedPlan,
@@ -21,6 +22,13 @@ test("status prefers sowing gap over excess", () => {
 test("can book never goes below zero", () => {
   assert.equal(canBookPlants(1000, 400, 100), 500);
   assert.equal(canBookPlants(100, 200, 0), 0);
+});
+
+test("capacity can book is sowed excess, not slot size or stored available", () => {
+  assert.equal(canBookFromExcess(6500), 6500);
+  assert.equal(canBookFromExcess(0), 0);
+  assert.equal(canBookFromExcess(-4), 0);
+  assert.notEqual(canBookFromExcess(6500), canBookPlants(20000, 18000, 0));
 });
 
 test("majority seed plan uses pipeline orders", () => {
