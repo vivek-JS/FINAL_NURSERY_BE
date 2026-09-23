@@ -425,6 +425,10 @@ export const getCapacitySlotDetail = async (req, res) => {
         slotEndDay: found.endDay,
         primarySowed: num(found.primarySowed),
         orderReservedPlants: num(found.orderReservedPlants),
+        actualPlants: num(found.actualPlants),
+        expectedMortality: num(found.expectedMortality),
+        actualReadyPlants: num(found.actualReadyPlants),
+        lagwadRemaining: num(found.lagwadRemaining),
         sowingBatches: found.sowingBatches || [],
       };
       break;
@@ -472,7 +476,7 @@ export const getCapacitySlotDetail = async (req, res) => {
       ],
     })
       .select(
-        "orderId numberOfPlants additionalPlants deliveryDate sowingDone sowingPlan orderStatus farmer"
+        "orderId numberOfPlants additionalPlants deliveryDate orderBookingDate createdAt sowingDone sowingPlan orderStatus farmer"
       )
       .populate("farmer", "name mobileNumber")
       .sort({ deliveryDate: 1, orderId: 1 })
@@ -484,7 +488,8 @@ export const getCapacitySlotDetail = async (req, res) => {
       farmerName: order.farmer?.name || "",
       farmerMobile: order.farmer?.mobileNumber || "",
       plants: num(order.numberOfPlants) + num(order.additionalPlants),
-      deliveryDate: order.deliveryDate,
+      bookingDate: order.orderBookingDate || order.createdAt || null,
+      deliveryDate: order.deliveryDate || null,
       sowingDone: Boolean(order.sowingDone),
       seedPlan: String(order.sowingPlan?.seedSource || "COMPANY").toUpperCase(),
       orderStatus: order.orderStatus,
@@ -499,8 +504,15 @@ export const getCapacitySlotDetail = async (req, res) => {
       packetsUsed: num(batch.packetsUsed),
       orderCoveredPlants: num(batch.orderCoveredPlants),
       excessPlants: num(batch.excessPlants),
+      actualPlantsApplied: num(batch.actualPlantsApplied),
+      expectedMortalityApplied: num(batch.expectedMortalityApplied),
+      availablePlantsApplied: num(batch.availablePlantsApplied),
+      shedName: batch.shedName || "",
       isExcessiveSowing: Boolean(batch.isExcessiveSowing),
     }));
+    const lagwadEntries = batches.filter(
+      (batch) => batch.excessPlants > 0 || batch.isExcessiveSowing || batch.availablePlantsApplied > 0
+    );
 
     return res.status(200).json({
       success: true,
@@ -513,9 +525,16 @@ export const getCapacitySlotDetail = async (req, res) => {
         subtypeName: subtype?.name || "",
         orderReservedPlants: num(slot.orderReservedPlants),
         primarySowed: num(slot.primarySowed),
+        lagwad: {
+          actualPlants: num(slot.actualPlants),
+          expectedMortality: num(slot.expectedMortality),
+          actualReadyPlants: num(slot.actualReadyPlants),
+          lagwadRemaining: num(slot.lagwadRemaining),
+        },
       },
       orders,
       batches,
+      lagwadEntries,
       generatedAt: moment().utcOffset(IST_OFFSET).toISOString(),
     });
   } catch (error) {
