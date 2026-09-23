@@ -1,6 +1,7 @@
 import {
   commodityMatchesCrops,
   cropsOnSheet,
+  groundAdvice,
   parseAnalystJson,
   rulesAnalyst,
   slimCapacityForAnalyst,
@@ -71,9 +72,12 @@ export async function fetchMandiPrices({ district, crops }) {
     return { available: false, reason: "No mapped crops on this sheet", prices: [] };
   }
   try {
+    const districtFilter = district
+      ? `&filters[district]=${encodeURIComponent(district)}`
+      : "";
     const url =
       `https://api.data.gov.in/resource/${MANDI_RESOURCE}?api-key=${encodeURIComponent(key)}` +
-      `&format=json&limit=100&filters[state]=Maharashtra&filters[district]=${encodeURIComponent(district)}`;
+      `&format=json&limit=100&filters[state]=Maharashtra${districtFilter}`;
     const body = await fetchJson(url, 15000);
     const records = Array.isArray(body?.records) ? body.records : [];
     const prices = records
@@ -102,16 +106,20 @@ export async function fetchMandiPrices({ district, crops }) {
 function analystPrompt({ district, question, capacity, weather, mandi }) {
   return [
     "You are a nursery booking analyst for a plant nursery in Maharashtra.",
-    "Use only the JSON facts. Do not invent slot capacity, available plants, or prices.",
-    "Can book = sowed excess minus sowing gap. Negative can book means more sowing is needed before booking.",
+    "The capacity JSON is our live sheet for the whole nursery. It is not split by district.",
+    "Answer plant by plant and subtype by subtype. One action for the whole nursery is not enough.",
+    "Use only the JSON facts. Do not invent plants, slot capacity, available plants, or prices.",
+    "Can book = sowed excess minus sowing gap. Negative can book means sow that plant or subtype before booking it.",
     "Return one JSON object and nothing else.",
     'Keys: action ("book" | "wait" | "sow_first"), confidence (0-100 integer), summary, downside, weatherNote, mandiNote.',
+    "summary must name which plants to sow first and which plants can be booked, using the plant names from the input.",
     "Lower confidence when mandi or weather is missing, or when rain is heavy.",
-    "action sow_first when gap is larger than excess. action book only when can book is positive and weather is not a clear risk. otherwise wait.",
+    "Weather and mandi are extra context. They do not replace our can-book and gap numbers.",
     "",
     JSON.stringify({
-      district,
-      question: question || "Can we book in this window?",
+      scope: district || "Maharashtra",
+      district: district || null,
+      question: question || "What should we book or sow in this window, plant by plant?",
       capacity,
       weather: {
         available: weather.available,
@@ -165,9 +173,7 @@ async function askOpenRouter(prompt) {
 export const askCapacityAnalyst = async (req, res) => {
   try {
     const district = String(req.body?.district || "").trim();
-    if (!district) {
-      return res.status(400).json({ success: false, message: "District is required" });
-    }
+    const scope = district || "Maharashtra";
     const defaults = defaultCapacityRange();
     const from = parseRangeBound(req.body?.from, defaults.from);
     const to = parseRangeBound(req.body?.to, defaults.to);
@@ -180,7 +186,7 @@ export const askCapacityAnalyst = async (req, res) => {
     const capacity = slimCapacityForAnalyst(sheet);
     const crops = cropsOnSheet(sheet.plants);
     const [weather, mandi] = await Promise.all([
-      fetchDistrictWeather(district),
+      fetchDistrictWeather(scope),
       fetchMandiPrices({ district, crops }),
     ]);
 
@@ -203,10 +209,12 @@ export const askCapacityAnalyst = async (req, res) => {
       advice = rulesAnalyst({ capacity, weather, mandi, district });
       source = "rules";
     }
+    advice = groundAdvice(advice, { capacity, weather, district });
 
     return res.status(200).json({
       success: true,
-      district,
+      scope,
+      district: district || null,
       from: capacity.from,
       to: capacity.to,
       source,

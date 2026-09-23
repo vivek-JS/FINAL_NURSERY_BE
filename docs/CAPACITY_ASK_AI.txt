@@ -1,8 +1,10 @@
 Capacity Ask AI — data the analyst needs
 ==========================================
 
-The analyst answers one question for a selected district and the sheet's date range:
-should the nursery book, wait, or sow first, and how sure is that call.
+The analyst answers for the whole Maharashtra nursery sheet in the selected date range.
+The call is plant by plant and subtype by subtype, using our can book, gap, booked, and sowed.
+A district is optional. If the user picks one, it only adds that district's weather and mandi.
+It does not replace the nursery-wide numbers.
 
 Required, already in the system
 -------------------------------
@@ -12,9 +14,9 @@ Required, already in the system
    One row per plant and subtype. Slot size and stored available plants are not used.
    Company, raising, and mixed seed totals are included so both seed sources stay in the numbers.
 
-2. District.
+2. District, optional.
    Source: existing location cascade, Maharashtra districts.
-   The user picks the district in Ask AI. It is not stored on the capacity row.
+   Default scope is all Maharashtra. The user can pick a district for weather only.
 
 Additional data, fetched by new server APIs
 --------------------------------------------
@@ -36,7 +38,9 @@ Additional data, fetched by new server APIs
 Model
 -----
 POST /api/v1/sowing/capacity-ask
-Body: district, from, to, optional question.
+Body: from, to, optional district, optional question.
+The reply includes plants[] and, under each plant, subtypes[] with our can book, gap, booked, and sowed.
+A single nursery-wide action is not the answer. Plant rows always come from our sheet.
 Auth: same login token as the capacity sheet.
 
 Env (backend only, never commit .env):

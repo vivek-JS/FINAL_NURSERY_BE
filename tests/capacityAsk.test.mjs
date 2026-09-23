@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   commodityMatchesCrops,
   cropsOnSheet,
+  groundAdvice,
   parseAnalystJson,
   rulesAnalyst,
 } from "../utility/capacityAsk.js";
@@ -33,4 +34,63 @@ test("rules analyst sows first when can book is negative", () => {
   });
   assert.equal(advice.action, "sow_first");
   assert.ok(advice.confidence >= 20 && advice.confidence <= 85);
+});
+
+test("rules analyst splits plants and subtypes from our sheet", () => {
+  const advice = rulesAnalyst({
+    district: "",
+    capacity: {
+      totals: { canBook: -1000, gap: 5000 },
+      plants: [
+        {
+          plant: "Papaya",
+          canBook: -4000,
+          gap: 5000,
+          booked: 100,
+          sowed: 1000,
+          subtypes: [{ name: "Red Lady", canBook: -4000, gap: 5000, booked: 100, sowed: 1000 }],
+        },
+        {
+          plant: "Watermelon",
+          canBook: 3000,
+          gap: 0,
+          booked: 10,
+          sowed: 4000,
+          subtypes: [],
+        },
+      ],
+    },
+    weather: { available: true, rainTotalMm: 5, tempMin: 20, tempMax: 33, place: "Maharashtra" },
+    mandi: { available: false, prices: [] },
+  });
+  assert.equal(advice.plants[0].action, "sow_first");
+  assert.equal(advice.plants[0].subtypes[0].action, "sow_first");
+  assert.equal(advice.plants[1].action, "book");
+  assert.match(advice.summary, /Papaya/);
+  assert.match(advice.summary, /Watermelon/);
+  assert.match(advice.summary, /Maharashtra/);
+});
+
+test("ground advice keeps our plant numbers when the model skips them", () => {
+  const advice = groundAdvice(
+    {
+      action: "wait",
+      confidence: 40,
+      summary: "Wait and see how the season goes.",
+      downside: "Unclear",
+      weatherNote: "",
+      mandiNote: "",
+    },
+    {
+      district: "",
+      capacity: {
+        plants: [{ plant: "Chili", canBook: -20, gap: 40, booked: 10, sowed: 20, subtypes: [] }],
+      },
+      weather: { rainTotalMm: 0 },
+    }
+  );
+  assert.equal(advice.plants[0].plant, "Chili");
+  assert.equal(advice.plants[0].canBook, -20);
+  assert.equal(advice.plants[0].action, "sow_first");
+  assert.match(advice.summary, /Chili/);
 });
