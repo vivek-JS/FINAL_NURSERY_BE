@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  bookingDirection,
   commodityMatchesCrops,
+  contextBrief,
   cropsOnSheet,
   groundAdvice,
   parseAnalystJson,
@@ -93,4 +95,24 @@ test("ground advice keeps our plant numbers when the model skips them", () => {
   assert.equal(advice.plants[0].canBook, -20);
   assert.equal(advice.plants[0].action, "sow_first");
   assert.match(advice.summary, /Chili/);
+});
+
+test("booking flow says why when orders rise in dry weather", () => {
+  assert.equal(bookingDirection(1200, 800), "up");
+  assert.equal(bookingDirection(700, 1000), "down");
+  const brief = contextBrief({
+    scope: "Maharashtra",
+    flow: {
+      recentPlants: 12000,
+      previousPlants: 8000,
+      direction: "up",
+      movers: [{ name: "Watermelon" }],
+    },
+    weather: { available: true, place: "Maharashtra", rainTotalMm: 12, tempMin: 22, tempMax: 34 },
+    mandi: { available: true, prices: [{ commodity: "Watermelon", market: "Nashik", modalPrice: 1800 }] },
+  });
+  assert.match(brief.booking.title, /up/i);
+  assert.match(brief.booking.why, /dry|12 mm/i);
+  assert.match(brief.mandi.line, /1,800|1800/);
+  assert.match(brief.weather.line, /34/);
 });

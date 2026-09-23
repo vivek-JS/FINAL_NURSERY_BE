@@ -1,5 +1,7 @@
 import {
+  bookingDirection,
   commodityMatchesCrops,
+  contextBrief,
   cropsOnSheet,
   groundAdvice,
   parseAnalystJson,
@@ -8,6 +10,8 @@ import {
 } from "../utility/capacityAsk.js";
 import { loadCapacitySheetPayload } from "./capacitySheet.controller.js";
 import { defaultCapacityRange, parseRangeBound } from "../utility/capacitySheetMetrics.js";
+import Order from "../models/order.model.js";
+import PlantCms from "../models/plantCms.model.js";
 
 const MANDI_RESOURCE = "9ef84268-d588-465a-a308-a864a43d0070";
 
@@ -170,6 +174,84 @@ async function askOpenRouter(prompt) {
   return { model: body?.model || model, text, parsed: parseAnalystJson(text) };
 }
 
+const DAY = 24 * 60 * 60 * 1000;
+
+export async function loadBookingFlow() {
+  const end = new Date();
+  const recentStart = new Date(end.getTime() - 14 * DAY);
+  const prevStart = new Date(end.getTime() - 28 * DAY);
+  const grouped = await Order.aggregate([
+    {
+      $match: {
+        orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
+        $or: [
+          { orderBookingDate: { $gte: prevStart, $lte: end } },
+          { createdAt: { $gte: prevStart, $lte: end } },
+        ],
+      },
+    },
+    {
+      $addFields: {
+        when: { $ifNull: ["$orderBookingDate", "$createdAt"] },
+        plants: { $add: [{ $ifNull: ["$numberOfPlants", 0] }, { $ifNull: ["$additionalPlants", 0] }] },
+      },
+    },
+    { $match: { when: { $gte: prevStart, $lte: end } } },
+    {
+      $group: {
+        _id: {
+          plant: "$plantName",
+          bucket: { $cond: [{ $gte: ["$when", recentStart] }, "recent", "previous"] },
+        },
+        plants: { $sum: "$plants" },
+        orders: { $sum: 1 },
+      },
+    },
+  ]);
+
+  const byPlant = new Map();
+  let recentPlants = 0;
+  let previousPlants = 0;
+  let recentOrders = 0;
+  let previousOrders = 0;
+  for (const row of grouped) {
+    const id = row?._id?.plant ? String(row._id.plant) : "";
+    const bucket = row?._id?.bucket === "recent" ? "recent" : "previous";
+    const plants = Number(row.plants) || 0;
+    const orders = Number(row.orders) || 0;
+    if (bucket === "recent") {
+      recentPlants += plants;
+      recentOrders += orders;
+    } else {
+      previousPlants += plants;
+      previousOrders += orders;
+    }
+    if (!id) continue;
+    const current = byPlant.get(id) || { recent: 0, previous: 0 };
+    current[bucket] += plants;
+    byPlant.set(id, current);
+  }
+
+  const direction = bookingDirection(recentPlants, previousPlants);
+  const ranked = [...byPlant.entries()]
+    .map(([id, row]) => ({ id, delta: row.recent - row.previous, ...row }))
+    .filter((row) => (direction === "down" ? row.delta < 0 : row.delta > 0))
+    .sort((a, b) => (direction === "down" ? a.delta - b.delta : b.delta - a.delta))
+    .slice(0, 2);
+  const names = ranked.length
+    ? await PlantCms.find({ _id: { $in: ranked.map((row) => row.id) } }).select("name").lean()
+    : [];
+  const nameById = new Map(names.map((row) => [String(row._id), row.name]));
+  return {
+    recentPlants,
+    previousPlants,
+    recentOrders,
+    previousOrders,
+    direction,
+    movers: ranked.map((row) => ({ name: nameById.get(row.id) || "", delta: row.delta })).filter((row) => row.name),
+  };
+}
+
 export const askCapacityAnalyst = async (req, res) => {
   try {
     const district = String(req.body?.district || "").trim();
@@ -185,10 +267,15 @@ export const askCapacityAnalyst = async (req, res) => {
     const sheet = await loadCapacitySheetPayload({ from, to });
     const capacity = slimCapacityForAnalyst(sheet);
     const crops = cropsOnSheet(sheet.plants);
-    const [weather, mandi] = await Promise.all([
+    const [weather, mandi, flowResult] = await Promise.all([
       fetchDistrictWeather(scope),
       fetchMandiPrices({ district, crops }),
+      loadBookingFlow().catch((error) => {
+        console.error("loadBookingFlow:", error?.message || error);
+        return null;
+      }),
     ]);
+    const flow = flowResult;
 
     const prompt = analystPrompt({ district, question, capacity, weather, mandi });
     let model = process.env.OPENROUTER_MODEL || "openrouter/free";
@@ -210,6 +297,7 @@ export const askCapacityAnalyst = async (req, res) => {
       source = "rules";
     }
     advice = groundAdvice(advice, { capacity, weather, district });
+    const context = contextBrief({ flow, weather, mandi, scope });
 
     return res.status(200).json({
       success: true,
@@ -233,6 +321,8 @@ export const askCapacityAnalyst = async (req, res) => {
         prices: mandi.prices || [],
       },
       totals: capacity.totals,
+      flow,
+      context,
     });
   } catch (error) {
     console.error("askCapacityAnalyst:", error);

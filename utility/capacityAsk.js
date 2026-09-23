@@ -188,6 +188,77 @@ export function groundAdvice(advice, { capacity, weather, district }) {
   };
 }
 
+export function bookingDirection(recentPlants, previousPlants) {
+  const recent = Number(recentPlants) || 0;
+  const previous = Number(previousPlants) || 0;
+  if (recent === 0 && previous === 0) return "flat";
+  const pct = ((recent - previous) / Math.max(previous, 1)) * 100;
+  if (pct >= 8) return "up";
+  if (pct <= -8) return "down";
+  return "flat";
+}
+
+/** Plain booking, weather, and mandi lines. Does not invent prices. */
+export function contextBrief({ flow, weather, mandi, scope }) {
+  const place = weather?.place || scope || "Maharashtra";
+  const rain = Number(weather?.rainTotalMm) || 0;
+  const recent = Number(flow?.recentPlants) || 0;
+  const previous = Number(flow?.previousPlants) || 0;
+  const direction = flow?.direction || bookingDirection(recent, previous);
+  const names = (flow?.movers || []).map((row) => row.name).filter(Boolean).slice(0, 2);
+  const who = names.length ? ` Most of that change is ${names.join(" and ")}.` : "";
+
+  let bookingTitle = "Bookings are steady";
+  let bookingLine = `The last 14 days and the 14 days before are about the same: ${n(recent)} plants booked.`;
+  if (!flow) {
+    bookingTitle = "Booking flow";
+    bookingLine = "Recent bookings could not be compared, so this does not say if the flow is up or down.";
+  } else if (direction === "up") {
+    bookingTitle = "Bookings are up";
+    bookingLine = `The last 14 days brought ${n(recent)} plants, up from ${n(previous)} in the 14 days before.${who}`;
+  } else if (direction === "down") {
+    bookingTitle = "Bookings have slowed";
+    bookingLine = `The last 14 days brought ${n(recent)} plants, down from ${n(previous)} in the 14 days before.${who}`;
+  }
+
+  let why = "Weather was not available, so this does not guess a reason from the forecast.";
+  if (weather?.available && flow) {
+    if (direction === "up" && rain < 40) {
+      why = `Why: the next 14 days around ${place} stay fairly dry (${rain} mm), so farmers are still placing orders.`;
+    } else if (direction === "up") {
+      why = `Orders are up even with about ${rain} mm of rain ahead around ${place}. Take only plants that are already sown.`;
+    } else if (direction === "down" && rain >= 40) {
+      why = `Why: ${place} has about ${rain} mm of rain over the next 14 days, and farmers usually wait that out.`;
+    } else if (direction === "down") {
+      why = `Weather is not the reason. ${place} is ${weather.tempMin}–${weather.tempMax}°C with only ${rain} mm of rain. Demand itself is quieter.`;
+    } else if (rain >= 40) {
+      why = `${place} has about ${rain} mm of rain ahead. The next round of bookings can slow.`;
+    } else {
+      why = `${place} looks workable for booking: ${weather.tempMin}–${weather.tempMax}°C and ${rain} mm of rain over 14 days.`;
+    }
+  }
+
+  const prices = mandi?.available ? mandi.prices || [] : [];
+  const top = [...prices].sort((a, b) => (Number(b.modalPrice) || 0) - (Number(a.modalPrice) || 0))[0];
+  let mandiLine = "Market rates are not connected yet, so price is not part of this read.";
+  if (top) {
+    mandiLine = `${top.commodity}${top.market ? ` at ${top.market}` : ""} is about ₹${n(top.modalPrice)} a quintal.`;
+    if (direction === "up") mandiLine += " A firm rate like this can keep bookings coming.";
+    if (direction === "down") mandiLine += " If farmers see this as soft, they book less.";
+  }
+
+  return {
+    booking: { title: bookingTitle, line: bookingLine, why: flow ? why : "" },
+    weather: {
+      title: "Weather",
+      line: weather?.available
+        ? `${place}: ${weather.tempMin}–${weather.tempMax}°C, ${rain} mm rain over the next 14 days.`
+        : "The 14-day forecast did not load.",
+    },
+    mandi: { title: "Mandi", line: mandiLine },
+  };
+}
+
 /** Used when the free model does not return usable JSON. Same inputs, no invented prices. */
 export function rulesAnalyst({ capacity, weather, mandi, district }) {
   const totals = capacity?.totals || {};
