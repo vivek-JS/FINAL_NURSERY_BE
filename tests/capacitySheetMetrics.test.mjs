@@ -5,6 +5,8 @@ import {
   canBookPlants,
   capacityStatus,
   majoritySeedPlan,
+  capacityYearsForRange,
+  slotDaySortKey,
   slotOverlapsRange,
 } from "../utility/capacitySheetMetrics.js";
 import { IST_OFFSET } from "../utility/istSlotDate.js";
@@ -29,6 +31,20 @@ test("majority seed plan uses pipeline orders", () => {
   ];
   assert.equal(majoritySeedPlan(orders), "RAISING");
   assert.equal(majoritySeedPlan([]), "COMPANY");
+});
+
+test("capacity years include the boundary year when the range touches January or December", () => {
+  const sep = moment("2026-09-23", "YYYY-MM-DD").utcOffset(IST_OFFSET, true);
+  const oct = moment("2026-10-06", "YYYY-MM-DD").utcOffset(IST_OFFSET, true);
+  assert.deepEqual(capacityYearsForRange(sep, oct), [2026]);
+  const jan = moment("2027-01-02", "YYYY-MM-DD").utcOffset(IST_OFFSET, true);
+  assert.deepEqual(capacityYearsForRange(jan, jan), [2026, 2027]);
+});
+
+test("slot day sort key is chronological", () => {
+  assert.equal(slotDaySortKey("23-09-2026"), 20260923);
+  assert.ok(slotDaySortKey("06-10-2026") > slotDaySortKey("23-09-2026"));
+  assert.equal(slotDaySortKey("not-a-date"), null);
 });
 
 test("slot overlap uses calendar days, not DD-MM string order", () => {

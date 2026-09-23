@@ -8,18 +8,79 @@ import {
   getNativeDeliveryCohortOrders,
   groupOrdersByDeliverySlot,
 } from "../utility/slotDispatchStats.js";
-import { IST_OFFSET } from "../utility/istSlotDate.js";
+import {
+  IST_OFFSET,
+  slotDayEndMoment,
+  slotDayStartMoment,
+  slotWindowToDeliveryUtcRange,
+} from "../utility/istSlotDate.js";
 import {
   canBookPlants,
   capacityStatus,
+  capacityYearsForRange,
   defaultCapacityRange,
   majoritySeedPlan,
   parseRangeBound,
+  slotDaySortKey,
   slotOverlapsRange,
 } from "../utility/capacitySheetMetrics.js";
 
 const ORDER_SELECT =
   "_id orderId orderStatus numberOfPlants additionalPlants sowingDone deliveryDate quotaSource pastDueSlotRollover pastDueSlotRolloverAt plantName plantSubtype sowingPlan farmer";
+
+const DELIVERY_ORDER_FILTER = {
+  deliveryDate: { $exists: true, $ne: null },
+  orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
+  $or: [
+    { quotaSource: { $ne: "dealer" } },
+    { quotaSource: { $exists: false } },
+    { quotaSource: null },
+  ],
+};
+
+function mongoSlotDayKey(dateExpr) {
+  return {
+    $let: {
+      vars: { parts: { $split: [{ $ifNull: [dateExpr, ""] }, "-"] } },
+      in: {
+        $cond: [
+          { $eq: [{ $size: "$$parts" }, 3] },
+          {
+            $convert: {
+              input: {
+                $concat: [
+                  { $arrayElemAt: ["$$parts", 2] },
+                  { $arrayElemAt: ["$$parts", 1] },
+                  { $arrayElemAt: ["$$parts", 0] },
+                ],
+              },
+              to: "int",
+              onError: null,
+              onNull: null,
+            },
+          },
+          null,
+        ],
+      },
+    },
+  };
+}
+
+function deliveryBoundsForSlots(slots) {
+  let minStart = null;
+  let maxEnd = null;
+  for (const slot of slots) {
+    const start = slotDayStartMoment(slot.slotStartDay);
+    const end = slotDayEndMoment(slot.slotEndDay);
+    if (start && (!minStart || start.isBefore(minStart))) minStart = start;
+    if (end && (!maxEnd || end.isAfter(maxEnd))) maxEnd = end;
+  }
+  if (!minStart || !maxEnd) return null;
+  return {
+    start: minStart.clone().utc().toDate(),
+    end: maxEnd.clone().utc().toDate(),
+  };
+}
 
 function num(n) {
   return Number(n) || 0;
@@ -67,42 +128,124 @@ function sumRows(rows) {
   );
 }
 
-async function loadSheetContext() {
-  const plants = await PlantCms.find({ sowingAllowed: true })
-    .select("_id name subtypes")
-    .lean();
+async function loadSheetContext({ from, to, plantId, subtypeId }) {
+  const plantQuery = { sowingAllowed: true };
+  if (plantId && mongoose.Types.ObjectId.isValid(plantId)) {
+    plantQuery._id = new mongoose.Types.ObjectId(plantId);
+  }
+  const plants = await PlantCms.find(plantQuery).select("_id name subtypes").lean();
   if (!plants.length) return { plants: [], slots: [], orders: [] };
 
   const plantIds = plants.map((p) => p._id);
+  const fromKey = Number(from.format("YYYYMMDD"));
+  const toKey = Number(to.format("YYYYMMDD"));
+  const startKey = mongoSlotDayKey("$$slot.startDay");
+  const endKey = mongoSlotDayKey("$$slot.endDay");
+  const slotMatch = {
+    plantId: { $in: plantIds },
+    year: { $in: capacityYearsForRange(from, to) },
+  };
+
   const slots = await PlantSlot.aggregate([
-    { $match: { plantId: { $in: plantIds } } },
+    { $match: slotMatch },
+    {
+      $project: {
+        plantId: 1,
+        subtypeSlots: {
+          $map: {
+            input: "$subtypeSlots",
+            as: "st",
+            in: {
+              subtypeId: "$$st.subtypeId",
+              slots: {
+                $map: {
+                  input: {
+                    $filter: {
+                      input: { $ifNull: ["$$st.slots", []] },
+                      as: "slot",
+                      cond: {
+                        $let: {
+                          vars: { startKey, endKey },
+                          in: {
+                            $and: [
+                              { $ne: ["$$startKey", null] },
+                              { $ne: ["$$endKey", null] },
+                              { $gte: ["$$endKey", fromKey] },
+                              { $lte: ["$$startKey", toKey] },
+                              ...(subtypeId && mongoose.Types.ObjectId.isValid(subtypeId)
+                                ? [
+                                    {
+                                      $eq: [
+                                        "$$st.subtypeId",
+                                        new mongoose.Types.ObjectId(subtypeId),
+                                      ],
+                                    },
+                                  ]
+                                : []),
+                            ],
+                          },
+                        },
+                      },
+                    },
+                  },
+                  as: "slot",
+                  in: {
+                    slotId: "$$slot._id",
+                    slotStartDay: "$$slot.startDay",
+                    slotEndDay: "$$slot.endDay",
+                    totalPlants: { $ifNull: ["$$slot.totalPlants", 0] },
+                    bufferAmount: { $ifNull: ["$$slot.bufferAmount", 0] },
+                    primarySowed: { $ifNull: ["$$slot.primarySowed", 0] },
+                    availablePlants: { $ifNull: ["$$slot.availablePlants", 0] },
+                    orderCoveredPlants: {
+                      $sum: {
+                        $map: {
+                          input: { $ifNull: ["$$slot.sowingBatches", []] },
+                          as: "batch",
+                          in: {
+                            $max: [0, { $ifNull: ["$$batch.orderCoveredPlants", 0] }],
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     { $unwind: "$subtypeSlots" },
     { $unwind: "$subtypeSlots.slots" },
     {
       $project: {
         plantId: 1,
         subtypeId: "$subtypeSlots.subtypeId",
-        slotId: "$subtypeSlots.slots._id",
-        slotStartDay: "$subtypeSlots.slots.startDay",
-        slotEndDay: "$subtypeSlots.slots.endDay",
-        totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
-        bufferAmount: { $ifNull: ["$subtypeSlots.slots.bufferAmount", 0] },
-        primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
-        availablePlants: { $ifNull: ["$subtypeSlots.slots.availablePlants", 0] },
-        sowingBatches: { $ifNull: ["$subtypeSlots.slots.sowingBatches", []] },
+        slotId: "$subtypeSlots.slots.slotId",
+        slotStartDay: "$subtypeSlots.slots.slotStartDay",
+        slotEndDay: "$subtypeSlots.slots.slotEndDay",
+        totalPlants: "$subtypeSlots.slots.totalPlants",
+        bufferAmount: "$subtypeSlots.slots.bufferAmount",
+        primarySowed: "$subtypeSlots.slots.primarySowed",
+        availablePlants: "$subtypeSlots.slots.availablePlants",
+        sowingBatches: [
+          { orderCoveredPlants: "$subtypeSlots.slots.orderCoveredPlants" },
+        ],
       },
     },
   ]);
 
+  const bounds = deliveryBoundsForSlots(slots);
+  if (!bounds) return { plants, slots, orders: [] };
+
   const orders = await Order.find({
     plantName: { $in: plantIds },
-    deliveryDate: { $exists: true, $ne: null },
-    orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
-    $or: [
-      { quotaSource: { $ne: "dealer" } },
-      { quotaSource: { $exists: false } },
-      { quotaSource: null },
-    ],
+    ...(subtypeId && mongoose.Types.ObjectId.isValid(subtypeId)
+      ? { plantSubtype: new mongoose.Types.ObjectId(subtypeId) }
+      : {}),
+    ...DELIVERY_ORDER_FILTER,
+    deliveryDate: { $gte: bounds.start, $lte: bounds.end },
   })
     .select(ORDER_SELECT)
     .lean();
@@ -118,12 +261,32 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
   });
 
   const metricsBySlot = applySowingGapBoardMetrics(inRange, orders);
-  const slotRows = inRange.map((slot) => ({
-    _id: slot.slotId,
-    startDay: slot.slotStartDay,
-    endDay: slot.slotEndDay,
-  }));
-  const ordersBySlot = groupOrdersByDeliverySlot(orders, slotRows);
+  const ordersBySubtype = new Map();
+  for (const order of orders) {
+    const key = `${String(order.plantName)}-${String(order.plantSubtype)}`;
+    if (!ordersBySubtype.has(key)) ordersBySubtype.set(key, []);
+    ordersBySubtype.get(key).push(order);
+  }
+  const slotsBySubtype = new Map();
+  for (const slot of inRange) {
+    const key = `${String(slot.plantId)}-${String(slot.subtypeId)}`;
+    if (!slotsBySubtype.has(key)) slotsBySubtype.set(key, []);
+    slotsBySubtype.get(key).push(slot);
+  }
+  const cohortBySlot = new Map();
+  for (const [key, subtypeSlots] of slotsBySubtype) {
+    const grouped = groupOrdersByDeliverySlot(
+      ordersBySubtype.get(key) || [],
+      subtypeSlots.map((slot) => ({
+        _id: slot.slotId,
+        startDay: slot.slotStartDay,
+        endDay: slot.slotEndDay,
+      }))
+    );
+    for (const [id, list] of grouped) {
+      cohortBySlot.set(id, getNativeDeliveryCohortOrders(list));
+    }
+  }
 
   const byPlant = new Map();
   for (const plant of plants) {
@@ -153,7 +316,7 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
     const subtype = plant.subtypes.get(String(slot.subtypeId));
     if (!subtype) continue;
     const slotId = String(slot.slotId);
-    const cohort = getNativeDeliveryCohortOrders(ordersBySlot.get(slotId) || []);
+    const cohort = cohortBySlot.get(slotId) || [];
     subtype.orders.push(...cohort);
     subtype.slots.push(rowFromMetrics(slot, metricsBySlot.get(slotId) || {}, cohort));
   }
@@ -164,8 +327,7 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
     for (const subtype of plant.subtypes.values()) {
       if (!subtype.slots.length) continue;
       subtype.slots.sort(
-        (a, b) =>
-          (slotDaySort(a.startDay) || 0) - (slotDaySort(b.startDay) || 0)
+        (a, b) => (slotDaySortKey(a.startDay) || 0) - (slotDaySortKey(b.startDay) || 0)
       );
       const totals = sumRows(subtype.slots);
       subtypes.push({
@@ -198,11 +360,6 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
   return plantRows;
 }
 
-function slotDaySort(ddmmyyyy) {
-  const m = moment(ddmmyyyy, "DD-MM-YYYY", true);
-  return m.isValid() ? m.valueOf() : 0;
-}
-
 export const getCapacitySheet = async (req, res) => {
   try {
     const defaults = defaultCapacityRange();
@@ -215,13 +372,15 @@ export const getCapacitySheet = async (req, res) => {
       });
     }
 
-    const ctx = await loadSheetContext();
+    const plantId = req.query.plantId || null;
+    const subtypeId = req.query.subtypeId || null;
+    const ctx = await loadSheetContext({ from, to, plantId, subtypeId });
     const plants = buildSheet({
       ...ctx,
       from,
       to,
-      plantId: req.query.plantId || null,
-      subtypeId: req.query.subtypeId || null,
+      plantId,
+      subtypeId,
     });
     const totals = sumRows(plants);
 
@@ -248,27 +407,28 @@ export const getCapacitySlotDetail = async (req, res) => {
       return res.status(400).json({ success: false, message: "Valid slot id is required" });
     }
     const sid = new mongoose.Types.ObjectId(slotId);
-    const rows = await PlantSlot.aggregate([
-      { $unwind: "$subtypeSlots" },
-      { $unwind: "$subtypeSlots.slots" },
-      { $match: { "subtypeSlots.slots._id": sid } },
-      {
-        $project: {
-          plantId: 1,
-          subtypeId: "$subtypeSlots.subtypeId",
-          slotId: "$subtypeSlots.slots._id",
-          slotStartDay: "$subtypeSlots.slots.startDay",
-          slotEndDay: "$subtypeSlots.slots.endDay",
-          totalPlants: { $ifNull: ["$subtypeSlots.slots.totalPlants", 0] },
-          bufferAmount: { $ifNull: ["$subtypeSlots.slots.bufferAmount", 0] },
-          primarySowed: { $ifNull: ["$subtypeSlots.slots.primarySowed", 0] },
-          availablePlants: { $ifNull: ["$subtypeSlots.slots.availablePlants", 0] },
-          orderReservedPlants: { $ifNull: ["$subtypeSlots.slots.orderReservedPlants", 0] },
-          sowingBatches: { $ifNull: ["$subtypeSlots.slots.sowingBatches", []] },
-        },
-      },
-    ]);
-    const slot = rows[0];
+    const doc = await PlantSlot.findOne({ "subtypeSlots.slots._id": sid })
+      .select("plantId subtypeSlots.subtypeId subtypeSlots.slots")
+      .lean();
+    let slot = null;
+    for (const subtypeSlot of doc?.subtypeSlots || []) {
+      const found = (subtypeSlot.slots || []).find((row) => String(row._id) === String(sid));
+      if (!found) continue;
+      slot = {
+        plantId: doc.plantId,
+        subtypeId: subtypeSlot.subtypeId,
+        slotId: found._id,
+        slotStartDay: found.startDay,
+        slotEndDay: found.endDay,
+        totalPlants: num(found.totalPlants),
+        bufferAmount: num(found.bufferAmount),
+        primarySowed: num(found.primarySowed),
+        availablePlants: num(found.availablePlants),
+        orderReservedPlants: num(found.orderReservedPlants),
+        sowingBatches: found.sowingBatches || [],
+      };
+      break;
+    }
     if (!slot) {
       return res.status(404).json({ success: false, message: "Slot not found" });
     }
@@ -278,16 +438,17 @@ export const getCapacitySlotDetail = async (req, res) => {
       (st) => String(st._id) === String(slot.subtypeId)
     );
 
+    const windowRange = slotWindowToDeliveryUtcRange({
+      startDay: slot.slotStartDay,
+      endDay: slot.slotEndDay,
+    });
     const deliveryOrders = await Order.find({
       plantName: slot.plantId,
       plantSubtype: slot.subtypeId,
-      deliveryDate: { $exists: true, $ne: null },
-      orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
-      $or: [
-        { quotaSource: { $ne: "dealer" } },
-        { quotaSource: { $exists: false } },
-        { quotaSource: null },
-      ],
+      ...DELIVERY_ORDER_FILTER,
+      ...(windowRange
+        ? { deliveryDate: { $gte: windowRange.start, $lte: windowRange.end } }
+        : {}),
     })
       .select(ORDER_SELECT)
       .lean();

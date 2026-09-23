@@ -64,3 +64,19 @@ export function defaultCapacityRange(now = moment().utcOffset(IST_OFFSET)) {
   const to = from.clone().add(13, "days").endOf("day");
   return { from, to };
 }
+
+/** PlantSlot.year values that can hold a slot overlapping [from, to]. */
+export function capacityYearsForRange(from, to) {
+  const years = new Set();
+  for (let year = from.year(); year <= to.year(); year += 1) years.add(year);
+  if (from.month() === 0) years.add(from.year() - 1);
+  if (to.month() === 11) years.add(to.year() + 1);
+  return [...years].sort((a, b) => a - b);
+}
+
+/** YYYYMMDD integer for a DD-MM-YYYY slot day. Invalid dates return null. */
+export function slotDaySortKey(ddmmyyyy) {
+  const m = moment(ddmmyyyy, "DD-MM-YYYY", true);
+  if (!m.isValid()) return null;
+  return m.year() * 10000 + (m.month() + 1) * 100 + m.date();
+}
