@@ -100,6 +100,10 @@ import {
   getSlotTransferTargets,
   transferSlotToSlot,
 } from "../controllers/slotTransfer.controller.js";
+import {
+  getCapacitySheet,
+  getCapacitySlotDetail,
+} from "../controllers/capacitySheet.controller.js";
 
 const router = express.Router();
 
@@ -118,6 +122,8 @@ router.get("/plant-alerts", getPlantAlerts); // Get plant alerts (plantId requir
 router.get("/plant-availability", getPlantAvailability); // Get plant availability (plantId required, shows only available slots)
 router.get("/all-plants-availability", getAllPlantsAvailability); // Get all plants availability (date range mandatory, shows all plants with all subtypes)
 router.get("/plants-gap-summary", getPlantsGapSummary); // Get all plants with subtype-wise totalBookingGap summary
+router.get("/capacity-sheet/slot/:slotId", getCapacitySlotDetail);
+router.get("/capacity-sheet", getCapacitySheet);
 router.get("/slot-orders/:slotId", getSlotOrdersSummary); // Get orders summary for a specific slot
 router.get("/today-sowing-data", getTodaySowingData); // Get today's sowing data for all plants (due and current day)
 router.get("/today-sowing-cards", getAllPlantsTodaySowingCards); // Get all plants subtype cards for today and overdue (flat structure, no accordion)
