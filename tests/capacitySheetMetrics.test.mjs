@@ -24,11 +24,11 @@ test("can book never goes below zero", () => {
   assert.equal(canBookPlants(100, 200, 0), 0);
 });
 
-test("capacity can book is sowed excess, not slot size or stored available", () => {
-  assert.equal(canBookFromExcess(6500), 6500);
-  assert.equal(canBookFromExcess(0), 0);
-  assert.equal(canBookFromExcess(-4), 0);
-  assert.notEqual(canBookFromExcess(6500), canBookPlants(20000, 18000, 0));
+test("capacity can book is excess minus gap", () => {
+  assert.equal(canBookFromExcess(6500, 2000), 4500);
+  assert.equal(canBookFromExcess(1000, 16000), -15000);
+  assert.equal(canBookFromExcess(0, 0), 0);
+  assert.notEqual(canBookFromExcess(6500, 0), canBookPlants(20000, 18000, 0));
 });
 
 test("majority seed plan uses pipeline orders", () => {

@@ -98,7 +98,7 @@ function rowFromMetrics(slot, metrics, orders) {
   const sowed = num(metrics.bookedCoveredPlants);
   const gap = num(metrics.bookedUncoveredPlants);
   const excess = num(metrics.excessAvailableForBooking);
-  const bookable = canBookFromExcess(excess);
+  const bookable = canBookFromExcess(excess, gap);
   const status = capacityStatus({ gap, excess });
   return {
     slotId: String(slot.slotId),

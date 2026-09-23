@@ -66,9 +66,9 @@ export function canBookPlants(totalPlants, booked, bufferAmount) {
   );
 }
 
-/** Plants that can still be booked: sowed excess, never leftover slot capacity or stored available. */
-export function canBookFromExcess(excess) {
-  return Math.max(0, Number(excess) || 0);
+/** Plants still free to book: sowed excess minus the sowing gap. Negative means more sowing is needed. */
+export function canBookFromExcess(excess, gap = 0) {
+  return (Number(excess) || 0) - (Number(gap) || 0);
 }
 
 export function parseRangeBound(value, fallback) {
