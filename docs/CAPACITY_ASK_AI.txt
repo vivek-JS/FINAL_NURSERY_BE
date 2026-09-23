@@ -1,0 +1,57 @@
+Capacity Ask AI — data the analyst needs
+==========================================
+
+The analyst answers one question for a selected district and the sheet's date range:
+should the nursery book, wait, or sow first, and how sure is that call.
+
+Required, already in the system
+-------------------------------
+1. Capacity sheet for the selected from/to dates.
+   Source: GET /api/v1/sowing/capacity-sheet
+   Fields used: can book (excess minus gap), gap, booked, sowed, excess, status.
+   One row per plant and subtype. Slot size and stored available plants are not used.
+   Company, raising, and mixed seed totals are included so both seed sources stay in the numbers.
+
+2. District.
+   Source: existing location cascade, Maharashtra districts.
+   The user picks the district in Ask AI. It is not stored on the capacity row.
+
+Additional data, fetched by new server APIs
+--------------------------------------------
+3. Weather for the next 14 days in that district.
+   Source: Open-Meteo geocoding, then the Open-Meteo forecast.
+   No API key.
+   Fields: latitude, longitude, daily min/max temperature, daily rain (mm), total rain.
+   If the district cannot be geocoded, the analyst still runs and says weather was missing.
+
+4. Mandi prices for the crops on the sheet in that district.
+   Source: data.gov.in daily commodity prices
+   (resource 9ef84268-d588-465a-a308-a864a43d0070).
+   Optional env: DATA_GOV_IN_API_KEY
+   Crops matched from the sheet: watermelon, muskmelon, papaya, chili/chilli.
+   Fields: commodity, market, date, min, max, modal price.
+   If DATA_GOV_IN_API_KEY is empty, mandi is reported as unavailable and confidence should drop.
+   Get a free key at https://data.gov.in and put it in the backend env. Do not commit it.
+
+Model
+-----
+POST /api/v1/sowing/capacity-ask
+Body: district, from, to, optional question.
+Auth: same login token as the capacity sheet.
+
+Env (backend only, never commit .env):
+  OPENROUTER_API_KEY
+  OPENROUTER_MODEL=openrouter/free
+  DATA_GOV_IN_API_KEY   (optional)
+
+The server sends the capacity packet, weather, and mandi to OpenRouter.
+The reply must be JSON:
+  action        book | wait | sow_first
+  confidence    0 to 100
+  summary       short analyst note
+  downside      the main risk
+  weatherNote   what the forecast means for sowing or booking
+  mandiNote     what prices do or do not say
+
+A negative can book means the gap is larger than sowed excess, so the action should lean sow_first.
+If the free model does not return usable JSON, the API falls back to the same rules and marks source as "rules".

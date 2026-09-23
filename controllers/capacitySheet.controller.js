@@ -355,6 +355,25 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
   return { plants: plantRows, seedSources: seedSourceTotals(seedOrders) };
 }
 
+export async function loadCapacitySheetPayload({ from, to, plantId = null, subtypeId = null }) {
+  const ctx = await loadSheetContext({ from, to, plantId, subtypeId });
+  const sheet = buildSheet({
+    ...ctx,
+    from,
+    to,
+    plantId,
+    subtypeId,
+  });
+  const totals = sumRows(sheet.plants);
+  return {
+    from: from.format("YYYY-MM-DD"),
+    to: to.format("YYYY-MM-DD"),
+    totals: { ...totals, status: capacityStatus(totals) },
+    seedSources: sheet.seedSources,
+    plants: sheet.plants,
+  };
+}
+
 export const getCapacitySheet = async (req, res) => {
   try {
     const defaults = defaultCapacityRange();
@@ -369,23 +388,11 @@ export const getCapacitySheet = async (req, res) => {
 
     const plantId = req.query.plantId || null;
     const subtypeId = req.query.subtypeId || null;
-    const ctx = await loadSheetContext({ from, to, plantId, subtypeId });
-    const sheet = buildSheet({
-      ...ctx,
-      from,
-      to,
-      plantId,
-      subtypeId,
-    });
-    const totals = sumRows(sheet.plants);
+    const payload = await loadCapacitySheetPayload({ from, to, plantId, subtypeId });
 
     return res.status(200).json({
       success: true,
-      from: from.format("YYYY-MM-DD"),
-      to: to.format("YYYY-MM-DD"),
-      totals: { ...totals, status: capacityStatus(totals) },
-      seedSources: sheet.seedSources,
-      plants: sheet.plants,
+      ...payload,
     });
   } catch (error) {
     console.error("getCapacitySheet:", error);
