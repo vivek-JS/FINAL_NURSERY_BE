@@ -422,6 +422,8 @@ export function aggregatePastDueMetricsForSlotGroup(slots, ordersBySlot, asOfDat
     rolledInOnCurrentSlot.length + rolledInOnOtherSlots.length;
   const pastDuePendingOrders = pendingBySlot.reduce((s, b) => s + b.orderCount, 0);
 
+  const lagwadPending = buildPendingLagwadBucketsFromSlots(slots, asOfDate);
+
   return {
     currentSlotId,
     pastDueRolledInPlants,
@@ -444,6 +446,60 @@ export function aggregatePastDueMetricsForSlotGroup(slots, ordersBySlot, asOfDat
         orderCount: pendingBySlot.reduce((s, b) => s + b.orderCount, 0),
         plants: pastDuePendingOnSlot,
       },
+      pendingLagwadBySlot: lagwadPending.pendingLagwadBySlot,
+      pendingLagwadTotal: lagwadPending.pendingLagwadTotal,
+    },
+  };
+}
+
+/**
+ * Expired windows with **ready lagwad** pending roll onto today's slot.
+ * Sow (90% actualPlants) stays on the expired window as a delayed sow record — not rolled.
+ */
+export function buildPendingLagwadBucketsFromSlots(slots, asOfDate = new Date()) {
+  const pendingLagwadBySlot = [];
+  let totalSowRecord = 0;
+  let totalReady = 0;
+
+  for (const slot of slots || []) {
+    if (!isSlotExpiredByEndDay(slot, asOfDate)) continue;
+    const slotId = slot._id?.toString?.() || String(slot._id);
+    const sowRecordPlants = Math.max(0, Math.floor(Number(slot.actualPlants) || 0));
+    const actualReadyPlants = Math.max(
+      0,
+      Math.floor(Number(slot.actualReadyPlants) || 0)
+    );
+    if (actualReadyPlants < 1) continue;
+
+    totalSowRecord += sowRecordPlants;
+    totalReady += actualReadyPlants;
+    pendingLagwadBySlot.push({
+      slotId,
+      startDay: slot.startDay,
+      endDay: slot.endDay,
+      label: `${slot.startDay}–${slot.endDay}`,
+      /** Ready qty to roll */
+      actualReadyPlants,
+      /** Informational — sow stays on this expired window */
+      sowRecordPlants,
+      /** @deprecated use sowRecordPlants — kept for older FE */
+      actualPlants: 0,
+      batches: [],
+    });
+  }
+
+  pendingLagwadBySlot.sort(
+    (a, b) => b.actualReadyPlants - a.actualReadyPlants
+  );
+
+  return {
+    pendingLagwadBySlot,
+    pendingLagwadTotal: {
+      slotCount: pendingLagwadBySlot.length,
+      readyPlants: totalReady,
+      sowRecordPlants: totalSowRecord,
+      /** @deprecated */
+      actualPlants: 0,
     },
   };
 }
@@ -511,15 +567,17 @@ export function sumGrossOrderCoveredPlants(slot) {
 
 /**
  * Sowing-allowed slot display fields (call after resolveSlotBufferFields).
- * excessAvailableForBooking = availablePlants − gross order cover (display gross, not 90% lagwad).
+ * Can book / excess is live sowed stock left after current orders.
+ * Stored slot availablePlants is not used.
  */
 export function applySowingAllowedSlotMetrics(slot) {
   if (!slot) return slot;
   const gross = sumGrossOrderCoveredPlants(slot);
-  const available = Number(slot.availablePlants) || 0;
+  const primarySowed = Math.max(0, Number(slot.primarySowed) || 0);
   const sowingGap = Math.max(0, Number(slot.bookedUncoveredPlants) || 0);
   slot.grossOrderCoveredPlants = gross;
-  slot.excessAvailableForBooking = Math.max(0, available - gross);
+  slot.excessAvailableForBooking =
+    primarySowed > 0 ? Math.max(0, primarySowed - gross) : 0;
   slot.sowingGapPlants = sowingGap;
   slot.orderReservedPlants = Math.max(0, Number(slot.orderReservedPlants) || 0);
   slot.excessiveSowingPlants = Math.max(

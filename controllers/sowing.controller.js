@@ -7388,7 +7388,7 @@ export const getPlantsGapSummary = async (req, res) => {
           sum +
           Math.max(
             0,
-            Number(sl.excessAvailableForBooking ?? sl.availablePlants) || 0
+            Number(sl.excessAvailableForBooking) || 0
           ),
         0
       );

@@ -36,6 +36,8 @@ import {
   runSlotEndNightlyController,
   getRollExpiredAvailableSources,
   postRollExpiredAvailable,
+  postRollExpiredLagwadAll,
+  getRolledLagwadSummaryHandler,
   getSlotReadyRollLog,
   getSlotOrderDispatchByBatchHandler,
   getSubtypeVillageStats,
@@ -85,6 +87,8 @@ slotRouter.post("/slots/past-due-rollover/run", runPastDueSlotRolloverController
 slotRouter.post("/slots/slot-end-nightly/run", runSlotEndNightlyController);
 slotRouter.get("/slots/roll-expired-available/sources", getRollExpiredAvailableSources);
 slotRouter.post("/slots/roll-expired-available", postRollExpiredAvailable);
+slotRouter.post("/slots/roll-expired-lagwad/roll-all", postRollExpiredLagwadAll);
+slotRouter.get("/slots/:slotId/rolled-lagwad-summary", getRolledLagwadSummaryHandler);
 
 // Salesmen restriction routes - Using completely different path pattern
 slotRouter.put("/salesmen-access/:slotId", updateSlotSalesmenRestrictions);

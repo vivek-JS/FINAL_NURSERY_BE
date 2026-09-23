@@ -54,6 +54,11 @@ import {
   listReadyRollLogForSlot,
   summarizeReadyRollForSlot,
 } from "../services/rollExpiredSlotAvailable.service.js";
+import { enrichPendingLagwadBatchPreviews } from "../services/pendingLagwadPreview.service.js";
+import {
+  rollAllExpiredLagwadForSubtype,
+  getRolledLagwadSummary,
+} from "../services/rollExpiredLagwad.service.js";
 import { getSlotOrderDispatchByBatch } from "../services/slotOrderDispatchByBatch.service.js";
 import {
   aggregatePastDueMetricsForSlotGroup,
@@ -2726,6 +2731,9 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         ordersBySlot,
         asOfToday
       );
+      if (pastDueGroup.pastDueDetail?.pendingLagwadBySlot?.length) {
+        await enrichPendingLagwadBatchPreviews(pastDueGroup.pastDueDetail, asOfToday);
+      }
       const dispatchedCrossSlotBySlot = sumDispatchedCrossSlotOntoSlot(
         crossSlotOrders,
         slotIdSet,
@@ -5432,6 +5440,68 @@ export const getSlotOrderDispatchByBatchHandler = async (req, res) => {
     return res.status(400).json({
       success: false,
       message: error.message || "Failed to load order dispatch by batch",
+    });
+  }
+};
+
+/** POST /slots/roll-expired-lagwad/roll-all */
+export const postRollExpiredLagwadAll = async (req, res) => {
+  try {
+    if (!canRunPastDueSlotRollover(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins may roll expired lagwad sellable",
+      });
+    }
+
+    const { plantId, subtypeId, targetSlotId, reason } = req.body || {};
+    if (!plantId || !subtypeId) {
+      return res.status(400).json({
+        success: false,
+        message: "plantId and subtypeId are required",
+      });
+    }
+
+    const asOfRaw = req.body?.asOfDate;
+    const asOfDate = asOfRaw ? new Date(asOfRaw) : undefined;
+
+    const data = await rollAllExpiredLagwadForSubtype({
+      plantId: String(plantId),
+      subtypeId: String(subtypeId),
+      targetSlotId: targetSlotId ? String(targetSlotId) : undefined,
+      performedBy: req.user?._id || null,
+      reason: reason?.trim() || "Roll all pending lagwad from expired windows",
+      asOfDate,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Expired lagwad roll completed",
+      data,
+    });
+  } catch (error) {
+    console.error("postRollExpiredLagwadAll:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Roll expired lagwad failed",
+    });
+  }
+};
+
+/** GET /slots/:slotId/rolled-lagwad-summary */
+export const getRolledLagwadSummaryHandler = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    if (!slotId) {
+      return res.status(400).json({ success: false, message: "slotId is required" });
+    }
+    const data = await getRolledLagwadSummary(slotId);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("getRolledLagwadSummary:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to load rolled lagwad summary",
     });
   }
 };
