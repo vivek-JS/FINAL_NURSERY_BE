@@ -95,7 +95,9 @@ function seedLabel(code) {
 
 function rowFromMetrics(slot, metrics, orders) {
   const booked = num(metrics.totalBookedPlants);
-  const sowed = num(metrics.bookedCoveredPlants);
+  const covered = num(metrics.bookedCoveredPlants);
+  const primarySowed = num(metrics.primarySowed) || num(slot.primarySowed);
+  const sowed = covered > 0 ? covered : primarySowed;
   const gap = num(metrics.bookedUncoveredPlants);
   const excess = num(metrics.excessAvailableForBooking);
   const bookable = canBookFromExcess(excess, gap);
@@ -106,6 +108,7 @@ function rowFromMetrics(slot, metrics, orders) {
     endDay: slot.slotEndDay,
     booked,
     sowed,
+    primarySowed,
     gap,
     excess,
     canBook: bookable,
@@ -119,11 +122,12 @@ function sumRows(rows) {
     (acc, row) => ({
       booked: acc.booked + row.booked,
       sowed: acc.sowed + row.sowed,
+      primarySowed: acc.primarySowed + (Number(row.primarySowed) || 0),
       gap: acc.gap + row.gap,
       excess: acc.excess + row.excess,
       canBook: acc.canBook + row.canBook,
     }),
-    { booked: 0, sowed: 0, gap: 0, excess: 0, canBook: 0 }
+    { booked: 0, sowed: 0, primarySowed: 0, gap: 0, excess: 0, canBook: 0 }
   );
 }
 
