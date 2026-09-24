@@ -227,9 +227,10 @@ const allowedParams = [
   // One-click agri load link params
   "orderNumber",
   "actorPhone",
-  // Daily notes list filters
+  // Daily notes list filters; capacity sheet uses from/to, or all=1 for no date range
   "from",
   "to",
+  "all",
   // Money ledger (GET /inventory/money-ledger/parties*)
   "book",
   "side",
@@ -271,6 +272,7 @@ allowedQueryKeys.add("side"); // GET /inventory/money-ledger — AR | AP | ALL
 allowedQueryKeys.add("purchaseOrderId"); // GET /inventory/purchase-returns/returnable-batches
 allowedQueryKeys.add("supplierId"); // GET /inventory/purchase-returns/returnable-batches (supplier-wise)
 allowedQueryKeys.add("partyKind"); // GET /inventory/money-ledger/parties — ALL|FARMER|MERCHANT
+allowedQueryKeys.add("all"); // GET /sowing/capacity-sheet?all=1 and sow-ready entries
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
