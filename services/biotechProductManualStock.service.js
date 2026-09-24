@@ -112,6 +112,7 @@ async function addProductStock(productId, qty, userId, { batchNumber, expiryDate
     unit: product.primaryUnit,
     status: 'active',
     notes: 'Manual stock adjustment',
+    createdBy: userId || product.createdBy,
   });
 
   product.currentStock = before + addQty;
