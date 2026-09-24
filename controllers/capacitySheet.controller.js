@@ -127,7 +127,7 @@ function sumRows(rows) {
   );
 }
 
-async function loadSheetContext({ from, to, plantId, subtypeId }) {
+async function loadSheetContext({ from, to, plantId, subtypeId, unbounded = false }) {
   const plantQuery = { sowingAllowed: true };
   if (plantId && mongoose.Types.ObjectId.isValid(plantId)) {
     plantQuery._id = new mongoose.Types.ObjectId(plantId);
@@ -136,13 +136,13 @@ async function loadSheetContext({ from, to, plantId, subtypeId }) {
   if (!plants.length) return { plants: [], slots: [], orders: [] };
 
   const plantIds = plants.map((p) => p._id);
-  const fromKey = Number(from.format("YYYYMMDD"));
-  const toKey = Number(to.format("YYYYMMDD"));
+  const fromKey = unbounded ? null : Number(from.format("YYYYMMDD"));
+  const toKey = unbounded ? null : Number(to.format("YYYYMMDD"));
   const startKey = mongoSlotDayKey("$$slot.startDay");
   const endKey = mongoSlotDayKey("$$slot.endDay");
   const slotMatch = {
     plantId: { $in: plantIds },
-    year: { $in: capacityYearsForRange(from, to) },
+    ...(unbounded ? {} : { year: { $in: capacityYearsForRange(from, to) } }),
   };
 
   const slots = await PlantSlot.aggregate([
@@ -169,8 +169,12 @@ async function loadSheetContext({ from, to, plantId, subtypeId }) {
                             $and: [
                               { $ne: ["$$startKey", null] },
                               { $ne: ["$$endKey", null] },
-                              { $gte: ["$$endKey", fromKey] },
-                              { $lte: ["$$startKey", toKey] },
+                              ...(unbounded
+                                ? []
+                                : [
+                                    { $gte: ["$$endKey", fromKey] },
+                                    { $lte: ["$$startKey", toKey] },
+                                  ]),
                               ...(subtypeId && mongoose.Types.ObjectId.isValid(subtypeId)
                                 ? [
                                     {
@@ -246,10 +250,11 @@ async function loadSheetContext({ from, to, plantId, subtypeId }) {
   return { plants, slots, orders };
 }
 
-function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
+function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbounded = false }) {
   const inRange = slots.filter((slot) => {
     if (plantId && String(slot.plantId) !== String(plantId)) return false;
     if (subtypeId && String(slot.subtypeId) !== String(subtypeId)) return false;
+    if (unbounded) return true;
     return slotOverlapsRange(slot.slotStartDay, slot.slotEndDay, from, to);
   });
 
@@ -355,19 +360,20 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId }) {
   return { plants: plantRows, seedSources: seedSourceTotals(seedOrders) };
 }
 
-export async function loadCapacitySheetPayload({ from, to, plantId = null, subtypeId = null }) {
-  const ctx = await loadSheetContext({ from, to, plantId, subtypeId });
+export async function loadCapacitySheetPayload({ from, to, plantId = null, subtypeId = null, unbounded = false }) {
+  const ctx = await loadSheetContext({ from, to, plantId, subtypeId, unbounded });
   const sheet = buildSheet({
     ...ctx,
     from,
     to,
     plantId,
     subtypeId,
+    unbounded,
   });
   const totals = sumRows(sheet.plants);
   return {
-    from: from.format("YYYY-MM-DD"),
-    to: to.format("YYYY-MM-DD"),
+    from: unbounded ? null : from.format("YYYY-MM-DD"),
+    to: unbounded ? null : to.format("YYYY-MM-DD"),
     totals: { ...totals, status: capacityStatus(totals) },
     seedSources: sheet.seedSources,
     plants: sheet.plants,
@@ -376,10 +382,11 @@ export async function loadCapacitySheetPayload({ from, to, plantId = null, subty
 
 export const getCapacitySheet = async (req, res) => {
   try {
+    const unbounded = String(req.query.all || "") === "1";
     const defaults = defaultCapacityRange();
-    const from = parseRangeBound(req.query.from, defaults.from);
-    const to = parseRangeBound(req.query.to, defaults.to);
-    if (to.isBefore(from, "day")) {
+    const from = unbounded ? defaults.from : parseRangeBound(req.query.from, defaults.from);
+    const to = unbounded ? defaults.to : parseRangeBound(req.query.to, defaults.to);
+    if (!unbounded && to.isBefore(from, "day")) {
       return res.status(400).json({
         success: false,
         message: "to must be on or after from",
@@ -388,7 +395,7 @@ export const getCapacitySheet = async (req, res) => {
 
     const plantId = req.query.plantId || null;
     const subtypeId = req.query.subtypeId || null;
-    const payload = await loadCapacitySheetPayload({ from, to, plantId, subtypeId });
+    const payload = await loadCapacitySheetPayload({ from, to, plantId, subtypeId, unbounded });
 
     return res.status(200).json({
       success: true,

@@ -256,15 +256,16 @@ export const askCapacityAnalyst = async (req, res) => {
   try {
     const district = String(req.body?.district || "").trim();
     const scope = district || "Maharashtra";
+    const unbounded = req.body?.all === true || String(req.body?.all || "") === "1";
     const defaults = defaultCapacityRange();
-    const from = parseRangeBound(req.body?.from, defaults.from);
-    const to = parseRangeBound(req.body?.to, defaults.to);
-    if (to.isBefore(from, "day")) {
+    const from = unbounded ? defaults.from : parseRangeBound(req.body?.from, defaults.from);
+    const to = unbounded ? defaults.to : parseRangeBound(req.body?.to, defaults.to);
+    if (!unbounded && to.isBefore(from, "day")) {
       return res.status(400).json({ success: false, message: "to must be on or after from" });
     }
     const question = String(req.body?.question || "").trim().slice(0, 500);
 
-    const sheet = await loadCapacitySheetPayload({ from, to });
+    const sheet = await loadCapacitySheetPayload({ from, to, unbounded });
     const capacity = slimCapacityForAnalyst(sheet);
     const crops = cropsOnSheet(sheet.plants);
     const [weather, mandi, flowResult] = await Promise.all([
