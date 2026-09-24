@@ -14,6 +14,11 @@ import {
 import { canDirectStockUpdate } from "../utility/directStockAccess.js";
 import { applyBiotechProductManualStock } from "../services/biotechProductManualStock.service.js";
 
+/** Product routes are mounted as /:id/...; handlers also accept :productId. */
+function routeProductId(req) {
+  return req.params.id || req.params.productId;
+}
+
 export const getBiotechSeedMaster = catchAsync(async (req, res) => {
   const unlinkedOnly = String(req.query.unlinkedOnly || "").toLowerCase() === "true";
   const data = await buildBiotechSeedMaster({ unlinkedOnly });
@@ -91,7 +96,7 @@ export const getSubtypeInventoryLinksHandler = catchAsync(async (req, res, next)
 });
 
 export const getProductAgriLinkHandler = catchAsync(async (req, res, next) => {
-  const { productId } = req.params;
+  const productId = routeProductId(req);
   if (!mongoose.isValidObjectId(productId)) {
     return next(new AppError("Invalid product ID", 400));
   }
@@ -102,7 +107,7 @@ export const getProductAgriLinkHandler = catchAsync(async (req, res, next) => {
 });
 
 export const patchProductAgriLinkHandler = catchAsync(async (req, res, next) => {
-  const { productId } = req.params;
+  const productId = routeProductId(req);
   const { cropId, varietyId, tentativePlantsPerPacket, clearLink } = req.body;
   const userId = req.user?._id || req.user?.id;
 
@@ -146,7 +151,7 @@ export const postProductManualStockHandler = catchAsync(async (req, res, next) =
     return next(new AppError("You do not have permission to directly update stock", 403));
   }
 
-  const { productId } = req.params;
+  const productId = routeProductId(req);
   const { quantityDelta, batchNumber, expiryDate } = req.body;
 
   if (!mongoose.isValidObjectId(productId)) {
@@ -169,7 +174,7 @@ export const postProductManualStockHandler = catchAsync(async (req, res, next) =
 });
 
 export const getProductStockLedgerHandler = catchAsync(async (req, res, next) => {
-  const { productId } = req.params;
+  const productId = routeProductId(req);
   const { startDate, endDate } = req.query;
 
   if (!mongoose.isValidObjectId(productId)) {
