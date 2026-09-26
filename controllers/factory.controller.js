@@ -88,9 +88,31 @@ import {
   emitPlantOrderUpdateEvents,
 } from "../utils/orderEventDualWrite.js";
 import { istTodayBounds } from "../utility/queryDateRange.js";
+import { assertBookingSlotOpenForNewAllocation } from "../utility/bookingSlotExpiryGuard.js";
 
 const getSlotAvailableForBooking = (slot) =>
   Math.max(0, resolveSlotBufferFields(slot).availablePlants);
+
+/**
+ * Abort only while the session is still in a transaction.
+ * Calling abort after commit throws "Cannot call abortTransaction after calling commitTransaction"
+ * and hides the real error.
+ */
+async function closeMongoSession(session, { abort = false } = {}) {
+  if (!session) return;
+  if (abort && typeof session.inTransaction === "function" && session.inTransaction()) {
+    try {
+      await session.abortTransaction();
+    } catch (err) {
+      console.error("Mongo session abort failed:", err?.message || err);
+    }
+  }
+  try {
+    await session.endSession();
+  } catch (err) {
+    console.error("Mongo session end failed:", err?.message || err);
+  }
+}
 
 const CANCEL_LIKE_ORDER_STATUSES = new Set(["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"]);
 function isCancelLikeOrderStatus(status) {
@@ -563,6 +585,12 @@ const createOne = (Model, modelName) =>
       // Using session for transaction
       const session = await mongoose.startSession();
       session.startTransaction();
+      let orderTxnCommitted = false;
+      let createdOrderDoc = null;
+      let createdPaymentArray = [];
+      let createdWalletTransactions = [];
+      const pendingSlotTrails = [];
+      let inventoryLedgerRowsForAfter = [];
 
       try {
         // Check if salesPerson exists and get their details
@@ -570,8 +598,7 @@ const createOne = (Model, modelName) =>
           session
         );
         if (!salesPerson) {
-          await session.abortTransaction();
-          session.endSession();
+          await closeMongoSession(session, { abort: true });
           return res.status(400).json({
             message: "Sales person not found",
           });
@@ -596,6 +623,14 @@ const createOne = (Model, modelName) =>
         ) => {
           let pendingLedger = null;
           const quotaPatch = {};
+
+          if (!skipSlotBooking && lineQty > 0) {
+            await assertBookingSlotOpenForNewAllocation(
+              lineSlot,
+              req.user,
+              session
+            );
+          }
 
           if (salesPerson.jobTitle === "DEALER" && normalizedComponyQuota === true) {
             await updateSlot(lineSlot, lineQty, "subtract", session);
@@ -699,18 +734,21 @@ const createOne = (Model, modelName) =>
         let pendingInventoryLedgerEntries = [];
         if (orderData.dealerOrder) {
           if (multiPlantLines?.length) {
-            await session.abortTransaction();
-            session.endSession();
+            await closeMongoSession(session, { abort: true });
             return res.status(400).json({
               message: "plantLineItems is not supported for dealer bulk orders",
             });
           }
           if (numPlants > 0) {
             try {
+              await assertBookingSlotOpenForNewAllocation(
+                bookingSlot,
+                req.user,
+                session
+              );
               await updateSlot(bookingSlot, numPlants, "subtract", session);
             } catch (slotError) {
-              await session.abortTransaction();
-              session.endSession();
+              await closeMongoSession(session, { abort: true });
               return res.status(400).json({
                 message: slotError.message || "Failed to update slot",
               });
@@ -794,8 +832,7 @@ const createOne = (Model, modelName) =>
             orderData.plantLineItems = multiPlantLines;
             pendingInventoryLedgerEntry = pendingInventoryLedgerEntries[0] || null;
           } catch (lineBookErr) {
-            await session.abortTransaction();
-            session.endSession();
+            await closeMongoSession(session, { abort: true });
             const status = lineBookErr.statusCode || 400;
             return res.status(status).json({
               message: lineBookErr.message || "Failed to book plant line items",
@@ -817,8 +854,7 @@ const createOne = (Model, modelName) =>
             pendingInventoryLedgerEntry = pendingLedger;
             if (pendingLedger) pendingInventoryLedgerEntries = [pendingLedger];
           } catch (lineBookErr) {
-            await session.abortTransaction();
-            session.endSession();
+            await closeMongoSession(session, { abort: true });
             const status = lineBookErr.statusCode || 400;
             return res.status(status).json({
               message: lineBookErr.message || "Failed to update slot",
@@ -1007,26 +1043,18 @@ const createOne = (Model, modelName) =>
         // Create the Order with all new fields
         const order = await Model.create([orderDocument], { session });
 
-        // Create plant inventory ledger entr(y|ies) (immutable, append-only)
+        // Inventory ledger is append-only audit. Write it after commit so a
+        // duplicate/validation error cannot abort the order transaction.
         const ledgerRows =
           pendingInventoryLedgerEntries.length > 0
             ? pendingInventoryLedgerEntries
             : pendingInventoryLedgerEntry
               ? [pendingInventoryLedgerEntry]
               : [];
-        for (const ledgerRow of ledgerRows) {
-          try {
-            await DealerPlantInventoryLedger.createLedgerEntry(
-              {
-                ...ledgerRow,
-                referenceId: order[0]._id,
-              },
-              session
-            );
-          } catch (ledgerErr) {
-            console.error("DealerPlantInventoryLedger create failed:", ledgerErr);
-          }
-        }
+        inventoryLedgerRowsForAfter = ledgerRows.map((ledgerRow) => ({
+          ...ledgerRow,
+          referenceId: order[0]._id,
+        }));
 
         // Check if this is a ready plants order (single-product path; not used with multi-plant lines)
         const isReadyPlantsOrder = !!(orderData.productMappingId && orderData.productName);
@@ -1085,21 +1113,18 @@ const createOne = (Model, modelName) =>
           );
 
           if (slotUpdateResult.modifiedCount > 0 && beforeSnap) {
-            try {
-              await appendOrderSlotTrail({
-                slotId,
-                orderId: order[0]._id,
-                quantity: plantsForSlot,
-                direction: "book",
-                performedBy: req.user?._id,
-                session,
-                isSowingAllowed,
-                affectsAvailable: isReadyPlantsOrder || !isSowingAllowed,
-                beforeSnap,
-              });
-            } catch (trailErr) {
-              console.error("Order booked slot trail failed:", trailErr);
-            }
+            // Same slot document as the booking update. A failed trail write
+            // aborts the whole transaction, so record it after commit.
+            pendingSlotTrails.push({
+              slotId,
+              orderId: order[0]._id,
+              quantity: plantsForSlot,
+              direction: "book",
+              performedBy: req.user?._id,
+              isSowingAllowed,
+              affectsAvailable: isReadyPlantsOrder || !isSowingAllowed,
+              beforeSnap,
+            });
           }
         };
 
@@ -1201,7 +1226,9 @@ const createOne = (Model, modelName) =>
             }
           } catch (productMappingError) {
             console.error('❌ Error updating PlantProductMapping and productStock:', productMappingError);
-            // Don't fail order creation if mapping update fails
+            // A failed write inside the transaction aborts it. Continuing and
+            // then committing surfaces "Cannot call abortTransaction after calling commitTransaction".
+            throw productMappingError;
           }
         }
 
@@ -1241,7 +1268,7 @@ const createOne = (Model, modelName) =>
 
             let orderForFarmer = await Farmer.findOne({
               mobileNumber: orderForMobileNum,
-            }).session(session);
+            });
 
             console.log("🔍 Existing farmer check result:", orderForFarmer ? "FOUND" : "NOT FOUND");
 
@@ -1262,7 +1289,7 @@ const createOne = (Model, modelName) =>
               console.log("📝 Creating new farmer with data:", farmerData);
               
               // Create the farmer
-              const newFarmer = await Farmer.create([farmerData], { session });
+              const newFarmer = await Farmer.create([farmerData]);
               orderForFarmer = newFarmer[0];
               
               console.log("✅ Successfully created new farmer from orderFor! ID:", orderForFarmer._id, "Name:", orderForFarmer.name);
@@ -1289,8 +1316,7 @@ const createOne = (Model, modelName) =>
               },
               {
                 $set: { "referredTo.$.orderId": order[0]._id }
-              },
-              { session }
+              }
             );
           } catch (error) {
             console.error("Error updating referral with order ID:", error);
@@ -1350,66 +1376,87 @@ const createOne = (Model, modelName) =>
                 }
               } catch (walletError) {
                 console.error("Error processing wallet transaction for payment:", walletError);
-                // Don't fail the order creation, just log the error
+                throw walletError;
               }
             }
           }
         }
 
-        if (modelName === "Order" && order[0]) {
-          try {
-            await ensureFarmerPlantOrderDebit(order[0], {
-              userId: req.user?._id,
-              session,
-            });
-            if (paymentArray.length > 0) {
-              for (const paymentItem of paymentArray) {
-                try {
-                  await recordFarmerPlantLedgerPaymentTransition(
-                    order[0],
-                    paymentItem,
-                    null,
-                    paymentItem.paymentStatus,
-                    { userId: req.user?._id, session }
-                  );
-                } catch (payLedgerErr) {
-                  console.error(
-                    "FarmerPlantOrderLedger payment on create:",
-                    payLedgerErr
-                  );
-                }
-              }
-            }
-          } catch (ledgerErr) {
-            console.error("FarmerPlantOrderLedger ORDER debit failed:", ledgerErr);
-          }
-          try {
-            await syncDealerLedgerForOrder(order[0], {
-              userId: req.user?._id,
-              session,
-            });
-          } catch (dealerAuditErr) {
-            console.error("Dealer ledger sync on create failed:", dealerAuditErr);
-          }
-        }
+        createdOrderDoc = order[0];
+        createdPaymentArray = paymentArray;
+        createdWalletTransactions = walletTransactions;
 
         await session.commitTransaction();
-        session.endSession();
+        orderTxnCommitted = true;
+      } catch (error) {
+        console.error("Order create failed:", error);
+        await closeMongoSession(session, { abort: !orderTxnCommitted });
+        return res.status(400).json({
+          message: error?.message || "Failed to create order",
+          type: error?.name === "AppError" ? error.type : "UNKNOWN_ERROR",
+        });
+      }
 
-        if (modelName === "Order" && order[0]) {
-          emitPlantOrderCreatedEvents(order[0], {
+      await closeMongoSession(session, { abort: false });
+
+      if (createdOrderDoc) {
+        for (const ledgerRow of inventoryLedgerRowsForAfter) {
+          try {
+            await DealerPlantInventoryLedger.createLedgerEntry(ledgerRow, null);
+          } catch (ledgerErr) {
+            console.error("DealerPlantInventoryLedger create failed:", ledgerErr);
+          }
+        }
+        for (const trail of pendingSlotTrails) {
+          try {
+            await appendOrderSlotTrail(trail);
+          } catch (trailErr) {
+            console.error("Order booked slot trail failed:", trailErr);
+          }
+        }
+        try {
+          await ensureFarmerPlantOrderDebit(createdOrderDoc, {
             userId: req.user?._id,
-            actorName: req.user?.name,
-          }).catch((e) =>
-            console.error("[OrderEvent] create emit failed:", e?.message || e)
-          );
+          });
+          for (const paymentItem of createdOrderDoc.payment || createdPaymentArray) {
+            try {
+              await recordFarmerPlantLedgerPaymentTransition(
+                createdOrderDoc,
+                paymentItem,
+                null,
+                paymentItem.paymentStatus,
+                { userId: req.user?._id }
+              );
+            } catch (payLedgerErr) {
+              console.error(
+                "FarmerPlantOrderLedger payment on create:",
+                payLedgerErr
+              );
+            }
+          }
+        } catch (ledgerErr) {
+          console.error("FarmerPlantOrderLedger ORDER debit failed:", ledgerErr);
+        }
+        try {
+          await syncDealerLedgerForOrder(createdOrderDoc, {
+            userId: req.user?._id,
+          });
+        } catch (dealerAuditErr) {
+          console.error("Dealer ledger sync on create failed:", dealerAuditErr);
         }
 
-        if (modelName === "Order" && order[0]?.orderStatus === "DISPATCHED") {
+        emitPlantOrderCreatedEvents(createdOrderDoc, {
+          userId: req.user?._id,
+          actorName: req.user?.name,
+        }).catch((e) =>
+          console.error("[OrderEvent] create emit failed:", e?.message || e)
+        );
+
+        if (createdOrderDoc.orderStatus === "DISPATCHED") {
           (async () => {
             try {
               const { ensureFeedbackCallForOrder } = await import("../services/feedbackCallScheduling.js");
-              await ensureFeedbackCallForOrder(order[0], { isInstantDispatch: true });
+              await ensureFeedbackCallForOrder(createdOrderDoc, { isInstantDispatch: true });
             } catch (e) {
               console.error("voice-feedback ensure (order create):", e?.message || e);
             }
@@ -1418,62 +1465,53 @@ const createOne = (Model, modelName) =>
             const { scheduleOrderDeliveryChallanPdf } = await import(
               "../services/orderDeliveryChallanPdf.service.js"
             );
-            scheduleOrderDeliveryChallanPdf(order[0]._id);
+            scheduleOrderDeliveryChallanPdf(createdOrderDoc._id);
           } catch (e) {
             console.error("order DC PDF schedule (create):", e?.message || e);
           }
         }
 
-        if (modelName === "Order" && order[0]) {
-          const createdOrderId = order[0]._id;
-          const createdOrderIdStr = String(createdOrderId);
-          setTimeout(() => {
-            (async () => {
-              try {
-                const { sendOrderPlacedAlert } = await import("../services/whatsappAlertService.js");
-                const delivery = await sendOrderPlacedAlert(createdOrderId);
-                if (!delivery?.delivered) {
-                  console.warn(
-                    `[WhatsApp Alert] New order ${createdOrderIdStr} alert not delivered:`,
-                    delivery?.reason || delivery?.error || "see results",
-                    delivery?.results || ""
-                  );
-                }
-                const { evaluateOrderAlertsOnCreate } = await import(
-                  "../services/whatsappAlertEngine.service.js"
+        const createdOrderId = createdOrderDoc._id;
+        const createdOrderIdStr = String(createdOrderId);
+        setTimeout(() => {
+          (async () => {
+            try {
+              const { sendOrderPlacedAlert } = await import("../services/whatsappAlertService.js");
+              const delivery = await sendOrderPlacedAlert(createdOrderId);
+              if (!delivery?.delivered) {
+                console.warn(
+                  `[WhatsApp Alert] New order ${createdOrderIdStr} alert not delivered:`,
+                  delivery?.reason || delivery?.error || "see results",
+                  delivery?.results || ""
                 );
-                await evaluateOrderAlertsOnCreate(createdOrderId);
-                const { tryAutoSendOrderPlacedWhatsApp } = await import(
-                  "./order.controller.js"
-                );
-                await tryAutoSendOrderPlacedWhatsApp(createdOrderId);
-              } catch (e) {
-                console.error("whatsapp-alert (order create):", e?.message || e);
               }
-            })();
-          }, 500);
-        }
-
-        const response = generateResponse(
-          "Success",
-          `${modelName} created successfully with ${paymentArray.length} payment(s)`,
-          {
-            order: order[0],
-            payments: paymentArray,
-            walletTransactions: walletTransactions
-          },
-          undefined
-        );
-
-        return res.status(201).json(response);
-      } catch (error) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          message: error.message,
-          type: error.name === "AppError" ? error.type : "UNKNOWN_ERROR",
-        });
+              const { evaluateOrderAlertsOnCreate } = await import(
+                "../services/whatsappAlertEngine.service.js"
+              );
+              await evaluateOrderAlertsOnCreate(createdOrderId);
+              const { tryAutoSendOrderPlacedWhatsApp } = await import(
+                "./order.controller.js"
+              );
+              await tryAutoSendOrderPlacedWhatsApp(createdOrderId);
+            } catch (e) {
+              console.error("whatsapp-alert (order create):", e?.message || e);
+            }
+          })();
+        }, 500);
       }
+
+      const response = generateResponse(
+        "Success",
+        `${modelName} created successfully with ${createdPaymentArray.length} payment(s)`,
+        {
+          order: createdOrderDoc,
+          payments: createdPaymentArray,
+          walletTransactions: createdWalletTransactions,
+        },
+        undefined
+      );
+
+      return res.status(201).json(response);
     }
 
     const doc = await Model.create(req.body);
@@ -2638,8 +2676,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           );
         } catch (slotErr) {
           console.error("Slot re-deduct failed (cancel→pending):", slotErr);
-          await session.abortTransaction();
-          session.endSession();
+          await closeMongoSession(session, { abort: true });
           return next(new AppError(slotErr.message || "Failed to re-allocate slot", 400));
         }
       }
@@ -2933,8 +2970,7 @@ const updateOne = (Model, modelName, allowedFields) =>
             { req, allowOverflow: canDispatchBeyondRemaining(req) }
           );
         } catch (error) {
-          await session.abortTransaction();
-          session.endSession();
+          await closeMongoSession(session, { abort: true });
           return next(error);
         }
       }
@@ -3143,8 +3179,7 @@ const updateOne = (Model, modelName, allowedFields) =>
         })
       );
     } catch (error) {
-      await session.abortTransaction();
-      session.endSession();
+      await closeMongoSession(session, { abort: true });
       return next(error);
     }
   });
@@ -3180,6 +3215,14 @@ const handleSlotUpdatesWithSession = async (
 
       if (!slot) {
         throw new AppError("Specific slot not found", 404);
+      }
+
+      if (plantsNeeded > 0) {
+        await assertBookingSlotOpenForNewAllocation(
+          slotId,
+          req?.user,
+          session
+        );
       }
 
       // Skip availability check for sowing-allowed plants
@@ -3323,7 +3366,7 @@ const handleSlotUpdatesWithSession = async (
   }
 };
 // Helper function to handle slot updates
-const handleSlotUpdates = async (existingDoc, filteredBody) => {
+const handleSlotUpdates = async (existingDoc, filteredBody, user = null) => {
   const { bookingSlot, numberOfPlants } = filteredBody;
 
   try {
@@ -3344,6 +3387,10 @@ const handleSlotUpdates = async (existingDoc, filteredBody) => {
 
       if (!slot) {
         throw new AppError("Specific slot not found", 404);
+      }
+
+      if (plantsNeeded > 0) {
+        await assertBookingSlotOpenForNewAllocation(slotId, user);
       }
 
       // Skip availability check for sowing-allowed plants
