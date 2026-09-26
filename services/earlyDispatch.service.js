@@ -8,6 +8,11 @@ import {
   getSlotWindowById,
   isDateOutsideSlotWindow,
 } from "../utility/findDeliverySlot.js";
+import {
+  shrinkPlantSlotTrails,
+  slotTrailPush,
+  updatePlantSlotCapped,
+} from "../utility/shrinkPlantSlotTrails.js";
 
 const PRE_DISPATCH_STATUSES = new Set([
   "PENDING",
@@ -81,13 +86,18 @@ export const moveOrderBetweenSlots = async ({
   const fromPlantOid = new mongoose.Types.ObjectId(fromCtx.plantSlotId.toString());
   const toPlantOid = new mongoose.Types.ObjectId(toCtx.plantSlotId.toString());
 
+  const plantIds = new Set([String(fromPlantOid), String(toPlantOid)]);
+  for (const plantId of plantIds) {
+    await shrinkPlantSlotTrails(plantId, { session });
+  }
+
   const releaseOp = {
     $pull: {
       "subtypeSlots.$[st].slots.$[sl].orders": orderId,
     },
   };
 
-  await PlantSlot.updateOne({ _id: fromPlantOid }, releaseOp, {
+  await updatePlantSlotCapped({ _id: fromPlantOid }, releaseOp, {
     arrayFilters: [{ "st.subtypeId": fromSubtypeOid }, { "sl._id": fromSlotOid }],
     session,
   });
@@ -98,7 +108,7 @@ export const moveOrderBetweenSlots = async ({
     },
   };
 
-  await PlantSlot.updateOne({ _id: toPlantOid }, bookOp, {
+  await updatePlantSlotCapped({ _id: toPlantOid }, bookOp, {
     arrayFilters: [{ "st.subtypeId": toSubtypeOid }, { "sl._id": toSlotOid }],
     session,
   });
@@ -132,9 +142,20 @@ export const appendSlotTrail = async ({
     after: {},
   };
 
-  await PlantSlot.updateOne(
+  let parentQuery = PlantSlot.findOne({ "subtypeSlots.slots._id": slotId }).select("_id");
+  if (session) parentQuery = parentQuery.session(session);
+  const parent = await parentQuery.lean();
+  if (parent?._id) {
+    await shrinkPlantSlotTrails(parent._id, { session });
+  }
+
+  await updatePlantSlotCapped(
     { "subtypeSlots.slots._id": slotId },
-    { $push: { "subtypeSlots.$[subtypeSlot].slots.$[slot].slotTrail": trailEntry } },
+    {
+      $push: {
+        "subtypeSlots.$[subtypeSlot].slots.$[slot].slotTrail": slotTrailPush(trailEntry),
+      },
+    },
     {
       arrayFilters: [{ "subtypeSlot.slots._id": slotId }, { "slot._id": slotId }],
       session,
