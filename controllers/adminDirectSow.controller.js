@@ -122,13 +122,18 @@ export const listDirectSowOrders = async (req, res) => {
       (p.subtypes || []).map((st) => st._id)
     );
 
+    const acceptedOnly =
+      String(req.query.acceptedOnly || "") === "1" ||
+      String(req.query.orderStatus || "").toUpperCase() === "ACCEPTED";
     const orders = await Order.find({
       plantName: { $in: plantIds },
       ...(subtypeIds.length ? { plantSubtype: { $in: subtypeIds } } : {}),
       sowingDone: { $ne: true },
-      orderStatus: {
-        $nin: ["CANCELLED", "TEMPORARY_CANCELLED", "REJECTED", "DELETED"],
-      },
+      orderStatus: acceptedOnly
+        ? "ACCEPTED"
+        : {
+            $nin: ["CANCELLED", "TEMPORARY_CANCELLED", "REJECTED", "DELETED"],
+          },
     })
       .select(
         "orderId name farmer plantName plantSubtype bookingSlot numberOfPlants additionalPlants deliveryDate sowingPlan orderStatus"

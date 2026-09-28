@@ -769,12 +769,43 @@ export const getIssuedSowingQueue = async (req, res) => {
 /**
  * GET /sowing/completions?page&limit&q&from&to&plantId&subtypeId
  */
+function utcDayBound(ymd, end) {
+  const m = String(ymd || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  return end
+    ? new Date(Date.UTC(y, mo, d, 23, 59, 59, 999))
+    : new Date(Date.UTC(y, mo, d, 0, 0, 0, 0));
+}
+
+function dateRangeQuery(from, to) {
+  const range = {};
+  const start = utcDayBound(from, false);
+  const end = utcDayBound(to, true);
+  if (start) range.$gte = start;
+  if (end) range.$lte = end;
+  return Object.keys(range).length ? range : null;
+}
+
 export const getSowingCompletions = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 40));
     const skip = (page - 1) * limit;
     const q = String(req.query.q || "").trim();
+    const sortKey = String(req.query.sort || "sowDate");
+    const sortDir = String(req.query.dir || "desc").toLowerCase() === "asc" ? 1 : -1;
+    const sortField = {
+      sowDate: "sowingCompletedDate",
+      added: "createdAt",
+      request: "requestNumber",
+      plant: "plantName",
+      plants: "sowedQuantity",
+      packets: "packetsUsed",
+      labour: "laboursLadies",
+    }[sortKey] || "sowingCompletedDate";
 
     const match = { sowingCompleted: true };
     if (req.query.plantId && mongoose.Types.ObjectId.isValid(req.query.plantId)) {
@@ -786,11 +817,13 @@ export const getSowingCompletions = async (req, res) => {
     ) {
       match.subtypeId = new mongoose.Types.ObjectId(req.query.subtypeId);
     }
-    if (req.query.from || req.query.to) {
-      match.sowingCompletedDate = {};
-      if (req.query.from) match.sowingCompletedDate.$gte = new Date(req.query.from);
-      if (req.query.to) match.sowingCompletedDate.$lte = new Date(req.query.to);
-    }
+    const sowRange = dateRangeQuery(
+      req.query.sowFrom || req.query.from,
+      req.query.sowTo || req.query.to
+    );
+    if (sowRange) match.sowingCompletedDate = sowRange;
+    const addedRange = dateRangeQuery(req.query.addedFrom, req.query.addedTo);
+    if (addedRange) match.createdAt = addedRange;
 
     let orderIdFilter = null;
     if (q) {
@@ -819,10 +852,10 @@ export const getSowingCompletions = async (req, res) => {
       SowingRequest.countDocuments(match),
       SowingRequest.find(match)
         .select(
-          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents completionPhotos completionNotes shedName sowingCompletedDate isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned returnRequestIds completionEvents completedBy outwardId"
+          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents completionPhotos completionNotes shedName sowingCompletedDate createdAt isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned returnRequestIds completionEvents completedBy outwardId"
         )
         .populate("completedBy", "name")
-        .sort({ sowingCompletedDate: -1 })
+        .sort({ [sortField]: sortDir, _id: sortDir })
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -1038,6 +1071,7 @@ export const getSowingCompletions = async (req, res) => {
         batchNumbers,
         outwardNumber: outward?.outwardNumber || "",
         sowingDate,
+        createdAt: r.createdAt || null,
         affectedSlot,
       };
     });
