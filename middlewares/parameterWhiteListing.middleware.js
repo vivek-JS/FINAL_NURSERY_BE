@@ -62,6 +62,13 @@ const allowedParams = [
   "date",
   "sowDate", // GET /sowing/request/:id/slot-preview
   "sowingDate", // alias of sowDate
+  "acceptedOnly", // GET /sowing/admin-direct-sow/orders — accepted + unsowed only
+  "sort", // GET /sowing/completions column sort
+  "dir", // GET /sowing/completions asc | desc
+  "sowFrom", // GET /sowing/completions sow-date filter
+  "sowTo",
+  "addedFrom", // GET /sowing/completions date-added filter
+  "addedTo",
   "plantReadyDays", // GET /sowing/request/:id/slot-preview
   "fromDate",
   "dispatched",
