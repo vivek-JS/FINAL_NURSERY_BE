@@ -21,6 +21,7 @@ import {
   appendTransferSlotTrail,
   buildSlotSnapshot,
 } from "../utility/slotTransferTrail.js";
+import { loadSlotTrailView } from "../utility/slotTrailStore.js";
 import { executeMassOrderSlotTransfer } from "../services/slotOrderTransfer.service.js";
 import {
   aggregateShedStockBySlotIds,
@@ -3543,8 +3544,11 @@ export const getSlotTrail = async (req, res) => {
 
     const slotObjectId = new mongoose.Types.ObjectId(slotId);
 
+    const storedTrail = await loadSlotTrailView(slotObjectId);
     // Use aggregation to get slot trail with populated user info
-    const result = await PlantSlot.aggregate([
+    const result = storedTrail.length
+      ? storedTrail
+      : await PlantSlot.aggregate([
       {
         $match: {
           "subtypeSlots.slots._id": slotObjectId,

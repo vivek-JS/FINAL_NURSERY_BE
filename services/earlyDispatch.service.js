@@ -10,7 +10,6 @@ import {
 } from "../utility/findDeliverySlot.js";
 import {
   shrinkPlantSlotTrails,
-  slotTrailPush,
   updatePlantSlotCapped,
 } from "../utility/shrinkPlantSlotTrails.js";
 
@@ -142,25 +141,8 @@ export const appendSlotTrail = async ({
     after: {},
   };
 
-  let parentQuery = PlantSlot.findOne({ "subtypeSlots.slots._id": slotId }).select("_id");
-  if (session) parentQuery = parentQuery.session(session);
-  const parent = await parentQuery.lean();
-  if (parent?._id) {
-    await shrinkPlantSlotTrails(parent._id, { session });
-  }
-
-  await updatePlantSlotCapped(
-    { "subtypeSlots.slots._id": slotId },
-    {
-      $push: {
-        "subtypeSlots.$[subtypeSlot].slots.$[slot].slotTrail": slotTrailPush(trailEntry),
-      },
-    },
-    {
-      arrayFilters: [{ "subtypeSlot.slots._id": slotId }, { "slot._id": slotId }],
-      session,
-    }
-  );
+  const { recordSlotTrail } = await import("../utility/slotTrailStore.js");
+  await recordSlotTrail(slotId, trailEntry, session);
 };
 
 const normalizeDispatchDate = (dispatchTargetDate) => {

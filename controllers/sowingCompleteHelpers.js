@@ -12,6 +12,7 @@ import {
   parseLocalDate,
 } from "./sowingSlotReadyHelpers.js";
 import { sowQtySlotImpact, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
+import { updatePlantSlotCapped } from "../utility/shrinkPlantSlotTrails.js";
 
 function hasAppliedSplit(batch) {
   return (
@@ -154,7 +155,7 @@ export async function recordExcessPlantsOnSlot(
   }
   if (Object.keys(inc).length) update.$inc = inc;
 
-  await PlantSlot.updateOne(
+  await updatePlantSlotCapped(
     {
       "subtypeSlots.slots._id": sid,
       "subtypeSlots.slots.sowingBatches.sowingRequestId": rid,
@@ -187,7 +188,7 @@ async function pushBatchToSlot(slotId, { inc, sowingDateStr, plantReadyDateStr, 
   if (saleable > 0) {
     incDoc["subtypeSlots.$[st].slots.$[sl].excessiveSowing.plants"] = saleable;
   }
-  await PlantSlot.updateOne(
+  await updatePlantSlotCapped(
     { "subtypeSlots.slots._id": slotId },
     {
       $inc: incDoc,
@@ -202,7 +203,7 @@ async function pushBatchToSlot(slotId, { inc, sowingDateStr, plantReadyDateStr, 
         "subtypeSlots.$[st].slots.$[sl].sowingBatches": {
           $each: [batch],
           $position: 0,
-          $slice: 200,
+          $slice: 40,
         },
       },
       $addToSet: {
@@ -478,7 +479,7 @@ export async function reverseSowBatchFromSlot(slotId, sowingRequestId, plantsSow
     inc["subtypeSlots.$[st].slots.$[sl].orderReservedPlants"] = -reservedRev;
   }
 
-  await PlantSlot.updateOne(
+  await updatePlantSlotCapped(
     { "subtypeSlots.slots._id": id },
     {
       $inc: inc,
@@ -1030,7 +1031,7 @@ export async function reclaimExcessForCoveredOrders(
   const move = splitLagwadQtyForSlot(covered).actualPlants;
   const leftoverAvail = splitLagwadQtyForSlot(excessLeft).actualPlants;
 
-  await PlantSlot.updateOne(
+  await updatePlantSlotCapped(
     {
       "subtypeSlots.slots._id": sid,
       "subtypeSlots.slots.sowingBatches.sowingRequestId": rid,

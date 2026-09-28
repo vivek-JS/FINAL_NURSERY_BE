@@ -1,4 +1,5 @@
 import PlantSlot from "../models/slots.model.js";
+import { offloadEmbeddedSlotTrails } from "./slotTrailStore.js";
 
 /** Newest-first trails. Keep enough history for the UI without crossing the 16MB BSON cap. */
 export const SLOT_TRAIL_KEEP = 40;
@@ -58,9 +59,16 @@ async function runTrailShrink(plantSlotId, keep, opts) {
 
 export async function shrinkPlantSlotTrails(plantSlotId, { session, keep = SLOT_TRAIL_KEEP } = {}) {
   if (!plantSlotId) return;
-  const limit = Math.max(0, Number(keep) || SLOT_TRAIL_KEEP);
+  // History belongs in slottrails. Empty the embedded arrays so the plant file can be updated.
+  try {
+    await offloadEmbeddedSlotTrails(plantSlotId);
+    return;
+  } catch (err) {
+    if (!isResultingDocumentTooLarge(err)) throw err;
+  }
+  const limit = Math.max(0, Number(keep) || 0);
   const opts = session ? { session } : {};
-  const attempts = [...new Set([limit, 10, 1, 0])].filter((n) => n <= limit);
+  const attempts = [...new Set([Math.min(limit, 1), 0])];
   let lastErr;
   for (const n of attempts) {
     try {

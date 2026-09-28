@@ -1117,6 +1117,11 @@ plantSlotSchema.pre("validate", function normalizeSlotTrailBeforeValidate(next) 
   next();
 });
 
+plantSlotSchema.pre("save", async function offloadSlotTrailsBeforeSave() {
+  const { archiveEmbeddedTrailsFromDoc } = await import("../utility/slotTrailStore.js");
+  await archiveEmbeddedTrailsFromDoc(this);
+});
+
 const PlantSlot = model("PlantSlot", plantSlotSchema);
 
 export default PlantSlot;
