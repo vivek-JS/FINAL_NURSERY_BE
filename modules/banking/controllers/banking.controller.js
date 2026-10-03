@@ -4,8 +4,27 @@ import { fetchAndStoreCorporateStatement } from "../services/iciciCorporateState
 import { fetchTransactionStatus } from "../services/iciciCorporateStatus.service.js";
 import { fetchAccountBalance } from "../services/iciciBalance.service.js";
 import { runEnhancedReconciliation } from "../services/reconciliationEngine.service.js";
-import { listOpenSuspense, resolveSuspense } from "../services/suspense.service.js";
+import {
+  listOpenSuspense,
+  resolveSuspense,
+  linkSuspenseToPayment,
+} from "../services/suspense.service.js";
 import { findDuplicateByComposite } from "../services/duplicateDetection.service.js";
+import {
+  listStatementEntries,
+  listStatementAccounts,
+  markStatementVerified,
+} from "../services/bankStatement.service.js";
+import { checkPaymentAgainstBank } from "../services/paymentBankCheck.service.js";
+import {
+  createCashDeposit,
+  listCashDeposits,
+  verifyCashDeposit,
+} from "../services/cashDeposit.service.js";
+import {
+  getUnclearedPayments,
+  getPaymentsForApproval,
+} from "../../../services/paymentReconciliationService.js";
 import { encryptPayload, decryptPayload } from "../crypto/rsaEncryption.js";
 import { loadKeyMaterial, getPublicKeyFingerprint } from "../crypto/keyManager.js";
 import { getIciciCorporateConfig } from "../config/iciciCorporate.config.js";
@@ -88,6 +107,126 @@ export const postResolveSuspense = catchAsync(async (req, res) => {
   });
   if (!result.ok) return res.status(404).json({ success: false, message: result.error });
   return res.status(200).json({ success: true, data: result.entry });
+});
+
+/** POST /api/banking/payments/verify — on-demand bank check for one payment */
+export const postVerifyPayment = catchAsync(async (req, res) => {
+  const { source, orderMongoId, paymentId, allowLiveLookup } = req.body || {};
+  if (!source || !orderMongoId || !paymentId) {
+    return res.status(400).json({
+      success: false,
+      message: "source, orderMongoId and paymentId are required",
+    });
+  }
+
+  const result = await checkPaymentAgainstBank({
+    source,
+    orderMongoId,
+    paymentId,
+    userId: req.user?._id,
+    allowLiveLookup: allowLiveLookup !== false,
+  });
+
+  if (!result.ok) {
+    const status = result.code === "ICICI_UNREACHABLE" ? 502 : 400;
+    return res.status(status).json({ success: false, message: result.error, code: result.code });
+  }
+  return res.status(200).json({ success: true, data: result });
+});
+
+/** GET /api/banking/payments/pending */
+export const getPendingPayments = catchAsync(async (req, res) => {
+  const { dateFrom, dateTo, source } = req.query || {};
+  const data = await getUnclearedPayments({ dateFrom, dateTo, source: source || "all" });
+  return res.status(200).json({ success: true, data, count: data.length });
+});
+
+/** GET /api/banking/payments/verified */
+export const getVerifiedPayments = catchAsync(async (req, res) => {
+  const { dateFrom, dateTo, source } = req.query || {};
+  const data = await getPaymentsForApproval({ dateFrom, dateTo, source: source || "all" });
+  return res.status(200).json({ success: true, data, count: data.length });
+});
+
+/** GET /api/banking/statement */
+export const getStatement = catchAsync(async (req, res) => {
+  const { accountNumber, dateFrom, dateTo, limit, skip } = req.query || {};
+  if (!dateFrom || !dateTo) {
+    return res.status(400).json({ success: false, message: "dateFrom and dateTo required" });
+  }
+  const data = await listStatementEntries({ accountNumber, dateFrom, dateTo, limit, skip });
+  return res.status(200).json({ success: true, data, count: data.length });
+});
+
+/** GET /api/banking/statement/accounts */
+export const getStatementAccounts = catchAsync(async (req, res) => {
+  const data = await listStatementAccounts();
+  return res.status(200).json({ success: true, data });
+});
+
+/** POST /api/banking/statement/:id/verify */
+export const postVerifyStatementLine = catchAsync(async (req, res) => {
+  const result = await markStatementVerified(req.params.id, { userId: req.user?._id });
+  if (!result.ok) return res.status(404).json({ success: false, message: result.error });
+  return res.status(200).json({
+    success: true,
+    data: result.entry,
+    alreadyVerified: result.alreadyVerified,
+  });
+});
+
+/** POST /api/banking/suspense/:id/link */
+export const postLinkSuspense = catchAsync(async (req, res) => {
+  const { source, orderMongoId, paymentId, resolutionNotes } = req.body || {};
+  const result = await linkSuspenseToPayment(req.params.id, {
+    source,
+    orderMongoId,
+    paymentId,
+    resolutionNotes,
+    userId: req.user?._id,
+  });
+  if (!result.ok) return res.status(400).json({ success: false, message: result.error });
+  return res.status(200).json({ success: true, data: result.entry });
+});
+
+/** POST /api/banking/cash-deposit */
+export const postCashDeposit = catchAsync(async (req, res) => {
+  const { entryDate, amount, accountNumber, slipNumber, narration } = req.body || {};
+  const result = await createCashDeposit({
+    entryDate,
+    amount,
+    accountNumber,
+    slipNumber,
+    narration,
+    userId: req.user?._id,
+  });
+  if (!result.ok) return res.status(400).json({ success: false, message: result.error });
+  return res.status(201).json({ success: true, data: result.deposit });
+});
+
+/** GET /api/banking/cash-deposit */
+export const getCashDeposits = catchAsync(async (req, res) => {
+  const { accountNumber, dateFrom, dateTo, verified } = req.query || {};
+  const data = await listCashDeposits({
+    accountNumber,
+    dateFrom,
+    dateTo,
+    verified: verified === undefined ? undefined : verified === "true",
+  });
+  return res.status(200).json({ success: true, data, count: data.length });
+});
+
+/** POST /api/banking/cash-deposit/:id/verify */
+export const postVerifyCashDeposit = catchAsync(async (req, res) => {
+  const result = await verifyCashDeposit(req.params.id, { userId: req.user?._id });
+  if (!result.ok) return res.status(404).json({ success: false, message: result.error });
+  return res.status(200).json({
+    success: true,
+    matched: result.matched !== false,
+    message: result.message,
+    data: result.deposit,
+    bankEntry: result.bankEntry || null,
+  });
 });
 
 /** GET /api/banking/duplicate-check */

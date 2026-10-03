@@ -1,5 +1,6 @@
 import { iciciCorporateRequest } from "./iciciHttpClient.js";
 import { getIciciCorporateConfig, assertCorporateConfig } from "../config/iciciCorporate.config.js";
+import { isCibSvCryptoMode } from "../crypto/rsaEncryption.js";
 import { getBankingLogger } from "../utils/logger.js";
 
 const log = () => getBankingLogger();
@@ -28,13 +29,16 @@ export async function fetchTransactionStatus({ utr, merchantTranId, amount, user
     USERID: cfg.userId,
     AGGRID: cfg.aggregatorId,
     ACCOUNTNO: cfg.accountNumber,
+    UNIQUEID: merchantTranId || utr || "",
     UTR: utr || "",
     MERCHANTTRANID: merchantTranId || "",
     AMOUNT: amount != null ? Number(amount).toFixed(2) : "",
   };
 
   const response = await iciciCorporateRequest({
-    endpointPath: cfg.endpoints.transactionStatus,
+    endpointPath: isCibSvCryptoMode()
+      ? cfg.endpoints.transactionInquiry
+      : cfg.endpoints.transactionStatus,
     payload,
     idempotencyKey: `status-${utr || merchantTranId}`,
     userId,

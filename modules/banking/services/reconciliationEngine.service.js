@@ -1,22 +1,31 @@
 /**
- * Enhanced reconciliation engine with confidence scoring.
+ * Reconciliation engine with confidence scoring.
+ *
+ * Amount is a hard gate everywhere: a pair whose amounts differ by a paisa or
+ * more is never a candidate, however well everything else lines up.
  *
  * Match priority (highest confidence first):
  *   1. UTR + amount + account + date        → 100 (EXACT)
- *   2. UTR + amount                          → 95
- *   3. transaction id + amount               → 90
- *   4. cheque + amount                       → 85
- *   5. amount + date (±2 days) + narration   → 60–80 (FUZZY)
+ *   2. UTR + amount + date                   → 98
+ *   3. UTR + amount                          → 95
+ *   4. transaction id + amount               → 90
+ *   5. cheque + amount                       → 85
+ *   6. amount + date (±2 days) + narration   → 60–80 (FUZZY)
+ *
+ * Only 1–3 may clear a payment on their own — see `qualifiesForAutoVerify`.
+ * Everything else is a suggestion for an accountant, not a decision.
  *
  * Flow:
- *   PENDING → BANK_VERIFIED (score >= threshold)
- *   PENDING → SUSPENSE (no match / low score / multiple matches)
+ *   PENDING → BANK_VERIFIED (UTR and amount agree with the bank)
+ *   PENDING → SUSPENSE      (anything else: no match, no UTR match, or a tie)
  */
 
 import crypto from "crypto";
 import Order from "../../../models/order.model.js";
 import AgriSalesOrder from "../../../models/agriSalesOrder.model.js";
-import BankStatementEntry from "../../../models/bankStatementEntry.model.js";
+import BankStatementEntry, {
+  NOT_STATEMENT_VERIFIED,
+} from "../../../models/bankStatementEntry.model.js";
 import BankReconciliationMatch from "../../finance/ledger/models/bankReconciliationMatch.model.js";
 import PaymentReconciliation from "../models/paymentReconciliation.model.js";
 import CashBook from "../models/cashBook.model.js";
@@ -31,7 +40,7 @@ const log = () => getBankingLogger();
 
 const AMOUNT_EPS = 0.02;
 const DATE_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
-const AUTO_VERIFY_THRESHOLD = Number(process.env.BANKING_AUTO_VERIFY_THRESHOLD || 85);
+/** Scores below this are not even offered as a candidate. */
 const FUZZY_THRESHOLD = Number(process.env.BANKING_FUZZY_THRESHOLD || 60);
 
 function getPaymentUtr(p) {
@@ -102,6 +111,23 @@ function scoreMatch(payment, entry) {
 
   if (score < FUZZY_THRESHOLD) return null;
   return { score: Math.min(score, 100), rule, matchType, entry };
+}
+
+/**
+ * Auto-verification policy: a payment may only clear itself when the bank
+ * agrees on both the UTR and the amount. Nothing else is certain enough.
+ *
+ * Everything the scorer can still produce — a cheque number, a bank transaction
+ * id, or an amount-and-date guess — goes to suspense for an accountant to
+ * confirm, however high it scored. Amount is already a hard gate inside
+ * `scoreMatch`, so a UTR rule here implies the amount agreed.
+ *
+ * @param {{ rule: string, matchType: string }|null|undefined} match
+ * @returns {boolean}
+ */
+export function qualifiesForAutoVerify(match) {
+  if (!match) return false;
+  return match.matchType === "EXACT" && String(match.rule || "").startsWith("UTR");
 }
 
 async function applyMatch(pay, match, runId, userId) {
@@ -198,6 +224,7 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
   const entries = await BankStatementEntry.find({
     txnDate: { $gte: from, $lte: to },
     reconciliationStatus: { $in: ["UNMATCHED", "SUSPENSE"] },
+    ...NOT_STATEMENT_VERIFIED,
   })
     .lean()
     .exec();
@@ -249,7 +276,7 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
     }
 
     const best = candidates[0];
-    if (best.score < AUTO_VERIFY_THRESHOLD) {
+    if (!qualifiesForAutoVerify(best)) {
       await routeToSuspense({
         payment: pay,
         bankEntry: best.entry,
@@ -257,7 +284,12 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
         confidenceScore: best.score,
         runId,
       });
-      suspense.push({ paymentId: pay.paymentId, reason: "LOW_CONFIDENCE", score: best.score });
+      suspense.push({
+        paymentId: pay.paymentId,
+        reason: "NO_UTR_MATCH",
+        rule: best.rule,
+        score: best.score,
+      });
       continue;
     }
 
@@ -307,4 +339,4 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
   return { runId, matched, updatedCount, suspense, errors };
 }
 
-export { scoreMatch, AUTO_VERIFY_THRESHOLD, FUZZY_THRESHOLD };
+export { scoreMatch, applyMatch, FUZZY_THRESHOLD };

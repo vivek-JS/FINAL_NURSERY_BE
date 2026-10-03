@@ -11,7 +11,9 @@ import {
   assertEazypayFilesPresent,
   readSdkConfigJson,
 } from "../config/eazypaySdk.js";
-import BankStatementEntry from "../models/bankStatementEntry.model.js";
+import BankStatementEntry, {
+  NOT_STATEMENT_VERIFIED,
+} from "../models/bankStatementEntry.model.js";
 
 const log = () => getEazypayLogger();
 
@@ -201,6 +203,7 @@ export async function getStoredEntriesForRange(dateFrom, dateTo) {
   to.setHours(23, 59, 59, 999);
   return BankStatementEntry.find({
     txnDate: { $gte: from, $lte: to },
+    ...NOT_STATEMENT_VERIFIED,
   })
     .lean()
     .exec();

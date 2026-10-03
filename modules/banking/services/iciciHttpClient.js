@@ -1,6 +1,10 @@
 import axios from "axios";
 import { getIciciCorporateConfig } from "../config/iciciCorporate.config.js";
-import { encryptPayload, decryptPayload } from "../crypto/rsaEncryption.js";
+import {
+  encryptPayload,
+  decryptPayload,
+  isCibSvCryptoMode,
+} from "../crypto/rsaEncryption.js";
 import { buildSignedHeaders } from "../crypto/requestSigning.js";
 import { withRetry } from "../utils/retry.js";
 import { getBankingLogger } from "../utils/logger.js";
@@ -36,14 +40,25 @@ export async function iciciCorporateRequest({
   const url = buildUrl(endpointPath);
   const started = Date.now();
 
-  const requestBody = cfg.useStub
-    ? payload
-    : encryptPayload({
-        ...payload,
+  // CIB_SV expects the uppercase identity keys from the bank's sample packets;
+  // the older CIB prefix uses camelCase.
+  const identity = isCibSvCryptoMode()
+    ? {
+        CORPID: cfg.corpId,
+        USERID: cfg.userId,
+        AGGRID: cfg.aggregatorId,
+        AGGRNAME: cfg.aggregatorName,
+        URN: cfg.urn,
+      }
+    : {
         corpId: cfg.corpId,
         userId: cfg.userId,
         aggregatorId: cfg.aggregatorId,
-      });
+      };
+
+  const requestBody = cfg.useStub
+    ? payload
+    : encryptPayload({ ...identity, ...payload }, { service: endpointPath });
 
   const headers = {
     "Content-Type": "application/json",

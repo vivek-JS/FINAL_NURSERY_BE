@@ -32,6 +32,10 @@ const bankStatementEntrySchema = new Schema(
       index: true,
     },
     matchedPaymentId: { type: String, trim: true },
+    /** Retired by an accountant — never offered to matching or the queues again. */
+    statementVerified: { type: Boolean, default: false, index: true },
+    statementVerifiedAt: { type: Date },
+    statementVerifiedBy: { type: Schema.Types.ObjectId, ref: "User" },
     rawResponse: { type: Schema.Types.Mixed },
     fetchedAt: { type: Date, default: Date.now },
   },
@@ -39,6 +43,9 @@ const bankStatementEntrySchema = new Schema(
 );
 
 bankStatementEntrySchema.index({ accountNumber: 1, utr: 1, amount: 1, txnDate: 1 });
+
+/** Query fragment excluding retired lines; spread into any matching filter. */
+export const NOT_STATEMENT_VERIFIED = { statementVerified: { $ne: true } };
 
 const BankStatementEntry =
   mongoose.models.BankStatementEntry ||

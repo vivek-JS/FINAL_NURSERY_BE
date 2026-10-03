@@ -40,22 +40,32 @@ Implementation: `modules/banking/crypto/rsaEncryption.js`
 ### Payment verification flow
 
 ```
-PENDING ──(statement match score ≥ 85)──▶ BANK_VERIFIED ──(accountant)──▶ COLLECTED
+PENDING ──(bank agrees on UTR and amount)──▶ BANK_VERIFIED ──(accountant)──▶ COLLECTED
     │
-    └──(no match / low score / multiple matches)──▶ SUSPENSE ──(manual resolve)──▶ BANK_VERIFIED
+    └──(anything else)──▶ SUSPENSE ──(manual resolve)──▶ BANK_VERIFIED
 ```
 
 ### Reconciliation matching (confidence scoring)
 
-| Rule | Score | Type |
-|------|-------|------|
-| UTR + amount + account + date | 100 | EXACT |
-| UTR + amount (+ date) | 95–98 | EXACT |
-| Transaction ID + amount | 90 | EXACT |
-| Cheque + amount | 85 | EXACT |
-| Amount + date + narration similarity | 60–80 | FUZZY |
+Amount is a hard gate: a pair whose amounts differ by a paisa or more is never a
+candidate, however well everything else lines up.
 
-Env: `BANKING_AUTO_VERIFY_THRESHOLD=85`, `BANKING_FUZZY_THRESHOLD=60`
+| Rule | Score | Type | Auto-verifies |
+|------|-------|------|---------------|
+| UTR + amount + account + date | 100 | EXACT | Yes |
+| UTR + amount (+ date) | 95–98 | EXACT | Yes |
+| Transaction ID + amount | 90 | EXACT | No — suspense |
+| Cheque + amount | 85 | EXACT | No — suspense |
+| Amount + date + narration similarity | 60–80 | FUZZY | No — suspense |
+
+Only a UTR agreeing with the bank at the same amount may clear a payment on its
+own (`qualifiesForAutoVerify`). Every other rule is a suggestion for an
+accountant, not a decision — it opens a suspense row carrying its score so the
+accountant can see how close it was. There is deliberately no score threshold to
+tune: a cheque match scoring 85 still requires a human.
+
+Env: `BANKING_FUZZY_THRESHOLD=60` (the floor below which a pair is not even
+offered as a candidate).
 
 ---
 
@@ -132,10 +142,14 @@ Copy from `.env.example`:
 ICICI_CORPORATE_ENV=UAT
 ICICI_CORPORATE_USE_STUB=true          # false for live
 ICICI_CORPORATE_USE_HTTP=true
-ICICI_CORPORATE_BASE_URL=https://apibankingonesandbox.icicibank.com
+ICICI_CORPORATE_BASE_URL=https://apibankingonesandbox.icici.bank.in
+ICICI_CORPORATE_API_PREFIX=/api/Corporate/CIB_SV/v1
+ICICI_CRYPTO_MODE=CIB_SV               # PKCS1 + in-payload IV, per the CIB_SV UAT spec
 ICICI_CORPORATE_ID=YOUR_CORP_ID
 ICICI_CORPORATE_USER_ID=YOUR_USER
 ICICI_AGGREGATOR_ID=YOUR_AGGR_ID
+ICICI_AGGRNAME=YOUR_AGGR_NAME
+ICICI_URN=YOUR_URN
 ICICI_ACCOUNT_ID=YOUR_ACCOUNT_NUMBER
 ICICI_CORPORATE_API_KEY=YOUR_API_KEY
 ICICI_PRIVATE_KEY_PATH=config/certs/private.key
@@ -154,7 +168,10 @@ curl -X POST http://localhost:8000/api/banking/icici/register \
   -H "X-Idempotency-Key: reg-$(date +%s)"
 ```
 
-Sandbox URL: `POST https://apibankingonesandbox.icicibank.com/api/Corporate/CIB/v1/Registration`
+Sandbox URL: `POST https://apibankingonesandbox.icici.bank.in/api/Corporate/CIB_SV/v1/Registration`
+
+Live calls also need ICICI's own public certificate saved at `ICICI_BANK_PUBLIC_CERT_PATH`;
+it arrives as an attachment with the UAT credentials and is not in the repo.
 
 ### 4. Fetch statement (Step 2)
 
