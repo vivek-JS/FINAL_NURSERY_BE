@@ -57,7 +57,12 @@ export const postStatement = catchAsync(async (req, res) => {
         ? await fetchAndStoreCorporateStatement(fromDate, toDate, req.user?._id)
         : await fetchAndStoreBankStatement(fromDate, toDate);
 
-    return res.status(200).json({ success: true, ...result });
+    const { entries, ...summary } = result || {};
+    return res.status(200).json({
+      success: true,
+      ...summary,
+      fetched: Array.isArray(entries) ? entries.length : 0,
+    });
   } catch (err) {
     if (err.code === "ICICI_DECRYPT_KEY_MISMATCH") {
       return res.status(502).json({
