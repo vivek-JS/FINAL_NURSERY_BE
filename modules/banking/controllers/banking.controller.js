@@ -51,12 +51,24 @@ export const postStatement = catchAsync(async (req, res) => {
   }
 
   const cfg = getIciciCorporateConfig();
-  const result =
-    cfg.useHttp && !cfg.useStub
-      ? await fetchAndStoreCorporateStatement(fromDate, toDate, req.user?._id)
-      : await fetchAndStoreBankStatement(fromDate, toDate);
+  try {
+    const result =
+      cfg.useHttp && !cfg.useStub
+        ? await fetchAndStoreCorporateStatement(fromDate, toDate, req.user?._id)
+        : await fetchAndStoreBankStatement(fromDate, toDate);
 
-  return res.status(200).json({ success: true, ...result });
+    return res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    if (err.code === "ICICI_DECRYPT_KEY_MISMATCH") {
+      return res.status(502).json({
+        success: false,
+        code: err.code,
+        message:
+          "ICICI sandbox replied with a statement, but encrypted it to a different certificate than keys/public.crt (CN=erp-icici-banking). Send that certificate to ICICI to register, then Sync will load the lines.",
+      });
+    }
+    throw err;
+  }
 });
 
 /** GET /api/banking/icici/balance */

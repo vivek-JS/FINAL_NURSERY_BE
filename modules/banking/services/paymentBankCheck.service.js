@@ -355,6 +355,14 @@ export async function checkPaymentAgainstBank({
         };
       }
     } catch (err) {
+      if (err.code === "ICICI_DECRYPT_KEY_MISMATCH") {
+        return {
+          ok: true,
+          result: CHECK_RESULT.NOT_FOUND,
+          message: notFoundMessage(utr, false),
+          utr,
+        };
+      }
       // A bank outage must not look like "this UTR does not exist".
       log().warn("Transaction inquiry failed during payment check", {
         paymentId,
