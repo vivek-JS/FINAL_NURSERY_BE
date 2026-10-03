@@ -20,13 +20,11 @@ export function buildDuplicateKey({ accountNumber, referenceNumber, amount, txnD
 
 /**
  * Idempotent insert — skips duplicates by duplicateKey or entryHash.
+ * One write for the whole batch so a 2,000-line sandbox statement does not
+ * sit on the request for a minute (nginx's default read timeout is 60s).
  */
 export async function safeInsertBankTransactions(entries) {
-  let inserted = 0;
-  let skipped = 0;
-  const duplicates = [];
-
-  for (const e of entries) {
+  const docs = entries.map((e) => {
     const duplicateKey =
       e.duplicateKey ||
       buildDuplicateKey({
@@ -35,37 +33,49 @@ export async function safeInsertBankTransactions(entries) {
         amount: e.amount,
         txnDate: e.txnDate,
       });
+    return {
+      txnDate: e.txnDate,
+      amount: e.amount,
+      referenceNumber: e.referenceNumber || "",
+      narration: e.narration || "",
+      txnType: e.txnType || "",
+      balance: e.balance,
+      transactionId: e.transactionId || "",
+      chequeNumber: e.chequeNumber || "",
+      entryHash: e.entryHash,
+      duplicateKey,
+      accountNumber: e.accountNumber || "",
+      utr: normalizeUtr(e.referenceNumber),
+      source: e.source || "CORPORATE_HTTP",
+      reconciliationStatus: "UNMATCHED",
+      rawResponse: e.rawResponse,
+    };
+  });
 
-    try {
-      await BankStatementEntry.create({
-        txnDate: e.txnDate,
-        amount: e.amount,
-        referenceNumber: e.referenceNumber || "",
-        narration: e.narration || "",
-        txnType: e.txnType || "",
-        balance: e.balance,
-        transactionId: e.transactionId || "",
-        chequeNumber: e.chequeNumber || "",
-        entryHash: e.entryHash,
-        duplicateKey,
-        accountNumber: e.accountNumber || "",
-        utr: normalizeUtr(e.referenceNumber),
-        source: e.source || "CORPORATE_HTTP",
-        reconciliationStatus: "UNMATCHED",
-        rawResponse: e.rawResponse,
-      });
-      inserted += 1;
-    } catch (err) {
-      if (err.code === 11000) {
-        skipped += 1;
-        duplicates.push({ duplicateKey, referenceNumber: e.referenceNumber });
-      } else {
-        throw err;
-      }
-    }
+  if (!docs.length) return { inserted: 0, skipped: 0, total: 0, duplicates: [] };
+
+  try {
+    const written = await BankStatementEntry.insertMany(docs, { ordered: false });
+    return { inserted: written.length, skipped: 0, total: docs.length, duplicates: [] };
+  } catch (err) {
+    const duplicateError =
+      err.code === 11000 ||
+      err.name === "MongoBulkWriteError" ||
+      (Array.isArray(err.writeErrors) && err.writeErrors.some((w) => w.code === 11000));
+    if (!duplicateError) throw err;
+
+    const inserted = err.result?.insertedCount ?? err.insertedCount ?? 0;
+    const skipped = docs.length - inserted;
+    return {
+      inserted,
+      skipped,
+      total: docs.length,
+      duplicates: (err.writeErrors || [])
+        .filter((w) => w.code === 11000)
+        .slice(0, 20)
+        .map((w) => ({ index: w.index })),
+    };
   }
-
-  return { inserted, skipped, total: entries.length, duplicates };
 }
 
 export async function findDuplicateByComposite({ accountNumber, utr, amount, txnDate }) {
