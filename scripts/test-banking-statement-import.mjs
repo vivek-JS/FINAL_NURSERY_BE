@@ -56,7 +56,29 @@ async function run() {
   const { importStatementRows } = await import("../modules/banking/services/bankStatement.service.js");
   const { checkPaymentAgainstBank } = await import("../modules/banking/services/paymentBankCheck.service.js");
 
-  const before = await BankStatementEntry.countDocuments();
+  /**
+   * Counting only statement lines would let the finance rows a verification
+   * posts drift unnoticed, so the baseline covers the whole chain.
+   */
+  const WATCHED = [
+    "orders",
+    "bankstatemententries",
+    "paymentreconciliations",
+    "bankreconciliationmatches",
+    "suspenseentries",
+    "cashbooks",
+    "financialevents",
+    "financevouchers",
+    "journalentries",
+    "ledgerlines",
+  ];
+  const snapshot = async () => {
+    const out = {};
+    for (const c of WATCHED) out[c] = await mongoose.connection.db.collection(c).countDocuments();
+    return out;
+  };
+
+  const before = await snapshot();
   let stageOrder = null;
   let paymentId = null;
 
@@ -70,10 +92,25 @@ async function run() {
     const db = mongoose.connection.db;
     const ids = [paymentId, stageOrder ? String(stageOrder._id) : null].filter(Boolean);
     if (paymentId) {
-      const ev = await db
-        .collection("financialevents")
-        .deleteMany({ idempotencyKey: `bank:verified:${paymentId}` });
-      if (ev.deletedCount) console.log(`  removed ${ev.deletedCount} from financialevents`);
+      // A verification posts a whole chain — event, voucher, journal, ledger
+      // lines — and only the event carries the payment id. Walk the chain by
+      // its foreign keys, deepest first, or the ledger rows are orphaned.
+      const voucherIds = (
+        await db.collection("financevouchers").find({ sourceDomain: "BankReconciliation" }).toArray()
+      ).map((v) => v._id);
+      const journalIds = (
+        await db.collection("journalentries").find({ voucherId: { $in: voucherIds } }).toArray()
+      ).map((j) => j._id);
+
+      for (const [name, filter] of [
+        ["ledgerlines", { journalEntryId: { $in: journalIds } }],
+        ["journalentries", { _id: { $in: journalIds } }],
+        ["financevouchers", { _id: { $in: voucherIds } }],
+        ["financialevents", { idempotencyKey: `bank:verified:${paymentId}` }],
+      ]) {
+        const r = await db.collection(name).deleteMany(filter);
+        if (r.deletedCount) console.log(`  removed ${r.deletedCount} from ${name}`);
+      }
     }
     for (const c of [
       "financialevents",
@@ -94,8 +131,11 @@ async function run() {
     const delOrders = await Order.deleteMany({ _id: { $in: created.orders } });
     console.log(`  removed ${delLines.deletedCount} statement lines, ${delOrders.deletedCount} orders`);
 
-    const after = await BankStatementEntry.countDocuments();
-    check("stage is back to its original statement count", after === before, `before=${before} after=${after}`);
+    const after = await snapshot();
+    const drift = WATCHED.filter((c) => after[c] !== before[c]).map(
+      (c) => `${c} ${before[c]}->${after[c]}`
+    );
+    check("stage is back to baseline across every collection", drift.length === 0, drift.join(", "));
     const leftover = await BankStatementEntry.countDocuments({ accountNumber: ACCOUNT });
     check("no test account rows remain", leftover === 0, `leftover=${leftover}`);
   }
