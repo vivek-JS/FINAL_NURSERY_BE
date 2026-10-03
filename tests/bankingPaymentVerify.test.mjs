@@ -286,3 +286,26 @@ describe("verifying twice does not post a second entry", () => {
     assert.equal(CHECK_RESULT.VERIFIED, "VERIFIED");
   });
 });
+
+describe("no bank connection is not the same as a bank outage", () => {
+  const src = () => readSource("modules/banking/services/paymentBankCheck.service.js");
+
+  it("skips the live lookup entirely when ICICI is not configured", () => {
+    // Otherwise the inquiry throws on missing credentials and a plain miss is
+    // reported to the accountant as "Could not reach ICICI".
+    assert.match(src(), /if \(allowLiveLookup && bankConfigured\)/);
+    assert.match(src(), /function liveLookupAvailable\(\)[\s\S]{0,200}assertCorporateConfig\(\)/);
+  });
+
+  it("tells the accountant to import the statement instead", () => {
+    assert.match(src(), /function notFoundMessage\(/);
+    assert.match(src(), /Import the statement covering this date/);
+    assert.match(src(), /message: notFoundMessage\(utr, bankConfigured\)/);
+  });
+
+  it("still reports a genuine outage as unreachable", () => {
+    // The configured-but-failing path must keep its own error code.
+    const live = src().slice(src().indexOf("if (allowLiveLookup && bankConfigured)"));
+    assert.match(live, /catch \(err\)[\s\S]{0,400}code: "ICICI_UNREACHABLE"/);
+  });
+});

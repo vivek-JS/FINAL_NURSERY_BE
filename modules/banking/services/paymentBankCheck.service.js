@@ -25,7 +25,7 @@ import { routeToSuspense } from "./suspense.service.js";
 import { transitionPaymentStatus } from "./verificationStatusEngine.js";
 import { fetchTransactionStatus } from "./iciciCorporateStatus.service.js";
 import { normalizeAmount, normalizeUtr } from "../../../services/iciciBankService.js";
-import { getIciciCorporateConfig } from "../config/iciciCorporate.config.js";
+import { getIciciCorporateConfig, assertCorporateConfig } from "../config/iciciCorporate.config.js";
 import { getBankingLogger } from "../utils/logger.js";
 
 const log = () => getBankingLogger();
@@ -157,6 +157,30 @@ function liveStatusIsSuccess(status) {
 }
 
 /**
+ * Whether there is a bank connection to fall back on at all.
+ *
+ * With no credentials the inquiry throws before it reaches the network, and
+ * reporting that as "could not reach ICICI" tells an accountant the bank is
+ * down when the truth is that the statement simply holds no such credit.
+ */
+function liveLookupAvailable() {
+  try {
+    assertCorporateConfig();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** What an accountant should do next when nothing matched. */
+function notFoundMessage(utr, bankConfigured) {
+  const which = utr ? `UTR ${utr}` : "this payment";
+  return bankConfigured
+    ? `${which} is not in the bank statement yet`
+    : `No credit for ${which} in the statement. Import the statement covering this date under Bank Recon → Statement.`;
+}
+
+/**
  * Verify one payment against the bank.
  *
  * @param {{ source: "order"|"agriSales", orderMongoId: string, paymentId: string, userId?: string, allowLiveLookup?: boolean }} args
@@ -276,8 +300,9 @@ export async function checkPaymentAgainstBank({
     };
   }
 
-  // 3. Nothing stored yet — ask the bank directly.
-  if (allowLiveLookup) {
+  // 3. Nothing stored yet — ask the bank directly, if there is a bank to ask.
+  const bankConfigured = liveLookupAvailable();
+  if (allowLiveLookup && bankConfigured) {
     try {
       const live = await fetchTransactionStatus({
         utr,
@@ -346,7 +371,7 @@ export async function checkPaymentAgainstBank({
   return {
     ok: true,
     result: CHECK_RESULT.NOT_FOUND,
-    message: "This UTR is not in the bank statement yet",
+    message: notFoundMessage(utr, bankConfigured),
     utr,
   };
 }
