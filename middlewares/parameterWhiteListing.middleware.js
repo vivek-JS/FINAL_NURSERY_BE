@@ -319,6 +319,12 @@ const parameterWhiteListing = (req, res, next) => {
     return next();
   }
 
+  // Banking tab — accountNumber, skip, verified, utr, amount, txnDate, merchantTranId.
+  // Same idea as /api/payments: the controllers ignore unknown keys.
+  if (paymentsPath.startsWith("/api/banking") || (req.path && req.path.startsWith("/api/banking"))) {
+    return next();
+  }
+
   /**
    * Farmer order list + dashboard tab counts evolve new filter flags often (e.g. plantTotals).
    * getOrders / dashboard-tab-counts only read a fixed set of query keys in the controller;
