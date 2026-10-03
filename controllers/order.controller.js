@@ -74,7 +74,7 @@ import {
   rejectFarmerOrderTransferRequest,
 } from "./farmerPlantOrderLedger.controller.js";
 import { applyPaymentTimingToPayment, sumOrderAdvancePayments } from "../utils/paymentTiming.js";
-import { addPaymentsToOrder } from "../services/orderPayment.service.js";
+import { addPaymentsToOrder, summarizeSavedPayment } from "../services/orderPayment.service.js";
 import { schedulePlantOrderPaymentWhatsApp } from "../services/orderPaymentWhatsapp.service.js";
 import { stampPaymentUpdatedBy } from "../utils/paymentAudit.js";
 import {
@@ -1277,6 +1277,7 @@ const addNewPayment = catchAsync(async (req, res) => {
     updatedOrder: result.order,
     transaction: result.walletTransactions[0] || undefined,
     walletDebited: result.walletDebited || 0,
+    savedPayments: result.savedPayments.map(summarizeSavedPayment).filter(Boolean),
   });
 });
 
@@ -1342,6 +1343,7 @@ const addBatchPayments = catchAsync(async (req, res) => {
     transactions: result.walletTransactions,
     count,
     walletDebited: result.walletDebited || 0,
+    savedPayments: result.savedPayments.map(summarizeSavedPayment).filter(Boolean),
   });
 });
 

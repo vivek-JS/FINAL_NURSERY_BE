@@ -47,6 +47,7 @@ import {
 import { pushAgriActivityAndEmit } from "../utils/orderEventDualWrite.js";
 import { mergeAgriOldFilter, resolveAgriOldFilter } from "../utils/agriOrderEra.util.js";
 import { scheduleAgriOrderPaymentWhatsApp } from "../services/orderPaymentWhatsapp.service.js";
+import { summarizeSavedPayment } from "../services/orderPayment.service.js";
 import { scheduleStockChangeAlert } from "../services/stockWhatsappAlert.service.js";
 import { stampPaymentUpdatedBy, stampPaymentRecordedBy } from "../utils/paymentAudit.js";
 import {
@@ -2216,11 +2217,13 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
   await order.populate("salesPerson", "name phoneNumber jobTitle");
   await order.populate("acceptedBy");
 
+  const saved = order.payment[order.payment.length - 1];
   const response = generateResponse(
     "Success",
     "Payment added successfully",
     order,
-    undefined
+    undefined,
+    { savedPayment: summarizeSavedPayment(saved), savedPayments: [summarizeSavedPayment(saved)].filter(Boolean) }
   );
 
   return res.status(200).json(response);

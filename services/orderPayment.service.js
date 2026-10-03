@@ -14,6 +14,21 @@ import {
 import { syncDealerLedgerForOrder } from "../utils/dealerLedgerHelper.js";
 import { DISCOUNT_PAYMENT_MODE, isDiscountPayment } from "../utils/orderDiscountPayment.js";
 
+/** Ids and refs the UI needs to run a bank check right after add. */
+export function summarizeSavedPayment(p) {
+  if (!p) return null;
+  return {
+    _id: p._id != null ? String(p._id) : "",
+    paidAmount: p.paidAmount,
+    paymentStatus: p.paymentStatus,
+    modeOfPayment: p.modeOfPayment,
+    utrNumber: p.utrNumber || "",
+    transactionId: p.transactionId || "",
+    chequeNumber: p.chequeNumber || "",
+    isWalletPayment: Boolean(p.isWalletPayment),
+  };
+}
+
 export function mergeRemarkWithPayee(remark, receiptPayeeName) {
   const r = String(remark || "").trim();
   const p = String(receiptPayeeName || "").trim();
