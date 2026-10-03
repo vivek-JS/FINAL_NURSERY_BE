@@ -1,8 +1,9 @@
 import crypto from "crypto";
-import BankStatementEntry from "../../../models/bankStatementEntry.model.js";
+import BankStatementEntry, { NOT_STATEMENT_VERIFIED } from "../../../models/bankStatementEntry.model.js";
 import { getBankingLogger } from "../utils/logger.js";
 import { buildDuplicateKey, safeInsertBankTransactions } from "./duplicateDetection.service.js";
 import { parseStatementCsv } from "../utils/statementCsv.js";
+import { normalizeAmount, normalizeUtr } from "../../../services/iciciBankService.js";
 
 const log = () => getBankingLogger();
 
@@ -51,6 +52,59 @@ export async function listStatementEntries({
     skip: offset,
     hasMore: offset + items.length < total,
   };
+}
+
+/**
+ * Mark a page of pending ERP payments with whether a statement line already
+ * has that UTR (and the same amount). The Pending tab uses this so a clerk
+ * can see the match without clicking Check bank on every row.
+ */
+export async function matchPendingToStatement(items) {
+  const rows = Array.isArray(items) ? items : [];
+  const refs = [
+    ...new Set(
+      rows
+        .map((p) => normalizeUtr(p.utrNumber || p.transactionId || p.chequeNumber || p.ref))
+        .filter((r) => r && r.length >= 4)
+    ),
+  ];
+
+  if (!refs.length) {
+    return rows.map((p) => ({ ...p, statementMatch: "NOT_FOUND" }));
+  }
+
+  const lines = await BankStatementEntry.find({
+    ...NOT_STATEMENT_VERIFIED,
+    $or: [{ utr: { $in: refs } }, { referenceNumber: { $in: refs } }],
+  })
+    .select("utr referenceNumber amount txnDate")
+    .lean()
+    .exec();
+
+  return rows.map((p) => {
+    const ref = normalizeUtr(p.utrNumber || p.transactionId || p.chequeNumber || p.ref);
+    if (!ref) return { ...p, statementMatch: "NOT_FOUND" };
+    const hits = lines.filter(
+      (l) => normalizeUtr(l.utr) === ref || normalizeUtr(l.referenceNumber) === ref
+    );
+    if (!hits.length) return { ...p, statementMatch: "NOT_FOUND" };
+    const exact = hits.find(
+      (l) => Math.abs(normalizeAmount(l.amount) - normalizeAmount(p.paidAmount)) < 0.02
+    );
+    if (exact) {
+      return {
+        ...p,
+        statementMatch: "EXACT",
+        statementAmount: exact.amount,
+        statementTxnDate: exact.txnDate,
+      };
+    }
+    return {
+      ...p,
+      statementMatch: "AMOUNT_MISMATCH",
+      statementAmount: hits[0].amount,
+    };
+  });
 }
 
 /** Distinct account numbers seen on statement lines — feeds the account selector. */

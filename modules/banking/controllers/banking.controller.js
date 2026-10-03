@@ -15,6 +15,7 @@ import {
   listStatementAccounts,
   markStatementVerified,
   importStatementRows,
+  matchPendingToStatement,
 } from "../services/bankStatement.service.js";
 import { checkPaymentAgainstBank } from "../services/paymentBankCheck.service.js";
 import {
@@ -154,9 +155,30 @@ export const postVerifyPayment = catchAsync(async (req, res) => {
 
 /** GET /api/banking/payments/pending */
 export const getPendingPayments = catchAsync(async (req, res) => {
-  const { dateFrom, dateTo, source } = req.query || {};
-  const data = await getUnclearedPayments({ dateFrom, dateTo, source: source || "all" });
-  return res.status(200).json({ success: true, data, count: data.length });
+  const { dateFrom, dateTo, source, limit, skip } = req.query || {};
+  const all = await getUnclearedPayments({ dateFrom, dateTo, source: source || "all" });
+  all.sort((a, b) => {
+    const tb = new Date(b.paymentDate).getTime();
+    const ta = new Date(a.paymentDate).getTime();
+    const byDate = (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta);
+    if (byDate !== 0) return byDate;
+    return String(b.paymentId || "").localeCompare(String(a.paymentId || ""));
+  });
+
+  const pageSize = Math.min(Math.max(Number(limit) || 50, 1), 500);
+  const offset = Math.max(Number(skip) || 0, 0);
+  const slice = all.slice(offset, offset + pageSize);
+  const data = await matchPendingToStatement(slice);
+
+  return res.status(200).json({
+    success: true,
+    data,
+    count: data.length,
+    total: all.length,
+    limit: pageSize,
+    skip: offset,
+    hasMore: offset + data.length < all.length,
+  });
 });
 
 /** GET /api/banking/payments/verified */
