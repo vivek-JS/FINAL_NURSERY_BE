@@ -182,6 +182,33 @@ curl -X POST http://localhost:8000/api/banking/icici/statement \
   -d '{"fromDate":"2026-05-01","toDate":"2026-05-27"}'
 ```
 
+### 4b. Import a statement instead (no bank connection needed)
+
+The ICICI API is optional. An accountant can export the statement from net
+banking and load it from the **Statement** tab, which is the supported path
+while credentials and certificates are not in place. Everything downstream —
+matching, suspense, per-payment checks — behaves identically, because imported
+lines are ordinary `BankStatementEntry` rows with `source: "IMPORT"`.
+
+```bash
+curl -X POST http://localhost:8000/api/banking/statement/import \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"accountNumber":"000405001234","csv":"Txn Date,Description,Ref No./Cheque No.,Debit,Credit,Balance\n01/04/2026,UPI/CR/412345678901/RAHUL,412345678901,,1500.00,51500.00"}'
+```
+
+The parser accepts the common Indian bank export shapes: separate Debit/Credit
+columns or one signed Amount column, `dd/mm/yyyy`, `dd-MMM-yy` or ISO dates,
+amounts written as `1,23,456.78`, `₹1,500.00`, `250.00 Dr` or `(250.00)`, and
+preamble/footer rows which are skipped. Credits are stored positive, debits
+negative. If the reference column is blank the parser looks for a UTR in the
+narration.
+
+Re-importing the same file inserts nothing: each row carries a deterministic
+key, built from the reference when there is one so an imported line and the
+same line later pulled from the API collapse into a single row. Two genuinely
+identical credits on one day are still kept as two rows.
+
 ### 5. Run reconciliation (Step 4)
 
 ```bash
@@ -227,7 +254,7 @@ curl "http://localhost:8000/api/banking/duplicate-check?utr=X&amount=100&txnDate
 | duplicateKey | String | Unique — SHA256(account\|utr\|amount\|date) |
 | entryHash | String | Unique — legacy dedupe |
 | reconciliationStatus | enum | UNMATCHED, MATCHED, SUSPENSE, IGNORED |
-| source | enum | SDK, CORPORATE_HTTP, MANUAL |
+| source | enum | SDK, CORPORATE_HTTP, MANUAL, IMPORT |
 
 ### payment_reconciliation → `PaymentReconciliation`
 

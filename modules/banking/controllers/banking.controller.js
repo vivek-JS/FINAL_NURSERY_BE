@@ -14,6 +14,7 @@ import {
   listStatementEntries,
   listStatementAccounts,
   markStatementVerified,
+  importStatementRows,
 } from "../services/bankStatement.service.js";
 import { checkPaymentAgainstBank } from "../services/paymentBankCheck.service.js";
 import {
@@ -162,6 +163,24 @@ export const getStatement = catchAsync(async (req, res) => {
 export const getStatementAccounts = catchAsync(async (req, res) => {
   const data = await listStatementAccounts();
   return res.status(200).json({ success: true, data });
+});
+
+/** POST /api/banking/statement/import — load a statement exported from net banking */
+export const postImportStatement = catchAsync(async (req, res) => {
+  const { csv, rows, accountNumber } = req.body || {};
+  if (!csv && !Array.isArray(rows)) {
+    return res.status(400).json({ success: false, message: "csv or rows required" });
+  }
+
+  const result = await importStatementRows({
+    csv,
+    rows,
+    accountNumber,
+    userId: req.user?._id,
+  });
+
+  if (!result.ok) return res.status(400).json({ success: false, message: result.error });
+  return res.status(200).json({ success: true, data: result });
 });
 
 /** POST /api/banking/statement/:id/verify */

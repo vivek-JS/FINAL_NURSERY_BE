@@ -22,6 +22,7 @@ import {
   getStatement,
   getStatementAccounts,
   postVerifyStatementLine,
+  postImportStatement,
   getCryptoHealth,
   postCryptoTest,
 } from "../controllers/banking.controller.js";
@@ -45,6 +46,7 @@ router.get("/payments/verified", requirePaymentAccess, getVerifiedPayments);
 
 router.get("/statement", requirePaymentAccess, getStatement);
 router.get("/statement/accounts", requirePaymentAccess, getStatementAccounts);
+router.post("/statement/import", requirePaymentAccess, postImportStatement);
 router.post("/statement/:id/verify", requirePaymentAccess, postVerifyStatementLine);
 
 router.post("/reconcile", requirePaymentAccess, idempotencyMiddleware, postReconcileEnhanced);

@@ -1,7 +1,13 @@
+import crypto from "crypto";
 import BankStatementEntry from "../../../models/bankStatementEntry.model.js";
 import { getBankingLogger } from "../utils/logger.js";
+import { buildDuplicateKey, safeInsertBankTransactions } from "./duplicateDetection.service.js";
+import { parseStatementCsv } from "../utils/statementCsv.js";
 
 const log = () => getBankingLogger();
+
+/** Refuse implausibly large pastes rather than letting one request exhaust memory. */
+export const MAX_IMPORT_ROWS = 5000;
 
 function dayRange(dateFrom, dateTo) {
   const from = new Date(dateFrom);
@@ -61,4 +67,110 @@ export async function markStatementVerified(entryId, { userId } = {}) {
     amount: entry.amount,
   });
   return { ok: true, entry: entry.toObject(), alreadyVerified: false };
+}
+
+/**
+ * Identity for an imported line.
+ *
+ * When the bank gave us a reference we reuse buildDuplicateKey, so a line
+ * imported from a CSV and the same line later pulled from the API collapse
+ * onto one row. With no reference there is nothing unique to key on, so the
+ * narration and the line's occurrence within the file stand in — that keeps
+ * two genuinely separate ₹500 credits on the same day as two rows, while
+ * re-importing the same file still lands on the same keys and inserts nothing.
+ */
+function importKeys(row, accountNumber, occurrence) {
+  const dateStr = row.txnDate.toISOString().slice(0, 10);
+  const ref = String(row.referenceNumber || "").trim();
+
+  const duplicateKey = ref
+    ? buildDuplicateKey({
+        accountNumber,
+        referenceNumber: ref,
+        amount: row.amount,
+        txnDate: row.txnDate,
+      })
+    : crypto
+        .createHash("sha256")
+        .update(
+          ["IMPORT", accountNumber || "DEFAULT", dateStr, row.amount, row.narration || "", occurrence].join("|")
+        )
+        .digest("hex");
+
+  const entryHash = crypto
+    .createHash("sha256")
+    .update(
+      ["IMPORT", accountNumber || "DEFAULT", dateStr, row.amount, ref, row.narration || "", occurrence].join("|")
+    )
+    .digest("hex");
+
+  return { duplicateKey, entryHash };
+}
+
+/**
+ * Load statement lines an accountant exported from net banking.
+ *
+ * Re-running the same file is safe: every row carries a deterministic key, so
+ * the second run reports everything as skipped rather than doubling the
+ * statement. Returns counts so the caller can say what actually happened.
+ *
+ * @param {{ csv?: string, rows?: Array, accountNumber?: string, userId?: string }} args
+ */
+export async function importStatementRows({ csv, rows, accountNumber, userId } = {}) {
+  const account = String(accountNumber || "").trim();
+  if (!account) return { ok: false, error: "Pick the bank account these lines belong to" };
+
+  let parsed = Array.isArray(rows) ? rows : null;
+  let skippedRows = [];
+
+  if (!parsed) {
+    const result = parseStatementCsv(csv);
+    if (!result.ok) return { ok: false, error: result.error };
+    parsed = result.rows;
+    skippedRows = result.skipped;
+  }
+
+  if (!parsed.length) return { ok: false, error: "No transaction rows could be read from the file" };
+  if (parsed.length > MAX_IMPORT_ROWS) {
+    return {
+      ok: false,
+      error: `That file has ${parsed.length} rows; import at most ${MAX_IMPORT_ROWS} at a time`,
+    };
+  }
+
+  const seen = new Map();
+  const entries = parsed.map((row) => {
+    const txnDate = row.txnDate instanceof Date ? row.txnDate : new Date(row.txnDate);
+    const normalised = { ...row, txnDate };
+    const tally = [txnDate.toISOString().slice(0, 10), row.amount, row.referenceNumber || "", row.narration || ""].join("|");
+    const occurrence = seen.get(tally) || 0;
+    seen.set(tally, occurrence + 1);
+
+    return {
+      ...normalised,
+      accountNumber: account,
+      source: "IMPORT",
+      ...importKeys(normalised, account, occurrence),
+      rawResponse: { imported: true, importedBy: userId ? String(userId) : null, at: new Date() },
+    };
+  });
+
+  const result = await safeInsertBankTransactions(entries);
+  const credits = entries.filter((e) => e.amount > 0).length;
+
+  log().info("Statement imported", {
+    account,
+    inserted: result.inserted,
+    skipped: result.skipped,
+    userId: userId ? String(userId) : null,
+  });
+
+  return {
+    ok: true,
+    inserted: result.inserted,
+    duplicates: result.skipped,
+    total: entries.length,
+    credits,
+    unreadable: skippedRows,
+  };
 }
