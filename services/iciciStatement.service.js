@@ -20,28 +20,46 @@ const log = () => getEazypayLogger();
 /**
  * Normalise one ICICI statement row — field names may differ by SDK version.
  */
+/** ICICI sandbox dates arrive as dd-mm-yyyy; ISO and Date objects pass through. */
+function parseBankDate(value) {
+  if (value instanceof Date) return value;
+  const s = String(value || "").trim();
+  const dmy = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy) {
+    return new Date(Date.UTC(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1])));
+  }
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
 export function normaliseStatementRow(raw, index = 0) {
   const r = raw || {};
   const txnDate =
     r.txnDate ||
+    r.TXNDATE ||
+    r.TXN_DATE ||
+    r.PORDATE ||
     r.transactionDate ||
     r.transactionDateTime ||
     r.date ||
+    r.VALUEDATE ||
     r.valueDate ||
     new Date();
-  const amount = Number(
-    r.amount ?? r.creditAmount ?? r.debitAmount ?? r.txnAmount ?? 0
-  );
+  const credit = Number(r.CREDIT ?? r.creditAmount ?? r.CRAMT ?? 0);
+  const debit = Number(r.DEBIT ?? r.debitAmount ?? r.DRAMT ?? 0);
+  const signed =
+    credit > 0 ? credit : debit > 0 ? -Math.abs(debit) : Number(r.amount ?? r.AMOUNT ?? r.TXNAMT ?? r.txnAmount ?? 0);
+  const amount = Number(signed);
   const referenceNumber = String(
-    r.referenceNumber ?? r.reference ?? r.utr ?? r.rrn ?? ""
+    r.referenceNumber ?? r.REFERENCE ?? r.UTR ?? r.CHQNO ?? r.reference ?? r.utr ?? r.rrn ?? ""
   ).trim();
-  const narration = String(r.narration ?? r.description ?? r.remark ?? "");
-  const txnType = String(r.txnType ?? r.type ?? r.transactionType ?? "");
-  const balance = r.balance != null ? Number(r.balance) : undefined;
-  const transactionId = String(r.transactionId ?? r.txnId ?? "").trim();
-  const chequeNumber = String(r.chequeNumber ?? r.chequeNo ?? "").trim();
+  const narration = String(r.narration ?? r.REMARKS ?? r.NARRATION ?? r.description ?? r.remark ?? "");
+  const txnType = String(r.txnType ?? r.TYPE ?? r.DRCR ?? r.type ?? r.transactionType ?? "");
+  const balance = r.BALANCE != null ? Number(r.BALANCE) : r.balance != null ? Number(r.balance) : undefined;
+  const transactionId = String(r.transactionId ?? r.TXNID ?? r.txnId ?? "").trim();
+  const chequeNumber = String(r.chequeNumber ?? r.CHEQUENO ?? r.chequeNo ?? "").trim();
 
-  const d = txnDate instanceof Date ? txnDate : new Date(txnDate);
+  const d = txnDate instanceof Date ? txnDate : parseBankDate(txnDate);
   const entryHash = crypto
     .createHash("sha256")
     .update(

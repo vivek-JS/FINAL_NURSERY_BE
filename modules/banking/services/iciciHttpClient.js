@@ -13,6 +13,38 @@ import BankAuditLog from "../models/bankAuditLog.model.js";
 
 const log = () => getBankingLogger();
 
+/** The only CIB_SV packets the bank's samples carry AGGRNAME in. */
+const WANTS_AGGRNAME = new Set(["/Registration", "/RegistrationStatus", "/Transaction"]);
+
+/**
+ * Identity fields prefixed to every request body.
+ *
+ * CIB_SV expects the uppercase keys from the bank's sample packets; the older
+ * CIB prefix uses camelCase. AGGRNAME appears in only some of the samples, and
+ * sending it on an endpoint that does not list it comes back as response 8017,
+ * "Invalid request" — so it goes in per endpoint rather than everywhere.
+ *
+ * @param {string} endpointPath
+ * @param {object} cfg
+ */
+export function buildIdentity(endpointPath, cfg) {
+  if (!isCibSvCryptoMode()) {
+    return {
+      corpId: cfg.corpId,
+      userId: cfg.userId,
+      aggregatorId: cfg.aggregatorId,
+    };
+  }
+
+  return {
+    CORPID: cfg.corpId,
+    USERID: cfg.userId,
+    AGGRID: cfg.aggregatorId,
+    URN: cfg.urn,
+    ...(WANTS_AGGRNAME.has(endpointPath) ? { AGGRNAME: cfg.aggregatorName } : {}),
+  };
+}
+
 function buildUrl(endpointPath) {
   const cfg = getIciciCorporateConfig();
   return `${cfg.baseUrl}${cfg.apiPrefix}${endpointPath}`;
@@ -40,21 +72,7 @@ export async function iciciCorporateRequest({
   const url = buildUrl(endpointPath);
   const started = Date.now();
 
-  // CIB_SV expects the uppercase identity keys from the bank's sample packets;
-  // the older CIB prefix uses camelCase.
-  const identity = isCibSvCryptoMode()
-    ? {
-        CORPID: cfg.corpId,
-        USERID: cfg.userId,
-        AGGRID: cfg.aggregatorId,
-        AGGRNAME: cfg.aggregatorName,
-        URN: cfg.urn,
-      }
-    : {
-        corpId: cfg.corpId,
-        userId: cfg.userId,
-        aggregatorId: cfg.aggregatorId,
-      };
+  const identity = buildIdentity(endpointPath, cfg);
 
   const requestBody = cfg.useStub
     ? payload
@@ -62,8 +80,8 @@ export async function iciciCorporateRequest({
 
   const headers = {
     "Content-Type": "application/json",
-    Accept: "application/json",
-    ...(cfg.apiKey ? { apikey: cfg.apiKey } : {}),
+    Accept: "*/*",
+    ...(cfg.apiKey ? { apikey: cfg.apiKey, APIKEY: cfg.apiKey } : {}),
     ...(cfg.clientId ? { "X-IBM-Client-Id": cfg.clientId } : {}),
     ...(idempotencyKey ? { "X-Idempotency-Key": idempotencyKey } : {}),
     ...buildSignedHeaders(requestBody, process.env.ICICI_WEBHOOK_HMAC_SECRET),
