@@ -32,6 +32,19 @@ function parseBankDate(value) {
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+/** "10,852.22" / "2.00" → number. */
+function parseIndianAmount(raw) {
+  if (raw == null || raw === "") return null;
+  const n = Number(String(raw).replace(/,/g, "").trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+/** UPI/NEFT narrations bury the UTR between slashes. */
+function referenceFromNarration(narration) {
+  const tokens = String(narration || "").split(/[\s/|,;:]+/).filter(Boolean);
+  return tokens.find((t) => /^\d{12,22}$/.test(t) || /^[A-Z]{4}[A-Za-z0-9]{10,18}$/.test(t)) || "";
+}
+
 export function normaliseStatementRow(raw, index = 0) {
   const r = raw || {};
   const txnDate =
@@ -45,18 +58,23 @@ export function normaliseStatementRow(raw, index = 0) {
     r.VALUEDATE ||
     r.valueDate ||
     new Date();
-  const credit = Number(r.CREDIT ?? r.creditAmount ?? r.CRAMT ?? 0);
-  const debit = Number(r.DEBIT ?? r.debitAmount ?? r.DRAMT ?? 0);
-  const signed =
-    credit > 0 ? credit : debit > 0 ? -Math.abs(debit) : Number(r.amount ?? r.AMOUNT ?? r.TXNAMT ?? r.txnAmount ?? 0);
-  const amount = Number(signed);
+  const credit = parseIndianAmount(r.CREDIT ?? r.creditAmount ?? r.CRAMT);
+  const debit = parseIndianAmount(r.DEBIT ?? r.debitAmount ?? r.DRAMT);
+  const plain = parseIndianAmount(r.amount ?? r.AMOUNT ?? r.TXNAMT ?? r.txnAmount);
+  const type = String(r.txnType ?? r.TYPE ?? r.DRCR ?? r.type ?? r.transactionType ?? "").toUpperCase();
+  let amount = 0;
+  if (credit != null && credit !== 0) amount = Math.abs(credit);
+  else if (debit != null && debit !== 0) amount = -Math.abs(debit);
+  else if (plain != null) {
+    amount = type === "DR" || type === "DEBIT" ? -Math.abs(plain) : Math.abs(plain);
+  }
+  const narration = String(r.narration ?? r.REMARKS ?? r.NARRATION ?? r.description ?? r.remark ?? "");
   const referenceNumber = String(
     r.referenceNumber ?? r.REFERENCE ?? r.UTR ?? r.CHQNO ?? r.reference ?? r.utr ?? r.rrn ?? ""
-  ).trim();
-  const narration = String(r.narration ?? r.REMARKS ?? r.NARRATION ?? r.description ?? r.remark ?? "");
-  const txnType = String(r.txnType ?? r.TYPE ?? r.DRCR ?? r.type ?? r.transactionType ?? "");
-  const balance = r.BALANCE != null ? Number(r.BALANCE) : r.balance != null ? Number(r.balance) : undefined;
-  const transactionId = String(r.transactionId ?? r.TXNID ?? r.txnId ?? "").trim();
+  ).trim() || referenceFromNarration(narration);
+  const txnType = type;
+  const balance = parseIndianAmount(r.BALANCE ?? r.balance) ?? undefined;
+  const transactionId = String(r.transactionId ?? r.TRANSACTIONID ?? r.TXNID ?? r.txnId ?? "").trim();
   const chequeNumber = String(r.chequeNumber ?? r.CHEQUENO ?? r.chequeNo ?? "").trim();
 
   const d = txnDate instanceof Date ? txnDate : parseBankDate(txnDate);
