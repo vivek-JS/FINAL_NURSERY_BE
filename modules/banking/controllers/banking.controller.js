@@ -172,8 +172,16 @@ export const getStatement = catchAsync(async (req, res) => {
   if (!dateFrom || !dateTo) {
     return res.status(400).json({ success: false, message: "dateFrom and dateTo required" });
   }
-  const data = await listStatementEntries({ accountNumber, dateFrom, dateTo, limit, skip });
-  return res.status(200).json({ success: true, data, count: data.length });
+  const page = await listStatementEntries({ accountNumber, dateFrom, dateTo, limit, skip });
+  return res.status(200).json({
+    success: true,
+    data: page.items,
+    count: page.items.length,
+    total: page.total,
+    limit: page.limit,
+    skip: page.skip,
+    hasMore: page.hasMore,
+  });
 });
 
 /** GET /api/banking/statement/accounts */

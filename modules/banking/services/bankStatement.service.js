@@ -24,19 +24,33 @@ export async function listStatementEntries({
   accountNumber,
   dateFrom,
   dateTo,
-  limit = 200,
+  limit = 50,
   skip = 0,
 }) {
   const { from, to } = dayRange(dateFrom, dateTo);
   const filter = { txnDate: { $gte: from, $lte: to } };
   if (accountNumber) filter.accountNumber = accountNumber;
 
-  return BankStatementEntry.find(filter)
-    .sort({ txnDate: -1, _id: -1 })
-    .skip(Number(skip) || 0)
-    .limit(Math.min(Number(limit) || 200, 500))
-    .lean()
-    .exec();
+  const pageSize = Math.min(Math.max(Number(limit) || 50, 1), 500);
+  const offset = Math.max(Number(skip) || 0, 0);
+
+  const [items, total] = await Promise.all([
+    BankStatementEntry.find(filter)
+      .sort({ txnDate: -1, _id: -1 })
+      .skip(offset)
+      .limit(pageSize)
+      .lean()
+      .exec(),
+    BankStatementEntry.countDocuments(filter),
+  ]);
+
+  return {
+    items,
+    total,
+    limit: pageSize,
+    skip: offset,
+    hasMore: offset + items.length < total,
+  };
 }
 
 /** Distinct account numbers seen on statement lines — feeds the account selector. */
