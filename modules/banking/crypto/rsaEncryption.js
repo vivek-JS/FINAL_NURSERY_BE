@@ -188,10 +188,30 @@ function decryptPayloadCibSv(envelope) {
     throw err;
   }
 
-  const aesKey = crypto.privateDecrypt(
-    { key: forgePrivateKeyToNode(privateKey), padding: RSA_PADDING_CIB_SV },
-    Buffer.from(envelope.encryptedKey, "base64")
-  );
+  // Node refuses PKCS1 v1.5 private decryption since CVE-2023-46809 (Marvin),
+  // and the bank's scheme leaves us no choice of padding, so forge does this
+  // step in JS. The timing oracle that CVE describes needs an attacker who can
+  // feed us ciphertexts; here we only ever decrypt ICICI's own reply.
+  let aesKey;
+  try {
+    aesKey = Buffer.from(
+      privateKey.decrypt(
+        Buffer.from(envelope.encryptedKey, "base64").toString("binary"),
+        "RSAES-PKCS1-V1_5"
+      ),
+      "binary"
+    );
+  } catch (cause) {
+    // Almost always means ICICI encrypted to a different public key than the
+    // one we hold, i.e. our certificate was never registered with them.
+    const err = new Error(
+      "Could not decrypt the ICICI response — the bank encrypted it to a different public key. " +
+        "Check that the certificate registered with ICICI matches ICICI_PRIVATE_KEY_PATH."
+    );
+    err.code = "ICICI_DECRYPT_KEY_MISMATCH";
+    err.cause = cause;
+    throw err;
+  }
 
   const raw = Buffer.from(envelope.encryptedData, "base64");
   const decipher = crypto.createDecipheriv(
