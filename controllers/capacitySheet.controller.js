@@ -14,6 +14,7 @@ import {
   slotDayStartMoment,
   slotWindowToDeliveryUtcRange,
 } from "../utility/istSlotDate.js";
+import { loadShedStockPayload } from "../services/capacityShedStock.service.js";
 import {
   canBookFromExcess,
   capacityStatus,
@@ -410,6 +411,24 @@ export const getCapacitySheet = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to load capacity sheet",
+    });
+  }
+};
+
+/** GET /sowing/capacity-sheet/shed-stock — shed -> batch stock with sowed / remaining / gone / orders. */
+export const getCapacityShedStock = async (req, res) => {
+  try {
+    const payload = await loadShedStockPayload();
+    return res.status(200).json({
+      success: true,
+      ...payload,
+      generatedAt: moment().utcOffset(IST_OFFSET).toISOString(),
+    });
+  } catch (error) {
+    console.error("getCapacityShedStock:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load shed stock",
     });
   }
 };

@@ -75,6 +75,7 @@ import {
   canApplyRateDirectly,
 } from "../utils/orderUpdatePermissions.js";
 import { canDispatchBeyondRemaining } from "../utility/dispatchOrderStatus.util.js";
+import { SOWING_GAP_PIPELINE_STATUSES } from "../constants/sowingGapOrderStatuses.js";
 import {
   buildOrderEditHistoryEntries,
   mergeEditHistoryIntoFilteredBody,
@@ -4160,15 +4161,17 @@ const getAll = (Model, modelName) =>
           },
         });
       } else if (slotStatScope === "remaining") {
+        // Same status set as the slot card (slotDispatchStats.getRemainingToDispatchQty)
+        // so the list always adds up to the number on the card.
         pipeline.push({
           $match: {
-            orderStatus: { $in: ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH"] },
+            orderStatus: { $in: SOWING_GAP_PIPELINE_STATUSES },
           },
         });
       } else if (slotStatScope === "remaining_native") {
         pipeline.push({
           $match: {
-            orderStatus: { $in: ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH"] },
+            orderStatus: { $in: SOWING_GAP_PIPELINE_STATUSES },
             $nor: [
               { pastDueSlotRollover: true },
               { pastDueSlotRolloverAt: { $exists: true, $ne: null } },
@@ -4178,7 +4181,7 @@ const getAll = (Model, modelName) =>
       } else if (slotStatScope === "remaining_rolled") {
         pipeline.push({
           $match: {
-            orderStatus: { $in: ["ACCEPTED", "FARM_READY", "READY_FOR_DISPATCH"] },
+            orderStatus: { $in: SOWING_GAP_PIPELINE_STATUSES },
             $or: [
               { pastDueSlotRollover: true },
               { pastDueSlotRolloverAt: { $exists: true, $ne: null } },

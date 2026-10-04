@@ -103,6 +103,7 @@ import {
 import {
   getCapacitySheet,
   getCapacitySlotDetail,
+  getCapacityShedStock,
 } from "../controllers/capacitySheet.controller.js";
 import { askCapacityAnalyst } from "../controllers/capacityAsk.controller.js";
 
@@ -124,6 +125,7 @@ router.get("/plant-availability", getPlantAvailability); // Get plant availabili
 router.get("/all-plants-availability", getAllPlantsAvailability); // Get all plants availability (date range mandatory, shows all plants with all subtypes)
 router.get("/plants-gap-summary", getPlantsGapSummary); // Get all plants with subtype-wise totalBookingGap summary
 router.get("/capacity-sheet/slot/:slotId", getCapacitySlotDetail);
+router.get("/capacity-sheet/shed-stock", getCapacityShedStock);
 router.get("/capacity-sheet", getCapacitySheet);
 router.post("/capacity-ask", askCapacityAnalyst);
 router.get("/slot-orders/:slotId", getSlotOrdersSummary); // Get orders summary for a specific slot
