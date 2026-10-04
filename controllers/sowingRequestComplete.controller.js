@@ -16,6 +16,8 @@ import {
   editSowEntryOnSlots,
   companyPacketShare,
   getRemainingCompanyPackets,
+  raisingPacketShare,
+  getRemainingRaisingPackets,
 } from "./sowingCompleteHelpers.js";
 import {
   resolveCmsReadyDays,
@@ -193,11 +195,24 @@ export const completeSowingRequest = async (req, res) => {
       String(req.body.completeSowing ?? "true").toLowerCase() !== "false";
     const packetsToReturnRaw = parseNum(req.body.packetsToReturn, NaN);
     const hasReturnInput = Number.isFinite(packetsToReturnRaw);
+    const raisingUsedRaw = parseNum(req.body.raisingPacketsUsed, NaN);
+    const raisingReturnRaw = parseNum(
+      req.body.raisingPacketsToReturn ?? req.body.raisingPacketsReturned,
+      NaN
+    );
+    const hasRaisingUsedInput = Number.isFinite(raisingUsedRaw);
+    const hasRaisingReturnInput = Number.isFinite(raisingReturnRaw);
+    const raisingTouched = hasRaisingUsedInput || hasRaisingReturnInput;
 
-    if (!(plantsSowed > 0) && !(hasReturnInput && packetsToReturnRaw > 0)) {
+    if (
+      !(plantsSowed > 0) &&
+      !(hasReturnInput && packetsToReturnRaw > 0) &&
+      !(hasRaisingUsedInput && raisingUsedRaw > 0) &&
+      !(hasRaisingReturnInput && raisingReturnRaw > 0)
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Enter plantsSowed > 0 and/or packetsToReturn > 0",
+        message: "Enter plantsSowed > 0 and/or company/raising packets used or returned",
       });
     }
     if (!shedName) {
@@ -243,12 +258,14 @@ export const completeSowingRequest = async (req, res) => {
       );
 
       const companyPkts = companyPacketShare(locked);
+      const raisingPkts = raisingPacketShare(locked);
       const packetsIssued =
         Number(locked.packetsIssued) ||
         Number(locked.packetsRequested) ||
         companyPkts ||
         0;
       const remainingPkt = await getRemainingCompanyPackets(locked);
+      const remainingRaising = getRemainingRaisingPackets(locked);
 
       // Prefer explicit packetsUsed. Honor explicit packetsToReturn even when
       // plant/cf used-hint would consume every remaining bag.
@@ -266,6 +283,15 @@ export const completeSowingRequest = async (req, res) => {
       });
       const packetsUsed = settled.packetsUsed;
       const packetsToReturn = settled.packetsToReturn;
+
+      const raisingSettled = settleSowPackets({
+        remaining: remainingRaising,
+        usedHint: hasRaisingUsedInput ? raisingUsedRaw : 0,
+        packetsToReturn: hasRaisingReturnInput ? raisingReturnRaw : 0,
+        completeSowing: raisingTouched ? completeSowing : false,
+      });
+      const raisingPacketsUsedNow = raisingSettled.packetsUsed;
+      const raisingPacketsToReturnNow = raisingSettled.packetsToReturn;
 
       const userId = req.user._id;
       const cmsReady = await resolveCmsReadyDays(locked.plantId, locked.subtypeId);
@@ -291,9 +317,17 @@ export const completeSowingRequest = async (req, res) => {
             })
           : { slotsUpdated: 0 };
 
-      const [inv, photos] = await Promise.all([
+      const [inv, photos, raisingRestore] = await Promise.all([
         settleOutwardAndReturns(locked, packetsUsed, packetsToReturn, userId),
         uploadCompleteSowPhotos(req.files),
+        raisingPacketsToReturnNow > 0
+          ? import("./raisingSeed.controller.js").then(({ restoreRaisingPackets }) =>
+              restoreRaisingPackets({
+                intakeIds: locked.raisingIntakeIds || [],
+                packetsToRestore: raisingPacketsToReturnNow,
+              })
+            )
+          : Promise.resolve({ restored: 0 }),
       ]);
 
       const prevSowed = Number(locked.sowedQuantity) || 0;
@@ -304,6 +338,10 @@ export const completeSowingRequest = async (req, res) => {
       locked.packetsUsed = Number(locked.packetsUsed || 0) + (inv.used || 0);
       locked.packetsReturned =
         Number(locked.packetsReturned || 0) + (inv.returned || 0);
+      locked.raisingPacketsUsed =
+        Number(locked.raisingPacketsUsed || 0) + raisingPacketsUsedNow;
+      locked.raisingPacketsReturned =
+        Number(locked.raisingPacketsReturned || 0) + raisingPacketsToReturnNow;
       if (inv.returnRequestIds?.length) {
         locked.returnRequestIds = [
           ...(locked.returnRequestIds || []),
@@ -321,10 +359,15 @@ export const completeSowingRequest = async (req, res) => {
       locked.completedBy = userId;
 
       // Remaining open bags after this settle (0 → auto-complete).
-      const remainingAfter = Math.max(
+      const remainingCompanyAfter = Math.max(
         0,
         remainingPkt - (inv.used || 0) - (inv.returned || 0)
       );
+      const remainingRaisingAfter = Math.max(
+        0,
+        remainingRaising - raisingPacketsUsedNow - raisingPacketsToReturnNow
+      );
+      const remainingAfter = remainingCompanyAfter + remainingRaisingAfter;
       locked.remainingSowingNeeded = Math.max(
         0,
         expected - locked.sowedQuantity
@@ -334,6 +377,7 @@ export const completeSowingRequest = async (req, res) => {
         completeSowing,
         remainingAfter,
         companyPackets: companyPkts,
+        raisingPackets: raisingPkts,
         remainingSowingNeeded: locked.remainingSowingNeeded,
       });
       if (locked.sowingCompleted) {
@@ -398,6 +442,10 @@ export const completeSowingRequest = async (req, res) => {
           packetsUsed: locked.packetsUsed,
           packetsReturned: locked.packetsReturned,
           packetsRemaining: remainingAfter,
+          remainingCompany: remainingCompanyAfter,
+          remainingRaising: remainingRaisingAfter,
+          raisingPacketsUsed: locked.raisingPacketsUsed,
+          raisingPacketsReturned: locked.raisingPacketsReturned,
           completeSowing,
           sowedQuantity: locked.sowedQuantity,
           orderCoveredPlants,
@@ -424,6 +472,29 @@ export const completeSowingRequest = async (req, res) => {
         },
       });
       for (const evt of inv.events || []) pushEvent(locked, evt);
+      if (raisingPacketsUsedNow > 0) {
+        pushEvent(locked, {
+          type: "PACKETS_USED",
+          by: userId,
+          quantity: raisingPacketsUsedNow,
+          unit: "packets",
+          message: "Raising packets used",
+          meta: { source: "RAISING" },
+        });
+      }
+      if (raisingPacketsToReturnNow > 0) {
+        pushEvent(locked, {
+          type: "PACKETS_RETURNED",
+          by: userId,
+          quantity: raisingPacketsToReturnNow,
+          unit: "packets",
+          message: "Raising packets returned to intake",
+          meta: {
+            source: "RAISING",
+            restored: raisingRestore?.restored || 0,
+          },
+        });
+      }
 
       await locked.save();
       bustLiteCacheAsync();
@@ -470,6 +541,10 @@ export const completeSowingRequest = async (req, res) => {
           packetsUsed: locked.packetsUsed,
           packetsReturned: locked.packetsReturned,
           packetsRemaining: remainingAfter,
+          remainingCompany: remainingCompanyAfter,
+          remainingRaising: remainingRaisingAfter,
+          raisingPacketsUsed: locked.raisingPacketsUsed,
+          raisingPacketsReturned: locked.raisingPacketsReturned,
           slotsUpdated: slotResult.slotsUpdated,
           plantReadyDays: slotResult.plantReadyDays ?? plantReadyDays,
           plantReadyDate: slotResult.plantReadyDate,
@@ -595,7 +670,7 @@ export const getIssuedSowingQueue = async (req, res) => {
       sowingCompleted: { $ne: true },
     })
       .select(
-        "requestNumber plantId plantName subtypeId subtypeName productId packetsNeeded packetsRequested packetsIssued packetsUsed packetsReturned conversionFactor tentativePlantsPerPacket seedSource packetsFromCompany packetsFromRaising linkedOrderIds linkedSlotIds isExcessiveSowing sowedQuantity remainingSowingNeeded issuedDate sowingStartedDate sowingInProgress outwardId"
+        "requestNumber plantId plantName subtypeId subtypeName productId packetsNeeded packetsRequested packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned conversionFactor tentativePlantsPerPacket seedSource packetsFromCompany packetsFromRaising linkedOrderIds linkedSlotIds isExcessiveSowing sowedQuantity remainingSowingNeeded issuedDate sowingStartedDate sowingInProgress outwardId"
       )
       .sort({ issuedDate: 1 })
       .lean();
@@ -694,12 +769,43 @@ export const getIssuedSowingQueue = async (req, res) => {
 /**
  * GET /sowing/completions?page&limit&q&from&to&plantId&subtypeId
  */
+function utcDayBound(ymd, end) {
+  const m = String(ymd || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  return end
+    ? new Date(Date.UTC(y, mo, d, 23, 59, 59, 999))
+    : new Date(Date.UTC(y, mo, d, 0, 0, 0, 0));
+}
+
+function dateRangeQuery(from, to) {
+  const range = {};
+  const start = utcDayBound(from, false);
+  const end = utcDayBound(to, true);
+  if (start) range.$gte = start;
+  if (end) range.$lte = end;
+  return Object.keys(range).length ? range : null;
+}
+
 export const getSowingCompletions = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 40));
     const skip = (page - 1) * limit;
     const q = String(req.query.q || "").trim();
+    const sortKey = String(req.query.sort || "sowDate");
+    const sortDir = String(req.query.dir || "desc").toLowerCase() === "asc" ? 1 : -1;
+    const sortField = {
+      sowDate: "sowingCompletedDate",
+      added: "createdAt",
+      request: "requestNumber",
+      plant: "plantName",
+      plants: "sowedQuantity",
+      packets: "packetsUsed",
+      labour: "laboursLadies",
+    }[sortKey] || "sowingCompletedDate";
 
     const match = { sowingCompleted: true };
     if (req.query.plantId && mongoose.Types.ObjectId.isValid(req.query.plantId)) {
@@ -711,11 +817,13 @@ export const getSowingCompletions = async (req, res) => {
     ) {
       match.subtypeId = new mongoose.Types.ObjectId(req.query.subtypeId);
     }
-    if (req.query.from || req.query.to) {
-      match.sowingCompletedDate = {};
-      if (req.query.from) match.sowingCompletedDate.$gte = new Date(req.query.from);
-      if (req.query.to) match.sowingCompletedDate.$lte = new Date(req.query.to);
-    }
+    const sowRange = dateRangeQuery(
+      req.query.sowFrom || req.query.from,
+      req.query.sowTo || req.query.to
+    );
+    if (sowRange) match.sowingCompletedDate = sowRange;
+    const addedRange = dateRangeQuery(req.query.addedFrom, req.query.addedTo);
+    if (addedRange) match.createdAt = addedRange;
 
     let orderIdFilter = null;
     if (q) {
@@ -744,10 +852,10 @@ export const getSowingCompletions = async (req, res) => {
       SowingRequest.countDocuments(match),
       SowingRequest.find(match)
         .select(
-          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents completionPhotos completionNotes shedName sowingCompletedDate isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned returnRequestIds completionEvents completedBy outwardId"
+          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents completionPhotos completionNotes shedName sowingCompletedDate createdAt isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned returnRequestIds completionEvents completedBy outwardId"
         )
         .populate("completedBy", "name")
-        .sort({ sowingCompletedDate: -1 })
+        .sort({ [sortField]: sortDir, _id: sortDir })
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -963,6 +1071,7 @@ export const getSowingCompletions = async (req, res) => {
         batchNumbers,
         outwardNumber: outward?.outwardNumber || "",
         sowingDate,
+        createdAt: r.createdAt || null,
         affectedSlot,
       };
     });

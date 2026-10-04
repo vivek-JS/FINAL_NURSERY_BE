@@ -103,4 +103,28 @@ describe("isSowingRequestClosed", () => {
       true
     );
   });
+
+  it("stays open when raising bags remain even if company is done", () => {
+    assert.equal(
+      isSowingRequestClosed({
+        completeSowing: false,
+        remainingAfter: 4,
+        companyPackets: 10,
+        raisingPackets: 10,
+      }),
+      false
+    );
+  });
+
+  it("auto-closes mixed request when company + raising leftover is 0", () => {
+    assert.equal(
+      isSowingRequestClosed({
+        completeSowing: false,
+        remainingAfter: 0,
+        companyPackets: 10,
+        raisingPackets: 10,
+      }),
+      true
+    );
+  });
 });

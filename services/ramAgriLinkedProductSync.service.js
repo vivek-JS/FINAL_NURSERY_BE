@@ -139,6 +139,7 @@ export async function syncLinkedInventoryFromRamAgri(
         classic.manufactureDate = rb.manufactureDate || classic.manufactureDate;
         classic.status = status;
         if (!classic.unit) classic.unit = rb.unit || product.primaryUnit;
+        if (!classic.createdBy) classic.createdBy = actor;
       }
 
       await classic.save();

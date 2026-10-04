@@ -762,8 +762,14 @@ export const issueStockFromRequest = async (req, res) => {
       inventorySource,
       packetsFromBiotech: bodyPacketsBio,
       packetsFromRamAgri: bodyPacketsAgri,
+      ramAgriBatchAllocations: rawAgriAllocations,
+      expiryOrder,
     } = req.body;
     const batchAllocations = Array.isArray(rawAllocations) ? rawAllocations : [];
+    const ramAgriBatchAllocations = Array.isArray(rawAgriAllocations)
+      ? rawAgriAllocations
+      : [];
+    const issueExpiryOrder = expiryOrder === 'latest' ? 'latest' : 'fifo';
 
     if (purpose !== 'production') {
       return res.status(400).json({
@@ -936,6 +942,8 @@ export const issueStockFromRequest = async (req, res) => {
           sowingRequest: request,
           userId: req.user._id,
           forceQty: true,
+          ramAgriBatchAllocations,
+          expiryOrder: issueExpiryOrder,
         });
         if (!transferResult || transferResult.skipped) {
           return res.status(400).json({

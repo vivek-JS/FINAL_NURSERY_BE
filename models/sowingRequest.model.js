@@ -175,6 +175,16 @@ const sowingRequestSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    raisingPacketsUsed: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    raisingPacketsReturned: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     returnRequestIds: [
       {
         type: mongoose.Schema.Types.ObjectId,

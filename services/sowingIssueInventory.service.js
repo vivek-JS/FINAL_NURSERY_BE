@@ -3,7 +3,7 @@ import { getSubtypeInventoryCandidates } from "./subtypeInventoryLink.service.js
 import Product from "../models/product.model.js";
 import RamAgriBatch from "../models/ramAgriBatch.model.js";
 import { resolveRamAgriForSeedProduct } from "./ramAgriVarietyInventoryLink.service.js";
-import { deductStockFIFO } from "./ramAgriBatchInventory.service.js";
+import { deductStockFIFO, deductStockFromBatches } from "./ramAgriBatchInventory.service.js";
 import { RAM_AGRI_MOVEMENT_TYPES } from "./ramAgriStockMovement.service.js";
 
 const SOURCES = new Set(["BIOTECH", "RAM_AGRI", "BOTH"]);
@@ -238,40 +238,25 @@ export async function deductRamAgriForSowingIssue({
     metadata: { sowingIssue: true, inventorySource: "RAM_AGRI" },
   };
 
-  // Explicit per-batch picks from UI
+  // Explicit per-batch picks from UI (FIFO fill, latest-expiry fill, or manual edits)
   if (Array.isArray(ramAgriBatchAllocations) && ramAgriBatchAllocations.length > 0) {
-    // Group by crop+variety if provided, else FEFO via returnToExplicit needs allocations scaffold.
-    // Build fake prior allocations from picks so returnToExplicitBatches can restore? That's for returns.
-    // Use deductStockFIFO per variety after summing picks... Simpler: for each allocation row,
-    // call deduct via explicit remaining adjust using returnToExplicit pattern in reverse =
-    // actually deductStockFIFO doesn't take batch list. Use FEFO total qty and ignore batch picks
-    // OR implement batch-level deduct inline.
-
-    // Prefer: sum qty, pick first linked variety that has stock, deduct FEFO for that crop/variety.
-    // If UI sent batchIds with crop/variety, deduct per pair.
-    const byVariety = new Map();
-    for (const row of ramAgriBatchAllocations) {
-      const cropId = row.ramAgriCropId || preferredCropId || agriLinks[0].ramAgriCropId?._id || agriLinks[0].ramAgriCropId;
-      const varietyId =
-        row.ramAgriVarietyId || preferredVarietyId || agriLinks[0].ramAgriVarietyId;
-      const k = `${cropId}:${varietyId}`;
-      if (!byVariety.has(k)) byVariety.set(k, { cropId, varietyId, qty: 0 });
-      byVariety.get(k).qty += Number(row.quantity || row.quantityDeducted) || 0;
-    }
-    const allocations = [];
-    for (const { cropId, varietyId, qty: q } of byVariety.values()) {
-      if (q <= 0) continue;
-      const result = await deductStockFIFO(cropId, varietyId, q, metaBase);
+    const picks = ramAgriBatchAllocations
+      .map((row) => ({
+        batchId: row.batchId || row._id,
+        quantity: Number(row.quantity || row.quantityDeducted) || 0,
+        ramAgriCropId: row.ramAgriCropId,
+        ramAgriVarietyId: row.ramAgriVarietyId,
+      }))
+      .filter((row) => row.batchId && row.quantity > 0);
+    if (picks.length > 0) {
+      const result = await deductStockFromBatches(picks, {
+        ...metaBase,
+        cropId: preferredCropId,
+        varietyId: preferredVarietyId,
+      });
       if (!result.ok) return result;
-      for (const a of result.allocations || []) {
-        allocations.push({
-          ...a,
-          ramAgriCropId: cropId,
-          ramAgriVarietyId: varietyId,
-        });
-      }
+      return { ok: true, allocations: result.allocations || [] };
     }
-    return { ok: true, allocations };
   }
 
   // FEFO across linked varieties until qty filled

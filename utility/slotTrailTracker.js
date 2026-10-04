@@ -1,4 +1,5 @@
 import PlantSlot from '../models/slots.model.js';
+import { recordSlotTrail, loadSlotTrailView } from './slotTrailStore.js';
 import { calculateEffectiveBuffer, calculateBufferAdjustedCapacity } from './bufferUtils.js';
 
 /**
@@ -38,12 +39,7 @@ export const addSlotTrailEntry = async (slotId, trailData) => {
       return activityNameMap[action] || action.replace(/_/g, ' ');
     };
 
-    // Find the slot and add trail entry
-    const result = await PlantSlot.updateOne(
-      { "subtypeSlots.slots._id": slotId },
-      {
-        $push: {
-          "subtypeSlots.$[].slots.$[slotElem].slotTrail": {
+    const entry = {
             action: action || 'UPDATE',
             activityName: getActivityName(action || 'UPDATE'),
             quantity: quantity ?? 0,
@@ -93,16 +89,9 @@ export const addSlotTrailEntry = async (slotId, trailData) => {
               inProgressCount: 0,
             },
             metadata: {},
-          }
-        }
-      },
-      {
-        arrayFilters: [{ "slotElem._id": slotId }],
-        new: true
-      }
-    );
-
-    return { success: true, result };
+    };
+    const saved = await recordSlotTrail(slotId, entry);
+    return { success: true, result: saved };
   } catch (error) {
     console.error('Error adding slot trail entry:', error);
     return { success: false, error: error.message };
@@ -116,25 +105,8 @@ export const addSlotTrailEntry = async (slotId, trailData) => {
  */
 export const getSlotTrail = async (slotId) => {
   try {
-    const plantSlot = await PlantSlot.findOne(
-      { "subtypeSlots.slots._id": slotId },
-      { "subtypeSlots.$": 1 }
-    );
-
-    if (!plantSlot || !plantSlot.subtypeSlots[0]) {
-      return [];
-    }
-
-    const slot = plantSlot.subtypeSlots[0].slots.find(
-      (s) => s._id.toString() === slotId.toString()
-    );
-
-    if (!slot || !slot.slotTrail) {
-      return [];
-    }
-
-    // Sort by timestamp (newest first)
-    return slot.slotTrail.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const rows = await loadSlotTrailView(slotId);
+    return rows.map((row) => row.slotTrail).filter(Boolean);
   } catch (error) {
     console.error('Error getting slot trail:', error);
     return [];

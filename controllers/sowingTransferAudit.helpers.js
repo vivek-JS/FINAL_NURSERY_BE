@@ -3,6 +3,7 @@ import PlantCms from "../models/plantCms.model.js";
 import SowingRequest from "../models/sowingRequest.model.js";
 import PlantSlot from "../models/slots.model.js";
 import { fmtDDMMYYYY, parseLocalDate } from "./sowingSlotReadyHelpers.js";
+import { recordSlotTrail } from "../utility/slotTrailStore.js";
 
 function windowDeliveryLabel(order) {
   try {
@@ -227,24 +228,15 @@ export async function writePartialTransferRecord({
 
   for (const t of transfers) {
     if (t.sameSlot || String(t.fromSlotId) === String(destId)) continue;
-    const fromId = new mongoose.Types.ObjectId(t.fromSlotId);
-    await PlantSlot.updateOne(
-      { "subtypeSlots.slots._id": fromId },
-      {
-        $push: {
-          "subtypeSlots.$[st].slots.$[sl].slotTrail": {
-            at: now,
-            action: "PARTIAL_TRANSFER_OUT",
-            plants: t.take,
-            orderId: order.orderId,
-            toSlotId: destId,
-            toLabel: destination.label,
-          },
-        },
-      },
-      {
-        arrayFilters: [{ "st.slots._id": fromId }, { "sl._id": fromId }],
-      }
-    );
+    await recordSlotTrail(t.fromSlotId, {
+      at: now,
+      action: "PARTIAL_TRANSFER_OUT",
+      plants: t.take,
+      orderId: order.orderId,
+      toSlotId: destId,
+      toLabel: destination.label,
+      reason: "Partial transfer out",
+      activityName: "Partial transfer out",
+    });
   }
 }

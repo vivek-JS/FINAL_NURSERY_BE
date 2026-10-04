@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
 import { isOfficeOrSuper, applyTransfer } from "./orderSowFromExcess.controller.js";
+import { recordSlotTrail } from "../utility/slotTrailStore.js";
 
 function slotLabel(slot) {
   if (!slot) return "—";
@@ -170,16 +171,8 @@ export const transferSlotToSlot = async (req, res) => {
       by: userId,
     };
 
-    await PlantSlot.updateOne(
-      { "subtypeSlots.slots._id": new mongoose.Types.ObjectId(from.slotId) },
-      { $push: { "subtypeSlots.$[st].slots.$[sl].slotTrail": trailOut } },
-      { arrayFilters: [{ "st.slots._id": new mongoose.Types.ObjectId(from.slotId) }, { "sl._id": new mongoose.Types.ObjectId(from.slotId) }] }
-    );
-    await PlantSlot.updateOne(
-      { "subtypeSlots.slots._id": new mongoose.Types.ObjectId(toSlotId) },
-      { $push: { "subtypeSlots.$[st].slots.$[sl].slotTrail": trailIn } },
-      { arrayFilters: [{ "st.slots._id": new mongoose.Types.ObjectId(toSlotId) }, { "sl._id": new mongoose.Types.ObjectId(toSlotId) }] }
-    );
+    await recordSlotTrail(from.slotId, trailOut);
+    await recordSlotTrail(toSlotId, trailIn);
 
     return res.status(200).json({
       success: true,

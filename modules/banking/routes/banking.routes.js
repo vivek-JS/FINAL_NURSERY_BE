@@ -12,6 +12,17 @@ import {
   getSuspense,
   postResolveSuspense,
   getDuplicateCheck,
+  postLinkSuspense,
+  postCashDeposit,
+  getCashDeposits,
+  postVerifyCashDeposit,
+  postVerifyPayment,
+  getPendingPayments,
+  getVerifiedPayments,
+  getStatement,
+  getStatementAccounts,
+  postVerifyStatementLine,
+  postImportStatement,
   getCryptoHealth,
   postCryptoTest,
 } from "../controllers/banking.controller.js";
@@ -29,9 +40,24 @@ router.post("/icici/statement", requirePaymentAccess, idempotencyMiddleware, pos
 router.get("/icici/balance", requirePaymentAccess, getBalance);
 router.get("/icici/status", requirePaymentAccess, getTxnStatus);
 
+router.post("/payments/verify", requirePaymentAccess, idempotencyMiddleware, postVerifyPayment);
+router.get("/payments/pending", requirePaymentAccess, getPendingPayments);
+router.get("/payments/verified", requirePaymentAccess, getVerifiedPayments);
+
+router.get("/statement", requirePaymentAccess, getStatement);
+router.get("/statement/accounts", requirePaymentAccess, getStatementAccounts);
+router.post("/statement/import", requirePaymentAccess, postImportStatement);
+router.post("/statement/:id/verify", requirePaymentAccess, postVerifyStatementLine);
+
 router.post("/reconcile", requirePaymentAccess, idempotencyMiddleware, postReconcileEnhanced);
 router.get("/suspense", requirePaymentAccess, getSuspense);
 router.post("/suspense/:id/resolve", requirePaymentAccess, postResolveSuspense);
+router.post("/suspense/:id/link", requirePaymentAccess, postLinkSuspense);
+
+router.post("/cash-deposit", requirePaymentAccess, idempotencyMiddleware, postCashDeposit);
+router.get("/cash-deposit", requirePaymentAccess, getCashDeposits);
+router.post("/cash-deposit/:id/verify", requirePaymentAccess, postVerifyCashDeposit);
+
 router.get("/duplicate-check", requirePaymentAccess, getDuplicateCheck);
 
 export default router;

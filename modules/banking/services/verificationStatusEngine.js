@@ -8,6 +8,27 @@
 import Order from "../../../models/order.model.js";
 import AgriSalesOrder from "../../../models/agriSalesOrder.model.js";
 
+/**
+ * Collapse a reconciliation rule onto the payment schema's enum.
+ *
+ * The engine's rules are finer grained than the payment subdocument allows
+ * ("UTR_AMOUNT_ACCOUNT_DATE" vs "UTR"), and writing a rule straight through
+ * fails subdocument validation. The precise rule is still kept on the
+ * PaymentReconciliation and BankReconciliationMatch rows.
+ *
+ * @param {string|null} rule
+ * @returns {"UTR"|"CHEQUE"|"TXN_ID"|"AMOUNT_DATE"|null}
+ */
+export function normalizeMatchedBy(rule) {
+  const r = String(rule || "").toUpperCase();
+  if (!r) return null;
+  if (r.startsWith("UTR") || r === "TXN_STATUS_API") return "UTR";
+  if (r.startsWith("CHEQUE")) return "CHEQUE";
+  if (r.startsWith("TXN_ID")) return "TXN_ID";
+  if (r.startsWith("AMOUNT_DATE")) return "AMOUNT_DATE";
+  return null;
+}
+
 export async function transitionPaymentStatus({
   pay,
   targetStatus,
@@ -18,6 +39,8 @@ export async function transitionPaymentStatus({
   if (!pay || !targetStatus) {
     return { ok: false, error: "Invalid transition params" };
   }
+
+  const matchedByEnum = normalizeMatchedBy(matchedBy);
 
   if (targetStatus === "BANK_VERIFIED") {
     if (pay.source === "order") {
@@ -30,7 +53,7 @@ export async function transitionPaymentStatus({
       subdoc.paymentStatus = "BANK_VERIFIED";
       subdoc.bankVerificationStatus = "BANK_VERIFIED";
       subdoc.bankVerificationSource = source;
-      subdoc.bankVerificationMatchedBy = matchedBy;
+      subdoc.bankVerificationMatchedBy = matchedByEnum;
       if (bankEntry) {
         subdoc.bankReferenceNumber = bankEntry.referenceNumber || "";
         subdoc.bankNarration = bankEntry.narration || "";
@@ -62,7 +85,7 @@ export async function transitionPaymentStatus({
       subdoc.paymentStatus = "BANK_VERIFIED";
       subdoc.bankVerificationStatus = "BANK_VERIFIED";
       subdoc.bankVerificationSource = source;
-      subdoc.bankVerificationMatchedBy = matchedBy;
+      subdoc.bankVerificationMatchedBy = matchedByEnum;
       if (bankEntry) {
         subdoc.bankReferenceNumber = bankEntry.referenceNumber || "";
         subdoc.bankNarration = bankEntry.narration || "";

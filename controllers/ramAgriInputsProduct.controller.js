@@ -9,6 +9,7 @@ import {
 } from '../utils/changeLogHelper.js';
 import { scheduleStockChangeAlert } from '../services/stockWhatsappAlert.service.js';
 import { attachInventoryLinksToCrops } from '../services/ramAgriVarietyInventoryLink.service.js';
+import { canDirectStockUpdate } from '../utility/directStockAccess.js';
 
 const normalizeProductType = (value, { allowAll = false } = {}) => {
   if (value === undefined || value === null || value === '') {
@@ -32,21 +33,6 @@ const parseDisplayOrder = (value) => {
   if (!Number.isFinite(n) || n < 0) return null;
   return Math.floor(n);
 };
-
-const isSuperAdminUser = (user) => {
-  const role = String(user?.role || '').toUpperCase().trim();
-  const jobTitle = String(user?.jobTitle || '').toUpperCase().trim();
-  return role === 'SUPER_ADMIN' || role === 'SUPERADMIN' || jobTitle === 'SUPER_ADMIN' || jobTitle === 'SUPERADMIN';
-};
-
-const isRamAgriMasterUser = (user) => {
-  const role = String(user?.role || '').toUpperCase().trim();
-  const jobTitle = String(user?.jobTitle || '').toUpperCase().trim();
-  return role === 'RAM_AGRI_MASTER' || jobTitle === 'RAM_AGRI_MASTER';
-};
-
-const canDirectStockUpdate = (user) =>
-  isSuperAdminUser(user) || isRamAgriMasterUser(user);
 
 /** 0 and null/undefined both mean "no explicit order" → sort to end */
 const effectiveOrder = (v) => (!v || v === 0 ? Infinity : v);
@@ -511,24 +497,55 @@ export const updateVariety = catchAsync(async (req, res, next) => {
   }
 
   const hasCurrentStockInBody = Object.prototype.hasOwnProperty.call(req.body, 'currentStock');
+  const hasQuantityDelta = Object.prototype.hasOwnProperty.call(req.body, 'quantityDelta');
+  const stockOnlyKeys = new Set([
+    'currentStock',
+    'quantityDelta',
+    'batches',
+    'batchNumber',
+    'expiryDate',
+    'notes',
+  ]);
   const bodyKeys = Object.keys(req.body || {});
   const isStockOnlyUpdate =
-    hasCurrentStockInBody &&
-    bodyKeys.every((k) => ['currentStock', 'batches', 'notes'].includes(k));
+    (hasCurrentStockInBody || hasQuantityDelta) &&
+    bodyKeys.every((k) => stockOnlyKeys.has(k));
 
   if (isStockOnlyUpdate) {
     if (!canDirectStockUpdate(req.user)) {
-      return next(new AppError('Only Ram Agri Master or Super Admin can directly update stock', 403));
+      return next(
+        new AppError(
+          'You do not have permission to directly update stock',
+          403
+        )
+      );
     }
 
-    const parsedStock = Number(currentStock);
+    const oldStock = Number(variety.currentStock) || 0;
+    let parsedStock = hasCurrentStockInBody ? Number(currentStock) : null;
+    if (hasQuantityDelta) {
+      const delta = Number(req.body.quantityDelta);
+      if (!Number.isFinite(delta) || delta === 0) {
+        return next(new AppError('quantityDelta must be a non-zero number', 400));
+      }
+      parsedStock = oldStock + delta;
+    }
     if (!Number.isFinite(parsedStock) || parsedStock < 0) {
-      return next(new AppError('currentStock must be a non-negative number', 400));
+      return next(new AppError('Resulting stock must be a non-negative number', 400));
     }
 
     const { applyManualStockAdjustment } = await import('../services/ramAgriBatchInventory.service.js');
-    const oldStock = Number(variety.currentStock) || 0;
-    const batches = Array.isArray(req.body.batches) ? req.body.batches : [];
+    let batches = Array.isArray(req.body.batches) ? req.body.batches : [];
+    const delta = parsedStock - oldStock;
+    if (delta > 0 && !batches.length) {
+      batches = [
+        {
+          batchNumber: req.body.batchNumber,
+          expiryDate: req.body.expiryDate,
+          quantity: delta,
+        },
+      ];
+    }
     try {
       await applyManualStockAdjustment(id, varietyId, parsedStock, req.user._id, { batches });
     } catch (err) {
@@ -698,7 +715,9 @@ export const updateVariety = catchAsync(async (req, res, next) => {
 
   if (currentStock !== undefined) {
     if (!canDirectStockUpdate(req.user)) {
-      return next(new AppError('Only Ram Agri Master or Super Admin can directly update stock', 403));
+      return next(
+        new AppError('You do not have permission to directly update stock', 403)
+      );
     }
 
     const parsedStock = Number(currentStock);

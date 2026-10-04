@@ -2,7 +2,7 @@
  * WhatsApp order bot configuration.
  *
  * Enable flow: `WHATSAPP_ORDER_FLOW_ENABLED=true`
- * Disable: `DISABLE_WHATSAPP_ORDER_FLOW=true`
+ * Disable (preferred): `DISABLE_WHATSAPP_ORDER_FLOW=true` and/or `WHATSAPP_ORDER_FLOW_ENABLED=false`
  *
  * Dual channel (default when flow is on): farmers can message via
  *   • scanned QR / whatsapp-web.js (same session as alerts)

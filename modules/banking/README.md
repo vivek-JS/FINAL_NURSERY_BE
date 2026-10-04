@@ -40,22 +40,32 @@ Implementation: `modules/banking/crypto/rsaEncryption.js`
 ### Payment verification flow
 
 ```
-PENDING ──(statement match score ≥ 85)──▶ BANK_VERIFIED ──(accountant)──▶ COLLECTED
+PENDING ──(bank agrees on UTR and amount)──▶ BANK_VERIFIED ──(accountant)──▶ COLLECTED
     │
-    └──(no match / low score / multiple matches)──▶ SUSPENSE ──(manual resolve)──▶ BANK_VERIFIED
+    └──(anything else)──▶ SUSPENSE ──(manual resolve)──▶ BANK_VERIFIED
 ```
 
 ### Reconciliation matching (confidence scoring)
 
-| Rule | Score | Type |
-|------|-------|------|
-| UTR + amount + account + date | 100 | EXACT |
-| UTR + amount (+ date) | 95–98 | EXACT |
-| Transaction ID + amount | 90 | EXACT |
-| Cheque + amount | 85 | EXACT |
-| Amount + date + narration similarity | 60–80 | FUZZY |
+Amount is a hard gate: a pair whose amounts differ by a paisa or more is never a
+candidate, however well everything else lines up.
 
-Env: `BANKING_AUTO_VERIFY_THRESHOLD=85`, `BANKING_FUZZY_THRESHOLD=60`
+| Rule | Score | Type | Auto-verifies |
+|------|-------|------|---------------|
+| UTR + amount + account + date | 100 | EXACT | Yes |
+| UTR + amount (+ date) | 95–98 | EXACT | Yes |
+| Transaction ID + amount | 90 | EXACT | No — suspense |
+| Cheque + amount | 85 | EXACT | No — suspense |
+| Amount + date + narration similarity | 60–80 | FUZZY | No — suspense |
+
+Only a UTR agreeing with the bank at the same amount may clear a payment on its
+own (`qualifiesForAutoVerify`). Every other rule is a suggestion for an
+accountant, not a decision — it opens a suspense row carrying its score so the
+accountant can see how close it was. There is deliberately no score threshold to
+tune: a cheque match scoring 85 still requires a human.
+
+Env: `BANKING_FUZZY_THRESHOLD=60` (the floor below which a pair is not even
+offered as a candidate).
 
 ---
 
@@ -132,10 +142,14 @@ Copy from `.env.example`:
 ICICI_CORPORATE_ENV=UAT
 ICICI_CORPORATE_USE_STUB=true          # false for live
 ICICI_CORPORATE_USE_HTTP=true
-ICICI_CORPORATE_BASE_URL=https://apibankingonesandbox.icicibank.com
+ICICI_CORPORATE_BASE_URL=https://apibankingonesandbox.icici.bank.in
+ICICI_CORPORATE_API_PREFIX=/api/Corporate/CIB_SV/v1
+ICICI_CRYPTO_MODE=CIB_SV               # PKCS1 + in-payload IV, per the CIB_SV UAT spec
 ICICI_CORPORATE_ID=YOUR_CORP_ID
 ICICI_CORPORATE_USER_ID=YOUR_USER
 ICICI_AGGREGATOR_ID=YOUR_AGGR_ID
+ICICI_AGGRNAME=YOUR_AGGR_NAME
+ICICI_URN=YOUR_URN
 ICICI_ACCOUNT_ID=YOUR_ACCOUNT_NUMBER
 ICICI_CORPORATE_API_KEY=YOUR_API_KEY
 ICICI_PRIVATE_KEY_PATH=config/certs/private.key
@@ -154,7 +168,10 @@ curl -X POST http://localhost:8000/api/banking/icici/register \
   -H "X-Idempotency-Key: reg-$(date +%s)"
 ```
 
-Sandbox URL: `POST https://apibankingonesandbox.icicibank.com/api/Corporate/CIB/v1/Registration`
+Sandbox URL: `POST https://apibankingonesandbox.icici.bank.in/api/Corporate/CIB_SV/v1/Registration`
+
+Live calls also need ICICI's own public certificate saved at `ICICI_BANK_PUBLIC_CERT_PATH`;
+it arrives as an attachment with the UAT credentials and is not in the repo.
 
 ### 4. Fetch statement (Step 2)
 
@@ -164,6 +181,33 @@ curl -X POST http://localhost:8000/api/banking/icici/statement \
   -H "Content-Type: application/json" \
   -d '{"fromDate":"2026-05-01","toDate":"2026-05-27"}'
 ```
+
+### 4b. Import a statement instead (no bank connection needed)
+
+The ICICI API is optional. An accountant can export the statement from net
+banking and load it from the **Statement** tab, which is the supported path
+while credentials and certificates are not in place. Everything downstream —
+matching, suspense, per-payment checks — behaves identically, because imported
+lines are ordinary `BankStatementEntry` rows with `source: "IMPORT"`.
+
+```bash
+curl -X POST http://localhost:8000/api/banking/statement/import \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"accountNumber":"000405001234","csv":"Txn Date,Description,Ref No./Cheque No.,Debit,Credit,Balance\n01/04/2026,UPI/CR/412345678901/RAHUL,412345678901,,1500.00,51500.00"}'
+```
+
+The parser accepts the common Indian bank export shapes: separate Debit/Credit
+columns or one signed Amount column, `dd/mm/yyyy`, `dd-MMM-yy` or ISO dates,
+amounts written as `1,23,456.78`, `₹1,500.00`, `250.00 Dr` or `(250.00)`, and
+preamble/footer rows which are skipped. Credits are stored positive, debits
+negative. If the reference column is blank the parser looks for a UTR in the
+narration.
+
+Re-importing the same file inserts nothing: each row carries a deterministic
+key, built from the reference when there is one so an imported line and the
+same line later pulled from the API collapse into a single row. Two genuinely
+identical credits on one day are still kept as two rows.
 
 ### 5. Run reconciliation (Step 4)
 
@@ -210,7 +254,7 @@ curl "http://localhost:8000/api/banking/duplicate-check?utr=X&amount=100&txnDate
 | duplicateKey | String | Unique — SHA256(account\|utr\|amount\|date) |
 | entryHash | String | Unique — legacy dedupe |
 | reconciliationStatus | enum | UNMATCHED, MATCHED, SUSPENSE, IGNORED |
-| source | enum | SDK, CORPORATE_HTTP, MANUAL |
+| source | enum | SDK, CORPORATE_HTTP, MANUAL, IMPORT |
 
 ### payment_reconciliation → `PaymentReconciliation`
 

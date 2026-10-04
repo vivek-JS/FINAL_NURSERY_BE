@@ -34,6 +34,20 @@ const onVehicleQty = (order) => {
   return Math.max(0, dispatched);
 };
 
+/** Plants original farmer kept (keptQty, or full on-vehicle minus returns when DISPATCH). */
+const resolveKeptPlantsForEntry = (entry, order) => {
+  const onV = onVehicleQty(order);
+  const returnedQty = Math.max(0, Number(entry?.returnedQty) || 0);
+  const maxKept = Math.max(0, onV - returnedQty);
+  const disposition = String(entry?.disposition || "").toUpperCase();
+  const explicit = Math.max(0, Number(entry?.keptQty) || 0);
+  if (disposition === "DISPATCHED" || disposition === "DISPATCH") {
+    if (explicit > 0) return Math.min(explicit, maxKept);
+    return maxKept;
+  }
+  return Math.min(explicit, maxKept);
+};
+
 /** Release `qty` plants back to the nursery slot (regular orders give availablePlants back). */
 const releaseSlotQuantity = async (order, qty, session) => {
   if (!(qty > 0) || !order?.bookingSlot) return;
@@ -121,18 +135,6 @@ export const reassignRefusedDelivery = catchAsync(async (req, res, next) => {
   if (!Array.isArray(originalOrders) || originalOrders.length === 0) {
     return next(new AppError("originalOrders is required", 400));
   }
-  if (normalizedMode !== "RETURNED" && (!Array.isArray(newFarmers) || newFarmers.length === 0)) {
-    const allOriginalDispatched = (originalOrders || []).every((e) => {
-      const d = String(e?.disposition || "").toUpperCase();
-      return d === "DISPATCHED" || d === "DISPATCH";
-    });
-    if (!allOriginalDispatched) {
-      return next(
-        new AppError("At least one receiving farmer is required for this mode", 400)
-      );
-    }
-  }
-
   const userId = req.user?._id || req.user?.id || null;
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -177,30 +179,51 @@ export const reassignRefusedDelivery = catchAsync(async (req, res, next) => {
       (sum, f) => sum + Math.max(0, Number(f?.numberOfPlants) || 0),
       0
     );
-    const totalOriginalDispatched = originalOrders.reduce((sum, e) => {
-      const disposition = String(e?.disposition || "").toUpperCase();
-      if (disposition !== "DISPATCHED" && disposition !== "DISPATCH") return sum;
+    const totalKeptByOriginal = originalOrders.reduce((sum, e) => {
       const order = originalById.get(String(e?.orderId || ""));
       if (!order) return sum;
-      const returnedQty = Math.max(0, Number(e?.returnedQty) || 0);
-      return sum + Math.max(0, onVehicleQty(order) - returnedQty);
+      return sum + resolveKeptPlantsForEntry(e, order);
     }, 0);
 
-    if (totalReassigned + totalReturned + totalOriginalDispatched !== vehiclePlants) {
+    for (const entry of originalOrders) {
+      const order = originalById.get(String(entry?.orderId || ""));
+      if (!order) continue;
+      const onV = onVehicleQty(order);
+      const ret = Math.max(0, Number(entry?.returnedQty) || 0);
+      const kept = resolveKeptPlantsForEntry(entry, order);
+      if (ret + kept > onV) {
+        await session.abortTransaction();
+        return next(
+          new AppError(
+            `Order ${order.orderId ?? entry.orderId}: kept (${kept}) + returned (${ret}) cannot exceed on vehicle (${onV})`,
+            400
+          )
+        );
+      }
+    }
+
+    if (totalReassigned + totalReturned + totalKeptByOriginal !== vehiclePlants) {
       await session.abortTransaction();
       return next(
         new AppError(
-          `Plant count mismatch: reassigned (${totalReassigned}) + returned (${totalReturned}) + dispatched (${totalOriginalDispatched}) must equal plants on vehicle (${vehiclePlants})`,
+          `Plant count mismatch: reassigned (${totalReassigned}) + returned (${totalReturned}) + kept by original farmers (${totalKeptByOriginal}) must equal plants on vehicle (${vehiclePlants})`,
           400
         )
       );
     }
 
-    const leftoverForNewFarmers = vehiclePlants - totalReturned - totalOriginalDispatched;
-    if (leftoverForNewFarmers > 0 && totalReassigned === 0) {
+    const leftoverForNewFarmers = vehiclePlants - totalReturned - totalKeptByOriginal;
+    if (
+      normalizedMode !== "RETURNED" &&
+      leftoverForNewFarmers > 0 &&
+      totalReassigned === 0
+    ) {
       await session.abortTransaction();
       return next(
-        new AppError("At least one receiving farmer is required for the remaining plants", 400)
+        new AppError(
+          `At least one receiving farmer is required for ${leftoverForNewFarmers} plant(s) going to other farmers`,
+          400
+        )
       );
     }
 
@@ -214,19 +237,39 @@ export const reassignRefusedDelivery = catchAsync(async (req, res, next) => {
       const disposition = String(entry?.disposition || "").toUpperCase();
       const keepOrder = disposition === "KEEP" || disposition === "ACCEPTED";
       const dispatchOrder = disposition === "DISPATCHED" || disposition === "DISPATCH";
+      const cancelComplete =
+        disposition === "CANCELLED" ||
+        disposition === "CANCEL_COMPLETE" ||
+        disposition === "CANCEL_FINAL";
+      const onV = onVehicleQty(order);
+      const keptPlants = resolveKeptPlantsForEntry(entry, order);
+      const toOtherFarmers = Math.max(0, onV - returnedQty - keptPlants);
 
-      // Plants that came back to the nursery release the booking slot.
-      if (returnedQty > 0) {
-        await releaseSlotQuantity(order, returnedQty, session);
+      // Slot release: nursery returns + plants that went to other farmers (not kept by original).
+      const slotRelease = returnedQty + toOtherFarmers;
+      if (slotRelease > 0) {
+        await releaseSlotQuantity(order, slotRelease, session);
       }
 
       const $set = {};
       const $push = {};
 
-      if (dispatchOrder) {
-        // Original farmer took the plants on this vehicle.
+      if (keptPlants > 0) {
+        // Original farmer kept some or all plants on this trip (incl. partial e.g. 2000 of 2800).
+        $set.orderStatus =
+          keptPlants >= onV - returnedQty && toOtherFarmers === 0 && dispatchOrder
+            ? "DISPATCHED"
+            : "COMPLETED";
+        $set.remainingPlants = 0;
+      } else if (dispatchOrder) {
+        // Marked complete but kept qty 0 — fall through to other dispositions.
         $set.orderStatus = "DISPATCHED";
         $set.remainingPlants = 0;
+      } else if (cancelComplete) {
+        // Refused — finalize cancel (no resend); ledger reversal via status sync.
+        $set.orderStatus = "CANCELLED";
+        $set.remainingPlants = 0;
+        $set.currentDispatchId = null;
       } else if (keepOrder) {
         // Farmer still wants the plants — re-send later. Return to ready-for-dispatch.
         $set.orderStatus = "ACCEPTED";

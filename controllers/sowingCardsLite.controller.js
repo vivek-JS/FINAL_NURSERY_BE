@@ -243,7 +243,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         sowingCompleted: { $ne: true },
       })
         .select(
-          "plantId subtypeId productId requestNumber packetsRequested packetsFromCompany packetsFromRaising seedSource conversionFactor tentativePlantsPerPacket status sowingInProgress issuedDate sowingCompleted linkedOrderIds isExcessiveSowing"
+          "plantId subtypeId productId requestNumber packetsRequested packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned packetsFromCompany packetsFromRaising seedSource conversionFactor tentativePlantsPerPacket status sowingInProgress issuedDate sowingCompleted linkedOrderIds isExcessiveSowing"
         )
         .lean(),
     ]);
@@ -306,6 +306,11 @@ export const getTodaySowingCardsLite = async (req, res) => {
         packetsRequested: r.packetsRequested,
         packetsFromCompany: r.packetsFromCompany,
         packetsFromRaising: r.packetsFromRaising,
+        packetsIssued: r.packetsIssued,
+        packetsUsed: r.packetsUsed,
+        packetsReturned: r.packetsReturned,
+        raisingPacketsUsed: r.raisingPacketsUsed,
+        raisingPacketsReturned: r.raisingPacketsReturned,
         seedSource: r.seedSource,
         productId: r.productId || null,
         status,
@@ -1011,7 +1016,7 @@ export const getOrderWiseSowing = async (req, res) => {
     const [orders, products, raisings, activeOrderReqs, plantDoc] = await Promise.all([
       Order.find(query)
         .select(
-          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderStatus sowingDone sowingDoneAt deliveryDate"
+          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderBookingDate orderStatus sowingDone sowingDoneAt deliveryDate"
         )
         .populate("farmer", "name mobileNumber")
         .sort({ deliveryDate: 1, createdAt: 1 })
@@ -1200,6 +1205,8 @@ export const getOrderWiseSowing = async (req, res) => {
         numberOfPlants: plants,
         bookingSlot: o.bookingSlot,
         deliveryDate: o.deliveryDate || null,
+        orderBookingDate: o.orderBookingDate || null,
+        bookingDate: o.orderBookingDate || o.createdAt || null,
         slotStartDay: slotMeta?.startDay || null,
         plantReadyDays: readyDays,
         sowByDate,

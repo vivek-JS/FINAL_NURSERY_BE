@@ -11,35 +11,73 @@ import {
   assertEazypayFilesPresent,
   readSdkConfigJson,
 } from "../config/eazypaySdk.js";
-import BankStatementEntry from "../models/bankStatementEntry.model.js";
+import BankStatementEntry, {
+  NOT_STATEMENT_VERIFIED,
+} from "../models/bankStatementEntry.model.js";
 
 const log = () => getEazypayLogger();
 
 /**
  * Normalise one ICICI statement row — field names may differ by SDK version.
  */
+/** ICICI sandbox dates arrive as dd-mm-yyyy; ISO and Date objects pass through. */
+function parseBankDate(value) {
+  if (value instanceof Date) return value;
+  const s = String(value || "").trim();
+  const dmy = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy) {
+    return new Date(Date.UTC(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1])));
+  }
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+/** "10,852.22" / "2.00" → number. */
+function parseIndianAmount(raw) {
+  if (raw == null || raw === "") return null;
+  const n = Number(String(raw).replace(/,/g, "").trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+/** UPI/NEFT narrations bury the UTR between slashes. */
+function referenceFromNarration(narration) {
+  const tokens = String(narration || "").split(/[\s/|,;:]+/).filter(Boolean);
+  return tokens.find((t) => /^\d{12,22}$/.test(t) || /^[A-Z]{4}[A-Za-z0-9]{10,18}$/.test(t)) || "";
+}
+
 export function normaliseStatementRow(raw, index = 0) {
   const r = raw || {};
   const txnDate =
     r.txnDate ||
+    r.TXNDATE ||
+    r.TXN_DATE ||
+    r.PORDATE ||
     r.transactionDate ||
     r.transactionDateTime ||
     r.date ||
+    r.VALUEDATE ||
     r.valueDate ||
     new Date();
-  const amount = Number(
-    r.amount ?? r.creditAmount ?? r.debitAmount ?? r.txnAmount ?? 0
-  );
+  const credit = parseIndianAmount(r.CREDIT ?? r.creditAmount ?? r.CRAMT);
+  const debit = parseIndianAmount(r.DEBIT ?? r.debitAmount ?? r.DRAMT);
+  const plain = parseIndianAmount(r.amount ?? r.AMOUNT ?? r.TXNAMT ?? r.txnAmount);
+  const type = String(r.txnType ?? r.TYPE ?? r.DRCR ?? r.type ?? r.transactionType ?? "").toUpperCase();
+  let amount = 0;
+  if (credit != null && credit !== 0) amount = Math.abs(credit);
+  else if (debit != null && debit !== 0) amount = -Math.abs(debit);
+  else if (plain != null) {
+    amount = type === "DR" || type === "DEBIT" ? -Math.abs(plain) : Math.abs(plain);
+  }
+  const narration = String(r.narration ?? r.REMARKS ?? r.NARRATION ?? r.description ?? r.remark ?? "");
   const referenceNumber = String(
-    r.referenceNumber ?? r.reference ?? r.utr ?? r.rrn ?? ""
-  ).trim();
-  const narration = String(r.narration ?? r.description ?? r.remark ?? "");
-  const txnType = String(r.txnType ?? r.type ?? r.transactionType ?? "");
-  const balance = r.balance != null ? Number(r.balance) : undefined;
-  const transactionId = String(r.transactionId ?? r.txnId ?? "").trim();
-  const chequeNumber = String(r.chequeNumber ?? r.chequeNo ?? "").trim();
+    r.referenceNumber ?? r.REFERENCE ?? r.UTR ?? r.CHQNO ?? r.reference ?? r.utr ?? r.rrn ?? ""
+  ).trim() || referenceFromNarration(narration);
+  const txnType = type;
+  const balance = parseIndianAmount(r.BALANCE ?? r.balance) ?? undefined;
+  const transactionId = String(r.transactionId ?? r.TRANSACTIONID ?? r.TXNID ?? r.txnId ?? "").trim();
+  const chequeNumber = String(r.chequeNumber ?? r.CHEQUENO ?? r.chequeNo ?? "").trim();
 
-  const d = txnDate instanceof Date ? txnDate : new Date(txnDate);
+  const d = txnDate instanceof Date ? txnDate : parseBankDate(txnDate);
   const entryHash = crypto
     .createHash("sha256")
     .update(
@@ -201,6 +239,7 @@ export async function getStoredEntriesForRange(dateFrom, dateTo) {
   to.setHours(23, 59, 59, 999);
   return BankStatementEntry.find({
     txnDate: { $gte: from, $lte: to },
+    ...NOT_STATEMENT_VERIFIED,
   })
     .lean()
     .exec();

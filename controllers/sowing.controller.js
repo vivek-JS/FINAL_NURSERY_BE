@@ -16,6 +16,7 @@ import {
   applySowingGapBoardMetrics,
   fetchDeliveryOrdersForPlants,
 } from "../utility/sowingGapSummaryMetrics.js";
+import SlotTrail from "../models/slotTrail.model.js";
 
 // Create a new sowing record
 export const createSowing = async (req, res) => {
@@ -7388,7 +7389,7 @@ export const getPlantsGapSummary = async (req, res) => {
           sum +
           Math.max(
             0,
-            Number(sl.excessAvailableForBooking ?? sl.availablePlants) || 0
+            Number(sl.excessAvailableForBooking) || 0
           ),
         0
       );
@@ -10159,33 +10160,37 @@ export const getSowingInsightsRecords = async (req, res) => {
       .skip(skip)
       .lean();
 
-    const slotTrailPipeline = [
-      { $unwind: "$subtypeSlots" },
-      { $unwind: "$subtypeSlots.slots" },
-      { $unwind: "$subtypeSlots.slots.slotTrail" },
-      {
-        $project: {
-          plantId: 1,
-          slotId: "$subtypeSlots.slots._id",
-          slotStartDay: "$subtypeSlots.slots.startDay",
-          slotEndDay: "$subtypeSlots.slots.endDay",
-          subtypeId: "$subtypeSlots.subtypeId",
-          trail: "$subtypeSlots.slots.slotTrail",
-        },
-      },
-    ];
+    const trailQuery = {};
+    if (plantId && mongoose.Types.ObjectId.isValid(String(plantId))) {
+      trailQuery.plantId = new mongoose.Types.ObjectId(String(plantId));
+    }
+    if (subtypeId && mongoose.Types.ObjectId.isValid(String(subtypeId))) {
+      trailQuery.subtypeId = new mongoose.Types.ObjectId(String(subtypeId));
+    }
     if (slotId && mongoose.Types.ObjectId.isValid(String(slotId))) {
-      slotTrailPipeline.push({
-        $match: { slotId: new mongoose.Types.ObjectId(String(slotId)) },
-      });
+      trailQuery.slotId = new mongoose.Types.ObjectId(String(slotId));
     }
-    if (actionType) {
-      slotTrailPipeline.push({
-        $match: { "trail.action": actionType },
-      });
+    if (actionType) trailQuery.action = String(actionType);
+    if (startDate || endDate) {
+      trailQuery.createdAt = {};
+      if (startDate) trailQuery.createdAt.$gte = new Date(startDate);
+      if (endDate) trailQuery.createdAt.$lte = new Date(endDate);
     }
-    slotTrailPipeline.push({ $sort: { "trail.timestamp": -1 } }, { $limit: safeLimit });
-    const trailRows = await PlantSlot.aggregate(slotTrailPipeline);
+    const trailDocs = await SlotTrail.find(trailQuery)
+      .sort({ createdAt: -1 })
+      .limit(safeLimit)
+      .lean();
+    const trailRows = trailDocs.map((d) => ({
+      plantId: d.plantId,
+      slotId: d.slotId,
+      slotStartDay: d.startDay,
+      slotEndDay: d.endDay,
+      subtypeId: d.subtypeId,
+      trail: {
+        ...(d.entry || {}),
+        timestamp: d.entry?.timestamp || d.createdAt,
+      },
+    }));
 
     const records = [];
 

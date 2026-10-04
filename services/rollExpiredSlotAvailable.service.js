@@ -614,22 +614,28 @@ export async function summarizeReadyRollForSlot(targetSlotId) {
   };
 }
 
+/**
+ * Nightly auto-roll: move booking available + ready lagwad from expired slots onto today's window.
+ * (Same rules as manual POST /slots/roll-expired-available, without admin reason text.)
+ */
 export async function runExpiredReadyRollAuto({ asOfDate = new Date() } = {}) {
   const plantSlots = await PlantSlot.find({}).lean();
-  let rolled = 0;
+  let slotsRolled = 0;
   let errors = 0;
+  let totalAvailableRolled = 0;
+  let totalReadyRolled = 0;
 
   for (const doc of plantSlots) {
     for (const st of doc.subtypeSlots || []) {
-      for (const slot of st.slots || []) {
+      const subtypeSlots = st.slots || [];
+      for (const slot of subtypeSlots) {
         if (!isSlotExpiredByEndDay(slot, asOfDate)) continue;
-        const ready = Number(slot.actualReadyPlants) || 0;
-        if (ready < 1) continue;
 
-        const targetId = findCurrentSlotIdForExpiredRoll(
-          st.slots || [],
-          asOfDate
-        );
+        const availableQty = Math.floor(getSlotEffectiveAvailablePlants(slot));
+        const readyQty = Math.floor(Number(slot.actualReadyPlants) || 0);
+        if (availableQty < 1 && readyQty < 1) continue;
+
+        const targetId = findCurrentSlotIdForExpiredRoll(subtypeSlots, asOfDate);
         if (!targetId || targetId === String(slot._id)) continue;
 
         try {
@@ -638,25 +644,33 @@ export async function runExpiredReadyRollAuto({ asOfDate = new Date() } = {}) {
             transfers: [
               {
                 sourceSlotId: String(slot._id),
-                availableQty: 0,
-                readyQty: ready,
+                availableQty,
+                readyQty,
               },
             ],
-            reason: "Auto expired ready roll",
+            reason: "Auto expired slot roll (available + ready)",
             performedBy: null,
             asOfDate,
             rollKind: "expired_auto",
           });
-          rolled += 1;
+          slotsRolled += 1;
+          totalAvailableRolled += availableQty;
+          totalReadyRolled += readyQty;
         } catch (err) {
           errors += 1;
-          console.warn("[ExpiredReadyRoll] auto", slot._id, err?.message || err);
+          console.warn("[ExpiredSlotRoll] auto", slot._id, err?.message || err);
         }
       }
     }
   }
 
-  return { slotsRolled: rolled, errors, asOf: moment(asOfDate).format("YYYY-MM-DD") };
+  return {
+    slotsRolled,
+    errors,
+    totalAvailableRolled,
+    totalReadyRolled,
+    asOf: moment(asOfDate).format("YYYY-MM-DD"),
+  };
 }
 
 function findCurrentSlotIdForExpiredRoll(slots, asOfDate) {

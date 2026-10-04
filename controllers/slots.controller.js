@@ -21,6 +21,7 @@ import {
   appendTransferSlotTrail,
   buildSlotSnapshot,
 } from "../utility/slotTransferTrail.js";
+import { loadSlotTrailView } from "../utility/slotTrailStore.js";
 import { executeMassOrderSlotTransfer } from "../services/slotOrderTransfer.service.js";
 import {
   aggregateShedStockBySlotIds,
@@ -54,6 +55,11 @@ import {
   listReadyRollLogForSlot,
   summarizeReadyRollForSlot,
 } from "../services/rollExpiredSlotAvailable.service.js";
+import { enrichPendingLagwadBatchPreviews } from "../services/pendingLagwadPreview.service.js";
+import {
+  rollAllExpiredLagwadForSubtype,
+  getRolledLagwadSummary,
+} from "../services/rollExpiredLagwad.service.js";
 import { getSlotOrderDispatchByBatch } from "../services/slotOrderDispatchByBatch.service.js";
 import {
   aggregatePastDueMetricsForSlotGroup,
@@ -2726,6 +2732,9 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         ordersBySlot,
         asOfToday
       );
+      if (pastDueGroup.pastDueDetail?.pendingLagwadBySlot?.length) {
+        await enrichPendingLagwadBatchPreviews(pastDueGroup.pastDueDetail, asOfToday);
+      }
       const dispatchedCrossSlotBySlot = sumDispatchedCrossSlotOntoSlot(
         crossSlotOrders,
         slotIdSet,
@@ -3535,8 +3544,11 @@ export const getSlotTrail = async (req, res) => {
 
     const slotObjectId = new mongoose.Types.ObjectId(slotId);
 
+    const storedTrail = await loadSlotTrailView(slotObjectId);
     // Use aggregation to get slot trail with populated user info
-    const result = await PlantSlot.aggregate([
+    const result = storedTrail.length
+      ? storedTrail
+      : await PlantSlot.aggregate([
       {
         $match: {
           "subtypeSlots.slots._id": slotObjectId,
@@ -5236,6 +5248,75 @@ function canRunPastDueSlotRollover(user) {
   return ["SUPER_ADMIN", "SUPERADMIN", "OFFICE_ADMIN", "ADMIN"].includes(role);
 }
 
+/** POST /slots/slot-end-nightly/run — unified slot-end automation (admin). */
+export const runSlotEndNightlyController = async (req, res) => {
+  try {
+    if (!canRunPastDueSlotRollover(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only SUPER_ADMIN or OFFICE_ADMIN may run slot-end nightly automation",
+      });
+    }
+
+    const dryRun =
+      req.body?.dryRun === true ||
+      String(req.query?.dryRun || "").toLowerCase() === "true";
+    const asOfRaw = req.body?.asOfDate || req.query?.asOfDate;
+    const asOfDate = asOfRaw ? new Date(asOfRaw) : undefined;
+
+    const plantId = req.body?.plantId || req.query?.plantId;
+    const subtypeId = req.body?.subtypeId || req.query?.subtypeId;
+
+    const steps = {};
+    if (req.body?.orders !== undefined || req.query?.orders !== undefined) {
+      steps.orders =
+        req.body?.orders === true ||
+        String(req.query?.orders || "").toLowerCase() === "true";
+    }
+    if (
+      req.body?.capacityRoll !== undefined ||
+      req.query?.capacityRoll !== undefined
+    ) {
+      steps.capacityRoll =
+        req.body?.capacityRoll === true ||
+        String(req.query?.capacityRoll || "").toLowerCase() === "true";
+    }
+    if (
+      req.body?.lagwadRelocate !== undefined ||
+      req.query?.lagwadRelocate !== undefined
+    ) {
+      steps.lagwadRelocate =
+        req.body?.lagwadRelocate === true ||
+        String(req.query?.lagwadRelocate || "").toLowerCase() === "true";
+    }
+
+    const { runSlotEndNightlyAutomation } = await import(
+      "../services/slotEndNightlyAutomation.service.js"
+    );
+    const summary = await runSlotEndNightlyAutomation({
+      asOfDate,
+      dryRun,
+      steps: Object.keys(steps).length ? steps : undefined,
+      plantId: plantId ? String(plantId) : undefined,
+      subtypeId: subtypeId ? String(subtypeId) : undefined,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: dryRun
+        ? "Slot-end nightly dry-run completed"
+        : "Slot-end nightly automation completed",
+      data: summary,
+    });
+  } catch (error) {
+    console.error("Error in runSlotEndNightlyController:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Slot-end nightly automation failed",
+    });
+  }
+};
+
 /** POST /slots/past-due-rollover/run — manual past-due slot rollover (admin). */
 export const runPastDueSlotRolloverController = async (req, res) => {
   try {
@@ -5363,6 +5444,68 @@ export const getSlotOrderDispatchByBatchHandler = async (req, res) => {
     return res.status(400).json({
       success: false,
       message: error.message || "Failed to load order dispatch by batch",
+    });
+  }
+};
+
+/** POST /slots/roll-expired-lagwad/roll-all */
+export const postRollExpiredLagwadAll = async (req, res) => {
+  try {
+    if (!canRunPastDueSlotRollover(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins may roll expired lagwad sellable",
+      });
+    }
+
+    const { plantId, subtypeId, targetSlotId, reason } = req.body || {};
+    if (!plantId || !subtypeId) {
+      return res.status(400).json({
+        success: false,
+        message: "plantId and subtypeId are required",
+      });
+    }
+
+    const asOfRaw = req.body?.asOfDate;
+    const asOfDate = asOfRaw ? new Date(asOfRaw) : undefined;
+
+    const data = await rollAllExpiredLagwadForSubtype({
+      plantId: String(plantId),
+      subtypeId: String(subtypeId),
+      targetSlotId: targetSlotId ? String(targetSlotId) : undefined,
+      performedBy: req.user?._id || null,
+      reason: reason?.trim() || "Roll all pending lagwad from expired windows",
+      asOfDate,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Expired lagwad roll completed",
+      data,
+    });
+  } catch (error) {
+    console.error("postRollExpiredLagwadAll:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Roll expired lagwad failed",
+    });
+  }
+};
+
+/** GET /slots/:slotId/rolled-lagwad-summary */
+export const getRolledLagwadSummaryHandler = async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    if (!slotId) {
+      return res.status(400).json({ success: false, message: "slotId is required" });
+    }
+    const data = await getRolledLagwadSummary(slotId);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("getRolledLagwadSummary:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to load rolled lagwad summary",
     });
   }
 };

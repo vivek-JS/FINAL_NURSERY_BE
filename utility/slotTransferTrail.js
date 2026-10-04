@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
 import { getSlotTrailActivityName } from "../constants/slotTrailActions.js";
+import { recordSlotTrail } from "./slotTrailStore.js";
 
 const parseNum = (value) => {
   const n = Number(value);
@@ -230,29 +231,7 @@ export async function appendTransferSlotTrail({
     updatedAt: now,
   };
 
-  const slotOid =
-    typeof slotId === "string" ? new mongoose.Types.ObjectId(slotId) : slotId;
-
-  const updateOptions = {
-    arrayFilters: [{ "subtypeSlot.slots._id": slotOid }, { "slot._id": slotOid }],
-  };
-  if (session) {
-    updateOptions.session = session;
-  }
-
-  await PlantSlot.updateOne(
-    { "subtypeSlots.slots._id": slotOid },
-    {
-      $push: {
-        "subtypeSlots.$[subtypeSlot].slots.$[slot].slotTrail": {
-          $each: [trailEntry],
-          $position: 0,
-          $slice: 1000,
-        },
-      },
-    },
-    updateOptions
-  );
+  await recordSlotTrail(slotId, trailEntry, session);
 }
 
 /**

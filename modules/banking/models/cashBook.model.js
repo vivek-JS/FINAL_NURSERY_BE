@@ -27,6 +27,16 @@ const cashBookSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "PaymentReconciliation",
     },
+    /** Pay-in slip number, for manually entered cash deposits. */
+    slipNumber: { type: String, trim: true, default: "", index: true },
+    /** True once the deposit was matched to a credit on the statement. */
+    depositVerified: { type: Boolean, default: false, index: true },
+    depositVerifiedAt: { type: Date },
+    verifiedAgainstEntryId: {
+      type: Schema.Types.ObjectId,
+      ref: "BankStatementEntry",
+    },
+    depositedBy: { type: Schema.Types.ObjectId, ref: "User" },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     metadata: { type: Schema.Types.Mixed },
   },

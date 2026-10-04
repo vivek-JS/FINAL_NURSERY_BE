@@ -22,9 +22,42 @@ import { assertKeysForEncryption } from "./keyManager.js";
  * Why hybrid? RSA is slow for large payloads; AES handles bulk data; RSA secures the AES key.
  */
 
+/**
+ * CIB_SV MODE (ICICI UAT mail, SR285629874)
+ * =========================================
+ * The CIB_SV sandbox uses a different scheme to the OAEP flow above:
+ *   1. RANDOMNO1 = 16 random digits, used directly as the AES-128 key
+ *   2. encryptedKey = base64(RSA/ECB/PKCS1(RANDOMNO1))
+ *   3. RANDOMNO2 = 16 random digits, used as the IV
+ *   4. encryptedData = base64(AES/CBC/PKCS5(RANDOMNO2 + json, RANDOMNO1, RANDOMNO2))
+ * The envelope carries `oaepHashingAlgorithm: "NONE"` and an empty `iv` field,
+ * because the IV travels inside the payload rather than beside it.
+ *
+ * On the way back the bank prepends the raw IV to the ciphertext, so decrypting
+ * the whole blob yields one garbage block first — that is the 16 bytes the bank's
+ * instructions tell us to discard.
+ */
+
 const AES_ALGO = "aes-256-cbc";
+const AES_ALGO_CIB_SV = "aes-128-cbc";
 const RSA_PADDING = crypto.constants.RSA_PKCS1_OAEP_PADDING;
+const RSA_PADDING_CIB_SV = crypto.constants.RSA_PKCS1_PADDING;
 const OAEP_HASH = "sha256";
+const CIB_SV_BLOCK_BYTES = 16;
+
+/** True when the CIB_SV (UAT) scheme is selected instead of the OAEP scheme. */
+export function isCibSvCryptoMode() {
+  return String(process.env.ICICI_CRYPTO_MODE || "").toUpperCase() === "CIB_SV";
+}
+
+/** 16 random digits as ASCII — doubles as a 16-byte AES key or IV. */
+function random16Digits() {
+  let out = "";
+  for (let i = 0; i < CIB_SV_BLOCK_BYTES; i += 1) {
+    out += String(crypto.randomInt(0, 10));
+  }
+  return Buffer.from(out, "utf8");
+}
 
 function forgePrivateKeyToNode(forgePrivateKey) {
   const pem = forge.pki.privateKeyToPem(forgePrivateKey);
@@ -37,11 +70,11 @@ function forgePublicKeyToNode(forgeCert) {
 }
 
 /**
- * Encrypt a plain object for ICICI Corporate API.
+ * Encrypt a plain object for ICICI Corporate API (OAEP SHA-256 scheme).
  * @param {object} payload
  * @returns {{ encryptedKey: string, encryptedData: string, iv: string, oaepHashingAlgorithm: string }}
  */
-export function encryptPayload(payload) {
+function encryptPayloadOaep(payload) {
   const { iciciPublicCert, privateKey } = assertKeysForEncryption();
 
   const plainText = JSON.stringify(payload);
@@ -69,11 +102,56 @@ export function encryptPayload(payload) {
 }
 
 /**
- * Decrypt ICICI Corporate API response envelope.
+ * Encrypt a plain object for the CIB_SV sandbox (PKCS1 + in-payload IV).
+ * @param {object} payload
+ * @returns {{ requestId: string, service: string, encryptedKey: string, encryptedData: string, oaepHashingAlgorithm: string, iv: string, clientInfo: string, optionalParam: string }}
+ */
+function encryptPayloadCibSv(payload, { service = "" } = {}) {
+  const { iciciPublicCert } = assertKeysForEncryption();
+
+  const aesKey = random16Digits();
+  const iv = random16Digits();
+
+  const cipher = crypto.createCipheriv(AES_ALGO_CIB_SV, aesKey, iv);
+  const encryptedData = Buffer.concat([
+    cipher.update(Buffer.concat([iv, Buffer.from(JSON.stringify(payload), "utf8")])),
+    cipher.final(),
+  ]).toString("base64");
+
+  const encryptedKey = crypto.publicEncrypt(
+    { key: forgePublicKeyToNode(iciciPublicCert), padding: RSA_PADDING_CIB_SV },
+    aesKey
+  );
+
+  return {
+    requestId: crypto.randomUUID(),
+    service,
+    encryptedKey: encryptedKey.toString("base64"),
+    encryptedData,
+    oaepHashingAlgorithm: "NONE",
+    iv: "",
+    clientInfo: "",
+    optionalParam: "",
+  };
+}
+
+/**
+ * Encrypt a plain object for ICICI. Scheme follows `ICICI_CRYPTO_MODE`.
+ * @param {object} payload
+ * @param {{ service?: string }} [options]
+ */
+export function encryptPayload(payload, options = {}) {
+  return isCibSvCryptoMode()
+    ? encryptPayloadCibSv(payload, options)
+    : encryptPayloadOaep(payload);
+}
+
+/**
+ * Decrypt ICICI Corporate API response envelope (OAEP SHA-256 scheme).
  * @param {{ encryptedKey: string, encryptedData: string, iv: string }} envelope
  * @returns {object}
  */
-export function decryptPayload(envelope) {
+function decryptPayloadOaep(envelope) {
   const { privateKey } = assertKeysForEncryption();
 
   if (!envelope?.encryptedKey || !envelope?.encryptedData || !envelope?.iv) {
@@ -94,6 +172,72 @@ export function decryptPayload(envelope) {
   plain += decipher.final("utf8");
 
   return JSON.parse(plain);
+}
+
+/**
+ * Decrypt a CIB_SV response envelope (PKCS1 key, IV prefixed to the ciphertext).
+ * @param {{ encryptedKey: string, encryptedData: string }} envelope
+ * @returns {object}
+ */
+function decryptPayloadCibSv(envelope) {
+  const { privateKey } = assertKeysForEncryption();
+
+  if (!envelope?.encryptedKey || !envelope?.encryptedData) {
+    const err = new Error("Invalid encrypted envelope — missing encryptedKey or encryptedData");
+    err.code = "ICICI_DECRYPT_INVALID";
+    throw err;
+  }
+
+  // Node refuses PKCS1 v1.5 private decryption since CVE-2023-46809 (Marvin),
+  // and the bank's scheme leaves us no choice of padding, so forge does this
+  // step in JS. The timing oracle that CVE describes needs an attacker who can
+  // feed us ciphertexts; here we only ever decrypt ICICI's own reply.
+  let aesKey;
+  try {
+    aesKey = Buffer.from(
+      privateKey.decrypt(
+        Buffer.from(envelope.encryptedKey, "base64").toString("binary"),
+        "RSAES-PKCS1-V1_5"
+      ),
+      "binary"
+    );
+  } catch (cause) {
+    // Almost always means ICICI encrypted to a different public key than the
+    // one we hold, i.e. our certificate was never registered with them.
+    const err = new Error(
+      "Could not decrypt the ICICI response — the bank encrypted it to a different public key. " +
+        "Check that the certificate registered with ICICI matches ICICI_PRIVATE_KEY_PATH."
+    );
+    err.code = "ICICI_DECRYPT_KEY_MISMATCH";
+    err.cause = cause;
+    throw err;
+  }
+
+  const raw = Buffer.from(envelope.encryptedData, "base64");
+  const decipher = crypto.createDecipheriv(
+    AES_ALGO_CIB_SV,
+    aesKey,
+    raw.subarray(0, CIB_SV_BLOCK_BYTES)
+  );
+  const plain = Buffer.concat([decipher.update(raw), decipher.final()]);
+
+  // First block is the IV echoed back through CBC; the JSON starts after it.
+  const text = plain.subarray(CIB_SV_BLOCK_BYTES).toString("utf8").trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return JSON.parse(plain.toString("utf8").trim());
+  }
+}
+
+/**
+ * Decrypt an ICICI response envelope. Scheme follows `ICICI_CRYPTO_MODE`.
+ * @param {{ encryptedKey: string, encryptedData: string, iv?: string }} envelope
+ */
+export function decryptPayload(envelope) {
+  return isCibSvCryptoMode()
+    ? decryptPayloadCibSv(envelope)
+    : decryptPayloadOaep(envelope);
 }
 
 /**

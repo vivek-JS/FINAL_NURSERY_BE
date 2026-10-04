@@ -98,7 +98,7 @@ export const createPurchaseOrder = async (req, res) => {
       return res.status(403).json({
         success: false,
         message:
-          'Auto GRN / auto-approve is only available for Super Admin, Ram Agri Master, or Ram Agri Sales Manager',
+          'Auto GRN / auto-approve is only available for Super Admin, Office Admin, Ram Agri Master, or Ram Agri Sales Manager',
       });
     }
     const isAutoGRN = wantsAutoGRN && canAutoAccept;
@@ -1316,6 +1316,7 @@ export const getPurchaseOrderById = async (req, res) => {
     const purchaseOrder = await PurchaseOrder.findById(req.params.id)
       .populate([
         'items.product',
+        'items.targetProduct',
         'items.unit',
         'createdBy',
         'updatedBy',
@@ -1411,7 +1412,7 @@ export const updatePurchaseOrder = async (req, res) => {
         return res.status(403).json({
           success: false,
           message:
-            'Auto GRN / auto-approve is only available for Super Admin, Ram Agri Master, or Ram Agri Sales Manager',
+            'Auto GRN / auto-approve is only available for Super Admin, Office Admin, Ram Agri Master, or Ram Agri Sales Manager',
         });
       }
       purchaseOrder.autoGRN = wantsAutoGRN;

@@ -62,6 +62,13 @@ const allowedParams = [
   "date",
   "sowDate", // GET /sowing/request/:id/slot-preview
   "sowingDate", // alias of sowDate
+  "acceptedOnly", // GET /sowing/admin-direct-sow/orders — accepted + unsowed only
+  "sort", // GET /sowing/completions column sort
+  "dir", // GET /sowing/completions asc | desc
+  "sowFrom", // GET /sowing/completions sow-date filter
+  "sowTo",
+  "addedFrom", // GET /sowing/completions date-added filter
+  "addedTo",
   "plantReadyDays", // GET /sowing/request/:id/slot-preview
   "fromDate",
   "dispatched",
@@ -227,9 +234,10 @@ const allowedParams = [
   // One-click agri load link params
   "orderNumber",
   "actorPhone",
-  // Daily notes list filters
+  // Daily notes list filters; capacity sheet uses from/to, or all=1 for no date range
   "from",
   "to",
+  "all",
   // Money ledger (GET /inventory/money-ledger/parties*)
   "book",
   "side",
@@ -271,6 +279,7 @@ allowedQueryKeys.add("side"); // GET /inventory/money-ledger — AR | AP | ALL
 allowedQueryKeys.add("purchaseOrderId"); // GET /inventory/purchase-returns/returnable-batches
 allowedQueryKeys.add("supplierId"); // GET /inventory/purchase-returns/returnable-batches (supplier-wise)
 allowedQueryKeys.add("partyKind"); // GET /inventory/money-ledger/parties — ALL|FARMER|MERCHANT
+allowedQueryKeys.add("all"); // GET /sowing/capacity-sheet?all=1 and sow-ready entries
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
@@ -307,6 +316,12 @@ const parameterWhiteListing = (req, res, next) => {
   // ERP ICICI / payment reconciliation — mounted at /api/payments (dateFrom, dateTo, source, …)
   const paymentsPath = stripQuery(req.originalUrl || req.url || "") || req.path || "";
   if (paymentsPath.startsWith("/api/payments") || (req.path && req.path.startsWith("/api/payments"))) {
+    return next();
+  }
+
+  // Banking tab — accountNumber, skip, verified, utr, amount, txnDate, merchantTranId.
+  // Same idea as /api/payments: the controllers ignore unknown keys.
+  if (paymentsPath.startsWith("/api/banking") || (req.path && req.path.startsWith("/api/banking"))) {
     return next();
   }
 

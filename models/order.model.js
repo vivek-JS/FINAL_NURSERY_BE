@@ -1133,6 +1133,18 @@ const orderSchema = new Schema(
       type: String,
       trim: true,
     },
+    /** Traceability snapshot at delivery complete (batch + shed from app load or office pick). */
+    deliveryCompleteBatch: {
+      batchNumber: { type: String, trim: true, default: "" },
+      batchId: { type: Schema.Types.ObjectId, ref: "DispatchBatch" },
+      pollyhouse: { type: String, trim: true, default: "" },
+      secondaryInwardId: { type: Schema.Types.ObjectId },
+      source: {
+        type: String,
+        enum: ["vehicle_load", "shed_stock", "manual"],
+      },
+      capturedAt: { type: Date },
+    },
     /**
      * Delivery challan invoice label reserved at instant sale (order created as DISPATCHED)
      * or reused when the order is first loaded on a vehicle dispatch.

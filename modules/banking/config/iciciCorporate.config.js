@@ -17,17 +17,19 @@ export function getIciciCorporateConfig() {
   const baseUrl =
     process.env.ICICI_CORPORATE_BASE_URL ||
     (isProd
-      ? "https://apibankingone.icicibank.com"
-      : "https://apibankingonesandbox.icicibank.com");
+      ? "https://apibankingone.icici.bank.in"
+      : "https://apibankingonesandbox.icici.bank.in");
 
   return {
     envType,
     isProd,
     baseUrl,
-    apiPrefix: process.env.ICICI_CORPORATE_API_PREFIX || "/api/Corporate/CIB/v1",
+    apiPrefix: process.env.ICICI_CORPORATE_API_PREFIX || "/api/Corporate/CIB_SV/v1",
     corpId: process.env.ICICI_CORPORATE_ID || "",
     userId: process.env.ICICI_CORPORATE_USER_ID || "",
     aggregatorId: process.env.ICICI_AGGREGATOR_ID || "",
+    aggregatorName: process.env.ICICI_AGGRNAME || "",
+    urn: process.env.ICICI_URN || "",
     accountNumber: process.env.ICICI_ACCOUNT_ID || process.env.ICICI_ACCOUNT_NUMBER || "",
     apiKey: process.env.ICICI_CORPORATE_API_KEY || "",
     clientId: process.env.ICICI_CORPORATE_CLIENT_ID || "",
@@ -50,8 +52,12 @@ export function getIciciCorporateConfig() {
     },
     endpoints: {
       registration: process.env.ICICI_REGISTRATION_PATH || "/Registration",
+      registrationStatus:
+        process.env.ICICI_REGISTRATION_STATUS_PATH || "/RegistrationStatus",
       statement: process.env.ICICI_STATEMENT_PATH || "/AccountStatement",
       transactionStatus: process.env.ICICI_TXN_STATUS_PATH || "/TransactionStatus",
+      transactionInquiry:
+        process.env.ICICI_TXN_INQUIRY_PATH || "/TransactionInquiry",
       balance: process.env.ICICI_BALANCE_PATH || "/BalanceInquiry",
     },
     ipWhitelist: (process.env.ICICI_IP_WHITELIST || "")

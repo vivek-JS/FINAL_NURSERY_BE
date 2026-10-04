@@ -3,6 +3,7 @@ import assert from "node:assert";
 import {
   aggregatePastDueMetricsForSlotGroup,
   buildCrossSlotDetailBySlot,
+  buildPendingLagwadBucketsFromSlots,
   buildSlotOrderMetrics,
   computeSlotPhysicalMetrics,
   sumEarlyDispatchOntoSlot,
@@ -296,5 +297,69 @@ describe("pastDueSlotMetrics — remaining split on slot row", () => {
     assert.strictEqual(metrics.actualGapPlants, 100);
     assert.strictEqual(metrics.actualGapPct, 25);
     assert.strictEqual(metrics.rolledInAvailablePlants, 50);
+  });
+});
+
+describe("pastDueSlotMetrics — pending lagwad buckets", () => {
+  const asOf = new Date("2026-06-20T12:00:00+05:30");
+
+  it("pending roll includes ready only; sow-only expired windows excluded", () => {
+    const slots = [
+      {
+        _id: EXPIRED,
+        startDay: "01-05-2026",
+        endDay: "15-05-2026",
+        actualPlants: 900,
+        actualReadyPlants: 0,
+      },
+      {
+        _id: "eeeeeeeeeeeeeeeeeeeeeeee",
+        startDay: "16-05-2026",
+        endDay: "31-05-2026",
+        actualPlants: 0,
+        actualReadyPlants: 120,
+      },
+      {
+        _id: CURRENT,
+        startDay: "16-06-2026",
+        endDay: "30-06-2026",
+        actualPlants: 500,
+        actualReadyPlants: 50,
+      },
+    ];
+    const { pendingLagwadBySlot, pendingLagwadTotal } = buildPendingLagwadBucketsFromSlots(
+      slots,
+      asOf
+    );
+    assert.strictEqual(pendingLagwadBySlot.length, 1);
+    assert.strictEqual(pendingLagwadTotal.slotCount, 1);
+    assert.strictEqual(pendingLagwadTotal.readyPlants, 120);
+    assert.strictEqual(pendingLagwadBySlot[0].sowRecordPlants, 0);
+    assert.ok(pendingLagwadBySlot.every((b) => Array.isArray(b.batches)));
+  });
+
+  it("surfaces pending lagwad on current slot pastDueDetail", () => {
+    const slots = [
+      {
+        _id: EXPIRED,
+        status: true,
+        startDay: "01-05-2026",
+        endDay: "15-05-2026",
+        actualPlants: 100,
+        actualReadyPlants: 10,
+      },
+      {
+        _id: CURRENT,
+        status: true,
+        startDay: "16-06-2026",
+        endDay: "30-06-2026",
+        actualPlants: 0,
+        actualReadyPlants: 0,
+      },
+    ];
+    const group = aggregatePastDueMetricsForSlotGroup(slots, new Map(), asOf);
+    assert.strictEqual(group.pastDueDetail.pendingLagwadTotal.sowRecordPlants, 100);
+    assert.strictEqual(group.pastDueDetail.pendingLagwadTotal.readyPlants, 10);
+    assert.strictEqual(group.pastDueDetail.pendingLagwadBySlot.length, 1);
   });
 });

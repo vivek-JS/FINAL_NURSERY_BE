@@ -4,6 +4,7 @@ import {
   getProductAgriLinkHandler,
   patchProductAgriLinkHandler,
   getProductStockLedgerHandler,
+  postProductManualStockHandler,
 } from '../controllers/biotechSeedMaster.controller.js';
 
 const router = express.Router();
@@ -19,6 +20,7 @@ router.get('/', productController.getAllProducts);
 router.get('/:id/stock-ledger', getProductStockLedgerHandler);
 router.get('/:id/agri-link', getProductAgriLinkHandler);
 router.patch('/:id/agri-link', patchProductAgriLinkHandler);
+router.post('/:id/manual-stock', postProductManualStockHandler);
 router.get('/:id', productController.getProductById);
 router.put('/:id', productController.updateProduct);
 router.delete('/:id', productController.deleteProduct);

@@ -56,8 +56,11 @@ export function isWhatsAppConnectionInProgress() {
   if (authenticatedPendingReady) return true;
   if (readyWatchdog) return true;
   if (client && initStarted) return true;
-  if (isChromeRunningForSession()) return true;
-  if (lastQrAt && Date.now() - lastQrAt.getTime() < QR_SCAN_GRACE_MS) return true;
+  // Only treat Chrome as "in progress" when our client is actually starting (avoids stuck reconnecting).
+  if (client && isChromeRunningForSession()) return true;
+  if (lastQrAt && Date.now() - lastQrAt.getTime() < QR_SCAN_GRACE_MS) {
+    if (getWhatsAppQrPayload()) return true;
+  }
   return false;
 }
 
@@ -305,6 +308,62 @@ export function getWhatsAppLinkedPhone() {
   }
 }
 
+export function isWhatsAppAuthPending() {
+  return authenticatedPendingReady;
+}
+
+/** Status payload for campaign bridge + UI (avoids stale QR while linked). */
+export function getWhatsAppBridgePublicStatus() {
+  const qr = getWhatsAppQrStatus();
+  const linkedPhone = getWhatsAppLinkedPhone();
+  const sessionPersisted = hasPersistedWhatsAppSession(getWhatsAppSessionPath());
+
+  if (isWhatsAppReady) {
+    return {
+      status: "connected",
+      whatsappReady: true,
+      linkedPhone,
+      sessionPersisted,
+      authPending: false,
+      qrHint: null,
+      qrPayload: null,
+      lastQrAt: null,
+      qrExpired: false,
+    };
+  }
+
+  if (authenticatedPendingReady) {
+    return {
+      status: "connecting",
+      whatsappReady: false,
+      linkedPhone,
+      sessionPersisted,
+      authPending: true,
+      qrHint: null,
+      qrPayload: null,
+      lastQrAt: null,
+      qrExpired: false,
+    };
+  }
+
+  let status = "disconnected";
+  if (qr.hasQr) status = "qr_required";
+  else if (qr.qrExpired) status = "reconnecting";
+  else if (sessionPersisted) status = "reconnecting";
+
+  return {
+    status,
+    whatsappReady: false,
+    linkedPhone,
+    sessionPersisted,
+    authPending: false,
+    qrHint: qr.hasQr ? qr.qrFile : qr.qrExpired ? qr.qrFile : null,
+    qrPayload: qr.qrPayload || null,
+    lastQrAt: qr.lastQrAt,
+    qrExpired: Boolean(qr.qrExpired),
+  };
+}
+
 const clearReadyWatchdog = () => {
   if (readyWatchdog) {
     clearTimeout(readyWatchdog);
@@ -446,8 +505,21 @@ function attachClientHandlers(waClient) {
     })();
   };
 
-  waClient.on("message", onInboundMessage);
-  waClient.on("message_create", onInboundMessage);
+  waClient.on("message_ack", (msg, ack) => {
+    void import("./whatsappCampaignBridge.service.js").then(({ handleCampaignMessageAck }) =>
+      handleCampaignMessageAck(msg, ack)
+    );
+  });
+
+  const onInboundWithCampaign = (msg) => {
+    void import("./whatsappCampaignBridge.service.js").then(({ handleCampaignInboundMessage }) =>
+      handleCampaignInboundMessage(msg)
+    );
+    onInboundMessage(msg);
+  };
+
+  waClient.on("message", onInboundWithCampaign);
+  waClient.on("message_create", onInboundWithCampaign);
 
   waClient.on("auth_failure", (msg) => {
     clearReadyWatchdog();
@@ -525,11 +597,61 @@ function persistQrForScan(qr) {
   }
 }
 
+const QR_MAX_AGE_MS = Number(process.env.WHATSAPP_QR_MAX_AGE_MS || 45000);
+
+function parseQrFileMeta() {
+  try {
+    const qrFile = path.join(getWhatsAppSessionPath(), "last-qr.txt");
+    if (!fs.existsSync(qrFile)) return { payload: null, scannedAt: null };
+    const raw = fs.readFileSync(qrFile, "utf8").trim();
+    const lines = raw.split("\n");
+    let scannedAt = null;
+    if (lines[0]?.startsWith("Scan at ")) {
+      const t = Date.parse(lines[0].slice("Scan at ".length).trim());
+      scannedAt = Number.isFinite(t) ? t : null;
+    }
+    const payload = lines.find((line) => line && !line.startsWith("Scan at")) || null;
+    return { payload, scannedAt };
+  } catch {
+    return { payload: null, scannedAt: null };
+  }
+}
+
+function isQrFresh(scannedAtMs) {
+  if (!scannedAtMs) return false;
+  return Date.now() - scannedAtMs <= QR_MAX_AGE_MS;
+}
+
+/** Raw QR string for internal bridge (campaign UI — must be fresh or scan fails on phone). */
+export function getWhatsAppQrPayload() {
+  if (isWhatsAppReady) return null;
+  if (lastQrPayload && lastQrAt && isQrFresh(lastQrAt.getTime())) {
+    return lastQrPayload;
+  }
+  const fromFile = parseQrFileMeta();
+  if (fromFile.payload && isQrFresh(fromFile.scannedAt)) {
+    return fromFile.payload;
+  }
+  return null;
+}
+
 export function getWhatsAppQrStatus() {
+  const payload = getWhatsAppQrPayload();
+  const freshAt =
+    lastQrAt && lastQrPayload && isQrFresh(lastQrAt.getTime())
+      ? lastQrAt.toISOString()
+      : (() => {
+          const f = parseQrFileMeta();
+          return f.scannedAt && isQrFresh(f.scannedAt)
+            ? new Date(f.scannedAt).toISOString()
+            : null;
+        })();
   return {
-    hasQr: Boolean(lastQrPayload),
-    lastQrAt: lastQrAt?.toISOString() || null,
+    hasQr: Boolean(payload),
+    lastQrAt: freshAt,
+    qrExpired: !payload && !isWhatsAppReady,
     qrFile: path.join(getWhatsAppSessionPath(), "last-qr.txt"),
+    qrPayload: payload,
   };
 }
 
@@ -562,7 +684,9 @@ export async function ensureWhatsAppConnected(reason = "watchdog") {
     reason.startsWith("manual") ||
     reason.startsWith("watchdog") ||
     reason.startsWith("cron") ||
-    reason.startsWith("detached");
+    reason.startsWith("detached") ||
+    reason.startsWith("campaign-bridge") ||
+    reason.startsWith("session-reset");
 
   if ((client || chromeRunning || initPromise) && !forceHardReset) {
     const ready = await waitUntilWhatsAppReady(
@@ -770,6 +894,61 @@ async function startWhatsAppClientInner() {
   }
 
   return client;
+}
+
+/**
+ * Unlink WhatsApp on disk + restart client so a new QR is shown (ERP + campaign share this session).
+ */
+export async function resetWhatsAppSessionForRelink(reason = "session-reset") {
+  if (shuttingDown) return { ok: false, reason: "shutting_down" };
+
+  console.warn(`[WhatsApp] Full session reset requested (${reason}) — new QR required`);
+  isWhatsAppReady = false;
+  authenticatedPendingReady = false;
+  lastQrPayload = null;
+  lastQrAt = null;
+  clearReadyWatchdog();
+  reinitAttempts = 0;
+
+  if (initPromise) {
+    await initPromise.catch(() => {});
+    initPromise = null;
+  }
+
+  if (client) {
+    try {
+      if (typeof client.logout === "function") {
+        await client.logout();
+      } else {
+        await client.destroy();
+      }
+    } catch (err) {
+      console.warn("[WhatsApp] logout/destroy during reset:", err?.message || err);
+      await client.destroy?.().catch(() => {});
+    }
+    client = null;
+  }
+
+  initStarted = false;
+  const dataPath = resolveWritableWhatsAppSessionPath();
+  sessionPath = dataPath;
+  releaseStaleWhatsAppBrowserLock(dataPath);
+  wipeSessionDir(dataPath, reason);
+  try {
+    fs.unlinkSync(path.join(dataPath, "last-qr.txt"));
+  } catch {
+    /* ignore */
+  }
+
+  await sleep(2000);
+  await startWhatsAppClient();
+  await waitUntilWhatsAppReady(15000).catch(() => false);
+  const qr = getWhatsAppQrPayload();
+  return {
+    ok: true,
+    reason: qr ? "qr_ready" : "reset_started_wait_for_qr",
+    hasQr: Boolean(qr),
+  };
 }
 
 /**
