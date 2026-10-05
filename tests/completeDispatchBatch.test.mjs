@@ -56,6 +56,63 @@ test("no vehicle load requires batchNumber", () => {
   );
 });
 
+test("banana requires existing batch when no vehicle load", () => {
+  const dispatch = { orderDispatchDetails: [{ orderId: oid, shedLoadedBatches: [] }] };
+  assert.throws(
+    () =>
+      resolveCompleteDispatchBatch({
+        dispatch,
+        orderId: oid,
+        order: { plantName: { name: "Banana" } },
+        clientPayload: {},
+      }),
+    /banana/i
+  );
+  assert.throws(
+    () =>
+      resolveCompleteDispatchBatch({
+        dispatch,
+        orderId: oid,
+        order: { plantName: { name: "Banana" } },
+        clientPayload: { batchNumber: "LOT-X", batchSource: "manual" },
+      }),
+    /existing lagwad/
+  );
+  const fromStock = resolveCompleteDispatchBatch({
+    dispatch,
+    orderId: oid,
+    order: { plantName: { name: "Banana" } },
+    clientPayload: {
+      batchNumber: "SB-19",
+      batchSource: "shed_stock",
+      batchId: "507f1f77bcf86cd799439011",
+    },
+  });
+  assert.equal(fromStock.batchNumber, "SB-19");
+  assert.equal(fromStock.source, "shed_stock");
+});
+
+test("non-banana may complete without batch or with a typed lot", () => {
+  const dispatch = { orderDispatchDetails: [{ orderId: oid, shedLoadedBatches: [] }] };
+  const empty = resolveCompleteDispatchBatch({
+    dispatch,
+    orderId: oid,
+    order: { plantName: { name: "Papaya" } },
+    clientPayload: {},
+  });
+  assert.equal(empty.batchNumber, "");
+  assert.equal(empty.source, "manual");
+
+  const typed = resolveCompleteDispatchBatch({
+    dispatch,
+    orderId: oid,
+    order: { plantName: { name: "Papaya" } },
+    clientPayload: { batchNumber: "LOT-X", batchSource: "manual" },
+  });
+  assert.equal(typed.batchNumber, "LOT-X");
+  assert.equal(typed.source, "manual");
+});
+
 test("requiresPollyhouse when client flag set", () => {
   const dispatch = { orderDispatchDetails: [{ orderId: oid }] };
   assert.throws(

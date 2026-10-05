@@ -3,13 +3,19 @@ import {
   sendCustomNotificationToUser,
   sendBulkNotification,
   sendNotificationByPhone,
+  listMyInbox,
+  markInboxRead,
+  markAllInboxRead,
 } from "../controllers/notification.controller.js";
 import { authenticateToken } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
 
-// All notification routes require authentication
 router.use(authenticateToken);
+
+router.get("/inbox", listMyInbox);
+router.patch("/inbox/read-all", markAllInboxRead);
+router.patch("/inbox/:id/read", markInboxRead);
 
 /**
  * Send custom notification to a single user by userId

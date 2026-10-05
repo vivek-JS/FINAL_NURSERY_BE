@@ -1,11 +1,27 @@
 import User from "../models/user.model.js";
 import Order from "../models/order.model.js";
+import NotificationInbox from "../models/notificationInbox.model.js";
 import {
   sendCustomNotification,
   sendOrderAcceptedNotification,
   sendOrderRejectedNotification,
   sendOrderDispatchedNotification,
 } from "../utility/pushNotification.js";
+
+function isExpoToken(token) {
+  return typeof token === "string" && token.startsWith("ExponentPushToken[");
+}
+
+async function persistInbox({ userId, title, body, type = "custom", data = {} }) {
+  if (!userId || !title || !body) return null;
+  return NotificationInbox.create({
+    user: userId,
+    title,
+    body,
+    type,
+    data,
+  });
+}
 
 /**
  * Save user's push notification token
@@ -25,10 +41,13 @@ export const savePushToken = async (req, res) => {
       });
     }
 
-    // Update user with push token
+    const tokenUpdate = isExpoToken(pushToken)
+      ? { expoPushToken: pushToken }
+      : { fcmToken: pushToken };
+
     const updatedUser = await User.findByIdAndUpdate(
       userId, 
-      { expoPushToken: pushToken },
+      tokenUpdate,
       { new: true, runValidators: false }
     );
 
@@ -85,19 +104,21 @@ export const sendCustomNotificationToUser = async (req, res) => {
       });
     }
 
-    if (!user.expoPushToken) {
-      return res.status(400).json({
-        success: false,
-        message: "User doesn't have a push token. They need to open the mobile app first."
-      });
-    }
-
     console.log(`📤 Sending custom notification to ${user.name} (${user.phoneNumber})`);
     console.log(`   Title: ${title}`);
     console.log(`   Message: ${message}`);
 
-    // Send notification
-    const result = await sendCustomNotification(user.expoPushToken, title, message, data);
+    await persistInbox({
+      userId: user._id,
+      title,
+      body: message,
+      type: data?.type || "custom",
+      data,
+    });
+
+    const result = user.expoPushToken
+      ? await sendCustomNotification(user.expoPushToken, title, message, data)
+      : { success: true, message: "Inbox saved (no Expo token)" };
 
     res.json({
       success: true,
@@ -135,26 +156,35 @@ export const sendBulkNotification = async (req, res) => {
     }
 
     // Get users with push tokens
-    const users = await User.find({
-      _id: { $in: userIds },
-      expoPushToken: { $exists: true, $ne: null }
-    });
+    const users = await User.find({ _id: { $in: userIds } });
 
     if (users.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "No users found with push tokens"
+        message: "No users found"
       });
     }
 
-    const pushTokens = users.map(u => u.expoPushToken);
+    await NotificationInbox.insertMany(
+      users.map((u) => ({
+        user: u._id,
+        title,
+        body: message,
+        type: data?.type || "custom",
+        data,
+      })),
+    );
+
+    const pushTokens = users.map((u) => u.expoPushToken).filter(Boolean);
 
     console.log(`📤 Sending bulk notification to ${users.length} users`);
     console.log(`   Title: ${title}`);
     console.log(`   Message: ${message}`);
 
     // Send notification
-    const result = await sendCustomNotification(pushTokens, title, message, data);
+    const result = pushTokens.length
+      ? await sendCustomNotification(pushTokens, title, message, data)
+      : { success: true, message: "Inbox saved (no Expo tokens)" };
 
     res.json({
       success: true,
@@ -197,19 +227,17 @@ export const sendNotificationByPhone = async (req, res) => {
       });
     }
 
-    if (!user.expoPushToken) {
-      return res.status(400).json({
-        success: false,
-        message: `User ${user.name} doesn't have a push token. They need to open the mobile app first.`
-      });
-    }
+    await persistInbox({
+      userId: user._id,
+      title,
+      body: message,
+      type: data?.type || "custom",
+      data,
+    });
 
-    console.log(`📤 Sending notification to ${user.name} (${user.phoneNumber})`);
-    console.log(`   Title: ${title}`);
-    console.log(`   Message: ${message}`);
-
-    // Send notification
-    const result = await sendCustomNotification(user.expoPushToken, title, message, data);
+    const result = user.expoPushToken
+      ? await sendCustomNotification(user.expoPushToken, title, message, data)
+      : { success: true, message: "Inbox saved (no Expo token)" };
 
     res.json({
       success: true,
@@ -226,6 +254,58 @@ export const sendNotificationByPhone = async (req, res) => {
       success: false,
       message: "Failed to send notification",
       error: error.message
+    });
+  }
+};
+
+export const listMyInbox = async (req, res) => {
+  try {
+    const items = await NotificationInbox.find({ user: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    res.json({ success: true, data: items, items });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to load notifications",
+      error: error.message,
+    });
+  }
+};
+
+export const markInboxRead = async (req, res) => {
+  try {
+    const item = await NotificationInbox.findOneAndUpdate(
+      { _id: req.params.id, user: req.user._id },
+      { readAt: new Date() },
+      { new: true },
+    );
+    if (!item) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
+    res.json({ success: true, data: item });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark read",
+      error: error.message,
+    });
+  }
+};
+
+export const markAllInboxRead = async (req, res) => {
+  try {
+    const result = await NotificationInbox.updateMany(
+      { user: req.user._id, readAt: null },
+      { readAt: new Date() },
+    );
+    res.json({ success: true, updated: result.modifiedCount });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark all read",
+      error: error.message,
     });
   }
 };

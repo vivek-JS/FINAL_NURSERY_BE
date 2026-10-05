@@ -631,7 +631,13 @@ export async function runExpiredReadyRollAuto({ asOfDate = new Date() } = {}) {
       for (const slot of subtypeSlots) {
         if (!isSlotExpiredByEndDay(slot, asOfDate)) continue;
 
-        const availableQty = Math.floor(getSlotEffectiveAvailablePlants(slot));
+        const includeBookingAvailable =
+          String(process.env.SLOT_ROLL_INCLUDE_BOOKING_AVAILABLE || "").toLowerCase() ===
+          "true";
+        const availableQty = includeBookingAvailable
+          ? Math.floor(getSlotEffectiveAvailablePlants(slot))
+          : 0;
+        const actualQty = 0;
         const readyQty = Math.floor(Number(slot.actualReadyPlants) || 0);
         if (availableQty < 1 && readyQty < 1) continue;
 
@@ -645,10 +651,13 @@ export async function runExpiredReadyRollAuto({ asOfDate = new Date() } = {}) {
               {
                 sourceSlotId: String(slot._id),
                 availableQty,
+                actualQty,
                 readyQty,
               },
             ],
-            reason: "Auto expired slot roll (available + ready)",
+            reason: includeBookingAvailable
+              ? "Auto expired slot roll (available + ready lagwad)"
+              : "Auto expired lagwad roll (ready only; sow stays on window)",
             performedBy: null,
             asOfDate,
             rollKind: "expired_auto",
@@ -847,6 +856,53 @@ export async function runRollExpiredSlotAvailable({
       totalActualRolled: results.reduce((s, r) => s + (r.actualQty || 0), 0),
       totalReadyRolled: totalReady,
     };
+  } catch (err) {
+    await session.abortTransaction();
+    throw err;
+  } finally {
+    session.endSession();
+  }
+}
+
+/** Move actualPlants (sow) back from today's slot → expired source (undo mistaken sow roll). */
+export async function revertActualPlantsRoll({
+  fromSlotId,
+  toSlotId,
+  actualQty,
+  reason = "Revert lagwad sow roll — restore sow on original delivery window",
+  performedBy = null,
+}) {
+  const qty = Math.floor(Number(actualQty) || 0);
+  if (qty < 1) throw new Error("actualQty must be positive");
+  if (!fromSlotId || !toSlotId) throw new Error("fromSlotId and toSlotId are required");
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const sourceDetails = await findSlotDetails(fromSlotId);
+    const targetDetails = await findSlotDetails(toSlotId);
+    if (!sourceDetails || !targetDetails) throw new Error("Slot not found");
+    if (sourceDetails.plantId.toString() !== targetDetails.plantId.toString()) {
+      throw new Error("Slots must be same plant");
+    }
+    if (sourceDetails.subtypeId.toString() !== targetDetails.subtypeId.toString()) {
+      throw new Error("Slots must be same subtype");
+    }
+
+    await applyActualTransfer({
+      sourceDetails,
+      targetDetails,
+      sourceSlotId: String(fromSlotId),
+      targetSlotId: String(toSlotId),
+      actualQty: qty,
+      reason,
+      performedBy,
+      session,
+      transferKind: "expired_actual_revert",
+    });
+
+    await session.commitTransaction();
+    return { fromSlotId: String(fromSlotId), toSlotId: String(toSlotId), actualQty: qty };
   } catch (err) {
     await session.abortTransaction();
     throw err;

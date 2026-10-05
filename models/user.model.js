@@ -98,6 +98,11 @@ const userSchema = new Schema({
     type: String,
     default: null,
   },
+  /** Native Flutter FCM / APNs token (shed-ops-flutter). */
+  fcmToken: {
+    type: String,
+    default: null,
+  },
   /** Ram Agri: max allowed sales outstanding (₹); null/omit → use global default from RamAgriSalesConfig */
   ramAgriOutstandingLimitRupees: {
     type: Number,

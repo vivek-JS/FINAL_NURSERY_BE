@@ -47,6 +47,8 @@ export const SALES_SHEET_COLUMNS = [
   { key: "shadeNo", label: "Shade No." },
   { key: "nursery", label: "Nursery" },
   { key: "batch", label: "Batch" },
+  { key: "deliveryBatch", label: "Delivery Batch" },
+  { key: "deliveryShed", label: "Shed" },
   { key: "issuePlantQty", label: "Issue Plant Qty." },
   { key: "returnQty", label: "Return" },
   { key: "damagedQty", label: "Damaged" },
@@ -110,6 +112,20 @@ export function formatSalesSheetNursery(expectedNursery) {
   return code || "RB";
 }
 
+/** Batch captured at delivery complete (FEN complete form / deliveryCompleteBatch). */
+export function formatSalesSheetDeliveryBatch(order) {
+  const snap = order?.deliveryCompleteBatch;
+  const fromSnap = String(snap?.batchNumber ?? "").trim();
+  if (fromSnap) return fromSnap;
+  return String(order?.batchNumber ?? "").trim();
+}
+
+/** Shed / polyhouse captured at delivery complete. */
+export function formatSalesSheetDeliveryShed(order) {
+  const snap = order?.deliveryCompleteBatch;
+  return String(snap?.pollyhouse ?? "").trim();
+}
+
 function resolveDispatchDate(order) {
   if (order?.dispatchedDate) return order.dispatchedDate;
   if (order?.bucketEventAt) return order.bucketEventAt;
@@ -166,6 +182,8 @@ export function buildSalesSheetRow(order, lookups = {}) {
       lotBatch: order.batchNumber,
       dispatchBatchNumber: resolveDispatchBatchNumber(order, dispatchBatchById),
     }),
+    deliveryBatch: formatSalesSheetDeliveryBatch(order),
+    deliveryShed: formatSalesSheetDeliveryShed(order),
     issuePlantQty,
     returnQty: returnedPlants,
     damagedQty: damagedPlants,
