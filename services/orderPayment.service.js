@@ -2,7 +2,9 @@ import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import User from "../models/user.model.js";
 import DealerWallet from "../models/dealerWallet.js";
+import AgriSalesOrder from "../models/agriSalesOrder.model.js";
 import AppError from "../utility/appError.js";
+import { normalizeUtr } from "./iciciBankService.js";
 import { applyPaymentTimingToPayment } from "../utils/paymentTiming.js";
 import { stampPaymentRecordedBy, stampPaymentUpdatedBy } from "../utils/paymentAudit.js";
 import { formatOrderWalletDescriptionContext } from "../utils/dispatchCompleteOrderPayments.js";
@@ -108,6 +110,72 @@ export function normalizePaymentRow(row, reqUser, order, { extraReceiptUrls = []
     stampPaymentUpdatedBy(payment, reqUser);
   }
   return payment;
+}
+
+/** Modes whose reference is a bank UTR (cash has none, a cheque is tracked by cheque number). */
+function paymentCarriesUtr(p) {
+  if (!p || p.isDiscount || p.isWalletPayment) return false;
+  const mode = String(p.modeOfPayment || "").toLowerCase();
+  return mode !== "cash" && mode !== "cheque" && mode !== "wallet" && mode !== "discount";
+}
+
+function utrOf(p) {
+  return String(p?.utrNumber || p?.transactionId || "").trim();
+}
+
+/**
+ * Finds a live (not rejected) payment already recorded against this UTR, on any plant order
+ * or agri-sales order. One bank credit pays for one payment, so a second entry is refused.
+ * @returns {Promise<{ orderLabel: string, source: "order"|"agriSales", paymentId: string }|null>}
+ */
+export async function findExistingPaymentByUtr(utrRaw, { excludePaymentId, session } = {}) {
+  const raw = String(utrRaw || "").trim();
+  if (raw.length < 6) return null;
+  const norm = normalizeUtr(raw);
+  const variants = [...new Set([raw, norm, raw.toUpperCase(), raw.toLowerCase()])];
+  const sameUtr = (p) =>
+    p &&
+    p.paymentStatus !== "REJECTED" &&
+    String(p._id) !== String(excludePaymentId || "") &&
+    [p.utrNumber, p.transactionId].some((v) => v && normalizeUtr(v) === norm);
+  const query = {
+    $or: [{ "payment.utrNumber": { $in: variants } }, { "payment.transactionId": { $in: variants } }],
+  };
+
+  for (const [Model, source, label] of [
+    [Order, "order", (o) => `#${o.orderId ?? o._id}`],
+    [AgriSalesOrder, "agriSales", (o) => `#${o.orderNumber ?? o._id}`],
+  ]) {
+    let q = Model.find(query).select("orderId orderNumber payment").lean();
+    if (session) q = q.session(session);
+    for (const o of await q) {
+      const hit = (o.payment || []).find(sameUtr);
+      if (hit) return { orderLabel: label(o), source, paymentId: String(hit._id) };
+    }
+  }
+  return null;
+}
+
+/**
+ * Throws 409 "UTR already exists" when any payment row reuses a UTR that is already recorded,
+ * or repeats the same UTR twice inside this request.
+ */
+export async function assertUtrsNotUsed(payments, { session } = {}) {
+  const seen = new Set();
+  for (const p of payments) {
+    if (!paymentCarriesUtr(p)) continue;
+    const utr = utrOf(p);
+    if (utr.length < 6) continue;
+    const key = normalizeUtr(utr);
+    if (seen.has(key)) {
+      throw new AppError(`UTR ${utr} already exists (entered twice in this request)`, 409);
+    }
+    seen.add(key);
+    const found = await findExistingPaymentByUtr(utr, { session });
+    if (found) {
+      throw new AppError(`UTR ${utr} already exists — already recorded on order ${found.orderLabel}`, 409);
+    }
+  }
 }
 
 /** Payment modes that do not require a receipt photo. Cheque carries its own cheque number. */
@@ -256,6 +324,8 @@ export async function addPaymentsToOrder(orderId, rawPayments, reqUser, options 
       applyPaymentTimingToPayment(subdoc, order);
       return subdoc;
     });
+
+    await assertUtrsNotUsed(normalized, { session });
 
     const dealerId = await resolveDealerIdForOrderWallet(order, session);
     const walletDebitTotal = normalized

@@ -50,6 +50,7 @@ import { scheduleAgriOrderPaymentWhatsApp } from "../services/orderPaymentWhatsa
 import { summarizeSavedPayment } from "../services/orderPayment.service.js";
 import { scheduleStockChangeAlert } from "../services/stockWhatsappAlert.service.js";
 import { stampPaymentUpdatedBy, stampPaymentRecordedBy } from "../utils/paymentAudit.js";
+import { findExistingPaymentByUtr } from "../services/orderPayment.service.js";
 import {
   isAgriDealerSelf,
   mergeDealerCustomerFields,
@@ -2149,6 +2150,18 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
   const previousTotalPaid = order.totalPaidAmount || 0;
   const previousBalance = order.balanceAmount || order.totalAmount;
   const previousPaymentStatus = order.paymentStatus;
+
+  // One bank UTR can only be recorded once.
+  {
+    const refUtr = String(utrNumber || transactionId || "").trim();
+    const modeLc = String(modeOfPayment || "").toLowerCase();
+    if (refUtr && !isWalletPayment && modeLc !== "cash" && modeLc !== "cheque") {
+      const dup = await findExistingPaymentByUtr(refUtr);
+      if (dup) {
+        return next(new AppError(`UTR ${refUtr} already exists — already recorded on order ${dup.orderLabel}`, 409));
+      }
+    }
+  }
 
   // Add payment
   const newPayment = {

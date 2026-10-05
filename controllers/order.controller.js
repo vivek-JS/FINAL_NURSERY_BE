@@ -74,7 +74,11 @@ import {
   rejectFarmerOrderTransferRequest,
 } from "./farmerPlantOrderLedger.controller.js";
 import { applyPaymentTimingToPayment, sumOrderAdvancePayments } from "../utils/paymentTiming.js";
-import { addPaymentsToOrder, summarizeSavedPayment } from "../services/orderPayment.service.js";
+import {
+  addPaymentsToOrder,
+  summarizeSavedPayment,
+  findExistingPaymentByUtr,
+} from "../services/orderPayment.service.js";
 import { schedulePlantOrderPaymentWhatsApp } from "../services/orderPaymentWhatsapp.service.js";
 import { stampPaymentUpdatedBy } from "../utils/paymentAudit.js";
 import {
@@ -1627,6 +1631,25 @@ const updatePaymentStatus = async (req, res, next) => {
     if (remark !== undefined) {
       payment.remark = remark;
     }
+    // A UTR that is already recorded on another payment cannot be reused.
+    for (const next of [utrNumber, transactionId]) {
+      const nextUtr = String(next ?? "").trim();
+      const unchanged = [payment.utrNumber, payment.transactionId].some(
+        (cur) => cur && String(cur).trim() === nextUtr
+      );
+      if (nextUtr && !unchanged && !payment.isWalletPayment) {
+        const mode = String(modeOfPayment ?? payment.modeOfPayment ?? "").toLowerCase();
+        if (mode === "cash" || mode === "cheque" || mode === "discount") continue;
+        const dup = await findExistingPaymentByUtr(nextUtr, { excludePaymentId: payment._id });
+        if (dup) {
+          return res.status(409).json({
+            success: false,
+            message: `UTR ${nextUtr} already exists — already recorded on order ${dup.orderLabel}`,
+          });
+        }
+      }
+    }
+
     if (transactionId !== undefined) {
       payment.transactionId = transactionId;
     }
