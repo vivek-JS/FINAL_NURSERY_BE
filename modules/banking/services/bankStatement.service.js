@@ -21,21 +21,55 @@ function dayRange(dateFrom, dateTo) {
  * Statement lines for the Statement tab — retired lines stay visible here as
  * history, which is why this is the one reader that does not filter them out.
  */
+/**
+ * Statement tab filters.
+ *  - verified   : cleared by the bank match (paid UTR + amount) or marked verified by an accountant
+ *  - unverified : everything still open (new, suspense, ignored)
+ *  - matched    : matched to a payment by the engine
+ *  - suspense   : waiting for an accountant to link
+ */
+export const STATEMENT_STATUS_FILTERS = ["all", "verified", "unverified", "matched", "suspense"];
+
+const VERIFIED_CLAUSE = { $or: [{ statementVerified: true }, { reconciliationStatus: "MATCHED" }] };
+const UNVERIFIED_CLAUSE = {
+  statementVerified: { $ne: true },
+  reconciliationStatus: { $ne: "MATCHED" },
+};
+
+function statusClause(status) {
+  switch (status) {
+    case "verified":
+      return VERIFIED_CLAUSE;
+    case "unverified":
+      return UNVERIFIED_CLAUSE;
+    case "matched":
+      return { reconciliationStatus: "MATCHED" };
+    case "suspense":
+      return { reconciliationStatus: "SUSPENSE", statementVerified: { $ne: true } };
+    default:
+      return {};
+  }
+}
+
 export async function listStatementEntries({
   accountNumber,
   dateFrom,
   dateTo,
   limit = 50,
   skip = 0,
+  status = "all",
 }) {
   const { from, to } = dayRange(dateFrom, dateTo);
-  const filter = { txnDate: { $gte: from, $lte: to } };
-  if (accountNumber) filter.accountNumber = accountNumber;
+  const base = { txnDate: { $gte: from, $lte: to } };
+  if (accountNumber) base.accountNumber = accountNumber;
+
+  const wanted = STATEMENT_STATUS_FILTERS.includes(String(status)) ? String(status) : "all";
+  const filter = { ...base, ...statusClause(wanted) };
 
   const pageSize = Math.min(Math.max(Number(limit) || 50, 1), 500);
   const offset = Math.max(Number(skip) || 0, 0);
 
-  const [items, total] = await Promise.all([
+  const [items, total, all, verified, unverified, matched, suspense] = await Promise.all([
     BankStatementEntry.find(filter)
       .sort({ txnDate: -1, _id: -1 })
       .skip(offset)
@@ -43,6 +77,9 @@ export async function listStatementEntries({
       .lean()
       .exec(),
     BankStatementEntry.countDocuments(filter),
+    ...["all", "verified", "unverified", "matched", "suspense"].map((k) =>
+      BankStatementEntry.countDocuments({ ...base, ...statusClause(k) })
+    ),
   ]);
 
   return {
@@ -51,6 +88,8 @@ export async function listStatementEntries({
     limit: pageSize,
     skip: offset,
     hasMore: offset + items.length < total,
+    status: wanted,
+    counts: { all, verified, unverified, matched, suspense },
   };
 }
 
