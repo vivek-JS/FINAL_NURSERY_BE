@@ -78,6 +78,7 @@ import {
   addPaymentsToOrder,
   summarizeSavedPayment,
   findExistingPaymentByUtr,
+  utrDuplicateMessage,
 } from "../services/orderPayment.service.js";
 import { schedulePlantOrderPaymentWhatsApp } from "../services/orderPaymentWhatsapp.service.js";
 import { stampPaymentUpdatedBy } from "../utils/paymentAudit.js";
@@ -1644,7 +1645,7 @@ const updatePaymentStatus = async (req, res, next) => {
         if (dup) {
           return res.status(409).json({
             success: false,
-            message: `UTR ${nextUtr} already exists — already recorded on order ${dup.orderLabel}`,
+            message: utrDuplicateMessage(nextUtr, dup),
           });
         }
       }

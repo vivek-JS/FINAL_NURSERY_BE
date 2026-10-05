@@ -119,6 +119,15 @@ function paymentCarriesUtr(p) {
   return mode !== "cash" && mode !== "cheque" && mode !== "wallet" && mode !== "discount";
 }
 
+/** Accepted = the bank statement matched it, or an accountant collected it. */
+function isAcceptedPayment(p) {
+  return (
+    p?.paymentStatus === "BANK_VERIFIED" ||
+    p?.paymentStatus === "COLLECTED" ||
+    p?.bankVerificationStatus === "BANK_VERIFIED"
+  );
+}
+
 function utrOf(p) {
   return String(p?.utrNumber || p?.transactionId || "").trim();
 }
@@ -138,6 +147,7 @@ export async function findExistingPaymentByUtr(utrRaw, { excludePaymentId, sessi
     p.paymentStatus !== "REJECTED" &&
     String(p._id) !== String(excludePaymentId || "") &&
     [p.utrNumber, p.transactionId].some((v) => v && normalizeUtr(v) === norm);
+  let pending = null;
   const query = {
     $or: [{ "payment.utrNumber": { $in: variants } }, { "payment.transactionId": { $in: variants } }],
   };
@@ -149,15 +159,27 @@ export async function findExistingPaymentByUtr(utrRaw, { excludePaymentId, sessi
     let q = Model.find(query).select("orderId orderNumber payment").lean();
     if (session) q = q.session(session);
     for (const o of await q) {
-      const hit = (o.payment || []).find(sameUtr);
-      if (hit) return { orderLabel: label(o), source, paymentId: String(hit._id) };
+      const hits = (o.payment || []).filter(sameUtr);
+      if (!hits.length) continue;
+      // Prefer the accepted one, so the message tells the truth about the strongest claim on this UTR.
+      const hit = hits.find(isAcceptedPayment) || hits[0];
+      const found = { orderLabel: label(o), source, paymentId: String(hit._id), accepted: isAcceptedPayment(hit) };
+      if (found.accepted) return found;
+      pending = pending || found;
     }
   }
-  return null;
+  return pending;
+}
+
+/** The text every add/edit path shows when a UTR cannot be reused. */
+export function utrDuplicateMessage(utr, found) {
+  return found.accepted
+    ? `UTR ${utr} already verified — payment accepted on order ${found.orderLabel}`
+    : `UTR ${utr} already exists — already recorded on order ${found.orderLabel} (not verified yet)`;
 }
 
 /**
- * Throws 409 "UTR already exists" when any payment row reuses a UTR that is already recorded,
+ * Throws 409 "UTR already verified" / "UTR already exists" when any payment row reuses a UTR that is already recorded,
  * or repeats the same UTR twice inside this request.
  */
 export async function assertUtrsNotUsed(payments, { session } = {}) {
@@ -173,7 +195,7 @@ export async function assertUtrsNotUsed(payments, { session } = {}) {
     seen.add(key);
     const found = await findExistingPaymentByUtr(utr, { session });
     if (found) {
-      throw new AppError(`UTR ${utr} already exists — already recorded on order ${found.orderLabel}`, 409);
+      throw new AppError(utrDuplicateMessage(utr, found), 409);
     }
   }
 }

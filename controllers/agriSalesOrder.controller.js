@@ -50,7 +50,7 @@ import { scheduleAgriOrderPaymentWhatsApp } from "../services/orderPaymentWhatsa
 import { summarizeSavedPayment } from "../services/orderPayment.service.js";
 import { scheduleStockChangeAlert } from "../services/stockWhatsappAlert.service.js";
 import { stampPaymentUpdatedBy, stampPaymentRecordedBy } from "../utils/paymentAudit.js";
-import { findExistingPaymentByUtr } from "../services/orderPayment.service.js";
+import { findExistingPaymentByUtr, utrDuplicateMessage } from "../services/orderPayment.service.js";
 import {
   isAgriDealerSelf,
   mergeDealerCustomerFields,
@@ -2158,7 +2158,7 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
     if (refUtr && !isWalletPayment && modeLc !== "cash" && modeLc !== "cheque") {
       const dup = await findExistingPaymentByUtr(refUtr);
       if (dup) {
-        return next(new AppError(`UTR ${refUtr} already exists — already recorded on order ${dup.orderLabel}`, 409));
+        return next(new AppError(utrDuplicateMessage(refUtr, dup), 409));
       }
     }
   }
