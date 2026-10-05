@@ -117,13 +117,50 @@ async function candidateEntries(pay) {
   to.setDate(to.getDate() + SEARCH_WINDOW_DAYS);
   to.setHours(23, 59, 59, 999);
 
-  return BankStatementEntry.find({
-    txnDate: { $gte: from, $lte: to },
+  const open = {
     reconciliationStatus: { $in: ["UNMATCHED", "SUSPENSE"] },
     ...NOT_STATEMENT_VERIFIED,
+  };
+
+  const windowed = await BankStatementEntry.find({
+    txnDate: { $gte: from, $lte: to },
+    ...open,
   })
     .lean()
     .exec();
+
+  // A UTR, bank transaction id or cheque number identifies one bank line on its own,
+  // so those are looked up whatever the date. Otherwise a payment keyed in with a
+  // different date from the bank's (late entry, wrong day, imported older statement)
+  // is reported as "not in the statement" even though the line is sitting there.
+  const keys = [paymentUtr(pay), pay.transactionId, pay.chequeNumber]
+    .map((v) => (v == null ? "" : String(v).trim()))
+    .filter((v) => v.length >= 6);
+  const byKey = [];
+  if (keys.length) {
+    const normalized = keys.map((k) => normalizeUtr(k)).filter(Boolean);
+    byKey.push(
+      ...(await BankStatementEntry.find({
+        ...open,
+        $or: [
+          { referenceNumber: { $in: [...keys, ...normalized] } },
+          { utr: { $in: [...keys, ...normalized] } },
+          { transactionId: { $in: keys } },
+          { chequeNumber: { $in: keys } },
+        ],
+      })
+        .lean()
+        .exec())
+    );
+  }
+
+  const seen = new Set();
+  return [...windowed, ...byKey].filter((e) => {
+    const id = String(e._id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 /**
