@@ -190,11 +190,11 @@ export const getVerifiedPayments = catchAsync(async (req, res) => {
 
 /** GET /api/banking/statement */
 export const getStatement = catchAsync(async (req, res) => {
-  const { accountNumber, dateFrom, dateTo, limit, skip } = req.query || {};
+  const { accountNumber, dateFrom, dateTo, limit, skip, status } = req.query || {};
   if (!dateFrom || !dateTo) {
     return res.status(400).json({ success: false, message: "dateFrom and dateTo required" });
   }
-  const page = await listStatementEntries({ accountNumber, dateFrom, dateTo, limit, skip });
+  const page = await listStatementEntries({ accountNumber, dateFrom, dateTo, limit, skip, status });
   return res.status(200).json({
     success: true,
     data: page.items,
@@ -203,6 +203,8 @@ export const getStatement = catchAsync(async (req, res) => {
     limit: page.limit,
     skip: page.skip,
     hasMore: page.hasMore,
+    status: page.status,
+    counts: page.counts,
   });
 });
 
