@@ -76,6 +76,7 @@ import { rebuildDispatchTargets } from "../services/dispatchTargetBuilder.servic
 import { syncDispatchTransportStatusAfterShedChange } from "../services/secondaryVehicleLoad.service.js";
 import { applyPostDispatchDeliveryDateSync } from "../utility/syncDeliveryDateToDispatchDay.js";
 import { resolveCompleteDispatchBatch } from "../services/completeDispatchBatch.service.js";
+import { applyCompleteDispatchShedDeduction } from "../services/completeDispatchShedDeduction.service.js";
 
 export const updateOrderWithLedgerSync = async ({
   orderId,
@@ -3603,7 +3604,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       // First get the order (populate for ledger descriptions / quota release)
       const order = await Order.findById(orderId)
         .populate("farmer", "name village")
-        .populate("plantName", "name")
+        .populate("plantName", "name subtypes")
         .session(session);
 
       if (!order) return null;
@@ -3812,6 +3813,7 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       const batchSnapshot = resolveCompleteDispatchBatch({
         dispatch,
         orderId: order._id,
+        order,
         clientPayload: {
           batchNumber: orderUpdate.batchNumber,
           batchId: orderUpdate.batchId,
@@ -3822,7 +3824,27 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
         },
       });
       orderUpdateData.batchNumber = batchSnapshot.batchNumber;
-      orderUpdateData.deliveryCompleteBatch = batchSnapshot;
+
+      const shouldApplyShedDeduction =
+        completeOrder ||
+        orderStatusToSet === "COMPLETED" ||
+        orderUpdateData.orderStatus === "COMPLETED";
+
+      let deliveryCompleteBatch = batchSnapshot;
+      if (shouldApplyShedDeduction) {
+        const deductionResult = await applyCompleteDispatchShedDeduction({
+          session,
+          order,
+          dispatch,
+          batchSnapshot,
+          returnsForThisOrder,
+          damagedForThisOrder,
+          performedBy: req.user?._id,
+        });
+        deliveryCompleteBatch =
+          deductionResult?.batchSnapshot ?? batchSnapshot;
+      }
+      orderUpdateData.deliveryCompleteBatch = deliveryCompleteBatch;
 
       // Split returns between dealer plant quota vs nursery slot (hybrid orders)
       const fromWallet =
@@ -4016,7 +4038,10 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
           ] = slotReleaseQty;
         }
 
-        await PlantSlot.updateOne(
+        const { updatePlantSlotCapped } = await import(
+          "../utility/shrinkPlantSlotTrails.js"
+        );
+        await updatePlantSlotCapped(
           { "subtypeSlots.slots._id": order.bookingSlot },
           { $inc: slotInc },
           {
@@ -4090,6 +4115,8 @@ Example payload:
   ]
 }
 When shedLoadedBatches has one row, server ignores client batch fields and uses vehicle load.
+Banana orders require an existing lagwad/vehicle batch (manual unknown lots are rejected).
+Other plants may omit batch or type a lot; typed lots that match stock should send shed_stock.
 */
 
 /*

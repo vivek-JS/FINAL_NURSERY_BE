@@ -57,6 +57,7 @@ const SALES_SHEET_PROJECT = {
   rate: 1,
   freightCharges: 1,
   batchNumber: 1,
+  deliveryCompleteBatch: 1,
   expectedNursery: 1,
   deliveryChallanInvoiceNumber: 1,
   officialDeliveryChallanNumber: 1,

@@ -1144,6 +1144,11 @@ const orderSchema = new Schema(
         enum: ["vehicle_load", "shed_stock", "manual"],
       },
       capturedAt: { type: Date },
+      /** Lagwad qty removed on delivery complete (office pick / shed stock). */
+      plantsDeducted: { type: Number, min: 0 },
+      secondaryOutwardId: { type: Schema.Types.ObjectId },
+      plantOutwardId: { type: Schema.Types.ObjectId, ref: "PlantOutward" },
+      deductionAppliedAt: { type: Date },
     },
     /**
      * Delivery challan invoice label reserved at instant sale (order created as DISPATCHED)

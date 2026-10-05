@@ -7,6 +7,35 @@ function normalizeStr(v) {
   return v != null ? String(v).trim() : "";
 }
 
+export function isBananaPlantOrder(order) {
+  if (!order) return false;
+  const line0 = Array.isArray(order?.plantLineItems) ? order.plantLineItems[0] : null;
+  const plantBits = [
+    order?.plantName?.name,
+    order?.plantType?.name,
+    order?.plantDetails?.name,
+    order?.plantDetails?.subtype,
+    typeof order?.plantName === "string" ? order.plantName : "",
+    order?.plantSubtype?.name,
+    typeof order?.plantSubtype === "string" ? order.plantSubtype : "",
+    order?.productName,
+    order?.plantNameSnapshot,
+    order?.plantSubtypeSnapshot,
+    line0?.plantNameSnapshot,
+    line0?.plantSubtypeSnapshot,
+  ];
+  return /banana|keli|केळ/i.test(plantBits.filter(Boolean).join(" "));
+}
+
+function emptyManualSnapshot() {
+  return {
+    batchNumber: "",
+    pollyhouse: "",
+    source: "manual",
+    capturedAt: new Date(),
+  };
+}
+
 function validOid(v) {
   const s = normalizeStr(v);
   return s && mongoose.isValidObjectId(s) ? s : null;
@@ -43,12 +72,14 @@ function snapshotFromVehicleBatch(entry) {
 export function resolveCompleteDispatchBatch({
   dispatch,
   orderId,
+  order = null,
   clientPayload = {},
 } = {}) {
   const detail = dispatchDetailForOrder(dispatch, orderId);
   const loaded = Array.isArray(detail?.shedLoadedBatches)
     ? detail.shedLoadedBatches.filter((b) => normalizeStr(b?.batchNumber))
     : [];
+  const banana = isBananaPlantOrder(order);
 
   const clientBatch = normalizeStr(clientPayload.batchNumber);
   const clientPolly = normalizeStr(clientPayload.pollyhouse);
@@ -80,7 +111,15 @@ export function resolveCompleteDispatchBatch({
   }
 
   if (!clientBatch) {
-    throw new AppError("Batch number is required to complete delivery", 400);
+    if (order != null && !banana) {
+      return emptyManualSnapshot();
+    }
+    throw new AppError(
+      banana
+        ? "Batch number is required to complete banana delivery"
+        : "Batch number is required to complete delivery",
+      400
+    );
   }
 
   const source = BATCH_SOURCES.has(clientSource)
@@ -88,6 +127,13 @@ export function resolveCompleteDispatchBatch({
     : clientPayload.batchId || clientPayload.secondaryInwardId
       ? "shed_stock"
       : "manual";
+
+  if (banana && source === "manual") {
+    throw new AppError(
+      "Banana delivery requires selecting an existing lagwad batch",
+      400
+    );
+  }
 
   const batchId = validOid(clientPayload.batchId);
   const secondaryInwardId = validOid(clientPayload.secondaryInwardId);
