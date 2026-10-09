@@ -82,6 +82,19 @@ export function isSuperAdmin(user) {
   return userRoles(user).some((r) => r === "SUPER_ADMIN" || r === "SUPERADMIN");
 }
 
+export function canSelfApprove(user, cfg = getIciciCorporateConfig()) {
+  return Boolean(cfg.payout.superAdminSelfApprove) && isSuperAdmin(user);
+}
+
+const SELF_APPROVED_NOTE = "Self-approved by super admin";
+
+/** Note recorded on an approval; flags a maker approving their own item. */
+export function approvalNote(isSelf, note) {
+  const text = String(note || "").trim();
+  if (!isSelf) return text || undefined;
+  return text ? `${SELF_APPROVED_NOTE} — ${text}` : SELF_APPROVED_NOTE;
+}
+
 export function maskAccount(acc) {
   const s = String(acc || "");
   if (s.length <= 4) return s;
@@ -396,6 +409,7 @@ export function getPayoutConfig(user) {
     debitAccount: maskAccount(debit),
     debitConfigured: Boolean(debit),
     canApprove: isPayoutChecker(user, cfg),
+    canSelfApprove: canSelfApprove(user, cfg),
     requireBeneficiary: cfg.payout.requireBeneficiary,
     checkerRoles: cfg.payout.checkerRoles,
     limits: {
@@ -503,9 +517,11 @@ export async function approvePayout(id, user, { note } = {}) {
     throw new PayoutError("Only an approver can approve payments", "FORBIDDEN");
   }
   const current = await loadOrThrow(id);
-  if (String(current.makerId) === String(user._id)) {
+  const isSelf = String(current.makerId) === String(user._id);
+  if (isSelf && !canSelfApprove(user, cfg)) {
     throw new PayoutError("You created this payment — another approver must approve it", "SELF_APPROVAL");
   }
+  const historyNote = approvalNote(isSelf, note);
   if (current.status !== "PENDING_APPROVAL") {
     throw new PayoutError(`Payment is already ${current.status}`, "BAD_STATE");
   }
@@ -525,14 +541,15 @@ export async function approvePayout(id, user, { note } = {}) {
 
   const now = new Date();
   const doc = await IciciPayout.findOneAndUpdate(
-    { _id: id, status: "PENDING_APPROVAL", makerId: { $ne: user._id } },
+    { _id: id, status: "PENDING_APPROVAL", ...(isSelf ? {} : { makerId: { $ne: user._id } }) },
     {
       $set: {
         status: "SUBMITTING",
         checkerId: user._id,
         checkerName: userName(user),
         checkedAt: now,
-        checkerNote: note || undefined,
+        checkerNote: historyNote,
+        selfApproved: isSelf,
       },
       $push: {
         history: {
@@ -542,7 +559,7 @@ export async function approvePayout(id, user, { note } = {}) {
           toStatus: "SUBMITTING",
           by: user._id,
           byName: userName(user),
-          note: note || undefined,
+          note: historyNote,
         },
       },
     },

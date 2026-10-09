@@ -64,9 +64,11 @@ try {
   );
 
   const own = await svc.createPayout(input({ accountNumber: "60100012345678" }), adminMaker);
-  await expectError("approver cannot approve their own payment", "SELF_APPROVAL", () =>
+  process.env.ICICI_PAYOUT_SUPER_ADMIN_SELF_APPROVE = "false";
+  await expectError("with self-approval off, approver cannot approve their own payment", "SELF_APPROVAL", () =>
     svc.approvePayout(own._id, adminMaker)
   );
+  delete process.env.ICICI_PAYOUT_SUPER_ADMIN_SELF_APPROVE;
 
   const approved = await svc.approvePayout(p._id, checker, { note: "Checked bill" });
   check(
@@ -184,9 +186,11 @@ try {
     { name: "Mina Supplier", accountNumber: "44440012345678", ifsc: "HDFC0004444" },
     adminMaker
   );
-  await expectError("approver cannot approve a payee they added", "SELF_APPROVAL", () =>
+  process.env.ICICI_PAYOUT_SUPER_ADMIN_SELF_APPROVE = "false";
+  await expectError("with self-approval off, approver cannot approve a payee they added", "SELF_APPROVAL", () =>
     bene.approveBeneficiary(ownBene._id, adminMaker)
   );
+  delete process.env.ICICI_PAYOUT_SUPER_ADMIN_SELF_APPROVE;
 
   const activeOther = await bene.approveBeneficiary(other._id, checker);
   const activeIcici = await bene.approveBeneficiary(icici._id, checker);
@@ -241,6 +245,30 @@ try {
     summary.paidToday.count === 2 && summary.paidToday.amount === 25001 && summary.failed30d.count === 1,
     JSON.stringify({ paid: summary.paidToday, failed: summary.failed30d })
   );
+
+  console.log("Super admin self-approval");
+  const selfBene = await bene.createBeneficiary(
+    { name: "Self Approved Payee", accountNumber: "77770012345678", ifsc: "HDFC0007777" },
+    adminMaker
+  );
+  const selfBeneOk = await bene.approveBeneficiary(selfBene._id, adminMaker);
+  check(
+    "super admin can approve a payee they added, marked self-approved",
+    selfBeneOk.status === "ACTIVE" && selfBeneOk.selfApproved === true && /Self-approved/.test(selfBeneOk.history.at(-1).note || "")
+  );
+  const selfPay = await svc.createPayout({ beneficiaryId: selfBene._id, txnType: "IFS", amount: "321" }, adminMaker);
+  const selfPayOk = await svc.approvePayout(selfPay._id, adminMaker);
+  check(
+    "super admin can approve their own payment, still held for ICICI approval",
+    selfPayOk.status === "AWAITING_BANK_APPROVAL" && selfPayOk.selfApproved === true,
+    selfPayOk.status
+  );
+  const accMade = await svc.createPayout(input({ accountNumber: "88880012345678" }), maker);
+  await expectError("accountant still cannot approve, even their own", "FORBIDDEN", () =>
+    svc.approvePayout(accMade._id, maker)
+  );
+  check("config tells a super admin they can self-approve", svc.getPayoutConfig(adminMaker).canSelfApprove === true);
+  check("config tells an accountant they cannot", svc.getPayoutConfig(maker).canSelfApprove === false);
 } catch (err) {
   console.error(err);
   check("script ran without crashing", false, err.message);

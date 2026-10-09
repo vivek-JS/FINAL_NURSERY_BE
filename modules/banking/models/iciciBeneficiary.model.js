@@ -48,6 +48,8 @@ const iciciBeneficiarySchema = new Schema(
     checkerId: { type: Schema.Types.ObjectId, ref: "User" },
     checkerName: { type: String },
     checkedAt: { type: Date },
+    /** Added and approved by the same super admin. */
+    selfApproved: { type: Boolean, default: false },
     rejectReason: { type: String },
 
     history: { type: [historySchema], default: [] },

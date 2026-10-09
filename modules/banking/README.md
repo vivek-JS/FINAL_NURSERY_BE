@@ -102,8 +102,10 @@ Outgoing payments need three people (Accounts dashboard → **Payouts** tab):
    against ICICI's rules up front: IFSC format, RTGS ≥ ₹2 L, IMPS ≤ ₹5 L, NEFT
    remarks ≤ 32 characters, letters/digits/spaces only. If the same account and
    amount were paid in the last 7 days, the maker gets a duplicate warning.
-2. **ERP checker** (a role in `ICICI_PAYOUT_CHECKER_ROLES`, never the maker)
-   approves or rejects. Approval sends `POST /Transaction` **without
+2. **ERP checker** (a role in `ICICI_PAYOUT_CHECKER_ROLES`, normally not the
+   maker) approves or rejects. A super admin may approve their own payout or
+   payee unless `ICICI_PAYOUT_SUPER_ADMIN_SELF_APPROVE=false`; it is recorded as
+   self-approved, and ICICI's net-banking approval remains the second check. Approval sends `POST /Transaction` **without
    `WORKFLOW_REQD`**, so ICICI holds it as "Pending For approval".
 3. **ICICI authoriser** approves it in net banking (CIB). The status poller (or
    "Check status") moves it to Paid with the UTR, or to Failed/Returned.
@@ -256,6 +258,7 @@ ICICI_PAYOUT_POLL_ENABLED=false                   # poll ICICI for payout status
 ICICI_PAYOUT_POLL_CRON=*/15 * * * *
 ICICI_PAYOUT_MIN_CHECK_MS=600000                  # min gap between checks of one payout
 ICICI_PAYOUT_REQUIRE_BENEFICIARY=false            # true = pay only approved payees
+ICICI_PAYOUT_SUPER_ADMIN_SELF_APPROVE=true        # false = super admins also need a second approver
 ```
 
 **Never commit** `private.key`, `icici_public.crt`, or API keys.
