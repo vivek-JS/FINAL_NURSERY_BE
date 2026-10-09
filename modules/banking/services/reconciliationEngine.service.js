@@ -18,6 +18,7 @@
  * Flow:
  *   PENDING → BANK_VERIFIED (UTR and amount agree with the bank)
  *   PENDING → SUSPENSE      (anything else: no match, no UTR match, or a tie)
+ *   SUSPENSE → BANK_VERIFIED (a later run finds the UTR line; the row closes itself)
  */
 
 import crypto from "crypto";
@@ -32,16 +33,24 @@ import CashBook from "../models/cashBook.model.js";
 import { normalizeUtr, normalizeAmount } from "../../../services/iciciBankService.js";
 import { collectPendingBankReconciliationPayments } from "../../../services/reconciliation.service.js";
 import { narrationSimilarity, containsUtrInNarration } from "../utils/narrationSimilarity.js";
-import { routeToSuspense } from "./suspense.service.js";
+import { routeToSuspense, closeOpenSuspenseFor } from "./suspense.service.js";
 import { transitionPaymentStatus } from "./verificationStatusEngine.js";
 import { getBankingLogger } from "../utils/logger.js";
 
 const log = () => getBankingLogger();
 
 const AMOUNT_EPS = 0.02;
-const DATE_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DATE_WINDOW_MS = 2 * DAY_MS;
 /** Scores below this are not even offered as a candidate. */
 const FUZZY_THRESHOLD = Number(process.env.BANKING_FUZZY_THRESHOLD || 60);
+/** Statement lines this far either side of the run's range can still match. */
+const SEARCH_WINDOW_DAYS = 7;
+/**
+ * Days after the payment date before a payment with no bank line goes to
+ * suspense as NO_MATCH. NEFT and cheques often land a day or two later.
+ */
+const NO_MATCH_GRACE_DAYS = Number(process.env.BANKING_NO_MATCH_GRACE_DAYS || 2);
 
 function getPaymentUtr(p) {
   return (
@@ -130,6 +139,84 @@ export function qualifiesForAutoVerify(match) {
   return match.matchType === "EXACT" && String(match.rule || "").startsWith("UTR");
 }
 
+/**
+ * A line carrying the payment's UTR at a different amount. `scoreMatch` drops
+ * these because amount is a hard gate, but it is the case an accountant most
+ * needs to see.
+ *
+ * @returns {object|null}
+ */
+export function findUtrAmountMismatchIn(payment, entries) {
+  const utr = normalizeUtr(getPaymentUtr(payment));
+  if (!utr || utr.length < 6) return null;
+  const amt = normalizeAmount(payment.paidAmount);
+  return (
+    (entries || []).find((e) => {
+      const ref = normalizeUtr(e.referenceNumber || e.utr || "");
+      return ref === utr && Math.abs(normalizeAmount(e.amount) - amt) >= AMOUNT_EPS;
+    }) || null
+  );
+}
+
+/** Whether a payment with no bank line has waited long enough to be reported. */
+export function isPastNoMatchGrace(payment, now = new Date(), graceDays = NO_MATCH_GRACE_DAYS) {
+  if (!payment?.paymentDate) return false;
+  const paid = new Date(payment.paymentDate);
+  if (Number.isNaN(paid.getTime())) return false;
+  return now.getTime() - paid.getTime() >= graceDays * DAY_MS;
+}
+
+/** References that identify one bank line on their own, whatever its date. */
+function lookupKeys(payment) {
+  const raw = [getPaymentUtr(payment), payment.transactionId, payment.chequeNumber]
+    .map((v) => (v == null ? "" : String(v).trim()))
+    .filter((v) => v.length >= 6);
+  return [...new Set([...raw, ...raw.map((k) => normalizeUtr(k)).filter(Boolean)])];
+}
+
+/**
+ * Open statement lines a run should score: the run's range widened by
+ * SEARCH_WINDOW_DAYS, plus any line carrying one of the payments' references.
+ * Without the widening a payment keyed on the 31st whose credit lands on the
+ * 1st never meets its line.
+ */
+async function loadCandidateEntries(from, to, payments) {
+  const windowFrom = new Date(from.getTime() - SEARCH_WINDOW_DAYS * DAY_MS);
+  const windowTo = new Date(to.getTime() + SEARCH_WINDOW_DAYS * DAY_MS);
+
+  const windowed = await BankStatementEntry.find({
+    txnDate: { $gte: windowFrom, $lte: windowTo },
+    reconciliationStatus: { $in: ["UNMATCHED", "SUSPENSE"] },
+    ...NOT_STATEMENT_VERIFIED,
+  })
+    .lean()
+    .exec();
+
+  const keys = [...new Set(payments.flatMap(lookupKeys))];
+  const byKey = keys.length
+    ? await BankStatementEntry.find({
+        reconciliationStatus: { $in: ["UNMATCHED", "SUSPENSE"] },
+        ...NOT_STATEMENT_VERIFIED,
+        $or: [
+          { referenceNumber: { $in: keys } },
+          { utr: { $in: keys } },
+          { transactionId: { $in: keys } },
+          { chequeNumber: { $in: keys } },
+        ],
+      })
+        .lean()
+        .exec()
+    : [];
+
+  const seen = new Set();
+  return [...windowed, ...byKey].filter((e) => {
+    const id = String(e._id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
 async function applyMatch(pay, match, runId, userId) {
   const { entry, score, rule, matchType } = match;
 
@@ -204,6 +291,12 @@ async function applyMatch(pay, match, runId, userId) {
     createdBy: userId || null,
   });
 
+  await closeOpenSuspenseFor({
+    paymentId: pay.paymentId,
+    bankTransactionId: entry._id,
+    note: `Matched automatically on ${rule}${runId ? ` (run ${runId})` : ""}`,
+  });
+
   return { ok: true, score, rule, matchType };
 }
 
@@ -221,32 +314,38 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
   const to = new Date(dateTo);
   to.setHours(23, 59, 59, 999);
 
-  const entries = await BankStatementEntry.find({
+  // With no statement for the range at all, every payment would look missing
+  // from the bank. Only report NO_MATCH once there is a statement to compare to.
+  const statementLines = await BankStatementEntry.countDocuments({
     txnDate: { $gte: from, $lte: to },
-    reconciliationStatus: { $in: ["UNMATCHED", "SUSPENSE"] },
-    ...NOT_STATEMENT_VERIFIED,
-  })
-    .lean()
-    .exec();
-
-  if (!entries.length) {
+  });
+  if (!statementLines) {
     return {
       runId,
       matched,
       updatedCount,
       suspense,
       errors,
-      message: "No unmatched bank entries in range",
+      message: "No bank statement lines in range. Sync or import the statement first.",
     };
   }
 
-  const pending = await collectPendingBankReconciliationPayments(dateFrom, dateTo);
+  const pending = await collectPendingBankReconciliationPayments(from, to, {
+    includeSuspense: true,
+  });
   const filtered =
     source === "all"
       ? pending
       : pending.filter((p) => (source === "order" ? p.source === "order" : p.source === "agriSales"));
 
+  const entries = await loadCandidateEntries(from, to, filtered);
+
   const usedEntryIds = new Set();
+  /** Lines offered to a payment in this run; not orphan credits. */
+  const claimedEntryIds = new Set();
+  const claim = (routed, entry) => {
+    if (!routed?.decided && entry?._id) claimedEntryIds.add(String(entry._id));
+  };
 
   for (const pay of filtered) {
     const available = entries.filter((e) => e._id && !usedEntryIds.has(String(e._id)));
@@ -260,36 +359,57 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
     candidates.sort((a, b) => b.score - a.score);
 
     if (candidates.length === 0) {
+      const mismatch = findUtrAmountMismatchIn(pay, available);
+      if (mismatch) {
+        const routed = await routeToSuspense({
+          payment: pay,
+          bankEntry: mismatch,
+          reason: "AMOUNT_MISMATCH",
+          runId,
+        });
+        claim(routed, mismatch);
+        if (routed.created) {
+          suspense.push({ paymentId: pay.paymentId, reason: "AMOUNT_MISMATCH" });
+        }
+      } else if (isPastNoMatchGrace(pay)) {
+        const routed = await routeToSuspense({ payment: pay, reason: "NO_MATCH", runId });
+        if (routed.created) suspense.push({ paymentId: pay.paymentId, reason: "NO_MATCH" });
+      }
       continue;
     }
 
     if (candidates.length > 1 && candidates[0].score === candidates[1].score) {
-      await routeToSuspense({
+      const tied = candidates.filter((c) => c.score === candidates[0].score);
+      const routed = await routeToSuspense({
         payment: pay,
         reason: "MULTIPLE_MATCH",
-        candidates: candidates.slice(0, 3),
+        candidates: tied.slice(0, 3),
         runId,
       });
-      suspense.push({ paymentId: pay.paymentId, reason: "MULTIPLE_MATCH" });
+      for (const c of tied) claim(routed, c.entry);
+      if (routed.created) suspense.push({ paymentId: pay.paymentId, reason: "MULTIPLE_MATCH" });
       errors.push({ paymentId: pay.paymentId, message: "Multiple equal-confidence matches" });
       continue;
     }
 
     const best = candidates[0];
     if (!qualifiesForAutoVerify(best)) {
-      await routeToSuspense({
+      const routed = await routeToSuspense({
         payment: pay,
         bankEntry: best.entry,
         reason: "MANUAL_REVIEW",
         confidenceScore: best.score,
         runId,
       });
-      suspense.push({
-        paymentId: pay.paymentId,
-        reason: "NO_UTR_MATCH",
-        rule: best.rule,
-        score: best.score,
-      });
+      claim(routed, best.entry);
+      if (routed.created) {
+        suspense.push({
+          paymentId: pay.paymentId,
+          reason: "MANUAL_REVIEW",
+          rule: best.rule,
+          score: best.score,
+        });
+      }
       continue;
     }
 
@@ -315,10 +435,14 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
     }
   }
 
-  // Orphan bank credits → suspense
+  // Orphan bank credits → suspense. Lines outside the run's own range were only
+  // loaded so payments could reach them; their own run reports them.
   for (const e of entries) {
-    if (usedEntryIds.has(String(e._id))) continue;
+    const id = String(e._id);
+    if (usedEntryIds.has(id) || claimedEntryIds.has(id)) continue;
     if (e.amount <= 0) continue;
+    const when = new Date(e.txnDate);
+    if (when < from || when > to) continue;
     const already = await routeToSuspense({
       bankEntry: e,
       reason: "ORPHAN_CREDIT",
@@ -339,4 +463,4 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
   return { runId, matched, updatedCount, suspense, errors };
 }
 
-export { scoreMatch, applyMatch, FUZZY_THRESHOLD };
+export { scoreMatch, applyMatch, FUZZY_THRESHOLD, NO_MATCH_GRACE_DAYS, SEARCH_WINDOW_DAYS };

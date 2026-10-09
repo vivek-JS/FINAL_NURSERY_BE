@@ -11,6 +11,9 @@ const SENSITIVE_KEYS = [
   "utr",
   "accountNumber",
   "account_number",
+  "accountno",
+  "debitacc",
+  "creditacc",
 ];
 
 export function maskValue(key, value) {
