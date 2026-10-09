@@ -446,9 +446,12 @@ async function resolveBeneficiary(input, cfg) {
   return bene;
 }
 
-/** Maker: create a payout awaiting ERP approval. */
-export async function createPayout(input, user, { confirmDuplicate = false } = {}) {
-  const cfg = getIciciCorporateConfig();
+/**
+ * Validate a payout request without saving it.
+ *
+ * @returns {Promise<{ value: object, duplicate: object|null }>} throws PayoutError VALIDATION
+ */
+export async function preparePayout(input, cfg = getIciciCorporateConfig()) {
   const bene = await resolveBeneficiary(input, cfg);
   const fields = bene
     ? {
@@ -469,31 +472,26 @@ export async function createPayout(input, user, { confirmDuplicate = false } = {
     throw new PayoutError("Please fix the highlighted fields", "VALIDATION", { errors: check.errors });
   }
   if (bene) check.value.beneficiaryId = bene._id;
+  return { value: check.value, duplicate: await findPossibleDuplicate(check.value) };
+}
 
-  const dup = await findPossibleDuplicate(check.value);
-  if (dup && !confirmDuplicate) {
-    throw new PayoutError(
-      `A payment of ₹${dup.amount} to this account already exists (${dup.uniqueId}, ${dup.status})`,
-      "POSSIBLE_DUPLICATE",
-      { duplicate: { _id: dup._id, uniqueId: dup.uniqueId, status: dup.status, createdAt: dup.createdAt } }
-    );
-  }
+export function duplicateMessage(dup) {
+  return `A payment of ₹${dup.amount} to this account already exists (${dup.uniqueId}, ${dup.status})`;
+}
 
+/** Save a prepared payout as PENDING_APPROVAL. */
+export async function insertPayout(value, user, { note, batch, cfg = getIciciCorporateConfig() } = {}) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const doc = new IciciPayout({
-      ...check.value,
+      ...value,
+      ...(batch ? { batchId: batch.id, batchName: batch.name } : {}),
       uniqueId: generatePayoutUniqueId(),
       status: "PENDING_APPROVAL",
       makerId: user._id,
       makerName: userName(user),
       bank: { stub: cfg.useStub },
     });
-    pushHistory(doc, {
-      action: "CREATED",
-      to: "PENDING_APPROVAL",
-      user,
-      note: dup ? `Created despite possible duplicate ${dup.uniqueId}` : undefined,
-    });
+    pushHistory(doc, { action: "CREATED", to: "PENDING_APPROVAL", user, note });
     try {
       await doc.save();
       return doc.toObject();
@@ -502,6 +500,21 @@ export async function createPayout(input, user, { confirmDuplicate = false } = {
     }
   }
   throw new PayoutError("Could not allocate a unique payment reference, try again", "UNIQUE_ID");
+}
+
+/** Maker: create a payout awaiting ERP approval. */
+export async function createPayout(input, user, { confirmDuplicate = false } = {}) {
+  const cfg = getIciciCorporateConfig();
+  const { value, duplicate: dup } = await preparePayout(input, cfg);
+  if (dup && !confirmDuplicate) {
+    throw new PayoutError(duplicateMessage(dup), "POSSIBLE_DUPLICATE", {
+      duplicate: { _id: dup._id, uniqueId: dup.uniqueId, status: dup.status, createdAt: dup.createdAt },
+    });
+  }
+  return insertPayout(value, user, {
+    cfg,
+    note: dup ? `Created despite possible duplicate ${dup.uniqueId}` : undefined,
+  });
 }
 
 async function loadOrThrow(id) {
@@ -694,9 +707,10 @@ export function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export async function listPayouts({ view = "all", search = "", limit = 50, skip = 0 } = {}) {
+export async function listPayouts({ view = "all", search = "", batchId = "", limit = 50, skip = 0 } = {}) {
   const filter = {};
   if (PAYOUT_VIEWS[view]) filter.status = { $in: PAYOUT_VIEWS[view] };
+  if (batchId) filter.batchId = String(batchId);
   const q = String(search || "").trim();
   if (q) {
     const re = new RegExp(escapeRegex(q), "i");
@@ -706,10 +720,12 @@ export async function listPayouts({ view = "all", search = "", limit = 50, skip 
       { referenceNo: re },
       { "bank.utr": re },
       { "payee.accountNumber": re },
+      { batchName: re },
+      { batchId: re },
     ];
   }
 
-  const pageSize = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const pageSize = Math.min(Math.max(Number(limit) || 50, 1), 500);
   const offset = Math.max(Number(skip) || 0, 0);
   const [items, total] = await Promise.all([
     IciciPayout.find(filter).sort({ createdAt: -1 }).skip(offset).limit(pageSize).lean(),

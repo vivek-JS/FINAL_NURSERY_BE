@@ -21,6 +21,11 @@ import {
   bankKindOf,
   validateBeneficiaryInput,
 } from "../modules/banking/services/iciciBeneficiary.service.js";
+import {
+  beneficiaryRowToInput,
+  normaliseMode,
+  payoutRowToInput,
+} from "../modules/banking/services/payoutBulk.service.js";
 
 const DEBIT = "000405001234";
 const base = {
@@ -197,6 +202,41 @@ describe("validateBeneficiaryInput", () => {
 
   it("accepts a +91 mobile number", () => {
     assert.equal(check({ mobile: "+91 98765 43210" }).value.mobile, "9876543210");
+  });
+});
+
+describe("Excel row parsing", () => {
+  it("reads payment modes the way people write them", () => {
+    assert.equal(normaliseMode("neft"), "RGS");
+    assert.equal(normaliseMode("RTGS"), "RTG");
+    assert.equal(normaliseMode(" imps "), "IFS");
+    assert.equal(normaliseMode("ICICI to ICICI"), "TPA");
+    assert.equal(normaliseMode("UPI"), "UPI");
+  });
+
+  it("maps a payment row, cleaning the amount and labels", () => {
+    const input = payoutRowToInput({
+      name: "ABC Traders",
+      accountNumber: 50100012345678,
+      ifsc: "hdfc0001234",
+      mode: "NEFT",
+      amount: "₹1,25,000.50",
+      purpose: "Vendor bill",
+      payeeType: "farmer",
+    });
+    assert.equal(input.payeeName, "ABC Traders");
+    assert.equal(input.accountNumber, "50100012345678");
+    assert.equal(input.txnType, "RGS");
+    assert.equal(input.amount, "125000.50");
+    assert.equal(input.purpose, "VENDOR_BILL");
+    assert.equal(input.payeeType, "FARMER");
+  });
+
+  it("maps a payee row and its bank", () => {
+    assert.equal(beneficiaryRowToInput({ bank: "ICICI Bank" }).bankKind, "ICICI");
+    assert.equal(beneficiaryRowToInput({ bank: "Other" }).bankKind, "NON_ICICI");
+    assert.equal(beneficiaryRowToInput({}).bankKind, "");
+    assert.equal(beneficiaryRowToInput({ payeeName: "X", type: "dealer" }).type, "DEALER");
   });
 });
 

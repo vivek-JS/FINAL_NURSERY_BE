@@ -42,6 +42,12 @@ import {
   postApproveBeneficiary,
   postRejectBeneficiary,
   postDisableBeneficiary,
+  postBulkPayouts,
+  postBulkApprovePayouts,
+  postBulkRejectPayouts,
+  postBulkBeneficiaries,
+  postBulkApproveBeneficiaries,
+  postBulkRejectBeneficiaries,
 } from "../controllers/payout.controller.js";
 
 const router = express.Router();
@@ -82,6 +88,9 @@ router.get("/payouts/config", requirePaymentAccess, getPayoutsConfig);
 router.get("/payouts/summary", requirePaymentAccess, getPayoutsSummary);
 router.get("/payouts", requirePaymentAccess, getPayouts);
 router.post("/payouts", requirePaymentAccess, idempotencyMiddleware, postPayout);
+router.post("/payouts/bulk", requirePaymentAccess, postBulkPayouts);
+router.post("/payouts/bulk-approve", requirePaymentAccess, postBulkApprovePayouts);
+router.post("/payouts/bulk-reject", requirePaymentAccess, postBulkRejectPayouts);
 router.get("/payouts/:id", requirePaymentAccess, getPayoutById);
 router.post("/payouts/:id/approve", requirePaymentAccess, postApprovePayout);
 router.post("/payouts/:id/reject", requirePaymentAccess, postRejectPayout);
@@ -92,6 +101,9 @@ router.post("/payouts/:id/resend", requirePaymentAccess, postResendPayout);
 // Payee register (maker adds, a different approver activates).
 router.get("/beneficiaries", requirePaymentAccess, getBeneficiaries);
 router.post("/beneficiaries", requirePaymentAccess, idempotencyMiddleware, postBeneficiary);
+router.post("/beneficiaries/bulk", requirePaymentAccess, postBulkBeneficiaries);
+router.post("/beneficiaries/bulk-approve", requirePaymentAccess, postBulkApproveBeneficiaries);
+router.post("/beneficiaries/bulk-reject", requirePaymentAccess, postBulkRejectBeneficiaries);
 router.post("/beneficiaries/:id/approve", requirePaymentAccess, postApproveBeneficiary);
 router.post("/beneficiaries/:id/reject", requirePaymentAccess, postRejectBeneficiary);
 router.post("/beneficiaries/:id/disable", requirePaymentAccess, postDisableBeneficiary);
