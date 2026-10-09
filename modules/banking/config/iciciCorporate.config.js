@@ -59,6 +59,21 @@ export function getIciciCorporateConfig() {
       transactionInquiry:
         process.env.ICICI_TXN_INQUIRY_PATH || "/TransactionInquiry",
       balance: process.env.ICICI_BALANCE_PATH || "/BalanceInquiry",
+      transaction: process.env.ICICI_TXN_PATH || "/Transaction",
+    },
+    payout: {
+      /** Roles allowed to approve a payout in the ERP (never the maker). */
+      checkerRoles: (process.env.ICICI_PAYOUT_CHECKER_ROLES || "SUPER_ADMIN,SUPERADMIN")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+      pollEnabled:
+        String(process.env.ICICI_PAYOUT_POLL_ENABLED || "false").toLowerCase() === "true",
+      pollSchedule: process.env.ICICI_PAYOUT_POLL_CRON || "*/15 * * * *",
+      /** Do not re-ask the bank about one payout more often than this. */
+      minCheckIntervalMs: Number(process.env.ICICI_PAYOUT_MIN_CHECK_MS || 10 * 60 * 1000),
+      /** true = payouts only to payees approved in the register; no one-time payees. */
+      requireBeneficiary: process.env.ICICI_PAYOUT_REQUIRE_BENEFICIARY === "true",
     },
     ipWhitelist: (process.env.ICICI_IP_WHITELIST || "")
       .split(",")

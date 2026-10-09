@@ -11,11 +11,11 @@ import { getStoredEntriesForRange } from "./iciciStatement.service.js";
 const AMOUNT_EPS = 0.02;
 const DATE_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 
-function paymentNeedsBankVerification(p) {
+function paymentNeedsBankVerification(p, includeSuspense = false) {
   if (p.paymentStatus !== "PENDING") return false;
   const b = p.bankVerificationStatus;
   if (!b || b === "PENDING") return true;
-  return false;
+  return includeSuspense && b === "VERIFY_FAILED";
 }
 
 function getPaymentUtr(p) {
@@ -29,8 +29,15 @@ function getPaymentUtr(p) {
 
 /**
  * Find all uncleared payments that need bank reconciliation.
+ *
+ * `includeSuspense` also returns payments parked in suspense (VERIFY_FAILED),
+ * so a statement line that lands after the first run can still clear them.
  */
-export async function collectPendingBankReconciliationPayments(dateFrom, dateTo) {
+export async function collectPendingBankReconciliationPayments(
+  dateFrom,
+  dateTo,
+  { includeSuspense = false } = {}
+) {
   const list = [];
   const now = new Date();
 
@@ -48,7 +55,7 @@ export async function collectPendingBankReconciliationPayments(dateFrom, dateTo)
 
   for (const order of orders) {
     for (const p of order.payment || []) {
-      if (!paymentNeedsBankVerification(p)) continue;
+      if (!paymentNeedsBankVerification(p, includeSuspense)) continue;
       if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
       const hasRef =
         getPaymentUtr(p) ||
@@ -86,7 +93,7 @@ export async function collectPendingBankReconciliationPayments(dateFrom, dateTo)
 
   for (const order of agriOrders) {
     for (const p of order.payment || []) {
-      if (!paymentNeedsBankVerification(p)) continue;
+      if (!paymentNeedsBankVerification(p, includeSuspense)) continue;
       if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
       const hasRef =
         getPaymentUtr(p) ||

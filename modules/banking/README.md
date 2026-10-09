@@ -67,6 +67,100 @@ tune: a cheque match scoring 85 still requires a human.
 Env: `BANKING_FUZZY_THRESHOLD=60` (the floor below which a pair is not even
 offered as a candidate).
 
+### Suspense lifecycle
+
+Each run scores statement lines up to 7 days either side of its range, plus any
+line carrying the payment's UTR, transaction id or cheque number on any date.
+
+| Reason | Opened when |
+|--------|-------------|
+| `NO_MATCH` | A payment has no bank line `BANKING_NO_MATCH_GRACE_DAYS` (default 2) after its payment date. Not raised when the range has no statement at all. |
+| `AMOUNT_MISMATCH` | The bank has the payment's UTR at a different amount |
+| `MULTIPLE_MATCH` | Two or more lines tie for a payment |
+| `MANUAL_REVIEW` | The best line matched on cheque, bank transaction id or amount and date, not a UTR |
+| `ORPHAN_CREDIT` | A credit in the range that no payment claimed |
+
+- Payments in suspense stay in every run, so a line that arrives later clears
+  them. Their open rows close with `closedBy: SYSTEM`.
+- A line offered to a payment is never also an orphan credit, and a payment has
+  one open row at a time (a new reason supersedes the old one).
+- An accountant's decision sticks. A written-off orphan line becomes `IGNORED`.
+  "Return to pending" sends the payment back to the Pending tab, and the
+  dismissed pairing is not reopened by later runs.
+
+End-to-end check against a local MongoDB (creates and drops its own database):
+
+```bash
+node scripts/test-banking-suspense-lifecycle.mjs
+```
+
+### Payouts (maker / checker / ICICI approval)
+
+Outgoing payments need three people (Accounts dashboard → **Payouts** tab):
+
+1. **Maker** (accountant or super admin) creates the payment. It is checked
+   against ICICI's rules up front: IFSC format, RTGS ≥ ₹2 L, IMPS ≤ ₹5 L, NEFT
+   remarks ≤ 32 characters, letters/digits/spaces only. If the same account and
+   amount were paid in the last 7 days, the maker gets a duplicate warning.
+2. **ERP checker** (a role in `ICICI_PAYOUT_CHECKER_ROLES`, never the maker)
+   approves or rejects. Approval sends `POST /Transaction` **without
+   `WORKFLOW_REQD`**, so ICICI holds it as "Pending For approval".
+3. **ICICI authoriser** approves it in net banking (CIB). The status poller (or
+   "Check status") moves it to Paid with the UTR, or to Failed/Returned.
+
+| Status | Meaning |
+|--------|---------|
+| `PENDING_APPROVAL` | Waiting for the ERP checker (maker may cancel) |
+| `SUBMITTING` | Being sent; after 5 min without an answer it becomes `UNKNOWN` |
+| `AWAITING_BANK_APPROVAL` | Held at ICICI for the net-banking authoriser |
+| `PROCESSING` | Approved at ICICI, not settled yet |
+| `UNKNOWN` | ICICI did not answer (timeout, 8010/8012/8013/103068). Check status; a checker may resend with the **same** `UNIQUEID`, which ICICI never pays twice |
+| `SUCCESS` / `FAILED` / `REVERSED` | Final bank result |
+| `REJECTED` / `CANCELLED` | Stopped in the ERP; nothing reached the bank |
+
+The `UNIQUEID` is 15 characters (`RB` + yymmdd + 7 random characters) because
+ICICI shows the first 15 in the statement narration. The ICICI corporate must
+have a CIB approval workflow configured for the API user, or ICICI may post
+the payment without step 3. Payouts are not posted to the ledger yet.
+
+#### Payee register (beneficiaries)
+
+The CIB payment API is ad hoc ("without any bene registration"), and the spec
+has no beneficiary registration or validation API, so ICICI keeps no payee list
+for us. The register (`icici_beneficiaries`, **Payouts → Payees**) does it in the
+ERP with the same two-person rule:
+
+- A maker adds a payee: ICICI Bank (IFSC starts `ICIC`, paid ICICI to ICICI) or
+  another bank (NEFT/RTGS/IMPS). Name, account and IFSC are checked as ICICI
+  would, and the account number is typed twice.
+- A different approver approves (`ACTIVE`) or rejects it. The same account +
+  IFSC cannot be registered twice while pending or active.
+- A payout with `beneficiaryId` takes the payee details from the register, not
+  the request. Disabling a payee blocks approval of its pending payouts.
+- `ICICI_PAYOUT_REQUIRE_BENEFICIARY=true` turns off one-time payees.
+
+| UAT "Beneficiary APIs" row | Covered by |
+|----------------------------|------------|
+| Beneficiary Registration – ICICI | Add payee, ICICI Bank (ERP register) |
+| Beneficiary Registration – Non ICICI | Add payee, another bank (ERP register) |
+| Beneficiary Validation – Success | Format checks + approval → `ACTIVE` |
+| Duplicate / Invalid Beneficiary | `DUPLICATE_BENEFICIARY` (409) / `VALIDATION` (400) |
+
+If ICICI enables registered-beneficiary payments, they must supply that API's
+spec; until then mark these UAT rows "No — ad hoc payments" for the bank.
+
+`GET /beneficiaries?status=&search=`, `POST /beneficiaries`, and
+`POST /beneficiaries/:id/approve | reject | disable`.
+
+API (all need accountant or super admin): `GET /payouts/config`,
+`GET /payouts/summary`, `GET /payouts?view=approval|bank|done|all&search=`,
+`POST /payouts`, `GET /payouts/:id`, and `POST /payouts/:id/approve | reject |
+cancel | refresh | resend`.
+
+```bash
+node scripts/test-banking-payouts.mjs   # stub bank + throwaway local MongoDB
+```
+
 ---
 
 ## Folder structure
@@ -156,6 +250,12 @@ ICICI_PRIVATE_KEY_PATH=config/certs/private.key
 ICICI_PUBLIC_CERT_PATH=config/certs/public.crt
 ICICI_BANK_PUBLIC_CERT_PATH=config/certs/icici_public.crt
 ICICI_BANKING_CRON_ENABLED=false
+ICICI_TXN_PATH=/Transaction                       # payouts
+ICICI_PAYOUT_CHECKER_ROLES=SUPER_ADMIN,SUPERADMIN  # who may approve payouts in the ERP
+ICICI_PAYOUT_POLL_ENABLED=false                   # poll ICICI for payout status
+ICICI_PAYOUT_POLL_CRON=*/15 * * * *
+ICICI_PAYOUT_MIN_CHECK_MS=600000                  # min gap between checks of one payout
+ICICI_PAYOUT_REQUIRE_BENEFICIARY=false            # true = pay only approved payees
 ```
 
 **Never commit** `private.key`, `icici_public.crt`, or API keys.

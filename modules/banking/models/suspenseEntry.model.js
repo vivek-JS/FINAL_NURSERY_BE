@@ -12,6 +12,7 @@ const suspenseEntrySchema = new Schema(
     },
     paymentId: { type: String, index: true },
     orderMongoId: { type: String },
+    orderId: { type: String },
     source: { type: String, enum: ["order", "agriSales", "bank_only"] },
     reason: {
       type: String,
@@ -40,6 +41,11 @@ const suspenseEntrySchema = new Schema(
     assignedTo: { type: Schema.Types.ObjectId, ref: "User" },
     resolvedAt: { type: Date },
     resolutionNotes: { type: String },
+    /**
+     * SYSTEM rows were closed by a later reconciliation run (matched or
+     * superseded) and may reopen. Anything else is an accountant's decision.
+     */
+    closedBy: { type: String, enum: ["USER", "SYSTEM", null], default: null },
     metadata: { type: Schema.Types.Mixed },
   },
   { timestamps: true }

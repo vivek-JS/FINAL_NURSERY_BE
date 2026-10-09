@@ -124,7 +124,10 @@ export const postResolveSuspense = catchAsync(async (req, res) => {
     action,
     userId: req.user?._id,
   });
-  if (!result.ok) return res.status(404).json({ success: false, message: result.error });
+  if (!result.ok) {
+    const status = result.code === "NOT_FOUND" ? 404 : 400;
+    return res.status(status).json({ success: false, message: result.error });
+  }
   return res.status(200).json({ success: true, data: result.entry });
 });
 
