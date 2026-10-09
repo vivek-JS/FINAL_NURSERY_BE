@@ -20,6 +20,14 @@ import {
   listBeneficiaries,
   rejectBeneficiary,
 } from "../services/iciciBeneficiary.service.js";
+import {
+  bulkApproveBeneficiaries,
+  bulkApprovePayouts,
+  bulkCreateBeneficiaries,
+  bulkCreatePayouts,
+  bulkRejectBeneficiaries,
+  bulkRejectPayouts,
+} from "../services/payoutBulk.service.js";
 
 const HTTP_BY_CODE = {
   VALIDATION: 400,
@@ -64,8 +72,8 @@ export const getPayoutsSummary = handle(async (req, res) => {
 
 /** GET /api/banking/payouts?view=approval|bank|done|all&search=&limit=&skip= */
 export const getPayouts = handle(async (req, res) => {
-  const { view, search, limit, skip } = req.query || {};
-  const page = await listPayouts({ view, search, limit, skip });
+  const { view, search, batchId, limit, skip } = req.query || {};
+  const page = await listPayouts({ view, search, batchId, limit, skip });
   res.status(200).json({ success: true, data: page.items, ...page, items: undefined });
 });
 
@@ -108,6 +116,47 @@ export const postRefreshPayout = handle(async (req, res) => {
 /** POST /api/banking/payouts/:id/resend — checker, only when ICICI never answered */
 export const postResendPayout = handle(async (req, res) => {
   const data = await resendPayout(req.params.id, req.user);
+  res.status(200).json({ success: true, data });
+});
+
+/** POST /api/banking/payouts/bulk — Excel rows; { rows, dryRun, confirmDuplicates, batchName } */
+export const postBulkPayouts = handle(async (req, res) => {
+  const { rows, dryRun, confirmDuplicates, batchName } = req.body || {};
+  const data = await bulkCreatePayouts(rows, req.user, {
+    dryRun: dryRun !== false,
+    confirmDuplicates: confirmDuplicates === true,
+    batchName,
+  });
+  res.status(data.dryRun ? 200 : 201).json({ success: true, data });
+});
+
+/** POST /api/banking/payouts/bulk-approve — { ids, note } */
+export const postBulkApprovePayouts = handle(async (req, res) => {
+  const data = await bulkApprovePayouts(req.body?.ids, req.user, { note: req.body?.note });
+  res.status(200).json({ success: true, data });
+});
+
+/** POST /api/banking/payouts/bulk-reject — { ids, reason } */
+export const postBulkRejectPayouts = handle(async (req, res) => {
+  const data = await bulkRejectPayouts(req.body?.ids, req.user, { reason: req.body?.reason });
+  res.status(200).json({ success: true, data });
+});
+
+/** POST /api/banking/beneficiaries/bulk — Excel rows; { rows, dryRun } */
+export const postBulkBeneficiaries = handle(async (req, res) => {
+  const data = await bulkCreateBeneficiaries(req.body?.rows, req.user, { dryRun: req.body?.dryRun !== false });
+  res.status(data.dryRun ? 200 : 201).json({ success: true, data });
+});
+
+/** POST /api/banking/beneficiaries/bulk-approve — { ids, note } */
+export const postBulkApproveBeneficiaries = handle(async (req, res) => {
+  const data = await bulkApproveBeneficiaries(req.body?.ids, req.user, { note: req.body?.note });
+  res.status(200).json({ success: true, data });
+});
+
+/** POST /api/banking/beneficiaries/bulk-reject — { ids, reason } */
+export const postBulkRejectBeneficiaries = handle(async (req, res) => {
+  const data = await bulkRejectBeneficiaries(req.body?.ids, req.user, { reason: req.body?.reason });
   res.status(200).json({ success: true, data });
 });
 

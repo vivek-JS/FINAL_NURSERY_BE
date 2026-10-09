@@ -159,6 +159,24 @@ API (all need accountant or super admin): `GET /payouts/config`,
 `POST /payouts`, `GET /payouts/:id`, and `POST /payouts/:id/approve | reject |
 cancel | refresh | resend`.
 
+#### Excel upload and bulk decisions (`payoutBulk.service.js`)
+
+- `POST /payouts/bulk` and `POST /beneficiaries/bulk` take `{ rows, dryRun }`
+  (max 500 rows; the UI reads the Excel template into rows). Each row gets the
+  same checks as a single create. `dryRun: true` (default) only returns
+  per-row verdicts: `ok`, `warning` (possible duplicate in the file or the
+  last 7 days; payouts only, created with `confirmDuplicates: true`) or
+  `error`. The commit creates the valid rows, which still wait for approval.
+- A payout row whose account + IFSC is an approved payee is linked to it and
+  uses the register's details. All payouts of one upload share a `batchId` /
+  `batchName` (`GET /payouts?batchId=`).
+- `POST /payouts/bulk-approve | bulk-reject` and
+  `POST /beneficiaries/bulk-approve | bulk-reject` take `{ ids, note | reason }`
+  and return `{ items: [{ id, ok, status | error }], done, failed }`. Every
+  item goes through the normal approve/reject rules. Payout approvals are sent
+  to ICICI one at a time, 600 ms apart (ICICI allows 1–2 requests per second),
+  at most 25 per request.
+
 ```bash
 node scripts/test-banking-payouts.mjs   # stub bank + throwaway local MongoDB
 ```

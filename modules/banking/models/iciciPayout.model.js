@@ -76,6 +76,9 @@ const iciciPayoutSchema = new Schema(
     debitAccount: { type: String, required: true, trim: true },
     remarks: { type: String, trim: true, default: "" },
     purpose: { type: String, enum: PAYOUT_PURPOSES, default: "OTHER" },
+    /** Set when created from an Excel upload; every row of one upload shares it. */
+    batchId: { type: String, index: true },
+    batchName: { type: String, trim: true },
     /** Bill, invoice or order number this payment settles. */
     referenceNo: { type: String, trim: true, default: "" },
 

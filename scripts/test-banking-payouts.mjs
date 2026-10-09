@@ -269,6 +269,70 @@ try {
   );
   check("config tells a super admin they can self-approve", svc.getPayoutConfig(adminMaker).canSelfApprove === true);
   check("config tells an accountant they cannot", svc.getPayoutConfig(maker).canSelfApprove === false);
+
+  console.log("Excel upload and bulk decisions");
+  const bulk = await import("../modules/banking/services/payoutBulk.service.js");
+  const payeeRows = [
+    { name: "Bulk Farmer One", accountNumber: "12120012345678", ifsc: "SBIN0001212", type: "Farmer" },
+    { name: "Bulk Icici Vendor", accountNumber: "000401212121", ifsc: "ICIC0001212", bank: "ICICI" },
+    { name: "Bulk Farmer One Again", accountNumber: "12120012345678", ifsc: "SBIN0001212" },
+    { name: "Ram Seeds", accountNumber: "000401234567", ifsc: "ICIC0000004" },
+    { name: "Bad & Co", accountNumber: "12", ifsc: "X" },
+  ];
+  const payeeDry = await bulk.bulkCreateBeneficiaries(payeeRows, maker, { dryRun: true });
+  check(
+    "payee upload check: 2 ok, in-file duplicate, already registered, invalid",
+    payeeDry.summary.ok === 2 && payeeDry.summary.errors === 3 && payeeDry.rows[2].verdict === "error" && /Already registered/.test(payeeDry.rows[3].errors.accountNumber || ""),
+    JSON.stringify(payeeDry.summary)
+  );
+  check("payee check saves nothing", (await bene.listBeneficiaries({ search: "Bulk" })).total === 0);
+  const payeeCommit = await bulk.bulkCreateBeneficiaries(payeeRows, maker, { dryRun: false });
+  check("payee upload creates only valid rows, awaiting approval", payeeCommit.summary.created === 2);
+  const uploaded = (await bene.listBeneficiaries({ search: "Bulk", status: "PENDING_APPROVAL" })).items;
+  const payeeDecide = await bulk.bulkApproveBeneficiaries(uploaded.map((b) => b._id), checker);
+  check("bulk approve payees", payeeDecide.done === 2 && payeeDecide.failed === 0);
+
+  const payRows = [
+    { name: "Bulk Farmer One", accountNumber: "12120012345678", ifsc: "SBIN0001212", mode: "IMPS", amount: "1,500", purpose: "Farmer refund" },
+    { name: "Wrong Name", accountNumber: "000401212121", ifsc: "ICIC0001212", mode: "ICICI to ICICI", amount: "2500" },
+    { name: "Bulk Farmer One", accountNumber: "12120012345678", ifsc: "SBIN0001212", mode: "IMPS", amount: "1500" },
+    { name: "One Time Payee", accountNumber: "34340012345678", ifsc: "HDFC0003434", mode: "NEFT", amount: "999" },
+    { name: "Too Small Rtgs", accountNumber: "56560012345678", ifsc: "HDFC0005656", mode: "RTGS", amount: "1000" },
+  ];
+  const payDry = await bulk.bulkCreatePayouts(payRows, maker, { dryRun: true });
+  check(
+    "payment upload check: matches register, flags in-file duplicate and RTGS minimum",
+    payDry.summary.ok === 3 && payDry.summary.warnings === 1 && payDry.summary.errors === 1 &&
+      payDry.rows[1].registeredPayee === "Bulk Icici Vendor" && payDry.rows[1].warnings.length === 1,
+    JSON.stringify(payDry.summary)
+  );
+  const payCommit = await bulk.bulkCreatePayouts(payRows, maker, { dryRun: false, batchName: "October farmers" });
+  check("payment upload creates valid rows in one batch, skips warnings", payCommit.summary.created === 3 && !!payCommit.batch.id);
+  const batchList = await svc.listPayouts({ batchId: payCommit.batch.id });
+  check(
+    "batch rows are listed together and linked to approved payees",
+    batchList.total === 3 && batchList.items.every((x) => x.batchName === "October farmers") && batchList.items.filter((x) => x.beneficiaryId).length === 2
+  );
+
+  const ids = batchList.items.map((x) => x._id);
+  await expectError("accountant cannot bulk approve", "FORBIDDEN", async () => {
+    const r = await bulk.bulkApprovePayouts(ids, maker);
+    if (r.failed === ids.length) throw Object.assign(new Error(r.items[0].error), { code: r.items[0].code });
+  });
+  const approvedBulk = await bulk.bulkApprovePayouts(ids.slice(0, 2), checker, { note: "Batch ok" });
+  check(
+    "bulk approve sends each to ICICI",
+    approvedBulk.done === 2 && approvedBulk.items.every((x) => x.status === "AWAITING_BANK_APPROVAL"),
+    JSON.stringify(approvedBulk.items.map((x) => x.status))
+  );
+  const again2 = await bulk.bulkApprovePayouts(ids.slice(0, 1), checker);
+  check("bulk approve reports items already approved", again2.failed === 1 && again2.items[0].code === "BAD_STATE");
+  await expectError("bulk reject needs a reason", "VALIDATION", () => bulk.bulkRejectPayouts(ids.slice(2), checker, {}));
+  const rejectedBulk = await bulk.bulkRejectPayouts(ids.slice(2), checker, { reason: "Wrong batch" });
+  check("bulk reject", rejectedBulk.done === 1);
+  await expectError("too many in one bulk approve", "VALIDATION", () =>
+    bulk.bulkApprovePayouts(Array.from({ length: 26 }, () => new mongoose.Types.ObjectId()), checker)
+  );
 } catch (err) {
   console.error(err);
   check("script ran without crashing", false, err.message);
