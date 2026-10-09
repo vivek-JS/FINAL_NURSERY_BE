@@ -17,6 +17,8 @@ import {
   IFSC_RE,
   NAME_RE,
   PAYEE_NAME_MAX,
+  approvalNote,
+  canSelfApprove,
   escapeRegex,
   isPayoutChecker,
   pushHistory,
@@ -167,15 +169,16 @@ async function decide(id, user, { from, to, action, extra = {}, note, unsetKey =
 export async function approveBeneficiary(id, user, { note } = {}) {
   if (!isPayoutChecker(user)) throw new PayoutError("Only an approver can approve payees", "FORBIDDEN");
   const current = await loadOrThrow(id);
-  if (String(current.makerId) === String(user._id)) {
+  const isSelf = String(current.makerId) === String(user._id);
+  if (isSelf && !canSelfApprove(user)) {
     throw new PayoutError("You added this payee — another approver must approve it", "SELF_APPROVAL");
   }
   return decide(id, user, {
     from: "PENDING_APPROVAL",
     to: "ACTIVE",
     action: "APPROVED",
-    note: String(note || "").trim() || undefined,
-    extra: { checkerId: user._id, checkerName: userName(user), checkedAt: new Date() },
+    note: approvalNote(isSelf, note),
+    extra: { checkerId: user._id, checkerName: userName(user), checkedAt: new Date(), selfApproved: isSelf },
   });
 }
 

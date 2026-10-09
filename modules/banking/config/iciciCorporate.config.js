@@ -74,6 +74,8 @@ export function getIciciCorporateConfig() {
       minCheckIntervalMs: Number(process.env.ICICI_PAYOUT_MIN_CHECK_MS || 10 * 60 * 1000),
       /** true = payouts only to payees approved in the register; no one-time payees. */
       requireBeneficiary: process.env.ICICI_PAYOUT_REQUIRE_BENEFICIARY === "true",
+      /** Super admins may approve payouts/payees they created themselves; ICICI net-banking approval still applies. */
+      superAdminSelfApprove: process.env.ICICI_PAYOUT_SUPER_ADMIN_SELF_APPROVE !== "false",
     },
     ipWhitelist: (process.env.ICICI_IP_WHITELIST || "")
       .split(",")

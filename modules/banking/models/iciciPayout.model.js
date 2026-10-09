@@ -85,6 +85,8 @@ const iciciPayoutSchema = new Schema(
     checkerName: { type: String },
     checkedAt: { type: Date },
     checkerNote: { type: String },
+    /** The maker approved it themselves (super admin); ICICI net-banking approval was the second check. */
+    selfApproved: { type: Boolean, default: false },
     rejectReason: { type: String },
 
     bank: {
