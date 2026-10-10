@@ -27,6 +27,12 @@ function getPaymentUtr(p) {
   );
 }
 
+/** A cash payment with no bank reference, which can only be matched on amount and date. */
+export function isPlainCashPayment(p) {
+  if (!p || p.isDiscount || p.isWalletPayment || p.mainPaymentId || p.transferredFromOrderId) return false;
+  return String(p.modeOfPayment || "").trim().toLowerCase() === "cash";
+}
+
 /**
  * Find all uncleared payments that need bank reconciliation.
  *
@@ -36,7 +42,7 @@ function getPaymentUtr(p) {
 export async function collectPendingBankReconciliationPayments(
   dateFrom,
   dateTo,
-  { includeSuspense = false } = {}
+  { includeSuspense = false, includeCash = false } = {}
 ) {
   const list = [];
   const now = new Date();
@@ -53,15 +59,23 @@ export async function collectPendingBankReconciliationPayments(
     .populate("farmer", "name village")
     .lean();
 
+  /** Which rows to hand to the matcher, and whether they are cash (matched on amount + date only). */
+  const pick = (p) => {
+    if (!paymentNeedsBankVerification(p, includeSuspense)) return null;
+    if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) return null;
+    const hasRef =
+      getPaymentUtr(p) ||
+      (p.chequeNumber && String(p.chequeNumber).trim()) ||
+      (p.merchantTranId && String(p.merchantTranId).trim());
+    if (hasRef) return { isCash: false };
+    if (includeCash && isPlainCashPayment(p)) return { isCash: true };
+    return null;
+  };
+
   for (const order of orders) {
     for (const p of order.payment || []) {
-      if (!paymentNeedsBankVerification(p, includeSuspense)) continue;
-      if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
-      const hasRef =
-        getPaymentUtr(p) ||
-        (p.chequeNumber && String(p.chequeNumber).trim()) ||
-        (p.merchantTranId && String(p.merchantTranId).trim());
-      if (!hasRef) continue;
+      const picked = pick(p);
+      if (!picked) continue;
       list.push({
         source: "order",
         orderMongoId: order._id.toString(),
@@ -76,6 +90,7 @@ export async function collectPendingBankReconciliationPayments(
         qrReferenceId: p.qrReferenceId,
         merchantTranId: p.merchantTranId,
         farmerName: order.farmer?.name,
+        isCash: picked.isCash,
       });
     }
   }
@@ -93,13 +108,8 @@ export async function collectPendingBankReconciliationPayments(
 
   for (const order of agriOrders) {
     for (const p of order.payment || []) {
-      if (!paymentNeedsBankVerification(p, includeSuspense)) continue;
-      if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
-      const hasRef =
-        getPaymentUtr(p) ||
-        (p.chequeNumber && String(p.chequeNumber).trim()) ||
-        (p.merchantTranId && String(p.merchantTranId).trim());
-      if (!hasRef) continue;
+      const picked = pick(p);
+      if (!picked) continue;
       list.push({
         source: "agriSales",
         orderMongoId: order._id.toString(),
@@ -114,6 +124,7 @@ export async function collectPendingBankReconciliationPayments(
         qrReferenceId: p.qrReferenceId,
         merchantTranId: p.merchantTranId,
         customerName: order.customerName,
+        isCash: picked.isCash,
       });
     }
   }

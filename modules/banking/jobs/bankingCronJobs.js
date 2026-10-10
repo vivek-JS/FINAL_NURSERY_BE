@@ -3,6 +3,7 @@ import { getIciciCorporateConfig } from "../config/iciciCorporate.config.js";
 import { fetchAndStoreCorporateStatement } from "../services/iciciCorporateStatement.service.js";
 import { runEnhancedReconciliation } from "../services/reconciliationEngine.service.js";
 import { pollOpenPayouts } from "../services/iciciPayout.service.js";
+import { fetchStatementIfDue } from "../services/bankAutoCheck.service.js";
 import { getBankingLogger } from "../utils/logger.js";
 
 const log = () => getBankingLogger();
@@ -14,8 +15,10 @@ const log = () => getBankingLogger();
  * Every 15 min: ask ICICI about payouts that are with the bank.
  * Enable with ICICI_PAYOUT_POLL_ENABLED=true
  *
- * Hourly: reconcile the stored statement (no bank call), so a payment or
- * credit unmatched for 24 h goes to suspense. Off with BANKING_SUSPENSE_SWEEP_ENABLED=false
+ * Hourly: fetch the last 2 days of statement (live bank only, at most every
+ * BANKING_AUTO_FETCH_GAP_MINUTES; off with BANKING_SUSPENSE_SWEEP_FETCH=false),
+ * then reconcile, so a payment or credit unmatched for 24 h goes to suspense.
+ * Off with BANKING_SUSPENSE_SWEEP_ENABLED=false
  */
 export function initBankingCronJobs() {
   const cfg = getIciciCorporateConfig();
@@ -53,6 +56,9 @@ export function initBankingCronJobs() {
         try {
           const to = new Date();
           const from = new Date(to.getTime() - cfg.suspenseSweep.lookbackDays * 24 * 60 * 60 * 1000);
+          if (cfg.suspenseSweep.fetchStatement) {
+            await fetchStatementIfDue(new Date(to.getTime() - 2 * 24 * 60 * 60 * 1000), to);
+          }
           const result = await runEnhancedReconciliation(from, to, { source: "all" });
           if (result.updatedCount || result.suspense?.length) {
             log().info("Suspense sweep complete", {

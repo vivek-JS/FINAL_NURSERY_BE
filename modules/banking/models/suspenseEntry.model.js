@@ -23,6 +23,8 @@ const suspenseEntrySchema = new Schema(
         "DATE_MISMATCH",
         "ORPHAN_CREDIT",
         "MANUAL_REVIEW",
+        /** A cash payment and a cash credit on the statement agree on amount and date; accountant confirms. */
+        "CASH_MATCH",
       ],
       required: true,
     },

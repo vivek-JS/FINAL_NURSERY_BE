@@ -2224,6 +2224,10 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
 
   await order.save();
 
+  import("../modules/banking/services/bankAutoCheck.service.js")
+    .then((m) => m.queueBankCheck({ paymentDate: newPayment.paymentDate }))
+    .catch((e) => console.error("[Banking] queue bank check:", e?.message || e));
+
   // Populate fields
   await order.populate("productId");
   await order.populate("createdBy");
