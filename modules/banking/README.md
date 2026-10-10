@@ -395,7 +395,31 @@ OPEN items for manual review: ORPHAN_CREDIT, MULTIPLE_MATCH, LOW_CONFIDENCE, etc
 
 ### cash_book → `CashBook`
 
-Bank/cash register lines linked to reconciled payments.
+Bank/cash register lines linked to reconciled payments, and `CASH_IN` rows for
+cash deposits (employee in `depositedBy`, slip photos in `slipPhotos`,
+`cancelledAt` for deposits withdrawn before they were matched).
+
+### Employee cash in hand (Cashbook tab)
+
+| Counted | Source |
+|---|---|
+| + cash received | Order / agri order payments in `Cash`, not rejected, not bulk-linked, not transfers, not discounts. Employee = `paymentRecordedBy`, else the order's `salesPerson` (agri: then `createdBy`). Cash bulk payments by `createdBy`. |
+| − expenses | `ItarKharchEntry` by `createdBy`, except the `बँक जमा` category (shown as "noted in app", not subtracted). |
+| − deposited | `CashBook` `CASH_IN` rows by `depositedBy`, not cancelled. |
+
+Counting starts at `BANKING_CASHBOOK_START_DATE` (default `2026-10-01`, IST).
+A deposit needs an employee, at least one slip photo, a date on or after the
+start, and cannot exceed that employee's cash in hand. Unmatched deposits can be
+cancelled; matched ones cannot.
+
+- `GET /api/banking/cashbook/cash-in-hand` — every employee's balance
+- `GET /api/banking/cashbook/cash-in-hand/:employeeId` — one employee's movements with running balance
+- `POST /api/banking/cash-deposit` — `{ employeeId, entryDate, amount, accountNumber, slipNumber, slipPhotos[], narration }`
+- `POST /api/banking/cash-deposit/:id/cancel` — `{ reason }`
+
+```bash
+node scripts/test-banking-cashbook.mjs
+```
 
 ### Indexes
 

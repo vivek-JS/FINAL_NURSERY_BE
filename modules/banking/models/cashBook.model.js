@@ -36,7 +36,13 @@ const cashBookSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "BankStatementEntry",
     },
-    depositedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    /** Employee whose cash in hand this deposit came out of. */
+    depositedBy: { type: Schema.Types.ObjectId, ref: "User", index: true },
+    /** Photos of the stamped pay-in slip / counter receipt. */
+    slipPhotos: [{ type: String, trim: true }],
+    cancelledAt: { type: Date, default: null },
+    cancelledBy: { type: Schema.Types.ObjectId, ref: "User" },
+    cancelReason: { type: String, trim: true, default: "" },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     metadata: { type: Schema.Types.Mixed },
   },
