@@ -421,6 +421,33 @@ cancelled; matched ones cannot.
 node scripts/test-banking-cashbook.mjs
 ```
 
+### Cash against the statement
+
+Every reconciliation run (manual, hourly, or after a payment is added):
+
+1. **Deposits first.** Each unverified, uncancelled deposit is matched to a
+   credit of the same amount on its account within ±2 days, preferring cash
+   narrations (`BY CASH`, `CASH DEP`, `CDM`, `BNA`, …).
+2. **Cash payments.** A pending plain cash payment (not bulk-linked, transfer,
+   discount or wallet) with a cash credit of the same amount within 2 days gets a
+   `CASH_MATCH` suspense row ("Bank match found (cash)"). It is never
+   auto-verified: the accountant presses **Confirm** (payment becomes
+   `BANK_VERIFIED` and leaves the employee's cash in hand) or **Not this** (the
+   pairing is not offered again; the next candidate line is). With no cash
+   credit the payment is not suspense: the cash is still with the employee.
+3. UTR payments never fuzzy-match a cash line on amount and date.
+
+After an ERP payment is saved, a check is queued: after
+`BANKING_AUTO_CHECK_DELAY_SECONDS` (default 90) the statement is fetched for
+the payment dates up to today (live bank only, at most every
+`BANKING_AUTO_FETCH_GAP_MINUTES`, default 10) and the engine runs over that
+range. Off with `BANKING_AUTO_CHECK_ON_PAYMENT=false`. The hourly sweep also
+fetches the last 2 days first (off with `BANKING_SUSPENSE_SWEEP_FETCH=false`).
+
+```bash
+node scripts/test-banking-cash-match.mjs
+```
+
 ### Indexes
 
 - `BankStatementEntry`: duplicateKey (unique), accountNumber+utr+amount+txnDate

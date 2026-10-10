@@ -13,8 +13,10 @@ import BankStatementEntry, {
   NOT_STATEMENT_VERIFIED,
 } from "../../../models/bankStatementEntry.model.js";
 import { markStatementVerified } from "./bankStatement.service.js";
+import { closeOpenSuspenseFor } from "./suspense.service.js";
 import { cashInHandOf, cashbookStartDate } from "./cashInHand.service.js";
 import { getBankingLogger } from "../utils/logger.js";
+import { isCashCreditLine } from "../utils/cashNarration.js";
 
 const log = () => getBankingLogger();
 
@@ -177,9 +179,10 @@ export async function verifyCashDeposit(depositId, { userId } = {}) {
     .lean()
     .exec();
 
-  const match = candidates.find(
+  const sameAmount = candidates.filter(
     (e) => e.amount > 0 && Math.abs(Number(e.amount) - Number(deposit.amount)) < AMOUNT_EPS
   );
+  const match = sameAmount.find(isCashCreditLine) || sameAmount[0];
 
   if (!match) {
     return {
@@ -199,6 +202,10 @@ export async function verifyCashDeposit(depositId, { userId } = {}) {
   await deposit.save();
 
   await markStatementVerified(match._id, { userId });
+  await closeOpenSuspenseFor({
+    bankTransactionId: match._id,
+    note: `Matched to cash deposit ${deposit._id}`,
+  });
 
   log().info("Cash deposit verified", {
     id: String(deposit._id),

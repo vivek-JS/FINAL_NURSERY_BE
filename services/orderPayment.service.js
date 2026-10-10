@@ -411,6 +411,17 @@ export async function addPaymentsToOrder(orderId, rawPayments, reqUser, options 
 
     const hasCollected = savedPayments.some((p) => p.paymentStatus === "COLLECTED");
 
+    const toCheck = savedPayments.filter((p) => p.paymentStatus === "PENDING" && !p.isDiscount);
+    if (toCheck.length) {
+      const earliest = toCheck.reduce(
+        (min, p) => (new Date(p.paymentDate) < min ? new Date(p.paymentDate) : min),
+        new Date()
+      );
+      import("../modules/banking/services/bankAutoCheck.service.js")
+        .then((m) => m.queueBankCheck({ paymentDate: earliest }))
+        .catch((e) => console.error("[Banking] queue bank check:", e?.message || e));
+    }
+
     return {
       order,
       savedPayments,

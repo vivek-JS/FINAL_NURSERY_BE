@@ -19,6 +19,11 @@
  *   PENDING → BANK_VERIFIED (UTR and amount agree with the bank)
  *   PENDING → SUSPENSE      (anything else: no match, no UTR match, or a tie)
  *   SUSPENSE → BANK_VERIFIED (a later run finds the UTR line; the row closes itself)
+ *
+ * Cash payments have no UTR. A cash credit of the same amount within two days
+ * becomes a CASH_MATCH row for the accountant to confirm; with none, the cash is
+ * still with the employee (cash book) and is never reported as NO_MATCH.
+ * Recorded cash book deposits are matched to their credit before any of this.
  */
 
 import crypto from "crypto";
@@ -33,6 +38,7 @@ import CashBook from "../models/cashBook.model.js";
 import { normalizeUtr, normalizeAmount } from "../../../services/iciciBankService.js";
 import { collectPendingBankReconciliationPayments } from "../../../services/reconciliation.service.js";
 import { narrationSimilarity, containsUtrInNarration } from "../utils/narrationSimilarity.js";
+import { isCashCreditLine } from "../utils/cashNarration.js";
 import { routeToSuspense, closeOpenSuspenseFor } from "./suspense.service.js";
 import { transitionPaymentStatus } from "./verificationStatusEngine.js";
 import { getBankingLogger } from "../utils/logger.js";
@@ -129,7 +135,7 @@ function scoreMatch(payment, entry) {
     score = 85;
     rule = "CHEQUE_AMOUNT";
     matchType = "EXACT";
-  } else if (Math.abs(eDate - payDate) <= DATE_WINDOW_MS) {
+  } else if (Math.abs(eDate - payDate) <= DATE_WINDOW_MS && !isCashCreditLine(entry)) {
     score = 65;
     rule = "AMOUNT_DATE";
     matchType = "FUZZY";
@@ -184,6 +190,54 @@ export function findUtrAmountMismatchIn(payment, entries) {
       return ref === utr && Math.abs(normalizeAmount(e.amount) - amt) >= AMOUNT_EPS;
     }) || null
   );
+}
+
+/**
+ * Cash credits on the statement that could be this cash payment: same amount,
+ * within two days, narrated as cash. Closest date first.
+ */
+export function cashCandidatesFor(payment, entries) {
+  const amt = normalizeAmount(payment.paidAmount);
+  const payDate = new Date(payment.paymentDate).getTime();
+  return (entries || [])
+    .filter(
+      (e) =>
+        isCashCreditLine(e) &&
+        Math.abs(normalizeAmount(e.amount) - amt) < AMOUNT_EPS &&
+        Math.abs(new Date(e.txnDate).getTime() - payDate) <= DATE_WINDOW_MS
+    )
+    .map((e) => ({ entry: e, gap: Math.abs(new Date(e.txnDate).getTime() - payDate) }))
+    .sort((a, b) => a.gap - b.gap);
+}
+
+/**
+ * Match recorded cash deposits (cash book, with slip photo) to their bank
+ * credit before payments are scored, so a deposit's line is not offered to a
+ * payment or reported as an orphan.
+ */
+async function matchCashDeposits(from, to, userId) {
+  const windowFrom = new Date(from.getTime() - DATE_WINDOW_MS);
+  const windowTo = new Date(to.getTime() + DATE_WINDOW_MS);
+  const open = await CashBook.find({
+    entryType: "CASH_IN",
+    depositVerified: { $ne: true },
+    cancelledAt: null,
+    entryDate: { $gte: windowFrom, $lte: windowTo },
+  })
+    .select("_id")
+    .lean();
+  if (!open.length) return 0;
+  const { verifyCashDeposit } = await import("./cashDeposit.service.js");
+  let matched = 0;
+  for (const d of open) {
+    try {
+      const r = await verifyCashDeposit(d._id, { userId });
+      if (r.ok && r.matched) matched += 1;
+    } catch (err) {
+      log().warn("Cash deposit auto-match failed", { id: String(d._id), error: err.message });
+    }
+  }
+  return matched;
 }
 
 /** Whether a payment with no bank line has waited long enough to be reported. */
@@ -333,8 +387,10 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
   const errors = [];
   const matched = [];
   const suspense = [];
-  const waiting = { payments: 0, lines: 0, noStatementYet: 0 };
+  const waiting = { payments: 0, lines: 0, noStatementYet: 0, cashInHand: 0 };
   let updatedCount = 0;
+  let cashMatches = 0;
+  let depositsMatched = 0;
 
   const from = new Date(dateFrom);
   const to = new Date(dateTo);
@@ -353,9 +409,13 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
       suspense,
       errors,
       waiting,
+      cashMatches,
+      depositsMatched,
       message: "No bank statement lines in range. Sync or import the statement first.",
     };
   }
+
+  depositsMatched = await matchCashDeposits(from, to, userId);
 
   // A payment is only "missing from the bank" once the statement reaches its day.
   const latestLine = await BankStatementEntry.findOne({}).sort({ txnDate: -1 }).select("txnDate").lean();
@@ -363,11 +423,19 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
 
   const pending = await collectPendingBankReconciliationPayments(from, to, {
     includeSuspense: true,
+    includeCash: true,
   });
-  const filtered =
+  // Payments with a UTR go first: their match is certain, a cash match is a guess.
+  const filtered = (
     source === "all"
       ? pending
-      : pending.filter((p) => (source === "order" ? p.source === "order" : p.source === "agriSales"));
+      : pending.filter((p) => (source === "order" ? p.source === "order" : p.source === "agriSales"))
+  ).sort(
+    (a, b) =>
+      Number(Boolean(a.isCash)) - Number(Boolean(b.isCash)) ||
+      new Date(a.paymentDate) - new Date(b.paymentDate) ||
+      String(a.paymentId).localeCompare(String(b.paymentId))
+  );
 
   const entries = await loadCandidateEntries(from, to, filtered);
 
@@ -378,8 +446,53 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
     if (!routed?.decided && entry?._id) claimedEntryIds.add(String(entry._id));
   };
 
+  /** Cash lines already offered to a cash payment in this run. */
+  const cashOffered = new Set();
+
   for (const pay of filtered) {
     const available = entries.filter((e) => e._id && !usedEntryIds.has(String(e._id)));
+
+    // Cash: suggest the bank cash credit for the accountant to confirm. With no
+    // credit the cash is still with the employee (cash book), not missing.
+    if (pay.isCash) {
+      const options = cashCandidatesFor(pay, available);
+      if (!options.length) {
+        waiting.cashInHand += 1;
+        continue;
+      }
+      // Lines not yet offered to another cash payment first; a pairing the
+      // accountant dismissed comes back `decided`, so try the next line.
+      const ordered = [
+        ...options.filter((o) => !cashOffered.has(String(o.entry._id))),
+        ...options.filter((o) => cashOffered.has(String(o.entry._id))),
+      ];
+      let offered = false;
+      for (let i = 0; i < ordered.length; i += 1) {
+        const { entry: line, gap } = ordered[i];
+        const tied = ordered.some((o, j) => j !== i && o.gap === gap);
+        const shared = cashOffered.has(String(line._id));
+        const routed = await routeToSuspense({
+          payment: pay,
+          bankEntry: line,
+          reason: "CASH_MATCH",
+          confidenceScore: tied || shared ? 50 : 70,
+          candidates: ordered.slice(0, 3).map((o) => ({ score: o.gap === gap ? 70 : 50, rule: "CASH_AMOUNT_DATE" })),
+          runId,
+        });
+        if (routed.decided) continue;
+        cashOffered.add(String(line._id));
+        claim(routed, line);
+        if (routed.created) {
+          cashMatches += 1;
+          suspense.push({ paymentId: pay.paymentId, reason: "CASH_MATCH" });
+        }
+        offered = true;
+        break;
+      }
+      if (!offered) waiting.cashInHand += 1;
+      continue;
+    }
+
     const candidates = [];
 
     for (const e of available) {
@@ -504,6 +617,12 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
     `${updatedCount} payment${updatedCount === 1 ? "" : "s"} verified by bank`,
     `${suspense.length} sent to suspense`,
   ];
+  if (cashMatches) {
+    notes.push(`${cashMatches} cash payment${cashMatches === 1 ? "" : "s"} found in the bank — confirm in Suspense`);
+  }
+  if (depositsMatched) {
+    notes.push(`${depositsMatched} cash deposit${depositsMatched === 1 ? "" : "s"} matched to the bank`);
+  }
   const under = waiting.payments + waiting.lines;
   if (under) {
     notes.push(
@@ -516,10 +635,21 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
     notes.push(`${waiting.noStatementYet} payment(s) wait for the statement to reach their date`);
   }
 
-  return { runId, matched, updatedCount, suspense, errors, waiting, message: `${notes.join("; ")}.` };
+  return {
+    runId,
+    matched,
+    updatedCount,
+    suspense,
+    errors,
+    waiting,
+    cashMatches,
+    depositsMatched,
+    message: `${notes.join("; ")}.`,
+  };
 }
 
 export {
+  isCashCreditLine,
   scoreMatch,
   applyMatch,
   FUZZY_THRESHOLD,

@@ -94,6 +94,7 @@ export function getIciciCorporateConfig() {
       enabled: process.env.BANKING_SUSPENSE_SWEEP_ENABLED !== "false",
       schedule: process.env.BANKING_SUSPENSE_SWEEP_CRON || "20 * * * *",
       lookbackDays: Number(process.env.BANKING_SUSPENSE_SWEEP_LOOKBACK_DAYS || 30),
+      fetchStatement: process.env.BANKING_SUSPENSE_SWEEP_FETCH !== "false",
     },
   };
 }

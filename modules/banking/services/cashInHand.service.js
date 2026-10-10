@@ -56,6 +56,8 @@ function orderCashPipeline({ start, employeeId, fallbackFields }) {
         "payment.paymentStatus": { $in: [...RECEIVED, ...OPEN] },
         "payment.isWalletPayment": { $ne: true },
         "payment.isDiscount": { $ne: true },
+        // Matched to its own cash credit on the statement: paid into the bank, not held.
+        "payment.bankVerificationStatus": { $ne: "BANK_VERIFIED" },
         $and: [
           { $or: [{ "payment.mainPaymentId": null }, { "payment.mainPaymentId": { $exists: false } }] },
           {
