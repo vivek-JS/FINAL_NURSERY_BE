@@ -55,6 +55,8 @@ export function getIciciCorporateConfig() {
       registrationStatus:
         process.env.ICICI_REGISTRATION_STATUS_PATH || "/RegistrationStatus",
       statement: process.env.ICICI_STATEMENT_PATH || "/AccountStatement",
+      statementNextPage:
+        process.env.ICICI_STATEMENT_PAGINATION_PATH || process.env.ICICI_STATEMENT_PATH || "/AccountStatement",
       transactionStatus: process.env.ICICI_TXN_STATUS_PATH || "/TransactionStatus",
       transactionInquiry:
         process.env.ICICI_TXN_INQUIRY_PATH || "/TransactionInquiry",
