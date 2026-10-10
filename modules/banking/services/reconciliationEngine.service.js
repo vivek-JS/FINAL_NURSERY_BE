@@ -46,11 +46,39 @@ const DATE_WINDOW_MS = 2 * DAY_MS;
 const FUZZY_THRESHOLD = Number(process.env.BANKING_FUZZY_THRESHOLD || 60);
 /** Statement lines this far either side of the run's range can still match. */
 const SEARCH_WINDOW_DAYS = 7;
+const HOUR_MS = 60 * 60 * 1000;
 /**
- * Days after the payment date before a payment with no bank line goes to
- * suspense as NO_MATCH. NEFT and cheques often land a day or two later.
+ * Hours an ERP payment or a bank credit may stay unmatched before it goes to
+ * suspense (NO_MATCH / ORPHAN_CREDIT). Until then it waits for its other half.
  */
-const NO_MATCH_GRACE_DAYS = Number(process.env.BANKING_NO_MATCH_GRACE_DAYS || 2);
+const SUSPENSE_AFTER_HOURS = Number(
+  process.env.BANKING_SUSPENSE_AFTER_HOURS ||
+    (process.env.BANKING_NO_MATCH_GRACE_DAYS ? Number(process.env.BANKING_NO_MATCH_GRACE_DAYS) * 24 : 24)
+);
+const NO_MATCH_GRACE_DAYS = SUSPENSE_AFTER_HOURS / 24;
+
+const IST_OFFSET_MS = 330 * 60 * 1000;
+const indiaDay = (d) => new Date(new Date(d).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+
+const validDate = (v) => {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+/** A payment waits from its payment date; a bank line from its transaction date. */
+export function paymentUnmatchedSince(payment) {
+  return validDate(payment?.paymentDate);
+}
+
+export function lineUnmatchedSince(entry) {
+  return validDate(entry?.txnDate);
+}
+
+export function hasWaitedLongEnough(since, now = new Date(), hours = SUSPENSE_AFTER_HOURS) {
+  if (!since) return false;
+  return now.getTime() - since.getTime() >= hours * HOUR_MS;
+}
 
 function getPaymentUtr(p) {
   return (
@@ -160,10 +188,7 @@ export function findUtrAmountMismatchIn(payment, entries) {
 
 /** Whether a payment with no bank line has waited long enough to be reported. */
 export function isPastNoMatchGrace(payment, now = new Date(), graceDays = NO_MATCH_GRACE_DAYS) {
-  if (!payment?.paymentDate) return false;
-  const paid = new Date(payment.paymentDate);
-  if (Number.isNaN(paid.getTime())) return false;
-  return now.getTime() - paid.getTime() >= graceDays * DAY_MS;
+  return hasWaitedLongEnough(paymentUnmatchedSince(payment), now, graceDays * 24);
 }
 
 /** References that identify one bank line on their own, whatever its date. */
@@ -304,10 +329,11 @@ async function applyMatch(pay, match, runId, userId) {
  * Run enhanced reconciliation with confidence scoring.
  */
 export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) {
-  const { source = "all", userId = null, runId = crypto.randomUUID() } = options;
+  const { source = "all", userId = null, runId = crypto.randomUUID(), now = new Date() } = options;
   const errors = [];
   const matched = [];
   const suspense = [];
+  const waiting = { payments: 0, lines: 0, noStatementYet: 0 };
   let updatedCount = 0;
 
   const from = new Date(dateFrom);
@@ -326,9 +352,14 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
       updatedCount,
       suspense,
       errors,
+      waiting,
       message: "No bank statement lines in range. Sync or import the statement first.",
     };
   }
+
+  // A payment is only "missing from the bank" once the statement reaches its day.
+  const latestLine = await BankStatementEntry.findOne({}).sort({ txnDate: -1 }).select("txnDate").lean();
+  const statementThrough = latestLine ? indiaDay(latestLine.txnDate) : "";
 
   const pending = await collectPendingBankReconciliationPayments(from, to, {
     includeSuspense: true,
@@ -371,7 +402,11 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
         if (routed.created) {
           suspense.push({ paymentId: pay.paymentId, reason: "AMOUNT_MISMATCH" });
         }
-      } else if (isPastNoMatchGrace(pay)) {
+      } else if (!isPastNoMatchGrace(pay, now)) {
+        waiting.payments += 1;
+      } else if (!statementThrough || statementThrough < indiaDay(paymentUnmatchedSince(pay))) {
+        waiting.noStatementYet += 1;
+      } else {
         const routed = await routeToSuspense({ payment: pay, reason: "NO_MATCH", runId });
         if (routed.created) suspense.push({ paymentId: pay.paymentId, reason: "NO_MATCH" });
       }
@@ -443,6 +478,10 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
     if (e.amount <= 0) continue;
     const when = new Date(e.txnDate);
     if (when < from || when > to) continue;
+    if (e.reconciliationStatus !== "SUSPENSE" && !hasWaitedLongEnough(lineUnmatchedSince(e), now)) {
+      waiting.lines += 1;
+      continue;
+    }
     const already = await routeToSuspense({
       bankEntry: e,
       reason: "ORPHAN_CREDIT",
@@ -458,9 +497,33 @@ export async function runEnhancedReconciliation(dateFrom, dateTo, options = {}) 
     matched: matched.length,
     suspense: suspense.length,
     errors: errors.length,
+    waiting,
   });
 
-  return { runId, matched, updatedCount, suspense, errors };
+  const notes = [
+    `${updatedCount} payment${updatedCount === 1 ? "" : "s"} verified by bank`,
+    `${suspense.length} sent to suspense`,
+  ];
+  const under = waiting.payments + waiting.lines;
+  if (under) {
+    notes.push(
+      `${under} still unmatched for less than ${SUSPENSE_AFTER_HOURS} hours (${waiting.payments} payment${
+        waiting.payments === 1 ? "" : "s"
+      }, ${waiting.lines} bank line${waiting.lines === 1 ? "" : "s"}) — they go to suspense if still unmatched after that`
+    );
+  }
+  if (waiting.noStatementYet) {
+    notes.push(`${waiting.noStatementYet} payment(s) wait for the statement to reach their date`);
+  }
+
+  return { runId, matched, updatedCount, suspense, errors, waiting, message: `${notes.join("; ")}.` };
 }
 
-export { scoreMatch, applyMatch, FUZZY_THRESHOLD, NO_MATCH_GRACE_DAYS, SEARCH_WINDOW_DAYS };
+export {
+  scoreMatch,
+  applyMatch,
+  FUZZY_THRESHOLD,
+  NO_MATCH_GRACE_DAYS,
+  SUSPENSE_AFTER_HOURS,
+  SEARCH_WINDOW_DAYS,
+};

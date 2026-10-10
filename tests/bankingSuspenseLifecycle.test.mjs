@@ -52,17 +52,17 @@ describe("findUtrAmountMismatchIn", () => {
 describe("isPastNoMatchGrace", () => {
   const now = new Date("2026-10-09T12:00:00.000Z");
 
-  it("defaults to two days", () => {
-    assert.equal(NO_MATCH_GRACE_DAYS, 2);
+  it("defaults to 24 hours", () => {
+    assert.equal(NO_MATCH_GRACE_DAYS, 1);
   });
 
-  it("holds back a payment made inside the grace period", () => {
-    const paymentDate = new Date(now.getTime() - 1.5 * DAY);
+  it("holds back a payment unmatched for less than 24 hours", () => {
+    const paymentDate = new Date(now.getTime() - 23 * 60 * 60 * 1000);
     assert.equal(isPastNoMatchGrace({ paymentDate }, now), false);
   });
 
-  it("reports a payment once the grace period is over", () => {
-    const paymentDate = new Date(now.getTime() - 2 * DAY);
+  it("reports a payment unmatched for 24 hours", () => {
+    const paymentDate = new Date(now.getTime() - DAY);
     assert.equal(isPastNoMatchGrace({ paymentDate }, now), true);
   });
 

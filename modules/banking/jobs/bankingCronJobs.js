@@ -13,6 +13,9 @@ const log = () => getBankingLogger();
  *
  * Every 15 min: ask ICICI about payouts that are with the bank.
  * Enable with ICICI_PAYOUT_POLL_ENABLED=true
+ *
+ * Hourly: reconcile the stored statement (no bank call), so a payment or
+ * credit unmatched for 24 h goes to suspense. Off with BANKING_SUSPENSE_SWEEP_ENABLED=false
  */
 export function initBankingCronJobs() {
   const cfg = getIciciCorporateConfig();
@@ -38,6 +41,36 @@ export function initBankingCronJobs() {
       { timezone: cfg.cron.timezone }
     );
     log().info("Payout status poller initialized", { schedule: cfg.payout.pollSchedule });
+  }
+
+  if (cfg.suspenseSweep.enabled) {
+    let sweeping = false;
+    cron.schedule(
+      cfg.suspenseSweep.schedule,
+      async () => {
+        if (sweeping) return;
+        sweeping = true;
+        try {
+          const to = new Date();
+          const from = new Date(to.getTime() - cfg.suspenseSweep.lookbackDays * 24 * 60 * 60 * 1000);
+          const result = await runEnhancedReconciliation(from, to, { source: "all" });
+          if (result.updatedCount || result.suspense?.length) {
+            log().info("Suspense sweep complete", {
+              runId: result.runId,
+              matched: result.updatedCount,
+              suspense: result.suspense?.length,
+              waiting: result.waiting,
+            });
+          }
+        } catch (e) {
+          log().error("Suspense sweep failed", { error: e.message });
+        } finally {
+          sweeping = false;
+        }
+      },
+      { timezone: cfg.cron.timezone }
+    );
+    log().info("Suspense sweep initialized", { schedule: cfg.suspenseSweep.schedule });
   }
 
   if (!cfg.cron.enabled) {
