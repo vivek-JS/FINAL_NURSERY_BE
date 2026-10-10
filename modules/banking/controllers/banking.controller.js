@@ -22,7 +22,9 @@ import {
   createCashDeposit,
   listCashDeposits,
   verifyCashDeposit,
+  cancelCashDeposit,
 } from "../services/cashDeposit.service.js";
+import { listEmployeeCashInHand, getEmployeeCashBook } from "../services/cashInHand.service.js";
 import {
   getUnclearedPayments,
   getPaymentsForApproval,
@@ -262,29 +264,71 @@ export const postLinkSuspense = catchAsync(async (req, res) => {
 
 /** POST /api/banking/cash-deposit */
 export const postCashDeposit = catchAsync(async (req, res) => {
-  const { entryDate, amount, accountNumber, slipNumber, narration } = req.body || {};
+  const { entryDate, amount, accountNumber, slipNumber, narration, employeeId, slipPhotos } =
+    req.body || {};
   const result = await createCashDeposit({
     entryDate,
     amount,
     accountNumber,
     slipNumber,
     narration,
+    employeeId,
+    slipPhotos,
     userId: req.user?._id,
   });
-  if (!result.ok) return res.status(400).json({ success: false, message: result.error });
-  return res.status(201).json({ success: true, data: result.deposit });
+  if (!result.ok) {
+    return res
+      .status(400)
+      .json({ success: false, message: result.error, code: result.code, cashInHand: result.cashInHand });
+  }
+  return res
+    .status(201)
+    .json({ success: true, data: result.deposit, cashInHandAfter: result.cashInHandAfter });
 });
 
 /** GET /api/banking/cash-deposit */
 export const getCashDeposits = catchAsync(async (req, res) => {
-  const { accountNumber, dateFrom, dateTo, verified } = req.query || {};
+  const { accountNumber, dateFrom, dateTo, verified, employeeId } = req.query || {};
   const data = await listCashDeposits({
     accountNumber,
     dateFrom,
     dateTo,
+    employeeId,
     verified: verified === undefined ? undefined : verified === "true",
   });
   return res.status(200).json({ success: true, data, count: data.length });
+});
+
+/** POST /api/banking/cash-deposit/:id/cancel */
+export const postCancelCashDeposit = catchAsync(async (req, res) => {
+  const result = await cancelCashDeposit(req.params.id, {
+    userId: req.user?._id,
+    reason: req.body?.reason,
+  });
+  if (!result.ok) {
+    return res
+      .status(result.code === "NOT_FOUND" ? 404 : 400)
+      .json({ success: false, message: result.error });
+  }
+  return res.status(200).json({ success: true, data: result.deposit });
+});
+
+/** GET /api/banking/cashbook/cash-in-hand */
+export const getCashInHand = catchAsync(async (req, res) => {
+  const data = await listEmployeeCashInHand();
+  return res.status(200).json({ success: true, ...data });
+});
+
+/** GET /api/banking/cashbook/cash-in-hand/:employeeId */
+export const getEmployeeCashBookEntries = catchAsync(async (req, res) => {
+  const result = await getEmployeeCashBook(req.params.employeeId);
+  if (!result.ok) return res.status(400).json({ success: false, message: result.error });
+  return res.status(200).json({
+    success: true,
+    startDate: result.startDate,
+    employee: result.employee,
+    entries: result.entries,
+  });
 });
 
 /** POST /api/banking/cash-deposit/:id/verify */

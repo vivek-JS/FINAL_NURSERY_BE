@@ -16,6 +16,9 @@ import {
   postCashDeposit,
   getCashDeposits,
   postVerifyCashDeposit,
+  postCancelCashDeposit,
+  getCashInHand,
+  getEmployeeCashBookEntries,
   postVerifyPayment,
   getPendingPayments,
   getVerifiedPayments,
@@ -80,6 +83,9 @@ router.post("/suspense/:id/link", requirePaymentAccess, postLinkSuspense);
 router.post("/cash-deposit", requirePaymentAccess, idempotencyMiddleware, postCashDeposit);
 router.get("/cash-deposit", requirePaymentAccess, getCashDeposits);
 router.post("/cash-deposit/:id/verify", requirePaymentAccess, postVerifyCashDeposit);
+router.post("/cash-deposit/:id/cancel", requirePaymentAccess, postCancelCashDeposit);
+router.get("/cashbook/cash-in-hand", requirePaymentAccess, getCashInHand);
+router.get("/cashbook/cash-in-hand/:employeeId", requirePaymentAccess, getEmployeeCashBookEntries);
 
 router.get("/duplicate-check", requirePaymentAccess, getDuplicateCheck);
 
