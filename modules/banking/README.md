@@ -74,11 +74,19 @@ line carrying the payment's UTR, transaction id or cheque number on any date.
 
 | Reason | Opened when |
 |--------|-------------|
-| `NO_MATCH` | A payment has no bank line `BANKING_NO_MATCH_GRACE_DAYS` (default 2) after its payment date. Not raised when the range has no statement at all. |
+| `NO_MATCH` | A payment still has no bank line 24 hours after its payment date, and the statement has been loaded up to that date (otherwise it waits for the statement). Not raised when the range has no statement at all. |
 | `AMOUNT_MISMATCH` | The bank has the payment's UTR at a different amount |
 | `MULTIPLE_MATCH` | Two or more lines tie for a payment |
 | `MANUAL_REVIEW` | The best line matched on cheque, bank transaction id or amount and date, not a UTR |
-| `ORPHAN_CREDIT` | A credit in the range that no payment claimed |
+| `ORPHAN_CREDIT` | A credit no payment claimed, 24 hours after its transaction date |
+
+- The wait is `BANKING_SUSPENSE_AFTER_HOURS` (default 24). Until then the
+  payment or line stays unmatched, and the run's message says how many are
+  waiting.
+- An hourly sweep (`BANKING_SUSPENSE_SWEEP_CRON`, default minute 20) reconciles
+  the stored statement for the last `BANKING_SUSPENSE_SWEEP_LOOKBACK_DAYS`
+  (default 30) without calling the bank, so items reach suspense on their own.
+  Turn it off with `BANKING_SUSPENSE_SWEEP_ENABLED=false`.
 
 - Payments in suspense stay in every run, so a line that arrives later clears
   them. Their open rows close with `closedBy: SYSTEM`.

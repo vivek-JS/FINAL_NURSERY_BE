@@ -89,6 +89,12 @@ export function getIciciCorporateConfig() {
       timezone: process.env.FINANCE_CRON_TZ || "Asia/Kolkata",
       lookbackDays: Number(process.env.ICICI_BANKING_LOOKBACK_DAYS || 3),
     },
+    /** Hourly reconciliation of stored lines, so anything unmatched for 24 h reaches suspense on its own. */
+    suspenseSweep: {
+      enabled: process.env.BANKING_SUSPENSE_SWEEP_ENABLED !== "false",
+      schedule: process.env.BANKING_SUSPENSE_SWEEP_CRON || "20 * * * *",
+      lookbackDays: Number(process.env.BANKING_SUSPENSE_SWEEP_LOOKBACK_DAYS || 30),
+    },
   };
 }
 

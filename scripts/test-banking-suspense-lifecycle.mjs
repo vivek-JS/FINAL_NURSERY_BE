@@ -165,6 +165,46 @@ try {
   await makeLine({ amount: 10, txnDate: daysAgo(30), narration: "INTEREST" });
   await run(daysAgo(31), daysAgo(30));
   check("payment matches a credit just outside the range", (await paymentOf(p5)).paymentStatus === "BANK_VERIFIED");
+
+  console.log("\nUnmatched for more than 24 hours → suspense");
+  const HOUR = 60 * 60 * 1000;
+  const base = new Date(Date.now() + 40 * DAY);
+  base.setHours(12, 0, 0, 0);
+  const at = (hours) => new Date(base.getTime() + hours * HOUR);
+  const credit = await makeLine({ amount: 6200, txnDate: base, narration: "NEFT UNKNOWN PARTY" });
+  const pay = await makeOrder({ paidAmount: 8100, paymentDate: base, utrNumber: "UTRP6000006" });
+  const runAt = (hours) =>
+    runEnhancedReconciliation(new Date(base.getTime() - DAY), at(hours), { source: "all", now: at(hours) });
+
+  const early = await runAt(23);
+  check("after 23 h the credit is still unmatched, not suspense", (await openRows({ bankTransactionId: credit._id })).length === 0);
+  check("after 23 h the payment is not in suspense", (await openRows({ paymentId: pay.paymentId })).length === 0);
+  check(
+    "the run says both are waiting",
+    early.waiting.lines === 1 && early.waiting.payments === 1 && /less than 24 hours/.test(early.message),
+    early.message
+  );
+
+  const late = await runAt(25);
+  const creditRows = await openRows({ bankTransactionId: credit._id });
+  check("after 25 h the credit goes to suspense", creditRows.length === 1 && creditRows[0].reason === "ORPHAN_CREDIT");
+  check(
+    "after 25 h the payment goes to suspense as NO_MATCH",
+    (await openRows({ paymentId: pay.paymentId })).some((r) => r.reason === "NO_MATCH")
+  );
+  check("the line is marked SUSPENSE", (await BankStatementEntry.findById(credit._id).lean()).reconciliationStatus === "SUSPENSE");
+  check("the run reports them", late.suspense.length >= 2, late.message);
+
+  console.log("\nNo statement for the payment's day yet");
+  const ahead = new Date(base.getTime() + 10 * DAY);
+  const unseen = await makeOrder({ paidAmount: 4300, paymentDate: ahead, utrNumber: "UTRP7000007" });
+  const later = new Date(ahead.getTime() + 3 * DAY);
+  const r7 = await runEnhancedReconciliation(new Date(base.getTime() - DAY), later, { source: "all", now: later });
+  check(
+    "a payment after the last statement date waits instead of NO_MATCH",
+    (await openRows({ paymentId: unseen.paymentId })).length === 0 && r7.waiting.noStatementYet === 1,
+    r7.message
+  );
 } catch (err) {
   console.error(err);
   check("script ran without throwing", false, err.message);
