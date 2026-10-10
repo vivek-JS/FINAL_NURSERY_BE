@@ -397,11 +397,35 @@ Bank/cash register lines linked to reconciled payments.
 
 ---
 
-## Duplicate UTR detection
+## Duplicate detection (statement lines)
 
-Composite key: `SHA256(accountNumber|UTR|amount|YYYY-MM-DD)`
+Syncing or importing the same days again only adds lines that are new.
+`safeInsertBankTransactions` compares every incoming line with the lines
+already saved for that account (±2 days) and with earlier lines of the batch:
 
-Safe insert: `duplicateDetection.service.js` → catches MongoDB 11000, returns `{ inserted, skipped, duplicates }`.
+1. Both have ICICI's `TRANSACTIONID` → same line if the id and amount match.
+2. Otherwise same amount and India-time day, plus the same UTR (or the UTR of
+   one appears in the other's narration — a CSV without a reference column).
+3. Neither has a reference → same amount, day and narration. Identical lines
+   are counted, so two separate ₹500 cash deposits on one day stay two lines
+   and a re-sync adds neither.
+
+Because it compares stored lines, it also recognises lines saved before this
+check existed. The unique `duplicateKey` / `entryHash` still stop two syncs
+running at once from saving a line twice. The result is
+`{ inserted, alreadySaved, repeatedInBatch, skipped, total }`, and the sync
+message says "Fetched N lines from ICICI, X new saved, Y already in the system".
+
+Statement pages: when more than 200 records match, ICICI returns `LASTTRID`
+(`LISTTRID` in its sample); the sync calls again with `CONFLG=Y` and that
+value until none comes back (max 100 pages, 600 ms apart). Set
+`ICICI_STATEMENT_PAGINATION_PATH` if ICICI gives a separate URL for the next
+pages. If a later page fails, the lines already fetched are saved and the
+message says to sync again. Statement calls send no `X-Idempotency-Key`, so a
+later sync of the same range is never answered with an earlier reply.
+
+`node scripts/test-banking-statement-sync.mjs` (throwaway local MongoDB)
+covers these cases.
 
 Use `X-Idempotency-Key` header on POST endpoints for request-level idempotency.
 

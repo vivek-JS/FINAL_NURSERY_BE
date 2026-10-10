@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { iciciCorporateRequest } from "./iciciHttpClient.js";
 import { getIciciCorporateConfig, assertCorporateConfig } from "../config/iciciCorporate.config.js";
 import { normaliseStatementRow } from "../../../services/iciciStatement.service.js";
@@ -112,15 +111,95 @@ function extractTransactions(response) {
   return [];
 }
 
+export const STATEMENT_MAX_PAGES = 100;
+const PAGE_GAP_MS = 600;
+
 /**
- * STEP 2 — Fetch Account Statement via Corporate HTTP API.
+ * ICICI sends LASTTRID (its sample spells it LISTTRID) when more than 200
+ * records match; the next page is asked for with CONFLG=Y and that value,
+ * sent exactly as received.
  */
-export async function fetchCorporateStatement(fromDate, toDate, userId) {
+export function lastTransactionIdOf(response) {
+  if (!response || typeof response !== "object") return "";
+  for (const [key, value] of Object.entries(response)) {
+    if (/^(LASTTRID|LISTTRID)$/i.test(key) && value != null && String(value).trim()) return String(value);
+  }
+  return "";
+}
+
+function failureMessageOf(response) {
+  const flag = response?.RESPONSE ?? response?.response ?? response?.Response;
+  if (!/fail/i.test(String(flag || ""))) return "";
+  return String(response?.MESSAGE ?? response?.message ?? response?.Message ?? "ICICI returned FAILURE");
+}
+
+/**
+ * Walk every page of a statement. `fetchPage({ conflg, lastTrId, page })`
+ * returns the raw ICICI response. Stops when ICICI sends no LASTTRID, repeats
+ * it, sends no rows, or after STATEMENT_MAX_PAGES. A failure after the first
+ * page keeps what was fetched and says the statement is incomplete.
+ */
+export async function collectStatementPages(fetchPage, { maxPages = STATEMENT_MAX_PAGES, gapMs = 0 } = {}) {
+  const rows = [];
+  let lastTrId = "";
+  let pages = 0;
+  let complete = true;
+  let warning;
+
+  for (;;) {
+    if (pages > 0 && gapMs) await new Promise((r) => setTimeout(r, gapMs));
+    let response;
+    try {
+      response = await fetchPage({ conflg: pages === 0 ? "N" : "Y", lastTrId, page: pages + 1 });
+    } catch (err) {
+      if (pages === 0) throw err;
+      complete = false;
+      warning = `ICICI stopped answering after page ${pages} (${err.message}); sync again to load the rest`;
+      break;
+    }
+    pages += 1;
+
+    const failure = failureMessageOf(response);
+    const pageRows = extractTransactions(response);
+    if (failure && !pageRows.length) {
+      if (pages > 1) {
+        complete = false;
+        warning = `ICICI failed on page ${pages}: ${failure}; sync again to load the rest`;
+      } else {
+        warning = failure;
+      }
+      break;
+    }
+    rows.push(...pageRows);
+
+    const next = lastTransactionIdOf(response);
+    if (!next || !pageRows.length) break;
+    if (next === lastTrId) {
+      complete = false;
+      warning = "ICICI repeated the same page marker; stopped to avoid a loop";
+      break;
+    }
+    if (pages >= maxPages) {
+      complete = false;
+      warning = `Stopped after ${maxPages} pages — use a shorter date range`;
+      break;
+    }
+    lastTrId = next;
+  }
+
+  return { rows, pages, complete, warning };
+}
+
+/**
+ * STEP 2 — Fetch Account Statement via Corporate HTTP API (all pages).
+ * Returns { rows, pages, complete, warning }.
+ */
+export async function fetchCorporateStatementPages(fromDate, toDate, userId) {
   const cfg = getIciciCorporateConfig();
 
   if (cfg.useStub) {
     log().info("Corporate statement stub mode");
-    return stubStatement(fromDate, toDate);
+    return { rows: stubStatement(fromDate, toDate), pages: 1, complete: true };
   }
 
   assertCorporateConfig();
@@ -136,49 +215,61 @@ export async function fetchCorporateStatement(fromDate, toDate, userId) {
     URN: cfg.urn,
   };
 
-  const idempotencyKey = crypto
-    .createHash("sha256")
-    .update(`${cfg.accountNumber}|${payload.FROMDATE}|${payload.TODATE}`)
-    .digest("hex");
-
-  const response = await iciciCorporateRequest({
-    endpointPath: cfg.endpoints.statement,
-    payload,
-    idempotencyKey,
-    userId,
-  });
-
-  const rows = extractTransactions(response);
-  return rows.map((row, i) =>
-    normaliseStatementRow(
-      {
-        ...row,
-        accountNumber: cfg.accountNumber,
-      },
-      i
-    )
+  // No idempotency key: syncing the same range later must return the lines
+  // that arrived since, not a replay of the earlier answer.
+  const result = await collectStatementPages(
+    ({ conflg, lastTrId }) =>
+      iciciCorporateRequest({
+        endpointPath: conflg === "N" ? cfg.endpoints.statement : cfg.endpoints.statementNextPage,
+        payload: conflg === "N" ? payload : { ...payload, CONFLG: "Y", LASTTRID: lastTrId },
+        userId,
+      }),
+    { gapMs: PAGE_GAP_MS }
   );
+
+  return {
+    ...result,
+    rows: result.rows.map((row, i) => normaliseStatementRow({ ...row, accountNumber: cfg.accountNumber }, i)),
+  };
+}
+
+export async function fetchCorporateStatement(fromDate, toDate, userId) {
+  return (await fetchCorporateStatementPages(fromDate, toDate, userId)).rows;
 }
 
 /**
- * Fetch + persist with duplicate-safe insert.
+ * Fetch every page and save only the lines not already in the system.
  */
 export async function fetchAndStoreCorporateStatement(fromDate, toDate, userId) {
   const cfg = getIciciCorporateConfig();
   const window = resolveStatementWindow(fromDate, toDate, cfg);
-  const rows = await fetchCorporateStatement(window.fromDate, window.toDate, userId);
-  const enriched = rows.map((r) => ({
+  const fetched = await fetchCorporateStatementPages(window.fromDate, window.toDate, userId);
+  const enriched = fetched.rows.map((r) => ({
     ...r,
     accountNumber: cfg.accountNumber,
     source: "CORPORATE_HTTP",
   }));
   const persist = await safeInsertBankTransactions(enriched);
+
+  const parts = [
+    `Fetched ${enriched.length} line${enriched.length === 1 ? "" : "s"} from ICICI` +
+      (fetched.pages > 1 ? ` (${fetched.pages} pages)` : ""),
+    `${persist.inserted} new saved`,
+    `${persist.alreadySaved} already in the system`,
+  ];
+  if (persist.repeatedInBatch) parts.push(`${persist.repeatedInBatch} repeated by the bank, ignored`);
+  const notes = [
+    window.clamped ? `Sandbox statement window is ${window.fromDate} to ${window.toDate} — fetched that range` : "",
+    fetched.warning || "",
+  ].filter(Boolean);
+
   return {
     ...persist,
     entries: enriched,
+    pages: fetched.pages,
+    complete: fetched.complete,
+    warning: fetched.warning,
     window: { fromDate: window.fromDate, toDate: window.toDate, clamped: window.clamped },
-    message: window.clamped
-      ? `Sandbox statement window is ${window.fromDate} to ${window.toDate} — fetched that range`
-      : undefined,
+    message: [parts.join(", ") + ".", ...notes].join(" "),
   };
 }

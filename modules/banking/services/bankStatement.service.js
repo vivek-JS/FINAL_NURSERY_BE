@@ -1,7 +1,6 @@
-import crypto from "crypto";
 import BankStatementEntry, { NOT_STATEMENT_VERIFIED } from "../../../models/bankStatementEntry.model.js";
 import { getBankingLogger } from "../utils/logger.js";
-import { buildDuplicateKey, safeInsertBankTransactions } from "./duplicateDetection.service.js";
+import { safeInsertBankTransactions } from "./duplicateDetection.service.js";
 import { parseStatementCsv } from "../utils/statementCsv.js";
 import { normalizeAmount, normalizeUtr } from "../../../services/iciciBankService.js";
 
@@ -177,49 +176,12 @@ export async function markStatementVerified(entryId, { userId } = {}) {
 }
 
 /**
- * Identity for an imported line.
- *
- * When the bank gave us a reference we reuse buildDuplicateKey, so a line
- * imported from a CSV and the same line later pulled from the API collapse
- * onto one row. With no reference there is nothing unique to key on, so the
- * narration and the line's occurrence within the file stand in — that keeps
- * two genuinely separate ₹500 credits on the same day as two rows, while
- * re-importing the same file still lands on the same keys and inserts nothing.
- */
-function importKeys(row, accountNumber, occurrence) {
-  const dateStr = row.txnDate.toISOString().slice(0, 10);
-  const ref = String(row.referenceNumber || "").trim();
-
-  const duplicateKey = ref
-    ? buildDuplicateKey({
-        accountNumber,
-        referenceNumber: ref,
-        amount: row.amount,
-        txnDate: row.txnDate,
-      })
-    : crypto
-        .createHash("sha256")
-        .update(
-          ["IMPORT", accountNumber || "DEFAULT", dateStr, row.amount, row.narration || "", occurrence].join("|")
-        )
-        .digest("hex");
-
-  const entryHash = crypto
-    .createHash("sha256")
-    .update(
-      ["IMPORT", accountNumber || "DEFAULT", dateStr, row.amount, ref, row.narration || "", occurrence].join("|")
-    )
-    .digest("hex");
-
-  return { duplicateKey, entryHash };
-}
-
-/**
  * Load statement lines an accountant exported from net banking.
  *
- * Re-running the same file is safe: every row carries a deterministic key, so
- * the second run reports everything as skipped rather than doubling the
- * statement. Returns counts so the caller can say what actually happened.
+ * Re-running the same file is safe, and so is importing lines the API sync
+ * already saved: safeInsertBankTransactions compares every line with what is
+ * stored and only adds new ones. Returns counts so the caller can say what
+ * actually happened.
  *
  * @param {{ csv?: string, rows?: Array, accountNumber?: string, userId?: string }} args
  */
@@ -245,22 +207,13 @@ export async function importStatementRows({ csv, rows, accountNumber, userId } =
     };
   }
 
-  const seen = new Map();
-  const entries = parsed.map((row) => {
-    const txnDate = row.txnDate instanceof Date ? row.txnDate : new Date(row.txnDate);
-    const normalised = { ...row, txnDate };
-    const tally = [txnDate.toISOString().slice(0, 10), row.amount, row.referenceNumber || "", row.narration || ""].join("|");
-    const occurrence = seen.get(tally) || 0;
-    seen.set(tally, occurrence + 1);
-
-    return {
-      ...normalised,
-      accountNumber: account,
-      source: "IMPORT",
-      ...importKeys(normalised, account, occurrence),
-      rawResponse: { imported: true, importedBy: userId ? String(userId) : null, at: new Date() },
-    };
-  });
+  const entries = parsed.map((row) => ({
+    ...row,
+    txnDate: row.txnDate instanceof Date ? row.txnDate : new Date(row.txnDate),
+    accountNumber: account,
+    source: "IMPORT",
+    rawResponse: { imported: true, importedBy: userId ? String(userId) : null, at: new Date() },
+  }));
 
   const result = await safeInsertBankTransactions(entries);
   const credits = entries.filter((e) => e.amount > 0).length;
