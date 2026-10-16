@@ -823,7 +823,55 @@ const dispatchLineRemainingPlants = (dispatchDoc, orderId) => {
   return Math.max(0, target - loaded);
 };
 
+const VEHICLE_LOAD_EXCLUDED_ORDER_STATUSES = ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"];
+
+/**
+ * Orders on this vehicle for one plant row that still need plants, oldest orderId first.
+ * Order status is not used: the office sets DISPATCHED when it creates the vehicle.
+ */
+export async function resolveVehicleOrderIdsForPlantRow(dispatchDoc, plantCmsId, plantSubtypeId) {
+  const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
+  if (!unionIds.length || !plantCmsId) return [];
+  const filter = {
+    _id: { $in: unionIds },
+    plantName: plantCmsId,
+    orderStatus: { $nin: VEHICLE_LOAD_EXCLUDED_ORDER_STATUSES },
+  };
+  if (plantSubtypeId) filter.plantSubtype = plantSubtypeId;
+  const orders = await Order.find(filter).select("_id orderId").sort({ orderId: 1 }).lean();
+  const withNeed = orders
+    .map((o) => String(o._id))
+    .filter((id) => (dispatchLineRemainingPlants(dispatchDoc, id) ?? 0) > 0);
+  if (withNeed.length) return withNeed;
+  const withoutLine = orders.filter((o) => dispatchLineRemainingPlants(dispatchDoc, o._id) == null);
+  return orders.length === 1 && withoutLine.length === 1 ? [String(orders[0]._id)] : [];
+}
+
+/** Remaining plants per order line on the vehicle (for a running FIFO split across allocations). */
+export function vehicleLineRemainingMap(dispatchDoc, orderIds) {
+  return new Map(
+    (orderIds || []).map((id) => [String(id), dispatchLineRemainingPlants(dispatchDoc, id) ?? 0])
+  );
+}
+
+/**
+ * Take `plants` FIFO from orders' remaining need and decrement `remMap` in place.
+ * Returns { allocations: [{ orderId, plants }], unassigned }.
+ */
+export function takePlantsFromOrdersFifo(plants, orderIds, remMap) {
+  const allocations = splitPlantsAcrossOrdersFifo(plants, orderIds, remMap);
+  let assigned = 0;
+  for (const a of allocations) {
+    remMap.set(a.orderId, Math.max(0, (Number(remMap.get(a.orderId)) || 0) - a.plants));
+    assigned += a.plants;
+  }
+  return { allocations, unassigned: Math.max(0, Math.floor(Number(plants) || 0) - assigned) };
+}
+
 const orderReservedAtOfficeDispatch = (orderDoc) => {
+  if (orderDoc.orderStatus === "DISPATCHED" || orderDoc.orderStatus === "COMPLETED") {
+    return true;
+  }
   const remaining = orderRemainingPlantsValue(orderDoc);
   return (
     remaining === 0 &&
@@ -1025,14 +1073,8 @@ async function executeOneSecondaryOutwardLine({
     if (!linkedOrderDoc) {
       throw new AppError("Linked order not found", 404);
     }
-    const orderOk =
-      linkedOrderDoc.orderStatus === "READY_FOR_DISPATCH" ||
-      linkedOrderDoc.orderStatus === "DISPATCH_PROCESS";
-    if (!orderOk) {
-      throw new AppError(
-        "Order must be READY_FOR_DISPATCH or DISPATCH_PROCESS",
-        400
-      );
+    if (VEHICLE_LOAD_EXCLUDED_ORDER_STATUSES.includes(linkedOrderDoc.orderStatus)) {
+      throw new AppError(`Order is ${linkedOrderDoc.orderStatus} — cannot load`, 400);
     }
     if (!orderMatchesDispatchBatch(linkedOrderDoc, batchDoc)) {
       throw new AppError("Order plant/subtype does not match batch", 400);
@@ -1496,22 +1538,16 @@ export async function executeSecondaryVehicleLoad({
   );
 
   let resolvedOrderId = linkedOrderId;
+  /** Several orders share this plant row: split plants FIFO across them. */
+  let fifoOrderIds = [];
   if (!resolvedOrderId && !hasExplicitOrderMap) {
-    const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
-    const statusIn = { $in: ["READY_FOR_DISPATCH", "DISPATCH_PROCESS"] };
-    const matching = await Order.find({
-      _id: { $in: unionIds },
-      plantName: plantCmsId,
-      plantSubtype: plantSubtypeId,
-      orderStatus: statusIn,
-    })
-      .select("_id")
-      .sort({ orderId: -1 })
-      .limit(1)
-      .lean();
-    if (matching.length === 1) {
-      resolvedOrderId = String(matching[0]._id);
-    }
+    const rowOrderIds = await resolveVehicleOrderIdsForPlantRow(
+      dispatchDoc,
+      plantCmsId,
+      plantSubtypeId
+    );
+    if (rowOrderIds.length === 1) resolvedOrderId = rowOrderIds[0];
+    else if (rowOrderIds.length > 1) fifoOrderIds = rowOrderIds;
   }
 
   const { total: alreadyLoaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
@@ -1522,6 +1558,11 @@ export async function executeSecondaryVehicleLoad({
     if (lineRem != null && lineRem > 0) {
       capPlants = capPlants > 0 ? Math.min(capPlants, lineRem) : lineRem;
     }
+  }
+  const fifoRemaining = vehicleLineRemainingMap(dispatchDoc, fifoOrderIds);
+  if (fifoOrderIds.length) {
+    const rowRem = [...fifoRemaining.values()].reduce((s, n) => s + n, 0);
+    capPlants = capPlants > 0 ? Math.min(capPlants, rowRem) : rowRem;
   }
 
   const useManual = Array.isArray(inwardSelections) && inwardSelections.length > 0;
@@ -1549,7 +1590,11 @@ export async function executeSecondaryVehicleLoad({
     throw new AppError(fifo.error || "Allocation failed", 400);
   }
 
-  if (!hasExplicitOrderMap && resolvedOrderId && fifo.totalAllocated > capPlants) {
+  if (
+    !hasExplicitOrderMap &&
+    (resolvedOrderId || fifoOrderIds.length) &&
+    fifo.totalAllocated > capPlants
+  ) {
     throw new AppError(
       `Selection ${fifo.totalAllocated} exceeds remaining cap ${capPlants}`,
       400
@@ -1559,10 +1604,22 @@ export async function executeSecondaryVehicleLoad({
   /** Expand stock allocations into per-order plant slices. */
   const workItems = [];
   for (const allocation of fifo.allocations) {
-    const resolved = resolveOrderAllocationsForSelection(allocation, {
-      linkedOrderId: resolvedOrderId,
-      dispatchDoc,
-    });
+    let resolved;
+    if (fifoOrderIds.length) {
+      const take = takePlantsFromOrdersFifo(allocation.plants, fifoOrderIds, fifoRemaining);
+      if (take.unassigned > 0) {
+        throw new AppError(
+          `Selection exceeds remaining need of orders on this vehicle by ${take.unassigned}`,
+          400
+        );
+      }
+      resolved = { allocations: take.allocations };
+    } else {
+      resolved = resolveOrderAllocationsForSelection(allocation, {
+        linkedOrderId: resolvedOrderId,
+        dispatchDoc,
+      });
+    }
     if (resolved.error) {
       throw new AppError(resolved.error, 400);
     }

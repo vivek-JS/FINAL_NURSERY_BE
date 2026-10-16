@@ -5,6 +5,8 @@ import {
   allocateManualSecondaryLoads,
   allocateSecondaryFifoPlants,
   DISPATCH_SHED_ALLOWED_STATUSES,
+  vehicleLineRemainingMap,
+  takePlantsFromOrdersFifo,
 } from "../services/secondaryVehicleLoad.service.js";
 import {
   normalizeOutwardUnloadSelections,
@@ -94,6 +96,42 @@ describe("secondaryVehicleUnload — outward selections", () => {
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].plants, 150);
     assert.strictEqual(rows[0].batchId, "b1");
+  });
+});
+
+describe("secondaryVehicleLoad — split one plant row across orders", () => {
+  const dispatchDoc = {
+    orderDispatchDetails: [
+      { orderId: "o1", dispatchQuantity: 2001, shedLoadedQuantity: 0 },
+      { orderId: "o2", dispatchQuantity: 500, shedLoadedQuantity: 100 },
+    ],
+  };
+
+  it("vehicleLineRemainingMap reads remaining per order line", () => {
+    const rem = vehicleLineRemainingMap(dispatchDoc, ["o1", "o2", "o3"]);
+    assert.strictEqual(rem.get("o1"), 2001);
+    assert.strictEqual(rem.get("o2"), 400);
+    assert.strictEqual(rem.get("o3"), 0);
+  });
+
+  it("fills oldest order first and carries the remainder across allocations", () => {
+    const rem = vehicleLineRemainingMap(dispatchDoc, ["o1", "o2"]);
+    const a = takePlantsFromOrdersFifo(1977, ["o1", "o2"], rem);
+    assert.deepStrictEqual(a.allocations, [{ orderId: "o1", plants: 1977 }]);
+    assert.strictEqual(a.unassigned, 0);
+    const b = takePlantsFromOrdersFifo(200, ["o1", "o2"], rem);
+    assert.deepStrictEqual(b.allocations, [
+      { orderId: "o1", plants: 24 },
+      { orderId: "o2", plants: 176 },
+    ]);
+    assert.strictEqual(rem.get("o1"), 0);
+    assert.strictEqual(rem.get("o2"), 224);
+  });
+
+  it("reports plants beyond all order lines as unassigned", () => {
+    const rem = vehicleLineRemainingMap(dispatchDoc, ["o2"]);
+    const r = takePlantsFromOrdersFifo(450, ["o2"], rem);
+    assert.strictEqual(r.unassigned, 50);
   });
 });
 
