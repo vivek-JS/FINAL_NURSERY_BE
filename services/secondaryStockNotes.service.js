@@ -235,10 +235,11 @@ ${JSON.stringify(demandRows)}
 Write 5 to 8 points, most urgent first. Use HIGH for at most 4 points.
 Each point is about ONE shed or ONE batch (never all sheds in one point). List the stock rows it covers in "items" as { batch, shed } (max ${MAX_ITEMS_PER_POINT}); the app shows plant counts and days for each item, so do NOT repeat per-shed numbers in detail.
 title: max 8 words. detail: one short sentence, max 15 words, saying why or what to do. summary: max 2 short sentences.
+Never write plant counts or day counts in title or detail; the items already show exact numbers.
 - HIGH: overdue by 7+ days or very old stock; dispatch today/next vehicles.
 - MEDIUM: ready or slightly overdue; plan in the next few days.
 - LOW: watch items, e.g. a crop with old stock but no pending demand (suggest the office books orders), or stock split across many sheds that should be consolidated.
-Mention batch, shed, crop and plant counts. Use only numbers from the data. No markdown.
+Use only numbers from the data. No markdown.
 
 Language: write summary, title and detail in simple spoken Marathi (Devanagari script) for shed workers.
 Keep batch codes (e.g. RB 19), shed names and crop names exactly as given in English, and write all numbers with Western digits (0-9).
