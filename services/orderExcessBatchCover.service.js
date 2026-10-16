@@ -69,6 +69,8 @@ function readyMomentOf(batch, slot) {
 /**
  * Free excess in sowing batches of plant+subtype whose ready date is within
  * delivery ±windowDays (IST). One entry per batch, nearest to delivery first.
+ * Per slot free = primarySowed − gross orderCoveredPlants (same as slot "Can book");
+ * stored availablePlants does not cap it.
  */
 export async function listExcessBatches({
   plantId,
@@ -139,7 +141,7 @@ export async function listExcessBatches({
     const gross = batches.reduce((s, b) => s + int(b.orderCoveredPlants), 0);
     const primarySowed = int(slot.primarySowed);
     const excessForBooking = primarySowed > 0 ? Math.max(0, primarySowed - gross) : 0;
-    let slotCap = Math.min(excessForBooking, int(slot.availablePlants));
+    let slotCap = excessForBooking;
     if (slotCap <= 0) continue;
 
     const ordered = [...batches].sort(
@@ -264,17 +266,25 @@ export async function validateCoverPicks({
 const SLOT_PATH = "subtypeSlots.$[st].slots.$[sl]";
 const BATCH_PATH = `${SLOT_PATH}.sowingBatches.$[b]`;
 
-async function applySourcePick({ pick, orderOid, userOid, now, excessiveLeft, session }) {
+async function applySourcePick({
+  pick,
+  orderOid,
+  userOid,
+  now,
+  excessiveLeft,
+  availableLeft,
+  session,
+}) {
   const slotOid = toOid(pick.slotId);
   const batchOid = toOid(pick.batchId);
   const take = pick.take;
   const excessDec = Math.min(take, Math.max(0, excessiveLeft));
+  const availDec = Math.min(take, Math.max(0, availableLeft));
   const batchExcessDec = Math.min(take, int(pick.batchExcessPlants));
   const maxCoveredBefore = pick.plantsSowed - take;
 
   const slotMatch = {
     _id: slotOid,
-    availablePlants: { $gte: take },
     sowingBatches: {
       $elemMatch: {
         _id: batchOid,
@@ -287,11 +297,12 @@ async function applySourcePick({ pick, orderOid, userOid, now, excessiveLeft, se
     },
   };
   if (excessDec > 0) slotMatch["excessiveSowing.plants"] = { $gte: excessDec };
+  if (availDec > 0) slotMatch.availablePlants = { $gte: availDec };
 
   const inc = {
-    [`${SLOT_PATH}.availablePlants`]: -take,
     [`${BATCH_PATH}.orderCoveredPlants`]: take,
   };
+  if (availDec > 0) inc[`${SLOT_PATH}.availablePlants`] = -availDec;
   if (excessDec > 0) inc[`${SLOT_PATH}.excessiveSowing.plants`] = -excessDec;
   if (batchExcessDec > 0) inc[`${BATCH_PATH}.excessPlants`] = -batchExcessDec;
 
@@ -316,17 +327,25 @@ async function applySourcePick({ pick, orderOid, userOid, now, excessiveLeft, se
     }
   );
   if (!res.matchedCount) return null;
-  return { excessDec, batchExcessDec };
+  return { excessDec, availDec, batchExcessDec };
 }
 
 /** Batch may have moved slot (sow-date edit) since the cover, so match it by batch id. */
-async function revertSourcePick({ batchId, plants, excessDec, batchExcessDec, orderOid, session }) {
+async function revertSourcePick({
+  batchId,
+  plants,
+  excessDec,
+  availDec,
+  batchExcessDec,
+  orderOid,
+  session,
+}) {
   const batchOid = toOid(batchId);
   if (!batchOid || plants <= 0) return false;
   const inc = {
-    [`${SLOT_PATH}.availablePlants`]: plants,
     [`${BATCH_PATH}.orderCoveredPlants`]: -plants,
   };
+  if (availDec > 0) inc[`${SLOT_PATH}.availablePlants`] = availDec;
   if (excessDec > 0) inc[`${SLOT_PATH}.excessiveSowing.plants`] = excessDec;
   if (batchExcessDec > 0) inc[`${BATCH_PATH}.excessPlants`] = batchExcessDec;
   const res = await PlantSlot.collection.updateOne(
@@ -442,6 +461,7 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId }
   const userOid = toOid(userId);
   const now = new Date();
   const excessiveLeftBySlot = new Map();
+  const availableLeftBySlot = new Map();
   const applied = [];
 
   const rollback = async (withDestination) => {
@@ -465,8 +485,19 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId }
     if (!excessiveLeftBySlot.has(pick.slotId)) {
       excessiveLeftBySlot.set(pick.slotId, pick.slotExcessivePlants);
     }
+    if (!availableLeftBySlot.has(pick.slotId)) {
+      availableLeftBySlot.set(pick.slotId, pick.slotAvailablePlants);
+    }
     const excessiveLeft = excessiveLeftBySlot.get(pick.slotId);
-    const res = await applySourcePick({ pick, orderOid, userOid, now, excessiveLeft });
+    const availableLeft = availableLeftBySlot.get(pick.slotId);
+    const res = await applySourcePick({
+      pick,
+      orderOid,
+      userOid,
+      now,
+      excessiveLeft,
+      availableLeft,
+    });
     if (!res) {
       await rollback(false);
       throw new ExcessCoverError(
@@ -476,11 +507,13 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId }
       );
     }
     excessiveLeftBySlot.set(pick.slotId, excessiveLeft - res.excessDec);
+    availableLeftBySlot.set(pick.slotId, availableLeft - res.availDec);
     applied.push({
       slotId: pick.slotId,
       batchId: pick.batchId,
       plants: pick.take,
       excessDec: res.excessDec,
+      availDec: res.availDec,
       batchExcessDec: res.batchExcessDec,
     });
   }
@@ -502,6 +535,7 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId }
     shedName: p.shedName || "",
     offsetDays: p.offsetDays,
     excessiveSowingDec: applied[i].excessDec,
+    availablePlantsDec: applied[i].availDec,
     batchExcessDec: applied[i].batchExcessDec,
   }));
   const remark = coverRemark(sources);
@@ -649,6 +683,7 @@ export async function reverseOrderBatchCover({ order, userId, session }) {
       batchId: s.batchId,
       plants: int(s.plants),
       excessDec: int(s.excessiveSowingDec),
+      availDec: s.availablePlantsDec == null ? int(s.plants) : int(s.availablePlantsDec),
       batchExcessDec: int(s.batchExcessDec),
       orderOid,
       session,

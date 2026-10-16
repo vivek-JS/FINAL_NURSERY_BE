@@ -901,8 +901,9 @@ const orderSchema = new Schema(
         plantReadyDate: { type: String, default: "" },
         shedName: { type: String, default: "" },
         offsetDays: { type: Number, default: 0 },
-        /** Exact slot excessiveSowing.plants / batch excessPlants taken, restored on reverse. */
+        /** Exact slot excessiveSowing.plants / availablePlants / batch excessPlants taken, restored on reverse. */
         excessiveSowingDec: { type: Number, default: 0 },
+        availablePlantsDec: { type: Number },
         batchExcessDec: { type: Number, default: 0 },
       },
     ],
