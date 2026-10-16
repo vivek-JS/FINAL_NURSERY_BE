@@ -38,6 +38,9 @@ const allowedParams = [
   "plantId",
   "subtypeId",
   "slotIds", // GET /sowing/order-wise — comma-separated booking slot ObjectIds
+  "deliveryDate", // GET /sowing/excess-batches
+  "need", // GET /sowing/excess-batches
+  "windowDays", // GET /sowing/excess-batches
   "year",
   "onlyAvailable", // GET /slots/availability-overview
   "minNumberPerCrate",
