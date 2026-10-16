@@ -45,6 +45,7 @@ import {
   getSowReadyEntries,
   getDispatchStockLines,
   getSecondaryPolyhouseStock,
+  getSecondaryStockSummary,
   getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,
   previewSecondaryVehicleLoadHandler,
@@ -165,6 +166,7 @@ router.post(
 );
 router.get("/secondary/dispatch-stock-lines", getDispatchStockLines);
 router.get("/secondary/polyhouse-stock", getSecondaryPolyhouseStock);
+router.get("/secondary/stock-summary", getSecondaryStockSummary);
 router.get(
   "/secondary/farmer-dispatch/pickup-batch-suggestions",
   getFarmerDispatchPickupBatchSuggestions
