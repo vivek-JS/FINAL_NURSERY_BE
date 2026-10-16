@@ -4720,6 +4720,7 @@ const getAll = (Model, modelName) =>
                     stateName: "$$farmerData.stateName",
                     districtName: "$$farmerData.districtName",
                     talukaName: "$$farmerData.talukaName",
+                    isPremium: { $ifNull: ["$$farmerData.isPremium", false] },
                   },
                 },
               },
@@ -4809,6 +4810,10 @@ const getAll = (Model, modelName) =>
           returnReason: 1, // Return reason field
           returnHistory: 1, // Return history field
           currentDispatchId: 1, // Reference to current dispatch
+          vehicleLoaded: { $ifNull: ["$vehicleLoaded", false] },
+          vehicleLoadedAt: 1,
+          vehicleLoadedQuantity: 1,
+          whatsappDispatchSendCount: 1,
           /** Manual / legacy DC label; also used when challan PDF should match edited number */
           deliveryChallanInvoiceNumber: 1,
           /** Immutable plant-scoped system DC when fully DISPATCHED */

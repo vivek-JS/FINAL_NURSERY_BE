@@ -143,11 +143,18 @@ async function resolveDispatchVehicleFromHistory(latest) {
 
 async function buildDispatchWhatsAppDetails(order) {
   const history = Array.isArray(order.dispatchHistory) ? order.dispatchHistory : [];
-  const dispatchedSum = history.reduce((s, h) => s + (Number(h.quantity) || 0), 0);
-  const totalPlants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
-  const totalDispatched =
-    dispatchedSum > 0 ? dispatchedSum : order.orderStatus === "DISPATCHED" ? totalPlants : 0;
-  const latest = history.length > 0 ? history[history.length - 1] : null;
+  let totalDispatched;
+  let latest;
+  if (order.vehicleLoaded && Number(order.vehicleLoadedQuantity) > 0) {
+    totalDispatched = Number(order.vehicleLoadedQuantity);
+    latest = { dispatchId: order.vehicleLoadedDispatchId, date: order.vehicleLoadedAt };
+  } else {
+    const dispatchedSum = history.reduce((s, h) => s + (Number(h.quantity) || 0), 0);
+    const totalPlants = (order.numberOfPlants || 0) + (order.additionalPlants || 0);
+    totalDispatched =
+      dispatchedSum > 0 ? dispatchedSum : order.orderStatus === "DISPATCHED" ? totalPlants : 0;
+    latest = history.length > 0 ? history[history.length - 1] : null;
+  }
   const dispatchVehicle = await resolveDispatchVehicleFromHistory(latest);
   const driverMobile =
     (await resolveDriverMobileFromDispatch(latest)) ||
@@ -179,7 +186,42 @@ async function buildDispatchWhatsAppDetails(order) {
 }
 
 /**
- * Send farmer/dealer dispatch WhatsApp once per order (WATI delivery_final_revamp).
+ * Atomically reserve this send so concurrent triggers (post-load hook, vehicle scan, DC PDF)
+ * do not double-message. Returns a release() that undoes the claim when the send fails.
+ */
+async function claimDispatchWhatsAppSend(order, { shedTracked, loadedQty, allowManualResend }) {
+  if (allowManualResend) return { claimed: true, release: async () => {} };
+  if (shedTracked) {
+    const prevQty = order.whatsappDispatchSentQty ?? null;
+    const res = await Order.updateOne(
+      { _id: order._id, whatsappDispatchSentQty: { $ne: loadedQty } },
+      { $set: { whatsappDispatchSentQty: loadedQty } }
+    );
+    return {
+      claimed: res.modifiedCount > 0,
+      release: () =>
+        Order.updateOne(
+          { _id: order._id, whatsappDispatchSentQty: loadedQty },
+          { $set: { whatsappDispatchSentQty: prevQty } }
+        ),
+    };
+  }
+  const res = await Order.updateOne(
+    { _id: order._id, whatsappDispatchSentAt: null },
+    { $set: { whatsappDispatchSentAt: new Date() } }
+  );
+  return {
+    claimed: res.modifiedCount > 0,
+    release: () =>
+      Order.updateOne({ _id: order._id }, { $set: { whatsappDispatchSentAt: null } }),
+  };
+}
+
+/**
+ * Farmer/dealer dispatch WhatsApp (WATI delivery_final_revamp; papaya uses driver_fianl).
+ * Shed-loaded orders: send whenever vehicleLoadedQuantity differs from the qty in the last message
+ * (first load, unload+reload to a new qty, office qty edit + refill). Not sent while unloaded.
+ * Orders never loaded through the shed: send once (legacy office dispatch flow).
  * @returns {Promise<{ sent?, alreadySent?, skipped?, reason?, error?, whatsappDispatchSentAt?, whatsappDispatchMessageKey?, farmerSent?, dealerSent?, dealerAlsoSent?, dealerSendWarning? }>}
  */
 export async function ensureOrderDispatchWhatsAppOnce(orderId, { allowManualResend = false } = {}) {
@@ -190,12 +232,21 @@ export async function ensureOrderDispatchWhatsAppOnce(orderId, { allowManualRese
   if (!order) {
     return { skipped: true, reason: "order_not_found" };
   }
-  if (order.whatsappDispatchSentAt && !allowManualResend) {
-    return {
-      alreadySent: true,
-      whatsappDispatchSentAt: order.whatsappDispatchSentAt,
-      whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
-    };
+
+  const shedTracked = Boolean(order.vehicleLoaded || order.vehicleLoadedDispatchId);
+  const loadedQty = Math.max(0, Number(order.vehicleLoadedQuantity) || 0);
+  const alreadySentResult = {
+    alreadySent: true,
+    whatsappDispatchSentAt: order.whatsappDispatchSentAt,
+    whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
+  };
+
+  if (!allowManualResend) {
+    if (shedTracked && !order.vehicleLoaded) {
+      return { skipped: true, reason: "vehicle_not_loaded" };
+    }
+    if (shedTracked && order.whatsappDispatchSentQty === loadedQty) return alreadySentResult;
+    if (!shedTracked && order.whatsappDispatchSentAt) return alreadySentResult;
   }
 
   const { totalDispatched, details } = await buildDispatchWhatsAppDetails(order);
@@ -209,46 +260,53 @@ export async function ensureOrderDispatchWhatsAppOnce(orderId, { allowManualRese
     details.publicOrderCode = order.publicOrderCode;
   }
 
-  if (order.dealerOrder) {
-    const dealerRec = dealerWhatsAppRecipient(order);
-    if (!dealerRec) {
-      return { skipped: true, reason: "dealer_no_phone" };
-    }
-    const result = await sendOrderDispatchedWhatsAppDelivery1(dealerRec, details);
-    if (!result.success) {
-      return { skipped: true, reason: "wati_failed", error: result.error };
-    }
-    order.whatsappDispatchSentAt = new Date();
-    const msgKey = extractWatiLocalMessageId(result.data);
-    if (msgKey) order.whatsappDispatchMessageKey = String(msgKey);
-    await order.save();
-    return {
-      sent: true,
-      farmerSent: false,
-      dealerSent: true,
-      whatsappDispatchSentAt: order.whatsappDispatchSentAt,
-      whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
-    };
+  const recipient = order.dealerOrder ? dealerWhatsAppRecipient(order) : farmerWhatsAppRecipient(order);
+  if (!recipient) {
+    return { skipped: true, reason: order.dealerOrder ? "dealer_no_phone" : "farmer_no_phone" };
   }
 
-  const farmerRec = farmerWhatsAppRecipient(order);
-  if (!farmerRec) {
-    return { skipped: true, reason: "farmer_no_phone" };
+  const claim = await claimDispatchWhatsAppSend(order, {
+    shedTracked,
+    loadedQty,
+    allowManualResend,
+  });
+  if (!claim.claimed) return alreadySentResult;
+
+  const send = (rec) => sendOrderDispatchedWhatsAppDelivery1(rec, details);
+
+  const primaryResult = await send(recipient);
+  if (!primaryResult.success) {
+    await claim.release();
+    return { skipped: true, reason: "wati_failed", error: primaryResult.error };
   }
-  const farmerResult = await sendOrderDispatchedWhatsAppDelivery1(farmerRec, details);
-  if (!farmerResult.success) {
-    return { skipped: true, reason: "wati_failed", error: farmerResult.error };
+
+  const sentAt = new Date();
+  const msgKey = extractWatiLocalMessageId(primaryResult.data);
+  await Order.updateOne(
+    { _id: order._id },
+    {
+      $set: {
+        whatsappDispatchSentAt: sentAt,
+        ...(shedTracked ? { whatsappDispatchSentQty: loadedQty } : {}),
+        ...(msgKey ? { whatsappDispatchMessageKey: String(msgKey) } : {}),
+      },
+      $inc: { whatsappDispatchSendCount: 1 },
+    }
+  );
+  const sentFields = {
+    whatsappDispatchSentAt: sentAt,
+    whatsappDispatchMessageKey: msgKey ? String(msgKey) : order.whatsappDispatchMessageKey || null,
+  };
+
+  if (order.dealerOrder) {
+    return { sent: true, farmerSent: false, dealerSent: true, ...sentFields };
   }
-  order.whatsappDispatchSentAt = new Date();
-  const farmerMsgKey = extractWatiLocalMessageId(farmerResult.data);
-  if (farmerMsgKey) order.whatsappDispatchMessageKey = String(farmerMsgKey);
-  await order.save();
 
   let dealerAlsoSent = false;
   let dealerSendNote = null;
   const dealerRec = dealerWhatsAppRecipient(order);
-  if (dealerRec && watiPhonesDiffer(farmerRec.mobileNumber, dealerRec.mobileNumber)) {
-    const dealerResult = await sendOrderDispatchedWhatsAppDelivery1(dealerRec, details);
+  if (dealerRec && watiPhonesDiffer(recipient.mobileNumber, dealerRec.mobileNumber)) {
+    const dealerResult = await send(dealerRec);
     dealerAlsoSent = Boolean(dealerResult.success);
     if (!dealerResult.success) {
       dealerSendNote =
@@ -262,8 +320,7 @@ export async function ensureOrderDispatchWhatsAppOnce(orderId, { allowManualRese
     farmerSent: true,
     dealerAlsoSent,
     ...(dealerSendNote ? { dealerSendWarning: dealerSendNote } : {}),
-    whatsappDispatchSentAt: order.whatsappDispatchSentAt,
-    whatsappDispatchMessageKey: order.whatsappDispatchMessageKey || null,
+    ...sentFields,
   };
 }
 

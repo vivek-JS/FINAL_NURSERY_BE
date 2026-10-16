@@ -74,6 +74,10 @@ import {
 } from "../utils/orderEventDualWrite.js";
 import { rebuildDispatchTargets } from "../services/dispatchTargetBuilder.service.js";
 import { syncDispatchTransportStatusAfterShedChange } from "../services/secondaryVehicleLoad.service.js";
+import {
+  schedulePendingDispatchWhatsAppForVehicle,
+  syncAllOrdersVehicleLoadedFlag,
+} from "../services/dispatchPostLoadFinalize.service.js";
 import { applyPostDispatchDeliveryDateSync } from "../utility/syncDeliveryDateToDispatchDay.js";
 import { resolveCompleteDispatchBatch } from "../services/completeDispatchBatch.service.js";
 import { applyCompleteDispatchShedDeduction } from "../services/completeDispatchShedDeduction.service.js";
@@ -1453,6 +1457,16 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       }
     }
 
+    await syncAllOrdersVehicleLoadedFlag({ session, dispatchDoc: updated });
+    const removedOrderIds = oldOrderIds.filter((oid) => !newIdSet.has(String(oid)));
+    if (removedOrderIds.length) {
+      await Order.updateMany(
+        { _id: { $in: removedOrderIds }, vehicleLoadedDispatchId: dispatchOid },
+        { $set: { vehicleLoaded: false } },
+        { session }
+      );
+    }
+
     const expectedNurseryPatch =
       raw.expectedNursery != null && String(raw.expectedNursery).trim() !== ""
         ? String(raw.expectedNursery).trim()
@@ -1491,6 +1505,9 @@ const updateDispatch = catchAsync(async (req, res, next) => {
     delete req._orderEditAlertQueue;
 
     scheduleDispatchPdfGeneration(updated._id, ["delivery_challan"]);
+    schedulePendingDispatchWhatsAppForVehicle(updated._id, {
+      changedBy: req.user?.name || req.user?.email || "Unknown",
+    });
 
     const response = generateResponse(
       "Success",
@@ -1871,6 +1888,12 @@ const detachOrderFromDispatch = catchAsync(async (req, res, next) => {
         },
       },
       { new: true, runValidators: true, session }
+    );
+
+    await Order.updateOne(
+      { _id: targetOrderStr, vehicleLoadedDispatchId: dispatchOid },
+      { $set: { vehicleLoaded: false } },
+      { session }
     );
 
     await session.commitTransaction();

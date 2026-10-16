@@ -183,6 +183,7 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
       orderId: row.orderId,
       orderIdNumeric: label?.orderId ?? null,
       publicOrderCode: label?.publicOrderCode ?? "",
+      isPremium: Boolean(label?.farmer?.isPremium),
       dispatchQuantity,
       originalDispatchQuantity,
       officeQtyDeltaTotal,
@@ -263,6 +264,7 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
     plantRowsSummary: plantRows,
     plantsDetailPreview,
     orderDispatchPreview,
+    hasPremiumCustomer: orderDispatchPreview.some((r) => r.isPremium),
     orderCount: unionCount || (d.orderIds || []).length,
   };
 }
@@ -329,7 +331,8 @@ export async function listSecondaryVehicleDispatches({
   const [previewOrderLabels, loadedMap, cmsRows] = await Promise.all([
     previewOrderOids.length
       ? Order.find({ _id: { $in: previewOrderOids } })
-          .select("_id orderId publicOrderCode")
+          .select("_id orderId publicOrderCode farmer")
+          .populate("farmer", "isPremium")
           .lean()
       : Promise.resolve([]),
     sumPlantsLoadedOnDispatches(docs.map((d) => d._id)),

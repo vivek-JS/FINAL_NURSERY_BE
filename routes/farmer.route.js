@@ -11,8 +11,11 @@ import {
   getInvalidPhoneFarmers,
   updateFarmerPhone,
   recordWhatsappHistory,
-  getFarmerWhatsappHistory
+  getFarmerWhatsappHistory,
+  stripPremiumFields,
+  setFarmerPremium,
 } from "../controllers/farmer.controller.js";
+import { authorizeRoles } from "../middlewares/auth.middleware.js";
 import { getAllFarmerContacts } from "../controllers/farmerContacts.controller.js";
 import { createOrder } from "../controllers/order.controller.js";
 import express from "express";
@@ -74,6 +77,13 @@ router
   .post("/uploadFarmers", uploadExcel.single("data"), uploadFarmers)
   .get('/invalid-phones', getInvalidPhoneFarmers)
   .put('/:id/phone', updateFarmerPhone)
+  .patch(
+    "/:id/premium",
+    authorizeRoles(["SUPER_ADMIN", "SUPERADMIN"]),
+    [check("id").isMongoId().withMessage("Please enter valid farmerId")],
+    checkErrors,
+    setFarmerPremium
+  )
   .post('/whatsapp-history', recordWhatsappHistory)
   .get('/:id/whatsapp-history', getFarmerWhatsappHistory)
 
@@ -90,6 +100,7 @@ router
         .withMessage("Please enter valid mobile number"),
     ],
     checkErrors,
+    stripPremiumFields,
     createVillage,
     createTaluka,
     createDistrict,
@@ -113,6 +124,7 @@ router
     "/updateFarmer",
     [check("id").isMongoId().withMessage("Please enter valid farmerId")],
     checkErrors,
+    stripPremiumFields,
     updateFarmer
   )
   .delete(

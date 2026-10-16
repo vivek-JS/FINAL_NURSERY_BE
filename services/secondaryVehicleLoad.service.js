@@ -26,6 +26,7 @@ import {
   finalizeOrderOnShedLineLoaded,
   schedulePostShedLoadAlerts,
   schedulePendingDispatchWhatsAppForVehicle,
+  syncOrderVehicleLoadedFlag,
 } from "./dispatchPostLoadFinalize.service.js";
 
 const BATCH_SELECT_FIELDS =
@@ -1664,6 +1665,7 @@ export async function executeSecondaryVehicleLoad({
         performedBy,
       });
       if (result) finalizeResults.push(result);
+      await syncOrderVehicleLoadedFlag({ session, orderId: oid, dispatchDoc: freshDispatch });
     }
 
     const transportStatus = await syncDispatchTransportStatusAfterShedChange({

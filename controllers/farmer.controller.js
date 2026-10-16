@@ -391,6 +391,34 @@ const getFarmerById = catchAsync(async (req, res, next) => {
   res.status(200).json(generateResponse("Success", "Farmer fetched", farmer));
 });
 
+const PREMIUM_FIELDS = ["isPremium", "premiumUpdatedAt", "premiumUpdatedBy"];
+
+/** Premium flag may only change via PATCH /:id/premium (SUPER_ADMIN). */
+const stripPremiumFields = (req, res, next) => {
+  if (req.body && typeof req.body === "object") {
+    for (const key of PREMIUM_FIELDS) delete req.body[key];
+  }
+  next();
+};
+
+const setFarmerPremium = catchAsync(async (req, res, next) => {
+  const { isPremium } = req.body || {};
+  if (typeof isPremium !== "boolean") {
+    return next(new AppError("isPremium (boolean) is required", 400));
+  }
+  const farmer = await Farmer.findByIdAndUpdate(
+    req.params.id,
+    {
+      isPremium,
+      premiumUpdatedAt: new Date(),
+      premiumUpdatedBy: req.user?._id || req.user?.id || null,
+    },
+    { new: true }
+  ).select("_id name isPremium premiumUpdatedAt");
+  if (!farmer) return next(new AppError("Farmer not found", 404));
+  res.status(200).json(generateResponse("Success", "Farmer premium updated", farmer));
+});
+
 export {
   createFarmer,
   updateFarmer,
@@ -403,6 +431,8 @@ export {
   getInvalidPhoneFarmers,
   updateFarmerPhone,
   recordWhatsappHistory,
+  stripPremiumFields,
+  setFarmerPremium,
 };
 // Get WhatsApp activity history for farmer by ID
 export const getFarmerWhatsappHistory = catchAsync(async (req, res) => {

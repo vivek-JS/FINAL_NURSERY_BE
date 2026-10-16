@@ -13,6 +13,72 @@ const orderRemainingPlantsValue = (doc) => {
 };
 
 /**
+ * Mirror the vehicle row's shed-load state onto the order (vehicleLoaded flag + loaded qty).
+ * Returns { orderId, vehicleLoaded, vehicleLoadedQuantity, changed } or null when the order is not on the vehicle.
+ */
+export async function syncOrderVehicleLoadedFlag({ session, orderId, dispatchDoc }) {
+  if (!orderId || !dispatchDoc) return null;
+  const oid = String(orderId);
+  const row = (dispatchDoc.orderDispatchDetails || []).find(
+    (d) => String(d.orderId) === oid
+  );
+  if (!row) return null;
+
+  const need = Math.max(0, Number(row.dispatchQuantity) || 0);
+  const loaded = Math.max(0, Number(row.shedLoadedQuantity) || 0);
+  const isLoaded = need > 0 && loaded >= need;
+
+  const query = Order.findById(oid).select(
+    "vehicleLoaded vehicleLoadedQuantity vehicleLoadedDispatchId"
+  );
+  if (session) query.session(session);
+  const current = await query.lean();
+  if (!current) return null;
+
+  const changed =
+    Boolean(current.vehicleLoaded) !== isLoaded ||
+    (isLoaded &&
+      (Number(current.vehicleLoadedQuantity) !== loaded ||
+        String(current.vehicleLoadedDispatchId || "") !== String(dispatchDoc._id)));
+
+  if (changed) {
+    const set = isLoaded
+      ? {
+          vehicleLoaded: true,
+          vehicleLoadedQuantity: loaded,
+          vehicleLoadedDispatchId: dispatchDoc._id,
+          vehicleLoadedAt: new Date(),
+        }
+      : { vehicleLoaded: false };
+    await Order.updateOne({ _id: oid }, { $set: set }, session ? { session } : {});
+  }
+
+  return {
+    orderId: oid,
+    vehicleLoaded: isLoaded,
+    vehicleLoadedQuantity: isLoaded ? loaded : 0,
+    changed,
+  };
+}
+
+/** Sync the vehicleLoaded flag for every order on a vehicle. */
+export async function syncAllOrdersVehicleLoadedFlag({ session, dispatchDoc }) {
+  const ids = [
+    ...new Set(
+      (dispatchDoc?.orderDispatchDetails || [])
+        .map((d) => String(d.orderId || "").trim())
+        .filter((id) => mongoose.isValidObjectId(id))
+    ),
+  ];
+  const out = [];
+  for (const orderId of ids) {
+    const r = await syncOrderVehicleLoadedFlag({ session, orderId, dispatchDoc });
+    if (r) out.push(r);
+  }
+  return out;
+}
+
+/**
  * When shed load completes an order line on a dispatch, set DISPATCHED + official DC(s).
  * Billable subtypes → officialDeliveryChallanNumber (global dc_billable).
  * Non-billable subtypes → officialNonBillableDeliveryChallanNumber (global dc_non_billable).
@@ -224,8 +290,8 @@ export function schedulePostShedLoadAlerts({ finalizeResult, changedBy = "Unknow
 }
 
 /**
- * Farmer delivery WhatsApp (WATI) for every DISPATCHED order on a vehicle that has not been sent yet.
- * Covers multi-order vehicles and orders that missed alerts on prior loads.
+ * Farmer delivery WhatsApp (WATI) for every fully loaded order on a vehicle whose loaded qty
+ * differs from the qty in its last message (first send, or a resend after the load was edited).
  */
 export function schedulePendingDispatchWhatsAppForVehicle(dispatchId, { changedBy = "Unknown" } = {}) {
   if (!dispatchId) return;
@@ -248,11 +314,8 @@ export function schedulePendingDispatchWhatsAppForVehicle(dispatchId, { changedB
 
         const orders = await Order.find({
           _id: { $in: orderIds },
-          orderStatus: "DISPATCHED",
-          $or: [
-            { whatsappDispatchSentAt: null },
-            { whatsappDispatchSentAt: { $exists: false } },
-          ],
+          vehicleLoaded: true,
+          $expr: { $ne: ["$whatsappDispatchSentQty", "$vehicleLoadedQuantity"] },
         })
           .select("_id")
           .lean();
