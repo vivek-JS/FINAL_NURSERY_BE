@@ -8,7 +8,7 @@ const MAX_GROUPS_FOR_AI = 40;
 /** Shed app request timeout is 45s; fall back to rules well before that. */
 const AI_TIMEOUT_MS = 25 * 1000;
 const NOTES_LANG = "mr";
-const NOTES_FORMAT = "items-v2";
+const NOTES_FORMAT = "items-v4";
 const MAX_ITEMS_PER_POINT = 6;
 
 /** "Purandar (पुरंदर) (6)" → "Purandar (6)" so notes stay English-only. */
@@ -234,7 +234,7 @@ ${JSON.stringify(demandRows)}
 
 Write 5 to 8 points, most urgent first. Use HIGH for at most 4 points.
 Each point is about ONE shed or ONE batch (never all sheds in one point). List the stock rows it covers in "items" as { batch, shed } (max ${MAX_ITEMS_PER_POINT}); the app shows plant counts and days for each item, so do NOT repeat per-shed numbers in detail.
-title: max 8 words. detail: one short sentence, max 15 words, saying why or what to do. summary: max 2 short sentences.
+title: max 8 words and must start with the shed or batch the point is about, e.g. "Purandar (6): जुना स्टॉक आधी पाठवा" or "बॅच RB 19: सर्व शेडमधून पाठवा". detail: one short sentence, max 15 words, saying why or what to do. summary: max 2 short sentences.
 Never write plant counts or day counts in title or detail; the items already show exact numbers.
 Never translate or rename crops: write the crop exactly as in the data (e.g. "Banana G9", "Banana Vasai"), or say "केळी" only for Banana.
 - HIGH: overdue by 7+ days or very old stock; dispatch today/next vehicles.
