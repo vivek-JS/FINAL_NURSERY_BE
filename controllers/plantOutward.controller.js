@@ -68,6 +68,7 @@ import {
   unionDispatchOrderObjectIds,
 } from "../services/secondaryVehicleLoad.service.js";
 import { listSecondaryVehicleDispatches } from "../services/secondaryVehicleDispatchesList.service.js";
+import { buildSecondaryStockNotes } from "../services/secondaryStockNotes.service.js";
 import {
   collectLoadedOutwardLinesForDispatch,
   executeSecondaryVehicleUnload,
@@ -5999,6 +6000,16 @@ const getSecondaryStockSummary = catchAsync(async (req, res) => {
   );
 });
 
+/** GET AI dispatch-priority notes for live secondary stock (oldest first). */
+const getSecondaryStockNotes = catchAsync(async (req, res) => {
+  const lines = await collectAllSecondaryInwardStockLines(null, null);
+  const refresh = ["1", "true"].includes(String(req.query.refresh || "").toLowerCase());
+  const notes = await buildSecondaryStockNotes(lines, { refresh });
+  return res
+    .status(200)
+    .json(generateResponse("Success", "Secondary stock notes", notes, undefined));
+});
+
 /** POST FIFO preview for vehicle load from shed (no writes). */
 const previewSecondaryVehicleLoadHandler = catchAsync(async (req, res, next) => {
   const { dispatchId } = req.params;
@@ -6353,6 +6364,7 @@ export {
   getDispatchStockLines,
   getSecondaryPolyhouseStock,
   getSecondaryStockSummary,
+  getSecondaryStockNotes,
   getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,
   previewSecondaryVehicleLoadHandler,

@@ -73,6 +73,26 @@ function getGenAiClient() {
   return clientSingleton;
 }
 
+/** Text prompt → parsed JSON matching `schema` (Gemini structured output). */
+export async function generateJson(prompt, schema, { model = "gemini-2.5-flash" } = {}) {
+  const ai = getGenAiClient();
+  const response = await ai.models.generateContent({
+    model,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseJsonSchema: schema,
+    },
+  });
+  const text = response.text;
+  if (!text || typeof text !== "string") {
+    throw new Error("Empty response from Gemini");
+  }
+  return JSON.parse(text);
+}
+
+export { Type as GeminiType };
+
 /**
  * Calls Gemini with inline image bytes and returns parsed JSON fields.
  * @param {Buffer} buffer
