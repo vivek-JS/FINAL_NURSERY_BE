@@ -70,6 +70,15 @@ function istYmd(d) {
 
 const SOW_ENTRY_EVENT_TYPES = ["PLANTS_SOWED", "SOW_COMPLETED"];
 
+export const DEFAULT_TRAY_SIZE = 126;
+
+/** A part-filled tray is still a tray. */
+export function traysFor(plants, traySize = DEFAULT_TRAY_SIZE) {
+  const size = Number(traySize) > 0 ? Number(traySize) : DEFAULT_TRAY_SIZE;
+  const p = Number(plants) || 0;
+  return p > 0 ? Math.ceil(p / size) : 0;
+}
+
 /** Packet events saved with an entry land in the same save, milliseconds apart. */
 function packetsNearEntry(events, at, type) {
   if (!at) return 0;
@@ -275,6 +284,9 @@ export const completeSowingRequest = async (req, res) => {
     }
 
     const plantsSowed = Math.max(0, parseNum(req.body.plantsSowed));
+    const bodyTraySize = parseNum(req.body.traySize, NaN);
+    const traySize =
+      Number.isFinite(bodyTraySize) && bodyTraySize > 0 ? bodyTraySize : DEFAULT_TRAY_SIZE;
     const laboursLadies = Math.max(0, parseNum(req.body.laboursLadies));
     const laboursGents = Math.max(0, parseNum(req.body.laboursGents));
     const notes = String(req.body.notes || req.body.completionNotes || "").trim();
@@ -568,6 +580,8 @@ export const completeSowingRequest = async (req, res) => {
           machineEndTime: machine.end || undefined,
           machineMinutes: machine.start ? machine.minutes : undefined,
           sowDate: istYmd(sowedAt),
+          traySize,
+          trays: traysFor(plantsSowed, traySize),
           packetsUsedNow: (inv.used || 0) + raisingPacketsUsedNow,
           ordersMarked: orderResult.marked,
           remainingUncovered: orderResult.remainingUncovered ?? 0,
@@ -1241,6 +1255,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
     request: "requestNumber",
     plant: "plantName",
     plants: "entryPlants",
+    trays: "entryPlants",
     packets: "entryPackets",
     labour: "entryLabour",
   }[sortKey] || "entrySowDay";
@@ -1401,6 +1416,10 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       requestPacketsUsed: Number(r.packetsUsed) || 0,
       requestPacketsReturned: Number(r.packetsReturned) || 0,
       sowedQuantity: Number(ev.quantity) || 0,
+      traySize: Number(meta.traySize) > 0 ? Number(meta.traySize) : DEFAULT_TRAY_SIZE,
+      trays: Number.isFinite(Number(meta.trays)) && meta.trays != null
+        ? Number(meta.trays)
+        : traysFor(ev.quantity, meta.traySize),
       packetsUsed: Math.round(packetsUsed * 100) / 100,
       packetsReturned: Math.round(packetsReturned * 100) / 100,
       laboursLadies: ladies,
