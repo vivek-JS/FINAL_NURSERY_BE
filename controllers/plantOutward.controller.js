@@ -4317,6 +4317,13 @@ async function resolveDispatchBatchRef(batchParam, session) {
   return null;
 }
 
+/** IST calendar day stored as UTC midnight (same shape the web sends); IST-midnight ISO (…T18:30Z) maps to the next day. */
+function istCalendarDayUtc(value) {
+  const m = moment(value);
+  if (!m.isValid()) return null;
+  return moment.utc(m.utcOffset(330).format("YYYY-MM-DD"), "YYYY-MM-DD").toDate();
+}
+
 /**
  * Direct lagwad: record secondary inward + slot sync without primary outward stock.
  * Bypasses Accept / primary-outward pool for field ops prod-lite flow.
@@ -4327,7 +4334,7 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
     sizeSplit,
     cavity: cavityRaw,
     numberOfTrays: traysOverrideRaw,
-    secondaryInwardDate,
+    secondaryInwardDate: secondaryInwardDateRaw,
     dateOfDispatch,
     pollyhouse,
     laboursLadies,
@@ -4336,6 +4343,9 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
     remarks,
     readyDaysBySize,
   } = req.body ?? {};
+  const secondaryInwardDate = secondaryInwardDateRaw
+    ? istCalendarDayUtc(secondaryInwardDateRaw)
+    : null;
 
   const cavityNum = Math.max(1, safeNonNegativeInt(cavityRaw, 126));
   const ladies = safeNonNegativeInt(laboursLadies, 0);
