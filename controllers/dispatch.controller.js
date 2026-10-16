@@ -81,6 +81,7 @@ import {
 import { applyPostDispatchDeliveryDateSync } from "../utility/syncDeliveryDateToDispatchDay.js";
 import { resolveCompleteDispatchBatch } from "../services/completeDispatchBatch.service.js";
 import { applyCompleteDispatchShedDeduction } from "../services/completeDispatchShedDeduction.service.js";
+import { applyCompleteFormShedReturns } from "../services/secondaryVehicleReturn.service.js";
 
 export const updateOrderWithLedgerSync = async ({
   orderId,
@@ -4087,6 +4088,14 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       await session.abortTransaction();
       return next(new AppError("One or more orders not found", 404));
     }
+
+    await applyCompleteFormShedReturns({
+      session,
+      dispatch,
+      orderUpdates,
+      updatedOrders,
+      performedBy: req.user?._id,
+    });
 
     await session.commitTransaction();
     fireOrderEditWhatsAppAlerts(

@@ -7,6 +7,7 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 const MAX_GROUPS_FOR_AI = 40;
 /** Shed app request timeout is 45s; fall back to rules well before that. */
 const AI_TIMEOUT_MS = 25 * 1000;
+const NOTES_LANG = "mr";
 
 /** "Purandar (पुरंदर) (6)" → "Purandar (6)" so notes stay English-only. */
 export function englishShedName(raw) {
@@ -142,11 +143,13 @@ function ruleNotes(groups, demandRows) {
     const priority = g.overdueDays >= 7 ? "HIGH" : g.overdueDays > 0 ? "MEDIUM" : "LOW";
     points.push({
       priority,
-      title: `Dispatch batch ${g.batch} from ${g.shed}`,
+      title: `${g.shed} मधून बॅच ${g.batch} आधी पाठवा`,
       detail:
-        `${g.plants.toLocaleString("en-IN")} ${g.crop} plants` +
-        (g.ageDays != null ? `, planted ${g.ageDays} days ago` : "") +
-        (g.overdueDays > 0 ? `, ${g.overdueDays} days past ready date.` : ", ready now."),
+        `${g.plants.toLocaleString("en-IN")} ${g.crop} रोप` +
+        (g.ageDays != null ? `, लागवड होऊन ${g.ageDays} दिवस` : "") +
+        (g.overdueDays > 0
+          ? `, तयार तारखेपेक्षा ${g.overdueDays} दिवस उशीर.`
+          : ", आता तयार."),
       batch: g.batch,
       shed: g.shed,
       crop: g.crop,
@@ -158,8 +161,8 @@ function ruleNotes(groups, demandRows) {
   const demand = demandRows.reduce((s, r) => s + r.pendingVehiclePlants, 0);
   return {
     summary:
-      `${total.toLocaleString("en-IN")} plants in stock; ${overdue.toLocaleString("en-IN")} are past their ready date. ` +
-      `Pending vehicles need ${demand.toLocaleString("en-IN")} plants. Load the oldest batches first.`,
+      `स्टॉकमध्ये ${total.toLocaleString("en-IN")} रोप आहेत; त्यापैकी ${overdue.toLocaleString("en-IN")} रोप तयार तारखेपेक्षा जुने आहेत. ` +
+      `बाकी गाड्यांना ${demand.toLocaleString("en-IN")} रोप हवे आहेत. सर्वात जुन्या बॅच आधी लोड करा.`,
     points,
   };
 }
@@ -180,7 +183,11 @@ Write 5 to 8 points, most urgent first. Use HIGH for at most 4 points. Group row
 - HIGH: overdue by 7+ days or very old stock; dispatch today/next vehicles.
 - MEDIUM: ready or slightly overdue; plan in the next few days.
 - LOW: watch items, e.g. a crop with old stock but no pending demand (suggest the office books orders), or stock split across many sheds that should be consolidated.
-Mention batch, shed, crop and plant counts. Use only numbers from the data. Plain English only, no Marathi, no markdown.`;
+Mention batch, shed, crop and plant counts. Use only numbers from the data. No markdown.
+
+Language: write summary, title and detail in simple spoken Marathi (Devanagari script) for shed workers.
+Keep batch codes (e.g. RB 19), shed names and crop names exactly as given in English, and write all numbers with Western digits (0-9).
+The fields batch, shed and crop must be copied exactly from the data (English).`;
 }
 
 /**
@@ -209,7 +216,7 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
     .map(({ cropKey, ...g }) => g);
   const hash = crypto
     .createHash("sha1")
-    .update(JSON.stringify([today.format("YYYY-MM-DD"), aiGroups, demandRows]))
+    .update(JSON.stringify([NOTES_LANG, today.format("YYYY-MM-DD"), aiGroups, demandRows]))
     .digest("hex");
 
   if (!refresh && cache && cache.hash === hash && Date.now() - cache.at < CACHE_TTL_MS) {
@@ -244,6 +251,7 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
   }
 
   const result = {
+    lang: NOTES_LANG,
     generatedAt: new Date().toISOString(),
     source,
     aiError,

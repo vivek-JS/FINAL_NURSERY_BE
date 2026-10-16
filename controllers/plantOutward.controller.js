@@ -69,6 +69,8 @@ import {
 } from "../services/secondaryVehicleLoad.service.js";
 import { listSecondaryVehicleDispatches } from "../services/secondaryVehicleDispatchesList.service.js";
 import { buildSecondaryStockNotes } from "../services/secondaryStockNotes.service.js";
+import { summarizeLagwadLines } from "../services/secondaryInwardDestroy.service.js";
+import { sumShedReturns } from "../services/secondaryVehicleReturn.service.js";
 import {
   collectLoadedOutwardLinesForDispatch,
   executeSecondaryVehicleUnload,
@@ -5986,8 +5988,48 @@ const getSecondaryStockSummary = catchAsync(async (req, res) => {
       crops: [...crops.values()].sort(byPlantsDesc),
     }))
     .sort((a, b) => a.shed.localeCompare(b.shed, undefined, { numeric: true }));
+  // Lifetime numbers (planted / sold / destroyed / returned) need every line, not only lines with stock.
+  const lifetimeByBatch = new Map();
+  const batchOids = [...batchMap.values()]
+    .map((b) => b.batchId)
+    .filter((id) => id && mongoose.isValidObjectId(String(id)));
+  if (batchOids.length) {
+    const pos = await PlantOutward.find({ batchId: { $in: batchOids } })
+      .select(
+        "batchId secondaryInward.totalQuantity secondaryInward.availableQuantity secondaryInward.destroyedQuantity secondaryInward.isReturn secondaryInward.pollyhouse"
+      )
+      .lean();
+    for (const po of pos) {
+      const bKey = String(po.batchId);
+      const byShed = new Map();
+      for (const si of po.secondaryInward || []) {
+        const shed = String(si.pollyhouse || "").trim() || "—";
+        const arr = byShed.get(shed) || [];
+        arr.push(si);
+        byShed.set(shed, arr);
+      }
+      lifetimeByBatch.set(bKey, {
+        all: summarizeLagwadLines(po.secondaryInward || []),
+        byShed: new Map([...byShed].map(([s, ls]) => [s, summarizeLagwadLines(ls)])),
+      });
+    }
+  }
+  const lifetimeFields = (s) =>
+    s
+      ? { gross: s.gross, sold: s.sold, destroyed: s.destroyed, returned: s.returned, mortalityPct: s.mortalityPct }
+      : {};
+
   const batches = [...batchMap.values()]
-    .map(({ sheds: bs, ...b }) => ({ ...b, sheds: [...bs.values()].sort(byPlantsDesc) }))
+    .map(({ sheds: bs, ...b }) => {
+      const life = lifetimeByBatch.get(String(b.batchId));
+      return {
+        ...b,
+        ...lifetimeFields(life?.all),
+        sheds: [...bs.values()]
+          .map((s) => ({ ...s, ...lifetimeFields(life?.byShed.get(s.shed)) }))
+          .sort(byPlantsDesc),
+      };
+    })
     .sort((a, b) => String(a.batchNumber).localeCompare(String(b.batchNumber), undefined, { numeric: true }));
 
   return res.status(200).json(
@@ -6112,10 +6154,17 @@ const getSecondaryVehicleLoadedLines = catchAsync(async (req, res, next) => {
     return next(new AppError("Vehicle dispatch not found", 404));
   }
 
-  const { lines, totalPlants } = await collectLoadedOutwardLinesForDispatch(
+  const { lines: rawLines, totalPlants } = await collectLoadedOutwardLinesForDispatch(
     doc._id,
     linkedOrderId ? String(linkedOrderId) : undefined
   );
+  const shedReturns = (doc.shedReturns || []).filter(
+    (r) => !linkedOrderId || String(r.orderId || "") === String(linkedOrderId)
+  );
+  const lines = rawLines.map((l) => {
+    const returnedPlants = sumShedReturns(shedReturns, { sourceOutwardId: l.secondaryOutwardId });
+    return { ...l, returnedPlants, returnablePlants: Math.max(0, l.plants - returnedPlants) };
+  });
 
   const orderIds = [
     ...new Set(lines.map((l) => l.linkedOrderId).filter(Boolean)),
@@ -6136,6 +6185,8 @@ const getSecondaryVehicleLoadedLines = catchAsync(async (req, res, next) => {
       linkedOrderId: linkedOrderId ? String(linkedOrderId) : null,
       lines,
       totalPlants,
+      shedReturns,
+      shedReturnedPlants: shedReturns.reduce((s, r) => s + (Number(r.quantity) || 0), 0),
       orders: orderLabels.map((o) => ({
         _id: o._id,
         orderId: o.orderId,
