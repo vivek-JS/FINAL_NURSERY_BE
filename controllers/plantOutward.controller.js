@@ -5899,6 +5899,87 @@ const getSecondaryPolyhouseStock = catchAsync(async (req, res, next) => {
   res.status(200).json(response);
 });
 
+/**
+ * GET /plant-outward/secondary/stock-summary
+ * Live secondary stock grouped by shed (with crop split) and by batch (with shed split).
+ */
+const getSecondaryStockSummary = catchAsync(async (req, res) => {
+  const lines = await collectAllSecondaryInwardStockLines(null, null);
+
+  const shedMap = new Map();
+  const batchMap = new Map();
+  let totalPlants = 0;
+  let readyPlants = 0;
+
+  for (const ln of lines) {
+    const plants = Number(ln.availableQuantity) || 0;
+    if (plants < 1) continue;
+    const ready = ln.dispatchEligible ? plants : 0;
+    const shed = String(ln.pollyhouse || "").trim() || "—";
+    const crop = [ln.plantLabel, ln.subtypeLabel].filter(Boolean).join(" ").trim() || "—";
+    totalPlants += plants;
+    readyPlants += ready;
+
+    const s =
+      shedMap.get(shed) ||
+      { shed, plants: 0, readyPlants: 0, batchCount: 0, crops: new Map(), batchIds: new Set() };
+    s.plants += plants;
+    s.readyPlants += ready;
+    s.batchIds.add(String(ln.batchId));
+    const c = s.crops.get(crop) || { crop, plants: 0, readyPlants: 0 };
+    c.plants += plants;
+    c.readyPlants += ready;
+    s.crops.set(crop, c);
+    shedMap.set(shed, s);
+
+    const bKey = String(ln.batchId);
+    const b =
+      batchMap.get(bKey) ||
+      {
+        batchId: ln.batchId,
+        batchNumber: ln.batchNumber || "",
+        crop,
+        cavity: Number(ln.cavity) || 0,
+        plants: 0,
+        readyPlants: 0,
+        inwardDate: ln.secondaryInwardDate || null,
+        expectedReadyDate: ln.expectedReadyByCalendar || null,
+        sheds: new Map(),
+      };
+    b.plants += plants;
+    b.readyPlants += ready;
+    if (ln.secondaryInwardDate && (!b.inwardDate || new Date(ln.secondaryInwardDate) < new Date(b.inwardDate))) {
+      b.inwardDate = ln.secondaryInwardDate;
+    }
+    const bs = b.sheds.get(shed) || { shed, plants: 0, readyPlants: 0 };
+    bs.plants += plants;
+    bs.readyPlants += ready;
+    b.sheds.set(shed, bs);
+    batchMap.set(bKey, b);
+  }
+
+  const byPlantsDesc = (a, b) => b.plants - a.plants;
+  const sheds = [...shedMap.values()]
+    .map(({ crops, batchIds, ...s }) => ({
+      ...s,
+      batchCount: batchIds.size,
+      crops: [...crops.values()].sort(byPlantsDesc),
+    }))
+    .sort((a, b) => a.shed.localeCompare(b.shed, undefined, { numeric: true }));
+  const batches = [...batchMap.values()]
+    .map(({ sheds: bs, ...b }) => ({ ...b, sheds: [...bs.values()].sort(byPlantsDesc) }))
+    .sort((a, b) => String(a.batchNumber).localeCompare(String(b.batchNumber), undefined, { numeric: true }));
+
+  return res.status(200).json(
+    generateResponse(
+      "Success",
+      "Secondary stock summary",
+      { totalPlants, readyPlants, sheds, batches },
+      undefined
+    )
+  );
+});
+
 /** POST FIFO preview for vehicle load from shed (no writes). */
 const previewSecondaryVehicleLoadHandler = catchAsync(async (req, res, next) => {
   const { dispatchId } = req.params;
@@ -6252,6 +6333,7 @@ export {
   getSowReadyEntries,
   getDispatchStockLines,
   getSecondaryPolyhouseStock,
+  getSecondaryStockSummary,
   getFarmerDispatchPickupBatchSuggestions,
   patchSecondaryInwardReadinessBypass,
   previewSecondaryVehicleLoadHandler,
