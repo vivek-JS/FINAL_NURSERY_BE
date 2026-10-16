@@ -75,7 +75,9 @@ export function buildDispatchDayLines({ outwards, dispatchById, orderById, batch
       transportId: d.transportId || "",
       vehicle: d.isInstantPickup
         ? ""
-        : [d.vehicleName, d.vehicleNumber].filter(Boolean).join(" · ") || d.driverName || "",
+        : [...new Set([d.vehicleName, d.vehicleNumber].map((s) => String(s || "").trim()))]
+            .filter(Boolean)
+            .join(" · "),
       driverName: d.isInstantPickup ? "" : d.driverName || "",
       isInstantPickup: Boolean(d.isInstantPickup),
       orderId: o.orderId ? idStr(o.orderId) : "",
