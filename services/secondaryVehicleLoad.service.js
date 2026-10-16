@@ -738,13 +738,13 @@ export function groupPolyhouseStockByBatch(lines) {
   return [...map.values()].sort((a, b) => b.totalPlants - a.totalPlants);
 }
 
-export async function sumPlantsLoadedOnDispatch(dispatchId) {
-  const map = await sumPlantsLoadedOnDispatches([dispatchId]);
+export async function sumPlantsLoadedOnDispatch(dispatchId, { session } = {}) {
+  const map = await sumPlantsLoadedOnDispatches([dispatchId], { session });
   return map.get(String(dispatchId)) || { total: 0, byOrder: new Map() };
 }
 
 /** One PlantOutward scan for many dispatches — avoids N+1 on list APIs. */
-export async function sumPlantsLoadedOnDispatches(dispatchIds) {
+export async function sumPlantsLoadedOnDispatches(dispatchIds, { session } = {}) {
   const result = new Map();
   const oids = [];
   for (const id of dispatchIds || []) {
@@ -762,6 +762,7 @@ export async function sumPlantsLoadedOnDispatches(dispatchIds) {
     "secondaryOutward.linkedDispatchId": { $in: oids },
   })
     .select("secondaryOutward")
+    .session(session || null)
     .lean();
 
   for (const po of pos) {
@@ -1395,7 +1396,7 @@ export async function syncDispatchTransportStatusAfterShedChange({
 }) {
   void plantRowIndex;
   const vehicleNeed = computeTotalVehiclePlantNeed(dispatchDoc);
-  const { total: loaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const { total: loaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id, { session });
   const complete = isVehicleLoadComplete(loaded, vehicleNeed);
 
   if (complete) {
