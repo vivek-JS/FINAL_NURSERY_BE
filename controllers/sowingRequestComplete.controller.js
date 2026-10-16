@@ -372,12 +372,15 @@ export const completeSowingRequest = async (req, res) => {
       const packetsUsed = settled.packetsUsed;
       const packetsToReturn = settled.packetsToReturn;
 
-      const raisingSettled = settleSowPackets({
-        remaining: remainingRaising,
-        usedHint: hasRaisingUsedInput ? raisingUsedRaw : 0,
-        packetsToReturn: hasRaisingReturnInput ? raisingReturnRaw : 0,
-        completeSowing: raisingTouched ? completeSowing : false,
-      });
+      // Complete with no raising input (shed app): nothing is in hand, so open raising bags were sowed.
+      const raisingSettled = raisingTouched
+        ? settleSowPackets({
+            remaining: remainingRaising,
+            usedHint: hasRaisingUsedInput ? raisingUsedRaw : 0,
+            packetsToReturn: hasRaisingReturnInput ? raisingReturnRaw : 0,
+            completeSowing,
+          })
+        : { packetsUsed: completeSowing ? remainingRaising : 0, packetsToReturn: 0 };
       const raisingPacketsUsedNow = raisingSettled.packetsUsed;
       const raisingPacketsToReturnNow = raisingSettled.packetsToReturn;
 
@@ -844,6 +847,7 @@ export const getIssuedSowingQueue = async (req, res) => {
         packetsUsed,
         packetsReturned,
         packetsRemaining,
+        raisingPacketsRemaining: getRemainingRaisingPackets(r),
         plantReadyDays:
           readyMap.get(`${r.plantId}-${r.subtypeId}`) || 0,
         linkedOrderCount: linked.length,

@@ -116,6 +116,28 @@ describe("isSowingRequestClosed", () => {
     );
   });
 
+  it("auto-closes when only a float remainder is left (0.3 - 0.1 - 0.2)", () => {
+    assert.equal(
+      isSowingRequestClosed({
+        completeSowing: false,
+        remainingAfter: 0.3 - 0.1 - 0.2,
+        companyPackets: 10,
+      }),
+      true
+    );
+  });
+
+  it("stays open with a real fraction of a bag left", () => {
+    assert.equal(
+      isSowingRequestClosed({
+        completeSowing: false,
+        remainingAfter: 0.1,
+        companyPackets: 10,
+      }),
+      false
+    );
+  });
+
   it("auto-closes mixed request when company + raising leftover is 0", () => {
     assert.equal(
       isSowingRequestClosed({
