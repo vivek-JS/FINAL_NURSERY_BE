@@ -4,6 +4,8 @@ import Dispatch from "../models/dispatch.model.js";
 import { generateJson, GeminiType as Type } from "./gemini.service.js";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
+const RULES_CACHE_TTL_MS = 10 * 60 * 1000;
+const AI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
 const MAX_GROUPS_FOR_AI = 40;
 /** Shed app request timeout is 45s; fall back to rules well before that. */
 const AI_TIMEOUT_MS = 25 * 1000;
@@ -267,6 +269,23 @@ Keep batch codes (e.g. RB 19), shed names and crop names exactly as given in Eng
 The fields batch, shed and crop must be copied exactly from the data (English).`;
 }
 
+const isQuotaError = (e) => /429|RESOURCE_EXHAUSTED|quota/i.test(e?.message || String(e));
+
+/** Free-tier quota is per model, so a quota error moves on to the next model. */
+async function askAi(prompt) {
+  for (let i = 0; i < AI_MODELS.length; i++) {
+    try {
+      return await withTimeout(
+        generateJson(prompt, NOTES_SCHEMA, { model: AI_MODELS[i] }),
+        AI_TIMEOUT_MS
+      );
+    } catch (e) {
+      if (i === AI_MODELS.length - 1 || !isQuotaError(e)) throw e;
+    }
+  }
+  throw new Error("No AI model available");
+}
+
 /**
  * AI dispatch-priority notes for live secondary stock.
  * Cached for 30 min per stock snapshot; `refresh` forces a new AI call.
@@ -296,7 +315,8 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
     .update(JSON.stringify([NOTES_LANG, NOTES_FORMAT, today.format("YYYY-MM-DD"), aiGroups, demandRows]))
     .digest("hex");
 
-  if (!refresh && cache && cache.hash === hash && Date.now() - cache.at < CACHE_TTL_MS) {
+  const ttl = cache?.result?.source === "ai" ? CACHE_TTL_MS : RULES_CACHE_TTL_MS;
+  if (!refresh && cache && cache.hash === hash && Date.now() - cache.at < ttl) {
     return cache.result;
   }
 
@@ -304,10 +324,7 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
   let source = "ai";
   let aiError = null;
   try {
-    const raw = await withTimeout(
-      generateJson(buildPrompt(today, aiGroups, demandRows, demand.vehicles), NOTES_SCHEMA),
-      AI_TIMEOUT_MS
-    );
+    const raw = await askAi(buildPrompt(today, aiGroups, demandRows, demand.vehicles));
     const points = (Array.isArray(raw?.points) ? raw.points : [])
       .filter((p) => p && p.title)
       .map((p) => {
@@ -343,6 +360,6 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
     oldest: groups.slice(0, 10).map(({ cropKey, ...g }) => g),
     demand: demandRows.sort((a, b) => b.stockPlants - a.stockPlants),
   };
-  if (source === "ai") cache = { hash, at: Date.now(), result };
+  cache = { hash, at: Date.now(), result };
   return result;
 }
