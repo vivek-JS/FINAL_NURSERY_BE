@@ -129,7 +129,9 @@ test("3-day groups count from today; the first group folds into now", () => {
   );
   assert.equal(parseGroupDays("3"), 3);
   assert.equal(parseGroupDays("junk"), 1);
-  assert.equal(parseGroupDays(99), 7);
+  assert.equal(parseGroupDays("6"), 6);
+  assert.equal(parseGroupDays("12"), 12);
+  assert.equal(parseGroupDays(99), 30);
 });
 
 test("board row without a slot today still shows overdue as the current cell", () => {

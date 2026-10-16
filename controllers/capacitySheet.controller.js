@@ -495,8 +495,8 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
 }
 
 /**
- * GET /sowing/capacity-sheet/board?group=1|3 — variety rows: stock, now (current + overdue),
- * and only the future cells that have plants; group=3 buckets them into 3-day groups from today.
+ * GET /sowing/capacity-sheet/board?group=N (1..30) — variety rows: stock, now (current + overdue),
+ * and only the future cells that have plants; group=N buckets them into N-day groups from today.
  */
 export const getCapacityBoard = async (req, res) => {
   try {
