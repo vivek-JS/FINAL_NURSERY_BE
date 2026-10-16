@@ -54,7 +54,7 @@ export function computeSowingGapBoardMetricsForSubtype(slots, deliveryOrders) {
     const slotGap = Math.max(0, Number(stats.bookedUncoveredPlants) || 0);
     const primarySowed = Number(slot.primarySowed) || 0;
     const grossCover = Number(enriched.grossOrderCoveredPlants) || 0;
-    // Excess = survivors (90% of sowed) minus plants already covering orders.
+    // Excess = sowed minus plants covering orders minus expected-mortality reserve.
     // Slot size and stored availablePlants are not bookable stock.
     const excessAvailableForBooking = Number(enriched.excessAvailableForBooking) || 0;
 
