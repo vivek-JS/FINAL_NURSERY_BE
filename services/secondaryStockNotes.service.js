@@ -8,6 +8,8 @@ const MAX_GROUPS_FOR_AI = 40;
 /** Shed app request timeout is 45s; fall back to rules well before that. */
 const AI_TIMEOUT_MS = 25 * 1000;
 const NOTES_LANG = "mr";
+const NOTES_FORMAT = "items-v1";
+const MAX_ITEMS_PER_POINT = 6;
 
 /** "Purandar (पुरंदर) (6)" → "Purandar (6)" so notes stay English-only. */
 export function englishShedName(raw) {
@@ -32,7 +34,7 @@ const PRIORITIES = ["HIGH", "MEDIUM", "LOW"];
 const NOTES_SCHEMA = {
   type: Type.OBJECT,
   properties: {
-    summary: { type: Type.STRING, description: "2-3 sentence overview in plain English" },
+    summary: { type: Type.STRING, description: "Max 2 short sentences" },
     points: {
       type: Type.ARRAY,
       items: {
@@ -40,14 +42,30 @@ const NOTES_SCHEMA = {
         properties: {
           priority: { type: Type.STRING, enum: PRIORITIES },
           title: { type: Type.STRING, description: "Short action, max 8 words" },
-          detail: { type: Type.STRING, description: "One or two sentences with numbers" },
+          detail: {
+            type: Type.STRING,
+            description: "One short sentence, max 15 words, why/what to do. No shed-wise number lists.",
+          },
           batch: { type: Type.STRING },
           shed: { type: Type.STRING },
           crop: { type: Type.STRING },
           plants: { type: Type.INTEGER },
+          items: {
+            type: Type.ARRAY,
+            description: `Stock rows this point is about, max ${MAX_ITEMS_PER_POINT}`,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                batch: { type: Type.STRING },
+                shed: { type: Type.STRING },
+              },
+              required: ["batch", "shed"],
+              propertyOrdering: ["batch", "shed"],
+            },
+          },
         },
-        required: ["priority", "title", "detail"],
-        propertyOrdering: ["priority", "title", "detail", "batch", "shed", "crop", "plants"],
+        required: ["priority", "title", "detail", "items"],
+        propertyOrdering: ["priority", "title", "detail", "batch", "shed", "crop", "plants", "items"],
       },
     },
   },
@@ -117,6 +135,45 @@ export function groupStockForNotes(lines, today = moment().startOf("day")) {
     );
 }
 
+const normKey = (s) => String(s || "").toLowerCase().replace(/\s+/g, "");
+
+/**
+ * AI item refs ({ batch, shed }) → rows with numbers taken from stock data.
+ * Sizes of the same batch + shed are merged; a ref missing shed (or batch)
+ * expands to every shed of that batch (or batch in that shed).
+ */
+export function resolveNoteItems(refs, groups, fallback = {}) {
+  const rows = new Map();
+  for (const g of groups || []) {
+    const key = `${normKey(g.batch)}|${normKey(g.shed)}`;
+    const r =
+      rows.get(key) ||
+      { batch: g.batch, shed: g.shed, crop: g.crop, plants: 0, readyPlants: 0, ageDays: null, overdueDays: 0 };
+    r.plants += g.plants;
+    r.readyPlants += g.readyPlants;
+    if (g.ageDays != null) r.ageDays = Math.max(r.ageDays ?? 0, g.ageDays);
+    r.overdueDays = Math.max(r.overdueDays, g.overdueDays || 0);
+    rows.set(key, r);
+  }
+
+  const wanted = (Array.isArray(refs) ? refs : []).filter((x) => x && (x.batch || x.shed));
+  if (!wanted.length && (fallback.batch || fallback.shed)) wanted.push(fallback);
+
+  const out = new Map();
+  for (const ref of wanted) {
+    const b = normKey(ref.batch);
+    const s = normKey(ref.shed);
+    for (const [key, r] of rows) {
+      const [rb, rs] = key.split("|");
+      if ((b && rb !== b) || (s && rs !== s)) continue;
+      out.set(key, r);
+    }
+  }
+  return [...out.values()]
+    .sort((a, b) => b.overdueDays - a.overdueDays || b.plants - a.plants)
+    .slice(0, MAX_ITEMS_PER_POINT);
+}
+
 /** Plants still to load on pending vehicles, by plant:subtype. */
 async function pendingDemandByCrop() {
   const docs = await Dispatch.find({
@@ -144,16 +201,12 @@ function ruleNotes(groups, demandRows) {
     points.push({
       priority,
       title: `${g.shed} मधून बॅच ${g.batch} आधी पाठवा`,
-      detail:
-        `${g.plants.toLocaleString("en-IN")} ${g.crop} रोप` +
-        (g.ageDays != null ? `, लागवड होऊन ${g.ageDays} दिवस` : "") +
-        (g.overdueDays > 0
-          ? `, तयार तारखेपेक्षा ${g.overdueDays} दिवस उशीर.`
-          : ", आता तयार."),
+      detail: g.overdueDays > 0 ? "तयार तारीख उलटली आहे, पुढच्या गाडीत लोड करा." : "रोप तयार आहेत.",
       batch: g.batch,
       shed: g.shed,
       crop: g.crop,
       plants: g.plants,
+      items: resolveNoteItems([{ batch: g.batch, shed: g.shed }], groups),
     });
   }
   const total = groups.reduce((s, g) => s + g.plants, 0);
@@ -179,7 +232,9 @@ ${JSON.stringify(groups)}
 Pending vehicle demand by crop (plants still to load on ${pendingVehicles} pending vehicles):
 ${JSON.stringify(demandRows)}
 
-Write 5 to 8 points, most urgent first. Use HIGH for at most 4 points. Group rows of the same shed into one point.
+Write 5 to 8 points, most urgent first. Use HIGH for at most 4 points.
+Each point is about ONE shed or ONE batch (never all sheds in one point). List the stock rows it covers in "items" as { batch, shed } (max ${MAX_ITEMS_PER_POINT}); the app shows plant counts and days for each item, so do NOT repeat per-shed numbers in detail.
+title: max 8 words. detail: one short sentence, max 15 words, saying why or what to do. summary: max 2 short sentences.
 - HIGH: overdue by 7+ days or very old stock; dispatch today/next vehicles.
 - MEDIUM: ready or slightly overdue; plan in the next few days.
 - LOW: watch items, e.g. a crop with old stock but no pending demand (suggest the office books orders), or stock split across many sheds that should be consolidated.
@@ -216,7 +271,7 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
     .map(({ cropKey, ...g }) => g);
   const hash = crypto
     .createHash("sha1")
-    .update(JSON.stringify([NOTES_LANG, today.format("YYYY-MM-DD"), aiGroups, demandRows]))
+    .update(JSON.stringify([NOTES_LANG, NOTES_FORMAT, today.format("YYYY-MM-DD"), aiGroups, demandRows]))
     .digest("hex");
 
   if (!refresh && cache && cache.hash === hash && Date.now() - cache.at < CACHE_TTL_MS) {
@@ -233,15 +288,21 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
     );
     const points = (Array.isArray(raw?.points) ? raw.points : [])
       .filter((p) => p && p.title)
-      .map((p) => ({
-        priority: PRIORITIES.includes(p.priority) ? p.priority : "MEDIUM",
-        title: String(p.title),
-        detail: String(p.detail || ""),
-        batch: p.batch ? String(p.batch) : "",
-        shed: p.shed ? String(p.shed) : "",
-        crop: p.crop ? String(p.crop) : "",
-        plants: Number(p.plants) || 0,
-      }));
+      .map((p) => {
+        const batch = p.batch ? String(p.batch) : "";
+        const shed = p.shed ? String(p.shed) : "";
+        const items = resolveNoteItems(p.items, groups, { batch, shed });
+        return {
+          priority: PRIORITIES.includes(p.priority) ? p.priority : "MEDIUM",
+          title: String(p.title),
+          detail: String(p.detail || ""),
+          batch,
+          shed,
+          crop: p.crop ? String(p.crop) : "",
+          plants: items.length ? items.reduce((s, r) => s + r.plants, 0) : Number(p.plants) || 0,
+          items,
+        };
+      });
     if (!points.length) throw new Error("AI returned no points");
     notes = { summary: String(raw.summary || ""), points };
   } catch (e) {

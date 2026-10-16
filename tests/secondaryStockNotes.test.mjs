@@ -4,6 +4,7 @@ import moment from "moment";
 import {
   englishShedName,
   groupStockForNotes,
+  resolveNoteItems,
 } from "../services/secondaryStockNotes.service.js";
 
 const today = moment("2026-10-16", "YYYY-MM-DD").startOf("day");
@@ -60,5 +61,34 @@ describe("groupStockForNotes", () => {
     );
     assert.deepEqual(g.map((x) => x.batch), ["RB 1", "RB 50"]);
     assert.equal(g[1].daysUntilReady, 4);
+  });
+});
+
+describe("resolveNoteItems", () => {
+  const groups = groupStockForNotes(
+    [
+      line(),
+      line({ size: "R3", availableQuantity: 40 }),
+      line({ pollyhouse: "Torna (तोरणा) (5)", availableQuantity: 70 }),
+      line({ batchId: "b2", batchNumber: "VS 911", pollyhouse: "Raigad (2)", availableQuantity: 500, expectedReadyByCalendar: "2026-08-01T00:00:00.000Z" }),
+    ],
+    today
+  );
+
+  it("merges sizes and takes numbers from stock, not the AI", () => {
+    const items = resolveNoteItems([{ batch: "rb 19", shed: "Devgiri" }], groups);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].plants, 140);
+    assert.equal(items[0].overdueDays, 15);
+  });
+
+  it("expands a batch-only ref to every shed, most overdue first", () => {
+    const items = resolveNoteItems([{ batch: "RB 19" }], groups);
+    assert.deepEqual(items.map((r) => r.shed), ["Devgiri", "Torna (5)"]);
+  });
+
+  it("falls back to the point's batch/shed and ignores unknown refs", () => {
+    assert.equal(resolveNoteItems([], groups, { shed: "Raigad (2)" })[0].batch, "VS 911");
+    assert.deepEqual(resolveNoteItems([{ batch: "NOPE", shed: "X" }], groups), []);
   });
 });
