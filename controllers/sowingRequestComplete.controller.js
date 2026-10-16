@@ -66,6 +66,17 @@ function istYmd(d) {
 
 const SOW_ENTRY_EVENT_TYPES = ["PLANTS_SOWED", "SOW_COMPLETED"];
 
+/** Packet events saved with an entry land in the same save, milliseconds apart. */
+function packetsNearEntry(events, at, type) {
+  if (!at) return 0;
+  const t = new Date(at).getTime();
+  return (events || [])
+    .filter(
+      (e) => e?.type === type && e.at && Math.abs(new Date(e.at).getTime() - t) < 60 * 1000
+    )
+    .reduce((s, e) => s + (Number(e.quantity) || 0), 0);
+}
+
 /**
  * GET /sowing/day-summary?date=YYYY-MM-DD
  * One row per sow entry on that day (entry sowDate, else the IST day it was saved).
@@ -102,16 +113,7 @@ export const getSowingDaySummary = async (req, res) => {
 
         let packetsUsed = Number(meta.packetsUsedNow);
         if (!Number.isFinite(packetsUsed)) {
-          // Older entries: packet events are pushed in the same save, milliseconds apart.
-          packetsUsed = events
-            .filter(
-              (e) =>
-                e?.type === "PACKETS_USED" &&
-                at &&
-                e.at &&
-                Math.abs(new Date(e.at).getTime() - at.getTime()) < 60 * 1000
-            )
-            .reduce((s, e) => s + (Number(e.quantity) || 0), 0);
+          packetsUsed = packetsNearEntry(events, at, "PACKETS_USED");
         }
 
         entries.push({
@@ -909,7 +911,7 @@ export const getSowingCompletions = async (req, res) => {
       labour: "laboursLadies",
     }[sortKey] || "sowingCompletedDate";
 
-    const match = { sowingCompleted: true };
+    const match = {};
     if (req.query.plantId && mongoose.Types.ObjectId.isValid(req.query.plantId)) {
       match.plantId = new mongoose.Types.ObjectId(req.query.plantId);
     }
@@ -919,13 +921,6 @@ export const getSowingCompletions = async (req, res) => {
     ) {
       match.subtypeId = new mongoose.Types.ObjectId(req.query.subtypeId);
     }
-    const sowRange = dateRangeQuery(
-      req.query.sowFrom || req.query.from,
-      req.query.sowTo || req.query.to
-    );
-    if (sowRange) match.sowingCompletedDate = sowRange;
-    const addedRange = dateRangeQuery(req.query.addedFrom, req.query.addedTo);
-    if (addedRange) match.createdAt = addedRange;
 
     let orderIdFilter = null;
     if (q) {
@@ -950,12 +945,23 @@ export const getSowingCompletions = async (req, res) => {
       ];
     }
 
+    if (String(req.query.view || "") === "entries") {
+      return await sendSowingEntries(req, res, { match, page, limit, skip, sortKey, sortDir });
+    }
+
+    match.sowingCompleted = true;
+    const sowRange = dateRangeQuery(
+      req.query.sowFrom || req.query.from,
+      req.query.sowTo || req.query.to
+    );
+    if (sowRange) match.sowingCompletedDate = sowRange;
+    const addedRange = dateRangeQuery(req.query.addedFrom, req.query.addedTo);
+    if (addedRange) match.createdAt = addedRange;
+
     const [total, rows] = await Promise.all([
       SowingRequest.countDocuments(match),
       SowingRequest.find(match)
-        .select(
-          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents machineStartTime machineEndTime machineMinutes completionPhotos completionNotes shedName sowingCompletedDate createdAt isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned returnRequestIds completionEvents completedBy outwardId"
-        )
+        .select(COMPLETION_SELECT)
         .populate("completedBy", "name")
         .sort({ [sortField]: sortDir, _id: sortDir })
         .skip(skip)
@@ -963,17 +969,101 @@ export const getSowingCompletions = async (req, res) => {
         .lean(),
     ]);
 
-    const requestIds = rows.map((r) => r._id).filter(Boolean);
-    const outwardIds = [
-      ...new Set(
-        rows.map((r) => r.outwardId).filter(Boolean).map((id) => String(id))
-      ),
-    ];
-    const allSlotIds = [
-      ...new Set(rows.flatMap((r) => collectSlotIdsFromRequest(r))),
-    ].map((id) => new mongoose.Types.ObjectId(id));
+    const { ordersByReqMap, outwardMap, slotMap } = await loadCompletionLookups(rows);
 
-    const [ordersByRequest, outwards, slotRows] = await Promise.all([
+    const items = rows.map((r) => {
+      const cf = resolveSowingPlantsPerPacket(r);
+      const batchNumbers = outwardBatchNumbers(r, outwardMap);
+      const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
+      const covered = ordersByReqMap.get(String(r._id)) || [];
+      const sowCompletedEv = Array.isArray(r.completionEvents)
+        ? r.completionEvents.find((e) => e?.type === "SOW_COMPLETED")
+        : null;
+      const sowingDate = r.sowingCompletedDate || sowCompletedEv?.at || null;
+      const readyDateMeta =
+        sowCompletedEv?.meta?.orderReadyDate ||
+        sowCompletedEv?.meta?.plantReadyDate ||
+        null;
+      const coverWindowDays = Number(
+        sowCompletedEv?.meta?.orderCoverWindowDays ?? 4
+      );
+      const linkedOrders = covered.map((o) =>
+        mapCoveredOrder(o, readyDateMeta, coverWindowDays)
+      );
+
+      const preferredSlotId =
+        sowCompletedEv?.meta?.appliedSlotId ||
+        collectSlotIdsFromRequest(r)[0] ||
+        null;
+      const slotRaw = preferredSlotId
+        ? slotMap.get(String(preferredSlotId))
+        : null;
+      const reqBatch = (slotRaw?.sowingBatches || []).find(
+        (b) => String(b.sowingRequestId) === String(r._id)
+      );
+      const affectedSlot = buildAffectedSlot(slotRaw, reqBatch, r.shedName);
+
+      return {
+        ...r,
+        expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
+        isExcess: Boolean(r.isExcessiveSowing),
+        linkedOrders,
+        labourTotal:
+          (Number(r.laboursLadies) || 0) + (Number(r.laboursGents) || 0),
+        batchNumber: batchNumbers.join(", ") || "",
+        batchNumbers,
+        outwardNumber: outward?.outwardNumber || "",
+        sowingDate,
+        createdAt: r.createdAt || null,
+        affectedSlot,
+      };
+    });
+
+    return res.json({
+      success: true,
+      items,
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit) || 0,
+    });
+  } catch (error) {
+    console.error("getSowingCompletions:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load completions",
+      error: error.message,
+    });
+  }
+};
+
+const COMPLETION_SELECT =
+  "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents machineStartTime machineEndTime machineMinutes completionPhotos completionNotes shedName sowingCompleted sowingCompletedDate createdAt isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned returnRequestIds completionEvents completedBy outwardId";
+
+function outwardBatchNumbers(r, outwardMap) {
+  const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
+  return [
+    ...new Set(
+      (outward?.items || [])
+        .map((it) => it?.batch?.batchNumber || it?.batchNumber || "")
+        .filter(Boolean)
+    ),
+  ];
+}
+
+/** Covered orders, outwards and slots for a page of sowing requests. */
+async function loadCompletionLookups(rows) {
+  const requestIds = rows.map((r) => r._id).filter(Boolean);
+  const outwardIds = [
+    ...new Set(
+      rows.map((r) => r.outwardId).filter(Boolean).map((id) => String(id))
+    ),
+  ];
+  const allSlotIds = [
+    ...new Set(rows.flatMap((r) => collectSlotIdsFromRequest(r))),
+  ].map((id) => new mongoose.Types.ObjectId(id));
+
+  const [ordersByRequest, outwards, slotRows] = await Promise.all([
       // Orders actually covered by each completion (delivery matched at mark time)
       requestIds.length
         ? Order.find({ sowingDoneRequestId: { $in: requestIds } })
@@ -1030,168 +1120,286 @@ export const getSowingCompletions = async (req, res) => {
         : Promise.resolve([]),
     ]);
 
-    const ordersByReqMap = new Map();
-    for (const o of ordersByRequest) {
-      const key = String(o.sowingDoneRequestId);
-      if (!ordersByReqMap.has(key)) ordersByReqMap.set(key, []);
-      ordersByReqMap.get(key).push(o);
+  const ordersByReqMap = new Map();
+  for (const o of ordersByRequest) {
+    const key = String(o.sowingDoneRequestId);
+    if (!ordersByReqMap.has(key)) ordersByReqMap.set(key, []);
+    ordersByReqMap.get(key).push(o);
+  }
+  return {
+    ordersByReqMap,
+    outwardMap: new Map(outwards.map((o) => [String(o._id), o])),
+    slotMap: new Map(slotRows.map((s) => [String(s.slotId), s])),
+  };
+}
+
+function mapCoveredOrder(o, readyDateMeta, coverWindowDays) {
+  let coverOffsetDays = null;
+  if (o.deliveryDate && readyDateMeta) {
+    try {
+      const del = new Date(o.deliveryDate);
+      let ready = null;
+      const dmy = String(readyDateMeta).match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (dmy) {
+        ready = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]), 12, 0, 0);
+      } else {
+        ready = new Date(readyDateMeta);
+      }
+      if (!Number.isNaN(del.getTime()) && ready && !Number.isNaN(ready.getTime())) {
+        const d0 = Date.UTC(del.getFullYear(), del.getMonth(), del.getDate());
+        const r0 = Date.UTC(ready.getFullYear(), ready.getMonth(), ready.getDate());
+        coverOffsetDays = Math.round((d0 - r0) / 86400000);
+      }
+    } catch {
+      coverOffsetDays = null;
     }
-    const outwardMap = new Map(outwards.map((o) => [String(o._id), o]));
-    const slotMap = new Map(slotRows.map((s) => [String(s.slotId), s]));
+  }
+  return {
+    orderId: o._id,
+    orderNumber: o.orderId,
+    farmerName: o.farmer?.name || o.name || "",
+    farmerMobile: o.farmer?.mobileNumber || "",
+    plants: (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0),
+    sowingDone: Boolean(o.sowingDone),
+    sowingDoneAt: o.sowingDoneAt,
+    bookingDate: o.orderBookingDate || o.createdAt || null,
+    deliveryDate: o.deliveryDate || null,
+    coverOffsetDays,
+    inCoverWindow:
+      coverOffsetDays == null ? true : Math.abs(coverOffsetDays) <= coverWindowDays,
+  };
+}
 
-    const items = rows.map((r) => {
-      const cf = resolveSowingPlantsPerPacket(r);
-      const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
-      const batchNumbers = [
-        ...new Set(
-          (outward?.items || [])
-            .map((it) => it?.batch?.batchNumber || it?.batchNumber || "")
-            .filter(Boolean)
-        ),
-      ];
-      const covered = ordersByReqMap.get(String(r._id)) || [];
-      const sowCompletedEv = Array.isArray(r.completionEvents)
-        ? r.completionEvents.find((e) => e?.type === "SOW_COMPLETED")
-        : null;
-      const sowingDate = r.sowingCompletedDate || sowCompletedEv?.at || null;
-      const readyDateMeta =
-        sowCompletedEv?.meta?.orderReadyDate ||
-        sowCompletedEv?.meta?.plantReadyDate ||
-        null;
-      const coverWindowDays = Number(
-        sowCompletedEv?.meta?.orderCoverWindowDays ?? 4
-      );
-      const linkedOrders = covered.map((o) => {
-        let coverOffsetDays = null;
-        if (o.deliveryDate && readyDateMeta) {
-          try {
-            const del = new Date(o.deliveryDate);
-            let ready = null;
-            const dmy = String(readyDateMeta).match(
-              /^(\d{2})-(\d{2})-(\d{4})$/
-            );
-            if (dmy) {
-              ready = new Date(
-                Number(dmy[3]),
-                Number(dmy[2]) - 1,
-                Number(dmy[1]),
-                12,
-                0,
-                0
-              );
-            } else {
-              ready = new Date(readyDateMeta);
-            }
-            if (
-              !Number.isNaN(del.getTime()) &&
-              ready &&
-              !Number.isNaN(ready.getTime())
-            ) {
-              const d0 = Date.UTC(
-                del.getFullYear(),
-                del.getMonth(),
-                del.getDate()
-              );
-              const r0 = Date.UTC(
-                ready.getFullYear(),
-                ready.getMonth(),
-                ready.getDate()
-              );
-              coverOffsetDays = Math.round((d0 - r0) / 86400000);
-            }
-          } catch {
-            coverOffsetDays = null;
-          }
-        }
-        return {
-          orderId: o._id,
-          orderNumber: o.orderId,
-          farmerName: o.farmer?.name || o.name || "",
-          farmerMobile: o.farmer?.mobileNumber || "",
-          plants:
-            (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0),
-          sowingDone: Boolean(o.sowingDone),
-          sowingDoneAt: o.sowingDoneAt,
-          bookingDate: o.orderBookingDate || o.createdAt || null,
-          deliveryDate: o.deliveryDate || null,
-          coverOffsetDays,
-          inCoverWindow:
-            coverOffsetDays == null
-              ? true
-              : Math.abs(coverOffsetDays) <= coverWindowDays,
-        };
-      });
+function buildAffectedSlot(slotRaw, reqBatch, shedName) {
+  if (!slotRaw) return null;
+  return {
+    slotId: String(slotRaw.slotId),
+    label:
+      slotRaw.startDay === slotRaw.endDay
+        ? slotRaw.startDay || "—"
+        : `${slotRaw.startDay || "—"} → ${slotRaw.endDay || "—"}`,
+    startDay: slotRaw.startDay || null,
+    endDay: slotRaw.endDay || null,
+    month: slotRaw.month || null,
+    year: slotRaw.year || null,
+    primarySowed: Number(slotRaw.primarySowed) || 0,
+    officeSowed: Number(slotRaw.officeSowed) || 0,
+    plantsSowed: Number(slotRaw.plantsSowed) || 0,
+    availablePlants: Number(slotRaw.availablePlants) || 0,
+    orderReservedPlants: Number(slotRaw.orderReservedPlants) || 0,
+    totalBookedPlants: Number(slotRaw.totalBookedPlants) || 0,
+    totalPlants: Number(slotRaw.totalPlants) || 0,
+    excessivePlants: Number(slotRaw.excessivePlants) || 0,
+    sowingDate: reqBatch?.sowingDate || slotRaw.sowingDate || null,
+    plantReadyDate: reqBatch?.plantReadyDate || slotRaw.plantReadyDate || null,
+    plantReadyDays: reqBatch?.plantReadyDays ?? slotRaw.plantReadyDays ?? null,
+    batchPlantsSowed: Number(reqBatch?.plantsSowed) || 0,
+    batchPacketsUsed: Number(reqBatch?.packetsUsed) || 0,
+    shedName: reqBatch?.shedName || shedName || "",
+  };
+}
 
-      const preferredSlotId =
-        sowCompletedEv?.meta?.appliedSlotId ||
-        collectSlotIdsFromRequest(r)[0] ||
-        null;
-      const slotRaw = preferredSlotId
-        ? slotMap.get(String(preferredSlotId))
-        : null;
-      const reqBatch = (slotRaw?.sowingBatches || []).find(
-        (b) => String(b.sowingRequestId) === String(r._id)
-      );
-      const affectedSlot = slotRaw
-        ? {
-            slotId: String(slotRaw.slotId),
-            label:
-              slotRaw.startDay === slotRaw.endDay
-                ? slotRaw.startDay || "—"
-                : `${slotRaw.startDay || "—"} → ${slotRaw.endDay || "—"}`,
-            startDay: slotRaw.startDay || null,
-            endDay: slotRaw.endDay || null,
-            month: slotRaw.month || null,
-            year: slotRaw.year || null,
-            primarySowed: Number(slotRaw.primarySowed) || 0,
-            officeSowed: Number(slotRaw.officeSowed) || 0,
-            plantsSowed: Number(slotRaw.plantsSowed) || 0,
-            availablePlants: Number(slotRaw.availablePlants) || 0,
-            orderReservedPlants: Number(slotRaw.orderReservedPlants) || 0,
-            totalBookedPlants: Number(slotRaw.totalBookedPlants) || 0,
-            totalPlants: Number(slotRaw.totalPlants) || 0,
-            excessivePlants: Number(slotRaw.excessivePlants) || 0,
-            sowingDate: reqBatch?.sowingDate || slotRaw.sowingDate || null,
-            plantReadyDate:
-              reqBatch?.plantReadyDate || slotRaw.plantReadyDate || null,
-            plantReadyDays:
-              reqBatch?.plantReadyDays ?? slotRaw.plantReadyDays ?? null,
-            batchPlantsSowed: Number(reqBatch?.plantsSowed) || 0,
-            batchPacketsUsed: Number(reqBatch?.packetsUsed) || 0,
-            shedName: reqBatch?.shedName || r.shedName || "",
-          }
-        : null;
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-      return {
-        ...r,
-        expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
-        isExcess: Boolean(r.isExcessiveSowing),
-        linkedOrders,
-        labourTotal:
-          (Number(r.laboursLadies) || 0) + (Number(r.laboursGents) || 0),
-        batchNumber: batchNumbers.join(", ") || "",
-        batchNumbers,
-        outwardNumber: outward?.outwardNumber || "",
-        sowingDate,
-        createdAt: r.createdAt || null,
-        affectedSlot,
-      };
-    });
+function ymdRange(from, to) {
+  const range = {};
+  if (YMD_RE.test(String(from || ""))) range.$gte = String(from);
+  if (YMD_RE.test(String(to || ""))) range.$lte = String(to);
+  return Object.keys(range).length ? range : null;
+}
 
-    return res.json({
-      success: true,
-      items,
-      total,
-      page,
-      limit,
-      pages: Math.ceil(total / limit) || 0,
-    });
-  } catch (error) {
-    console.error("getSowingCompletions:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to load completions",
-      error: error.message,
+/** Orders don't record which entry covered them; pick the entry saved closest to sowingDoneAt. */
+export function ordersForEntry(orders, entryTimes, entryTime) {
+  if (entryTimes.length <= 1) return orders;
+  const last = entryTimes[entryTimes.length - 1];
+  return orders.filter((o) => {
+    const t = o.sowingDoneAt ? new Date(o.sowingDoneAt).getTime() : NaN;
+    if (!Number.isFinite(t)) return entryTime === last;
+    let nearest = entryTimes[0];
+    for (const x of entryTimes) {
+      if (Math.abs(x - t) < Math.abs(nearest - t)) nearest = x;
+    }
+    return nearest === entryTime;
+  });
+}
+
+/**
+ * view=entries: one row per sow entry (partial or final), open requests included.
+ * Sow / added date filters use the entry's IST day.
+ */
+async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, sortDir }) {
+  const sortField = {
+    sowDate: "entrySowDay",
+    added: "entryAt",
+    request: "requestNumber",
+    plant: "plantName",
+    plants: "entryPlants",
+    packets: "entryPackets",
+    labour: "entryLabour",
+  }[sortKey] || "entrySowDay";
+
+  const istDay = (expr) => ({
+    $dateToString: { format: "%Y-%m-%d", date: expr, timezone: "Asia/Kolkata" },
+  });
+  const dayMatch = {};
+  const sowRange = ymdRange(req.query.sowFrom || req.query.from, req.query.sowTo || req.query.to);
+  if (sowRange) dayMatch.entrySowDay = sowRange;
+  const addedRange = ymdRange(req.query.addedFrom, req.query.addedTo);
+  if (addedRange) dayMatch.entryAddedDay = addedRange;
+
+  const [facet] = await SowingRequest.aggregate([
+    { $match: { ...match, "completionEvents.type": { $in: SOW_ENTRY_EVENT_TYPES } } },
+    {
+      $project: {
+        requestNumber: 1,
+        plantName: 1,
+        sowingCompletedDate: 1,
+        ev: "$completionEvents",
+      },
+    },
+    { $unwind: { path: "$ev", includeArrayIndex: "entryIndex" } },
+    { $match: { "ev.type": { $in: SOW_ENTRY_EVENT_TYPES }, "ev.quantity": { $gt: 0 } } },
+    {
+      $addFields: {
+        entryAt: "$ev.at",
+        entrySowDay: {
+          $ifNull: [
+            "$ev.meta.sowDate",
+            istDay({
+              $cond: [
+                { $and: [{ $eq: ["$ev.type", "SOW_COMPLETED"] }, "$sowingCompletedDate"] },
+                "$sowingCompletedDate",
+                "$ev.at",
+              ],
+            }),
+          ],
+        },
+        entryAddedDay: istDay("$ev.at"),
+        entryPlants: "$ev.quantity",
+        entryPackets: { $ifNull: ["$ev.meta.packetsUsedNow", 0] },
+        entryLabour: {
+          $add: [
+            { $ifNull: ["$ev.meta.laboursLadies", 0] },
+            { $ifNull: ["$ev.meta.laboursGents", 0] },
+          ],
+        },
+      },
+    },
+    ...(Object.keys(dayMatch).length ? [{ $match: dayMatch }] : []),
+    {
+      $facet: {
+        total: [{ $count: "n" }],
+        rows: [
+          { $sort: { [sortField]: sortDir, entryAt: sortDir, _id: sortDir } },
+          { $skip: skip },
+          { $limit: limit },
+          { $project: { _id: 1, entryIndex: 1 } },
+        ],
+      },
+    },
+  ]);
+  const total = facet?.total?.[0]?.n || 0;
+  const pageRows = facet?.rows || [];
+
+  const requestIds = [...new Set(pageRows.map((p) => String(p._id)))];
+  const requests = requestIds.length
+    ? await SowingRequest.find({ _id: { $in: requestIds } })
+        .select(COMPLETION_SELECT)
+        .populate("completedBy", "name")
+        .lean()
+    : [];
+  const reqMap = new Map(requests.map((r) => [String(r._id), r]));
+  const { ordersByReqMap, outwardMap, slotMap } = await loadCompletionLookups(requests);
+
+  const items = [];
+  for (const p of pageRows) {
+    const r = reqMap.get(String(p._id));
+    const events = r?.completionEvents || [];
+    const ev = events[p.entryIndex];
+    if (!r || !ev) continue;
+    const meta = ev.meta || {};
+    const at = ev.at ? new Date(ev.at) : null;
+    const entryTimes = events
+      .filter((e) => SOW_ENTRY_EVENT_TYPES.includes(e?.type) && Number(e.quantity) > 0)
+      .map((e) => (e.at ? new Date(e.at).getTime() : 0));
+    const entryTime = at ? at.getTime() : 0;
+    const entryNo = entryTimes.indexOf(entryTime) + 1;
+    const onlyEntry = entryTimes.length <= 1;
+
+    let packetsUsed = Number(meta.packetsUsedNow);
+    if (!Number.isFinite(packetsUsed)) packetsUsed = packetsNearEntry(events, at, "PACKETS_USED");
+    const packetsReturned = packetsNearEntry(events, at, "PACKETS_RETURNED");
+
+    const readyDateMeta = meta.orderReadyDate || meta.plantReadyDate || null;
+    const coverWindowDays = Number(meta.orderCoverWindowDays ?? 4);
+    const linkedOrders = ordersForEntry(
+      ordersByReqMap.get(String(r._id)) || [],
+      entryTimes,
+      entryTime
+    ).map((o) => mapCoveredOrder(o, readyDateMeta, coverWindowDays));
+
+    const slotId = meta.appliedSlotId || meta.toSlotId || collectSlotIdsFromRequest(r)[0] || null;
+    const slotRaw = slotId ? slotMap.get(String(slotId)) : null;
+    const batches = (slotRaw?.sowingBatches || []).filter(
+      (b) => String(b.sowingRequestId) === String(r._id)
+    );
+    const reqBatch =
+      batches.find((b) => Number(b.plantsSowed) === Number(ev.quantity)) || batches[0];
+    const shedName = meta.shedName || r.shedName || "";
+
+    const batchNumbers = meta.batchNumber ? [meta.batchNumber] : outwardBatchNumbers(r, outwardMap);
+    const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
+    const pick = (entryVal, reqVal) => (entryVal != null ? entryVal : onlyEntry ? reqVal : null);
+    const ladies = Number(pick(meta.laboursLadies, r.laboursLadies)) || 0;
+    const gents = Number(pick(meta.laboursGents, r.laboursGents)) || 0;
+
+    items.push({
+      ...r,
+      _id: `${r._id}-${p.entryIndex}`,
+      requestId: r._id,
+      entryIndex: p.entryIndex,
+      entryNo,
+      entryCount: entryTimes.length,
+      entryType: ev.type,
+      isFinalEntry: ev.type === "SOW_COMPLETED",
+      requestCompleted: Boolean(r.sowingCompleted),
+      requestPlants: Number(r.sowedQuantity) || 0,
+      requestPacketsUsed: Number(r.packetsUsed) || 0,
+      requestPacketsReturned: Number(r.packetsReturned) || 0,
+      sowedQuantity: Number(ev.quantity) || 0,
+      packetsUsed: Math.round(packetsUsed * 100) / 100,
+      packetsReturned: Math.round(packetsReturned * 100) / 100,
+      laboursLadies: ladies,
+      laboursGents: gents,
+      labourTotal: ladies + gents,
+      machineStartTime: pick(meta.machineStartTime, r.machineStartTime) || "",
+      machineEndTime: pick(meta.machineEndTime, r.machineEndTime) || "",
+      machineMinutes: Number(pick(meta.machineMinutes, r.machineMinutes)) || 0,
+      completionNotes: pick(meta.notes, r.completionNotes) || "",
+      shedName,
+      isExcess: Boolean(r.isExcessiveSowing) || Number(meta.excessPlants) >= Number(ev.quantity),
+      excessPlants: Number(meta.excessPlants) || 0,
+      linkedOrders,
+      batchNumber: batchNumbers.join(", ") || "",
+      batchNumbers,
+      outwardNumber: outward?.outwardNumber || "",
+      sowingDate:
+        meta.sowDate ||
+        (ev.type === "SOW_COMPLETED" && r.sowingCompletedDate) ||
+        at,
+      createdAt: at,
+      requestCreatedAt: r.createdAt || null,
+      affectedSlot: buildAffectedSlot(slotRaw, reqBatch, shedName),
     });
   }
-};
+
+  return res.json({
+    success: true,
+    view: "entries",
+    items,
+    total,
+    page,
+    limit,
+    pages: Math.ceil(total / limit) || 0,
+  });
+}
