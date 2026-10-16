@@ -81,6 +81,7 @@ import {
   editSowEntry,
   getIssuedSowingQueue,
   getSowingCompletions,
+  getSowingDaySummary,
   getSowSlotPreview,
 } from "../controllers/sowingRequestComplete.controller.js";
 import { getDeliveryVsReadyAnalytics } from "../controllers/deliveryVsReady.controller.js";
@@ -134,6 +135,7 @@ router.get("/today-sowing-cards", getAllPlantsTodaySowingCards); // Get all plan
 router.get("/today-sowing-cards-lite", getTodaySowingCardsLite); // Lean cards + order seed summary (fast UI)
 router.get("/order-wise", getOrderWiseSowing); // Order-wise rows for Request Packets drawer
 router.get("/completions", getSowingCompletions); // Completed sow history (paginated + order search)
+router.get("/day-summary", getSowingDaySummary); // Sow entries for one day (WhatsApp day slip)
 router.get("/analytics/delivery-vs-ready", getDeliveryVsReadyAnalytics); // Delivery vs ready/available chart
 router.get("/admin-direct-sow/orders", listDirectSowOrders); // Office/Super Admin: orders by delivery date
 router.post("/admin-direct-sow", submitDirectSow); // Office/Super Admin: sow entry bypassing packet issue
