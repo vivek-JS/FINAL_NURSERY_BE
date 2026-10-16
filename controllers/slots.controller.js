@@ -72,6 +72,7 @@ import {
   isPastDueRolledInOrder,
   sumEarlyDispatchOntoSlot,
 } from "../utility/pastDueSlotMetrics.js";
+import { loadCoverMovedIndex } from "../utility/coverMovedSlotIndex.js";
 
 // Helper function to convert month name to number
 const getMonthNumber = (monthName) => {
@@ -2723,6 +2724,12 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
     }
 
     const asOfToday = new Date();
+    let coverMoved = { inBySlot: new Map(), outBySlot: new Map(), metaByOrder: new Map() };
+    try {
+      coverMoved = await loadCoverMovedIndex(slotIds, slotMap, ordersById);
+    } catch (err) {
+      console.error("[slots] cover-moved index failed:", err?.message || err);
+    }
 
     // Update slots with orders and calculate values
     for (const slotGroup of slots) {
@@ -2740,7 +2747,11 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         slotIdSet,
         slotGroup.slots
       );
-      const orderSowingIndex = buildOrderSowingSlotIndex(slotGroup.slots, slotMap);
+      const orderSowingIndex = buildOrderSowingSlotIndex(
+        slotGroup.slots,
+        slotMap,
+        coverMoved.metaByOrder
+      );
 
       for (const slot of slotGroup.slots) {
         const slotId = slot._id?.toString ? slot._id.toString() : slot._id;
@@ -2793,6 +2804,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
             crossSlotDetailBySlot,
             sowingFromOtherSlotDetail,
             sowingGapDetail,
+            coverMovedOutDetail: coverMoved.outBySlot.get(slotId) || null,
           })
         );
 
