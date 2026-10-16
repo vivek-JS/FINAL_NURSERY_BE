@@ -27,7 +27,11 @@ import {
   fmtDDMMYYYY,
 } from "./sowingSlotReadyHelpers.js";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
-import { settleSowPackets, isSowingRequestClosed } from "../utility/sowPacketSettlement.js";
+import {
+  settleSowPackets,
+  isSowingRequestClosed,
+  wantsSowingClosed,
+} from "../utility/sowPacketSettlement.js";
 import { readMachineTimes } from "../utility/sowMachineTime.js";
 
 /** Collect applied slot ids from completion meta + linkedSlotIds. */
@@ -277,8 +281,6 @@ export const completeSowingRequest = async (req, res) => {
     const shedName = String(
       req.body.shedName || req.body.pollyhouse || req.body.shed || ""
     ).trim();
-    const completeSowing =
-      String(req.body.completeSowing ?? "true").toLowerCase() !== "false";
     const packetsToReturnRaw = parseNum(req.body.packetsToReturn, NaN);
     const hasReturnInput = Number.isFinite(packetsToReturnRaw);
     const raisingUsedRaw = parseNum(req.body.raisingPacketsUsed, NaN);
@@ -286,6 +288,11 @@ export const completeSowingRequest = async (req, res) => {
       req.body.raisingPacketsToReturn ?? req.body.raisingPacketsReturned,
       NaN
     );
+    const completeSowing = wantsSowingClosed({
+      completeSowing: String(req.body.completeSowing ?? "true").toLowerCase() !== "false",
+      packetsToReturn: packetsToReturnRaw,
+      raisingPacketsToReturn: raisingReturnRaw,
+    });
     const hasRaisingUsedInput = Number.isFinite(raisingUsedRaw);
     const hasRaisingReturnInput = Number.isFinite(raisingReturnRaw);
     const raisingTouched = hasRaisingUsedInput || hasRaisingReturnInput;
