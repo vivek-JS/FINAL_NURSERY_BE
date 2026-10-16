@@ -4,7 +4,26 @@ import Dispatch from "../models/dispatch.model.js";
 import { generateJson, GeminiType as Type } from "./gemini.service.js";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
-const MAX_GROUPS_FOR_AI = 60;
+const MAX_GROUPS_FOR_AI = 40;
+/** Shed app request timeout is 45s; fall back to rules well before that. */
+const AI_TIMEOUT_MS = 25 * 1000;
+
+/** "Purandar (पुरंदर) (6)" → "Purandar (6)" so notes stay English-only. */
+export function englishShedName(raw) {
+  return String(raw || "")
+    .replace(/\s*\([^)]*[^\x00-\x7F][^)]*\)/g, "")
+    .trim() || "Unknown";
+}
+
+function withTimeout(promise, ms) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`AI timed out after ${ms / 1000}s`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 let cache = null;
 
 const PRIORITIES = ["HIGH", "MEDIUM", "LOW"];
@@ -45,7 +64,7 @@ export function groupStockForNotes(lines, today = moment().startOf("day")) {
   for (const ln of lines || []) {
     const plants = Number(ln.availableQuantity) || 0;
     if (plants < 1) continue;
-    const shed = String(ln.pollyhouse || "").trim() || "Unknown";
+    const shed = englishShedName(ln.pollyhouse);
     const size = String(ln.size || "").trim();
     const key = `${ln.batchId}|${shed}|${size}`;
     const g =
@@ -157,7 +176,7 @@ ${JSON.stringify(groups)}
 Pending vehicle demand by crop (plants still to load on ${pendingVehicles} pending vehicles):
 ${JSON.stringify(demandRows)}
 
-Write 5 to 8 points, most urgent first.
+Write 5 to 8 points, most urgent first. Use HIGH for at most 4 points. Group rows of the same shed into one point.
 - HIGH: overdue by 7+ days or very old stock; dispatch today/next vehicles.
 - MEDIUM: ready or slightly overdue; plan in the next few days.
 - LOW: watch items, e.g. a crop with old stock but no pending demand (suggest the office books orders), or stock split across many sheds that should be consolidated.
@@ -201,9 +220,9 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
   let source = "ai";
   let aiError = null;
   try {
-    const raw = await generateJson(
-      buildPrompt(today, aiGroups, demandRows, demand.vehicles),
-      NOTES_SCHEMA
+    const raw = await withTimeout(
+      generateJson(buildPrompt(today, aiGroups, demandRows, demand.vehicles), NOTES_SCHEMA),
+      AI_TIMEOUT_MS
     );
     const points = (Array.isArray(raw?.points) ? raw.points : [])
       .filter((p) => p && p.title)

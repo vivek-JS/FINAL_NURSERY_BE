@@ -1,7 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import moment from "moment";
-import { groupStockForNotes } from "../services/secondaryStockNotes.service.js";
+import {
+  englishShedName,
+  groupStockForNotes,
+} from "../services/secondaryStockNotes.service.js";
 
 const today = moment("2026-10-16", "YYYY-MM-DD").startOf("day");
 
@@ -17,6 +20,14 @@ const line = (over = {}) => ({
   secondaryInwardDate: "2026-09-01T00:00:00.000Z",
   expectedReadyByCalendar: "2026-10-01T00:00:00.000Z",
   ...over,
+});
+
+describe("englishShedName", () => {
+  it("drops the Marathi part and keeps the shed number", () => {
+    assert.equal(englishShedName("Purandar (पुरंदर) (6)"), "Purandar (6)");
+    assert.equal(englishShedName("Shed A"), "Shed A");
+    assert.equal(englishShedName(""), "Unknown");
+  });
 });
 
 describe("groupStockForNotes", () => {
