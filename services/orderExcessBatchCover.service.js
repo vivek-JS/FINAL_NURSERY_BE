@@ -11,7 +11,7 @@ import {
 } from "../controllers/orderSowFromExcess.controller.js";
 import { writeTransferAudit } from "../controllers/sowingTransferAudit.helpers.js";
 import { recordSlotTrail } from "../utility/slotTrailStore.js";
-import { sowedStockForBooking, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
+import { slotSowStock, sowBatchStock, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
 import {
   SLOT_TRAIL_ACTIONS,
   getSlotTrailActivityName,
@@ -125,6 +125,8 @@ export async function listExcessBatches({
               plantReadyDate: "$$b.plantReadyDate",
               plantsSowed: { $ifNull: ["$$b.plantsSowed", 0] },
               orderCoveredPlants: { $ifNull: ["$$b.orderCoveredPlants", 0] },
+              destroyedPlants: { $ifNull: ["$$b.destroyedPlants", 0] },
+              excessAllocations: { $ifNull: ["$$b.excessAllocations", []] },
               excessPlants: { $ifNull: ["$$b.excessPlants", 0] },
               actualPlantsApplied: "$$b.actualPlantsApplied",
               expectedMortalityApplied: "$$b.expectedMortalityApplied",
@@ -142,9 +144,10 @@ export async function listExcessBatches({
   const entries = [];
   for (const slot of rows) {
     const batches = slot.batches || [];
-    const gross = batches.reduce((s, b) => s + int(b.orderCoveredPlants), 0);
-    const primarySowed = int(slot.primarySowed);
-    const excessForBooking = sowedStockForBooking(primarySowed, gross).free;
+    const excessForBooking = slotSowStock({
+      primarySowed: slot.primarySowed,
+      sowingBatches: batches,
+    }).free;
     let slotCap = excessForBooking;
     if (slotCap <= 0) continue;
 
@@ -155,7 +158,7 @@ export async function listExcessBatches({
       if (slotCap <= 0) break;
       const sowed = int(b.plantsSowed);
       if (sowed <= 0) continue;
-      const rawFree = Math.max(0, sowed - int(b.orderCoveredPlants));
+      const rawFree = sowBatchStock(b).free;
       if (rawFree <= 0) continue;
       const ready = readyMomentOf(b, slot);
       if (!ready) continue;
@@ -640,7 +643,13 @@ function coverRemark(sources) {
  * Cover a booked order from picked sowing batches: source batch cover, destination
  * orderReserved, order sowingDone + sowingCoverSources, audit request and trail rows.
  */
-export async function coverOrderFromBatches({ order: orderInput, picks, userId, quiet = false }) {
+export async function coverOrderFromBatches({
+  order: orderInput,
+  picks,
+  userId,
+  quiet = false,
+  windowDays = EXCESS_COVER_WINDOW_DAYS,
+}) {
   const orderOid = toOid(orderInput?._id || orderInput);
   if (!orderOid) throw new ExcessCoverError("ORDER_NOT_FOUND", "Order not found", 404);
   const order = await Order.findById(orderOid)
@@ -660,6 +669,7 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId, 
     deliveryDate: order.deliveryDate,
     need,
     picks,
+    windowDays,
   });
 
   const destination = await resolveDestinationSlot({

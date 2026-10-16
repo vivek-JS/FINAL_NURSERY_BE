@@ -127,9 +127,22 @@ export async function recordExcessPlantsOnSlot(
   });
   const availInc = impact.availablePlants;
   const reservedInc = impact.orderReservedPlants;
+  // Apply step already moved 10% to expected mortality; the order buffer can raise it.
+  const mortalityExtra = Math.max(
+    0,
+    impact.expectedMortality - splitLagwadQtyForSlot(impact.plantsSowed).expectedMortality
+  );
 
   const update = {
     $set: {
+      ...(mortalityExtra > 0
+        ? {
+            "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].actualPlantsApplied":
+              impact.actualPlants,
+            "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].expectedMortalityApplied":
+              impact.expectedMortality,
+          }
+        : {}),
       "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].orderCoveredPlants":
         covered,
       "subtypeSlots.$[st].slots.$[sl].sowingBatches.$[b].excessPlants": qty,
@@ -152,6 +165,10 @@ export async function recordExcessPlantsOnSlot(
   }
   if (reservedInc > 0) {
     inc["subtypeSlots.$[st].slots.$[sl].orderReservedPlants"] = reservedInc;
+  }
+  if (mortalityExtra > 0) {
+    inc["subtypeSlots.$[st].slots.$[sl].expectedMortality"] = mortalityExtra;
+    inc["subtypeSlots.$[st].slots.$[sl].actualPlants"] = -mortalityExtra;
   }
   if (Object.keys(inc).length) update.$inc = inc;
 
