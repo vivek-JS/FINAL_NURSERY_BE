@@ -121,10 +121,14 @@ function isCancelLikeOrderStatus(status) {
 }
 import { createRateChangeRequest } from "./rateChangeRequest.controller.js";
 import {
+  EXCESS_COVER_WINDOW_DAYS,
   ExcessCoverError,
   coverOrderFromBatches,
   normalizePicks,
+  ownSowTolerance,
+  releaseOrderOwnSow,
   reverseOrderBatchCover,
+  slotStartDateById,
   validateCoverPicks,
 } from "../services/orderExcessBatchCover.service.js";
 
@@ -2239,19 +2243,36 @@ const updateOne = (Model, modelName, allowedFields) =>
           delete filteredBody.deliveryChangeReason;
         }
 
-        if (
-          modelName === "Order" &&
-          existingDoc.sowingCoverSources?.length &&
-          !existingDoc.sowingCoverReversedAt
-        ) {
-          const coverReverse = await reverseOrderBatchCover({
-            order: existingDoc,
-            userId: req.user?._id,
-            session,
-          });
-          console.log(
-            `🔙 Excess cover reversed on delivery change for order #${existingDoc.orderId}: ${coverReverse.plants || 0} plants`
-          );
+        const hasExcessCover =
+          existingDoc.sowingCoverSources?.length && !existingDoc.sowingCoverReversedAt;
+        if (modelName === "Order" && (hasExcessCover || existingDoc.sowingDone)) {
+          const newDeliveryForSow =
+            filteredBody.deliveryDate ||
+            (await slotStartDateById(filteredBody.bookingSlot, session));
+          const tolerance = await ownSowTolerance(existingDoc, newDeliveryForSow, session);
+          if (tolerance.withinTolerance) {
+            console.log(
+              `🌱 Order #${existingDoc.orderId} keeps its sowing (ready ${tolerance.readyDate}, ${tolerance.offsetDays}d)`
+            );
+          } else if (hasExcessCover) {
+            const coverReverse = await reverseOrderBatchCover({
+              order: existingDoc,
+              userId: req.user?._id,
+              session,
+            });
+            console.log(
+              `🔙 Excess cover reversed on delivery change for order #${existingDoc.orderId}: ${coverReverse.plants || 0} plants`
+            );
+          } else {
+            const ownRelease = await releaseOrderOwnSow({
+              order: existingDoc,
+              userId: req.user?._id,
+              session,
+            });
+            console.log(
+              `🔙 Own sowing released on delivery change for order #${existingDoc.orderId}: ${ownRelease.plants || 0} plants`
+            );
+          }
         }
       }
 
@@ -3218,6 +3239,40 @@ const updateOne = (Model, modelName, allowedFields) =>
       await session.commitTransaction();
       session.endSession();
 
+      let excessCover = null;
+      const excessCoverPicks =
+        modelName === "Order" && updatedDoc ? normalizePicks(req.body?.excessCoverPicks) : [];
+      if (excessCoverPicks.length) {
+        const rawCoverWindow = Math.floor(
+          Number(req.body?.excessCoverWindowDays) || EXCESS_COVER_WINDOW_DAYS
+        );
+        try {
+          const cover = await coverOrderFromBatches({
+            order: updatedDoc._id,
+            picks: excessCoverPicks,
+            userId: req.user?._id,
+            windowDays: Math.min(15, Math.max(1, rawCoverWindow)),
+          });
+          excessCover = {
+            success: true,
+            plants: cover.need,
+            sources: cover.sources.length,
+            requestNumber: cover.requestNumber,
+            remark: cover.remark,
+          };
+        } catch (coverErr) {
+          console.error(
+            `[excessCover] cover after delivery change failed for order #${existingDoc.orderId}:`,
+            coverErr?.message || coverErr
+          );
+          excessCover = {
+            success: false,
+            code: coverErr?.code || null,
+            message: coverErr?.message || "Cover from excess failed",
+          };
+        }
+      }
+
       if (modelName === "Order" && updatedDoc) {
         const statusChangePush = filteredBody.$push?.statusChanges;
         emitPlantOrderUpdateEvents({
@@ -3310,6 +3365,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           ...(modelName === "Order" && rejectedFields.length > 0
             ? { rejectedFields }
             : {}),
+          ...(excessCover ? { excessCover } : {}),
         })
       );
     } catch (error) {
