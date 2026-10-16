@@ -142,9 +142,12 @@ export function buildSowingFromOtherSlotDetail({ slot, deliveryOrders, orderSowi
     const row = mapCrossSlotOrderRow(order, {
       fromSlotLabel,
       fromSlotId: sowingSource?.fromSlotId || "",
+      toSlotLabel: slotWindowLabel(slot),
       requestNumber: sowingSource?.requestNumber || "",
+      sowingDate: sowingSource?.sowingDate || "",
       plantReadyDate: sowingSource?.plantReadyDate || "",
       sowingNote: sowingSource?.sowingNote || "",
+      fromExcess: Boolean(sowingSource?.fromExcess),
     });
     orders.push(row);
     plants += row.plants;

@@ -136,15 +136,22 @@ export async function loadCoverMovedIndex(slotIds, slotMap, ordersById = new Map
         sowingNote,
         fromSlotId: fromId,
         toSlotId: toId,
+        fromSlotLabel,
+        toSlotLabel,
+        fromExcess: true,
       };
-      push(inBySlot, toId, { ...base, fromSlotLabel });
-      push(outBySlot, fromId, { ...base, toSlotLabel });
+      push(inBySlot, toId, base);
+      push(outBySlot, fromId, base);
       metaByOrder.set(key, {
         fromSlotId: fromId,
         fromSlotLabel,
+        toSlotId: toId,
+        toSlotLabel,
         requestNumber: b.requestNumber || "",
+        sowingDate: b.sowingDate || "",
         plantReadyDate: b.plantReadyDate || "",
         sowingNote,
+        fromExcess: true,
       });
     }
   }
