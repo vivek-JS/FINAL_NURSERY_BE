@@ -5,7 +5,11 @@ import { generateJson, GeminiType as Type } from "./gemini.service.js";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const RULES_CACHE_TTL_MS = 10 * 60 * 1000;
-const AI_MODELS = ["gemini-2.5-flash", "gemini-3.5-flash-lite"];
+/** 3.x models reject `thinkingBudget: 0`, so they run with their default thinking. */
+const AI_MODELS = [
+  { model: "gemini-2.5-flash", thinking: false },
+  { model: "gemini-3.5-flash-lite", thinking: true },
+];
 const MAX_GROUPS_FOR_AI = 40;
 /** Shed app request timeout is 45s; fall back to rules well before that. */
 const AI_TIMEOUT_MS = 25 * 1000;
@@ -277,7 +281,7 @@ async function askAi(prompt) {
   for (let i = 0; i < AI_MODELS.length; i++) {
     try {
       return await withTimeout(
-        generateJson(prompt, NOTES_SCHEMA, { model: AI_MODELS[i] }),
+        generateJson(prompt, NOTES_SCHEMA, AI_MODELS[i]),
         AI_TIMEOUT_MS
       );
     } catch (e) {
