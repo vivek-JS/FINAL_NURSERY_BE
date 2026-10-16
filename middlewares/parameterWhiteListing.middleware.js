@@ -69,6 +69,7 @@ const allowedParams = [
   "sowTo",
   "addedFrom", // GET /sowing/completions date-added filter
   "addedTo",
+  "view", // GET /sowing/completions?view=entries — one row per sow entry
   "plantReadyDays", // GET /sowing/request/:id/slot-preview
   "fromDate",
   "dispatched",
