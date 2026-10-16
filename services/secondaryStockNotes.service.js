@@ -14,7 +14,7 @@ const MAX_GROUPS_FOR_AI = 40;
 /** Shed app request timeout is 45s; fall back to rules well before that. */
 const AI_TIMEOUT_MS = 25 * 1000;
 const NOTES_LANG = "mr";
-const NOTES_FORMAT = "items-v6";
+const NOTES_FORMAT = "items-v7";
 const MAX_ITEMS_PER_POINT = 6;
 
 /** "Purandar (पुरंदर) (6)" → "Purandar (6)" so notes stay English-only. */
@@ -186,12 +186,21 @@ export function toWesternDigits(text) {
   return String(text || "").replace(/[०-९]/g, (d) => String(DEVANAGARI_DIGITS.indexOf(d)));
 }
 
+/** Western digits + the shed team's word for old stock ("जुना", not "पुराना"/"पुरातन"). */
+export function cleanNoteText(text) {
+  return toWesternDigits(text)
+    .replace(/पुरातन|पुराणा|पुराना/g, "जुना")
+    .replace(/पुराणी|पुरानी/g, "जुनी")
+    .replace(/पुराणे|पुराने/g, "जुने")
+    .trim();
+}
+
 /**
  * Title with the batch or shed name taken from the data (English CMS names),
  * so the AI never has to write — or translate — them itself.
  */
 export function noteTitle(aiTitle, items) {
-  let action = toWesternDigits(aiTitle).trim();
+  let action = cleanNoteText(aiTitle);
   const colon = action.indexOf(":");
   if (colon > -1 && colon < 30) action = action.slice(colon + 1).trim();
   const batches = new Set(items.map((r) => r.batch));
@@ -225,15 +234,19 @@ function ruleNotes(groups, demandRows) {
     if (points.length >= 8) break;
     if (g.overdueDays < 1 && g.readyPlants < 1) continue;
     const priority = g.overdueDays >= 7 ? "HIGH" : g.overdueDays > 0 ? "MEDIUM" : "LOW";
+    const items = resolveNoteItems([{ batch: g.batch, shed: g.shed }], groups);
+    const late = g.overdueDays > 0;
     points.push({
       priority,
-      title: `${g.shed} मधून बॅच ${g.batch} आधी पाठवा`,
-      detail: g.overdueDays > 0 ? "तयार तारीख उलटली आहे, पुढच्या गाडीत लोड करा." : "रोप तयार आहेत.",
+      title: noteTitle(late ? "जुना स्टॉक आधी पाठवा" : "तयार रोपे पुढच्या गाडीत पाठवा", items),
+      detail: late
+        ? "तयार तारीख उलटून गेली, रोपे ट्रेमध्ये जास्त वाढत आहेत."
+        : "रोपे तयार आहेत, पुढच्या गाडीत भरा.",
       batch: g.batch,
       shed: g.shed,
       crop: g.crop,
       plants: g.plants,
-      items: resolveNoteItems([{ batch: g.batch, shed: g.shed }], groups),
+      items,
     });
   }
   const total = groups.reduce((s, g) => s + g.plants, 0);
@@ -241,8 +254,10 @@ function ruleNotes(groups, demandRows) {
   const demand = demandRows.reduce((s, r) => s + r.pendingVehiclePlants, 0);
   return {
     summary:
-      `स्टॉकमध्ये ${total.toLocaleString("en-IN")} रोप आहेत; त्यापैकी ${overdue.toLocaleString("en-IN")} रोप तयार तारखेपेक्षा जुने आहेत. ` +
-      `बाकी गाड्यांना ${demand.toLocaleString("en-IN")} रोप हवे आहेत. सर्वात जुन्या बॅच आधी लोड करा.`,
+      `शेडमध्ये ${total.toLocaleString("en-IN")} रोपे आहेत, त्यापैकी ${overdue.toLocaleString("en-IN")} रोपे जुना स्टॉक आहेत. ` +
+      (demand > 0
+        ? `बाकी गाड्यांना ${demand.toLocaleString("en-IN")} रोपे हवी आहेत. जुना स्टॉक आधी गाडीत भरा.`
+        : "जुना स्टॉक आधी गाडीत भरा."),
     points,
   };
 }
@@ -268,8 +283,12 @@ In summary, title and detail never write shed names, batch codes, crop names, pl
 - LOW: watch items, e.g. a crop with old stock but no pending demand (suggest the office books orders), or stock split across many sheds that should be consolidated.
 Use only numbers from the data. No markdown.
 
-Language: write summary, title and detail in simple spoken Marathi (Devanagari script) for shed workers.
-Keep batch codes (e.g. RB 19), shed names and crop names exactly as given in English, and write all numbers with Western digits (0-9).
+Language: write summary, title and detail in simple, natural spoken Marathi (Devanagari script), the way a shed supervisor talks to workers. Short, clear, polite.
+Words to use: "जुना स्टॉक", "जुनी रोपे", "रोपे", "गाडी", "शेड", "तयार तारीख", "ऑफिस", "ऑर्डर".
+Never use: "पुराना", "पुरातन", "पुराणा", "माल", "वाहन", "आवक", "डिस्पॅच", "ओव्हरग्रोथ", or Hindi words.
+Good titles: "जुना स्टॉक आधी पाठवा", "तयार रोपे पुढच्या गाडीत पाठवा", "ऑर्डरसाठी ऑफिसला कळवा", "रोपे एका शेडमध्ये एकत्र करा".
+Good details: "तयार तारीख उलटून गेली, रोपे ट्रेमध्ये जास्त वाढत आहेत.", "आजच्या गाड्यांमध्ये ही रोपे आधी भरा.", "या रोपांना सध्या मागणी नाही, ऑफिसला ऑर्डर घ्यायला सांगा."
+Write all numbers with Western digits (0-9).
 The fields batch, shed and crop must be copied exactly from the data (English).`;
 }
 
@@ -339,7 +358,7 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
         return {
           priority: PRIORITIES.includes(p.priority) ? p.priority : "MEDIUM",
           title: noteTitle(p.title, items),
-          detail: toWesternDigits(p.detail),
+          detail: cleanNoteText(p.detail),
           batch,
           shed,
           crop: p.crop ? String(p.crop) : "",
@@ -348,7 +367,7 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
         };
       });
     if (!points.length) throw new Error("AI returned no points");
-    notes = { summary: toWesternDigits(raw.summary), points };
+    notes = { summary: cleanNoteText(raw.summary), points };
   } catch (e) {
     aiError = e?.message || String(e);
     source = "rules";
