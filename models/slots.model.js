@@ -476,6 +476,16 @@ const slotSchema = new Schema({
           by: { type: Schema.Types.ObjectId, ref: "User" },
         },
       ],
+      /** Plants of this batch destroyed after sowing (already taken off the slot's sowed / stock). */
+      destroyedPlants: { type: Number, default: 0, min: 0 },
+      destroyLog: [
+        {
+          at: { type: Date, default: Date.now },
+          by: { type: Schema.Types.ObjectId, ref: "User" },
+          plants: { type: Number, default: 0 },
+          reason: { type: String, default: "", trim: true },
+        },
+      ],
       /** Set on a sow entry moved here to cover an order from another slot's excess. */
       coverMovedFrom: {
         slotId: { type: Schema.Types.ObjectId },

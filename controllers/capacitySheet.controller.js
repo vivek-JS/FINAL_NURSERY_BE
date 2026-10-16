@@ -626,6 +626,16 @@ export const getCapacitySlotDetail = async (req, res) => {
     }));
 
     const batches = (slot.sowingBatches || []).map((batch) => ({
+      batchId: String(batch._id),
+      slotId: String(slot.slotId),
+      sowingRequestId: batch.sowingRequestId ? String(batch.sowingRequestId) : "",
+      destroyedPlants: num(batch.destroyedPlants),
+      plantsLeft: Math.max(0, num(batch.plantsSowed) - num(batch.destroyedPlants)),
+      destroyLog: (batch.destroyLog || []).map((d) => ({
+        at: d.at || null,
+        plants: num(d.plants),
+        reason: d.reason || "",
+      })),
       requestNumber: batch.requestNumber || "",
       sowingDate: batch.sowingDate || "",
       plantReadyDate: batch.plantReadyDate || "",
