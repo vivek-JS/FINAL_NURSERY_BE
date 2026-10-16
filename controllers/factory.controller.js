@@ -640,7 +640,7 @@ const createOne = (Model, modelName) =>
           throw coverErr;
         }
       } else if (sowingCoverDecision === "SOW" && sowingCoverOffered > 0) {
-        const sowRemark = `Excess ${sowingCoverOffered.toLocaleString("en-IN")} within ±5d shown; chose sowing`;
+        const sowRemark = `Excess ${sowingCoverOffered.toLocaleString("en-IN")} within ±5d shown; chose "या order ची पूर्ण sowing करू"`;
         if (Array.isArray(orderRemarks)) orderRemarks = [...orderRemarks, sowRemark];
         else if (typeof orderRemarks === "string" && orderRemarks.trim()) {
           orderRemarks = [orderRemarks, sowRemark];

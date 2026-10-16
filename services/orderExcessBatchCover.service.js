@@ -415,9 +415,16 @@ async function incDestinationReserved(slotId, delta, session) {
 }
 
 function coverRemark(sources) {
-  const parts = sources.map(
+  const byDate = new Map();
+  for (const s of sources) {
+    const key = `${s.sowingDate}|${s.plantReadyDate}`;
+    const prev = byDate.get(key);
+    if (prev) prev.plants += Number(s.plants) || 0;
+    else byDate.set(key, { ...s, plants: Number(s.plants) || 0 });
+  }
+  const parts = [...byDate.values()].map(
     (s) =>
-      `${shortDay(s.plantReadyDate)} (${offsetLabel(s.offsetDays)}) ${Number(s.plants).toLocaleString("en-IN")}`
+      `sowed ${shortDay(s.sowingDate)} (ready ${shortDay(s.plantReadyDate)}, ${offsetLabel(s.offsetDays)}) ${s.plants.toLocaleString("en-IN")}`
   );
   return `Sow completed from excess: ${parts.join(", ")}`;
 }
