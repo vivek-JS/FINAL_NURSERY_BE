@@ -70,11 +70,23 @@ function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function buildListFilter({ search, statusFilter }) {
+const IST_OFFSET_MS = 330 * 60 * 1000;
+
+/** YYYY-MM-DD (IST calendar day) → createdAt range, or null. */
+function istDayRange(day) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || "").trim());
+  if (!m) return null;
+  const startUtcMs = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - IST_OFFSET_MS;
+  return { $gte: new Date(startUtcMs), $lt: new Date(startUtcMs + 24 * 60 * 60 * 1000) };
+}
+
+function buildListFilter({ search, statusFilter, date }) {
   const filter = {
     isDeleted: { $ne: true },
     transportStatus: { $in: DISPATCH_SHED_ALLOWED_STATUSES },
   };
+  const range = istDayRange(date);
+  if (range) filter.createdAt = range;
   if (statusFilter === "loaded") {
     filter.transportStatus = "LOADED";
   } else if (statusFilter === "pending") {
@@ -85,6 +97,7 @@ function buildListFilter({ search, statusFilter }) {
     filter.$or = [
       { transportId: rx },
       { driverName: rx },
+      { driverMobile: rx },
       { vehicleName: rx },
       { vehicleNumber: rx },
     ];
@@ -279,6 +292,7 @@ export async function listSecondaryVehicleDispatches({
   limit = 20,
   search = "",
   status = "",
+  date = "",
 } = {}) {
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.min(50, Math.max(1, Number(limit) || 20));
@@ -286,8 +300,8 @@ export async function listSecondaryVehicleDispatches({
   const qSearch = String(search || "").trim();
   const statusFilter = String(status || "").trim().toLowerCase();
 
-  const filter = buildListFilter({ search: qSearch, statusFilter });
-  const countBase = buildListFilter({ search: qSearch, statusFilter: "" });
+  const filter = buildListFilter({ search: qSearch, statusFilter, date });
+  const countBase = buildListFilter({ search: qSearch, statusFilter: "", date });
 
   const [total, docs, pendingTotal, loadedTotal] = await Promise.all([
     Dispatch.countDocuments(filter),
