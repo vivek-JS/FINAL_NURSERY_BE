@@ -23,6 +23,8 @@ import {
 import {
   finalizeOrderOnShedLineLoaded,
   schedulePostShedLoadAlerts,
+  schedulePendingDispatchWhatsAppForVehicle,
+  syncOrderVehicleLoadedFlag,
 } from "./dispatchPostLoadFinalize.service.js";
 
 function parseDdMmYyyy(str) {
@@ -651,6 +653,11 @@ export async function executeSowReadyVehicleLoad({
         orderLoaded,
         performedBy,
       });
+      await syncOrderVehicleLoadedFlag({
+        session,
+        orderId: resolvedOrderId,
+        dispatchDoc: freshDispatch,
+      });
     }
 
     const transportStatus = await syncDispatchTransportStatusAfterShedChange({
@@ -661,10 +668,9 @@ export async function executeSowReadyVehicleLoad({
 
     await session.commitTransaction();
 
-    schedulePostShedLoadAlerts({
-      finalizeResult,
-      changedBy: performedBy ? String(performedBy) : "Secondary shed",
-    });
+    const alertChangedBy = performedBy ? String(performedBy) : "Secondary shed";
+    schedulePostShedLoadAlerts({ finalizeResult, changedBy: alertChangedBy });
+    schedulePendingDispatchWhatsAppForVehicle(freshDispatch._id, { changedBy: alertChangedBy });
 
     return {
       allocations: results,

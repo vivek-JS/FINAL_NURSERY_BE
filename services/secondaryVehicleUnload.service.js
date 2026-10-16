@@ -18,6 +18,7 @@ import {
   SHED_ACTIVITY_ACTIONS,
 } from "./shedActivity.service.js";
 import { updateOrderWithLedgerSync } from "../controllers/dispatch.controller.js";
+import { syncAllOrdersVehicleLoadedFlag } from "./dispatchPostLoadFinalize.service.js";
 
 const BATCH_SELECT_FIELDS =
   "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
@@ -561,6 +562,7 @@ export async function executeSecondaryVehicleUnload({
         performedBy,
       });
     }
+    await syncAllOrdersVehicleLoadedFlag({ session, dispatchDoc: freshDispatch });
 
     const newStatus = await syncDispatchTransportStatusAfterShedChange({
       session,

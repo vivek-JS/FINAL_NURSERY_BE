@@ -1,8 +1,11 @@
 import multer from "multer";
+import AppError from "../utility/appError.js";
+
+export const MAX_VEHICLE_LOAD_PHOTO_BYTES = 1024 * 1024;
 
 export const vehicleLoadPhotosUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024, files: 10 },
+  limits: { fileSize: MAX_VEHICLE_LOAD_PHOTO_BYTES, files: 10 },
 });
 
 /** Run multer only when client sends multipart (photos); JSON loads unchanged. */
@@ -10,6 +13,9 @@ export function optionalVehicleLoadPhotosUpload(req, res, next) {
   const ct = String(req.headers["content-type"] || "");
   if (!ct.includes("multipart/form-data")) return next();
   return vehicleLoadPhotosUpload.array("photos", 10)(req, res, (err) => {
+    if (err?.code === "LIMIT_FILE_SIZE") {
+      return next(new AppError("Photo must be 1 MB or less", 400));
+    }
     if (err) return next(err);
     next();
   });

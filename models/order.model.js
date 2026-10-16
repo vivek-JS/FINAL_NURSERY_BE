@@ -581,6 +581,15 @@ const orderSchema = new Schema(
       trim: true,
       default: null,
     },
+    /** Loaded qty in the last farmer dispatch WhatsApp; a differing vehicleLoadedQuantity triggers a resend. */
+    whatsappDispatchSentQty: {
+      type: Number,
+      default: null,
+    },
+    whatsappDispatchSendCount: {
+      type: Number,
+      default: 0,
+    },
     whatsappFarmReadySentAt: {
       type: Date,
       default: null,
@@ -744,6 +753,25 @@ const orderSchema = new Schema(
     currentDispatchId: {
       type: Schema.Types.ObjectId,
       ref: "Dispatch",
+    },
+    /** Secondary shed loaded this order's full qty on its vehicle (shedLoadedQuantity >= dispatchQuantity). */
+    vehicleLoaded: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    vehicleLoadedAt: {
+      type: Date,
+      default: null,
+    },
+    vehicleLoadedDispatchId: {
+      type: Schema.Types.ObjectId,
+      ref: "Dispatch",
+      default: null,
+    },
+    vehicleLoadedQuantity: {
+      type: Number,
+      default: 0,
     },
     /**
      * True when this order was created on the field during a refused-delivery

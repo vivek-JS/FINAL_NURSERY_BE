@@ -76,6 +76,20 @@ const farmerSchema = new Schema({
     type: Boolean,
     default: false
   },
+  // Premium customer — shown only as a star icon (no text) in office & shed apps. SUPER_ADMIN only.
+  isPremium: {
+    type: Boolean,
+    default: false,
+  },
+  premiumUpdatedAt: {
+    type: Date,
+    default: null,
+  },
+  premiumUpdatedBy: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
   // Record of WhatsApp automation activities for this farmer
   whatsappAutomationActivities: [
     {
@@ -126,6 +140,7 @@ farmerSchema.index({ mobileNumber: 1 });
 farmerSchema.index({ alternateNumber: 1 });
 // Add index for opt_in status lookups
 farmerSchema.index({ opt_in: 1 });
+farmerSchema.index({ isPremium: 1 });
 // Index for quick lookup by localMessageId in embedded activities
 farmerSchema.index({ "whatsappAutomationActivities.localMessageId": 1 });
 
