@@ -2238,6 +2238,21 @@ const updateOne = (Model, modelName, allowedFields) =>
           // Remove temporary field
           delete filteredBody.deliveryChangeReason;
         }
+
+        if (
+          modelName === "Order" &&
+          existingDoc.sowingCoverSources?.length &&
+          !existingDoc.sowingCoverReversedAt
+        ) {
+          const coverReverse = await reverseOrderBatchCover({
+            order: existingDoc,
+            userId: req.user?._id,
+            session,
+          });
+          console.log(
+            `🔙 Excess cover reversed on delivery change for order #${existingDoc.orderId}: ${coverReverse.plants || 0} plants`
+          );
+        }
       }
 
       // Special handling for farmReadyDate - track farm ready date changes
