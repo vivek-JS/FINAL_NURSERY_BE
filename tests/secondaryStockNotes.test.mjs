@@ -7,6 +7,7 @@ import {
   resolveNoteItems,
   noteTitle,
   toWesternDigits,
+  cleanNoteText,
 } from "../services/secondaryStockNotes.service.js";
 
 const today = moment("2026-10-16", "YYYY-MM-DD").startOf("day");
@@ -120,5 +121,12 @@ describe("noteTitle", () => {
 describe("toWesternDigits", () => {
   it("converts Devanagari digits", () => {
     assert.equal(toWesternDigits("६० दिवस"), "60 दिवस");
+  });
+});
+
+describe("cleanNoteText", () => {
+  it("uses जुना for old stock and Western digits", () => {
+    assert.equal(cleanNoteText("पुरातन स्टॉक ६० दिवस"), "जुना स्टॉक 60 दिवस");
+    assert.equal(cleanNoteText("पुरानी रोपे"), "जुनी रोपे");
   });
 });
