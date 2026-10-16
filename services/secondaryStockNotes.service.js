@@ -8,7 +8,7 @@ const MAX_GROUPS_FOR_AI = 40;
 /** Shed app request timeout is 45s; fall back to rules well before that. */
 const AI_TIMEOUT_MS = 25 * 1000;
 const NOTES_LANG = "mr";
-const NOTES_FORMAT = "items-v5";
+const NOTES_FORMAT = "items-v6";
 const MAX_ITEMS_PER_POINT = 6;
 
 /** "Purandar (पुरंदर) (6)" → "Purandar (6)" so notes stay English-only. */
@@ -174,6 +174,27 @@ export function resolveNoteItems(refs, groups, fallback = {}) {
     .slice(0, MAX_ITEMS_PER_POINT);
 }
 
+const DEVANAGARI_DIGITS = "०१२३४५६७८९";
+
+export function toWesternDigits(text) {
+  return String(text || "").replace(/[०-९]/g, (d) => String(DEVANAGARI_DIGITS.indexOf(d)));
+}
+
+/**
+ * Title with the batch or shed name taken from the data (English CMS names),
+ * so the AI never has to write — or translate — them itself.
+ */
+export function noteTitle(aiTitle, items) {
+  let action = toWesternDigits(aiTitle).trim();
+  const colon = action.indexOf(":");
+  if (colon > -1 && colon < 30) action = action.slice(colon + 1).trim();
+  const batches = new Set(items.map((r) => r.batch));
+  const sheds = new Set(items.map((r) => r.shed));
+  const prefix =
+    batches.size === 1 ? `बॅच ${[...batches][0]}` : sheds.size === 1 ? [...sheds][0] : "";
+  return prefix ? `${prefix}: ${action}` : action;
+}
+
 /** Plants still to load on pending vehicles, by plant:subtype. */
 async function pendingDemandByCrop() {
   const docs = await Dispatch.find({
@@ -234,9 +255,8 @@ ${JSON.stringify(demandRows)}
 
 Write 5 to 8 points, most urgent first. Use HIGH for at most 4 points.
 Each point is about ONE shed or ONE batch (never all sheds in one point). List the stock rows it covers in "items" as { batch, shed } (max ${MAX_ITEMS_PER_POINT}); the app shows plant counts and days for each item, so do NOT repeat per-shed numbers in detail.
-title: max 8 words and must start with the shed or batch the point is about, e.g. "Purandar (6): जुना स्टॉक आधी पाठवा" or "बॅच RB 19: सर्व शेडमधून पाठवा". detail: one short sentence, max 15 words, saying why or what to do. summary: max 2 short sentences.
-Never write plant counts or day counts in title or detail; the items already show exact numbers.
-Crop names are CMS names: always write them in English exactly as in the data (e.g. "Banana G9", "Banana Vasai"). Never translate, transliterate or shorten them (no "केळी", "बनाना", "नाशपाती").
+title: max 6 words, the action only, e.g. "जुना स्टॉक आधी पाठवा" (the app adds the batch or shed name in front). detail: one short sentence, max 15 words, saying why or what to do. summary: max 2 short sentences.
+In summary, title and detail never write shed names, batch codes, crop names, plant counts or day counts; the app shows them from the data. Put the batch and shed only in the batch, shed and items fields, copied exactly in English.
 - HIGH: overdue by 7+ days or very old stock; dispatch today/next vehicles.
 - MEDIUM: ready or slightly overdue; plan in the next few days.
 - LOW: watch items, e.g. a crop with old stock but no pending demand (suggest the office books orders), or stock split across many sheds that should be consolidated.
@@ -296,8 +316,8 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
         const items = resolveNoteItems(p.items, groups, { batch, shed });
         return {
           priority: PRIORITIES.includes(p.priority) ? p.priority : "MEDIUM",
-          title: String(p.title),
-          detail: String(p.detail || ""),
+          title: noteTitle(p.title, items),
+          detail: toWesternDigits(p.detail),
           batch,
           shed,
           crop: p.crop ? String(p.crop) : "",
@@ -306,7 +326,7 @@ export async function buildSecondaryStockNotes(lines, { refresh = false } = {}) 
         };
       });
     if (!points.length) throw new Error("AI returned no points");
-    notes = { summary: String(raw.summary || ""), points };
+    notes = { summary: toWesternDigits(raw.summary), points };
   } catch (e) {
     aiError = e?.message || String(e);
     source = "rules";
