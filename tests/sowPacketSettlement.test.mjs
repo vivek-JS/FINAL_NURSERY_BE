@@ -1,6 +1,38 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { settleSowPackets, isSowingRequestClosed } from "../utility/sowPacketSettlement.js";
+import {
+  settleSowPackets,
+  isSowingRequestClosed,
+  wantsSowingClosed,
+} from "../utility/sowPacketSettlement.js";
+
+describe("wantsSowingClosed", () => {
+  it("closes when company packets are returned on a partial save", () => {
+    assert.equal(wantsSowingClosed({ completeSowing: false, packetsToReturn: 13 }), true);
+  });
+
+  it("closes when raising packets are returned on a partial save", () => {
+    assert.equal(wantsSowingClosed({ completeSowing: false, raisingPacketsToReturn: 0.5 }), true);
+  });
+
+  it("stays a partial save when nothing is returned", () => {
+    assert.equal(
+      wantsSowingClosed({ completeSowing: false, packetsToReturn: 0, raisingPacketsToReturn: NaN }),
+      false
+    );
+  });
+
+  it("keeps an explicit complete", () => {
+    assert.equal(wantsSowingClosed({ completeSowing: true }), true);
+  });
+
+  it("returns the leftover too once a return closes the request", () => {
+    const completeSowing = wantsSowingClosed({ packetsToReturn: 13 });
+    const out = settleSowPackets({ remaining: 43.1, usedHint: 30, packetsToReturn: 13, completeSowing });
+    assert.equal(out.packetsUsed, 30);
+    assert.ok(Math.abs(out.packetsToReturn - 13.1) < 1e-9);
+  });
+});
 
 describe("settleSowPackets", () => {
   it("honors explicit return even when plant-based used-hint eats all bags", () => {

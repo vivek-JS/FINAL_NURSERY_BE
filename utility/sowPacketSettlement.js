@@ -28,6 +28,19 @@ export function settleSowPackets({
 
 const PACKET_EPSILON = 0.001;
 
+/** Returning packets means nothing more will be sowed from this request, so it closes. */
+export function wantsSowingClosed({
+  completeSowing = false,
+  packetsToReturn = 0,
+  raisingPacketsToReturn = 0,
+} = {}) {
+  return (
+    Boolean(completeSowing) ||
+    Number(packetsToReturn) > 0 ||
+    Number(raisingPacketsToReturn) > 0
+  );
+}
+
 /** Request is closed when the worker marks complete, or no company/raising bags remain. */
 export function isSowingRequestClosed({
   completeSowing = false,
