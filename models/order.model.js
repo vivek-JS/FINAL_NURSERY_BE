@@ -905,6 +905,15 @@ const orderSchema = new Schema(
         excessiveSowingDec: { type: Number, default: 0 },
         availablePlantsDec: { type: Number },
         batchExcessDec: { type: Number, default: 0 },
+        /** Source in another slot: plants moved into a sow entry on the booking slot. */
+        moved: { type: Boolean, default: false },
+        destSlotId: { type: Schema.Types.ObjectId },
+        destBatchId: { type: Schema.Types.ObjectId },
+        actualPlantsDec: { type: Number, default: 0 },
+        expectedMortalityDec: { type: Number, default: 0 },
+        batchActualAppliedDec: { type: Number, default: 0 },
+        batchMortalityAppliedDec: { type: Number, default: 0 },
+        batchAvailableAppliedDec: { type: Number, default: 0 },
       },
     ],
     /** Set when a cancel/reject returned sowingCoverSources plants to their batches. */

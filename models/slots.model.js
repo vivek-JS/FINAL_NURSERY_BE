@@ -476,6 +476,11 @@ const slotSchema = new Schema({
           by: { type: Schema.Types.ObjectId, ref: "User" },
         },
       ],
+      /** Set on a sow entry moved here to cover an order from another slot's excess. */
+      coverMovedFrom: {
+        slotId: { type: Schema.Types.ObjectId },
+        batchId: { type: Schema.Types.ObjectId },
+      },
       /** Audit when sow date / ready days edit moves plants between calendar slots */
       slotHistory: [
         {
