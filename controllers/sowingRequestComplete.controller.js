@@ -1232,7 +1232,7 @@ export function ordersForEntry(orders, entryTimes, entryTime) {
 
 /**
  * view=entries: one row per sow entry (partial or final), open requests included.
- * Sow / added date filters use the entry's IST day.
+ * Sow / added date filters use the entry's IST day; slotId keeps entries applied to that slot.
  */
 async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, sortDir }) {
   const sortField = {
@@ -1253,9 +1253,30 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
   if (sowRange) dayMatch.entrySowDay = sowRange;
   const addedRange = ymdRange(req.query.addedFrom, req.query.addedTo);
   if (addedRange) dayMatch.entryAddedDay = addedRange;
+  const slotId = String(req.query.slotId || "").trim();
+  const slotFilter = mongoose.Types.ObjectId.isValid(slotId)
+    ? { $or: [{ "ev.meta.appliedSlotId": slotId }, { "ev.meta.toSlotId": slotId }] }
+    : null;
 
   const [facet] = await SowingRequest.aggregate([
-    { $match: { ...match, "completionEvents.type": { $in: SOW_ENTRY_EVENT_TYPES } } },
+    {
+      $match: {
+        ...match,
+        "completionEvents.type": { $in: SOW_ENTRY_EVENT_TYPES },
+        ...(slotFilter
+          ? {
+              $and: [
+                {
+                  $or: [
+                    { "completionEvents.meta.appliedSlotId": slotId },
+                    { "completionEvents.meta.toSlotId": slotId },
+                  ],
+                },
+              ],
+            }
+          : {}),
+      },
+    },
     {
       $project: {
         requestNumber: 1,
@@ -1265,7 +1286,13 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       },
     },
     { $unwind: { path: "$ev", includeArrayIndex: "entryIndex" } },
-    { $match: { "ev.type": { $in: SOW_ENTRY_EVENT_TYPES }, "ev.quantity": { $gt: 0 } } },
+    {
+      $match: {
+        "ev.type": { $in: SOW_ENTRY_EVENT_TYPES },
+        "ev.quantity": { $gt: 0 },
+        ...(slotFilter || {}),
+      },
+    },
     {
       $addFields: {
         entryAt: "$ev.at",
