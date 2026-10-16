@@ -26,6 +26,8 @@ export function settleSowPackets({
   return { packetsUsed: used, packetsToReturn: ret };
 }
 
+const PACKET_EPSILON = 0.001;
+
 /** Request is closed when the worker marks complete, or no company/raising bags remain. */
 export function isSowingRequestClosed({
   completeSowing = false,
@@ -40,5 +42,5 @@ export function isSowingRequestClosed({
   if (company <= 0 && raising <= 0) {
     return (Number(remainingSowingNeeded) || 0) <= 0;
   }
-  return (Number(remainingAfter) || 0) <= 0;
+  return (Number(remainingAfter) || 0) < PACKET_EPSILON;
 }
