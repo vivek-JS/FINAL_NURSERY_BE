@@ -33,6 +33,7 @@ import {
   wantsSowingClosed,
 } from "../utility/sowPacketSettlement.js";
 import { readMachineTimes } from "../utility/sowMachineTime.js";
+import { sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
 
 /** Collect applied slot ids from completion meta + linkedSlotIds. */
 function collectSlotIdsFromRequest(r) {
@@ -1218,6 +1219,7 @@ function buildAffectedSlot(slotRaw, reqBatch, shedName) {
     batchPacketsUsed: Number(reqBatch?.packetsUsed) || 0,
     batchId: reqBatch?._id ? String(reqBatch._id) : null,
     batchDestroyedPlants: Number(reqBatch?.destroyedPlants) || 0,
+    batchExpectedMortality: reqBatch ? sowBatchStock(reqBatch).reserve : 0,
     requestDestroyedPlants: (slotRaw.sowingBatches || [])
       .filter((b) => reqBatch && String(b.sowingRequestId) === String(reqBatch.sowingRequestId))
       .reduce((s, b) => s + (Number(b.destroyedPlants) || 0), 0),
@@ -1261,6 +1263,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
     plant: "plantName",
     plants: "entryPlants",
     trays: "entryPlants",
+    mortality: "entryPlants",
     packets: "entryPackets",
     labour: "entryLabour",
   }[sortKey] || "entrySowDay";

@@ -84,10 +84,12 @@ export const coverOrderFromExcessBatches = async (req, res) => {
       return res.status(400).json({ success: false, message: "Order is cancelled" });
     }
 
+    const rawWindow = Math.floor(Number(req.body?.windowDays) || EXCESS_COVER_WINDOW_DAYS);
     const result = await coverOrderFromBatches({
       order: order._id,
       picks: req.body?.picks,
       userId: req.user?._id,
+      windowDays: Math.min(15, Math.max(1, rawWindow)),
     });
     return res.status(200).json({
       success: true,
