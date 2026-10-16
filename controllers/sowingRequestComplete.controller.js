@@ -59,6 +59,89 @@ export function optionalCompleteSowUpload(req, res, next) {
   });
 }
 
+/** Date -> "YYYY-MM-DD" in IST. */
+function istYmd(d) {
+  return new Date(d).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+
+const SOW_ENTRY_EVENT_TYPES = ["PLANTS_SOWED", "SOW_COMPLETED"];
+
+/**
+ * GET /sowing/day-summary?date=YYYY-MM-DD
+ * One row per sow entry on that day (entry sowDate, else the IST day it was saved).
+ */
+export const getSowingDaySummary = async (req, res) => {
+  try {
+    const date = String(req.query.date || "").trim() || istYmd(new Date());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ success: false, message: "date must be YYYY-MM-DD" });
+    }
+    const dayStart = new Date(`${date}T00:00:00+05:30`);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 3600 * 1000);
+
+    const rows = await SowingRequest.find({
+      $or: [
+        { "completionEvents.meta.sowDate": date },
+        { "completionEvents.at": { $gte: dayStart, $lt: dayEnd } },
+      ],
+    })
+      .select("requestNumber plantName subtypeName shedName completionEvents")
+      .lean();
+
+    const entries = [];
+    for (const r of rows) {
+      const events = r.completionEvents || [];
+      for (const ev of events) {
+        if (!SOW_ENTRY_EVENT_TYPES.includes(ev?.type)) continue;
+        const plants = Number(ev.quantity) || 0;
+        if (plants < 1) continue;
+        const meta = ev.meta || {};
+        const at = ev.at ? new Date(ev.at) : null;
+        const entryDay = meta.sowDate || (at ? istYmd(at) : "");
+        if (entryDay !== date) continue;
+
+        let packetsUsed = Number(meta.packetsUsedNow);
+        if (!Number.isFinite(packetsUsed)) {
+          // Older entries: packet events are pushed in the same save, milliseconds apart.
+          packetsUsed = events
+            .filter(
+              (e) =>
+                e?.type === "PACKETS_USED" &&
+                at &&
+                e.at &&
+                Math.abs(new Date(e.at).getTime() - at.getTime()) < 60 * 1000
+            )
+            .reduce((s, e) => s + (Number(e.quantity) || 0), 0);
+        }
+
+        entries.push({
+          requestId: r._id,
+          requestNumber: r.requestNumber || "",
+          plantName: r.plantName || "",
+          subtypeName: r.subtypeName || "",
+          shedName: meta.shedName || r.shedName || "",
+          plants,
+          packetsUsed: Math.round(packetsUsed * 100) / 100,
+          ladies: Number(meta.laboursLadies) || 0,
+          gents: Number(meta.laboursGents) || 0,
+          machineStartTime: meta.machineStartTime || "",
+          machineEndTime: meta.machineEndTime || "",
+          at,
+        });
+      }
+    }
+    entries.sort((a, b) => (a.at?.getTime() || 0) - (b.at?.getTime() || 0));
+
+    return res.json({ success: true, date, entries });
+  } catch (error) {
+    console.error("getSowingDaySummary:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to load sowing day summary",
+    });
+  }
+};
+
 function bustLiteCacheAsync() {
   setImmediate(() => {
     import("./sowingCardsLite.controller.js")
@@ -472,6 +555,8 @@ export const completeSowingRequest = async (req, res) => {
           machineStartTime: machine.start || undefined,
           machineEndTime: machine.end || undefined,
           machineMinutes: machine.start ? machine.minutes : undefined,
+          sowDate: istYmd(sowedAt),
+          packetsUsedNow: (inv.used || 0) + raisingPacketsUsedNow,
           ordersMarked: orderResult.marked,
           remainingUncovered: orderResult.remainingUncovered ?? 0,
           orderReadyDate: orderResult.readyDate || null,
