@@ -4334,6 +4334,7 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
     laboursGents,
     laboursEngaged: laboursRaw,
     remarks,
+    readyDaysBySize,
   } = req.body ?? {};
 
   const cavityNum = Math.max(1, safeNonNegativeInt(cavityRaw, 126));
@@ -4409,11 +4410,16 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
     const traysOverride = safeNonNegativeInt(traysOverrideRaw, 0);
 
     for (const sr of sizeRows) {
-      const rowExpectedReady = expectedReadyDateForSecondarySize(
-        secondaryInwardDate,
-        sr.size,
-        batchDocForReady
-      );
+      const sizeDays = Math.min(365, safeNonNegativeInt(readyDaysBySize?.[sr.size], 0));
+      const inwardDay = moment(secondaryInwardDate).startOf("day");
+      const rowExpectedReady =
+        sizeDays > 0 && inwardDay.isValid()
+          ? inwardDay.clone().add(sizeDays, "days").toDate()
+          : expectedReadyDateForSecondarySize(
+              secondaryInwardDate,
+              sr.size,
+              batchDocForReady
+            );
       const rowDispatchDate =
         rowExpectedReady ??
         (dateOfDispatch ? moment(dateOfDispatch).toDate() : null);
