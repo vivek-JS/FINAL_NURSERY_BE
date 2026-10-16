@@ -391,6 +391,22 @@ const secondaryInwardSchema = new Schema({
     maxlength: 500,
     default: "",
   },
+  /** Plants destroyed in shed (dead / damaged); already removed from availableQuantity. */
+  destroyedQuantity: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  destroyLog: [
+    {
+      quantity: { type: Number, required: true, min: 1 },
+      reason: { type: String, trim: true, default: "" },
+      recordedAt: { type: Date, default: Date.now },
+      recordedBy: { type: Schema.Types.ObjectId, ref: "User" },
+      fromMortality: { type: Number, default: 0, min: 0 },
+      fromSellable: { type: Number, default: 0, min: 0 },
+    },
+  ],
   activityLog: { type: [activityLogSchema], default: [] },
 });
 

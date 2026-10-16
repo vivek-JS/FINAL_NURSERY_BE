@@ -386,9 +386,13 @@ export function buildSecondaryInwardLine(si, po, batchLean, todayStart) {
   const slotSyncStatus =
     synced <= 0 ? "pending" : pendingSlotSync > 0 ? "partial" : "synced";
   const split = splitLagwadQtyForSlot(totalQuantity);
+  const destroyedQuantity = Math.max(0, Number(si.destroyedQuantity) || 0);
+  const soldQuantity = Math.max(0, totalQuantity - avail - destroyedQuantity);
 
   return {
     secondaryInwardId: si._id,
+    destroyedQuantity,
+    soldQuantity,
     plantOutwardId: po._id,
     secondaryInwardDate: si.secondaryInwardDate,
     lagwadDate: si.secondaryInwardDate,
@@ -880,6 +884,58 @@ export async function subtractSecondaryInwardSlotStock({
     actualReadyOnly: true,
     message: `Actual ready −${subtracted} (batch ${bn}); actualPlants unchanged`,
   };
+}
+
+/**
+ * Destroy: realised loss eats the slot's expected mortality first; only the sellable
+ * part leaves actualPlants (and actualReadyPlants once the line counts as ready).
+ */
+export async function applySecondaryInwardDestroyToSlot({
+  session,
+  batchId,
+  batchLean,
+  siPlain,
+  fromMortality,
+  sellableSlotDec,
+  performedBy,
+}) {
+  const none = { actualDec: 0, mortalityDec: 0, readyDec: 0 };
+  const slotId = siPlain?.linkedBookingSlotId;
+  const synced = Math.max(0, Number(siPlain?.slotStockSyncedPlants) || 0);
+  if (!slotId || synced < 1) return { ...none, skipped: "not_on_slot" };
+
+  const loaded = await loadSlotSubdoc(slotId, session);
+  if (!loaded) return { ...none, skipped: "slot_not_found", slotId: String(slotId) };
+
+  const { plantSlot, slot } = loaded;
+  const prevActual = Math.max(0, Number(slot.actualPlants) || 0);
+  const prevMortality = Math.max(0, Number(slot.expectedMortality) || 0);
+  const prevReady = Math.max(0, Number(slot.actualReadyPlants) || 0);
+
+  const mortalityDec = Math.min(Math.max(0, Number(fromMortality) || 0), prevMortality);
+  const actualDec = Math.min(Math.max(0, Number(sellableSlotDec) || 0), prevActual);
+  const readyEligible = secondaryInwardCalendarReady(siPlain, batchLean, moment().startOf("day"));
+  const readyDec = readyEligible ? Math.min(actualDec, prevReady) : 0;
+  if (mortalityDec + actualDec + readyDec < 1) return { ...none, slotId: String(slotId) };
+
+  const bn =
+    batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
+  applyStockFieldUpdates(
+    slot,
+    {
+      actualPlants: prevActual - actualDec,
+      expectedMortality: prevMortality - mortalityDec,
+      actualReadyPlants: prevReady - readyDec,
+    },
+    performedBy,
+    `Destroyed · batch ${bn} (−${actualDec} actual, −${mortalityDec} exp. mortality, −${readyDec} ready)`
+  );
+  if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
+    slot.setPerformer?.(performedBy);
+  }
+  await plantSlot.save({ session: session || undefined, validateBeforeSave: true });
+
+  return { actualDec, mortalityDec, readyDec, slotId: String(slotId) };
 }
 
 /**
