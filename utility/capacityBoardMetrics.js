@@ -102,7 +102,7 @@ function hasNumbers(cell) {
 
 /** Days the board table looks ahead; `upcoming` still carries the full load window. */
 export const BOARD_TABLE_DAYS = 30;
-export const MAX_GROUP_DAYS = 7;
+export const MAX_GROUP_DAYS = BOARD_TABLE_DAYS;
 
 export function parseGroupDays(value) {
   const days = Math.floor(Number(value) || 1);

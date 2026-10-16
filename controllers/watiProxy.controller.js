@@ -61,7 +61,7 @@ export const sendTemplateMessage = catchAsync(async (req, res) => {
     language: { code: body.languageCode || "en" },
     broadcast_name: body.broadcastName || `Single_${Date.now()}`,
     parameters: body.parameters || [],
-    channel_number: body.channelNumber || "917276386452",
+    channel_number: process.env.WATI_CHANNEL_NUMBER || body.channelNumber || "17111452809",
   };
   const response = await client.post(
     `/api/v1/sendTemplateMessage?whatsappNumber=${encodeURIComponent(whatsappNumber)}`,
@@ -93,7 +93,7 @@ export const sendTemplateMessages = catchAsync(async (req, res) => {
     language: { code: body.languageCode || "en" },
     broadcast_name: body.broadcastName || `Campaign_${Date.now()}`,
     receivers,
-    channel_number: body.channelNumber || "917276386452",
+    channel_number: process.env.WATI_CHANNEL_NUMBER || body.channelNumber || "17111452809",
   };
 
   console.log("[WATI] sendTemplateMessages:", {

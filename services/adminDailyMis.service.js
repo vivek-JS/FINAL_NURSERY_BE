@@ -18,7 +18,7 @@ import {
 } from "../utility/adminMisMetrics.js";
 
 /** Resolve plant + subtype labels for variety aggregations. */
-const PLANT_SUBTYPE_STAGES = [
+export const PLANT_SUBTYPE_STAGES = [
   {
     $lookup: {
       from: "plantcms",

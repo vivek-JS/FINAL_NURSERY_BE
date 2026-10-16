@@ -122,7 +122,7 @@ export async function sendWatiTemplateMessage(mobileNumber, templateName, parame
       return { success: false, error: `Invalid mobile: ${mobileNumber}` };
     }
 
-    const channelNumber = process.env.WATI_CHANNEL_NUMBER || "917276386452";
+    const channelNumber = process.env.WATI_CHANNEL_NUMBER || "17111452809";
     const body = {
       template_name: templateName,
       broadcast_name: `Order_${Date.now()}`,

@@ -324,6 +324,7 @@ import {
   getAdminMisOrders,
   getAdminSalesSheet,
 } from "./controllers/order.controller.js";
+import { getMisMobile } from "./controllers/misMobile.controller.js";
 import {
   getCeoReportCatalogHandler,
   getCeoOrderDeliveryFlow,
@@ -599,6 +600,7 @@ server.get("/api/v1/order/admin-daily-mis", ...adminMisAuth, getAdminDailyMis);
 server.get("/api/v1/order/admin-mis-sales", ...adminMisAuth, getAdminSalesMis);
 server.get("/api/v1/order/admin-mis-dealer", ...adminMisAuth, getAdminDealerMis);
 server.get("/api/v1/order/admin-mis-due", ...adminMisAuth, getAdminDueMis);
+server.get("/api/v1/order/mis-mobile", ...adminMisAuth, getMisMobile);
 server.get(
   "/api/v1/order/central-report",
   authenticateToken,
