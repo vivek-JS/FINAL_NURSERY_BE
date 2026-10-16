@@ -3103,6 +3103,7 @@ export const getLciSnapshot = catchAsync(async (req, res) => {
     Dispatch.countDocuments({
       createdAt: { $gte: todayStart, $lte: todayEnd },
       isDeleted: { $ne: true },
+      isInstantPickup: { $ne: true },
     }),
     Order.countDocuments({
       deliveryDate: { $gte: todayStart, $lte: windowEnd },

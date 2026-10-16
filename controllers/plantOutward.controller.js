@@ -68,6 +68,7 @@ import {
   unionDispatchOrderObjectIds,
 } from "../services/secondaryVehicleLoad.service.js";
 import { listSecondaryVehicleDispatches } from "../services/secondaryVehicleDispatchesList.service.js";
+import { getDispatchDaySummary as dispatchDaySummaryForDay } from "../services/dispatchDaySummary.service.js";
 import { buildSecondaryStockNotes } from "../services/secondaryStockNotes.service.js";
 import { summarizeLagwadLines } from "../services/secondaryInwardDestroy.service.js";
 import { sumShedReturns } from "../services/secondaryVehicleReturn.service.js";
@@ -5424,6 +5425,13 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res) => {
     );
 });
 
+/** GET /secondary/dispatch-day-summary?date=YYYY-MM-DD — plants given on that IST day (vehicles + instant pickups). */
+const getDispatchDaySummary = catchAsync(async (req, res, next) => {
+  const payload = await dispatchDaySummaryForDay(String(req.query.date || "").trim());
+  if (!payload) return next(new AppError("date must be YYYY-MM-DD", 400));
+  res.status(200).json(generateResponse("Success", "Dispatch day summary", payload, undefined));
+});
+
 /**
  * Crate breakdown for a plant-row need (mirrors dispatch.controller calculateDispatchCrates).
  * A full crate = cavitySize x numberPerCrate plants; remainder becomes one partial crate.
@@ -6410,6 +6418,7 @@ export {
   getSecondaryOutwardById,
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
+  getDispatchDaySummary,
   getVehicleDispatchAllocationSuggestions,
   getSowReadyEntries,
   getDispatchStockLines,

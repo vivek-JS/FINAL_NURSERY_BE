@@ -467,6 +467,15 @@ const slotSchema = new Schema({
           ref: "Order",
         },
       ],
+      /** Excess from this batch later given to new orders (already counted in orderCoveredPlants). */
+      excessAllocations: [
+        {
+          orderId: { type: Schema.Types.ObjectId, ref: "Order" },
+          plants: { type: Number, default: 0 },
+          at: { type: Date, default: Date.now },
+          by: { type: Schema.Types.ObjectId, ref: "User" },
+        },
+      ],
       /** Audit when sow date / ready days edit moves plants between calendar slots */
       slotHistory: [
         {

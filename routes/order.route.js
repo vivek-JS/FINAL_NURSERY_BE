@@ -22,6 +22,7 @@ import {
   createPaymentActivity,
   getPaymentActivities,
   getTodaysPaymentActivities,
+  getMyTodaysPaymentSummary,
   getUnclearedPayments,
   getPaymentsForApproval,
   reconcilePayments,
@@ -196,6 +197,7 @@ router
   .get("/dispatch-summary", getDispatchSummary)
   .get("/payment-activity", authenticateToken, getPaymentActivities)
   .get("/payment-activity/today", authenticateToken, getTodaysPaymentActivities)
+  .get("/my-payments/today", authenticateToken, getMyTodaysPaymentSummary)
   .get("/payments/uncleared", requirePaymentAccess, getUnclearedPayments)
   .get("/payments/for-approval", requirePaymentAccess, getPaymentsForApproval)
   .post("/payments/reconcile", requirePaymentAccess, reconcilePayments)

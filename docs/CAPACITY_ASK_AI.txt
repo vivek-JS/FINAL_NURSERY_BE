@@ -9,10 +9,9 @@ It does not replace the nursery-wide numbers.
 Required, already in the system
 -------------------------------
 1. Capacity sheet for the selected from/to dates.
-   Source: GET /api/v1/sowing/capacity-sheet
+   Source: loadCapacitySheetPayload in controllers/capacitySheet.controller.js (no public route).
    Fields used: can book (excess minus gap), gap, booked, sowed, excess, status.
    One row per plant and subtype. Slot size and stored available plants are not used.
-   Company, raising, and mixed seed totals are included so both seed sources stay in the numbers.
 
 2. District, optional.
    Source: existing location cascade, Maharashtra districts.

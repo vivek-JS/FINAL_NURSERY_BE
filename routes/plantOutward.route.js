@@ -41,6 +41,7 @@ import {
   getSecondaryOutwardById,
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
+  getDispatchDaySummary,
   getVehicleDispatchAllocationSuggestions,
   getSowReadyEntries,
   getDispatchStockLines,
@@ -144,6 +145,7 @@ router.post(
   secondaryInwardToSecondaryOutward
 );
 router.get("/secondary/vehicle-dispatches", getSecondaryVehicleDispatches);
+router.get("/secondary/dispatch-day-summary", getDispatchDaySummary);
 router.get(
   "/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
   getVehicleDispatchAllocationSuggestions

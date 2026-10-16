@@ -342,6 +342,12 @@ const dispatchSchema = new Schema(
       type: Boolean,
       default: false, // This ensures new documents start as not deleted
     },
+    /** Instant order: farmer takes plants himself. Shed "gives" through the load flow; no vehicle. */
+    isInstantPickup: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     // Add returnedPlants field to track total returns for the dispatch
     returnedPlants: {
       type: Number,

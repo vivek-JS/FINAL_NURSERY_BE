@@ -96,7 +96,7 @@ export const getFleetLedger = catchAsync(async (req, res) => {
   const search = String(req.query.search || "").trim();
   const transportStatus = String(req.query.transportStatus || "").trim();
 
-  const filter = { isDeleted: false };
+  const filter = { isDeleted: false, isInstantPickup: { $ne: true } };
   if (transportStatus) {
     filter.transportStatus = transportStatus;
   }

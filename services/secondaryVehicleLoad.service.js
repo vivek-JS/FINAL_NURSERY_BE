@@ -833,12 +833,16 @@ const VEHICLE_LOAD_EXCLUDED_ORDER_STATUSES = ["CANCELLED", "REJECTED", "TEMPORAR
 export async function resolveVehicleOrderIdsForPlantRow(dispatchDoc, plantCmsId, plantSubtypeId) {
   const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
   if (!unionIds.length || !plantCmsId) return [];
+  const rootMatch = { plantName: plantCmsId };
+  if (plantSubtypeId) rootMatch.plantSubtype = plantSubtypeId;
+  const lineMatch = { plantName: plantCmsId };
+  if (plantSubtypeId) lineMatch.plantSubtype = plantSubtypeId;
   const filter = {
     _id: { $in: unionIds },
-    plantName: plantCmsId,
     orderStatus: { $nin: VEHICLE_LOAD_EXCLUDED_ORDER_STATUSES },
+    // Multi-plant instant orders carry the other plants in plantLineItems.
+    $or: [rootMatch, { plantLineItems: { $elemMatch: lineMatch } }],
   };
-  if (plantSubtypeId) filter.plantSubtype = plantSubtypeId;
   const orders = await Order.find(filter).select("_id orderId").sort({ orderId: 1 }).lean();
   const withNeed = orders
     .map((o) => String(o._id))
@@ -883,9 +887,12 @@ const orderReservedAtOfficeDispatch = (orderDoc) => {
 
 const orderMatchesDispatchBatch = (orderDoc, batchLean) => {
   if (!batchLean?.plantCmsId || !batchLean?.plantSubtypeId) return false;
+  const same = (plant, subtype) =>
+    String(plant) === String(batchLean.plantCmsId) &&
+    String(subtype) === String(batchLean.plantSubtypeId);
   return (
-    String(orderDoc.plantName) === String(batchLean.plantCmsId) &&
-    String(orderDoc.plantSubtype) === String(batchLean.plantSubtypeId)
+    same(orderDoc.plantName, orderDoc.plantSubtype) ||
+    (orderDoc.plantLineItems || []).some((l) => same(l.plantName, l.plantSubtype))
   );
 };
 

@@ -5,6 +5,33 @@ import {
   sendOrderDispatchedNotification,
   sendOrderStatusNotification,
 } from "./pushNotification.js";
+import { persistInboxOnce } from "./notificationInbox.js";
+
+const STATUS_INBOX_COPY = {
+  ACCEPTED: { type: "order_accepted", title: "ऑर्डर स्वीकारली · Order accepted" },
+  CONFIRMED: { type: "order_accepted", title: "ऑर्डर स्वीकारली · Order accepted" },
+  REJECTED: { type: "order_rejected", title: "ऑर्डर नाकारली · Order rejected" },
+  CANCELLED: { type: "order_cancelled", title: "ऑर्डर रद्द · Order cancelled" },
+  FARM_READY: { type: "order_farm_ready", title: "रोपे तयार · Plants ready" },
+  READY_FOR_DISPATCH: { type: "order_ready_dispatch", title: "डिस्पॅचसाठी तयार · Ready for dispatch" },
+  DISPATCHED: { type: "order_dispatched", title: "गाडी निघाली · Order dispatched" },
+  COMPLETED: { type: "order_completed", title: "ऑर्डर पूर्ण · Order completed" },
+};
+
+async function persistStatusInbox(order, userId, newStatus) {
+  const copy = STATUS_INBOX_COPY[newStatus];
+  if (!copy) return;
+  const label = order.orderId || order._id;
+  const plants = order.numberOfPlants ? ` · ${order.numberOfPlants} plants` : "";
+  await persistInboxOnce({
+    userId,
+    title: copy.title,
+    body: `Order #${label}${plants}`,
+    type: copy.type,
+    data: { orderId: String(order._id), orderLabel: String(label), status: newStatus },
+    dedupeKey: `order:${order._id}:status:${newStatus}`,
+  });
+}
 
 /**
  * Send notification when order status changes
@@ -30,6 +57,10 @@ export async function sendStatusChangeNotification(order, oldStatus, newStatus) 
       // Farmer order - notify the sales person
       userToNotify = await User.findById(order.salesPerson);
       console.log(`📱 Farmer order - notifying sales person: ${userToNotify?.name || "Unknown"}`);
+    }
+
+    if (userToNotify) {
+      await persistStatusInbox(order, userToNotify._id, newStatus);
     }
 
     // Check if user has push token

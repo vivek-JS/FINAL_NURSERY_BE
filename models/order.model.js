@@ -889,6 +889,28 @@ const orderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "SowingRequest",
     },
+    /** Sowing batches whose excess covered this order at booking (sowingDone set alongside). */
+    sowingCoverSources: [
+      {
+        slotId: { type: Schema.Types.ObjectId },
+        batchId: { type: Schema.Types.ObjectId },
+        sowingRequestId: { type: Schema.Types.ObjectId, ref: "SowingRequest" },
+        requestNumber: { type: String, default: "" },
+        plants: { type: Number, default: 0 },
+        sowingDate: { type: String, default: "" },
+        plantReadyDate: { type: String, default: "" },
+        shedName: { type: String, default: "" },
+        offsetDays: { type: Number, default: 0 },
+        /** Exact slot excessiveSowing.plants / availablePlants / batch excessPlants taken, restored on reverse. */
+        excessiveSowingDec: { type: Number, default: 0 },
+        availablePlantsDec: { type: Number },
+        batchExcessDec: { type: Number, default: 0 },
+      },
+    ],
+    /** Set when a cancel/reject returned sowingCoverSources plants to their batches. */
+    sowingCoverReversedAt: {
+      type: Date,
+    },
     cavity: {
       type: Schema.Types.ObjectId,
       ref: "Tray",

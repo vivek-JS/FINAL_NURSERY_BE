@@ -40,6 +40,7 @@ export const getOrderDispatchDetails = catchAsync(async (req, res) => {
   const dispatches = await Dispatch.find({
     orderIds: orderId,
     isDeleted: false,
+    isInstantPickup: { $ne: true },
   })
     .select(
       "driverName driverMobile vehicleName vehicleNumber transportId transportStatus orderDispatchDetails createdAt updatedAt"
@@ -165,7 +166,7 @@ export const getDispatchSummary = catchAsync(async (req, res) => {
   const { status, startDate, endDate, limit = 50, page = 1 } = req.query;
 
   // Build filter
-  const filter = { isDeleted: false };
+  const filter = { isDeleted: false, isInstantPickup: { $ne: true } };
 
   if (status) {
     filter.transportStatus = status;

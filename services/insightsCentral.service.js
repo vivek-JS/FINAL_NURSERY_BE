@@ -76,6 +76,7 @@ async function fetchDispatchTripsByDay(rangeStart, rangeEnd) {
     {
       $match: {
         isDeleted: false,
+        isInstantPickup: { $ne: true },
         transportStatus: { $ne: "CANCELLED" },
         createdAt: { $gte: rangeStart, $lte: rangeEnd },
       },

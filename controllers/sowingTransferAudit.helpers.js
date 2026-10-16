@@ -25,8 +25,11 @@ export async function writeTransferAudit({
   destination,
   userId,
   note = "Cover order from slot stock",
+  /** false → destination batch is a pointer (0 plants); cover lives on the source batches. */
+  destCountsAsCovered = true,
 }) {
   const qty = Math.max(0, Math.floor(Number(plants) || 0));
+  const destBatchPlants = destCountsAsCovered ? qty : 0;
   const plant = await PlantCms.findById(order.plantName)
     .select("name subtypes._id subtypes.name")
     .lean();
@@ -120,9 +123,9 @@ export async function writeTransferAudit({
           sowingDate: fmtDDMMYYYY(now),
           plantReadyDate: readyLabel,
           plantReadyDays: 0,
-          plantsSowed: qty,
+          plantsSowed: destBatchPlants,
           packetsUsed: 0,
-          orderCoveredPlants: qty,
+          orderCoveredPlants: destBatchPlants,
           excessPlants: 0,
           shedName: "Office",
           sowingRequestId: request._id,
@@ -140,6 +143,7 @@ export async function writeTransferAudit({
   );
 
   for (const t of transfers) {
+    if (!destCountsAsCovered) break;
     if (t.sameSlot || String(t.fromSlotId) === String(destId)) continue;
     const fromId = new mongoose.Types.ObjectId(t.fromSlotId);
     await PlantSlot.updateOne(

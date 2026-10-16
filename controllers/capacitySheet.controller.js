@@ -6,6 +6,7 @@ import Order from "../models/order.model.js";
 import { applySowingGapBoardMetrics } from "../utility/sowingGapSummaryMetrics.js";
 import {
   getNativeDeliveryCohortOrders,
+  getRemainingToDispatchQty,
   groupOrdersByDeliverySlot,
 } from "../utility/slotDispatchStats.js";
 import {
@@ -19,13 +20,17 @@ import {
   canBookFromExcess,
   capacityStatus,
   capacityYearsForRange,
-  defaultCapacityRange,
   majoritySeedPlan,
-  parseRangeBound,
-  seedSourceTotals,
   slotDaySortKey,
   slotOverlapsRange,
 } from "../utility/capacitySheetMetrics.js";
+import {
+  OVERDUE_LOOKBACK_DAYS,
+  boardRowHasNumbers,
+  buildBoardRow,
+  shedStockByVariety,
+  varietyKey,
+} from "../utility/capacityBoardMetrics.js";
 
 const ORDER_SELECT =
   "_id orderId orderStatus numberOfPlants additionalPlants sowingDone deliveryDate quotaSource pastDueSlotRollover pastDueSlotRolloverAt plantName plantSubtype sowingPlan farmer";
@@ -277,7 +282,6 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbou
     slotsBySubtype.get(key).push(slot);
   }
   const cohortBySlot = new Map();
-  const seedOrders = [];
   for (const [key, subtypeSlots] of slotsBySubtype) {
     const grouped = groupOrdersByDeliverySlot(
       ordersBySubtype.get(key) || [],
@@ -322,7 +326,6 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbou
     const slotId = String(slot.slotId);
     const cohort = cohortBySlot.get(slotId) || [];
     subtype.orders.push(...cohort);
-    seedOrders.push(...cohort);
     subtype.slots.push(rowFromMetrics(slot, metricsBySlot.get(slotId) || {}, cohort));
   }
 
@@ -362,7 +365,7 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbou
     });
   }
   plantRows.sort((a, b) => a.plantName.localeCompare(b.plantName));
-  return { plants: plantRows, seedSources: seedSourceTotals(seedOrders) };
+  return { plants: plantRows };
 }
 
 export async function loadCapacitySheetPayload({ from, to, plantId = null, subtypeId = null, unbounded = false }) {
@@ -380,37 +383,110 @@ export async function loadCapacitySheetPayload({ from, to, plantId = null, subty
     from: unbounded ? null : from.format("YYYY-MM-DD"),
     to: unbounded ? null : to.format("YYYY-MM-DD"),
     totals: { ...totals, status: capacityStatus(totals) },
-    seedSources: sheet.seedSources,
     plants: sheet.plants,
   };
 }
 
-export const getCapacitySheet = async (req, res) => {
-  try {
-    const unbounded = String(req.query.all || "") === "1";
-    const defaults = defaultCapacityRange();
-    const from = unbounded ? defaults.from : parseRangeBound(req.query.from, defaults.from);
-    const to = unbounded ? defaults.to : parseRangeBound(req.query.to, defaults.to);
-    if (!unbounded && to.isBefore(from, "day")) {
-      return res.status(400).json({
-        success: false,
-        message: "to must be on or after from",
+/** Enough forward days for the current slot plus four 7-day slots. */
+const BOARD_FORWARD_DAYS = 40;
+
+function groupByVariety(list, plantOf, subtypeOf) {
+  const map = new Map();
+  for (const item of list) {
+    const key = varietyKey(String(plantOf(item)), String(subtypeOf(item)));
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(item);
+  }
+  return map;
+}
+
+/**
+ * Variety-wise board: stock in sheds, overdue folded into the current slot, then the next slots.
+ * Rows carry their slot length so the UI can split 1-day and 7-day varieties into separate tables.
+ */
+export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFSET)) {
+  const today = now.clone().startOf("day");
+  const from = today.clone().subtract(OVERDUE_LOOKBACK_DAYS, "days");
+  const to = today.clone().add(BOARD_FORWARD_DAYS, "days").endOf("day");
+
+  const [{ plants, slots, orders }, shedPayload] = await Promise.all([
+    loadSheetContext({ from, to }),
+    loadShedStockPayload(),
+  ]);
+
+  const metricsBySlot = applySowingGapBoardMetrics(slots, orders);
+  const slotsByVariety = groupByVariety(slots, (s) => s.plantId, (s) => s.subtypeId);
+  const ordersByVariety = groupByVariety(orders, (o) => o.plantName, (o) => o.plantSubtype);
+
+  const pendingBySlot = new Map();
+  for (const [key, list] of slotsByVariety) {
+    const grouped = groupOrdersByDeliverySlot(
+      ordersByVariety.get(key) || [],
+      list.map((slot) => ({ _id: slot.slotId, startDay: slot.slotStartDay, endDay: slot.slotEndDay }))
+    );
+    for (const [slotId, cohort] of grouped) {
+      const pending = getNativeDeliveryCohortOrders(cohort).reduce(
+        (acc, order) => acc + getRemainingToDispatchQty(order),
+        0
+      );
+      pendingBySlot.set(slotId, pending);
+    }
+  }
+
+  const stockByVariety = shedStockByVariety(shedPayload);
+  const rows = [];
+  for (const plant of plants) {
+    for (const subtype of plant.subtypes || []) {
+      const key = varietyKey(String(plant._id), String(subtype._id));
+      const subtypeSlots = (slotsByVariety.get(key) || []).map((slot) => {
+        const slotId = String(slot.slotId);
+        const metrics = metricsBySlot.get(slotId) || {};
+        return {
+          slotId,
+          startDay: slot.slotStartDay,
+          endDay: slot.slotEndDay,
+          booked: num(metrics.totalBookedPlants),
+          gap: num(metrics.bookedUncoveredPlants),
+          excess: num(metrics.excessAvailableForBooking),
+          pendingDispatch: pendingBySlot.get(slotId) || 0,
+        };
+      });
+      const row = buildBoardRow({ slots: subtypeSlots, today, stock: stockByVariety.get(key) });
+      if (!boardRowHasNumbers(row)) continue;
+      rows.push({
+        plantId: String(plant._id),
+        plantName: plant.name,
+        subtypeId: String(subtype._id),
+        subtypeName: subtype.name,
+        ...row,
       });
     }
+  }
+  rows.sort(
+    (a, b) => a.plantName.localeCompare(b.plantName) || a.subtypeName.localeCompare(b.subtypeName)
+  );
 
-    const plantId = req.query.plantId || null;
-    const subtypeId = req.query.subtypeId || null;
-    const payload = await loadCapacitySheetPayload({ from, to, plantId, subtypeId, unbounded });
+  return {
+    today: today.format("YYYY-MM-DD"),
+    overdueLookbackDays: OVERDUE_LOOKBACK_DAYS,
+    rows,
+  };
+}
 
+/** GET /sowing/capacity-sheet/board — variety rows: stock, overdue + current slot, next slots. */
+export const getCapacityBoard = async (req, res) => {
+  try {
+    const payload = await loadCapacityBoardPayload();
     return res.status(200).json({
       success: true,
       ...payload,
+      generatedAt: moment().utcOffset(IST_OFFSET).toISOString(),
     });
   } catch (error) {
-    console.error("getCapacitySheet:", error);
+    console.error("getCapacityBoard:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to load capacity sheet",
+      message: "Failed to load capacity board",
     });
   }
 };

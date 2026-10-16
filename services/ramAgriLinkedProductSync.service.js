@@ -10,6 +10,9 @@ import Batch from "../models/batch.model.js";
 
 const LINK_NOTE_PREFIX = "linkedRamAgriBatchId:";
 
+/** Classic Batch rows that only mirror a Ram Agri lot (not real Biotech warehouse stock). */
+export const RAM_AGRI_MIRROR_NOTE_REGEX = new RegExp(`^${LINK_NOTE_PREFIX}`);
+
 export function isRamAgriLinkedProduct(product) {
   if (!product) return false;
   return Boolean(
@@ -82,18 +85,51 @@ export async function syncLinkedInventoryFromRamAgri(
     products[0].createdBy ||
     new mongoose.Types.ObjectId("000000000000000000000001");
 
+  const productIds = products.map((p) => p._id);
+  const existingMirrors = await Batch.find({
+    product: { $in: productIds },
+    notes: { $regex: `^${LINK_NOTE_PREFIX}` },
+  });
+  const mirrorByKey = new Map();
+  const mirrorsByProduct = new Map();
+  for (const b of existingMirrors) {
+    const pid = String(b.product);
+    const key = `${pid}:${b.notes}`;
+    if (!mirrorByKey.has(key)) mirrorByKey.set(key, b);
+    if (!mirrorsByProduct.has(pid)) mirrorsByProduct.set(pid, []);
+    mirrorsByProduct.get(pid).push(b);
+  }
+
+  const lotNumber = (rb) => String(rb.batchNumber || "").trim() || `RAG-${rb._id}`;
+  const missingLotNumbers = new Set();
+  for (const product of products) {
+    for (const rb of ramBatches) {
+      if (!mirrorByKey.has(`${product._id}:${LINK_NOTE_PREFIX}${rb._id}`)) {
+        missingLotNumbers.add(lotNumber(rb));
+      }
+    }
+  }
+  const clashOwner = new Map();
+  if (missingLotNumbers.size) {
+    const clashes = await Batch.find({ batchNumber: { $in: [...missingLotNumbers] } })
+      .select("batchNumber product")
+      .lean();
+    for (const c of clashes) clashOwner.set(c.batchNumber, String(c.product));
+  }
+
+  const now = new Date();
+  const ramIds = new Set(ramBatches.map((rb) => String(rb._id)));
+
   for (const product of products) {
     product.isRamAgriSales = true;
     product.ramAgriCropId = cropId;
     product.ramAgriVarietyId = varietyId;
     product.currentStock = activeRem;
-    product.stockUpdatedAt = new Date();
+    product.stockUpdatedAt = now;
     if (userId) product.updatedBy = userId;
-    await product.save({ validateBeforeSave: false });
+    const pendingSaves = [product.save({ validateBeforeSave: false })];
 
-    const seenRamIds = new Set();
     for (const rb of ramBatches) {
-      seenRamIds.add(String(rb._id));
       const rem = Math.max(0, Number(rb.remainingQuantity) || 0);
       const qty = Math.max(rem, Number(rb.quantity) || 0);
       const status =
@@ -106,16 +142,13 @@ export async function syncLinkedInventoryFromRamAgri(
               : "active";
 
       const note = `${LINK_NOTE_PREFIX}${rb._id}`;
-      let classic = await Batch.findOne({
-        product: product._id,
-        notes: note,
-      });
+      let classic = mirrorByKey.get(`${product._id}:${note}`);
 
       if (!classic) {
         // Prefer same lot number; fall back if unique collision
-        let batchNumber = String(rb.batchNumber || "").trim() || `RAG-${rb._id}`;
-        const clash = await Batch.findOne({ batchNumber }).select("_id product").lean();
-        if (clash && String(clash.product) !== String(product._id)) {
+        let batchNumber = lotNumber(rb);
+        const owner = clashOwner.get(batchNumber);
+        if (owner && owner !== String(product._id)) {
           batchNumber = `RAG-${batchNumber}`;
         }
         classic = new Batch({
@@ -123,7 +156,7 @@ export async function syncLinkedInventoryFromRamAgri(
           product: product._id,
           manufactureDate: rb.manufactureDate,
           expiryDate: rb.expiryDate,
-          receivedDate: rb.receivedDate || new Date(),
+          receivedDate: rb.receivedDate || now,
           purchasePrice: Number(rb.purchasePrice) || 0,
           quantity: qty || rem,
           remainingQuantity: rem,
@@ -132,6 +165,7 @@ export async function syncLinkedInventoryFromRamAgri(
           notes: note,
           createdBy: actor,
         });
+        mirrorByKey.set(`${product._id}:${note}`, classic);
       } else {
         classic.remainingQuantity = rem;
         classic.quantity = Math.max(Number(classic.quantity) || 0, qty, rem);
@@ -140,26 +174,30 @@ export async function syncLinkedInventoryFromRamAgri(
         classic.status = status;
         if (!classic.unit) classic.unit = rb.unit || product.primaryUnit;
         if (!classic.createdBy) classic.createdBy = actor;
+        // Same transition the Batch pre-save hook applies, so skipping unchanged rows stays equivalent.
+        if (rem > 0 && classic.expiryDate && classic.expiryDate < now) {
+          classic.status = "expired";
+        }
       }
 
-      await classic.save();
-      batchWrites += 1;
-    }
-
-    // Exhaust mirrors whose Ram Agri lot disappeared
-    const orphans = await Batch.find({
-      product: product._id,
-      notes: { $regex: `^${LINK_NOTE_PREFIX}` },
-    });
-    for (const b of orphans) {
-      const rid = linkedRamAgriBatchIdFromNotes(b.notes);
-      if (rid && !seenRamIds.has(rid) && b.remainingQuantity > 0) {
-        b.remainingQuantity = 0;
-        b.status = "exhausted";
-        await b.save();
+      if (classic.isNew || classic.isModified()) {
+        pendingSaves.push(classic.save());
         batchWrites += 1;
       }
     }
+
+    // Exhaust mirrors whose Ram Agri lot disappeared
+    for (const b of mirrorsByProduct.get(String(product._id)) || []) {
+      const rid = linkedRamAgriBatchIdFromNotes(b.notes);
+      if (rid && !ramIds.has(rid) && b.remainingQuantity > 0) {
+        b.remainingQuantity = 0;
+        b.status = "exhausted";
+        pendingSaves.push(b.save());
+        batchWrites += 1;
+      }
+    }
+
+    await Promise.all(pendingSaves);
   }
 
   return { products: products.length, batches: batchWrites };

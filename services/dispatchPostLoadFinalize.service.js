@@ -299,9 +299,9 @@ export function schedulePendingDispatchWhatsAppForVehicle(dispatchId, { changedB
     (async () => {
       try {
         const dispatch = await Dispatch.findById(dispatchId)
-          .select("orderDispatchDetails")
+          .select("orderDispatchDetails isInstantPickup")
           .lean();
-        if (!dispatch) return;
+        if (!dispatch || dispatch.isInstantPickup) return;
 
         const orderIds = [
           ...new Set(

@@ -1,7 +1,9 @@
 import mongoose from "mongoose";
 import { getSubtypeInventoryCandidates } from "./subtypeInventoryLink.service.js";
 import Product from "../models/product.model.js";
+import Batch from "../models/batch.model.js";
 import RamAgriBatch from "../models/ramAgriBatch.model.js";
+import { RAM_AGRI_MIRROR_NOTE_REGEX } from "./ramAgriLinkedProductSync.service.js";
 import { resolveRamAgriForSeedProduct } from "./ramAgriVarietyInventoryLink.service.js";
 import { deductStockFIFO, deductStockFromBatches } from "./ramAgriBatchInventory.service.js";
 import { RAM_AGRI_MOVEMENT_TYPES } from "./ramAgriStockMovement.service.js";
@@ -81,6 +83,42 @@ export function resolveIssueInventorySplit({
 }
 
 /**
+ * Biotech products linked to a Ram Agri variety carry mirror batches of the
+ * Ram Agri lots, and their currentStock includes them. Those packets are
+ * already counted under Ram Agri, so drop them from Biotech availability.
+ */
+async function withoutRamAgriMirrorStock(biotechLinks) {
+  const productIds = biotechLinks
+    .map((l) => l.productId?._id || l.productId)
+    .filter((id) => id && mongoose.isValidObjectId(id))
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
+  if (!productIds.length) return biotechLinks;
+
+  const mirrored = await Batch.aggregate([
+    {
+      $match: {
+        product: { $in: productIds },
+        notes: RAM_AGRI_MIRROR_NOTE_REGEX,
+        status: { $in: ["active", "expired"] },
+        remainingQuantity: { $gt: 0 },
+      },
+    },
+    { $group: { _id: "$product", total: { $sum: "$remainingQuantity" } } },
+  ]);
+  const mirrorByProduct = new Map(mirrored.map((m) => [String(m._id), Number(m.total) || 0]));
+
+  return biotechLinks.map((link) => {
+    const pid = String(link.productId?._id || link.productId || "");
+    const mirror = mirrorByProduct.get(pid) || 0;
+    if (!mirror) return link;
+    return {
+      ...link,
+      availableStock: Math.max(0, (Number(link.availableStock) || 0) - mirror),
+    };
+  });
+}
+
+/**
  * Availability payload for issue dialog (multi-link).
  */
 export async function buildIssueInventoryAvailability(plantId, subtypeId, productId) {
@@ -148,6 +186,8 @@ export async function buildIssueInventoryAvailability(plantId, subtypeId, produc
         ];
     }
   }
+
+  biotechLinks = await withoutRamAgriMirrorStock(biotechLinks);
 
   const biotechAvailable = biotechLinks.reduce((s, l) => s + (Number(l.availableStock) || 0), 0);
   const ramAgriAvailable = ramAgriLinks.reduce((s, l) => s + (Number(l.availableStock) || 0), 0);

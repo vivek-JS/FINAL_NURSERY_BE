@@ -38,6 +38,9 @@ const allowedParams = [
   "plantId",
   "subtypeId",
   "slotIds", // GET /sowing/order-wise — comma-separated booking slot ObjectIds
+  "deliveryDate", // GET /sowing/excess-batches
+  "need", // GET /sowing/excess-batches
+  "windowDays", // GET /sowing/excess-batches
   "year",
   "onlyAvailable", // GET /slots/availability-overview
   "minNumberPerCrate",
@@ -280,7 +283,7 @@ allowedQueryKeys.add("side"); // GET /inventory/money-ledger — AR | AP | ALL
 allowedQueryKeys.add("purchaseOrderId"); // GET /inventory/purchase-returns/returnable-batches
 allowedQueryKeys.add("supplierId"); // GET /inventory/purchase-returns/returnable-batches (supplier-wise)
 allowedQueryKeys.add("partyKind"); // GET /inventory/money-ledger/parties — ALL|FARMER|MERCHANT
-allowedQueryKeys.add("all"); // GET /sowing/capacity-sheet?all=1 and sow-ready entries
+allowedQueryKeys.add("all"); // sow-ready entries
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
