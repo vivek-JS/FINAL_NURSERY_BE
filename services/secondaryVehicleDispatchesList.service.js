@@ -2,10 +2,13 @@ import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import PlantCms from "../models/plantCms.model.js";
+import PlantOutward from "../models/plantOutward.model.js";
+import User from "../models/user.model.js";
 import {
   DISPATCH_SHED_ALLOWED_STATUSES,
   sumPlantsLoadedOnDispatches,
 } from "./secondaryVehicleLoad.service.js";
+import { SHED_ACTIVITY_ACTIONS } from "./shedActivity.service.js";
 
 /** Office qty edit within this window shows "recent" on shed app cards. */
 const OFFICE_EDIT_RECENT_MS = 24 * 60 * 60 * 1000;
@@ -72,20 +75,29 @@ function escapeRegex(s) {
 
 const IST_OFFSET_MS = 330 * 60 * 1000;
 
-/** YYYY-MM-DD (IST calendar day) → createdAt range, or null. */
-function istDayRange(day) {
+/** YYYY-MM-DD (IST calendar day) → start of that day as a UTC Date, or null. */
+function istDayStart(day) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || "").trim());
   if (!m) return null;
-  const startUtcMs = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - IST_OFFSET_MS;
-  return { $gte: new Date(startUtcMs), $lt: new Date(startUtcMs + 24 * 60 * 60 * 1000) };
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - IST_OFFSET_MS);
 }
 
-function buildListFilter({ search, statusFilter, date }) {
+/** IST day range (inclusive) → createdAt filter, or null. `date` = single day. */
+function istRange({ date, from, to }) {
+  const start = istDayStart(from || date);
+  const endDay = istDayStart(to || date || from);
+  const range = {};
+  if (start) range.$gte = start;
+  if (endDay) range.$lt = new Date(endDay.getTime() + 24 * 60 * 60 * 1000);
+  return Object.keys(range).length ? range : null;
+}
+
+function buildListFilter({ search, statusFilter, date, from, to }) {
   const filter = {
     isDeleted: { $ne: true },
     transportStatus: { $in: DISPATCH_SHED_ALLOWED_STATUSES },
   };
-  const range = istDayRange(date);
+  const range = istRange({ date, from, to });
   if (range) filter.createdAt = range;
   if (statusFilter === "loaded") {
     filter.transportStatus = "LOADED";
@@ -283,6 +295,100 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
 }
 
 /**
+ * Who loaded each vehicle: shed users from the batch activity log (SECONDARY_OUTWARD),
+ * or the office user from order dispatch history when the vehicle has no shed loads.
+ * Returns Map dispatchId → { loadedBy: [{ name, plants, at, office }], lastLoadedAt }.
+ */
+async function loadVehicleLoaders(docs, loadedMap) {
+  const out = new Map();
+  if (!docs.length) return out;
+  const ids = docs.map((d) => d._id);
+
+  const acts = await PlantOutward.aggregate([
+    { $match: { "secondaryOutward.linkedDispatchId": { $in: ids } } },
+    { $project: { log: "$secondaryInward.activityLog" } },
+    { $unwind: "$log" },
+    { $unwind: "$log" },
+    {
+      $match: {
+        "log.action": SHED_ACTIVITY_ACTIONS.SECONDARY_OUTWARD,
+        "log.metadata.linkedDispatchId": { $in: ids },
+      },
+    },
+    {
+      $project: {
+        dispatchId: "$log.metadata.linkedDispatchId",
+        userId: "$log.performedBy",
+        plants: "$log.quantity",
+        at: "$log.performedAt",
+      },
+    },
+  ]);
+
+  const officeDocs = docs.filter(
+    (d) =>
+      d.transportStatus === "LOADED" &&
+      !(loadedMap.get(String(d._id))?.total > 0)
+  );
+  const officeIds = officeDocs.map((d) => d._id);
+  const officeOrderIds = officeDocs.flatMap((d) => unionDispatchOrderObjectIds(d));
+  const officeRows = officeOrderIds.length
+    ? await Order.aggregate([
+        { $match: { _id: { $in: officeOrderIds } } },
+        { $project: { dispatchHistory: 1 } },
+        { $unwind: "$dispatchHistory" },
+        { $match: { "dispatchHistory.dispatchId": { $in: officeIds } } },
+        {
+          $project: {
+            dispatchId: "$dispatchHistory.dispatchId",
+            userId: "$dispatchHistory.processedBy",
+            plants: "$dispatchHistory.quantity",
+            at: "$dispatchHistory.date",
+          },
+        },
+      ])
+    : [];
+
+  const userIds = [
+    ...new Set(
+      [...acts, ...officeRows]
+        .map((r) => (r.userId ? String(r.userId) : ""))
+        .filter((id) => mongoose.isValidObjectId(id))
+    ),
+  ];
+  const users = userIds.length
+    ? await User.find({ _id: { $in: userIds } }).select("_id name").lean()
+    : [];
+  const nameById = new Map(users.map((u) => [String(u._id), String(u.name || "").trim()]));
+
+  const add = (rows, office) => {
+    for (const r of rows) {
+      const key = String(r.dispatchId);
+      const bucket = out.get(key) || { byUser: new Map(), lastLoadedAt: null };
+      const name = nameById.get(String(r.userId || "")) || (office ? "Office" : "—");
+      const at = r.at ? new Date(r.at) : null;
+      const cur = bucket.byUser.get(name) || { name, plants: 0, at: null, office };
+      cur.plants += Number(r.plants) || 0;
+      if (at && (!cur.at || at > cur.at)) cur.at = at;
+      if (at && (!bucket.lastLoadedAt || at > bucket.lastLoadedAt)) bucket.lastLoadedAt = at;
+      bucket.byUser.set(name, cur);
+      out.set(key, bucket);
+    }
+  };
+  add(acts, false);
+  add(officeRows, true);
+
+  const result = new Map();
+  for (const [key, b] of out) {
+    result.set(key, {
+      loadedBy: [...b.byUser.values()].sort((a, c) => (c.at || 0) - (a.at || 0)),
+      lastLoadedAt: b.lastLoadedAt,
+    });
+  }
+  return result;
+}
+
+/**
  * Paginated vehicle dispatches for secondary shed UI.
  * status: pending | loaded | (empty = all allowed)
  * Batches outward load sums in one query (fast).
@@ -293,6 +399,8 @@ export async function listSecondaryVehicleDispatches({
   search = "",
   status = "",
   date = "",
+  from = "",
+  to = "",
 } = {}) {
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.min(50, Math.max(1, Number(limit) || 20));
@@ -300,8 +408,8 @@ export async function listSecondaryVehicleDispatches({
   const qSearch = String(search || "").trim();
   const statusFilter = String(status || "").trim().toLowerCase();
 
-  const filter = buildListFilter({ search: qSearch, statusFilter, date });
-  const countBase = buildListFilter({ search: qSearch, statusFilter: "", date });
+  const filter = buildListFilter({ search: qSearch, statusFilter, date, from, to });
+  const countBase = buildListFilter({ search: qSearch, statusFilter: "", date, from, to });
 
   const [total, docs, pendingTotal, loadedTotal] = await Promise.all([
     Dispatch.countDocuments(filter),
@@ -367,9 +475,12 @@ export async function listSecondaryVehicleDispatches({
     plantCmsById.set(String(r._id), r);
   }
 
-  const items = docs.map((d) =>
-    mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, orderLabelById)
-  );
+  const loadersById = await loadVehicleLoaders(docs, loadedMap);
+
+  const items = docs.map((d) => ({
+    ...mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, orderLabelById),
+    ...(loadersById.get(String(d._id)) || { loadedBy: [], lastLoadedAt: null }),
+  }));
 
   return {
     items,

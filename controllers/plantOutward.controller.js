@@ -5406,6 +5406,8 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res) => {
     search: req.query.search,
     status: req.query.status,
     date: req.query.date,
+    from: req.query.from,
+    to: req.query.to,
   });
   res
     .status(200)
