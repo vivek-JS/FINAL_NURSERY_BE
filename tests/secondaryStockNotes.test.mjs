@@ -5,6 +5,8 @@ import {
   englishShedName,
   groupStockForNotes,
   resolveNoteItems,
+  noteTitle,
+  toWesternDigits,
 } from "../services/secondaryStockNotes.service.js";
 
 const today = moment("2026-10-16", "YYYY-MM-DD").startOf("day");
@@ -90,5 +92,33 @@ describe("resolveNoteItems", () => {
   it("falls back to the point's batch/shed and ignores unknown refs", () => {
     assert.equal(resolveNoteItems([], groups, { shed: "Raigad (2)" })[0].batch, "VS 911");
     assert.deepEqual(resolveNoteItems([{ batch: "NOPE", shed: "X" }], groups), []);
+  });
+});
+
+describe("noteTitle", () => {
+  const item = (batch, shed) => ({ batch, shed });
+
+  it("prefixes the single batch with its CMS code", () => {
+    assert.equal(
+      noteTitle("जुना स्टॉक पाठवा", [item("RB 19", "Purandar (6)"), item("RB 19", "Devgiri (8)")]),
+      "बॅच RB 19: जुना स्टॉक पाठवा"
+    );
+  });
+
+  it("uses the English shed name and drops any AI-written prefix", () => {
+    assert.equal(
+      noteTitle("राजेगड (७): जुना स्टॉक पाठवा", [item("SB 139", "Rajgad (7)"), item("RB 19", "Rajgad (7)")]),
+      "Rajgad (7): जुना स्टॉक पाठवा"
+    );
+  });
+
+  it("leaves the action alone when items span several batches and sheds", () => {
+    assert.equal(noteTitle("लवकर पाठवा", [item("A", "X"), item("B", "Y")]), "लवकर पाठवा");
+  });
+});
+
+describe("toWesternDigits", () => {
+  it("converts Devanagari digits", () => {
+    assert.equal(toWesternDigits("६० दिवस"), "60 दिवस");
   });
 });
