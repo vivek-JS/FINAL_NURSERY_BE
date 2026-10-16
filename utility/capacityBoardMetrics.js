@@ -4,11 +4,6 @@ import { canBookFromExcess } from "./capacitySheetMetrics.js";
 /** How far back unsold / undispatched plants on past slots still count as overdue. */
 export const OVERDUE_LOOKBACK_DAYS = 30;
 
-/** Upcoming slot columns the board table shows after the current slot, by slot length. */
-export function upcomingSlotCount(slotDays) {
-  return Number(slotDays) <= 1 ? 7 : 4;
-}
-
 function num(n) {
   return Number(n) || 0;
 }
@@ -105,14 +100,92 @@ function hasNumbers(cell) {
   return num(cell?.booked) > 0 || num(cell?.ready) > 0 || num(cell?.net) !== 0;
 }
 
+/** Days the board table looks ahead; `upcoming` still carries the full load window. */
+export const BOARD_TABLE_DAYS = 30;
+export const MAX_GROUP_DAYS = 7;
+
+export function parseGroupDays(value) {
+  const days = Math.floor(Number(value) || 1);
+  return Math.min(MAX_GROUP_DAYS, Math.max(1, days));
+}
+
+const ymd = (m) => m.format("YYYY-MM-DD");
+const ddmmyyyy = (m) => m.format("DD-MM-YYYY");
+
+function cellWithIds(cell) {
+  return {
+    key: ymd(slotDayStartMoment(cell.startDay)),
+    startDay: cell.startDay,
+    endDay: cell.endDay,
+    booked: num(cell.booked),
+    ready: num(cell.ready),
+    net: num(cell.net),
+    gap: num(cell.gap),
+    slotIds: cell.slotId ? [cell.slotId] : [],
+  };
+}
+
+/**
+ * Table columns for one variety: `now` (current + overdue) and only the future cells that have plants.
+ * groupDays 1 keeps each slot on its own date. groupDays N buckets slots by start day into N-day groups
+ * counted from today; the first group (today .. today+N-1) folds into `now`.
+ */
+export function boardCells({ current, upcoming, today, groupDays = 1, tableDays = BOARD_TABLE_DAYS }) {
+  const group = parseGroupDays(groupDays);
+  const last = today.clone().add(tableDays, "days");
+  const future = (upcoming || []).filter((cell) => {
+    const start = slotDayStartMoment(cell.startDay);
+    return start && !start.isAfter(last, "day") && hasNumbers(cell);
+  });
+
+  if (group === 1) {
+    return { now: { ...current, key: "now" }, cells: future.map(cellWithIds) };
+  }
+
+  const intoNow = [];
+  const buckets = new Map();
+  for (const cell of future) {
+    const index = Math.floor(slotDayStartMoment(cell.startDay).diff(today, "days") / group);
+    if (index <= 0) {
+      intoNow.push(cell);
+      continue;
+    }
+    const from = today.clone().add(index * group, "days");
+    const key = ymd(from);
+    if (!buckets.has(key)) {
+      buckets.set(key, { key, startDay: ddmmyyyy(from), endDay: ddmmyyyy(from.clone().add(group - 1, "days")), list: [] });
+    }
+    buckets.get(key).list.push(cell);
+  }
+
+  const now = {
+    ...current,
+    ...addCells([current, ...intoNow]),
+    key: "now",
+    startDay: ddmmyyyy(today),
+    endDay: ddmmyyyy(today.clone().add(group - 1, "days")),
+    slotIds: [...(current.slotIds || []), ...intoNow.map((cell) => cell.slotId).filter(Boolean)],
+  };
+  const cells = [...buckets.values()]
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .map((bucket) => ({
+      key: bucket.key,
+      startDay: bucket.startDay,
+      endDay: bucket.endDay,
+      ...addCells(bucket.list),
+      slotIds: bucket.list.map((cell) => cell.slotId).filter(Boolean),
+    }));
+  return { now, cells };
+}
+
 /**
  * Board row for one variety.
  * `slots` carry { slotId, startDay, endDay, booked, gap, excess, pendingDispatch }.
  * The current cell folds in every overdue past slot so urgent work sits in one column.
  * `upcoming` keeps every future slot in the window (the ready-plants message reads further ahead);
- * `totals` cover only the columns the table shows.
+ * `now` + `cells` are the table columns (see boardCells) and `totals` add them up.
  */
-export function buildBoardRow({ slots, today, stock = null }) {
+export function buildBoardRow({ slots, today, stock = null, groupDays = 1, tableDays = BOARD_TABLE_DAYS }) {
   const slotDays = dominantSlotDays(slots);
   const past = [];
   let current = null;
@@ -148,12 +221,15 @@ export function buildBoardRow({ slots, today, stock = null }) {
     slotIds: [own.slotId, ...overdue.slotIds].filter(Boolean),
   };
 
-  const totals = addCells([currentCell, ...upcoming.slice(0, upcomingSlotCount(slotDays))]);
+  const { now, cells } = boardCells({ current: currentCell, upcoming, today, groupDays, tableDays });
+  const totals = addCells([now, ...cells]);
 
   return {
     slotDays,
     current: currentCell,
     upcoming,
+    now,
+    cells,
     totals,
     stock: stock || { inShed: 0, readyNow: 0, batches: [] },
   };

@@ -25,9 +25,11 @@ import {
   slotOverlapsRange,
 } from "../utility/capacitySheetMetrics.js";
 import {
+  BOARD_TABLE_DAYS,
   OVERDUE_LOOKBACK_DAYS,
   boardRowHasNumbers,
   buildBoardRow,
+  parseGroupDays,
   shedStockByVariety,
   varietyKey,
 } from "../utility/capacityBoardMetrics.js";
@@ -403,8 +405,10 @@ function groupByVariety(list, plantOf, subtypeOf) {
 /**
  * Variety-wise board: stock in sheds, overdue folded into the current slot, then the next slots.
  * Rows carry their slot length so the UI can split 1-day and 7-day varieties into separate tables.
+ * groupDays > 1 buckets the table cells into N-day groups from today (see boardCells).
  */
-export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFSET)) {
+export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFSET), { groupDays = 1 } = {}) {
+  const group = parseGroupDays(groupDays);
   const today = now.clone().startOf("day");
   const from = today.clone().subtract(OVERDUE_LOOKBACK_DAYS, "days");
   const to = today.clone().add(BOARD_FORWARD_DAYS, "days").endOf("day");
@@ -451,7 +455,7 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
           pendingDispatch: pendingBySlot.get(slotId) || 0,
         };
       });
-      const row = buildBoardRow({ slots: subtypeSlots, today, stock: stockByVariety.get(key) });
+      const row = buildBoardRow({ slots: subtypeSlots, today, stock: stockByVariety.get(key), groupDays: group });
       if (!boardRowHasNumbers(row)) continue;
       rows.push({
         plantId: String(plant._id),
@@ -474,7 +478,7 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
       subtypeId: stock.subtypeId,
       subtypeName: stock.subtypeName || "—",
       sowingAllowed: false,
-      ...buildBoardRow({ slots: [], today, stock }),
+      ...buildBoardRow({ slots: [], today, stock, groupDays: group }),
     });
   }
   rows.sort(
@@ -484,14 +488,19 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
   return {
     today: today.format("YYYY-MM-DD"),
     overdueLookbackDays: OVERDUE_LOOKBACK_DAYS,
+    groupDays: group,
+    tableDays: BOARD_TABLE_DAYS,
     rows,
   };
 }
 
-/** GET /sowing/capacity-sheet/board — variety rows: stock, overdue + current slot, next slots. */
+/**
+ * GET /sowing/capacity-sheet/board?group=1|3 — variety rows: stock, now (current + overdue),
+ * and only the future cells that have plants; group=3 buckets them into 3-day groups from today.
+ */
 export const getCapacityBoard = async (req, res) => {
   try {
-    const payload = await loadCapacityBoardPayload();
+    const payload = await loadCapacityBoardPayload(undefined, { groupDays: req.query?.group });
     return res.status(200).json({
       success: true,
       ...payload,
