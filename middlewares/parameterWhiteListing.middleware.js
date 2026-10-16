@@ -41,6 +41,7 @@ const allowedParams = [
   "deliveryDate", // GET /sowing/excess-batches
   "need", // GET /sowing/excess-batches
   "windowDays", // GET /sowing/excess-batches
+  "group", // GET /sowing/capacity-sheet/board — N-day column groups
   "year",
   "onlyAvailable", // GET /slots/availability-overview
   "minNumberPerCrate",

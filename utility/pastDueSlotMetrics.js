@@ -50,7 +50,7 @@ function slotWindowLabel(slot) {
 }
 
 /** Map order _id → ready slot where its sowing batch was recorded. */
-export function buildOrderSowingSlotIndex(slots, slotMap = null) {
+export function buildOrderSowingSlotIndex(slots, slotMap = null, movedMetaByOrder = null) {
   const byOrderId = new Map();
   const resolveLabel = (slotId) => {
     if (slotMap?.has(slotId)) {
@@ -95,6 +95,10 @@ export function buildOrderSowingSlotIndex(slots, slotMap = null) {
     }
   }
 
+  for (const [orderId, meta] of movedMetaByOrder || []) {
+    byOrderId.set(orderId, meta);
+  }
+
   return byOrderId;
 }
 
@@ -105,6 +109,7 @@ export function buildSowingFromOtherSlotDetail({ slot, deliveryOrders, orderSowi
   const slotId = slot?._id?.toString?.() ?? String(slot?._id || "");
   const localOrderIds = new Set();
   for (const batch of slot?.sowingBatches || []) {
+    if (batch.coverMovedFrom?.slotId) continue;
     for (const oid of batch.linkedOrderIds || []) {
       localOrderIds.add(oid?.toString?.() ?? String(oid));
     }
@@ -136,8 +141,13 @@ export function buildSowingFromOtherSlotDetail({ slot, deliveryOrders, orderSowi
 
     const row = mapCrossSlotOrderRow(order, {
       fromSlotLabel,
+      fromSlotId: sowingSource?.fromSlotId || "",
+      toSlotLabel: slotWindowLabel(slot),
       requestNumber: sowingSource?.requestNumber || "",
+      sowingDate: sowingSource?.sowingDate || "",
       plantReadyDate: sowingSource?.plantReadyDate || "",
+      sowingNote: sowingSource?.sowingNote || "",
+      fromExcess: Boolean(sowingSource?.fromExcess),
     });
     orders.push(row);
     plants += row.plants;
@@ -227,6 +237,7 @@ export function buildSowingGapDetail({
   const slotId = slot?._id?.toString?.() ?? String(slot?._id || "");
   const localCoverByOrder = new Map();
   for (const batch of slot?.sowingBatches || []) {
+    if (batch.coverMovedFrom?.slotId) continue;
     for (const oid of batch.linkedOrderIds || []) {
       const orderKey = oid?.toString?.() ?? String(oid);
       localCoverByOrder.set(orderKey, {
@@ -263,8 +274,10 @@ export function buildSowingGapDetail({
               meta.fromSlotLabel ||
               (local ? slotWindowLabel(slot) : "") ||
               "Other slot",
+            fromSlotId: meta.fromSlotId || "",
             plantReadyDate: meta.plantReadyDate || "",
             requestNumber: meta.requestNumber || "",
+            sowingNote: meta.sowingNote || "",
             coverType: local ? "local" : "other",
           })
         );
@@ -599,6 +612,7 @@ export function buildSlotOrderMetrics({
   crossSlotDetailBySlot,
   sowingFromOtherSlotDetail = null,
   sowingGapDetail = null,
+  coverMovedOutDetail = null,
 }) {
   const isCurrentSlot = slotId === pastDueGroup.currentSlotId;
   const rolledOnCurrent = pastDueGroup.pastDueDetail?.rolledInOnCurrentSlot || {};
@@ -664,6 +678,8 @@ export function buildSlotOrderMetrics({
     sowingFromOtherSlotDetail: sowingOther,
     sowingFromOtherSlotPlants: sowingOther.plants || 0,
     sowingFromOtherSlotOrders: sowingOther.orderCount || 0,
+    coverMovedOutDetail: coverMovedOutDetail || { orders: [], orderCount: 0, plants: 0 },
+    coverMovedOutPlants: coverMovedOutDetail?.plants || 0,
     sowingGapDetail: sowingGapDetail || {
       uncovered: { orders: [], orderCount: 0, plants: 0 },
       coveredByReadyDate: [],

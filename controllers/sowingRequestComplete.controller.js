@@ -1216,6 +1216,11 @@ function buildAffectedSlot(slotRaw, reqBatch, shedName) {
     plantReadyDays: reqBatch?.plantReadyDays ?? slotRaw.plantReadyDays ?? null,
     batchPlantsSowed: Number(reqBatch?.plantsSowed) || 0,
     batchPacketsUsed: Number(reqBatch?.packetsUsed) || 0,
+    batchId: reqBatch?._id ? String(reqBatch._id) : null,
+    batchDestroyedPlants: Number(reqBatch?.destroyedPlants) || 0,
+    requestDestroyedPlants: (slotRaw.sowingBatches || [])
+      .filter((b) => reqBatch && String(b.sowingRequestId) === String(reqBatch.sowingRequestId))
+      .reduce((s, b) => s + (Number(b.destroyedPlants) || 0), 0),
     shedName: reqBatch?.shedName || shedName || "",
   };
 }

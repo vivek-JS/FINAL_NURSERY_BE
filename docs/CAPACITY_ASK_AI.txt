@@ -13,6 +13,12 @@ Required, already in the system
    Fields used: can book (excess minus gap), gap, booked, sowed, excess, status.
    One row per plant and subtype. Slot size and stored available plants are not used.
 
+1b. Capacity board, variety by variety (same data as the Sowing & Booking Capacity page).
+   Source: loadCapacityBoardPayload, slimmed by boardForAnalyst in utility/capacityAsk.js.
+   Fields: shed stock (in shed, ready now, batches), current slot incl. overdue
+   (ready, booked, net, overdue booked, unsold from past), next slots, urgent flag,
+   sowingRequired (false for crops we do not sow, e.g. banana).
+
 2. District, optional.
    Source: existing location cascade, Maharashtra districts.
    Default scope is all Maharashtra. The user can pick a district for weather only.
@@ -49,6 +55,8 @@ Env (backend only, never commit .env):
 
 The server sends the capacity packet, weather, and mandi to OpenRouter.
 The reply must be JSON:
+  answer        direct reply to the question, 2-8 lines, "Crop – Variety: ..." per line,
+                in the language of the question (Marathi / Hindi / English)
   action        book | wait | sow_first
   confidence    0 to 100
   summary       short analyst note
@@ -58,3 +66,5 @@ The reply must be JSON:
 
 A negative can book means the gap is larger than sowed excess, so the action should lean sow_first.
 If the free model does not return usable JSON, the API falls back to the same rules and marks source as "rules".
+If the model gives no answer, rulesAnswer builds one from the board (variety asked about, overdue/short,
+shed stock, or free to sell) and advice.answerSource is "sheet" instead of "ai".

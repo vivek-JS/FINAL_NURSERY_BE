@@ -2701,17 +2701,6 @@ const updateOne = (Model, modelName, allowedFields) =>
         );
         console.log(`✅ Slot update completed for cancelled order`);
 
-        if (existingDoc.sowingCoverSources?.length && !existingDoc.sowingCoverReversedAt) {
-          const coverReverse = await reverseOrderBatchCover({
-            order: existingDoc,
-            userId: req.user?._id,
-            session,
-          });
-          console.log(
-            `🔙 Excess batch cover reversed for order #${existingDoc.orderId}: ${coverReverse.plants || 0} plants`
-          );
-        }
-
         if (beforeSnap) {
           try {
             await appendOrderSlotTrail({
@@ -2730,6 +2719,22 @@ const updateOne = (Model, modelName, allowedFields) =>
             console.error("Order cancel slot trail failed:", trailErr);
           }
         }
+      }
+
+      if (
+        isCancelLikeOrderStatus(filteredBody.orderStatus) &&
+        !isCancelLikeOrderStatus(existingDoc.orderStatus) &&
+        existingDoc.sowingCoverSources?.length &&
+        !existingDoc.sowingCoverReversedAt
+      ) {
+        const coverReverse = await reverseOrderBatchCover({
+          order: existingDoc,
+          userId: req.user?._id,
+          session,
+        });
+        console.log(
+          `🔙 Excess batch cover reversed for order #${existingDoc.orderId}: ${coverReverse.plants || 0} plants`
+        );
       }
 
       // Re-deduct slot when order status changes from CANCELLED/REJECTED back to PENDING (or any non-cancelled status)
@@ -4905,6 +4910,7 @@ const getAll = (Model, modelName) =>
           sowingDoneRequestId: 1,
           sowingCoverSources: 1,
           sowingCoverReversedAt: 1,
+          productMappingId: 1,
           payment: 1,
           numberOfPlants: 1,
           additionalPlants: { $ifNull: ["$additionalPlants", 0] },

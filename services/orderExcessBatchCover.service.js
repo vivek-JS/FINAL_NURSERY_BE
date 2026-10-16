@@ -11,6 +11,7 @@ import {
 } from "../controllers/orderSowFromExcess.controller.js";
 import { writeTransferAudit } from "../controllers/sowingTransferAudit.helpers.js";
 import { recordSlotTrail } from "../utility/slotTrailStore.js";
+import { splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
 import {
   SLOT_TRAIL_ACTIONS,
   getSlotTrailActivityName,
@@ -125,6 +126,9 @@ export async function listExcessBatches({
               plantsSowed: { $ifNull: ["$$b.plantsSowed", 0] },
               orderCoveredPlants: { $ifNull: ["$$b.orderCoveredPlants", 0] },
               excessPlants: { $ifNull: ["$$b.excessPlants", 0] },
+              actualPlantsApplied: "$$b.actualPlantsApplied",
+              expectedMortalityApplied: "$$b.expectedMortalityApplied",
+              availablePlantsApplied: "$$b.availablePlantsApplied",
               shedName: "$$b.shedName",
               requestNumber: "$$b.requestNumber",
               sowingRequestId: "$$b.sowingRequestId",
@@ -174,6 +178,12 @@ export async function listExcessBatches({
         plantsSowed: sowed,
         orderCoveredPlants: int(b.orderCoveredPlants),
         batchExcessPlants: int(b.excessPlants),
+        batchActualApplied: b.actualPlantsApplied == null ? null : int(b.actualPlantsApplied),
+        batchMortalityApplied:
+          b.expectedMortalityApplied == null ? null : int(b.expectedMortalityApplied),
+        batchAvailableApplied:
+          b.availablePlantsApplied == null ? null : int(b.availablePlantsApplied),
+        sowedAt: b.sowedAt || null,
         slotAvailablePlants: int(slot.availablePlants),
         slotExcessivePlants: int(slot.excessivePlants),
       });
@@ -266,8 +276,34 @@ export async function validateCoverPicks({
 const SLOT_PATH = "subtypeSlots.$[st].slots.$[sl]";
 const BATCH_PATH = `${SLOT_PATH}.sowingBatches.$[b]`;
 
+/** Positional filters for a batch matched by id only (it may have moved slot since). */
+function batchFilters(batchOid) {
+  return [
+    { "st.slots.sowingBatches._id": batchOid },
+    { "sl.sowingBatches._id": batchOid },
+    { "b._id": batchOid },
+  ];
+}
+
+function batchExistsFilter(batchOid, extra = {}) {
+  return {
+    subtypeSlots: {
+      $elemMatch: {
+        slots: { $elemMatch: { sowingBatches: { $elemMatch: { _id: batchOid, ...extra } } } },
+      },
+    },
+  };
+}
+
+/**
+ * Take plants from a source batch.
+ * Same slot as the booking → batch.orderCoveredPlants += take (plants stay).
+ * Other slot → plants move: source batch/slot sowed −take; a real sow entry with the
+ * same sowing date is added on the booking slot (covered, not saleable).
+ */
 async function applySourcePick({
   pick,
+  destination,
   orderOid,
   userOid,
   now,
@@ -278,30 +314,54 @@ async function applySourcePick({
   const slotOid = toOid(pick.slotId);
   const batchOid = toOid(pick.batchId);
   const take = pick.take;
+  const moved = String(pick.slotId) !== String(destination.slotId);
   const excessDec = Math.min(take, Math.max(0, excessiveLeft));
   const availDec = Math.min(take, Math.max(0, availableLeft));
   const batchExcessDec = Math.min(take, int(pick.batchExcessPlants));
   const maxCoveredBefore = pick.plantsSowed - take;
+  const split = splitLagwadQtyForSlot(take);
+  const batchActualDec =
+    moved && pick.batchActualApplied != null ? Math.min(split.actualPlants, pick.batchActualApplied) : 0;
+  const batchMortalityDec =
+    moved && pick.batchMortalityApplied != null
+      ? Math.min(split.expectedMortality, pick.batchMortalityApplied)
+      : 0;
+  const batchAvailableDec =
+    moved && pick.batchAvailableApplied != null ? Math.min(availDec, pick.batchAvailableApplied) : 0;
+  const actualDec = !moved ? 0 : pick.batchActualApplied != null ? batchActualDec : split.actualPlants;
+  const mortalityDec = !moved
+    ? 0
+    : pick.batchMortalityApplied != null
+      ? batchMortalityDec
+      : split.expectedMortality;
 
-  const slotMatch = {
-    _id: slotOid,
-    sowingBatches: {
-      $elemMatch: {
-        _id: batchOid,
-        $or: [
-          { orderCoveredPlants: { $lte: maxCoveredBefore } },
-          { orderCoveredPlants: { $exists: false } },
-          { orderCoveredPlants: null },
-        ],
-      },
-    },
+  const batchMatch = {
+    _id: batchOid,
+    $or: [
+      { orderCoveredPlants: { $lte: maxCoveredBefore } },
+      { orderCoveredPlants: { $exists: false } },
+      { orderCoveredPlants: null },
+    ],
   };
+  if (moved) batchMatch.plantsSowed = pick.plantsSowed;
+  const slotMatch = { _id: slotOid, sowingBatches: { $elemMatch: batchMatch } };
   if (excessDec > 0) slotMatch["excessiveSowing.plants"] = { $gte: excessDec };
   if (availDec > 0) slotMatch.availablePlants = { $gte: availDec };
 
-  const inc = {
-    [`${BATCH_PATH}.orderCoveredPlants`]: take,
-  };
+  const inc = {};
+  if (moved) {
+    inc[`${SLOT_PATH}.primarySowed`] = -take;
+    inc[`${SLOT_PATH}.plantsSowed`] = -take;
+    inc[`${SLOT_PATH}.totalPlants`] = -take;
+    if (actualDec > 0) inc[`${SLOT_PATH}.actualPlants`] = -actualDec;
+    if (mortalityDec > 0) inc[`${SLOT_PATH}.expectedMortality`] = -mortalityDec;
+    inc[`${BATCH_PATH}.plantsSowed`] = -take;
+    if (batchActualDec > 0) inc[`${BATCH_PATH}.actualPlantsApplied`] = -batchActualDec;
+    if (batchMortalityDec > 0) inc[`${BATCH_PATH}.expectedMortalityApplied`] = -batchMortalityDec;
+    if (batchAvailableDec > 0) inc[`${BATCH_PATH}.availablePlantsApplied`] = -batchAvailableDec;
+  } else {
+    inc[`${BATCH_PATH}.orderCoveredPlants`] = take;
+  }
   if (availDec > 0) inc[`${SLOT_PATH}.availablePlants`] = -availDec;
   if (excessDec > 0) inc[`${SLOT_PATH}.excessiveSowing.plants`] = -excessDec;
   if (batchExcessDec > 0) inc[`${BATCH_PATH}.excessPlants`] = -batchExcessDec;
@@ -327,41 +387,125 @@ async function applySourcePick({
     }
   );
   if (!res.matchedCount) return null;
-  return { excessDec, availDec, batchExcessDec };
+
+  const applied = {
+    moved,
+    excessDec,
+    availDec,
+    batchExcessDec,
+    actualDec,
+    mortalityDec,
+    batchActualDec,
+    batchMortalityDec,
+    batchAvailableDec,
+    destSlotId: null,
+    destBatchId: null,
+  };
+  if (!moved) return applied;
+
+  const destSlotOid = toOid(destination.slotId);
+  const destBatchId = new mongoose.Types.ObjectId();
+  const destRes = await PlantSlot.collection.updateOne(
+    { "subtypeSlots.slots._id": destSlotOid },
+    {
+      $inc: {
+        [`${SLOT_PATH}.primarySowed`]: take,
+        [`${SLOT_PATH}.plantsSowed`]: take,
+        [`${SLOT_PATH}.totalPlants`]: take,
+        [`${SLOT_PATH}.actualPlants`]: split.actualPlants,
+        [`${SLOT_PATH}.expectedMortality`]: split.expectedMortality,
+      },
+      $push: {
+        [`${SLOT_PATH}.sowingBatches`]: {
+          _id: destBatchId,
+          sowedAt: pick.sowedAt ? new Date(pick.sowedAt) : now,
+          sowingDate: pick.sowingDate || "",
+          plantReadyDate: pick.plantReadyDate || "",
+          plantsSowed: take,
+          packetsUsed: 0,
+          orderCoveredPlants: take,
+          excessPlants: 0,
+          actualPlantsApplied: split.actualPlants,
+          expectedMortalityApplied: split.expectedMortality,
+          availablePlantsApplied: 0,
+          orderReservedPlantsApplied: take,
+          shedName: pick.shedName || "",
+          isExcessiveSowing: false,
+          linkedOrderIds: [orderOid],
+          coverMovedFrom: { slotId: slotOid, batchId: batchOid },
+          slotHistory: [
+            {
+              at: now,
+              by: userOid,
+              fromSlotId: slotOid,
+              toSlotId: destSlotOid,
+              fromReadyDate: pick.plantReadyDate || "",
+              toReadyDate: destination.label || "",
+              sowDate: pick.sowingDate || "",
+              plantsSowed: take,
+              reason: "EXCESS_COVER_MOVE",
+            },
+          ],
+        },
+      },
+    },
+    {
+      arrayFilters: [{ "st.slots._id": destSlotOid }, { "sl._id": destSlotOid }],
+      ...(session ? { session } : {}),
+    }
+  );
+  applied.destSlotId = String(destSlotOid);
+  applied.destBatchId = String(destBatchId);
+  if (!destRes.matchedCount) {
+    applied.destSlotId = null;
+    applied.destBatchId = null;
+    await revertSourcePick({ batchId: pick.batchId, plants: take, ...applied, orderOid, session });
+    return null;
+  }
+  return applied;
 }
 
-/** Batch may have moved slot (sow-date edit) since the cover, so match it by batch id. */
+/** Undo one source pick (and remove the moved sow entry from the booking slot). */
 async function revertSourcePick({
   batchId,
   plants,
-  excessDec,
-  availDec,
-  batchExcessDec,
+  moved = false,
+  excessDec = 0,
+  availDec = 0,
+  batchExcessDec = 0,
+  actualDec = 0,
+  mortalityDec = 0,
+  batchActualDec = 0,
+  batchMortalityDec = 0,
+  batchAvailableDec = 0,
+  destBatchId = null,
   orderOid,
   session,
 }) {
   const batchOid = toOid(batchId);
   if (!batchOid || plants <= 0) return false;
-  const inc = {
-    [`${BATCH_PATH}.orderCoveredPlants`]: -plants,
-  };
+  const opts = session ? { session } : {};
+
+  const inc = {};
+  if (moved) {
+    inc[`${SLOT_PATH}.primarySowed`] = plants;
+    inc[`${SLOT_PATH}.plantsSowed`] = plants;
+    inc[`${SLOT_PATH}.totalPlants`] = plants;
+    if (actualDec > 0) inc[`${SLOT_PATH}.actualPlants`] = actualDec;
+    if (mortalityDec > 0) inc[`${SLOT_PATH}.expectedMortality`] = mortalityDec;
+    inc[`${BATCH_PATH}.plantsSowed`] = plants;
+    if (batchActualDec > 0) inc[`${BATCH_PATH}.actualPlantsApplied`] = batchActualDec;
+    if (batchMortalityDec > 0) inc[`${BATCH_PATH}.expectedMortalityApplied`] = batchMortalityDec;
+    if (batchAvailableDec > 0) inc[`${BATCH_PATH}.availablePlantsApplied`] = batchAvailableDec;
+  } else {
+    inc[`${BATCH_PATH}.orderCoveredPlants`] = -plants;
+  }
   if (availDec > 0) inc[`${SLOT_PATH}.availablePlants`] = availDec;
   if (excessDec > 0) inc[`${SLOT_PATH}.excessiveSowing.plants`] = excessDec;
   if (batchExcessDec > 0) inc[`${BATCH_PATH}.excessPlants`] = batchExcessDec;
+
   const res = await PlantSlot.collection.updateOne(
-    {
-      subtypeSlots: {
-        $elemMatch: {
-          slots: {
-            $elemMatch: {
-              sowingBatches: {
-                $elemMatch: { _id: batchOid, orderCoveredPlants: { $gte: plants } },
-              },
-            },
-          },
-        },
-      },
-    },
+    batchExistsFilter(batchOid, moved ? {} : { orderCoveredPlants: { $gte: plants } }),
     {
       $inc: inc,
       $pull: {
@@ -369,16 +513,79 @@ async function revertSourcePick({
         [`${BATCH_PATH}.linkedOrderIds`]: orderOid,
       },
     },
-    {
-      arrayFilters: [
-        { "st.slots.sowingBatches._id": batchOid },
-        { "sl.sowingBatches._id": batchOid },
-        { "b._id": batchOid },
-      ],
-      ...(session ? { session } : {}),
-    }
+    { arrayFilters: batchFilters(batchOid), ...opts }
   );
+
+  const destOid = toOid(destBatchId);
+  if (moved && destOid) {
+    const split = splitLagwadQtyForSlot(plants);
+    await PlantSlot.collection.updateOne(
+      batchExistsFilter(destOid),
+      {
+        $inc: {
+          [`${SLOT_PATH}.primarySowed`]: -plants,
+          [`${SLOT_PATH}.plantsSowed`]: -plants,
+          [`${SLOT_PATH}.totalPlants`]: -plants,
+          [`${SLOT_PATH}.actualPlants`]: -(actualDec || split.actualPlants),
+          [`${SLOT_PATH}.expectedMortality`]: -(mortalityDec || split.expectedMortality),
+        },
+        $pull: { [`${SLOT_PATH}.sowingBatches`]: { _id: destOid } },
+      },
+      {
+        arrayFilters: [
+          { "st.slots.sowingBatches._id": destOid },
+          { "sl.sowingBatches._id": destOid },
+        ],
+        ...opts,
+      }
+    );
+  }
   return res.matchedCount > 0;
+}
+
+/** Older covers left a 0-plant pointer entry on the booking slot; drop it on reverse. */
+async function removeCoverPointerBatches(sowingRequestId, session) {
+  const reqOid = toOid(sowingRequestId);
+  if (!reqOid) return;
+  await PlantSlot.collection.updateMany(
+    {
+      "subtypeSlots.slots.sowingBatches": {
+        $elemMatch: { sowingRequestId: reqOid, plantsSowed: 0 },
+      },
+    },
+    {
+      $pull: {
+        "subtypeSlots.$[].slots.$[].sowingBatches": { sowingRequestId: reqOid, plantsSowed: 0 },
+      },
+    },
+    session ? { session } : {}
+  );
+}
+
+/** Tag moved sow entries with the cover's audit request (shows on slot sow entries). */
+async function tagMovedBatches(applied, request, session) {
+  for (const a of applied) {
+    const destOid = toOid(a.destBatchId);
+    if (!destOid || !request?._id) continue;
+    await PlantSlot.collection.updateOne(
+      batchExistsFilter(destOid),
+      {
+        $set: {
+          [`${BATCH_PATH}.sowingRequestId`]: request._id,
+          [`${BATCH_PATH}.requestNumber`]: request.requestNumber,
+        },
+        $addToSet: { [`${SLOT_PATH}.linkedSowingRequests`]: request._id },
+      },
+      {
+        arrayFilters: [
+          { "st.slots.sowingBatches._id": destOid },
+          { "sl.sowingBatches._id": destOid },
+          { "b._id": destOid },
+        ],
+        ...(session ? { session } : {}),
+      }
+    );
+  }
 }
 
 async function incDestinationReserved(slotId, delta, session) {
@@ -433,7 +640,7 @@ function coverRemark(sources) {
  * Cover a booked order from picked sowing batches: source batch cover, destination
  * orderReserved, order sowingDone + sowingCoverSources, audit request and trail rows.
  */
-export async function coverOrderFromBatches({ order: orderInput, picks, userId }) {
+export async function coverOrderFromBatches({ order: orderInput, picks, userId, quiet = false }) {
   const orderOid = toOid(orderInput?._id || orderInput);
   if (!orderOid) throw new ExcessCoverError("ORDER_NOT_FOUND", "Order not found", 404);
   const order = await Order.findById(orderOid)
@@ -499,6 +706,7 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId }
     const availableLeft = availableLeftBySlot.get(pick.slotId);
     const res = await applySourcePick({
       pick,
+      destination,
       orderOid,
       userOid,
       now,
@@ -515,14 +723,7 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId }
     }
     excessiveLeftBySlot.set(pick.slotId, excessiveLeft - res.excessDec);
     availableLeftBySlot.set(pick.slotId, availableLeft - res.availDec);
-    applied.push({
-      slotId: pick.slotId,
-      batchId: pick.batchId,
-      plants: pick.take,
-      excessDec: res.excessDec,
-      availDec: res.availDec,
-      batchExcessDec: res.batchExcessDec,
-    });
+    applied.push({ ...res, slotId: pick.slotId, batchId: pick.batchId, plants: pick.take });
   }
 
   const destOk = await incDestinationReserved(destination.slotId, need);
@@ -544,6 +745,14 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId }
     excessiveSowingDec: applied[i].excessDec,
     availablePlantsDec: applied[i].availDec,
     batchExcessDec: applied[i].batchExcessDec,
+    moved: applied[i].moved,
+    destSlotId: toOid(applied[i].destSlotId),
+    destBatchId: toOid(applied[i].destBatchId),
+    actualPlantsDec: applied[i].actualDec,
+    expectedMortalityDec: applied[i].mortalityDec,
+    batchActualAppliedDec: applied[i].batchActualDec,
+    batchMortalityAppliedDec: applied[i].batchMortalityDec,
+    batchAvailableAppliedDec: applied[i].batchAvailableDec,
   }));
   const remark = coverRemark(sources);
 
@@ -556,7 +765,7 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId }
         sowingCoverSources: sources,
       },
       $unset: { sowingCoverReversedAt: "" },
-      $push: { orderRemarks: remark },
+      ...(quiet ? {} : { $push: { orderRemarks: remark } }),
     },
     { new: true }
   );
@@ -582,9 +791,11 @@ export async function coverOrderFromBatches({ order: orderInput, picks, userId }
       userId,
       note: "Cover order from excess sowing batches",
       destCountsAsCovered: false,
+      skipDestBatch: true,
     });
     if (request?._id) {
       await Order.updateOne({ _id: orderOid }, { $set: { sowingDoneRequestId: request._id } });
+      await tagMovedBatches(applied, request);
     }
   } catch (err) {
     console.error("[excessCover] audit write failed:", err?.message || err);
@@ -675,7 +886,7 @@ async function writeCoverTrails({ order, sources, destination, need, userId, act
  * Undo coverOrderFromBatches (order cancel / reject). Safe to call twice.
  * Pass the cancel transaction's session to keep slot + order writes atomic.
  */
-export async function reverseOrderBatchCover({ order, userId, session }) {
+export async function reverseOrderBatchCover({ order, userId, session, quiet = false }) {
   const sources = Array.isArray(order?.sowingCoverSources) ? order.sowingCoverSources : [];
   if (!sources.length || order?.sowingCoverReversedAt) {
     return { reversed: false, sources: 0 };
@@ -683,15 +894,29 @@ export async function reverseOrderBatchCover({ order, userId, session }) {
   const orderOid = toOid(order._id);
   const need = orderPlantsNeed(order);
   const destSlotId = order.bookingSlot?._id || order.bookingSlot;
+  let auditRequestId = order.sowingDoneRequestId;
+  if (auditRequestId === undefined) {
+    const fresh = await Order.findById(orderOid)
+      .select("sowingDoneRequestId")
+      .session(session || null)
+      .lean();
+    auditRequestId = fresh?.sowingDoneRequestId;
+  }
 
   for (const s of sources) {
     const ok = await revertSourcePick({
-      slotId: s.slotId,
       batchId: s.batchId,
       plants: int(s.plants),
+      moved: Boolean(s.moved),
       excessDec: int(s.excessiveSowingDec),
       availDec: s.availablePlantsDec == null ? int(s.plants) : int(s.availablePlantsDec),
       batchExcessDec: int(s.batchExcessDec),
+      actualDec: int(s.actualPlantsDec),
+      mortalityDec: int(s.expectedMortalityDec),
+      batchActualDec: int(s.batchActualAppliedDec),
+      batchMortalityDec: int(s.batchMortalityAppliedDec),
+      batchAvailableDec: int(s.batchAvailableAppliedDec),
+      destBatchId: s.destBatchId,
       orderOid,
       session,
     });
@@ -703,6 +928,7 @@ export async function reverseOrderBatchCover({ order, userId, session }) {
   }
   const coveredTotal = sources.reduce((sum, s) => sum + int(s.plants), 0);
   await incDestinationReserved(destSlotId, -(coveredTotal || need), session);
+  await removeCoverPointerBatches(auditRequestId, session);
 
   const at = new Date();
   await Order.collection.updateOne(
@@ -710,12 +936,18 @@ export async function reverseOrderBatchCover({ order, userId, session }) {
     {
       $set: { sowingCoverReversedAt: at, sowingDone: false },
       $unset: { sowingDoneAt: "", sowingDoneRequestId: "" },
-      $push: {
-        orderRemarks: `Excess cover reversed: ${coveredTotal.toLocaleString("en-IN")} plants returned to sowing batches`,
-      },
+      ...(quiet
+        ? {}
+        : {
+            $push: {
+              orderRemarks: `Excess cover reversed: ${coveredTotal.toLocaleString("en-IN")} plants returned to sowing entries`,
+            },
+          }),
     },
     session ? { session } : undefined
   );
+
+  if (quiet) return { reversed: true, sources: sources.length, plants: coveredTotal };
 
   await writeCoverTrails({
     order,

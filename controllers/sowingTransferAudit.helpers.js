@@ -27,6 +27,8 @@ export async function writeTransferAudit({
   note = "Cover order from slot stock",
   /** false → destination batch is a pointer (0 plants); cover lives on the source batches. */
   destCountsAsCovered = true,
+  /** true → caller writes the destination sow entries itself; no batch is pushed here. */
+  skipDestBatch = false,
 }) {
   const qty = Math.max(0, Math.floor(Number(plants) || 0));
   const destBatchPlants = destCountsAsCovered ? qty : 0;
@@ -113,6 +115,8 @@ export async function writeTransferAudit({
   }));
 
   const readyLabel = destination.startDay || windowDeliveryLabel(order);
+
+  if (skipDestBatch) return request;
 
   await PlantSlot.updateOne(
     { "subtypeSlots.slots._id": destId },

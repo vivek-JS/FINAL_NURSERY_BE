@@ -1,19 +1,24 @@
 import {
+  answerFocus,
+  boardForAnalyst,
   bookingDirection,
   commodityMatchesCrops,
   contextBrief,
   cropsOnSheet,
   groundAdvice,
   parseAnalystJson,
+  rowsMentioned,
   rulesAnalyst,
+  rulesAnswer,
   slimCapacityForAnalyst,
 } from "../utility/capacityAsk.js";
-import { loadCapacitySheetPayload } from "./capacitySheet.controller.js";
+import { loadCapacityBoardPayload, loadCapacitySheetPayload } from "./capacitySheet.controller.js";
 import { defaultCapacityRange, parseRangeBound } from "../utility/capacitySheetMetrics.js";
 import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
 
 const MANDI_RESOURCE = "9ef84268-d588-465a-a308-a864a43d0070";
+const ANSWER_CARDS = 8;
 
 async function fetchJson(url, ms = 12000) {
   const response = await fetch(url, { signal: AbortSignal.timeout(ms) });
@@ -107,23 +112,39 @@ export async function fetchMandiPrices({ district, crops }) {
   }
 }
 
-function analystPrompt({ district, question, capacity, weather, mandi }) {
+function analystPrompt({ district, question, capacity, board, weather, mandi }) {
   return [
-    "You are a nursery booking analyst for a plant nursery in Maharashtra.",
-    "The capacity JSON is our live sheet for the whole nursery. It is not split by district.",
-    "Answer plant by plant and subtype by subtype. One action for the whole nursery is not enough.",
-    "Use only the JSON facts. Do not invent plants, slot capacity, available plants, or prices.",
-    "Can book = sowed excess minus sowing gap. Negative can book means sow that plant or subtype before booking it.",
-    "Return one JSON object and nothing else.",
-    'Keys: action ("book" | "wait" | "sow_first"), confidence (0-100 integer), summary, downside, weatherNote, mandiNote.',
-    "summary must name which plants to sow first and which plants can be booked, using the plant names from the input.",
-    "Lower confidence when mandi or weather is missing, or when rain is heavy.",
-    "Weather and mandi are extra context. They do not replace our can-book and gap numbers.",
+    "You are the booking desk analyst of Ram Biotech, a plant nursery in Maharashtra.",
+    "Staff ask you short questions before they promise plants to farmers. Answer the question they asked.",
+    "",
+    "DATA",
+    "board.varieties is the live board, one row per crop – variety (e.g. Papaya – Taiwan):",
+    "- stock.inShed / stock.readyNow: plants in our sheds now, and how many of them are ready to dispatch.",
+    "- now: the current slot. It already includes overdue slots from the last board.overdueLookbackDays days.",
+    "  ready = plants ready for that slot, booked = plants promised, net = ready − booked (negative = short, positive = free to sell).",
+    "  overdueBooked = orders from past slots not dispatched yet (urgent). unsoldFromPast = ready plants left over from past slots.",
+    "- next: the next slots in date order with the same ready / booked / net.",
+    "- urgent = short now or has overdue orders. sowingRequired false = crop we do not sow (e.g. banana): only shed stock counts.",
+    "- slotDays 1 = daily slots, 7 = weekly slots. Dates are DD-MM-YYYY.",
+    "capacity is the older sowing sheet for the date window: canBook = sowed excess − sowing gap; negative means sow before booking.",
+    "",
+    "RULES",
+    "- Use only these numbers. Never invent crops, varieties, dates, plant counts or prices. If the data does not have it, say so.",
+    "- Always name rows as 'Crop – Variety'. Put urgent items (overdue, short) before free ones.",
+    "- When asked about one crop or variety, give its stock, now and next slots.",
+    "- Reply in the language of the question: Marathi (Devanagari) if the question is in Marathi, Hindi if Hindi, else simple English.",
+    "- Weather and mandi are extra context only; they never override board numbers.",
+    "",
+    "OUTPUT: one JSON object, nothing else. Keys:",
+    '  answer: the direct reply, 2-8 short lines separated by \\n, each line starting with "Crop – Variety:" when about a variety. No markdown tables.',
+    '  action ("book" | "wait" | "sow_first"), confidence (0-100 integer, lower when weather or mandi is missing or rain is heavy),',
+    "  summary (which varieties to sow first and which can be booked), downside (main risk), weatherNote, mandiNote.",
     "",
     JSON.stringify({
       scope: district || "Maharashtra",
       district: district || null,
-      question: question || "What should we book or sow in this window, plant by plant?",
+      question: question || "What should we book or sow in this window, variety by variety?",
+      board,
       capacity,
       weather: {
         available: weather.available,
@@ -265,8 +286,15 @@ export const askCapacityAnalyst = async (req, res) => {
     }
     const question = String(req.body?.question || "").trim().slice(0, 500);
 
-    const sheet = await loadCapacitySheetPayload({ from, to, unbounded });
+    const [sheet, boardPayload] = await Promise.all([
+      loadCapacitySheetPayload({ from, to, unbounded }),
+      loadCapacityBoardPayload().catch((error) => {
+        console.error("loadCapacityBoardPayload:", error?.message || error);
+        return null;
+      }),
+    ]);
     const capacity = slimCapacityForAnalyst(sheet);
+    const board = boardForAnalyst(boardPayload);
     const crops = cropsOnSheet(sheet.plants);
     const [weather, mandi, flowResult] = await Promise.all([
       fetchDistrictWeather(scope),
@@ -278,7 +306,7 @@ export const askCapacityAnalyst = async (req, res) => {
     ]);
     const flow = flowResult;
 
-    const prompt = analystPrompt({ district, question, capacity, weather, mandi });
+    const prompt = analystPrompt({ district, question, capacity, board, weather, mandi });
     let model = process.env.OPENROUTER_MODEL || "openrouter/free";
     let advice = null;
     let source = "rules";
@@ -298,6 +326,16 @@ export const askCapacityAnalyst = async (req, res) => {
       source = "rules";
     }
     advice = groundAdvice(advice, { capacity, weather, district });
+    const modelAnswer = source === "openrouter" && Boolean(advice.answer);
+    if (!modelAnswer) advice.answer = rulesAnswer(board, question);
+    advice.answerSource = modelAnswer ? "ai" : "sheet";
+    const focus = answerFocus(board, question);
+    const mentioned = modelAnswer ? rowsMentioned(board, advice.answer) : [];
+    const cards = mentioned.length ? mentioned : focus.rows;
+    advice.answerTitle = focus.title;
+    advice.answerStockOnly = !mentioned.length && focus.stockOnly;
+    advice.answerRows = cards.slice(0, ANSWER_CARDS);
+    advice.answerMore = Math.max(0, cards.length - ANSWER_CARDS);
     const context = contextBrief({ flow, weather, mandi, scope });
 
     return res.status(200).json({

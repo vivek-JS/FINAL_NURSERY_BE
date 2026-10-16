@@ -10,7 +10,7 @@ import {
   shedStockByVariety,
   slotLengthDays,
   slotTiming,
-  upcomingSlotCount,
+  parseGroupDays,
 } from "../utility/capacityBoardMetrics.js";
 import { IST_OFFSET } from "../utility/istSlotDate.js";
 
@@ -41,8 +41,6 @@ test("dominant slot length picks the most common, ties go shorter", () => {
     ]),
     1
   );
-  assert.equal(upcomingSlotCount(1), 7);
-  assert.equal(upcomingSlotCount(7), 4);
 });
 
 test("slot cell: ready = sowed against orders + free excess, net = ready - booked", () => {
@@ -81,14 +79,57 @@ test("board row folds overdue into current and keeps next slots in order", () =>
   assert.equal(row.totals.ready, 1100 + 2000 + 150);
 });
 
-test("upcoming keeps every future slot; totals only cover the table columns", () => {
-  const slots = Array.from({ length: 10 }, (_, i) => {
-    const day = String(17 + i).padStart(2, "0");
-    return { slotId: `d${i}`, startDay: `${day}-10-2026`, endDay: `${day}-10-2026`, booked: 0, gap: 0, excess: 100, pendingDispatch: 0 };
-  });
-  const row = buildBoardRow({ slots, today });
-  assert.equal(row.upcoming.length, 10);
-  assert.equal(row.totals.ready, 7 * 100);
+const daySlot = (day, excess, booked = 0) => ({
+  slotId: `d${day}`,
+  startDay: `${day}-10-2026`,
+  endDay: `${day}-10-2026`,
+  booked,
+  gap: 0,
+  excess,
+  pendingDispatch: booked,
+});
+
+test("day-wise cells skip empty days and stay inside the table window", () => {
+  const slots = [daySlot("16", 100), daySlot("17", 0), daySlot("18", 0), daySlot("20", 300, 200), daySlot("29", 50)];
+  const row = buildBoardRow({ slots, today, tableDays: 10 });
+  assert.equal(row.now.key, "now");
+  assert.equal(row.now.ready, 100);
+  assert.deepEqual(
+    row.cells.map((c) => [c.key, c.ready, c.booked, c.slotIds.join()]),
+    [["2026-10-20", 500, 200, "d20"]]
+  );
+  assert.equal(row.upcoming.length, 4);
+  assert.equal(row.totals.ready, 600);
+});
+
+test("3-day groups count from today; the first group folds into now", () => {
+  const slots = [
+    { slotId: "old", startDay: "14-10-2026", endDay: "14-10-2026", booked: 300, gap: 300, excess: 0, pendingDispatch: 300 },
+    daySlot("16", 100),
+    daySlot("17", 200),
+    daySlot("18", 0),
+    daySlot("20", 300, 100),
+    daySlot("21", 50),
+    daySlot("25", 70),
+  ];
+  const row = buildBoardRow({ slots, today, groupDays: 3 });
+  assert.equal(row.now.startDay, "16-10-2026");
+  assert.equal(row.now.endDay, "18-10-2026");
+  assert.equal(row.now.ready, 100 + 200);
+  assert.equal(row.now.booked, 300);
+  assert.equal(row.now.overdue.booked, 300);
+  assert.deepEqual(row.now.slotIds, ["d16", "old", "d17"]);
+  assert.equal(row.current.ready, 100);
+  assert.deepEqual(
+    row.cells.map((c) => [c.key, c.startDay, c.endDay, c.ready, c.slotIds.join()]),
+    [
+      ["2026-10-19", "19-10-2026", "21-10-2026", 450, "d20,d21"],
+      ["2026-10-25", "25-10-2026", "27-10-2026", 70, "d25"],
+    ]
+  );
+  assert.equal(parseGroupDays("3"), 3);
+  assert.equal(parseGroupDays("junk"), 1);
+  assert.equal(parseGroupDays(99), 7);
 });
 
 test("board row without a slot today still shows overdue as the current cell", () => {
@@ -120,13 +161,16 @@ test("shed stock rolls up per variety and skips empty batches", () => {
         batches: [
           {
             plantId: "p",
+            plantName: "Banana",
             subtypeId: "s",
+            subtypeName: "G9",
             batchNumber: "B1",
             remaining: 5200,
             readyRemaining: 5000,
             lines: [
-              { remaining: 5200, lagwadDate: "2026-08-22", readyDate: "2026-10-16" },
-              { remaining: 0, lagwadDate: "2026-08-01", readyDate: "2026-09-01" },
+              { remaining: 5000, ready: true, lagwadDate: "2026-08-22", readyDate: "2026-10-16" },
+              { remaining: 200, ready: false, lagwadDate: "2026-09-10", readyDate: "2026-10-30" },
+              { remaining: 0, ready: true, lagwadDate: "2026-08-01", readyDate: "2026-09-01" },
             ],
           },
           { plantId: "p", subtypeId: "s", batchNumber: "B0", remaining: 0, readyRemaining: 0, lines: [] },
@@ -142,5 +186,9 @@ test("shed stock rolls up per variety and skips empty batches", () => {
   assert.equal(entry.inShed, 11100);
   assert.equal(entry.readyNow, 5000);
   assert.deepEqual(entry.batches.map((b) => b.batchNumber), ["B2", "B1"]);
+  assert.equal(entry.plantName, "Banana");
+  assert.equal(entry.subtypeName, "G9");
   assert.equal(entry.batches[1].lagwadDate.toISOString().slice(0, 10), "2026-08-22");
+  assert.equal(entry.batches[1].notReady, 200);
+  assert.equal(entry.batches[1].nextReadyDate.toISOString().slice(0, 10), "2026-10-30");
 });

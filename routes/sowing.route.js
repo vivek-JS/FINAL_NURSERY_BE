@@ -107,6 +107,7 @@ import {
   getCapacityShedStock,
 } from "../controllers/capacitySheet.controller.js";
 import { askCapacityAnalyst } from "../controllers/capacityAsk.controller.js";
+import { postDestroySowBatch } from "../controllers/sowBatchDestroy.controller.js";
 import {
   getExcessBatches,
   coverOrderFromExcessBatches,
@@ -133,6 +134,7 @@ router.get("/capacity-sheet/slot/:slotId", getCapacitySlotDetail);
 router.get("/capacity-sheet/shed-stock", getCapacityShedStock);
 router.get("/capacity-sheet/board", getCapacityBoard);
 router.post("/capacity-ask", askCapacityAnalyst);
+router.post("/sow-batch/destroy", postDestroySowBatch); // Destroy sown plants of a slot sowing batch
 router.get("/slot-orders/:slotId", getSlotOrdersSummary); // Get orders summary for a specific slot
 router.get("/today-sowing-data", getTodaySowingData); // Get today's sowing data for all plants (due and current day)
 router.get("/today-sowing-cards", getAllPlantsTodaySowingCards); // Get all plants subtype cards for today and overdue (flat structure, no accordion)
