@@ -53,6 +53,7 @@ import {
   getSecondaryVehicleLoadedLines,
   postSecondaryVehicleUnload,
 } from "../controllers/plantOutward.controller.js";
+import { postSecondaryInwardDestroy } from "../controllers/secondaryInwardDestroy.controller.js";
 import { optionalVehicleLoadPhotosUpload } from "../middleware/vehicleLoadPhotos.middleware.js";
 
 const router = express.Router();
@@ -178,6 +179,10 @@ router.get(
 router.patch(
   "/secondary/:batchId/secondary-inward/:secondaryInwardId/readiness-bypass",
   patchSecondaryInwardReadinessBypass
+);
+router.post(
+  "/secondary/:batchId/secondary-inward/:secondaryInwardId/destroy",
+  postSecondaryInwardDestroy
 );
 router.get("/transfers/:batchId", getTransferHistory);
 router.get("/activity/:batchId", getShedActivityByBatch);

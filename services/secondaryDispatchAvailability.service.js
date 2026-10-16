@@ -211,6 +211,45 @@ export async function recordSecondaryOutwardOnLedger(session, payload) {
 }
 
 /**
+ * Destroyed in shed: take plants off the FIFO line. A missing ledger line is not fatal —
+ * PlantOutward stays the source of truth and the ledger backfills from it.
+ */
+export async function recordSecondaryDestroyOnLedger(session, payload) {
+  const { dispatchBatchId, plantOutwardId, secondaryInwardId, quantity, performedBy, reason } =
+    payload;
+  const qty = Math.floor(Number(quantity) || 0);
+  if (!dispatchBatchId || !secondaryInwardId || qty < 1) return null;
+
+  const doc = await SecondaryDispatchAvailability.findOne({ dispatchBatchId })
+    .session(session)
+    .exec();
+  if (!doc) return null;
+
+  const line = (doc.fifoLines || []).find(
+    (l) => String(l.secondaryInwardId) === String(secondaryInwardId)
+  );
+  if (!line) return null;
+
+  const prevTotal = doc.totalAvailablePlants;
+  const take = Math.min(qty, Math.max(0, Number(line.remainingPlants) || 0));
+  line.remainingPlants -= take;
+  doc.recalcTotal();
+  doc.availabilityTrail.unshift({
+    action: "SUBTRACT_DESTROYED",
+    activityName: "Destroyed in shed",
+    quantity: take,
+    previousTotalAvailable: prevTotal,
+    newTotalAvailable: doc.totalAvailablePlants,
+    reason: String(reason || "Plants destroyed in secondary shed").slice(0, 500),
+    plantOutwardId,
+    secondaryInwardId,
+    performedBy: performedBy || undefined,
+  });
+  await doc.save({ session });
+  return doc;
+}
+
+/**
  * Reverse a vehicle unload: add plants back to the FIFO line for the source secondary inward.
  */
 export async function recordSecondaryUnloadOnLedger(session, payload) {
