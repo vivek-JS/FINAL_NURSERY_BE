@@ -28,6 +28,7 @@ import {
 } from "./sowingSlotReadyHelpers.js";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
 import { settleSowPackets, isSowingRequestClosed } from "../utility/sowPacketSettlement.js";
+import { readMachineTimes } from "../utility/sowMachineTime.js";
 
 /** Collect applied slot ids from completion meta + linkedSlotIds. */
 function collectSlotIdsFromRequest(r) {
@@ -221,6 +222,10 @@ export const completeSowingRequest = async (req, res) => {
         message: "shedName is required (where sowing was done)",
       });
     }
+    const machine = readMachineTimes(req.body);
+    if (machine.error) {
+      return res.status(400).json({ success: false, message: machine.error });
+    }
 
     const locked = await SowingRequest.findOneAndUpdate(
       {
@@ -334,6 +339,11 @@ export const completeSowingRequest = async (req, res) => {
       locked.sowedQuantity = prevSowed + plantsSowed;
       locked.laboursLadies = laboursLadies;
       locked.laboursGents = laboursGents;
+      if (machine.start) {
+        locked.machineStartTime = machine.start;
+        locked.machineEndTime = machine.end;
+        locked.machineMinutes = Number(locked.machineMinutes || 0) + machine.minutes;
+      }
       locked.packetsIssued = packetsIssued;
       locked.packetsUsed = Number(locked.packetsUsed || 0) + (inv.used || 0);
       locked.packetsReturned =
@@ -459,6 +469,9 @@ export const completeSowingRequest = async (req, res) => {
           resolvedByReadyDate: Boolean(slotResult.resolvedByReadyDate),
           laboursLadies,
           laboursGents,
+          machineStartTime: machine.start || undefined,
+          machineEndTime: machine.end || undefined,
+          machineMinutes: machine.start ? machine.minutes : undefined,
           ordersMarked: orderResult.marked,
           remainingUncovered: orderResult.remainingUncovered ?? 0,
           orderReadyDate: orderResult.readyDate || null,
@@ -852,7 +865,7 @@ export const getSowingCompletions = async (req, res) => {
       SowingRequest.countDocuments(match),
       SowingRequest.find(match)
         .select(
-          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents completionPhotos completionNotes shedName sowingCompletedDate createdAt isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned returnRequestIds completionEvents completedBy outwardId"
+          "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents machineStartTime machineEndTime machineMinutes completionPhotos completionNotes shedName sowingCompletedDate createdAt isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned returnRequestIds completionEvents completedBy outwardId"
         )
         .populate("completedBy", "name")
         .sort({ [sortField]: sortDir, _id: sortDir })

@@ -138,6 +138,23 @@ const sowingRequestSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    /** Sowing machine run for the latest entry, 24h "HH:mm" */
+    machineStartTime: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    machineEndTime: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    /** Machine minutes summed over all sow entries */
+    machineMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     completionPhotos: [
       {
         url: { type: String, required: true },
