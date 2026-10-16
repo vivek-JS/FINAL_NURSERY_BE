@@ -4,6 +4,7 @@ import {
   isSlotExpiredByEndDay,
 } from "../services/pastDueSlotRollover.service.js";
 import { getNativeDeliveryCohortOrders } from "./slotDispatchStats.js";
+import { sowedStockForBooking } from "./lagwadSlotPlantsSplit.js";
 import { SOWING_GAP_PIPELINE_STATUS_SET } from "../constants/sowingGapOrderStatuses.js";
 
 const DUE_PIPELINE_STATUS_SET = new Set(DUE_DELIVERY_STATUSES);
@@ -580,17 +581,19 @@ export function sumGrossOrderCoveredPlants(slot) {
 
 /**
  * Sowing-allowed slot display fields (call after resolveSlotBufferFields).
- * Can book / excess is live sowed stock left after current orders.
- * Stored slot availablePlants is not used.
+ * Can book / excess is live survivor stock (90% of sowed) left after current orders;
+ * the other 10% is expected mortality. Stored slot availablePlants is not used.
  */
 export function applySowingAllowedSlotMetrics(slot) {
   if (!slot) return slot;
   const gross = sumGrossOrderCoveredPlants(slot);
   const primarySowed = Math.max(0, Number(slot.primarySowed) || 0);
   const sowingGap = Math.max(0, Number(slot.bookedUncoveredPlants) || 0);
+  const stock = sowedStockForBooking(primarySowed, gross);
   slot.grossOrderCoveredPlants = gross;
-  slot.excessAvailableForBooking =
-    primarySowed > 0 ? Math.max(0, primarySowed - gross) : 0;
+  slot.excessAvailableForBooking = stock.free;
+  slot.sowedActualPlants = stock.actualPlants;
+  slot.sowedExpectedMortality = stock.expectedMortality;
   slot.sowingGapPlants = sowingGap;
   slot.orderReservedPlants = Math.max(0, Number(slot.orderReservedPlants) || 0);
   slot.excessiveSowingPlants = Math.max(

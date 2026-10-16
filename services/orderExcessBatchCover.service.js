@@ -11,7 +11,7 @@ import {
 } from "../controllers/orderSowFromExcess.controller.js";
 import { writeTransferAudit } from "../controllers/sowingTransferAudit.helpers.js";
 import { recordSlotTrail } from "../utility/slotTrailStore.js";
-import { splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
+import { sowedStockForBooking, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
 import {
   SLOT_TRAIL_ACTIONS,
   getSlotTrailActivityName,
@@ -144,7 +144,7 @@ export async function listExcessBatches({
     const batches = slot.batches || [];
     const gross = batches.reduce((s, b) => s + int(b.orderCoveredPlants), 0);
     const primarySowed = int(slot.primarySowed);
-    const excessForBooking = primarySowed > 0 ? Math.max(0, primarySowed - gross) : 0;
+    const excessForBooking = sowedStockForBooking(primarySowed, gross).free;
     let slotCap = excessForBooking;
     if (slotCap <= 0) continue;
 

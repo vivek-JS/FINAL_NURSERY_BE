@@ -117,6 +117,8 @@ function rowFromMetrics(slot, metrics, orders) {
     booked,
     sowed,
     primarySowed,
+    survivors: num(metrics.sowedActualPlants),
+    expectedMortality: num(metrics.sowedExpectedMortality),
     gap,
     excess,
     canBook: bookable,

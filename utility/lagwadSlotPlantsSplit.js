@@ -11,6 +11,20 @@ export function splitLagwadQtyForSlot(qty) {
   return { total, actualPlants, expectedMortality };
 }
 
+/**
+ * Sellable sow stock on a slot: survivors (90% of sowed) minus plants already covering orders.
+ * The 10% expected mortality of everything sowed stays reserved and is never offered for booking.
+ */
+export function sowedStockForBooking(primarySowed, grossOrderCovered = 0) {
+  const split = splitLagwadQtyForSlot(primarySowed);
+  const covered = Math.max(0, Math.floor(Number(grossOrderCovered) || 0));
+  return {
+    actualPlants: split.actualPlants,
+    expectedMortality: split.expectedMortality,
+    free: Math.max(0, split.actualPlants - covered),
+  };
+}
+
 /** Max slot-synced position for a lagwad line (90% of physical avail). */
 export function maxLagwadSyncedPlants(availableQuantity) {
   return splitLagwadQtyForSlot(availableQuantity).actualPlants;
