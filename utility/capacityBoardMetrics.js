@@ -184,18 +184,31 @@ export function shedStockByVariety(shedPayload) {
     for (const batch of shed.batches || []) {
       if (num(batch.remaining) < 1) continue;
       const key = varietyKey(batch.plantId, batch.subtypeId);
-      if (!map.has(key)) map.set(key, { inShed: 0, readyNow: 0, batches: [] });
+      if (!map.has(key)) {
+        map.set(key, {
+          plantId: batch.plantId || "",
+          plantName: batch.plantName || "",
+          subtypeId: batch.subtypeId || "",
+          subtypeName: batch.subtypeName || "",
+          inShed: 0,
+          readyNow: 0,
+          batches: [],
+        });
+      }
       const entry = map.get(key);
       entry.inShed += num(batch.remaining);
       entry.readyNow += num(batch.readyRemaining);
       const live = (batch.lines || []).filter((line) => num(line.remaining) > 0);
+      const waiting = live.filter((line) => !line.ready);
       entry.batches.push({
         shed: shed.shed,
         batchNumber: batch.batchNumber,
         inShed: num(batch.remaining),
         readyNow: num(batch.readyRemaining),
+        notReady: Math.max(0, num(batch.remaining) - num(batch.readyRemaining)),
         lagwadDate: earliest(live.map((line) => line.lagwadDate)),
         readyDate: earliest(live.map((line) => line.readyDate)),
+        nextReadyDate: earliest(waiting.map((line) => line.readyDate)),
       });
     }
   }

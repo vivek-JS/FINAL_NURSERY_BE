@@ -70,12 +70,14 @@ export function parseAnalystJson(text) {
   } catch {
     return null;
   }
-  const action = ACTIONS.has(parsed.action) ? parsed.action : null;
+  const answer = String(parsed.answer || "").trim().slice(0, 2000);
+  const action = ACTIONS.has(parsed.action) ? parsed.action : answer ? "wait" : null;
   if (!action) return null;
   const confidence = Math.max(0, Math.min(100, Math.round(Number(parsed.confidence) || 0)));
   return {
     action,
     confidence,
+    answer,
     summary: String(parsed.summary || "").slice(0, 900),
     downside: String(parsed.downside || "").slice(0, 900),
     weatherNote: String(parsed.weatherNote || "").slice(0, 600),
@@ -85,6 +87,173 @@ export function parseAnalystJson(text) {
 
 function n(value) {
   return (Number(value) || 0).toLocaleString("en-IN");
+}
+
+const num = (value) => Number(value) || 0;
+
+function slotText(cell) {
+  if (!cell?.startDay) return "";
+  return cell.endDay && cell.endDay !== cell.startDay ? `${cell.startDay} to ${cell.endDay}` : cell.startDay;
+}
+
+/** Variety-wise board (stock, current + overdue slot, next slots) in the shape the model reads. */
+export function boardForAnalyst(board, { nextSlots = 4 } = {}) {
+  return {
+    today: board?.today || "",
+    overdueLookbackDays: num(board?.overdueLookbackDays),
+    varieties: (board?.rows || []).map((row) => {
+      const current = row.current || {};
+      const overdue = current.overdue || {};
+      const hasSlots = num(row.slotDays) > 0;
+      const now = hasSlots
+        ? {
+            slot: slotText(current),
+            ready: num(current.ready),
+            booked: num(current.booked),
+            net: num(current.net),
+            overdueBooked: num(overdue.booked),
+            unsoldFromPast: num(overdue.unsold),
+          }
+        : null;
+      return {
+        crop: row.plantName,
+        variety: row.subtypeName,
+        slotDays: hasSlots ? num(row.slotDays) : null,
+        sowingRequired: row.sowingAllowed !== false,
+        urgent: Boolean(now && (now.net < 0 || now.overdueBooked > 0)),
+        stock: {
+          inShed: num(row.stock?.inShed),
+          readyNow: num(row.stock?.readyNow),
+          batches: row.stock?.batches?.length || 0,
+        },
+        now,
+        next: (row.upcoming || []).slice(0, nextSlots).map((cell) => ({
+          slot: slotText(cell),
+          ready: num(cell.ready),
+          booked: num(cell.booked),
+          net: num(cell.net),
+        })),
+      };
+    }),
+  };
+}
+
+const MARATHI_CROPS = [
+  ["पपई", "papaya"],
+  ["टरबूज", "watermelon"],
+  ["कलिंगड", "watermelon"],
+  ["खरबूज", "muskmelon"],
+  ["केळी", "banana"],
+  ["केळ", "banana"],
+  ["मिरची", "chilli"],
+];
+
+const squash = (text) => String(text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+function questionKey(question) {
+  let text = String(question || "").toLowerCase();
+  for (const [mr, en] of MARATHI_CROPS) text = text.split(mr).join(` ${en} `);
+  return { text, flat: squash(text) };
+}
+
+function netText(value) {
+  if (value < 0) return `${n(-value)} short`;
+  if (value > 0) return `${n(value)} free`;
+  return "matched";
+}
+
+function varietyLine(row, { withNext = true } = {}) {
+  const parts = [];
+  if (row.stock.inShed) parts.push(`${n(row.stock.inShed)} in shed (${n(row.stock.readyNow)} ready now)`);
+  if (!row.sowingRequired) parts.push("no sowing, shed stock only");
+  if (row.now && (row.now.ready || row.now.booked)) {
+    const overdue = row.now.overdueBooked ? `, incl. ${n(row.now.overdueBooked)} overdue` : "";
+    parts.push(`now ${row.now.slot}: ${n(row.now.ready)} ready, ${n(row.now.booked)} booked, ${netText(row.now.net)}${overdue}`);
+  }
+  if (withNext) {
+    const next = row.next.filter((cell) => cell.ready || cell.booked).slice(0, 3);
+    if (next.length) parts.push(`next: ${next.map((cell) => `${cell.slot} ${n(cell.ready)} ready (${netText(cell.net)})`).join("; ")}`);
+  }
+  return `${row.crop} – ${row.variety}: ${parts.join(" · ") || "nothing on the board"}`;
+}
+
+const INTENTS = [
+  { key: "urgent", re: /overdue|urgent|short|late|due|pending|तातडी|उशीर|बाकी|कमी|थकीत/ },
+  { key: "stock", re: /stock|shed|batch|banana|ready now|स्टॉक|शेड|रेडी|बॅच/ },
+  { key: "free", re: /free|sell|available|spare|book|मोकळ|विक्री|विका|उपलब्ध|बुक/ },
+];
+
+function namedRows(rows, flat) {
+  const named = rows.filter((row) => {
+    const crop = squash(row.crop);
+    const variety = squash(row.variety);
+    return (crop.length >= 3 && flat.includes(crop)) || (variety.length >= 3 && flat.includes(variety));
+  });
+  const exact = named.filter((row) => squash(row.variety).length >= 3 && flat.includes(squash(row.variety)));
+  return exact.length ? exact : named;
+}
+
+/** Which board rows answer the question, with a one-line title. stockOnly: hide slot details. */
+export function answerFocus(packet, question) {
+  const rows = packet?.varieties || [];
+  const none = { title: "", rows: [], stockOnly: false };
+  if (!rows.length) return none;
+  const { text, flat } = questionKey(question);
+  const named = namedRows(rows, flat);
+  if (named.length) {
+    const title = named.length === 1 ? `${named[0].crop} – ${named[0].variety}` : `${named.length} varieties`;
+    return { title, rows: named, stockOnly: false };
+  }
+  const intent = INTENTS.find((row) => row.re.test(text))?.key;
+  if (intent === "urgent") {
+    const urgent = rows.filter((row) => row.urgent).sort((a, b) => a.now.net - b.now.net);
+    return {
+      title: urgent.length ? `${urgent.length} overdue or short now` : "Nothing is overdue or short in the current slot.",
+      rows: urgent,
+      stockOnly: false,
+    };
+  }
+  if (intent === "stock") {
+    const stocked = rows.filter((row) => row.stock.inShed > 0).sort((a, b) => b.stock.inShed - a.stock.inShed);
+    const total = stocked.reduce((acc, row) => acc + row.stock.inShed, 0);
+    return {
+      title: stocked.length ? `${n(total)} plants in sheds` : "No lagwad stock in any shed right now.",
+      rows: stocked,
+      stockOnly: true,
+    };
+  }
+  if (intent === "free") {
+    const free = rows
+      .map((row) => ({ row, free: Math.max(0, num(row.now?.net)) + row.next.reduce((acc, cell) => acc + Math.max(0, cell.net), 0) }))
+      .filter((item) => item.free > 0)
+      .sort((a, b) => b.free - a.free)
+      .map((item) => item.row);
+    return {
+      title: free.length ? `Free to sell in ${free.length === 1 ? "1 variety" : `${free.length} varieties`}` : "Nothing is free to sell in the current or next slots.",
+      rows: free,
+      stockOnly: false,
+    };
+  }
+  return none;
+}
+
+/** Board rows the model's answer talks about, by crop and variety name. */
+export function rowsMentioned(packet, answer) {
+  const { flat } = questionKey(answer);
+  return (packet?.varieties || []).filter((row) => {
+    const variety = squash(row.variety);
+    return variety.length >= 2 && flat.includes(squash(row.crop)) && flat.includes(variety);
+  });
+}
+
+/** Plain answer from the board when the model is down or skips the answer. */
+export function rulesAnswer(packet, question, { limit = 8 } = {}) {
+  const focus = answerFocus(packet, question);
+  if (!focus.rows.length) return focus.title;
+  return focus.rows
+    .slice(0, limit)
+    .map((row) => varietyLine(row, { withNext: !focus.stockOnly }))
+    .join("\n");
 }
 
 export function actionForRow(row, rain = 0) {

@@ -458,9 +458,24 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
         plantName: plant.name,
         subtypeId: String(subtype._id),
         subtypeName: subtype.name,
+        sowingAllowed: true,
         ...row,
       });
     }
+  }
+
+  // Crops not sown here (e.g. banana) still sit in sheds: list them as stock-only rows.
+  const listed = new Set(rows.map((row) => varietyKey(row.plantId, row.subtypeId)));
+  for (const [key, stock] of stockByVariety) {
+    if (listed.has(key) || stock.inShed < 1) continue;
+    rows.push({
+      plantId: stock.plantId,
+      plantName: stock.plantName || "Unknown plant",
+      subtypeId: stock.subtypeId,
+      subtypeName: stock.subtypeName || "—",
+      sowingAllowed: false,
+      ...buildBoardRow({ slots: [], today, stock }),
+    });
   }
   rows.sort(
     (a, b) => a.plantName.localeCompare(b.plantName) || a.subtypeName.localeCompare(b.subtypeName)

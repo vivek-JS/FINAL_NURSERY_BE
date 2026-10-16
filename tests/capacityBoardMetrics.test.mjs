@@ -120,13 +120,16 @@ test("shed stock rolls up per variety and skips empty batches", () => {
         batches: [
           {
             plantId: "p",
+            plantName: "Banana",
             subtypeId: "s",
+            subtypeName: "G9",
             batchNumber: "B1",
             remaining: 5200,
             readyRemaining: 5000,
             lines: [
-              { remaining: 5200, lagwadDate: "2026-08-22", readyDate: "2026-10-16" },
-              { remaining: 0, lagwadDate: "2026-08-01", readyDate: "2026-09-01" },
+              { remaining: 5000, ready: true, lagwadDate: "2026-08-22", readyDate: "2026-10-16" },
+              { remaining: 200, ready: false, lagwadDate: "2026-09-10", readyDate: "2026-10-30" },
+              { remaining: 0, ready: true, lagwadDate: "2026-08-01", readyDate: "2026-09-01" },
             ],
           },
           { plantId: "p", subtypeId: "s", batchNumber: "B0", remaining: 0, readyRemaining: 0, lines: [] },
@@ -142,5 +145,9 @@ test("shed stock rolls up per variety and skips empty batches", () => {
   assert.equal(entry.inShed, 11100);
   assert.equal(entry.readyNow, 5000);
   assert.deepEqual(entry.batches.map((b) => b.batchNumber), ["B2", "B1"]);
+  assert.equal(entry.plantName, "Banana");
+  assert.equal(entry.subtypeName, "G9");
   assert.equal(entry.batches[1].lagwadDate.toISOString().slice(0, 10), "2026-08-22");
+  assert.equal(entry.batches[1].notReady, 200);
+  assert.equal(entry.batches[1].nextReadyDate.toISOString().slice(0, 10), "2026-10-30");
 });
