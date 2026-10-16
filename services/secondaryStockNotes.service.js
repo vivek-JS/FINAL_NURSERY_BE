@@ -5,7 +5,7 @@ import { generateJson, GeminiType as Type } from "./gemini.service.js";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const RULES_CACHE_TTL_MS = 10 * 60 * 1000;
-const AI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const AI_MODELS = ["gemini-2.5-flash", "gemini-3.5-flash-lite"];
 const MAX_GROUPS_FOR_AI = 40;
 /** Shed app request timeout is 45s; fall back to rules well before that. */
 const AI_TIMEOUT_MS = 25 * 1000;
@@ -269,9 +269,10 @@ Keep batch codes (e.g. RB 19), shed names and crop names exactly as given in Eng
 The fields batch, shed and crop must be copied exactly from the data (English).`;
 }
 
-const isQuotaError = (e) => /429|RESOURCE_EXHAUSTED|quota/i.test(e?.message || String(e));
+const isModelUnavailable = (e) =>
+  /429|RESOURCE_EXHAUSTED|quota|404|NOT_FOUND|no longer available/i.test(e?.message || String(e));
 
-/** Free-tier quota is per model, so a quota error moves on to the next model. */
+/** Free-tier quota is per model, so quota or missing-model errors move on to the next model. */
 async function askAi(prompt) {
   for (let i = 0; i < AI_MODELS.length; i++) {
     try {
@@ -280,7 +281,7 @@ async function askAi(prompt) {
         AI_TIMEOUT_MS
       );
     } catch (e) {
-      if (i === AI_MODELS.length - 1 || !isQuotaError(e)) throw e;
+      if (i === AI_MODELS.length - 1 || !isModelUnavailable(e)) throw e;
     }
   }
   throw new Error("No AI model available");
