@@ -419,6 +419,7 @@ export const getInsightsDashboard = catchAsync(async (req, res) => {
 
   const dispatchDocs = await Dispatch.find({
     isDeleted: false,
+    isInstantPickup: { $ne: true },
     transportStatus: { $ne: "CANCELLED" },
     createdAt: { $gte: winStart, $lte: winEnd },
   })

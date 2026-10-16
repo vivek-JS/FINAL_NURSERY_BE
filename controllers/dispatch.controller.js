@@ -2210,7 +2210,7 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
 });
 
 /** Non-deleted dispatches (field may be absent on older rows). */
-const DISPATCH_NOT_DELETED = { isDeleted: { $ne: true } };
+const DISPATCH_NOT_DELETED = { isDeleted: { $ne: true }, isInstantPickup: { $ne: true } };
 
 /** Match dispatches by vehicle/driver fields or by farmer/order on any linked order. */
 async function resolveDispatchIdsForSearch(searchTrim) {
@@ -2350,7 +2350,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
       String(req.query.paged || "") === "1";
 
     const searchTrim = String(req.query.search || "").trim();
-    const listFilter = { isDeleted: false };
+    const listFilter = { isDeleted: false, isInstantPickup: { $ne: true } };
     const createdAtFilter = buildDispatchCreatedAtFilter(req.query);
     if (createdAtFilter) listFilter.createdAt = createdAtFilter;
     if (req.query.transportStatus) {
@@ -2380,7 +2380,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
 
     let pagination = null;
     let idSortHint = null;
-    let matchStage = { isDeleted: false };
+    let matchStage = { isDeleted: false, isInstantPickup: { $ne: true } };
     if (createdAtFilter) matchStage.createdAt = createdAtFilter;
 
     if (hasPaging) {

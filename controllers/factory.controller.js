@@ -1561,6 +1561,16 @@ const createOne = (Model, modelName) =>
           } catch (e) {
             console.error("order DC PDF schedule (create):", e?.message || e);
           }
+          try {
+            const { isInstantOrderRequest, ensureInstantPickupDispatch } = await import(
+              "../services/instantPickupDispatch.service.js"
+            );
+            if (isInstantOrderRequest(req.body)) {
+              await ensureInstantPickupDispatch(createdOrderDoc);
+            }
+          } catch (e) {
+            console.error("instant pickup dispatch (create):", e?.message || e);
+          }
         }
 
         const createdOrderId = createdOrderDoc._id;

@@ -9,6 +9,7 @@ import {
   sumPlantsLoadedOnDispatches,
 } from "./secondaryVehicleLoad.service.js";
 import { SHED_ACTIVITY_ACTIONS } from "./shedActivity.service.js";
+import { sweepCancelledInstantPickups } from "./instantPickupDispatch.service.js";
 
 /** Office qty edit within this window shows "recent" on shed app cards. */
 const OFFICE_EDIT_RECENT_MS = 24 * 60 * 60 * 1000;
@@ -209,6 +210,7 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
       orderIdNumeric: label?.orderId ?? null,
       publicOrderCode: label?.publicOrderCode ?? "",
       isPremium: Boolean(label?.farmer?.isPremium),
+      farmerName: label?.farmer?.name || "",
       dispatchQuantity,
       originalDispatchQuantity,
       officeQtyDeltaTotal,
@@ -269,8 +271,21 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
     lastOfficeEditedAt != null &&
     Date.now() - new Date(lastOfficeEditedAt).getTime() < OFFICE_EDIT_RECENT_MS;
 
+  const pickupFarmer = d.isInstantPickup
+    ? orderLabelById.get(String(d.orderDispatchDetails?.[0]?.orderId || d.orderIds?.[0] || ""))
+        ?.farmer
+    : null;
+
   return {
     _id: d._id,
+    isInstantPickup: Boolean(d.isInstantPickup),
+    ...(pickupFarmer
+      ? {
+          farmerName: pickupFarmer.name || "",
+          farmerMobile: pickupFarmer.mobileNumber ? String(pickupFarmer.mobileNumber) : "",
+          farmerVillage: pickupFarmer.village || "",
+        }
+      : {}),
     transportId: d.transportId,
     transportStatus: d.transportStatus,
     driverName: d.driverName,
@@ -408,6 +423,12 @@ export async function listSecondaryVehicleDispatches({
   const qSearch = String(search || "").trim();
   const statusFilter = String(status || "").trim().toLowerCase();
 
+  try {
+    await sweepCancelledInstantPickups();
+  } catch (e) {
+    console.error("sweepCancelledInstantPickups:", e?.message || e);
+  }
+
   const filter = buildListFilter({ search: qSearch, statusFilter, date, from, to });
   const countBase = buildListFilter({ search: qSearch, statusFilter: "", date, from, to });
 
@@ -418,7 +439,7 @@ export async function listSecondaryVehicleDispatches({
       .skip(skip)
       .limit(limitNum)
       .select(
-        "transportId transportStatus driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds lastOfficeEditedAt createdAt updatedAt shedReturns shedReturnedPlants"
+        "transportId transportStatus isInstantPickup driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds lastOfficeEditedAt createdAt updatedAt shedReturns shedReturnedPlants"
       )
       .lean(),
     Dispatch.countDocuments({
@@ -454,7 +475,7 @@ export async function listSecondaryVehicleDispatches({
     previewOrderOids.length
       ? Order.find({ _id: { $in: previewOrderOids } })
           .select("_id orderId publicOrderCode farmer")
-          .populate("farmer", "isPremium")
+          .populate("farmer", "isPremium name mobileNumber village")
           .lean()
       : Promise.resolve([]),
     sumPlantsLoadedOnDispatches(docs.map((d) => d._id)),

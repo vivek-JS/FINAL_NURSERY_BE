@@ -6312,6 +6312,7 @@ const getAdminDashboardStats = catchAsync(async (req, res) => {
   // ── Today's dispatch count ─────────────────────────────────────────────────
   const todayDispatchCount = await Dispatch.countDocuments({
     createdAt: { $gte: todayStart, $lte: todayEnd },
+    isInstantPickup: { $ne: true },
   });
 
   // ── Date-range aggregations (optional) ────────────────────────────────────
@@ -6456,6 +6457,7 @@ const getAdminDashboardStats = catchAsync(async (req, res) => {
     // Dispatch count in range
     const dispatchInRange = await Dispatch.countDocuments({
       createdAt: { $gte: rangeStart, $lte: rangeEnd },
+      isInstantPickup: { $ne: true },
     });
     rangeDispatchStats = { dispatchCount: dispatchInRange };
     }
