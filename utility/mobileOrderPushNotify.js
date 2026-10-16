@@ -6,6 +6,7 @@ import {
   sendOrderAcceptedNotification,
   sendOrderDispatchedNotification,
 } from "./pushNotification.js";
+import { persistInboxOnce } from "./notificationInbox.js";
 
 const notifyAsync = (fn, ...args) => {
   void fn(...args).catch((err) => {
@@ -47,9 +48,31 @@ function agriOrderLabel(order) {
   return order?.orderNumber || String(order?._id || "");
 }
 
+const PAYMENT_INBOX_COPY = {
+  COLLECTED: { type: "payment_accepted", title: "पेमेंट स्वीकारले · Payment accepted" },
+  BANK_VERIFIED: { type: "payment_accepted", title: "पेमेंट स्वीकारले · Payment accepted" },
+  REJECTED: { type: "payment_rejected", title: "पेमेंट नाकारले · Payment rejected" },
+};
+
+async function persistPaymentInbox(user, order, orderLabel, paymentStatus, amount, remark) {
+  const copy = PAYMENT_INBOX_COPY[paymentStatus];
+  if (!user?._id || !copy) return;
+  const amt = Number(amount || 0).toLocaleString("en-IN");
+  const reason = paymentStatus === "REJECTED" && remark ? ` · ${remark}` : "";
+  await persistInboxOnce({
+    userId: user._id,
+    title: copy.title,
+    body: `₹${amt} · Order #${orderLabel}${reason}`,
+    type: copy.type,
+    data: { orderId: String(order?._id || ""), orderLabel: String(orderLabel), amount: Number(amount || 0), paymentStatus },
+    dedupeKey: `order:${order?._id}:payment:${paymentStatus}:${Number(amount || 0)}`,
+  });
+}
+
 export function notifyPlantOrderPaymentStatus(order, paymentStatus, amount, remark = "") {
   notifyAsync(async () => {
     const user = await resolvePlantOrderNotifyUser(order);
+    await persistPaymentInbox(user, order, plantOrderLabel(order), paymentStatus, amount, remark);
     if (!user?.expoPushToken) return;
 
     const orderId = plantOrderLabel(order);
@@ -89,6 +112,7 @@ export function notifyPlantOrderDispatched(order, dispatchDetails = {}) {
 export function notifyAgriOrderPaymentStatus(order, paymentStatus, amount, remark = "") {
   notifyAsync(async () => {
     const user = await resolveAgriOrderNotifyUser(order);
+    await persistPaymentInbox(user, order, agriOrderLabel(order), paymentStatus, amount, remark);
     if (!user?.expoPushToken) return;
 
     const orderId = agriOrderLabel(order);

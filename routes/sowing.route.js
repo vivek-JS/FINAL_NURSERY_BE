@@ -102,11 +102,15 @@ import {
   transferSlotToSlot,
 } from "../controllers/slotTransfer.controller.js";
 import {
-  getCapacitySheet,
+  getCapacityBoard,
   getCapacitySlotDetail,
   getCapacityShedStock,
 } from "../controllers/capacitySheet.controller.js";
 import { askCapacityAnalyst } from "../controllers/capacityAsk.controller.js";
+import {
+  getExcessBatches,
+  coverOrderFromExcessBatches,
+} from "../controllers/orderExcessBatchCover.controller.js";
 
 const router = express.Router();
 
@@ -127,7 +131,7 @@ router.get("/all-plants-availability", getAllPlantsAvailability); // Get all pla
 router.get("/plants-gap-summary", getPlantsGapSummary); // Get all plants with subtype-wise totalBookingGap summary
 router.get("/capacity-sheet/slot/:slotId", getCapacitySlotDetail);
 router.get("/capacity-sheet/shed-stock", getCapacityShedStock);
-router.get("/capacity-sheet", getCapacitySheet);
+router.get("/capacity-sheet/board", getCapacityBoard);
 router.post("/capacity-ask", askCapacityAnalyst);
 router.get("/slot-orders/:slotId", getSlotOrdersSummary); // Get orders summary for a specific slot
 router.get("/today-sowing-data", getTodaySowingData); // Get today's sowing data for all plants (due and current day)
@@ -141,6 +145,8 @@ router.get("/admin-direct-sow/orders", listDirectSowOrders); // Office/Super Adm
 router.post("/admin-direct-sow", submitDirectSow); // Office/Super Admin: sow entry bypassing packet issue
 router.get("/order/:orderId/slot-excess", getOrderSlotExcess); // Preview saleable excess on delivery slot
 router.post("/order/:orderId/complete-from-excess", completeOrderFromSlotExcess); // Mark sow done from slot excess
+router.get("/excess-batches", getExcessBatches); // Booking preview: batch excess within delivery ±5d
+router.post("/order/:orderId/cover-from-batches", coverOrderFromExcessBatches); // Cover order from picked batches
 router.get("/slot/:slotId/coverable-orders", getSlotCoverableOrders); // Slot-first: pending orders for surplus slot
 router.post("/slot/:slotId/allocate-to-orders", allocateSlotToOrders); // Bulk allocate excess → orders
 router.get("/slot/:slotId/transfer-targets", getSlotTransferTargets); // Slot-to-slot transfer targets

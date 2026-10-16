@@ -3901,6 +3901,67 @@ const getTodaysPaymentActivities = catchAsync(async (req, res, next) => {
 });
 
 /**
+ * GET /order/my-payments/today — plant-order payments the caller recorded today (IST).
+ * Always scoped to req.user, so field staff only ever see their own collection.
+ */
+const getMyTodaysPaymentSummary = catchAsync(async (req, res) => {
+  const { start, end } = istTodayBounds();
+  const userId = new mongoose.Types.ObjectId(String(req.user._id));
+  const [row] = await Order.aggregate([
+    { $match: { "payment.paymentRecordedBy": userId, "payment.paymentDate": { $gte: start, $lte: end } } },
+    { $unwind: "$payment" },
+    {
+      $match: {
+        "payment.paymentRecordedBy": userId,
+        "payment.paymentDate": { $gte: start, $lte: end },
+        "payment.isDiscount": { $ne: true },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        count: { $sum: 1 },
+        orders: { $addToSet: "$_id" },
+        totalAmount: { $sum: "$payment.paidAmount" },
+        acceptedAmount: {
+          $sum: {
+            $cond: [{ $in: ["$payment.paymentStatus", ["COLLECTED", "BANK_VERIFIED"]] }, "$payment.paidAmount", 0],
+          },
+        },
+        pendingAmount: {
+          $sum: { $cond: [{ $eq: ["$payment.paymentStatus", "PENDING"] }, "$payment.paidAmount", 0] },
+        },
+        cashAmount: {
+          $sum: {
+            $cond: [
+              { $and: [{ $eq: ["$payment.modeOfPayment", "Cash"] }, { $ne: ["$payment.paymentStatus", "REJECTED"] }] },
+              "$payment.paidAmount",
+              0,
+            ],
+          },
+        },
+      },
+    },
+  ]);
+
+  return res.status(200).json(
+    generateResponse(
+      "Success",
+      "Today's payments",
+      {
+        count: row?.count || 0,
+        orderCount: row?.orders?.length || 0,
+        totalAmount: row?.totalAmount || 0,
+        acceptedAmount: row?.acceptedAmount || 0,
+        pendingAmount: row?.pendingAmount || 0,
+        cashAmount: row?.cashAmount || 0,
+      },
+      undefined
+    )
+  );
+});
+
+/**
  * Send order accepted WhatsApp (WATI order_accpeted_revamped).
  * Auto on first COLLECTED payment; manual retry via POST send-accepted-whatsapp.
  */
@@ -6577,6 +6638,7 @@ export {
   createPaymentActivity,
   getPaymentActivities,
   getTodaysPaymentActivities,
+  getMyTodaysPaymentSummary,
   getUnclearedPayments,
   getPaymentsForApproval,
   reconcilePayments,

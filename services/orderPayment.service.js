@@ -247,6 +247,22 @@ export function validatePaymentRow(row, index = 0) {
   }
 }
 
+/**
+ * SALES / DEALER may only record payments on orders they can see in getOrders
+ * (same jobTitle scoping as factory getAll). Other roles are unrestricted.
+ */
+export function assertCanAddPaymentToOrder(order, reqUser) {
+  const job = String(reqUser?.jobTitle || "").toUpperCase();
+  if (job !== "SALES" && job !== "DEALER") return;
+  const uid = String(reqUser?._id || "");
+  const salesPersonId = String(order?.salesPerson?._id || order?.salesPerson || "");
+  const dealerId = String(order?.dealer?._id || order?.dealer || "");
+  const owns = job === "SALES" ? salesPersonId === uid : salesPersonId === uid || dealerId === uid;
+  if (!uid || !owns) {
+    throw new AppError("You can only add payments to your own orders", 403);
+  }
+}
+
 export async function resolveDealerIdForOrderWallet(order, session) {
   let dealerId = order.dealer;
   if (!dealerId && order.salesPerson) {
@@ -338,6 +354,8 @@ export async function addPaymentsToOrder(orderId, rawPayments, reqUser, options 
     if (!order) {
       throw new AppError("Order not found", 404);
     }
+
+    assertCanAddPaymentToOrder(order, reqUser);
 
     const normalized = rawPayments.map((row, i) => {
       const extra =

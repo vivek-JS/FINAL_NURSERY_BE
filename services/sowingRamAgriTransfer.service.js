@@ -305,18 +305,24 @@ export async function maybeCreateSowingTransferPurchaseOrder({
   const qty = Number(companyPackets) || 0;
   if (qty <= 0) return null;
 
-  const available = await getAvailablePacketsForProduct(product);
-  const shortfall = forceQty
-    ? Number(qty.toFixed(4))
-    : Number(Math.max(0, qty - available).toFixed(4));
-  if (shortfall <= 0.001) return null;
-
   const productForResolve = {
     ...product,
     plantId: product?.plantId || sowingRequest?.plantId,
     subtypeId: product?.subtypeId || sowingRequest?.subtypeId,
   };
-  const resolved = await resolveRamAgriForSeedProduct(productForResolve);
+  const supplierPromise = resolveRamAgriSupplier().then(
+    (value) => ({ value }),
+    (error) => ({ error })
+  );
+  const [available, resolved] = await Promise.all([
+    getAvailablePacketsForProduct(product),
+    resolveRamAgriForSeedProduct(productForResolve),
+  ]);
+  const shortfall = forceQty
+    ? Number(qty.toFixed(4))
+    : Number(Math.max(0, qty - available).toFixed(4));
+  if (shortfall <= 0.001) return null;
+
   if (!resolved?.cropId || !resolved?.varietyId) {
     return {
       skipped: true,
@@ -336,7 +342,9 @@ export async function maybeCreateSowingTransferPurchaseOrder({
     return { skipped: true, reason: "Ram Agri crop/variety not found", shortfall, available };
   }
 
-  const supplier = await resolveRamAgriSupplier();
+  const supplierResult = await supplierPromise;
+  if (supplierResult.error) throw supplierResult.error;
+  const supplier = supplierResult.value;
   const rate =
     Number(variety.averagePrice) ||
     Number(variety.purchasePrice) ||
@@ -345,13 +353,14 @@ export async function maybeCreateSowingTransferPurchaseOrder({
   const amount = shortfall * rate;
   const primaryUnit = variety.primaryUnit?._id || variety.primaryUnit;
 
-  const expiryDate = await resolveTransferExpiryDate({
-    ramAgriBatchAllocations,
-    cropId: resolved.cropId,
-    varietyId: resolved.varietyId,
-  });
-
-  const poNumber = await PurchaseOrder.generatePONumber();
+  const [expiryDate, poNumber] = await Promise.all([
+    resolveTransferExpiryDate({
+      ramAgriBatchAllocations,
+      cropId: resolved.cropId,
+      varietyId: resolved.varietyId,
+    }),
+    PurchaseOrder.generatePONumber(),
+  ]);
   const poItem = {
     isRamAgriProduct: true,
     isBiotechTransfer: true,

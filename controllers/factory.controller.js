@@ -120,6 +120,13 @@ function isCancelLikeOrderStatus(status) {
   return CANCEL_LIKE_ORDER_STATUSES.has(String(status || "").toUpperCase());
 }
 import { createRateChangeRequest } from "./rateChangeRequest.controller.js";
+import {
+  ExcessCoverError,
+  coverOrderFromBatches,
+  normalizePicks,
+  reverseOrderBatchCover,
+  validateCoverPicks,
+} from "../services/orderExcessBatchCover.service.js";
 
 const DISPATCH_DAY_KEY_TO_OFFSET = {
   TODAY: 0,
@@ -541,6 +548,18 @@ const createOne = (Model, modelName) =>
         }
       }
 
+      // Booking-time excess cover choice from the ±5d batch popup
+      const sowingCoverDecision = String(orderData.sowingCoverDecision || "")
+        .trim()
+        .toUpperCase();
+      const sowingCoverPicks = normalizePicks(orderData.sowingCoverPicks);
+      const sowingCoverOffered = Math.max(0, Math.floor(Number(orderData.sowingCoverOffered) || 0));
+      delete orderData.sowingCoverDecision;
+      delete orderData.sowingCoverPicks;
+      delete orderData.sowingCoverOffered;
+      delete orderData.sowingCoverSources;
+      delete orderData.sowingCoverReversedAt;
+
       // Instant multi-plant: parse plantLineItems, roll up root plant/qty/slot from lines
       let multiPlantLines = null;
       const rawPlantLines = parsePlantLineItemsInput(
@@ -581,6 +600,51 @@ const createOne = (Model, modelName) =>
         return res.status(400).json({
           message: "numberOfPlants must be greater than 0 for farmer orders",
         });
+      }
+
+      if (sowingCoverDecision === "COVER") {
+        const isDealerOrder =
+          orderData.dealerOrder === true || orderData.dealerOrder === "true";
+        if (multiPlantLines?.length > 1 || isDealerOrder || orderData.productMappingId || skipSlotBooking) {
+          return res.status(400).json({
+            message: "Excess cover is only for single-plant sowing farmer orders",
+            code: "COVER_NOT_ALLOWED",
+          });
+        }
+        const coverPlant = await mongoose
+          .model("PlantCms")
+          .findById(orderData.plantName)
+          .select("sowingAllowed")
+          .lean();
+        if (!coverPlant?.sowingAllowed) {
+          return res.status(400).json({
+            message: "Excess cover is only for sowing-allowed plants",
+            code: "COVER_NOT_ALLOWED",
+          });
+        }
+        try {
+          await validateCoverPicks({
+            plantId: orderData.plantName,
+            subtypeId: orderData.plantSubtype,
+            deliveryDate: orderData.deliveryDate,
+            need: numPlants + (Number(orderData.additionalPlants) || 0),
+            picks: sowingCoverPicks,
+          });
+        } catch (coverErr) {
+          if (coverErr instanceof ExcessCoverError) {
+            return res.status(400).json({
+              message: `${coverErr.message}. Please re-open the excess popup.`,
+              code: coverErr.code,
+            });
+          }
+          throw coverErr;
+        }
+      } else if (sowingCoverDecision === "SOW" && sowingCoverOffered > 0) {
+        const sowRemark = `Excess ${sowingCoverOffered.toLocaleString("en-IN")} within ±5d shown; chose sowing`;
+        if (Array.isArray(orderRemarks)) orderRemarks = [...orderRemarks, sowRemark];
+        else if (typeof orderRemarks === "string" && orderRemarks.trim()) {
+          orderRemarks = [orderRemarks, sowRemark];
+        } else orderRemarks = [sowRemark];
       }
 
       // Using session for transaction
@@ -1400,6 +1464,33 @@ const createOne = (Model, modelName) =>
 
       await closeMongoSession(session, { abort: false });
 
+      let sowingCover = null;
+      if (createdOrderDoc && sowingCoverDecision === "COVER") {
+        try {
+          const coverResult = await coverOrderFromBatches({
+            order: createdOrderDoc._id,
+            picks: sowingCoverPicks,
+            userId: req.user?._id,
+          });
+          sowingCover = {
+            ok: true,
+            message: coverResult.remark,
+            sources: coverResult.sources,
+            requestNumber: coverResult.requestNumber,
+          };
+          createdOrderDoc.sowingDone = true;
+          createdOrderDoc.sowingDoneAt = new Date();
+          createdOrderDoc.sowingCoverSources = coverResult.sources;
+        } catch (coverErr) {
+          console.error("Order excess cover after create failed:", coverErr?.message || coverErr);
+          sowingCover = {
+            ok: false,
+            code: coverErr?.code || "COVER_FAILED",
+            message: `Order booked, but excess cover failed: ${coverErr?.message || "unknown error"}. It will go through sowing.`,
+          };
+        }
+      }
+
       if (createdOrderDoc) {
         for (const ledgerRow of inventoryLedgerRowsForAfter) {
           try {
@@ -1508,6 +1599,7 @@ const createOne = (Model, modelName) =>
           order: createdOrderDoc,
           payments: createdPaymentArray,
           walletTransactions: createdWalletTransactions,
+          ...(sowingCover ? { sowingCover } : {}),
         },
         undefined
       );
@@ -2598,6 +2690,17 @@ const updateOne = (Model, modelName, allowedFields) =>
           }
         );
         console.log(`✅ Slot update completed for cancelled order`);
+
+        if (existingDoc.sowingCoverSources?.length && !existingDoc.sowingCoverReversedAt) {
+          const coverReverse = await reverseOrderBatchCover({
+            order: existingDoc,
+            userId: req.user?._id,
+            session,
+          });
+          console.log(
+            `🔙 Excess batch cover reversed for order #${existingDoc.orderId}: ${coverReverse.plants || 0} plants`
+          );
+        }
 
         if (beforeSnap) {
           try {
@@ -4790,6 +4893,8 @@ const getAll = (Model, modelName) =>
           sowingDone: { $ifNull: ["$sowingDone", false] },
           sowingDoneAt: 1,
           sowingDoneRequestId: 1,
+          sowingCoverSources: 1,
+          sowingCoverReversedAt: 1,
           payment: 1,
           numberOfPlants: 1,
           additionalPlants: { $ifNull: ["$additionalPlants", 0] },

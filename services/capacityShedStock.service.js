@@ -81,6 +81,8 @@ export async function loadShedStockPayload() {
       byBatch.set(batchId, {
         batchId,
         batchNumber: batch?.batchNumber || "",
+        plantId: idStr(batch?.plantCmsId),
+        subtypeId: idStr(batch?.plantSubtypeId),
         plantName: plant?.name || "",
         subtypeName: subtype?.name || "",
         sowed: 0,
@@ -188,6 +190,8 @@ export async function loadShedStockPayload() {
       return {
         batchId: b.batchId,
         batchNumber: b.batchNumber,
+        plantId: b.plantId,
+        subtypeId: b.subtypeId,
         plantName: b.plantName,
         subtypeName: b.subtypeName,
         sowed: b.sowed,
