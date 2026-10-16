@@ -407,6 +407,15 @@ const secondaryInwardSchema = new Schema({
       fromSellable: { type: Number, default: 0, min: 0 },
     },
   ],
+  /** Plants that came back from a loaded vehicle (not new planting). */
+  isReturn: { type: Boolean, default: false },
+  returnedFromDispatchId: { type: Schema.Types.ObjectId, ref: "Dispatch", default: null },
+  /** secondaryOutward row the plants were loaded on. */
+  returnedFromOutwardId: { type: Schema.Types.ObjectId, default: null },
+  returnedFromOrderId: { type: Schema.Types.ObjectId, ref: "Order", default: null },
+  returnReason: { type: String, trim: true, maxlength: 500, default: "" },
+  returnedAt: { type: Date, default: null },
+  returnedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
   activityLog: { type: [activityLogSchema], default: [] },
 });
 

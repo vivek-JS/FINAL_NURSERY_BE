@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { planSecondaryDestroy } from "../services/secondaryInwardDestroy.service.js";
+import {
+  planSecondaryDestroy,
+  summarizeLagwadLines,
+} from "../services/secondaryInwardDestroy.service.js";
 
 const line = (over = {}) => ({
   totalQuantity: 1000,
@@ -42,5 +45,30 @@ describe("planSecondaryDestroy", () => {
   it("rejects zero and more than available", () => {
     assert.ok(planSecondaryDestroy(line(), 0).error);
     assert.ok(planSecondaryDestroy(line({ availableQuantity: 10 }), 11).error);
+  });
+});
+
+describe("summarizeLagwadLines", () => {
+  it("gives planted, sold, destroyed and mortality after destroying all remaining", () => {
+    const s = summarizeLagwadLines([
+      { totalQuantity: 1000, availableQuantity: 0, destroyedQuantity: 150 },
+      { totalQuantity: 500, availableQuantity: 0, destroyedQuantity: 50 },
+    ]);
+    assert.equal(s.gross, 1500);
+    assert.equal(s.sold, 1300);
+    assert.equal(s.destroyed, 200);
+    assert.equal(s.inShed, 0);
+    assert.equal(s.mortalityPct, 13.3);
+  });
+
+  it("does not count returned plants as planted or sold twice", () => {
+    const s = summarizeLagwadLines([
+      { totalQuantity: 1000, availableQuantity: 100, destroyedQuantity: 0 },
+      { totalQuantity: 50, availableQuantity: 50, destroyedQuantity: 0, isReturn: true },
+    ]);
+    assert.equal(s.gross, 1000);
+    assert.equal(s.returned, 50);
+    assert.equal(s.inShed, 150);
+    assert.equal(s.sold, 850);
   });
 });

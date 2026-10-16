@@ -84,8 +84,10 @@ export async function loadShedStockPayload() {
         plantName: plant?.name || "",
         subtypeName: subtype?.name || "",
         sowed: 0,
+        returned: 0,
         remaining: 0,
         readyRemaining: 0,
+        destroyed: 0,
         toOrders: 0,
         lines: [],
         orderMap: new Map(),
@@ -108,9 +110,13 @@ export async function loadShedStockPayload() {
       const { ready, readyDate } = lineReadiness(si, secondaryDays, today);
       const bucket = batchBucket(shed, batchId);
 
+      const destroyed = qty(si.destroyedQuantity);
+      const isReturn = Boolean(si.isReturn);
       inwardShed.set(idStr(si._id), shed);
-      bucket.sowed += sowed;
+      if (isReturn) bucket.returned += sowed;
+      else bucket.sowed += sowed;
       bucket.remaining += remaining;
+      bucket.destroyed += destroyed;
       if (ready) bucket.readyRemaining += remaining;
       bucket.lines.push({
         inwardId: idStr(si._id),
@@ -122,6 +128,9 @@ export async function loadShedStockPayload() {
         sowed,
         remaining,
         gone: Math.max(0, sowed - remaining),
+        destroyed,
+        isReturn,
+        returnedAt: si.returnedAt || null,
         transferStatus: si.transferStatus || "available",
       });
     }
@@ -161,7 +170,8 @@ export async function loadShedStockPayload() {
 
   const shedRows = [...sheds.entries()].map(([shed, byBatch]) => {
     const batchRows = [...byBatch.values()].map((b) => {
-      const gone = Math.max(0, b.sowed - b.remaining);
+      const gone = Math.max(0, b.sowed + b.returned - b.remaining);
+      const toOrders = Math.min(b.toOrders, gone || b.toOrders);
       const orders = [...b.orderMap.values()]
         .map((entry) => {
           const order = orderById.get(entry.orderId);
@@ -181,11 +191,13 @@ export async function loadShedStockPayload() {
         plantName: b.plantName,
         subtypeName: b.subtypeName,
         sowed: b.sowed,
+        returned: b.returned,
         remaining: b.remaining,
         readyRemaining: b.readyRemaining,
         gone,
-        toOrders: Math.min(b.toOrders, gone || b.toOrders),
-        otherGone: Math.max(0, gone - b.toOrders),
+        destroyed: b.destroyed,
+        toOrders,
+        otherGone: Math.max(0, gone - toOrders - b.destroyed),
         lines: b.lines.sort((a, c) => new Date(a.lagwadDate || 0) - new Date(c.lagwadDate || 0)),
         orders,
       };
@@ -199,9 +211,11 @@ export async function loadShedStockPayload() {
       batchCount: batchRows.length,
       activeBatchCount: batchRows.filter((row) => row.remaining > 0).length,
       sowed: sum("sowed"),
+      returned: sum("returned"),
       remaining: sum("remaining"),
       readyRemaining: sum("readyRemaining"),
       gone: sum("gone"),
+      destroyed: sum("destroyed"),
       toOrders: sum("toOrders"),
       otherGone: sum("otherGone"),
       batches: batchRows,
@@ -218,7 +232,10 @@ export async function loadShedStockPayload() {
       remaining: shedRows.reduce((acc, row) => acc + row.remaining, 0),
       readyRemaining: shedRows.reduce((acc, row) => acc + row.readyRemaining, 0),
       gone: shedRows.reduce((acc, row) => acc + row.gone, 0),
+      destroyed: shedRows.reduce((acc, row) => acc + row.destroyed, 0),
+      returned: shedRows.reduce((acc, row) => acc + row.returned, 0),
       toOrders: shedRows.reduce((acc, row) => acc + row.toOrders, 0),
+      otherGone: shedRows.reduce((acc, row) => acc + row.otherGone, 0),
     },
     sheds: shedRows,
   };
@@ -226,7 +243,18 @@ export async function loadShedStockPayload() {
 
 function emptyPayload() {
   return {
-    totals: { sheds: 0, batches: 0, sowed: 0, remaining: 0, readyRemaining: 0, gone: 0, toOrders: 0 },
+    totals: {
+      sheds: 0,
+      batches: 0,
+      sowed: 0,
+      remaining: 0,
+      readyRemaining: 0,
+      gone: 0,
+      destroyed: 0,
+      returned: 0,
+      toOrders: 0,
+      otherGone: 0,
+    },
     sheds: [],
   };
 }

@@ -352,6 +352,23 @@ const dispatchSchema = new Schema(
       default: 0,
       min: 0,
     },
+    /** Plants taken off the vehicle and put back into a shed (stock only; order money untouched). */
+    shedReturns: [
+      {
+        orderId: { type: Schema.Types.ObjectId, ref: "Order", default: null },
+        batchId: { type: Schema.Types.ObjectId, ref: "DispatchBatch" },
+        batchNumber: { type: String, default: "" },
+        sourceOutwardId: { type: Schema.Types.ObjectId, default: null },
+        secondaryInwardId: { type: Schema.Types.ObjectId, default: null },
+        pollyhouse: { type: String, trim: true, default: "" },
+        quantity: { type: Number, required: true, min: 1 },
+        reason: { type: String, trim: true, default: "" },
+        source: { type: String, enum: ["APP", "COMPLETE_FORM"], default: "APP" },
+        returnedAt: { type: Date, default: Date.now },
+        returnedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      },
+    ],
+    shedReturnedPlants: { type: Number, default: 0, min: 0 },
     plantsDetails: {
       type: [plantDetailSchema],
       validate: {

@@ -418,7 +418,7 @@ export async function listSecondaryVehicleDispatches({
       .skip(skip)
       .limit(limitNum)
       .select(
-        "transportId transportStatus driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds lastOfficeEditedAt createdAt updatedAt"
+        "transportId transportStatus driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds lastOfficeEditedAt createdAt updatedAt shedReturns shedReturnedPlants"
       )
       .lean(),
     Dispatch.countDocuments({
@@ -480,6 +480,15 @@ export async function listSecondaryVehicleDispatches({
   const items = docs.map((d) => ({
     ...mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, orderLabelById),
     ...(loadersById.get(String(d._id)) || { loadedBy: [], lastLoadedAt: null }),
+    shedReturnedPlants: Number(d.shedReturnedPlants) || 0,
+    shedReturns: (d.shedReturns || []).map((r) => ({
+      batchNumber: r.batchNumber || "",
+      pollyhouse: r.pollyhouse || "",
+      quantity: Number(r.quantity) || 0,
+      reason: r.reason || "",
+      source: r.source || "APP",
+      returnedAt: r.returnedAt || null,
+    })),
   }));
 
   return {

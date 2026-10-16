@@ -414,6 +414,18 @@ export function buildSecondaryInwardLine(si, po, batchLean, todayStart) {
     dispatchEligible,
     onSlot: synced > 0,
     readinessBypassAt: si.readinessBypassAt ?? null,
+    isReturn: Boolean(si.isReturn),
+    returnedFromDispatchId: si.returnedFromDispatchId ?? null,
+    returnReason: si.returnReason || "",
+    returnedAt: si.returnedAt ?? null,
+    destroyLog: (si.destroyLog || []).map((d) => ({
+      quantity: Number(d.quantity) || 0,
+      reason: d.reason || "",
+      recordedAt: d.recordedAt ?? null,
+      recordedBy: d.recordedBy ?? null,
+      fromMortality: Number(d.fromMortality) || 0,
+      fromSellable: Number(d.fromSellable) || 0,
+    })),
     // Lagwad analysis additions — 90/10 split, ready age and readiness state.
     sell90: split.actualPlants,
     mort10: split.expectedMortality,

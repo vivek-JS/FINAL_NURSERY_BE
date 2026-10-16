@@ -54,7 +54,11 @@ import {
   getSecondaryVehicleLoadedLines,
   postSecondaryVehicleUnload,
 } from "../controllers/plantOutward.controller.js";
-import { postSecondaryInwardDestroy } from "../controllers/secondaryInwardDestroy.controller.js";
+import { postSecondaryVehicleReturn } from "../controllers/secondaryVehicleReturn.controller.js";
+import {
+  postSecondaryDestroyRemaining,
+  postSecondaryInwardDestroy,
+} from "../controllers/secondaryInwardDestroy.controller.js";
 import { optionalVehicleLoadPhotosUpload } from "../middleware/vehicleLoadPhotos.middleware.js";
 
 const router = express.Router();
@@ -166,6 +170,7 @@ router.post(
   "/secondary/vehicle-dispatch/:dispatchId/unload",
   postSecondaryVehicleUnload
 );
+router.post("/secondary/vehicle-dispatch/:dispatchId/return", postSecondaryVehicleReturn);
 router.get("/secondary/dispatch-stock-lines", getDispatchStockLines);
 router.get("/secondary/polyhouse-stock", getSecondaryPolyhouseStock);
 router.get("/secondary/stock-summary", getSecondaryStockSummary);
@@ -186,6 +191,7 @@ router.post(
   "/secondary/:batchId/secondary-inward/:secondaryInwardId/destroy",
   postSecondaryInwardDestroy
 );
+router.post("/secondary/:batchId/destroy-remaining", postSecondaryDestroyRemaining);
 router.get("/transfers/:batchId", getTransferHistory);
 router.get("/activity/:batchId", getShedActivityByBatch);
 router.get(
