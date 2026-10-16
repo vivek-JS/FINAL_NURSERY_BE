@@ -74,7 +74,11 @@ function getGenAiClient() {
 }
 
 /** Text prompt → parsed JSON matching `schema` (Gemini structured output). */
-export async function generateJson(prompt, schema, { model = "gemini-2.5-flash" } = {}) {
+export async function generateJson(
+  prompt,
+  schema,
+  { model = "gemini-2.5-flash", thinking = false } = {}
+) {
   const ai = getGenAiClient();
   const response = await ai.models.generateContent({
     model,
@@ -82,6 +86,7 @@ export async function generateJson(prompt, schema, { model = "gemini-2.5-flash" 
     config: {
       responseMimeType: "application/json",
       responseJsonSchema: schema,
+      ...(thinking ? {} : { thinkingConfig: { thinkingBudget: 0 } }),
     },
   });
   const text = response.text;
