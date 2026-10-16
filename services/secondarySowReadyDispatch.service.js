@@ -12,13 +12,15 @@ import { applyStockFieldUpdates } from "../utility/slotStockTrail.js";
 import {
   findDispatchActiveByIdOrTransport,
   resolvePlantRowFromDispatch,
-  unionDispatchOrderObjectIds,
   syncDispatchTransportStatusAfterShedChange,
   updateDispatchOrderShedLoaded,
   computeSuggestedFulfillmentSequence,
   DISPATCH_SHED_ALLOWED_STATUSES,
   sumPlantsLoadedOnDispatch,
   normalizeShedLoadInputs,
+  resolveVehicleOrderIdsForPlantRow,
+  vehicleLineRemainingMap,
+  takePlantsFromOrdersFifo,
 } from "./secondaryVehicleLoad.service.js";
 import {
   finalizeOrderOnShedLineLoaded,
@@ -536,19 +538,36 @@ export async function executeSowReadyVehicleLoad({
   }
 
   let resolvedOrderId = linkedOrderId;
+  let fifoOrderIds = [];
   if (!resolvedOrderId) {
-    const unionIds = unionDispatchOrderObjectIds(dispatchDoc);
-    const matching = await Order.find({
-      _id: { $in: unionIds },
-      plantName: plantCmsId,
-      plantSubtype: plantSubtypeId,
-      orderStatus: { $in: ["READY_FOR_DISPATCH", "DISPATCH_PROCESS"] },
-    })
-      .select("_id")
-      .sort({ orderId: -1 })
-      .limit(1)
-      .lean();
-    if (matching.length === 1) resolvedOrderId = String(matching[0]._id);
+    const rowOrderIds = await resolveVehicleOrderIdsForPlantRow(
+      dispatchDoc,
+      plantCmsId,
+      plantSubtypeId
+    );
+    if (rowOrderIds.length === 1) resolvedOrderId = rowOrderIds[0];
+    else if (rowOrderIds.length > 1) fifoOrderIds = rowOrderIds;
+  }
+
+  /** Split each slot pick across the row's orders (FIFO by remaining need on the vehicle). */
+  if (fifoOrderIds.length) {
+    const remaining = vehicleLineRemainingMap(dispatchDoc, fifoOrderIds);
+    const sliced = [];
+    for (const item of loadPlan) {
+      const take = takePlantsFromOrdersFifo(item.plants, fifoOrderIds, remaining);
+      if (take.unassigned > 0) {
+        throw new AppError(
+          `Selection exceeds remaining need of orders on this vehicle by ${take.unassigned}`,
+          400
+        );
+      }
+      for (const part of take.allocations) {
+        sliced.push({ ...item, plants: part.plants, orderId: part.orderId });
+      }
+    }
+    loadPlan = sliced;
+  } else if (resolvedOrderId) {
+    loadPlan = loadPlan.map((item) => ({ ...item, orderId: String(resolvedOrderId) }));
   }
 
   const { cavity, numberPerCrate } = await resolveDefaultCavity();
@@ -567,6 +586,7 @@ export async function executeSowReadyVehicleLoad({
 
     let seq = await computeSuggestedFulfillmentSequence(freshDispatch._id);
     const results = [];
+    const plantsByOrder = new Map();
     let slotSubtractTotal = 0;
     let totalLoaded = 0;
 
@@ -603,8 +623,8 @@ export async function executeSowReadyVehicleLoad({
         stockSource: "SOW_READY",
         sowReadySlotId: new mongoose.Types.ObjectId(item.slotId),
         sowReadyPlantReadyDate: ent?.plantReadyDate || "",
-        ...(resolvedOrderId
-          ? { linkedOrderId: new mongoose.Types.ObjectId(resolvedOrderId) }
+        ...(item.orderId
+          ? { linkedOrderId: new mongoose.Types.ObjectId(item.orderId) }
           : {}),
         linkedDispatchId: freshDispatch._id,
         linkedDispatchPlantRowIndex: dispatchPlantRowIdx,
@@ -635,30 +655,37 @@ export async function executeSowReadyVehicleLoad({
       });
       totalLoaded += plantsMoving;
       seq += 1;
+      if (item.orderId) {
+        plantsByOrder.set(item.orderId, (plantsByOrder.get(item.orderId) || 0) + plantsMoving);
+      }
     }
 
-    let orderLoaded = null;
-    let finalizeResult = null;
-    if (resolvedOrderId) {
-      orderLoaded = await updateDispatchOrderShedLoaded({
+    const orderLoadedList = [];
+    const finalizeResults = [];
+    for (const [oid, plantsLoaded] of plantsByOrder) {
+      const loaded = await updateDispatchOrderShedLoaded({
         session,
         dispatchDoc: freshDispatch,
-        orderId: resolvedOrderId,
-        plantsLoaded: totalLoaded,
+        orderId: oid,
+        plantsLoaded,
       });
-      finalizeResult = await finalizeOrderOnShedLineLoaded({
+      if (loaded) orderLoadedList.push(loaded);
+      const fr = await finalizeOrderOnShedLineLoaded({
         session,
-        orderId: resolvedOrderId,
+        orderId: oid,
         dispatchDoc: freshDispatch,
-        orderLoaded,
+        orderLoaded: loaded,
         performedBy,
       });
-      await syncOrderVehicleLoadedFlag({
-        session,
-        orderId: resolvedOrderId,
-        dispatchDoc: freshDispatch,
-      });
+      if (fr) finalizeResults.push(fr);
+      await syncOrderVehicleLoadedFlag({ session, orderId: oid, dispatchDoc: freshDispatch });
     }
+    const primaryOrderId =
+      resolvedOrderId || (plantsByOrder.size === 1 ? [...plantsByOrder.keys()][0] : null);
+    const orderLoaded =
+      orderLoadedList.find((r) => String(r.orderId) === String(primaryOrderId)) ||
+      orderLoadedList[0] ||
+      null;
 
     const transportStatus = await syncDispatchTransportStatusAfterShedChange({
       session,
@@ -669,7 +696,9 @@ export async function executeSowReadyVehicleLoad({
     await session.commitTransaction();
 
     const alertChangedBy = performedBy ? String(performedBy) : "Secondary shed";
-    schedulePostShedLoadAlerts({ finalizeResult, changedBy: alertChangedBy });
+    for (const fr of finalizeResults) {
+      schedulePostShedLoadAlerts({ finalizeResult: fr, changedBy: alertChangedBy });
+    }
     schedulePendingDispatchWhatsAppForVehicle(freshDispatch._id, { changedBy: alertChangedBy });
 
     return {
@@ -677,8 +706,9 @@ export async function executeSowReadyVehicleLoad({
       totalLoaded,
       slotSubtractTotal,
       orderLoaded,
+      orderLoadedList,
       transportStatus,
-      linkedOrderId: resolvedOrderId || null,
+      linkedOrderId: primaryOrderId || null,
       stockSource: "SOW_READY",
     };
   } catch (err) {
