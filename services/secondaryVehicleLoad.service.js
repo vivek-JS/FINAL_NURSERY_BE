@@ -1378,6 +1378,16 @@ export async function updateDispatchOrderShedLoaded({
   };
 }
 
+/** A vehicle short by at most this share of its plants still counts as LOADED. */
+export const VEHICLE_SHORT_LOAD_TOLERANCE = 0.02;
+
+export function isVehicleLoadComplete(loaded, need) {
+  const n = Math.max(0, Number(need) || 0);
+  const l = Math.max(0, Number(loaded) || 0);
+  if (n <= 0 || l <= 0) return false;
+  return l >= n - Math.floor(n * VEHICLE_SHORT_LOAD_TOLERANCE);
+}
+
 export async function syncDispatchTransportStatusAfterShedChange({
   session,
   dispatchDoc,
@@ -1386,8 +1396,9 @@ export async function syncDispatchTransportStatusAfterShedChange({
   void plantRowIndex;
   const vehicleNeed = computeTotalVehiclePlantNeed(dispatchDoc);
   const { total: loaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const complete = isVehicleLoadComplete(loaded, vehicleNeed);
 
-  if (vehicleNeed > 0 && loaded >= vehicleNeed) {
+  if (complete) {
     if (dispatchDoc.transportStatus !== "LOADED") {
       dispatchDoc.transportStatus = "LOADED";
       await dispatchDoc.save({ session, validateBeforeSave: true });
@@ -1395,7 +1406,7 @@ export async function syncDispatchTransportStatusAfterShedChange({
     return "LOADED";
   }
 
-  if (dispatchDoc.transportStatus === "LOADED" && loaded < vehicleNeed) {
+  if (dispatchDoc.transportStatus === "LOADED" && !complete) {
     dispatchDoc.transportStatus = "PENDING";
     await dispatchDoc.save({ session, validateBeforeSave: true });
     return "PENDING";
