@@ -42,6 +42,27 @@ export function fmtDDMMYYYY(d) {
   return `${dd}-${mm}-${yyyy}`;
 }
 
+/** Today's IST calendar day as a local-noon Date (server runs in UTC). */
+export function istTodayNoon(now = new Date()) {
+  return parseLocalDate(now.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }));
+}
+
+/** Sow day as "YYYY-MM-DD": day strings keep their calendar day, Dates use IST. */
+export function toSowYmd(input) {
+  if (input == null || input === "") return "";
+  if (!(input instanceof Date)) {
+    const s = String(input).trim();
+    const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
+    const dmy = s.match(/^(\d{2})-(\d{2})-(\d{4})/);
+    if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  }
+  const d = new Date(input);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+
 export function addDays(date, days) {
   const d = new Date(date.getTime());
   d.setHours(0, 0, 0, 0);

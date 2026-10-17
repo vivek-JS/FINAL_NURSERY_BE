@@ -25,6 +25,8 @@ import {
   findSlotByPlantReadyDate,
   addDays,
   fmtDDMMYYYY,
+  istTodayNoon,
+  toSowYmd,
 } from "./sowingSlotReadyHelpers.js";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
 import {
@@ -190,7 +192,7 @@ export const getSowSlotPreview = async (req, res) => {
       Number.isFinite(bodyReady) && bodyReady > 0 ? bodyReady : cmsReady;
 
     const sowedAt =
-      parseLocalDate(req.query.sowDate || req.query.sowingDate) || new Date();
+      parseLocalDate(req.query.sowDate || req.query.sowingDate) || istTodayNoon();
     const plantReadyDateStr = fmtDDMMYYYY(addDays(sowedAt, plantReadyDays || 0));
 
     let resolved = null;
@@ -412,7 +414,7 @@ export const completeSowingRequest = async (req, res) => {
       const plantReadyDays =
         Number.isFinite(bodyReady) && bodyReady > 0 ? bodyReady : cmsReady;
       const sowedAt =
-        parseLocalDate(req.body.sowDate || req.body.sowingDate) || new Date();
+        parseLocalDate(req.body.sowDate || req.body.sowingDate) || istTodayNoon();
 
       // Slots first (fail before creating return requests), then inventory + photos in parallel
       const slotResult =
@@ -1321,7 +1323,34 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
         entryAt: "$ev.at",
         entrySowDay: {
           $ifNull: [
-            "$ev.meta.sowDate",
+            {
+              $let: {
+                vars: { s: { $ifNull: ["$ev.meta.sowDate", ""] } },
+                in: {
+                  $switch: {
+                    branches: [
+                      {
+                        case: { $regexMatch: { input: "$$s", regex: /^\d{4}-\d{2}-\d{2}/ } },
+                        then: { $substrCP: ["$$s", 0, 10] },
+                      },
+                      {
+                        case: { $regexMatch: { input: "$$s", regex: /^\d{2}-\d{2}-\d{4}/ } },
+                        then: {
+                          $concat: [
+                            { $substrCP: ["$$s", 6, 4] },
+                            "-",
+                            { $substrCP: ["$$s", 3, 2] },
+                            "-",
+                            { $substrCP: ["$$s", 0, 2] },
+                          ],
+                        },
+                      },
+                    ],
+                    default: null,
+                  },
+                },
+              },
+            },
             istDay({
               $cond: [
                 { $and: [{ $eq: ["$ev.type", "SOW_COMPLETED"] }, "$sowingCompletedDate"] },
@@ -1445,9 +1474,10 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       batchNumbers,
       outwardNumber: outward?.outwardNumber || "",
       sowingDate:
-        meta.sowDate ||
-        (ev.type === "SOW_COMPLETED" && r.sowingCompletedDate) ||
-        at,
+        toSowYmd(meta.sowDate) ||
+        toSowYmd(ev.type === "SOW_COMPLETED" ? r.sowingCompletedDate : null) ||
+        toSowYmd(at) ||
+        null,
       createdAt: at,
       requestCreatedAt: r.createdAt || null,
       affectedSlot: buildAffectedSlot(slotRaw, reqBatch, shedName),

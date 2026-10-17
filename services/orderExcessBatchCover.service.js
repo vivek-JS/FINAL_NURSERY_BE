@@ -11,6 +11,7 @@ import {
   orderPlantsNeed,
 } from "../controllers/orderSowFromExcess.controller.js";
 import { writeTransferAudit } from "../controllers/sowingTransferAudit.helpers.js";
+import { toSowYmd } from "../controllers/sowingSlotReadyHelpers.js";
 import { recordSlotTrail } from "../utility/slotTrailStore.js";
 import { slotSowStock, sowBatchStock, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
 import {
@@ -37,6 +38,15 @@ function toOid(id) {
 
 function int(n) {
   return Math.max(0, Math.floor(Number(n) || 0));
+}
+
+/** Oldest sow day across the picked batches, as "YYYY-MM-DD" (null when none recorded). */
+export function earliestSowYmd(picks) {
+  const days = (picks || [])
+    .map((p) => toSowYmd(p?.sowingDate || p?.sowedAt))
+    .filter(Boolean)
+    .sort();
+  return days[0] || null;
 }
 
 function offsetLabel(off) {
@@ -973,6 +983,7 @@ export async function coverOrderFromBatches({
       note: "Cover order from excess sowing batches",
       destCountsAsCovered: false,
       skipDestBatch: true,
+      sowDate: earliestSowYmd(matched),
     });
     if (request?._id) {
       await Order.updateOne({ _id: orderOid }, { $set: { sowingDoneRequestId: request._id } });

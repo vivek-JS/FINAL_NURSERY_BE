@@ -15,6 +15,8 @@ import {
   fmtDDMMYYYY,
   addDays,
   parseLocalDate as parseLocalDateHelper,
+  istTodayNoon,
+  toSowYmd,
 } from "./sowingSlotReadyHelpers.js";
 import { fetchSlotsBySubtype } from "../services/directSowSlotDays.service.js";
 
@@ -334,7 +336,7 @@ export const submitDirectSow = async (req, res) => {
     const sowDateHint = String(
       req.body.sowDate || req.body.sowingDate || req.body.date || ""
     ).trim();
-    const sowedAt = parseLocalDate(sowDateHint) || new Date();
+    const sowedAt = parseLocalDate(sowDateHint) || istTodayNoon();
 
     let orders = [];
     if (orderIds.length) {
@@ -655,7 +657,7 @@ export const submitDirectSow = async (req, res) => {
         adminBypass: true,
         noSeedProduct: !product,
         excessOnly: isExcessOnly,
-        sowDate: sowDateHint || null,
+        sowDate: toSowYmd(sowedAt) || null,
         plantReadyDays: slotResult.plantReadyDays ?? plantReadyDays,
         plantReadyDate: slotResult.plantReadyDate || null,
         appliedSlotId: slotResult.appliedSlotId
