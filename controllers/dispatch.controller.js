@@ -2876,6 +2876,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
       return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
     }
     const dispatch = await Dispatch.findById(resolved._id)
+      .populate({ path: "tripId", select: "tripNumber kmRun rent otherCharges tripRemark" })
       .populate({
         path: "orderIds",
         populate: [
@@ -2911,6 +2912,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
     if (!dispatch) {
       return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
     }
+    const tripDoc = dispatch.tripId && typeof dispatch.tripId === "object" ? dispatch.tripId : null;
 
     // Separately get all relevant tray data to ensure we have the info
     const trayIds = [];
@@ -2963,6 +2965,15 @@ const getDispatch = catchAsync(async (req, res, next) => {
       completeInvoicePdfUrl: dispatch.completeInvoicePdfUrl || "",
       completeInvoicePdfGeneratedAt: dispatch.completeInvoicePdfGeneratedAt || null,
       transportStatus: dispatch.transportStatus || "PENDING",
+      trip: tripDoc
+        ? {
+            tripNumber: tripDoc.tripNumber || "",
+            kmRun: tripDoc.kmRun ?? null,
+            rent: tripDoc.rent ?? null,
+            otherCharges: tripDoc.otherCharges ?? null,
+            tripRemark: tripDoc.tripRemark || "",
+          }
+        : null,
       orderDispatchDetails: dispatch.orderDispatchDetails || [], // Include dispatch details
       plantsDetails: dispatch.plantsDetails.map((plant) => {
         // Calculate cavity count
@@ -3091,6 +3102,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
         returnedPlants: order.returnedPlants,
         damagedPlants: order.damagedPlants,
         returnReason: order.returnReason,
+        returnHistory: order.returnHistory || [],
         quotaSource: order.quotaSource,
         additionalPlants: order.additionalPlants,
         dealerOrder: order.dealerOrder,
@@ -3098,6 +3110,12 @@ const getDispatch = catchAsync(async (req, res, next) => {
         deliveryDate: order.deliveryDate,
         notes: order.notes,
         dispatchHistory: order.dispatchHistory || [],
+        freight: order.freight || null,
+        freightCharges: order.freightCharges ?? 0,
+        batchNumber: order.batchNumber || "",
+        deliveryCompleteBatch: order.deliveryCompleteBatch || null,
+        expectedNursery: order.expectedNursery || "",
+        orderRemarks: order.orderRemarks || [],
         };
       }),
       createdAt: dispatch.createdAt,

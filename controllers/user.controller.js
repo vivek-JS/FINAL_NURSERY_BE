@@ -1614,7 +1614,7 @@ const exportDealerWalletTransactionsCSV = async (req, res) => {
 
       return {
         'Sr No': index + 1,
-        'Date': new Date(transaction.createdAt).toLocaleDateString('en-IN'),
+        'Date': new Date(transaction.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }),
         'Type': transaction.type,
         'Amount': transaction.amount,
         'Balance Before': transaction.balanceBefore,
@@ -1622,7 +1622,7 @@ const exportDealerWalletTransactionsCSV = async (req, res) => {
         'Description': description,
         'Status': transaction.status,
         'Reference': transaction.reference || '',
-        'Created At': new Date(transaction.createdAt).toLocaleString('en-IN')
+        'Created At': new Date(transaction.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
       };
     });
 

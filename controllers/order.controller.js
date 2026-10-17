@@ -907,7 +907,7 @@ const getCsv = catchAsync(async (req, res, next) => {
     const csvData = [];
 
     const formatInDate = (d) =>
-      d ? new Date(d).toLocaleDateString("en-IN") : "N/A";
+      d ? new Date(d).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" }) : "";
 
     const deliverySource = (obj) =>
       obj.deliveryDate || obj.farmReadyDate || null;
