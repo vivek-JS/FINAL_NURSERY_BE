@@ -9,6 +9,7 @@ import {
   coverOrderFromBatches,
   listExcessBatches,
   ownSowTolerance,
+  suggestExcessDays,
 } from "../services/orderExcessBatchCover.service.js";
 
 /** Plant ready days of the subtype and whether a sowing started today is ready by delivery. */
@@ -67,6 +68,15 @@ export const getExcessBatches = async (req, res) => {
       releaseOrderId: releaseId,
     });
     Object.assign(data, await newSowingInfo(plantId, subtypeId, deliveryDate));
+    if (data.windowDays >= 15 && data.need > 0 && data.totalFree < data.need) {
+      data.suggestedDays = await suggestExcessDays({
+        plantId,
+        subtypeId,
+        deliveryDate,
+        need: data.need,
+        releaseOrderId: releaseId,
+      });
+    }
     if (releaseId) {
       const order = await Order.findById(releaseId)
         .select(

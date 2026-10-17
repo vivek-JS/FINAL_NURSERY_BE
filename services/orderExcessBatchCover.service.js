@@ -177,12 +177,13 @@ export async function listExcessBatches({
   need = 0,
   windowDays = EXCESS_COVER_WINDOW_DAYS,
   releaseOrderId = null,
+  maxWindowDays = 15,
 }) {
   const plantOid = toOid(plantId);
   const subtypeOid = toOid(subtypeId);
   const deliveryIst = deliveryDateToIstMoment(deliveryDate);
   const needQty = int(need);
-  const win = Math.min(15, Math.max(0, Math.floor(Number(windowDays) || 0)));
+  const win = Math.min(maxWindowDays, Math.max(0, Math.floor(Number(windowDays) || 0)));
   const empty = { need: needQty, windowDays: win, totalFree: 0, mode: "none", entries: [] };
   if (!plantOid || !subtypeOid || !deliveryIst) return empty;
 
@@ -299,6 +300,78 @@ export async function listExcessBatches({
   let mode = "none";
   if (totalFree > 0) mode = needQty > 0 && totalFree >= needQty ? "full" : "partial";
   return { need: needQty, windowDays: win, totalFree, mode, entries };
+}
+
+/** How far from the requested delivery date other days are suggested. */
+export const SUGGEST_RANGE_DAYS = 45;
+
+/**
+ * Other delivery days (today or later, within ±SUGGEST_RANGE_DAYS) whose excess within
+ * ±coverWindowDays can cover the whole order. Nearest to the requested date first.
+ */
+export async function suggestExcessDays({
+  plantId,
+  subtypeId,
+  deliveryDate,
+  need,
+  releaseOrderId = null,
+  coverWindowDays = EXCESS_COVER_WINDOW_DAYS,
+  limit = 6,
+}) {
+  const needQty = int(need);
+  const deliveryIst = deliveryDateToIstMoment(deliveryDate);
+  if (!needQty || !deliveryIst) return [];
+  const span = SUGGEST_RANGE_DAYS + coverWindowDays;
+  const wide = await listExcessBatches({
+    plantId,
+    subtypeId,
+    deliveryDate,
+    need: needQty,
+    windowDays: span,
+    maxWindowDays: span,
+    releaseOrderId,
+  });
+  const entries = wide.entries.map((e) => ({
+    free: e.freePlants,
+    ready: slotDayStartMoment(e.plantReadyDate) || deliveryIst.clone().add(e.offsetDays, "days"),
+  }));
+  if (!entries.length) return [];
+
+  const today = deliveryDateToIstMoment(new Date());
+  const out = [];
+  for (let off = -SUGGEST_RANGE_DAYS; off <= SUGGEST_RANGE_DAYS; off += 1) {
+    if (off === 0) continue;
+    const day = deliveryIst.clone().add(off, "days");
+    if (today && day.isBefore(today, "day")) continue;
+    let freePlants = 0;
+    const used = [];
+    entries.forEach((e, i) => {
+      if (Math.abs(e.ready.diff(day, "days")) <= coverWindowDays) {
+        freePlants += e.free;
+        used.push(i);
+      }
+    });
+    if (freePlants >= needQty) {
+      out.push({
+        date: day.format("YYYY-MM-DD"),
+        offsetDays: off,
+        freePlants,
+        entryCount: used.length,
+        key: used.join(","),
+      });
+    }
+  }
+  out.sort((a, b) => Math.abs(a.offsetDays) - Math.abs(b.offsetDays) || a.offsetDays - b.offsetDays);
+  const seen = new Set();
+  const distinct = [];
+  for (const d of out) {
+    if (seen.has(d.key)) continue;
+    seen.add(d.key);
+    const { key: _key, ...rest } = d;
+    distinct.push(rest);
+    if (distinct.length >= limit) break;
+  }
+  return distinct;
 }
 
 /** Merge duplicate batch picks; drops zero rows. */
