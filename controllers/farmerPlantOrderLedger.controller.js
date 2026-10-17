@@ -685,6 +685,15 @@ function recomputeOrderPaymentCompletion(order) {
   order.paymentCompleted = collected >= total;
 }
 
+function buildTransferRequestOrderSnapshot(order) {
+  return {
+    orderNumber: Number(order.orderId) || null,
+    farmerId: order.farmer?._id || order.farmer || null,
+    farmerName: order.farmer?.name || "",
+    farmerMobile: normalizeFarmerMobile(order.farmer?.mobileNumber) || "",
+  };
+}
+
 function getOrderTransferableAmount(order) {
   const list = Array.isArray(order?.payment) ? order.payment : [];
   return roundMoney(
@@ -699,14 +708,16 @@ function getOrderTransferableAmount(order) {
 
 /**
  * POST move one COLLECTED payment from a farmer plant order to another (any eligible farmer plant target).
- * Body: { sourceOrderId, targetOrderId, paymentId, message? }
+ * Body: { sourceOrderId, targetOrderId, paymentId, message?, amount? }
  *
  * - Source payment → REJECTED; target → new payment COLLECTED; paired ledger rows on transfer
  * - Rejecting the target payment via updatePaymentStatus restores source + reverses ledgers
  * - Excludes wallet payments and bulk-linked payments (mainPaymentId)
+ * - amount < line amount: posted as an auto-approved transfer request deducted from this line only
+ *   (source line stays COLLECTED with reduced paidAmount; undo via rejecting the target payment)
  */
 export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next) => {
-  const { sourceOrderId, targetOrderId, paymentId, message } = req.body || {};
+  const { sourceOrderId, targetOrderId, paymentId, message, amount: rawAmount } = req.body || {};
   const msg = message != null && String(message).trim() ? String(message).trim() : "";
 
   const sid = sourceOrderId != null ? String(sourceOrderId).trim() : "";
@@ -718,6 +729,15 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
   }
   if (sid === tid) {
     return next(new AppError("Source and target orders must be different", 400));
+  }
+
+  let requestedAmount = null;
+  if (rawAmount != null && String(rawAmount).trim() !== "") {
+    const parsed = Number(rawAmount);
+    if (!Number.isFinite(parsed) || !(roundMoney(parsed) > 0)) {
+      return next(new AppError("Transfer amount must be greater than zero", 400));
+    }
+    requestedAmount = roundMoney(parsed);
   }
 
   const performedBy = req.user?._id || req.user?.id;
@@ -768,6 +788,120 @@ export const transferFarmerPlantOrderPayment = catchAsync(async (req, res, next)
     const amount = roundMoney(Math.abs(Number(sourcePayment.paidAmount || 0)));
     if (!(amount > 0)) {
       throw new AppError("Payment amount must be greater than zero", 400);
+    }
+    if (requestedAmount != null && requestedAmount > amount) {
+      throw new AppError(
+        `Transfer amount cannot exceed the payment amount (₹${amount.toLocaleString("en-IN")})`,
+        400
+      );
+    }
+
+    if (requestedAmount != null && requestedAmount < amount) {
+      const dealerPair = isDealerOrderTransferPair(sourceOrder, targetOrder);
+      if (
+        !dealerPair &&
+        (orderBelongsToDealerScope(sourceOrder) || orderBelongsToDealerScope(targetOrder))
+      ) {
+        throw new AppError(
+          "Partial amount transfer is only supported between orders of the same dealer or between non-dealer orders. Transfer the full payment instead.",
+          400
+        );
+      }
+
+      const [requestDoc] = await FarmerOrderTransferRequest.create(
+        [
+          {
+            fromOrderId: sourceOrder._id,
+            toOrderId: targetOrder._id,
+            requestedAmount,
+            note: msg,
+            requestedBy: performedBy,
+            requestedAt: new Date(),
+            transferKind: dealerPair ? "dealer" : "farmer",
+            dealerId: dealerPair ? resolveDealerIdForOrder(sourceOrder) : null,
+            fromOrderSnapshot: buildTransferRequestOrderSnapshot(sourceOrder),
+            toOrderSnapshot: buildTransferRequestOrderSnapshot(targetOrder),
+          },
+        ],
+        { session }
+      );
+
+      const posted = await postApprovedFarmerOrderTransferRequest(requestDoc, {
+        session,
+        user: req.user,
+        preferredSourcePaymentId: sourcePayment._id,
+      });
+
+      const outstandingAfterSource = await getLastOutstandingAfterForCustomer(
+        fromParty.customerMobile,
+        session
+      );
+      const outstandingAfterTarget = await getLastOutstandingAfterForCustomer(
+        toParty.customerMobile,
+        session
+      );
+
+      await Log.create(
+        [
+          {
+            userId: performedBy,
+            modelName: "FarmerPlantOrderPaymentTransfer",
+            documentId: requestDoc._id,
+            operation: "CREATE",
+            newState: {
+              transferRequestId: requestDoc._id,
+              partial: true,
+              amount: requestedAmount,
+              originalPaymentAmount: amount,
+              message: msg || null,
+              sourceOrderMongoId: sid,
+              targetOrderMongoId: tid,
+              sourceOrderNumericId: sourceOrder.orderId ?? "",
+              targetOrderNumericId: targetOrder.orderId ?? "",
+              originalPaymentId: pid,
+              newPaymentId: posted.newPayment?._id ? String(posted.newPayment._id) : null,
+              sourceCustomerMobile: fromParty.customerMobile,
+              targetCustomerMobile: toParty.customerMobile,
+              outstandingAfterSource: roundMoney(outstandingAfterSource),
+              outstandingAfterTarget: roundMoney(outstandingAfterTarget),
+              customerMobile: fromParty.customerMobile,
+              outstandingAfter: roundMoney(outstandingAfterSource),
+            },
+            changedFields: ["orderPaymentTransfer"],
+            metadata: {
+              transferRequestId: requestDoc._id,
+              sourceOrderId: sid,
+              targetOrderId: tid,
+              paymentId: pid,
+              orderEditHistory: ["paymentTransferRequestOut", "paymentTransferRequestIn"],
+            },
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      return res.status(200).json(
+        generateResponse(
+          "Success",
+          `₹${requestedAmount.toLocaleString("en-IN")} transferred between orders`,
+          {
+            transferRequestId: requestDoc._id,
+            partial: true,
+            amount: requestedAmount,
+            remainingOnSourcePayment: roundMoney(amount - requestedAmount),
+            sourceOrder: { _id: sourceOrder._id, orderId: sourceOrder.orderId },
+            targetOrder: { _id: targetOrder._id, orderId: targetOrder.orderId },
+            newPaymentId: posted.newPayment?._id || null,
+            outstandingAfterSource: roundMoney(outstandingAfterSource),
+            outstandingAfterTarget: roundMoney(outstandingAfterTarget),
+            outstandingAfter: roundMoney(outstandingAfterSource),
+          },
+          undefined
+        )
+      );
     }
 
     const targetNumericId = targetOrder.orderId ?? "";
@@ -1057,18 +1191,8 @@ export const createFarmerOrderTransferRequest = catchAsync(async (req, res, next
     requestedAt: new Date(),
     transferKind: dealerPair ? "dealer" : "farmer",
     dealerId: dealerPair ? resolveDealerIdForOrder(fromOrder) : null,
-    fromOrderSnapshot: {
-      orderNumber: Number(fromOrder.orderId) || null,
-      farmerId: fromOrder.farmer?._id || fromOrder.farmer || null,
-      farmerName: fromOrder.farmer?.name || "",
-      farmerMobile: normalizeFarmerMobile(fromOrder.farmer?.mobileNumber) || "",
-    },
-    toOrderSnapshot: {
-      orderNumber: Number(toOrder.orderId) || null,
-      farmerId: toOrder.farmer?._id || toOrder.farmer || null,
-      farmerName: toOrder.farmer?.name || "",
-      farmerMobile: normalizeFarmerMobile(toOrder.farmer?.mobileNumber) || "",
-    },
+    fromOrderSnapshot: buildTransferRequestOrderSnapshot(fromOrder),
+    toOrderSnapshot: buildTransferRequestOrderSnapshot(toOrder),
   });
 
   const targetPaymentPayload = {
@@ -1156,6 +1280,309 @@ export const getFarmerOrderTransferRequests = catchAsync(async (req, res) => {
 });
 
 /**
+ * Post an approved transfer request: deduct from source COLLECTED lines, add COLLECTED line on target,
+ * write farmer / dealer / central ledgers, edit history, and mark the request APPROVED.
+ * When preferredSourcePaymentId is set, the whole amount is deducted from that single line.
+ */
+async function postApprovedFarmerOrderTransferRequest(
+  requestDoc,
+  { session, user, preferredSourcePaymentId = null }
+) {
+  const [sourceOrder, targetOrder] = await Promise.all([
+    Order.findById(requestDoc.fromOrderId).populate(orderDetailsPopulate).session(session),
+    Order.findById(requestDoc.toOrderId).populate(orderDetailsPopulate).session(session),
+  ]);
+  if (!sourceOrder || !targetOrder) {
+    throw new AppError("Source or target order no longer exists", 404);
+  }
+  try {
+    assertOrdersEligibleForPlantTransfer(sourceOrder, targetOrder);
+  } catch (e) {
+    throw new AppError(e.message, e.statusCode || 409);
+  }
+
+  const transferMsg = String(requestDoc.note || "").trim();
+  const msgSuffix = transferMsg ? ` — ${transferMsg}` : "";
+  let remaining = roundMoney(requestDoc.requestedAmount);
+  const sourceCollectedPayments = (sourceOrder.payment || [])
+    .filter(
+      (p) =>
+        p &&
+        p.paymentStatus === "COLLECTED" &&
+        !p.isWalletPayment &&
+        !p.mainPaymentId &&
+        Number(p.paidAmount || 0) > 0 &&
+        (!preferredSourcePaymentId || String(p._id) === String(preferredSourcePaymentId))
+    )
+    .sort((a, b) => new Date(a.paymentDate || a.createdAt || 0) - new Date(b.paymentDate || b.createdAt || 0));
+
+  for (const payment of sourceCollectedPayments) {
+    if (remaining <= 0) break;
+    const paidAmount = roundMoney(Math.abs(Number(payment.paidAmount || 0)));
+    if (!(paidAmount > 0)) continue;
+    const deduct = roundMoney(Math.min(paidAmount, remaining));
+    payment.paidAmount = roundMoney(paidAmount - deduct);
+    stampPaymentUpdatedBy(payment, user);
+    const note = `[Transfer request #${requestDoc._id} approved: -₹${deduct.toLocaleString("en-IN")} moved to order #${targetOrder.orderId}${msgSuffix}]`;
+    const prevRemark = payment.remark ? String(payment.remark).trim() : "";
+    payment.remark = prevRemark ? `${prevRemark}\n${note}` : note;
+    remaining = roundMoney(remaining - deduct);
+  }
+
+  if (remaining > 0) {
+    throw new AppError("Source order no longer has sufficient transferable amount", 409);
+  }
+
+  await sourceOrder.save({ session });
+
+  const mode = "Transfer";
+  const amount = roundMoney(requestDoc.requestedAmount);
+  const transferLedgerTxnId = new mongoose.Types.ObjectId();
+  const performedBy = user?._id || user?.id;
+  const sourceNumericId = sourceOrder.orderId ?? "";
+  const targetNumericId = targetOrder.orderId ?? "";
+  const dealerPair = isDealerOrderTransferPair(sourceOrder, targetOrder);
+
+  let sourceReversal = null;
+  let targetCredit = null;
+  let newPayment = null;
+
+  const existingTargetPayment = findPaymentSubdocument(
+    targetOrder,
+    requestDoc.postedMetadata?.targetPaymentId
+  ) ||
+    (targetOrder.payment || []).find(
+      (p) =>
+        p &&
+        p.transferRequestId &&
+        String(p.transferRequestId) === String(requestDoc._id) &&
+        p.paymentStatus === "PENDING"
+    );
+
+  if (dealerPair) {
+    if (existingTargetPayment) {
+      existingTargetPayment.paidAmount = amount;
+      existingTargetPayment.paymentStatus = "COLLECTED";
+      stampPaymentUpdatedBy(existingTargetPayment, user);
+      existingTargetPayment.paymentDate = new Date();
+      existingTargetPayment.modeOfPayment = mode;
+      existingTargetPayment.remark = `[Transfer request #${requestDoc._id} approved from dealer order #${sourceNumericId}${msgSuffix}]`;
+      existingTargetPayment.isWalletPayment = false;
+      existingTargetPayment.transferredFromOrderId = new mongoose.Types.ObjectId(sourceOrder._id);
+      applyPaymentTimingToPayment(existingTargetPayment, targetOrder, { force: true });
+      newPayment = existingTargetPayment;
+    } else {
+      const targetPaymentPayload = {
+        paidAmount: amount,
+        paymentStatus: "COLLECTED",
+        paymentDate: new Date(),
+        modeOfPayment: mode,
+        remark: `[Transfer request #${requestDoc._id} approved from dealer order #${sourceNumericId}${msgSuffix}]`,
+        isWalletPayment: false,
+        transferredFromOrderId: new mongoose.Types.ObjectId(sourceOrder._id),
+        transferRequestId: requestDoc._id,
+      };
+      applyPaymentTimingToPayment(targetPaymentPayload, targetOrder);
+      stampPaymentRecordedBy(targetPaymentPayload, user);
+      stampPaymentUpdatedBy(targetPaymentPayload, user);
+      targetOrder.payment.push(targetPaymentPayload);
+      newPayment = targetOrder.payment[targetOrder.payment.length - 1];
+    }
+    recomputeOrderPaymentCompletion(sourceOrder);
+    recomputeOrderPaymentCompletion(targetOrder);
+    await sourceOrder.save({ session });
+    await targetOrder.save({ session });
+
+    const ledgerSync = await syncTransferRequestApproveLedgers(
+      {
+        sourceOrder,
+        targetOrder,
+        targetPayment: newPayment,
+        transferRequestId: requestDoc._id,
+        amount,
+        userId: performedBy,
+        ledgerTxnId: transferLedgerTxnId,
+        transferMsg,
+      },
+      { session }
+    );
+    sourceReversal = ledgerSync?.farmer?.source || null;
+    targetCredit = ledgerSync?.farmer?.target || null;
+  } else {
+    await ensureFarmerPlantOrderDebit(sourceOrder, { userId: performedBy, session });
+    await ensureFarmerPlantOrderDebit(targetOrder, { userId: performedBy, session });
+
+    const sourceParty = await resolveFarmerIdentity(sourceOrder);
+    const targetParty = await resolveFarmerIdentity(targetOrder);
+
+    sourceReversal = await createFarmerPlantLedgerEntry({
+    customerMobile: sourceParty.customerMobile,
+    customerName: sourceParty.customerName,
+    farmerId: sourceParty.farmerId,
+    refType: "REVERSAL",
+    refId: transferLedgerTxnId,
+    orderId: sourceOrder._id,
+    debit: amount,
+    reference: String(sourceOrder.orderId || ""),
+    category: "Order Transfer Out",
+    description:
+      `Transfer approved (out): order #${sourceNumericId} -> order #${targetNumericId}. ` +
+      `₹${amount.toLocaleString("en-IN")}.${transferMsg ? ` Note: ${transferMsg}` : ""}`,
+    entryDate: new Date(),
+    createdBy: performedBy,
+    metadata: {
+      kind: "order_payment_transfer_request",
+      transferRequestId: String(requestDoc._id),
+      direction: "out",
+      peerOrderMongoId: String(targetOrder._id),
+      peerOrderNumber: targetNumericId,
+      transitionKey: transferRequestLedgerTransitionKey(requestDoc._id, "approve_out"),
+    },
+    session,
+  });
+
+    if (existingTargetPayment) {
+      existingTargetPayment.paidAmount = amount;
+      existingTargetPayment.paymentDate = new Date();
+      existingTargetPayment.modeOfPayment = mode;
+      existingTargetPayment.remark = `[Transfer request #${requestDoc._id} approved from order #${sourceNumericId}${msgSuffix}]`;
+      existingTargetPayment.isWalletPayment = false;
+      existingTargetPayment.transferredFromOrderId = new mongoose.Types.ObjectId(sourceOrder._id);
+      existingTargetPayment.transferRequestId = requestDoc._id;
+      applyPaymentTimingToPayment(existingTargetPayment, targetOrder, { force: true });
+      newPayment = existingTargetPayment;
+    } else {
+      const targetPaymentPayload = {
+        paidAmount: amount,
+        paymentStatus: "PENDING",
+        paymentDate: new Date(),
+        modeOfPayment: mode,
+        remark: `[Transfer request #${requestDoc._id} approved from order #${sourceNumericId}${msgSuffix}]`,
+        isWalletPayment: false,
+        transferredFromOrderId: new mongoose.Types.ObjectId(sourceOrder._id),
+        transferRequestId: requestDoc._id,
+      };
+      applyPaymentTimingToPayment(targetPaymentPayload, targetOrder);
+      targetOrder.payment.push(targetPaymentPayload);
+      newPayment = targetOrder.payment[targetOrder.payment.length - 1];
+    }
+    await targetOrder.save({ session });
+    const previousStatus = newPayment.paymentStatus;
+    newPayment.paymentStatus = "COLLECTED";
+    stampPaymentUpdatedBy(newPayment, user);
+    applyPaymentTimingToPayment(newPayment, targetOrder, { force: true });
+    await targetOrder.save({ session });
+
+    targetCredit = await recordFarmerPlantLedgerPaymentTransition(
+      targetOrder,
+      newPayment,
+      previousStatus,
+      "COLLECTED",
+      {
+        userId: performedBy,
+        session,
+        descriptionOverride:
+          `Transfer approved (in): order #${targetNumericId} <- order #${sourceNumericId}. ` +
+          `₹${amount.toLocaleString("en-IN")}.${transferMsg ? ` Note: ${transferMsg}` : ""}`,
+        metadataExtra: {
+          kind: "order_payment_transfer_request",
+          transferRequestId: String(requestDoc._id),
+          direction: "in",
+          peerOrderMongoId: String(sourceOrder._id),
+          peerOrderNumber: sourceNumericId,
+          ledgerTxnId: transferLedgerTxnId,
+        },
+      }
+    );
+
+    try {
+      const fs = await import("../modules/finance/integration/financeShadow.js");
+      fs.shadowFarmerPaymentTransfer({
+        requestId: requestDoc._id,
+        direction: "REVERSAL",
+        amount,
+        customerMobile: sourceParty.customerMobile,
+        userId: performedBy,
+      });
+      fs.shadowFarmerPaymentTransfer({
+        requestId: requestDoc._id,
+        direction: "CREDIT",
+        amount,
+        customerMobile: targetParty.customerMobile,
+        userId: performedBy,
+      });
+    } catch (shadowErr) {
+      console.error("[Finance] shadow payment transfer:", shadowErr?.message || shadowErr);
+    }
+
+    await syncDealerTransferRequestApproveReference(
+      {
+        sourceOrder,
+        targetOrder,
+        targetPayment: newPayment,
+        amount,
+        transferRequestId: requestDoc._id,
+        userId: performedBy,
+      },
+      { session }
+    );
+  }
+
+  if (!Array.isArray(sourceOrder.orderEditHistory)) sourceOrder.orderEditHistory = [];
+  sourceOrder.orderEditHistory.push({
+    field: "paymentTransferRequestOut",
+    previousValue: {},
+    newValue: {
+      transferRequestId: String(requestDoc._id),
+      amount,
+      targetOrderMongoId: String(targetOrder._id),
+      targetOrderNumber: targetNumericId,
+      status: "APPROVED",
+    },
+    changedBy: performedBy,
+    notes: `Transfer request approved out to order #${targetNumericId}`,
+  });
+  await sourceOrder.save({ session });
+
+  if (!Array.isArray(targetOrder.orderEditHistory)) targetOrder.orderEditHistory = [];
+  targetOrder.orderEditHistory.push({
+    field: "paymentTransferRequestIn",
+    previousValue: {},
+    newValue: {
+      transferRequestId: String(requestDoc._id),
+      amount,
+      sourceOrderMongoId: String(sourceOrder._id),
+      sourceOrderNumber: sourceNumericId,
+      targetPaymentId: String(newPayment?._id || ""),
+      status: "APPROVED",
+    },
+    changedBy: performedBy,
+    notes: `Transfer request approved in from order #${sourceNumericId}`,
+  });
+  await targetOrder.save({ session });
+
+  requestDoc.status = "APPROVED";
+  requestDoc.approval = {
+    ...(requestDoc.approval || {}),
+    approvedBy: performedBy,
+    approvedAt: new Date(),
+    rejectedBy: null,
+    rejectedAt: null,
+    rejectionReason: "",
+  };
+  requestDoc.postedAt = new Date();
+  requestDoc.ledgerTxnId = transferLedgerTxnId;
+  requestDoc.postedMetadata = {
+    sourcePaymentId: null,
+    targetPaymentId: newPayment?._id || null,
+    reversalLedgerEntryId: sourceReversal?._id || null,
+    paymentLedgerEntryId: targetCredit?._id || null,
+  };
+  await requestDoc.save({ session });
+  return { requestDoc, sourceOrder, targetOrder, newPayment };
+}
+
+/**
  * PATCH approve pending transfer request and post debit/credit.
  */
 export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, next) => {
@@ -1178,294 +1605,7 @@ export const approveFarmerOrderTransferRequest = catchAsync(async (req, res, nex
       throw new AppError("This request is already posted", 409);
     }
 
-    const [sourceOrder, targetOrder] = await Promise.all([
-      Order.findById(requestDoc.fromOrderId).populate(orderDetailsPopulate).session(session),
-      Order.findById(requestDoc.toOrderId).populate(orderDetailsPopulate).session(session),
-    ]);
-    if (!sourceOrder || !targetOrder) {
-      throw new AppError("Source or target order no longer exists", 404);
-    }
-    try {
-      assertOrdersEligibleForPlantTransfer(sourceOrder, targetOrder);
-    } catch (e) {
-      throw new AppError(e.message, e.statusCode || 409);
-    }
-
-    let remaining = roundMoney(requestDoc.requestedAmount);
-    const sourceCollectedPayments = (sourceOrder.payment || [])
-      .filter(
-        (p) =>
-          p &&
-          p.paymentStatus === "COLLECTED" &&
-          !p.isWalletPayment &&
-          !p.mainPaymentId &&
-          Number(p.paidAmount || 0) > 0
-      )
-      .sort((a, b) => new Date(a.paymentDate || a.createdAt || 0) - new Date(b.paymentDate || b.createdAt || 0));
-
-    for (const payment of sourceCollectedPayments) {
-      if (remaining <= 0) break;
-      const paidAmount = roundMoney(Math.abs(Number(payment.paidAmount || 0)));
-      if (!(paidAmount > 0)) continue;
-      const deduct = roundMoney(Math.min(paidAmount, remaining));
-      payment.paidAmount = roundMoney(paidAmount - deduct);
-      const note = `[Transfer request #${requestDoc._id} approved: -₹${deduct.toLocaleString("en-IN")} moved to order #${targetOrder.orderId}]`;
-      const prevRemark = payment.remark ? String(payment.remark).trim() : "";
-      payment.remark = prevRemark ? `${prevRemark}\n${note}` : note;
-      remaining = roundMoney(remaining - deduct);
-    }
-
-    if (remaining > 0) {
-      throw new AppError("Source order no longer has sufficient transferable amount", 409);
-    }
-
-    await sourceOrder.save({ session });
-
-    const mode = "Transfer";
-    const amount = roundMoney(requestDoc.requestedAmount);
-    const transferLedgerTxnId = new mongoose.Types.ObjectId();
-    const performedBy = req.user?._id || req.user?.id;
-    const sourceNumericId = sourceOrder.orderId ?? "";
-    const targetNumericId = targetOrder.orderId ?? "";
-    const transferMsg = String(requestDoc.note || "").trim();
-    const dealerPair = isDealerOrderTransferPair(sourceOrder, targetOrder);
-
-    let sourceReversal = null;
-    let targetCredit = null;
-    let newPayment = null;
-
-    const existingTargetPayment = findPaymentSubdocument(
-      targetOrder,
-      requestDoc.postedMetadata?.targetPaymentId
-    ) ||
-      (targetOrder.payment || []).find(
-        (p) =>
-          p &&
-          p.transferRequestId &&
-          String(p.transferRequestId) === String(requestDoc._id) &&
-          p.paymentStatus === "PENDING"
-      );
-
-    if (dealerPair) {
-      if (existingTargetPayment) {
-        existingTargetPayment.paidAmount = amount;
-        existingTargetPayment.paymentStatus = "COLLECTED";
-        stampPaymentUpdatedBy(existingTargetPayment, req.user);
-        existingTargetPayment.paymentDate = new Date();
-        existingTargetPayment.modeOfPayment = mode;
-        existingTargetPayment.remark = `[Transfer request #${requestDoc._id} approved from dealer order #${sourceNumericId}]`;
-        existingTargetPayment.isWalletPayment = false;
-        existingTargetPayment.transferredFromOrderId = new mongoose.Types.ObjectId(sourceOrder._id);
-        applyPaymentTimingToPayment(existingTargetPayment, targetOrder, { force: true });
-        newPayment = existingTargetPayment;
-      } else {
-        const targetPaymentPayload = {
-          paidAmount: amount,
-          paymentStatus: "COLLECTED",
-          paymentDate: new Date(),
-          modeOfPayment: mode,
-          remark: `[Transfer request #${requestDoc._id} approved from dealer order #${sourceNumericId}]`,
-          isWalletPayment: false,
-          transferredFromOrderId: new mongoose.Types.ObjectId(sourceOrder._id),
-          transferRequestId: requestDoc._id,
-        };
-        applyPaymentTimingToPayment(targetPaymentPayload, targetOrder);
-        stampPaymentRecordedBy(targetPaymentPayload, req.user);
-        stampPaymentUpdatedBy(targetPaymentPayload, req.user);
-        targetOrder.payment.push(targetPaymentPayload);
-        newPayment = targetOrder.payment[targetOrder.payment.length - 1];
-      }
-      recomputeOrderPaymentCompletion(sourceOrder);
-      recomputeOrderPaymentCompletion(targetOrder);
-      await sourceOrder.save({ session });
-      await targetOrder.save({ session });
-
-      const ledgerSync = await syncTransferRequestApproveLedgers(
-        {
-          sourceOrder,
-          targetOrder,
-          targetPayment: newPayment,
-          transferRequestId: requestDoc._id,
-          amount,
-          userId: performedBy,
-          ledgerTxnId: transferLedgerTxnId,
-          transferMsg,
-        },
-        { session }
-      );
-      sourceReversal = ledgerSync?.farmer?.source || null;
-      targetCredit = ledgerSync?.farmer?.target || null;
-    } else {
-      await ensureFarmerPlantOrderDebit(sourceOrder, { userId: performedBy, session });
-      await ensureFarmerPlantOrderDebit(targetOrder, { userId: performedBy, session });
-
-      const sourceParty = await resolveFarmerIdentity(sourceOrder);
-      const targetParty = await resolveFarmerIdentity(targetOrder);
-
-      sourceReversal = await createFarmerPlantLedgerEntry({
-      customerMobile: sourceParty.customerMobile,
-      customerName: sourceParty.customerName,
-      farmerId: sourceParty.farmerId,
-      refType: "REVERSAL",
-      refId: transferLedgerTxnId,
-      orderId: sourceOrder._id,
-      debit: amount,
-      reference: String(sourceOrder.orderId || ""),
-      category: "Order Transfer Out",
-      description:
-        `Transfer approved (out): order #${sourceNumericId} -> order #${targetNumericId}. ` +
-        `₹${amount.toLocaleString("en-IN")}.${transferMsg ? ` Note: ${transferMsg}` : ""}`,
-      entryDate: new Date(),
-      createdBy: performedBy,
-      metadata: {
-        kind: "order_payment_transfer_request",
-        transferRequestId: String(requestDoc._id),
-        direction: "out",
-        peerOrderMongoId: String(targetOrder._id),
-        peerOrderNumber: targetNumericId,
-        transitionKey: transferRequestLedgerTransitionKey(requestDoc._id, "approve_out"),
-      },
-      session,
-    });
-
-      if (existingTargetPayment) {
-        existingTargetPayment.paidAmount = amount;
-        existingTargetPayment.paymentDate = new Date();
-        existingTargetPayment.modeOfPayment = mode;
-        existingTargetPayment.remark = `[Transfer request #${requestDoc._id} approved from order #${sourceNumericId}]`;
-        existingTargetPayment.isWalletPayment = false;
-        existingTargetPayment.transferredFromOrderId = new mongoose.Types.ObjectId(sourceOrder._id);
-        existingTargetPayment.transferRequestId = requestDoc._id;
-        applyPaymentTimingToPayment(existingTargetPayment, targetOrder, { force: true });
-        newPayment = existingTargetPayment;
-      } else {
-        const targetPaymentPayload = {
-          paidAmount: amount,
-          paymentStatus: "PENDING",
-          paymentDate: new Date(),
-          modeOfPayment: mode,
-          remark: `[Transfer request #${requestDoc._id} approved from order #${sourceNumericId}]`,
-          isWalletPayment: false,
-          transferredFromOrderId: new mongoose.Types.ObjectId(sourceOrder._id),
-          transferRequestId: requestDoc._id,
-        };
-        applyPaymentTimingToPayment(targetPaymentPayload, targetOrder);
-        targetOrder.payment.push(targetPaymentPayload);
-        newPayment = targetOrder.payment[targetOrder.payment.length - 1];
-      }
-      await targetOrder.save({ session });
-      const previousStatus = newPayment.paymentStatus;
-      newPayment.paymentStatus = "COLLECTED";
-      stampPaymentUpdatedBy(newPayment, req.user);
-      applyPaymentTimingToPayment(newPayment, targetOrder, { force: true });
-      await targetOrder.save({ session });
-
-      targetCredit = await recordFarmerPlantLedgerPaymentTransition(
-        targetOrder,
-        newPayment,
-        previousStatus,
-        "COLLECTED",
-        {
-          userId: performedBy,
-          session,
-          descriptionOverride:
-            `Transfer approved (in): order #${targetNumericId} <- order #${sourceNumericId}. ` +
-            `₹${amount.toLocaleString("en-IN")}.${transferMsg ? ` Note: ${transferMsg}` : ""}`,
-          metadataExtra: {
-            kind: "order_payment_transfer_request",
-            transferRequestId: String(requestDoc._id),
-            direction: "in",
-            peerOrderMongoId: String(sourceOrder._id),
-            peerOrderNumber: sourceNumericId,
-            ledgerTxnId: transferLedgerTxnId,
-          },
-        }
-      );
-
-      try {
-        const fs = await import("../modules/finance/integration/financeShadow.js");
-        fs.shadowFarmerPaymentTransfer({
-          requestId: requestDoc._id,
-          direction: "REVERSAL",
-          amount,
-          customerMobile: sourceParty.customerMobile,
-          userId: performedBy,
-        });
-        fs.shadowFarmerPaymentTransfer({
-          requestId: requestDoc._id,
-          direction: "CREDIT",
-          amount,
-          customerMobile: targetParty.customerMobile,
-          userId: performedBy,
-        });
-      } catch (shadowErr) {
-        console.error("[Finance] shadow payment transfer:", shadowErr?.message || shadowErr);
-      }
-
-      await syncDealerTransferRequestApproveReference(
-        {
-          sourceOrder,
-          targetOrder,
-          targetPayment: newPayment,
-          amount,
-          transferRequestId: requestDoc._id,
-          userId: performedBy,
-        },
-        { session }
-      );
-    }
-
-    if (!Array.isArray(sourceOrder.orderEditHistory)) sourceOrder.orderEditHistory = [];
-    sourceOrder.orderEditHistory.push({
-      field: "paymentTransferRequestOut",
-      previousValue: {},
-      newValue: {
-        transferRequestId: String(requestDoc._id),
-        amount,
-        targetOrderMongoId: String(targetOrder._id),
-        targetOrderNumber: targetNumericId,
-        status: "APPROVED",
-      },
-      changedBy: performedBy,
-      notes: `Transfer request approved out to order #${targetNumericId}`,
-    });
-    await sourceOrder.save({ session });
-
-    if (!Array.isArray(targetOrder.orderEditHistory)) targetOrder.orderEditHistory = [];
-    targetOrder.orderEditHistory.push({
-      field: "paymentTransferRequestIn",
-      previousValue: {},
-      newValue: {
-        transferRequestId: String(requestDoc._id),
-        amount,
-        sourceOrderMongoId: String(sourceOrder._id),
-        sourceOrderNumber: sourceNumericId,
-        targetPaymentId: String(newPayment?._id || ""),
-        status: "APPROVED",
-      },
-      changedBy: performedBy,
-      notes: `Transfer request approved in from order #${sourceNumericId}`,
-    });
-    await targetOrder.save({ session });
-
-    requestDoc.status = "APPROVED";
-    requestDoc.approval = {
-      ...(requestDoc.approval || {}),
-      approvedBy: performedBy,
-      approvedAt: new Date(),
-      rejectedBy: null,
-      rejectedAt: null,
-      rejectionReason: "",
-    };
-    requestDoc.postedAt = new Date();
-    requestDoc.ledgerTxnId = transferLedgerTxnId;
-    requestDoc.postedMetadata = {
-      sourcePaymentId: null,
-      targetPaymentId: newPayment?._id || null,
-      reversalLedgerEntryId: sourceReversal?._id || null,
-      paymentLedgerEntryId: targetCredit?._id || null,
-    };
-    await requestDoc.save({ session });
+    await postApprovedFarmerOrderTransferRequest(requestDoc, { session, user: req.user });
 
     await session.commitTransaction();
     session.endSession();
