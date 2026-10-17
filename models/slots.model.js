@@ -476,6 +476,8 @@ const slotSchema = new Schema({
           by: { type: Schema.Types.ObjectId, ref: "User" },
         },
       ],
+      /** Sowed count confirmed — no mortality reserve held back from sellable stock. */
+      noMortalityReserve: { type: Boolean, default: false },
       /** Plants of this batch destroyed after sowing (already taken off the slot's sowed / stock). */
       destroyedPlants: { type: Number, default: 0, min: 0 },
       destroyLog: [
