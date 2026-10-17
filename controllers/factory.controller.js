@@ -2230,7 +2230,12 @@ const updateOne = (Model, modelName, allowedFields) =>
             previousSlot: existingDoc.bookingSlot,
             newSlot: filteredBody.bookingSlot,
             reasonForChange:
-              filteredBody.deliveryChangeReason || "Delivery date changed",
+              filteredBody.deliveryChangeReason ||
+              (filteredBody.plantSubtype != null &&
+              String(filteredBody.plantSubtype) !==
+                String(existingDoc.plantSubtype?._id || existingDoc.plantSubtype || "")
+                ? "Plant subtype changed"
+                : "Delivery date changed"),
             changedBy: req.user ? req.user._id : null,
           };
 
@@ -2249,7 +2254,14 @@ const updateOne = (Model, modelName, allowedFields) =>
           const newDeliveryForSow =
             filteredBody.deliveryDate ||
             (await slotStartDateById(filteredBody.bookingSlot, session));
-          const tolerance = await ownSowTolerance(existingDoc, newDeliveryForSow, session);
+          const prevSubtypeId = String(existingDoc.plantSubtype?._id || existingDoc.plantSubtype || "");
+          const subtypeChanging =
+            canChangeOrderStatusFull &&
+            filteredBody.plantSubtype != null &&
+            String(filteredBody.plantSubtype) !== prevSubtypeId;
+          const tolerance = subtypeChanging
+            ? { withinTolerance: false }
+            : await ownSowTolerance(existingDoc, newDeliveryForSow, session);
           if (tolerance.withinTolerance) {
             console.log(
               `🌱 Order #${existingDoc.orderId} keeps its sowing (ready ${tolerance.readyDate}, ${tolerance.offsetDays}d)`
