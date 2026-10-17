@@ -7,6 +7,14 @@ export const ORDER_TRANSFER_EXCLUDED_STATUSES = [
   "REJECTED",
 ];
 
+/**
+ * Statuses blocked for the receiving order. A dispatched order may still receive a payment
+ * (e.g. the farmer settling the balance after the vehicle left); money cannot move out of it.
+ */
+export const ORDER_TRANSFER_TARGET_EXCLUDED_STATUSES = ORDER_TRANSFER_EXCLUDED_STATUSES.filter(
+  (st) => st !== "DISPATCHED"
+);
+
 /** GET /order/getOrders `status` query for transfer order search (comma-separated). */
 export const ORDER_TRANSFER_SEARCH_STATUS_QUERY = [
   "PENDING",
@@ -16,6 +24,9 @@ export const ORDER_TRANSFER_SEARCH_STATUS_QUERY = [
   "READY_FOR_DISPATCH",
   "DISPATCH_PROCESS",
 ].join(",");
+
+/** Same as above plus DISPATCHED, for picking the receiving order. */
+export const ORDER_TRANSFER_TARGET_SEARCH_STATUS_QUERY = `${ORDER_TRANSFER_SEARCH_STATUS_QUERY},DISPATCHED`;
 
 /**
  * @param {{ orderStatus?: string }|string|null|undefined} orderOrStatus
@@ -38,6 +49,15 @@ export function getOrderTransferIneligibilityMessage(order, role = "order") {
   const label = role === "source" ? "Source" : role === "target" ? "Target" : "Order";
   if (!st) {
     return `${label} order${num} has no status; transfer is not allowed.`;
+  }
+  if (role === "target") {
+    if (ORDER_TRANSFER_TARGET_EXCLUDED_STATUSES.includes(st)) {
+      return (
+        `${label} order${num} is ${st}. Payments can only be moved to orders that are not ` +
+        `completed, partially completed, cancelled, or rejected.`
+      );
+    }
+    return null;
   }
   if (ORDER_TRANSFER_EXCLUDED_STATUSES.includes(st)) {
     return (
