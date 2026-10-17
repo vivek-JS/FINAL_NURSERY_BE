@@ -50,6 +50,18 @@ test("sowBatchStock: covering orders from excess later never eats the reserve", 
   assert.equal(afterCover.free, 0);
 });
 
+test("sowBatchStock: noMortalityReserve keeps the full sowed count sellable", () => {
+  const batch = {
+    plantsSowed: 28980,
+    orderCoveredPlants: 14000,
+    excessAllocations: [{ plants: 14000 }],
+    noMortalityReserve: true,
+  };
+  assert.deepEqual(sowBatchStock(batch), { sowed: 28980, covered: 14000, reserve: 0, free: 14980 });
+  const slot = { primarySowed: 28980, sowingBatches: [batch] };
+  assert.deepEqual(slotSowStock(slot), { actualPlants: 28980, expectedMortality: 0, free: 14980 });
+});
+
 test("slotSowStock / applySowingAllowedSlotMetrics use the batch reserves", () => {
   const slot = {
     primarySowed: 24000,
