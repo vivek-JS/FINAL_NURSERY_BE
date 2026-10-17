@@ -240,6 +240,7 @@ export async function listExcessBatches({
               actualPlantsApplied: "$$b.actualPlantsApplied",
               expectedMortalityApplied: "$$b.expectedMortalityApplied",
               availablePlantsApplied: "$$b.availablePlantsApplied",
+              noMortalityReserve: "$$b.noMortalityReserve",
               shedName: "$$b.shedName",
               requestNumber: "$$b.requestNumber",
               sowingRequestId: "$$b.sowingRequestId",
