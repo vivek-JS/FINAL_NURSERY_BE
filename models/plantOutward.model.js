@@ -508,6 +508,25 @@ const secondaryOutwardSchema = new Schema({
     type: String,
     trim: true,
   },
+  /** Slot sowing batch picked at vehicle load (seed-sown plants). */
+  sowingBatchId: {
+    type: Schema.Types.ObjectId,
+  },
+  sowingDate: {
+    type: String,
+    trim: true,
+  },
+  sowBucket: {
+    type: String,
+    enum: ["COVER", "SWITCH", "FREE"],
+  },
+  /** Slot counters taken at load, given back on unload. */
+  sowReservedDec: { type: Number },
+  sowAvailableDec: { type: Number },
+  /** Excess used and orders relinked when the order's linked batch was not picked. */
+  switchPlan: {
+    type: Schema.Types.Mixed,
+  },
   linkedOrderId: {
     type: Schema.Types.ObjectId,
     ref: "Order",

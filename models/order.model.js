@@ -920,6 +920,21 @@ const orderSchema = new Schema(
     sowingCoverReversedAt: {
       type: Date,
     },
+    /** Plants moved between sowing batches at dispatch; applied on top of the sowing / cover link. */
+    sowBatchLinks: [
+      {
+        at: { type: Date, default: Date.now },
+        by: { type: Schema.Types.ObjectId, ref: "User" },
+        fromSlotId: { type: Schema.Types.ObjectId },
+        fromBatchId: { type: Schema.Types.ObjectId },
+        slotId: { type: Schema.Types.ObjectId },
+        batchId: { type: Schema.Types.ObjectId },
+        plants: { type: Number, default: 0 },
+        reason: { type: String, enum: ["DISPATCH_SWITCH", "DISPATCH_RELINK", "DISPATCH_FREE"] },
+        dispatchId: { type: Schema.Types.ObjectId, ref: "Dispatch" },
+        causedByOrderId: { type: Schema.Types.ObjectId, ref: "Order" },
+      },
+    ],
     cavity: {
       type: Schema.Types.ObjectId,
       ref: "Tray",

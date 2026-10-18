@@ -740,7 +740,7 @@ export function groupPolyhouseStockByBatch(lines) {
 
 export async function sumPlantsLoadedOnDispatch(dispatchId, { session } = {}) {
   const map = await sumPlantsLoadedOnDispatches([dispatchId], { session });
-  return map.get(String(dispatchId)) || { total: 0, byOrder: new Map() };
+  return map.get(String(dispatchId)) || { total: 0, byOrder: new Map(), byRow: new Map() };
 }
 
 /** One PlantOutward scan for many dispatches — avoids N+1 on list APIs. */
@@ -751,7 +751,7 @@ export async function sumPlantsLoadedOnDispatches(dispatchIds, { session } = {})
     const key = String(id || "");
     if (!key || !mongoose.isValidObjectId(key)) continue;
     if (!result.has(key)) {
-      result.set(key, { total: 0, byOrder: new Map() });
+      result.set(key, { total: 0, byOrder: new Map(), byRow: new Map() });
       oids.push(new mongoose.Types.ObjectId(key));
     }
   }
@@ -773,6 +773,8 @@ export async function sumPlantsLoadedOnDispatches(dispatchIds, { session } = {})
       if (!bucket) continue;
       const q = Number(so.totalQuantity) || 0;
       bucket.total += q;
+      const row = Math.max(0, Number(so.linkedDispatchPlantRowIndex) || 0);
+      bucket.byRow.set(row, (bucket.byRow.get(row) || 0) + q);
       if (so.linkedOrderId) {
         const key = String(so.linkedOrderId);
         bucket.byOrder.set(key, (bucket.byOrder.get(key) || 0) + q);
@@ -1396,15 +1398,27 @@ export function isVehicleLoadComplete(loaded, need) {
   return l >= n - Math.floor(n * VEHICLE_SHORT_LOAD_TOLERANCE);
 }
 
+/**
+ * Every plant row with a need must be loaded (within tolerance); one row can't make up for another.
+ * Vehicles without plant rows fall back to the total.
+ */
+export function isVehicleLoadCompleteByRows(dispatchDoc, { total, byRow }) {
+  const plain = dispatchDoc?.toObject?.() ?? dispatchDoc;
+  const rows = (plain?.plantsDetails || [])
+    .map((p, i) => ({ need: Math.max(0, Number(p.quantity ?? p.totalPlants ?? 0) || 0), i }))
+    .filter((r) => r.need > 0);
+  if (!rows.length) return isVehicleLoadComplete(total, computeTotalVehiclePlantNeed(dispatchDoc));
+  return rows.every((r) => isVehicleLoadComplete(byRow?.get(r.i) || 0, r.need));
+}
+
 export async function syncDispatchTransportStatusAfterShedChange({
   session,
   dispatchDoc,
   plantRowIndex = 0,
 }) {
   void plantRowIndex;
-  const vehicleNeed = computeTotalVehiclePlantNeed(dispatchDoc);
-  const { total: loaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id, { session });
-  const complete = isVehicleLoadComplete(loaded, vehicleNeed);
+  const loadedSums = await sumPlantsLoadedOnDispatch(dispatchDoc._id, { session });
+  const complete = isVehicleLoadCompleteByRows(dispatchDoc, loadedSums);
 
   if (complete) {
     if (dispatchDoc.transportStatus !== "LOADED") {
@@ -1448,9 +1462,12 @@ export async function previewSecondaryVehicleLoad({
   }
 
   const { suggestions } = await collectSuggestionsFn(plantCmsId, plantSubtypeId);
-  const { total: alreadyLoaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const { byRow } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
   const vehicleNeed = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
-  const capPlants = Math.max(0, vehicleNeed - alreadyLoaded);
+  const capPlants = Math.max(
+    0,
+    vehicleNeed - (byRow.get(Math.max(0, Number(plantRowIndex) || 0)) || 0)
+  );
 
   const useManual = Array.isArray(inwardSelections) && inwardSelections.length > 0;
   let normalizedInputs = [];

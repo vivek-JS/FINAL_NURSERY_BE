@@ -374,7 +374,7 @@ export async function ensureSowReadyPlantOutward(plantId, subtypeId, session) {
   return { batch, plantOutward: po, plantName: plant.name, subtypeName: st?.name || "" };
 }
 
-async function resolveDefaultCavity() {
+export async function resolveDefaultCavity() {
   const tray = await Tray.findOne({ isActive: { $ne: false } })
     .select("cavity numberPerCrate")
     .sort({ cavity: -1 })
@@ -475,9 +475,9 @@ export async function executeSowReadyVehicleLoad({
     throw new AppError("Plant is not sowingAllowed — use secondary inward load", 400);
   }
 
-  const { total: alreadyLoaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
-  const vehicleNeed = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
-  const capPlants = Math.max(0, vehicleNeed - alreadyLoaded);
+  const { byRow } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const rowNeed = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
+  const capPlants = Math.max(0, rowNeed - (byRow.get(dispatchPlantRowIdx) || 0));
 
   const listed = await listSowReadyEntries(plantCmsId, plantSubtypeId);
   const bySlot = new Map(listed.entries.map((e) => [String(e.slotId), e]));
