@@ -387,6 +387,8 @@ const dispatchSchema = new Schema(
     },
     /** Single Trip document created when completing this dispatch. */
     tripId: { type: Schema.Types.ObjectId, ref: "Trip", default: null },
+    /** Tentative / final freight slip for this vehicle trip. */
+    freightSlipId: { type: Schema.Types.ObjectId, ref: "FreightSlip", default: null },
     /** Public URL of server-generated delivery challan PDF (DigitalOcean Spaces or mock). */
     deliveryChallanPdfUrl: { type: String, default: "" },
     deliveryChallanPdfGeneratedAt: { type: Date, default: null },

@@ -3,6 +3,8 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import Dispatch from "../models/dispatch.model.js";
+import FreightSlip from "../models/freightSlip.model.js";
+import { slipSummary } from "../services/freightSlip.service.js";
 
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -131,6 +133,9 @@ export const getFleetLedger = catchAsync(async (req, res) => {
     Dispatch.countDocuments(filter),
   ]);
 
+  const slips = await FreightSlip.find({ dispatchId: { $in: items.map((d) => d._id) } }).lean();
+  const slipByDispatch = new Map(slips.map((s) => [String(s.dispatchId), s]));
+
   const data = items.map((d) => {
     const orders = mapOrders(d.orderIds);
     const freightTotal = orders.reduce((s, o) => s + o.freightCharges, 0);
@@ -156,6 +161,7 @@ export const getFleetLedger = catchAsync(async (req, res) => {
       orders,
       freightTotal: Math.round(freightTotal * 100) / 100,
       vehicleCostTotal: trip?.vehicleCostTotal ?? null,
+      freightSlip: slipSummary(slipByDispatch.get(String(d._id))),
     };
   });
 
@@ -237,6 +243,7 @@ export const getFleetLedgerByDispatchId = catchAsync(async (req, res, next) => {
     trip: mapTrip(d.tripId),
     orders,
     freightTotal: orders.reduce((s, o) => s + o.freightCharges, 0),
+    freightSlip: await FreightSlip.findOne({ dispatchId: d._id }).lean(),
   };
 
   return res

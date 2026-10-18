@@ -404,6 +404,11 @@ const parameterWhiteListing = (req, res, next) => {
     return next();
   }
 
+  /** Freight slips — quote (rateCardId, km, loadType, crop, crates, dispatchId), trips (status, days, search), pdf (stage). */
+  if (req.method === "GET" && insightsPath.includes("/api/v1/freight-slips")) {
+    return next();
+  }
+
   // Only check query parameters, not path parameters (path params are defined in routes)
   const requestParams = req.query || {};
 

@@ -15,6 +15,7 @@ import Vehicle from "../models/vehicleModel.model.js";
 import VehicleDriver from "../models/vehicleDriver.model.js";
 import Trip from "../models/trip.model.js";
 import { allocateTripNumber } from "../utility/tripNumber.js";
+import { saveTentative } from "../services/freightSlip.service.js";
 import {
   bookablePlantsTotal,
   orderRemainingOrBookable,
@@ -432,6 +433,12 @@ const createDispatch = catchAsync(async (req, res, next) => {
     if (readyDispatchGroupId !== undefined) {
       delete dispatchRequest.readyDispatchGroupId;
     }
+    const freightSlipInput =
+      dispatchRequest.freightSlip && typeof dispatchRequest.freightSlip === "object"
+        ? dispatchRequest.freightSlip
+        : null;
+    delete dispatchRequest.freightSlip;
+    delete dispatchRequest.freightSlipId;
 
     if (
       readyDispatchGroupId &&
@@ -632,6 +639,17 @@ const createDispatch = catchAsync(async (req, res, next) => {
       });
     }
 
+    let freightSlip = null;
+    if (freightSlipInput) {
+      freightSlip = await saveTentative({
+        dispatchId: dispatch[0]._id,
+        input: freightSlipInput,
+        user: req.user,
+        source: "WEB",
+        session,
+      });
+    }
+
     await session.commitTransaction();
     fireOrderEditWhatsAppAlerts(
       req._orderEditAlertQueue,
@@ -725,6 +743,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
     );
     const responsePayload = {
       ...dispatchDoc,
+      ...(freightSlip ? { freightSlipId: freightSlip._id, freightSlip } : {}),
       linkedAgriLoadWarning:
         stillPendingLinkedAgri
           ? {
@@ -3590,9 +3609,11 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       { new: true, runValidators: true, session }
     );
 
-    // Upsert Trip document with vehicle trip details if provided
+    // Upsert Trip document with vehicle trip details if provided.
+    // With a freight slip, km/charges come only from the slip's final entry.
     if (
       tripData &&
+      !dispatch.freightSlipId &&
       (tripData.kmRun != null || tripData.rent != null || tripData.otherCharges != null || tripData.remark)
     ) {
       const tripSet = {

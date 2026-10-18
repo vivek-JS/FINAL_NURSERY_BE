@@ -26,7 +26,8 @@ async function getBrowser() {
 
 /**
  * @param {string} html — full HTML document
- * @param {{ format?: string, width?: string, height?: string, margin?: object }} [opts]
+ * @param {{ format?: string, width?: string, height?: string, margin?: object, fitContentHeight?: boolean }} [opts]
+ *   fitContentHeight: with `width`, sizes the page height to the rendered content (thermal rolls).
  * @returns {Promise<Buffer>}
  */
 export async function htmlToPdfBuffer(html, opts = {}) {
@@ -42,7 +43,12 @@ export async function htmlToPdfBuffer(html, opts = {}) {
       preferCSSPageSize: true,
       margin: opts.margin ?? { top: "0", right: "0", bottom: "0", left: "0" },
     };
-    if (opts.width && opts.height) {
+    if (opts.width && opts.fitContentHeight) {
+      const px = await page.evaluate(() => Math.ceil(document.documentElement.scrollHeight));
+      pdfOpts.preferCSSPageSize = false;
+      pdfOpts.width = opts.width;
+      pdfOpts.height = `${Math.ceil((px * 25.4) / 96) + 4}mm`;
+    } else if (opts.width && opts.height) {
       pdfOpts.width = opts.width;
       pdfOpts.height = opts.height;
     } else {
