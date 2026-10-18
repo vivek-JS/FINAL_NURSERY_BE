@@ -781,17 +781,16 @@ export function sowLinkMovesForLine(line, { dispatchId, performedBy, now, readyD
       },
     });
   }
+  const oid = (v) => (v && mongoose.isValidObjectId(String(v)) ? new mongoose.Types.ObjectId(String(v)) : undefined);
   return moves.map((m) => ({
     orderId: m.orderId,
     entry: {
       ...m.entry,
-      slotId: m.entry.slotId ? new mongoose.Types.ObjectId(m.entry.slotId) : undefined,
-      batchId: m.entry.batchId ? new mongoose.Types.ObjectId(m.entry.batchId) : undefined,
-      fromSlotId: m.entry.fromSlotId ? new mongoose.Types.ObjectId(m.entry.fromSlotId) : undefined,
-      fromBatchId: m.entry.fromBatchId ? new mongoose.Types.ObjectId(m.entry.fromBatchId) : undefined,
-      causedByOrderId: m.entry.causedByOrderId
-        ? new mongoose.Types.ObjectId(m.entry.causedByOrderId)
-        : undefined,
+      slotId: oid(m.entry.slotId),
+      batchId: oid(m.entry.batchId),
+      fromSlotId: oid(m.entry.fromSlotId),
+      fromBatchId: oid(m.entry.fromBatchId),
+      causedByOrderId: oid(m.entry.causedByOrderId),
     },
   }));
 }

@@ -202,13 +202,33 @@ test("orders loaded in the same submit are not used as relink takers", () => {
   assert.equal(plan.lines[1].bucket, "COVER");
 });
 
-test("order with no linked batch can only take free excess", () => {
+test("order with no linked batch takes free excess, then other orders with no relink", () => {
   const ctx = example(300);
   const ok = planSowBatchLoad({ selections: [{ orderId: "new", batchId: OID.b17, plants: 300 }], ...ctx });
   assert.equal(ok.ok, true);
   assert.equal(ok.lines[0].bucket, "FREE");
-  const bad = planSowBatchLoad({ selections: [{ orderId: "new", batchId: OID.b17, plants: 301 }], ...ctx });
-  assert.equal(bad.ok, false);
+  assert.equal(ok.lines[0].fromFree, 300);
+  assert.equal(ok.lines[0].unlinkedTakes.length, 0);
+
+  const short = planSowBatchLoad({ selections: [{ orderId: "new", batchId: OID.b17, plants: 301 }], ...ctx });
+  assert.equal(short.ok, true);
+  const line = short.lines[0];
+  assert.equal(line.bucket, "FREE");
+  assert.equal(line.fromFree, 300);
+  assert.equal(line.relinks.length, 0);
+  assert.deepEqual(line.unlinkedTakes.map((t) => [t.orderId, t.plants]), [[OID.Y3, 1]]);
+  assert.equal(line.warnings.length, 1);
+
+  const moves = sowLinkMovesForLine(line, { dispatchId: OID.s16, now: new Date() });
+  const taken = moves.find((m) => m.orderId === OID.Y3);
+  assert.equal(taken.entry.reason, "DISPATCH_FREE");
+  assert.equal(taken.entry.batchId, undefined);
+  assert.equal(String(taken.entry.fromBatchId), OID.b17);
+  const after = applySowBatchLinks(
+    [{ slotId: OID.s17, batchId: OID.b17, plants: 300 }],
+    [taken.entry]
+  );
+  assert.deepEqual(after, [{ slotId: OID.s17, batchId: OID.b17, plants: 299 }]);
 });
 
 test("an order split across two batches: own part is COVER, the rest switches", () => {
