@@ -387,6 +387,8 @@ import {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getVehicleDispatchAllocationSuggestions,
+  getSowBatchOptions,
+  postSowLoadPreview,
   getSowReadyEntries,
   getDispatchStockLines,
   getSecondaryPolyhouseStock,
@@ -807,6 +809,16 @@ server.get(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/sow-ready-entries",
   authenticateToken,
   getSowReadyEntries
+);
+server.get(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/sow-batch-options",
+  authenticateToken,
+  getSowBatchOptions
+);
+server.post(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/sow-load-preview",
+  authenticateToken,
+  postSowLoadPreview
 );
 server.get(
   "/api/v1/laboutward/secondary/sow-ready-entries",

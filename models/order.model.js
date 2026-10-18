@@ -933,6 +933,10 @@ const orderSchema = new Schema(
         reason: { type: String, enum: ["DISPATCH_SWITCH", "DISPATCH_RELINK", "DISPATCH_FREE"] },
         dispatchId: { type: Schema.Types.ObjectId, ref: "Dispatch" },
         causedByOrderId: { type: Schema.Types.ObjectId, ref: "Order" },
+        /** Public code of the order whose dispatch caused this move. */
+        causedByOrderCode: { type: String, default: "" },
+        /** Ready date (DD-MM-YYYY) of the batch these plants sit on after the move. */
+        plantReadyDate: { type: String, default: "" },
       },
     ],
     cavity: {
