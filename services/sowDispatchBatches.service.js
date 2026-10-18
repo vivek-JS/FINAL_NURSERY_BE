@@ -107,6 +107,8 @@ export function applySowBatchLinks(baseLinks, moves) {
     }
     if (qty < 1) continue;
     const to = idStr(m.batchId);
+    // No destination: the plants were taken for a dispatch and there is no batch to send the order to.
+    if (!to) continue;
     const dst = links.find((l) => l.batchId === to);
     if (dst) dst.plants += qty;
     else links.push({ slotId: idStr(m.slotId), batchId: to, plants: qty });
@@ -145,7 +147,8 @@ export function remainingOrderLinks(order, batchIndex, dispatchedMap) {
  * - Another batch B: its free excess first; the rest comes from B's other orders (FIFO by
  *   delivery, then booking), which are relinked to the batch(es) the order leaves. Whatever the
  *   order leaves behind and nobody takes becomes excess there (equal to the excess used on B).
- * - An order with no linked batch can only take B's free excess (FREE).
+ * - An order with no linked batch takes B's free excess (FREE). Anything still short comes from
+ *   B's other orders, FIFO, with no relink (nowhere to send them). The line carries a warning.
  *
  * @param selections [{ orderId, batchId, plants }]
  * @param orderLinks Map orderId → [{ slotId, batchId, plants }] (remaining links)
@@ -200,6 +203,8 @@ export function planSowBatchLoad({ selections, orderLinks, batches }) {
       fromFree: 0,
       relinks: [],
       released: [],
+      unlinkedTakes: [],
+      warnings: [],
       bucket: "COVER",
     };
 
@@ -210,13 +215,45 @@ export function planSowBatchLoad({ selections, orderLinks, batches }) {
       const r = rest - f;
 
       if (releasable < 1) {
-        if (r > 0) {
-          return {
-            ok: false,
-            error: `Batch has only ${B.free} free plants; this order has no sowing batch to swap with`,
-          };
-        }
         line.bucket = "FREE";
+        if (r > 0) {
+          const takers = [];
+          let need = r;
+          for (const y of B.orders) {
+            if (need <= 0) break;
+            if (y.orderId === orderId || selectedOrderIds.has(y.orderId) || y.plants < 1) continue;
+            const t = Math.min(need, y.plants);
+            takers.push({ orderId: y.orderId, plants: t, ref: y });
+            need -= t;
+          }
+          if (need > 0) {
+            const booked = B.orders
+              .filter((y) => y.orderId !== orderId && !selectedOrderIds.has(y.orderId))
+              .reduce((s, y) => s + y.plants, 0);
+            return {
+              ok: false,
+              error: `Batch has ${B.free} free + ${booked} booked by other orders; need ${rest}`,
+            };
+          }
+          for (const t of takers) {
+            t.ref.plants -= t.plants;
+            const yl = links.get(t.orderId);
+            if (yl) {
+              const fromL = yl.find((l) => l.batchId === batchId);
+              if (fromL) fromL.plants -= t.plants;
+            }
+            line.unlinkedTakes.push({
+              orderId: t.orderId,
+              plants: t.plants,
+              fromBatchId: batchId,
+              fromSlotId: B.slotId,
+            });
+          }
+          const names = line.unlinkedTakes.map((t) => t.orderId).join(", ");
+          line.warnings.push(
+            `${r} plants taken from orders ${names} with no batch to move them to`
+          );
+        }
       } else {
         const released = Math.min(rest, releasable);
         if (r > released) {
@@ -315,9 +352,17 @@ export function describeSowPlanLine(line, labels = {}) {
   if (taken) {
     parts.push(`${taken} from orders ${[...new Set(line.relinks.map((r) => `#${code(r.orderId)}`))].join(", ")}`);
   }
+  const unlinked = line.unlinkedTakes || [];
+  const unlinkedPlants = unlinked.reduce((s, r) => s + r.plants, 0);
+  if (unlinkedPlants) {
+    parts.push(
+      `${unlinkedPlants} from orders ${[...new Set(unlinked.map((r) => `#${code(r.orderId)}`))].join(", ")}`
+    );
+  }
   let text = `${day(line.batchId)}: ${parts.join(" + ")}`;
   const moved = [...new Set(line.relinks.map((r) => r.toBatchId))].map(day).filter(Boolean);
   if (taken && moved.length) text += `. Those orders move to ${moved.join(", ")}`;
+  if (unlinkedPlants) text += `. Those orders are not moved; they lose this batch`;
   const leftover = line.released.filter((r) => r.leftover > 0);
   if (leftover.length) {
     text += `. ${leftover.map((r) => `${r.leftover} of ${day(r.batchId)}`).join(", ")} become excess`;
@@ -342,12 +387,12 @@ function batchView(entry, extra = {}) {
   };
 }
 
-async function loadSlotDocs(plantId, subtypeId, session) {
+async function loadSlotDocs(plantId, subtypeId, session, hydrate) {
   const q = PlantSlot.find({
     plantId: new mongoose.Types.ObjectId(String(plantId)),
     "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(String(subtypeId)),
   }).session(session || null);
-  return session ? q : q.select("plantId subtypeSlots").lean();
+  return hydrate ? q : q.select("plantId subtypeSlots").lean();
 }
 
 const ORDER_SELECT =
@@ -357,8 +402,12 @@ const ORDER_SELECT =
  * Everything the planner needs for one plant/subtype: batch index, each order's remaining links,
  * and per batch its free plants and the other orders that can be relinked.
  */
-export async function loadSowDispatchContext(plantId, subtypeId, { session, vehicleOrderIds = [] } = {}) {
-  const slotDocs = await loadSlotDocs(plantId, subtypeId, session);
+export async function loadSowDispatchContext(
+  plantId,
+  subtypeId,
+  { session, vehicleOrderIds = [], hydrate = false } = {}
+) {
+  const slotDocs = await loadSlotDocs(plantId, subtypeId, session, hydrate);
   const batchIndex = indexSowBatches(slotDocs, subtypeId);
   const reqIds = [
     ...new Set([...batchIndex.values()].map((e) => idStr(e.batch.sowingRequestId)).filter(Boolean)),
@@ -572,8 +621,11 @@ export async function previewSowBatchLoad({ dispatchId, plantRowIndex = 0, sowBa
       sowingDate: ctx.batchIndex.get(l.batchId)?.batch?.sowingDate || "",
       plantReadyDate: ctx.batchIndex.get(l.batchId)?.batch?.plantReadyDate || "",
       summary: describeSowPlanLine(l, labels),
+      warnings: l.warnings || [],
       relinks: l.relinks.map((r) => ({ ...r, orderCode: labels.orderCode(r.orderId) })),
+      unlinkedTakes: (l.unlinkedTakes || []).map((t) => ({ ...t, orderCode: labels.orderCode(t.orderId) })),
     })),
+    warnings: plan.lines.flatMap((l) => l.warnings || []),
   };
 }
 
@@ -659,8 +711,16 @@ export function applySowPlanLineToSlots({ line, batchIndex, performedBy, transpo
 }
 
 /** order.sowBatchLinks entries written for one planned line (dispatched order + relinked orders). */
-export function sowLinkMovesForLine(line, { dispatchId, performedBy, now }) {
-  const base = { at: now, by: performedBy || undefined, dispatchId, causedByOrderId: line.orderId };
+export function sowLinkMovesForLine(line, { dispatchId, performedBy, now, readyDate, orderCode } = {}) {
+  const code = typeof orderCode === "function" ? orderCode(line.orderId) : "";
+  const ready = (batchId) => (typeof readyDate === "function" ? readyDate(batchId) || "" : "");
+  const base = {
+    at: now,
+    by: performedBy || undefined,
+    dispatchId,
+    causedByOrderId: line.orderId,
+    causedByOrderCode: code || "",
+  };
   const moves = [];
   const gained = line.plants - line.cover;
   let releasedTotal = 0;
@@ -675,6 +735,7 @@ export function sowLinkMovesForLine(line, { dispatchId, performedBy, now }) {
         slotId: line.slotId,
         batchId: line.batchId,
         plants: rel.plants,
+        plantReadyDate: ready(line.batchId),
         reason: "DISPATCH_SWITCH",
       },
     });
@@ -687,6 +748,7 @@ export function sowLinkMovesForLine(line, { dispatchId, performedBy, now }) {
         slotId: line.slotId,
         batchId: line.batchId,
         plants: gained - releasedTotal,
+        plantReadyDate: ready(line.batchId),
         reason: line.bucket === "FREE" ? "DISPATCH_FREE" : "DISPATCH_SWITCH",
       },
     });
@@ -701,7 +763,21 @@ export function sowLinkMovesForLine(line, { dispatchId, performedBy, now }) {
         slotId: r.toSlotId,
         batchId: r.toBatchId,
         plants: r.plants,
+        plantReadyDate: ready(r.toBatchId),
         reason: "DISPATCH_RELINK",
+      },
+    });
+  }
+  for (const t of line.unlinkedTakes || []) {
+    moves.push({
+      orderId: t.orderId,
+      entry: {
+        ...base,
+        fromSlotId: t.fromSlotId,
+        fromBatchId: t.fromBatchId,
+        plants: t.plants,
+        plantReadyDate: ready(t.fromBatchId),
+        reason: "DISPATCH_FREE",
       },
     });
   }
@@ -710,10 +786,12 @@ export function sowLinkMovesForLine(line, { dispatchId, performedBy, now }) {
     entry: {
       ...m.entry,
       slotId: m.entry.slotId ? new mongoose.Types.ObjectId(m.entry.slotId) : undefined,
-      batchId: new mongoose.Types.ObjectId(m.entry.batchId),
+      batchId: m.entry.batchId ? new mongoose.Types.ObjectId(m.entry.batchId) : undefined,
       fromSlotId: m.entry.fromSlotId ? new mongoose.Types.ObjectId(m.entry.fromSlotId) : undefined,
       fromBatchId: m.entry.fromBatchId ? new mongoose.Types.ObjectId(m.entry.fromBatchId) : undefined,
-      causedByOrderId: new mongoose.Types.ObjectId(m.entry.causedByOrderId),
+      causedByOrderId: m.entry.causedByOrderId
+        ? new mongoose.Types.ObjectId(m.entry.causedByOrderId)
+        : undefined,
     },
   }));
 }
@@ -754,6 +832,16 @@ export async function executeSowBatchVehicleLoad({
     const plan = planSowBatchLoad({ selections, orderLinks: ctx.orderLinks, batches: ctx.batches });
     if (!plan.ok) throw new AppError(plan.error, 400);
 
+    // Slot docs hold every subtype (several MB); hydrate only the ones this plan writes.
+    const planSlotIds = new Set(plan.lines.flatMap((l) => [l.slotId, ...l.released.map((r) => r.slotId)]));
+    const writeDocIds = [
+      ...new Set(
+        [...ctx.batchIndex.values()].filter((e) => planSlotIds.has(e.slotId)).map((e) => idStr(e.doc._id))
+      ),
+    ];
+    const writeDocs = await PlantSlot.find({ _id: { $in: writeDocIds } }).session(session);
+    const writeIndex = indexSowBatches(writeDocs, row.subTypeId);
+
     const now = new Date();
     const { plantOutward, plantName, subtypeName } = await ensureSowReadyPlantOutward(
       row.plantId,
@@ -769,10 +857,10 @@ export async function executeSowBatchVehicleLoad({
     const touched = new Set();
 
     for (const line of plan.lines) {
-      const B = ctx.batchIndex.get(line.batchId);
+      const B = writeIndex.get(line.batchId);
       const { reservedDec, availableDec, touchedSlots } = applySowPlanLineToSlots({
         line,
-        batchIndex: ctx.batchIndex,
+        batchIndex: writeIndex,
         performedBy,
         transportId: freshDispatch.transportId,
         now,
@@ -811,6 +899,7 @@ export async function executeSowBatchVehicleLoad({
                 fromExcess: line.fromFree,
                 released: line.released,
                 relinked: line.relinks.map((r) => ({ orderId: r.orderId, plants: r.plants, toBatchId: r.toBatchId })),
+                unlinkedTakes: line.unlinkedTakes,
                 summary: describeSowPlanLine(line, labels),
               },
         linkedOrderId: new mongoose.Types.ObjectId(line.orderId),
@@ -838,7 +927,18 @@ export async function executeSowBatchVehicleLoad({
         plants: line.plants,
         bucket: line.bucket,
       });
-      linkMoves.push(...sowLinkMovesForLine(line, { dispatchId: freshDispatch._id, performedBy, now }));
+      linkMoves.push(
+        ...sowLinkMovesForLine(line, {
+          dispatchId: freshDispatch._id,
+          performedBy,
+          now,
+          orderCode: labels.orderCode,
+          readyDate: (id) => {
+            const e = ctx.batchIndex.get(String(id));
+            return e?.batch?.plantReadyDate || e?.slot?.plantReadyDate || "";
+          },
+        })
+      );
       results.push({
         secondaryOutwardId: String(so._id),
         orderId: line.orderId,
@@ -862,7 +962,7 @@ export async function executeSowBatchVehicleLoad({
     if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
       touched.forEach((s) => s.setPerformer?.(performedBy));
     }
-    for (const doc of ctx.slotDocs) {
+    for (const doc of writeDocs) {
       if (doc.isModified()) await doc.save({ session, validateBeforeSave: true });
     }
     for (const m of linkMoves) {
