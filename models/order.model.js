@@ -1159,7 +1159,7 @@ const orderSchema = new Schema(
         },
         source: {
           type: String,
-          enum: ["VEHICLE", "SECONDARY_SHED"],
+          enum: ["VEHICLE", "SECONDARY_SHED", "SECONDARY_SHED_UNLOAD"],
         },
         secondaryOutwardId: {
           type: Schema.Types.ObjectId,

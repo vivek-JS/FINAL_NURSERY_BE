@@ -4993,6 +4993,7 @@ const getAll = (Model, modelName) =>
           sowingDoneRequestId: 1,
           sowingCoverSources: 1,
           sowingCoverReversedAt: 1,
+          sowBatchLinks: 1,
           productMappingId: 1,
           payment: 1,
           numberOfPlants: 1,
