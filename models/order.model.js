@@ -905,6 +905,8 @@ const orderSchema = new Schema(
         excessiveSowingDec: { type: Number, default: 0 },
         availablePlantsDec: { type: Number },
         batchExcessDec: { type: Number, default: 0 },
+        /** Cover stays on the original sowing; reserved is on that slot, not the booking slot. */
+        reservedOnSource: { type: Boolean, default: false },
         /** Source in another slot: plants moved into a sow entry on the booking slot. */
         moved: { type: Boolean, default: false },
         destSlotId: { type: Schema.Types.ObjectId },
