@@ -7,6 +7,7 @@ import {
   sowQtySlotImpact,
 } from "../utility/lagwadSlotPlantsSplit.js";
 import { applySowingAllowedSlotMetrics } from "../utility/pastDueSlotMetrics.js";
+import { computeSowingGapBoardMetricsForSubtype } from "../utility/sowingGapSummaryMetrics.js";
 
 test("sowMortalityReserve: 10% floor, leftover kept up to 20% of order plants", () => {
   assert.equal(sowMortalityReserve(12000, 10000), 2000);
@@ -75,4 +76,21 @@ test("slotSowStock / applySowingAllowedSlotMetrics use the batch reserves", () =
   assert.equal(m.excessAvailableForBooking, 10800);
   assert.equal(m.sowedExpectedMortality, 3200);
   assert.equal(m.sowedActualPlants, 20800);
+});
+
+test("capacity board excess uses real sow batches so 10% mortality is held back", () => {
+  const real = computeSowingGapBoardMetricsForSubtype(
+    [
+      {
+        slotId: "s1",
+        slotStartDay: "02-11-2026",
+        slotEndDay: "02-11-2026",
+        primarySowed: 112140,
+        sowingBatches: [{ plantsSowed: 112140, orderCoveredPlants: 85500 }],
+      },
+    ],
+    []
+  );
+  assert.equal(real.get("s1").sowedExpectedMortality, 17100);
+  assert.equal(real.get("s1").excessAvailableForBooking, 9540);
 });

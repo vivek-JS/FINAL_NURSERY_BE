@@ -29,6 +29,8 @@ import {
   OVERDUE_LOOKBACK_DAYS,
   boardRowHasNumbers,
   buildBoardRow,
+  buildBoardSummary,
+  dueSowItems,
   parseGroupDays,
   shedStockByVariety,
   varietyKey,
@@ -211,13 +213,22 @@ async function loadSheetContext({ from, to, plantId, subtypeId, unbounded = fals
                     slotStartDay: "$$slot.startDay",
                     slotEndDay: "$$slot.endDay",
                     primarySowed: { $ifNull: ["$$slot.primarySowed", 0] },
-                    orderCoveredPlants: {
-                      $sum: {
-                        $map: {
-                          input: { $ifNull: ["$$slot.sowingBatches", []] },
-                          as: "batch",
-                          in: {
-                            $max: [0, { $ifNull: ["$$batch.orderCoveredPlants", 0] }],
+                    sowingBatches: {
+                      $map: {
+                        input: { $ifNull: ["$$slot.sowingBatches", []] },
+                        as: "batch",
+                        in: {
+                          plantsSowed: { $ifNull: ["$$batch.plantsSowed", 0] },
+                          destroyedPlants: { $ifNull: ["$$batch.destroyedPlants", 0] },
+                          orderCoveredPlants: { $ifNull: ["$$batch.orderCoveredPlants", 0] },
+                          noMortalityReserve: { $ifNull: ["$$batch.noMortalityReserve", false] },
+                          isExcessiveSowing: { $ifNull: ["$$batch.isExcessiveSowing", false] },
+                          excessAllocations: {
+                            $map: {
+                              input: { $ifNull: ["$$batch.excessAllocations", []] },
+                              as: "a",
+                              in: { plants: { $ifNull: ["$$a.plants", 0] } },
+                            },
                           },
                         },
                       },
@@ -240,9 +251,7 @@ async function loadSheetContext({ from, to, plantId, subtypeId, unbounded = fals
         slotStartDay: "$subtypeSlots.slots.slotStartDay",
         slotEndDay: "$subtypeSlots.slots.slotEndDay",
         primarySowed: "$subtypeSlots.slots.primarySowed",
-        sowingBatches: [
-          { orderCoveredPlants: "$subtypeSlots.slots.orderCoveredPlants" },
-        ],
+        sowingBatches: "$subtypeSlots.slots.sowingBatches",
       },
     },
   ]);
@@ -454,17 +463,21 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
           booked: num(metrics.totalBookedPlants),
           gap: num(metrics.bookedUncoveredPlants),
           excess: num(metrics.excessAvailableForBooking),
+          mortality: num(metrics.sowedExpectedMortality),
           pendingDispatch: pendingBySlot.get(slotId) || 0,
         };
       });
+      const readyDays = num(subtype.plantReadyDays);
       const row = buildBoardRow({ slots: subtypeSlots, today, stock: stockByVariety.get(key), groupDays: group });
-      if (!boardRowHasNumbers(row)) continue;
+      if (!boardRowHasNumbers(row) && !subtypeSlots.some((slot) => num(slot.gap) > 0)) continue;
       rows.push({
         plantId: String(plant._id),
         plantName: plant.name,
         subtypeId: String(subtype._id),
         subtypeName: subtype.name,
         sowingAllowed: true,
+        plantReadyDays: readyDays,
+        dueSow: dueSowItems({ slots: subtypeSlots, today, readyDays }),
         ...row,
       });
     }
@@ -492,6 +505,7 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
     overdueLookbackDays: OVERDUE_LOOKBACK_DAYS,
     groupDays: group,
     tableDays: BOARD_TABLE_DAYS,
+    summary: buildBoardSummary(rows),
     rows,
   };
 }

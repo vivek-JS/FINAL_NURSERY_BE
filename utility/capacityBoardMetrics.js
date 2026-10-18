@@ -49,7 +49,7 @@ export function dominantSlotDays(slots) {
  *   ready   plants sowed for the window: sowed against orders + free sowed excess
  *   net     ready - booked (negative = short, positive = free to sell)
  */
-export function boardSlotCell({ slotId, startDay, endDay, booked, gap, excess }) {
+export function boardSlotCell({ slotId, startDay, endDay, booked, gap, excess, mortality }) {
   const b = num(booked);
   const g = Math.min(num(gap), b);
   const e = num(excess);
@@ -61,6 +61,7 @@ export function boardSlotCell({ slotId, startDay, endDay, booked, gap, excess })
     ready: b - g + e,
     net: canBookFromExcess(e, g),
     gap: g,
+    mortality: num(mortality),
   };
 }
 
@@ -68,7 +69,7 @@ export function boardSlotCell({ slotId, startDay, endDay, booked, gap, excess })
  * Past slot carried into today: only orders still waiting to dispatch count as booked,
  * plus any free sowed excess that was never sold.
  */
-export function overdueSlotCell({ slotId, startDay, endDay, pendingDispatch, gap, excess }) {
+export function overdueSlotCell({ slotId, startDay, endDay, pendingDispatch, gap, excess, mortality }) {
   const pending = num(pendingDispatch);
   const g = Math.min(num(gap), pending);
   const e = num(excess);
@@ -81,6 +82,7 @@ export function overdueSlotCell({ slotId, startDay, endDay, pendingDispatch, gap
     net: canBookFromExcess(e, g),
     gap: g,
     unsold: e,
+    mortality: num(mortality),
   };
 }
 
@@ -91,8 +93,9 @@ function addCells(cells) {
       ready: acc.ready + num(cell.ready),
       net: acc.net + num(cell.net),
       gap: acc.gap + num(cell.gap),
+      mortality: acc.mortality + num(cell.mortality),
     }),
-    { booked: 0, ready: 0, net: 0, gap: 0 }
+    { booked: 0, ready: 0, net: 0, gap: 0, mortality: 0 }
   );
 }
 
@@ -121,6 +124,7 @@ function cellWithIds(cell) {
     ready: num(cell.ready),
     net: num(cell.net),
     gap: num(cell.gap),
+    mortality: num(cell.mortality),
     slotIds: cell.slotId ? [cell.slotId] : [],
   };
 }
@@ -292,6 +296,75 @@ export function shedStockByVariety(shedPayload) {
     entry.batches.sort((a, b) => b.inShed - a.inShed);
   }
   return map;
+}
+
+/** Last day this slot should have been sown: ready date minus plant-ready days. */
+export function slotSowByDay(startDay, readyDays) {
+  const start = slotDayStartMoment(startDay);
+  if (!start) return null;
+  return start.clone().subtract(Math.max(0, num(readyDays)), "days");
+}
+
+/** Uncovered bookings whose sow-by date is today or already past. */
+export function dueSowItems({ slots, today, readyDays }) {
+  const items = [];
+  for (const slot of slots || []) {
+    const gap = num(slot.gap);
+    if (gap <= 0) continue;
+    const sowBy = slotSowByDay(slot.startDay, readyDays);
+    if (!sowBy || sowBy.isAfter(today, "day")) continue;
+    items.push({
+      startDay: slot.startDay,
+      endDay: slot.endDay,
+      sowBy: sowBy.format("DD-MM-YYYY"),
+      plants: gap,
+      slotIds: slot.slotId ? [String(slot.slotId)] : [],
+    });
+  }
+  return items;
+}
+
+function rowForecastCards(row) {
+  const cards = [];
+  if (row?.now) cards.push(row.now);
+  else if (row?.current) cards.push(row.current);
+  for (const cell of row?.cells || []) cards.push(cell);
+  return cards;
+}
+
+/** Totals for the 30-day board: sellable excess after mortality, unsown gap, and past-due sow dates. */
+export function buildBoardSummary(rows, tableDays = BOARD_TABLE_DAYS) {
+  let totalExcess = 0;
+  let totalUnsown = 0;
+  const dueSow = [];
+  for (const row of rows || []) {
+    for (const cell of rowForecastCards(row)) {
+      const net = num(cell?.net);
+      if (net > 0) totalExcess += net;
+      totalUnsown += num(cell?.gap);
+    }
+    for (const item of row.dueSow || []) {
+      dueSow.push({
+        plantName: row.plantName,
+        subtypeName: row.subtypeName,
+        plantId: row.plantId,
+        subtypeId: row.subtypeId,
+        ...item,
+      });
+    }
+  }
+  dueSow.sort((a, b) => {
+    const ka = String(a.sowBy || a.startDay || "").split("-").reverse().join("");
+    const kb = String(b.sowBy || b.startDay || "").split("-").reverse().join("");
+    return ka.localeCompare(kb) || String(a.subtypeName).localeCompare(String(b.subtypeName));
+  });
+  return {
+    tableDays,
+    totalExcess,
+    totalUnsown,
+    dueSowPlants: dueSow.reduce((sum, item) => sum + num(item.plants), 0),
+    dueSow,
+  };
 }
 
 export { varietyKey };
