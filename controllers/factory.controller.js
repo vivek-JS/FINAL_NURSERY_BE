@@ -58,6 +58,7 @@ import {
   sanitizePaymentArrayForOrder,
 } from "../utils/paymentTiming.js";
 import { normalizeOrderForLocationFields } from "../utils/orderForNormalize.js";
+import { sanitizeVoiceNotes } from "../utils/voiceNotes.js";
 import {
   parsePlantLineItemsInput,
   normalizePlantLineItemsForCreate,
@@ -531,6 +532,10 @@ const createOne = (Model, modelName) =>
 
       if (orderData.orderFor != null) {
         req.body.orderFor = orderData.orderFor;
+      }
+
+      if (orderData.voiceNotes != null) {
+        orderData.voiceNotes = sanitizeVoiceNotes(orderData.voiceNotes, req.user, "BOOKING");
       }
 
       // Parse sowingPlan (seed source / company + raising packets) from FormData JSON
@@ -5040,6 +5045,7 @@ const getAll = (Model, modelName) =>
           walletEntryId: 1, // Add wallet entry reference
           notes: 1,
           orderRemarks: 1, // Keep orderRemarks field as array of strings
+          voiceNotes: 1,
           // Added farm ready date change history with user info
           farmReadyDateChanges: {
             $map: {

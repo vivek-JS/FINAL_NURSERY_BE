@@ -88,6 +88,7 @@ import { sendPaymentCollectedNotification } from "../utility/pushNotification.js
 import catchAsync from "../utility/catchAsync.js";
 import { noCacheApiResponse } from "../middlewares/noCacheApi.middleware.js";
 import { getPlantOrderTimeline } from "../modules/orderEvents/api/orderEvents.controller.js";
+import { addOrderVoiceNote } from "../controllers/orderVoiceNote.controller.js";
 
 const router = express.Router();
 
@@ -263,5 +264,6 @@ router
   .post("/dealer-order", uploadImages.array('screenshots', 10), createDealerOrder)
   .patch("/afterOrder",addAfterDispatchedOrderIds)
   .post("/:orderId/split", authenticateToken, splitOrder)
+  .post("/:orderId/voice-notes", addOrderVoiceNote)
 
 export default router;

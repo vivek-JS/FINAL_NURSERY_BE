@@ -2171,6 +2171,7 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
           dealerOrder: 1,
           notes: 1,
           orderRemarks: 1,
+          voiceNotes: 1,
           statusChanges: {
             $map: {
               input: "$statusChanges",

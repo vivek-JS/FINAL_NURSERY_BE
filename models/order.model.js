@@ -985,6 +985,18 @@ const orderSchema = new Schema(
     },
     // Changed to array of strings for order remarks
     orderRemarks: [String],
+    // Voice-note remarks recorded in the Ram Orders app (local /uploads audio URLs)
+    voiceNotes: [
+      {
+        url: { type: String, required: true, trim: true },
+        durationSec: { type: Number, default: 0, min: 0 },
+        note: { type: String, trim: true, default: "" },
+        recordedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+        recordedByName: { type: String, trim: true, default: "" },
+        recordedAt: { type: Date, default: Date.now },
+        source: { type: String, enum: ["BOOKING", "LATER"], default: "BOOKING" },
+      },
+    ],
     // Screenshots uploaded with the order (Cloudinary URLs)
     screenshots: [String], // Array of Cloudinary image URLs
     // Ready plants product fields - for products from other nurseries
