@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import { planSowBatchDestroy, sowBatchLeft } from "../services/sowBatchDestroy.service.js";
 
 const slot = {
+  totalPlants: 10000,
   primarySowed: 10000,
   plantsSowed: 10000,
   actualPlants: 9000,
+  expectedMortality: 1000,
   availablePlants: 2000,
+  orderReservedPlants: 7000,
   excessiveSowing: { plants: 2000 },
 };
 
@@ -23,7 +26,10 @@ test("planSowBatchDestroy: lowers sowed, survivors and free stock", () => {
   });
   assert.equal(plan.primarySowed, 8500);
   assert.equal(plan.plantsSowed, 8500);
+  assert.equal(plan.totalPlants, 8500);
   assert.equal(plan.actualPlants, 7500);
+  assert.equal(plan.expectedMortality, 1000);
+  assert.equal(plan.orderReservedPlants, 7000);
   assert.equal(plan.availablePlants, 500);
   assert.equal(plan.excessivePlants, 500);
   assert.deepEqual(plan.takes, [{ batchId: "b1", plants: 1500 }]);
@@ -38,6 +44,32 @@ test("planSowBatchDestroy: free stock floors at zero when destroying reserved pl
   assert.equal(plan.availablePlants, 0);
   assert.equal(plan.excessivePlants, 0);
   assert.equal(plan.primarySowed, 7000);
+  assert.equal(plan.totalPlants, 7000);
+  assert.equal(plan.actualPlants, 6000);
+  assert.equal(plan.expectedMortality, 1000);
+  assert.equal(plan.orderReservedPlants, 6000);
+});
+
+test("planSowBatchDestroy: mortality reserve drops only after live actual plants are gone", () => {
+  const plan = planSowBatchDestroy({
+    slot: {
+      totalPlants: 1000,
+      primarySowed: 1000,
+      plantsSowed: 1000,
+      actualPlants: 900,
+      expectedMortality: 100,
+      availablePlants: 0,
+      orderReservedPlants: 900,
+      excessiveSowing: { plants: 0 },
+    },
+    batches: [{ _id: "b1", plantsSowed: 1000 }],
+    quantity: 950,
+  });
+  assert.equal(plan.totalPlants, 50);
+  assert.equal(plan.primarySowed, 50);
+  assert.equal(plan.actualPlants, 0);
+  assert.equal(plan.expectedMortality, 50);
+  assert.equal(plan.orderReservedPlants, 0);
 });
 
 test("planSowBatchDestroy: newest batch first, capped by what is left", () => {
