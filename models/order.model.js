@@ -889,6 +889,14 @@ const orderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "SowingRequest",
     },
+    /** Plants already held on a sowing batch while the order is not yet sowingDone. */
+    sowingPartialCover: [
+      {
+        requestId: { type: Schema.Types.ObjectId, ref: "SowingRequest" },
+        plants: { type: Number, default: 0, min: 0 },
+        at: { type: Date, default: Date.now },
+      },
+    ],
     /** Sowing batches whose excess covered this order at booking (sowingDone set alongside). */
     sowingCoverSources: [
       {

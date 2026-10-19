@@ -697,7 +697,7 @@ export const submitDirectSow = async (req, res) => {
         request._id,
         excessPlants,
         orderCoveredPlants,
-        orderResult.markedIds || request.linkedOrderIds || []
+        orderResult.batchLinkedIds || orderResult.markedIds || request.linkedOrderIds || []
       );
     }
     pushEvent(request, {

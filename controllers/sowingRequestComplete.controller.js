@@ -544,7 +544,7 @@ export const completeSowingRequest = async (req, res) => {
             locked._id,
             excessPlants,
             orderCoveredPlants,
-            orderResult.markedIds || locked.linkedOrderIds || []
+            orderResult.batchLinkedIds || orderResult.markedIds || locked.linkedOrderIds || []
           );
         }
       }
@@ -554,9 +554,11 @@ export const completeSowingRequest = async (req, res) => {
         by: userId,
         quantity: plantsSowed,
         unit: "plants",
-        message: locked.sowingCompleted
-          ? "Sowing completed"
-          : "Sowing progress saved (bags still open)",
+        message: locked.sowingIncomplete
+          ? "Sowing marked incomplete — leftover orders go to a later request"
+          : locked.sowingCompleted
+            ? "Sowing completed"
+            : "Sowing progress saved (bags still open)",
         meta: {
           packetsIssued: locked.packetsIssued,
           packetsUsed: locked.packetsUsed,
@@ -588,6 +590,9 @@ export const completeSowingRequest = async (req, res) => {
           packetsUsedNow: (inv.used || 0) + raisingPacketsUsedNow,
           ordersMarked: orderResult.marked,
           remainingUncovered: orderResult.remainingUncovered ?? 0,
+          sowingIncomplete: Boolean(orderResult.incomplete),
+          waitingOrders: (orderResult.waiting || []).length,
+          partialPlants: orderResult.partial?.addPlants || 0,
           orderReadyDate: orderResult.readyDate || null,
           orderPlantReadyDays: orderResult.plantReadyDays ?? plantReadyDays,
           orderCoverWindowDays: orderResult.coverWindowDays ?? 0,
@@ -654,13 +659,16 @@ export const completeSowingRequest = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: locked.sowingCompleted
-          ? "Sowing completed successfully"
-          : "Sowing progress saved",
+        message: locked.sowingIncomplete
+          ? "Sowing marked incomplete — leftover orders can go on a new request"
+          : locked.sowingCompleted
+            ? "Sowing completed successfully"
+            : "Sowing progress saved",
         data: {
           requestId: locked._id,
           requestNumber: locked.requestNumber,
           sowingCompleted: locked.sowingCompleted,
+          sowingIncomplete: Boolean(locked.sowingIncomplete),
           expectedPlants: expected,
           plantsSowed,
           shedName,
@@ -684,6 +692,8 @@ export const completeSowingRequest = async (req, res) => {
             returnRequestIds: inv.returnRequestIds,
           },
           ordersMarked: orderResult.marked,
+          waitingOrders: (orderResult.waiting || []).length,
+          partialPlants: orderResult.partial?.addPlants || 0,
           orderCoveredPlants,
           excessPlants: finalExcess,
           uncoveredLinkedOrders,
@@ -1031,6 +1041,9 @@ export const getSowingCompletions = async (req, res) => {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
         isExcess: Boolean(r.isExcessiveSowing),
+        excessPlants: Number(reqBatch?.excessPlants) || 0,
+        bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
+        shedName: reqBatch?.shedName || r.shedName || "",
         linkedOrders,
         labourTotal:
           (Number(r.laboursLadies) || 0) + (Number(r.laboursGents) || 0),
@@ -1062,7 +1075,7 @@ export const getSowingCompletions = async (req, res) => {
 };
 
 const COMPLETION_SELECT =
-  "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents machineStartTime machineEndTime machineMinutes completionPhotos completionNotes shedName sowingCompleted sowingCompletedDate createdAt isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned returnRequestIds completionEvents completedBy outwardId";
+  "requestNumber plantId plantName subtypeId subtypeName packetsRequested conversionFactor sowedQuantity laboursLadies laboursGents machineStartTime machineEndTime machineMinutes completionPhotos completionNotes shedName sowingCompleted sowingIncomplete uncoveredOrderIds sowingCompletedDate createdAt isExcessiveSowing linkedOrderIds linkedSlotIds seedSource packetsFromCompany packetsFromRaising packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned returnRequestIds completionEvents completedBy outwardId";
 
 function outwardBatchNumbers(r, outwardMap) {
   const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
@@ -1087,12 +1100,23 @@ async function loadCompletionLookups(rows) {
     ...new Set(rows.flatMap((r) => collectSlotIdsFromRequest(r))),
   ].map((id) => new mongoose.Types.ObjectId(id));
 
+  const uncoveredIds = [
+    ...new Set(
+      rows.flatMap((r) => (r.uncoveredOrderIds || []).map((id) => String(id))).filter(Boolean)
+    ),
+  ].map((id) => new mongoose.Types.ObjectId(id));
+
   const [ordersByRequest, outwards, slotRows] = await Promise.all([
-      // Orders actually covered by each completion (delivery matched at mark time)
       requestIds.length
-        ? Order.find({ sowingDoneRequestId: { $in: requestIds } })
+        ? Order.find({
+            $or: [
+              { sowingDoneRequestId: { $in: requestIds } },
+              { "sowingPartialCover.requestId": { $in: requestIds } },
+              ...(uncoveredIds.length ? [{ _id: { $in: uncoveredIds } }] : []),
+            ],
+          })
             .select(
-              "orderId name farmer numberOfPlants additionalPlants sowingDone sowingDoneAt sowingDoneRequestId deliveryDate orderBookingDate createdAt"
+              "orderId name farmer numberOfPlants additionalPlants sowingDone sowingDoneAt sowingDoneRequestId sowingPartialCover deliveryDate orderBookingDate createdAt"
             )
             .populate("farmer", "name mobileNumber")
             .sort({ deliveryDate: 1, createdAt: 1 })
@@ -1145,10 +1169,21 @@ async function loadCompletionLookups(rows) {
     ]);
 
   const ordersByReqMap = new Map();
-  for (const o of ordersByRequest) {
-    const key = String(o.sowingDoneRequestId);
+  const put = (key, o) => {
+    if (!key) return;
     if (!ordersByReqMap.has(key)) ordersByReqMap.set(key, []);
-    ordersByReqMap.get(key).push(o);
+    const list = ordersByReqMap.get(key);
+    if (!list.some((x) => String(x._id) === String(o._id))) list.push(o);
+  };
+  for (const o of ordersByRequest) {
+    put(String(o.sowingDoneRequestId || ""), o);
+    for (const p of o.sowingPartialCover || []) put(String(p.requestId || ""), o);
+  }
+  for (const r of rows) {
+    for (const id of r.uncoveredOrderIds || []) {
+      const o = ordersByRequest.find((x) => String(x._id) === String(id));
+      if (o) put(String(r._id), o);
+    }
   }
   return {
     ordersByReqMap,
@@ -1185,6 +1220,17 @@ function mapCoveredOrder(o, readyDateMeta, coverWindowDays) {
     farmerMobile: o.farmer?.mobileNumber || "",
     plants: (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0),
     sowingDone: Boolean(o.sowingDone),
+    coveredPlants: (() => {
+      const total = (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0);
+      const held = (Array.isArray(o.sowingPartialCover) ? o.sowingPartialCover : []).reduce(
+        (s, row) => s + (Number(row.plants) || 0),
+        0
+      );
+      return o.sowingDone ? total : held;
+    })(),
+    partiallyCovered:
+      !o.sowingDone &&
+      (Array.isArray(o.sowingPartialCover) ? o.sowingPartialCover : []).some((r) => Number(r.plants) > 0),
     sowingDoneAt: o.sowingDoneAt,
     bookingDate: o.orderBookingDate || o.createdAt || null,
     deliveryDate: o.deliveryDate || null,
@@ -1226,6 +1272,8 @@ function buildAffectedSlot(slotRaw, reqBatch, shedName) {
       .filter((b) => reqBatch && String(b.sowingRequestId) === String(reqBatch.sowingRequestId))
       .reduce((s, b) => s + (Number(b.destroyedPlants) || 0), 0),
     shedName: reqBatch?.shedName || shedName || "",
+    excessPlants: Number(reqBatch?.excessPlants) || 0,
+    bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
   };
 }
 
@@ -1466,9 +1514,10 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       machineEndTime: pick(meta.machineEndTime, r.machineEndTime) || "",
       machineMinutes: Number(pick(meta.machineMinutes, r.machineMinutes)) || 0,
       completionNotes: pick(meta.notes, r.completionNotes) || "",
-      shedName,
+      shedName: reqBatch?.shedName || shedName,
       isExcess: Boolean(r.isExcessiveSowing) || Number(meta.excessPlants) >= Number(ev.quantity),
-      excessPlants: Number(meta.excessPlants) || 0,
+      excessPlants: Number(reqBatch?.excessPlants) || Number(meta.excessPlants) || 0,
+      bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
       linkedOrders,
       batchNumber: batchNumbers.join(", ") || "",
       batchNumbers,

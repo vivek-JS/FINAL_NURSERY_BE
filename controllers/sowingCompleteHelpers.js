@@ -13,6 +13,10 @@ import {
 } from "./sowingSlotReadyHelpers.js";
 import { sowQtySlotImpact, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
 import { updatePlantSlotCapped } from "../utility/shrinkPlantSlotTrails.js";
+import {
+  planOrderSowCover,
+  applyIncompleteRequestRelease,
+} from "../services/orderSowCover.plan.js";
 
 function hasAppliedSplit(batch) {
   return (
@@ -906,11 +910,8 @@ export async function settleOutwardAndReturns(
 }
 
 /**
- * Mark orders sowingDone=true for orders included on this sow only.
- *
- * Eligible = opts.orderIds (if provided) else request.linkedOrderIds.
- * No ±N delivery-date auto-cover — only orders attached to the sowing.
- * Excess / saleable = plantsSowed − sum(included order plants).
+ * FIFO-cover linked orders: full orders get sowingDone; a short remainder is
+ * held as sowingPartialCover (not done); leftover orders stay need-sow.
  */
 export async function markOrdersSowed(request, opts = {}) {
   const plantsSowed = Math.max(0, Math.floor(parseNum(opts.plantsSowed, 0)));
@@ -919,10 +920,15 @@ export async function markOrdersSowed(request, opts = {}) {
       marked: 0,
       remainingUncovered: 0,
       markedIds: [],
+      batchLinkedIds: [],
       readyDate: null,
       plantReadyDays: 0,
       coverWindowDays: 0,
       eligibleCount: 0,
+      incomplete: false,
+      partial: null,
+      waiting: [],
+      orderPlantsCovered: 0,
     };
   }
 
@@ -951,17 +957,22 @@ export async function markOrdersSowed(request, opts = {}) {
     ),
   ].map((id) => new mongoose.Types.ObjectId(id));
 
-  if (!orderObjectIds.length) {
-    return {
-      marked: 0,
-      remainingUncovered: plantsSowed,
-      markedIds: [],
-      readyDate: readyDateStr,
-      plantReadyDays: readyDays,
-      coverWindowDays: 0,
-      eligibleCount: 0,
-    };
-  }
+  const empty = {
+    marked: 0,
+    remainingUncovered: plantsSowed,
+    markedIds: [],
+    batchLinkedIds: [],
+    readyDate: readyDateStr,
+    plantReadyDays: readyDays,
+    coverWindowDays: 0,
+    eligibleCount: 0,
+    incomplete: false,
+    partial: null,
+    waiting: [],
+    orderPlantsCovered: 0,
+  };
+
+  if (!orderObjectIds.length) return empty;
 
   const orders = await Order.find({
     _id: { $in: orderObjectIds },
@@ -970,61 +981,64 @@ export async function markOrdersSowed(request, opts = {}) {
       $nin: ["CANCELLED", "TEMPORARY_CANCELLED", "REJECTED", "DELETED"],
     },
   })
-    .select("_id numberOfPlants additionalPlants deliveryDate createdAt orderId")
+    .select("_id numberOfPlants additionalPlants deliveryDate createdAt orderId sowingPartialCover")
     .sort({ deliveryDate: 1, createdAt: 1, orderId: 1 })
     .lean();
 
-  const toMark = orders.map((o) => o._id);
-  const coveredNeed = orders.reduce(
-    (s, o) =>
-      s + (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0),
-    0
-  );
-  const remainingUncovered = Math.max(0, plantsSowed - coveredNeed);
+  if (!orders.length) return { ...empty, remainingUncovered: plantsSowed };
 
-  if (!toMark.length) {
-    return {
-      marked: 0,
-      remainingUncovered: plantsSowed,
-      markedIds: [],
-      readyDate: readyDateStr,
-      plantReadyDays: readyDays,
-      coverWindowDays: 0,
-      eligibleCount: 0,
-    };
+  const plan = planOrderSowCover({ plantsSowed, orders });
+  const reqId = request._id;
+
+  for (const f of plan.full) {
+    await Order.updateOne(
+      { _id: f.orderId, sowingDone: { $ne: true } },
+      {
+        $set: {
+          sowingDone: true,
+          sowingDoneAt: sowedAt,
+          sowingDoneRequestId: reqId,
+        },
+      }
+    );
   }
 
-  const result = await Order.updateMany(
-    {
-      _id: { $in: toMark },
-      sowingDone: { $ne: true },
-    },
-    {
-      $set: {
-        sowingDone: true,
-        sowingDoneAt: sowedAt,
-        sowingDoneRequestId: request._id,
-      },
-    }
-  );
+  if (plan.partial?.orderId && plan.partial.addPlants > 0) {
+    await Order.updateOne(
+      { _id: plan.partial.orderId, sowingDone: { $ne: true } },
+      {
+        $push: {
+          sowingPartialCover: {
+            requestId: reqId,
+            plants: plan.partial.addPlants,
+            at: sowedAt,
+          },
+        },
+      }
+    );
+  }
 
-  // Keep request.linkedOrderIds = orders marked by this request
-  const allMarkedForReq = await Order.find({
-    sowingDoneRequestId: request._id,
-  })
-    .select("_id")
-    .lean();
-  request.linkedOrderIds = allMarkedForReq.map((o) => o._id);
+  applyIncompleteRequestRelease(request, plan, { sowedAt });
+
+  const markedIds = plan.full.map((f) => f.orderId);
+  const batchLinkedIds = [
+    ...markedIds,
+    ...(plan.partial?.orderId ? [plan.partial.orderId] : []),
+  ];
 
   return {
-    marked: result.modifiedCount || 0,
-    remainingUncovered,
-    markedIds: toMark,
+    marked: markedIds.length,
+    remainingUncovered: plan.excess,
+    markedIds,
+    batchLinkedIds,
     readyDate: readyDateStr,
     plantReadyDays: readyDays,
     coverWindowDays: 0,
     eligibleCount: orders.length,
-    orderPlantsCovered: coveredNeed,
+    incomplete: plan.incomplete,
+    partial: plan.partial,
+    waiting: plan.waiting,
+    orderPlantsCovered: plan.orderPlantsCovered,
   };
 }
 

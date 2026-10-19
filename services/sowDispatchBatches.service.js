@@ -68,6 +68,17 @@ export function indexSowBatches(slotDocs, subtypeId) {
  * Batches an order's plants were sown into before any dispatch relink:
  * excess cover sources first, else the batch(es) of its sowing request.
  */
+function batchForRequest(batchIndex, reqId, orderId) {
+  if (!reqId) return null;
+  const candidates = [...batchIndex.values()].filter((e) => idStr(e.batch.sowingRequestId) === reqId);
+  if (!candidates.length) return null;
+  const oid = idStr(orderId);
+  return (
+    candidates.find((e) => (e.batch.linkedOrderIds || []).some((x) => idStr(x) === oid)) ||
+    candidates[0]
+  );
+}
+
 export function baseOrderLinks(order, batchIndex) {
   const covers = order?.sowingCoverReversedAt ? [] : order?.sowingCoverSources || [];
   if (covers.length) {
@@ -79,16 +90,32 @@ export function baseOrderLinks(order, batchIndex) {
       }))
       .filter((l) => l.batchId && l.plants > 0);
   }
+  const partials = Array.isArray(order?.sowingPartialCover) ? order.sowingPartialCover : [];
+  const links = [];
+  let held = 0;
+  for (const p of partials) {
+    const n = toQty(p.plants);
+    if (n < 1) continue;
+    const pick = batchForRequest(batchIndex, idStr(p.requestId), order._id);
+    if (!pick) continue;
+    links.push({ slotId: pick.slotId, batchId: idStr(pick.batch._id), plants: n });
+    held += n;
+  }
   const reqId = idStr(order?.sowingDoneRequestId);
-  if (!reqId) return [];
-  const candidates = [...batchIndex.values()].filter((e) => idStr(e.batch.sowingRequestId) === reqId);
-  if (!candidates.length) return [];
-  const oid = idStr(order._id);
-  const pick =
-    candidates.find((e) => (e.batch.linkedOrderIds || []).some((x) => idStr(x) === oid)) ||
-    candidates[0];
-  const plants = orderPlants(order);
-  return plants > 0 ? [{ slotId: pick.slotId, batchId: idStr(pick.batch._id), plants }] : [];
+  if (reqId) {
+    const pick = batchForRequest(batchIndex, reqId, order._id);
+    const plants =
+      held > 0
+        ? order.sowingDone
+          ? Math.max(0, orderPlants(order) - held)
+          : 0
+        : orderPlants(order);
+    if (pick && plants > 0) {
+      links.push({ slotId: pick.slotId, batchId: idStr(pick.batch._id), plants });
+    }
+  }
+  if (links.length) return links;
+  return [];
 }
 
 /** Apply order.sowBatchLinks moves (oldest first) on top of the base links. */
@@ -392,11 +419,17 @@ async function loadSlotDocs(plantId, subtypeId, session, hydrate) {
     plantId: new mongoose.Types.ObjectId(String(plantId)),
     "subtypeSlots.subtypeId": new mongoose.Types.ObjectId(String(subtypeId)),
   }).session(session || null);
-  return hydrate ? q : q.select("plantId subtypeSlots").lean();
+  if (hydrate) return q;
+  // Planner only needs batch counters. Trails and destroy history make this document several MB.
+  return q
+    .select(
+      "-subtypeSlots.slots.slotTrail -subtypeSlots.slots.productStock -subtypeSlots.slots.sowingInProgress -subtypeSlots.slots.sowingBatches.destroyLog -subtypeSlots.slots.sowingBatches.slotHistory -subtypeSlots.slots.gapCovered -subtypeSlots.slots.linkedSowingRequests"
+    )
+    .lean();
 }
 
 const ORDER_SELECT =
-  "orderId publicOrderCode farmer numberOfPlants additionalPlants orderStatus vehicleLoaded deliveryDate orderBookingDate createdAt plantName plantSubtype sowingDone sowingDoneRequestId sowingCoverSources sowingCoverReversedAt sowBatchLinks";
+  "orderId publicOrderCode farmer numberOfPlants additionalPlants orderStatus vehicleLoaded deliveryDate orderBookingDate createdAt plantName plantSubtype sowingDone sowingDoneRequestId sowingPartialCover sowingCoverSources sowingCoverReversedAt sowBatchLinks";
 
 /**
  * Everything the planner needs for one plant/subtype: batch index, each order's remaining links,
@@ -405,7 +438,7 @@ const ORDER_SELECT =
 export async function loadSowDispatchContext(
   plantId,
   subtypeId,
-  { session, vehicleOrderIds = [], hydrate = false } = {}
+  { session, vehicleOrderIds = [], hydrate = false, withFarmer = true } = {}
 ) {
   const slotDocs = await loadSlotDocs(plantId, subtypeId, session, hydrate);
   const batchIndex = indexSowBatches(slotDocs, subtypeId);
@@ -418,7 +451,7 @@ export async function loadSowDispatchContext(
     .filter((id) => mongoose.isValidObjectId(id))
     .map((id) => new mongoose.Types.ObjectId(id));
 
-  const orders = await Order.find({
+  let orderQuery = Order.find({
     plantName: new mongoose.Types.ObjectId(String(plantId)),
     plantSubtype: new mongoose.Types.ObjectId(String(subtypeId)),
     orderStatus: { $nin: CLOSED_ORDER_STATUSES },
@@ -431,9 +464,9 @@ export async function loadSowDispatchContext(
     ],
   })
     .select(ORDER_SELECT)
-    .populate("farmer", "name village")
-    .session(session || null)
-    .lean();
+    .session(session || null);
+  if (withFarmer) orderQuery = orderQuery.populate("farmer", "name village");
+  const orders = await orderQuery.lean();
 
   const dispatched = dispatchedByBatchOrder(batchIndex);
   const vehicleSet = new Set(vehicleOids.map(String));
@@ -468,7 +501,7 @@ export async function loadSowDispatchContext(
   return { slotDocs, batchIndex, orders, orderById, orderLinks, batches };
 }
 
-const orderCode = (o) => String(o?.publicOrderCode || o?.orderId || "");
+const orderCode = (o) => String(o?.orderId || o?.publicOrderCode || "");
 
 async function resolveSowRow(dispatchDoc, plantRowIndex) {
   const rowIdx = Math.max(0, Number(plantRowIndex) || 0);
@@ -827,6 +860,7 @@ export async function executeSowBatchVehicleLoad({
     const ctx = await loadSowDispatchContext(row.plantId, row.subTypeId, {
       session,
       vehicleOrderIds: rowOrderIds,
+      withFarmer: false,
     });
     const plan = planSowBatchLoad({ selections, orderLinks: ctx.orderLinks, batches: ctx.batches });
     if (!plan.ok) throw new AppError(plan.error, 400);
