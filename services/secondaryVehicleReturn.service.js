@@ -5,6 +5,7 @@ import DispatchBatch from "../models/dispatchBatch.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import AppError from "../utility/appError.js";
 import { collectLoadedOutwardLinesForDispatch } from "./secondaryVehicleUnload.service.js";
+import { restoreSowBatchDispatch } from "./sowDispatchBatches.service.js";
 import { syncSecondaryInwardSlotStockAdd } from "./secondaryShedSlotStock.service.js";
 import { recordSecondaryInwardOnLedger } from "./secondaryDispatchAvailability.service.js";
 import { SHED_ACTIVITY_ACTIONS, recordShedActivity } from "./shedActivity.service.js";
@@ -101,7 +102,6 @@ export async function returnPlantsFromVehicle({
     throw new AppError("Invalid vehicle or batch id", 400);
   }
   const shed = String(pollyhouse ?? "").trim();
-  if (!shed) throw new AppError("Choose the shed to return plants into", 400);
   const src = VEHICLE_RETURN_SOURCES.includes(source) ? source : "APP";
   const by = performedBy && mongoose.isValidObjectId(String(performedBy)) ? performedBy : null;
   const reasonStr = String(reason ?? "").trim().slice(0, 500);
@@ -135,10 +135,61 @@ export async function returnPlantsFromVehicle({
       .lean();
 
     const ln = plan.sourceLine;
+    const outward = ln.secondaryOutwardId ? po.secondaryOutward.id(ln.secondaryOutwardId) : null;
+    const now = new Date();
+
+    if (outward?.sowBucket) {
+      const restoreResult = await restoreSowBatchDispatch({
+        session,
+        outward,
+        plants: plan.quantity,
+        dispatchId,
+        performedBy: by,
+      });
+      if (!restoreResult?.restored) {
+        throw new AppError("Could not restore sowing-batch stock for this return", 400);
+      }
+      outward.sowAvailableDec = Math.max(0, toInt(outward.sowAvailableDec) - (restoreResult.fromAvail || 0));
+      outward.sowReservedDec = Math.max(0, toInt(outward.sowReservedDec) - (restoreResult.fromReserved || 0));
+      await po.save({ session, validateModifiedOnly: true });
+
+      const entry = {
+        orderId: plan.orderId,
+        batchId,
+        batchNumber: batchLean?.batchNumber != null ? String(batchLean.batchNumber) : ln.batchNumber || "",
+        sourceOutwardId: ln.secondaryOutwardId || null,
+        secondaryInwardId: null,
+        pollyhouse: shed || outward.pollyhouse || "",
+        quantity: plan.quantity,
+        reason: reasonStr,
+        source: src,
+        returnedAt: now,
+        returnedBy: by,
+        sowBucket: outward.sowBucket,
+      };
+      await Dispatch.updateOne(
+        { _id: dispatchId },
+        { $push: { shedReturns: entry }, $inc: { shedReturnedPlants: plan.quantity } },
+        { session }
+      );
+      return {
+        dispatchId: String(dispatchId),
+        batchId: String(batchId),
+        batchNumber: entry.batchNumber,
+        orderId: plan.orderId,
+        secondaryInwardId: null,
+        pollyhouse: entry.pollyhouse,
+        quantity: plan.quantity,
+        returnedDate: moment(now).format("YYYY-MM-DD"),
+        sowBucket: outward.sowBucket,
+        slotRestore: restoreResult.restored,
+      };
+    }
+
+    if (!shed) throw new AppError("Choose the shed to return plants into", 400);
     const srcInward = ln.secondaryInwardId ? po.secondaryInward.id(ln.secondaryInwardId) : null;
     const cavity = Math.max(1, toInt(ln.cavity || srcInward?.cavity) || 1);
     const trays = Math.max(1, Math.ceil(plan.quantity / cavity));
-    const now = new Date();
     const inwardDate = srcInward?.secondaryInwardDate || ln.secondaryInwardDate || ln.loadedAt || now;
     const readyDate = srcInward?.expectedReadyDate || ln.sowReadyPlantReadyDate || null;
 

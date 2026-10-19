@@ -12,6 +12,7 @@ import {
 } from "./secondaryVehicleLoad.service.js";
 import { restoreSecondaryInwardSlotStock } from "./secondaryShedSlotStock.service.js";
 import { restoreSowReadySlotAvailable } from "./secondarySowReadyDispatch.service.js";
+import { restoreSowBatchDispatch } from "./sowDispatchBatches.service.js";
 import { recordSecondaryUnloadOnLedger } from "./secondaryDispatchAvailability.service.js";
 import {
   recordShedActivity,
@@ -84,6 +85,9 @@ export async function collectLoadedOutwardLinesForDispatch(dispatchId, linkedOrd
         stockSource: so.stockSource || "SECONDARY_INWARD",
         sowReadySlotId: so.sowReadySlotId ? String(so.sowReadySlotId) : null,
         sowReadyPlantReadyDate: so.sowReadyPlantReadyDate || null,
+        sowingBatchId: so.sowingBatchId ? String(so.sowingBatchId) : null,
+        sowingDate: so.sowingDate || null,
+        sowBucket: so.sowBucket || null,
         linkedOrderId: so.linkedOrderId ? String(so.linkedOrderId) : null,
         plants,
         size: so.size,
@@ -213,14 +217,43 @@ async function executeOneSecondaryUnloadLine({
 
     let slotRestore = 0;
     try {
-      const restoreResult = await restoreSowReadySlotAvailable({
-        session,
-        slotId: sowReadySlotId,
-        quantity: unloadQty,
-        performedBy,
-        remark: `Sow-ready vehicle unload (+${unloadQty})`,
-      });
-      slotRestore = restoreResult?.restored ?? 0;
+      if (outward.sowBucket) {
+        const restoreResult = await restoreSowBatchDispatch({
+          session,
+          outward,
+          plants: unloadQty,
+          dispatchId: linkedDispatchDoc._id,
+          performedBy,
+        });
+        slotRestore = restoreResult?.restored ?? 0;
+        if (!fullUnload && restoreResult?.restored) {
+          await PlantOutward.updateOne(
+            { batchId, "secondaryOutward._id": secondaryOutwardId },
+            {
+              $set: {
+                "secondaryOutward.$.sowAvailableDec": Math.max(
+                  0,
+                  (Number(outward.sowAvailableDec) || 0) - restoreResult.fromAvail
+                ),
+                "secondaryOutward.$.sowReservedDec": Math.max(
+                  0,
+                  (Number(outward.sowReservedDec) || 0) - restoreResult.fromReserved
+                ),
+              },
+            },
+            { session }
+          );
+        }
+      } else {
+        const restoreResult = await restoreSowReadySlotAvailable({
+          session,
+          slotId: sowReadySlotId,
+          quantity: unloadQty,
+          performedBy,
+          remark: `Sow-ready vehicle unload (+${unloadQty})`,
+        });
+        slotRestore = restoreResult?.restored ?? 0;
+      }
     } catch (slotErr) {
       console.warn(
         "[secondaryVehicleUnload] sow-ready slot restore:",

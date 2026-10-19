@@ -44,6 +44,8 @@ import {
   getDispatchDaySummary,
   getVehicleDispatchAllocationSuggestions,
   getSowReadyEntries,
+  getSowBatchOptions,
+  postSowLoadPreview,
   getDispatchStockLines,
   getSecondaryPolyhouseStock,
   getSecondaryStockSummary,
@@ -155,6 +157,14 @@ router.get(
   getSowReadyEntries
 );
 router.get("/secondary/sow-ready-entries", getSowReadyEntries);
+router.get(
+  "/secondary/vehicle-dispatch/:dispatchId/sow-batch-options",
+  getSowBatchOptions
+);
+router.post(
+  "/secondary/vehicle-dispatch/:dispatchId/sow-load-preview",
+  postSowLoadPreview
+);
 router.post(
   "/secondary/vehicle-dispatch/:dispatchId/load-preview",
   previewSecondaryVehicleLoadHandler

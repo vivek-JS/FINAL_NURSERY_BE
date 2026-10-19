@@ -117,6 +117,17 @@ const sowingRequestSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    /** Closed short of linked orders; leftover orders go to a later request. */
+    sowingIncomplete: {
+      type: Boolean,
+      default: false,
+    },
+    uncoveredOrderIds: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Order",
+      },
+    ],
     sowingCompletedDate: {
       type: Date,
     },

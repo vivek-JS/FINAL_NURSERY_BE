@@ -69,6 +69,11 @@ import {
 } from "../services/secondaryVehicleLoad.service.js";
 import { listSecondaryVehicleDispatches } from "../services/secondaryVehicleDispatchesList.service.js";
 import { getDispatchDaySummary as dispatchDaySummaryForDay } from "../services/dispatchDaySummary.service.js";
+import {
+  listSowBatchOptionsForDispatch,
+  previewSowBatchLoad,
+  executeSowBatchVehicleLoad,
+} from "../services/sowDispatchBatches.service.js";
 import { buildSecondaryStockNotes } from "../services/secondaryStockNotes.service.js";
 import { summarizeLagwadLines } from "../services/secondaryInwardDestroy.service.js";
 import { sumShedReturns } from "../services/secondaryVehicleReturn.service.js";
@@ -6092,6 +6097,7 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
     shedLoads,
     inwardSelections,
     sowReadySelections,
+    sowBatchSelections,
     source,
     directShedLoad,
   } = body;
@@ -6100,12 +6106,22 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
     userId && mongoose.isValidObjectId(String(userId)) ? userId : undefined;
 
   const sowSels = Array.isArray(sowReadySelections) ? sowReadySelections : [];
+  const batchSels = Array.isArray(sowBatchSelections) ? sowBatchSelections : [];
   const isSowReady =
     source === "SOW_READY" ||
+    batchSels.length > 0 ||
     sowSels.some((s) => s?.slotId && Number(s?.plants) > 0);
 
   let result;
-  if (isSowReady) {
+  if (batchSels.length > 0) {
+    result = await executeSowBatchVehicleLoad({
+      dispatchId,
+      plantRowIndex,
+      sowBatchSelections: batchSels,
+      remarks,
+      performedBy,
+    });
+  } else if (isSowReady) {
     result = await executeSowReadyVehicleLoad({
       dispatchId,
       plantRowIndex,
@@ -6150,6 +6166,30 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
   return res.status(200).json(
     generateResponse("Success", message, result, undefined)
   );
+});
+
+/** GET per-order linked sowing batches + all batches with plants, for a seed-sown plant row. */
+const getSowBatchOptions = catchAsync(async (req, res) => {
+  const data = await listSowBatchOptionsForDispatch(
+    req.params.dispatchId,
+    Math.max(0, Number(req.query.plantRowIndex ?? 0) || 0)
+  );
+  return res
+    .status(200)
+    .json(generateResponse("Success", "Sowing batch options for vehicle plant row", data, undefined));
+});
+
+/** POST plan for sowing batch picks (excess used, orders relinked) — no writes. */
+const postSowLoadPreview = catchAsync(async (req, res) => {
+  const { plantRowIndex, sowBatchSelections } = req.body || {};
+  const data = await previewSowBatchLoad({
+    dispatchId: req.params.dispatchId,
+    plantRowIndex,
+    sowBatchSelections,
+  });
+  return res
+    .status(200)
+    .json(generateResponse("Success", "Sowing batch load preview", data, undefined));
 });
 
 /** GET outward lines already loaded on a vehicle (for unload / edit UI). */
@@ -6419,6 +6459,8 @@ export {
   getSecondaryOrdersReadyForDispatch,
   getSecondaryVehicleDispatches,
   getDispatchDaySummary,
+  getSowBatchOptions,
+  postSowLoadPreview,
   getVehicleDispatchAllocationSuggestions,
   getSowReadyEntries,
   getDispatchStockLines,

@@ -1,12 +1,30 @@
 import mongoose from "mongoose";
 import Order from "../models/order.model.js";
+import PlantCms from "../models/plantCms.model.js";
 import { isOfficeOrSuper } from "./orderSowFromExcess.controller.js";
+import { deliveryDateToIstMoment } from "../utility/istSlotDate.js";
 import {
   EXCESS_COVER_WINDOW_DAYS,
   ExcessCoverError,
   coverOrderFromBatches,
   listExcessBatches,
+  ownSowTolerance,
+  suggestExcessDays,
 } from "../services/orderExcessBatchCover.service.js";
+
+/** Plant ready days of the subtype and whether a sowing started today is ready by delivery. */
+async function newSowingInfo(plantId, subtypeId, deliveryDate) {
+  const plant = await PlantCms.findById(plantId).select("subtypes._id subtypes.plantReadyDays").lean();
+  const subtype = (plant?.subtypes || []).find((s) => String(s._id) === String(subtypeId));
+  const plantReadyDays = Math.max(0, Math.floor(Number(subtype?.plantReadyDays) || 0));
+  const delivery = deliveryDateToIstMoment(deliveryDate);
+  const readyBy = deliveryDateToIstMoment(new Date())?.add(plantReadyDays, "days");
+  return {
+    plantReadyDays,
+    newSowingReadyBy: readyBy ? readyBy.format("DD-MM-YYYY") : null,
+    newSowingPossible: Boolean(delivery && readyBy && !delivery.isBefore(readyBy)),
+  };
+}
 
 function sendError(res, err, fallback) {
   if (err instanceof ExcessCoverError) {
@@ -26,7 +44,7 @@ function sendError(res, err, fallback) {
  */
 export const getExcessBatches = async (req, res) => {
   try {
-    const { plantId, subtypeId, deliveryDate, need, windowDays } = req.query;
+    const { plantId, subtypeId, deliveryDate, need, windowDays, releaseOrderId } = req.query;
     if (
       !mongoose.Types.ObjectId.isValid(String(plantId || "")) ||
       !mongoose.Types.ObjectId.isValid(String(subtypeId || ""))
@@ -38,13 +56,35 @@ export const getExcessBatches = async (req, res) => {
     if (!deliveryDate) {
       return res.status(400).json({ success: false, message: "deliveryDate is required" });
     }
+    const releaseId = mongoose.Types.ObjectId.isValid(String(releaseOrderId || ""))
+      ? String(releaseOrderId)
+      : null;
     const data = await listExcessBatches({
       plantId,
       subtypeId,
       deliveryDate,
       need,
       windowDays: windowDays ?? EXCESS_COVER_WINDOW_DAYS,
+      releaseOrderId: releaseId,
     });
+    Object.assign(data, await newSowingInfo(plantId, subtypeId, deliveryDate));
+    if (data.windowDays >= 15 && data.need > 0 && data.totalFree < data.need) {
+      data.suggestedDays = await suggestExcessDays({
+        plantId,
+        subtypeId,
+        deliveryDate,
+        need: data.need,
+        releaseOrderId: releaseId,
+      });
+    }
+    if (releaseId) {
+      const order = await Order.findById(releaseId)
+        .select(
+          "orderId deliveryDate sowingDone sowingDoneRequestId sowingCoverSources sowingCoverReversedAt"
+        )
+        .lean();
+      data.ownSow = order ? await ownSowTolerance(order, deliveryDate) : null;
+    }
     return res.status(200).json({ success: true, data });
   } catch (err) {
     return sendError(res, err, "Failed to load excess sowing batches");

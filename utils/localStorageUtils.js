@@ -22,7 +22,29 @@ const MIME_TO_EXT = {
   'video/mp4': 'mp4',
   'video/webm': 'webm',
   'application/pdf': 'pdf',
+  'audio/mp4': 'm4a',
+  'audio/m4a': 'm4a',
+  'audio/x-m4a': 'm4a',
+  'audio/aac': 'aac',
+  'audio/mpeg': 'mp3',
+  'audio/ogg': 'ogg',
+  'audio/webm': 'weba',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
 };
+
+export const MEDIA_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif'];
+export const MEDIA_AUDIO_TYPES = [
+  'audio/mp4',
+  'audio/m4a',
+  'audio/x-m4a',
+  'audio/aac',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/webm',
+  'audio/wav',
+  'audio/x-wav',
+];
 
 const getBaseUrl = () => {
   if (process.env.BASE_URL) {

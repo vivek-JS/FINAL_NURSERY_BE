@@ -21,7 +21,7 @@ import DealerLedgerEntry from "../models/dealerLedgerEntry.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import mongoose from "mongoose";
 import { getWalletPlantDetailsWithDerivedOverlay } from "../utils/dealerWalletReconcile.js";
-import { uploadImageToLocalStorage } from "../utils/localStorageUtils.js";
+import { uploadImageToLocalStorage, MEDIA_IMAGE_TYPES, MEDIA_AUDIO_TYPES } from "../utils/localStorageUtils.js";
 import axios from "axios";
 import moment from "moment";
 import { ImageAnnotatorClient } from "@google-cloud/vision";
@@ -1614,7 +1614,7 @@ const exportDealerWalletTransactionsCSV = async (req, res) => {
 
       return {
         'Sr No': index + 1,
-        'Date': new Date(transaction.createdAt).toLocaleDateString('en-IN'),
+        'Date': new Date(transaction.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }),
         'Type': transaction.type,
         'Amount': transaction.amount,
         'Balance Before': transaction.balanceBefore,
@@ -1622,7 +1622,7 @@ const exportDealerWalletTransactionsCSV = async (req, res) => {
         'Description': description,
         'Status': transaction.status,
         'Reference': transaction.reference || '',
-        'Created At': new Date(transaction.createdAt).toLocaleString('en-IN')
+        'Created At': new Date(transaction.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
       };
     });
 
@@ -2222,9 +2222,12 @@ const uploadMedia = async (req, res, next) => {
 
     // Validate file type
     if (media_type === "IMAGE") {
-      const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"];
-      if (!allowedTypes.includes(req.file.mimetype)) {
+      if (!MEDIA_IMAGE_TYPES.includes(req.file.mimetype)) {
         return next(new AppError("Invalid file type. Only JPG, PNG, WEBP, AVIF, and GIF images are allowed.", 400));
+      }
+    } else if (media_type === "AUDIO") {
+      if (!MEDIA_AUDIO_TYPES.includes(req.file.mimetype)) {
+        return next(new AppError("Invalid audio type. Use M4A, AAC, MP3, OGG, WEBM or WAV.", 400));
       }
     }
 

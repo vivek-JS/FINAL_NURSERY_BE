@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import PlantCms from "../models/plantCms.model.js";
 import SowingRequest from "../models/sowingRequest.model.js";
 import PlantSlot from "../models/slots.model.js";
-import { fmtDDMMYYYY, parseLocalDate } from "./sowingSlotReadyHelpers.js";
+import { fmtDDMMYYYY, parseLocalDate, toSowYmd } from "./sowingSlotReadyHelpers.js";
 import { recordSlotTrail } from "../utility/slotTrailStore.js";
 
 function windowDeliveryLabel(order) {
@@ -29,6 +29,8 @@ export async function writeTransferAudit({
   destCountsAsCovered = true,
   /** true → caller writes the destination sow entries itself; no batch is pushed here. */
   skipDestBatch = false,
+  /** Day the moved plants were actually sown (YYYY-MM-DD or DD-MM-YYYY); defaults to today. */
+  sowDate = null,
 }) {
   const qty = Math.max(0, Math.floor(Number(plants) || 0));
   const destBatchPlants = destCountsAsCovered ? qty : 0;
@@ -91,6 +93,7 @@ export async function writeTransferAudit({
         message: `Covered order #${order.orderId} via slot transfer`,
         meta: {
           transferFromExcess: true,
+          sowDate: toSowYmd(sowDate || now),
           transfers: transfers.map((t) => ({
             from: t.fromLabel,
             to: t.toLabel,

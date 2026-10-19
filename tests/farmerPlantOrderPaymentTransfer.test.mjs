@@ -268,7 +268,12 @@ describe("farmerPlantOrderPaymentTransfer policy", () => {
       resolve(process.cwd(), "controllers/farmerPlantOrderLedger.controller.js"),
       "utf8"
     );
-    assert.match(controllerSource, /const \{ sourceOrderId, targetOrderId, paymentId, message \} = req\.body/);
+    assert.match(
+      controllerSource,
+      /const \{ sourceOrderId, targetOrderId, paymentId, message, amount: rawAmount \} = req\.body/
+    );
+    assert.match(controllerSource, /preferredSourcePaymentId: sourcePayment\._id/);
+    assert.match(controllerSource, /Transfer amount cannot exceed the payment amount/);
     assert.match(
       controllerSource,
       /Valid sourceOrderId, targetOrderId, and paymentId are required/

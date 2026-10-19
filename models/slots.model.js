@@ -476,6 +476,8 @@ const slotSchema = new Schema({
           by: { type: Schema.Types.ObjectId, ref: "User" },
         },
       ],
+      /** Sowed count confirmed — no mortality reserve held back from sellable stock. */
+      noMortalityReserve: { type: Boolean, default: false },
       /** Plants of this batch destroyed after sowing (already taken off the slot's sowed / stock). */
       destroyedPlants: { type: Number, default: 0, min: 0 },
       destroyLog: [
@@ -484,6 +486,19 @@ const slotSchema = new Schema({
           by: { type: Schema.Types.ObjectId, ref: "User" },
           plants: { type: Number, default: 0 },
           reason: { type: String, default: "", trim: true },
+        },
+      ],
+      /** Plants loaded onto vehicles from this batch (unloads are negative). */
+      dispatchLog: [
+        {
+          at: { type: Date, default: Date.now },
+          by: { type: Schema.Types.ObjectId, ref: "User" },
+          dispatchId: { type: Schema.Types.ObjectId, ref: "Dispatch" },
+          orderId: { type: Schema.Types.ObjectId, ref: "Order" },
+          secondaryOutwardId: { type: Schema.Types.ObjectId },
+          plants: { type: Number, default: 0 },
+          /** COVER = order's own plants · SWITCH = picked over its linked batch · FREE = excess · UNLOAD */
+          bucket: { type: String, enum: ["COVER", "SWITCH", "FREE", "UNLOAD"] },
         },
       ],
       /** Set on a sow entry moved here to cover an order from another slot's excess. */

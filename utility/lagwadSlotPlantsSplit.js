@@ -28,12 +28,17 @@ export function sowMortalityReserve(plantsSowed, orderCoveredPlants = 0) {
   return Math.max(splitLagwadQtyForSlot(sowed).expectedMortality, buffer);
 }
 
-/** One slot sowing batch: mortality reserve and plants free to sell. */
+/**
+ * One slot sowing batch: mortality reserve and plants free to sell.
+ * batch.noMortalityReserve = sowed count is confirmed, so nothing is held back.
+ */
 export function sowBatchStock(batch) {
   const sowed = Math.max(0, toQty(batch?.plantsSowed) - toQty(batch?.destroyedPlants));
   const covered = toQty(batch?.orderCoveredPlants);
   const takenFromExcess = (batch?.excessAllocations || []).reduce((s, a) => s + toQty(a?.plants), 0);
-  const reserve = Math.min(sowed, sowMortalityReserve(sowed, Math.max(0, covered - takenFromExcess)));
+  const reserve = batch?.noMortalityReserve
+    ? 0
+    : Math.min(sowed, sowMortalityReserve(sowed, Math.max(0, covered - takenFromExcess)));
   return { sowed, covered, reserve, free: Math.max(0, sowed - reserve - covered) };
 }
 

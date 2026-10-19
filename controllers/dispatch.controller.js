@@ -15,6 +15,7 @@ import Vehicle from "../models/vehicleModel.model.js";
 import VehicleDriver from "../models/vehicleDriver.model.js";
 import Trip from "../models/trip.model.js";
 import { allocateTripNumber } from "../utility/tripNumber.js";
+import { saveTentative } from "../services/freightSlip.service.js";
 import {
   bookablePlantsTotal,
   orderRemainingOrBookable,
@@ -432,6 +433,12 @@ const createDispatch = catchAsync(async (req, res, next) => {
     if (readyDispatchGroupId !== undefined) {
       delete dispatchRequest.readyDispatchGroupId;
     }
+    const freightSlipInput =
+      dispatchRequest.freightSlip && typeof dispatchRequest.freightSlip === "object"
+        ? dispatchRequest.freightSlip
+        : null;
+    delete dispatchRequest.freightSlip;
+    delete dispatchRequest.freightSlipId;
 
     if (
       readyDispatchGroupId &&
@@ -632,6 +639,17 @@ const createDispatch = catchAsync(async (req, res, next) => {
       });
     }
 
+    let freightSlip = null;
+    if (freightSlipInput) {
+      freightSlip = await saveTentative({
+        dispatchId: dispatch[0]._id,
+        input: freightSlipInput,
+        user: req.user,
+        source: "WEB",
+        session,
+      });
+    }
+
     await session.commitTransaction();
     fireOrderEditWhatsAppAlerts(
       req._orderEditAlertQueue,
@@ -725,6 +743,7 @@ const createDispatch = catchAsync(async (req, res, next) => {
     );
     const responsePayload = {
       ...dispatchDoc,
+      ...(freightSlip ? { freightSlipId: freightSlip._id, freightSlip } : {}),
       linkedAgriLoadWarning:
         stillPendingLinkedAgri
           ? {
@@ -2876,6 +2895,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
       return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
     }
     const dispatch = await Dispatch.findById(resolved._id)
+      .populate({ path: "tripId", select: "tripNumber kmRun rent otherCharges tripRemark" })
       .populate({
         path: "orderIds",
         populate: [
@@ -2911,6 +2931,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
     if (!dispatch) {
       return next(new AppError(DISPATCH_LOOKUP_NOT_FOUND, 404));
     }
+    const tripDoc = dispatch.tripId && typeof dispatch.tripId === "object" ? dispatch.tripId : null;
 
     // Separately get all relevant tray data to ensure we have the info
     const trayIds = [];
@@ -2963,6 +2984,15 @@ const getDispatch = catchAsync(async (req, res, next) => {
       completeInvoicePdfUrl: dispatch.completeInvoicePdfUrl || "",
       completeInvoicePdfGeneratedAt: dispatch.completeInvoicePdfGeneratedAt || null,
       transportStatus: dispatch.transportStatus || "PENDING",
+      trip: tripDoc
+        ? {
+            tripNumber: tripDoc.tripNumber || "",
+            kmRun: tripDoc.kmRun ?? null,
+            rent: tripDoc.rent ?? null,
+            otherCharges: tripDoc.otherCharges ?? null,
+            tripRemark: tripDoc.tripRemark || "",
+          }
+        : null,
       orderDispatchDetails: dispatch.orderDispatchDetails || [], // Include dispatch details
       plantsDetails: dispatch.plantsDetails.map((plant) => {
         // Calculate cavity count
@@ -3091,6 +3121,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
         returnedPlants: order.returnedPlants,
         damagedPlants: order.damagedPlants,
         returnReason: order.returnReason,
+        returnHistory: order.returnHistory || [],
         quotaSource: order.quotaSource,
         additionalPlants: order.additionalPlants,
         dealerOrder: order.dealerOrder,
@@ -3098,6 +3129,12 @@ const getDispatch = catchAsync(async (req, res, next) => {
         deliveryDate: order.deliveryDate,
         notes: order.notes,
         dispatchHistory: order.dispatchHistory || [],
+        freight: order.freight || null,
+        freightCharges: order.freightCharges ?? 0,
+        batchNumber: order.batchNumber || "",
+        deliveryCompleteBatch: order.deliveryCompleteBatch || null,
+        expectedNursery: order.expectedNursery || "",
+        orderRemarks: order.orderRemarks || [],
         };
       }),
       createdAt: dispatch.createdAt,
@@ -3572,9 +3609,11 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       { new: true, runValidators: true, session }
     );
 
-    // Upsert Trip document with vehicle trip details if provided
+    // Upsert Trip document with vehicle trip details if provided.
+    // With a freight slip, km/charges come only from the slip's final entry.
     if (
       tripData &&
+      !dispatch.freightSlipId &&
       (tripData.kmRun != null || tripData.rent != null || tripData.otherCharges != null || tripData.remark)
     ) {
       const tripSet = {

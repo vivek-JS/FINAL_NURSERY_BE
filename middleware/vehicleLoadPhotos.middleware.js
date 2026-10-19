@@ -25,6 +25,7 @@ const JSON_ARRAY_FIELDS = [
   "inwardSelections",
   "shedLoads",
   "sowReadySelections",
+  "sowBatchSelections",
 ];
 
 /** Parse vehicle load body from multipart form fields (JSON strings) or JSON body. */

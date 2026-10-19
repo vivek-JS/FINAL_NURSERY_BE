@@ -88,6 +88,8 @@ export function buildDispatchDayLines({ outwards, dispatchById, orderById, batch
       subtype: names.subtype,
       batch: batch?.batchNumber != null ? String(batch.batchNumber) : o.batchNumber || "",
       shed: o.shed || "",
+      sowingDate: o.sowingDate || "",
+      sowBucket: o.sowBucket || "",
       plants,
       at: o.at || null,
     });
@@ -131,6 +133,8 @@ export async function getDispatchDaySummary(day) {
         shed: "$secondaryOutward.pollyhouse",
         plantRowIndex: "$secondaryOutward.linkedDispatchPlantRowIndex",
         batchNumber: "$secondaryOutward.orderLinkSnapshot.batchNumber",
+        sowingDate: "$secondaryOutward.sowingDate",
+        sowBucket: "$secondaryOutward.sowBucket",
         at: "$secondaryOutward.secondaryOutwardDate",
       },
     },

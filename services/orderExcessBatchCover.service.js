@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import PlantSlot from "../models/slots.model.js";
+import SowingRequest from "../models/sowingRequest.model.js";
 import {
   deliveryDateToIstMoment,
   slotDayStartMoment,
@@ -9,7 +10,7 @@ import {
   resolveDestinationSlot,
   orderPlantsNeed,
 } from "../controllers/orderSowFromExcess.controller.js";
-import { writeTransferAudit } from "../controllers/sowingTransferAudit.helpers.js";
+import { toSowYmd } from "../controllers/sowingSlotReadyHelpers.js";
 import { recordSlotTrail } from "../utility/slotTrailStore.js";
 import { slotSowStock, sowBatchStock, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
 import {
@@ -36,6 +37,15 @@ function toOid(id) {
 
 function int(n) {
   return Math.max(0, Math.floor(Number(n) || 0));
+}
+
+/** Oldest sow day across the picked batches, as "YYYY-MM-DD" (null when none recorded). */
+export function earliestSowYmd(picks) {
+  const days = (picks || [])
+    .map((p) => toSowYmd(p?.sowingDate || p?.sowedAt))
+    .filter(Boolean)
+    .sort();
+  return days[0] || null;
 }
 
 function offsetLabel(off) {
@@ -67,6 +77,102 @@ function readyMomentOf(batch, slot) {
   return slotDayStartMoment(slot?.startDay);
 }
 
+function hasActiveExcessCover(order) {
+  return (
+    Array.isArray(order?.sowingCoverSources) &&
+    order.sowingCoverSources.length > 0 &&
+    !order.sowingCoverReversedAt
+  );
+}
+
+/** Slot batches of the order's own (normal) sowing that still hold its plants, oldest first. */
+async function findOwnSowBatches(order, session) {
+  const reqOid = toOid(order?.sowingDoneRequestId);
+  if (!reqOid) return [];
+  const agg = PlantSlot.aggregate([
+    { $match: { "subtypeSlots.slots.sowingBatches.sowingRequestId": reqOid } },
+    { $unwind: "$subtypeSlots" },
+    { $unwind: "$subtypeSlots.slots" },
+    { $unwind: "$subtypeSlots.slots.sowingBatches" },
+    { $match: { "subtypeSlots.slots.sowingBatches.sowingRequestId": reqOid } },
+    {
+      $project: {
+        _id: 0,
+        slotId: "$subtypeSlots.slots._id",
+        startDay: "$subtypeSlots.slots.startDay",
+        endDay: "$subtypeSlots.slots.endDay",
+        orderReservedPlants: { $ifNull: ["$subtypeSlots.slots.orderReservedPlants", 0] },
+        batch: "$subtypeSlots.slots.sowingBatches",
+      },
+    },
+  ]);
+  if (session) agg.session(session);
+  const rows = (await agg).filter(
+    (r) => int(r.batch?.plantsSowed) > 0 && int(r.batch?.orderCoveredPlants) > 0
+  );
+  const orderKey = String(order._id);
+  const linked = rows.filter((r) =>
+    (r.batch.linkedOrderIds || []).some((id) => String(id) === orderKey)
+  );
+  return (linked.length ? linked : rows).sort(
+    (a, b) => new Date(a.batch.sowedAt || 0) - new Date(b.batch.sowedAt || 0)
+  );
+}
+
+/**
+ * What releasing an order's own sowing / excess cover would add back, per batch,
+ * so the delivery-change picker can offer those plants before the release is saved.
+ */
+async function orderReleaseAdjustments(orderId) {
+  const byBatch = new Map();
+  const sowedBySlot = new Map();
+  const order = await Order.findById(toOid(orderId))
+    .select(
+      "numberOfPlants additionalPlants sowingDone sowingDoneRequestId sowingCoverSources sowingCoverReversedAt"
+    )
+    .lean();
+  if (!order) return { byBatch, sowedBySlot };
+  const orderKey = String(order._id);
+  if (hasActiveExcessCover(order)) {
+    for (const s of order.sowingCoverSources) {
+      const key = String(s.batchId);
+      const plants = int(s.plants);
+      const adj = byBatch.get(key) || { coveredDec: 0, sowedInc: 0, orderKey };
+      if (s.moved) {
+        adj.sowedInc += plants;
+        const slotKey = String(s.slotId);
+        sowedBySlot.set(slotKey, (sowedBySlot.get(slotKey) || 0) + plants);
+      } else {
+        adj.coveredDec += plants;
+      }
+      byBatch.set(key, adj);
+    }
+  } else if (order.sowingDone) {
+    let left = orderPlantsNeed(order);
+    for (const r of await findOwnSowBatches(order)) {
+      if (left <= 0) break;
+      const rel = Math.min(left, int(r.batch.orderCoveredPlants));
+      if (rel <= 0) continue;
+      byBatch.set(String(r.batch._id), { coveredDec: rel, sowedInc: 0, orderKey });
+      left -= rel;
+    }
+  }
+  return { byBatch, sowedBySlot };
+}
+
+function applyReleaseToBatch(batch, release) {
+  const adj = release?.byBatch.get(String(batch._id));
+  if (!adj) return batch;
+  return {
+    ...batch,
+    plantsSowed: int(batch.plantsSowed) + adj.sowedInc,
+    orderCoveredPlants: Math.max(0, int(batch.orderCoveredPlants) - adj.coveredDec),
+    excessAllocations: (batch.excessAllocations || []).filter(
+      (a) => String(a?.orderId) !== adj.orderKey
+    ),
+  };
+}
+
 /**
  * Free excess in sowing batches of plant+subtype whose ready date is within
  * delivery ±windowDays (IST). One entry per batch, nearest to delivery first.
@@ -79,12 +185,14 @@ export async function listExcessBatches({
   deliveryDate,
   need = 0,
   windowDays = EXCESS_COVER_WINDOW_DAYS,
+  releaseOrderId = null,
+  maxWindowDays = 15,
 }) {
   const plantOid = toOid(plantId);
   const subtypeOid = toOid(subtypeId);
   const deliveryIst = deliveryDateToIstMoment(deliveryDate);
   const needQty = int(need);
-  const win = Math.min(15, Math.max(0, Math.floor(Number(windowDays) || 0)));
+  const win = Math.min(maxWindowDays, Math.max(0, Math.floor(Number(windowDays) || 0)));
   const empty = { need: needQty, windowDays: win, totalFree: 0, mode: "none", entries: [] };
   if (!plantOid || !subtypeOid || !deliveryIst) return empty;
 
@@ -131,6 +239,7 @@ export async function listExcessBatches({
               actualPlantsApplied: "$$b.actualPlantsApplied",
               expectedMortalityApplied: "$$b.expectedMortalityApplied",
               availablePlantsApplied: "$$b.availablePlantsApplied",
+              noMortalityReserve: "$$b.noMortalityReserve",
               shedName: "$$b.shedName",
               requestNumber: "$$b.requestNumber",
               sowingRequestId: "$$b.sowingRequestId",
@@ -141,13 +250,13 @@ export async function listExcessBatches({
     },
   ]);
 
+  const release = releaseOrderId ? await orderReleaseAdjustments(releaseOrderId) : null;
   const entries = [];
   for (const slot of rows) {
-    const batches = slot.batches || [];
-    const excessForBooking = slotSowStock({
-      primarySowed: slot.primarySowed,
-      sowingBatches: batches,
-    }).free;
+    const batches = (slot.batches || []).map((b) => applyReleaseToBatch(b, release));
+    const primarySowed =
+      int(slot.primarySowed) + (release?.sowedBySlot.get(String(slot.slotId)) || 0);
+    const excessForBooking = slotSowStock({ primarySowed, sowingBatches: batches }).free;
     let slotCap = excessForBooking;
     if (slotCap <= 0) continue;
 
@@ -201,6 +310,78 @@ export async function listExcessBatches({
   let mode = "none";
   if (totalFree > 0) mode = needQty > 0 && totalFree >= needQty ? "full" : "partial";
   return { need: needQty, windowDays: win, totalFree, mode, entries };
+}
+
+/** How far from the requested delivery date other days are suggested. */
+export const SUGGEST_RANGE_DAYS = 45;
+
+/**
+ * Other delivery days (today or later, within ±SUGGEST_RANGE_DAYS) whose excess within
+ * ±coverWindowDays can cover the whole order. Nearest to the requested date first.
+ */
+export async function suggestExcessDays({
+  plantId,
+  subtypeId,
+  deliveryDate,
+  need,
+  releaseOrderId = null,
+  coverWindowDays = EXCESS_COVER_WINDOW_DAYS,
+  limit = 6,
+}) {
+  const needQty = int(need);
+  const deliveryIst = deliveryDateToIstMoment(deliveryDate);
+  if (!needQty || !deliveryIst) return [];
+  const span = SUGGEST_RANGE_DAYS + coverWindowDays;
+  const wide = await listExcessBatches({
+    plantId,
+    subtypeId,
+    deliveryDate,
+    need: needQty,
+    windowDays: span,
+    maxWindowDays: span,
+    releaseOrderId,
+  });
+  const entries = wide.entries.map((e) => ({
+    free: e.freePlants,
+    ready: slotDayStartMoment(e.plantReadyDate) || deliveryIst.clone().add(e.offsetDays, "days"),
+  }));
+  if (!entries.length) return [];
+
+  const today = deliveryDateToIstMoment(new Date());
+  const out = [];
+  for (let off = -SUGGEST_RANGE_DAYS; off <= SUGGEST_RANGE_DAYS; off += 1) {
+    if (off === 0) continue;
+    const day = deliveryIst.clone().add(off, "days");
+    if (today && day.isBefore(today, "day")) continue;
+    let freePlants = 0;
+    const used = [];
+    entries.forEach((e, i) => {
+      if (Math.abs(e.ready.diff(day, "days")) <= coverWindowDays) {
+        freePlants += e.free;
+        used.push(i);
+      }
+    });
+    if (freePlants >= needQty) {
+      out.push({
+        date: day.format("YYYY-MM-DD"),
+        offsetDays: off,
+        freePlants,
+        entryCount: used.length,
+        key: used.join(","),
+      });
+    }
+  }
+  out.sort((a, b) => Math.abs(a.offsetDays) - Math.abs(b.offsetDays) || a.offsetDays - b.offsetDays);
+  const seen = new Set();
+  const distinct = [];
+  for (const d of out) {
+    if (seen.has(d.key)) continue;
+    seen.add(d.key);
+    const { key: _key, ...rest } = d;
+    distinct.push(rest);
+    if (distinct.length >= limit) break;
+  }
+  return distinct;
 }
 
 /** Merge duplicate batch picks; drops zero rows. */
@@ -299,14 +480,12 @@ function batchExistsFilter(batchOid, extra = {}) {
 }
 
 /**
- * Take plants from a source batch.
- * Same slot as the booking → batch.orderCoveredPlants += take (plants stay).
- * Other slot → plants move: source batch/slot sowed −take; a real sow entry with the
- * same sowing date is added on the booking slot (covered, not saleable).
+ * Cover an order from a source batch: plants stay on that sowing.
+ * Excess / saleable goes down; orderCoveredPlants and reserved go up.
+ * No second sowing entry is created, even if the booking slot is different.
  */
 async function applySourcePick({
   pick,
-  destination,
   orderOid,
   userOid,
   now,
@@ -317,26 +496,12 @@ async function applySourcePick({
   const slotOid = toOid(pick.slotId);
   const batchOid = toOid(pick.batchId);
   const take = pick.take;
-  const moved = String(pick.slotId) !== String(destination.slotId);
   const excessDec = Math.min(take, Math.max(0, excessiveLeft));
   const availDec = Math.min(take, Math.max(0, availableLeft));
   const batchExcessDec = Math.min(take, int(pick.batchExcessPlants));
   const maxCoveredBefore = pick.plantsSowed - take;
-  const split = splitLagwadQtyForSlot(take);
-  const batchActualDec =
-    moved && pick.batchActualApplied != null ? Math.min(split.actualPlants, pick.batchActualApplied) : 0;
-  const batchMortalityDec =
-    moved && pick.batchMortalityApplied != null
-      ? Math.min(split.expectedMortality, pick.batchMortalityApplied)
-      : 0;
   const batchAvailableDec =
-    moved && pick.batchAvailableApplied != null ? Math.min(availDec, pick.batchAvailableApplied) : 0;
-  const actualDec = !moved ? 0 : pick.batchActualApplied != null ? batchActualDec : split.actualPlants;
-  const mortalityDec = !moved
-    ? 0
-    : pick.batchMortalityApplied != null
-      ? batchMortalityDec
-      : split.expectedMortality;
+    pick.batchAvailableApplied != null ? Math.min(availDec, int(pick.batchAvailableApplied)) : availDec;
 
   const batchMatch = {
     _id: batchOid,
@@ -346,28 +511,19 @@ async function applySourcePick({
       { orderCoveredPlants: null },
     ],
   };
-  if (moved) batchMatch.plantsSowed = pick.plantsSowed;
   const slotMatch = { _id: slotOid, sowingBatches: { $elemMatch: batchMatch } };
   if (excessDec > 0) slotMatch["excessiveSowing.plants"] = { $gte: excessDec };
   if (availDec > 0) slotMatch.availablePlants = { $gte: availDec };
 
-  const inc = {};
-  if (moved) {
-    inc[`${SLOT_PATH}.primarySowed`] = -take;
-    inc[`${SLOT_PATH}.plantsSowed`] = -take;
-    inc[`${SLOT_PATH}.totalPlants`] = -take;
-    if (actualDec > 0) inc[`${SLOT_PATH}.actualPlants`] = -actualDec;
-    if (mortalityDec > 0) inc[`${SLOT_PATH}.expectedMortality`] = -mortalityDec;
-    inc[`${BATCH_PATH}.plantsSowed`] = -take;
-    if (batchActualDec > 0) inc[`${BATCH_PATH}.actualPlantsApplied`] = -batchActualDec;
-    if (batchMortalityDec > 0) inc[`${BATCH_PATH}.expectedMortalityApplied`] = -batchMortalityDec;
-    if (batchAvailableDec > 0) inc[`${BATCH_PATH}.availablePlantsApplied`] = -batchAvailableDec;
-  } else {
-    inc[`${BATCH_PATH}.orderCoveredPlants`] = take;
-  }
+  const inc = {
+    [`${BATCH_PATH}.orderCoveredPlants`]: take,
+    [`${SLOT_PATH}.orderReservedPlants`]: take,
+    [`${BATCH_PATH}.orderReservedPlantsApplied`]: take,
+  };
   if (availDec > 0) inc[`${SLOT_PATH}.availablePlants`] = -availDec;
   if (excessDec > 0) inc[`${SLOT_PATH}.excessiveSowing.plants`] = -excessDec;
   if (batchExcessDec > 0) inc[`${BATCH_PATH}.excessPlants`] = -batchExcessDec;
+  if (batchAvailableDec > 0) inc[`${BATCH_PATH}.availablePlantsApplied`] = -batchAvailableDec;
 
   const res = await PlantSlot.collection.updateOne(
     { subtypeSlots: { $elemMatch: { slots: { $elemMatch: slotMatch } } } },
@@ -391,81 +547,20 @@ async function applySourcePick({
   );
   if (!res.matchedCount) return null;
 
-  const applied = {
-    moved,
+  return {
+    moved: false,
+    reservedOnSource: true,
     excessDec,
     availDec,
     batchExcessDec,
-    actualDec,
-    mortalityDec,
-    batchActualDec,
-    batchMortalityDec,
+    actualDec: 0,
+    mortalityDec: 0,
+    batchActualDec: 0,
+    batchMortalityDec: 0,
     batchAvailableDec,
     destSlotId: null,
     destBatchId: null,
   };
-  if (!moved) return applied;
-
-  const destSlotOid = toOid(destination.slotId);
-  const destBatchId = new mongoose.Types.ObjectId();
-  const destRes = await PlantSlot.collection.updateOne(
-    { "subtypeSlots.slots._id": destSlotOid },
-    {
-      $inc: {
-        [`${SLOT_PATH}.primarySowed`]: take,
-        [`${SLOT_PATH}.plantsSowed`]: take,
-        [`${SLOT_PATH}.totalPlants`]: take,
-        [`${SLOT_PATH}.actualPlants`]: split.actualPlants,
-        [`${SLOT_PATH}.expectedMortality`]: split.expectedMortality,
-      },
-      $push: {
-        [`${SLOT_PATH}.sowingBatches`]: {
-          _id: destBatchId,
-          sowedAt: pick.sowedAt ? new Date(pick.sowedAt) : now,
-          sowingDate: pick.sowingDate || "",
-          plantReadyDate: pick.plantReadyDate || "",
-          plantsSowed: take,
-          packetsUsed: 0,
-          orderCoveredPlants: take,
-          excessPlants: 0,
-          actualPlantsApplied: split.actualPlants,
-          expectedMortalityApplied: split.expectedMortality,
-          availablePlantsApplied: 0,
-          orderReservedPlantsApplied: take,
-          shedName: pick.shedName || "",
-          isExcessiveSowing: false,
-          linkedOrderIds: [orderOid],
-          coverMovedFrom: { slotId: slotOid, batchId: batchOid },
-          slotHistory: [
-            {
-              at: now,
-              by: userOid,
-              fromSlotId: slotOid,
-              toSlotId: destSlotOid,
-              fromReadyDate: pick.plantReadyDate || "",
-              toReadyDate: destination.label || "",
-              sowDate: pick.sowingDate || "",
-              plantsSowed: take,
-              reason: "EXCESS_COVER_MOVE",
-            },
-          ],
-        },
-      },
-    },
-    {
-      arrayFilters: [{ "st.slots._id": destSlotOid }, { "sl._id": destSlotOid }],
-      ...(session ? { session } : {}),
-    }
-  );
-  applied.destSlotId = String(destSlotOid);
-  applied.destBatchId = String(destBatchId);
-  if (!destRes.matchedCount) {
-    applied.destSlotId = null;
-    applied.destBatchId = null;
-    await revertSourcePick({ batchId: pick.batchId, plants: take, ...applied, orderOid, session });
-    return null;
-  }
-  return applied;
 }
 
 /** Undo one source pick (and remove the moved sow entry from the booking slot). */
@@ -473,6 +568,7 @@ async function revertSourcePick({
   batchId,
   plants,
   moved = false,
+  reservedOnSource = false,
   excessDec = 0,
   availDec = 0,
   batchExcessDec = 0,
@@ -502,6 +598,11 @@ async function revertSourcePick({
     if (batchAvailableDec > 0) inc[`${BATCH_PATH}.availablePlantsApplied`] = batchAvailableDec;
   } else {
     inc[`${BATCH_PATH}.orderCoveredPlants`] = -plants;
+  }
+  if (reservedOnSource) {
+    inc[`${SLOT_PATH}.orderReservedPlants`] = -plants;
+    inc[`${BATCH_PATH}.orderReservedPlantsApplied`] = -plants;
+    if (batchAvailableDec > 0) inc[`${BATCH_PATH}.availablePlantsApplied`] = batchAvailableDec;
   }
   if (availDec > 0) inc[`${SLOT_PATH}.availablePlants`] = availDec;
   if (excessDec > 0) inc[`${SLOT_PATH}.excessiveSowing.plants`] = excessDec;
@@ -640,8 +741,8 @@ function coverRemark(sources) {
 }
 
 /**
- * Cover a booked order from picked sowing batches: source batch cover, destination
- * orderReserved, order sowingDone + sowingCoverSources, audit request and trail rows.
+ * Cover a booked order from picked sowing batches: order cover stays on that
+ * sowing (no new sowing entry). Order sowingDone + sowingCoverSources + trails.
  */
 export async function coverOrderFromBatches({
   order: orderInput,
@@ -688,19 +789,12 @@ export async function coverOrderFromBatches({
   const availableLeftBySlot = new Map();
   const applied = [];
 
-  const rollback = async (withDestination) => {
+  const rollback = async () => {
     for (const a of applied.reverse()) {
       try {
         await revertSourcePick({ ...a, orderOid });
       } catch (err) {
         console.error("[excessCover] rollback source failed:", err?.message || err);
-      }
-    }
-    if (withDestination) {
-      try {
-        await incDestinationReserved(destination.slotId, -need);
-      } catch (err) {
-        console.error("[excessCover] rollback destination failed:", err?.message || err);
       }
     }
   };
@@ -716,7 +810,6 @@ export async function coverOrderFromBatches({
     const availableLeft = availableLeftBySlot.get(pick.slotId);
     const res = await applySourcePick({
       pick,
-      destination,
       orderOid,
       userOid,
       now,
@@ -724,7 +817,7 @@ export async function coverOrderFromBatches({
       availableLeft,
     });
     if (!res) {
-      await rollback(false);
+      await rollback();
       throw new ExcessCoverError(
         "INSUFFICIENT_BATCH_EXCESS",
         `Batch ${pick.requestNumber || pick.plantReadyDate} no longer has ${pick.take} free plants`,
@@ -734,12 +827,6 @@ export async function coverOrderFromBatches({
     excessiveLeftBySlot.set(pick.slotId, excessiveLeft - res.excessDec);
     availableLeftBySlot.set(pick.slotId, availableLeft - res.availDec);
     applied.push({ ...res, slotId: pick.slotId, batchId: pick.batchId, plants: pick.take });
-  }
-
-  const destOk = await incDestinationReserved(destination.slotId, need);
-  if (!destOk) {
-    await rollback(false);
-    throw new ExcessCoverError("NO_DESTINATION", "Could not update the order's booking slot");
   }
 
   const sources = matched.map((p, i) => ({
@@ -755,16 +842,18 @@ export async function coverOrderFromBatches({
     excessiveSowingDec: applied[i].excessDec,
     availablePlantsDec: applied[i].availDec,
     batchExcessDec: applied[i].batchExcessDec,
-    moved: applied[i].moved,
-    destSlotId: toOid(applied[i].destSlotId),
-    destBatchId: toOid(applied[i].destBatchId),
-    actualPlantsDec: applied[i].actualDec,
-    expectedMortalityDec: applied[i].mortalityDec,
-    batchActualAppliedDec: applied[i].batchActualDec,
-    batchMortalityAppliedDec: applied[i].batchMortalityDec,
+    reservedOnSource: true,
+    moved: false,
+    destSlotId: null,
+    destBatchId: null,
+    actualPlantsDec: 0,
+    expectedMortalityDec: 0,
+    batchActualAppliedDec: 0,
+    batchMortalityAppliedDec: 0,
     batchAvailableAppliedDec: applied[i].batchAvailableDec,
   }));
   const remark = coverRemark(sources);
+  const sourceReqId = toOid(matched[0]?.sowingRequestId);
 
   const marked = await Order.findOneAndUpdate(
     { _id: orderOid, sowingDone: { $ne: true } },
@@ -773,6 +862,7 @@ export async function coverOrderFromBatches({
         sowingDone: true,
         sowingDoneAt: now,
         sowingCoverSources: sources,
+        ...(sourceReqId ? { sowingDoneRequestId: sourceReqId } : {}),
       },
       $unset: { sowingCoverReversedAt: "" },
       ...(quiet ? {} : { $push: { orderRemarks: remark } }),
@@ -780,35 +870,18 @@ export async function coverOrderFromBatches({
     { new: true }
   );
   if (!marked) {
-    await rollback(true);
+    await rollback();
     throw new ExcessCoverError("ALREADY_SOWED", "Order is already marked sow completed", 409);
   }
 
-  let request = null;
-  try {
-    request = await writeTransferAudit({
-      order,
-      plants: need,
-      transfers: matched.map((p) => ({
-        fromSlotId: p.slotId,
-        fromLabel: p.plantReadyDate || p.slotLabel,
-        toLabel: destination.label,
-        take: p.take,
-        offsetDays: p.offsetDays,
-        sameSlot: String(p.slotId) === String(destination.slotId),
-      })),
-      destination,
-      userId,
-      note: "Cover order from excess sowing batches",
-      destCountsAsCovered: false,
-      skipDestBatch: true,
-    });
-    if (request?._id) {
-      await Order.updateOne({ _id: orderOid }, { $set: { sowingDoneRequestId: request._id } });
-      await tagMovedBatches(applied, request);
-    }
-  } catch (err) {
-    console.error("[excessCover] audit write failed:", err?.message || err);
+  const sourceReqIds = [
+    ...new Set(matched.map((p) => String(p.sowingRequestId || "")).filter((id) => mongoose.Types.ObjectId.isValid(id))),
+  ].map((id) => toOid(id));
+  if (sourceReqIds.length) {
+    await SowingRequest.updateMany(
+      { _id: { $in: sourceReqIds } },
+      { $addToSet: { linkedOrderIds: orderOid } }
+    );
   }
 
   await writeCoverTrails({
@@ -824,8 +897,8 @@ export async function coverOrderFromBatches({
   return {
     orderId: order.orderId,
     need,
-    sowingDoneRequestId: request?._id || null,
-    requestNumber: request?.requestNumber || null,
+    sowingDoneRequestId: sourceReqId || null,
+    requestNumber: matched[0]?.requestNumber || null,
     sources,
     destination: { slotId: destination.slotId, label: destination.label },
     remark,
@@ -918,6 +991,7 @@ export async function reverseOrderBatchCover({ order, userId, session, quiet = f
       batchId: s.batchId,
       plants: int(s.plants),
       moved: Boolean(s.moved),
+      reservedOnSource: Boolean(s.reservedOnSource),
       excessDec: int(s.excessiveSowingDec),
       availDec: s.availablePlantsDec == null ? int(s.plants) : int(s.availablePlantsDec),
       batchExcessDec: int(s.batchExcessDec),
@@ -937,8 +1011,26 @@ export async function reverseOrderBatchCover({ order, userId, session, quiet = f
     }
   }
   const coveredTotal = sources.reduce((sum, s) => sum + int(s.plants), 0);
-  await incDestinationReserved(destSlotId, -(coveredTotal || need), session);
+  const reservedOnSource = sources.some((s) => s.reservedOnSource);
+  if (!reservedOnSource) {
+    await incDestinationReserved(destSlotId, -(coveredTotal || need), session);
+  }
   await removeCoverPointerBatches(auditRequestId, session);
+  const unlinkReqIds = [
+    ...new Set(
+      [auditRequestId, ...sources.map((s) => s.sowingRequestId)]
+        .map((id) => toOid(id))
+        .filter(Boolean)
+        .map(String)
+    ),
+  ].map((id) => toOid(id));
+  if (unlinkReqIds.length) {
+    await SowingRequest.collection.updateMany(
+      { _id: { $in: unlinkReqIds } },
+      { $pull: { linkedOrderIds: orderOid } },
+      session ? { session } : undefined
+    );
+  }
 
   const at = new Date();
   await Order.collection.updateOne(
@@ -971,4 +1063,165 @@ export async function reverseOrderBatchCover({ order, userId, session, quiet = f
   });
 
   return { reversed: true, sources: sources.length, plants: coveredTotal };
+}
+
+/** IST start of a slot's first day (fallback delivery date when only bookingSlot changes). */
+export async function slotStartDateById(slotId, session) {
+  const slotOid = toOid(slotId);
+  if (!slotOid) return null;
+  const agg = PlantSlot.aggregate([
+    { $match: { "subtypeSlots.slots._id": slotOid } },
+    { $unwind: "$subtypeSlots" },
+    { $unwind: "$subtypeSlots.slots" },
+    { $match: { "subtypeSlots.slots._id": slotOid } },
+    { $project: { _id: 0, startDay: "$subtypeSlots.slots.startDay" } },
+  ]);
+  if (session) agg.session(session);
+  const [row] = await agg;
+  return slotDayStartMoment(row?.startDay)?.toDate() || null;
+}
+
+/** A sowed order may move this many days before / after its own sowing's ready date. */
+export const OWN_SOW_EARLY_DAYS = 3;
+export const OWN_SOW_LATE_DAYS = 5;
+
+async function ownSowReadyDates(order, session) {
+  if (hasActiveExcessCover(order)) {
+    return [...new Set(order.sowingCoverSources.map((s) => s.plantReadyDate).filter(Boolean))];
+  }
+  if (!order?.sowingDone) return [];
+  const rows = await findOwnSowBatches(order, session);
+  const dates = rows.map((r) => r.batch.plantReadyDate || r.startDay).filter(Boolean);
+  if (dates.length) return [...new Set(dates)];
+  const old = deliveryDateToIstMoment(order.deliveryDate);
+  return old ? [old.format("DD-MM-YYYY")] : [];
+}
+
+/**
+ * Can a sowed order keep its own sowing (or excess cover) at a new delivery date?
+ * Within when every ready date is OWN_SOW_EARLY_DAYS before .. OWN_SOW_LATE_DAYS after it.
+ */
+export async function ownSowTolerance(order, newDeliveryDate, session) {
+  const sowed = Boolean(order?.sowingDone) || hasActiveExcessCover(order);
+  const base = {
+    sowed,
+    readyDate: null,
+    offsetDays: null,
+    withinTolerance: false,
+    earlyDays: OWN_SOW_EARLY_DAYS,
+    lateDays: OWN_SOW_LATE_DAYS,
+  };
+  if (!sowed) return base;
+  const target = deliveryDateToIstMoment(newDeliveryDate);
+  if (!target) return base;
+  let worst = null;
+  let within = true;
+  for (const d of await ownSowReadyDates(order, session)) {
+    const ready = slotDayStartMoment(d);
+    if (!ready) continue;
+    const off = target.diff(ready, "days");
+    if (off < -OWN_SOW_EARLY_DAYS || off > OWN_SOW_LATE_DAYS) within = false;
+    if (!worst || Math.abs(off) > Math.abs(worst.off)) worst = { off, d };
+  }
+  if (!worst) return base;
+  return { ...base, readyDate: worst.d, offsetDays: worst.off, withinTolerance: within };
+}
+
+/**
+ * Delivery change beyond tolerance: return a normally sowed order's plants to its
+ * sowing batches as excess (slot reserve → available) and mark the order not sowed.
+ */
+export async function releaseOrderOwnSow({ order, userId, session, quiet = false }) {
+  if (!order?.sowingDone || !order?.sowingDoneRequestId || hasActiveExcessCover(order)) {
+    return { released: false, plants: 0 };
+  }
+  const orderOid = toOid(order._id);
+  const reqOid = toOid(order.sowingDoneRequestId);
+  const opts = session ? { session } : {};
+  let left = orderPlantsNeed(order);
+  let total = 0;
+  const bySlot = new Map();
+
+  for (const r of await findOwnSowBatches(order, session)) {
+    if (left <= 0) break;
+    const release = Math.min(left, int(r.batch.orderCoveredPlants));
+    if (release <= 0) continue;
+    const relRes = Math.min(release, int(r.batch.orderReservedPlantsApplied), int(r.orderReservedPlants));
+    const batchOid = toOid(r.batch._id);
+    const inc = {
+      [`${BATCH_PATH}.orderCoveredPlants`]: -release,
+      [`${BATCH_PATH}.excessPlants`]: release,
+    };
+    if (relRes > 0) {
+      inc[`${BATCH_PATH}.orderReservedPlantsApplied`] = -relRes;
+      inc[`${BATCH_PATH}.availablePlantsApplied`] = relRes;
+      inc[`${SLOT_PATH}.orderReservedPlants`] = -relRes;
+      inc[`${SLOT_PATH}.availablePlants`] = relRes;
+      inc[`${SLOT_PATH}.excessiveSowing.plants`] = relRes;
+    }
+    const res = await PlantSlot.collection.updateOne(
+      batchExistsFilter(batchOid, { orderCoveredPlants: { $gte: release } }),
+      { $inc: inc, $pull: { [`${BATCH_PATH}.linkedOrderIds`]: orderOid } },
+      { arrayFilters: batchFilters(batchOid), ...opts }
+    );
+    if (!res.matchedCount) continue;
+    left -= release;
+    total += release;
+    const key = String(r.slotId);
+    const prev = bySlot.get(key) || { plants: 0, label: slotLabel(r) };
+    prev.plants += release;
+    bySlot.set(key, prev);
+  }
+
+  const labels = [...bySlot.values()].map((s) => s.label).join(", ");
+  await Order.collection.updateOne(
+    { _id: orderOid },
+    {
+      $set: { sowingDone: false },
+      $unset: { sowingDoneAt: "", sowingDoneRequestId: "" },
+      ...(quiet
+        ? {}
+        : {
+            $push: {
+              orderRemarks: `Own sowing released on delivery change: ${total.toLocaleString("en-IN")} plants returned as excess to ${labels || "sowing entry"}`,
+            },
+          }),
+    },
+    opts
+  );
+  if (reqOid) {
+    await SowingRequest.collection.updateOne(
+      { _id: reqOid },
+      { $pull: { linkedOrderIds: orderOid } },
+      opts
+    );
+  }
+
+  if (!quiet) {
+    const at = new Date();
+    for (const [slotId, s] of bySlot) {
+      try {
+        await recordSlotTrail(
+          slotId,
+          {
+            at,
+            timestamp: at,
+            action: SLOT_TRAIL_ACTIONS.ORDER_OWN_SOW_RELEASED,
+            activityName: getSlotTrailActivityName(SLOT_TRAIL_ACTIONS.ORDER_OWN_SOW_RELEASED),
+            quantity: s.plants,
+            plants: s.plants,
+            orderId: order.orderId,
+            orderRef: orderOid,
+            performedBy: userId || null,
+            reason: `Order #${order.orderId} delivery changed — ${s.plants} sowed plants returned as excess`,
+          },
+          session
+        );
+      } catch (err) {
+        console.error("[excessCover] own-sow release trail failed:", err?.message || err);
+      }
+    }
+  }
+
+  return { released: true, plants: total, slots: bySlot.size };
 }

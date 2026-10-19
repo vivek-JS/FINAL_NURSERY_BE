@@ -889,6 +889,14 @@ const orderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "SowingRequest",
     },
+    /** Plants already held on a sowing batch while the order is not yet sowingDone. */
+    sowingPartialCover: [
+      {
+        requestId: { type: Schema.Types.ObjectId, ref: "SowingRequest" },
+        plants: { type: Number, default: 0, min: 0 },
+        at: { type: Date, default: Date.now },
+      },
+    ],
     /** Sowing batches whose excess covered this order at booking (sowingDone set alongside). */
     sowingCoverSources: [
       {
@@ -905,6 +913,8 @@ const orderSchema = new Schema(
         excessiveSowingDec: { type: Number, default: 0 },
         availablePlantsDec: { type: Number },
         batchExcessDec: { type: Number, default: 0 },
+        /** Cover stays on the original sowing; reserved is on that slot, not the booking slot. */
+        reservedOnSource: { type: Boolean, default: false },
         /** Source in another slot: plants moved into a sow entry on the booking slot. */
         moved: { type: Boolean, default: false },
         destSlotId: { type: Schema.Types.ObjectId },
@@ -920,6 +930,25 @@ const orderSchema = new Schema(
     sowingCoverReversedAt: {
       type: Date,
     },
+    /** Plants moved between sowing batches at dispatch; applied on top of the sowing / cover link. */
+    sowBatchLinks: [
+      {
+        at: { type: Date, default: Date.now },
+        by: { type: Schema.Types.ObjectId, ref: "User" },
+        fromSlotId: { type: Schema.Types.ObjectId },
+        fromBatchId: { type: Schema.Types.ObjectId },
+        slotId: { type: Schema.Types.ObjectId },
+        batchId: { type: Schema.Types.ObjectId },
+        plants: { type: Number, default: 0 },
+        reason: { type: String, enum: ["DISPATCH_SWITCH", "DISPATCH_RELINK", "DISPATCH_FREE"] },
+        dispatchId: { type: Schema.Types.ObjectId, ref: "Dispatch" },
+        causedByOrderId: { type: Schema.Types.ObjectId, ref: "Order" },
+        /** Public code of the order whose dispatch caused this move. */
+        causedByOrderCode: { type: String, default: "" },
+        /** Ready date (DD-MM-YYYY) of the batch these plants sit on after the move. */
+        plantReadyDate: { type: String, default: "" },
+      },
+    ],
     cavity: {
       type: Schema.Types.ObjectId,
       ref: "Tray",
@@ -964,6 +993,18 @@ const orderSchema = new Schema(
     },
     // Changed to array of strings for order remarks
     orderRemarks: [String],
+    // Voice-note remarks recorded in the Ram Orders app (local /uploads audio URLs)
+    voiceNotes: [
+      {
+        url: { type: String, required: true, trim: true },
+        durationSec: { type: Number, default: 0, min: 0 },
+        note: { type: String, trim: true, default: "" },
+        recordedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+        recordedByName: { type: String, trim: true, default: "" },
+        recordedAt: { type: Date, default: Date.now },
+        source: { type: String, enum: ["BOOKING", "LATER"], default: "BOOKING" },
+      },
+    ],
     // Screenshots uploaded with the order (Cloudinary URLs)
     screenshots: [String], // Array of Cloudinary image URLs
     // Ready plants product fields - for products from other nurseries
@@ -1138,7 +1179,7 @@ const orderSchema = new Schema(
         },
         source: {
           type: String,
-          enum: ["VEHICLE", "SECONDARY_SHED"],
+          enum: ["VEHICLE", "SECONDARY_SHED", "SECONDARY_SHED_UNLOAD"],
         },
         secondaryOutwardId: {
           type: Schema.Types.ObjectId,

@@ -43,6 +43,7 @@ import { getDealerPlantLedger } from "../controllers/dealerPlantInventoryLedger.
 import catchAsync from "../utility/catchAsync.js";
 import { savePushToken } from "../controllers/notification.controller.js";
 import multer from "multer";
+import { MEDIA_IMAGE_TYPES, MEDIA_AUDIO_TYPES } from "../utils/localStorageUtils.js";
 import { forgotPassword, resetPasswordWithOtp } from "../controllers/passwordReset.controller.js";
 import { loginRateLimiter, passwordResetRateLimiter } from "../middlewares/faceAttendanceRateLimit.middleware.js";
 
@@ -53,8 +54,8 @@ const uploadMediaFile = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
   fileFilter: (req, file, cb) => {
-    const ok = ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"].includes(file.mimetype);
-    cb(ok ? null : new Error("Only JPG/PNG/WEBP/AVIF/GIF allowed"), ok);
+    const ok = [...MEDIA_IMAGE_TYPES, ...MEDIA_AUDIO_TYPES].includes(file.mimetype);
+    cb(ok ? null : new Error("Only JPG/PNG/WEBP/AVIF/GIF images or M4A/AAC/MP3/OGG/WEBM/WAV audio allowed"), ok);
   },
 });
 

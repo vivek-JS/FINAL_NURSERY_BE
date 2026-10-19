@@ -5,10 +5,13 @@ import {
   boardRowHasNumbers,
   boardSlotCell,
   buildBoardRow,
+  buildBoardSummary,
   dominantSlotDays,
+  dueSowItems,
   overdueSlotCell,
   shedStockByVariety,
   slotLengthDays,
+  slotSowByDay,
   slotTiming,
   parseGroupDays,
 } from "../utility/capacityBoardMetrics.js";
@@ -44,9 +47,10 @@ test("dominant slot length picks the most common, ties go shorter", () => {
 });
 
 test("slot cell: ready = sowed against orders + free excess, net = ready - booked", () => {
-  const cell = boardSlotCell({ slotId: "a", booked: 12300, gap: 2000, excess: 800 });
+  const cell = boardSlotCell({ slotId: "a", booked: 12300, gap: 2000, excess: 800, mortality: 1114 });
   assert.equal(cell.ready, 11100);
   assert.equal(cell.net, -1200);
+  assert.equal(cell.mortality, 1114);
   assert.equal(cell.ready - cell.booked, cell.net);
 });
 
@@ -193,4 +197,41 @@ test("shed stock rolls up per variety and skips empty batches", () => {
   assert.equal(entry.batches[1].lagwadDate.toISOString().slice(0, 10), "2026-08-22");
   assert.equal(entry.batches[1].notReady, 200);
   assert.equal(entry.batches[1].nextReadyDate.toISOString().slice(0, 10), "2026-10-30");
+});
+
+test("sow-by is ready date minus plant-ready days; due items are unsown past that day", () => {
+  const sowBy = slotSowByDay("02-11-2026", 18);
+  assert.equal(sowBy.format("DD-MM-YYYY"), "15-10-2026");
+  const today = moment("2026-10-18", "YYYY-MM-DD").utcOffset(IST_OFFSET, true).startOf("day");
+  const due = dueSowItems({
+    today,
+    readyDays: 18,
+    slots: [
+      { slotId: "a", startDay: "01-11-2026", endDay: "01-11-2026", gap: 16000 },
+      { slotId: "b", startDay: "08-11-2026", endDay: "08-11-2026", gap: 14500 },
+    ],
+  });
+  assert.deepEqual(
+    due.map((d) => [d.sowBy, d.plants]),
+    [["14-10-2026", 16000]]
+  );
+});
+
+test("board summary totals free excess, unsown gap, and past-due sow cards", () => {
+  const summary = buildBoardSummary([
+    {
+      plantName: "Watermelon",
+      subtypeName: "Prachand",
+      now: { net: 18215, gap: 0 },
+      cells: [
+        { net: 9540, gap: 6000 },
+        { net: -13000, gap: 13000 },
+      ],
+      dueSow: [{ startDay: "05-11-2026", sowBy: "18-10-2026", plants: 13000, slotIds: ["x"] }],
+    },
+  ]);
+  assert.equal(summary.totalExcess, 18215 + 9540);
+  assert.equal(summary.totalUnsown, 19000);
+  assert.equal(summary.dueSowPlants, 13000);
+  assert.equal(summary.dueSow[0].subtypeName, "Prachand");
 });

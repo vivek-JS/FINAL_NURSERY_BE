@@ -58,6 +58,7 @@ import {
   sanitizePaymentArrayForOrder,
 } from "../utils/paymentTiming.js";
 import { normalizeOrderForLocationFields } from "../utils/orderForNormalize.js";
+import { sanitizeVoiceNotes } from "../utils/voiceNotes.js";
 import {
   parsePlantLineItemsInput,
   normalizePlantLineItemsForCreate,
@@ -121,10 +122,14 @@ function isCancelLikeOrderStatus(status) {
 }
 import { createRateChangeRequest } from "./rateChangeRequest.controller.js";
 import {
+  EXCESS_COVER_WINDOW_DAYS,
   ExcessCoverError,
   coverOrderFromBatches,
   normalizePicks,
+  ownSowTolerance,
+  releaseOrderOwnSow,
   reverseOrderBatchCover,
+  slotStartDateById,
   validateCoverPicks,
 } from "../services/orderExcessBatchCover.service.js";
 
@@ -527,6 +532,10 @@ const createOne = (Model, modelName) =>
 
       if (orderData.orderFor != null) {
         req.body.orderFor = orderData.orderFor;
+      }
+
+      if (orderData.voiceNotes != null) {
+        orderData.voiceNotes = sanitizeVoiceNotes(orderData.voiceNotes, req.user, "BOOKING");
       }
 
       // Parse sowingPlan (seed source / company + raising packets) from FormData JSON
@@ -2226,7 +2235,12 @@ const updateOne = (Model, modelName, allowedFields) =>
             previousSlot: existingDoc.bookingSlot,
             newSlot: filteredBody.bookingSlot,
             reasonForChange:
-              filteredBody.deliveryChangeReason || "Delivery date changed",
+              filteredBody.deliveryChangeReason ||
+              (filteredBody.plantSubtype != null &&
+              String(filteredBody.plantSubtype) !==
+                String(existingDoc.plantSubtype?._id || existingDoc.plantSubtype || "")
+                ? "Plant subtype changed"
+                : "Delivery date changed"),
             changedBy: req.user ? req.user._id : null,
           };
 
@@ -2239,19 +2253,43 @@ const updateOne = (Model, modelName, allowedFields) =>
           delete filteredBody.deliveryChangeReason;
         }
 
-        if (
-          modelName === "Order" &&
-          existingDoc.sowingCoverSources?.length &&
-          !existingDoc.sowingCoverReversedAt
-        ) {
-          const coverReverse = await reverseOrderBatchCover({
-            order: existingDoc,
-            userId: req.user?._id,
-            session,
-          });
-          console.log(
-            `🔙 Excess cover reversed on delivery change for order #${existingDoc.orderId}: ${coverReverse.plants || 0} plants`
-          );
+        const hasExcessCover =
+          existingDoc.sowingCoverSources?.length && !existingDoc.sowingCoverReversedAt;
+        if (modelName === "Order" && (hasExcessCover || existingDoc.sowingDone)) {
+          const newDeliveryForSow =
+            filteredBody.deliveryDate ||
+            (await slotStartDateById(filteredBody.bookingSlot, session));
+          const prevSubtypeId = String(existingDoc.plantSubtype?._id || existingDoc.plantSubtype || "");
+          const subtypeChanging =
+            canChangeOrderStatusFull &&
+            filteredBody.plantSubtype != null &&
+            String(filteredBody.plantSubtype) !== prevSubtypeId;
+          const tolerance = subtypeChanging
+            ? { withinTolerance: false }
+            : await ownSowTolerance(existingDoc, newDeliveryForSow, session);
+          if (tolerance.withinTolerance) {
+            console.log(
+              `🌱 Order #${existingDoc.orderId} keeps its sowing (ready ${tolerance.readyDate}, ${tolerance.offsetDays}d)`
+            );
+          } else if (hasExcessCover) {
+            const coverReverse = await reverseOrderBatchCover({
+              order: existingDoc,
+              userId: req.user?._id,
+              session,
+            });
+            console.log(
+              `🔙 Excess cover reversed on delivery change for order #${existingDoc.orderId}: ${coverReverse.plants || 0} plants`
+            );
+          } else {
+            const ownRelease = await releaseOrderOwnSow({
+              order: existingDoc,
+              userId: req.user?._id,
+              session,
+            });
+            console.log(
+              `🔙 Own sowing released on delivery change for order #${existingDoc.orderId}: ${ownRelease.plants || 0} plants`
+            );
+          }
         }
       }
 
@@ -3218,6 +3256,40 @@ const updateOne = (Model, modelName, allowedFields) =>
       await session.commitTransaction();
       session.endSession();
 
+      let excessCover = null;
+      const excessCoverPicks =
+        modelName === "Order" && updatedDoc ? normalizePicks(req.body?.excessCoverPicks) : [];
+      if (excessCoverPicks.length) {
+        const rawCoverWindow = Math.floor(
+          Number(req.body?.excessCoverWindowDays) || EXCESS_COVER_WINDOW_DAYS
+        );
+        try {
+          const cover = await coverOrderFromBatches({
+            order: updatedDoc._id,
+            picks: excessCoverPicks,
+            userId: req.user?._id,
+            windowDays: Math.min(15, Math.max(1, rawCoverWindow)),
+          });
+          excessCover = {
+            success: true,
+            plants: cover.need,
+            sources: cover.sources.length,
+            requestNumber: cover.requestNumber,
+            remark: cover.remark,
+          };
+        } catch (coverErr) {
+          console.error(
+            `[excessCover] cover after delivery change failed for order #${existingDoc.orderId}:`,
+            coverErr?.message || coverErr
+          );
+          excessCover = {
+            success: false,
+            code: coverErr?.code || null,
+            message: coverErr?.message || "Cover from excess failed",
+          };
+        }
+      }
+
       if (modelName === "Order" && updatedDoc) {
         const statusChangePush = filteredBody.$push?.statusChanges;
         emitPlantOrderUpdateEvents({
@@ -3310,6 +3382,7 @@ const updateOne = (Model, modelName, allowedFields) =>
           ...(modelName === "Order" && rejectedFields.length > 0
             ? { rejectedFields }
             : {}),
+          ...(excessCover ? { excessCover } : {}),
         })
       );
     } catch (error) {
@@ -4925,6 +4998,7 @@ const getAll = (Model, modelName) =>
           sowingDoneRequestId: 1,
           sowingCoverSources: 1,
           sowingCoverReversedAt: 1,
+          sowBatchLinks: 1,
           productMappingId: 1,
           payment: 1,
           numberOfPlants: 1,
@@ -4971,6 +5045,7 @@ const getAll = (Model, modelName) =>
           walletEntryId: 1, // Add wallet entry reference
           notes: 1,
           orderRemarks: 1, // Keep orderRemarks field as array of strings
+          voiceNotes: 1,
           // Added farm ready date change history with user info
           farmReadyDateChanges: {
             $map: {

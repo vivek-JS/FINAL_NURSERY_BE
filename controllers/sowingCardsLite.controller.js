@@ -1016,7 +1016,7 @@ export const getOrderWiseSowing = async (req, res) => {
     const [orders, products, raisings, activeOrderReqs, plantDoc] = await Promise.all([
       Order.find(query)
         .select(
-          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderBookingDate orderStatus sowingDone sowingDoneAt deliveryDate"
+          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderBookingDate orderStatus sowingDone sowingDoneAt sowingPartialCover deliveryDate"
         )
         .populate("farmer", "name mobileNumber")
         .sort({ deliveryDate: 1, createdAt: 1 })
@@ -1045,6 +1045,7 @@ export const getOrderWiseSowing = async (req, res) => {
         plantId,
         subtypeId,
         status: { $in: ["pending", "processing", "issued"] },
+        sowingCompleted: { $ne: true },
         linkedOrderIds: { $exists: true, $ne: [] },
       })
         .select("requestNumber status linkedOrderIds")
@@ -1137,8 +1138,13 @@ export const getOrderWiseSowing = async (req, res) => {
     });
 
     const rows = orders.map((o) => {
-      const plants =
+      const booked =
         (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0);
+      const held = (Array.isArray(o.sowingPartialCover) ? o.sowingPartialCover : []).reduce(
+        (s, r) => s + (Number(r.plants) || 0),
+        0
+      );
+      const plants = Math.max(0, booked - held);
       const sp = o.sowingPlan || {};
       const seedSource = sp.seedSource || "COMPANY";
       const intakes = raisingMap.get(String(o._id)) || [];
@@ -1235,6 +1241,9 @@ export const getOrderWiseSowing = async (req, res) => {
         alreadyRequested,
         existingRequestNumber: prior?.requestNumber || null,
         existingRequestStatus: prior?.status || null,
+        coveredPlants: held,
+        bookedPlants: booked,
+        partiallyCovered: held > 0 && !o.sowingDone,
         sowingDone: Boolean(o.sowingDone),
         sowingDoneAt: o.sowingDoneAt || null,
         createdAt: o.createdAt,
@@ -1262,7 +1271,9 @@ export const getOrderWiseSowing = async (req, res) => {
             return Number(r.daysUntilSow) <= horizon;
           });
 
-    const openOrders = horizonFiltered.filter((r) => !r.alreadyRequested);
+    const openOrders = horizonFiltered.filter(
+      (r) => !r.alreadyRequested && (Number(r.numberOfPlants) || 0) > 0
+    );
 
     return res.json({
       success: true,

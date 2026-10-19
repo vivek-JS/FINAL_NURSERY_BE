@@ -41,6 +41,7 @@ const allowedParams = [
   "deliveryDate", // GET /sowing/excess-batches
   "need", // GET /sowing/excess-batches
   "windowDays", // GET /sowing/excess-batches
+  "releaseOrderId", // GET /sowing/excess-batches — delivery change: count this order's own sowing as free
   "group", // GET /sowing/capacity-sheet/board — N-day column groups
   "year",
   "onlyAvailable", // GET /slots/availability-overview
@@ -400,6 +401,11 @@ const parameterWhiteListing = (req, res, next) => {
     req.method === "GET" &&
     insightsPath.includes("/api/v1/inventory/agri-sales-orders")
   ) {
+    return next();
+  }
+
+  /** Freight slips — quote (rateCardId, km, loadType, crop, crates, dispatchId), trips (status, days, search), pdf (stage). */
+  if (req.method === "GET" && insightsPath.includes("/api/v1/freight-slips")) {
     return next();
   }
 

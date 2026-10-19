@@ -907,7 +907,7 @@ const getCsv = catchAsync(async (req, res, next) => {
     const csvData = [];
 
     const formatInDate = (d) =>
-      d ? new Date(d).toLocaleDateString("en-IN") : "N/A";
+      d ? new Date(d).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" }) : "";
 
     const deliverySource = (obj) =>
       obj.deliveryDate || obj.farmReadyDate || null;
@@ -2171,6 +2171,7 @@ const getOrdersByStatus = catchAsync(async (req, res, next) => {
           dealerOrder: 1,
           notes: 1,
           orderRemarks: 1,
+          voiceNotes: 1,
           statusChanges: {
             $map: {
               input: "$statusChanges",
