@@ -910,8 +910,8 @@ export async function settleOutwardAndReturns(
 }
 
 /**
- * FIFO-cover linked orders: full orders get sowingDone; a short remainder is
- * held as sowingPartialCover (not done); leftover orders stay need-sow.
+ * FIFO-cover linked orders: only fully covered orders get sowingDone.
+ * Short remainder stays excess; leftover orders stay need-sow for a later request.
  */
 export async function markOrdersSowed(request, opts = {}) {
   const plantsSowed = Math.max(0, Math.floor(parseNum(opts.plantsSowed, 0)));
@@ -1003,28 +1003,10 @@ export async function markOrdersSowed(request, opts = {}) {
     );
   }
 
-  if (plan.partial?.orderId && plan.partial.addPlants > 0) {
-    await Order.updateOne(
-      { _id: plan.partial.orderId, sowingDone: { $ne: true } },
-      {
-        $push: {
-          sowingPartialCover: {
-            requestId: reqId,
-            plants: plan.partial.addPlants,
-            at: sowedAt,
-          },
-        },
-      }
-    );
-  }
-
   applyIncompleteRequestRelease(request, plan, { sowedAt });
 
   const markedIds = plan.full.map((f) => f.orderId);
-  const batchLinkedIds = [
-    ...markedIds,
-    ...(plan.partial?.orderId ? [plan.partial.orderId] : []),
-  ];
+  const batchLinkedIds = markedIds;
 
   return {
     marked: markedIds.length,

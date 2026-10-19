@@ -19,13 +19,13 @@ export function orderPlantRemaining(order) {
 }
 
 /**
- * FIFO cover: fully covered orders, one partial hold, the rest waiting.
- * Excess = plants left after every remaining order is fully covered.
+ * FIFO cover: only fully covered orders are sown.
+ * A leftover that cannot fill the next order stays excess (not a partial hold).
+ * Unfilled orders go to the next sowing request at their full remaining qty.
  */
 export function planOrderSowCover({ plantsSowed, orders = [] }) {
   let left = toQty(plantsSowed);
   const full = [];
-  let partial = null;
   const waiting = [];
 
   for (const o of orders) {
@@ -40,14 +40,6 @@ export function planOrderSowCover({ plantsSowed, orders = [] }) {
         totalCovered: held + remaining,
       });
       left -= remaining;
-    } else if (left > 0 && !partial) {
-      partial = {
-        orderId: oid,
-        addPlants: left,
-        totalCovered: held + left,
-        remainingNeed: remaining,
-      };
-      left = 0;
     } else {
       waiting.push({ orderId: oid, remaining });
     }
@@ -55,10 +47,10 @@ export function planOrderSowCover({ plantsSowed, orders = [] }) {
 
   return {
     full,
-    partial,
+    partial: null,
     waiting,
     excess: left,
-    incomplete: Boolean(partial || waiting.length),
+    incomplete: waiting.length > 0,
     orderPlantsCovered: toQty(plantsSowed) - left,
   };
 }
@@ -69,10 +61,7 @@ export function applyIncompleteRequestRelease(request, plan, { sowedAt } = {}) {
     if (marked.length) request.linkedOrderIds = marked;
     return { incomplete: false, linkedOrderIds: request.linkedOrderIds, uncoveredOrderIds: [] };
   }
-  const uncovered = [
-    ...(plan.partial?.orderId ? [plan.partial.orderId] : []),
-    ...(plan.waiting || []).map((w) => w.orderId),
-  ].filter(Boolean);
+  const uncovered = (plan.waiting || []).map((w) => w.orderId).filter(Boolean);
   request.sowingIncomplete = true;
   request.sowingCompleted = true;
   request.sowingCompletedDate = sowedAt instanceof Date ? sowedAt : new Date();
