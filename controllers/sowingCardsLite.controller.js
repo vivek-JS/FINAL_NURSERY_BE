@@ -1265,6 +1265,8 @@ export const getOrderWiseSowing = async (req, res) => {
         existingRequestStatus: prior?.status || null,
         coveredPlants: held,
         bookedPlants: booked,
+        leftoverPlants: plants,
+        leftoverFromIncomplete: leftoverOidSet.has(String(o._id)),
         partiallyCovered: held > 0 && !o.sowingDone,
         sowingDone: Boolean(o.sowingDone),
         sowingDoneAt: o.sowingDoneAt || null,
