@@ -19,14 +19,16 @@ export function orderPlantRemaining(order) {
 }
 
 /**
- * FIFO cover: only fully covered orders are sown.
- * A leftover that cannot fill the next order stays excess (not a partial hold).
- * Unfilled orders go to the next sowing request at their full remaining qty.
+ * FIFO cover: fully covered orders are sown.
+ * Leftover plants that cannot fill the next order are a partial hold on that
+ * order. Remaining packing is booked minus that hold. Later waiting orders
+ * go to the next request at their leftover remaining.
  */
 export function planOrderSowCover({ plantsSowed, orders = [] }) {
   let left = toQty(plantsSowed);
   const full = [];
   const waiting = [];
+  let partial = null;
 
   for (const o of orders) {
     const remaining = orderPlantRemaining(o);
@@ -40,6 +42,14 @@ export function planOrderSowCover({ plantsSowed, orders = [] }) {
         totalCovered: held + remaining,
       });
       left -= remaining;
+    } else if (left > 0 && !partial) {
+      partial = {
+        orderId: oid,
+        addPlants: left,
+        remaining: remaining - left,
+        totalCovered: held + left,
+      };
+      left = 0;
     } else {
       waiting.push({ orderId: oid, remaining });
     }
@@ -47,10 +57,10 @@ export function planOrderSowCover({ plantsSowed, orders = [] }) {
 
   return {
     full,
-    partial: null,
+    partial,
     waiting,
     excess: left,
-    incomplete: waiting.length > 0,
+    incomplete: Boolean(partial) || waiting.length > 0,
     orderPlantsCovered: toQty(plantsSowed) - left,
   };
 }
@@ -61,7 +71,10 @@ export function applyIncompleteRequestRelease(request, plan, { sowedAt } = {}) {
     if (marked.length) request.linkedOrderIds = marked;
     return { incomplete: false, linkedOrderIds: request.linkedOrderIds, uncoveredOrderIds: [] };
   }
-  const uncovered = (plan.waiting || []).map((w) => w.orderId).filter(Boolean);
+  const uncovered = [
+    plan.partial?.orderId,
+    ...(plan.waiting || []).map((w) => w.orderId),
+  ].filter(Boolean);
   request.sowingIncomplete = true;
   request.sowingCompleted = true;
   request.sowingCompletedDate = sowedAt instanceof Date ? sowedAt : new Date();
