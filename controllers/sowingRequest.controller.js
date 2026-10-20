@@ -28,6 +28,42 @@ function bustSowingCardsLiteCache() {
   });
 }
 
+/** Run the stock-issue handler in-process and capture its JSON response. */
+function invokeIssueStock(requestId, body, user) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const fakeRes = {
+      statusCode: 200,
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        if (settled) return payload;
+        settled = true;
+        const ok = payload?.success !== false && this.statusCode < 400;
+        resolve({
+          success: ok,
+          statusCode: this.statusCode,
+          message: payload?.message,
+          data: payload?.data,
+        });
+        return payload;
+      },
+    };
+    Promise.resolve(
+      issueStockFromRequest(
+        { params: { id: String(requestId) }, body, user },
+        fakeRes
+      )
+    ).catch((err) => {
+      if (!settled) {
+        resolve({ success: false, message: err?.message || "Failed to issue stock" });
+      }
+    });
+  });
+}
+
 /** Warehouse issue qty = company packets only (raising is allocated at create). */
 const resolveCompanyIssuePackets = (request) => {
   if (
@@ -376,6 +412,54 @@ export const createSowingRequest = async (req, res) => {
     await request.saveWithUniqueRequestNumber();
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'requestedBy']);
 
+    if (req.body.directIssue) {
+      const { buildDirectIssueBody, abandonUnissuedRequest } = await import(
+        "../services/directIssueSowingRequest.service.js"
+      );
+      try {
+        const built = await buildDirectIssueBody(request);
+        if (!built.ok) {
+          await abandonUnissuedRequest(request._id, req.user, built.message);
+          bustSowingCardsLiteCache();
+          return res.status(400).json({
+            success: false,
+            message: built.message || "Could not issue sowing request",
+          });
+        }
+        const issued = await invokeIssueStock(request._id, built.body, req.user);
+        if (!issued.success) {
+          await abandonUnissuedRequest(
+            request._id,
+            req.user,
+            issued.message || "Could not issue sowing request"
+          );
+          bustSowingCardsLiteCache();
+          return res.status(400).json({
+            success: false,
+            message: issued.message || "Could not issue sowing request",
+          });
+        }
+        bustSowingCardsLiteCache();
+        return res.status(201).json({
+          success: true,
+          message: "Sowing request created and issued",
+          data: issued.data?.request || request,
+          directIssued: true,
+        });
+      } catch (issueErr) {
+        await abandonUnissuedRequest(
+          request._id,
+          req.user,
+          issueErr?.message || "Could not issue sowing request"
+        );
+        bustSowingCardsLiteCache();
+        return res.status(400).json({
+          success: false,
+          message: issueErr?.message || "Could not issue sowing request",
+        });
+      }
+    }
+
     // Auto Ram Agri → Biotech transfer on create is DISABLED so Office Admin
     // chooses Biotech / Input / Both at issue time (avoids double stock moves).
     const transferResult = null;
@@ -575,82 +659,75 @@ export const getSowingRequestById = async (req, res) => {
       });
     }
 
-    // Biotech warehouse batches only — Ram Agri mirror lots are issued from the Ram Agri source.
-    const { RAM_AGRI_MIRROR_NOTE_REGEX } = await import(
-      '../services/ramAgriLinkedProductSync.service.js'
-    );
-    const batches = await Batch.find({
-      product: request.productId._id,
-      status: { $in: ['active', 'expired'] },
-      remainingQuantity: { $gt: 0 },
-      notes: { $not: RAM_AGRI_MIRROR_NOTE_REGEX },
-    })
-      .select('batchNumber product receivedDate supplier purchasePrice quantity remainingQuantity unit status grn expiryDate manufactureDate')
-      .populate('unit', 'name symbol')
-      .populate('supplier', 'name')
-      .sort({ receivedDate: 1 })
-      .lean();
+    // Completed / backfilled sow requests may have no seed product linked.
+    const productOid =
+      request.productId?._id ||
+      (request.productId && mongoose.Types.ObjectId.isValid(request.productId)
+        ? request.productId
+        : null);
 
-    // Calculate available packets from batches (warehouse)
+    let batches = [];
     let availablePacketsFromBatches = 0;
-    const primaryUnitId = request.primaryUnit?._id?.toString();
-    const secondaryUnitId = request.secondaryUnit?._id?.toString();
-
-    batches.forEach((batch) => {
-      const batchUnitId = batch.unit?._id?.toString();
-      if (batchUnitId === primaryUnitId) {
-        availablePacketsFromBatches += batch.remainingQuantity;
-      } else if (batchUnitId === secondaryUnitId && request.conversionFactor) {
-        availablePacketsFromBatches += batch.remainingQuantity / request.conversionFactor;
-      } else {
-        availablePacketsFromBatches += batch.remainingQuantity;
-      }
-    });
-
-    // Issued production outwards use purpose=production and status=issued (no InventoryOutward.type field).
-    const outwardQuery = {
-      purpose: 'production',
-      status: 'issued',
-    };
-    if (request.outwardId) {
-      outwardQuery._id = request.outwardId;
-    } else {
-      outwardQuery.sowingRequestId = request._id;
-    }
-
-    const outwardRecords = await InventoryOutward.find(outwardQuery)
-      .populate({
-        path: 'items.product',
-        select: '_id',
-      })
-      .populate('items.unit', 'name symbol')
-      .lean();
-
     let availablePacketsFromOutward = 0;
-    
-    outwardRecords.forEach((outward) => {
-      outward.items?.forEach((item) => {
-        // Check if this item is for our product
-        if (item.product?._id?.toString() === request.productId._id.toString()) {
-          const totalQty = item.quantity || 0;
-          const usedQty = item.usedQuantity || 0;
-          const availableQty = totalQty - usedQty; // Issued but not used yet
-          
-          if (availableQty > 0) {
-            const itemUnitId = item.unit?._id?.toString();
-            
-            // Convert to secondary unit (packets) based on unit
-            if (itemUnitId === primaryUnitId) {
-              availablePacketsFromOutward += availableQty;
-            } else if (itemUnitId === secondaryUnitId && request.conversionFactor) {
-              availablePacketsFromOutward += availableQty / request.conversionFactor;
-            } else {
-              availablePacketsFromOutward += availableQty;
+
+    if (productOid) {
+      const { loadBiotechIssueBatches, packetsInRequestUnit } = await import(
+        '../services/sowingIssueInventory.service.js'
+      );
+      batches = await loadBiotechIssueBatches({
+        plantId: request.plantId,
+        subtypeId: request.subtypeId,
+        fallbackProductId: productOid,
+      });
+      const productIdStr = String(productOid);
+      const primaryUnitId = request.primaryUnit?._id?.toString();
+      const secondaryUnitId = request.secondaryUnit?._id?.toString();
+
+      batches.forEach((batch) => {
+        availablePacketsFromBatches += packetsInRequestUnit(batch, request);
+      });
+
+      // Issued production outwards use purpose=production and status=issued (no InventoryOutward.type field).
+      const outwardQuery = {
+        purpose: 'production',
+        status: 'issued',
+      };
+      if (request.outwardId) {
+        outwardQuery._id = request.outwardId;
+      } else {
+        outwardQuery.sowingRequestId = request._id;
+      }
+
+      const outwardRecords = await InventoryOutward.find(outwardQuery)
+        .populate({
+          path: 'items.product',
+          select: '_id',
+        })
+        .populate('items.unit', 'name symbol')
+        .lean();
+
+      outwardRecords.forEach((outward) => {
+        outward.items?.forEach((item) => {
+          if (item.product?._id?.toString() === productIdStr) {
+            const totalQty = item.quantity || 0;
+            const usedQty = item.usedQuantity || 0;
+            const availableQty = totalQty - usedQty;
+
+            if (availableQty > 0) {
+              const itemUnitId = item.unit?._id?.toString();
+
+              if (itemUnitId === primaryUnitId) {
+                availablePacketsFromOutward += availableQty;
+              } else if (itemUnitId === secondaryUnitId && request.conversionFactor) {
+                availablePacketsFromOutward += availableQty / request.conversionFactor;
+              } else {
+                availablePacketsFromOutward += availableQty;
+              }
             }
           }
-        }
+        });
       });
-    });
+    }
 
     // Total available = warehouse stock + issued but unused
     const availablePackets = availablePacketsFromBatches + availablePacketsFromOutward;
@@ -663,7 +740,7 @@ export const getSowingRequestById = async (req, res) => {
       inventoryAvailability = await buildIssueInventoryAvailability(
         request.plantId,
         request.subtypeId,
-        request.productId
+        productOid || request.productId
       );
     } catch (availErr) {
       console.error('[getSowingRequestById] inventoryAvailability:', availErr?.message || availErr);
@@ -982,7 +1059,9 @@ export const issueStockFromRequest = async (req, res) => {
       });
     }
 
-    const request = await SowingRequest.findById(id);
+    const request = await SowingRequest.findById(id)
+      .populate('primaryUnit', 'name symbol')
+      .populate('secondaryUnit', 'name symbol');
     if (!request) {
       return res.status(404).json({
         success: false,
@@ -1066,14 +1145,30 @@ export const issueStockFromRequest = async (req, res) => {
     // Validate Biotech batch allocations against Biotech packet qty only
     const primaryUnitId = request.primaryUnit?._id?.toString();
     const secondaryUnitId = request.secondaryUnit?._id?.toString();
+    let allocationBatches = [];
 
     if (needBiotech) {
     const { RAM_AGRI_MIRROR_NOTE_REGEX } = await import(
       '../services/ramAgriLinkedProductSync.service.js'
     );
-    const allocationBatches = await Promise.all(
+    const { resolveBiotechIssueProductIds } = await import(
+      '../services/sowingIssueInventory.service.js'
+    );
+    const allowedProductIds = new Set(
+      (
+        await resolveBiotechIssueProductIds(
+          request.plantId,
+          request.subtypeId,
+          request.productId
+        )
+      ).map(String)
+    );
+    allocationBatches = await Promise.all(
       batchAllocations.map((allocation) =>
-        Batch.findById(allocation.batchId).populate('unit', 'name symbol _id').lean()
+        Batch.findById(allocation.batchId)
+          .populate('unit', 'name symbol _id')
+          .populate('product', 'name')
+          .lean()
       )
     );
     for (const [allocationIndex, allocation] of batchAllocations.entries()) {
@@ -1097,6 +1192,14 @@ export const issueStockFromRequest = async (req, res) => {
         return res.status(400).json({
           success: false,
           message: `Batch ${batch.batchNumber} is Ram Agri Input stock — issue it from the Ram Agri Input source, not Biotech warehouse.`,
+        });
+      }
+
+      const batchProductId = String(batch.product?._id || batch.product || '');
+      if (allowedProductIds.size && batchProductId && !allowedProductIds.has(batchProductId)) {
+        return res.status(400).json({
+          success: false,
+          message: `Batch ${batch.batchNumber} is not linked to ${request.plantName} ${request.subtypeName}.`,
         });
       }
 
@@ -1206,8 +1309,11 @@ export const issueStockFromRequest = async (req, res) => {
     // Create outward entry and issue stock directly
     const outwardNumber = await InventoryOutward.generateOutwardNumber();
     const outwardItems = outwardAllocations.map((allocation) => {
+      const fromBio = allocationBatches.find(
+        (row) => String(row?._id) === String(allocation.batchId)
+      );
       const item = {
-        product: request.productId,
+        product: fromBio?.product?._id || fromBio?.product || request.productId,
         batch: allocation.batchId,
         quantity: allocation.quantity,
         unit: request.primaryUnit || request.secondaryUnit,
@@ -1240,14 +1346,19 @@ export const issueStockFromRequest = async (req, res) => {
 
     await outward.save();
 
-    // Issue stock directly (deduct from batches and products)
-    const product = await Product.findById(request.productId);
-    if (!product) {
-      throw new Error('Product not found');
-    }
+    // Issue stock directly (deduct from the batch's own product, not only request.productId)
+    const productById = new Map();
+    const loadIssueProduct = async (productId) => {
+      const key = String(productId || '');
+      if (!key) throw new Error('Product not found');
+      if (productById.has(key)) return productById.get(key);
+      const found = await Product.findById(productId);
+      if (!found) throw new Error('Product not found');
+      productById.set(key, found);
+      return found;
+    };
 
-    // Helper to create inventory transaction
-    const createOutwardTransaction = async (item, outwardDoc, user) => {
+    const createOutwardTransaction = async (item, outwardDoc, user, stockProduct) => {
       const transactionNumber = await InventoryTransaction.generateTransactionNumber();
       const transaction = new InventoryTransaction({
         transactionNumber,
@@ -1256,8 +1367,8 @@ export const issueStockFromRequest = async (req, res) => {
         batch: item.batch,
         quantity: item.quantity,
         unit: item.unit,
-        balanceBeforeTransaction: product.currentStock,
-        balanceAfterTransaction: product.currentStock - item.quantity,
+        balanceBeforeTransaction: stockProduct.currentStock,
+        balanceAfterTransaction: stockProduct.currentStock - item.quantity,
         rate: 0,
         value: 0,
         referenceType: 'Outward',
@@ -1288,6 +1399,15 @@ export const issueStockFromRequest = async (req, res) => {
         throw new Error(`Batch ${batch.batchNumber} is not issuable (status: ${batch.status})`);
       }
 
+      const stockProduct = await loadIssueProduct(item.product || batch.product);
+      if (stockProduct.currentStock < item.quantity) {
+        throw new Error(
+          `Insufficient stock in ${stockProduct.name}. Available: ${stockProduct.currentStock}, Required: ${item.quantity}`
+        );
+      }
+
+      await createOutwardTransaction(item, outward, req.user, stockProduct);
+
       // Update batch
       batch.remainingQuantity -= item.quantity;
       if (batch.remainingQuantity <= 0) {
@@ -1295,22 +1415,14 @@ export const issueStockFromRequest = async (req, res) => {
       }
       await batch.save();
 
-      if (product.currentStock < item.quantity) {
-        throw new Error(
-          `Insufficient stock. Available: ${product.currentStock}, Required: ${item.quantity}`
-        );
-      }
-      product.currentStock -= item.quantity;
-      if (product.currentStock > 0 && product.stockValue > 0) {
-        product.averagePrice = product.stockValue / product.currentStock;
+      stockProduct.currentStock -= item.quantity;
+      if (stockProduct.currentStock > 0 && stockProduct.stockValue > 0) {
+        stockProduct.averagePrice = stockProduct.stockValue / stockProduct.currentStock;
       } else {
-        product.averagePrice = 0;
+        stockProduct.averagePrice = 0;
       }
-      product.updatedBy = req.user._id;
-      await product.save();
-
-      // Create inventory transaction
-      await createOutwardTransaction(item, outward, req.user);
+      stockProduct.updatedBy = req.user._id;
+      await stockProduct.save();
     }
 
     // Update outward status to issued
@@ -1331,12 +1443,17 @@ export const issueStockFromRequest = async (req, res) => {
     request.packetsIssuedFromRamAgri = issueSplit.packetsFromRamAgri;
     request.issueInventorySource = issueSplit.source;
     request.biotechBatchAllocations = shouldCreateOutward
-      ? outwardAllocations.map((a) => ({
-          batchId: a.batchId,
-          batchNumber: a.batchNumber,
-          quantity: a.quantity,
-          productId: request.productId,
-        }))
+      ? outwardAllocations.map((a) => {
+          const fromBio = allocationBatches.find(
+            (row) => String(row?._id) === String(a.batchId)
+          );
+          return {
+            batchId: a.batchId,
+            batchNumber: a.batchNumber || fromBio?.batchNumber,
+            quantity: a.quantity,
+            productId: fromBio?.product?._id || fromBio?.product || request.productId,
+          };
+        })
       : [];
     request.ramAgriBatchAllocations = agriAllocations;
     request.excessPackets = excessPackets;
