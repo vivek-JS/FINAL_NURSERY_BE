@@ -998,12 +998,21 @@ export async function markOrdersSowed(request, opts = {}) {
           sowingDone: true,
           sowingDoneAt: sowedAt,
           sowingDoneRequestId: reqId,
+          leftoverFromIncomplete: false,
         },
       }
     );
   }
 
   applyIncompleteRequestRelease(request, plan, { sowedAt });
+
+  const leftoverIds = (plan.waiting || []).map((w) => w.orderId).filter(Boolean);
+  if (leftoverIds.length) {
+    await Order.updateMany(
+      { _id: { $in: leftoverIds }, sowingDone: { $ne: true } },
+      { $set: { leftoverFromIncomplete: true } }
+    );
+  }
 
   const markedIds = plan.full.map((f) => f.orderId);
   const batchLinkedIds = markedIds;
