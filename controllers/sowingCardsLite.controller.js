@@ -8,6 +8,10 @@ import SowingRequest from "../models/sowingRequest.model.js";
 import RaisingSeedIntake from "../models/raisingSeedIntake.model.js";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
 import { enrichSeedProductsFromRamAgriLinks } from "../services/sowingSeedProductResolve.service.js";
+import {
+  leftoverBookingSlotIdSet,
+  leftoverLiveOrders,
+} from "../services/sowingLeftoverDue.service.js";
 
 const ACTIVE_ORDER_STATUSES = [
   "PENDING",
@@ -143,7 +147,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
 
     // Parallel: products, slots, pending requests. Raising stock is scoped to
     // eligible order ids after the horizon slots are known.
-    const [baseProducts, rawSlots, pendingRequests] = await Promise.all([
+    const [baseProducts, rawSlots, pendingRequests, leftoverSlotIds] = await Promise.all([
       Product.find({
         plantId: { $in: plantIds },
         category: { $regex: /^seeds$/i },
@@ -246,6 +250,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
           "plantId subtypeId productId requestNumber packetsRequested packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned packetsFromCompany packetsFromRaising seedSource conversionFactor tentativePlantsPerPacket status sowingInProgress issuedDate sowingCompleted linkedOrderIds isExcessiveSowing"
         )
         .lean(),
+      leftoverBookingSlotIdSet({ plantIds }),
     ]);
 
     const products = await enrichSeedProductsFromRamAgriLinks(baseProducts, plantIds);
@@ -350,9 +355,11 @@ export const getTodaySowingCardsLite = async (req, res) => {
       const startMs = slotStartMs(slot.startDay, slot.month, slot.year);
       if (startMs == null) continue;
       const sowByMs = startMs - readyDays * 86400000;
-      const daysUntilSow = Math.floor((sowByMs - todayUtc) / 86400000);
+      let daysUntilSow = Math.floor((sowByMs - todayUtc) / 86400000);
+      const leftoverDue = leftoverSlotIds.has(String(slot.slotId));
+      if (leftoverDue) daysUntilSow = Math.min(daysUntilSow, 0);
       // Include overdue + today + upcoming through +horizon
-      if (daysUntilSow > horizon) continue;
+      if (daysUntilSow > horizon && !leftoverDue) continue;
       dueCandidates.push({
         ...slot,
         readyDays,
@@ -988,6 +995,21 @@ export const getOrderWiseSowing = async (req, res) => {
         .filter((s) => mongoose.Types.ObjectId.isValid(s))
         .map((s) => new mongoose.Types.ObjectId(s));
     }
+    const leftoverOrders = await leftoverLiveOrders({ plantId, subtypeId });
+    const leftoverOidSet = new Set(leftoverOrders.map((o) => String(o._id)));
+    if (slotIdList.length && leftoverOrders.length) {
+      const extra = leftoverOrders
+        .map((o) => o.bookingSlot)
+        .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
+        .map((id) => new mongoose.Types.ObjectId(id));
+      const seen = new Set(slotIdList.map(String));
+      for (const id of extra) {
+        if (!seen.has(String(id))) {
+          seen.add(String(id));
+          slotIdList.push(id);
+        }
+      }
+    }
 
     // Explicit orderIds = covered / linked rows (include already sowingDone)
     let orderIdList = [];
@@ -1267,6 +1289,7 @@ export const getOrderWiseSowing = async (req, res) => {
       orderIdList.length > 0
         ? rows
         : rows.filter((r) => {
+            if (leftoverOidSet.has(String(r.orderId))) return true;
             if (r.daysUntilSow == null) return slotIdList.length > 0;
             return Number(r.daysUntilSow) <= horizon;
           });
