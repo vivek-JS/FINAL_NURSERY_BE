@@ -30,14 +30,27 @@ export function planSowBatchDestroy({ slot, batches, quantity }) {
   }
 
   const available = Number(slot?.availablePlants) || 0;
+  const actual = toInt(slot?.actualPlants);
+  const orderReserved = toInt(slot?.orderReservedPlants);
+  const expectedMortality = toInt(slot?.expectedMortality);
+  const availableDestroyed = available > 0 ? Math.min(qty, available) : 0;
+  const actualDestroyed = Math.min(qty, actual);
+  const reservedDestroyed = Math.min(Math.max(0, qty - availableDestroyed), orderReserved);
+  const mortalityDestroyed = Math.min(
+    Math.max(0, qty - actualDestroyed),
+    expectedMortality
+  );
   return {
     quantity: qty,
     takes,
+    totalPlants: Math.max(0, toInt(slot?.totalPlants) - qty),
     primarySowed: Math.max(0, toInt(slot?.primarySowed) - qty),
     plantsSowed: Math.max(0, toInt(slot?.plantsSowed) - qty),
-    actualPlants: Math.max(0, toInt(slot?.actualPlants) - qty),
-    availablePlants: available > 0 ? Math.max(0, available - qty) : available,
-    excessivePlants: Math.max(0, toInt(slot?.excessiveSowing?.plants) - Math.min(qty, Math.max(0, available))),
+    actualPlants: Math.max(0, actual - actualDestroyed),
+    expectedMortality: Math.max(0, expectedMortality - mortalityDestroyed),
+    orderReservedPlants: Math.max(0, orderReserved - reservedDestroyed),
+    availablePlants: available > 0 ? Math.max(0, available - availableDestroyed) : available,
+    excessivePlants: Math.max(0, toInt(slot?.excessiveSowing?.plants) - availableDestroyed),
   };
 }
 
@@ -80,8 +93,11 @@ export async function destroySowBatchPlants({
     b.destroyedPlants = toInt(b.destroyedPlants) + t.plants;
     b.destroyLog = [...(b.destroyLog || []), { at: now, by, plants: t.plants, reason: reasonStr }];
   }
+  slot.totalPlants = plan.totalPlants;
   slot.primarySowed = plan.primarySowed;
   slot.plantsSowed = plan.plantsSowed;
+  slot.expectedMortality = plan.expectedMortality;
+  slot.orderReservedPlants = plan.orderReservedPlants;
   if (slot.excessiveSowing) slot.excessiveSowing.plants = plan.excessivePlants;
   const label = batches[0]?.requestNumber || "sowing batch";
   applyStockFieldUpdates(
