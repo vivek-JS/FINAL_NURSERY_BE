@@ -1873,14 +1873,10 @@ const updateOne = (Model, modelName, allowedFields) =>
         filteredBody.cavity = resolvedCavity;
       }
 
-      // Plant quantity is locked once the order is in the ready-for-dispatch queue or a terminal state.
+      // Plant quantity stays editable through READY_FOR_DISPATCH and DISPATCHED.
       // cavity and salesPerson are NOT gated here — office roles may change them through DISPATCHED.
       const statusesBlockingQuantityEdit = new Set([
-        "READY_FOR_DISPATCH",
-        "DISPATCH_PROCESS",
-        "DISPATCHED",
         "COMPLETED",
-        "PARTIALLY_COMPLETED",
         "CANCELLED",
         "REJECTED",
       ]);
@@ -1890,7 +1886,7 @@ const updateOne = (Model, modelName, allowedFields) =>
         statusesBlockingQuantityEdit.has(String(existingDoc.orderStatus || ""))
       ) {
         throw new AppError(
-          "Plant quantity cannot be changed after the order is ready for dispatch or in a completed/cancelled state.",
+          "Plant quantity cannot be changed on completed or cancelled orders.",
           400
         );
       }
@@ -4998,6 +4994,8 @@ const getAll = (Model, modelName) =>
           sowingDoneRequestId: 1,
           sowingCoverSources: 1,
           sowingCoverReversedAt: 1,
+          sowingPartialCover: 1,
+          leftoverFromIncomplete: { $ifNull: ["$leftoverFromIncomplete", false] },
           sowBatchLinks: 1,
           productMappingId: 1,
           payment: 1,

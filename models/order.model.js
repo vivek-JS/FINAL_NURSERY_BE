@@ -897,6 +897,11 @@ const orderSchema = new Schema(
         at: { type: Date, default: Date.now },
       },
     ],
+    /** Uncovered after an incomplete sow — leftover plants still need a new request. */
+    leftoverFromIncomplete: {
+      type: Boolean,
+      default: false,
+    },
     /** Sowing batches whose excess covered this order at booking (sowingDone set alongside). */
     sowingCoverSources: [
       {
