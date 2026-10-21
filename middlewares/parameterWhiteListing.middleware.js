@@ -75,6 +75,9 @@ const allowedParams = [
   "addedFrom", // GET /sowing/completions date-added filter
   "addedTo",
   "view", // GET /sowing/completions?view=entries — one row per sow entry
+  "stock", // GET /sowing/sow-batch-stock — remaining | all
+  "ready", // GET /sowing/sow-batch-stock — now | later | all
+  "shed", // GET /sowing/sow-batch-stock — shed name filter
   "plantReadyDays", // GET /sowing/request/:id/slot-preview
   "fromDate",
   "dispatched",
@@ -286,6 +289,9 @@ allowedQueryKeys.add("purchaseOrderId"); // GET /inventory/purchase-returns/retu
 allowedQueryKeys.add("supplierId"); // GET /inventory/purchase-returns/returnable-batches (supplier-wise)
 allowedQueryKeys.add("partyKind"); // GET /inventory/money-ledger/parties — ALL|FARMER|MERCHANT
 allowedQueryKeys.add("all"); // sow-ready entries
+allowedQueryKeys.add("stock"); // GET /sowing/sow-batch-stock
+allowedQueryKeys.add("ready");
+allowedQueryKeys.add("shed");
 
 const parameterWhiteListing = (req, res, next) => {
   // First: lab / plant outward — never apply global query whitelist (batchId, upcomingDays, …)
@@ -406,6 +412,28 @@ const parameterWhiteListing = (req, res, next) => {
 
   /** Freight slips — quote (rateCardId, km, loadType, crop, crates, dispatchId), trips (status, days, search), pdf (stage). */
   if (req.method === "GET" && insightsPath.includes("/api/v1/freight-slips")) {
+    return next();
+  }
+
+  if (req.method === "GET" && insightsPath.includes("/api/v1/driver-payments")) {
+    return next();
+  }
+
+  if (req.method === "GET" && insightsPath.includes("/api/v1/order/outstanding-balances")) {
+    return next();
+  }
+
+  /** Sowing batch stock table — stock, ready, shed, q; controller ignores unknown keys. */
+  if (req.method === "GET" && insightsPath.includes("/sowing/sow-batch-stock")) {
+    return next();
+  }
+
+  if (
+    req.method === "GET" &&
+    (insightsPath.includes("/api/v1/field-leads") ||
+      insightsPath.includes("/api/v1/field-attendance") ||
+      insightsPath.includes("/api/v1/location"))
+  ) {
     return next();
   }
 
