@@ -12,6 +12,7 @@ import { resolveSowingPlantsPerPacket } from '../utility/sowingPlantsPerPacket.j
 import { validateLinkedOrderScope } from '../utility/sowingRequestOrderScope.js';
 import { insertTrailRows } from '../utility/slotTrailStore.js';
 import { getSlotTrailActivityName } from '../constants/slotTrailActions.js';
+import { releaseOrdersLinkedToSowingRequest } from '../services/releaseSowingRequestOrders.js';
 
 const applySowingBuffer = (baseValue, bufferPercent) => {
   const qty = Number(baseValue) || 0;
@@ -1680,6 +1681,7 @@ export const cancelSowingRequest = async (req, res) => {
     if (!request.outwardId) {
       const raisingRestore =
         await restoreCancelledRequestRaisingPackets(request);
+      const ordersReleased = await releaseOrdersLinkedToSowingRequest(request);
       request.status = 'cancelled';
       request.cancelledBy = req.user?._id;
       request.cancelledDate = new Date();
@@ -1693,6 +1695,7 @@ export const cancelSowingRequest = async (req, res) => {
         message: 'Sowing request cancelled successfully (no stock was issued)',
         data: request,
         raisingRestore,
+        ordersReleased: ordersReleased.modifiedCount,
       });
     }
 
@@ -1845,6 +1848,7 @@ export const cancelSowingRequest = async (req, res) => {
     // Step 5: Mark request as cancelled
     const raisingRestore =
       await restoreCancelledRequestRaisingPackets(request);
+    const ordersReleased = await releaseOrdersLinkedToSowingRequest(request);
     request.status = 'cancelled';
     request.sowingInProgress = false;
     request.cancelledBy = req.user?._id;
@@ -1881,6 +1885,7 @@ export const cancelSowingRequest = async (req, res) => {
           totalPacketsReturned: revertedBatches.reduce((sum, b) => sum + b.quantityReturned, 0),
           totalSlotsUpdated: revertedSlots.length,
           raisingPacketsReturned: raisingRestore.restored,
+          ordersReleased: ordersReleased.modifiedCount,
         },
       },
     });
@@ -1897,6 +1902,14 @@ export const cancelSowingRequest = async (req, res) => {
 // Cancel all pending sowing requests (for testing)
 export const cancelAllSowingRequests = async (req, res) => {
   try {
+    const pending = await SowingRequest.find({ status: 'pending' }).select(
+      '_id linkedOrderIds packetsFromRaising raisingIntakeIds'
+    );
+    let ordersReleased = 0;
+    for (const row of pending) {
+      await restoreCancelledRequestRaisingPackets(row);
+      ordersReleased += (await releaseOrdersLinkedToSowingRequest(row)).modifiedCount;
+    }
     const result = await SowingRequest.updateMany(
       { status: 'pending' },
       {
@@ -1904,6 +1917,7 @@ export const cancelAllSowingRequests = async (req, res) => {
           status: 'cancelled',
           cancelledBy: req.user?._id,
           cancelledDate: new Date(),
+          cancellationReason: 'Cancelled all pending from inventory',
         },
       }
     );
@@ -1915,6 +1929,7 @@ export const cancelAllSowingRequests = async (req, res) => {
       message: `Cancelled ${result.modifiedCount} pending sowing request(s)`,
       data: {
         cancelledCount: result.modifiedCount,
+        ordersReleased,
       },
     });
   } catch (error) {

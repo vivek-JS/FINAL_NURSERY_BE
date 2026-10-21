@@ -10,6 +10,7 @@ import {
   isReadyNow,
   orderRemainingPlants,
 } from "../services/sowBatchStock.service.js";
+import { plantLetter, rollupDeliveryIntel, ymdInRange } from "../services/sowBatchStock.intel.js";
 
 const OID = {
   o1: "650000000000000000000001",
@@ -94,4 +95,25 @@ test("order remaining uses partial cover until sowingDone", () => {
   };
   assert.equal(orderRemainingPlants(o), 17700);
   assert.equal(orderRemainingPlants({ ...o, sowingDone: true }), 0);
+});
+
+test("plant letter W for watermelon", () => {
+  assert.equal(plantLetter("Watermelon"), "W");
+  assert.equal(plantLetter("Ram Tarbuja"), "W");
+  assert.equal(plantLetter("Papaya"), "P");
+});
+
+test("delivery intel short is orders minus sowed", () => {
+  const rows = rollupDeliveryIntel(
+    [{ plantId: "p", subtypeId: "s", plantName: "Watermelon", subtypeName: "Ram", plantsSowed: 8000, excess: 2000 }],
+    [{ plantId: "p", subtypeId: "s", cropName: "Watermelon", varietyName: "Ram", plants: 12000 }]
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].letter, "W");
+  assert.equal(rows[0].orderPlants, 12000);
+  assert.equal(rows[0].sowed, 8000);
+  assert.equal(rows[0].excess, 2000);
+  assert.equal(rows[0].short, 4000);
+  assert.equal(ymdInRange("2026-10-05", "2026-10-01", "2026-10-10"), true);
+  assert.equal(ymdInRange("2026-10-11", "2026-10-01", "2026-10-10"), false);
 });
