@@ -46,6 +46,15 @@ describe("lagwad 90/10 split", () => {
     assert.equal(r.orderReservedPlants, 0);
   });
 
+  it("watermelon 12% mortality split", () => {
+    const s = splitLagwadQtyForSlot(10000, 12);
+    assert.equal(s.actualPlants, 8800);
+    assert.equal(s.expectedMortality, 1200);
+    const r = sowQtySlotImpact(10000, { orderCoveredPlants: 10000, mortalityPct: 12 });
+    assert.equal(r.expectedMortality, 1200);
+    assert.equal(r.actualPlants, 8800);
+  });
+
   it("mixed cover + leftover: reserved + available = actual", () => {
     const r = sowQtySlotImpact(11000, {
       orderCoveredPlants: 10000,

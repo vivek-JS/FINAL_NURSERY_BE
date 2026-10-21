@@ -115,7 +115,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
 
     const plants = await PlantCms.find({ sowingAllowed: true })
       .select(
-        "_id name sowingBuffer subtypes._id subtypes.name subtypes.plantReadyDays subtypes.buffer"
+        "_id name sowingBuffer sowingMortality subtypes._id subtypes.name subtypes.plantReadyDays subtypes.buffer"
       )
       .lean();
 
@@ -446,6 +446,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
           subtypeId: String(slot.subtypeId),
           subtypeName: slot.subtype?.name || "Subtype",
           sowingBuffer: bufferPct,
+          sowingMortality: Number(slot.plant.sowingMortality) || 10,
           plantReadyDays: slot.readyDays,
           primaryUnit: { symbol: "pkt", name: "packets" },
           secondaryUnit: null,
@@ -774,6 +775,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         subtypeId: card.subtypeId,
         subtypeName: card.subtypeName,
         sowingBuffer: card.sowingBuffer,
+        sowingMortality: Number(card.sowingMortality) || 10,
         plantReadyDays: card.plantReadyDays,
         conversionFactor: def?.conversionFactor || 1,
         primaryUnit: card.primaryUnit,
@@ -832,9 +834,10 @@ export const getTodaySowingCardsLite = async (req, res) => {
 
     for (const c of subtypeCards) {
       const key = `${c.plantId}-${c.subtypeId}`;
-      const hasOpenPacking = (c.packings || []).some(
-        (p) => !p.pendingRequest && !p.activeRequest
-      );
+      const hasOpenPacking = (c.packings || []).some((p) => {
+        const st = p.pendingRequest?.status || p.activeRequest?.status;
+        return st !== "issued";
+      });
 
       if (c.sowingInProgress) {
         inProgressCards.push({
@@ -876,6 +879,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         subtypeId: String(r.subtypeId),
         subtypeName: subtype?.name || "Subtype",
         sowingBuffer: Number(plant.sowingBuffer) || 0,
+        sowingMortality: Number(plant.sowingMortality) || 10,
         plantReadyDays: Number(subtype?.plantReadyDays) || 0,
         conversionFactor: resolveSowingPlantsPerPacket(r),
         tentativePlantsPerPacket: r.tentativePlantsPerPacket ?? null,

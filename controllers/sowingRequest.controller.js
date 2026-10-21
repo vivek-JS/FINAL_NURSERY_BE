@@ -153,17 +153,31 @@ const enrichRequestsWithBufferContext = async (requests) => {
     .map((id) => new mongoose.Types.ObjectId(id));
 
   const plants = await PlantCms.find({ _id: { $in: plantIds } })
-    .select("_id sowingBuffer")
+    .select("_id sowingBuffer sowingMortality")
     .lean();
-  const plantBufferMap = new Map(plants.map((p) => [String(p._id), Number(p.sowingBuffer) || 0]));
+  const plantBufferMap = new Map(
+    plants.map((p) => [
+      String(p._id),
+      {
+        sowingBuffer: Number(p.sowingBuffer) || 0,
+        sowingMortality: Number(p.sowingMortality) || 10,
+      },
+    ])
+  );
 
   return (requests || []).map((request) => {
-    const sowingBuffer = plantBufferMap.get(String(request.plantId)) || 0;
+    const plantRates = plantBufferMap.get(String(request.plantId)) || {
+      sowingBuffer: 0,
+      sowingMortality: 10,
+    };
+    const sowingBuffer = plantRates.sowingBuffer;
+    const sowingMortality = plantRates.sowingMortality;
     const baseSowingQty = Number(request.remainingSowingNeeded || request.packetsNeeded || 0) || 0;
     const displaySowingQty = applySowingBuffer(baseSowingQty, sowingBuffer);
     return {
       ...request,
       sowingBuffer,
+      sowingMortality,
       bufferPercent: sowingBuffer,
       baseSowingQty,
       displaySowingQty,
@@ -322,15 +336,29 @@ export const createSowingRequest = async (req, res) => {
           directIssued: Boolean(issued.success),
         });
       }
-      const msg =
-        existingRequest.status === "issued"
-          ? `Stock already issued (${existingRequest.requestNumber}) — sowing in progress. Cannot request again for this packing.`
-          : `A ${existingRequest.status} request already exists for this seed packing (${existingRequest.requestNumber})`;
-      return res.status(400).json({
-        success: false,
-        message: msg,
-        data: existingRequest,
-      });
+      const unusedPending =
+        ["pending", "processing"].includes(existingRequest.status) &&
+        !existingRequest.outwardId &&
+        !(Number(existingRequest.packetsIssued) > 0);
+      if (unusedPending) {
+        await restoreCancelledRequestRaisingPackets(existingRequest);
+        existingRequest.status = "cancelled";
+        existingRequest.cancelledBy = req.user?._id;
+        existingRequest.cancelledDate = new Date();
+        existingRequest.cancellationReason = "Replaced by a new packet request";
+        await existingRequest.save();
+        bustSowingCardsLiteCache();
+      } else {
+        const msg =
+          existingRequest.status === "issued"
+            ? `Stock already issued (${existingRequest.requestNumber}) — sowing in progress. Cannot request again for this packing.`
+            : `A ${existingRequest.status} request already exists for this seed packing (${existingRequest.requestNumber})`;
+        return res.status(400).json({
+          success: false,
+          message: msg,
+          data: existingRequest,
+        });
+      }
     }
 
     const suppliedOrderIds = Array.isArray(linkedOrderIds)

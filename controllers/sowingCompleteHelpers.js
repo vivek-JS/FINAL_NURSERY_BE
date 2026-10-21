@@ -3,6 +3,8 @@ import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
 import InventoryOutward from "../models/inventoryOutward.model.js";
 import ReturnRequest from "../models/returnRequest.model.js";
+import PlantCms from "../models/plantCms.model.js";
+import SowingRequest from "../models/sowingRequest.model.js";
 import {
   fmtDDMMYYYY,
   addDays,
@@ -11,7 +13,17 @@ import {
   resolveReadyDays,
   parseLocalDate,
 } from "./sowingSlotReadyHelpers.js";
-import { sowQtySlotImpact, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
+import {
+  sowQtySlotImpact,
+  splitLagwadQtyForSlot,
+  clampMortalityPct,
+} from "../utility/lagwadSlotPlantsSplit.js";
+
+async function mortalityPctForPlant(plantId) {
+  if (!plantId) return 10;
+  const p = await PlantCms.findById(plantId).select("sowingMortality").lean();
+  return clampMortalityPct(p?.sowingMortality, 10);
+}
 import { updatePlantSlotCapped } from "../utility/shrinkPlantSlotTrails.js";
 import {
   planOrderSowCover,
@@ -124,17 +136,21 @@ export async function recordExcessPlantsOnSlot(
   const sid = new mongoose.Types.ObjectId(slotId);
   const rid = new mongoose.Types.ObjectId(sowingRequestId);
   const orderIds = toObjectIds(coveredOrderIds);
+  const reqRow = await SowingRequest.findById(rid).select("plantId").lean();
+  const mortalityPct = await mortalityPctForPlant(reqRow?.plantId);
 
   const impact = sowQtySlotImpact(qty + covered, {
     excessPlants: qty,
     orderCoveredPlants: covered,
+    mortalityPct,
   });
   const availInc = impact.availablePlants;
   const reservedInc = impact.orderReservedPlants;
-  // Apply step already moved 10% to expected mortality; the order buffer can raise it.
+  // Apply step already moved plant mortality %; the order buffer can raise it.
   const mortalityExtra = Math.max(
     0,
-    impact.expectedMortality - splitLagwadQtyForSlot(impact.plantsSowed).expectedMortality
+    impact.expectedMortality -
+      splitLagwadQtyForSlot(impact.plantsSowed, mortalityPct).expectedMortality
   );
 
   const update = {
@@ -268,6 +284,7 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
 
   const plantId = request.plantId || meta.plantId;
   const subtypeId = request.subtypeId || meta.subtypeId;
+  const mortalityPct = await mortalityPctForPlant(plantId);
   const cmsReadyDays = await resolveCmsReadyDays(plantId, subtypeId);
   const overrideReady = Number(meta.plantReadyDays);
   const readyDaysGlobal =
@@ -385,7 +402,7 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
     appliedReadyDays = readyDays;
     appliedReadyDate = readyDateStr;
 
-    const impact = sowQtySlotImpact(addPlants, { isExcess });
+    const impact = sowQtySlotImpact(addPlants, { isExcess, mortalityPct });
     appliedActual += impact.actualPlants;
     appliedMortality += impact.expectedMortality;
     // Physical sowed stays gross; usable pool is 90% actual + 10% expected mortality
@@ -658,10 +675,12 @@ export async function editSowEntryOnSlots(request, opts = {}) {
 
   const isExcess =
     Boolean(request.isExcessiveSowing) && coveredTotal <= 0;
+  const mortalityPct = await mortalityPctForPlant(request.plantId);
   const impact = sowQtySlotImpact(plantsTotal, {
     isExcess,
     excessPlants: excessTotal,
     orderCoveredPlants: coveredTotal,
+    mortalityPct,
   });
 
   const editInc = {
