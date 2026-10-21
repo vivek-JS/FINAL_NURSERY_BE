@@ -87,9 +87,35 @@ export async function assignSubtypeSeed({
       userId,
     });
 
+    let agri = null;
+    if (cropId && varietyId) {
+      const { linkProductToAgriVariety } = await import(
+        "./ramAgriVarietyInventoryLink.service.js"
+      );
+      agri = await linkProductToAgriVariety({
+        productId: product._id,
+        cropId,
+        varietyId,
+        tentativePlantsPerPacket,
+        userId,
+      });
+      try {
+        await addRamAgriSubtypeLink({
+          plantId,
+          subtypeId,
+          cropId,
+          varietyId,
+          userId,
+        });
+      } catch {
+        /* already linked */
+      }
+    }
+
     return {
       source: "biotech",
       link,
+      agri,
       product: product.toObject ? product.toObject() : product,
     };
   }
