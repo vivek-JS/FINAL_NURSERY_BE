@@ -292,33 +292,22 @@ export const createSowingRequest = async (req, res) => {
         : [];
     }
 
-    // Same order cannot be included in another active sowing request
+    // Move overlapping orders off any other active request so this create can own them
     if (linkedOrderObjectIds.length) {
-      const ACTIVE_REQ = ['pending', 'processing', 'issued'];
-      const conflict = await SowingRequest.findOne({
-        linkedOrderIds: { $in: linkedOrderObjectIds },
-        status: { $in: ACTIVE_REQ },
-      })
-        .select('requestNumber status linkedOrderIds plantName subtypeName')
-        .lean();
-
-      if (conflict) {
-        const conflictIds = new Set(
-          (conflict.linkedOrderIds || []).map((id) => String(id))
-        );
-        const overlap = linkedOrderObjectIds.filter((id) =>
-          conflictIds.has(String(id))
-        );
-        return res.status(400).json({
-          success: false,
-          message: `Order(s) already requested in ${conflict.requestNumber} (${conflict.status}). Cannot request again for the same order.`,
-          data: {
-            existingRequestNumber: conflict.requestNumber,
-            existingStatus: conflict.status,
-            overlappingOrderIds: overlap,
+      const ACTIVE_REQ = ["pending", "processing", "issued"];
+      await SowingRequest.updateMany(
+        {
+          linkedOrderIds: { $in: linkedOrderObjectIds },
+          status: { $in: ACTIVE_REQ },
+          sowingCompleted: { $ne: true },
+        },
+        {
+          $pull: {
+            linkedOrderIds: { $in: linkedOrderObjectIds },
+            uncoveredOrderIds: { $in: linkedOrderObjectIds },
           },
-        });
-      }
+        }
+      );
     }
 
     // Generate request number
