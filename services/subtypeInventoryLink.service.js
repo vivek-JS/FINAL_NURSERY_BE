@@ -13,7 +13,12 @@ export async function listSubtypeInventoryLinks(plantId, subtypeId) {
     subtypeId,
     isActive: true,
   })
-    .populate("productId", "name code currentStock category primaryUnit")
+    .populate({
+      path: "productId",
+      select:
+        "name code currentStock category primaryUnit tentativePlantsPerPacket ramAgriCropId ramAgriVarietyId",
+      populate: { path: "ramAgriCropId", select: "cropName varieties" },
+    })
     .populate("ramAgriCropId", "cropName productType varieties")
     .sort({ source: 1, createdAt: 1 })
     .lean();
@@ -44,8 +49,14 @@ export function enrichLinkRows(links = []) {
       row.availableStock = Number(variety?.currentStock) || 0;
     } else if ((link.source === "BIOTECH" || hasBiotech) && link.productId) {
       const p = link.productId;
+      const crop = p?.ramAgriCropId;
+      const variety = (crop?.varieties || []).find(
+        (v) => String(v._id) === String(p?.ramAgriVarietyId)
+      );
       row.displayName = p?.name || link.label || "Biotech product";
       row.availableStock = Number(p?.currentStock) || 0;
+      row.ramAgriCropName = crop?.cropName || "";
+      row.ramAgriVarietyName = variety?.name || "";
     }
     return row;
   });
