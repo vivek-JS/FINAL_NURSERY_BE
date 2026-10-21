@@ -327,6 +327,26 @@ export const createSowingRequest = async (req, res) => {
             directIssued: true,
           });
         }
+        if (req.body.skipStockIssue) {
+          const { markIssuedWithoutStock } = await import(
+            "../services/directIssueSowingRequest.service.js"
+          );
+          existingRequest.packetsNeeded = Number(packetsNeeded) || existingRequest.packetsNeeded;
+          existingRequest.packetsRequested = Number(requested) || existingRequest.packetsRequested;
+          if (Number.isFinite(fromCompany)) existingRequest.packetsFromCompany = fromCompany;
+          if (Number.isFinite(fromRaising)) existingRequest.packetsFromRaising = fromRaising;
+          existingRequest.seedSource = resolvedSource;
+          await existingRequest.save();
+          const ready = await markIssuedWithoutStock(existingRequest, req.user);
+          bustSowingCardsLiteCache();
+          return res.status(200).json({
+            success: true,
+            message: `${ready.requestNumber} is now sowing in progress`,
+            data: ready,
+            directIssued: true,
+            skippedStock: true,
+          });
+        }
         const issued = await issuePendingRequestDirect(existingRequest, req.user, {
           cancelOnFail: false,
         });
@@ -540,6 +560,20 @@ export const createSowingRequest = async (req, res) => {
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'requestedBy']);
 
     if (req.body.directIssue) {
+      if (req.body.skipStockIssue) {
+        const { markIssuedWithoutStock } = await import(
+          "../services/directIssueSowingRequest.service.js"
+        );
+        const ready = await markIssuedWithoutStock(request, req.user);
+        bustSowingCardsLiteCache();
+        return res.status(201).json({
+          success: true,
+          message: `${ready.requestNumber} is now sowing in progress`,
+          data: ready,
+          directIssued: true,
+          skippedStock: true,
+        });
+      }
       try {
         const issued = await issuePendingRequestDirect(request, req.user, {
           cancelOnFail: false,
