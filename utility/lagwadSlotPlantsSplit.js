@@ -1,12 +1,20 @@
 /** Lagwad → slot: 90% actual plants, 10% expected mortality (all lagwad paths). */
 export const LAGWAD_ACTUAL_PLANTS_PCT = 90;
 
-export function splitLagwadQtyForSlot(qty) {
+export function clampMortalityPct(value, fallback = 10) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.min(50, n);
+}
+
+export function splitLagwadQtyForSlot(qty, mortalityPct = 10) {
   const total = Math.max(0, Math.floor(Number(qty) || 0));
   if (total < 1) {
     return { total: 0, actualPlants: 0, expectedMortality: 0 };
   }
-  const actualPlants = Math.floor((total * LAGWAD_ACTUAL_PLANTS_PCT) / 100);
+  const mort = clampMortalityPct(mortalityPct, 10);
+  const actualPct = 100 - mort;
+  const actualPlants = Math.floor((total * actualPct) / 100);
   const expectedMortality = total - actualPlants;
   return { total, actualPlants, expectedMortality };
 }
@@ -21,11 +29,11 @@ const toQty = (v) => Math.max(0, Math.floor(Number(v) || 0));
  * the leftover is kept as buffer up to 20% of the order plants.
  * 12,000 sowed for 10,000 ordered → 2,000; 15,000 for 10,000 → 2,000; 12,000 with no orders → 1,200.
  */
-export function sowMortalityReserve(plantsSowed, orderCoveredPlants = 0) {
+export function sowMortalityReserve(plantsSowed, orderCoveredPlants = 0, mortalityPct = 10) {
   const sowed = toQty(plantsSowed);
   const covered = Math.min(sowed, toQty(orderCoveredPlants));
   const buffer = Math.min(sowed - covered, Math.floor((covered * ORDER_MORTALITY_BUFFER_PCT) / 100));
-  return Math.max(splitLagwadQtyForSlot(sowed).expectedMortality, buffer);
+  return Math.max(splitLagwadQtyForSlot(sowed, mortalityPct).expectedMortality, buffer);
 }
 
 /**
@@ -96,12 +104,12 @@ export function computeLagwadPendingSlotSync(availableQuantity, slotStockSyncedP
  */
 export function sowQtySlotImpact(
   plantsSowed,
-  { isExcess = false, excessPlants = 0, orderCoveredPlants = 0 } = {}
+  { isExcess = false, excessPlants = 0, orderCoveredPlants = 0, mortalityPct = 10 } = {}
 ) {
   const total = toQty(plantsSowed);
   const excessQty = isExcess ? total : toQty(excessPlants);
   const coveredQty = isExcess ? 0 : toQty(orderCoveredPlants);
-  const expectedMortality = sowMortalityReserve(total, coveredQty);
+  const expectedMortality = sowMortalityReserve(total, coveredQty, mortalityPct);
   const actualPlants = total - expectedMortality;
   const orderReservedPlants = Math.min(coveredQty, actualPlants);
   return {

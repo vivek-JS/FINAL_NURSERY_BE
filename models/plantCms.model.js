@@ -42,7 +42,8 @@ const plantSchema = new Schema({
   buffer: { type: Number, default: 0 }, // Buffer at plant level
   sowingAllowed: { type: Boolean, default: false }, // Whether sowing is allowed for this plant
   dailyDispatchCapacity: { type: Number, default: 2000 }, // Daily dispatch capacity for this plant
-  sowingBuffer: { type: Number, default: 0 }, // Sowing buffer percentage for this plant
+  sowingBuffer: { type: Number, default: 0 }, // Extra seed % on company packet requests
+  sowingMortality: { type: Number, default: 10 }, // Expected mortality % on complete-sow split
 });
 
 // Auto slot generation removed - slots are now managed through dedicated slot management system

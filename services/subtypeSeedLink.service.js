@@ -75,6 +75,11 @@ export async function assignSubtypeSeed({
       throw new Error("Only seed products can be assigned to a subtype");
     }
 
+    if (Number(tentativePlantsPerPacket) > 0) {
+      product.tentativePlantsPerPacket = Number(tentativePlantsPerPacket);
+      await product.save();
+    }
+
     const link = await addBiotechSubtypeLink({
       plantId,
       subtypeId,
