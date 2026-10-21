@@ -1,0 +1,97 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  dispatchedNetOf,
+  remainingOf,
+  changeCountOf,
+  linkedOrderIdSet,
+  mergeStockChanges,
+  dmyToYmd,
+  isReadyNow,
+  orderRemainingPlants,
+} from "../services/sowBatchStock.service.js";
+
+const OID = {
+  o1: "650000000000000000000001",
+  o2: "650000000000000000000002",
+};
+
+test("dispatchedNet sums signed dispatchLog plants", () => {
+  const batch = {
+    dispatchLog: [
+      { plants: 1000, bucket: "COVER" },
+      { plants: 400, bucket: "FREE" },
+      { plants: -200, bucket: "UNLOAD" },
+      { plants: -100, bucket: "RETURN" },
+    ],
+  };
+  assert.equal(dispatchedNetOf(batch), 1100);
+});
+
+test("remaining is sowed minus destroyed minus net dispatch", () => {
+  const batch = {
+    plantsSowed: 10000,
+    destroyedPlants: 500,
+    dispatchLog: [
+      { plants: 3000, bucket: "COVER" },
+      { plants: -500, bucket: "RETURN" },
+    ],
+  };
+  assert.equal(remainingOf(batch), 7000);
+  assert.equal(remainingOf(batch, 2500), 7000);
+});
+
+test("remaining never goes negative", () => {
+  assert.equal(
+    remainingOf({ plantsSowed: 100, destroyedPlants: 40, dispatchLog: [{ plants: 90 }] }),
+    0
+  );
+});
+
+test("changeCount and linked ids include allocs", () => {
+  const batch = {
+    linkedOrderIds: [OID.o1],
+    dispatchLog: [{ plants: 10, orderId: OID.o1 }],
+    destroyLog: [{ plants: 2 }],
+    excessAllocations: [{ orderId: OID.o2, plants: 50 }],
+    slotHistory: [{ plantsSowed: 100 }],
+  };
+  assert.equal(changeCountOf(batch), 4);
+  assert.deepEqual([...linkedOrderIdSet(batch)].sort(), [OID.o1, OID.o2].sort());
+});
+
+test("mergeStockChanges is newest first and signs destroy as negative", () => {
+  const t1 = new Date("2026-10-18T10:00:00.000Z");
+  const t2 = new Date("2026-10-19T10:00:00.000Z");
+  const t3 = new Date("2026-10-20T10:00:00.000Z");
+  const changes = mergeStockChanges({
+    dispatchLog: [{ at: t2, plants: 800, bucket: "COVER", orderId: OID.o1 }],
+    destroyLog: [{ at: t3, plants: 50, reason: "rot" }],
+    excessAllocations: [{ at: t1, plants: 200, orderId: OID.o2 }],
+    slotHistory: [],
+  });
+  assert.equal(changes.length, 3);
+  assert.equal(changes[0].type, "destroy");
+  assert.equal(changes[0].plants, -50);
+  assert.equal(changes[1].type, "dispatch");
+  assert.equal(changes[1].orderId, OID.o1);
+  assert.equal(changes[2].type, "excessAlloc");
+});
+
+test("ready date compare uses DD-MM-YYYY vs IST ymd", () => {
+  assert.equal(dmyToYmd("18-10-2026"), "2026-10-18");
+  assert.equal(isReadyNow("18-10-2026", "2026-10-20"), true);
+  assert.equal(isReadyNow("25-10-2026", "2026-10-20"), false);
+  assert.equal(isReadyNow("", "2026-10-20"), false);
+});
+
+test("order remaining uses partial cover until sowingDone", () => {
+  const o = {
+    numberOfPlants: 20000,
+    additionalPlants: 0,
+    sowingDone: false,
+    sowingPartialCover: [{ plants: 2300 }],
+  };
+  assert.equal(orderRemainingPlants(o), 17700);
+  assert.equal(orderRemainingPlants({ ...o, sowingDone: true }), 0);
+});

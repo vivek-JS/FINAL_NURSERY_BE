@@ -112,6 +112,10 @@ import {
   getExcessBatches,
   coverOrderFromExcessBatches,
 } from "../controllers/orderExcessBatchCover.controller.js";
+import {
+  getSowBatchStock,
+  getSowBatchStockById,
+} from "../controllers/sowBatchStock.controller.js";
 
 const router = express.Router();
 
@@ -135,6 +139,8 @@ router.get("/capacity-sheet/shed-stock", getCapacityShedStock);
 router.get("/capacity-sheet/board", getCapacityBoard);
 router.post("/capacity-ask", askCapacityAnalyst);
 router.post("/sow-batch/destroy", postDestroySowBatch); // Destroy sown plants of a slot sowing batch
+router.get("/sow-batch-stock", getSowBatchStock); // SowingAllowed batch stock table
+router.get("/sow-batch-stock/:batchId", getSowBatchStockById); // Batch stock-change timeline
 router.get("/slot-orders/:slotId", getSlotOrdersSummary); // Get orders summary for a specific slot
 router.get("/today-sowing-data", getTodaySowingData); // Get today's sowing data for all plants (due and current day)
 router.get("/today-sowing-cards", getAllPlantsTodaySowingCards); // Get all plants subtype cards for today and overdue (flat structure, no accordion)
