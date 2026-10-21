@@ -12,6 +12,10 @@ import {
   leftoverBookingSlotIdSet,
   leftoverLiveOrders,
 } from "../services/sowingLeftoverDue.service.js";
+import {
+  buildOrderRequestLookup,
+  lookupOrderRequest,
+} from "../services/sowingRequestOrderFlags.js";
 
 const ACTIVE_ORDER_STATUSES = [
   "PENDING",
@@ -1072,9 +1076,8 @@ export const getOrderWiseSowing = async (req, res) => {
         subtypeId,
         status: { $in: ["pending", "processing", "issued"] },
         sowingCompleted: { $ne: true },
-        linkedOrderIds: { $exists: true, $ne: [] },
       })
-        .select("requestNumber status linkedOrderIds")
+        .select("requestNumber status linkedOrderIds linkedSlotIds")
         .lean(),
       PlantCms.findById(plantId)
         .select("subtypes._id subtypes.plantReadyDays sowingBuffer")
@@ -1129,18 +1132,7 @@ export const getOrderWiseSowing = async (req, res) => {
       now.getDate()
     );
 
-    const orderRequestMap = new Map();
-    (activeOrderReqs || []).forEach((r) => {
-      (r.linkedOrderIds || []).forEach((oid) => {
-        const k = String(oid);
-        if (!orderRequestMap.has(k)) {
-          orderRequestMap.set(k, {
-            requestNumber: r.requestNumber,
-            status: r.status,
-          });
-        }
-      });
-    });
+    const orderRequestLookup = buildOrderRequestLookup(activeOrderReqs);
 
     const raisingMap = new Map();
     raisings.forEach((r) => {
@@ -1183,7 +1175,7 @@ export const getOrderWiseSowing = async (req, res) => {
           sp.raisingIntakeId ||
           raisingInHand > 0
       );
-      const prior = orderRequestMap.get(String(o._id)) || null;
+      const prior = lookupOrderRequest(o, orderRequestLookup);
       const alreadyRequested = Boolean(prior);
 
       const slotMeta = slotMetaById.get(String(o.bookingSlot)) || null;

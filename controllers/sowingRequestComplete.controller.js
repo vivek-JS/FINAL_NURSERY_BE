@@ -296,7 +296,9 @@ export const completeSowingRequest = async (req, res) => {
     const shedName = String(
       req.body.shedName || req.body.pollyhouse || req.body.shed || ""
     ).trim();
+    const packetsUsedRaw = parseNum(req.body.packetsUsed, NaN);
     const packetsToReturnRaw = parseNum(req.body.packetsToReturn, NaN);
+    const hasUsedInput = Number.isFinite(packetsUsedRaw);
     const hasReturnInput = Number.isFinite(packetsToReturnRaw);
     const raisingUsedRaw = parseNum(req.body.raisingPacketsUsed, NaN);
     const raisingReturnRaw = parseNum(
@@ -378,6 +380,13 @@ export const completeSowingRequest = async (req, res) => {
         0;
       const remainingPkt = await getRemainingCompanyPackets(locked);
       const remainingRaising = getRemainingRaisingPackets(locked);
+
+      if (remainingPkt > 0.001 && (!hasUsedInput || !hasReturnInput)) {
+        return res.status(400).json({
+          success: false,
+          message: "Enter packets used and packets returned",
+        });
+      }
 
       // Prefer explicit packetsUsed. Honor explicit packetsToReturn even when
       // plant/cf used-hint would consume every remaining bag.
@@ -1040,8 +1049,9 @@ export const getSowingCompletions = async (req, res) => {
       return {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
+        isIrrelevant: Boolean(reqBatch?.isIrrelevant),
         isExcess: Boolean(r.isExcessiveSowing),
-        excessPlants: Number(reqBatch?.excessPlants) || 0,
+        excessPlants: reqBatch?.isIrrelevant ? 0 : Number(reqBatch?.excessPlants) || 0,
         bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
         shedName: reqBatch?.shedName || r.shedName || "",
         linkedOrders,
@@ -1268,11 +1278,12 @@ function buildAffectedSlot(slotRaw, reqBatch, shedName) {
     batchId: reqBatch?._id ? String(reqBatch._id) : null,
     batchDestroyedPlants: Number(reqBatch?.destroyedPlants) || 0,
     batchExpectedMortality: reqBatch ? sowBatchStock(reqBatch).reserve : 0,
+    isIrrelevant: Boolean(reqBatch?.isIrrelevant),
     requestDestroyedPlants: (slotRaw.sowingBatches || [])
       .filter((b) => reqBatch && String(b.sowingRequestId) === String(reqBatch.sowingRequestId))
       .reduce((s, b) => s + (Number(b.destroyedPlants) || 0), 0),
     shedName: reqBatch?.shedName || shedName || "",
-    excessPlants: Number(reqBatch?.excessPlants) || 0,
+    excessPlants: reqBatch?.isIrrelevant ? 0 : Number(reqBatch?.excessPlants) || 0,
     bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
   };
 }
@@ -1515,8 +1526,11 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       machineMinutes: Number(pick(meta.machineMinutes, r.machineMinutes)) || 0,
       completionNotes: pick(meta.notes, r.completionNotes) || "",
       shedName: reqBatch?.shedName || shedName,
+      isIrrelevant: Boolean(reqBatch?.isIrrelevant),
       isExcess: Boolean(r.isExcessiveSowing) || Number(meta.excessPlants) >= Number(ev.quantity),
-      excessPlants: Number(reqBatch?.excessPlants) || Number(meta.excessPlants) || 0,
+      excessPlants: reqBatch?.isIrrelevant
+        ? 0
+        : Number(reqBatch?.excessPlants) || Number(meta.excessPlants) || 0,
       bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
       linkedOrders,
       batchNumber: batchNumbers.join(", ") || "",
