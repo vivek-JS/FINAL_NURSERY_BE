@@ -28,6 +28,66 @@ function bustSowingCardsLiteCache() {
   });
 }
 
+async function issuePendingRequestDirect(requestDoc, user, { cancelOnFail = true } = {}) {
+  const { buildDirectIssueBody, abandonUnissuedRequest } = await import(
+    "../services/directIssueSowingRequest.service.js"
+  );
+  const request = await SowingRequest.findById(requestDoc._id)
+    .populate("primaryUnit", "name symbol")
+    .populate("secondaryUnit", "name symbol")
+    .populate("productId");
+  if (!request) {
+    return { success: false, statusCode: 404, message: "Sowing request not found" };
+  }
+  if (request.status === "issued") {
+    return { success: true, statusCode: 200, data: { request }, alreadyIssued: true };
+  }
+  try {
+    const built = await buildDirectIssueBody(request);
+    if (!built.ok) {
+      return {
+        success: false,
+        statusCode: 400,
+        message: built.message || "Could not issue sowing request",
+      };
+    }
+    const issued = await invokeIssueStock(request._id, built.body, user);
+    if (!issued.success) {
+      if (cancelOnFail) {
+        await abandonUnissuedRequest(
+          request._id,
+          user,
+          issued.message || "Could not issue sowing request"
+        );
+      }
+      return {
+        success: false,
+        statusCode: 400,
+        message: issued.message || "Could not issue sowing request",
+      };
+    }
+    return {
+      success: true,
+      statusCode: 201,
+      data: issued.data,
+      message: "Sowing request created and issued",
+    };
+  } catch (issueErr) {
+    if (cancelOnFail) {
+      await abandonUnissuedRequest(
+        request._id,
+        user,
+        issueErr?.message || "Could not issue sowing request"
+      );
+    }
+    return {
+      success: false,
+      statusCode: 400,
+      message: issueErr?.message || "Could not issue sowing request",
+    };
+  }
+}
+
 /** Run the stock-issue handler in-process and capture its JSON response. */
 function invokeIssueStock(requestId, body, user) {
   return new Promise((resolve) => {
@@ -230,8 +290,40 @@ export const createSowingRequest = async (req, res) => {
     });
 
     if (existingRequest) {
+      if (req.body.directIssue) {
+        const extraOrders = Array.isArray(linkedOrderIds)
+          ? linkedOrderIds.filter((id) => mongoose.Types.ObjectId.isValid(id))
+          : [];
+        if (extraOrders.length) {
+          await SowingRequest.updateOne(
+            { _id: existingRequest._id },
+            { $addToSet: { linkedOrderIds: { $each: extraOrders } } }
+          );
+        }
+        if (existingRequest.status === "issued") {
+          bustSowingCardsLiteCache();
+          return res.status(200).json({
+            success: true,
+            message: `Already issued (${existingRequest.requestNumber}) — ready to sow`,
+            data: existingRequest,
+            directIssued: true,
+          });
+        }
+        const issued = await issuePendingRequestDirect(existingRequest, req.user, {
+          cancelOnFail: false,
+        });
+        bustSowingCardsLiteCache();
+        return res.status(issued.statusCode || (issued.success ? 201 : 400)).json({
+          success: issued.success,
+          message: issued.success
+            ? `Issued ${existingRequest.requestNumber} — ready to sow`
+            : issued.message,
+          data: issued.data?.request || existingRequest,
+          directIssued: Boolean(issued.success),
+        });
+      }
       const msg =
-        existingRequest.status === 'issued'
+        existingRequest.status === "issued"
           ? `Stock already issued (${existingRequest.requestNumber}) — sowing in progress. Cannot request again for this packing.`
           : `A ${existingRequest.status} request already exists for this seed packing (${existingRequest.requestNumber})`;
       return res.status(400).json({
@@ -402,33 +494,15 @@ export const createSowingRequest = async (req, res) => {
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'requestedBy']);
 
     if (req.body.directIssue) {
-      const { buildDirectIssueBody, abandonUnissuedRequest } = await import(
-        "../services/directIssueSowingRequest.service.js"
-      );
       try {
-        const built = await buildDirectIssueBody(request);
-        if (!built.ok) {
-          await abandonUnissuedRequest(request._id, req.user, built.message);
-          bustSowingCardsLiteCache();
-          return res.status(400).json({
-            success: false,
-            message: built.message || "Could not issue sowing request",
-          });
-        }
-        const issued = await invokeIssueStock(request._id, built.body, req.user);
+        const issued = await issuePendingRequestDirect(request, req.user);
+        bustSowingCardsLiteCache();
         if (!issued.success) {
-          await abandonUnissuedRequest(
-            request._id,
-            req.user,
-            issued.message || "Could not issue sowing request"
-          );
-          bustSowingCardsLiteCache();
-          return res.status(400).json({
+          return res.status(issued.statusCode || 400).json({
             success: false,
             message: issued.message || "Could not issue sowing request",
           });
         }
-        bustSowingCardsLiteCache();
         return res.status(201).json({
           success: true,
           message: "Sowing request created and issued",
@@ -436,11 +510,6 @@ export const createSowingRequest = async (req, res) => {
           directIssued: true,
         });
       } catch (issueErr) {
-        await abandonUnissuedRequest(
-          request._id,
-          req.user,
-          issueErr?.message || "Could not issue sowing request"
-        );
         bustSowingCardsLiteCache();
         return res.status(400).json({
           success: false,
