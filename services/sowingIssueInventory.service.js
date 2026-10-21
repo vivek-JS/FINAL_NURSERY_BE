@@ -82,6 +82,84 @@ export function resolveIssueInventorySplit({
   };
 }
 
+/** Unique Biotech product ObjectIds from subtype links + the request product. */
+export function collectBiotechProductIds(biotechLinks = [], fallbackProductId) {
+  const ids = [];
+  const seen = new Set();
+  const add = (raw) => {
+    const id = raw?._id || raw;
+    if (!id || !mongoose.isValidObjectId(id)) return;
+    const key = String(id);
+    if (seen.has(key)) return;
+    seen.add(key);
+    ids.push(new mongoose.Types.ObjectId(key));
+  };
+  for (const link of biotechLinks || []) add(link?.productId);
+  add(fallbackProductId);
+  return ids;
+}
+
+export function packetsInRequestUnit(batch, request) {
+  const qty = Number(batch?.remainingQuantity) || 0;
+  const batchUnitId = batch?.unit?._id?.toString();
+  const primaryUnitId =
+    request?.primaryUnit?._id?.toString() || request?.primaryUnit?.toString();
+  const secondaryUnitId =
+    request?.secondaryUnit?._id?.toString() || request?.secondaryUnit?.toString();
+  if (
+    batchUnitId &&
+    secondaryUnitId &&
+    batchUnitId === secondaryUnitId &&
+    Number(request?.conversionFactor) > 0
+  ) {
+    return qty / Number(request.conversionFactor);
+  }
+  return qty;
+}
+
+/** Biotech products that the issue dialog can actually take stock from. */
+export async function resolveBiotechIssueProductIds(
+  plantId,
+  subtypeId,
+  fallbackProductId
+) {
+  const candidates = await getSubtypeInventoryCandidates(plantId, subtypeId);
+  let links = candidates.biotech || [];
+  if (!links.length && plantId && subtypeId) {
+    const products = await Product.find({ plantId, subtypeId }).select("_id").lean();
+    links = (products || []).map((p) => ({ productId: p._id }));
+  }
+  return collectBiotechProductIds(links, fallbackProductId);
+}
+
+/** Issuable Biotech warehouse batches across every product linked to this subtype. */
+export async function loadBiotechIssueBatches({
+  plantId,
+  subtypeId,
+  fallbackProductId,
+} = {}) {
+  const productIds = await resolveBiotechIssueProductIds(
+    plantId,
+    subtypeId,
+    fallbackProductId
+  );
+  if (!productIds.length) return [];
+  return Batch.find({
+    product: { $in: productIds },
+    status: { $in: ["active", "expired"] },
+    remainingQuantity: { $gt: 0 },
+    notes: { $not: RAM_AGRI_MIRROR_NOTE_REGEX },
+  })
+    .select(
+      "batchNumber product receivedDate supplier purchasePrice quantity remainingQuantity unit status grn expiryDate manufactureDate notes"
+    )
+    .populate("unit", "name symbol")
+    .populate("supplier", "name")
+    .populate("product", "name code currentStock")
+    .sort({ expiryDate: 1, receivedDate: 1 })
+    .lean();
+}
+
 /**
  * Biotech products linked to a Ram Agri variety carry mirror batches of the
  * Ram Agri lots, and their currentStock includes them. Those packets are
