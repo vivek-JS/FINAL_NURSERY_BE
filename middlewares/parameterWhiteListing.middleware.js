@@ -94,6 +94,7 @@ const allowedParams = [
   "talukaName",
   "dealer",
   "farmReady",
+  "unsown", // GET /order/getOrders — accepted sowing plants not yet sowingDone
   "ready_for_dispatch",
   "sortByDelivery", // getOrders ready tab: "true" = sort by deliveryDate
   "sortByReadyEntered", // getOrders ready tab: "true" = sort by readyForDispatchEnteredAt (default = dispatchTargetDate)

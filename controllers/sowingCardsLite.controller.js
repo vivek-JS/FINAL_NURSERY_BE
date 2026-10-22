@@ -378,7 +378,15 @@ export const getTodaySowingCardsLite = async (req, res) => {
       .map((s) => s.slotId)
       .filter(Boolean);
 
-    // Live booked per slot (excludes DISPATCHED/COMPLETED/CANCELLED ghosts on totalBookedPlants)
+    // Live booked per slot (excludes DISPATCHED/COMPLETED/CANCELLED ghosts on totalBookedPlants).
+    // sownOrderPlants is kept so slot primarySowed already used by sowingDone orders
+    // is not subtracted again from the orders that are still unsown.
+    const plantSum = {
+      $add: [
+        { $ifNull: ["$numberOfPlants", 0] },
+        { $ifNull: ["$additionalPlants", 0] },
+      ],
+    };
     const liveBookedBySlot = new Map();
     if (candidateSlotIds.length) {
       const liveRows = await Order.aggregate([
@@ -386,7 +394,6 @@ export const getTodaySowingCardsLite = async (req, res) => {
           $match: {
             bookingSlot: { $in: candidateSlotIds },
             orderStatus: { $in: ACTIVE_ORDER_STATUSES },
-            sowingDone: { $ne: true },
             $or: [
               { quotaSource: { $exists: false } },
               { quotaSource: null },
@@ -399,19 +406,24 @@ export const getTodaySowingCardsLite = async (req, res) => {
             _id: "$bookingSlot",
             bookedPlants: {
               $sum: {
-                $add: [
-                  { $ifNull: ["$numberOfPlants", 0] },
-                  { $ifNull: ["$additionalPlants", 0] },
-                ],
+                $cond: [{ $ne: ["$sowingDone", true] }, plantSum, 0],
               },
             },
-            orderCount: { $sum: 1 },
+            sownOrderPlants: {
+              $sum: {
+                $cond: [{ $eq: ["$sowingDone", true] }, plantSum, 0],
+              },
+            },
+            orderCount: {
+              $sum: { $cond: [{ $ne: ["$sowingDone", true] }, 1, 0] },
+            },
           },
         },
       ]);
       liveRows.forEach((r) => {
         liveBookedBySlot.set(String(r._id), {
           booked: Number(r.bookedPlants) || 0,
+          sownOrderPlants: Number(r.sownOrderPlants) || 0,
           orderCount: Number(r.orderCount) || 0,
         });
       });
@@ -422,6 +434,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
     for (const slot of dueCandidates) {
       const live = liveBookedBySlot.get(String(slot.slotId)) || {
         booked: 0,
+        sownOrderPlants: 0,
         orderCount: 0,
       };
       const booked = live.booked;
@@ -429,7 +442,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
 
       const sowed =
         (Number(slot.primarySowed) || 0) + (Number(slot.officeSowed) || 0);
-      const rawGap = Math.max(0, booked - sowed);
+      const excessSowed = Math.max(0, sowed - (Number(live.sownOrderPlants) || 0));
+      const rawGap = Math.max(0, booked - excessSowed);
       const bufferPct = slot.bufferPct || 0;
       // Match full sowing.controller: buffer on remaining gap, not on total booked
       const plantsToSowWithBuffer =

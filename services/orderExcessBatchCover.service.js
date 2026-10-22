@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Order from "../models/order.model.js";
+import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import SowingRequest from "../models/sowingRequest.model.js";
 import {
@@ -19,6 +20,21 @@ import {
 } from "../constants/slotTrailActions.js";
 
 export const EXCESS_COVER_WINDOW_DAYS = 5;
+export const DEFAULT_EXCESS_MAX_WINDOW_DAYS = 15;
+/** Papaya ready dates sit further from delivery than watermelon. */
+export const PAPAYA_EXCESS_WINDOW_DAYS = 40;
+
+export function isPapayaPlantName(name) {
+  return String(name || "").trim().toLowerCase() === "papaya";
+}
+
+/** ±15 for normal sowing plants; ±40 for papaya. */
+export async function excessWindowCapForPlant(plantId) {
+  const plant = await PlantCms.findById(toOid(plantId)).select("name").lean();
+  return isPapayaPlantName(plant?.name)
+    ? PAPAYA_EXCESS_WINDOW_DAYS
+    : DEFAULT_EXCESS_MAX_WINDOW_DAYS;
+}
 
 export class ExcessCoverError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -186,13 +202,25 @@ export async function listExcessBatches({
   need = 0,
   windowDays = EXCESS_COVER_WINDOW_DAYS,
   releaseOrderId = null,
-  maxWindowDays = 15,
+  maxWindowDays = null,
 }) {
   const plantOid = toOid(plantId);
   const subtypeOid = toOid(subtypeId);
   const deliveryIst = deliveryDateToIstMoment(deliveryDate);
   const needQty = int(need);
-  const win = Math.min(maxWindowDays, Math.max(0, Math.floor(Number(windowDays) || 0)));
+  const plantCap = plantOid
+    ? await excessWindowCapForPlant(plantOid)
+    : DEFAULT_EXCESS_MAX_WINDOW_DAYS;
+  let requested = Math.max(0, Math.floor(Number(windowDays) || 0));
+  // Papaya always searches ±40 unless the caller asked for a wider scan.
+  if (plantCap > DEFAULT_EXCESS_MAX_WINDOW_DAYS && maxWindowDays == null) {
+    requested = Math.max(requested, plantCap);
+  }
+  const cap =
+    maxWindowDays == null
+      ? plantCap
+      : Math.max(plantCap, Math.floor(Number(maxWindowDays) || 0));
+  const win = Math.min(cap, requested);
   const empty = { need: needQty, windowDays: win, totalFree: 0, mode: "none", entries: [] };
   if (!plantOid || !subtypeOid || !deliveryIst) return empty;
 
@@ -240,6 +268,7 @@ export async function listExcessBatches({
               expectedMortalityApplied: "$$b.expectedMortalityApplied",
               availablePlantsApplied: "$$b.availablePlantsApplied",
               noMortalityReserve: "$$b.noMortalityReserve",
+              isIrrelevant: { $ifNull: ["$$b.isIrrelevant", false] },
               shedName: "$$b.shedName",
               requestNumber: "$$b.requestNumber",
               sowingRequestId: "$$b.sowingRequestId",

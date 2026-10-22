@@ -3264,7 +3264,7 @@ const updateOne = (Model, modelName, allowedFields) =>
             order: updatedDoc._id,
             picks: excessCoverPicks,
             userId: req.user?._id,
-            windowDays: Math.min(15, Math.max(1, rawCoverWindow)),
+            windowDays: Math.max(1, rawCoverWindow),
           });
           excessCover = {
             success: true,
@@ -3922,6 +3922,7 @@ const getAll = (Model, modelName) =>
       expectedNursery, // Filter by nursery site code (RB, GH, …)
       showonly, // When truthy: restrict ANY role (incl. DISPATCH_MANAGER/ADMIN) to only orders where salesPerson === req.user._id
       exportAll: exportAllRaw, // "true" = full export (no 500 cap; skip early pagination)
+      unsown, // "true" = accepted sowing plants that are not sowingDone
     } = req.query;
 
     const exportAll = String(exportAllRaw ?? "") === "true";
@@ -4620,6 +4621,32 @@ const getAll = (Model, modelName) =>
           },
         });
       }
+    }
+
+    // Unsown tab: accepted sowing-plant orders that are not yet sowingDone.
+    // Lookup stays before pagination so the tab count matches the list.
+    if (String(unsown) === "true") {
+      pipeline.push(
+        {
+          $lookup: {
+            from: "plantcms",
+            let: { plantId: "$plantName" },
+            pipeline: [
+              { $match: { $expr: { $eq: ["$_id", "$$plantId"] } } },
+              { $project: { sowingAllowed: 1 } },
+            ],
+            as: "_unsownPlant",
+          },
+        },
+        {
+          $match: {
+            $expr: { $ne: [{ $ifNull: ["$sowingDone", false] }, true] },
+            dealerOrder: { $ne: true },
+            "_unsownPlant.sowingAllowed": true,
+          },
+        },
+        { $unset: "_unsownPlant" }
+      );
     }
 
     const canEarlyPaginate =

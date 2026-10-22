@@ -75,6 +75,7 @@ export const getExcessBatches = async (req, res) => {
         deliveryDate,
         need: data.need,
         releaseOrderId: releaseId,
+        coverWindowDays: data.windowDays > 15 ? data.windowDays : EXCESS_COVER_WINDOW_DAYS,
       });
     }
     if (releaseId) {
@@ -129,7 +130,7 @@ export const coverOrderFromExcessBatches = async (req, res) => {
       order: order._id,
       picks: req.body?.picks,
       userId: req.user?._id,
-      windowDays: Math.min(15, Math.max(1, rawWindow)),
+      windowDays: Math.max(1, rawWindow),
     });
     return res.status(200).json({
       success: true,

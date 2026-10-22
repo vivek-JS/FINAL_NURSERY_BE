@@ -1076,12 +1076,14 @@ function mergeDashboardTabQuery(base, tab, queueFarmReadyOnly) {
   delete q.dispatched;
   delete q.sortKey;
   delete q.sortOrder;
+  delete q.unsown;
 
   const isCancelledTab = tab === "cancelled";
   const isBookingLikeTab =
     tab === "booking" ||
     tab === "pending" ||
     tab === "accepted" ||
+    tab === "unsown" ||
     isCancelledTab;
   const isReadyForDispatchTab = tab === "ready_for_dispatch";
   const isCompletedTab = tab === "completed";
@@ -1094,8 +1096,11 @@ function mergeDashboardTabQuery(base, tab, queueFarmReadyOnly) {
     q.status = "CANCELLED,TEMPORARY_CANCELLED";
   } else if (tab === "pending") {
     q.status = "PENDING";
-  } else if (tab === "accepted") {
+  } else if (tab === "accepted" || tab === "unsown") {
     q.status = "ACCEPTED,ASSIGNED";
+  }
+  if (tab === "unsown") {
+    q.unsown = "true";
   }
 
   if (tab === "farmready") {
@@ -1169,6 +1174,7 @@ const getFarmerOrdersDashboardTabCounts = catchAsync(async (req, res, next) => {
     "booking",
     "pending",
     "accepted",
+    "unsown",
     "cancelled",
     "farmready",
     "ready_for_dispatch",
