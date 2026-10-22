@@ -784,7 +784,7 @@ export async function coverOrderFromBatches({
   if (!orderOid) throw new ExcessCoverError("ORDER_NOT_FOUND", "Order not found", 404);
   const order = await Order.findById(orderOid)
     .select(
-      "orderId plantName plantSubtype deliveryDate bookingSlot numberOfPlants additionalPlants sowingDone orderStatus productMappingId"
+      "orderId plantName plantSubtype deliveryDate bookingSlot numberOfPlants additionalPlants sowingPartialCover sowingDone orderStatus productMappingId"
     )
     .lean();
   if (!order) throw new ExcessCoverError("ORDER_NOT_FOUND", "Order not found", 404);
@@ -792,7 +792,14 @@ export async function coverOrderFromBatches({
     throw new ExcessCoverError("ALREADY_SOWED", "Order is already marked sow completed", 409);
   }
 
-  const need = orderPlantsNeed(order);
+  const held = (Array.isArray(order.sowingPartialCover) ? order.sowingPartialCover : []).reduce(
+    (sum, row) => sum + (Number(row?.plants) || 0),
+    0
+  );
+  const need = Math.max(0, orderPlantsNeed(order) - held);
+  if (need <= 0) {
+    throw new ExcessCoverError("NOTHING_TO_COVER", "This order has no plants left to cover");
+  }
   const { picks: matched } = await validateCoverPicks({
     plantId: order.plantName,
     subtypeId: order.plantSubtype,
