@@ -571,6 +571,7 @@ export const cancelSowingRequest = async (req, res) => {
       request.cancelledDate = new Date();
       request.cancellationReason = reason || 'Request cancelled before stock issuance';
       await request.save();
+      bustSowingCardsLiteCache();
 
       return res.status(200).json({
         success: true,
@@ -725,6 +726,7 @@ export const cancelSowingRequest = async (req, res) => {
     request.cancelledDate = new Date();
     request.cancellationReason = reason || 'Sowing request cancelled';
     await request.save();
+    bustSowingCardsLiteCache();
 
     console.log(`✅ Successfully cancelled sowing request ${request.requestNumber}`);
 
