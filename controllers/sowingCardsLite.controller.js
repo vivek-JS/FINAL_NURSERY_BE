@@ -539,6 +539,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
               subtypeId: { $toString: "$plantSubtype" },
             },
             eligibleOrderIds: { $push: "$_id" },
+            orderNumbers: { $push: "$orderId" },
             orderCount: { $sum: 1 },
             companyPackets: {
               $sum: { $ifNull: ["$sowingPlan.companySeedPackets", 0] },
@@ -820,6 +821,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         companyAvailablePlants: availablePlants,
         raisingAvailablePlants: raisingPlants,
         orderCount: o.orderCount || 0,
+        openOrderNumbers: (o.orderNumbers || []).filter((n) => n != null).slice(0, 40),
         orderSeedSummary: {
           companyPackets: Number(o.companyPackets) || 0,
           raisingPackets: Number(o.raisingPackets) || 0,
@@ -863,9 +865,9 @@ export const getTodaySowingCardsLite = async (req, res) => {
         progressKeys.add(key);
       }
 
-      // Request list: only when something is still left to request / await issue
-      // Do NOT keep pure in-progress cards here
-      if (hasOpenPacking) {
+      // Request list: still something to request, or unsown orders left beside an in-progress sow.
+      const stillUnsown = (Number(c.totalPlantsToSowRaw) || 0) > 0;
+      if (hasOpenPacking || (c.sowingInProgress && stillUnsown)) {
         requestCards.push({ ...c, cardKind: "request" });
       } else if (c.requestPending && !c.sowingInProgress) {
         requestCards.push({ ...c, cardKind: "pending" });
