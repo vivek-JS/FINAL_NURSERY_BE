@@ -2,6 +2,7 @@ import multer from "multer";
 import mongoose from "mongoose";
 import SowingRequest from "../models/sowingRequest.model.js";
 import Order from "../models/order.model.js";
+import User from "../models/user.model.js";
 import InventoryOutward from "../models/inventoryOutward.model.js";
 import PlantSlot from "../models/slots.model.js";
 import {
@@ -1305,6 +1306,39 @@ export function ordersForEntry(orders, entryTimes, entryTime) {
  * view=entries: one row per sow entry (partial or final), open requests included.
  * Sow / added date filters use the entry's IST day; slotId keeps entries applied to that slot.
  */
+function actorId(value) {
+  if (!value) return "";
+  if (typeof value === "object") return String(value._id || "");
+  return String(value);
+}
+
+async function sowingEntryAuthorNames(pageRows, reqMap) {
+  const ids = [];
+  for (const row of pageRows) {
+    const request = reqMap.get(String(row._id));
+    const event = request?.completionEvents?.[row.entryIndex];
+    ids.push(actorId(event?.by), actorId(request?.completedBy), actorId(request?.requestedBy));
+  }
+  const unique = [...new Set(ids.filter((id) => mongoose.Types.ObjectId.isValid(id)))];
+  const users = unique.length
+    ? await User.find({ _id: { $in: unique } }).select("name").lean()
+    : [];
+  const names = new Map(users.map((user) => [String(user._id), user.name || ""]));
+  const byEntry = new Map();
+  for (const row of pageRows) {
+    const request = reqMap.get(String(row._id));
+    const event = request?.completionEvents?.[row.entryIndex];
+    const name =
+      names.get(actorId(event?.by)) ||
+      names.get(actorId(request?.completedBy)) ||
+      request?.completedBy?.name ||
+      names.get(actorId(request?.requestedBy)) ||
+      "";
+    byEntry.set(`${row._id}-${row.entryIndex}`, name);
+  }
+  return byEntry;
+}
+
 async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, sortDir }) {
   const sortField = {
     sowDate: "entrySowDay",
@@ -1444,6 +1478,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
     : [];
   const reqMap = new Map(requests.map((r) => [String(r._id), r]));
   const { ordersByReqMap, outwardMap, slotMap } = await loadCompletionLookups(requests);
+  const addedByNames = await sowingEntryAuthorNames(pageRows, reqMap);
 
   const items = [];
   for (const p of pageRows) {
@@ -1527,6 +1562,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
         toSowYmd(ev.type === "SOW_COMPLETED" ? r.sowingCompletedDate : null) ||
         toSowYmd(at) ||
         null,
+      addedByName: addedByNames.get(`${r._id}-${p.entryIndex}`) || "",
       createdAt: at,
       requestCreatedAt: r.createdAt || null,
       affectedSlot: buildAffectedSlot(slotRaw, reqBatch, shedName),
