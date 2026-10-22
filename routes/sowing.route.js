@@ -75,6 +75,7 @@ import {
   getTodaySowingCardsLite,
   getOrderWiseSowing,
 } from "../controllers/sowingCardsLite.controller.js";
+import { getUnsownSowBoard } from "../controllers/unsownSowBoard.controller.js";
 import {
   optionalCompleteSowUpload,
   completeSowingRequest,
@@ -148,6 +149,7 @@ router.get("/today-sowing-data", getTodaySowingData); // Get today's sowing data
 router.get("/today-sowing-cards", getAllPlantsTodaySowingCards); // Get all plants subtype cards for today and overdue (flat structure, no accordion)
 router.get("/today-sowing-cards-lite", getTodaySowingCardsLite); // Lean cards + order seed summary (fast UI)
 router.get("/order-wise", getOrderWiseSowing); // Order-wise rows for Request Packets drawer
+router.get("/unsown-sow-board", getUnsownSowBoard); // Not-sown and partial orders for the gap page
 router.get("/completions", getSowingCompletions); // Completed sow history (paginated + order search)
 router.get("/day-summary", getSowingDaySummary); // Sow entries for one day (WhatsApp day slip)
 router.get("/analytics/delivery-vs-ready", getDeliveryVsReadyAnalytics); // Delivery vs ready/available chart
