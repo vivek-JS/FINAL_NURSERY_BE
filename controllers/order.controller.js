@@ -900,6 +900,7 @@ const getCsv = catchAsync(async (req, res, next) => {
       "Dispatched date",
       "Manual DC number",
       "Order status",
+      "Sown",
       "Reference",
     ];
 
@@ -1013,6 +1014,7 @@ const getCsv = catchAsync(async (req, res, next) => {
           "Dispatched date": formatInDate(dispatchInfo.date),
           "Manual DC number": manualDcNumber(obj),
           "Order status": obj.orderStatus ?? "",
+          Sown: obj.sowingDone === true ? "Y" : "N",
           Reference: reference,
         });
       } catch (error) {

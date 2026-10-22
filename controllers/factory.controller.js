@@ -53,6 +53,7 @@ import {
   getBookingSlotDetailsForOrderList,
 } from "../utility/findDeliverySlot.js";
 import { ensureOfficialDcSetFields } from "../services/officialDeliveryChallan.service.js";
+import { appendFastOrderExportStages } from "../services/orderExportList.service.js";
 import {
   applyPaymentTimingToPayment,
   sanitizePaymentArrayForOrder,
@@ -4744,6 +4745,29 @@ const getAll = (Model, modelName) =>
       pipeline.push({
         $match: locClauses.length === 1 ? locClauses[0] : { $and: locClauses },
       });
+    }
+
+    // Export skips tray, history, dispatch, and plant-slot joins, and skips the second count query.
+    if (exportAll && modelName === "Order") {
+      appendFastOrderExportStages(pipeline, {
+        sort: orderListSortSpec(),
+        limit,
+      });
+      const exportRows = await Model.aggregate(pipeline).allowDiskUse(true);
+      const exportData = exportRows.map((item) => {
+        const { _id, ...rest } = item;
+        return { id: _id, _id, ...rest };
+      });
+      return res.status(200).json(
+        generateResponse("Success", `${modelName} found successfully`, {
+          data: exportData,
+          total: exportData.length,
+          totalPages: 1,
+          currentPage: 1,
+          limit,
+          hasPaginationParams,
+        })
+      );
     }
 
     // Common lookups for both normal queries and slotId queries
