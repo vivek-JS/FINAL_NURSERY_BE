@@ -22,12 +22,9 @@ import {
   ensureSowReadyPlantOutward,
   resolveDefaultCavity,
 } from "./secondarySowReadyDispatch.service.js";
-import {
-  finalizeOrderOnShedLineLoaded,
-  schedulePostShedLoadAlerts,
-  schedulePendingDispatchWhatsAppForVehicle,
-  syncOrderVehicleLoadedFlag,
-} from "./dispatchPostLoadFinalize.service.js";
+import { baseOrderLinks, orderPlants } from "./sowDispatchOrderLinks.js";
+
+export { baseOrderLinks, orderPlants };
 
 const toQty = (v) => Math.max(0, Math.floor(Number(v) || 0));
 const idStr = (v) => (v == null || v === "" ? "" : String(v?._id ?? v));
@@ -40,8 +37,6 @@ const NOT_RELINKABLE_STATUSES = [
   "COMPLETED",
   "PARTIALLY_COMPLETED",
 ];
-
-export const orderPlants = (o) => toQty(o?.numberOfPlants) + toQty(o?.additionalPlants);
 
 function dmyMs(s) {
   const m = moment(String(s || ""), ["DD-MM-YYYY", "YYYY-MM-DD"], true);
@@ -62,60 +57,6 @@ export function indexSowBatches(slotDocs, subtypeId) {
     }
   }
   return index;
-}
-
-/**
- * Batches an order's plants were sown into before any dispatch relink:
- * excess cover sources first, else the batch(es) of its sowing request.
- */
-function batchForRequest(batchIndex, reqId, orderId) {
-  if (!reqId) return null;
-  const candidates = [...batchIndex.values()].filter((e) => idStr(e.batch.sowingRequestId) === reqId);
-  if (!candidates.length) return null;
-  const oid = idStr(orderId);
-  return (
-    candidates.find((e) => (e.batch.linkedOrderIds || []).some((x) => idStr(x) === oid)) ||
-    candidates[0]
-  );
-}
-
-export function baseOrderLinks(order, batchIndex) {
-  const covers = order?.sowingCoverReversedAt ? [] : order?.sowingCoverSources || [];
-  if (covers.length) {
-    return covers
-      .map((s) => ({
-        slotId: idStr(s.moved ? s.destSlotId : s.slotId),
-        batchId: idStr(s.moved ? s.destBatchId : s.batchId),
-        plants: toQty(s.plants),
-      }))
-      .filter((l) => l.batchId && l.plants > 0);
-  }
-  const partials = Array.isArray(order?.sowingPartialCover) ? order.sowingPartialCover : [];
-  const links = [];
-  let held = 0;
-  for (const p of partials) {
-    const n = toQty(p.plants);
-    if (n < 1) continue;
-    const pick = batchForRequest(batchIndex, idStr(p.requestId), order._id);
-    if (!pick) continue;
-    links.push({ slotId: pick.slotId, batchId: idStr(pick.batch._id), plants: n });
-    held += n;
-  }
-  const reqId = idStr(order?.sowingDoneRequestId);
-  if (reqId) {
-    const pick = batchForRequest(batchIndex, reqId, order._id);
-    const plants =
-      held > 0
-        ? order.sowingDone
-          ? Math.max(0, orderPlants(order) - held)
-          : 0
-        : orderPlants(order);
-    if (pick && plants > 0) {
-      links.push({ slotId: pick.slotId, batchId: idStr(pick.batch._id), plants });
-    }
-  }
-  if (links.length) return links;
-  return [];
 }
 
 /** Apply order.sowBatchLinks moves (oldest first) on top of the base links. */
@@ -1006,6 +947,12 @@ export async function executeSowBatchVehicleLoad({
       );
     }
 
+    const {
+      finalizeOrderOnShedLineLoaded,
+      schedulePostShedLoadAlerts,
+      schedulePendingDispatchWhatsAppForVehicle,
+      syncOrderVehicleLoadedFlag,
+    } = await import("./dispatchPostLoadFinalize.service.js");
     const orderLoadedList = [];
     const finalizeResults = [];
     for (const [oid, plantsLoaded] of plantsByOrder) {
