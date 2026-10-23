@@ -98,6 +98,22 @@ test("linked batch: direct sow uses the request's batch, excess cover uses its (
   assert.deepEqual(baseOrderLinks({ ...cover, sowingCoverReversedAt: new Date() }, index), []);
 });
 
+test("partly sown order completed from excess keeps both partial and excess batch links", () => {
+  const index = indexSowBatches(slotDocs(), "st");
+  const order = {
+    _id: OID.X,
+    numberOfPlants: 1000,
+    sowingDone: true,
+    sowingDoneRequestId: "audit",
+    sowingPartialCover: [{ requestId: OID.r15, plants: 400 }],
+    sowingCoverSources: [{ slotId: OID.s17, batchId: OID.b17, plants: 600 }],
+  };
+  assert.deepEqual(baseOrderLinks(order, index), [
+    { slotId: OID.s15, batchId: OID.b15, plants: 400 },
+    { slotId: OID.s17, batchId: OID.b17, plants: 600 },
+  ]);
+});
+
 test("sowBatchLinks move plants between batches; an order can end up split across two", () => {
   const links = applySowBatchLinks(
     [{ slotId: OID.s15, batchId: OID.b15, plants: 1000 }],

@@ -79,17 +79,19 @@ function batchForRequest(batchIndex, reqId, orderId) {
   );
 }
 
+function pushOrderLink(links, link) {
+  if (!link?.batchId || toQty(link.plants) < 1) return;
+  const existing = links.find((l) => l.batchId === link.batchId);
+  if (existing) {
+    existing.plants += toQty(link.plants);
+    if (!existing.slotId) existing.slotId = link.slotId || "";
+    return;
+  }
+  links.push({ slotId: link.slotId || "", batchId: link.batchId, plants: toQty(link.plants) });
+}
+
 export function baseOrderLinks(order, batchIndex) {
   const covers = order?.sowingCoverReversedAt ? [] : order?.sowingCoverSources || [];
-  if (covers.length) {
-    return covers
-      .map((s) => ({
-        slotId: idStr(s.moved ? s.destSlotId : s.slotId),
-        batchId: idStr(s.moved ? s.destBatchId : s.batchId),
-        plants: toQty(s.plants),
-      }))
-      .filter((l) => l.batchId && l.plants > 0);
-  }
   const partials = Array.isArray(order?.sowingPartialCover) ? order.sowingPartialCover : [];
   const links = [];
   let held = 0;
@@ -98,8 +100,18 @@ export function baseOrderLinks(order, batchIndex) {
     if (n < 1) continue;
     const pick = batchForRequest(batchIndex, idStr(p.requestId), order._id);
     if (!pick) continue;
-    links.push({ slotId: pick.slotId, batchId: idStr(pick.batch._id), plants: n });
+    pushOrderLink(links, { slotId: pick.slotId, batchId: idStr(pick.batch._id), plants: n });
     held += n;
+  }
+  if (covers.length) {
+    for (const s of covers) {
+      pushOrderLink(links, {
+        slotId: idStr(s.moved ? s.destSlotId : s.slotId),
+        batchId: idStr(s.moved ? s.destBatchId : s.batchId),
+        plants: toQty(s.plants),
+      });
+    }
+    return links;
   }
   const reqId = idStr(order?.sowingDoneRequestId);
   if (reqId) {
@@ -111,7 +123,7 @@ export function baseOrderLinks(order, batchIndex) {
           : 0
         : orderPlants(order);
     if (pick && plants > 0) {
-      links.push({ slotId: pick.slotId, batchId: idStr(pick.batch._id), plants });
+      pushOrderLink(links, { slotId: pick.slotId, batchId: idStr(pick.batch._id), plants });
     }
   }
   if (links.length) return links;
