@@ -42,6 +42,23 @@ test("moves only the amount asked, and refuses more than the screen shows", () =
   assert.equal(planMortalityToExcess({ slot, batch, plants: 0 }).error, "Enter how many plants to move");
 });
 
+test("a mongoose batch still has mortality to move", () => {
+  const data = {
+    plantsSowed: 103068,
+    orderCoveredPlants: 88000,
+    expectedMortalityApplied: 12400,
+    excessAllocations: [{ plants: 20000 }, { plants: 6000 }],
+  };
+  const plan = planMortalityToExcess({
+    slot: { actualPlants: 90000, expectedMortality: 12400, availablePlants: 2668, excessiveSowing: { plants: 0 } },
+    batch: { toObject: () => ({ ...data }) },
+    plants: 368,
+  });
+  assert.equal(plan.error, undefined);
+  assert.equal(plan.mort, 368);
+  assert.equal(plan.expectedMortality, 12032);
+});
+
 test("irrelevant and already-released batches are refused", () => {
   assert.equal(
     planMortalityToExcess({ slot: {}, batch: { isIrrelevant: true, expectedMortalityApplied: 50 } }).error,

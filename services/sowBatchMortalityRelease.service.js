@@ -7,6 +7,12 @@ import { sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
 const toInt = (v) => Math.max(0, Math.floor(Number(v) || 0));
 const idStr = (v) => (v == null || v === "" ? "" : String(v));
 
+/** Mongoose documents hide their fields from a spread. Read the plain values. */
+function plainBatch(batch) {
+  if (batch && typeof batch.toObject === "function") return batch.toObject();
+  return batch;
+}
+
 /**
  * Plants currently held as mortality on this batch.
  * Prefer the amount written onto the slot at sow time.
@@ -15,7 +21,7 @@ export function mortalityHeldOnBatch(batch) {
   if (!batch || batch.isIrrelevant || batch.noMortalityReserve) return 0;
   const stored = toInt(batch.expectedMortalityApplied);
   if (stored > 0) return stored;
-  return sowBatchStock({ ...batch, isIrrelevant: false, noMortalityReserve: false }).reserve;
+  return sowBatchStock({ ...plainBatch(batch), isIrrelevant: false, noMortalityReserve: false }).reserve;
 }
 
 /** Mortality already shifted into the excess count. */
@@ -31,7 +37,7 @@ export function mortalityLeftOnBatch(batch) {
   if (!batch || batch.isIrrelevant) return 0;
   const moved = mortalityMovedPlants(batch);
   if (batch.noMortalityReserve && moved <= 0) return 0;
-  const reserve = sowBatchStock({ ...batch, isIrrelevant: false, noMortalityReserve: false }).reserve;
+  const reserve = sowBatchStock({ ...plainBatch(batch), isIrrelevant: false, noMortalityReserve: false }).reserve;
   return Math.max(0, reserve - moved);
 }
 

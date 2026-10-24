@@ -8,6 +8,11 @@ import { dmyToYmd } from "./sowBatchStock.service.js";
 const toInt = (v) => Math.max(0, Math.floor(Number(v) || 0));
 const idStr = (v) => (v == null || v === "" ? "" : String(v));
 
+function plainBatch(batch) {
+  if (batch && typeof batch.toObject === "function") return batch.toObject();
+  return batch;
+}
+
 export const WATERMELON_IRRELEVANT_BEFORE = "2026-10-14";
 
 export function isSuperAdminUser(user) {
@@ -33,7 +38,7 @@ export function readyBeforeYmd(dmy, cutoffYmd = WATERMELON_IRRELEVANT_BEFORE) {
 export function batchSaleableStock(batch) {
   const applied = batch?.availablePlantsApplied;
   if (applied != null && applied !== "") return toInt(applied);
-  const live = sowBatchStock({ ...batch, isIrrelevant: false });
+  const live = sowBatchStock({ ...plainBatch(batch), isIrrelevant: false });
   return sowQtySlotImpact(live.free, { isExcess: true }).availablePlants;
 }
 
