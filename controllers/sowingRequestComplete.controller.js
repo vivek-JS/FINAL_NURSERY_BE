@@ -39,7 +39,7 @@ import { readMachineTimes } from "../utility/sowMachineTime.js";
 import { reportedExcess } from "../utility/lagwadSlotPlantsSplit.js";
 import { sowingBufferPctByPlantId } from "../utility/plantSowingBuffer.js";
 import { mortalityLeftOnBatch } from "../services/sowBatchMortalityRelease.service.js";
-import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
+import { paintSowingEntryNumbers, storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 
 /** Collect applied slot ids from completion meta + linkedSlotIds. */
 function collectSlotIdsFromRequest(r) {
@@ -1048,12 +1048,19 @@ export const getSowingCompletions = async (req, res) => {
       );
       const bufferPct = bufferByPlant.get(String(r.plantId)) || 0;
       const affectedSlot = buildAffectedSlot(slotRaw, reqBatch, r.shedName, bufferPct);
+      const figures = paintSowingEntryNumbers(affectedSlot, {
+        batch: reqBatch,
+        linkedOrders,
+        bufferPct,
+        sowed: Number(reqBatch?.plantsSowed) || Number(r.sowedQuantity) || 0,
+        mortalityReserve: reqBatch ? mortalityLeftOnBatch(reqBatch) : 0,
+      });
 
       return {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
         isExcess: Boolean(r.isExcessiveSowing),
-        excessPlants: storedShownExcess(reqBatch, bufferPct),
+        excessPlants: figures.excess,
         bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
         shedName: reqBatch?.shedName || r.shedName || "",
         linkedOrders,
@@ -1536,6 +1543,14 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
     const shedName = meta.shedName || r.shedName || "";
     const bufferPct = bufferByPlant.get(String(r.plantId)) || 0;
     const entrySowed = Number(ev.quantity) || 0;
+    const affectedSlot = buildAffectedSlot(slotRaw, reqBatch, shedName, bufferPct);
+    const figures = paintSowingEntryNumbers(affectedSlot, {
+      batch: reqBatch,
+      linkedOrders,
+      bufferPct,
+      sowed: Number(reqBatch?.plantsSowed) || entrySowed,
+      mortalityReserve: reqBatch ? mortalityLeftOnBatch(reqBatch) : 0,
+    });
     const storedExcess = Number(meta.excessPlants) || 0;
 
     const batchNumbers = meta.batchNumber ? [meta.batchNumber] : outwardBatchNumbers(r, outwardMap);
@@ -1573,13 +1588,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       completionNotes: pick(meta.notes, r.completionNotes) || "",
       shedName: reqBatch?.shedName || shedName,
       isExcess: Boolean(r.isExcessiveSowing) || storedExcess >= entrySowed,
-      excessPlants: storedShownExcess(
-        reqBatch || {
-          plantsSowed: entrySowed,
-          orderCoveredPlants: Math.max(0, entrySowed - storedExcess),
-        },
-        bufferPct
-      ),
+      excessPlants: figures.excess,
       bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
       linkedOrders,
       batchNumber: batchNumbers.join(", ") || "",
@@ -1593,7 +1602,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       addedByName: addedByNames.get(`${r._id}-${p.entryIndex}`) || "",
       createdAt: at,
       requestCreatedAt: r.createdAt || null,
-      affectedSlot: buildAffectedSlot(slotRaw, reqBatch, shedName, bufferPct),
+      affectedSlot,
     });
   }
 

@@ -26,6 +26,65 @@ export function displayOrderQty(batch, plantQtyByOrderId = null) {
   return covered;
 }
 
+/** Numbers for a sowing entry: CMS percent of sowed is mortality, then subtract the orders. */
+export function displaySowingFigures({
+  plantsSowed = 0,
+  orderCoveredPlants = 0,
+  linkedOrders = null,
+  bufferPlants = null,
+  sowingBufferPct = 0,
+  mortalityMovedToExcess = 0,
+  isIrrelevant = false,
+} = {}) {
+  if (isIrrelevant) return { bufferPlants: 0, mortality: 0, excess: 0 };
+  const sowed = Math.max(0, Math.floor(Number(plantsSowed) || 0));
+  const pctRaw = Number(sowingBufferPct);
+  const pct = Number.isFinite(pctRaw) && pctRaw > 0 ? pctRaw : 0;
+  const buffer =
+    bufferPlants == null
+      ? Math.round((sowed * pct) / 100)
+      : Math.max(0, Math.round(Number(bufferPlants) || 0));
+  const covered = Math.max(0, Math.floor(Number(orderCoveredPlants) || 0));
+  const live = (linkedOrders || []).reduce(
+    (sum, order) => sum + Math.max(0, Math.floor(Number(order?.plants) || 0)),
+    0
+  );
+  const orders = live > 0 && live <= covered ? live : covered;
+  const moved = Math.max(0, Math.floor(Number(mortalityMovedToExcess) || 0));
+  return {
+    bufferPlants: buffer,
+    mortality: Math.max(0, buffer - moved),
+    excess: Math.max(0, sowed - buffer - orders) + moved,
+  };
+}
+
+/** Writes the entry numbers the sowing list shows: mortality, excess, and the movable reserve. */
+export function paintSowingEntryNumbers(slot, {
+  batch = null,
+  linkedOrders = null,
+  bufferPct = 0,
+  sowed = 0,
+  mortalityReserve = 0,
+} = {}) {
+  const figures = displaySowingFigures({
+    plantsSowed: sowed,
+    orderCoveredPlants: batch?.orderCoveredPlants,
+    linkedOrders,
+    bufferPlants: batch?.bufferPlants,
+    sowingBufferPct: batch?.sowingBufferPct ?? bufferPct,
+    mortalityMovedToExcess: batch?.mortalityMovedToExcess,
+    isIrrelevant: batch?.isIrrelevant,
+  });
+  if (slot) {
+    slot.bufferPlants = figures.bufferPlants;
+    slot.mortalityMovedToExcess = Math.max(0, Math.floor(Number(batch?.mortalityMovedToExcess) || 0));
+    slot.mortalityReserve = Math.max(0, Math.floor(Number(mortalityReserve) || 0));
+    slot.batchExpectedMortality = figures.mortality;
+    slot.excessPlants = figures.excess;
+  }
+  return figures;
+}
+
 /** CMS percent off plants sowed, then orders. Mortality already moved is included. */
 export function excessFieldsForBatch(batch, sowingBufferPct = 0, plantQtyByOrderId = null) {
   const pct = pctOf(sowingBufferPct);
