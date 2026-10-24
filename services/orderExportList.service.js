@@ -37,6 +37,8 @@ const SOURCE_FIELDS = {
   dispatchTargetDateSort: 1,
 };
 
+export const ORDER_EXPORT_MAX_ROWS = 200000;
+
 function plantLookupStage() {
   return {
     $lookup: {
@@ -185,7 +187,11 @@ function exportRowProject() {
 
 /** Mutates pipeline. Call only after order filters and the farmer lookup. */
 export function appendFastOrderExportStages(pipeline, { sort, limit } = {}) {
-  const cap = Math.min(Math.max(Math.floor(Number(limit) || 1), 1), 200000);
+  const requested = Math.floor(Number(limit));
+  const cap =
+    Number.isFinite(requested) && requested >= 1
+      ? Math.min(requested, ORDER_EXPORT_MAX_ROWS)
+      : ORDER_EXPORT_MAX_ROWS;
   pipeline.push({ $project: SOURCE_FIELDS });
   pipeline.push(plantLookupStage());
   pipeline.push(salesLookupStage());

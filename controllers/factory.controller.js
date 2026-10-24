@@ -53,7 +53,10 @@ import {
   getBookingSlotDetailsForOrderList,
 } from "../utility/findDeliverySlot.js";
 import { ensureOfficialDcSetFields } from "../services/officialDeliveryChallan.service.js";
-import { appendFastOrderExportStages } from "../services/orderExportList.service.js";
+import {
+  appendFastOrderExportStages,
+  ORDER_EXPORT_MAX_ROWS,
+} from "../services/orderExportList.service.js";
 import {
   applyPaymentTimingToPayment,
   sanitizePaymentArrayForOrder,
@@ -4751,7 +4754,7 @@ const getAll = (Model, modelName) =>
     if (exportAll && modelName === "Order") {
       appendFastOrderExportStages(pipeline, {
         sort: orderListSortSpec(),
-        limit,
+        limit: ORDER_EXPORT_MAX_ROWS,
       });
       const exportRows = await Model.aggregate(pipeline).allowDiskUse(true);
       const exportData = exportRows.map((item) => {
