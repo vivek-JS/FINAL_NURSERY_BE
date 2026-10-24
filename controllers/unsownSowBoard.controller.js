@@ -183,6 +183,7 @@ export const getUnsownSowBoard = async (req, res) => {
         requestNumber: requestNumber || "",
         deliveryDate: order.deliveryDate || null,
         sowByDate,
+        readyDate: windowMs != null ? dmy(windowMs) : null,
         daysUntilSow,
         slotStart: slot?.startDay || "",
         slotEnd: slot?.endDay || "",
