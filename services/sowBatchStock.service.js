@@ -58,8 +58,10 @@ export function isReadyNow(plantReadyDate, todayYmd = todayIstYmd()) {
 export function orderRemainingPlants(order) {
   const booked = n(order?.numberOfPlants) + n(order?.additionalPlants);
   if (order?.sowingDone) return 0;
+  const outstanding =
+    order?.remainingPlants == null ? booked : Math.min(booked, Math.max(0, n(order.remainingPlants)));
   const held = (order?.sowingPartialCover || []).reduce((s, r) => s + n(r.plants), 0);
-  return Math.max(0, booked - held);
+  return Math.max(0, outstanding - held);
 }
 
 export function mergeStockChanges(batch) {
@@ -130,7 +132,7 @@ async function sowingAllowedPlants(plantId) {
 function mapOrderBrief(order, inProgress = false) {
   const booked = n(order.numberOfPlants) + n(order.additionalPlants);
   const held = (order.sowingPartialCover || []).reduce((s, r) => s + n(r.plants), 0);
-  const remainingPlants = order.sowingDone ? 0 : Math.max(0, booked - held);
+  const remainingPlants = orderRemainingPlants(order);
   return {
     _id: String(order._id),
     orderId: order.orderId,
@@ -176,7 +178,7 @@ async function hydrateOrders(idSet) {
   const ids = [...idSet].filter((id) => mongoose.Types.ObjectId.isValid(id));
   if (!ids.length) return new Map();
   const rows = await Order.find({ _id: { $in: ids.map((id) => new mongoose.Types.ObjectId(id)) } })
-    .select("orderId name farmer numberOfPlants additionalPlants sowingDone sowingPartialCover")
+    .select("orderId name farmer numberOfPlants additionalPlants remainingPlants sowingDone sowingPartialCover")
     .populate("farmer", "name")
     .lean();
   const progress = await inProgressOrderIdSet(ids);

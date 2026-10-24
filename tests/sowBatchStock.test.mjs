@@ -95,6 +95,15 @@ test("order remaining uses partial cover until sowingDone", () => {
   };
   assert.equal(orderRemainingPlants(o), 17700);
   assert.equal(orderRemainingPlants({ ...o, sowingDone: true }), 0);
+  assert.equal(orderRemainingPlants({ ...o, remainingPlants: 9000 }), 6700);
+  assert.equal(
+    orderRemainingPlants({ numberOfPlants: 14000, remainingPlants: 9000, sowingDone: false }),
+    9000
+  );
+  assert.equal(
+    orderRemainingPlants({ numberOfPlants: 12000, remainingPlants: 0, sowingDone: false }),
+    0
+  );
 });
 
 test("plant letter W for watermelon", () => {

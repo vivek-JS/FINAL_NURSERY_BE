@@ -3,7 +3,7 @@ import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
 import { leftoverOrderIdSet } from "../services/sowingLeftoverDue.service.js";
-import { inProgressRequestByOrderId } from "../services/sowBatchStock.service.js";
+import { inProgressRequestByOrderId, orderRemainingPlants } from "../services/sowBatchStock.service.js";
 
 const ACTIVE_ORDER_STATUSES = [
   "PENDING",
@@ -123,7 +123,7 @@ export const getUnsownSowBoard = async (req, res) => {
         productMappingId: null,
       })
         .select(
-          "orderId name farmer plantName plantSubtype plantNameSnapshot plantSubtypeSnapshot bookingSlot numberOfPlants additionalPlants sowingPartialCover deliveryDate"
+          "orderId name farmer plantName plantSubtype plantNameSnapshot plantSubtypeSnapshot bookingSlot numberOfPlants additionalPlants remainingPlants sowingPartialCover deliveryDate"
         )
         .populate("farmer", "name")
         .limit(ROW_CAP)
@@ -150,7 +150,7 @@ export const getUnsownSowBoard = async (req, res) => {
       const subtype = plant.subtypes.get(String(order.plantSubtype));
       const booked = (Number(order.numberOfPlants) || 0) + (Number(order.additionalPlants) || 0);
       const covered = heldPlants(order);
-      const remaining = Math.max(0, booked - covered);
+      const remaining = orderRemainingPlants(order);
       const leftover = leftoverIds.has(String(order._id));
       const requestNumber = progressByOrder.get(String(order._id));
       const inProgress = requestNumber != null;
