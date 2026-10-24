@@ -64,11 +64,11 @@ describe("lagwad 90/10 split", () => {
       orderCoveredPlants: 8000,
       sowingBufferPct: 12,
     });
-    assert.equal(parts.bufferPlants, 960);
-    assert.equal(parts.excess, 1040);
+    assert.equal(parts.bufferPlants, 1200);
+    assert.equal(parts.excess, 800);
     assert.equal(
       reportedExcess({ plantsSowed: 10000, orderCoveredPlants: 8000, sowingBufferPct: 12 }),
-      1040
+      800
     );
     assert.equal(
       reportedExcess({ plantsSowed: 10000, orderCoveredPlants: 8000, sowingBufferPct: 0 }),
@@ -76,7 +76,11 @@ describe("lagwad 90/10 split", () => {
     );
     assert.equal(
       reportedExcess({ plantsSowed: 10000, orderCoveredPlants: 0, sowingBufferPct: 12 }),
-      10000
+      8800
+    );
+    assert.equal(
+      reportedExcess({ plantsSowed: 75600, orderCoveredPlants: 66700, sowingBufferPct: 12 }),
+      0
     );
     assert.equal(
       shownSowingExcess({ isIrrelevant: true, plantsSowed: 10000, orderCoveredPlants: 0 }, 12),
