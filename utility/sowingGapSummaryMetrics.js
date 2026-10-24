@@ -21,7 +21,7 @@ export function groupFlatSlotsBySubtype(allSlots) {
 }
 
 /** Same sowing gap / excess rules as GET slots (delivery window + sowingDone). */
-export function computeSowingGapBoardMetricsForSubtype(slots, deliveryOrders) {
+export function computeSowingGapBoardMetricsForSubtype(slots, deliveryOrders, sowingBufferPct = 0) {
   const slotRows = (slots || []).map((s) => ({
     _id: s.slotId,
     startDay: s.slotStartDay,
@@ -49,13 +49,12 @@ export function computeSowingGapBoardMetricsForSubtype(slots, deliveryOrders) {
       primarySowed: Number(slot.primarySowed) || 0,
       ...stats,
     };
-    applySowingAllowedSlotMetrics(enriched);
+    applySowingAllowedSlotMetrics(enriched, sowingBufferPct);
 
     const slotGap = Math.max(0, Number(stats.bookedUncoveredPlants) || 0);
     const primarySowed = Number(slot.primarySowed) || 0;
     const grossCover = Number(enriched.grossOrderCoveredPlants) || 0;
-    // Excess = sowed minus plants covering orders minus expected-mortality reserve.
-    // Slot size and stored availablePlants are not bookable stock.
+    // Excess = CMS percent off plants sowed, then minus the orders.
     const excessAvailableForBooking = Number(enriched.excessAvailableForBooking) || 0;
 
     metricsBySlotId.set(slotId, {
@@ -96,7 +95,7 @@ export async function fetchDeliveryOrdersForPlants(plantIds, Order) {
 }
 
 /** Returns Map<slotId, metrics> aligned with slots page. */
-export function applySowingGapBoardMetrics(allSlots, deliveryOrders) {
+export function applySowingGapBoardMetrics(allSlots, deliveryOrders, bufferByPlant = null) {
   const bySubtype = groupFlatSlotsBySubtype(allSlots);
   const ordersByKey = new Map();
   for (const order of deliveryOrders || []) {
@@ -107,9 +106,12 @@ export function applySowingGapBoardMetrics(allSlots, deliveryOrders) {
 
   const allMetrics = new Map();
   for (const [key, slots] of bySubtype) {
+    const plantId = String(slots[0]?.plantId || "");
+    const sowingBufferPct = bufferByPlant?.get?.(plantId) || 0;
     const subtypeMetrics = computeSowingGapBoardMetricsForSubtype(
       slots,
-      ordersByKey.get(key) || []
+      ordersByKey.get(key) || [],
+      sowingBufferPct
     );
     for (const [slotId, metrics] of subtypeMetrics) {
       allMetrics.set(slotId, metrics);

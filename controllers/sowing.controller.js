@@ -12,6 +12,7 @@ import moment from "moment";
 import mongoose from "mongoose";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
 import { SOWING_GAP_PIPELINE_STATUSES } from "../constants/sowingGapOrderStatuses.js";
+import { reportedExcess } from "../utility/lagwadSlotPlantsSplit.js";
 import {
   applySowingGapBoardMetrics,
   fetchDeliveryOrdersForPlants,
@@ -7151,7 +7152,10 @@ export const getPlantsGapSummary = async (req, res) => {
 
     // Step 3: Delivery-window orders + slots-page gap/excess metrics
     const deliveryOrders = await fetchDeliveryOrdersForPlants(plantIds, Order);
-    const boardMetrics = applySowingGapBoardMetrics(allSlots, deliveryOrders);
+    const bufferByPlant = new Map(
+      plants.map((p) => [String(p._id), Math.max(0, Number(p.sowingBuffer) || 0)])
+    );
+    const boardMetrics = applySowingGapBoardMetrics(allSlots, deliveryOrders, bufferByPlant);
 
     // Step 4: Join slots with metrics in memory and calculate overdue status
     const today = moment().startOf("day");
@@ -7791,6 +7795,7 @@ export const getSlotOrdersSummary = async (req, res) => {
         $project: {
           plantId: "$plantId",
           plantName: { $ifNull: ["$plantInfo.name", "Unknown"] },
+          sowingBuffer: { $ifNull: ["$plantInfo.sowingBuffer", 0] },
           subtypeId: "$subtypeSlots.subtypeId",
           slot: {
             _id: "$slot._id",
@@ -7817,13 +7822,23 @@ export const getSlotOrdersSummary = async (req, res) => {
     ]);
 
     const slot = slotInfo[0]?.slot || null;
-    const sowBatches = Array.isArray(slot?.sowingBatches)
-      ? [...slot.sowingBatches].sort(
-          (a, b) =>
-            new Date(b.sowedAt || 0).getTime() -
-            new Date(a.sowedAt || 0).getTime()
-        )
-      : [];
+    const bufferPct = Math.max(0, Number(slotInfo[0]?.sowingBuffer) || 0);
+    const sowBatches = (Array.isArray(slot?.sowingBatches) ? slot.sowingBatches : [])
+      .sort(
+        (a, b) =>
+          new Date(b.sowedAt || 0).getTime() -
+          new Date(a.sowedAt || 0).getTime()
+      )
+      .map((b) => ({
+        ...b,
+        excessPlants: b?.isIrrelevant
+          ? 0
+          : reportedExcess({
+              plantsSowed: b.plantsSowed,
+              orderCoveredPlants: b.orderCoveredPlants,
+              sowingBufferPct: bufferPct,
+            }) + Math.max(0, Math.floor(Number(b.mortalityMovedToExcess) || 0)),
+      }));
     const totalSowedPlants = sowBatches.reduce(
       (s, b) => s + (Number(b.plantsSowed) || 0),
       0

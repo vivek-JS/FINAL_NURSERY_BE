@@ -800,11 +800,13 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
     let plantBuffer = 0;
     let subtypeBuffer = 0;
     let sowingAllowed = false;
+    let sowingBuffer = 0;
     
     if (plantId) {
       const plant = await PlantCms.findById(plantId);
       if (plant) {
         plantBuffer = plant.buffer || 0;
+        sowingBuffer = Math.max(0, Number(plant.sowingBuffer) || 0);
         sowingAllowed = Boolean(plant.sowingAllowed);
         
         // Find subtype buffer if subtypeId is provided
@@ -868,6 +870,7 @@ export const getSlotsByPlantAndSubtype = async (req, res) => {
       subtypeBuffer,
       plantBuffer,
       sowingAllowed,
+      sowingBuffer,
     });
 
     // Recalculate month-wise summary with actual orders data
@@ -2506,7 +2509,7 @@ const calculateTotalBookedPlantsFromOrders = async (slotId) => {
 // Function to populate slots with orders and calculate totalBookedPlants
 // OPTIMIZED: Batches all queries instead of N+1 queries
 const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
-  const { subtypeBuffer = 0, plantBuffer = 0, sowingAllowed = false } = bufferContext;
+  const { subtypeBuffer = 0, plantBuffer = 0, sowingAllowed = false, sowingBuffer = 0 } = bufferContext;
   try {
     // Collect all slot information for batch querying
     const slotIds = [];
@@ -2805,6 +2808,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
             sowingFromOtherSlotDetail,
             sowingGapDetail,
             coverMovedOutDetail: coverMoved.outBySlot.get(slotId) || null,
+            sowingBufferPct: sowingBuffer,
           })
         );
 
@@ -2852,7 +2856,7 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
 
         slot.isOverflow = slot.availablePlants < 0;
         slot.overflow = slot.availablePlants < 0;
-        applySowingAllowedSlotMetrics(slot);
+        applySowingAllowedSlotMetrics(slot, sowingBuffer);
         slot.sowingAllowed = Boolean(sowingAllowed);
       }
     }

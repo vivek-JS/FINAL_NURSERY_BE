@@ -72,13 +72,13 @@ test("slotSowStock / applySowingAllowedSlotMetrics use the batch reserves", () =
     ],
   };
   assert.deepEqual(slotSowStock(slot), { actualPlants: 20800, expectedMortality: 3200, free: 10800 });
-  const m = applySowingAllowedSlotMetrics({ ...slot });
-  assert.equal(m.excessAvailableForBooking, 10800);
+  const m = applySowingAllowedSlotMetrics({ ...slot }, 12);
+  assert.equal(m.excessAvailableForBooking, 11120);
   assert.equal(m.sowedExpectedMortality, 3200);
   assert.equal(m.sowedActualPlants, 20800);
 });
 
-test("capacity board excess uses real sow batches so 10% mortality is held back", () => {
+test("capacity board excess takes the CMS percent off sowed, then the orders", () => {
   const real = computeSowingGapBoardMetricsForSubtype(
     [
       {
@@ -89,8 +89,9 @@ test("capacity board excess uses real sow batches so 10% mortality is held back"
         sowingBatches: [{ plantsSowed: 112140, orderCoveredPlants: 85500 }],
       },
     ],
-    []
+    [],
+    12
   );
   assert.equal(real.get("s1").sowedExpectedMortality, 17100);
-  assert.equal(real.get("s1").excessAvailableForBooking, 9540);
+  assert.equal(real.get("s1").excessAvailableForBooking, 13183);
 });

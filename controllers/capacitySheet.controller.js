@@ -149,7 +149,7 @@ async function loadSheetContext({ from, to, plantId, subtypeId, unbounded = fals
   if (plantId && mongoose.Types.ObjectId.isValid(plantId)) {
     plantQuery._id = new mongoose.Types.ObjectId(plantId);
   }
-  const plants = await PlantCms.find(plantQuery).select("_id name subtypes").lean();
+  const plants = await PlantCms.find(plantQuery).select("_id name subtypes sowingBuffer").lean();
   if (!plants.length) return { plants: [], slots: [], orders: [] };
 
   const plantIds = plants.map((p) => p._id);
@@ -274,6 +274,12 @@ async function loadSheetContext({ from, to, plantId, subtypeId, unbounded = fals
   return { plants, slots, orders };
 }
 
+function sowingBufferByPlant(plants) {
+  return new Map(
+    (plants || []).map((plant) => [String(plant._id), Math.max(0, Number(plant.sowingBuffer) || 0)])
+  );
+}
+
 function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbounded = false }) {
   const inRange = slots.filter((slot) => {
     if (plantId && String(slot.plantId) !== String(plantId)) return false;
@@ -282,7 +288,7 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbou
     return slotOverlapsRange(slot.slotStartDay, slot.slotEndDay, from, to);
   });
 
-  const metricsBySlot = applySowingGapBoardMetrics(inRange, orders);
+  const metricsBySlot = applySowingGapBoardMetrics(inRange, orders, sowingBufferByPlant(plants));
   const ordersBySubtype = new Map();
   for (const order of orders) {
     const key = `${String(order.plantName)}-${String(order.plantSubtype)}`;
@@ -430,7 +436,7 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
     loadShedStockPayload(),
   ]);
 
-  const metricsBySlot = applySowingGapBoardMetrics(slots, orders);
+  const metricsBySlot = applySowingGapBoardMetrics(slots, orders, sowingBufferByPlant(plants));
   const slotsByVariety = groupByVariety(slots, (s) => s.plantId, (s) => s.subtypeId);
   const ordersByVariety = groupByVariety(orders, (o) => o.plantName, (o) => o.plantSubtype);
 
@@ -604,7 +610,11 @@ export const getCapacitySlotDetail = async (req, res) => {
       .select(ORDER_SELECT)
       .lean();
 
-    const metricsBySlot = applySowingGapBoardMetrics([slot], deliveryOrders);
+    const metricsBySlot = applySowingGapBoardMetrics(
+      [slot],
+      deliveryOrders,
+      sowingBufferByPlant([plant])
+    );
     const metrics = metricsBySlot.get(String(slot.slotId)) || {};
     const cohort = getNativeDeliveryCohortOrders(
       groupOrdersByDeliverySlot(deliveryOrders, [

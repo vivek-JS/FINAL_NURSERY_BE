@@ -51,6 +51,23 @@ export function reportedExcess(input) {
   return reportedExcessBreakdown(input).excess;
 }
 
+/** Sum of the shown excess on a slot's sowings. Irrelevant sowings add nothing. */
+export function slotReportedExcess(batches, sowingBufferPct = 0) {
+  return (batches || []).reduce((sum, batch) => {
+    if (batch?.isIrrelevant) return sum;
+    const moved = Math.max(0, Math.floor(Number(batch?.mortalityMovedToExcess) || 0));
+    return (
+      sum +
+      reportedExcess({
+        plantsSowed: batch?.plantsSowed,
+        orderCoveredPlants: batch?.orderCoveredPlants,
+        sowingBufferPct,
+      }) +
+      moved
+    );
+  }, 0);
+}
+
 /** Display excess for a slot batch. Irrelevant batches are 0. Falls back when the batch is missing. */
 export function shownSowingExcess(batch, sowingBufferPct = 0, fallback = null) {
   if (batch?.isIrrelevant) return 0;

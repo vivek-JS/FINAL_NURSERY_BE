@@ -4,7 +4,7 @@ import {
   isSlotExpiredByEndDay,
 } from "../services/pastDueSlotRollover.service.js";
 import { getNativeDeliveryCohortOrders } from "./slotDispatchStats.js";
-import { slotSowStock } from "./lagwadSlotPlantsSplit.js";
+import { reportedExcess, slotReportedExcess, slotSowStock } from "./lagwadSlotPlantsSplit.js";
 import { SOWING_GAP_PIPELINE_STATUS_SET } from "../constants/sowingGapOrderStatuses.js";
 
 const DUE_PIPELINE_STATUS_SET = new Set(DUE_DELIVERY_STATUSES);
@@ -518,7 +518,7 @@ export function buildPendingLagwadBucketsFromSlots(slots, asOfDate = new Date())
   };
 }
 
-function summarizeSowingEntries(slot) {
+function summarizeSowingEntries(slot, sowingBufferPct = 0) {
   const batches = Array.isArray(slot?.sowingBatches) ? slot.sowingBatches : [];
   return batches.slice(0, 40).map((b) => ({
     requestNumber: b.requestNumber || "",
@@ -526,7 +526,13 @@ function summarizeSowingEntries(slot) {
     plantReadyDate: b.plantReadyDate || "",
     plantsSowed: Number(b.plantsSowed) || 0,
     orderCoveredPlants: Number(b.orderCoveredPlants) || 0,
-    excessPlants: Number(b.excessPlants) || 0,
+    excessPlants: b.isIrrelevant
+      ? 0
+      : reportedExcess({
+          plantsSowed: b.plantsSowed,
+          orderCoveredPlants: b.orderCoveredPlants,
+          sowingBufferPct,
+        }) + Math.max(0, Math.floor(Number(b.mortalityMovedToExcess) || 0)),
     packetsUsed: Number(b.packetsUsed) || 0,
     isExcessiveSowing: Boolean(b.isExcessiveSowing),
   }));
@@ -581,17 +587,22 @@ export function sumGrossOrderCoveredPlants(slot) {
 
 /**
  * Sowing-allowed slot display fields (call after resolveSlotBufferFields).
- * Can book / excess is live sowed stock left after current orders and each batch's
- * expected-mortality reserve (slotSowStock). Stored slot availablePlants is not used.
+ * Excess is the CMS percent off plants sowed, then minus orders.
+ * Mortality on the slot stays in sowedExpectedMortality. Stored availablePlants is not used.
  */
-export function applySowingAllowedSlotMetrics(slot) {
+export function applySowingAllowedSlotMetrics(slot, sowingBufferPct = 0) {
   if (!slot) return slot;
   const gross = sumGrossOrderCoveredPlants(slot);
   const primarySowed = Math.max(0, Number(slot.primarySowed) || 0);
   const sowingGap = Math.max(0, Number(slot.bookedUncoveredPlants) || 0);
   const stock = slotSowStock({ primarySowed, sowingBatches: slot.sowingBatches });
+  const pctRaw = Number(sowingBufferPct ?? slot?.sowingBufferPct);
+  const pct = Number.isFinite(pctRaw) && pctRaw > 0 ? pctRaw : 0;
+  const batches = Array.isArray(slot.sowingBatches) ? slot.sowingBatches : [];
   slot.grossOrderCoveredPlants = gross;
-  slot.excessAvailableForBooking = stock.free;
+  slot.excessAvailableForBooking = batches.length
+    ? slotReportedExcess(batches, pct)
+    : reportedExcess({ plantsSowed: primarySowed, orderCoveredPlants: gross, sowingBufferPct: pct });
   slot.sowedActualPlants = stock.actualPlants;
   slot.sowedExpectedMortality = stock.expectedMortality;
   slot.sowingGapPlants = sowingGap;
@@ -616,6 +627,7 @@ export function buildSlotOrderMetrics({
   sowingFromOtherSlotDetail = null,
   sowingGapDetail = null,
   coverMovedOutDetail = null,
+  sowingBufferPct = 0,
 }) {
   const isCurrentSlot = slotId === pastDueGroup.currentSlotId;
   const rolledOnCurrent = pastDueGroup.pastDueDetail?.rolledInOnCurrentSlot || {};
@@ -658,7 +670,7 @@ export function buildSlotOrderMetrics({
       0,
       Number(slot?.excessiveSowing?.plants) || 0
     ),
-    sowingEntries: summarizeSowingEntries(slot),
+    sowingEntries: summarizeSowingEntries(slot, sowingBufferPct),
     dispatchedFromOtherSlots: dispatchedFromOtherBySlot.get(slotId) || 0,
     releasedForEarlyDispatch: releasedForEarlyBySlot.get(slotId) || 0,
     isCurrentDateSlot: isCurrentSlot,
