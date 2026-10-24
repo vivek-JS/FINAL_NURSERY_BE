@@ -36,7 +36,8 @@ import {
   wantsSowingClosed,
 } from "../utility/sowPacketSettlement.js";
 import { readMachineTimes } from "../utility/sowMachineTime.js";
-import { sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
+import { reportedExcess, shownSowingExcess, sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
+import { sowingBufferPctByPlantId } from "../utility/plantSowingBuffer.js";
 
 /** Collect applied slot ids from completion meta + linkedSlotIds. */
 function collectSlotIdsFromRequest(r) {
@@ -696,7 +697,13 @@ export const completeSowingRequest = async (req, res) => {
           waitingOrders: (orderResult.waiting || []).length,
           partialPlants: orderResult.partial?.addPlants || 0,
           orderCoveredPlants,
-          excessPlants: finalExcess,
+          excessPlants: reportedExcess({
+            plantsSowed,
+            orderCoveredPlants,
+            sowingBufferPct: (
+              await sowingBufferPctByPlantId([locked.plantId])
+            ).get(String(locked.plantId)),
+          }),
           uncoveredLinkedOrders,
           suggestCoverFromStock,
           orderCoverWindowDays: orderResult.coverWindowDays ?? 0,
@@ -1005,6 +1012,7 @@ export const getSowingCompletions = async (req, res) => {
     ]);
 
     const { ordersByReqMap, outwardMap, slotMap } = await loadCompletionLookups(rows);
+    const bufferByPlant = await sowingBufferPctByPlantId(rows.map((r) => r.plantId));
 
     const items = rows.map((r) => {
       const cf = resolveSowingPlantsPerPacket(r);
@@ -1036,13 +1044,14 @@ export const getSowingCompletions = async (req, res) => {
       const reqBatch = (slotRaw?.sowingBatches || []).find(
         (b) => String(b.sowingRequestId) === String(r._id)
       );
-      const affectedSlot = buildAffectedSlot(slotRaw, reqBatch, r.shedName);
+      const bufferPct = bufferByPlant.get(String(r.plantId)) || 0;
+      const affectedSlot = buildAffectedSlot(slotRaw, reqBatch, r.shedName, bufferPct);
 
       return {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
         isExcess: Boolean(r.isExcessiveSowing),
-        excessPlants: Number(reqBatch?.excessPlants) || 0,
+        excessPlants: shownSowingExcess(reqBatch, bufferPct),
         bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
         shedName: reqBatch?.shedName || r.shedName || "",
         linkedOrders,
@@ -1241,7 +1250,7 @@ function mapCoveredOrder(o, readyDateMeta, coverWindowDays) {
   };
 }
 
-function buildAffectedSlot(slotRaw, reqBatch, shedName) {
+function buildAffectedSlot(slotRaw, reqBatch, shedName, sowingBufferPct = 0) {
   if (!slotRaw) return null;
   return {
     slotId: String(slotRaw.slotId),
@@ -1273,7 +1282,7 @@ function buildAffectedSlot(slotRaw, reqBatch, shedName) {
       .filter((b) => reqBatch && String(b.sowingRequestId) === String(reqBatch.sowingRequestId))
       .reduce((s, b) => s + (Number(b.destroyedPlants) || 0), 0),
     shedName: reqBatch?.shedName || shedName || "",
-    excessPlants: Number(reqBatch?.excessPlants) || 0,
+    excessPlants: shownSowingExcess(reqBatch, sowingBufferPct),
     bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
   };
 }
@@ -1478,6 +1487,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
     : [];
   const reqMap = new Map(requests.map((r) => [String(r._id), r]));
   const { ordersByReqMap, outwardMap, slotMap } = await loadCompletionLookups(requests);
+  const bufferByPlant = await sowingBufferPctByPlantId(requests.map((r) => r.plantId));
   const addedByNames = await sowingEntryAuthorNames(pageRows, reqMap);
 
   const items = [];
@@ -1515,6 +1525,9 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
     const reqBatch =
       batches.find((b) => Number(b.plantsSowed) === Number(ev.quantity)) || batches[0];
     const shedName = meta.shedName || r.shedName || "";
+    const bufferPct = bufferByPlant.get(String(r.plantId)) || 0;
+    const entrySowed = Number(ev.quantity) || 0;
+    const storedExcess = Number(meta.excessPlants) || 0;
 
     const batchNumbers = meta.batchNumber ? [meta.batchNumber] : outwardBatchNumbers(r, outwardMap);
     const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
@@ -1550,8 +1563,11 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       machineMinutes: Number(pick(meta.machineMinutes, r.machineMinutes)) || 0,
       completionNotes: pick(meta.notes, r.completionNotes) || "",
       shedName: reqBatch?.shedName || shedName,
-      isExcess: Boolean(r.isExcessiveSowing) || Number(meta.excessPlants) >= Number(ev.quantity),
-      excessPlants: Number(reqBatch?.excessPlants) || Number(meta.excessPlants) || 0,
+      isExcess: Boolean(r.isExcessiveSowing) || storedExcess >= entrySowed,
+      excessPlants: shownSowingExcess(reqBatch, bufferPct, {
+        plantsSowed: entrySowed,
+        orderCoveredPlants: Math.max(0, entrySowed - storedExcess),
+      }),
       bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
       linkedOrders,
       batchNumber: batchNumbers.join(", ") || "",
@@ -1565,7 +1581,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       addedByName: addedByNames.get(`${r._id}-${p.entryIndex}`) || "",
       createdAt: at,
       requestCreatedAt: r.createdAt || null,
-      affectedSlot: buildAffectedSlot(slotRaw, reqBatch, shedName),
+      affectedSlot: buildAffectedSlot(slotRaw, reqBatch, shedName, bufferPct),
     });
   }
 

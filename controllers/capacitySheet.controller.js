@@ -16,6 +16,7 @@ import {
   slotWindowToDeliveryUtcRange,
 } from "../utility/istSlotDate.js";
 import { loadShedStockPayload } from "../services/capacityShedStock.service.js";
+import { reportedExcess } from "../utility/lagwadSlotPlantsSplit.js";
 import {
   canBookFromExcess,
   capacityStatus,
@@ -583,7 +584,7 @@ export const getCapacitySlotDetail = async (req, res) => {
       return res.status(404).json({ success: false, message: "Slot not found" });
     }
 
-    const plant = await PlantCms.findById(slot.plantId).select("name subtypes").lean();
+    const plant = await PlantCms.findById(slot.plantId).select("name subtypes sowingBuffer").lean();
     const subtype = (plant?.subtypes || []).find(
       (st) => String(st._id) === String(slot.subtypeId)
     );
@@ -659,7 +660,14 @@ export const getCapacitySlotDetail = async (req, res) => {
       plantsSowed: num(batch.plantsSowed),
       packetsUsed: num(batch.packetsUsed),
       orderCoveredPlants: num(batch.orderCoveredPlants),
-      excessPlants: num(batch.excessPlants),
+      isIrrelevant: Boolean(batch.isIrrelevant),
+      excessPlants: batch.isIrrelevant
+        ? 0
+        : reportedExcess({
+            plantsSowed: batch.plantsSowed,
+            orderCoveredPlants: batch.orderCoveredPlants,
+            sowingBufferPct: plant?.sowingBuffer,
+          }),
       actualPlantsApplied: num(batch.actualPlantsApplied),
       expectedMortalityApplied: num(batch.expectedMortalityApplied),
       availablePlantsApplied: num(batch.availablePlantsApplied),
@@ -667,7 +675,9 @@ export const getCapacitySlotDetail = async (req, res) => {
       isExcessiveSowing: Boolean(batch.isExcessiveSowing),
     }));
     const lagwadEntries = batches.filter(
-      (batch) => batch.excessPlants > 0 || batch.isExcessiveSowing || batch.availablePlantsApplied > 0
+      (batch) =>
+        !batch.isIrrelevant &&
+        (batch.excessPlants > 0 || batch.isExcessiveSowing || batch.availablePlantsApplied > 0)
     );
 
     return res.status(200).json({

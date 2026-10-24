@@ -18,6 +18,7 @@ import {
   istTodayNoon,
   toSowYmd,
 } from "./sowingSlotReadyHelpers.js";
+import { reportedExcess } from "../utility/lagwadSlotPlantsSplit.js";
 import { fetchSlotsBySubtype } from "../services/directSowSlotDays.service.js";
 
 function isOfficeOrSuper(user) {
@@ -378,7 +379,7 @@ export const submitDirectSow = async (req, res) => {
     }
 
     const plant = await PlantCms.findById(plantId)
-      .select("name subtypes sowingAllowed")
+      .select("name subtypes sowingAllowed sowingBuffer")
       .lean();
     if (!plant?.sowingAllowed) {
       return res.status(400).json({
@@ -737,7 +738,11 @@ export const submitDirectSow = async (req, res) => {
         noSeedProduct: !product,
         excessOnly: isExcessOnly,
         orderCoveredPlants,
-        excessPlants,
+        excessPlants: reportedExcess({
+          plantsSowed,
+          orderCoveredPlants,
+          sowingBufferPct: plant?.sowingBuffer,
+        }),
         slotsUpdated: slotResult.slotsUpdated || 0,
         ordersMarked: orderResult.marked,
         sowingDate: slotResult.sowingDate,

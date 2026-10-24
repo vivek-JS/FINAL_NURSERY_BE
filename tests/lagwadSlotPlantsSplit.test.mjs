@@ -4,6 +4,9 @@ import {
   splitLagwadQtyForSlot,
   computeLagwadPendingSlotSync,
   sowQtySlotImpact,
+  reportedExcess,
+  reportedExcessBreakdown,
+  shownSowingExcess,
 } from "../utility/lagwadSlotPlantsSplit.js";
 
 describe("lagwad 90/10 split", () => {
@@ -53,6 +56,32 @@ describe("lagwad 90/10 split", () => {
     const r = sowQtySlotImpact(10000, { orderCoveredPlants: 10000, mortalityPct: 12 });
     assert.equal(r.expectedMortality, 1200);
     assert.equal(r.actualPlants, 8800);
+  });
+
+  it("reported excess uses the CMS sowing buffer, not 10% mortality", () => {
+    const parts = reportedExcessBreakdown({
+      plantsSowed: 10000,
+      orderCoveredPlants: 8000,
+      sowingBufferPct: 12,
+    });
+    assert.equal(parts.bufferPlants, 960);
+    assert.equal(parts.excess, 1040);
+    assert.equal(
+      reportedExcess({ plantsSowed: 10000, orderCoveredPlants: 8000, sowingBufferPct: 12 }),
+      1040
+    );
+    assert.equal(
+      reportedExcess({ plantsSowed: 10000, orderCoveredPlants: 8000, sowingBufferPct: 0 }),
+      2000
+    );
+    assert.equal(
+      reportedExcess({ plantsSowed: 10000, orderCoveredPlants: 0, sowingBufferPct: 12 }),
+      10000
+    );
+    assert.equal(
+      shownSowingExcess({ isIrrelevant: true, plantsSowed: 10000, orderCoveredPlants: 0 }, 12),
+      0
+    );
   });
 
   it("mixed cover + leftover: reserved + available = actual", () => {

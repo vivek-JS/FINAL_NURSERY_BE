@@ -25,6 +25,45 @@ export const ORDER_MORTALITY_BUFFER_PCT = 20;
 const toQty = (v) => Math.max(0, Math.floor(Number(v) || 0));
 
 /**
+ * Excess shown for one sowing. Orders come off first, then that plant's CMS sowing buffer.
+ * sowingMortality is not used. A sowing with no orders has no buffer plants.
+ */
+export function reportedExcessBreakdown({
+  plantsSowed = 0,
+  orderCoveredPlants = 0,
+  sowingBufferPct = 0,
+} = {}) {
+  const sowed = toQty(plantsSowed);
+  const orders = toQty(orderCoveredPlants);
+  const pctRaw = Number(sowingBufferPct);
+  const bufferPct = Number.isFinite(pctRaw) && pctRaw > 0 ? pctRaw : 0;
+  const bufferPlants = Math.round((orders * bufferPct) / 100);
+  return {
+    plantsSowed: sowed,
+    orders,
+    bufferPct,
+    bufferPlants,
+    excess: Math.max(0, sowed - orders - bufferPlants),
+  };
+}
+
+export function reportedExcess(input) {
+  return reportedExcessBreakdown(input).excess;
+}
+
+/** Display excess for a slot batch. Irrelevant batches are 0. Falls back when the batch is missing. */
+export function shownSowingExcess(batch, sowingBufferPct = 0, fallback = null) {
+  if (batch?.isIrrelevant) return 0;
+  const source = batch || fallback;
+  if (!source) return 0;
+  return reportedExcess({
+    plantsSowed: source.plantsSowed,
+    orderCoveredPlants: source.orderCoveredPlants,
+    sowingBufferPct,
+  });
+}
+
+/**
  * Expected mortality of one sowing: at least 10% of sowed; when it covered orders,
  * the leftover is kept as buffer up to 20% of the order plants.
  * 12,000 sowed for 10,000 ordered → 2,000; 15,000 for 10,000 → 2,000; 12,000 with no orders → 1,200.

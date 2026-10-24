@@ -13,6 +13,8 @@ import { validateLinkedOrderScope } from '../utility/sowingRequestOrderScope.js'
 import { insertTrailRows } from '../utility/slotTrailStore.js';
 import { getSlotTrailActivityName } from '../constants/slotTrailActions.js';
 import { releaseOrdersLinkedToSowingRequest } from '../services/releaseSowingRequestOrders.js';
+import { reportedExcess } from '../utility/lagwadSlotPlantsSplit.js';
+import { sowingBufferPctByPlantId } from '../utility/plantSowingBuffer.js';
 
 const applySowingBuffer = (baseValue, bufferPercent) => {
   const qty = Number(baseValue) || 0;
@@ -842,10 +844,25 @@ export const getSowingRequestById = async (req, res) => {
           .lean()
       : [];
 
+    const doneEv = (request.completionEvents || []).find((event) => event?.type === "SOW_COMPLETED");
+    const doneMeta = doneEv?.meta || {};
+    const sowedForExcess = Number(request.sowedQuantity) || Number(doneEv?.quantity) || 0;
+    const storedExcess = Number(doneMeta.excessPlants) || 0;
+    const coveredForExcess =
+      doneMeta.orderCoveredPlants != null
+        ? Number(doneMeta.orderCoveredPlants) || 0
+        : Math.max(0, sowedForExcess - storedExcess);
+    const bufferPct = (await sowingBufferPctByPlantId([request.plantId])).get(String(request.plantId)) || 0;
+
     res.json({
       success: true,
       data: {
         ...request,
+        reportedExcessPlants: reportedExcess({
+          plantsSowed: sowedForExcess,
+          orderCoveredPlants: coveredForExcess,
+          sowingBufferPct: bufferPct,
+        }),
         /** Outward purpose used when issuing stock from this dialog (always production for sowing). */
         issuePurpose: 'production',
         availablePackets: Math.floor(availablePackets),
