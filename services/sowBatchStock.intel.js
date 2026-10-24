@@ -48,7 +48,7 @@ export function rollupDeliveryIntel(batches, orders) {
   for (const b of batches || []) {
     const r = row(String(b.plantId), String(b.subtypeId), b.plantName, b.subtypeName);
     r.sowed += n(b.plantsSowed);
-    r.excess += n(b.excess);
+    if (!b.isIrrelevant) r.excess += n(b.excess);
     r.batches += 1;
   }
   for (const o of orders || []) {

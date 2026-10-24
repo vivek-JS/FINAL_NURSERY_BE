@@ -193,7 +193,8 @@ function toListRow(raw, plant, subtype, orderMap) {
     dispatchedNet: n(raw.dispatchedNet),
     remaining,
     covered: n(raw.orderCoveredPlants),
-    excess: n(raw.excessPlants),
+    excess: raw.isIrrelevant ? 0 : n(raw.excessPlants),
+    isIrrelevant: Boolean(raw.isIrrelevant),
     reservedApplied: n(raw.orderReservedPlantsApplied),
     availableApplied: n(raw.availablePlantsApplied),
     changeCount: n(raw.changeCount),
@@ -247,6 +248,7 @@ export async function listSowBatchStock(query = {}) {
       requestNumber: { $ifNull: ["$subtypeSlots.slots.sowingBatches.requestNumber", ""] },
       sowingRequestId: "$subtypeSlots.slots.sowingBatches.sowingRequestId",
       isExcessiveSowing: { $ifNull: ["$subtypeSlots.slots.sowingBatches.isExcessiveSowing", false] },
+      isIrrelevant: { $ifNull: ["$subtypeSlots.slots.sowingBatches.isIrrelevant", false] },
       linkedOrderIds: { $ifNull: ["$subtypeSlots.slots.sowingBatches.linkedOrderIds", []] },
       excessAllocations: { $ifNull: ["$subtypeSlots.slots.sowingBatches.excessAllocations", []] },
       dispatchedNet: {
@@ -281,7 +283,7 @@ export async function listSowBatchStock(query = {}) {
     const subtype = (plant.subtypes || []).find((st) => String(st._id) === String(r.subtypeId));
     if (shed && !String(r.shedName || "").toLowerCase().includes(shed)) continue;
     const remaining = remainingOf(r, r.dispatchedNet);
-    if (stock === "remaining" && remaining <= 0) continue;
+    if (stock === "remaining" && (r.isIrrelevant || n(r.excessPlants) <= 0)) continue;
     const readyNow = isReadyNow(r.plantReadyDate);
     if (ready === "now" && !readyNow) continue;
     if (ready === "later" && readyNow) continue;
@@ -297,7 +299,7 @@ export async function listSowBatchStock(query = {}) {
       s.remaining += r.remaining;
       s.sowed += r.plantsSowed;
       s.covered += r.covered;
-      s.excess += r.excess;
+      s.excess += r.isIrrelevant ? 0 : r.excess;
       s.destroyed += r.destroyedPlants;
       s.dispatched += r.dispatchedNet;
       s.batches += 1;
