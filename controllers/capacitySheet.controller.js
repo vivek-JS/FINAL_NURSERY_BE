@@ -16,7 +16,7 @@ import {
   slotWindowToDeliveryUtcRange,
 } from "../utility/istSlotDate.js";
 import { loadShedStockPayload } from "../services/capacityShedStock.service.js";
-import { reportedExcess } from "../utility/lagwadSlotPlantsSplit.js";
+import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 import {
   canBookFromExcess,
   capacityStatus,
@@ -671,13 +671,7 @@ export const getCapacitySlotDetail = async (req, res) => {
       packetsUsed: num(batch.packetsUsed),
       orderCoveredPlants: num(batch.orderCoveredPlants),
       isIrrelevant: Boolean(batch.isIrrelevant),
-      excessPlants: batch.isIrrelevant
-        ? 0
-        : reportedExcess({
-            plantsSowed: batch.plantsSowed,
-            orderCoveredPlants: batch.orderCoveredPlants,
-            sowingBufferPct: plant?.sowingBuffer,
-          }),
+      excessPlants: storedShownExcess(batch, plant?.sowingBuffer),
       actualPlantsApplied: num(batch.actualPlantsApplied),
       expectedMortalityApplied: num(batch.expectedMortalityApplied),
       availablePlantsApplied: num(batch.availablePlantsApplied),

@@ -51,10 +51,13 @@ export function reportedExcess(input) {
   return reportedExcessBreakdown(input).excess;
 }
 
-/** Sum of the shown excess on a slot's sowings. Irrelevant sowings add nothing. */
+/** Sum of stored shownExcess. Unstamped batches use the same formula. */
 export function slotReportedExcess(batches, sowingBufferPct = 0) {
   return (batches || []).reduce((sum, batch) => {
     if (batch?.isIrrelevant) return sum;
+    if (batch?.shownExcess != null && batch?.sowingBufferPct != null) {
+      return sum + Math.max(0, Math.floor(Number(batch.shownExcess) || 0));
+    }
     const moved = Math.max(0, Math.floor(Number(batch?.mortalityMovedToExcess) || 0));
     return (
       sum +

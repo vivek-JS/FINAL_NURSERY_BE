@@ -12,7 +12,7 @@ import moment from "moment";
 import mongoose from "mongoose";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
 import { SOWING_GAP_PIPELINE_STATUSES } from "../constants/sowingGapOrderStatuses.js";
-import { reportedExcess } from "../utility/lagwadSlotPlantsSplit.js";
+import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 import {
   applySowingGapBoardMetrics,
   fetchDeliveryOrdersForPlants,
@@ -7831,13 +7831,7 @@ export const getSlotOrdersSummary = async (req, res) => {
       )
       .map((b) => ({
         ...b,
-        excessPlants: b?.isIrrelevant
-          ? 0
-          : reportedExcess({
-              plantsSowed: b.plantsSowed,
-              orderCoveredPlants: b.orderCoveredPlants,
-              sowingBufferPct: bufferPct,
-            }) + Math.max(0, Math.floor(Number(b.mortalityMovedToExcess) || 0)),
+        excessPlants: storedShownExcess(b, bufferPct),
       }));
     const totalSowedPlants = sowBatches.reduce(
       (s, b) => s + (Number(b.plantsSowed) || 0),

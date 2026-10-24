@@ -5,6 +5,7 @@ import {
 } from "../services/pastDueSlotRollover.service.js";
 import { getNativeDeliveryCohortOrders } from "./slotDispatchStats.js";
 import { reportedExcess, slotReportedExcess, slotSowStock } from "./lagwadSlotPlantsSplit.js";
+import { storedShownExcess } from "./sowingBatchExcessStamp.js";
 import { SOWING_GAP_PIPELINE_STATUS_SET } from "../constants/sowingGapOrderStatuses.js";
 
 const DUE_PIPELINE_STATUS_SET = new Set(DUE_DELIVERY_STATUSES);
@@ -526,13 +527,7 @@ function summarizeSowingEntries(slot, sowingBufferPct = 0) {
     plantReadyDate: b.plantReadyDate || "",
     plantsSowed: Number(b.plantsSowed) || 0,
     orderCoveredPlants: Number(b.orderCoveredPlants) || 0,
-    excessPlants: b.isIrrelevant
-      ? 0
-      : reportedExcess({
-          plantsSowed: b.plantsSowed,
-          orderCoveredPlants: b.orderCoveredPlants,
-          sowingBufferPct,
-        }) + Math.max(0, Math.floor(Number(b.mortalityMovedToExcess) || 0)),
+    excessPlants: storedShownExcess(b, sowingBufferPct),
     packetsUsed: Number(b.packetsUsed) || 0,
     isExcessiveSowing: Boolean(b.isExcessiveSowing),
   }));

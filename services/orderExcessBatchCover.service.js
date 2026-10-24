@@ -13,7 +13,8 @@ import {
 } from "../controllers/orderSowFromExcess.controller.js";
 import { toSowYmd } from "../controllers/sowingSlotReadyHelpers.js";
 import { recordSlotTrail } from "../utility/slotTrailStore.js";
-import { reportedExcess, slotReportedExcess, slotSowStock, sowBatchStock, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
+import { slotReportedExcess, slotSowStock, sowBatchStock, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
+import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 import {
   SLOT_TRAIL_ACTIONS,
   getSlotTrailActivityName,
@@ -303,13 +304,7 @@ export async function listExcessBatches({
       if (slotCap <= 0) break;
       const sowed = int(b.plantsSowed);
       if (sowed <= 0) continue;
-      const shownExcess = b.isIrrelevant
-        ? 0
-        : reportedExcess({
-            plantsSowed: sowed,
-            orderCoveredPlants: b.orderCoveredPlants,
-            sowingBufferPct,
-          }) + Math.max(0, Math.floor(Number(b.mortalityMovedToExcess) || 0));
+      const shownExcess = storedShownExcess(b, sowingBufferPct);
       const rawFree = Math.min(sowBatchStock(b).free, shownExcess);
       if (rawFree <= 0) continue;
       const ready = readyMomentOf(b, slot);

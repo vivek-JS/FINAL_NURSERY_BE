@@ -2,6 +2,7 @@ import { Schema, model } from "mongoose";
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 import { SLOT_TRAIL_ACTION_ENUM } from "../constants/slotTrailActions.js";
 import { normalizeSlotTrailInPlantSlot } from "../utility/normalizeSlotTrail.js";
+import { attachSowingExcessMiddleware } from "../utility/sowingBatchExcessMiddleware.js";
 
 // Define a schema for slot trail tracking
 const slotTrailSchema = new Schema({
@@ -446,6 +447,12 @@ const slotSchema = new Schema({
       orderCoveredPlants: { type: Number, default: 0 },
       /** Plants beyond order cover — saleable: excessiveSowing.plants + availablePlants */
       excessPlants: { type: Number, default: 0 },
+      /** Plant CMS percent copied onto this sowing. Middleware keeps the next two in step. */
+      sowingBufferPct: { type: Number },
+      /** Round(plantsSowed × sowingBufferPct / 100). */
+      bufferPlants: { type: Number },
+      /** plantsSowed − bufferPlants − orders. This is the excess screens read. */
+      shownExcess: { type: Number },
       /** Super admin: batch stays visible but its excess is not bookable or counted. */
       isIrrelevant: { type: Boolean, default: false },
       irrelevantAt: { type: Date },
@@ -1163,6 +1170,8 @@ plantSlotSchema.pre("validate", function normalizeSlotTrailBeforeValidate(next) 
   normalizeSlotTrailInPlantSlot(this);
   next();
 });
+
+attachSowingExcessMiddleware(plantSlotSchema);
 
 plantSlotSchema.pre("save", async function offloadSlotTrailsBeforeSave() {
   const { archiveEmbeddedTrailsFromDoc } = await import("../utility/slotTrailStore.js");

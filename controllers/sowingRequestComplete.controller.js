@@ -36,9 +36,10 @@ import {
   wantsSowingClosed,
 } from "../utility/sowPacketSettlement.js";
 import { readMachineTimes } from "../utility/sowMachineTime.js";
-import { reportedExcess, shownSowingExcess } from "../utility/lagwadSlotPlantsSplit.js";
+import { reportedExcess } from "../utility/lagwadSlotPlantsSplit.js";
 import { sowingBufferPctByPlantId } from "../utility/plantSowingBuffer.js";
-import { excessPlusMoved, mortalityLeftOnBatch } from "../services/sowBatchMortalityRelease.service.js";
+import { mortalityLeftOnBatch } from "../services/sowBatchMortalityRelease.service.js";
+import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 
 /** Collect applied slot ids from completion meta + linkedSlotIds. */
 function collectSlotIdsFromRequest(r) {
@@ -1052,7 +1053,7 @@ export const getSowingCompletions = async (req, res) => {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
         isExcess: Boolean(r.isExcessiveSowing),
-        excessPlants: excessPlusMoved(shownSowingExcess(reqBatch, bufferPct), reqBatch),
+        excessPlants: storedShownExcess(reqBatch, bufferPct),
         bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
         shedName: reqBatch?.shedName || r.shedName || "",
         linkedOrders,
@@ -1283,7 +1284,7 @@ function buildAffectedSlot(slotRaw, reqBatch, shedName, sowingBufferPct = 0) {
       .filter((b) => reqBatch && String(b.sowingRequestId) === String(reqBatch.sowingRequestId))
       .reduce((s, b) => s + (Number(b.destroyedPlants) || 0), 0),
     shedName: reqBatch?.shedName || shedName || "",
-    excessPlants: excessPlusMoved(shownSowingExcess(reqBatch, sowingBufferPct), reqBatch),
+    excessPlants: storedShownExcess(reqBatch, sowingBufferPct),
     bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
   };
 }
@@ -1565,12 +1566,12 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       completionNotes: pick(meta.notes, r.completionNotes) || "",
       shedName: reqBatch?.shedName || shedName,
       isExcess: Boolean(r.isExcessiveSowing) || storedExcess >= entrySowed,
-      excessPlants: excessPlusMoved(
-        shownSowingExcess(reqBatch, bufferPct, {
+      excessPlants: storedShownExcess(
+        reqBatch || {
           plantsSowed: entrySowed,
           orderCoveredPlants: Math.max(0, entrySowed - storedExcess),
-        }),
-        reqBatch
+        },
+        bufferPct
       ),
       bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
       linkedOrders,
