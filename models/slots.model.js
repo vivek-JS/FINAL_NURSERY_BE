@@ -484,6 +484,8 @@ const slotSchema = new Schema({
       ],
       /** Sowed count confirmed — no mortality reserve held back from sellable stock. */
       noMortalityReserve: { type: Boolean, default: false },
+      /** Mortality already moved into excess. The rest of the hold stays mortality. */
+      mortalityMovedToExcess: { type: Number, default: 0 },
       /** Plants of this batch destroyed after sowing (already taken off the slot's sowed / stock). */
       destroyedPlants: { type: Number, default: 0, min: 0 },
       destroyLog: [

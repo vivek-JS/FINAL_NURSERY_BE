@@ -6,6 +6,7 @@ import Order from "../models/order.model.js";
 import SowingRequest from "../models/sowingRequest.model.js";
 import { IST_OFFSET } from "../utility/istSlotDate.js";
 import { reportedExcessBreakdown } from "../utility/lagwadSlotPlantsSplit.js";
+import { excessPlusMoved } from "./sowBatchMortalityRelease.service.js";
 
 const n = (v) => Number(v) || 0;
 const idStr = (v) => (v == null || v === "" ? "" : String(v._id ?? v));
@@ -212,7 +213,11 @@ function stockExcessOf(raw, plant) {
     orderCoveredPlants: raw?.orderCoveredPlants,
     sowingBufferPct: plant?.sowingBuffer,
   });
-  return { excess: parts.excess, bufferPlants: parts.bufferPlants, bufferPct: parts.bufferPct };
+  return {
+    excess: excessPlusMoved(parts.excess, raw),
+    bufferPlants: parts.bufferPlants,
+    bufferPct: parts.bufferPct,
+  };
 }
 
 function toListRow(raw, plant, subtype, orderMap) {
@@ -288,6 +293,7 @@ export async function listSowBatchStock(query = {}) {
       destroyedPlants: { $ifNull: ["$subtypeSlots.slots.sowingBatches.destroyedPlants", 0] },
       orderCoveredPlants: { $ifNull: ["$subtypeSlots.slots.sowingBatches.orderCoveredPlants", 0] },
       excessPlants: { $ifNull: ["$subtypeSlots.slots.sowingBatches.excessPlants", 0] },
+      mortalityMovedToExcess: { $ifNull: ["$subtypeSlots.slots.sowingBatches.mortalityMovedToExcess", 0] },
       availablePlantsApplied: { $ifNull: ["$subtypeSlots.slots.sowingBatches.availablePlantsApplied", 0] },
       orderReservedPlantsApplied: {
         $ifNull: ["$subtypeSlots.slots.sowingBatches.orderReservedPlantsApplied", 0],

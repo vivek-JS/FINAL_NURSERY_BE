@@ -36,8 +36,9 @@ import {
   wantsSowingClosed,
 } from "../utility/sowPacketSettlement.js";
 import { readMachineTimes } from "../utility/sowMachineTime.js";
-import { reportedExcess, shownSowingExcess, sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
+import { reportedExcess, shownSowingExcess } from "../utility/lagwadSlotPlantsSplit.js";
 import { sowingBufferPctByPlantId } from "../utility/plantSowingBuffer.js";
+import { excessPlusMoved, mortalityLeftOnBatch } from "../services/sowBatchMortalityRelease.service.js";
 
 /** Collect applied slot ids from completion meta + linkedSlotIds. */
 function collectSlotIdsFromRequest(r) {
@@ -1051,7 +1052,7 @@ export const getSowingCompletions = async (req, res) => {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
         isExcess: Boolean(r.isExcessiveSowing),
-        excessPlants: shownSowingExcess(reqBatch, bufferPct),
+        excessPlants: excessPlusMoved(shownSowingExcess(reqBatch, bufferPct), reqBatch),
         bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
         shedName: reqBatch?.shedName || r.shedName || "",
         linkedOrders,
@@ -1277,12 +1278,12 @@ function buildAffectedSlot(slotRaw, reqBatch, shedName, sowingBufferPct = 0) {
     batchPacketsUsed: Number(reqBatch?.packetsUsed) || 0,
     batchId: reqBatch?._id ? String(reqBatch._id) : null,
     batchDestroyedPlants: Number(reqBatch?.destroyedPlants) || 0,
-    batchExpectedMortality: reqBatch ? sowBatchStock(reqBatch).reserve : 0,
+    batchExpectedMortality: reqBatch ? mortalityLeftOnBatch(reqBatch) : 0,
     requestDestroyedPlants: (slotRaw.sowingBatches || [])
       .filter((b) => reqBatch && String(b.sowingRequestId) === String(reqBatch.sowingRequestId))
       .reduce((s, b) => s + (Number(b.destroyedPlants) || 0), 0),
     shedName: reqBatch?.shedName || shedName || "",
-    excessPlants: shownSowingExcess(reqBatch, sowingBufferPct),
+    excessPlants: excessPlusMoved(shownSowingExcess(reqBatch, sowingBufferPct), reqBatch),
     bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
   };
 }
@@ -1564,10 +1565,13 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       completionNotes: pick(meta.notes, r.completionNotes) || "",
       shedName: reqBatch?.shedName || shedName,
       isExcess: Boolean(r.isExcessiveSowing) || storedExcess >= entrySowed,
-      excessPlants: shownSowingExcess(reqBatch, bufferPct, {
-        plantsSowed: entrySowed,
-        orderCoveredPlants: Math.max(0, entrySowed - storedExcess),
-      }),
+      excessPlants: excessPlusMoved(
+        shownSowingExcess(reqBatch, bufferPct, {
+          plantsSowed: entrySowed,
+          orderCoveredPlants: Math.max(0, entrySowed - storedExcess),
+        }),
+        reqBatch
+      ),
       bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
       linkedOrders,
       batchNumber: batchNumbers.join(", ") || "",
