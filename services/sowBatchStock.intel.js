@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import { IST_OFFSET } from "../utility/istSlotDate.js";
-import { dmyToYmd, listSowBatchStock } from "./sowBatchStock.service.js";
+import { dmyToYmd, inProgressOrderIdSet, listSowBatchStock } from "./sowBatchStock.service.js";
 
 const n = (v) => Number(v) || 0;
 
@@ -37,6 +37,8 @@ export function rollupDeliveryIntel(batches, orders) {
         letter: plantLetter(plantName),
         orderCount: 0,
         orderPlants: 0,
+        notSownPlants: 0,
+        inProgressPlants: 0,
         sowed: 0,
         excess: 0,
         batches: 0,
@@ -46,9 +48,10 @@ export function rollupDeliveryIntel(batches, orders) {
   };
 
   for (const b of batches || []) {
+    if (b.isIrrelevant) continue;
     const r = row(String(b.plantId), String(b.subtypeId), b.plantName, b.subtypeName);
     r.sowed += n(b.plantsSowed);
-    if (!b.isIrrelevant) r.excess += n(b.excess);
+    r.excess += n(b.excess);
     r.batches += 1;
   }
   for (const o of orders || []) {
@@ -58,8 +61,11 @@ export function rollupDeliveryIntel(batches, orders) {
       o.cropName,
       o.varietyName
     );
+    const plants = n(o.plants);
     r.orderCount += 1;
-    r.orderPlants += n(o.plants);
+    r.orderPlants += plants;
+    if (!o.sowingDone && o.inProgress) r.inProgressPlants += plants;
+    else if (!o.sowingDone) r.notSownPlants += plants;
     if (o.cropName && !r.plantName) r.plantName = o.cropName;
     if (o.varietyName && !r.subtypeName) r.subtypeName = o.varietyName;
     r.letter = plantLetter(r.plantName);
@@ -67,11 +73,105 @@ export function rollupDeliveryIntel(batches, orders) {
 
   return [...map.values()]
     .map((r) => {
-      const short = Math.max(0, r.orderPlants - r.sowed);
+      const short = Math.max(0, r.notSownPlants - r.sowed);
       const free = Math.max(0, r.excess);
       return { ...r, short, free, net: free - short };
     })
     .sort((a, b) => b.orderPlants - a.orderPlants || b.excess - a.excess);
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function labelOfYmd(ymd) {
+  if (!ymd || ymd === "none") return "—";
+  const [y, m, d] = String(ymd).split("-");
+  return `${d} ${MONTHS[Number(m) - 1] || m} ${y}`;
+}
+
+/** Plant, then variety, then date. Irrelevant batches add no excess. */
+export function groupByPlantVarietyDate(batches, orders) {
+  const plants = new Map();
+  const plantOf = (plantId, plantName) => {
+    if (!plants.has(plantId)) {
+      plants.set(plantId, {
+        plantId,
+        plantName: plantName || "",
+        letter: plantLetter(plantName),
+        varieties: new Map(),
+      });
+    }
+    const plant = plants.get(plantId);
+    if (plantName && !plant.plantName) plant.plantName = plantName;
+    return plant;
+  };
+  const varietyOf = (plant, subtypeId, subtypeName) => {
+    if (!plant.varieties.has(subtypeId)) {
+      plant.varieties.set(subtypeId, { subtypeId, subtypeName: subtypeName || "", dates: new Map() });
+    }
+    const variety = plant.varieties.get(subtypeId);
+    if (subtypeName && !variety.subtypeName) variety.subtypeName = subtypeName;
+    return variety;
+  };
+  const dateOf = (variety, ymd) => {
+    const key = ymd || "none";
+    if (!variety.dates.has(key)) {
+      variety.dates.set(key, {
+        date: key === "none" ? "" : key,
+        label: labelOfYmd(key),
+        excess: 0,
+        sowed: 0,
+        batches: 0,
+        notSownPlants: 0,
+        notSownOrders: [],
+        inProgressPlants: 0,
+        inProgressCount: 0,
+      });
+    }
+    return variety.dates.get(key);
+  };
+
+  for (const batch of batches || []) {
+    if (batch.isIrrelevant) continue;
+    const plant = plantOf(String(batch.plantId), batch.plantName);
+    const variety = varietyOf(plant, String(batch.subtypeId), batch.subtypeName);
+    const date = dateOf(variety, dmyToYmd(batch.plantReadyDate));
+    date.excess += n(batch.excess);
+    date.sowed += n(batch.plantsSowed);
+    date.batches += 1;
+  }
+  for (const order of orders || []) {
+    if (order.sowingDone) continue;
+    const plant = plantOf(String(order.plantId), order.cropName);
+    const variety = varietyOf(plant, String(order.subtypeId), order.varietyName);
+    const date = dateOf(variety, order.dateYmd || "");
+    const plants = n(order.plants);
+    if (order.inProgress) {
+      date.inProgressPlants += plants;
+      date.inProgressCount += 1;
+    } else {
+      date.notSownPlants += plants;
+      date.notSownOrders.push({
+        _id: order._id || "",
+        orderId: order.orderId || "",
+        plants,
+      });
+    }
+  }
+
+  return [...plants.values()]
+    .map((plant) => ({
+      plantId: plant.plantId,
+      plantName: plant.plantName,
+      letter: plantLetter(plant.plantName),
+      varieties: [...plant.varieties.values()]
+        .map((variety) => ({
+          subtypeId: variety.subtypeId,
+          subtypeName: variety.subtypeName,
+          dates: [...variety.dates.values()].sort((a, b) => String(a.date).localeCompare(String(b.date))),
+        }))
+        .sort((a, b) => a.subtypeName.localeCompare(b.subtypeName)),
+    }))
+    .sort((a, b) => a.plantName.localeCompare(b.plantName));
 }
 
 function parseRange(from, to) {
@@ -125,10 +225,11 @@ export async function sowBatchStockIntel(query = {}) {
 
   const orderDocs = plantFilter.length
     ? await Order.find(orderMatch)
-        .select("orderId numberOfPlants additionalPlants plantName plantSubtype deliveryDate")
+        .select("orderId numberOfPlants additionalPlants plantName plantSubtype deliveryDate sowingDone")
         .populate("plantName", "name")
         .lean()
     : [];
+  const progressIds = await inProgressOrderIdSet(orderDocs.map((o) => o._id));
 
   const nameById = new Map();
   for (const b of batches) nameById.set(`${b.plantId}|${b.subtypeId}`, b);
@@ -137,20 +238,29 @@ export async function sowBatchStockIntel(query = {}) {
     const subtypeId = String(o.plantSubtype || "");
     const hit = nameById.get(`${plantId}|${subtypeId}`);
     const names = subtypeNameOf(plantId, subtypeId);
+    const sowingDone = Boolean(o.sowingDone);
     return {
+      _id: String(o._id),
+      orderId: o.orderId,
       plantId,
       subtypeId,
       cropName: o.plantName?.name || hit?.plantName || names.plantName,
       varietyName: hit?.subtypeName || names.subtypeName,
       plants: n(o.numberOfPlants) + n(o.additionalPlants),
+      sowingDone,
+      inProgress: !sowingDone && progressIds.has(String(o._id)),
+      dateYmd: moment(o.deliveryDate).utcOffset(IST_OFFSET).format("YYYY-MM-DD"),
     };
   });
 
   const rows = rollupDeliveryIntel(batches, orders);
+  const groups = groupByPlantVarietyDate(batches, orders);
   const summary = rows.reduce(
     (s, r) => {
       s.orderCount += r.orderCount;
       s.orderPlants += r.orderPlants;
+      s.notSownPlants += r.notSownPlants;
+      s.inProgressPlants += r.inProgressPlants;
       s.sowed += r.sowed;
       s.excess += r.excess;
       s.short += r.short;
@@ -158,7 +268,17 @@ export async function sowBatchStockIntel(query = {}) {
       s.batches += r.batches;
       return s;
     },
-    { orderCount: 0, orderPlants: 0, sowed: 0, excess: 0, short: 0, free: 0, batches: 0 }
+    {
+      orderCount: 0,
+      orderPlants: 0,
+      notSownPlants: 0,
+      inProgressPlants: 0,
+      sowed: 0,
+      excess: 0,
+      short: 0,
+      free: 0,
+      batches: 0,
+    }
   );
 
   return {
@@ -166,5 +286,6 @@ export async function sowBatchStockIntel(query = {}) {
     to: range.toYmd,
     summary,
     rows,
+    groups,
   };
 }

@@ -3,6 +3,7 @@ import moment from "moment";
 import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
+import SowingRequest from "../models/sowingRequest.model.js";
 import { IST_OFFSET } from "../utility/istSlotDate.js";
 
 const n = (v) => Number(v) || 0;
@@ -126,7 +127,7 @@ async function sowingAllowedPlants(plantId) {
   return PlantCms.find(q).select("_id name subtypes._id subtypes.name").lean();
 }
 
-function mapOrderBrief(order) {
+function mapOrderBrief(order, inProgress = false) {
   const booked = n(order.numberOfPlants) + n(order.additionalPlants);
   const held = (order.sowingPartialCover || []).reduce((s, r) => s + n(r.plants), 0);
   const remainingPlants = order.sowingDone ? 0 : Math.max(0, booked - held);
@@ -135,10 +136,31 @@ function mapOrderBrief(order) {
     orderId: order.orderId,
     farmerName: order.farmer?.name || order.name || "",
     sowingDone: Boolean(order.sowingDone),
+    inProgress: !order.sowingDone && Boolean(inProgress),
     bookedPlants: booked,
     coveredPlants: order.sowingDone ? booked : held,
     remainingPlants,
   };
+}
+
+/** Orders sitting on an issued or in-progress sowing that is not finished yet. */
+export async function inProgressOrderIdSet(orderIds) {
+  const ids = [...orderIds].filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
+  if (!ids.length) return new Set();
+  const oids = ids.map((id) => new mongoose.Types.ObjectId(String(id)));
+  const rows = await SowingRequest.find({
+    sowingCompleted: { $ne: true },
+    status: { $nin: ["cancelled", "rejected"] },
+    $or: [{ sowingInProgress: true }, { status: "issued" }],
+    linkedOrderIds: { $in: oids },
+  })
+    .select("linkedOrderIds")
+    .lean();
+  const set = new Set();
+  for (const row of rows) {
+    for (const id of row.linkedOrderIds || []) set.add(String(id));
+  }
+  return set;
 }
 
 async function hydrateOrders(idSet) {
@@ -148,8 +170,9 @@ async function hydrateOrders(idSet) {
     .select("orderId name farmer numberOfPlants additionalPlants sowingDone sowingPartialCover")
     .populate("farmer", "name")
     .lean();
+  const progress = await inProgressOrderIdSet(ids);
   const map = new Map();
-  for (const o of rows) map.set(String(o._id), mapOrderBrief(o));
+  for (const o of rows) map.set(String(o._id), mapOrderBrief(o, progress.has(String(o._id))));
   return map;
 }
 
