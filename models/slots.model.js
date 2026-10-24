@@ -446,6 +446,12 @@ const slotSchema = new Schema({
       orderCoveredPlants: { type: Number, default: 0 },
       /** Plants beyond order cover — saleable: excessiveSowing.plants + availablePlants */
       excessPlants: { type: Number, default: 0 },
+      /** Super admin: batch stays visible but its excess is not bookable or counted. */
+      isIrrelevant: { type: Boolean, default: false },
+      irrelevantAt: { type: Date },
+      irrelevantBy: { type: Schema.Types.ObjectId, ref: "User" },
+      /** Plants removed from slot.availablePlants / excessiveSowing.plants when marked. */
+      irrelevantStockPulled: { type: Number, default: 0, min: 0 },
       /** 90% of plantsSowed applied to slot.actualPlants */
       actualPlantsApplied: { type: Number },
       /** 10% of plantsSowed applied to slot.expectedMortality */

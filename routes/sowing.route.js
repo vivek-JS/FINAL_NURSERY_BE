@@ -109,6 +109,7 @@ import {
 } from "../controllers/capacitySheet.controller.js";
 import { askCapacityAnalyst } from "../controllers/capacityAsk.controller.js";
 import { postDestroySowBatch } from "../controllers/sowBatchDestroy.controller.js";
+import { postReleaseBatchMortality } from "../controllers/sowBatchMortalityRelease.controller.js";
 import {
   getExcessBatches,
   coverOrderFromExcessBatches,
@@ -141,6 +142,7 @@ router.get("/capacity-sheet/shed-stock", getCapacityShedStock);
 router.get("/capacity-sheet/board", getCapacityBoard);
 router.post("/capacity-ask", askCapacityAnalyst);
 router.post("/sow-batch/destroy", postDestroySowBatch); // Destroy sown plants of a slot sowing batch
+router.post("/sow-batch/mortality-to-excess", postReleaseBatchMortality); // Super admin: move mortality hold-back into excess
 router.get("/sow-batch-stock", getSowBatchStock); // SowingAllowed batch stock table
 router.get("/sow-batch-stock/intel", getSowBatchStockIntel); // Delivery range vs sowed/excess
 router.get("/sow-batch-stock/:batchId", getSowBatchStockById); // Batch stock-change timeline
