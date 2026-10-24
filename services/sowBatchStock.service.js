@@ -390,5 +390,6 @@ export async function getSowBatchStockDetail(batchId) {
     ...toListRow(raw, plant, subtype, orderMap),
     changes,
     remaining,
+    mortality: found.batch.noMortalityReserve ? 0 : n(found.batch.expectedMortalityApplied),
   };
 }
