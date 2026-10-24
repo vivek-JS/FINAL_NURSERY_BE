@@ -1280,6 +1280,13 @@ function buildAffectedSlot(slotRaw, reqBatch, shedName, sowingBufferPct = 0) {
     batchId: reqBatch?._id ? String(reqBatch._id) : null,
     batchDestroyedPlants: Number(reqBatch?.destroyedPlants) || 0,
     batchExpectedMortality: reqBatch ? mortalityLeftOnBatch(reqBatch) : 0,
+    bufferPlants:
+      !reqBatch || reqBatch.isIrrelevant
+        ? 0
+        : reqBatch.bufferPlants == null
+          ? null
+          : Math.max(0, Math.round(Number(reqBatch.bufferPlants) || 0)),
+    mortalityMovedToExcess: Math.max(0, Math.floor(Number(reqBatch?.mortalityMovedToExcess) || 0)),
     requestDestroyedPlants: (slotRaw.sowingBatches || [])
       .filter((b) => reqBatch && String(b.sowingRequestId) === String(reqBatch.sowingRequestId))
       .reduce((s, b) => s + (Number(b.destroyedPlants) || 0), 0),

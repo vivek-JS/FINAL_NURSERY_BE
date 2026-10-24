@@ -12,6 +12,36 @@ test("stamps CMS percent of sowed, then subtracts orders", () => {
   assert.equal(fields.shownExcess, 0);
 });
 
+test("lower live order quantity replaces the saved cover", () => {
+  const qty = new Map([
+    ["a", 16700],
+    ["b", 13000],
+    ["c", 18000],
+    ["d", 16000],
+  ]);
+  const fields = excessFieldsForBatch(
+    {
+      plantsSowed: 75600,
+      orderCoveredPlants: 66700,
+      linkedOrderIds: ["a", "b", "c", "d"],
+    },
+    12,
+    qty
+  );
+  assert.equal(fields.bufferPlants, 9072);
+  assert.equal(fields.shownExcess, 2828);
+});
+
+test("a larger linked order list does not replace the saved cover", () => {
+  const fields = excessFieldsForBatch(
+    { plantsSowed: 89000, orderCoveredPlants: 0, linkedOrderIds: ["a"] },
+    15,
+    new Map([["a", 122500]])
+  );
+  assert.equal(fields.bufferPlants, 13350);
+  assert.equal(fields.shownExcess, 75650);
+});
+
 test("stored shownExcess is read back as saved", () => {
   assert.equal(
     storedShownExcess({ plantsSowed: 75600, orderCoveredPlants: 66700, sowingBufferPct: 12, shownExcess: 0 }),
