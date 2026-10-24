@@ -143,10 +143,10 @@ function mapOrderBrief(order, inProgress = false) {
   };
 }
 
-/** Orders sitting on an issued or in-progress sowing that is not finished yet. */
-export async function inProgressOrderIdSet(orderIds) {
+/** Order id → request number for an issued or in-progress sowing that is not finished. */
+export async function inProgressRequestByOrderId(orderIds) {
   const ids = [...orderIds].filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
-  if (!ids.length) return new Set();
+  if (!ids.length) return new Map();
   const oids = ids.map((id) => new mongoose.Types.ObjectId(String(id)));
   const rows = await SowingRequest.find({
     sowingCompleted: { $ne: true },
@@ -154,13 +154,22 @@ export async function inProgressOrderIdSet(orderIds) {
     $or: [{ sowingInProgress: true }, { status: "issued" }],
     linkedOrderIds: { $in: oids },
   })
-    .select("linkedOrderIds")
+    .select("linkedOrderIds requestNumber")
     .lean();
-  const set = new Set();
+  const map = new Map();
   for (const row of rows) {
-    for (const id of row.linkedOrderIds || []) set.add(String(id));
+    for (const id of row.linkedOrderIds || []) {
+      const key = String(id);
+      if (!map.has(key)) map.set(key, row.requestNumber || "");
+    }
   }
-  return set;
+  return map;
+}
+
+/** Orders sitting on an issued or in-progress sowing that is not finished yet. */
+export async function inProgressOrderIdSet(orderIds) {
+  const byOrder = await inProgressRequestByOrderId(orderIds);
+  return new Set(byOrder.keys());
 }
 
 async function hydrateOrders(idSet) {

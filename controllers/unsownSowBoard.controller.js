@@ -3,6 +3,7 @@ import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
 import { leftoverOrderIdSet } from "../services/sowingLeftoverDue.service.js";
+import { inProgressRequestByOrderId } from "../services/sowBatchStock.service.js";
 
 const ACTIVE_ORDER_STATUSES = [
   "PENDING",
@@ -105,7 +106,12 @@ export const getUnsownSowBoard = async (req, res) => {
 
     const plantIds = plants.map((plant) => plant._id);
     if (!plantIds.length) {
-      return res.json({ success: true, data: [], counts: { need: 0, partial: 0, late: 0 }, truncated: false });
+      return res.json({
+        success: true,
+        data: [],
+        counts: { need: 0, partial: 0, progress: 0, late: 0 },
+        truncated: false,
+      });
     }
 
     const [orders, leftoverIds] = await Promise.all([
@@ -124,6 +130,7 @@ export const getUnsownSowBoard = async (req, res) => {
         .lean(),
       leftoverOrderIdSet(),
     ]);
+    const progressByOrder = await inProgressRequestByOrderId(orders.map((order) => order._id));
 
     const slotIds = [
       ...new Set(
@@ -145,8 +152,10 @@ export const getUnsownSowBoard = async (req, res) => {
       const covered = heldPlants(order);
       const remaining = Math.max(0, booked - covered);
       const leftover = leftoverIds.has(String(order._id));
+      const requestNumber = progressByOrder.get(String(order._id));
+      const inProgress = requestNumber != null;
       const partial = covered > 0 || leftover;
-      if (!partial && remaining <= 0) continue;
+      if (!inProgress && !partial && remaining <= 0) continue;
 
       const slot = slots.get(String(order.bookingSlot)) || null;
       const readyDays = Number(slot?.plantReadyDays) || subtype?.plantReadyDays || 0;
@@ -170,7 +179,8 @@ export const getUnsownSowBoard = async (req, res) => {
         bookedPlants: booked,
         coveredPlants: covered,
         remainingPlants: remaining,
-        status: partial ? "partial" : "need",
+        status: inProgress ? "progress" : partial ? "partial" : "need",
+        requestNumber: requestNumber || "",
         deliveryDate: order.deliveryDate || null,
         sowByDate,
         daysUntilSow,
@@ -189,11 +199,12 @@ export const getUnsownSowBoard = async (req, res) => {
     const counts = rows.reduce(
       (acc, row) => {
         if (row.status === "partial") acc.partial += 1;
+        else if (row.status === "progress") acc.progress += 1;
         else acc.need += 1;
         if (row.daysUntilSow != null && row.daysUntilSow < 0) acc.late += 1;
         return acc;
       },
-      { need: 0, partial: 0, late: 0 }
+      { need: 0, partial: 0, progress: 0, late: 0 }
     );
 
     return res.json({
