@@ -10,6 +10,7 @@ import {
   describeSowPlanLine,
   applySowPlanLineToSlots,
   sowLinkMovesForLine,
+  dispatchLoadableFree,
 } from "../services/sowDispatchBatches.service.js";
 import { isVehicleLoadCompleteByRows } from "../services/secondaryVehicleLoad.service.js";
 
@@ -229,6 +230,29 @@ test("order with no linked batch takes free excess, then other orders with no re
     [taken.entry]
   );
   assert.deepEqual(after, [{ slotId: OID.s17, batchId: OID.b17, plants: 299 }]);
+});
+
+test("dispatch free excludes unreleased mortality reserve", () => {
+  const batch = {
+    plantsSowed: 10000,
+    orderCoveredPlants: 0,
+    excessPlants: 10000,
+    expectedMortalityApplied: 1200,
+    availablePlantsApplied: 8800,
+    sowingBufferPct: 12,
+  };
+  assert.equal(dispatchLoadableFree(batch), 8800);
+
+  const ctx = {
+    orderLinks: new Map([["new", []]]),
+    batches: new Map([[OID.b17, { slotId: OID.s17, free: dispatchLoadableFree(batch), orders: [] }]]),
+  };
+  const plan = planSowBatchLoad({
+    selections: [{ orderId: "new", batchId: OID.b17, plants: 9000 }],
+    ...ctx,
+  });
+  assert.equal(plan.ok, false);
+  assert.match(plan.error, /need 9000/);
 });
 
 test("an order split across two batches: own part is COVER, the rest switches", () => {

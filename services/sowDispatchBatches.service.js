@@ -6,7 +6,7 @@ import Dispatch from "../models/dispatch.model.js";
 import Order from "../models/order.model.js";
 import { applyStockFieldUpdates } from "../utility/slotStockTrail.js";
 import { sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
-import { dispatchBookableFree } from "../utility/sowingBatchExcessStamp.js";
+import { dispatchLoadableFree } from "../utility/sowDispatchFree.js";
 import {
   findDispatchActiveByIdOrTransport,
   resolvePlantRowFromDispatch,
@@ -43,6 +43,7 @@ const NOT_RELINKABLE_STATUSES = [
 ];
 
 export const orderPlants = (o) => toQty(o?.numberOfPlants) + toQty(o?.additionalPlants);
+export { dispatchLoadableFree };
 
 function dmyMs(s) {
   const m = moment(String(s || ""), ["DD-MM-YYYY", "YYYY-MM-DD"], true);
@@ -410,7 +411,7 @@ function batchView(entry, extra = {}) {
     shedName: b.shedName || "",
     requestNumber: b.requestNumber || "",
     sowedPlants: stock.sowed,
-    freePlants: dispatchBookableFree(b, b?.sowingBufferPct || 0),
+    freePlants: dispatchLoadableFree(b),
     ...extra,
   };
 }
@@ -476,7 +477,7 @@ export async function loadSowDispatchContext(
   const batches = new Map(
     [...batchIndex].map(([batchId, e]) => [
       batchId,
-      { slotId: e.slotId, free: dispatchBookableFree(e.batch, e.batch?.sowingBufferPct || 0), orders: [] },
+      { slotId: e.slotId, free: dispatchLoadableFree(e.batch), orders: [] },
     ])
   );
 
