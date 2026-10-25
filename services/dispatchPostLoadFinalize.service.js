@@ -332,3 +332,32 @@ export function schedulePendingDispatchWhatsAppForVehicle(dispatchId, { changedB
     })();
   });
 }
+
+/**
+ * Trip-manager push/inbox when shed adds crates to a vehicle that already had load.
+ * First load is skipped (create + DISPATCHED alerts cover it).
+ */
+export function scheduleVehicleLoadMoreNotify(
+  dispatchId,
+  { plantsAdded = 0, alreadyLoadedBefore = 0, loadedTotal = 0, changedBy = "" } = {}
+) {
+  if (!dispatchId || plantsAdded < 1 || alreadyLoadedBefore < 1) return;
+  setImmediate(() => {
+    (async () => {
+      try {
+        const dispatch = await Dispatch.findById(dispatchId)
+          .select("transportId vehicleNumber vehicleName driverName")
+          .lean();
+        if (!dispatch) return;
+        const { notifyVehicleLoadMore } = await import("../utility/dispatchFleetNotify.js");
+        notifyVehicleLoadMore(dispatch, {
+          plantsAdded,
+          loadedTotal: loadedTotal || alreadyLoadedBefore + plantsAdded,
+          changedBy,
+        });
+      } catch (e) {
+        console.error("scheduleVehicleLoadMoreNotify:", e?.message || e);
+      }
+    })();
+  });
+}

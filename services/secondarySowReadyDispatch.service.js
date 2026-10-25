@@ -26,6 +26,7 @@ import {
   finalizeOrderOnShedLineLoaded,
   schedulePostShedLoadAlerts,
   schedulePendingDispatchWhatsAppForVehicle,
+  scheduleVehicleLoadMoreNotify,
   syncOrderVehicleLoadedFlag,
 } from "./dispatchPostLoadFinalize.service.js";
 
@@ -475,7 +476,7 @@ export async function executeSowReadyVehicleLoad({
     throw new AppError("Plant is not sowingAllowed — use secondary inward load", 400);
   }
 
-  const { byRow } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const { total: alreadyLoadedBefore, byRow } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
   const rowNeed = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
   const capPlants = Math.max(0, rowNeed - (byRow.get(dispatchPlantRowIdx) || 0));
 
@@ -700,6 +701,12 @@ export async function executeSowReadyVehicleLoad({
       schedulePostShedLoadAlerts({ finalizeResult: fr, changedBy: alertChangedBy });
     }
     schedulePendingDispatchWhatsAppForVehicle(freshDispatch._id, { changedBy: alertChangedBy });
+    scheduleVehicleLoadMoreNotify(freshDispatch._id, {
+      plantsAdded: totalLoaded,
+      alreadyLoadedBefore,
+      loadedTotal: alreadyLoadedBefore + totalLoaded,
+      changedBy: alertChangedBy,
+    });
 
     return {
       allocations: results,

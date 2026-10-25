@@ -26,6 +26,7 @@ import {
   finalizeOrderOnShedLineLoaded,
   schedulePostShedLoadAlerts,
   schedulePendingDispatchWhatsAppForVehicle,
+  scheduleVehicleLoadMoreNotify,
   syncOrderVehicleLoadedFlag,
 } from "./dispatchPostLoadFinalize.service.js";
 import { packQtyFromOrderDispatchRow } from "../utility/packCratesFromOrder.js";
@@ -1801,6 +1802,13 @@ export async function executeSecondaryVehicleLoad({
       schedulePostShedLoadAlerts({ finalizeResult: fr, changedBy: alertChangedBy });
     }
     schedulePendingDispatchWhatsAppForVehicle(dispatchDoc._id, { changedBy: alertChangedBy });
+    const plantsAdded = fifo.totalAllocated || 0;
+    scheduleVehicleLoadMoreNotify(dispatchDoc._id, {
+      plantsAdded,
+      alreadyLoadedBefore: alreadyLoaded,
+      loadedTotal: alreadyLoaded + plantsAdded,
+      changedBy: alertChangedBy,
+    });
 
     const primaryOrderId =
       resolvedOrderId ||

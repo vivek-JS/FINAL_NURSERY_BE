@@ -1368,6 +1368,7 @@ const updateDispatch = catchAsync(async (req, res, next) => {
 
     const officeEditNow = new Date();
     let dispatchLastOfficeEditedAt = existing.lastOfficeEditedAt || null;
+    const officeQtyDeltas = [];
 
     nextOrderDispatchDetails = nextOrderDispatchDetails.map((row) => {
       const oid = String(row.orderId);
@@ -1391,6 +1392,13 @@ const updateDispatch = catchAsync(async (req, res, next) => {
       if (!isNewOnDispatch && newQty !== oldQty) {
         lastOfficeQtyDelta = newQty - oldQty;
         lastOfficeEditedAt = officeEditNow;
+        officeQtyDeltas.push({
+          orderId: oid,
+          orderCode: row.orderId?.orderId || row.publicOrderCode || oid.slice(-4),
+          delta: lastOfficeQtyDelta,
+          oldQty,
+          newQty,
+        });
         if (
           !dispatchLastOfficeEditedAt ||
           lastOfficeEditedAt > dispatchLastOfficeEditedAt
@@ -1538,6 +1546,19 @@ const updateDispatch = catchAsync(async (req, res, next) => {
     schedulePendingDispatchWhatsAppForVehicle(updated._id, {
       changedBy: req.user?.name || req.user?.email || "Unknown",
     });
+
+    if (hasShedLoad && officeQtyDeltas.length > 0) {
+      try {
+        const { notifyDispatchLoadEdited } = await import("../utility/dispatchFleetNotify.js");
+        notifyDispatchLoadEdited(updated.toObject?.() || updated, {
+          qtyDeltas: officeQtyDeltas,
+          changedBy: req.user?.name || req.user?.email || "Unknown",
+          editedAt: officeEditNow,
+        });
+      } catch (e) {
+        console.error("notifyDispatchLoadEdited:", e?.message || e);
+      }
+    }
 
     const response = generateResponse(
       "Success",
