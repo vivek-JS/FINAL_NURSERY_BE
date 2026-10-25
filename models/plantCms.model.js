@@ -40,6 +40,12 @@ const plantSchema = new Schema({
   createdAt: { type: Date, default: Date.now },
   slotSize: { type: Number, default: 5, required: true }, // Slot size in days
   buffer: { type: Number, default: 0 }, // Buffer at plant level
+  /**
+   * Extra free plants given per FULL packing crate (not varti).
+   * Pack qty = orderQty + fullCrates * freePlantsPerCrate; DC/invoice stay on orderQty.
+   * e.g. watermelon = 1.
+   */
+  freePlantsPerCrate: { type: Number, default: 0 },
   sowingAllowed: { type: Boolean, default: false }, // Whether sowing is allowed for this plant
   dailyDispatchCapacity: { type: Number, default: 2000 }, // Daily dispatch capacity for this plant
   sowingBuffer: { type: Number, default: 0 }, // Extra seed % on company packet requests

@@ -3,42 +3,28 @@ import AppError from "../utility/appError.js";
 import Order from "../models/order.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import Tray from "../models/tray.model.js";
+import { packFromOrder } from "../utility/packCratesFromOrder.js";
 
-/** Server-side crate math — single source of truth for dispatch targets. */
+/**
+ * Pack crate rows from original dispatch qty.
+ * plantCount on crates = pack qty (order + free on full crates).
+ * Callers must keep dispatchQuantity / DC invoice on original qty.
+ */
 export function calculateDispatchCrates({
   dispatchQuantity,
   cavityId,
   cavityName,
   cavitySize,
   numberPerCrate,
+  freePlantsPerCrate = 0,
 }) {
-  const qty = Number(dispatchQuantity) || 0;
-  const traySize = Number(cavitySize) || 0;
-  const traysPerCrate = Number(numberPerCrate) || 0;
-
-  if (qty <= 0 || traySize <= 0 || traysPerCrate <= 0) {
-    return [];
-  }
-
-  const numberOfTrays = Math.floor(qty / traySize);
-  const fullCrates = Math.floor(numberOfTrays / traysPerCrate);
-  const plantsInFullCrates = fullCrates * traysPerCrate * traySize;
-  const remainingPlants = Math.max(0, qty - plantsInFullCrates);
-
-  const crateDetails = [];
-  if (fullCrates > 0) {
-    crateDetails.push({
-      crateCount: fullCrates,
-      plantCount: plantsInFullCrates,
-    });
-  }
-  if (remainingPlants > 0) {
-    crateDetails.push({
-      crateCount: 1,
-      plantCount: remainingPlants,
-    });
-  }
-  if (!crateDetails.length) {
+  const pack = packFromOrder({
+    orderQty: dispatchQuantity,
+    cavitySize,
+    numberPerCrate,
+    freePlantsPerCrate,
+  });
+  if (!pack.crateDetails.length) {
     return [];
   }
 
@@ -46,9 +32,11 @@ export function calculateDispatchCrates({
     {
       cavity: cavityId ? String(cavityId) : "",
       cavityName: cavityName || "",
-      crateCount: crateDetails.reduce((sum, row) => sum + Number(row.crateCount || 0), 0),
-      plantCount: crateDetails.reduce((sum, row) => sum + Number(row.plantCount || 0), 0),
-      crateDetails,
+      crateCount: pack.crateCount,
+      plantCount: pack.plantCount,
+      orderPlantCount: pack.orderQty,
+      freePlantBonus: pack.bonus,
+      crateDetails: pack.crateDetails,
     },
   ];
 }
@@ -115,9 +103,32 @@ export async function rebuildDispatchTargets({ dispatchRequest, session }) {
   }
 
   const orders = await Order.find({ _id: { $in: orderIds } })
-    .populate({ path: "plantName", select: "name subtypes" })
+    .populate({ path: "plantName", select: "name subtypes freePlantsPerCrate" })
     .session(session)
     .lean();
+
+  const freePerCrateOf = (order) =>
+    Math.max(0, Number(order?.plantName?.freePlantsPerCrate) || 0);
+
+  const freeForPlantRow = (plant) => {
+    const direct = Number(plant?.freePlantsPerCrate);
+    if (Number.isFinite(direct) && direct > 0) return Math.max(0, direct);
+    const plantKey = String(plant?.plantId || plant?.plantCms || "");
+    for (const o of orders) {
+      if (plantKey && String(o.plantName?._id || o.plantName) === plantKey) {
+        return freePerCrateOf(o);
+      }
+    }
+    const name = String(plant?.name || "").trim().toLowerCase();
+    if (name) {
+      for (const o of orders) {
+        if (String(o.plantName?.name || "").trim().toLowerCase() === name) {
+          return freePerCrateOf(o);
+        }
+      }
+    }
+    return 0;
+  };
 
   const orderById = new Map(orders.map((o) => [String(o._id), o]));
 
@@ -172,6 +183,7 @@ export async function rebuildDispatchTargets({ dispatchRequest, session }) {
       cavityName: tray.name || "",
       cavitySize: tray.cavity || 0,
       numberPerCrate: tray.numberPerCrate || 0,
+      freePlantsPerCrate: freePerCrateOf(order),
     });
 
     const currentRemaining =
@@ -245,6 +257,7 @@ export async function rebuildDispatchTargets({ dispatchRequest, session }) {
           cavityName: tray.name || "",
           cavitySize: tray.cavity || 0,
           numberPerCrate: tray.numberPerCrate || 0,
+          freePlantsPerCrate: freeForPlantRow(plant),
         });
 
         for (const row of calc) {
@@ -277,6 +290,7 @@ export async function rebuildDispatchTargets({ dispatchRequest, session }) {
             cavityName: tray.name || "",
             cavitySize: tray.cavity || 0,
             numberPerCrate: tray.numberPerCrate || 0,
+            freePlantsPerCrate: freeForPlantRow(plant),
           });
           calc.forEach((row) =>
             mergeCrateRow(crates, {

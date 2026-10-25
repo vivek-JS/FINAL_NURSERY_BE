@@ -4,7 +4,7 @@ import Order from "../models/order.model.js";
 
 // Add a new plant with subtypes
 export const addPlant = async (req, res) => {
-  const { name, subtypes, addedBy, slotSize, buffer, sowingAllowed, dailyDispatchCapacity, sowingBuffer } = req.body;
+  const { name, subtypes, addedBy, slotSize, buffer, sowingAllowed, dailyDispatchCapacity, sowingBuffer, freePlantsPerCrate } = req.body;
 
   try {
     // Check if a plant with the same name already exists
@@ -57,6 +57,7 @@ export const addPlant = async (req, res) => {
       sowingAllowed: sowingAllowed || false, // Default sowing allowed to false
       dailyDispatchCapacity: dailyDispatchCapacity || 2000, // Default daily dispatch capacity
       sowingBuffer: sowingBuffer || 0, // Default sowing buffer
+      freePlantsPerCrate: Math.max(0, Number(freePlantsPerCrate) || 0),
     });
 
     const savedPlant = await newPlant.save();
@@ -227,7 +228,7 @@ const createSlotsForNewSubtype = async (plantId, subtypeId, subtype) => {
 // Update a plant's details, subtypes, or slotSize
 export const updatePlant = async (req, res) => {
   const { plantId } = req.params;
-  const { name, subtypes, slotSize, buffer, sowingAllowed, dailyDispatchCapacity, sowingBuffer } = req.body;
+  const { name, subtypes, slotSize, buffer, sowingAllowed, dailyDispatchCapacity, sowingBuffer, freePlantsPerCrate } = req.body;
 
   try {
     const plant = await PlantCms.findById(plantId);
@@ -249,6 +250,9 @@ export const updatePlant = async (req, res) => {
     plant.sowingAllowed = sowingAllowed !== undefined ? sowingAllowed : plant.sowingAllowed;
     plant.dailyDispatchCapacity = dailyDispatchCapacity || plant.dailyDispatchCapacity;
     plant.sowingBuffer = sowingBuffer !== undefined ? sowingBuffer : plant.sowingBuffer;
+    if (freePlantsPerCrate !== undefined) {
+      plant.freePlantsPerCrate = Math.max(0, Number(freePlantsPerCrate) || 0);
+    }
 
     if (subtypes) {
       // Process and validate subtypes
@@ -793,7 +797,7 @@ export const getPlants = async (req, res) => {
   try {
     // Fetch all plants with their embedded subtypes (including plantReadyDays)
     const plants = await PlantCms.find()
-      .select("name subtypes slotSize addedBy buffer sowingAllowed dailyDispatchCapacity sowingBuffer createdAt") // Select fields to return
+      .select("name subtypes slotSize addedBy buffer sowingAllowed dailyDispatchCapacity sowingBuffer freePlantsPerCrate createdAt")
       .lean() // Convert to plain JavaScript object for better performance
       .exec();
 
@@ -810,6 +814,7 @@ export const getPlants = async (req, res) => {
       sowingAllowed: plant.sowingAllowed || false, // Explicitly include with default
       dailyDispatchCapacity: plant.dailyDispatchCapacity || 2000,
       sowingBuffer: plant.sowingBuffer || 0,
+      freePlantsPerCrate: Math.max(0, Number(plant.freePlantsPerCrate) || 0),
       createdAt: plant.createdAt,
       addedBy: plant.addedBy,
       subtypes: plant.subtypes.map(subtype => ({

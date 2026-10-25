@@ -178,12 +178,20 @@ export function farmReadyWhatsAppSkipReason(orderDoc, plantSubtypeName = "") {
 
 /**
  * Send delivery_final_second for one order (farmer must have mobile).
+ * Disabled: plant-ready WhatsApp is not needed (manual + auto).
  */
 export async function sendDeliveryFinalSecondForOrder(
   order,
   trigger = DELIVERY_FINAL_TRIGGERS.FARM_READY_STATUS,
   outboundMeta = {}
 ) {
+  return {
+    success: false,
+    skipped: true,
+    error: "disabled",
+    message: "Plant-ready WhatsApp notifications are disabled",
+  };
+
   if (!getWatiToken()) {
     return { success: false, error: "WATI not configured" };
   }
@@ -295,8 +303,10 @@ export async function sendDeliveryFinalSecondForOrder(
 
 /**
  * Cron / manual scan — past due + due in 7 days.
+ * Disabled: plant-ready WhatsApp is not needed.
  */
 export async function runDeliveryFinalSecondScan() {
+  return { skipped: true, reason: "plant_ready_whatsapp_disabled" };
   if (!isCronEnabled()) {
     return { skipped: true, reason: "cron_disabled" };
   }

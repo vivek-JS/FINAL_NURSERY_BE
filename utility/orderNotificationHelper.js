@@ -45,6 +45,12 @@ export async function sendStatusChangeNotification(order, oldStatus, newStatus) 
   try {
     console.log(`📱 Order #${order.orderId} status changed: ${oldStatus} → ${newStatus}`);
 
+    // Plant-ready push / inbox not needed
+    if (String(newStatus || "").toUpperCase() === "FARM_READY") {
+      console.log(`⏭️ Skipping FARM_READY notification for Order #${order.orderId}`);
+      return;
+    }
+
     // Find who to notify based on order type
     const User = mongoose.model("User");
     let userToNotify = null;
