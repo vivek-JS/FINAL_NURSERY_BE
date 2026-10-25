@@ -24,9 +24,18 @@ export const ORDER_MORTALITY_BUFFER_PCT = 20;
 
 const toQty = (v) => Math.max(0, Math.floor(Number(v) || 0));
 
+/** Saleable cover pool: sowed minus CMS mortality. Orders are filled from this, not the gross. */
+export function sowCoverPool(plantsSowed = 0, sowingBufferPct = 0) {
+  const sowed = toQty(plantsSowed);
+  const pctRaw = Number(sowingBufferPct);
+  const bufferPct = Number.isFinite(pctRaw) && pctRaw > 0 ? pctRaw : 0;
+  const bufferPlants = Math.round((sowed * bufferPct) / 100);
+  return Math.max(0, sowed - bufferPlants);
+}
+
 /**
- * Excess shown for one sowing. The plant CMS percent comes off the sowed count.
- * What remains after that, minus the orders, is excess. sowingMortality is not used.
+ * Excess shown for one sowing: sowed minus orders.
+ * CMS percent is mortality only — it is already taken at sow, not subtracted again.
  */
 export function reportedExcessBreakdown({
   plantsSowed = 0,
@@ -43,7 +52,7 @@ export function reportedExcessBreakdown({
     orders,
     bufferPct,
     bufferPlants,
-    excess: Math.max(0, sowed - bufferPlants - orders),
+    excess: Math.max(0, sowed - orders),
   };
 }
 

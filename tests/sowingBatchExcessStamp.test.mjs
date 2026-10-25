@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { displaySowingFigures, excessFieldsForBatch, storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
+import {
+  displaySowingFigures,
+  excessFieldsForBatch,
+  paintSowingEntryNumbers,
+  storedShownExcess,
+} from "../utility/sowingBatchExcessStamp.js";
 
 test("stamps CMS percent of sowed, then subtracts orders", () => {
   const fields = excessFieldsForBatch(
@@ -9,7 +14,7 @@ test("stamps CMS percent of sowed, then subtracts orders", () => {
   );
   assert.equal(fields.sowingBufferPct, 12);
   assert.equal(fields.bufferPlants, 9072);
-  assert.equal(fields.shownExcess, 0);
+  assert.equal(fields.shownExcess, 8900);
 });
 
 test("lower live order quantity replaces the saved cover", () => {
@@ -29,7 +34,7 @@ test("lower live order quantity replaces the saved cover", () => {
     qty
   );
   assert.equal(fields.bufferPlants, 9072);
-  assert.equal(fields.shownExcess, 2828);
+  assert.equal(fields.shownExcess, 11900);
 });
 
 test("a larger linked order list does not replace the saved cover", () => {
@@ -39,7 +44,7 @@ test("a larger linked order list does not replace the saved cover", () => {
     new Map([["a", 122500]])
   );
   assert.equal(fields.bufferPlants, 13350);
-  assert.equal(fields.shownExcess, 75650);
+  assert.equal(fields.shownExcess, 89000);
 });
 
 test("entry mortality is 12% of sowed and excess subtracts the lower order total", () => {
@@ -51,16 +56,75 @@ test("entry mortality is 12% of sowed and excess subtracts the lower order total
     linkedOrders: [{ plants: 16700 }, { plants: 13000 }, { plants: 18000 }, { plants: 16000 }],
   });
   assert.equal(figures.mortality, 9072);
-  assert.equal(figures.excess, 2828);
+  assert.equal(figures.excess, 11900);
 });
 
-test("stored shownExcess is read back as saved", () => {
+test("dispatch excess take lowers the sowing-entry leftover even if farmer list is unchanged", () => {
+  const linked = [{ plants: 3700 }];
+  const before = displaySowingFigures({
+    plantsSowed: 4000,
+    orderCoveredPlants: 3700,
+    sowingBufferPct: 0,
+    linkedOrders: linked,
+  });
+  const after = displaySowingFigures({
+    plantsSowed: 4000,
+    orderCoveredPlants: 4000,
+    sowingBufferPct: 0,
+    linkedOrders: linked,
+    excessAllocated: 300,
+  });
+  assert.equal(before.excess, 300);
+  assert.equal(after.excess, 0);
+});
+
+test("releasing leftover from the order's own batch raises that entry's excess", () => {
+  const after = displaySowingFigures({
+    plantsSowed: 4000,
+    orderCoveredPlants: 3300,
+    sowingBufferPct: 0,
+    linkedOrders: [{ plants: 3600 }],
+  });
+  assert.equal(after.excess, 700);
+});
+
+test("stored leftover is sowed minus orders, not minus the sowing buffer again", () => {
   assert.equal(
-    storedShownExcess({ plantsSowed: 75600, orderCoveredPlants: 66700, sowingBufferPct: 12, shownExcess: 0 }),
-    0
+    storedShownExcess({ plantsSowed: 1000, orderCoveredPlants: 0, sowingBufferPct: 12, shownExcess: 880 }),
+    1000
   );
   assert.equal(
     storedShownExcess({ plantsSowed: 10000, orderCoveredPlants: 8000 }, 12),
-    800
+    2000
   );
+});
+
+test("paint excess matches dispatch free, not entry-split linked order sums", () => {
+  const batch = {
+    plantsSowed: 89000,
+    orderCoveredPlants: 0,
+    sowingBufferPct: 12,
+    mortalityMovedToExcess: 0,
+  };
+  const slot = {};
+  const figures = paintSowingEntryNumbers(slot, {
+    batch,
+    linkedOrders: [{ plants: 5000 }, { plants: 10000 }],
+    bufferPct: 12,
+    sowed: 89000,
+  });
+  assert.equal(figures.excess, 89000);
+  assert.equal(slot.excessPlants, 89000);
+});
+
+test("partial entry rows can hide bookable excess so totals are not double-counted", () => {
+  const slot = {};
+  const figures = paintSowingEntryNumbers(slot, {
+    batch: { plantsSowed: 89000, orderCoveredPlants: 0, sowingBufferPct: 12 },
+    bufferPct: 12,
+    sowed: 89000,
+    showBookableExcess: false,
+  });
+  assert.equal(figures.excess, 0);
+  assert.equal(slot.excessPlants, 0);
 });

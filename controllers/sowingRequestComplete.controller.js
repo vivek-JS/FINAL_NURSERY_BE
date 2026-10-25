@@ -1543,6 +1543,12 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
     const shedName = meta.shedName || r.shedName || "";
     const bufferPct = bufferByPlant.get(String(r.plantId)) || 0;
     const entrySowed = Number(ev.quantity) || 0;
+    // One batch → one Excess/Cover total (matches app Free). Partial rows keep cover from their orders only.
+    const ownsBatch =
+      !reqBatch ||
+      onlyEntry ||
+      Number(reqBatch.plantsSowed) === entrySowed ||
+      ev.type === "SOW_COMPLETED";
     const affectedSlot = buildAffectedSlot(slotRaw, reqBatch, shedName, bufferPct);
     const figures = paintSowingEntryNumbers(affectedSlot, {
       batch: reqBatch,
@@ -1550,8 +1556,16 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       bufferPct,
       sowed: Number(reqBatch?.plantsSowed) || entrySowed,
       mortalityReserve: reqBatch ? mortalityLeftOnBatch(reqBatch) : 0,
+      showBookableExcess: ownsBatch,
     });
     const storedExcess = Number(meta.excessPlants) || 0;
+    const batchCover = Number(reqBatch?.orderCoveredPlants) || 0;
+    const entryCover = linkedOrders.reduce(
+      (sum, o) => sum + (Number(o.coveredPlants) || 0),
+      0
+    );
+    const bookedPlants = ownsBatch ? batchCover : entryCover;
+    if (affectedSlot) affectedSlot.bookedPlants = bookedPlants;
 
     const batchNumbers = meta.batchNumber ? [meta.batchNumber] : outwardBatchNumbers(r, outwardMap);
     const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
@@ -1589,7 +1603,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       shedName: reqBatch?.shedName || shedName,
       isExcess: Boolean(r.isExcessiveSowing) || storedExcess >= entrySowed,
       excessPlants: figures.excess,
-      bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
+      bookedPlants,
       linkedOrders,
       batchNumber: batchNumbers.join(", ") || "",
       batchNumbers,

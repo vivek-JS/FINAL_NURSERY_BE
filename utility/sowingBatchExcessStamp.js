@@ -5,13 +5,33 @@ const pctOf = (value) => {
   return Number.isFinite(n) && n > 0 ? n : 0;
 };
 
+const intQty = (v) => Math.max(0, Math.floor(Number(v) || 0));
+
+export function excessAllocatedPlants(batch) {
+  return (batch?.excessAllocations || []).reduce((s, a) => s + intQty(a?.plants), 0);
+}
+
+/**
+ * Reduced original orders can lower cover; plants later taken from this batch's excess always count.
+ */
+export function coverQtyForExcess(covered, live = 0, allocated = 0) {
+  const cover = intQty(covered);
+  const take = Math.min(cover, intQty(allocated));
+  const original = cover - take;
+  const liveQty = intQty(live);
+  const orderPart = liveQty > 0 && liveQty <= original ? liveQty : original;
+  return orderPart + take;
+}
+
 /**
  * Order quantity for the excess formula. When the linked orders add up to
  * less than the saved cover, the orders were reduced and that lower total is used.
  * A larger linked total is ignored so a shared order list cannot wipe the excess.
+ * Dispatch excess takes stay in cover via excessAllocations.
  */
 export function displayOrderQty(batch, plantQtyByOrderId = null) {
-  const covered = Math.max(0, Math.floor(Number(batch?.orderCoveredPlants) || 0));
+  const covered = intQty(batch?.orderCoveredPlants);
+  const allocated = excessAllocatedPlants(batch);
   const ids = batch?.linkedOrderIds || [];
   if (!plantQtyByOrderId || !ids.length) return covered;
   let live = 0;
@@ -20,10 +40,10 @@ export function displayOrderQty(batch, plantQtyByOrderId = null) {
     const qty = plantQtyByOrderId.get(String(id));
     if (qty == null) continue;
     known += 1;
-    live += Math.max(0, Math.floor(Number(qty) || 0));
+    live += intQty(qty);
   }
-  if (known > 0 && live > 0 && live <= covered) return live;
-  return covered;
+  if (!known) return covered;
+  return coverQtyForExcess(covered, live, allocated);
 }
 
 /** Numbers for a sowing entry: CMS percent of sowed is mortality, then subtract the orders. */
@@ -34,6 +54,7 @@ export function displaySowingFigures({
   bufferPlants = null,
   sowingBufferPct = 0,
   mortalityMovedToExcess = 0,
+  excessAllocated = 0,
   isIrrelevant = false,
 } = {}) {
   if (isIrrelevant) return { bufferPlants: 0, mortality: 0, excess: 0 };
@@ -44,17 +65,14 @@ export function displaySowingFigures({
     bufferPlants == null
       ? Math.round((sowed * pct) / 100)
       : Math.max(0, Math.round(Number(bufferPlants) || 0));
-  const covered = Math.max(0, Math.floor(Number(orderCoveredPlants) || 0));
-  const live = (linkedOrders || []).reduce(
-    (sum, order) => sum + Math.max(0, Math.floor(Number(order?.plants) || 0)),
-    0
-  );
-  const orders = live > 0 && live <= covered ? live : covered;
-  const moved = Math.max(0, Math.floor(Number(mortalityMovedToExcess) || 0));
+  const covered = intQty(orderCoveredPlants);
+  const live = (linkedOrders || []).reduce((sum, order) => sum + intQty(order?.plants), 0);
+  const orders = coverQtyForExcess(covered, live, excessAllocated);
+  const moved = intQty(mortalityMovedToExcess);
   return {
     bufferPlants: buffer,
     mortality: Math.max(0, buffer - moved),
-    excess: Math.max(0, sowed - buffer - orders) + moved,
+    excess: Math.max(0, sowed - orders) + moved,
   };
 }
 
@@ -65,6 +83,8 @@ export function paintSowingEntryNumbers(slot, {
   bufferPct = 0,
   sowed = 0,
   mortalityReserve = 0,
+  /** When false, skip writing batch bookable excess (partial entry rows). */
+  showBookableExcess = true,
 } = {}) {
   const figures = displaySowingFigures({
     plantsSowed: sowed,
@@ -73,19 +93,34 @@ export function paintSowingEntryNumbers(slot, {
     bufferPlants: batch?.bufferPlants,
     sowingBufferPct: batch?.sowingBufferPct ?? bufferPct,
     mortalityMovedToExcess: batch?.mortalityMovedToExcess,
+    excessAllocated: excessAllocatedPlants(batch),
     isIrrelevant: batch?.isIrrelevant,
   });
+  // Same number as dispatch "Free" — do not use entry-split linkedOrders for leftover.
+  const bookable = showBookableExcess
+    ? storedShownExcess(
+        batch || {
+          plantsSowed: sowed,
+          orderCoveredPlants: figures.excess > 0 ? Math.max(0, sowed - figures.excess) : 0,
+          sowingBufferPct: bufferPct,
+          mortalityMovedToExcess: batch?.mortalityMovedToExcess,
+          isIrrelevant: batch?.isIrrelevant,
+        },
+        batch?.sowingBufferPct ?? bufferPct
+      )
+    : 0;
+  figures.excess = bookable;
   if (slot) {
     slot.bufferPlants = figures.bufferPlants;
     slot.mortalityMovedToExcess = Math.max(0, Math.floor(Number(batch?.mortalityMovedToExcess) || 0));
     slot.mortalityReserve = Math.max(0, Math.floor(Number(mortalityReserve) || 0));
     slot.batchExpectedMortality = figures.mortality;
-    slot.excessPlants = figures.excess;
+    slot.excessPlants = bookable;
   }
   return figures;
 }
 
-/** CMS percent off plants sowed, then orders. Mortality already moved is included. */
+/** Leftover = sowed − orders (+ mortality moved). Buffer is not subtracted again. */
 export function excessFieldsForBatch(batch, sowingBufferPct = 0, plantQtyByOrderId = null) {
   const pct = pctOf(sowingBufferPct);
   if (!batch || batch.isIrrelevant) {
@@ -110,13 +145,15 @@ export function applyExcessFields(batch, sowingBufferPct = 0, plantQtyByOrderId 
   return batch;
 }
 
-/** Stored shownExcess when the batch has been stamped. Otherwise the same formula. */
+/** Leftover after orders. Buffer is mortality only — not subtracted again. */
 export function storedShownExcess(batch, sowingBufferPct = 0) {
   if (!batch || batch.isIrrelevant) return 0;
-  if (batch.shownExcess != null && batch.sowingBufferPct != null) {
-    return Math.max(0, Math.floor(Number(batch.shownExcess) || 0));
-  }
-  return excessFieldsForBatch(batch, sowingBufferPct).shownExcess;
+  return excessFieldsForBatch(batch, batch?.sowingBufferPct ?? sowingBufferPct).shownExcess;
+}
+
+/** Dispatch picker free = web sowing-entries excess. */
+export function dispatchBookableFree(batch, sowingBufferPct = 0) {
+  return storedShownExcess(batch, batch?.sowingBufferPct ?? sowingBufferPct);
 }
 
 export function stampSlotDocument(plantSlot, sowingBufferPct = 0, plantQtyByOrderId = null) {
