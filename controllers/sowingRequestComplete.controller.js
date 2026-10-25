@@ -1043,10 +1043,17 @@ export const getSowingCompletions = async (req, res) => {
       const slotRaw = preferredSlotId
         ? slotMap.get(String(preferredSlotId))
         : null;
-      const reqBatch = (slotRaw?.sowingBatches || []).find(
-        (b) => String(b.sowingRequestId) === String(r._id)
-      );
+      const reqBatches = batchesForRequest(slotRaw, r._id);
       const bufferPct = bufferByPlant.get(String(r.plantId)) || 0;
+      const reqBatch = primaryBatchForRequest(reqBatches, bufferPct);
+      const bookableExcess = reqBatches.reduce(
+        (sum, b) => sum + storedShownExcess(b, bufferPct),
+        0
+      );
+      const bookedPlants = reqBatches.reduce(
+        (sum, b) => sum + (Number(b.orderCoveredPlants) || 0),
+        0
+      );
       const affectedSlot = buildAffectedSlot(slotRaw, reqBatch, r.shedName, bufferPct);
       const figures = paintSowingEntryNumbers(affectedSlot, {
         batch: reqBatch,
@@ -1055,13 +1062,17 @@ export const getSowingCompletions = async (req, res) => {
         sowed: Number(reqBatch?.plantsSowed) || Number(r.sowedQuantity) || 0,
         mortalityReserve: reqBatch ? mortalityLeftOnBatch(reqBatch) : 0,
       });
+      if (affectedSlot) {
+        affectedSlot.excessPlants = bookableExcess;
+        affectedSlot.bookedPlants = bookedPlants;
+      }
 
       return {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
         isExcess: Boolean(r.isExcessiveSowing),
-        excessPlants: figures.excess,
-        bookedPlants: Number(reqBatch?.orderCoveredPlants) || 0,
+        excessPlants: bookableExcess,
+        bookedPlants,
         shedName: reqBatch?.shedName || r.shedName || "",
         linkedOrders,
         labourTotal:
@@ -1312,6 +1323,48 @@ function ymdRange(from, to) {
   return Object.keys(range).length ? range : null;
 }
 
+
+/** Batches on a slot that belong to one sowing request. */
+function batchesForRequest(slotRaw, requestId) {
+  return (slotRaw?.sowingBatches || []).filter(
+    (b) => String(b.sowingRequestId) === String(requestId)
+  );
+}
+
+/** Request-level list: use the batch with the most leftover (not the first insert). */
+function primaryBatchForRequest(batches, sowingBufferPct = 0) {
+  if (!batches?.length) return null;
+  return [...batches].sort((a, b) => {
+    const ea = storedShownExcess(a, sowingBufferPct);
+    const eb = storedShownExcess(b, sowingBufferPct);
+    if (eb !== ea) return eb - ea;
+    return (Number(b.plantsSowed) || 0) - (Number(a.plantsSowed) || 0);
+  })[0];
+}
+
+/**
+ * Map a completion entry to a slot batch. Entry qty often differs from plantsSowed
+ * after office edits — claim unused batches by closest sowed count.
+ */
+export function pickSowingBatchForEntry(batches, entryQty, claimedIds = null) {
+  const pool = (batches || []).filter((b) => {
+    if (!claimedIds) return true;
+    const id = b?._id != null ? String(b._id) : "";
+    return id && !claimedIds.has(id);
+  });
+  const list = pool.length ? pool : batches || [];
+  if (!list.length) return null;
+  const qty = Math.max(0, Math.floor(Number(entryQty) || 0));
+  const exact = list.find((b) => Number(b.plantsSowed) === qty);
+  if (exact) return exact;
+  return [...list].sort((a, b) => {
+    const da = Math.abs((Number(a.plantsSowed) || 0) - qty);
+    const db = Math.abs((Number(b.plantsSowed) || 0) - qty);
+    if (da !== db) return da - db;
+    return storedShownExcess(b) - storedShownExcess(a);
+  })[0];
+}
+
 /** Orders don't record which entry covered them; pick the entry saved closest to sowingDoneAt. */
 export function ordersForEntry(orders, entryTimes, entryTime) {
   if (entryTimes.length <= 1) return orders;
@@ -1507,6 +1560,8 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
   const addedByNames = await sowingEntryAuthorNames(pageRows, reqMap);
 
   const items = [];
+  const claimedBatchByRequest = new Map();
+  const excessShownForBatch = new Set();
   for (const p of pageRows) {
     const r = reqMap.get(String(p._id));
     const events = r?.completionEvents || [];
@@ -1535,20 +1590,19 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
 
     const slotId = meta.appliedSlotId || meta.toSlotId || collectSlotIdsFromRequest(r)[0] || null;
     const slotRaw = slotId ? slotMap.get(String(slotId)) : null;
-    const batches = (slotRaw?.sowingBatches || []).filter(
-      (b) => String(b.sowingRequestId) === String(r._id)
-    );
-    const reqBatch =
-      batches.find((b) => Number(b.plantsSowed) === Number(ev.quantity)) || batches[0];
+    const batches = batchesForRequest(slotRaw, r._id);
+    const claimKey = String(r._id);
+    if (!claimedBatchByRequest.has(claimKey)) claimedBatchByRequest.set(claimKey, new Set());
+    const claimedIds = claimedBatchByRequest.get(claimKey);
+    const entrySowed = Number(ev.quantity) || 0;
+    const reqBatch = pickSowingBatchForEntry(batches, entrySowed, claimedIds);
+    if (reqBatch?._id) claimedIds.add(String(reqBatch._id));
     const shedName = meta.shedName || r.shedName || "";
     const bufferPct = bufferByPlant.get(String(r.plantId)) || 0;
-    const entrySowed = Number(ev.quantity) || 0;
-    // One batch → one Excess/Cover total (matches app Free). Partial rows keep cover from their orders only.
-    const ownsBatch =
-      !reqBatch ||
-      onlyEntry ||
-      Number(reqBatch.plantsSowed) === entrySowed ||
-      ev.type === "SOW_COMPLETED";
+    const batchKey = reqBatch?._id ? String(reqBatch._id) : "";
+    // Entry qty can differ from plantsSowed after edits — show each batch leftover once.
+    const ownsBatch = Boolean(reqBatch) && (!batchKey || !excessShownForBatch.has(batchKey));
+    if (ownsBatch && batchKey) excessShownForBatch.add(batchKey);
     const affectedSlot = buildAffectedSlot(slotRaw, reqBatch, shedName, bufferPct);
     const figures = paintSowingEntryNumbers(affectedSlot, {
       batch: reqBatch,
@@ -1556,7 +1610,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       bufferPct,
       sowed: Number(reqBatch?.plantsSowed) || entrySowed,
       mortalityReserve: reqBatch ? mortalityLeftOnBatch(reqBatch) : 0,
-      showBookableExcess: ownsBatch,
+      showBookableExcess: ownsBatch || onlyEntry,
     });
     const storedExcess = Number(meta.excessPlants) || 0;
     const batchCover = Number(reqBatch?.orderCoveredPlants) || 0;
@@ -1564,7 +1618,7 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       (sum, o) => sum + (Number(o.coveredPlants) || 0),
       0
     );
-    const bookedPlants = ownsBatch ? batchCover : entryCover;
+    const bookedPlants = ownsBatch || onlyEntry ? batchCover : entryCover;
     if (affectedSlot) affectedSlot.bookedPlants = bookedPlants;
 
     const batchNumbers = meta.batchNumber ? [meta.batchNumber] : outwardBatchNumbers(r, outwardMap);
