@@ -2605,17 +2605,24 @@ const updateOne = (Model, modelName, allowedFields) =>
 
       mergeEditHistoryIntoFilteredBody(filteredBody, editHistoryEntries);
 
-      // Update remainingPlants field if numberOfPlants is being updated
+      // Qty change: remaining = previous remaining + delta (not full qty − returns).
+      // Full reset broke “+500 on a loaded order” — remaining stayed wrong so dispatch Edit could not load more.
       if (
-        filteredBody.numberOfPlants &&
-        filteredBody.numberOfPlants !== existingDoc.numberOfPlants
+        filteredBody.numberOfPlants != null &&
+        Number(filteredBody.numberOfPlants) !== Number(existingDoc.numberOfPlants)
       ) {
-        // Calculate new remainingPlants
-        const returnedPlants = existingDoc.returnedPlants || 0;
-        filteredBody.remainingPlants = Math.max(
-          0,
-          filteredBody.numberOfPlants - returnedPlants
-        );
+        const prevRem = Number(existingDoc.remainingPlants);
+        const baseRem = Number.isFinite(prevRem)
+          ? prevRem
+          : Math.max(
+              0,
+              (Number(existingDoc.numberOfPlants) || 0) +
+                (Number(existingDoc.additionalPlants) || 0) -
+                (Number(existingDoc.returnedPlants) || 0)
+            );
+        const delta =
+          Number(filteredBody.numberOfPlants) - Number(existingDoc.numberOfPlants);
+        filteredBody.remainingPlants = Math.max(0, baseRem + delta);
       }
 
       // Handle dealer wallet updates for rejected orders
@@ -3260,12 +3267,14 @@ const updateOne = (Model, modelName, allowedFields) =>
         const rawCoverWindow = Math.floor(
           Number(req.body?.excessCoverWindowDays) || EXCESS_COVER_WINDOW_DAYS
         );
+        const rawCoverNeed = Math.floor(Number(req.body?.excessCoverNeed) || 0);
         try {
           const cover = await coverOrderFromBatches({
             order: updatedDoc._id,
             picks: excessCoverPicks,
             userId: req.user?._id,
             windowDays: Math.max(1, rawCoverWindow),
+            additionalNeed: rawCoverNeed > 0 ? rawCoverNeed : null,
           });
           excessCover = {
             success: true,

@@ -13,8 +13,12 @@ import {
 } from "../controllers/orderSowFromExcess.controller.js";
 import { toSowYmd } from "../controllers/sowingSlotReadyHelpers.js";
 import { recordSlotTrail } from "../utility/slotTrailStore.js";
-import { slotReportedExcess, slotSowStock, sowBatchStock, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
+import { slotReportedExcess, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
 import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
+import {
+  EXCESS_PAST_READY_DAYS,
+  excessReadyInWindow,
+} from "../utility/excessCoverWindow.js";
 import {
   SLOT_TRAIL_ACTIONS,
   getSlotTrailActivityName,
@@ -22,6 +26,7 @@ import {
 
 export const EXCESS_COVER_WINDOW_DAYS = 5;
 export const DEFAULT_EXCESS_MAX_WINDOW_DAYS = 15;
+export { EXCESS_PAST_READY_DAYS, excessReadyInWindow } from "../utility/excessCoverWindow.js";
 /** Papaya ready dates sit further from delivery than watermelon. */
 export const PAPAYA_EXCESS_WINDOW_DAYS = 40;
 
@@ -80,18 +85,24 @@ function slotLabel(slot) {
   return `${slot.startDay} → ${slot.endDay}`;
 }
 
-function windowDayStrings(deliveryIst, windowDays) {
+function windowDayStrings(deliveryIst, backDays, forwardDays = backDays) {
   const days = [];
-  for (let o = -windowDays; o <= windowDays; o += 1) {
+  for (let o = -backDays; o <= forwardDays; o += 1) {
     days.push(deliveryIst.clone().add(o, "days").format("DD-MM-YYYY"));
   }
   return days;
 }
 
+function parseReadyDay(value) {
+  return slotDayStartMoment(value) || deliveryDateToIstMoment(value);
+}
+
 function readyMomentOf(batch, slot) {
-  const fromBatch = slotDayStartMoment(batch?.plantReadyDate);
-  if (fromBatch) return fromBatch;
-  return slotDayStartMoment(slot?.startDay);
+  return (
+    parseReadyDay(batch?.plantReadyDate) ||
+    parseReadyDay(slot?.startDay) ||
+    parseReadyDay(slot?.endDay)
+  );
 }
 
 function hasActiveExcessCover(order) {
@@ -193,8 +204,10 @@ function applyReleaseToBatch(batch, release) {
 /**
  * Free excess in sowing batches of plant+subtype whose ready date is within
  * delivery ±windowDays (IST). One entry per batch, nearest to delivery first.
- * Per slot free = primarySowed − gross orderCoveredPlants (same as slot "Can book");
- * stored availablePlants does not cap it.
+ * Bookable free is the sowing-entry shown excess (CMS buffer, then orders,
+ * plus mortality moved to excess). Lagwad mortality reserve is not applied.
+ * Lists leftover already ready (up to 45d before delivery) and sowings that
+ * become ready within +windowDays after delivery.
  */
 export async function listExcessBatches({
   plantId,
@@ -225,7 +238,8 @@ export async function listExcessBatches({
   const empty = { need: needQty, windowDays: win, totalFree: 0, mode: "none", entries: [] };
   if (!plantOid || !subtypeOid || !deliveryIst) return empty;
 
-  const days = windowDayStrings(deliveryIst, win);
+  const pastCap = Math.max(win, EXCESS_PAST_READY_DAYS);
+  const days = windowDayStrings(deliveryIst, pastCap, win);
   const plantDoc = plantOid
     ? await PlantCms.findById(plantOid).select("sowingBuffer").lean()
     : null;
@@ -240,7 +254,9 @@ export async function listExcessBatches({
         "subtypeSlots.slots.sowingBatches.0": { $exists: true },
         $or: [
           { "subtypeSlots.slots.startDay": { $in: days } },
+          { "subtypeSlots.slots.endDay": { $in: days } },
           { "subtypeSlots.slots.sowingBatches.plantReadyDate": { $in: days } },
+          { "subtypeSlots.slots.sowingBatches.sowingDate": { $in: days } },
         ],
       },
     },
@@ -269,6 +285,10 @@ export async function listExcessBatches({
               destroyedPlants: { $ifNull: ["$$b.destroyedPlants", 0] },
               excessAllocations: { $ifNull: ["$$b.excessAllocations", []] },
               excessPlants: { $ifNull: ["$$b.excessPlants", 0] },
+              shownExcess: "$$b.shownExcess",
+              sowingBufferPct: "$$b.sowingBufferPct",
+              bufferPlants: "$$b.bufferPlants",
+              mortalityMovedToExcess: { $ifNull: ["$$b.mortalityMovedToExcess", 0] },
               actualPlantsApplied: "$$b.actualPlantsApplied",
               expectedMortalityApplied: "$$b.expectedMortalityApplied",
               availablePlantsApplied: "$$b.availablePlantsApplied",
@@ -288,13 +308,7 @@ export async function listExcessBatches({
   const entries = [];
   for (const slot of rows) {
     const batches = (slot.batches || []).map((b) => applyReleaseToBatch(b, release));
-    const primarySowed =
-      int(slot.primarySowed) + (release?.sowedBySlot.get(String(slot.slotId)) || 0);
-    const excessForBooking = Math.min(
-      slotSowStock({ primarySowed, sowingBatches: batches }).free,
-      slotReportedExcess(batches, sowingBufferPct)
-    );
-    let slotCap = excessForBooking;
+    let slotCap = slotReportedExcess(batches, sowingBufferPct);
     if (slotCap <= 0) continue;
 
     const ordered = [...batches].sort(
@@ -302,15 +316,16 @@ export async function listExcessBatches({
     );
     for (const b of ordered) {
       if (slotCap <= 0) break;
+      if (b.isIrrelevant) continue;
       const sowed = int(b.plantsSowed);
       if (sowed <= 0) continue;
       const shownExcess = storedShownExcess(b, sowingBufferPct);
-      const rawFree = Math.min(sowBatchStock(b).free, shownExcess);
+      const rawFree = shownExcess;
       if (rawFree <= 0) continue;
       const ready = readyMomentOf(b, slot);
       if (!ready) continue;
       const offsetDays = ready.diff(deliveryIst, "days");
-      if (Math.abs(offsetDays) > win) continue;
+      if (!excessReadyInWindow(offsetDays, win, pastCap)) continue;
       const freePlants = Math.min(rawFree, slotCap);
       slotCap -= freePlants;
       entries.push({
@@ -560,7 +575,10 @@ async function applySourcePick({
   };
   if (availDec > 0) inc[`${SLOT_PATH}.availablePlants`] = -availDec;
   if (excessDec > 0) inc[`${SLOT_PATH}.excessiveSowing.plants`] = -excessDec;
-  if (batchExcessDec > 0) inc[`${BATCH_PATH}.excessPlants`] = -batchExcessDec;
+  if (batchExcessDec > 0) {
+    inc[`${BATCH_PATH}.excessPlants`] = -batchExcessDec;
+    inc[`${BATCH_PATH}.shownExcess`] = -batchExcessDec;
+  }
   if (batchAvailableDec > 0) inc[`${BATCH_PATH}.availablePlantsApplied`] = -batchAvailableDec;
 
   const res = await PlantSlot.collection.updateOne(
@@ -644,7 +662,10 @@ async function revertSourcePick({
   }
   if (availDec > 0) inc[`${SLOT_PATH}.availablePlants`] = availDec;
   if (excessDec > 0) inc[`${SLOT_PATH}.excessiveSowing.plants`] = excessDec;
-  if (batchExcessDec > 0) inc[`${BATCH_PATH}.excessPlants`] = batchExcessDec;
+  if (batchExcessDec > 0) {
+    inc[`${BATCH_PATH}.excessPlants`] = batchExcessDec;
+    inc[`${BATCH_PATH}.shownExcess`] = batchExcessDec;
+  }
 
   const res = await PlantSlot.collection.updateOne(
     batchExistsFilter(batchOid, moved ? {} : { orderCoveredPlants: { $gte: plants } }),
@@ -788,24 +809,32 @@ export async function coverOrderFromBatches({
   userId,
   quiet = false,
   windowDays = EXCESS_COVER_WINDOW_DAYS,
+  /** When set, cover only this many plants — works even if the order is already sowingDone (qty increase). */
+  additionalNeed = null,
 }) {
   const orderOid = toOid(orderInput?._id || orderInput);
   if (!orderOid) throw new ExcessCoverError("ORDER_NOT_FOUND", "Order not found", 404);
   const order = await Order.findById(orderOid)
     .select(
-      "orderId plantName plantSubtype deliveryDate bookingSlot numberOfPlants additionalPlants sowingPartialCover sowingDone orderStatus productMappingId"
+      "orderId plantName plantSubtype deliveryDate bookingSlot numberOfPlants additionalPlants sowingPartialCover sowingDone orderStatus productMappingId sowingCoverSources"
     )
     .lean();
   if (!order) throw new ExcessCoverError("ORDER_NOT_FOUND", "Order not found", 404);
-  if (order.sowingDone) {
-    throw new ExcessCoverError("ALREADY_SOWED", "Order is already marked sow completed", 409);
-  }
 
   const held = (Array.isArray(order.sowingPartialCover) ? order.sowingPartialCover : []).reduce(
     (sum, row) => sum + (Number(row?.plants) || 0),
     0
   );
-  const need = Math.max(0, orderPlantsNeed(order) - held);
+  const extra = additionalNeed != null ? int(additionalNeed) : 0;
+  const alreadySowed = Boolean(order.sowingDone);
+  if (alreadySowed && extra < 1) {
+    throw new ExcessCoverError("ALREADY_SOWED", "Order is already marked sow completed", 409);
+  }
+  const need = alreadySowed
+    ? extra
+    : extra > 0
+      ? extra
+      : Math.max(0, orderPlantsNeed(order) - held);
   if (need <= 0) {
     throw new ExcessCoverError("NOTHING_TO_COVER", "This order has no plants left to cover");
   }
@@ -900,23 +929,41 @@ export async function coverOrderFromBatches({
   const remark = coverRemark(sources);
   const sourceReqId = toOid(matched[0]?.sowingRequestId);
 
-  const marked = await Order.findOneAndUpdate(
-    { _id: orderOid, sowingDone: { $ne: true } },
-    {
-      $set: {
-        sowingDone: true,
-        sowingDoneAt: now,
-        sowingCoverSources: sources,
-        ...(sourceReqId ? { sowingDoneRequestId: sourceReqId } : {}),
+  let marked;
+  if (alreadySowed) {
+    marked = await Order.findOneAndUpdate(
+      { _id: orderOid, sowingDone: true },
+      {
+        $push: {
+          sowingCoverSources: { $each: sources },
+          ...(quiet ? {} : { orderRemarks: remark }),
+        },
       },
-      $unset: { sowingCoverReversedAt: "" },
-      ...(quiet ? {} : { $push: { orderRemarks: remark } }),
-    },
-    { new: true }
-  );
-  if (!marked) {
-    await rollback();
-    throw new ExcessCoverError("ALREADY_SOWED", "Order is already marked sow completed", 409);
+      { new: true }
+    );
+    if (!marked) {
+      await rollback();
+      throw new ExcessCoverError("ORDER_NOT_FOUND", "Order not found for additional cover", 404);
+    }
+  } else {
+    marked = await Order.findOneAndUpdate(
+      { _id: orderOid, sowingDone: { $ne: true } },
+      {
+        $set: {
+          sowingDone: true,
+          sowingDoneAt: now,
+          sowingCoverSources: sources,
+          ...(sourceReqId ? { sowingDoneRequestId: sourceReqId } : {}),
+        },
+        $unset: { sowingCoverReversedAt: "" },
+        ...(quiet ? {} : { $push: { orderRemarks: remark } }),
+      },
+      { new: true }
+    );
+    if (!marked) {
+      await rollback();
+      throw new ExcessCoverError("ALREADY_SOWED", "Order is already marked sow completed", 409);
+    }
   }
 
   const sourceReqIds = [
