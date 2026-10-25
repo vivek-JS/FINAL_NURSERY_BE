@@ -9,7 +9,10 @@ import Order from '../models/order.model.js';
 import RaisingSeedIntake from '../models/raisingSeedIntake.model.js';
 import mongoose from 'mongoose';
 import { resolveSowingPlantsPerPacket } from '../utility/sowingPlantsPerPacket.js';
-import { validateLinkedOrderScope } from '../utility/sowingRequestOrderScope.js';
+import {
+  ACTIVE_SOWING_ORDER_STATUSES,
+  validateLinkedOrderScope,
+} from '../utility/sowingRequestOrderScope.js';
 import { insertTrailRows } from '../utility/slotTrailStore.js';
 import { getSlotTrailActivityName } from '../constants/slotTrailActions.js';
 import { releaseOrdersLinkedToSowingRequest } from '../services/releaseSowingRequestOrders.js';
@@ -326,6 +329,26 @@ export const createSowingRequest = async (req, res) => {
             directIssued: true,
           });
         }
+        if (req.body.skipStockIssue) {
+          const { markIssuedWithoutStock } = await import(
+            "../services/directIssueSowingRequest.service.js"
+          );
+          existingRequest.packetsNeeded = Number(packetsNeeded) || existingRequest.packetsNeeded;
+          existingRequest.packetsRequested = Number(requested) || existingRequest.packetsRequested;
+          if (Number.isFinite(fromCompany)) existingRequest.packetsFromCompany = fromCompany;
+          if (Number.isFinite(fromRaising)) existingRequest.packetsFromRaising = fromRaising;
+          existingRequest.seedSource = resolvedSource;
+          await existingRequest.save();
+          const ready = await markIssuedWithoutStock(existingRequest, req.user);
+          bustSowingCardsLiteCache();
+          return res.status(200).json({
+            success: true,
+            message: `${ready.requestNumber} is now sowing in progress`,
+            data: ready,
+            directIssued: true,
+            skippedStock: true,
+          });
+        }
         const issued = await issuePendingRequestDirect(existingRequest, req.user, {
           cancelOnFail: false,
         });
@@ -378,7 +401,7 @@ export const createSowingRequest = async (req, res) => {
       });
     }
 
-    const linkedOrderObjectIds = suppliedOrderIds.map(
+    let linkedOrderObjectIds = suppliedOrderIds.map(
       (id) => new mongoose.Types.ObjectId(id)
     );
     let linkedSlotIds = [];
@@ -413,6 +436,20 @@ export const createSowingRequest = async (req, res) => {
             .filter((id) => mongoose.Types.ObjectId.isValid(id))
             .map((id) => new mongoose.Types.ObjectId(id))
         : [];
+      // Card-wide / slot-only create: persist the open orders so the sidebar
+      // can show them as requested. Explicit drawer selections skip this.
+      if (linkedSlotIds.length) {
+        const slotOrders = await Order.find({
+          plantName: plantId,
+          plantSubtype: subtypeId,
+          bookingSlot: { $in: linkedSlotIds },
+          sowingDone: { $ne: true },
+          orderStatus: { $in: ACTIVE_SOWING_ORDER_STATUSES },
+        })
+          .select("_id")
+          .lean();
+        linkedOrderObjectIds = slotOrders.map((row) => row._id);
+      }
     }
 
     // Move overlapping orders off any other active request so this create can own them
@@ -525,20 +562,60 @@ export const createSowingRequest = async (req, res) => {
     await request.populate(['primaryUnit', 'secondaryUnit', 'productId', 'requestedBy']);
 
     if (req.body.directIssue) {
-      try {
-        const issued = await issuePendingRequestDirect(request, req.user);
+      if (req.body.skipStockIssue) {
+        const { markIssuedWithoutStock } = await import(
+          "../services/directIssueSowingRequest.service.js"
+        );
+        const ready = await markIssuedWithoutStock(request, req.user);
         bustSowingCardsLiteCache();
-        if (!issued.success) {
-          return res.status(issued.statusCode || 400).json({
-            success: false,
-            message: issued.message || "Could not issue sowing request",
-          });
-        }
         return res.status(201).json({
           success: true,
-          message: "Sowing request created and issued",
-          data: issued.data?.request || request,
+          message: `${ready.requestNumber} is now sowing in progress`,
+          data: ready,
           directIssued: true,
+          skippedStock: true,
+        });
+      }
+      try {
+        const issued = await issuePendingRequestDirect(request, req.user, {
+          cancelOnFail: false,
+        });
+        bustSowingCardsLiteCache();
+        if (issued.success) {
+          return res.status(201).json({
+            success: true,
+            message: "Sowing request created and issued",
+            data: issued.data?.request || request,
+            directIssued: true,
+          });
+        }
+        // Easy Request / skip packets: still mark issued so Enter sow can open.
+        if (req.body.skipStockIssue) {
+          const ready = await SowingRequest.findById(request._id);
+          if (ready && ready.status === "pending") {
+            ready.status = "issued";
+            ready.issuedBy = req.user._id;
+            ready.issuedDate = new Date();
+            ready.packetsIssued = Number(ready.packetsFromCompany) || 0;
+            ready.sowingInProgress = true;
+            if (!ready.sowingStartedDate) ready.sowingStartedDate = new Date();
+            ready.notes = [ready.notes, "Issued without warehouse stock — enter sow"]
+              .filter(Boolean)
+              .join(" · ");
+            await ready.save();
+          }
+          const data = ready || request;
+          return res.status(201).json({
+            success: true,
+            message: `${data.requestNumber} ready to sow (no warehouse issue)`,
+            data,
+            directIssued: true,
+            skippedStock: true,
+          });
+        }
+        return res.status(issued.statusCode || 400).json({
+          success: false,
+          message: issued.message || "Could not issue sowing request",
         });
       } catch (issueErr) {
         bustSowingCardsLiteCache();

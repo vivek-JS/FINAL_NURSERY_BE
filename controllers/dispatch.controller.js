@@ -11,11 +11,14 @@ import PlantSlot from "../models/slots.model.js";
 import mongoose from "mongoose";
 import PlantCms from "../models/plantCms.model.js";
 import Tray from "../models/tray.model.js";
+import { calculateDispatchCrates } from "../services/dispatchTargetBuilder.service.js";
 import Vehicle from "../models/vehicleModel.model.js";
 import VehicleDriver from "../models/vehicleDriver.model.js";
 import Trip from "../models/trip.model.js";
 import { allocateTripNumber } from "../utility/tripNumber.js";
-import { saveTentative } from "../services/freightSlip.service.js";
+import { saveTentative, finalizeSlip } from "../services/freightSlip.service.js";
+import FreightSlip from "../models/freightSlip.model.js";
+import { ensureDriverPayment } from "../services/driverPayment.service.js";
 import {
   bookablePlantsTotal,
   orderRemainingOrBookable,
@@ -759,6 +762,13 @@ const createDispatch = catchAsync(async (req, res, next) => {
               linkedNurseryOrderRefs: [],
             },
     };
+
+    try {
+      const { notifyDispatchCreated } = await import("../utility/dispatchFleetNotify.js");
+      notifyDispatchCreated(dispatchDoc, freightSlip);
+    } catch (e) {
+      console.error("dispatch notify createDispatch:", e?.message || e);
+    }
 
     res.status(201).json(
       generateResponse(
@@ -1546,48 +1556,6 @@ const updateDispatch = catchAsync(async (req, res, next) => {
   }
 });
 
-const calculateDispatchCrates = ({ dispatchQuantity, cavityId, cavityName, cavitySize, numberPerCrate }) => {
-  const qty = Number(dispatchQuantity) || 0;
-  const traySize = Number(cavitySize) || 0;
-  const traysPerCrate = Number(numberPerCrate) || 0;
-
-  if (qty <= 0 || traySize <= 0 || traysPerCrate <= 0) {
-    return [];
-  }
-
-  const numberOfTrays = Math.floor(qty / traySize);
-  const fullCrates = Math.floor(numberOfTrays / traysPerCrate);
-  const plantsInFullCrates = fullCrates * traysPerCrate * traySize;
-  const remainingPlants = Math.max(0, qty - plantsInFullCrates);
-
-  const crateDetails = [];
-  if (fullCrates > 0) {
-    crateDetails.push({
-      crateCount: fullCrates,
-      plantCount: plantsInFullCrates,
-    });
-  }
-  if (remainingPlants > 0) {
-    crateDetails.push({
-      crateCount: 1,
-      plantCount: remainingPlants,
-    });
-  }
-  if (!crateDetails.length) {
-    return [];
-  }
-
-  return [
-    {
-      cavity: cavityId ? String(cavityId) : "",
-      cavityName: cavityName || "",
-      crateCount: crateDetails.reduce((sum, row) => sum + Number(row.crateCount || 0), 0),
-      plantCount: crateDetails.reduce((sum, row) => sum + Number(row.plantCount || 0), 0),
-      crateDetails,
-    },
-  ];
-};
-
 const buildPlantDispatchLabel = (plantCmsDoc, subtypeId) => {
   if (!plantCmsDoc || !plantCmsDoc.name) return "Plant";
   const st = plantCmsDoc.subtypes?.find(
@@ -1993,7 +1961,7 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     }
 
     const orderPopulated = await Order.findById(orderId)
-      .populate({ path: "plantName", select: "name subtypes" })
+      .populate({ path: "plantName", select: "name subtypes freePlantsPerCrate" })
       .session(session);
 
     assertDispatchQuantityAllowed(order, qty, req);
@@ -2030,6 +1998,10 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
       cavityName: trayForOrder.name || "",
       cavitySize: trayForOrder.cavity || 0,
       numberPerCrate: trayForOrder.numberPerCrate || 0,
+      freePlantsPerCrate: Math.max(
+        0,
+        Number(orderPopulated?.plantName?.freePlantsPerCrate) || 0
+      ),
     });
 
     const sanitizedCrates = Array.isArray(cratesFromRequest)
@@ -4135,6 +4107,21 @@ const handleDispatchReturns = catchAsync(async (req, res, next) => {
       updatedOrders,
       performedBy: req.user?._id,
     });
+
+    const existingSlip = await FreightSlip.findOne({ dispatchId: dispatchOid }).session(session);
+    if (existingSlip) {
+      if (existingSlip.status !== "FINAL") {
+        await finalizeSlip({
+          dispatchId: dispatchOid,
+          input: {},
+          user: req.user,
+          source: "WEB",
+          session,
+        });
+      } else {
+        await ensureDriverPayment({ dispatchId: dispatchOid, user: req.user, session });
+      }
+    }
 
     await session.commitTransaction();
     fireOrderEditWhatsAppAlerts(

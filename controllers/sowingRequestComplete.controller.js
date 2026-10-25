@@ -300,7 +300,9 @@ export const completeSowingRequest = async (req, res) => {
     const shedName = String(
       req.body.shedName || req.body.pollyhouse || req.body.shed || ""
     ).trim();
+    const packetsUsedRaw = parseNum(req.body.packetsUsed, NaN);
     const packetsToReturnRaw = parseNum(req.body.packetsToReturn, NaN);
+    const hasUsedInput = Number.isFinite(packetsUsedRaw);
     const hasReturnInput = Number.isFinite(packetsToReturnRaw);
     const raisingUsedRaw = parseNum(req.body.raisingPacketsUsed, NaN);
     const raisingReturnRaw = parseNum(
@@ -382,6 +384,13 @@ export const completeSowingRequest = async (req, res) => {
         0;
       const remainingPkt = await getRemainingCompanyPackets(locked);
       const remainingRaising = getRemainingRaisingPackets(locked);
+
+      if (remainingPkt > 0.001 && (!hasUsedInput || !hasReturnInput)) {
+        return res.status(400).json({
+          success: false,
+          message: "Enter packets used and packets returned",
+        });
+      }
 
       // Prefer explicit packetsUsed. Honor explicit packetsToReturn even when
       // plant/cf used-hint would consume every remaining bag.
@@ -1070,6 +1079,7 @@ export const getSowingCompletions = async (req, res) => {
       return {
         ...r,
         expectedPlants: Number(((Number(r.packetsRequested) || 0) * cf).toFixed(0)),
+        isIrrelevant: Boolean(reqBatch?.isIrrelevant),
         isExcess: Boolean(r.isExcessiveSowing),
         excessPlants: bookableExcess,
         bookedPlants,

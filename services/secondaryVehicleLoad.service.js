@@ -28,6 +28,7 @@ import {
   schedulePendingDispatchWhatsAppForVehicle,
   syncOrderVehicleLoadedFlag,
 } from "./dispatchPostLoadFinalize.service.js";
+import { packQtyFromOrderDispatchRow } from "../utility/packCratesFromOrder.js";
 
 const BATCH_SELECT_FIELDS =
   "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
@@ -758,12 +759,23 @@ export async function sumPlantsLoadedOnDispatches(dispatchIds, { session } = {})
   if (!oids.length) return result;
 
   const idSet = new Set(oids.map(String));
-  const pos = await PlantOutward.find({
-    "secondaryOutward.linkedDispatchId": { $in: oids },
-  })
-    .select("secondaryOutward")
-    .session(session || null)
-    .lean();
+  // Keep only this vehicle's lines. The outward array on a plant is the whole history.
+  let agg = PlantOutward.aggregate([
+    { $match: { "secondaryOutward.linkedDispatchId": { $in: oids } } },
+    {
+      $project: {
+        secondaryOutward: {
+          $filter: {
+            input: "$secondaryOutward",
+            as: "so",
+            cond: { $in: ["$$so.linkedDispatchId", oids] },
+          },
+        },
+      },
+    },
+  ]);
+  if (session) agg = agg.session(session);
+  const pos = await agg;
 
   for (const po of pos) {
     for (const so of po.secondaryOutward || []) {
@@ -821,7 +833,8 @@ const dispatchLineRemainingPlants = (dispatchDoc, orderId) => {
     (d) => String(d.orderId) === String(orderId)
   );
   if (!row) return null;
-  const target = Math.max(0, Number(row.dispatchQuantity) || 0);
+  // Load target = pack qty (order + free on full crates), not billable dispatchQuantity.
+  const target = packQtyFromOrderDispatchRow(row);
   const loaded = Math.max(0, Number(row.shedLoadedQuantity) || 0);
   return Math.max(0, target - loaded);
 };
@@ -916,20 +929,32 @@ const buildSecondaryOrderLinkSnapshot = (orderDoc, batchLean) => {
 export async function computeSuggestedFulfillmentSequence(dispatchId) {
   if (!mongoose.isValidObjectId(String(dispatchId))) return 1;
   const oid = new mongoose.Types.ObjectId(String(dispatchId));
-  const pos = await PlantOutward.find({
-    "secondaryOutward.linkedDispatchId": oid,
-  })
-    .select(
-      "secondaryOutward.linkedDispatchId secondaryOutward.dispatchFulfillmentSequence"
-    )
-    .lean();
+  const pos = await PlantOutward.aggregate([
+    { $match: { "secondaryOutward.linkedDispatchId": oid } },
+    {
+      $project: {
+        seqs: {
+          $map: {
+            input: {
+              $filter: {
+                input: "$secondaryOutward",
+                as: "so",
+                cond: { $eq: ["$$so.linkedDispatchId", oid] },
+              },
+            },
+            as: "so",
+            in: "$$so.dispatchFulfillmentSequence",
+          },
+        },
+      },
+    },
+  ]);
 
   let maxSeq = 0;
   for (const po of pos) {
-    for (const so of po.secondaryOutward || []) {
-      if (String(so.linkedDispatchId) !== String(dispatchId)) continue;
-      const seq = Number(so.dispatchFulfillmentSequence) || 0;
-      if (seq > maxSeq) maxSeq = seq;
+    for (const seq of po.seqs || []) {
+      const n = Number(seq) || 0;
+      if (n > maxSeq) maxSeq = n;
     }
   }
   return maxSeq + 1;
@@ -1359,6 +1384,7 @@ export async function updateDispatchOrderShedLoaded({
   const prev = Math.max(0, Number(row.shedLoadedQuantity) || 0);
   const next = prev + plantsLoaded;
   const dispatchQty = Math.max(0, Number(row.dispatchQuantity) || 0);
+  const packQty = packQtyFromOrderDispatchRow(row);
 
   dispatchDoc.orderDispatchDetails[idx].shedLoadedQuantity = next;
   dispatchDoc.orderDispatchDetails[idx].shedLoadedAt = new Date();
@@ -1384,7 +1410,8 @@ export async function updateDispatchOrderShedLoaded({
     orderId: oid,
     shedLoadedQuantity: next,
     dispatchQuantity: dispatchQty,
-    fullyLoaded: dispatchQty > 0 && next >= dispatchQty,
+    packQuantity: packQty,
+    fullyLoaded: packQty > 0 && next >= packQty,
   };
 }
 
@@ -1775,10 +1802,6 @@ export async function executeSecondaryVehicleLoad({
     }
     schedulePendingDispatchWhatsAppForVehicle(dispatchDoc._id, { changedBy: alertChangedBy });
 
-    const { total: shedLoadedPlantsTotal } = await sumPlantsLoadedOnDispatch(
-      dispatchDoc._id
-    );
-
     const primaryOrderId =
       resolvedOrderId ||
       (plantsByOrder.size === 1 ? [...plantsByOrder.keys()][0] : null);
@@ -1793,7 +1816,7 @@ export async function executeSecondaryVehicleLoad({
         null,
       orderLoadedList: orderLoadedResults,
       transportStatus,
-      shedLoadedPlantsTotal,
+      shedLoadedPlantsTotal: alreadyLoaded + (fifo.totalAllocated || 0),
       suggestedFulfillmentSequence: seq - workItems.length,
       linkedOrderId: primaryOrderId || null,
     };

@@ -159,6 +159,29 @@ export async function buildDirectIssueBody(request) {
   };
 }
 
+/** Mark issued + sowing in progress without warehouse / linked-stock movement. */
+export async function markIssuedWithoutStock(request, user) {
+  const fresh = await SowingRequest.findById(request?._id || request);
+  if (!fresh) return request;
+  if (fresh.status === "issued") {
+    fresh.sowingInProgress = true;
+    if (!fresh.sowingStartedDate) fresh.sowingStartedDate = new Date();
+    await fresh.save();
+    return fresh;
+  }
+  fresh.status = "issued";
+  fresh.issuedBy = user?._id;
+  fresh.issuedDate = new Date();
+  fresh.packetsIssued = Number(fresh.packetsFromCompany) || 0;
+  fresh.sowingInProgress = true;
+  if (!fresh.sowingStartedDate) fresh.sowingStartedDate = new Date();
+  fresh.notes = [fresh.notes, "Issued without warehouse stock — sowing in progress"]
+    .filter(Boolean)
+    .join(" · ");
+  await fresh.save();
+  return fresh;
+}
+
 /** Drop a still-pending direct request so Inventory never has to accept it. */
 export async function abandonUnissuedRequest(requestId, user, reason) {
   const fresh = await SowingRequest.findById(requestId);
