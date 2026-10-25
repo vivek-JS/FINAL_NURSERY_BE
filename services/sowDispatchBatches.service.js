@@ -7,6 +7,8 @@ import Order from "../models/order.model.js";
 import { applyStockFieldUpdates } from "../utility/slotStockTrail.js";
 import { sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
 import { dispatchBookableFree } from "../utility/sowingBatchExcessStamp.js";
+import { pushBatchChangeLog } from "../utility/sowingBatchChangeLog.js";
+import { sowingBufferPctByPlantId } from "../utility/plantSowingBuffer.js";
 import {
   findDispatchActiveByIdOrTransport,
   resolvePlantRowFromDispatch,
@@ -27,6 +29,7 @@ import {
   finalizeOrderOnShedLineLoaded,
   schedulePostShedLoadAlerts,
   schedulePendingDispatchWhatsAppForVehicle,
+  scheduleVehicleLoadMoreNotify,
   syncOrderVehicleLoadedFlag,
 } from "./dispatchPostLoadFinalize.service.js";
 
@@ -398,7 +401,7 @@ export function describeSowPlanLine(line, labels = {}) {
   return `${text}.`;
 }
 
-function batchView(entry, extra = {}) {
+function batchView(entry, extra = {}, bufferPct = 0) {
   const b = entry.batch;
   const stock = sowBatchStock(b);
   return {
@@ -410,7 +413,7 @@ function batchView(entry, extra = {}) {
     shedName: b.shedName || "",
     requestNumber: b.requestNumber || "",
     sowedPlants: stock.sowed,
-    freePlants: dispatchBookableFree(b, b?.sowingBufferPct || 0),
+    freePlants: dispatchBookableFree(b, bufferPct),
     ...extra,
   };
 }
@@ -473,10 +476,11 @@ export async function loadSowDispatchContext(
   const vehicleSet = new Set(vehicleOids.map(String));
   const orderLinks = new Map();
   const orderById = new Map();
+  const bufferPct = (await sowingBufferPctByPlantId([plantId])).get(String(plantId)) || 0;
   const batches = new Map(
     [...batchIndex].map(([batchId, e]) => [
       batchId,
-      { slotId: e.slotId, free: dispatchBookableFree(e.batch, e.batch?.sowingBufferPct || 0), orders: [] },
+      { slotId: e.slotId, free: dispatchBookableFree(e.batch, bufferPct), orders: [] },
     ])
   );
 
@@ -499,7 +503,7 @@ export async function loadSowDispatchContext(
     }
   }
 
-  return { slotDocs, batchIndex, orders, orderById, orderLinks, batches };
+  return { slotDocs, batchIndex, orders, orderById, orderLinks, batches, bufferPct };
 }
 
 const orderCode = (o) => String(o?.orderId || o?.publicOrderCode || "");
@@ -529,7 +533,7 @@ async function rowRemaining(dispatchDoc, rowIdx, row, session) {
   return Math.max(0, need - (byRow?.get(rowIdx) || 0));
 }
 
-/** GET sow-batch-options: per order on the plant row its linked batches, plus every batch with plants. */
+/** GET sow-batch-options: per order its linked batches, plus leftover excess (not other orders' booked plants). */
 export async function listSowBatchOptionsForDispatch(dispatchId, plantRowIndex = 0) {
   const dispatchDoc = await findDispatchActiveByIdOrTransport(dispatchId);
   if (!dispatchDoc) throw new AppError("Vehicle dispatch not found", 404);
@@ -539,12 +543,10 @@ export async function listSowBatchOptionsForDispatch(dispatchId, plantRowIndex =
   });
   const remaining = vehicleLineRemainingMap(dispatchDoc, rowOrderIds);
 
-  const vehicleLinked = new Set();
   const orders = rowOrderIds.map((oid) => {
     const o = ctx.orderById.get(oid) || {};
     const linked = (ctx.orderLinks.get(oid) || []).map((l) => {
-      vehicleLinked.add(l.batchId);
-      return batchView(ctx.batchIndex.get(l.batchId), { linkedPlants: l.plants });
+      return batchView(ctx.batchIndex.get(l.batchId), { linkedPlants: l.plants }, ctx.bufferPct);
     });
     linked.sort((a, b) => dmyMs(a.plantReadyDate) - dmyMs(b.plantReadyDate));
     return {
@@ -567,8 +569,9 @@ export async function listSowBatchOptionsForDispatch(dispatchId, plantRowIndex =
     const view = batchView(e, {
       bookedForOthers,
       otherOrders: (pool?.orders || []).length,
-    });
-    if (view.freePlants < 1 && bookedForOthers < 1 && !vehicleLinked.has(batchId)) continue;
+    }, ctx.bufferPct);
+    // Picker / Give+Dispatch: leftover excess only (own linked cover still on order.linked).
+    if (view.freePlants < 1) continue;
     batches.push(view);
   }
   batches.sort(
@@ -696,8 +699,23 @@ export function applySowPlanLineToSlots({ line, batchIndex, performedBy, transpo
 
   if (line.fromFree > 0) {
     const f = line.fromFree;
-    B.batch.orderCoveredPlants = toQty(B.batch.orderCoveredPlants) + f;
+    const freeBefore = dispatchBookableFree(B.batch, B.batch.sowingBufferPct);
+    const coverBefore = toQty(B.batch.orderCoveredPlants);
+    B.batch.orderCoveredPlants = coverBefore + f;
     B.batch.excessPlants = Math.max(0, toQty(B.batch.excessPlants) - f);
+    B.batch.shownExcess = Math.max(0, freeBefore - f);
+    pushBatchChangeLog(B.batch, {
+      at: now,
+      by: performedBy,
+      kind: "DISPATCH_TAKE",
+      plants: -f,
+      coverBefore,
+      coverAfter: B.batch.orderCoveredPlants,
+      excessBefore: freeBefore,
+      excessAfter: B.batch.shownExcess,
+      orderId: line.orderId,
+      reason: `Dispatch took ${f} leftover plants · ${tag}`,
+    });
     if (!Array.isArray(B.batch.excessAllocations)) B.batch.excessAllocations = [];
     B.batch.excessAllocations.push({
       orderId: new mongoose.Types.ObjectId(line.orderId),
@@ -716,8 +734,23 @@ export function applySowPlanLineToSlots({ line, batchIndex, performedBy, transpo
     for (const to of rel.toOrders) addToSet(A.batch.linkedOrderIds || (A.batch.linkedOrderIds = []), to.orderId);
     const left = toQty(rel.leftover);
     if (left < 1) continue;
-    A.batch.orderCoveredPlants = Math.max(0, toQty(A.batch.orderCoveredPlants) - left);
+    const freeBefore = dispatchBookableFree(A.batch, A.batch.sowingBufferPct);
+    const coverBefore = toQty(A.batch.orderCoveredPlants);
+    A.batch.orderCoveredPlants = Math.max(0, coverBefore - left);
     A.batch.excessPlants = toQty(A.batch.excessPlants) + left;
+    A.batch.shownExcess = freeBefore + left;
+    pushBatchChangeLog(A.batch, {
+      at: now,
+      by: performedBy,
+      kind: "DISPATCH_RELEASE",
+      plants: left,
+      coverBefore,
+      coverAfter: A.batch.orderCoveredPlants,
+      excessBefore: freeBefore,
+      excessAfter: A.batch.shownExcess,
+      orderId: line.orderId,
+      reason: `Dispatch leftover ${left} plants became excess · ${tag}`,
+    });
     let trim = left;
     for (const alloc of A.batch.excessAllocations || []) {
       if (trim <= 0) break;
@@ -844,6 +877,7 @@ export async function executeSowBatchVehicleLoad({
   }
   const { rowIdx, row, rowOrderIds } = await resolveSowRow(dispatchDoc, plantRowIndex);
   const selections = normalizeSowBatchSelections(sowBatchSelections);
+  const { total: alreadyLoadedBefore } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
 
   const { cavity, numberPerCrate } = await resolveDefaultCavity();
   const session = await mongoose.startSession();
@@ -997,7 +1031,8 @@ export async function executeSowBatchVehicleLoad({
       touched.forEach((s) => s.setPerformer?.(performedBy));
     }
     for (const doc of writeDocs) {
-      if (doc.isModified()) await doc.save({ session, validateBeforeSave: true });
+      doc.markModified("subtypeSlots");
+      await doc.save({ session, validateBeforeSave: true });
     }
     for (const m of linkMoves) {
       await Order.updateOne(
@@ -1037,6 +1072,12 @@ export async function executeSowBatchVehicleLoad({
     const changedBy = performedBy ? String(performedBy) : "Secondary shed";
     for (const fr of finalizeResults) schedulePostShedLoadAlerts({ finalizeResult: fr, changedBy });
     schedulePendingDispatchWhatsAppForVehicle(freshDispatch._id, { changedBy });
+    scheduleVehicleLoadMoreNotify(freshDispatch._id, {
+      plantsAdded: totalLoaded,
+      alreadyLoadedBefore,
+      loadedTotal: alreadyLoadedBefore + totalLoaded,
+      changedBy,
+    });
 
     return {
       allocations: results,
