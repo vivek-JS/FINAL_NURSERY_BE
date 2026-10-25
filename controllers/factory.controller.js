@@ -53,6 +53,7 @@ import {
   getBookingSlotDetailsForOrderList,
 } from "../utility/findDeliverySlot.js";
 import { ensureOfficialDcSetFields } from "../services/officialDeliveryChallan.service.js";
+import { appendFastOrderExportStages } from "../services/orderExportList.service.js";
 import {
   applyPaymentTimingToPayment,
   sanitizePaymentArrayForOrder,
@@ -2604,17 +2605,24 @@ const updateOne = (Model, modelName, allowedFields) =>
 
       mergeEditHistoryIntoFilteredBody(filteredBody, editHistoryEntries);
 
-      // Update remainingPlants field if numberOfPlants is being updated
+      // Qty change: remaining = previous remaining + delta (not full qty − returns).
+      // Full reset broke “+500 on a loaded order” — remaining stayed wrong so dispatch Edit could not load more.
       if (
-        filteredBody.numberOfPlants &&
-        filteredBody.numberOfPlants !== existingDoc.numberOfPlants
+        filteredBody.numberOfPlants != null &&
+        Number(filteredBody.numberOfPlants) !== Number(existingDoc.numberOfPlants)
       ) {
-        // Calculate new remainingPlants
-        const returnedPlants = existingDoc.returnedPlants || 0;
-        filteredBody.remainingPlants = Math.max(
-          0,
-          filteredBody.numberOfPlants - returnedPlants
-        );
+        const prevRem = Number(existingDoc.remainingPlants);
+        const baseRem = Number.isFinite(prevRem)
+          ? prevRem
+          : Math.max(
+              0,
+              (Number(existingDoc.numberOfPlants) || 0) +
+                (Number(existingDoc.additionalPlants) || 0) -
+                (Number(existingDoc.returnedPlants) || 0)
+            );
+        const delta =
+          Number(filteredBody.numberOfPlants) - Number(existingDoc.numberOfPlants);
+        filteredBody.remainingPlants = Math.max(0, baseRem + delta);
       }
 
       // Handle dealer wallet updates for rejected orders
@@ -3259,12 +3267,14 @@ const updateOne = (Model, modelName, allowedFields) =>
         const rawCoverWindow = Math.floor(
           Number(req.body?.excessCoverWindowDays) || EXCESS_COVER_WINDOW_DAYS
         );
+        const rawCoverNeed = Math.floor(Number(req.body?.excessCoverNeed) || 0);
         try {
           const cover = await coverOrderFromBatches({
             order: updatedDoc._id,
             picks: excessCoverPicks,
             userId: req.user?._id,
-            windowDays: Math.min(15, Math.max(1, rawCoverWindow)),
+            windowDays: Math.max(1, rawCoverWindow),
+            additionalNeed: rawCoverNeed > 0 ? rawCoverNeed : null,
           });
           excessCover = {
             success: true,
@@ -3922,6 +3932,7 @@ const getAll = (Model, modelName) =>
       expectedNursery, // Filter by nursery site code (RB, GH, …)
       showonly, // When truthy: restrict ANY role (incl. DISPATCH_MANAGER/ADMIN) to only orders where salesPerson === req.user._id
       exportAll: exportAllRaw, // "true" = full export (no 500 cap; skip early pagination)
+      unsown, // "true" = accepted sowing plants that are not sowingDone
     } = req.query;
 
     const exportAll = String(exportAllRaw ?? "") === "true";
@@ -4622,6 +4633,32 @@ const getAll = (Model, modelName) =>
       }
     }
 
+    // Unsown tab: accepted sowing-plant orders that are not yet sowingDone.
+    // Lookup stays before pagination so the tab count matches the list.
+    if (String(unsown) === "true") {
+      pipeline.push(
+        {
+          $lookup: {
+            from: "plantcms",
+            let: { plantId: "$plantName" },
+            pipeline: [
+              { $match: { $expr: { $eq: ["$_id", "$$plantId"] } } },
+              { $project: { sowingAllowed: 1 } },
+            ],
+            as: "_unsownPlant",
+          },
+        },
+        {
+          $match: {
+            $expr: { $ne: [{ $ifNull: ["$sowingDone", false] }, true] },
+            dealerOrder: { $ne: true },
+            "_unsownPlant.sowingAllowed": true,
+          },
+        },
+        { $unset: "_unsownPlant" }
+      );
+    }
+
     const canEarlyPaginate =
       !exportAll &&
       hasPaginationParams &&
@@ -4717,6 +4754,29 @@ const getAll = (Model, modelName) =>
       pipeline.push({
         $match: locClauses.length === 1 ? locClauses[0] : { $and: locClauses },
       });
+    }
+
+    // Export skips tray, history, dispatch, and plant-slot joins, and skips the second count query.
+    if (exportAll && modelName === "Order") {
+      appendFastOrderExportStages(pipeline, {
+        sort: orderListSortSpec(),
+        limit,
+      });
+      const exportRows = await Model.aggregate(pipeline).allowDiskUse(true);
+      const exportData = exportRows.map((item) => {
+        const { _id, ...rest } = item;
+        return { id: _id, _id, ...rest };
+      });
+      return res.status(200).json(
+        generateResponse("Success", `${modelName} found successfully`, {
+          data: exportData,
+          total: exportData.length,
+          totalPages: 1,
+          currentPage: 1,
+          limit,
+          hasPaginationParams,
+        })
+      );
     }
 
     // Common lookups for both normal queries and slotId queries
