@@ -6,6 +6,7 @@ import Dispatch from "../models/dispatch.model.js";
 import Order from "../models/order.model.js";
 import { applyStockFieldUpdates } from "../utility/slotStockTrail.js";
 import { sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
+import { dispatchBookableFree } from "../utility/sowingBatchExcessStamp.js";
 import {
   findDispatchActiveByIdOrTransport,
   resolvePlantRowFromDispatch,
@@ -409,7 +410,7 @@ function batchView(entry, extra = {}) {
     shedName: b.shedName || "",
     requestNumber: b.requestNumber || "",
     sowedPlants: stock.sowed,
-    freePlants: stock.free,
+    freePlants: dispatchBookableFree(b, b?.sowingBufferPct || 0),
     ...extra,
   };
 }
@@ -475,7 +476,7 @@ export async function loadSowDispatchContext(
   const batches = new Map(
     [...batchIndex].map(([batchId, e]) => [
       batchId,
-      { slotId: e.slotId, free: sowBatchStock(e.batch).free, orders: [] },
+      { slotId: e.slotId, free: dispatchBookableFree(e.batch, e.batch?.sowingBufferPct || 0), orders: [] },
     ])
   );
 

@@ -60,20 +60,21 @@ export function reportedExcess(input) {
   return reportedExcessBreakdown(input).excess;
 }
 
-/** Sum of stored shownExcess. Unstamped batches use the same formula. */
+/** Bookable leftover = sowed − orders (+ mortality moved). Always recompute; ignore stale stamps. */
 export function slotReportedExcess(batches, sowingBufferPct = 0) {
   return (batches || []).reduce((sum, batch) => {
     if (batch?.isIrrelevant) return sum;
-    if (batch?.shownExcess != null && batch?.sowingBufferPct != null) {
-      return sum + Math.max(0, Math.floor(Number(batch.shownExcess) || 0));
-    }
     const moved = Math.max(0, Math.floor(Number(batch?.mortalityMovedToExcess) || 0));
+    const pct =
+      batch?.sowingBufferPct != null && Number.isFinite(Number(batch.sowingBufferPct))
+        ? Number(batch.sowingBufferPct)
+        : sowingBufferPct;
     return (
       sum +
       reportedExcess({
         plantsSowed: batch?.plantsSowed,
         orderCoveredPlants: batch?.orderCoveredPlants,
-        sowingBufferPct,
+        sowingBufferPct: pct,
       }) +
       moved
     );
