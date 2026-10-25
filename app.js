@@ -437,6 +437,8 @@ import optInWebhookRoute from "./routes/optInWebhook.route.js";
 import whatsappStatusWebhookRoute from "./routes/whatsappStatusWebhook.route.js";
 import sowingRoute from "./routes/sowing.route.js";
 import publicFarmerLinkRoute from "./routes/publicFarmerLink.route.js";
+import fieldLeadRoute from "./routes/fieldLead.route.js";
+import fieldAttendanceRoute from "./routes/fieldAttendance.route.js";
 import clearDataRoute from "./routes/clearData.route.js";
 import backupRoute from "./routes/backup.route.js";
 import whatsappBroadcastRoute from "./routes/whatsappBroadcast.route.js";
@@ -533,7 +535,9 @@ server.use("/api/v1/user", userRoute);
 // ============================================
 // PUBLIC ROUTES - Must be BEFORE protected routes to avoid auth interception
 // ============================================
-server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead links (mixed auth & public)
+server.use("/api/v1/public-links", publicFarmerLinkRoute);
+server.use("/api/v1/field-leads", fieldLeadRoute);
+server.use("/api/v1/field-attendance", fieldAttendanceRoute); // Public farmer lead links (mixed auth & public)
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
@@ -1003,6 +1007,8 @@ server.use(errorHandler);
   try {
     const { initAttendanceReminderCron } = await import("./jobs/attendanceReminderCron.js");
     initAttendanceReminderCron();
+    const { initFieldAttendanceCron } = await import("./jobs/fieldAttendanceCron.js");
+    initFieldAttendanceCron();
   } catch (e) {
     console.error("[AttendanceReminder] Failed to init cron:", e?.message || e);
   }
