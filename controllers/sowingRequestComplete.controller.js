@@ -1600,26 +1600,27 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
     const shedName = meta.shedName || r.shedName || "";
     const bufferPct = bufferByPlant.get(String(r.plantId)) || 0;
     const batchKey = reqBatch?._id ? String(reqBatch._id) : "";
-    // Entry qty can differ from plantsSowed after edits — show each batch leftover once.
+    // One slot batch → show Cover/Excess once. Other partial rows stay blank (no order-sum fake cover).
     const ownsBatch = Boolean(reqBatch) && (!batchKey || !excessShownForBatch.has(batchKey));
     if (ownsBatch && batchKey) excessShownForBatch.add(batchKey);
-    const affectedSlot = buildAffectedSlot(slotRaw, reqBatch, shedName, bufferPct);
+    const showTotals = ownsBatch || onlyEntry;
+    const displayOrders = showTotals ? linkedOrders : [];
+    const affectedSlot = buildAffectedSlot(slotRaw, showTotals ? reqBatch : null, shedName, bufferPct);
     const figures = paintSowingEntryNumbers(affectedSlot, {
       batch: reqBatch,
-      linkedOrders,
+      linkedOrders: displayOrders,
       bufferPct,
       sowed: Number(reqBatch?.plantsSowed) || entrySowed,
       mortalityReserve: reqBatch ? mortalityLeftOnBatch(reqBatch) : 0,
-      showBookableExcess: ownsBatch || onlyEntry,
+      showBookableExcess: showTotals,
     });
     const storedExcess = Number(meta.excessPlants) || 0;
     const batchCover = Number(reqBatch?.orderCoveredPlants) || 0;
-    const entryCover = linkedOrders.reduce(
-      (sum, o) => sum + (Number(o.coveredPlants) || 0),
-      0
-    );
-    const bookedPlants = ownsBatch || onlyEntry ? batchCover : entryCover;
-    if (affectedSlot) affectedSlot.bookedPlants = bookedPlants;
+    const bookedPlants = showTotals ? batchCover : 0;
+    if (affectedSlot) {
+      affectedSlot.bookedPlants = bookedPlants;
+      if (!showTotals) affectedSlot.excessPlants = 0;
+    }
 
     const batchNumbers = meta.batchNumber ? [meta.batchNumber] : outwardBatchNumbers(r, outwardMap);
     const outward = r.outwardId ? outwardMap.get(String(r.outwardId)) : null;
@@ -1655,10 +1656,10 @@ async function sendSowingEntries(req, res, { match, page, limit, skip, sortKey, 
       machineMinutes: Number(pick(meta.machineMinutes, r.machineMinutes)) || 0,
       completionNotes: pick(meta.notes, r.completionNotes) || "",
       shedName: reqBatch?.shedName || shedName,
-      isExcess: Boolean(r.isExcessiveSowing) || storedExcess >= entrySowed,
-      excessPlants: figures.excess,
+      isExcess: Boolean(r.isExcessiveSowing) || (showTotals && storedExcess >= entrySowed),
+      excessPlants: showTotals ? figures.excess : 0,
       bookedPlants,
-      linkedOrders,
+      linkedOrders: displayOrders,
       batchNumber: batchNumbers.join(", ") || "",
       batchNumbers,
       outwardNumber: outward?.outwardNumber || "",
