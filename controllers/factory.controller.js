@@ -3257,41 +3257,54 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
-      // Order +qty on a loaded vehicle → bump dispatch line so shed "Load remaining" unlocks.
+      // Order +qty on a loaded vehicle → bump dispatch line/crates immediately so
+      // shed "Load remaining" unlocks, then notify load-more plants.
       let dispatchQtySync = null;
       if (
         modelName === "Order" &&
         updatedDoc &&
         Number(updatedDoc.numberOfPlants) > Number(existingDoc.numberOfPlants)
       ) {
-        const { syncDispatchAfterOrderQtyIncrease } = await import(
-          "../services/syncDispatchAfterOrderQty.service.js"
-        );
-        dispatchQtySync = await syncDispatchAfterOrderQtyIncrease({
-          order: updatedDoc,
-          previousNumberOfPlants: existingDoc.numberOfPlants,
-          nextNumberOfPlants: updatedDoc.numberOfPlants,
-          userId: req.user?._id,
-          session,
-        });
-        if (dispatchQtySync) {
-          const remFresh = await Model.findById(updatedDoc._id)
-            .select("remainingPlants orderStatus vehicleLoaded vehicleLoadedQuantity")
-            .session(session)
-            .lean();
-          if (remFresh) {
-            updatedDoc.remainingPlants = remFresh.remainingPlants;
-            updatedDoc.orderStatus = remFresh.orderStatus;
-            updatedDoc.vehicleLoaded = remFresh.vehicleLoaded;
-            updatedDoc.vehicleLoadedQuantity = remFresh.vehicleLoadedQuantity;
+        try {
+          const { syncDispatchAfterOrderQtyIncrease } = await import(
+            "../services/syncDispatchAfterOrderQty.service.js"
+          );
+          dispatchQtySync = await syncDispatchAfterOrderQtyIncrease({
+            order: updatedDoc,
+            previousNumberOfPlants: existingDoc.numberOfPlants,
+            nextNumberOfPlants: updatedDoc.numberOfPlants,
+            userId: req.user?._id,
+            session,
+          });
+          if (dispatchQtySync) {
+            const remFresh = await Model.findById(updatedDoc._id)
+              .select("remainingPlants orderStatus vehicleLoaded vehicleLoadedQuantity")
+              .session(session)
+              .lean();
+            if (remFresh) {
+              updatedDoc.remainingPlants = remFresh.remainingPlants;
+              updatedDoc.orderStatus = remFresh.orderStatus;
+              updatedDoc.vehicleLoaded = remFresh.vehicleLoaded;
+              updatedDoc.vehicleLoadedQuantity = remFresh.vehicleLoadedQuantity;
+            }
           }
+        } catch (syncErr) {
+          console.error("syncDispatchAfterOrderQtyIncrease failed:", {
+            orderId: String(updatedDoc?._id || id),
+            error: syncErr?.message || syncErr,
+          });
+          throw new AppError(
+            "Order quantity update failed because dispatch load sync failed. Please retry.",
+            500
+          );
         }
       }
 
       await session.commitTransaction();
       session.endSession();
 
-      if (dispatchQtySync?.qtyDeltas?.length) {
+      // Same gate as updateDispatch: only when shed already loaded plants on this vehicle.
+      if (dispatchQtySync?.qtyDeltas?.length && dispatchQtySync.hadShedLoad) {
         try {
           const { notifyDispatchLoadEdited } = await import(
             "../utility/dispatchFleetNotify.js"

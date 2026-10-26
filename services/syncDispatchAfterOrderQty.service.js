@@ -13,6 +13,11 @@ import { orderStatusFromRemaining } from "../utility/dispatchOrderStatus.util.js
  *
  * Consumes the order.remainingPlants delta into this dispatch (mirrors updateDispatch).
  */
+function skip(reason, meta = {}) {
+  console.warn("[syncDispatchAfterOrderQty] skip:", reason, meta);
+  return null;
+}
+
 export async function syncDispatchAfterOrderQtyIncrease({
   order,
   previousNumberOfPlants,
@@ -23,30 +28,44 @@ export async function syncDispatchAfterOrderQtyIncrease({
   const prev = Math.floor(Number(previousNumberOfPlants) || 0);
   const next = Math.floor(Number(nextNumberOfPlants) || 0);
   const delta = next - prev;
-  if (delta < 1 || !order?._id) return null;
+  if (delta < 1 || !order?._id) {
+    return skip("no_qty_increase", { prev, next, orderId: order?._id });
+  }
 
   const dispatchId = order.currentDispatchId;
-  if (!dispatchId || !mongoose.isValidObjectId(String(dispatchId))) return null;
+  if (!dispatchId || !mongoose.isValidObjectId(String(dispatchId))) {
+    return skip("no_current_dispatch", { orderId: String(order._id), delta });
+  }
 
   const q = Dispatch.findById(dispatchId);
   if (session) q.session(session);
   const dispatch = await q;
-  if (!dispatch) return null;
-  if (!DISPATCH_SHED_ALLOWED_STATUSES.includes(String(dispatch.transportStatus || ""))) {
-    return null;
+  if (!dispatch) {
+    return skip("dispatch_missing", { dispatchId: String(dispatchId) });
+  }
+  const transportStatus = String(dispatch.transportStatus || "");
+  if (!DISPATCH_SHED_ALLOWED_STATUSES.includes(transportStatus)) {
+    return skip("transport_not_shed_active", {
+      dispatchId: String(dispatchId),
+      transportStatus,
+    });
   }
 
   const oid = String(order._id);
   const rowIdx = (dispatch.orderDispatchDetails || []).findIndex(
     (d) => String(d.orderId) === oid
   );
-  if (rowIdx < 0) return null;
+  if (rowIdx < 0) {
+    return skip("order_not_on_dispatch", { orderId: oid, dispatchId: String(dispatchId) });
+  }
 
   const row = dispatch.orderDispatchDetails[rowIdx];
   const oldQty = Math.max(0, Math.floor(Number(row.dispatchQuantity) || 0));
   const shedLoaded = Math.max(0, Math.floor(Number(row.shedLoadedQuantity) || 0));
   const newQty = oldQty + delta;
-  if (newQty < shedLoaded) return null;
+  if (newQty < shedLoaded) {
+    return skip("new_qty_below_shed_loaded", { oldQty, newQty, shedLoaded });
+  }
 
   const officeEditNow = new Date();
   const originalQty =
@@ -144,6 +163,17 @@ export async function syncDispatchAfterOrderQtyIncrease({
       ? String(fresh.orderId)
       : fresh.publicOrderCode || oid.slice(-4);
 
+  console.log("[syncDispatchAfterOrderQty] synced", {
+    orderId: oid,
+    orderCode,
+    dispatchId: String(dispatch._id),
+    delta,
+    oldQty,
+    newQty,
+    shedLoaded,
+    hadShedLoad: shedLoaded > 0,
+  });
+
   return {
     dispatch,
     qtyDeltas: [
@@ -156,5 +186,7 @@ export async function syncDispatchAfterOrderQtyIncrease({
       },
     ],
     editedAt: officeEditNow,
+    /** True when shed already loaded plants — unlock Load remaining + notify. */
+    hadShedLoad: shedLoaded > 0,
   };
 }
