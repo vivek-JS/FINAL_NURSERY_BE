@@ -416,6 +416,18 @@ const secondaryInwardSchema = new Schema({
   returnReason: { type: String, trim: true, maxlength: 500, default: "" },
   returnedAt: { type: Date, default: null },
   returnedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+  remarks: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+  /** e.g. READY_PLANTS — imported ready stock from another nursery. */
+  importSource: {
+    type: String,
+    trim: true,
+    maxlength: 40,
+    default: "",
+  },
   activityLog: { type: [activityLogSchema], default: [] },
 });
 

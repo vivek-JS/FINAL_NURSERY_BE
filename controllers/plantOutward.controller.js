@@ -4375,6 +4375,15 @@ async function resolveDispatchBatchRef(batchParam, session) {
     .lean();
   if (byNum) return { batch: byNum, batchId: String(byNum._id) };
 
+  // Case-insensitive batch number (Ready plants imports like gh123 / GH123).
+  byNum = await DispatchBatch.findOne({
+    batchNumber: { $regex: `^${raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
+  })
+    .select(BATCH_SELECT_FIELDS)
+    .session(session)
+    .lean();
+  if (byNum) return { batch: byNum, batchId: String(byNum._id) };
+
   const asNum = Number(raw);
   if (Number.isFinite(asNum) && String(asNum) === raw) {
     byNum = await DispatchBatch.findOne({ batchNumber: asNum })
@@ -4385,6 +4394,57 @@ async function resolveDispatchBatchRef(batchParam, session) {
   }
 
   return null;
+}
+
+/**
+ * Create a DispatchBatch (+ PlantOutward shell) for Ready plants import when
+ * batch number is new. Requires plantCmsId + plantSubtypeId.
+ */
+async function createDispatchBatchForReadyImport({
+  batchNumber,
+  plantCmsId,
+  plantSubtypeId,
+  secondaryPlantReadyDays = 3,
+  session,
+}) {
+  const number = String(batchNumber || "").trim();
+  if (!number) throw new AppError("Batch number is required", 400);
+  if (!mongoose.isValidObjectId(String(plantCmsId)) || !mongoose.isValidObjectId(String(plantSubtypeId))) {
+    throw new AppError("plantCmsId and plantSubtypeId are required to create batch", 400);
+  }
+  const plant = await PlantCms.findById(plantCmsId).select("subtypes").session(session).lean();
+  if (!plant) throw new AppError("Plant not found", 400);
+  const subtypeOk = (plant.subtypes || []).some((s) => String(s._id) === String(plantSubtypeId));
+  if (!subtypeOk) throw new AppError("Subtype does not belong to selected plant", 400);
+
+  const readyDays = Math.max(1, Math.min(365, Math.floor(Number(secondaryPlantReadyDays) || 3)));
+  const [doc] = await DispatchBatch.create(
+    [
+      {
+        batchNumber: number,
+        dateAdded: new Date(),
+        primaryPlantReadyDays: 1,
+        secondaryPlantReadyDays: readyDays,
+        plantCmsId,
+        plantSubtypeId,
+      },
+    ],
+    { session }
+  );
+  await PlantOutward.create(
+    [
+      {
+        batchId: doc._id,
+        dateAdded: doc.dateAdded || new Date(),
+      },
+    ],
+    { session }
+  );
+  const lean = await DispatchBatch.findById(doc._id)
+    .select(BATCH_SELECT_FIELDS)
+    .session(session)
+    .lean();
+  return { batch: lean, batchId: String(doc._id), created: true };
 }
 
 /** IST calendar day stored as UTC midnight (same shape the web sends); IST-midnight ISO (…T18:30Z) maps to the next day. */
@@ -4412,6 +4472,11 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
     laboursEngaged: laboursRaw,
     remarks,
     readyDaysBySize,
+    plantCmsId,
+    plantSubtypeId,
+    secondaryPlantReadyDays,
+    createBatchIfMissing,
+    importSource,
   } = req.body ?? {};
   const secondaryInwardDate = secondaryInwardDateRaw
     ? istCalendarDayUtc(secondaryInwardDateRaw)
@@ -4422,8 +4487,18 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
   const gents = safeNonNegativeInt(laboursGents, 0);
   const laboursEngaged =
     ladies + gents > 0 ? ladies + gents : safeNonNegativeInt(laboursRaw, 0);
-  const remarksStr =
-    remarks === undefined || remarks === null ? "" : String(remarks).trim();
+  const importTag =
+    String(importSource || "").trim().toUpperCase() === "READY_PLANTS"
+      ? "READY_PLANTS"
+      : "";
+  const remarksStr = (() => {
+    const base =
+      remarks === undefined || remarks === null ? "" : String(remarks).trim();
+    if (!importTag) return base;
+    if (!base) return `Ready plants import · ${importTag}`;
+    if (base.includes("READY_PLANTS") || /ready plants import/i.test(base)) return base;
+    return `${base} · ${importTag}`;
+  })();
 
   const sizeRows = ["R1", "R2", "R3"]
     .map((size) => ({
@@ -4456,7 +4531,22 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
   session.startTransaction();
 
   try {
-    const resolvedBatch = await resolveDispatchBatchRef(batchParam, session);
+    let resolvedBatch = await resolveDispatchBatchRef(batchParam, session);
+    if (!resolvedBatch && createBatchIfMissing) {
+      const readyFromSizes = ["R1", "R2", "R3"]
+        .map((sz) => safeNonNegativeInt(readyDaysBySize?.[sz], 0))
+        .filter((n) => n > 0);
+      const readyDays =
+        safeNonNegativeInt(secondaryPlantReadyDays, 0) ||
+        (readyFromSizes.length ? Math.max(...readyFromSizes) : 3);
+      resolvedBatch = await createDispatchBatchForReadyImport({
+        batchNumber: String(batchParam || "").trim(),
+        plantCmsId,
+        plantSubtypeId,
+        secondaryPlantReadyDays: readyDays,
+        session,
+      });
+    }
     if (!resolvedBatch) {
       throw new AppError("No dispatch batch found with this batch ID", 404);
     }
@@ -4523,6 +4613,7 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
         transferStatus: "available",
         dateOfDispatch: rowDispatchDate ?? dateOfDispatch,
         remarks: remarksStr || `Direct lagwad · ${sr.size}`,
+        ...(importTag ? { importSource: importTag } : {}),
         ...(rowExpectedReady ? { expectedReadyDate: rowExpectedReady } : {}),
       };
 
