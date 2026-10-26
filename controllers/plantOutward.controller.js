@@ -176,6 +176,129 @@ const computeSecondaryDispatchEligibility = (si, secondaryPlantReadyDays, todayS
   };
 };
 
+/** Build one suggestion row from a secondary inward + batch (shared by full scan + by-id). */
+const buildSecondaryInwardSuggestion = (po, si, batchLean, todayStart) => {
+  const avail = safeNonNegativeInt(safeMongooseNumber(si.availableQuantity), 0);
+  if (avail < 1) return null;
+  if ((si.transferStatus ?? "available") === "fully_transferred") return null;
+
+  const labels = plantSubtypeLabelsFromLeanBatch(batchLean);
+  const secDays = Number(safeMongooseNumber(batchLean.secondaryPlantReadyDays)) || 0;
+  const siPlain = typeof si.toObject === "function" ? si.toObject() : si;
+  const elig = computeSecondaryDispatchEligibility(siPlain, secDays, todayStart);
+  const bypassAt = siPlain.readinessBypassAt;
+  let readyMoment = null;
+  if (bypassAt != null && moment(bypassAt).isValid()) {
+    readyMoment = moment(bypassAt).startOf("day");
+  } else if (elig.expectedReadyByCalendar) {
+    readyMoment = moment(elig.expectedReadyByCalendar).startOf("day");
+  } else if (siPlain.secondaryInwardDate) {
+    readyMoment = moment(siPlain.secondaryInwardDate).add(secDays, "days").startOf("day");
+  } else {
+    readyMoment = moment().add(365, "days");
+  }
+
+  const sortReady = readyMoment.valueOf();
+  const sortInward = moment(siPlain.secondaryInwardDate || 0).valueOf();
+
+  let daysUntilReady = null;
+  if (elig.dispatchEligible) {
+    daysUntilReady = 0;
+  } else if (bypassAt != null && moment(bypassAt).isValid()) {
+    daysUntilReady = 0;
+  } else if (elig.expectedReadyByCalendar) {
+    const readyDay = moment(elig.expectedReadyByCalendar).startOf("day");
+    daysUntilReady = Math.max(0, readyDay.diff(todayStart, "days"));
+  } else {
+    const effectiveReady = moment(readyMoment).startOf("day");
+    daysUntilReady = Math.max(0, effectiveReady.diff(todayStart, "days"));
+  }
+
+  const storedExpectedReady = siPlain.expectedReadyDate;
+  const expectedReadyByCalendar =
+    storedExpectedReady && moment(storedExpectedReady).isValid()
+      ? moment(storedExpectedReady).startOf("day").toISOString()
+      : elig.expectedReadyByCalendar;
+
+  return {
+    batchId: po.batchId,
+    batchNumber: batchLean.batchNumber,
+    plantOutwardId: po._id,
+    secondaryInwardId: si._id,
+    availableQuantity: avail,
+    remainingPlants: avail,
+    dispatchEligible: elig.dispatchEligible,
+    expectedReadyByCalendar,
+    expectedReadyDate: storedExpectedReady ?? null,
+    secondaryInwardDate: siPlain.secondaryInwardDate,
+    plantLabel: labels.plantLabel,
+    subtypeLabel: labels.subtypeLabel,
+    size: siPlain.size,
+    cavity: siPlain.cavity,
+    numberOfBottles: siPlain.numberOfBottles,
+    numberOfTrays: siPlain.numberOfTrays,
+    pollyhouse: String(siPlain.pollyhouse || "").trim(),
+    secondaryPlantReadyDays: secDays,
+    daysUntilReady,
+    sortReady,
+    sortInward,
+  };
+};
+
+/**
+ * Fast path for manual vehicle load: only the picked secondaryInwardIds.
+ * Avoids scanning every batch/outward for the plant/subtype.
+ */
+const collectSecondaryInwardSuggestionsByIds = async (secondaryInwardIds) => {
+  const idSet = new Set(
+    (secondaryInwardIds || []).map((id) => String(id || "").trim()).filter(Boolean)
+  );
+  if (!idSet.size) return { suggestions: [], batchDocs: [] };
+
+  const oids = [...idSet]
+    .filter((id) => mongoose.isValidObjectId(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  if (!oids.length) return { suggestions: [], batchDocs: [] };
+
+  const pos = await PlantOutward.find({ "secondaryInward._id": { $in: oids } })
+    .select("batchId secondaryInward")
+    .lean();
+
+  const batchIds = [...new Set(pos.map((p) => String(p.batchId)).filter(Boolean))];
+  const batchDocs =
+    batchIds.length === 0
+      ? []
+      : await DispatchBatch.find({
+          _id: {
+            $in: batchIds
+              .filter((id) => mongoose.isValidObjectId(id))
+              .map((id) => new mongoose.Types.ObjectId(id)),
+          },
+        })
+          .select(BATCH_SELECT_FIELDS)
+          .lean();
+  const batchMap = new Map(batchDocs.map((b) => [String(b._id), b]));
+  const todayStart = moment().startOf("day");
+  const suggestions = [];
+
+  for (const po of pos) {
+    const batchLean = batchMap.get(String(po.batchId));
+    if (!batchLean) continue;
+    for (const si of po.secondaryInward || []) {
+      if (!idSet.has(String(si._id))) continue;
+      const row = buildSecondaryInwardSuggestion(po, si, batchLean, todayStart);
+      if (row) suggestions.push(row);
+    }
+  }
+
+  suggestions.sort((a, b) => {
+    if (a.sortReady !== b.sortReady) return a.sortReady - b.sortReady;
+    return a.sortInward - b.sortInward;
+  });
+  const stripped = suggestions.map(({ sortReady, sortInward, ...rest }) => rest);
+  return { suggestions: stripped, batchDocs };
+};
+
 /**
  * FIFO-sorted secondary inward candidates for plant CMS + subtype (shared by vehicle allocation + farmer dispatch shade picker).
  */
@@ -224,7 +347,9 @@ const collectSecondaryInwardSuggestionsForPlantSubtype = async (plantCmsId, plan
   const pos =
     batchIds.length === 0
       ? []
-      : await PlantOutward.find({ batchId: { $in: batchIds } }).lean();
+      : await PlantOutward.find({ batchId: { $in: batchIds } })
+          .select("batchId secondaryInward")
+          .lean();
 
   const todayStart = moment().startOf("day");
   const suggestions = [];
@@ -232,73 +357,9 @@ const collectSecondaryInwardSuggestionsForPlantSubtype = async (plantCmsId, plan
   for (const po of pos) {
     const batchLean = batchMap.get(String(po.batchId));
     if (!batchLean) continue;
-    const labels = plantSubtypeLabelsFromLeanBatch(batchLean);
-    const secDays = Number(safeMongooseNumber(batchLean.secondaryPlantReadyDays)) || 0;
-
     for (const si of po.secondaryInward || []) {
-      const avail = safeNonNegativeInt(safeMongooseNumber(si.availableQuantity), 0);
-      if (avail < 1) continue;
-      if ((si.transferStatus ?? "available") === "fully_transferred") continue;
-
-      const siPlain = typeof si.toObject === "function" ? si.toObject() : si;
-      const elig = computeSecondaryDispatchEligibility(siPlain, secDays, todayStart);
-      const bypassAt = siPlain.readinessBypassAt;
-      let readyMoment = null;
-      if (bypassAt != null && moment(bypassAt).isValid()) {
-        readyMoment = moment(bypassAt).startOf("day");
-      } else if (elig.expectedReadyByCalendar) {
-        readyMoment = moment(elig.expectedReadyByCalendar).startOf("day");
-      } else if (siPlain.secondaryInwardDate) {
-        readyMoment = moment(siPlain.secondaryInwardDate).add(secDays, "days").startOf("day");
-      } else {
-        readyMoment = moment().add(365, "days");
-      }
-
-      const sortReady = readyMoment.valueOf();
-      const sortInward = moment(siPlain.secondaryInwardDate || 0).valueOf();
-
-      let daysUntilReady = null;
-      if (elig.dispatchEligible) {
-        daysUntilReady = 0;
-      } else if (bypassAt != null && moment(bypassAt).isValid()) {
-        daysUntilReady = 0;
-      } else if (elig.expectedReadyByCalendar) {
-        const readyDay = moment(elig.expectedReadyByCalendar).startOf("day");
-        daysUntilReady = Math.max(0, readyDay.diff(todayStart, "days"));
-      } else {
-        const effectiveReady = moment(readyMoment).startOf("day");
-        daysUntilReady = Math.max(0, effectiveReady.diff(todayStart, "days"));
-      }
-
-      const storedExpectedReady = siPlain.expectedReadyDate;
-      const expectedReadyByCalendar =
-        storedExpectedReady && moment(storedExpectedReady).isValid()
-          ? moment(storedExpectedReady).startOf("day").toISOString()
-          : elig.expectedReadyByCalendar;
-
-      suggestions.push({
-        batchId: po.batchId,
-        batchNumber: batchLean.batchNumber,
-        plantOutwardId: po._id,
-        secondaryInwardId: si._id,
-        availableQuantity: avail,
-        remainingPlants: avail,
-        dispatchEligible: elig.dispatchEligible,
-        expectedReadyByCalendar,
-        expectedReadyDate: storedExpectedReady ?? null,
-        secondaryInwardDate: siPlain.secondaryInwardDate,
-        plantLabel: labels.plantLabel,
-        subtypeLabel: labels.subtypeLabel,
-        size: siPlain.size,
-        cavity: siPlain.cavity,
-        numberOfBottles: siPlain.numberOfBottles,
-        numberOfTrays: siPlain.numberOfTrays,
-        pollyhouse: String(siPlain.pollyhouse || "").trim(),
-        secondaryPlantReadyDays: secDays,
-        daysUntilReady,
-        sortReady,
-        sortInward,
-      });
+      const row = buildSecondaryInwardSuggestion(po, si, batchLean, todayStart);
+      if (row) suggestions.push(row);
     }
   }
 
@@ -6145,18 +6206,28 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
       directShedLoad:
         Boolean(directShedLoad) || source === "SHED_DISPATCH",
       collectSuggestionsFn: collectSecondaryInwardSuggestionsForPlantSubtype,
+      collectSuggestionsByIdsFn: collectSecondaryInwardSuggestionsByIds,
     });
   }
 
-  const photoSave = await appendVehicleLoadPhotos({
-    dispatchId,
-    files: req.files,
-    plantsLoaded: result?.totalLoaded,
-    remarks,
-    performedBy,
-  });
-  if (photoSave.urls.length) {
-    result = { ...result, photoUrls: photoSave.urls };
+  // Photos must not block the load response — upload after 200.
+  const pendingFiles = Array.isArray(req.files) ? req.files : [];
+  if (pendingFiles.length) {
+    const photoDispatchId = dispatchId;
+    const photoPlants = result?.totalLoaded;
+    const photoRemarks = remarks;
+    const photoBy = performedBy;
+    setImmediate(() => {
+      void appendVehicleLoadPhotos({
+        dispatchId: photoDispatchId,
+        files: pendingFiles,
+        plantsLoaded: photoPlants,
+        remarks: photoRemarks,
+        performedBy: photoBy,
+      }).catch((err) =>
+        console.error("[vehicleLoad] deferred photos failed:", err?.message || err)
+      );
+    });
   }
 
   const message = isSowReady
@@ -6209,9 +6280,16 @@ const getSecondaryVehicleLoadedLines = catchAsync(async (req, res, next) => {
   const shedReturns = (doc.shedReturns || []).filter(
     (r) => !linkedOrderId || String(r.orderId || "") === String(linkedOrderId)
   );
+  const plantRows = Array.isArray(doc.plantsDetails) ? doc.plantsDetails : [];
   const lines = rawLines.map((l) => {
     const returnedPlants = sumShedReturns(shedReturns, { sourceOutwardId: l.secondaryOutwardId });
-    return { ...l, returnedPlants, returnablePlants: Math.max(0, l.plants - returnedPlants) };
+    const row = Number.isInteger(l.plantRowIndex) && l.plantRowIndex >= 0 ? plantRows[l.plantRowIndex] : null;
+    return {
+      ...l,
+      returnedPlants,
+      returnablePlants: Math.max(0, l.plants - returnedPlants),
+      plantName: row?.name || "",
+    };
   });
 
   const orderIds = [
@@ -6241,6 +6319,9 @@ const getSecondaryVehicleLoadedLines = catchAsync(async (req, res, next) => {
         publicOrderCode: o.publicOrderCode,
         farmer: o.farmer,
       })),
+      photoUrls: (doc.shedLoadPhotoLog || [])
+        .flatMap((entry) => (entry.photos || []).map((p) => p.url))
+        .filter(Boolean),
     })
   );
 });

@@ -742,7 +742,14 @@ export function groupPolyhouseStockByBatch(lines) {
 
 export async function sumPlantsLoadedOnDispatch(dispatchId, { session } = {}) {
   const map = await sumPlantsLoadedOnDispatches([dispatchId], { session });
-  return map.get(String(dispatchId)) || { total: 0, byOrder: new Map(), byRow: new Map() };
+  return (
+    map.get(String(dispatchId)) || {
+      total: 0,
+      byOrder: new Map(),
+      byRow: new Map(),
+      maxFulfillmentSeq: 0,
+    }
+  );
 }
 
 /** One PlantOutward scan for many dispatches — avoids N+1 on list APIs. */
@@ -753,7 +760,12 @@ export async function sumPlantsLoadedOnDispatches(dispatchIds, { session } = {})
     const key = String(id || "");
     if (!key || !mongoose.isValidObjectId(key)) continue;
     if (!result.has(key)) {
-      result.set(key, { total: 0, byOrder: new Map(), byRow: new Map() });
+      result.set(key, {
+        total: 0,
+        byOrder: new Map(),
+        byRow: new Map(),
+        maxFulfillmentSeq: 0,
+      });
       oids.push(new mongoose.Types.ObjectId(key));
     }
   }
@@ -792,6 +804,8 @@ export async function sumPlantsLoadedOnDispatches(dispatchIds, { session } = {})
         const key = String(so.linkedOrderId);
         bucket.byOrder.set(key, (bucket.byOrder.get(key) || 0) + q);
       }
+      const seq = Number(so.dispatchFulfillmentSequence) || 0;
+      if (seq > bucket.maxFulfillmentSeq) bucket.maxFulfillmentSeq = seq;
     }
   }
   return result;
@@ -1049,6 +1063,8 @@ async function executeOneSecondaryOutwardLine({
   linkedOrderId,
   remarks,
   performedBy,
+  /** Reuse docs across workItems on the same load request. */
+  cache = null,
 }) {
   const {
     secondaryInwardId,
@@ -1061,7 +1077,16 @@ async function executeOneSecondaryOutwardLine({
     plants,
   } = allocation;
 
-  const plantOutward = await PlantOutward.findOne({ batchId }).session(session);
+  const batchKey = String(batchId);
+  const outwardCache = cache?.outwardByBatch;
+  const batchCache = cache?.batchById;
+  const orderCache = cache?.orderById;
+
+  let plantOutward = outwardCache?.get(batchKey) || null;
+  if (!plantOutward) {
+    plantOutward = await PlantOutward.findOne({ batchId }).session(session);
+    if (plantOutward && outwardCache) outwardCache.set(batchKey, plantOutward);
+  }
   if (!plantOutward) {
     throw new AppError("No plant outward found with this batch ID", 404);
   }
@@ -1071,10 +1096,14 @@ async function executeOneSecondaryOutwardLine({
     throw new AppError("Secondary inward entry not found", 404);
   }
 
-  const batchDoc = await DispatchBatch.findById(plantOutward.batchId)
-    .select(BATCH_SELECT_FIELDS)
-    .session(session)
-    .lean();
+  let batchDoc = batchCache?.get(batchKey) || null;
+  if (!batchDoc) {
+    batchDoc = await DispatchBatch.findById(plantOutward.batchId)
+      .select(BATCH_SELECT_FIELDS)
+      .session(session)
+      .lean();
+    if (batchDoc && batchCache) batchCache.set(batchKey, batchDoc);
+  }
 
   const siPlain =
     typeof secondaryInward.toObject === "function"
@@ -1105,7 +1134,12 @@ async function executeOneSecondaryOutwardLine({
 
   let linkedOrderDoc = null;
   if (linkedOrderId) {
-    linkedOrderDoc = await Order.findById(linkedOrderId).session(session);
+    const orderKey = String(linkedOrderId);
+    linkedOrderDoc = orderCache?.get(orderKey) || null;
+    if (!linkedOrderDoc) {
+      linkedOrderDoc = await Order.findById(linkedOrderId).session(session);
+      if (linkedOrderDoc && orderCache) orderCache.set(orderKey, linkedOrderDoc);
+    }
     if (!linkedOrderDoc) {
       throw new AppError("Linked order not found", 404);
     }
@@ -1199,6 +1233,7 @@ async function executeOneSecondaryOutwardLine({
     },
     { new: true, session, runValidators: true }
   );
+  if (updatedDoc && outwardCache) outwardCache.set(batchKey, updatedDoc);
 
   const outArr = updatedDoc?.secondaryOutward || [];
   const newSo = outArr[outArr.length - 1];
@@ -1374,6 +1409,8 @@ export async function updateDispatchOrderShedLoaded({
   orderId,
   plantsLoaded,
   batchMeta,
+  /** When false, mutate in memory only — caller saves once after the loop. */
+  persist = true,
 }) {
   if (!orderId || plantsLoaded < 1) return null;
   const oid = String(orderId);
@@ -1405,7 +1442,9 @@ export async function updateDispatchOrderShedLoaded({
     });
   }
 
-  await dispatchDoc.save({ session, validateBeforeSave: true });
+  if (persist !== false) {
+    await dispatchDoc.save({ session, validateBeforeSave: true });
+  }
 
   return {
     orderId: oid,
@@ -1443,22 +1482,31 @@ export async function syncDispatchTransportStatusAfterShedChange({
   session,
   dispatchDoc,
   plantRowIndex = 0,
+  /** Skip re-aggregate when caller already has loaded totals. */
+  loadedSums = null,
+  /** When false, mutate status in memory only — caller saves. */
+  persist = true,
 }) {
   void plantRowIndex;
-  const loadedSums = await sumPlantsLoadedOnDispatch(dispatchDoc._id, { session });
-  const complete = isVehicleLoadCompleteByRows(dispatchDoc, loadedSums);
+  const sums =
+    loadedSums || (await sumPlantsLoadedOnDispatch(dispatchDoc._id, { session }));
+  const complete = isVehicleLoadCompleteByRows(dispatchDoc, sums);
 
   if (complete) {
     if (dispatchDoc.transportStatus !== "LOADED") {
       dispatchDoc.transportStatus = "LOADED";
-      await dispatchDoc.save({ session, validateBeforeSave: true });
+      if (persist !== false) {
+        await dispatchDoc.save({ session, validateBeforeSave: true });
+      }
     }
     return "LOADED";
   }
 
   if (dispatchDoc.transportStatus === "LOADED" && !complete) {
     dispatchDoc.transportStatus = "PENDING";
-    await dispatchDoc.save({ session, validateBeforeSave: true });
+    if (persist !== false) {
+      await dispatchDoc.save({ session, validateBeforeSave: true });
+    }
     return "PENDING";
   }
 
@@ -1579,7 +1627,9 @@ export async function executeSecondaryVehicleLoad({
   performedBy,
   directShedLoad = false,
   collectSuggestionsFn,
+  collectSuggestionsByIdsFn = null,
 }) {
+  const t0 = Date.now();
   const dispatchDoc = await findDispatchActiveByIdOrTransport(dispatchId);
   if (!dispatchDoc) {
     throw new AppError("Vehicle dispatch not found", 404);
@@ -1593,7 +1643,22 @@ export async function executeSecondaryVehicleLoad({
   const plantCmsId = row.plantId;
   const plantSubtypeId = row.subTypeId;
 
-  const { suggestions } = await collectSuggestionsFn(plantCmsId, plantSubtypeId);
+  const useManual = Array.isArray(inwardSelections) && inwardSelections.length > 0;
+  const manualIds = useManual
+    ? [
+        ...new Set(
+          inwardSelections
+            .map((s) => String(s?.secondaryInwardId || "").trim())
+            .filter(Boolean)
+        ),
+      ]
+    : [];
+
+  // Manual load only needs the picked inward lines — skip full plant/subtype stock scan.
+  const { suggestions } =
+    useManual && typeof collectSuggestionsByIdsFn === "function"
+      ? await collectSuggestionsByIdsFn(manualIds)
+      : await collectSuggestionsFn(plantCmsId, plantSubtypeId);
 
   const hasExplicitOrderMap = (Array.isArray(inwardSelections) ? inwardSelections : []).some(
     (s) =>
@@ -1614,7 +1679,8 @@ export async function executeSecondaryVehicleLoad({
     else if (rowOrderIds.length > 1) fifoOrderIds = rowOrderIds;
   }
 
-  const { total: alreadyLoaded } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const loadedBefore = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const alreadyLoaded = loadedBefore.total || 0;
   const vehicleNeedTotal = computeTotalVehiclePlantNeed(dispatchDoc);
   let capPlants = Math.max(0, vehicleNeedTotal - alreadyLoaded);
   if (resolvedOrderId && !hasExplicitOrderMap) {
@@ -1629,7 +1695,6 @@ export async function executeSecondaryVehicleLoad({
     capPlants = capPlants > 0 ? Math.min(capPlants, rowRem) : rowRem;
   }
 
-  const useManual = Array.isArray(inwardSelections) && inwardSelections.length > 0;
   let fifo;
   if (useManual) {
     const enriched = await enrichSuggestionsWithPerCrate(suggestions);
@@ -1726,11 +1791,17 @@ export async function executeSecondaryVehicleLoad({
       throw new AppError("Vehicle dispatch not found", 404);
     }
 
-    let seq = await computeSuggestedFulfillmentSequence(freshDispatch._id);
+    // Reuse maxSeq from the loaded-sum scan — skip a second PlantOutward aggregate.
+    let seq = (Number(loadedBefore.maxFulfillmentSeq) || 0) + 1;
     const results = [];
     let slotSubtractTotal = 0;
     const plantsByOrder = new Map();
     const orderLoadedResults = [];
+    const lineCache = {
+      outwardByBatch: new Map(),
+      batchById: new Map(),
+      orderById: new Map(),
+    };
 
     for (const item of workItems) {
       const lineResult = await executeOneSecondaryOutwardLine({
@@ -1744,6 +1815,7 @@ export async function executeSecondaryVehicleLoad({
         linkedOrderId: item.linkedOrderId,
         remarks,
         performedBy,
+        cache: lineCache,
       });
       results.push(lineResult);
       slotSubtractTotal += lineResult.slotSubtract || 0;
@@ -1766,6 +1838,7 @@ export async function executeSecondaryVehicleLoad({
             secondaryInwardId: item.allocation.secondaryInwardId,
             pollyhouse: item.allocation.pollyhouse,
           },
+          persist: false,
         });
         if (orderLoaded) orderLoadedResults.push(orderLoaded);
       }
@@ -1789,11 +1862,29 @@ export async function executeSecondaryVehicleLoad({
       await syncOrderVehicleLoadedFlag({ session, orderId: oid, dispatchDoc: freshDispatch });
     }
 
+    const plantsAdded = fifo.totalAllocated || 0;
+    const nextByRow = new Map(loadedBefore.byRow || []);
+    nextByRow.set(
+      dispatchPlantRowIdx,
+      (nextByRow.get(dispatchPlantRowIdx) || 0) + plantsAdded
+    );
+    const nextLoadedSums = {
+      total: alreadyLoaded + plantsAdded,
+      byRow: nextByRow,
+      byOrder: loadedBefore.byOrder || new Map(),
+      maxFulfillmentSeq: seq - 1,
+    };
+
     const transportStatus = await syncDispatchTransportStatusAfterShedChange({
       session,
       dispatchDoc: freshDispatch,
       plantRowIndex: dispatchPlantRowIdx,
+      loadedSums: nextLoadedSums,
+      persist: false,
     });
+
+    // One dispatch write for all order lines + transport status.
+    await freshDispatch.save({ session, validateBeforeSave: true });
 
     await session.commitTransaction();
 
@@ -1802,7 +1893,6 @@ export async function executeSecondaryVehicleLoad({
       schedulePostShedLoadAlerts({ finalizeResult: fr, changedBy: alertChangedBy });
     }
     schedulePendingDispatchWhatsAppForVehicle(dispatchDoc._id, { changedBy: alertChangedBy });
-    const plantsAdded = fifo.totalAllocated || 0;
     scheduleVehicleLoadMoreNotify(dispatchDoc._id, {
       plantsAdded,
       alreadyLoadedBefore: alreadyLoaded,
@@ -1813,6 +1903,14 @@ export async function executeSecondaryVehicleLoad({
     const primaryOrderId =
       resolvedOrderId ||
       (plantsByOrder.size === 1 ? [...plantsByOrder.keys()][0] : null);
+
+    console.log("[vehicleLoad] shed ok", {
+      dispatchId: String(dispatchDoc._id),
+      workItems: workItems.length,
+      plants: plantsAdded,
+      ms: Date.now() - t0,
+      manual: useManual,
+    });
 
     return {
       allocations: results,

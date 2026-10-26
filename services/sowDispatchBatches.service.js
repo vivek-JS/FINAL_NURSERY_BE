@@ -14,7 +14,6 @@ import {
   resolvePlantRowFromDispatch,
   syncDispatchTransportStatusAfterShedChange,
   updateDispatchOrderShedLoaded,
-  computeSuggestedFulfillmentSequence,
   DISPATCH_SHED_ALLOWED_STATUSES,
   sumPlantsLoadedOnDispatch,
   unionDispatchOrderObjectIds,
@@ -903,7 +902,11 @@ export async function executeSowBatchVehicleLoad({
   }
   const { rowIdx, row, rowOrderIds } = await resolveSowRow(dispatchDoc, plantRowIndex);
   const selections = normalizeSowBatchSelections(sowBatchSelections);
-  const { total: alreadyLoadedBefore } = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const t0 = Date.now();
+  const loadedBefore = await sumPlantsLoadedOnDispatch(dispatchDoc._id);
+  const alreadyLoadedBefore = loadedBefore.total || 0;
+  const rowNeed = Number(row.quantity ?? row.totalPlants ?? 0) || 0;
+  const rowCap = Math.max(0, rowNeed - (loadedBefore.byRow?.get(rowIdx) || 0));
 
   const { cavity, numberPerCrate } = await resolveDefaultCavity();
   const session = await mongoose.startSession();
@@ -915,7 +918,7 @@ export async function executeSowBatchVehicleLoad({
       selections,
       rowOrderIds,
       remaining: vehicleLineRemainingMap(freshDispatch, rowOrderIds),
-      cap: await rowRemaining(freshDispatch, rowIdx, row, session),
+      cap: rowCap,
     });
 
     const ctx = await loadSowDispatchContext(row.plantId, row.subTypeId, {
@@ -942,7 +945,7 @@ export async function executeSowBatchVehicleLoad({
       row.subTypeId,
       session
     );
-    let seq = await computeSuggestedFulfillmentSequence(freshDispatch._id);
+    let seq = (Number(loadedBefore.maxFulfillmentSeq) || 0) + 1;
     const labels = planLabels(ctx);
     const results = [];
     const plantsByOrder = new Map();
@@ -1059,12 +1062,19 @@ export async function executeSowBatchVehicleLoad({
     }
     for (const doc of writeDocs) {
       doc.markModified("subtypeSlots");
-      await doc.save({ session, validateBeforeSave: true });
     }
-    for (const m of linkMoves) {
-      await Order.updateOne(
-        { _id: m.orderId },
-        { $push: { sowBatchLinks: m.entry } },
+    // Different PlantSlot docs — safe to save in parallel under one session.
+    await Promise.all(
+      writeDocs.map((doc) => doc.save({ session, validateBeforeSave: true }))
+    );
+    if (linkMoves.length) {
+      await Order.bulkWrite(
+        linkMoves.map((m) => ({
+          updateOne: {
+            filter: { _id: m.orderId },
+            update: { $push: { sowBatchLinks: m.entry } },
+          },
+        })),
         { session }
       );
     }
@@ -1077,6 +1087,7 @@ export async function executeSowBatchVehicleLoad({
         dispatchDoc: freshDispatch,
         orderId: oid,
         plantsLoaded,
+        persist: false,
       });
       if (loaded) orderLoadedList.push(loaded);
       const fr = await finalizeOrderOnShedLineLoaded({
@@ -1089,11 +1100,21 @@ export async function executeSowBatchVehicleLoad({
       if (fr) finalizeResults.push(fr);
       await syncOrderVehicleLoadedFlag({ session, orderId: oid, dispatchDoc: freshDispatch });
     }
+    const nextByRow = new Map(loadedBefore.byRow || []);
+    nextByRow.set(rowIdx, (nextByRow.get(rowIdx) || 0) + totalLoaded);
     const transportStatus = await syncDispatchTransportStatusAfterShedChange({
       session,
       dispatchDoc: freshDispatch,
       plantRowIndex: rowIdx,
+      loadedSums: {
+        total: alreadyLoadedBefore + totalLoaded,
+        byRow: nextByRow,
+        byOrder: loadedBefore.byOrder || new Map(),
+        maxFulfillmentSeq: seq - 1,
+      },
+      persist: false,
     });
+    await freshDispatch.save({ session, validateBeforeSave: true });
     await session.commitTransaction();
 
     const changedBy = performedBy ? String(performedBy) : "Secondary shed";
@@ -1104,6 +1125,13 @@ export async function executeSowBatchVehicleLoad({
       alreadyLoadedBefore,
       loadedTotal: alreadyLoadedBefore + totalLoaded,
       changedBy,
+    });
+
+    console.log("[vehicleLoad] sow-batch ok", {
+      dispatchId: String(freshDispatch._id),
+      lines: results.length,
+      plants: totalLoaded,
+      ms: Date.now() - t0,
     });
 
     return {

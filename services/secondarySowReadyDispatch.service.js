@@ -642,11 +642,14 @@ export async function executeSowReadyVehicleLoad({
       };
 
       plantOutward.secondaryOutward.push(secondaryOutwardEntry);
-      await plantOutward.save({ session });
-      const newSo = plantOutward.secondaryOutward[plantOutward.secondaryOutward.length - 1];
-
+      totalLoaded += plantsMoving;
+      seq += 1;
+      if (item.orderId) {
+        plantsByOrder.set(item.orderId, (plantsByOrder.get(item.orderId) || 0) + plantsMoving);
+      }
       results.push({
-        secondaryOutwardId: String(newSo._id),
+        // _id assigned on save below
+        _pendingIdx: plantOutward.secondaryOutward.length - 1,
         slotId: item.slotId,
         pollyhouse: item.pollyhouse,
         plants: plantsMoving,
@@ -654,11 +657,13 @@ export async function executeSowReadyVehicleLoad({
         stockSource: "SOW_READY",
         numberPerCrate,
       });
-      totalLoaded += plantsMoving;
-      seq += 1;
-      if (item.orderId) {
-        plantsByOrder.set(item.orderId, (plantsByOrder.get(item.orderId) || 0) + plantsMoving);
-      }
+    }
+
+    await plantOutward.save({ session });
+    for (const r of results) {
+      const newSo = plantOutward.secondaryOutward[r._pendingIdx];
+      r.secondaryOutwardId = String(newSo?._id || "");
+      delete r._pendingIdx;
     }
 
     const orderLoadedList = [];
@@ -669,6 +674,7 @@ export async function executeSowReadyVehicleLoad({
         dispatchDoc: freshDispatch,
         orderId: oid,
         plantsLoaded,
+        persist: false,
       });
       if (loaded) orderLoadedList.push(loaded);
       const fr = await finalizeOrderOnShedLineLoaded({
@@ -692,7 +698,9 @@ export async function executeSowReadyVehicleLoad({
       session,
       dispatchDoc: freshDispatch,
       plantRowIndex: dispatchPlantRowIdx,
+      persist: false,
     });
+    await freshDispatch.save({ session, validateBeforeSave: true });
 
     await session.commitTransaction();
 
