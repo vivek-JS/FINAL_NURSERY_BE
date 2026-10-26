@@ -60,17 +60,6 @@ export async function syncDispatchAfterOrderQtyIncrease({
   const fresh = await orderQ;
   if (!fresh) return null;
 
-  const currentRemaining =
-    fresh.remainingPlants != null && Number.isFinite(Number(fresh.remainingPlants))
-      ? Number(fresh.remainingPlants)
-      : Math.max(
-          0,
-          (Number(fresh.numberOfPlants) || 0) + (Number(fresh.additionalPlants) || 0)
-        );
-  // Order edit already added `delta` to remaining; fold it into this dispatch line.
-  const newRemaining = Math.max(0, currentRemaining - delta);
-  const newStatus = orderStatusFromRemaining(fresh, newRemaining);
-
   const hist = Array.isArray(fresh.dispatchHistory) ? fresh.dispatchHistory : [];
   const nextHist = hist.map((h) => {
     const plain = h?.toObject ? h.toObject() : { ...h };
@@ -78,7 +67,6 @@ export async function syncDispatchAfterOrderQtyIncrease({
     return {
       ...plain,
       quantity: newQty,
-      remainingAfterDispatch: newRemaining,
     };
   });
   const hasHist = nextHist.some(
@@ -89,12 +77,26 @@ export async function syncDispatchAfterOrderQtyIncrease({
       date: officeEditNow,
       quantity: newQty,
       dispatchId: dispatch._id,
-      remainingAfterDispatch: newRemaining,
       processedBy: userId || null,
       driverName: dispatch.driverName || "",
       vehicleName: dispatch.vehicleName || "",
     });
   }
+
+  // Prefer history math over stored remaining (stored can be stale after +qty on loaded orders).
+  const orderTotal =
+    (Number(fresh.numberOfPlants) || 0) + (Number(fresh.additionalPlants) || 0);
+  const bookedOnDispatches = nextHist.reduce(
+    (s, h) => s + (Math.max(0, Number(h.quantity) || 0)),
+    0
+  );
+  const newRemaining = Math.max(0, orderTotal - bookedOnDispatches);
+  for (const h of nextHist) {
+    if (String(h.dispatchId || "") === String(dispatch._id)) {
+      h.remainingAfterDispatch = newRemaining;
+    }
+  }
+  const newStatus = orderStatusFromRemaining(fresh, newRemaining);
 
   fresh.remainingPlants = newRemaining;
   fresh.orderStatus = newStatus;
