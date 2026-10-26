@@ -11,7 +11,8 @@ import SowingRequest from "../models/sowingRequest.model.js";
 import moment from "moment";
 import mongoose from "mongoose";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
-import { SOWING_GAP_PIPELINE_STATUSES } from "../constants/sowingGapOrderStatuses.js";
+import { NEED_SOW_ORDER_STATUSES } from "../constants/sowingGapOrderStatuses.js";
+import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 import {
   applySowingGapBoardMetrics,
   fetchDeliveryOrdersForPlants,
@@ -7151,7 +7152,10 @@ export const getPlantsGapSummary = async (req, res) => {
 
     // Step 3: Delivery-window orders + slots-page gap/excess metrics
     const deliveryOrders = await fetchDeliveryOrdersForPlants(plantIds, Order);
-    const boardMetrics = applySowingGapBoardMetrics(allSlots, deliveryOrders);
+    const bufferByPlant = new Map(
+      plants.map((p) => [String(p._id), Math.max(0, Number(p.sowingBuffer) || 0)])
+    );
+    const boardMetrics = applySowingGapBoardMetrics(allSlots, deliveryOrders, bufferByPlant);
 
     // Step 4: Join slots with metrics in memory and calculate overdue status
     const today = moment().startOf("day");
@@ -7791,6 +7795,7 @@ export const getSlotOrdersSummary = async (req, res) => {
         $project: {
           plantId: "$plantId",
           plantName: { $ifNull: ["$plantInfo.name", "Unknown"] },
+          sowingBuffer: { $ifNull: ["$plantInfo.sowingBuffer", 0] },
           subtypeId: "$subtypeSlots.subtypeId",
           slot: {
             _id: "$slot._id",
@@ -7817,13 +7822,17 @@ export const getSlotOrdersSummary = async (req, res) => {
     ]);
 
     const slot = slotInfo[0]?.slot || null;
-    const sowBatches = Array.isArray(slot?.sowingBatches)
-      ? [...slot.sowingBatches].sort(
-          (a, b) =>
-            new Date(b.sowedAt || 0).getTime() -
-            new Date(a.sowedAt || 0).getTime()
-        )
-      : [];
+    const bufferPct = Math.max(0, Number(slotInfo[0]?.sowingBuffer) || 0);
+    const sowBatches = (Array.isArray(slot?.sowingBatches) ? slot.sowingBatches : [])
+      .sort(
+        (a, b) =>
+          new Date(b.sowedAt || 0).getTime() -
+          new Date(a.sowedAt || 0).getTime()
+      )
+      .map((b) => ({
+        ...b,
+        excessPlants: storedShownExcess(b, bufferPct),
+      }));
     const totalSowedPlants = sowBatches.reduce(
       (s, b) => s + (Number(b.plantsSowed) || 0),
       0
@@ -7905,6 +7914,7 @@ export const getSlotOrdersSummary = async (req, res) => {
             sowingDone: 1,
             sowingDoneAt: 1,
             sowingDoneRequestId: 1,
+            orderStatus: 1,
             bookingSlot: 1,
             farmer: {
               name: { $ifNull: ["$farmer.name", "Unknown"] },
@@ -7933,14 +7943,19 @@ export const getSlotOrdersSummary = async (req, res) => {
         : null;
       const bookedHere =
         o.bookingSlot && String(o.bookingSlot) === String(slotId);
+      const status = String(o.orderStatus || "").toUpperCase();
+      const dispatched = ["DISPATCHED", "DISPATCH_PROCESS", "COMPLETED", "PARTIALLY_COMPLETED"].includes(
+        status
+      );
       return {
         ...o,
         plants,
         farmerName: o.farmer?.name || "Unknown",
         farmerMobile: o.farmer?.mobileNumber || "",
-        tab: "reserved",
-        statusKey: "reserved_here",
-        statusLabel: "Reserved here",
+        tab: dispatched ? "dispatched" : "reserved",
+        statusKey: dispatched ? "dispatched" : "reserved_here",
+        statusLabel: dispatched ? "Dispatched" : "Reserved here",
+        dispatched,
         bookedOnThisSlot: bookedHere,
         bookingSlotLabel: bookedLabel,
         reservedOnReadyLabel: readySlotLabel,
@@ -8749,7 +8764,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       {
         $match: {
           bookingSlot: { $in: slotIds },
-          orderStatus: { $in: SOWING_GAP_PIPELINE_STATUSES },
+          orderStatus: { $in: NEED_SOW_ORDER_STATUSES },
           sowingDone: { $ne: true },
           $or: [
             { quotaSource: { $ne: "dealer" } },
@@ -9827,7 +9842,7 @@ export const getEasy30DaySowingCards = async (req, res) => {
         {
           $match: {
             bookingSlot: { $in: slotIds },
-            orderStatus: { $in: SOWING_GAP_PIPELINE_STATUSES },
+            orderStatus: { $in: NEED_SOW_ORDER_STATUSES },
             sowingDone: { $ne: true },
             $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }, { quotaSource: null }],
           },

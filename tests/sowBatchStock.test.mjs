@@ -9,8 +9,9 @@ import {
   dmyToYmd,
   isReadyNow,
   orderRemainingPlants,
+  summarizeStockRows,
 } from "../services/sowBatchStock.service.js";
-import { plantLetter, rollupDeliveryIntel, ymdInRange } from "../services/sowBatchStock.intel.js";
+import { groupByPlantVarietyDate, plantLetter, rollupDeliveryIntel, ymdInRange } from "../services/sowBatchStock.intel.js";
 
 const OID = {
   o1: "650000000000000000000001",
@@ -95,12 +96,104 @@ test("order remaining uses partial cover until sowingDone", () => {
   };
   assert.equal(orderRemainingPlants(o), 17700);
   assert.equal(orderRemainingPlants({ ...o, sowingDone: true }), 0);
+  assert.equal(orderRemainingPlants({ ...o, remainingPlants: 9000 }), 6700);
+  assert.equal(
+    orderRemainingPlants({ numberOfPlants: 14000, remainingPlants: 9000, sowingDone: false }),
+    9000
+  );
+  assert.equal(
+    orderRemainingPlants({ numberOfPlants: 12000, remainingPlants: 0, sowingDone: false }),
+    0
+  );
 });
 
 test("plant letter W for watermelon", () => {
   assert.equal(plantLetter("Watermelon"), "W");
   assert.equal(plantLetter("Ram Tarbuja"), "W");
   assert.equal(plantLetter("Papaya"), "P");
+});
+
+test("stock summary keeps irrelevant rows and omits their excess", () => {
+  const summary = summarizeStockRows([
+    { remaining: 1000, plantsSowed: 4000, covered: 2000, excess: 1500, destroyedPlants: 0, dispatchedNet: 0 },
+    {
+      remaining: 800,
+      plantsSowed: 3000,
+      covered: 0,
+      excess: 3000,
+      destroyedPlants: 0,
+      dispatchedNet: 0,
+      isIrrelevant: true,
+    },
+  ]);
+  assert.equal(summary.batches, 2);
+  assert.equal(summary.excess, 1500);
+  assert.equal(summary.sowed, 7000);
+});
+
+test("delivery intel skips irrelevant excess", () => {
+  const rows = rollupDeliveryIntel(
+    [
+      { plantId: "p", subtypeId: "s", plantName: "Watermelon", subtypeName: "Ram", plantsSowed: 5000, excess: 4000, isIrrelevant: true },
+      { plantId: "p", subtypeId: "s", plantName: "Watermelon", subtypeName: "Ram", plantsSowed: 2000, excess: 500 },
+    ],
+    []
+  );
+  assert.equal(rows[0].sowed, 2000);
+  assert.equal(rows[0].excess, 500);
+  assert.equal(rows[0].batches, 1);
+});
+
+test("in-progress orders stay out of the short", () => {
+  const rows = rollupDeliveryIntel(
+    [{ plantId: "p", subtypeId: "s", plantName: "Watermelon", subtypeName: "Prachand", plantsSowed: 8000, excess: 2000 }],
+    [
+      { plantId: "p", subtypeId: "s", plants: 5000, inProgress: true },
+      { plantId: "p", subtypeId: "s", plants: 3000 },
+      { plantId: "p", subtypeId: "s", plants: 9000, sowingDone: true },
+    ]
+  );
+  assert.equal(rows[0].notSownPlants, 3000);
+  assert.equal(rows[0].inProgressPlants, 5000);
+  assert.equal(rows[0].short, 0);
+});
+
+test("stock groups by plant, variety, and date", () => {
+  const groups = groupByPlantVarietyDate(
+    [
+      {
+        plantId: "p",
+        subtypeId: "s",
+        plantName: "Watermelon",
+        subtypeName: "Prachand",
+        plantReadyDate: "21-10-2026",
+        plantsSowed: 10000,
+        excess: 4000,
+      },
+      {
+        plantId: "p",
+        subtypeId: "s",
+        plantName: "Watermelon",
+        subtypeName: "Prachand",
+        plantReadyDate: "21-10-2026",
+        plantsSowed: 8000,
+        excess: 8000,
+        isIrrelevant: true,
+      },
+    ],
+    [
+      { plantId: "p", subtypeId: "s", cropName: "Watermelon", varietyName: "Prachand", plants: 1200, orderId: 4132, dateYmd: "2026-10-21" },
+      { plantId: "p", subtypeId: "s", plants: 900, inProgress: true, dateYmd: "2026-10-21" },
+    ]
+  );
+  const date = groups[0].varieties[0].dates[0];
+  assert.equal(groups[0].plantName, "Watermelon");
+  assert.equal(groups[0].varieties[0].subtypeName, "Prachand");
+  assert.equal(date.label, "21 Oct 2026");
+  assert.equal(date.excess, 4000);
+  assert.equal(date.notSownPlants, 1200);
+  assert.equal(date.notSownOrders[0].orderId, 4132);
+  assert.equal(date.inProgressPlants, 900);
 });
 
 test("delivery intel short is orders minus sowed", () => {
@@ -114,6 +207,7 @@ test("delivery intel short is orders minus sowed", () => {
   assert.equal(rows[0].sowed, 8000);
   assert.equal(rows[0].excess, 2000);
   assert.equal(rows[0].short, 4000);
+  assert.equal(rows[0].notSownPlants, 12000);
   assert.equal(ymdInRange("2026-10-05", "2026-10-01", "2026-10-10"), true);
   assert.equal(ymdInRange("2026-10-11", "2026-10-01", "2026-10-10"), false);
 });
