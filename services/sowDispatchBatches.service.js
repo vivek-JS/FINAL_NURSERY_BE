@@ -799,7 +799,11 @@ export function applySowPlanLineToSlots({
     addSlotExcess(A.slot, left);
   }
 
-  // Do NOT add the loading order onto B.linkedOrderIds for SWITCH/FREE — that rewrote sow reference.
+  // Cover list for the picked batch should show this order (with Dispatched tag in UI).
+  // Do NOT rewrite order.sowBatchLinks / sowingDoneRequestId — original sow day stays the identity.
+  if (line.bucket !== "COVER") {
+    addToSet(B.batch.linkedOrderIds || (B.batch.linkedOrderIds = []), line.orderId);
+  }
 
   const reserved = Math.max(0, Number(B.slot.orderReservedPlants) || 0);
   const reservedDec = Math.min(line.plants, reserved);

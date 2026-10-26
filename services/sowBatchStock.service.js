@@ -41,6 +41,14 @@ export function linkedOrderIdSet(batch) {
     const s = idStr(a?.orderId);
     if (s) ids.add(s);
   }
+  // Orders loaded from this batch on a vehicle (COVER / SWITCH / FREE) — show in cover with Dispatched tag.
+  for (const d of batch?.dispatchLog || []) {
+    if (!(n(d?.plants) > 0)) continue;
+    const bucket = String(d?.bucket || "").toUpperCase();
+    if (bucket && !["COVER", "SWITCH", "FREE", "DISPATCH"].includes(bucket)) continue;
+    const s = idStr(d?.orderId);
+    if (s) ids.add(s);
+  }
   return ids;
 }
 
@@ -141,6 +149,10 @@ function mapOrderBrief(order, inProgress = false) {
     orderId: order.orderId,
     farmerName: order.farmer?.name || order.name || "",
     sowingDone: Boolean(order.sowingDone),
+    orderStatus: order.orderStatus || "",
+    dispatched: ["DISPATCHED", "DISPATCH_PROCESS", "COMPLETED", "PARTIALLY_COMPLETED"].includes(
+      String(order.orderStatus || "").toUpperCase()
+    ),
     inProgress: !order.sowingDone && Boolean(inProgress),
     bookedPlants: booked,
     coveredPlants: order.sowingDone ? booked : held,
@@ -181,7 +193,9 @@ async function hydrateOrders(idSet) {
   const ids = [...idSet].filter((id) => mongoose.Types.ObjectId.isValid(id));
   if (!ids.length) return new Map();
   const rows = await Order.find({ _id: { $in: ids.map((id) => new mongoose.Types.ObjectId(id)) } })
-    .select("orderId name farmer numberOfPlants additionalPlants remainingPlants sowingDone sowingPartialCover")
+    .select(
+      "orderId name farmer numberOfPlants additionalPlants remainingPlants sowingDone sowingPartialCover orderStatus"
+    )
     .populate("farmer", "name")
     .lean();
   const progress = await inProgressOrderIdSet(ids);
@@ -255,14 +269,31 @@ function toListRow(raw, plant, subtype, orderMap) {
     excess: excess.excess,
     bufferPlants: excess.bufferPlants,
     sowingBufferPct: excess.bufferPct,
-    isIrrelevant: Boolean(raw.isIrrelevant),
     reservedApplied: n(raw.orderReservedPlantsApplied),
     availableApplied: n(raw.availablePlantsApplied),
     changeCount: n(raw.changeCount),
+    isIrrelevant: Boolean(raw.isIrrelevant),
     readyNow: isReadyNow(raw.plantReadyDate),
     linkedOrderIds: linkedIds,
     linkedOrders: linkedIds.map((id) => orderMap.get(id)).filter(Boolean),
   };
+}
+
+/** Page totals. Irrelevant batches stay in the list but their excess is not counted. */
+export function summarizeStockRows(items) {
+  return (items || []).reduce(
+    (s, r) => {
+      s.remaining += n(r.remaining);
+      s.sowed += n(r.plantsSowed);
+      s.covered += n(r.covered);
+      s.excess += r.isIrrelevant ? 0 : n(r.excess);
+      s.destroyed += n(r.destroyedPlants);
+      s.dispatched += n(r.dispatchedNet);
+      s.batches += 1;
+      return s;
+    },
+    { remaining: 0, sowed: 0, covered: 0, excess: 0, destroyed: 0, dispatched: 0, batches: 0 }
+  );
 }
 
 export async function listSowBatchStock(query = {}) {
@@ -358,19 +389,7 @@ export async function listSowBatchStock(query = {}) {
 
   items.sort((a, b) => b.remaining - a.remaining || String(b.sowingDate).localeCompare(String(a.sowingDate)));
 
-  const summary = items.reduce(
-    (s, r) => {
-      s.remaining += r.remaining;
-      s.sowed += r.plantsSowed;
-      s.covered += r.covered;
-      s.excess += r.isIrrelevant ? 0 : r.excess;
-      s.destroyed += r.destroyedPlants;
-      s.dispatched += r.dispatchedNet;
-      s.batches += 1;
-      return s;
-    },
-    { remaining: 0, sowed: 0, covered: 0, excess: 0, destroyed: 0, dispatched: 0, batches: 0 }
-  );
+  const summary = summarizeStockRows(items);
 
   return { items, total: items.length, summary };
 }

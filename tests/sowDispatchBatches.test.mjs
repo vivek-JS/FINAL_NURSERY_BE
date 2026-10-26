@@ -271,9 +271,14 @@ test("slot and batch counters for a switch, clamped at 0", () => {
   assert.deepEqual(res, { reservedDec: 1000, availableDec: 0, touchedSlots: res.touchedSlots });
   assert.equal(s17.availablePlants, 0);
   assert.equal(s17.orderReservedPlants, 3000);
-  // SWITCH must not attach the loading order onto the picked batch as a sow link.
-  assert.ok(!b17.linkedOrderIds.some((x) => String(x) === OID.X));
+  // Picked batch lists the order for cover (Dispatched tag); original sow identity stays on sowBatchLinks.
+  assert.ok(b17.linkedOrderIds.some((x) => String(x) === OID.X));
   assert.ok(b15.linkedOrderIds.some((x) => String(x) === OID.Y1));
+  // Day-25 (own) excess ↑ leftover; day-22 (picked) excess ↓ free take.
+  assert.equal(b15.excessPlants, 700);
+  assert.equal(b15.shownExcess, 700);
+  assert.equal(b17.excessPlants, 0);
+  assert.equal(b17.shownExcess, 0);
   const switchLog = (b15.changeLog || []).find((e) => e.kind === "DISPATCH_SWITCH");
   assert.ok(switchLog);
   assert.equal(switchLog.plants, -1000);

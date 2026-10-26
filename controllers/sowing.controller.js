@@ -11,7 +11,7 @@ import SowingRequest from "../models/sowingRequest.model.js";
 import moment from "moment";
 import mongoose from "mongoose";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
-import { SOWING_GAP_PIPELINE_STATUSES } from "../constants/sowingGapOrderStatuses.js";
+import { NEED_SOW_ORDER_STATUSES } from "../constants/sowingGapOrderStatuses.js";
 import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 import {
   applySowingGapBoardMetrics,
@@ -7914,6 +7914,7 @@ export const getSlotOrdersSummary = async (req, res) => {
             sowingDone: 1,
             sowingDoneAt: 1,
             sowingDoneRequestId: 1,
+            orderStatus: 1,
             bookingSlot: 1,
             farmer: {
               name: { $ifNull: ["$farmer.name", "Unknown"] },
@@ -7942,14 +7943,19 @@ export const getSlotOrdersSummary = async (req, res) => {
         : null;
       const bookedHere =
         o.bookingSlot && String(o.bookingSlot) === String(slotId);
+      const status = String(o.orderStatus || "").toUpperCase();
+      const dispatched = ["DISPATCHED", "DISPATCH_PROCESS", "COMPLETED", "PARTIALLY_COMPLETED"].includes(
+        status
+      );
       return {
         ...o,
         plants,
         farmerName: o.farmer?.name || "Unknown",
         farmerMobile: o.farmer?.mobileNumber || "",
-        tab: "reserved",
-        statusKey: "reserved_here",
-        statusLabel: "Reserved here",
+        tab: dispatched ? "dispatched" : "reserved",
+        statusKey: dispatched ? "dispatched" : "reserved_here",
+        statusLabel: dispatched ? "Dispatched" : "Reserved here",
+        dispatched,
         bookedOnThisSlot: bookedHere,
         bookingSlotLabel: bookedLabel,
         reservedOnReadyLabel: readySlotLabel,
@@ -8758,7 +8764,7 @@ export const getAllPlantsTodaySowingCards = async (req, res) => {
       {
         $match: {
           bookingSlot: { $in: slotIds },
-          orderStatus: { $in: SOWING_GAP_PIPELINE_STATUSES },
+          orderStatus: { $in: NEED_SOW_ORDER_STATUSES },
           sowingDone: { $ne: true },
           $or: [
             { quotaSource: { $ne: "dealer" } },
@@ -9836,7 +9842,7 @@ export const getEasy30DaySowingCards = async (req, res) => {
         {
           $match: {
             bookingSlot: { $in: slotIds },
-            orderStatus: { $in: SOWING_GAP_PIPELINE_STATUSES },
+            orderStatus: { $in: NEED_SOW_ORDER_STATUSES },
             sowingDone: { $ne: true },
             $or: [{ quotaSource: { $ne: "dealer" } }, { quotaSource: { $exists: false } }, { quotaSource: null }],
           },
