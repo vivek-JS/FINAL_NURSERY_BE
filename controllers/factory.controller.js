@@ -3257,8 +3257,57 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
+      // Order +qty on a loaded vehicle → bump dispatch line so shed "Load remaining" unlocks.
+      let dispatchQtySync = null;
+      if (
+        modelName === "Order" &&
+        updatedDoc &&
+        Number(updatedDoc.numberOfPlants) > Number(existingDoc.numberOfPlants)
+      ) {
+        const { syncDispatchAfterOrderQtyIncrease } = await import(
+          "../services/syncDispatchAfterOrderQty.service.js"
+        );
+        dispatchQtySync = await syncDispatchAfterOrderQtyIncrease({
+          order: updatedDoc,
+          previousNumberOfPlants: existingDoc.numberOfPlants,
+          nextNumberOfPlants: updatedDoc.numberOfPlants,
+          userId: req.user?._id,
+          session,
+        });
+        if (dispatchQtySync) {
+          const remFresh = await Model.findById(updatedDoc._id)
+            .select("remainingPlants orderStatus vehicleLoaded vehicleLoadedQuantity")
+            .session(session)
+            .lean();
+          if (remFresh) {
+            updatedDoc.remainingPlants = remFresh.remainingPlants;
+            updatedDoc.orderStatus = remFresh.orderStatus;
+            updatedDoc.vehicleLoaded = remFresh.vehicleLoaded;
+            updatedDoc.vehicleLoadedQuantity = remFresh.vehicleLoadedQuantity;
+          }
+        }
+      }
+
       await session.commitTransaction();
       session.endSession();
+
+      if (dispatchQtySync?.qtyDeltas?.length) {
+        try {
+          const { notifyDispatchLoadEdited } = await import(
+            "../utility/dispatchFleetNotify.js"
+          );
+          notifyDispatchLoadEdited(
+            dispatchQtySync.dispatch?.toObject?.() || dispatchQtySync.dispatch,
+            {
+              qtyDeltas: dispatchQtySync.qtyDeltas,
+              changedBy: req.user?.name || req.user?.email || "Unknown",
+              editedAt: dispatchQtySync.editedAt,
+            }
+          );
+        } catch (e) {
+          console.error("notifyDispatchLoadEdited after order qty:", e?.message || e);
+        }
+      }
 
       let excessCover = null;
       const excessCoverPicks =
