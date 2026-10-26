@@ -260,30 +260,36 @@ test("slot and batch counters for a switch, clamped at 0", () => {
   const b17 = index.get(OID.b17).batch;
   assert.equal(b17.orderCoveredPlants, 4000);
   assert.equal(b17.excessPlants, 0);
+  assert.equal(b17.shownExcess, 0);
   assert.equal(b17.excessAllocations[0].plants, 300);
   assert.equal(b15.orderCoveredPlants, 3300);
   assert.equal(b15.excessPlants, 700);
+  assert.equal(b15.shownExcess, 700);
   assert.equal(s15.availablePlants, 700);
   assert.equal(s15.orderReservedPlants, 3300);
   assert.equal(s15.excessiveSowing.plants, 700);
   assert.deepEqual(res, { reservedDec: 1000, availableDec: 0, touchedSlots: res.touchedSlots });
   assert.equal(s17.availablePlants, 0);
   assert.equal(s17.orderReservedPlants, 3000);
-  assert.ok(b17.linkedOrderIds.some((x) => String(x) === OID.X));
+  // SWITCH must not attach the loading order onto the picked batch as a sow link.
+  assert.ok(!b17.linkedOrderIds.some((x) => String(x) === OID.X));
   assert.ok(b15.linkedOrderIds.some((x) => String(x) === OID.Y1));
+  const switchLog = (b15.changeLog || []).find((e) => e.kind === "DISPATCH_SWITCH");
+  assert.ok(switchLog);
+  assert.equal(switchLog.plants, -1000);
+  const loadLog = (b17.changeLog || []).find((e) => e.kind === "DISPATCH_LOAD");
+  assert.ok(loadLog);
+  assert.equal(loadLog.plants, -700);
 });
 
-test("link moves record the dispatched order and the relinked orders", () => {
+test("link moves only relink other orders — loading order sow reference stays", () => {
   const plan = planSowBatchLoad({
     selections: [{ orderId: OID.X, batchId: OID.b17, plants: 1000 }],
     ...example(300),
   });
   const moves = sowLinkMovesForLine(plan.lines[0], { dispatchId: OID.s16, performedBy: null, now: new Date() });
   const x = moves.filter((m) => m.orderId === OID.X);
-  assert.equal(x.length, 1);
-  assert.equal(x[0].entry.plants, 1000);
-  assert.equal(String(x[0].entry.fromBatchId), OID.b15);
-  assert.equal(String(x[0].entry.batchId), OID.b17);
+  assert.equal(x.length, 0);
   const relinked = moves.filter((m) => m.entry.reason === "DISPATCH_RELINK");
   assert.deepEqual(relinked.map((m) => [m.orderId, m.entry.plants]), [
     [OID.Y3, 300],

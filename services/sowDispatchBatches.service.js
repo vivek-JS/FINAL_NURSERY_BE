@@ -691,11 +691,22 @@ function addToSet(arr, id) {
 /**
  * Apply one planned line's batch/slot bookkeeping (excess move, released leftovers, link sets).
  * Returns the reserved/available decrements taken for the dispatch itself.
+ *
+ * SWITCH/FREE must NOT rewrite the loading order's sow identity (linkedOrderIds / sowBatchLinks).
+ * Stock + changeLog only; original sowingCoverSources / sowingDoneRequestId stay the reference.
  */
-export function applySowPlanLineToSlots({ line, batchIndex, performedBy, transportId, now }) {
+export function applySowPlanLineToSlots({
+  line,
+  batchIndex,
+  performedBy,
+  transportId,
+  now,
+  dispatchId = null,
+}) {
   const B = batchIndex.get(line.batchId);
   if (!B) throw new AppError("Sowing batch not found", 404);
   const tag = `vehicle ${transportId || ""}`.trim();
+  const logBase = { at: now, by: performedBy, orderId: line.orderId, dispatchId };
 
   if (line.fromFree > 0) {
     const f = line.fromFree;
@@ -705,15 +716,13 @@ export function applySowPlanLineToSlots({ line, batchIndex, performedBy, transpo
     B.batch.excessPlants = Math.max(0, toQty(B.batch.excessPlants) - f);
     B.batch.shownExcess = Math.max(0, freeBefore - f);
     pushBatchChangeLog(B.batch, {
-      at: now,
-      by: performedBy,
+      ...logBase,
       kind: "DISPATCH_TAKE",
       plants: -f,
       coverBefore,
       coverAfter: B.batch.orderCoveredPlants,
       excessBefore: freeBefore,
       excessAfter: B.batch.shownExcess,
-      orderId: line.orderId,
       reason: `Dispatch took ${f} leftover plants · ${tag}`,
     });
     if (!Array.isArray(B.batch.excessAllocations)) B.batch.excessAllocations = [];
@@ -732,6 +741,34 @@ export function applySowPlanLineToSlots({ line, batchIndex, performedBy, transpo
     const A = batchIndex.get(rel.batchId);
     if (!A) continue;
     for (const to of rel.toOrders) addToSet(A.batch.linkedOrderIds || (A.batch.linkedOrderIds = []), to.orderId);
+
+    const switched = toQty(rel.plants);
+    if (switched > 0) {
+      // Count against remaining links on the original batch without rewriting sow identity.
+      if (!Array.isArray(A.batch.dispatchLog)) A.batch.dispatchLog = [];
+      A.batch.dispatchLog.push({
+        at: now,
+        by: performedBy || undefined,
+        dispatchId: dispatchId || undefined,
+        orderId: new mongoose.Types.ObjectId(line.orderId),
+        plants: switched,
+        bucket: "SWITCH",
+        reason: `Order loaded from another batch · ${switched} plants · ${tag}`,
+      });
+      const coverSnap = toQty(A.batch.orderCoveredPlants);
+      const freeSnap = dispatchBookableFree(A.batch, A.batch.sowingBufferPct);
+      pushBatchChangeLog(A.batch, {
+        ...logBase,
+        kind: "DISPATCH_SWITCH",
+        plants: -switched,
+        coverBefore: coverSnap,
+        coverAfter: coverSnap,
+        excessBefore: freeSnap,
+        excessAfter: freeSnap,
+        reason: `Linked order load switched away · −${switched} · ${tag}`,
+      });
+    }
+
     const left = toQty(rel.leftover);
     if (left < 1) continue;
     const freeBefore = dispatchBookableFree(A.batch, A.batch.sowingBufferPct);
@@ -740,15 +777,13 @@ export function applySowPlanLineToSlots({ line, batchIndex, performedBy, transpo
     A.batch.excessPlants = toQty(A.batch.excessPlants) + left;
     A.batch.shownExcess = freeBefore + left;
     pushBatchChangeLog(A.batch, {
-      at: now,
-      by: performedBy,
+      ...logBase,
       kind: "DISPATCH_RELEASE",
       plants: left,
       coverBefore,
       coverAfter: A.batch.orderCoveredPlants,
       excessBefore: freeBefore,
       excessAfter: A.batch.shownExcess,
-      orderId: line.orderId,
       reason: `Dispatch leftover ${left} plants became excess · ${tag}`,
     });
     let trim = left;
@@ -764,20 +799,38 @@ export function applySowPlanLineToSlots({ line, batchIndex, performedBy, transpo
     addSlotExcess(A.slot, left);
   }
 
-  if (line.bucket !== "COVER") {
-    addToSet(B.batch.linkedOrderIds || (B.batch.linkedOrderIds = []), line.orderId);
-  }
+  // Do NOT add the loading order onto B.linkedOrderIds for SWITCH/FREE — that rewrote sow reference.
 
   const reserved = Math.max(0, Number(B.slot.orderReservedPlants) || 0);
   const reservedDec = Math.min(line.plants, reserved);
   const availableDec = Math.min(line.plants - reservedDec, Math.max(0, Number(B.slot.availablePlants) || 0));
   addSlotReserved(B.slot, -reservedDec);
   setSlotAvailable(B.slot, -availableDec, performedBy, `Sow batch load · ${tag}`);
+
+  const bookedTake = Math.max(0, line.plants - (Number(line.fromFree) || 0));
+  if (bookedTake > 0) {
+    const freeSnap = dispatchBookableFree(B.batch, B.batch.sowingBufferPct);
+    const coverSnap = toQty(B.batch.orderCoveredPlants);
+    pushBatchChangeLog(B.batch, {
+      ...logBase,
+      kind: line.bucket === "COVER" ? "DISPATCH_COVER" : "DISPATCH_LOAD",
+      plants: -bookedTake,
+      coverBefore: coverSnap,
+      coverAfter: coverSnap,
+      excessBefore: freeSnap,
+      excessAfter: freeSnap,
+      reason: `${line.bucket} load ${bookedTake} plants · ${tag}`,
+    });
+  }
+
   const touchedSlots = [B.slot, ...line.released.map((r) => batchIndex.get(r.batchId)?.slot).filter(Boolean)];
   return { reservedDec, availableDec, touchedSlots };
 }
 
-/** order.sowBatchLinks entries written for one planned line (dispatched order + relinked orders). */
+/**
+ * Persist only RELINK / victim FREE moves — never rewrite the loading order's sowBatchLinks
+ * (DISPATCH_SWITCH used to change which batch the order "belongs" to after a load pick).
+ */
 export function sowLinkMovesForLine(line, { dispatchId, performedBy, now, readyDate, orderCode } = {}) {
   const code = typeof orderCode === "function" ? orderCode(line.orderId) : "";
   const ready = (batchId) => (typeof readyDate === "function" ? readyDate(batchId) || "" : "");
@@ -789,37 +842,6 @@ export function sowLinkMovesForLine(line, { dispatchId, performedBy, now, readyD
     causedByOrderCode: code || "",
   };
   const moves = [];
-  const gained = line.plants - line.cover;
-  let releasedTotal = 0;
-  for (const rel of line.released) {
-    releasedTotal += rel.plants;
-    moves.push({
-      orderId: line.orderId,
-      entry: {
-        ...base,
-        fromSlotId: rel.slotId,
-        fromBatchId: rel.batchId,
-        slotId: line.slotId,
-        batchId: line.batchId,
-        plants: rel.plants,
-        plantReadyDate: ready(line.batchId),
-        reason: "DISPATCH_SWITCH",
-      },
-    });
-  }
-  if (gained - releasedTotal > 0) {
-    moves.push({
-      orderId: line.orderId,
-      entry: {
-        ...base,
-        slotId: line.slotId,
-        batchId: line.batchId,
-        plants: gained - releasedTotal,
-        plantReadyDate: ready(line.batchId),
-        reason: line.bucket === "FREE" ? "DISPATCH_FREE" : "DISPATCH_SWITCH",
-      },
-    });
-  }
   for (const r of line.relinks) {
     moves.push({
       orderId: r.orderId,
@@ -932,6 +954,7 @@ export async function executeSowBatchVehicleLoad({
         performedBy,
         transportId: freshDispatch.transportId,
         now,
+        dispatchId: freshDispatch._id,
       });
       touchedSlots.forEach((s) => touched.add(s));
       const fullTrays = Math.floor(line.plants / cavity);
