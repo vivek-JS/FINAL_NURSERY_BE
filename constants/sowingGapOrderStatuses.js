@@ -1,5 +1,13 @@
 /**
- * Orders counted toward sowing gap / pre-dispatch pipeline.
+ * Need-sow only: accepted unsown orders.
+ * DISPATCHED, COMPLETED, FARM_READY, READY_FOR_DISPATCH, DISPATCH_PROCESS are not counted.
+ */
+export const NEED_SOW_ORDER_STATUSES = ["ACCEPTED"];
+
+export const NEED_SOW_ORDER_STATUS_SET = new Set(NEED_SOW_ORDER_STATUSES);
+
+/**
+ * Orders counted toward remaining-to-dispatch pipeline (not need-sow).
  * Excludes DISPATCHED, COMPLETED, CANCELLED, TEMPORARY_CANCELLED, REJECTED, etc.
  */
 export const SOWING_GAP_PIPELINE_STATUSES = [
