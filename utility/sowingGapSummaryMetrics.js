@@ -22,12 +22,7 @@ export function groupFlatSlotsBySubtype(allSlots) {
 }
 
 /** Same sowing gap / excess rules as GET slots (delivery window + sowingDone). */
-export function computeSowingGapBoardMetricsForSubtype(
-  slots,
-  deliveryOrders,
-  sowingBufferPct = 0,
-  { todayYmd = "", plantName = "" } = {}
-) {
+export function computeSowingGapBoardMetricsForSubtype(slots, deliveryOrders, sowingBufferPct = 0) {
   const slotRows = (slots || []).map((s) => ({
     _id: s.slotId,
     startDay: s.slotStartDay,
@@ -38,10 +33,7 @@ export function computeSowingGapBoardMetricsForSubtype(
   }));
   const byDelivery = groupOrdersByDeliverySlot(deliveryOrders, slotRows);
   const metricsBySlotId = new Map();
-  const includeBatch =
-    todayYmd || plantName
-      ? capacityBoardIncludeBatch({ todayYmd, plantName })
-      : null;
+  const includeBatch = capacityBoardIncludeBatch();
 
   for (const slot of slots || []) {
     const slotId = slot.slotId?.toString?.() ?? String(slot.slotId);
@@ -105,12 +97,7 @@ export async function fetchDeliveryOrdersForPlants(plantIds, Order) {
 }
 
 /** Returns Map<slotId, metrics> aligned with slots page. */
-export function applySowingGapBoardMetrics(
-  allSlots,
-  deliveryOrders,
-  bufferByPlant = null,
-  { todayYmd = "", plantNameById = null } = {}
-) {
+export function applySowingGapBoardMetrics(allSlots, deliveryOrders, bufferByPlant = null) {
   const bySubtype = groupFlatSlotsBySubtype(allSlots);
   const ordersByKey = new Map();
   for (const order of deliveryOrders || []) {
@@ -123,12 +110,10 @@ export function applySowingGapBoardMetrics(
   for (const [key, slots] of bySubtype) {
     const plantId = String(slots[0]?.plantId || "");
     const sowingBufferPct = bufferByPlant?.get?.(plantId) || 0;
-    const plantName = plantNameById?.get?.(plantId) || "";
     const subtypeMetrics = computeSowingGapBoardMetricsForSubtype(
       slots,
       ordersByKey.get(key) || [],
-      sowingBufferPct,
-      { todayYmd, plantName }
+      sowingBufferPct
     );
     for (const [slotId, metrics] of subtypeMetrics) {
       allMetrics.set(slotId, metrics);

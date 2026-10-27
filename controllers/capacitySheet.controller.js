@@ -286,17 +286,6 @@ function sowingBufferByPlant(plants) {
   );
 }
 
-function plantNameById(plants) {
-  return new Map((plants || []).map((plant) => [String(plant._id), plant.name || ""]));
-}
-
-function boardMetricsOpts(plants, today) {
-  return {
-    todayYmd: today?.format?.("YYYY-MM-DD") || "",
-    plantNameById: plantNameById(plants),
-  };
-}
-
 function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbounded = false }) {
   const inRange = slots.filter((slot) => {
     if (plantId && String(slot.plantId) !== String(plantId)) return false;
@@ -305,12 +294,7 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbou
     return slotOverlapsRange(slot.slotStartDay, slot.slotEndDay, from, to);
   });
 
-  const metricsBySlot = applySowingGapBoardMetrics(
-    inRange,
-    orders,
-    sowingBufferByPlant(plants),
-    boardMetricsOpts(plants, moment().utcOffset(IST_OFFSET).startOf("day"))
-  );
+  const metricsBySlot = applySowingGapBoardMetrics(inRange, orders, sowingBufferByPlant(plants));
   const ordersBySubtype = new Map();
   for (const order of orders) {
     const key = `${String(order.plantName)}-${String(order.plantSubtype)}`;
@@ -458,12 +442,7 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
     loadShedStockPayload(),
   ]);
 
-  const metricsBySlot = applySowingGapBoardMetrics(
-    slots,
-    orders,
-    sowingBufferByPlant(plants),
-    boardMetricsOpts(plants, today)
-  );
+  const metricsBySlot = applySowingGapBoardMetrics(slots, orders, sowingBufferByPlant(plants));
   const slotsByVariety = groupByVariety(slots, (s) => s.plantId, (s) => s.subtypeId);
   const ordersByVariety = groupByVariety(orders, (o) => o.plantName, (o) => o.plantSubtype);
 
@@ -640,8 +619,7 @@ export const getCapacitySlotDetail = async (req, res) => {
     const metricsBySlot = applySowingGapBoardMetrics(
       [slot],
       deliveryOrders,
-      sowingBufferByPlant([plant]),
-      boardMetricsOpts([plant], moment().utcOffset(IST_OFFSET).startOf("day"))
+      sowingBufferByPlant([plant])
     );
     const metrics = metricsBySlot.get(String(slot.slotId)) || {};
     const cohort = getNativeDeliveryCohortOrders(

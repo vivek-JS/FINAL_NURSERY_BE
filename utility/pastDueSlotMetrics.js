@@ -585,7 +585,7 @@ export function sumGrossOrderCoveredPlants(slot) {
  * Sowing-allowed slot display fields (call after resolveSlotBufferFields).
  * Excess is the CMS percent off plants sowed, then minus orders.
  * Mortality on the slot stays in sowedExpectedMortality. Stored availablePlants is not used.
- * `includeBatch` optionally drops stale/irrelevant sowings from bookable excess (capacity board).
+ * `includeBatch` optionally drops sowings from bookable excess (capacity board skips irrelevant).
  */
 export function applySowingAllowedSlotMetrics(slot, sowingBufferPct = 0, { includeBatch } = {}) {
   if (!slot) return slot;
