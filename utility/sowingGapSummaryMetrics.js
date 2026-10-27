@@ -5,6 +5,7 @@ import {
   computeSlotDispatchStatsFromOrders,
 } from "./slotDispatchStats.js";
 import { applySowingAllowedSlotMetrics } from "./pastDueSlotMetrics.js";
+import { capacityBoardIncludeBatch } from "./capacityBoardExcess.js";
 
 function slotKey(plantId, subtypeId) {
   return `${plantId?.toString?.() ?? plantId}-${subtypeId?.toString?.() ?? subtypeId}`;
@@ -21,7 +22,12 @@ export function groupFlatSlotsBySubtype(allSlots) {
 }
 
 /** Same sowing gap / excess rules as GET slots (delivery window + sowingDone). */
-export function computeSowingGapBoardMetricsForSubtype(slots, deliveryOrders) {
+export function computeSowingGapBoardMetricsForSubtype(
+  slots,
+  deliveryOrders,
+  sowingBufferPct = 0,
+  { todayYmd = "", plantName = "" } = {}
+) {
   const slotRows = (slots || []).map((s) => ({
     _id: s.slotId,
     startDay: s.slotStartDay,
@@ -32,6 +38,10 @@ export function computeSowingGapBoardMetricsForSubtype(slots, deliveryOrders) {
   }));
   const byDelivery = groupOrdersByDeliverySlot(deliveryOrders, slotRows);
   const metricsBySlotId = new Map();
+  const includeBatch =
+    todayYmd || plantName
+      ? capacityBoardIncludeBatch({ todayYmd, plantName })
+      : null;
 
   for (const slot of slots || []) {
     const slotId = slot.slotId?.toString?.() ?? String(slot.slotId);
@@ -49,13 +59,12 @@ export function computeSowingGapBoardMetricsForSubtype(slots, deliveryOrders) {
       primarySowed: Number(slot.primarySowed) || 0,
       ...stats,
     };
-    applySowingAllowedSlotMetrics(enriched);
+    applySowingAllowedSlotMetrics(enriched, sowingBufferPct, { includeBatch });
 
     const slotGap = Math.max(0, Number(stats.bookedUncoveredPlants) || 0);
     const primarySowed = Number(slot.primarySowed) || 0;
     const grossCover = Number(enriched.grossOrderCoveredPlants) || 0;
-    // Excess = sowed minus plants covering orders minus expected-mortality reserve.
-    // Slot size and stored availablePlants are not bookable stock.
+    // Excess = CMS percent off plants sowed, then minus the orders.
     const excessAvailableForBooking = Number(enriched.excessAvailableForBooking) || 0;
 
     metricsBySlotId.set(slotId, {
@@ -96,7 +105,12 @@ export async function fetchDeliveryOrdersForPlants(plantIds, Order) {
 }
 
 /** Returns Map<slotId, metrics> aligned with slots page. */
-export function applySowingGapBoardMetrics(allSlots, deliveryOrders) {
+export function applySowingGapBoardMetrics(
+  allSlots,
+  deliveryOrders,
+  bufferByPlant = null,
+  { todayYmd = "", plantNameById = null } = {}
+) {
   const bySubtype = groupFlatSlotsBySubtype(allSlots);
   const ordersByKey = new Map();
   for (const order of deliveryOrders || []) {
@@ -107,9 +121,14 @@ export function applySowingGapBoardMetrics(allSlots, deliveryOrders) {
 
   const allMetrics = new Map();
   for (const [key, slots] of bySubtype) {
+    const plantId = String(slots[0]?.plantId || "");
+    const sowingBufferPct = bufferByPlant?.get?.(plantId) || 0;
+    const plantName = plantNameById?.get?.(plantId) || "";
     const subtypeMetrics = computeSowingGapBoardMetricsForSubtype(
       slots,
-      ordersByKey.get(key) || []
+      ordersByKey.get(key) || [],
+      sowingBufferPct,
+      { todayYmd, plantName }
     );
     for (const [slotId, metrics] of subtypeMetrics) {
       allMetrics.set(slotId, metrics);

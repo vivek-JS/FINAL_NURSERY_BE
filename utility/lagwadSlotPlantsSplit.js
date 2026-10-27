@@ -24,6 +24,74 @@ export const ORDER_MORTALITY_BUFFER_PCT = 20;
 
 const toQty = (v) => Math.max(0, Math.floor(Number(v) || 0));
 
+/** Saleable cover pool: sowed minus CMS mortality. Orders are filled from this, not the gross. */
+export function sowCoverPool(plantsSowed = 0, sowingBufferPct = 0) {
+  const sowed = toQty(plantsSowed);
+  const pctRaw = Number(sowingBufferPct);
+  const bufferPct = Number.isFinite(pctRaw) && pctRaw > 0 ? pctRaw : 0;
+  const bufferPlants = Math.round((sowed * bufferPct) / 100);
+  return Math.max(0, sowed - bufferPlants);
+}
+
+/**
+ * Bookable excess for one sowing: sowed − CMS mortality − orders.
+ * Released mortality (`mortalityMovedToExcess`) is added by callers.
+ */
+export function reportedExcessBreakdown({
+  plantsSowed = 0,
+  orderCoveredPlants = 0,
+  sowingBufferPct = 0,
+} = {}) {
+  const sowed = toQty(plantsSowed);
+  const orders = toQty(orderCoveredPlants);
+  const pctRaw = Number(sowingBufferPct);
+  const bufferPct = Number.isFinite(pctRaw) && pctRaw > 0 ? pctRaw : 0;
+  const bufferPlants = Math.round((sowed * bufferPct) / 100);
+  return {
+    plantsSowed: sowed,
+    orders,
+    bufferPct,
+    bufferPlants,
+    excess: Math.max(0, sowed - bufferPlants - orders),
+  };
+}
+
+export function reportedExcess(input) {
+  return reportedExcessBreakdown(input).excess;
+}
+
+/** Bookable leftover = sowed − mortality − orders (+ mortality moved). Always recompute; ignore stale stamps. */
+export function slotReportedExcess(batches, sowingBufferPct = 0, includeBatch = null) {
+  return (batches || []).reduce((sum, batch) => {
+    if (batch?.isIrrelevant) return sum;
+    if (typeof includeBatch === "function" && !includeBatch(batch)) return sum;
+    const moved = Math.max(0, Math.floor(Number(batch?.mortalityMovedToExcess) || 0));
+    const pct =
+      batch?.sowingBufferPct != null && Number.isFinite(Number(batch.sowingBufferPct))
+        ? Number(batch.sowingBufferPct)
+        : sowingBufferPct;
+    const parts = reportedExcessBreakdown({
+      plantsSowed: batch?.plantsSowed,
+      orderCoveredPlants: batch?.orderCoveredPlants,
+      sowingBufferPct: pct,
+    });
+    // moved inside max so unlock already used in cover does not stay bookable
+    return sum + Math.max(0, parts.plantsSowed - parts.bufferPlants - parts.orders + moved);
+  }, 0);
+}
+
+/** Display excess for a slot batch. Irrelevant batches are 0. Falls back when the batch is missing. */
+export function shownSowingExcess(batch, sowingBufferPct = 0, fallback = null) {
+  if (batch?.isIrrelevant) return 0;
+  const source = batch || fallback;
+  if (!source) return 0;
+  return reportedExcess({
+    plantsSowed: source.plantsSowed,
+    orderCoveredPlants: source.orderCoveredPlants,
+    sowingBufferPct,
+  });
+}
+
 /**
  * Expected mortality of one sowing: at least 10% of sowed; when it covered orders,
  * the leftover is kept as buffer up to 20% of the order plants.
@@ -44,9 +112,15 @@ export function sowBatchStock(batch) {
   const sowed = Math.max(0, toQty(batch?.plantsSowed) - toQty(batch?.destroyedPlants));
   const covered = toQty(batch?.orderCoveredPlants);
   const takenFromExcess = (batch?.excessAllocations || []).reduce((s, a) => s + toQty(a?.plants), 0);
+  const pct = Number(batch?.mortalityPct);
+  const mortalityPct = Number.isFinite(pct) ? pct : 10;
+  if (batch?.isIrrelevant) return { sowed, covered, reserve: 0, free: 0 };
   const reserve = batch?.noMortalityReserve
     ? 0
-    : Math.min(sowed, sowMortalityReserve(sowed, Math.max(0, covered - takenFromExcess)));
+    : Math.min(
+        sowed,
+        sowMortalityReserve(sowed, Math.max(0, covered - takenFromExcess), mortalityPct)
+      );
   return { sowed, covered, reserve, free: Math.max(0, sowed - reserve - covered) };
 }
 
@@ -60,16 +134,18 @@ export function slotSowStock(slot) {
   let gross = 0;
   let reserve = 0;
   let free = 0;
+  let held = 0;
   for (const batch of slot?.sowingBatches || []) {
     const b = sowBatchStock(batch);
     batchSowed += b.sowed;
     gross += b.covered;
     reserve += b.reserve;
     free += b.free;
+    if (batch?.isIrrelevant) held += Math.max(0, b.sowed - b.covered);
   }
   const untracked = splitLagwadQtyForSlot(Math.max(0, primarySowed - batchSowed));
   reserve += untracked.expectedMortality;
-  free = Math.min(free + untracked.actualPlants, Math.max(0, primarySowed - gross));
+  free = Math.min(free + untracked.actualPlants, Math.max(0, primarySowed - gross - held));
   const expectedMortality = Math.min(reserve, primarySowed);
   return {
     actualPlants: primarySowed - expectedMortality,
