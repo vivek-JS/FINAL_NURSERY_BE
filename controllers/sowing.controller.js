@@ -2748,7 +2748,7 @@ export const getPendingReminders = async (req, res) => {
                   $expr: {
                     $and: [
                       { $eq: ["$bookingSlot", "$$slotId"] },
-                      { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                      { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                       { $ne: ["$sowingDone", true] },
                       {
                         $or: [
@@ -5237,7 +5237,7 @@ export const getPlantReminders = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     { $ne: ["$sowingDone", true] },
                     {
                       $or: [
@@ -5936,7 +5936,7 @@ export const getPlantAlerts = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     { $ne: ["$sowingDone", true] },
                     {
                       $or: [
@@ -6157,7 +6157,7 @@ export const getPlantAlerts = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     { $ne: ["$sowingDone", true] },
                     {
                       $or: [
@@ -6408,7 +6408,7 @@ export const getPlantAvailability = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -6577,7 +6577,7 @@ export const getPlantAvailability = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -6826,7 +6826,7 @@ export const getAllPlantsAvailability = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -7674,7 +7674,15 @@ export const getSlotOrdersSummary = async (req, res) => {
       {
         $match: {
           bookingSlot: new mongoose.Types.ObjectId(slotId),
-          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+          $and: [
+            {
+              $or: [
+                { orderStatus: { $in: NEED_SOW_ORDER_STATUSES } },
+                { sowingDone: true },
+              ],
+            },
+            { orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] } },
+          ],
           $or: [
             { quotaSource: { $ne: "dealer" } },
             { quotaSource: { $exists: false } }
@@ -8211,7 +8219,7 @@ export const getTodaySowingData = async (req, res) => {
                     $expr: {
                       $and: [
                         { $eq: ["$bookingSlot", "$$slotId"] },
-                        { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                        { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                         {
                           $or: [
                             { $ne: ["$quotaSource", "dealer"] },
