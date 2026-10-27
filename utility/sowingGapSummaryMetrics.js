@@ -91,7 +91,7 @@ export async function fetchDeliveryOrdersForPlants(plantIds, Order) {
     ],
   })
     .select(
-      "_id orderId orderStatus numberOfPlants additionalPlants sowingDone deliveryDate quotaSource pastDueSlotRollover pastDueSlotRolloverAt plantName plantSubtype"
+      "_id orderId orderStatus numberOfPlants additionalPlants sowingDone sowingCoverSources sowingPartialCover leftoverFromIncomplete deliveryDate quotaSource pastDueSlotRollover pastDueSlotRolloverAt plantName plantSubtype"
     )
     .lean();
 }

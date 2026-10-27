@@ -38,7 +38,7 @@ import {
 } from "../utility/capacityBoardMetrics.js";
 
 const ORDER_SELECT =
-  "_id orderId orderStatus numberOfPlants additionalPlants sowingDone deliveryDate quotaSource pastDueSlotRollover pastDueSlotRolloverAt plantName plantSubtype sowingPlan farmer";
+  "_id orderId orderStatus numberOfPlants additionalPlants sowingDone sowingCoverSources sowingPartialCover leftoverFromIncomplete deliveryDate quotaSource pastDueSlotRollover pastDueSlotRolloverAt plantName plantSubtype sowingPlan farmer";
 
 const DELIVERY_ORDER_FILTER = {
   deliveryDate: { $exists: true, $ne: null },
