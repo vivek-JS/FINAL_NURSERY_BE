@@ -106,6 +106,7 @@ import {
   getCapacityBoard,
   getCapacitySlotDetail,
   getCapacityShedStock,
+  getSmartShedCapacity,
 } from "../controllers/capacitySheet.controller.js";
 import { askCapacityAnalyst } from "../controllers/capacityAsk.controller.js";
 import { postDestroySowBatch } from "../controllers/sowBatchDestroy.controller.js";
@@ -139,6 +140,7 @@ router.get("/all-plants-availability", getAllPlantsAvailability); // Get all pla
 router.get("/plants-gap-summary", getPlantsGapSummary); // Get all plants with subtype-wise totalBookingGap summary
 router.get("/capacity-sheet/slot/:slotId", getCapacitySlotDetail);
 router.get("/capacity-sheet/shed-stock", getCapacityShedStock);
+router.get("/capacity-sheet/smart-shed", getSmartShedCapacity);
 router.get("/capacity-sheet/board", getCapacityBoard);
 router.post("/capacity-ask", askCapacityAnalyst);
 router.post("/sow-batch/destroy", postDestroySowBatch); // Destroy sown plants of a slot sowing batch
