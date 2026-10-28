@@ -19,6 +19,11 @@ const shadeSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    /** Max plants if this shed is entirely that crop. Melon is watermelon and muskmelon together. */
+    smartCapacity: {
+      papaya: { type: Number, min: 0, default: 0 },
+      melon: { type: Number, min: 0, default: 0 },
+    },
   },
   {
     timestamps: true,

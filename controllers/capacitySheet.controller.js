@@ -16,6 +16,7 @@ import {
   slotWindowToDeliveryUtcRange,
 } from "../utility/istSlotDate.js";
 import { loadShedStockPayload } from "../services/capacityShedStock.service.js";
+import { loadSmartShedPayload } from "../services/smartShedCapacity.service.js";
 import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 import {
   canBookFromExcess,
@@ -540,6 +541,24 @@ export const getCapacityBoard = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to load capacity board",
+    });
+  }
+};
+
+/** GET /sowing/capacity-sheet/smart-shed — shared floor for papaya and watermelon/muskmelon. */
+export const getSmartShedCapacity = async (req, res) => {
+  try {
+    const payload = await loadSmartShedPayload();
+    return res.status(200).json({
+      success: true,
+      ...payload,
+      generatedAt: moment().utcOffset(IST_OFFSET).toISOString(),
+    });
+  } catch (error) {
+    console.error("getSmartShedCapacity:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load smart shed capacity",
     });
   }
 };
