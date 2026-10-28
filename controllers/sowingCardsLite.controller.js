@@ -20,6 +20,11 @@ import {
   buildOrderRequestLookup,
   lookupOrderRequest,
 } from "../services/sowingRequestOrderFlags.js";
+import {
+  orderAlreadyCovered,
+  orderPlantRemaining,
+  orderPlantTotal,
+} from "../services/orderSowCover.plan.js";
 
 const ACTIVE_ORDER_STATUSES = NEED_SOW_ORDER_STATUSES;
 
@@ -378,55 +383,46 @@ export const getTodaySowingCardsLite = async (req, res) => {
       .map((s) => s.slotId)
       .filter(Boolean);
 
-    // Live booked per slot (excludes DISPATCHED/COMPLETED/CANCELLED ghosts on totalBookedPlants).
-    // sownOrderPlants is kept so slot primarySowed already used by sowingDone orders
-    // is not subtracted again from the orders that are still unsown.
-    const plantSum = {
-      $add: [
-        { $ifNull: ["$numberOfPlants", 0] },
-        { $ifNull: ["$additionalPlants", 0] },
-      ],
-    };
+    // Live booked per slot — partial sow counts only the still-unsown remainder.
+    // sownOrderPlants = fully done qty + already-covered partial, so free excess on the
+    // slot is not double-counted against the remaining gap.
     const liveBookedBySlot = new Map();
     if (candidateSlotIds.length) {
-      const liveRows = await Order.aggregate([
-        {
-          $match: {
-            bookingSlot: { $in: candidateSlotIds },
-            orderStatus: { $in: ACTIVE_ORDER_STATUSES },
-            $or: [
-              { quotaSource: { $exists: false } },
-              { quotaSource: null },
-              { quotaSource: { $ne: "dealer" } },
-            ],
-          },
-        },
-        {
-          $group: {
-            _id: "$bookingSlot",
-            bookedPlants: {
-              $sum: {
-                $cond: [{ $ne: ["$sowingDone", true] }, plantSum, 0],
-              },
-            },
-            sownOrderPlants: {
-              $sum: {
-                $cond: [{ $eq: ["$sowingDone", true] }, plantSum, 0],
-              },
-            },
-            orderCount: {
-              $sum: { $cond: [{ $ne: ["$sowingDone", true] }, 1, 0] },
-            },
-          },
-        },
-      ]);
-      liveRows.forEach((r) => {
-        liveBookedBySlot.set(String(r._id), {
-          booked: Number(r.bookedPlants) || 0,
-          sownOrderPlants: Number(r.sownOrderPlants) || 0,
-          orderCount: Number(r.orderCount) || 0,
-        });
-      });
+      const liveOrders = await Order.find({
+        bookingSlot: { $in: candidateSlotIds },
+        orderStatus: { $in: ACTIVE_ORDER_STATUSES },
+        $or: [
+          { quotaSource: { $exists: false } },
+          { quotaSource: null },
+          { quotaSource: { $ne: "dealer" } },
+        ],
+      })
+        .select(
+          "bookingSlot numberOfPlants additionalPlants sowingDone sowingCoverSources sowingPartialCover"
+        )
+        .lean();
+      for (const order of liveOrders) {
+        const slotKey = String(order.bookingSlot || "");
+        if (!slotKey) continue;
+        const entry = liveBookedBySlot.get(slotKey) || {
+          booked: 0,
+          sownOrderPlants: 0,
+          orderCount: 0,
+        };
+        const qty = orderPlantTotal(order);
+        if (order.sowingDone) {
+          entry.sownOrderPlants += qty;
+        } else {
+          const covered = orderAlreadyCovered(order);
+          const remaining = orderPlantRemaining(order);
+          entry.sownOrderPlants += covered;
+          if (remaining > 0) {
+            entry.booked += remaining;
+            entry.orderCount += 1;
+          }
+        }
+        liveBookedBySlot.set(slotKey, entry);
+      }
     }
 
     const cardMap = new Map();
@@ -634,9 +630,31 @@ export const getTodaySowingCardsLite = async (req, res) => {
       ]);
     }
 
+    // Orders already claimed by a pending/processing/issued unfinished request
+    // must not appear as "Not sown" on request cards.
+    const claimedByActiveRequest = new Set();
+    pendingRequests.forEach((r) => {
+      for (const id of r.linkedOrderIds || []) claimedByActiveRequest.add(String(id));
+    });
+
     const orderMap = new Map();
     orderAgg.forEach((row) => {
-      orderMap.set(`${row._id.plantId}-${row._id.subtypeId}`, row);
+      const nums = [];
+      const ids = [];
+      const orderNumbers = row.orderNumbers || [];
+      const eligibleIds = row.eligibleOrderIds || [];
+      for (let i = 0; i < orderNumbers.length; i++) {
+        const oid = eligibleIds[i];
+        if (oid && claimedByActiveRequest.has(String(oid))) continue;
+        nums.push(orderNumbers[i]);
+        if (oid) ids.push(oid);
+      }
+      orderMap.set(`${row._id.plantId}-${row._id.subtypeId}`, {
+        ...row,
+        orderNumbers: nums,
+        eligibleOrderIds: ids,
+        orderCount: nums.length,
+      });
     });
 
     const eligibleOrderIds = orderAgg.flatMap(
@@ -1058,7 +1076,7 @@ export const getOrderWiseSowing = async (req, res) => {
     const [orders, products, raisings, activeOrderReqs, plantDoc] = await Promise.all([
       Order.find(query)
         .select(
-          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderBookingDate orderStatus sowingDone sowingDoneAt sowingPartialCover deliveryDate"
+          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderBookingDate orderStatus sowingDone sowingDoneAt sowingPartialCover sowingCoverSources leftoverFromIncomplete deliveryDate"
         )
         .populate("farmer", "name mobileNumber")
         .sort({ deliveryDate: 1, createdAt: 1 })
@@ -1168,13 +1186,9 @@ export const getOrderWiseSowing = async (req, res) => {
     });
 
     const rows = orders.map((o) => {
-      const booked =
-        (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0);
-      const held = (Array.isArray(o.sowingPartialCover) ? o.sowingPartialCover : []).reduce(
-        (s, r) => s + (Number(r.plants) || 0),
-        0
-      );
-      const plants = Math.max(0, booked - held);
+      const booked = orderPlantTotal(o);
+      const held = orderAlreadyCovered(o);
+      const plants = orderPlantRemaining(o);
       const sp = o.sowingPlan || {};
       const seedSource = sp.seedSource || "COMPANY";
       const intakes = raisingMap.get(String(o._id)) || [];
@@ -1311,13 +1325,15 @@ export const getOrderWiseSowing = async (req, res) => {
         ? rows
         : rows.filter((r) => {
             if (!NEED_SOW_ORDER_STATUS_SET.has(r.orderStatus)) return false;
+            // Already on a pending/issued request → not in new-request picks.
+            if (r.alreadyRequested) return false;
             if (leftoverOidSet.has(String(r.orderId))) return true;
             if (r.daysUntilSow == null) return slotIdList.length > 0;
             return Number(r.daysUntilSow) <= horizon;
           });
 
     const openOrders = horizonFiltered.filter(
-      (r) => !r.alreadyRequested && (Number(r.numberOfPlants) || 0) > 0
+      (r) => (Number(r.leftoverPlants) || Number(r.numberOfPlants) || 0) > 0
     );
 
     return res.json({
