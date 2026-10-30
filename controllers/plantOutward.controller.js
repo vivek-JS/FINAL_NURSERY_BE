@@ -93,7 +93,7 @@ import { parseVehicleLoadRequestBody } from "../middleware/vehicleLoadPhotos.mid
 import PlantCms from "../models/plantCms.model.js";
 
 const BATCH_SELECT_FIELDS =
-  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
+  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays secondaryR2PlantReadyDays secondaryR3PlantReadyDays isActive plantCmsId plantSubtypeId";
 
 const BATCH_POPULATE = {
   path: "batchId",

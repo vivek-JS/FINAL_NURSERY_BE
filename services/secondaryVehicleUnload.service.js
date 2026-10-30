@@ -22,7 +22,7 @@ import { updateOrderWithLedgerSync } from "../controllers/dispatch.controller.js
 import { syncAllOrdersVehicleLoadedFlag } from "./dispatchPostLoadFinalize.service.js";
 
 const BATCH_SELECT_FIELDS =
-  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
+  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays secondaryR2PlantReadyDays secondaryR3PlantReadyDays isActive plantCmsId plantSubtypeId";
 
 export { DISPATCH_SHED_ALLOWED_STATUSES };
 

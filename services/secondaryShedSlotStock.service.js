@@ -18,17 +18,21 @@ const normBatchNumber = (v) => {
   return s || null;
 };
 
-/** R1/R2 lagwad → shorter secondary hardening; R3 → longer (different booking slot). */
+/** R1 uses batch secondary days. R2 and R3 use their own CMS fields (default 40). */
 export const DEFAULT_SECONDARY_R1_READY_DAYS = 30;
+export const DEFAULT_SECONDARY_R2_READY_DAYS = 40;
 export const DEFAULT_SECONDARY_R3_READY_DAYS = 40;
 
 export function secondaryReadyDaysForSize(size, batchLean) {
   const base = Number(batchLean?.secondaryPlantReadyDays) || 0;
   const r1Days = base > 0 ? base : DEFAULT_SECONDARY_R1_READY_DAYS;
+  const r2Explicit = Number(batchLean?.secondaryR2PlantReadyDays) || 0;
+  const r2Days = r2Explicit > 0 ? r2Explicit : DEFAULT_SECONDARY_R2_READY_DAYS;
   const r3Explicit = Number(batchLean?.secondaryR3PlantReadyDays) || 0;
-  const r3Days =
-    r3Explicit > 0 ? r3Explicit : DEFAULT_SECONDARY_R3_READY_DAYS;
-  if (String(size ?? "").toUpperCase() === "R3") return r3Days;
+  const r3Days = r3Explicit > 0 ? r3Explicit : DEFAULT_SECONDARY_R3_READY_DAYS;
+  const key = String(size ?? "").toUpperCase();
+  if (key === "R2") return r2Days;
+  if (key === "R3") return r3Days;
   return r1Days;
 }
 
@@ -220,7 +224,7 @@ export function rollupShedStockForSlots(posLean, slotIdStrings) {
 }
 
 const BATCH_SELECT =
-  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays plantCmsId plantSubtypeId";
+  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays secondaryR2PlantReadyDays secondaryR3PlantReadyDays plantCmsId plantSubtypeId";
 
 function plantSubtypeLabels(batchLean) {
   if (!batchLean) return { plantLabel: "—", subtypeLabel: "—" };

@@ -23,6 +23,16 @@ const dispatchBatchSchema = new Schema(
       required: true,
       min: 1,
     },
+    /** R2 hardening days. Empty on older batches — callers fall back to 40. */
+    secondaryR2PlantReadyDays: {
+      type: Number,
+      min: 1,
+    },
+    /** R3 hardening days. Empty on older batches — callers fall back to 40. */
+    secondaryR3PlantReadyDays: {
+      type: Number,
+      min: 1,
+    },
     /** CMS plant master — optional for legacy batches; required for new creates via CMS. */
     plantCmsId: {
       type: Schema.Types.ObjectId,
@@ -42,7 +52,12 @@ const dispatchBatchSchema = new Schema(
         changedBy: { type: Schema.Types.ObjectId, ref: "User" },
         field: {
           type: String,
-          enum: ["primaryPlantReadyDays", "secondaryPlantReadyDays"],
+          enum: [
+            "primaryPlantReadyDays",
+            "secondaryPlantReadyDays",
+            "secondaryR2PlantReadyDays",
+            "secondaryR3PlantReadyDays",
+          ],
         },
         oldValue: { type: Number },
         newValue: { type: Number },

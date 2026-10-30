@@ -130,7 +130,7 @@ export async function returnPlantsFromVehicle({
     const po = await PlantOutward.findOne({ batchId }).session(session);
     if (!po) throw new AppError("No plant outward found for this batch", 404);
     const batchLean = await DispatchBatch.findById(batchId)
-      .select("batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays secondaryR3PlantReadyDays")
+      .select("batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays secondaryR2PlantReadyDays secondaryR3PlantReadyDays")
       .session(session)
       .lean();
 

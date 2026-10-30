@@ -64,7 +64,7 @@ function sameShed(a, b) {
   return String(a ?? "").trim() === String(b ?? "").trim();
 }
 
-const BATCH_READY_SELECT = "batchNumber secondaryPlantReadyDays secondaryR3PlantReadyDays";
+const BATCH_READY_SELECT = "batchNumber secondaryPlantReadyDays secondaryR2PlantReadyDays secondaryR3PlantReadyDays";
 
 /** Destroy `quantity` on one line inside an open transaction; caller saves `po`. */
 async function applyDestroyToLine({ session, po, si, batchId, batchLean, quantity, reasonStr, by }) {
