@@ -91,6 +91,48 @@ export function loadOpenLagwadLines() {
   });
 }
 
+/** Open lagwad for one crop's slots, with shed and batch, for the can-sell sheet. */
+export async function loadSlotLagwadLines(slotIds) {
+  const ids = [...slotIds].filter((id) => mongoose.isValidObjectId(String(id))).map(oid);
+  if (!ids.length) return [];
+  const rows = await PlantOutward.aggregate([
+    { $match: { "secondaryInward.availableQuantity": { $gt: 0 }, "secondaryInward.linkedBookingSlotId": { $in: ids } } },
+    { $unwind: "$secondaryInward" },
+    {
+      $match: {
+        "secondaryInward.availableQuantity": { $gt: 0 },
+        "secondaryInward.linkedBookingSlotId": { $in: ids },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        batchId: 1,
+        availableQuantity: "$secondaryInward.availableQuantity",
+        expectedReadyDate: "$secondaryInward.expectedReadyDate",
+        inwardDate: "$secondaryInward.secondaryInwardDate",
+        shed: "$secondaryInward.pollyhouse",
+      },
+    },
+  ]);
+  const batchIds = [...new Set(rows.map((r) => String(r.batchId || "")).filter((id) => mongoose.isValidObjectId(id)))];
+  const batches = batchIds.length
+    ? await DispatchBatch.find({ _id: { $in: batchIds.map(oid) } }).select("batchNumber secondaryPlantReadyDays").lean()
+    : [];
+  const byId = new Map(batches.map((b) => [String(b._id), b]));
+  return rows.map((r) => {
+    const batch = byId.get(String(r.batchId));
+    return {
+      availableQuantity: r.availableQuantity,
+      expectedReadyDate:
+        r.expectedReadyDate ||
+        (r.inwardDate ? moment(r.inwardDate).add(Number(batch?.secondaryPlantReadyDays) || 0, "days").toDate() : null),
+      batchNumber: batch?.batchNumber || "",
+      shed: r.shed || "",
+    };
+  });
+}
+
 /** Crops that have booking slots around this year, with their slotted subtypes. */
 export function loadCropOptions() {
   return cached(cropCache, "crops", async () => {
@@ -105,7 +147,7 @@ export function loadCropOptions() {
       for (const st of doc.subtypeSlots || []) subsByPlant.get(key).add(String(st.subtypeId));
     }
     const plants = await PlantCms.find({ _id: { $in: [...subsByPlant.keys()].map(oid) } })
-      .select("name subtypes._id subtypes.name")
+      .select("name sowingAllowed subtypes._id subtypes.name")
       .lean();
     return plants
       .map((p) => {
@@ -113,6 +155,7 @@ export function loadCropOptions() {
         return {
           plantId: String(p._id),
           plantName: p.name,
+          sowingAllowed: Boolean(p.sowingAllowed),
           subtypes: (p.subtypes || [])
             .filter((s) => wanted.has(String(s._id)))
             .map((s) => ({ subtypeId: String(s._id), subtypeName: s.name }))
@@ -128,7 +171,7 @@ export async function resolveCropContext(plantId, subtypeId) {
   const crops = await loadCropOptions();
   let crop = crops.find((c) => c.plantId === String(plantId));
   if (!crop) {
-    const p = await PlantCms.findById(plantId).select("name subtypes._id subtypes.name").lean();
+    const p = await PlantCms.findById(plantId).select("name sowingAllowed subtypes._id subtypes.name").lean();
     crop = { plantName: p?.name || "", subtypes: (p?.subtypes || []).map((s) => ({ subtypeId: String(s._id), subtypeName: s.name })) };
   }
   const sub = subtypeId ? crop.subtypes.find((s) => s.subtypeId === String(subtypeId)) : null;

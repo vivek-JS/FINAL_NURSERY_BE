@@ -19,9 +19,14 @@ export function istDay(ymd) {
   return m.isValid() ? m.utcOffset(IST_OFFSET, true).startOf("day") : null;
 }
 
+const MIN_WINDOW = 1;
+const MAX_WINDOW = 30;
+
+/** Board presets are 5/10/15. Can sell also accepts any length the desk types, from 1 to 30 days. */
 export function parseWindowDays(value) {
-  const n = Number(value);
-  return WINDOW_DAYS.includes(n) ? n : 5;
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < MIN_WINDOW) return 5;
+  return Math.min(MAX_WINDOW, n);
 }
 
 /** Plants still to hand over: pipeline status, not dealer quota, minus anything already on a vehicle. */
@@ -53,6 +58,7 @@ export function bucketWindows(from, to, windowDays) {
       readyLagwad: 0,
       orderCount: 0,
       lineCount: 0,
+      oldLagwad: 0,
     });
   }
   return windows;
@@ -102,8 +108,15 @@ export function fillLagwad(windows, lines, { rollPast, today }) {
       ? deliveryDateToIstMoment(line.expectedReadyDate)?.format(YMD)
       : null;
     if (!ymd || ymd <= today) w.readyLagwad += qty;
+    if (ymd && ymd <= oldReadyCut(today)) w.oldLagwad += qty;
   }
   return windows;
+}
+
+/** Ready on this day or earlier is 7 days old. */
+function oldReadyCut(today) {
+  const day = moment(today, YMD, true);
+  return day.isValid() ? day.clone().subtract(7, "days").format(YMD) : today;
 }
 
 const SUM_KEYS = ["dispatch", "overdueDispatch", "lagwad", "readyLagwad", "orderCount", "lineCount"];

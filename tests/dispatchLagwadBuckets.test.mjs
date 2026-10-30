@@ -27,7 +27,9 @@ test("order due qty: status, dealer and vehicle loaded rules", () => {
 
 test("windows: 5/10/15 day edges, last window clipped", () => {
   assert.equal(parseWindowDays("10"), 10);
-  assert.equal(parseWindowDays("7"), 5);
+  assert.equal(parseWindowDays("7"), 7);
+  assert.equal(parseWindowDays("0"), 5);
+  assert.equal(parseWindowDays("99"), 30);
   const w5 = bucketWindows("2026-11-01", "2026-11-30", 5);
   assert.equal(w5.length, 6);
   assert.deepEqual([w5[0].from, w5[0].to], ["2026-11-01", "2026-11-05"]);
@@ -61,6 +63,7 @@ test("fill dispatch + lagwad with overdue and ready markers, then month totals",
   assert.equal(windows[0].overdueDispatch, 500);
   assert.equal(windows[0].lagwad, 800);
   assert.equal(windows[0].readyLagwad, 800);
+  assert.equal(windows[0].oldLagwad, 800);
   assert.equal(windows[1].dispatch, 200);
   assert.equal(windows[2].lagwad, 300);
   assert.equal(windows[2].readyLagwad, 0);

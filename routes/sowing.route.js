@@ -113,6 +113,7 @@ import {
   getDispatchActualStock,
   getDispatchLagwadBoard,
   getDispatchLagwadCrops,
+  getDispatchSlotLines,
 } from "../controllers/dispatchLagwad.controller.js";
 import { askDispatchAnalyst } from "../controllers/dispatchAsk.controller.js";
 import { postDestroySowBatch } from "../controllers/sowBatchDestroy.controller.js";
@@ -150,6 +151,7 @@ router.get("/capacity-sheet/smart-shed", getSmartShedCapacity);
 router.get("/capacity-sheet/board", getCapacityBoard);
 router.get("/dispatch-lagwad/actual-stock", getDispatchActualStock);
 router.get("/dispatch-lagwad/crops", getDispatchLagwadCrops);
+router.get("/dispatch-lagwad/slot", getDispatchSlotLines);
 router.get("/dispatch-lagwad", getDispatchLagwadBoard);
 router.post("/dispatch-lagwad/ask", askDispatchAnalyst);
 router.post("/capacity-ask", askCapacityAnalyst);
