@@ -227,10 +227,20 @@ const getEmployees = catchAsync(async (req, res) => {
   const filter = {
     jobTitle: { $exists: true, $ne: null },
     role: { $ne: "FARMER" },
+    isDisabled: { $ne: true },
   };
 
   if (jobTitle) {
-    filter.jobTitle = String(jobTitle).trim();
+    // Support one title or comma-separated list (e.g. SALES,DISPATCH_MANAGER).
+    const titles = String(jobTitle)
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (titles.length === 1) {
+      filter.jobTitle = titles[0];
+    } else if (titles.length > 1) {
+      filter.jobTitle = { $in: titles };
+    }
   }
   if (search) {
     const searchRegex = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
