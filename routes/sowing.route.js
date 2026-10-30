@@ -109,6 +109,12 @@ import {
   getSmartShedCapacity,
 } from "../controllers/capacitySheet.controller.js";
 import { askCapacityAnalyst } from "../controllers/capacityAsk.controller.js";
+import {
+  getDispatchActualStock,
+  getDispatchLagwadBoard,
+  getDispatchLagwadCrops,
+} from "../controllers/dispatchLagwad.controller.js";
+import { askDispatchAnalyst } from "../controllers/dispatchAsk.controller.js";
 import { postDestroySowBatch } from "../controllers/sowBatchDestroy.controller.js";
 import { postReleaseBatchMortality } from "../controllers/sowBatchMortalityRelease.controller.js";
 import {
@@ -142,6 +148,10 @@ router.get("/capacity-sheet/slot/:slotId", getCapacitySlotDetail);
 router.get("/capacity-sheet/shed-stock", getCapacityShedStock);
 router.get("/capacity-sheet/smart-shed", getSmartShedCapacity);
 router.get("/capacity-sheet/board", getCapacityBoard);
+router.get("/dispatch-lagwad/actual-stock", getDispatchActualStock);
+router.get("/dispatch-lagwad/crops", getDispatchLagwadCrops);
+router.get("/dispatch-lagwad", getDispatchLagwadBoard);
+router.post("/dispatch-lagwad/ask", askDispatchAnalyst);
 router.post("/capacity-ask", askCapacityAnalyst);
 router.post("/sow-batch/destroy", postDestroySowBatch); // Destroy sown plants of a slot sowing batch
 router.post("/sow-batch/mortality-to-excess", postReleaseBatchMortality); // Super admin: move mortality hold-back into excess
