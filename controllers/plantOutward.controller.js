@@ -4581,15 +4581,13 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
 
     for (const sr of sizeRows) {
       const sizeDays = Math.min(365, safeNonNegativeInt(readyDaysBySize?.[sr.size], 0));
+      const sizeDaysUsed =
+        sizeDays > 0 ? sizeDays : secondaryReadyDaysForSize(sr.size, batchDocForReady);
       const inwardDay = moment(secondaryInwardDate).startOf("day");
       const rowExpectedReady =
-        sizeDays > 0 && inwardDay.isValid()
-          ? inwardDay.clone().add(sizeDays, "days").toDate()
-          : expectedReadyDateForSecondarySize(
-              secondaryInwardDate,
-              sr.size,
-              batchDocForReady
-            );
+        sizeDaysUsed > 0 && inwardDay.isValid()
+          ? inwardDay.clone().add(sizeDaysUsed, "days").toDate()
+          : null;
       const rowDispatchDate =
         rowExpectedReady ??
         (dateOfDispatch ? moment(dateOfDispatch).toDate() : null);
@@ -4614,6 +4612,7 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
         dateOfDispatch: rowDispatchDate ?? dateOfDispatch,
         remarks: remarksStr || `Direct lagwad · ${sr.size}`,
         ...(importTag ? { importSource: importTag } : {}),
+        ...(sizeDaysUsed > 0 ? { readyDays: sizeDaysUsed } : {}),
         ...(rowExpectedReady ? { expectedReadyDate: rowExpectedReady } : {}),
       };
 

@@ -163,7 +163,8 @@ export function secondaryInwardCalendarReady(si, batchLean, todayStart) {
   if (si?.readinessBypassAt != null && moment(si.readinessBypassAt).isValid()) {
     return true;
   }
-  const days = secondaryReadyDaysForSize(si?.size, batchLean);
+  const storedDays = Number(si?.readyDays) || 0;
+  const days = storedDays > 0 ? storedDays : secondaryReadyDaysForSize(si?.size, batchLean);
   const inward = si?.secondaryInwardDate
     ? moment(si.secondaryInwardDate).startOf("day")
     : null;
@@ -695,7 +696,8 @@ export function pickReadyDateForSlot(siPlain, batchLean) {
   const inward = siPlain?.secondaryInwardDate
     ? moment(siPlain.secondaryInwardDate).startOf("day")
     : null;
-  const days = secondaryReadyDaysForSize(siPlain?.size, batchLean);
+  const storedDays = Number(siPlain?.readyDays) || 0;
+  const days = storedDays > 0 ? storedDays : secondaryReadyDaysForSize(siPlain?.size, batchLean);
   if (inward?.isValid()) return inward.clone().add(days, "days");
   return null;
 }

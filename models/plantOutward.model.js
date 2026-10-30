@@ -347,7 +347,12 @@ const secondaryInwardSchema = new Schema({
     type: Date,
     required: true
   },
-  /** Materialized: secondaryInwardDate + batch secondaryPlantReadyDays (server source of truth). */
+  /** Days copied from the batch at save time. Later CMS edits do not move this row. */
+  readyDays: {
+    type: Number,
+    min: 1,
+  },
+  /** Materialized: secondaryInwardDate + ready days locked when the row was saved. */
   expectedReadyDate: {
     type: Date,
     default: null,

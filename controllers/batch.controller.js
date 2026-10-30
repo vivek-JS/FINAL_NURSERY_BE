@@ -6,6 +6,9 @@ import DispatchBatch from "../models/dispatchBatch.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import PlantOutward from "../models/plantOutward.model.js";
 
+const DEFAULT_R2_READY_DAYS = 40;
+const DEFAULT_R3_READY_DAYS = 40;
+
 function positiveDay(value) {
   const n = Number(value);
   return Number.isFinite(n) && n >= 1 ? n : 0;
@@ -49,8 +52,8 @@ export const createBatch = catchAsync(async (req, res, next) => {
     dateAdded: dateAdded ? new Date(dateAdded) : new Date(),
     primaryPlantReadyDays: Number(primaryPlantReadyDays),
     secondaryPlantReadyDays: Number(secondaryPlantReadyDays),
-    ...(positiveDay(secondaryR2PlantReadyDays) ? { secondaryR2PlantReadyDays: positiveDay(secondaryR2PlantReadyDays) } : {}),
-    ...(positiveDay(secondaryR3PlantReadyDays) ? { secondaryR3PlantReadyDays: positiveDay(secondaryR3PlantReadyDays) } : {}),
+    secondaryR2PlantReadyDays: positiveDay(secondaryR2PlantReadyDays) || DEFAULT_R2_READY_DAYS,
+    secondaryR3PlantReadyDays: positiveDay(secondaryR3PlantReadyDays) || DEFAULT_R3_READY_DAYS,
     plantCmsId,
     plantSubtypeId,
   });
@@ -80,7 +83,7 @@ export const createBatch = catchAsync(async (req, res, next) => {
 
 export const getAllBatches = catchAsync(async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 10));
   const search = String(req.query.search || "").trim();
   const q = {};
   if (search) {
@@ -154,14 +157,16 @@ export const updateBatch = catchAsync(async (req, res, next) => {
   const sChanged =
     secondaryPlantReadyDays != null &&
     Number(secondaryPlantReadyDays) !== Number(existing.secondaryPlantReadyDays);
-  const r2Changed =
-    positiveDay(secondaryR2PlantReadyDays) > 0 &&
-    positiveDay(secondaryR2PlantReadyDays) !== Number(existing.secondaryR2PlantReadyDays);
-  const r3Changed =
-    positiveDay(secondaryR3PlantReadyDays) > 0 &&
-    positiveDay(secondaryR3PlantReadyDays) !== Number(existing.secondaryR3PlantReadyDays);
+  const r2Next = positiveDay(secondaryR2PlantReadyDays);
+  const r2Prev = positiveDay(existing.secondaryR2PlantReadyDays);
+  const r3Next = positiveDay(secondaryR3PlantReadyDays);
+  const r3Prev = positiveDay(existing.secondaryR3PlantReadyDays);
+  const r2Changed = r2Next > 0 && r2Next !== r2Prev;
+  const r3Changed = r3Next > 0 && r3Next !== r3Prev;
+  const daysNeedReason =
+    pChanged || sChanged || (r2Changed && r2Prev > 0) || (r3Changed && r3Prev > 0);
 
-  if ((pChanged || sChanged || r2Changed || r3Changed) && !String(plantReadyDaysChangeReason || "").trim()) {
+  if (daysNeedReason && !String(plantReadyDaysChangeReason || "").trim()) {
     return next(new AppError("Reason required when changing plant ready days", 400));
   }
 
