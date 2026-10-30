@@ -16,6 +16,10 @@ import {
   buildOrderRequestLookup,
   lookupOrderRequest,
 } from "../services/sowingRequestOrderFlags.js";
+import {
+  bookingSlotIdsStillNeedingSow,
+  stillNeedsSowMatch,
+} from "../services/sowingCardsNeedSow.service.js";
 
 const ACTIVE_ORDER_STATUSES = [
   "PENDING",
@@ -149,9 +153,10 @@ export const getTodaySowingCardsLite = async (req, res) => {
     const plantIds = plants.map((p) => p._id);
     const plantMap = new Map(plants.map((p) => [String(p._id), p]));
 
-    // Parallel: products, slots, pending requests. Raising stock is scoped to
-    // eligible order ids after the horizon slots are known.
-    const [baseProducts, rawSlots, pendingRequests, leftoverSlotIds] = await Promise.all([
+    // Slots come from orders still needing sow (not sown, or partial with
+    // plants left), not from the stored totalBookedPlants counter.
+    const [baseProducts, pendingRequests, leftoverSlotIds, needSowSlotIds] =
+      await Promise.all([
       Product.find({
         plantId: { $in: plantIds },
         category: { $regex: /^seeds$/i },
@@ -159,14 +164,36 @@ export const getTodaySowingCardsLite = async (req, res) => {
       })
         .select("_id plantId subtypeId name code conversionFactor tentativePlantsPerPacket")
         .lean(),
-      PlantSlot.aggregate([
+      SowingRequest.find({
+        status: { $in: ["pending", "processing", "issued"] },
+        plantId: { $in: plantIds },
+        sowingCompleted: { $ne: true },
+      })
+        .select(
+          "plantId subtypeId productId requestNumber packetsRequested packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned packetsFromCompany packetsFromRaising seedSource conversionFactor tentativePlantsPerPacket status sowingInProgress issuedDate sowingCompleted linkedOrderIds isExcessiveSowing"
+        )
+        .lean(),
+      leftoverBookingSlotIdSet({ plantIds }),
+      bookingSlotIdsStillNeedingSow(plantIds, ACTIVE_ORDER_STATUSES),
+    ]);
+
+    const slotIdByKey = new Map(needSowSlotIds.map((id) => [String(id), id]));
+    for (const id of leftoverSlotIds) {
+      const key = String(id || "");
+      if (!key || slotIdByKey.has(key) || !mongoose.Types.ObjectId.isValid(key)) continue;
+      slotIdByKey.set(key, new mongoose.Types.ObjectId(key));
+    }
+    const slotIds = [...slotIdByKey.values()];
+
+    const rawSlots = slotIds.length
+      ? await PlantSlot.aggregate([
         {
           $match: {
             plantId: { $in: plantIds },
             year: { $in: years },
+            "subtypeSlots.slots._id": { $in: slotIds },
           },
         },
-        // Drop empty subtype slots before unwind — biggest win
         {
           $project: {
             plantId: 1,
@@ -181,27 +208,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
                     $filter: {
                       input: "$$st.slots",
                       as: "s",
-                      cond: {
-                        $and: [
-                          { $gt: [{ $ifNull: ["$$s.totalBookedPlants", 0] }, 0] },
-                          {
-                            $gt: [
-                              {
-                                $subtract: [
-                                  { $ifNull: ["$$s.totalBookedPlants", 0] },
-                                  {
-                                    $add: [
-                                      { $ifNull: ["$$s.primarySowed", 0] },
-                                      { $ifNull: ["$$s.officeSowed", 0] },
-                                    ],
-                                  },
-                                ],
-                              },
-                              0,
-                            ],
-                          },
-                        ],
-                      },
+                      cond: { $in: ["$$s._id", slotIds] },
                     },
                   },
                 },
@@ -242,20 +249,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
             plantReadyDays: "$subtypeSlots.slots.plantReadyDays",
           },
         },
-        // Hard cap — Request Packets UI doesn't need tens of thousands of slot rows
-        { $limit: 2500 },
-      ]).option({ allowDiskUse: true }),
-      SowingRequest.find({
-        status: { $in: ["pending", "processing", "issued"] },
-        plantId: { $in: plantIds },
-        sowingCompleted: { $ne: true },
-      })
-        .select(
-          "plantId subtypeId productId requestNumber packetsRequested packetsIssued packetsUsed packetsReturned raisingPacketsUsed raisingPacketsReturned packetsFromCompany packetsFromRaising seedSource conversionFactor tentativePlantsPerPacket status sowingInProgress issuedDate sowingCompleted linkedOrderIds isExcessiveSowing"
-        )
-        .lean(),
-      leftoverBookingSlotIdSet({ plantIds }),
-    ]);
+      ]).option({ allowDiskUse: true })
+      : [];
 
     const products = await enrichSeedProductsFromRamAgriLinks(baseProducts, plantIds);
 
@@ -410,7 +405,36 @@ export const getTodaySowingCardsLite = async (req, res) => {
             _id: "$bookingSlot",
             bookedPlants: {
               $sum: {
-                $cond: [{ $ne: ["$sowingDone", true] }, plantSum, 0],
+                $cond: [
+                  { $ne: ["$sowingDone", true] },
+                  plantSum,
+                  {
+                    $let: {
+                      vars: {
+                        total: plantSum,
+                        covered: {
+                          $cond: [
+                            { $gt: [{ $sum: "$sowingCoverSources.plants" }, 0] },
+                            { $sum: "$sowingCoverSources.plants" },
+                            { $sum: "$sowingPartialCover.plants" },
+                          ],
+                        },
+                      },
+                      in: {
+                        $cond: [
+                          {
+                            $and: [
+                              { $gt: ["$$covered", 0] },
+                              { $lt: ["$$covered", "$$total"] },
+                            ],
+                          },
+                          { $subtract: ["$$total", "$$covered"] },
+                          0,
+                        ],
+                      },
+                    },
+                  },
+                ],
               },
             },
             sownOrderPlants: {
@@ -419,7 +443,49 @@ export const getTodaySowingCardsLite = async (req, res) => {
               },
             },
             orderCount: {
-              $sum: { $cond: [{ $ne: ["$sowingDone", true] }, 1, 0] },
+              $sum: {
+                $cond: [
+                  {
+                    $gt: [
+                      {
+                        $cond: [
+                          { $ne: ["$sowingDone", true] },
+                          plantSum,
+                          {
+                            $let: {
+                              vars: {
+                                total: plantSum,
+                                covered: {
+                                  $cond: [
+                                    { $gt: [{ $sum: "$sowingCoverSources.plants" }, 0] },
+                                    { $sum: "$sowingCoverSources.plants" },
+                                    { $sum: "$sowingPartialCover.plants" },
+                                  ],
+                                },
+                              },
+                              in: {
+                                $cond: [
+                                  {
+                                    $and: [
+                                      { $gt: ["$$covered", 0] },
+                                      { $lt: ["$$covered", "$$total"] },
+                                    ],
+                                  },
+                                  { $subtract: ["$$total", "$$covered"] },
+                                  0,
+                                ],
+                              },
+                            },
+                          },
+                        ],
+                      },
+                      0,
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
             },
           },
         },
@@ -1053,7 +1119,7 @@ export const getOrderWiseSowing = async (req, res) => {
       query._id = { $in: orderIdList };
     } else {
       query.orderStatus = { $in: ACTIVE_ORDER_STATUSES };
-      query.sowingDone = { $ne: true };
+      Object.assign(query, stillNeedsSowMatch());
       if (slotIdList.length) {
         query.bookingSlot = { $in: slotIdList };
       }
