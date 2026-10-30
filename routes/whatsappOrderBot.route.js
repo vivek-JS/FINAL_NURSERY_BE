@@ -11,25 +11,22 @@ import { getOrderBotChannels } from "../services/whatsappOrderMessenger.js";
 import {
   isWhatsAppReady,
   getWhatsAppLinkedPhone,
-  hasPersistedWhatsAppSession,
-  getWhatsAppSessionPath,
-} from "../services/whatsappClient.js";
+  hasSavedWhatsAppSession,
+} from "../services/whatsapp/index.js";
 import { isWhatsappOrderFlowDisabled } from "../utility/whatsappOrderFlowFlags.js";
 
 const router = express.Router();
 
 /** Public — check if bot can reply (no auth). */
 router.get("/status", (req, res) => {
-  const sessionPath = getWhatsAppSessionPath();
   return res.status(200).json({
     success: true,
     orderFlowEnabled: !isWhatsappOrderFlowDisabled(),
     ...getOrderBotChannels(),
     whatsappReady: isWhatsAppReady,
     linkedBotPhone: getWhatsAppLinkedPhone(),
-    hasSavedSession: hasPersistedWhatsAppSession(sessionPath),
-    sessionPath,
-    hint: "Message linkedBotPhone (web.js) or your WATI number. Hi/Order must not be blocked by report wizard.",
+    hasSavedSession: hasSavedWhatsAppSession(),
+    hint: "Message linkedBotPhone (scanned session) or your WATI number. Hi/Order must not be blocked by report wizard.",
   });
 });
 

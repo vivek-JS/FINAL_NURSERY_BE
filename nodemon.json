@@ -2,8 +2,6 @@
   "watch": ["."],
   "ext": "js,mjs,cjs,json",
   "ignore": [
-    ".wwebjs_auth/**",
-    "data/whatsapp-auth/**",
     "node_modules/**",
     "uploads/**",
     "backups/**",

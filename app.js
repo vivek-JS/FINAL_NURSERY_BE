@@ -324,6 +324,7 @@ import {
   getAdminMisOrders,
   getAdminSalesSheet,
 } from "./controllers/order.controller.js";
+import { getOutstandingBalances } from "./controllers/orderOutstandingBalances.controller.js";
 import { getMisMobile } from "./controllers/misMobile.controller.js";
 import {
   getCeoReportCatalogHandler,
@@ -373,6 +374,7 @@ import freightRateCardRouter from "./routes/freightRateCard.route.js";
 import tripRouter from "./routes/trip.route.js";
 import fleetRouter from "./routes/fleet.route.js";
 import freightSlipRouter from "./routes/freightSlip.route.js";
+import driverPaymentRouter from "./routes/driverPayment.route.js";
 import shadeRoter from "./routes/shades.route.js";
 import trayRouter from "./routes/tray.route.js";
 import dispatchRoute from "./routes/dispatched.route.js";
@@ -433,6 +435,7 @@ import notificationRoute from "./routes/notification.route.js";
 import whatsappOrderBotRoute from "./routes/whatsappOrderBot.route.js";
 import whatsappAlertRoute from "./routes/whatsappAlert.route.js";
 import whatsappCampaignBridgeRoute from "./routes/whatsappCampaignBridge.route.js";
+import whatsappConnectionRoute from "./routes/whatsappConnection.route.js";
 import optInWebhookRoute from "./routes/optInWebhook.route.js";
 import whatsappStatusWebhookRoute from "./routes/whatsappStatusWebhook.route.js";
 import sowingRoute from "./routes/sowing.route.js";
@@ -660,6 +663,12 @@ server.get("/api/v1/ceo-report/fleet-performance", ...adminMisAuth, getCeoFleetP
 server.get("/api/v1/ceo-report/slot-analysis", ...adminMisAuth, getCeoSlotAnalysis);
 server.get("/api/v1/ceo-report/orders", ...adminMisAuth, getCeoReportOrders);
 server.use("/api/v1/order", authenticateToken, orderRoute);
+server.get(
+  "/api/v1/order/outstanding-balances",
+  authenticateToken,
+  authorizeRoles(["ACCOUNTANT", "SUPER_ADMIN", "SUPERADMIN", "ADMIN"]),
+  getOutstandingBalances
+);
 server.use("/api/v1/order-events", authenticateToken, orderEventsRoute);
 // Direct bindings for reliability in environments with stale router mounts.
 server.get("/api/v1/ready-dispatch-groups", authenticateToken, getReadyDispatchGroups);
@@ -728,6 +737,7 @@ server.use("/api/v1/freight-rates", authenticateToken, freightRateCardRouter);
 server.use("/api/v1/trips", authenticateToken, tripRouter);
 server.use("/api/v1/fleet", authenticateToken, fleetRouter);
 server.use("/api/v1/freight-slips", authenticateToken, freightSlipRouter);
+server.use("/api/v1/driver-payments", authenticateToken, driverPaymentRouter);
 server.use("/api/v1/dispatched", authenticateToken, dispatchRoute);
 /** Explicit bindings — same pattern as dashboard-tab-counts / laboutward (always resolves). */
 server.get("/api/v1/invoice-sequence", authenticateToken, getDeliveryChallanInvoiceSequence);
@@ -944,6 +954,14 @@ server.use("/api/v1/finance", authenticateToken, financeRoute);
 
 // WhatsApp internal alert routes (test endpoint + status check)
 server.use("/api/v1/whatsapp-alert", authenticateToken, whatsappAlertRoute);
+// WhatsApp linked-device QR scan / pairing (SUPER_ADMIN only)
+server.use(
+  "/api/v1/whatsapp-connection",
+  authenticateToken,
+  authorizeRoles(["SUPER_ADMIN", "SUPERADMIN"]),
+  noCacheApiResponse,
+  whatsappConnectionRoute
+);
 
 // Serve locally uploaded media files
 server.use('/uploads', express.static(path.join(__dirname, 'uploads')));

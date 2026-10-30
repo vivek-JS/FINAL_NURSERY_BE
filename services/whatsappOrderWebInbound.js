@@ -1,5 +1,5 @@
 /**
- * Inbound WhatsApp messages on the scanned whatsapp-web.js session (order bot).
+ * Inbound WhatsApp messages on the scanned Baileys session (order bot).
  */
 
 import {

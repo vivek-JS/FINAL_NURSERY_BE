@@ -20,11 +20,12 @@ deployment/aws/terraform/cost-optimized/.terraform/
 .env.backup
 *.env
 
-# WhatsApp Selenium bot – Chrome profile (session data, do not commit)
+# Legacy WhatsApp Chrome / web.js session folders (Baileys login is in MongoDB)
 scripts/whatsapp-chrome-profile/
-
-# whatsapp-web.js LocalAuth (dev); production uses WHATSAPP_SESSION_PATH outside repo
 data/whatsapp-auth/
+.wwebjs_auth/
+.wwebjs_cache/
+whatsapp-profile/
 
 # Campaign run PIDs
 .campaign-pids/

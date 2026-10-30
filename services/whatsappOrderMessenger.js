@@ -1,13 +1,13 @@
 /**
- * Outbound messages for WhatsApp order bot — web.js and/or WATI (dual channel).
+ * Outbound messages for WhatsApp order bot — scanned session ("webjs" channel) and/or WATI.
  */
 
 import {
-  getWhatsAppClient,
   isWhatsAppReady,
   reportWhatsAppTransportFailure,
   waitUntilWhatsAppReady,
-} from "./whatsappClient.js";
+  sendWhatsAppText,
+} from "./whatsapp/index.js";
 import {
   isWhatsappOrderWebJsEnabled,
   isWhatsappOrderWatiEnabled,
@@ -20,30 +20,31 @@ import {
 import { sendWebJsReply } from "./whatsappOrderWebReply.js";
 import { sendSessionTextMessage } from "./watiService.js";
 
-function formatChatId(number) {
+function indianMobileTarget(number) {
   const digits = String(number).replace(/\D/g, "");
-  const ten =
-    digits.length >= 12 && digits.startsWith("91")
-      ? digits.slice(-10)
-      : digits.length === 10
-        ? digits
-        : digits.slice(-10);
-  if (!ten || ten.length !== 10) return `${digits}@c.us`;
-  return `91${ten}@c.us`;
+  const ten = digits.slice(-10);
+  return ten.length === 10 ? `91${ten}` : digits;
 }
 
-async function resolveChatId(wa, number) {
-  const digits = String(number).replace(/\D/g, "");
-  const lookup =
-    digits.length === 10 ? `91${digits}` : digits.startsWith("91") ? digits : `91${digits.slice(-10)}`;
-  const fallback = formatChatId(number);
-  try {
-    const registered = await wa.getNumberId(lookup);
-    if (registered?._serialized) return registered._serialized;
-  } catch (err) {
-    console.warn("[WhatsApp Order] getNumberId failed:", err?.message || err);
+async function sendToTargets(targets, body) {
+  let lastError = null;
+  for (const target of targets) {
+    try {
+      const sent = await sendWhatsAppText(target, body);
+      if (sent.ok) {
+        console.log(`[WhatsApp Order] ✅ Sent to ${sent.jid}`);
+        return { success: true, channel: "webjs", targetId: sent.jid };
+      }
+      lastError = sent.reason;
+    } catch (err) {
+      lastError = err?.message || String(err);
+      console.warn(`[WhatsApp Order] Send to ${target} failed:`, lastError);
+      if (reportWhatsAppTransportFailure(err, "order-send")) {
+        return { success: false, error: lastError, connectionLost: true };
+      }
+    }
   }
-  return fallback;
+  return { success: false, error: lastError || "send_failed" };
 }
 
 async function sendViaWebJs(phone, text) {
@@ -65,56 +66,17 @@ async function sendViaWebJs(phone, text) {
     return { ...directReply, channel: "webjs" };
   }
 
-  const wa = getWhatsAppClient();
-  if (!wa) {
-    return { success: false, error: "no_client", channel: "webjs" };
+  const targets = [...new Set([getWebJsChatJid(phone), indianMobileTarget(phone)].filter(Boolean))];
+  let result = await sendToTargets(targets, body);
+
+  if (result.connectionLost && (await waitUntilWhatsAppReady(60000))) {
+    result = await sendToTargets(targets, body);
+    if (result.success) result.retried = true;
   }
 
-  const storedJid = getWebJsChatJid(phone);
-  const targets = [];
-  if (storedJid) targets.push(storedJid);
-  const resolved = await resolveChatId(wa, phone);
-  if (resolved && !targets.includes(resolved)) targets.push(resolved);
-
-  let lastError = directReply?.error || null;
-  let sawDetached = reportWhatsAppTransportFailure(
-    { message: lastError },
-    "order-direct-reply"
-  );
-
-  for (const targetId of targets) {
-    try {
-      await wa.sendMessage(targetId, body);
-      console.log(`[WhatsApp Order] ✅ Sent (web.js) to ${targetId}`);
-      return { success: true, channel: "webjs", targetId };
-    } catch (err) {
-      lastError = err?.message || String(err);
-      console.warn(`[WhatsApp Order] web.js send to ${targetId} failed:`, lastError);
-      if (reportWhatsAppTransportFailure(err, "order-send")) {
-        sawDetached = true;
-        break;
-      }
-    }
-  }
-
-  if (sawDetached) {
-    const ready = await waitUntilWhatsAppReady(90000);
-    const wa2 = getWhatsAppClient();
-    if (ready && wa2) {
-      try {
-        const targetId = targets[0] || (await resolveChatId(wa2, phone));
-        await wa2.sendMessage(targetId, body);
-        console.log(`[WhatsApp Order] ✅ Sent after reinit (web.js) to ${targetId}`);
-        return { success: true, channel: "webjs", targetId, retried: true };
-      } catch (retryErr) {
-        lastError = retryErr?.message || String(retryErr);
-        reportWhatsAppTransportFailure(retryErr, "order-retry");
-      }
-    }
-  }
-
-  console.error("[WhatsApp Order] ❌ web.js send failed:", lastError);
-  return { success: false, error: lastError || "send_failed", channel: "webjs" };
+  if (result.success) return result;
+  console.error("[WhatsApp Order] ❌ Scanned-session send failed:", result.error);
+  return { success: false, error: result.error, channel: "webjs" };
 }
 
 function watiDigits(phone) {

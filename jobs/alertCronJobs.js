@@ -7,7 +7,11 @@
 
 import cron from "node-cron";
 import Order from "../models/order.model.js";
-import { isWhatsAppReady, isWhatsAppConnectionInProgress } from "../services/whatsappClient.js";
+import {
+  isWhatsAppReady,
+  isWhatsAppConnectionInProgress,
+  ensureWhatsAppConnected,
+} from "../services/whatsapp/index.js";
 import { sendDailySummaryAlert } from "../services/whatsappAlertService.js";
 import { sendAdminDailyMisMarathiAlert } from "../services/adminDailyMisWhatsapp.service.js";
 import {
@@ -144,8 +148,7 @@ export function initAlertCronJobs() {
   console.log(`✅ [WhatsApp Cron] Ops digest @ ${opsCron} (${tz}).`);
   console.log(`✅ [WhatsApp Cron] Slot scan @ ${slotCron} (${tz}).`);
 
-  // Session watchdog — reconnect if web.js client drops (every 5 min).
-  // Disabled in local dev by default: nodemon restarts + watchdog were invalidating QR mid-scan.
+  // Session watchdog — safety net if the linked session stays down (every 5 min). Never opens a QR window.
   const watchdogCron = process.env.WHATSAPP_SESSION_WATCHDOG_CRON || "*/5 * * * *";
   const watchdogEnabled =
     process.env.WHATSAPP_SESSION_WATCHDOG_ENABLED === "true" ||
@@ -163,9 +166,8 @@ export function initAlertCronJobs() {
         if (isWhatsAppReady || isWhatsAppConnectionInProgress()) return;
         console.warn("[WhatsApp Cron] Session watchdog — client not ready, attempting reconnect...");
         try {
-          const { ensureWhatsAppConnected } = await import("../services/whatsappClient.js");
           const result = await ensureWhatsAppConnected("cron-watchdog");
-          if (!result.ok) {
+          if (!result.ok && result.reason !== "needs_scan") {
             console.warn("[WhatsApp Cron] Session watchdog reconnect failed:", result.reason);
           }
         } catch (err) {
