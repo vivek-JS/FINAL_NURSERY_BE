@@ -1,18 +1,18 @@
 /**
- * Campaign sends + delivery ACKs via the single ERP whatsapp-web.js client (erp-alert-bot).
+ * Campaign sends + delivery ACKs via the single ERP linked WhatsApp session.
  * Updates collections created by whatsapp-automation (same MongoDB).
  */
 import fs from "fs";
+import path from "path";
 import mongoose from "mongoose";
-import pkg from "whatsapp-web.js";
 import {
-  getWhatsAppClient,
   isWhatsAppReady,
   getWhatsAppLinkedPhone,
-} from "./whatsappClient.js";
-import { reportWhatsAppTransportFailure } from "./whatsappClient.js";
-
-const { MessageMedia } = pkg;
+  reportWhatsAppTransportFailure,
+  sendWhatsAppText,
+  sendWhatsAppMedia,
+  isWhatsAppNumberRegistered,
+} from "./whatsapp/index.js";
 
 const ACK_RANK = {
   pending: 0,
@@ -131,31 +131,23 @@ export async function sendCampaignOutbound({
   if (!isWhatsAppReady) {
     return { ok: false, reason: "not_ready" };
   }
-  const wa = getWhatsAppClient();
-  if (!wa) return { ok: false, reason: "no_client" };
-
   const digits = String(mobile).replace(/\D/g, "");
-  const chatId = digits.includes("@") ? digits : `${digits}@c.us`;
 
   try {
     let sent;
     if (attachmentPath && fs.existsSync(attachmentPath)) {
-      const buffer = fs.readFileSync(attachmentPath);
-      const mime = attachmentMime || "application/octet-stream";
-      const media = new MessageMedia(
-        mime,
-        buffer.toString("base64"),
-        attachmentPath.split("/").pop() || "file"
-      );
-      sent = await wa.sendMessage(chatId, media, { caption: text || undefined });
+      const buffer = await fs.promises.readFile(attachmentPath);
+      sent = await sendWhatsAppMedia(digits, {
+        buffer,
+        mimetype: attachmentMime || "application/octet-stream",
+        fileName: path.basename(attachmentPath) || "file",
+        caption: text || undefined,
+      });
     } else {
-      sent = await wa.sendMessage(chatId, text || "");
+      sent = await sendWhatsAppText(digits, text || "");
     }
-    return {
-      ok: true,
-      messageId: sent?.id?._serialized || null,
-      chatId,
-    };
+    if (!sent.ok) return { ok: false, reason: sent.reason, chatId: sent.jid };
+    return { ok: true, messageId: sent.messageId, chatId: sent.jid };
   } catch (err) {
     reportWhatsAppTransportFailure(err, "campaign-send");
     return { ok: false, error: err?.message || String(err) };
@@ -164,20 +156,11 @@ export async function sendCampaignOutbound({
 
 export async function checkWhatsAppRegistered(mobile) {
   if (!isWhatsAppReady) return { ok: false, registered: false, reason: "not_ready" };
-  const wa = getWhatsAppClient();
-  if (!wa) return { ok: false, registered: false, reason: "no_client" };
-  const digits = String(mobile).replace(/\D/g, "");
-  const chatId = `${digits}@c.us`;
-  try {
-    const registered = await wa.isRegisteredUser(chatId);
-    return { ok: true, registered: Boolean(registered) };
-  } catch {
-    return { ok: true, registered: true };
-  }
+  return { ok: true, registered: await isWhatsAppNumberRegistered(mobile) };
 }
 
-export async function handleCampaignMessageAck(msg, ack) {
-  const waId = msg?.id?._serialized;
+/** @param {string} waId sent message id  @param {number} ack -1 failed … 4 played */
+export async function handleCampaignMessageAck(waId, ack) {
   if (!waId) return;
 
   const nextStatus = ackToStatus(ack);

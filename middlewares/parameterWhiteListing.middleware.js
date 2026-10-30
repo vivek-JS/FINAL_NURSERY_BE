@@ -41,6 +41,7 @@ const allowedParams = [
   "deliveryDate", // GET /sowing/excess-batches
   "need", // GET /sowing/excess-batches
   "windowDays", // GET /sowing/excess-batches
+  "pastWindowDays", // GET /sowing/excess-batches — days before delivery to look back
   "releaseOrderId", // GET /sowing/excess-batches — delivery change: count this order's own sowing as free
   "group", // GET /sowing/capacity-sheet/board — N-day column groups
   "year",
@@ -75,6 +76,12 @@ const allowedParams = [
   "addedFrom", // GET /sowing/completions date-added filter
   "addedTo",
   "view", // GET /sowing/completions?view=entries — one row per sow entry
+  "lite", // GET /sowing/completions?lite=1 — slim entry rows for Ram Live
+  "readyPlantsReceived", // GET /sowing/completions?readyPlantsReceived=false — pending truck receive
+  "readyDate", // GET /sowing/completions exact ready day YYYY-MM-DD
+  "excessOnly", // GET /sowing/completions excessOnly=true
+  "daysLeftGt", // GET /sowing/completions days left until ready, strictly greater
+  "daysLeftLt", // GET /sowing/completions days left until ready, strictly less
   "stock", // GET /sowing/sow-batch-stock — remaining | all
   "ready", // GET /sowing/sow-batch-stock — now | later | all
   "shed", // GET /sowing/sow-batch-stock — shed name filter
@@ -94,6 +101,7 @@ const allowedParams = [
   "talukaName",
   "dealer",
   "farmReady",
+  "unsown", // GET /order/getOrders — accepted sowing plants not yet sowingDone
   "ready_for_dispatch",
   "sortByDelivery", // getOrders ready tab: "true" = sort by deliveryDate
   "sortByReadyEntered", // getOrders ready tab: "true" = sort by readyForDispatchEnteredAt (default = dispatchTargetDate)
@@ -273,6 +281,7 @@ allowedQueryKeys.add("_"); // cache-bust query param (admin MIS)
 allowedQueryKeys.add("forceResend"); // POST order send-*-whatsapp — unlimited test resend
 allowedQueryKeys.add("templateType"); // GET /order/whatsapp/outbound — filter by template
 allowedQueryKeys.add("batchId"); // GET /order/whatsapp/outbound — campaign batch filter ("none" = unbatched)
+allowedQueryKeys.add("watch"); // GET /whatsapp-connection/status — keep QR refreshing while the page is open
 allowedQueryKeys.add("paymentTiming"); // GET /order/payments
 allowedQueryKeys.add("pendingAdvanceOnly"); // GET /order/payments accountant dashboard
 allowedQueryKeys.add("stockSort");

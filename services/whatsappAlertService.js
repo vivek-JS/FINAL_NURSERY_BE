@@ -11,13 +11,14 @@
 
 import mongoose from "mongoose";
 import {
-  getWhatsAppClient,
   isWhatsAppReady,
-  isWhatsAppDetachedError,
   reportWhatsAppTransportFailure,
   waitUntilWhatsAppReady,
   isWhatsAppConnectionInProgress,
-} from "./whatsappClient.js";
+  ensureWhatsAppConnected,
+  hasSavedWhatsAppSession,
+  sendWhatsAppText,
+} from "./whatsapp/index.js";
 import { getPendingLinkedAgriLoads } from "./linkedAgriLoadGuard.service.js";
 import { normalizePhoneForWhitelist } from "../utils/agriLoadLinkSigner.js";
 import Order from "../models/order.model.js";
@@ -157,72 +158,20 @@ export function getAdminNumbersFromEnv() {
     .map(formatNumber);
 }
 
-/** Digits with country code for getNumberId (no @suffix). */
-function digitsForWhatsAppLookup(number) {
-  const raw = String(number).trim();
-  const digits = (raw.includes("@") ? raw.split("@")[0] : raw).replace(/\D/g, "");
-  if (digits.length === 10) return `91${digits}`;
-  return digits;
-}
-
-/**
- * Resolve chat id via WhatsApp (required for many numbers not already in chat list).
- */
-async function resolveWhatsAppChatId(wa, number) {
-  const digits = digitsForWhatsAppLookup(number);
-  const fallback = formatNumber(number);
-
-  if (!digits || digits.length < 10) {
-    return fallback;
-  }
-
-  try {
-    const registered = await wa.getNumberId(digits);
-    if (registered?._serialized) {
-      return registered._serialized;
-    }
-  } catch (err) {
-    // Dead Puppeteer page — don't pretend fallback send will work
-    if (isWhatsAppDetachedError(err)) throw err;
-    console.warn(
-      `[WhatsApp Alert] getNumberId(${digits}) failed, using ${fallback}:`,
-      err?.message || err
-    );
-  }
-
-  return fallback;
-}
-
 async function sendWhatsAppMessageOnce(number, message) {
   const chatId = formatNumber(number);
-
-  if (!isWhatsAppReady) {
-    return { ok: false, chatId, reason: "not_ready" };
+  const sent = await sendWhatsAppText(number, message);
+  if (!sent.ok) {
+    return { ok: false, chatId, resolvedId: sent.jid, reason: sent.reason };
   }
-
-  const wa = getWhatsAppClient();
-  if (!wa) {
-    return { ok: false, chatId, reason: "no_client" };
-  }
-
-  const targetId = await resolveWhatsAppChatId(wa, number);
-  const sent = await wa.sendMessage(targetId, message);
-  console.log(
-    `[WhatsApp Alert] ✅ Sent to ${targetId}`,
-    sent?.id?._serialized ? `(id ${sent.id._serialized})` : ""
-  );
-  return {
-    ok: true,
-    chatId,
-    resolvedId: targetId,
-    messageId: sent?.id?._serialized || null,
-  };
+  console.log(`[WhatsApp Alert] ✅ Sent to ${sent.jid}`, sent.messageId ? `(id ${sent.messageId})` : "");
+  return { ok: true, chatId, resolvedId: sent.jid, messageId: sent.messageId };
 }
 
 /**
  * Sends a WhatsApp message to a single number.
  * Never throws — returns { ok, chatId, resolvedId?, error?, reason? }.
- * On detached Frame, re-inits client and retries once.
+ * On a dropped connection, waits for the auto-reconnect and retries once.
  */
 export async function sendWhatsAppMessage(number, message) {
   const chatId = formatNumber(number);
@@ -241,10 +190,8 @@ export async function sendWhatsAppMessage(number, message) {
   } catch (err) {
     const error = err?.message || String(err);
     if (reportWhatsAppTransportFailure(err, "alert-send")) {
-      console.warn(
-        `[WhatsApp Alert] Detached frame on ${chatId} — waiting for reinit then retry once`
-      );
-      const ready = await waitUntilWhatsAppReady(90000);
+      console.warn(`[WhatsApp Alert] Connection dropped on ${chatId} — waiting for reconnect then retry once`);
+      const ready = await waitUntilWhatsAppReady(60000);
       if (ready) {
         try {
           return await sendWhatsAppMessageOnce(number, message);
@@ -267,13 +214,14 @@ export async function sendWhatsAppMessage(number, message) {
 async function tryAutoReconnectForAlert(context) {
   if (process.env.WHATSAPP_ALERTS_AUTO_RECONNECT === "false") return false;
   if (isWhatsAppReady) return true;
-  const timeoutMs = Number(process.env.WHATSAPP_ALERT_RECONNECT_MS || 120000);
+  if (!hasSavedWhatsAppSession() && !isWhatsAppConnectionInProgress()) return false;
+  const timeoutMs = Number(process.env.WHATSAPP_ALERT_RECONNECT_MS || 60000);
   if (isWhatsAppConnectionInProgress()) {
-    console.warn(`[WhatsApp Alert] ${context} — waiting for startup / auth (${timeoutMs}ms)...`);
+    console.warn(`[WhatsApp Alert] ${context} — waiting for connection (${timeoutMs}ms)...`);
     return await waitUntilWhatsAppReady(timeoutMs);
   }
-  console.warn(`[WhatsApp Alert] ${context} — waiting for client ready (${timeoutMs}ms)...`);
-  return await waitUntilWhatsAppReady(timeoutMs);
+  const result = await ensureWhatsAppConnected(context, { timeoutMs });
+  return result.ok;
 }
 
 export async function alertAdmins(message, context = "alert", options = {}) {

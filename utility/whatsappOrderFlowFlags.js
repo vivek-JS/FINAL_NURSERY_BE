@@ -5,7 +5,7 @@
  * Disable (preferred): `DISABLE_WHATSAPP_ORDER_FLOW=true` and/or `WHATSAPP_ORDER_FLOW_ENABLED=false`
  *
  * Dual channel (default when flow is on): farmers can message via
- *   • scanned QR / whatsapp-web.js (same session as alerts)
+ *   • scanned QR / Baileys linked device (same session as alerts)
  *   • WATI webhook → `/api/v1/whatsapp-order/webhook`
  *
  * Opt out of one channel:
@@ -27,7 +27,7 @@ export function isWhatsappOrderFlowDisabled() {
   return true;
 }
 
-/** Scanned WhatsApp session (whatsapp-web.js). */
+/** Scanned WhatsApp session (Baileys). Env key kept as WEBJS for backward compatibility. */
 export function isWhatsappOrderWebJsEnabled() {
   if (process.env.DISABLE_WHATSAPP_ORDER_WEBJS === "true") {
     return false;

@@ -25,12 +25,10 @@ import {
 } from "../services/whatsappAlertEngine.service.js";
 import {
   isWhatsAppReady,
-  getWhatsAppSessionPath,
-  hasPersistedWhatsAppSession,
   getWhatsAppLinkedPhone,
-  getWhatsAppQrStatus,
+  getWhatsAppConnectionStatus,
   ensureWhatsAppConnected,
-} from "../services/whatsappClient.js";
+} from "../services/whatsapp/index.js";
 import { getPendingWhatsAppAlertCount } from "../services/whatsappAlertService.js";
 
 const router = express.Router();
@@ -96,8 +94,7 @@ router.post("/new-order/:orderId", async (req, res) => {
 });
 
 router.get("/status", (req, res) => {
-  const sessionPath = getWhatsAppSessionPath();
-  const qr = getWhatsAppQrStatus();
+  const connection = getWhatsAppConnectionStatus();
   return res.status(200).json({
     status: "Success",
     whatsappReady: isWhatsAppReady,
@@ -106,15 +103,12 @@ router.get("/status", (req, res) => {
     orderFlowEnabled: process.env.WHATSAPP_ORDER_FLOW_ENABLED === "true",
     linkedBotPhone: getWhatsAppLinkedPhone(),
     adminNumbers: getAdminNumbersFromEnv(),
-    sessionPath,
-    hasSavedSession: hasPersistedWhatsAppSession(sessionPath),
+    hasSavedSession: connection.sessionSaved,
+    connection,
     pendingAlertCount: getPendingWhatsAppAlertCount(),
-    qr,
     hint: isWhatsAppReady
       ? "WhatsApp connected. Messages send FROM linkedBotPhone."
-      : getPendingWhatsAppAlertCount() > 0
-        ? `WhatsApp disconnected — ${getPendingWhatsAppAlertCount()} alert(s) queued. POST /reconnect?background=1 then check status; scan QR on server if session expired.`
-        : "If whatsappReady is false: POST /reconnect?background=1, or scan QR from qr.qrFile on server.",
+      : "WhatsApp not linked/connected — open ERP → WhatsApp Connection to scan the QR.",
   });
 });
 
@@ -123,7 +117,7 @@ router.post("/reconnect", async (req, res) => {
   const background = req.query?.background === "1" || req.body?.background === true;
 
   if (background) {
-    void ensureWhatsAppConnected("manual-api-background").then(async (result) => {
+    void ensureWhatsAppConnected("manual-api-background", { force: true }).then(async (result) => {
       if (result.ok) {
         try {
           await flushPendingWhatsAppAlerts();
@@ -141,7 +135,7 @@ router.post("/reconnect", async (req, res) => {
   }
 
   try {
-    const result = await ensureWhatsAppConnected("manual-api");
+    const result = await ensureWhatsAppConnected("manual-api", { force: true });
     let flush = { flushed: 0, remaining: getPendingWhatsAppAlertCount() };
     if (result.ok) {
       flush = await flushPendingWhatsAppAlerts();
@@ -153,7 +147,7 @@ router.post("/reconnect", async (req, res) => {
       pendingAlertCount: getPendingWhatsAppAlertCount(),
       result,
       flush,
-      qr: getWhatsAppQrStatus(),
+      connection: getWhatsAppConnectionStatus(),
     });
   } catch (err) {
     return res.status(500).json({

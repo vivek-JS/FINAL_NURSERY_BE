@@ -7,7 +7,6 @@ REMOTE="${1:-root@167.71.232.6}"
 APP_DIR="/var/www/FINAL_NURSERY_BE"
 BRANCH="${DEPLOY_BRANCH:-prod}"
 PM2_NAME="${PM2_NAME:-erp-backend}"
-WHATSAPP_SESSION_DIR="/var/www/erp-whatsapp/.wwebjs_auth"
 
 echo "==> Deploy backend -> ${REMOTE}:${APP_DIR} (branch ${BRANCH})"
 ssh "$REMOTE" bash -s <<REMOTE_SCRIPT
@@ -18,22 +17,22 @@ git fetch origin
 git reset --hard origin/${BRANCH}
 cp -f /tmp/final_nursery_be.env.bak .env 2>/dev/null || true
 
-# WhatsApp LocalAuth — persistent path outside git deploy (one-time QR scan)
-mkdir -p ${WHATSAPP_SESSION_DIR}
-chown -R "\$(whoami):\$(whoami)" /var/www/erp-whatsapp
-if ! grep -q '^WHATSAPP_SESSION_PATH=' .env 2>/dev/null; then
-  echo "WHATSAPP_SESSION_PATH=${WHATSAPP_SESSION_DIR}" >> .env
-fi
 if ! grep -q '^NODE_ENV=' .env 2>/dev/null; then
   echo "NODE_ENV=production" >> .env
 else
   sed -i 's/^NODE_ENV=.*/NODE_ENV=production/' .env
 fi
 
+# Baileys login lives in MongoDB (whatsapp_session_keys) — no session folder on disk.
+# Prefer a stable session id so deploys keep the same linked device.
+if ! grep -q '^WHATSAPP_SESSION_ID=' .env 2>/dev/null; then
+  echo "WHATSAPP_SESSION_ID=erp-prod" >> .env
+fi
+
 export PUPPETEER_SKIP_DOWNLOAD=true
 npm install
 
-# Graceful reload preserves WhatsApp session (kill_timeout in ecosystem.config.cjs)
+# Graceful reload (kill_timeout in ecosystem.config.cjs)
 if pm2 describe ${PM2_NAME} >/dev/null 2>&1; then
   pm2 reload ecosystem.config.cjs --only ${PM2_NAME} --update-env
 else

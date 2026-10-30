@@ -1,12 +1,24 @@
 import "dotenv/config";
 import mongoose from "mongoose";
 import server from "./app.js";
+import { authenticateToken, authorizeRoles } from "./middlewares/auth.middleware.js";
+import driverPaymentRouter from "./routes/driverPayment.route.js";
+import { getOutstandingBalances } from "./controllers/orderOutstandingBalances.controller.js";
 import { attachVoiceFeedbackWebSocket } from "./services/voiceFeedback/voiceBridge.ws.js";
 import { warmUpFaceModels } from "./services/faceRecognition.service.js";
 import {
   startWhatsAppClient,
   shutdownWhatsAppClient,
-} from "./services/whatsappClient.js";
+} from "./services/whatsapp/index.js";
+
+/** Bound here too so a later app.js overwrite cannot drop GET /api/v1/driver-payments. */
+server.use("/api/v1/driver-payments", authenticateToken, driverPaymentRouter);
+server.get(
+  "/api/v1/order/outstanding-balances",
+  authenticateToken,
+  authorizeRoles(["ACCOUNTANT", "SUPER_ADMIN", "SUPERADMIN", "ADMIN"]),
+  getOutstandingBalances
+);
 
 /**
  * Resolve Mongo URI for the running environment.

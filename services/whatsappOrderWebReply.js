@@ -1,5 +1,5 @@
 /**
- * Reply on the same whatsapp-web.js chat using msg.reply() — fixes "No LID for user".
+ * Reply on the same Baileys chat using msg.reply() — preferred when an inbound is cached.
  */
 
 import { normalizeWhatsAppMobile } from "./whatsappOrderFarmer.service.js";

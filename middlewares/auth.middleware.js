@@ -27,7 +27,7 @@ export const authenticateToken = async (req, res, next) => {
       '/api/v1/location', // Location endpoints are public
       '/api/v1/whatsapp-campaign-bridge', // Campaign app → ERP WA (X-WA-Campaign-Key)
       '/api/v1/whatsapp-order/webhook', // WhatsApp webhook from Wati (public, no auth)
-      '/api/v1/whatsapp-order/status', // Order bot + web.js readiness (public)
+      '/api/v1/whatsapp-order/status', // Order bot + linked-session readiness (public)
       '/api/v1/opt-in/webhook', // Opt-in/opt-out webhook from Wati (public, no auth)
       '/api/v1/whatsapp-status/webhook', // WATI unified: template status + messageReceived (public)
       '/api/v1/rate-change-requests/by-token/', // Rate change approval page — token is the credential

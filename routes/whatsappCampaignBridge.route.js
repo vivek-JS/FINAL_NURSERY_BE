@@ -1,6 +1,6 @@
 /**
  * Internal API for whatsapp-automation app (same server).
- * Uses ERP whatsapp-web.js session — no second QR scan.
+ * Uses the ERP linked WhatsApp session — no second QR scan.
  */
 import express from "express";
 import {
@@ -9,12 +9,11 @@ import {
   getCampaignBridgeStatus,
 } from "../services/whatsappCampaignBridge.service.js";
 import {
-  isWhatsAppConnectionInProgress,
   getWhatsAppBridgePublicStatus,
-  startWhatsAppClient,
+  keepWhatsAppQrAlive,
   ensureWhatsAppConnected,
   resetWhatsAppSessionForRelink,
-} from "../services/whatsappClient.js";
+} from "../services/whatsapp/index.js";
 
 const router = express.Router();
 
@@ -33,13 +32,10 @@ function requireInternalKey(req, res, next) {
 router.use(requireInternalKey);
 
 router.get("/status", (_req, res) => {
-  const pub = getWhatsAppBridgePublicStatus();
-  if (!pub.whatsappReady && !pub.qrPayload && !isWhatsAppConnectionInProgress()) {
-    void startWhatsAppClient().catch(() => {});
-  }
+  keepWhatsAppQrAlive();
   return res.json({
     mode: "erp",
-    ...pub,
+    ...getWhatsAppBridgePublicStatus(),
     ...getCampaignBridgeStatus(),
   });
 });
@@ -59,7 +55,7 @@ router.post("/send", async (req, res) => {
 });
 
 router.post("/reconnect", async (_req, res) => {
-  const result = await ensureWhatsAppConnected("campaign-bridge");
+  const result = await ensureWhatsAppConnected("campaign-bridge", { wantQr: true, force: true });
   return res.status(result.ok ? 200 : 502).json(result);
 });
 

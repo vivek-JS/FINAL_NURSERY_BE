@@ -688,7 +688,7 @@ export const handleWhatsAppWebhook = catchAsync(async (req, res) => {
 });
 
 /**
- * Inbound order message (whatsapp-web.js session or internal test).
+ * Inbound order message (scanned Baileys session or internal test).
  */
 export async function handleInboundOrderMessage({
   chatMobile,
