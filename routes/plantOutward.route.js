@@ -63,6 +63,13 @@ import {
   postSecondaryInwardDestroy,
 } from "../controllers/secondaryInwardDestroy.controller.js";
 import { optionalVehicleLoadPhotosUpload } from "../middleware/vehicleLoadPhotos.middleware.js";
+import {
+  getPrimaryBoard,
+  postPrimaryReceive,
+  postPrimarySend,
+  postPrimarySow,
+} from "../controllers/primaryBatchLedger.controller.js";
+import { requirePrimaryJob } from "../utility/primaryShedNotice.js";
 
 const router = express.Router();
 
@@ -106,6 +113,10 @@ router.post(
   "/secondaryInward-to-secondaryOutward/:batchId",
   secondaryInwardToSecondaryOutward
 );
+router.get("/primary/board", requirePrimaryJob, getPrimaryBoard);
+router.post("/primary/receive", requirePrimaryJob, postPrimaryReceive);
+router.post("/primary/sow", requirePrimaryJob, postPrimarySow);
+router.post("/primary/send", requirePrimaryJob, postPrimarySend);
 /** Namespaced aliases (same handlers) — primary vs secondary mobile flows */
 router.post("/primary/lab-to-primary-inward/:batchId", labToPrimaryInward);
 router.post("/primary/primary-inward-fifo-preview", primaryInwardFifoPreviewGlobal);

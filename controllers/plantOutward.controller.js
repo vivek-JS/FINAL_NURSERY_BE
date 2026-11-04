@@ -6,6 +6,7 @@ import Tray from "../models/tray.model.js";
 import mongoose from "mongoose";
 import moment from "moment";
 import PlantOutward from "../models/plantOutward.model.js";
+import { notifyPrimaryShed } from "../services/primaryShedNotice.service.js";
 import Sowing from "../models/sowing.model.js";
 import DispatchBatch from "../models/dispatchBatch.model.js";
 import {
@@ -814,6 +815,8 @@ const addLabEntry = catchAsync(async (req, res, next) => {
     if (!updatedPlantOutward) {
       return next(new AppError("Failed to update plant outward", 400));
     }
+
+    notifyPrimaryShed("lab-outward").catch(() => {});
 
     const response = generateResponse(
       "Success",

@@ -194,7 +194,7 @@ const primaryOutwardSchema = new Schema({
   numberOfBottles: {
     type: Number,
     required: true,
-    min: 1,
+    min: 0,
   },
   size: {
     type: String,
@@ -209,7 +209,7 @@ const primaryOutwardSchema = new Schema({
   numberOfTrays: {
     type: Number,
     required: true,
-    min: 1,
+    min: 0,
   },
   totalQuantity: {
     type: Number,
@@ -259,6 +259,10 @@ const primaryOutwardSchema = new Schema({
     type: String,
     trim: true,
     default: "",
+  },
+  /** Set when this line was created by the primary ledger send. Bottles stay 0. */
+  ledgerSowId: {
+    type: Schema.Types.ObjectId,
   },
   /** Secondary shed acknowledged this line (Accept tab) before recording secondary inward. */
   secondaryAcknowledgedAt: {
