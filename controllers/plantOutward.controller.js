@@ -69,6 +69,7 @@ import {
   unionDispatchOrderObjectIds,
 } from "../services/secondaryVehicleLoad.service.js";
 import { listSecondaryVehicleDispatches } from "../services/secondaryVehicleDispatchesList.service.js";
+import { isDispatchEmployee } from "../services/dispatchAssignment.service.js";
 import { getDispatchDaySummary as dispatchDaySummaryForDay } from "../services/dispatchDaySummary.service.js";
 import {
   listSowBatchOptionsForDispatch,
@@ -5420,6 +5421,7 @@ const getSecondaryVehicleDispatches = catchAsync(async (req, res) => {
     date: req.query.date,
     from: req.query.from,
     to: req.query.to,
+    assignedToUserId: isDispatchEmployee(req.user) ? req.user._id : "",
   });
   res
     .status(200)

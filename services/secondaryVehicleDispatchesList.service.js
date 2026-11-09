@@ -93,11 +93,14 @@ function istRange({ date, from, to }) {
   return Object.keys(range).length ? range : null;
 }
 
-function buildListFilter({ search, statusFilter, date, from, to }) {
+function buildListFilter({ search, statusFilter, date, from, to, assignedToUserId }) {
   const filter = {
     isDeleted: { $ne: true },
     transportStatus: { $in: DISPATCH_SHED_ALLOWED_STATUSES },
   };
+  if (assignedToUserId && mongoose.isValidObjectId(String(assignedToUserId))) {
+    filter.assignedTo = new mongoose.Types.ObjectId(String(assignedToUserId));
+  }
   const range = istRange({ date, from, to });
   if (range) filter.createdAt = range;
   if (statusFilter === "loaded") {
@@ -306,6 +309,13 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
     orderDispatchPreview,
     hasPremiumCustomer: orderDispatchPreview.some((r) => r.isPremium),
     orderCount: unionCount || (d.orderIds || []).length,
+    assignedTo:
+      d.assignedTo && typeof d.assignedTo === "object"
+        ? d.assignedTo._id
+        : d.assignedTo || null,
+    assignedToName:
+      d.assignedTo && typeof d.assignedTo === "object" ? d.assignedTo.name || "" : "",
+    assignedAt: d.assignedAt || null,
   };
 }
 
@@ -416,6 +426,7 @@ export async function listSecondaryVehicleDispatches({
   date = "",
   from = "",
   to = "",
+  assignedToUserId = "",
 } = {}) {
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.min(50, Math.max(1, Number(limit) || 20));
@@ -429,8 +440,22 @@ export async function listSecondaryVehicleDispatches({
     console.error("sweepCancelledInstantPickups:", e?.message || e);
   }
 
-  const filter = buildListFilter({ search: qSearch, statusFilter, date, from, to });
-  const countBase = buildListFilter({ search: qSearch, statusFilter: "", date, from, to });
+  const filter = buildListFilter({
+    search: qSearch,
+    statusFilter,
+    date,
+    from,
+    to,
+    assignedToUserId,
+  });
+  const countBase = buildListFilter({
+    search: qSearch,
+    statusFilter: "",
+    date,
+    from,
+    to,
+    assignedToUserId,
+  });
 
   const [total, docs, pendingTotal, loadedTotal] = await Promise.all([
     Dispatch.countDocuments(filter),
@@ -439,8 +464,9 @@ export async function listSecondaryVehicleDispatches({
       .skip(skip)
       .limit(limitNum)
       .select(
-        "transportId transportStatus isInstantPickup driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds lastOfficeEditedAt createdAt updatedAt shedReturns shedReturnedPlants"
+        "transportId transportStatus isInstantPickup driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds lastOfficeEditedAt createdAt updatedAt shedReturns shedReturnedPlants assignedTo assignedAt"
       )
+      .populate("assignedTo", "name")
       .lean(),
     Dispatch.countDocuments({
       ...countBase,

@@ -447,6 +447,10 @@ import paymentReconciliationRoute from "./routes/payment.routes.js";
 import bankingRoute from "./modules/banking/routes/banking.routes.js";
 import iciciCorporateRoute from "./src/routes/icici.routes.js";
 import { optionalVehicleLoadPhotosUpload } from "./middleware/vehicleLoadPhotos.middleware.js";
+import {
+  postAssignVehicleDispatch,
+  requireOwnAssignedDispatch,
+} from "./controllers/dispatchAssignment.controller.js";
 
 // Inventory Management Routes
 import productRoute from "./routes/product.route.js";
@@ -809,21 +813,25 @@ server.get(
 server.get(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
   authenticateToken,
+  requireOwnAssignedDispatch,
   getVehicleDispatchAllocationSuggestions
 );
 server.get(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/sow-ready-entries",
   authenticateToken,
+  requireOwnAssignedDispatch,
   getSowReadyEntries
 );
 server.get(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/sow-batch-options",
   authenticateToken,
+  requireOwnAssignedDispatch,
   getSowBatchOptions
 );
 server.post(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/sow-load-preview",
   authenticateToken,
+  requireOwnAssignedDispatch,
   postSowLoadPreview
 );
 server.get(
@@ -844,23 +852,32 @@ server.get(
 server.post(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/load-preview",
   authenticateToken,
+  requireOwnAssignedDispatch,
   previewSecondaryVehicleLoadHandler
 );
 server.post(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/load",
   authenticateToken,
+  requireOwnAssignedDispatch,
   optionalVehicleLoadPhotosUpload,
   postSecondaryVehicleLoad
 );
 server.get(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/loaded-lines",
   authenticateToken,
+  requireOwnAssignedDispatch,
   getSecondaryVehicleLoadedLines
 );
 server.post(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/unload",
   authenticateToken,
+  requireOwnAssignedDispatch,
   postSecondaryVehicleUnload
+);
+server.post(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/assign",
+  authenticateToken,
+  postAssignVehicleDispatch
 );
 server.get(
   "/api/v1/laboutward/secondary/farmer-dispatch/pickup-batch-suggestions",

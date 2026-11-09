@@ -36,6 +36,7 @@ const userSchema = new Schema({
       "ACCOUNTANT",
       "CASHIER",
       "DISPATCH_MANAGER",
+      "DISPATCH",
       "RAM_AGRI_SALES",
       "RAM_AGRI_SALES_MANAGER",
       "RAM_AGRI_SALES_OFFICE_MANAGER",
@@ -57,6 +58,7 @@ const userSchema = new Schema({
       "CASHIER",
       "OFFICE_ADMIN",
       "DISPATCH_MANAGER",
+      "DISPATCH",
       "Manager",
       "HR",
       "PRIMARY",
@@ -76,6 +78,16 @@ const userSchema = new Schema({
   isDisabled: {
     type: Boolean,
     default: false,
+  },
+  /**
+   * Dispatch employee → their dispatch manager.
+   * Used so a manager can assign vehicles only to people who report to them.
+   */
+  reportsTo: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+    index: true,
   },
   defaultState: {
     type: String,
@@ -182,6 +194,27 @@ const userSchema = new Schema({
     select: false,
   },
 }, { timestamps: true });
+
+userSchema.pre("validate", async function validateDispatchReportsTo(next) {
+  try {
+    if (this.jobTitle !== "DISPATCH") return next();
+    if (!this.reportsTo) {
+      this.invalidate("reportsTo", "Dispatch employee must report to a dispatch manager");
+      return next();
+    }
+    const mgr = await this.constructor
+      .findById(this.reportsTo)
+      .select("jobTitle role isDisabled")
+      .lean();
+    const title = String(mgr?.jobTitle || mgr?.role || "");
+    if (!mgr || mgr.isDisabled || title !== "DISPATCH_MANAGER") {
+      this.invalidate("reportsTo", "Reports to must be an active dispatch manager");
+    }
+    return next();
+  } catch (err) {
+    return next(err);
+  }
+});
 
 // Middleware to handle DealerBooking creation for new dealers
 

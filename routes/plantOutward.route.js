@@ -59,6 +59,10 @@ import {
 } from "../controllers/plantOutward.controller.js";
 import { postSecondaryVehicleReturn } from "../controllers/secondaryVehicleReturn.controller.js";
 import {
+  postAssignVehicleDispatch,
+  requireOwnAssignedDispatch,
+} from "../controllers/dispatchAssignment.controller.js";
+import {
   postSecondaryDestroyRemaining,
   postSecondaryInwardDestroy,
 } from "../controllers/secondaryInwardDestroy.controller.js";
@@ -161,39 +165,55 @@ router.get("/secondary/vehicle-dispatches", getSecondaryVehicleDispatches);
 router.get("/secondary/dispatch-day-summary", getDispatchDaySummary);
 router.get(
   "/secondary/vehicle-dispatch/:dispatchId/allocation-suggestions",
+  requireOwnAssignedDispatch,
   getVehicleDispatchAllocationSuggestions
 );
 router.get(
   "/secondary/vehicle-dispatch/:dispatchId/sow-ready-entries",
+  requireOwnAssignedDispatch,
   getSowReadyEntries
 );
 router.get("/secondary/sow-ready-entries", getSowReadyEntries);
 router.get(
   "/secondary/vehicle-dispatch/:dispatchId/sow-batch-options",
+  requireOwnAssignedDispatch,
   getSowBatchOptions
 );
 router.post(
   "/secondary/vehicle-dispatch/:dispatchId/sow-load-preview",
+  requireOwnAssignedDispatch,
   postSowLoadPreview
 );
 router.post(
   "/secondary/vehicle-dispatch/:dispatchId/load-preview",
+  requireOwnAssignedDispatch,
   previewSecondaryVehicleLoadHandler
 );
 router.post(
   "/secondary/vehicle-dispatch/:dispatchId/load",
+  requireOwnAssignedDispatch,
   optionalVehicleLoadPhotosUpload,
   postSecondaryVehicleLoad
 );
 router.get(
   "/secondary/vehicle-dispatch/:dispatchId/loaded-lines",
+  requireOwnAssignedDispatch,
   getSecondaryVehicleLoadedLines
 );
 router.post(
   "/secondary/vehicle-dispatch/:dispatchId/unload",
+  requireOwnAssignedDispatch,
   postSecondaryVehicleUnload
 );
-router.post("/secondary/vehicle-dispatch/:dispatchId/return", postSecondaryVehicleReturn);
+router.post(
+  "/secondary/vehicle-dispatch/:dispatchId/return",
+  requireOwnAssignedDispatch,
+  postSecondaryVehicleReturn
+);
+router.post(
+  "/secondary/vehicle-dispatch/:dispatchId/assign",
+  postAssignVehicleDispatch
+);
 router.get("/secondary/dispatch-stock-lines", getDispatchStockLines);
 router.get("/secondary/polyhouse-stock", getSecondaryPolyhouseStock);
 router.get("/secondary/stock-summary", getSecondaryStockSummary);

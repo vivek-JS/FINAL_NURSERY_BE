@@ -412,6 +412,22 @@ const dispatchSchema = new Schema(
         generatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
       },
     ],
+    /** Dispatch employee this vehicle is assigned to. Others with job DISPATCH cannot see it. */
+    assignedTo: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+    assignedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    assignedAt: {
+      type: Date,
+      default: null,
+    },
     /** Load photos from shed mobile app (camera captures per load session). */
     shedLoadPhotoLog: {
       type: [

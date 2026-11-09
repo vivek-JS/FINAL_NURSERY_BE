@@ -45,6 +45,7 @@ import { savePushToken } from "../controllers/notification.controller.js";
 import multer from "multer";
 import { MEDIA_IMAGE_TYPES, MEDIA_AUDIO_TYPES } from "../utils/localStorageUtils.js";
 import { forgotPassword, resetPasswordWithOtp } from "../controllers/passwordReset.controller.js";
+import { getDispatchAssignees } from "../controllers/dispatchAssignment.controller.js";
 import { loginRateLimiter, passwordResetRateLimiter } from "../middlewares/faceAttendanceRateLimit.middleware.js";
 
 const router = express.Router();
@@ -100,6 +101,7 @@ router
   )
   .get("/allusers", authenticateToken, getUsers)
   .get("/aboutMe", authenticateToken, aboutMe)
+  .get("/dispatch-assignees", authenticateToken, getDispatchAssignees)
   .get("/wallet-details/:dealerId", getDealerWalletDetails)
   .post(
     "/dealers/:dealerId/reconcile-wallet",

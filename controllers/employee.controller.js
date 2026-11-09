@@ -7,8 +7,27 @@ import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import { createChangeLog, generateChangesArray } from "../utils/changeLogHelper.js";
 
-const EMPLOYEE_PATCH_FIELDS = ["name", "phoneNumber", "jobTitle", "birthDate"];
+const EMPLOYEE_PATCH_FIELDS = ["name", "phoneNumber", "jobTitle", "birthDate", "reportsTo"];
 const DEFAULT_LOGIN_PASSWORD = "1234";
+
+function jobOf(user) {
+  return String(user?.jobTitle || user?.role || "");
+}
+
+/** Dispatch employees must point at an active DISPATCH_MANAGER. Other titles clear the link. */
+async function resolveReportsTo(jobTitle, reportsTo, next) {
+  if (jobTitle !== "DISPATCH") return { ok: true, reportsTo: null };
+  if (!reportsTo || !mongoose.isValidObjectId(String(reportsTo))) {
+    next(new AppError("Dispatch employee must report to a dispatch manager", 400));
+    return { ok: false };
+  }
+  const mgr = await Employee.findById(reportsTo).select("jobTitle role isDisabled").lean();
+  if (!mgr || mgr.isDisabled || jobOf(mgr) !== "DISPATCH_MANAGER") {
+    next(new AppError("Reports to must be an active dispatch manager", 400));
+    return { ok: false };
+  }
+  return { ok: true, reportsTo: mgr._id };
+}
 
 function assertEmployeePasswordResetAllowed(before, next) {
   if (before.role === "FARMER" || !before.jobTitle) {
@@ -23,6 +42,14 @@ function assertEmployeePasswordResetAllowed(before, next) {
 }
 
 const createEmployee = catchAsync(async (req, res, next) => {
+  if (req.body.jobTitle && !req.body.role) req.body.role = req.body.jobTitle;
+  if (req.body.reportsTo === "") req.body.reportsTo = null;
+  if (req.body.jobTitle === "DISPATCH") {
+    const resolved = await resolveReportsTo(req.body.jobTitle, req.body.reportsTo, next);
+    if (!resolved.ok) return;
+    req.body.reportsTo = resolved.reportsTo;
+    req.body.role = "DISPATCH";
+  }
   const doc = await Employee.create(req.body);
   const safe = doc.toObject();
   if (safe.password) delete safe.password;
@@ -37,6 +64,7 @@ const createEmployee = catchAsync(async (req, res, next) => {
         { field: "name", oldValue: null, newValue: doc.name },
         { field: "phoneNumber", oldValue: null, newValue: doc.phoneNumber },
         { field: "jobTitle", oldValue: null, newValue: doc.jobTitle },
+        { field: "reportsTo", oldValue: null, newValue: doc.reportsTo || null },
       ],
       description: `Employee "${doc.name}" created`,
       ipAddress: req.ip,
@@ -70,6 +98,19 @@ const updateEmployee = catchAsync(async (req, res, next) => {
   }
   if (updates.phoneNumber !== undefined) {
     updates.phoneNumber = Number(updates.phoneNumber);
+  }
+  if (updates.reportsTo === "") updates.reportsTo = null;
+
+  const nextTitle = updates.jobTitle ?? before.jobTitle;
+  if (nextTitle === "DISPATCH" || updates.jobTitle !== undefined || updates.reportsTo !== undefined) {
+    const mgrId = updates.reportsTo !== undefined ? updates.reportsTo : before.reportsTo;
+    const resolved = await resolveReportsTo(nextTitle, mgrId, next);
+    if (!resolved.ok) return;
+    updates.reportsTo = resolved.reportsTo;
+    if (nextTitle === "DISPATCH") updates.role = "DISPATCH";
+    else if (before.role === "DISPATCH" && updates.jobTitle && updates.jobTitle !== "DISPATCH") {
+      updates.role = updates.jobTitle;
+    }
   }
 
   if (Object.keys(updates).length === 0) {
@@ -252,6 +293,7 @@ const getEmployees = catchAsync(async (req, res) => {
 
   const docs = await Employee.find(filter)
     .select("-password -__v")
+    .populate("reportsTo", "name jobTitle")
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limitNum)
