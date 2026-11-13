@@ -34,8 +34,8 @@ export function sowCoverPool(plantsSowed = 0, sowingBufferPct = 0) {
 }
 
 /**
- * Excess shown for one sowing: sowed minus orders.
- * CMS percent is mortality only — it is already taken at sow, not subtracted again.
+ * Bookable excess for one sowing: sowed − CMS mortality − orders.
+ * Released mortality (`mortalityMovedToExcess`) is added by callers.
  */
 export function reportedExcessBreakdown({
   plantsSowed = 0,
@@ -52,7 +52,7 @@ export function reportedExcessBreakdown({
     orders,
     bufferPct,
     bufferPlants,
-    excess: Math.max(0, sowed - orders),
+    excess: Math.max(0, sowed - bufferPlants - orders),
   };
 }
 
@@ -60,24 +60,27 @@ export function reportedExcess(input) {
   return reportedExcessBreakdown(input).excess;
 }
 
-/** Bookable leftover = sowed − orders (+ mortality moved). Always recompute; ignore stale stamps. */
-export function slotReportedExcess(batches, sowingBufferPct = 0) {
+/** Bookable leftover = sowed − destroyed − mortality − orders (+ mortality moved). Always recompute. */
+export function slotReportedExcess(batches, sowingBufferPct = 0, includeBatch = null) {
   return (batches || []).reduce((sum, batch) => {
     if (batch?.isIrrelevant) return sum;
+    if (typeof includeBatch === "function" && !includeBatch(batch)) return sum;
+    const destroyed = Math.max(0, Math.floor(Number(batch?.destroyedPlants) || 0));
+    const sowed = Math.max(0, Math.floor(Number(batch?.plantsSowed) || 0) - destroyed);
     const moved = Math.max(0, Math.floor(Number(batch?.mortalityMovedToExcess) || 0));
-    const pct =
-      batch?.sowingBufferPct != null && Number.isFinite(Number(batch.sowingBufferPct))
-        ? Number(batch.sowingBufferPct)
+    const fromExcess = Math.max(0, Math.floor(Number(batch?.excessMovedToMortality) || 0));
+    const batchPct = Number(batch?.sowingBufferPct);
+    const pct = batch?.noMortalityReserve
+      ? 0
+      : batch?.sowingBufferPct != null && Number.isFinite(batchPct)
+        ? batchPct
         : sowingBufferPct;
-    return (
-      sum +
-      reportedExcess({
-        plantsSowed: batch?.plantsSowed,
-        orderCoveredPlants: batch?.orderCoveredPlants,
-        sowingBufferPct: pct,
-      }) +
-      moved
-    );
+    const parts = reportedExcessBreakdown({
+      plantsSowed: sowed,
+      orderCoveredPlants: batch?.orderCoveredPlants,
+      sowingBufferPct: pct,
+    });
+    return sum + Math.max(0, parts.plantsSowed - parts.bufferPlants - parts.orders + moved - fromExcess);
   }, 0);
 }
 

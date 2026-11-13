@@ -224,6 +224,10 @@ async function loadSheetContext({ from, to, plantId, subtypeId, unbounded = fals
                           destroyedPlants: { $ifNull: ["$$batch.destroyedPlants", 0] },
                           orderCoveredPlants: { $ifNull: ["$$batch.orderCoveredPlants", 0] },
                           noMortalityReserve: { $ifNull: ["$$batch.noMortalityReserve", false] },
+                          isIrrelevant: { $ifNull: ["$$batch.isIrrelevant", false] },
+                          sowingBufferPct: "$$batch.sowingBufferPct",
+                          mortalityMovedToExcess: { $ifNull: ["$$batch.mortalityMovedToExcess", 0] },
+                          excessMovedToMortality: { $ifNull: ["$$batch.excessMovedToMortality", 0] },
                           isExcessiveSowing: { $ifNull: ["$$batch.isExcessiveSowing", false] },
                           excessAllocations: {
                             $map: {

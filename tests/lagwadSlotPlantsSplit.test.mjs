@@ -7,6 +7,7 @@ import {
   reportedExcess,
   reportedExcessBreakdown,
   shownSowingExcess,
+  slotReportedExcess,
 } from "../utility/lagwadSlotPlantsSplit.js";
 
 describe("lagwad 90/10 split", () => {
@@ -86,6 +87,27 @@ describe("lagwad 90/10 split", () => {
       shownSowingExcess({ isIrrelevant: true, plantsSowed: 10000, orderCoveredPlants: 0 }, 12),
       0
     );
+  });
+
+  it("slot excess holds mortality for every batch and drops irrelevant sowings", () => {
+    const free = slotReportedExcess(
+      [
+        { isIrrelevant: true, plantsSowed: 68670, orderCoveredPlants: 44750, sowingBufferPct: 12 },
+        { plantsSowed: 128142, orderCoveredPlants: 107237, sowingBufferPct: 0, noMortalityReserve: true },
+        { plantsSowed: 35028, orderCoveredPlants: 30448, sowingBufferPct: 12 },
+        { plantsSowed: 1000, destroyedPlants: 200, orderCoveredPlants: 0, sowingBufferPct: 12 },
+        {
+          plantsSowed: 1000,
+          orderCoveredPlants: 0,
+          sowingBufferPct: 12,
+          mortalityMovedToExcess: 50,
+          excessMovedToMortality: 20,
+        },
+      ],
+      12
+    );
+    // confirmed 20905 + 15 Nov 377 + destroyed net 704 + moved 50 − from excess 20
+    assert.equal(free, 20905 + 377 + 704 + 910);
   });
 
   it("mixed cover + leftover: reserved + available = actual", () => {
