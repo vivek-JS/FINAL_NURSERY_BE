@@ -14,16 +14,16 @@ function jobOf(user) {
   return String(user?.jobTitle || user?.role || "");
 }
 
-/** Dispatch employees must point at an active DISPATCH_MANAGER. Other titles clear the link. */
+/** Dispatch employees report to an active SECONDARY person. Other titles clear the link. */
 async function resolveReportsTo(jobTitle, reportsTo, next) {
   if (jobTitle !== "DISPATCH") return { ok: true, reportsTo: null };
   if (!reportsTo || !mongoose.isValidObjectId(String(reportsTo))) {
-    next(new AppError("Dispatch employee must report to a dispatch manager", 400));
+    next(new AppError("Dispatch employee must report to a secondary employee", 400));
     return { ok: false };
   }
   const mgr = await Employee.findById(reportsTo).select("jobTitle role isDisabled").lean();
-  if (!mgr || mgr.isDisabled || jobOf(mgr) !== "DISPATCH_MANAGER") {
-    next(new AppError("Reports to must be an active dispatch manager", 400));
+  if (!mgr || mgr.isDisabled || jobOf(mgr) !== "SECONDARY") {
+    next(new AppError("Reports to must be an active secondary employee", 400));
     return { ok: false };
   }
   return { ok: true, reportsTo: mgr._id };

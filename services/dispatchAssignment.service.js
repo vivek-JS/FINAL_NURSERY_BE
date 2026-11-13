@@ -16,15 +16,21 @@ export function isDispatchEmployee(user) {
   return jobOf(user) === "DISPATCH";
 }
 
-/** Dispatch manager, admin, or super admin may assign a vehicle. */
+/** Dispatch manager, secondary, admin, or super admin may assign a vehicle. */
 export function canAssignDispatch(user) {
   const job = jobOf(user);
   return (
     job === "DISPATCH_MANAGER" ||
+    job === "SECONDARY" ||
     job === "ADMIN" ||
     job === "SUPER_ADMIN" ||
     job === "SUPERADMIN"
   );
+}
+
+function assignsOwnTeam(user) {
+  const job = jobOf(user);
+  return job === "DISPATCH_MANAGER" || job === "SECONDARY";
 }
 
 function plantCount(dispatch) {
@@ -41,7 +47,7 @@ function plantCount(dispatch) {
 
 /**
  * Employees who can receive a vehicle.
- * A dispatch manager only sees people who report to them.
+ * Secondary and dispatch manager only see people who report to them.
  * Admin and super admin see every dispatch employee.
  */
 export async function listDispatchAssignees(actor) {
@@ -52,7 +58,7 @@ export async function listDispatchAssignees(actor) {
     isDisabled: { $ne: true },
     $or: [{ jobTitle: "DISPATCH" }, { role: "DISPATCH" }],
   };
-  if (jobOf(actor) === "DISPATCH_MANAGER") {
+  if (assignsOwnTeam(actor)) {
     filter.reportsTo = actor._id;
   }
   const rows = await User.find(filter)
@@ -135,7 +141,7 @@ export async function assignVehicleDispatch({ dispatchId, userId, actor }) {
     .select("name phoneNumber reportsTo expoPushToken")
     .lean();
   if (!employee) throw new AppError("That person is not a dispatch employee", 400);
-  if (jobOf(actor) === "DISPATCH_MANAGER" && String(employee.reportsTo || "") !== String(actor._id)) {
+  if (assignsOwnTeam(actor) && String(employee.reportsTo || "") !== String(actor._id)) {
     throw new AppError("You can only assign employees who report to you", 403);
   }
 

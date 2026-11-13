@@ -199,7 +199,7 @@ userSchema.pre("validate", async function validateDispatchReportsTo(next) {
   try {
     if (this.jobTitle !== "DISPATCH") return next();
     if (!this.reportsTo) {
-      this.invalidate("reportsTo", "Dispatch employee must report to a dispatch manager");
+      this.invalidate("reportsTo", "Dispatch employee must report to a secondary employee");
       return next();
     }
     const mgr = await this.constructor
@@ -207,8 +207,8 @@ userSchema.pre("validate", async function validateDispatchReportsTo(next) {
       .select("jobTitle role isDisabled")
       .lean();
     const title = String(mgr?.jobTitle || mgr?.role || "");
-    if (!mgr || mgr.isDisabled || title !== "DISPATCH_MANAGER") {
-      this.invalidate("reportsTo", "Reports to must be an active dispatch manager");
+    if (!mgr || mgr.isDisabled || title !== "SECONDARY") {
+      this.invalidate("reportsTo", "Reports to must be an active secondary employee");
     }
     return next();
   } catch (err) {
