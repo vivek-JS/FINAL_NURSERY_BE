@@ -1,6 +1,7 @@
 import multer from "multer";
 import mongoose from "mongoose";
 import SowingRequest from "../models/sowingRequest.model.js";
+import SowingEntry from "../models/sowingEntry.model.js";
 import Order from "../models/order.model.js";
 import User from "../models/user.model.js";
 import InventoryOutward from "../models/inventoryOutward.model.js";
@@ -523,12 +524,24 @@ export const completeSowingRequest = async (req, res) => {
             })
           : { marked: 0, remainingUncovered: plantsSowed || 0 };
 
-      // Leftover after included orders → saleable availablePlants; covered → orderReservedPlants
-      const excessPlants = Math.max(
-        0,
-        Number(orderResult.remainingUncovered) || 0
-      );
-      const orderCoveredPlants = Math.max(0, plantsSowed - excessPlants);
+      // Cover is what the 10% rule put on orders. Mortality left stays out of cover.
+      const orderCoveredPlants = Math.max(0, Number(orderResult.orderPlantsCovered) || 0);
+      const mortalityLeft = Math.max(0, Number(orderResult.mortalityLeft) || 0);
+      const excessPlants = Math.max(0, plantsSowed - mortalityLeft - orderCoveredPlants);
+      if (plantsSowed > 0 && locked?._id) {
+        await SowingEntry.updateOne(
+          { sowingRequestId: locked._id },
+          {
+            $set: {
+              orderCoveredPlants,
+              sowingBufferPct: 10,
+              bufferPlants: mortalityLeft,
+              excessPlants,
+              linkedOrderIds: orderResult.batchLinkedIds || orderResult.markedIds || [],
+            },
+          }
+        );
+      }
       let excessSlotResult = { excessPlants: 0 };
       if (slotResult.appliedSlotId) {
         if (locked.isExcessiveSowing) {

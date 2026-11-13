@@ -5,6 +5,7 @@ import InventoryOutward from "../models/inventoryOutward.model.js";
 import ReturnRequest from "../models/returnRequest.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import SowingRequest from "../models/sowingRequest.model.js";
+import SowingEntry from "../models/sowingEntry.model.js";
 import {
   fmtDDMMYYYY,
   addDays,
@@ -26,9 +27,11 @@ async function mortalityPctForPlant(plantId) {
 }
 import { updatePlantSlotCapped } from "../utility/shrinkPlantSlotTrails.js";
 import {
-  planOrderSowCover,
   applyIncompleteRequestRelease,
+  orderPlantRemaining,
+  orderPartialHeld,
 } from "../services/orderSowCover.plan.js";
+import { coverAtTenPercent } from "../utility/coverAtTenPercent.js";
 
 function hasAppliedSplit(batch) {
   return (
@@ -265,219 +268,73 @@ async function pushBatchToSlot(slotId, { inc, sowingDateStr, plantReadyDateStr, 
 export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) {
   if (plantsSowed <= 0) return { slotsUpdated: 0 };
 
-  const packetsUsedTotal = Math.max(0, Number(meta.packetsUsed) || 0);
-  const requestNumber = meta.requestNumber || request.requestNumber || "";
-  const shedName = String(meta.shedName || request.shedName || "").trim();
-  const linkedOrderIds = toObjectIds(
-    meta.linkedOrderIds || request.linkedOrderIds || []
-  );
-  const isExcess = Boolean(
-    meta.isExcessiveSowing ?? request.isExcessiveSowing
-  );
-  const bookingSlotIds = toObjectIds(request.linkedSlotIds);
-
   const sowedAt =
     meta.sowedAt instanceof Date && !Number.isNaN(meta.sowedAt.getTime())
       ? meta.sowedAt
       : new Date();
   const sowingDateStr = fmtDDMMYYYY(sowedAt);
-
-  const plantId = request.plantId || meta.plantId;
-  const subtypeId = request.subtypeId || meta.subtypeId;
-  const mortalityPct = await mortalityPctForPlant(plantId);
-  const cmsReadyDays = await resolveCmsReadyDays(plantId, subtypeId);
+  const cmsReadyDays = await resolveCmsReadyDays(request.plantId, request.subtypeId);
   const overrideReady = Number(meta.plantReadyDays);
-  const readyDaysGlobal =
-    Number.isFinite(overrideReady) && overrideReady > 0
-      ? overrideReady
-      : cmsReadyDays;
-  const plantReadyDateStr = fmtDDMMYYYY(addDays(sowedAt, readyDaysGlobal || 0));
+  const readyDays =
+    Number.isFinite(overrideReady) && overrideReady > 0 ? overrideReady : cmsReadyDays;
+  const plantReadyDateStr = fmtDDMMYYYY(addDays(sowedAt, readyDays || 0));
+  const mortality = Math.round((plantsSowed * 10) / 100);
+  const plant = await PlantCms.findById(request.plantId)
+    .select("name subtypes._id subtypes.name")
+    .lean();
+  const subtype = (plant?.subtypes || []).find(
+    (row) => String(row._id) === String(request.subtypeId)
+  );
+  const existing = await SowingEntry.findOne({ sowingRequestId: request._id })
+    .select("sourceBatchId dispatchedPlants")
+    .lean();
+  const sourceBatchId = existing?.sourceBatchId || new mongoose.Types.ObjectId();
+  const sowDayMatch = String(sowingDateStr).match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  const sowDay = sowDayMatch ? `${sowDayMatch[3]}-${sowDayMatch[2]}-${sowDayMatch[1]}` : "";
+  const year = sowDay ? Number(sowDay.slice(0, 4)) : null;
 
-  // Prefer calendar slot that contains plantReadyDate (create + edit path)
-  let resolvedReadySlot = null;
-  if (meta.resolveByReadyDate !== false && plantId && subtypeId && readyDaysGlobal > 0) {
-    resolvedReadySlot = await findSlotByPlantReadyDate(
-      plantId,
-      subtypeId,
-      plantReadyDateStr
-    );
-  }
-
-  let slotIds = bookingSlotIds;
-  if (resolvedReadySlot?.slotId) {
-    slotIds = [resolvedReadySlot.slotId];
-    // Keep booking slots on request; also track applied ready slot
-    const existing = new Set(
-      (request.linkedSlotIds || []).map((id) => String(id))
-    );
-    if (!existing.has(String(resolvedReadySlot.slotId))) {
-      request.linkedSlotIds = [
-        ...(request.linkedSlotIds || []),
-        resolvedReadySlot.slotId,
-      ];
-    }
-  }
-
-  if (!slotIds.length) {
-    throw new Error("No linked slots found to apply sowing");
-  }
-
-  const rows = await PlantSlot.aggregate([
-    { $match: { "subtypeSlots.slots._id": { $in: slotIds } } },
-    { $unwind: "$subtypeSlots" },
-    { $unwind: "$subtypeSlots.slots" },
-    { $match: { "subtypeSlots.slots._id": { $in: slotIds } } },
+  await SowingEntry.updateOne(
+    { sowingRequestId: request._id },
     {
-      $project: {
-        slotId: "$subtypeSlots.slots._id",
-        plantId: "$plantId",
-        subtypeId: "$subtypeSlots.subtypeId",
-        plantReadyDays: "$subtypeSlots.slots.plantReadyDays",
-        totalBookedPlants: "$subtypeSlots.slots.totalBookedPlants",
-        primarySowed: "$subtypeSlots.slots.primarySowed",
-        officeSowed: "$subtypeSlots.slots.officeSowed",
+      $set: {
+        sourceBatchId,
+        sowingRequestId: request._id,
+        requestNumber: meta.requestNumber || request.requestNumber || "",
+        plantId: request.plantId,
+        plantName: plant?.name || request.plantName || "",
+        subtypeId: request.subtypeId || null,
+        subtypeName: subtype?.name || request.subtypeName || "",
+        shedName: String(meta.shedName || request.shedName || "").trim(),
+        year: Number.isFinite(year) && year > 2000 ? year : null,
+        sowingDate: sowingDateStr,
+        sowDay,
+        plantReadyDate: plantReadyDateStr,
+        plantsSowed,
+        sowingBufferPct: 10,
+        bufferPlants: mortality,
+        isExcessiveSowing: Boolean(meta.isExcessiveSowing ?? request.isExcessiveSowing),
+      },
+      $setOnInsert: {
+        dispatchedPlants: 0,
+        remainingPlants: Math.max(0, plantsSowed - mortality),
+        orderCoveredPlants: 0,
+        excessPlants: Math.max(0, plantsSowed - mortality),
+        linkedOrderIds: [],
       },
     },
-  ]);
+    { upsert: true }
+  );
 
-  if (!rows.length) {
-    throw new Error("No linked slots found to apply sowing");
-  }
-
-  const byId = new Map(rows.map((r) => [String(r.slotId), r]));
-  const ordered = [];
-  for (const id of slotIds) {
-    const row = byId.get(String(id));
-    if (row) ordered.push(row);
-  }
-  if (!ordered.length) ordered.push(...rows);
-
-  let weightSum = 0;
-  const weights = ordered.map((row) => {
-    let w = 1;
-    if (!isExcess && !resolvedReadySlot) {
-      const booked = Number(row.totalBookedPlants) || 0;
-      const sowed =
-        (Number(row.primarySowed) || 0) + (Number(row.officeSowed) || 0);
-      w = Math.max(1, booked - sowed);
-    }
-    weightSum += w;
-    const readyDays = resolveReadyDays(
-      meta.plantReadyDays,
-      row.plantReadyDays,
-      cmsReadyDays
-    );
-    return { slotId: row.slotId, w, readyDays };
-  });
-
-  let remainingPlants = plantsSowed;
-  let remainingPackets = packetsUsedTotal;
-  const updates = [];
-  let appliedReadyDays = readyDaysGlobal;
-  let appliedReadyDate = plantReadyDateStr;
-  let appliedActual = 0;
-  let appliedMortality = 0;
-
-  for (let i = 0; i < weights.length; i++) {
-    const row = weights[i];
-    const isLast = i === weights.length - 1;
-    const plantShare = isLast
-      ? remainingPlants
-      : Math.max(0, Math.round((plantsSowed * row.w) / weightSum));
-    const addPlants = Math.min(plantShare, remainingPlants);
-    remainingPlants -= addPlants;
-
-    const pktShare = isLast
-      ? remainingPackets
-      : packetsUsedTotal > 0 && plantsSowed > 0
-        ? Math.round((packetsUsedTotal * addPlants) / plantsSowed)
-        : 0;
-    const addPackets = Math.min(pktShare, remainingPackets);
-    remainingPackets -= addPackets;
-
-    if (addPlants <= 0) continue;
-
-    const readyDays = row.readyDays || readyDaysGlobal || 0;
-    const readyDateStr = fmtDDMMYYYY(addDays(sowedAt, readyDays));
-    appliedReadyDays = readyDays;
-    appliedReadyDate = readyDateStr;
-
-    const impact = sowQtySlotImpact(addPlants, { isExcess, mortalityPct });
-    appliedActual += impact.actualPlants;
-    appliedMortality += impact.expectedMortality;
-    // Physical sowed stays gross; usable pool is 90% actual + 10% expected mortality
-    const inc = {
-      "subtypeSlots.$[st].slots.$[sl].primarySowed": addPlants,
-      "subtypeSlots.$[st].slots.$[sl].totalPlants": addPlants,
-      "subtypeSlots.$[st].slots.$[sl].plantsSowed": addPlants,
-      "subtypeSlots.$[st].slots.$[sl].actualPlants": impact.actualPlants,
-      "subtypeSlots.$[st].slots.$[sl].expectedMortality": impact.expectedMortality,
-    };
-    if (isExcess && impact.availablePlants > 0) {
-      inc["subtypeSlots.$[st].slots.$[sl].availablePlants"] = impact.availablePlants;
-    }
-
-    const sowHistoryEntry = {
-      at: sowedAt,
-      by: meta.userId || null,
-      fromSlotId: null,
-      toSlotId: row.slotId,
-      fromReadyDate: null,
-      toReadyDate: readyDateStr,
-      fromPlantReadyDays: null,
-      toPlantReadyDays: readyDays,
-      sowDate: sowingDateStr,
-      plantsSowed: addPlants,
-      reason: "SOW_COMPLETED",
-    };
-
-    updates.push(
-      pushBatchToSlot(row.slotId, {
-        inc,
-        sowingDateStr,
-        plantReadyDateStr: readyDateStr,
-        readyDays,
-        batch: {
-          sowedAt,
-          sowingDate: sowingDateStr,
-          plantReadyDate: readyDateStr,
-          plantReadyDays: readyDays,
-          plantsSowed: addPlants,
-          packetsUsed: addPackets,
-          shedName,
-          sowingRequestId: request._id,
-          requestNumber,
-          isExcessiveSowing: isExcess,
-          orderCoveredPlants: isExcess
-            ? 0
-            : Math.max(
-                0,
-                addPlants - Math.max(0, Number(meta.excessPlants) || 0)
-              ),
-          excessPlants: isExcess
-            ? addPlants
-            : Math.max(0, Number(meta.excessPlants) || 0),
-          actualPlantsApplied: impact.actualPlants,
-          expectedMortalityApplied: impact.expectedMortality,
-          availablePlantsApplied: isExcess ? impact.availablePlants : 0,
-          orderReservedPlantsApplied: 0,
-          linkedOrderIds,
-          slotHistory: [sowHistoryEntry],
-        },
-      })
-    );
-  }
-
-  if (updates.length) await Promise.all(updates);
   return {
-    slotsUpdated: updates.length,
+    slotsUpdated: 0,
     sowingDate: sowingDateStr,
-    plantReadyDays: appliedReadyDays,
-    plantReadyDate: appliedReadyDate,
-    appliedSlotId: resolvedReadySlot?.slotId || slotIds[0] || null,
-    resolvedByReadyDate: Boolean(resolvedReadySlot),
-    actualPlants: appliedActual,
-    expectedMortality: appliedMortality,
+    plantReadyDays: readyDays || 0,
+    plantReadyDate: plantReadyDateStr,
+    appliedSlotId: null,
+    resolvedByReadyDate: false,
+    actualPlants: Math.max(0, plantsSowed - mortality),
+    expectedMortality: mortality,
+    batchId: sourceBatchId,
   };
 }
 
@@ -732,6 +589,21 @@ export async function editSowEntryOnSlots(request, opts = {}) {
   request.linkedSlotIds = [...linked].map((id) => new mongoose.Types.ObjectId(id));
   request.sowedQuantity = plantsTotal;
   request.sowingCompletedDate = sowedAt;
+
+  const sowDayMatch = String(sowingDateStr).match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  const sowDay = sowDayMatch ? `${sowDayMatch[3]}-${sowDayMatch[2]}-${sowDayMatch[1]}` : "";
+  await SowingEntry.updateOne(
+    { sowingRequestId: request._id },
+    {
+      $set: {
+        sowingDate: sowingDateStr,
+        sowDay,
+        plantReadyDate: toReadyDate,
+        plantsSowed: plantsTotal,
+        requestNumber: request.requestNumber || "",
+      },
+    }
+  );
 
   return {
     slotChanged,
@@ -1004,9 +876,49 @@ export async function markOrdersSowed(request, opts = {}) {
     .sort({ deliveryDate: 1, createdAt: 1, orderId: 1 })
     .lean();
 
-  if (!orders.length) return { ...empty, remainingUncovered: plantsSowed };
+  if (!orders.length) {
+    return {
+      ...empty,
+      remainingUncovered: Math.max(0, plantsSowed - Math.round((plantsSowed * 10) / 100)),
+      mortalityLeft: Math.round((plantsSowed * 10) / 100),
+    };
+  }
 
-  const plan = planOrderSowCover({ plantsSowed, orders });
+  const needs = orders.map((order) => orderPlantRemaining(order));
+  const cover = coverAtTenPercent(plantsSowed, needs);
+  const full = [];
+  const waiting = [];
+  let partial = null;
+  orders.forEach((order, index) => {
+    const need = needs[index];
+    const got = cover.taken[index] || 0;
+    if (need < 1) return;
+    if (got >= need && got > 0) {
+      full.push({
+        orderId: order._id,
+        plants: got,
+        totalCovered: orderPartialHeld(order) + got,
+      });
+    } else if (got > 0 && !partial) {
+      partial = {
+        orderId: order._id,
+        addPlants: got,
+        remaining: need - got,
+        totalCovered: orderPartialHeld(order) + got,
+      };
+    } else if (got < 1) {
+      waiting.push({ orderId: order._id, remaining: need });
+    }
+  });
+  const plan = {
+    full,
+    partial,
+    waiting,
+    excess: cover.excess,
+    incomplete: Boolean(partial) || waiting.length > 0,
+    orderPlantsCovered: cover.covered,
+    mortalityLeft: cover.mortalityLeft,
+  };
   const reqId = request._id;
 
   for (const f of plan.full) {
@@ -1077,6 +989,7 @@ export async function markOrdersSowed(request, opts = {}) {
     partial: plan.partial,
     waiting: plan.waiting,
     orderPlantsCovered: plan.orderPlantsCovered,
+    mortalityLeft: plan.mortalityLeft ?? 0,
   };
 }
 
