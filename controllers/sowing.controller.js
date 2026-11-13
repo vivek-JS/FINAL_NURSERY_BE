@@ -2442,6 +2442,9 @@ export const getSowings = async (req, res) => {
 export const getSowingById = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({ message: "Sowing record not found" });
+    }
 
     const sowing = await Sowing.findById(id)
       .populate("plantId", "name sowingAllowed")

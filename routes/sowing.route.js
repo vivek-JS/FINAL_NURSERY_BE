@@ -127,6 +127,13 @@ import {
   getSowBatchStockById,
   getSowBatchStockIntel,
 } from "../controllers/sowBatchStock.controller.js";
+import { getSowingEntriesCollection } from "../modules/sowingEntries/listSowingEntries.controller.js";
+import { getSowingEntryById } from "../modules/sowingEntries/getSowingEntry.controller.js";
+import {
+  getCollectionExcess,
+  getSowingEntriesForOrder,
+} from "../modules/sowingEntries/collectionExcess.controller.js";
+import { getEntriesBoardExcess } from "../modules/sowingEntries/boardExcess.controller.js";
 
 const router = express.Router();
 
@@ -246,6 +253,12 @@ router.post("/whatsapp/reminders", sendSowingRemindersWhatsApp); // Generate and
 // router.get("/sowing-alerts", getSowingAlertsByStart); // DEPRECATED - Use /plant-alerts instead
 // router.get("/sowing-alerts/today", getTodaySowingSummary); // DEPRECATED
 router.get("/slot-ready-days/:slotId", getSlotPlantReadyDays); // Fetch plant ready days for a slot
+// Literal paths stay above /:id. Otherwise "entries" is read as a sowing id.
+router.get("/entries", getSowingEntriesCollection);
+router.get("/entries/excess", getCollectionExcess);
+router.get("/entries/board-excess", getEntriesBoardExcess);
+router.get("/entries/for-order", getSowingEntriesForOrder);
+router.get("/entries/:id", getSowingEntryById);
 router.get("/:id", getSowingById); // Get single sowing by ID
 router.put("/:id", updateSowing); // Update sowing record
 router.delete("/:id", deleteSowing); // Delete sowing record
