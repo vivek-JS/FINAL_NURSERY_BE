@@ -4,6 +4,7 @@ import PlantCms from "../models/plantCms.model.js";
 import { isOfficeOrSuper } from "./orderSowFromExcess.controller.js";
 import { deliveryDateToIstMoment } from "../utility/istSlotDate.js";
 import {
+  EXCESS_COVER_PAST_DAYS,
   EXCESS_COVER_WINDOW_DAYS,
   ExcessCoverError,
   coverOrderFromBatches,
@@ -39,12 +40,20 @@ function sendError(res, err, fallback) {
 }
 
 /**
- * GET /sowing/excess-batches?plantId&subtypeId&deliveryDate&need&windowDays=5
- * Booking-time preview: free excess per sowing batch within delivery ±windowDays (IST).
+ * GET /sowing/excess-batches?plantId&subtypeId&deliveryDate&need&windowDays=3&pastWindowDays=12
+ * Booking-time preview: free excess per sowing batch within delivery −past / +future (IST).
  */
 export const getExcessBatches = async (req, res) => {
   try {
-    const { plantId, subtypeId, deliveryDate, need, windowDays, releaseOrderId } = req.query;
+    const {
+      plantId,
+      subtypeId,
+      deliveryDate,
+      need,
+      windowDays,
+      pastWindowDays,
+      releaseOrderId,
+    } = req.query;
     if (
       !mongoose.Types.ObjectId.isValid(String(plantId || "")) ||
       !mongoose.Types.ObjectId.isValid(String(subtypeId || ""))
@@ -65,6 +74,7 @@ export const getExcessBatches = async (req, res) => {
       deliveryDate,
       need,
       windowDays: windowDays ?? EXCESS_COVER_WINDOW_DAYS,
+      pastWindowDays: pastWindowDays ?? EXCESS_COVER_PAST_DAYS,
       releaseOrderId: releaseId,
     });
     Object.assign(data, await newSowingInfo(plantId, subtypeId, deliveryDate));
@@ -126,11 +136,13 @@ export const coverOrderFromExcessBatches = async (req, res) => {
     }
 
     const rawWindow = Math.floor(Number(req.body?.windowDays) || EXCESS_COVER_WINDOW_DAYS);
+    const rawPast = Math.floor(Number(req.body?.pastWindowDays) || EXCESS_COVER_PAST_DAYS);
     const result = await coverOrderFromBatches({
       order: order._id,
       picks: req.body?.picks,
       userId: req.user?._id,
       windowDays: Math.max(1, rawWindow),
+      pastWindowDays: Math.max(0, rawPast),
     });
     return res.status(200).json({
       success: true,

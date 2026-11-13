@@ -41,6 +41,7 @@ const allowedParams = [
   "deliveryDate", // GET /sowing/excess-batches
   "need", // GET /sowing/excess-batches
   "windowDays", // GET /sowing/excess-batches
+  "pastWindowDays", // GET /sowing/excess-batches — days before delivery to look back
   "releaseOrderId", // GET /sowing/excess-batches — delivery change: count this order's own sowing as free
   "group", // GET /sowing/capacity-sheet/board — N-day column groups
   "year",

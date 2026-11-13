@@ -16,7 +16,7 @@ import { recordSlotTrail } from "../utility/slotTrailStore.js";
 import { slotReportedExcess, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
 import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 import {
-  EXCESS_PAST_READY_DAYS,
+  EXCESS_COVER_PAST_DAYS,
   excessReadyInWindow,
 } from "../utility/excessCoverWindow.js";
 import {
@@ -26,7 +26,11 @@ import {
 
 export const EXCESS_COVER_WINDOW_DAYS = 5;
 export const DEFAULT_EXCESS_MAX_WINDOW_DAYS = 15;
-export { EXCESS_PAST_READY_DAYS, excessReadyInWindow } from "../utility/excessCoverWindow.js";
+export {
+  EXCESS_COVER_PAST_DAYS,
+  EXCESS_PAST_READY_DAYS,
+  excessReadyInWindow,
+} from "../utility/excessCoverWindow.js";
 /** Papaya ready dates sit further from delivery than watermelon. */
 export const PAPAYA_EXCESS_WINDOW_DAYS = 40;
 
@@ -203,11 +207,9 @@ function applyReleaseToBatch(batch, release) {
 
 /**
  * Free excess in sowing batches of plant+subtype whose ready date is within
- * delivery ±windowDays (IST). One entry per batch, nearest to delivery first.
+ * delivery −pastWindowDays … +windowDays (IST). Default −12 / +window.
  * Bookable free is the sowing-entry shown excess (CMS buffer, then orders,
  * plus mortality moved to excess). Lagwad mortality reserve is not applied.
- * Lists leftover already ready (up to 45d before delivery) and sowings that
- * become ready within +windowDays after delivery.
  */
 export async function listExcessBatches({
   plantId,
@@ -215,6 +217,7 @@ export async function listExcessBatches({
   deliveryDate,
   need = 0,
   windowDays = EXCESS_COVER_WINDOW_DAYS,
+  pastWindowDays = EXCESS_COVER_PAST_DAYS,
   releaseOrderId = null,
   maxWindowDays = null,
 }) {
@@ -235,10 +238,22 @@ export async function listExcessBatches({
       ? plantCap
       : Math.max(plantCap, Math.floor(Number(maxWindowDays) || 0));
   const win = Math.min(cap, requested);
-  const empty = { need: needQty, windowDays: win, totalFree: 0, mode: "none", entries: [] };
+  const pastRequested = Math.max(0, Math.floor(Number(pastWindowDays) || 0));
+  // Papaya keeps a symmetric past lookback; others use the requested days, default −12.
+  const pastCap =
+    plantCap > DEFAULT_EXCESS_MAX_WINDOW_DAYS
+      ? Math.max(pastRequested, win)
+      : Math.min(cap, pastRequested || EXCESS_COVER_PAST_DAYS);
+  const empty = {
+    need: needQty,
+    windowDays: win,
+    pastWindowDays: pastCap,
+    totalFree: 0,
+    mode: "none",
+    entries: [],
+  };
   if (!plantOid || !subtypeOid || !deliveryIst) return empty;
 
-  const pastCap = Math.max(win, EXCESS_PAST_READY_DAYS);
   const days = windowDayStrings(deliveryIst, pastCap, win);
   const plantDoc = plantOid
     ? await PlantCms.findById(plantOid).select("sowingBuffer").lean()
@@ -362,7 +377,7 @@ export async function listExcessBatches({
   const totalFree = entries.reduce((s, e) => s + e.freePlants, 0);
   let mode = "none";
   if (totalFree > 0) mode = needQty > 0 && totalFree >= needQty ? "full" : "partial";
-  return { need: needQty, windowDays: win, totalFree, mode, entries };
+  return { need: needQty, windowDays: win, pastWindowDays: pastCap, totalFree, mode, entries };
 }
 
 /** How far from the requested delivery date other days are suggested. */
@@ -473,6 +488,7 @@ export async function validateCoverPicks({
   need,
   picks,
   windowDays = EXCESS_COVER_WINDOW_DAYS,
+  pastWindowDays = EXCESS_COVER_PAST_DAYS,
 }) {
   const needQty = int(need);
   const list = normalizePicks(picks);
@@ -492,6 +508,7 @@ export async function validateCoverPicks({
     deliveryDate,
     need: needQty,
     windowDays,
+    pastWindowDays,
   });
   const byBatch = new Map(preview.entries.map((e) => [e.batchId, e]));
   const matched = list.map((p) => {
@@ -809,6 +826,7 @@ export async function coverOrderFromBatches({
   userId,
   quiet = false,
   windowDays = EXCESS_COVER_WINDOW_DAYS,
+  pastWindowDays = EXCESS_COVER_PAST_DAYS,
   /** When set, cover only this many plants — works even if the order is already sowingDone (qty increase). */
   additionalNeed = null,
 }) {
@@ -845,6 +863,7 @@ export async function coverOrderFromBatches({
     need,
     picks,
     windowDays,
+    pastWindowDays,
   });
 
   const destination = await resolveDestinationSlot({
