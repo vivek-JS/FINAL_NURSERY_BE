@@ -30,12 +30,23 @@ function crateTotal(plant) {
   return n;
 }
 
+function plainVariety(name) {
+  return String(name || "")
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/\s*->\s*/g, " · ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** One line per variety, with the office crate count. */
 export function varietyLines(dispatch) {
   const plants = Array.isArray(dispatch?.plantsDetails) ? dispatch.plantsDetails : [];
   const lines = [];
   for (const plant of plants) {
-    const name = String(plant?.name || "").trim();
+    const name = plainVariety(plant?.name);
     if (!name) continue;
     const crates = crateTotal(plant);
     const qty = Number(plant?.totalPlants || plant?.quantity || 0);
