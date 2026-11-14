@@ -13,12 +13,15 @@ function vehicleLine(d = {}) {
   return [d.vehicleNumber, d.vehicleName, d.driverName].filter(Boolean).join(" · ");
 }
 
-async function tripManagers() {
+async function tripManagers({ includeSecondary = false } = {}) {
+  const roles = includeSecondary
+    ? [...DISPATCH_ALERT_ROLES, "SECONDARY"]
+    : DISPATCH_ALERT_ROLES;
   return User.find({
     isDisabled: { $ne: true },
     $or: [
-      { role: { $in: DISPATCH_ALERT_ROLES } },
-      { jobTitle: { $in: DISPATCH_ALERT_ROLES } },
+      { role: { $in: roles } },
+      { jobTitle: { $in: roles } },
       { canManageTrips: true },
     ],
   })
@@ -26,8 +29,8 @@ async function tripManagers() {
     .lean();
 }
 
-async function notifyTripManagers({ title, body, type, data, dedupeKey }) {
-  const users = await tripManagers();
+async function notifyTripManagers({ title, body, type, data, dedupeKey, includeSecondary = false }) {
+  const users = await tripManagers({ includeSecondary });
   for (const user of users) {
     await persistInboxOnce({
       userId: user._id,
@@ -62,6 +65,7 @@ export function notifyDispatchCreated(dispatch, slip) {
           kind: "dispatch_created",
         },
         dedupeKey: `dispatch:${dispatch._id}:created`,
+        includeSecondary: true,
       });
       if (slip) await notifyFreightSlipCreated(slip, dispatch);
     } catch (err) {
