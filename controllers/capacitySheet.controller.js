@@ -18,6 +18,7 @@ import {
 import { loadShedStockPayload } from "../services/capacityShedStock.service.js";
 import { loadSmartShedPayload } from "../services/smartShedCapacity.service.js";
 import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
+import { bookableExcessBySlot } from "../utility/boardBookableExcess.js";
 import {
   canBookFromExcess,
   capacityStatus,
@@ -222,6 +223,7 @@ async function loadSheetContext({ from, to, plantId, subtypeId, unbounded = fals
                         in: {
                           plantsSowed: { $ifNull: ["$$batch.plantsSowed", 0] },
                           destroyedPlants: { $ifNull: ["$$batch.destroyedPlants", 0] },
+                          requestNumber: { $ifNull: ["$$batch.requestNumber", ""] },
                           orderCoveredPlants: { $ifNull: ["$$batch.orderCoveredPlants", 0] },
                           noMortalityReserve: { $ifNull: ["$$batch.noMortalityReserve", false] },
                           isIrrelevant: { $ifNull: ["$$batch.isIrrelevant", false] },
@@ -283,6 +285,32 @@ function sowingBufferByPlant(plants) {
   return new Map(
     (plants || []).map((plant) => [String(plant._id), Math.max(0, Number(plant.sowingBuffer) || 0)])
   );
+}
+
+/** Plants already given or still to give, per sowing request. Cancelled orders are not cover. */
+async function liveCoverByRequestNumber() {
+  const rows = await Order.aggregate([
+    {
+      $match: {
+        orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
+        "sowingCoverSources.0": { $exists: true },
+      },
+    },
+    { $unwind: "$sowingCoverSources" },
+    {
+      $match: {
+        "sowingCoverSources.plants": { $gt: 0 },
+        "sowingCoverSources.requestNumber": { $type: "string", $ne: "" },
+      },
+    },
+    {
+      $group: {
+        _id: "$sowingCoverSources.requestNumber",
+        plants: { $sum: "$sowingCoverSources.plants" },
+      },
+    },
+  ]);
+  return new Map(rows.map((row) => [row._id, Math.max(0, Math.floor(Number(row.plants) || 0))]));
 }
 
 function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbounded = false }) {
@@ -436,12 +464,14 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
   const from = today.clone().subtract(OVERDUE_LOOKBACK_DAYS, "days");
   const to = today.clone().add(BOARD_FORWARD_DAYS, "days").endOf("day");
 
-  const [{ plants, slots, orders }, shedPayload] = await Promise.all([
+  const [{ plants, slots, orders }, shedPayload, coverByRequest] = await Promise.all([
     loadSheetContext({ from, to }),
     loadShedStockPayload(),
+    liveCoverByRequestNumber(),
   ]);
 
-  const metricsBySlot = applySowingGapBoardMetrics(slots, orders, sowingBufferByPlant(plants));
+  const bufferByPlant = sowingBufferByPlant(plants);
+  const metricsBySlot = applySowingGapBoardMetrics(slots, orders, bufferByPlant);
   const slotsByVariety = groupByVariety(slots, (s) => s.plantId, (s) => s.subtypeId);
   const ordersByVariety = groupByVariety(orders, (o) => o.plantName, (o) => o.plantSubtype);
 
@@ -465,7 +495,13 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
   for (const plant of plants) {
     for (const subtype of plant.subtypes || []) {
       const key = varietyKey(String(plant._id), String(subtype._id));
-      const subtypeSlots = (slotsByVariety.get(key) || []).map((slot) => {
+      const varietySlots = slotsByVariety.get(key) || [];
+      const excessBySlot = bookableExcessBySlot(
+        varietySlots,
+        bufferByPlant.get(String(plant._id)) || 0,
+        coverByRequest
+      );
+      const subtypeSlots = varietySlots.map((slot) => {
         const slotId = String(slot.slotId);
         const metrics = metricsBySlot.get(slotId) || {};
         return {
@@ -474,7 +510,7 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
           endDay: slot.slotEndDay,
           booked: num(metrics.totalBookedPlants),
           gap: num(metrics.bookedUncoveredPlants),
-          excess: num(metrics.excessAvailableForBooking),
+          excess: excessBySlot.get(slotId) || 0,
           mortality: num(metrics.sowedExpectedMortality),
           pendingDispatch: pendingBySlot.get(slotId) || 0,
         };
