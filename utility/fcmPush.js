@@ -28,21 +28,12 @@ export async function sendFcmNotification({ token, title, body, data = {} }) {
     if (value == null) continue;
     payload[key] = String(value);
   }
+  payload.title = title;
+  payload.body = body || title;
   await client.send({
     token,
-    notification: { title, body: body || title },
     data: payload,
-    android: {
-      priority: "high",
-      notification: {
-        channelId: "shed_assign",
-        sound: "default",
-        visibility: "public",
-        notificationPriority: "PRIORITY_MAX",
-        defaultVibrateTimings: false,
-        vibrateTimingsMillis: [0, 450, 180, 450, 180, 700],
-      },
-    },
+    android: { priority: "high", ttl: 60 * 60 * 1000 },
   });
   return true;
 }
