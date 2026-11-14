@@ -10,7 +10,11 @@ import {
   describeSowPlanLine,
   applySowPlanLineToSlots,
   sowLinkMovesForLine,
+  batchWithGridCover,
+  sowingsForDispatch,
+  directSowingLoadPlan,
 } from "../services/sowDispatchBatches.service.js";
+import { dispatchBookableFree } from "../utility/sowingBatchExcessStamp.js";
 import { isVehicleLoadCompleteByRows } from "../services/secondaryVehicleLoad.service.js";
 
 const OID = {
@@ -96,6 +100,15 @@ test("linked batch: direct sow uses the request's batch, excess cover uses its (
     { slotId: OID.s15, batchId: OID.b15, plants: 200 },
   ]);
   assert.deepEqual(baseOrderLinks({ ...cover, sowingCoverReversedAt: new Date() }, index), []);
+  const byRequest = {
+    _id: OID.X,
+    numberOfPlants: 1000,
+    sowingDoneRequestId: OID.r15,
+    sowingCoverSources: [{ sowingRequestId: OID.r15, plants: 1000, sowingDate: "22-10-2026" }],
+  };
+  assert.deepEqual(baseOrderLinks(byRequest, index), [
+    { slotId: OID.s15, batchId: OID.b15, plants: 1000 },
+  ]);
 });
 
 test("sowBatchLinks move plants between batches; an order can end up split across two", () => {
@@ -154,6 +167,27 @@ test("own linked batch is COVER", () => {
   assert.equal(plan.lines[0].cover, 1000);
 });
 
+test("watermelon free-plant gift stays on the linked batch and does not take other orders", () => {
+  const ctx = example(0);
+  ctx.orderLinks.set(OID.X, [{ slotId: OID.s15, batchId: OID.b15, plants: 11458 }]);
+  ctx.batches.get(OID.b15).free = 0;
+  ctx.batches.get(OID.b15).orders = [{ orderId: OID.Y1, plants: 12000, deliveryMs: 1, bookedMs: 1 }];
+  const plan = planSowBatchLoad({
+    selections: [{ orderId: OID.X, batchId: OID.b15, plants: 11548 }],
+    gifts: new Map([[OID.X, 90]]),
+    ...ctx,
+  });
+  assert.equal(plan.ok, true);
+  const line = plan.lines[0];
+  assert.equal(line.bucket, "COVER");
+  assert.equal(line.cover, 11458);
+  assert.equal(line.plants, 11548);
+  assert.equal(line.fromFree, 0);
+  assert.equal(line.relinks.length, 0);
+  assert.equal((line.unlinkedTakes || []).length, 0);
+  assert.equal(ctx.batches.get(OID.b15).orders[0].plants, 12000);
+});
+
 test("15/16/17 Oct: excess used first, rest relinked FIFO by delivery then booking, leftover becomes excess", () => {
   const plan = planSowBatchLoad({
     selections: [{ orderId: OID.X, batchId: OID.b17, plants: 1000 }],
@@ -174,6 +208,53 @@ test("15/16/17 Oct: excess used first, rest relinked FIFO by delivery then booki
   assert.equal(line.released[0].plants, 1000);
   assert.equal(line.released[0].leftover, 300);
   assert.equal(line.fromFree, line.released[0].leftover);
+});
+
+test("sellable plants left can go out when cover has no free and no other booking", () => {
+  const ctx = example(0);
+  ctx.batches.get(OID.b17).orders = [];
+  ctx.batches.get(OID.b17).remaining = 800;
+  const plan = planSowBatchLoad({
+    selections: [{ orderId: OID.X, batchId: OID.b17, plants: 800 }],
+    ...ctx,
+  });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.lines[0].fromRemaining, true);
+  assert.equal(plan.lines[0].relinks.length, 0);
+  assert.equal(plan.lines[0].coverRehome.length, 0);
+
+  ctx.batches.get(OID.b17).remaining = 100;
+  const over = planSowBatchLoad({
+    selections: [{ orderId: OID.X, batchId: OID.b17, plants: 800 }],
+    ...ctx,
+  });
+  assert.equal(over.ok, true);
+  assert.equal(over.lines[0].plants, 800);
+  assert.equal(over.lines[0].fromRemaining, true);
+});
+
+test("a short sowing still loads and the plant count is not checked again as free plants", () => {
+  const batches = new Map([
+    ["a", { remaining: 100, slotId: "" }],
+    ["b", { remaining: 40, slotId: "" }],
+  ]);
+  const plan = directSowingLoadPlan(
+    [
+      { orderId: "o1", batchId: "a", plants: 1000 },
+      { orderId: "o1", batchId: "b", plants: 50 },
+    ],
+    batches
+  );
+  assert.equal(plan.ok, true);
+  assert.deepEqual(
+    plan.lines.map((line) => [line.batchId, line.plants]),
+    [
+      ["a", 1000],
+      ["b", 50],
+    ]
+  );
+  assert.equal(plan.lines[0].warnings.length, 1);
+  assert.equal(plan.lines[1].fromFree, 0);
 });
 
 test("orders already on a vehicle are never relinked", () => {
@@ -287,14 +368,19 @@ test("slot and batch counters for a switch, clamped at 0", () => {
   assert.equal(loadLog.plants, -700);
 });
 
-test("link moves only relink other orders — loading order sow reference stays", () => {
+test("switch re-homes loading order cover onto picked batch", () => {
   const plan = planSowBatchLoad({
     selections: [{ orderId: OID.X, batchId: OID.b17, plants: 1000 }],
     ...example(300),
   });
-  const moves = sowLinkMovesForLine(plan.lines[0], { dispatchId: OID.s16, performedBy: null, now: new Date() });
-  const x = moves.filter((m) => m.orderId === OID.X);
-  assert.equal(x.length, 0);
+  const line = plan.lines[0];
+  assert.deepEqual(line.coverRehome.map((r) => [r.fromBatchId, r.plants]), [[OID.b15, 1000]]);
+  const moves = sowLinkMovesForLine(line, { dispatchId: OID.s16, performedBy: null, now: new Date() });
+  const x = moves.filter((m) => m.orderId === OID.X && m.entry.reason === "DISPATCH_SWITCH");
+  assert.equal(x.length, 1);
+  assert.equal(String(x[0].entry.fromBatchId), OID.b15);
+  assert.equal(String(x[0].entry.batchId), OID.b17);
+  assert.equal(x[0].entry.plants, 1000);
   const relinked = moves.filter((m) => m.entry.reason === "DISPATCH_RELINK");
   assert.deepEqual(relinked.map((m) => [m.orderId, m.entry.plants]), [
     [OID.Y3, 300],
@@ -317,6 +403,43 @@ test("switch summary text", () => {
   );
 });
 
+test("dispatch free is grid excess, not expected ready", () => {
+  const oct15 = {
+    plantsSowed: 47754,
+    orderCoveredPlants: 0,
+    sowingBufferPct: 12,
+    sowingRequestId: "req15",
+    requestNumber: "SR15",
+  };
+  assert.equal(dispatchBookableFree(oct15, 12), 42024);
+  const covered = batchWithGridCover(oct15, [
+    {
+      _id: "o1",
+      numberOfPlants: 21000,
+      sowingCoverSources: [{ sowingRequestId: "req15", plants: 21000, batchId: "b15" }],
+    },
+  ]);
+  assert.equal(covered.orderCoveredPlants, 21000);
+  assert.equal(dispatchBookableFree(covered, 12), 21024);
+
+  const sep26 = batchWithGridCover(
+    {
+      plantsSowed: 24822,
+      orderCoveredPlants: 0,
+      sowingBufferPct: 12,
+      sowingRequestId: "req26",
+    },
+    [
+      {
+        _id: "o2",
+        numberOfPlants: 11458,
+        sowingCoverSources: [{ sowingRequestId: "req26", plants: 23458 }],
+      },
+    ]
+  );
+  assert.equal(dispatchBookableFree(sep26, 12), 0);
+});
+
 test("mixed vehicle: every plant row must be loaded, one row can't cover another", () => {
   const dispatch = { plantsDetails: [{ quantity: 1000 }, { quantity: 500 }] };
   assert.equal(
@@ -328,4 +451,19 @@ test("mixed vehicle: every plant row must be loaded, one row can't cover another
     true
   );
   assert.equal(isVehicleLoadCompleteByRows({ plantsDetails: [] }, { total: 0, byRow: new Map() }), false);
+});
+
+test("dispatch keeps every sowing that still has plants, including one that is not the biggest", () => {
+  const rows = sowingsForDispatch(
+    [
+      { batchId: "big", requestNumber: "SR-BIG", availablePlants: 16000, plantReadyDate: "20-11-2026" },
+      { batchId: "sr4", requestNumber: "SR202610240004", availablePlants: 3500, plantReadyDate: "01-11-2026" },
+      { batchId: "empty", requestNumber: "SR-EMPTY", availablePlants: 0, plantReadyDate: "15-11-2026" },
+    ],
+    [{ linked: [{ batchId: "sr4" }] }]
+  );
+  assert.deepEqual(
+    rows.map((row) => row.requestNumber),
+    ["SR202610240004", "SR-BIG"]
+  );
 });

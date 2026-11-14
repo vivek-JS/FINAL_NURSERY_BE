@@ -69,6 +69,7 @@ export function slotReportedExcess(batches, sowingBufferPct = 0, includeBatch = 
     const sowed = Math.max(0, Math.floor(Number(batch?.plantsSowed) || 0) - destroyed);
     const moved = Math.max(0, Math.floor(Number(batch?.mortalityMovedToExcess) || 0));
     const fromExcess = Math.max(0, Math.floor(Number(batch?.excessMovedToMortality) || 0));
+    const marked = Math.max(0, Math.floor(Number(batch?.plantsMarkedSellable) || 0));
     const batchPct = Number(batch?.sowingBufferPct);
     const pct = batch?.noMortalityReserve
       ? 0
@@ -80,7 +81,7 @@ export function slotReportedExcess(batches, sowingBufferPct = 0, includeBatch = 
       orderCoveredPlants: batch?.orderCoveredPlants,
       sowingBufferPct: pct,
     });
-    return sum + Math.max(0, parts.plantsSowed - parts.bufferPlants - parts.orders + moved - fromExcess);
+    return sum + Math.max(0, parts.plantsSowed - parts.bufferPlants - parts.orders + moved - fromExcess + marked);
   }, 0);
 }
 

@@ -57,8 +57,26 @@ const sowingEntrySchema = new Schema(
         plants: { type: Number, default: 0, min: 0 },
       },
     ],
-    /** Sellable plants still here. Out plants are already subtracted. */
-    remainingPlants: { type: Number, default: 0, min: 0 },
+    /** Sellable plants still here. Out plants are already subtracted. Can go minus. */
+    remainingPlants: { type: Number, default: 0 },
+    /** Plants destroyed after sowing. Taken off sellable and remaining. */
+    destroyedPlants: { type: Number, default: 0, min: 0 },
+    /** Leftover plants sent to a later sowing. */
+    plantsTransferredOut: { type: Number, default: 0, min: 0 },
+    /** Leftover plants received from an earlier sowing. */
+    plantsTransferredIn: { type: Number, default: 0, min: 0 },
+    /** Leftover plants stamped as extra bookable excess on this sowing. */
+    plantsMarkedSellable: { type: Number, default: 0, min: 0 },
+    transferLog: [
+      {
+        at: { type: Date, default: Date.now },
+        by: { type: Schema.Types.ObjectId, ref: "User" },
+        plants: { type: Number, default: 0, min: 0 },
+        direction: { type: String, enum: ["out", "in", "sellable"], required: true },
+        otherEntryId: { type: Schema.Types.ObjectId, ref: "SowingEntry", default: null },
+        otherRequestNumber: { type: String, default: "", trim: true },
+      },
+    ],
   },
   { timestamps: true, collection: "sowingentries" }
 );

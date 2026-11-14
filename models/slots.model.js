@@ -495,6 +495,22 @@ const slotSchema = new Schema({
       mortalityMovedToExcess: { type: Number, default: 0 },
       /** Plants of this batch destroyed after sowing (already taken off the slot's sowed / stock). */
       destroyedPlants: { type: Number, default: 0, min: 0 },
+      /** Leftover plants sent to a later sowing. */
+      plantsTransferredOut: { type: Number, default: 0, min: 0 },
+      /** Leftover plants received from an earlier sowing. */
+      plantsTransferredIn: { type: Number, default: 0, min: 0 },
+      /** Leftover plants stamped as extra bookable excess on this batch. */
+      plantsMarkedSellable: { type: Number, default: 0, min: 0 },
+      transferLog: [
+        {
+          at: { type: Date, default: Date.now },
+          by: { type: Schema.Types.ObjectId, ref: "User" },
+          plants: { type: Number, default: 0, min: 0 },
+          direction: { type: String, enum: ["out", "in", "sellable"] },
+          otherEntryId: { type: Schema.Types.ObjectId, ref: "SowingEntry", default: null },
+          otherRequestNumber: { type: String, default: "", trim: true },
+        },
+      ],
       destroyLog: [
         {
           at: { type: Date, default: Date.now },

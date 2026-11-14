@@ -55,6 +55,7 @@ export function displaySowingFigures({
   sowingBufferPct = 0,
   mortalityMovedToExcess = 0,
   excessAllocated = 0,
+  plantsMarkedSellable = 0,
   isIrrelevant = false,
 } = {}) {
   if (isIrrelevant) return { bufferPlants: 0, mortality: 0, excess: 0 };
@@ -69,10 +70,11 @@ export function displaySowingFigures({
   const live = (linkedOrders || []).reduce((sum, order) => sum + intQty(order?.plants), 0);
   const orders = coverQtyForExcess(covered, live, excessAllocated);
   const moved = intQty(mortalityMovedToExcess);
+  const marked = intQty(plantsMarkedSellable);
   return {
     bufferPlants: buffer,
     mortality: Math.max(0, buffer - moved),
-    excess: Math.max(0, sowed - orders) + moved,
+    excess: Math.max(0, sowed - orders) + moved + marked,
   };
 }
 
@@ -94,6 +96,7 @@ export function paintSowingEntryNumbers(slot, {
     sowingBufferPct: batch?.sowingBufferPct ?? bufferPct,
     mortalityMovedToExcess: batch?.mortalityMovedToExcess,
     excessAllocated: excessAllocatedPlants(batch),
+    plantsMarkedSellable: batch?.plantsMarkedSellable,
     isIrrelevant: batch?.isIrrelevant,
   });
   // Same number as dispatch "Free" — do not use entry-split linkedOrders for leftover.
@@ -132,10 +135,11 @@ export function excessFieldsForBatch(batch, sowingBufferPct = 0, plantQtyByOrder
     sowingBufferPct: pct,
   });
   const moved = Math.max(0, Math.floor(Number(batch.mortalityMovedToExcess) || 0));
+  const marked = Math.max(0, Math.floor(Number(batch.plantsMarkedSellable) || 0));
   return {
     sowingBufferPct: pct,
     bufferPlants: parts.bufferPlants,
-    shownExcess: parts.excess + moved,
+    shownExcess: parts.excess + moved + marked,
   };
 }
 

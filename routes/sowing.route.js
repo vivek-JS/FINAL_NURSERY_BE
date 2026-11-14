@@ -129,6 +129,11 @@ import {
   getSowBatchStockIntel,
 } from "../controllers/sowBatchStock.controller.js";
 import { getSowingEntriesCollection } from "../modules/sowingEntries/listSowingEntries.controller.js";
+import {
+  getLeftoverSowing,
+  postMarkSellable,
+  postTransferRemaining,
+} from "../modules/sowingEntries/leftoverSowing.controller.js";
 import { getSowingEntryById } from "../modules/sowingEntries/getSowingEntry.controller.js";
 import {
   getCollectionExcess,
@@ -260,6 +265,9 @@ router.get("/entries", getSowingEntriesCollection);
 router.get("/entries/excess", getCollectionExcess);
 router.get("/entries/board-excess", getEntriesBoardExcess);
 router.get("/entries/for-order", getSowingEntriesForOrder);
+router.get("/entries/:id/leftover", getLeftoverSowing);
+router.post("/entries/:id/transfer-remaining", postTransferRemaining);
+router.post("/entries/:id/mark-sellable", postMarkSellable);
 router.get("/entries/:id", getSowingEntryById);
 router.get("/:id", getSowingById); // Get single sowing by ID
 router.put("/:id", updateSowing); // Update sowing record

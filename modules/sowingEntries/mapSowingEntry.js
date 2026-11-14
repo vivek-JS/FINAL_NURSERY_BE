@@ -33,13 +33,29 @@ export function coverShownForEntry(doc, orderPlants = null) {
  * Same numbers the sowing-entries grid reads: sowed, cover, excess, mortality.
  * Excess is sowed − CMS mortality − cover. A stored excessPlants stamp is not shown.
  */
+function latestTransferOf(doc) {
+  const logs = Array.isArray(doc?.transferLog) ? doc.transferLog : [];
+  const latest = logs.length ? logs[logs.length - 1] : null;
+  if (!latest) return null;
+  return {
+    at: latest.at || null,
+    plants: Math.max(0, Math.floor(Number(latest.plants) || 0)),
+    direction: latest.direction || "",
+    otherEntryId: latest.otherEntryId ? String(latest.otherEntryId) : "",
+    otherRequestNumber: latest.otherRequestNumber || "",
+  };
+}
+
 export function toSowingEntryListItem(doc, orderPlants = null) {
-  const cover = coverShownForEntry(doc, orderPlants);
+  const destroyed = Math.max(0, Math.floor(Number(doc?.destroyedPlants) || 0));
+  const gross = Math.max(0, Math.floor(Number(doc?.plantsSowed) || 0));
+  const sowed = Math.max(0, gross - destroyed);
+  const view = { ...doc, plantsSowed: sowed };
+  const cover = coverShownForEntry(view, orderPlants);
   const fields = excessFieldsForBatch(
-    { ...doc, orderCoveredPlants: cover },
+    { ...view, orderCoveredPlants: cover },
     doc?.sowingBufferPct || 0
   );
-  const sowed = Math.max(0, Math.floor(Number(doc?.plantsSowed) || 0));
   const excess = fields.shownExcess;
   const buffer = fields.bufferPlants;
   const moved = Math.max(0, Math.floor(Number(doc?.mortalityMovedToExcess) || 0));
@@ -60,7 +76,12 @@ export function toSowingEntryListItem(doc, orderPlants = null) {
     plantReadyDate: ready,
     out: doc?.out || "",
     dispatchedPlants: Math.max(0, Math.floor(Number(doc?.dispatchedPlants) || 0)),
-    remainingPlants: Math.max(0, Math.floor(Number(doc?.remainingPlants) || 0)),
+    remainingPlants: Math.floor(Number(doc?.remainingPlants) || 0),
+    destroyedPlants: destroyed,
+    plantsTransferredOut: Math.max(0, Math.floor(Number(doc?.plantsTransferredOut) || 0)),
+    plantsTransferredIn: Math.max(0, Math.floor(Number(doc?.plantsTransferredIn) || 0)),
+    plantsMarkedSellable: Math.max(0, Math.floor(Number(doc?.plantsMarkedSellable) || 0)),
+    latestTransfer: latestTransferOf(doc),
     sowedQuantity: sowed,
     bookedPlants: cover,
     orderPlants: orderTotal,
@@ -78,6 +99,7 @@ export function toSowingEntryListItem(doc, orderPlants = null) {
       excessPlants: excess,
       bookedPlants: cover,
       batchPlantsSowed: sowed,
+      batchDestroyedPlants: destroyed,
       isIrrelevant: Boolean(doc?.isIrrelevant),
     },
   };

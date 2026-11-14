@@ -10,7 +10,7 @@ function oid(value) {
 }
 
 const SORT_KEYS = {
-  plant: ["plantName", "subtypeName"],
+  plant: ["subtypeName", "plantName"],
   sowingId: ["requestNumber"],
   sowDate: ["sowDay", "requestNumber"],
   readyDate: ["readySort"],
@@ -94,7 +94,7 @@ export function sowingEntrySortFigures() {
       0,
       {
         $subtract: [
-          { $add: [{ $subtract: [num("$plantsSowed"), buffer] }, num("$mortalityMovedToExcess")] },
+          { $add: [{ $subtract: [num("$plantsSowed"), buffer] }, num("$mortalityMovedToExcess"), num("$plantsMarkedSellable")] },
           { $add: [coverSort, num("$excessMovedToMortality")] },
         ],
       },

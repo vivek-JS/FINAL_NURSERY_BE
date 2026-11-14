@@ -7,13 +7,67 @@ import SowingRequest from "../models/sowingRequest.model.js";
 import { IST_OFFSET } from "../utility/istSlotDate.js";
 import { reportedExcessBreakdown } from "../utility/lagwadSlotPlantsSplit.js";
 import { excessPlusMoved } from "./sowBatchMortalityRelease.service.js";
-import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
+import { excessFieldsForBatch, storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 
 const n = (v) => Number(v) || 0;
 const idStr = (v) => (v == null || v === "" ? "" : String(v._id ?? v));
 
 export function dispatchedNetOf(batch) {
   return (batch?.dispatchLog || []).reduce((s, d) => s + n(d.plants), 0);
+}
+
+const VEHICLE_BUCKETS = new Set(["COVER", "FREE", "DISPATCH", "SWITCH"]);
+
+/** A row counts only when a vehicle took plants from this batch. A booking link does not. */
+export function vehicleDispatchPlantsOf(row) {
+  const bucket = String(row?.bucket || "").toUpperCase();
+  const reason = String(row?.reason || "");
+  if (reason.includes("Order loaded from another batch")) return 0;
+  if (bucket === "UNLOAD" || bucket === "RETURN") return n(row?.plants);
+  if (!row?.secondaryOutwardId) return 0;
+  if (bucket && !VEHICLE_BUCKETS.has(bucket)) return 0;
+  return n(row?.plants);
+}
+
+/** Plants loaded on a vehicle, minus unloads and returns. Never below 0. */
+export function dispatchedPlantsOf(batch) {
+  const net = (batch?.dispatchLog || []).reduce((s, d) => s + vehicleDispatchPlantsOf(d), 0);
+  return Math.max(0, net);
+}
+
+/** Mortality still on the batch, and how much was last moved into excess. */
+export function stockMortalityOf(raw, bufferPlants) {
+  const moved = Math.max(0, Math.floor(Number(raw?.mortalityMovedToExcess) || 0));
+  const added = Math.max(0, Math.floor(Number(raw?.excessMovedToMortality) || 0));
+  if (raw?.isIrrelevant) {
+    return { mortality: 0, mortalityMovedToExcess: moved, mortalityReserve: 0 };
+  }
+  if (raw?.noMortalityReserve && moved <= 0) {
+    return { mortality: added, mortalityMovedToExcess: 0, mortalityReserve: added };
+  }
+  const buffer = Math.max(0, Math.floor(Number(bufferPlants) || 0));
+  const mortality = Math.max(0, buffer - moved + added);
+  return { mortality, mortalityMovedToExcess: moved, mortalityReserve: mortality };
+}
+
+function mortalityBufferOf(batch) {
+  if (batch?.bufferPlants != null && batch.bufferPlants !== "") {
+    return Math.max(0, Math.floor(Number(batch.bufferPlants) || 0));
+  }
+  return excessFieldsForBatch(batch, batch?.sowingBufferPct || 0).bufferPlants;
+}
+
+/** Plants sowed minus destroyed plants minus the mortality still held. */
+export function sellablePlantsOf(batch) {
+  if (!batch || batch.isIrrelevant) return 0;
+  const sowed = Math.max(0, n(batch.plantsSowed) - n(batch.destroyedPlants));
+  const mort = stockMortalityOf(batch, mortalityBufferOf(batch));
+  return Math.max(0, sowed - mort.mortality);
+}
+
+/** Sellable plants still here. Dispatched plants are subtracted once. */
+export function availablePlantsOf(batch) {
+  return Math.max(0, sellablePlantsOf(batch) - dispatchedPlantsOf(batch));
 }
 
 /** Remaining plants still on the batch after destroy + net dispatch (RETURN/UNLOAD are negative). */

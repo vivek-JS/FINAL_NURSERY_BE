@@ -1,13 +1,36 @@
 import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
+import SowingEntry from "../models/sowingEntry.model.js";
 import AppError from "../utility/appError.js";
 import { applyStockFieldUpdates } from "../utility/slotStockTrail.js";
+import { restamp } from "../modules/sowingEntries/leftoverSowingMath.js";
 
 const toInt = (v) => Math.max(0, Math.floor(Number(v) || 0));
 const idStr = (v) => (v == null || v === "" ? "" : String(v));
 
 export const sowBatchLeft = (batch) =>
   Math.max(0, toInt(batch?.plantsSowed) - toInt(batch?.destroyedPlants));
+
+/** Keep the sowing list in step: destroyed plants leave remaining and sellable. */
+async function noteDestroyedOnEntries(batches, takes) {
+  const takenByRequest = new Map();
+  for (const take of takes || []) {
+    const batch = (batches || []).find((row) => idStr(row._id) === idStr(take.batchId));
+    const requestId = idStr(batch?.sowingRequestId);
+    if (!requestId || !take.plants) continue;
+    takenByRequest.set(requestId, (takenByRequest.get(requestId) || 0) + toInt(take.plants));
+  }
+  for (const [requestId, taken] of takenByRequest) {
+    if (!mongoose.isValidObjectId(requestId) || taken < 1) continue;
+    const entry = await SowingEntry.findOne({ sowingRequestId: requestId });
+    if (!entry) continue;
+    entry.destroyedPlants = toInt(entry.destroyedPlants) + taken;
+    const stamped = restamp(entry.toObject());
+    entry.excessPlants = stamped.excessPlants;
+    entry.remainingPlants = stamped.remainingPlants;
+    await entry.save();
+  }
+}
 
 /**
  * Pure plan: take `quantity` from the chosen batches (newest first) and work out what the slot loses.
@@ -92,6 +115,7 @@ export async function destroySowBatchPlants({
   );
   if (by) slot.setPerformer?.(by);
   await plantSlot.save({ validateBeforeSave: true });
+  await noteDestroyedOnEntries(batches, plan.takes);
 
   return {
     slotId: idStr(slotId),
