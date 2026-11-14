@@ -3257,12 +3257,13 @@ const updateOne = (Model, modelName, allowedFields) =>
         }
       }
 
-      // Order +qty on a loaded vehicle → bump dispatch line so shed "Load remaining" unlocks.
+      // Order plant count changed on a shed vehicle → update the dispatch line and move it
+      // between pending and loaded. The shed card says how many plants went up or down.
       let dispatchQtySync = null;
       if (
         modelName === "Order" &&
         updatedDoc &&
-        Number(updatedDoc.numberOfPlants) > Number(existingDoc.numberOfPlants)
+        Number(updatedDoc.numberOfPlants) !== Number(existingDoc.numberOfPlants)
       ) {
         const { syncDispatchAfterOrderQtyIncrease } = await import(
           "../services/syncDispatchAfterOrderQty.service.js"

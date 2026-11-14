@@ -205,9 +205,24 @@ export function notifyVehicleLoadMore(dispatch, { plantsAdded = 0, loadedTotal =
   })();
 }
 
+function plantChangePhrase(qtyDeltas) {
+  let up = 0;
+  let down = 0;
+  for (const row of qtyDeltas || []) {
+    const n = Math.round(Number(row?.delta) || 0);
+    if (n > 0) up += n;
+    else if (n < 0) down += Math.abs(n);
+  }
+  const fmt = (n) => n.toLocaleString("en-IN");
+  if (up > 0 && down > 0) return `${fmt(up)} रोपे वाढवा · ${fmt(down)} रोपे कमी करा`;
+  if (up > 0) return `${fmt(up)} रोपे वाढवा`;
+  if (down > 0) return `${fmt(down)} रोपे कमी करा`;
+  return "";
+}
+
 /**
- * Office changed dispatch qty / orders after the vehicle already had shed load —
- * shed must load (or adjust) more crates.
+ * Office changed the plant count on a vehicle the shed already has.
+ * The full-screen card says how many plants to add or remove.
  */
 export function notifyDispatchLoadEdited(
   dispatch,
@@ -217,28 +232,23 @@ export function notifyDispatchLoadEdited(
     try {
       if (!dispatch?._id) return;
       const tid = dispatch.transportId || "";
-      const where = vehicleLine(dispatch);
+      const phrase = plantChangePhrase(qtyDeltas);
+      const title = phrase || "लोड संपादित";
       const by = changedBy ? ` · ${changedBy}` : "";
-      const parts = (qtyDeltas || [])
-        .filter((d) => d && Number(d.delta) !== 0)
-        .slice(0, 4)
-        .map((d) => {
-          const code = d.orderCode || d.orderId || "order";
-          const sign = Number(d.delta) > 0 ? "+" : "";
-          return `#${code} ${sign}${Number(d.delta).toLocaleString("en-IN")}`;
-        });
-      const detail = parts.length ? ` · ${parts.join(", ")}` : "";
       const stamp = editedAt ? new Date(editedAt).getTime() : Date.now();
+      const net = (qtyDeltas || []).reduce((s, d) => s + (Number(d?.delta) || 0), 0);
       await notifyTripManagers({
-        title: "लोड संपादित · Load edited",
-        body: `#${tid}${where ? ` · ${where}` : ""}${detail} — load more at shed${by}`,
+        title,
+        body: [dispatchNoticeBody(dispatch), phrase].filter(Boolean).join("\n") + by,
         type: "dispatch",
         data: {
           dispatchId: String(dispatch._id),
           transportId: String(tid),
           kind: "load_edited",
+          plantsDelta: String(net),
         },
         dedupeKey: `dispatch:${dispatch._id}:load-edited:${stamp}`,
+        includeSecondary: true,
       });
     } catch (err) {
       console.error("[dispatchFleetNotify] load edited:", err?.message || err);

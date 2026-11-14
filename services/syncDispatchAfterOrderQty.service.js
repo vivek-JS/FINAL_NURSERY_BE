@@ -2,7 +2,10 @@ import mongoose from "mongoose";
 import Dispatch from "../models/dispatch.model.js";
 import Order from "../models/order.model.js";
 import { rebuildDispatchTargets } from "./dispatchTargetBuilder.service.js";
-import { DISPATCH_SHED_ALLOWED_STATUSES } from "./secondaryVehicleLoad.service.js";
+import {
+  DISPATCH_SHED_ALLOWED_STATUSES,
+  syncDispatchTransportStatusAfterShedChange,
+} from "./secondaryVehicleLoad.service.js";
 import { syncOrderVehicleLoadedFlag } from "./dispatchPostLoadFinalize.service.js";
 import { orderStatusFromRemaining } from "../utility/dispatchOrderStatus.util.js";
 
@@ -23,7 +26,7 @@ export async function syncDispatchAfterOrderQtyIncrease({
   const prev = Math.floor(Number(previousNumberOfPlants) || 0);
   const next = Math.floor(Number(nextNumberOfPlants) || 0);
   const delta = next - prev;
-  if (delta < 1 || !order?._id) return null;
+  if (!delta || !order?._id) return null;
 
   const dispatchId = order.currentDispatchId;
   if (!dispatchId || !mongoose.isValidObjectId(String(dispatchId))) return null;
@@ -45,8 +48,9 @@ export async function syncDispatchAfterOrderQtyIncrease({
   const row = dispatch.orderDispatchDetails[rowIdx];
   const oldQty = Math.max(0, Math.floor(Number(row.dispatchQuantity) || 0));
   const shedLoaded = Math.max(0, Math.floor(Number(row.shedLoadedQuantity) || 0));
-  const newQty = oldQty + delta;
-  if (newQty < shedLoaded) return null;
+  const newQty = Math.max(0, oldQty + delta);
+  const appliedDelta = newQty - oldQty;
+  if (!appliedDelta) return null;
 
   const officeEditNow = new Date();
   const originalQty =
@@ -111,7 +115,7 @@ export async function syncDispatchAfterOrderQtyIncrease({
       orderId: plain.orderId,
       dispatchQuantity: newQty,
       originalDispatchQuantity: originalQty,
-      lastOfficeQtyDelta: delta,
+      lastOfficeQtyDelta: appliedDelta,
       lastOfficeEditedAt: officeEditNow,
       shedLoadedQuantity: shedLoaded,
       remainingAfterDispatch: newRemaining,
@@ -139,6 +143,13 @@ export async function syncDispatchAfterOrderQtyIncrease({
     dispatchDoc: dispatch,
   });
 
+  // Loaded vehicles leave the pending list. An increase that is not covered yet
+  // puts the vehicle back on pending so the extra plants can be loaded.
+  await syncDispatchTransportStatusAfterShedChange({
+    session,
+    dispatchDoc: dispatch,
+  });
+
   const orderCode =
     fresh.orderId != null
       ? String(fresh.orderId)
@@ -150,7 +161,7 @@ export async function syncDispatchAfterOrderQtyIncrease({
       {
         orderId: oid,
         orderCode,
-        delta,
+        delta: appliedDelta,
         oldQty,
         newQty,
       },
