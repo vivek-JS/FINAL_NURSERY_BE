@@ -4,6 +4,7 @@ import Dispatch from "../models/dispatch.model.js";
 import AppError from "../utility/appError.js";
 import { persistInboxOnce } from "../utility/notificationInbox.js";
 import { sendFcmNotification } from "../utility/fcmPush.js";
+import { dispatchNoticeBody } from "../utility/dispatchFleetNotify.js";
 import { sendCustomNotification } from "../utility/pushNotification.js";
 
 export function jobOf(user) {
@@ -32,18 +33,6 @@ export function canAssignDispatch(user) {
 function assignsOwnTeam(user) {
   const job = jobOf(user);
   return job === "DISPATCH_MANAGER" || job === "SECONDARY";
-}
-
-function plantCount(dispatch) {
-  const fromOrders = (dispatch.orderDispatchDetails || []).reduce(
-    (sum, row) => sum + (Number(row.dispatchQuantity) || 0),
-    0
-  );
-  if (fromOrders > 0) return fromOrders;
-  return (dispatch.plantsDetails || []).reduce(
-    (sum, row) => sum + (Number(row.quantity ?? row.totalPlants) || 0),
-    0
-  );
 }
 
 /**
@@ -90,15 +79,7 @@ export async function assertDispatchVisible(user, dispatchId) {
 
 async function notifyAssignee(employee, dispatch) {
   const title = "गाडी तुमच्याकडे · Vehicle assigned";
-  const plants = plantCount(dispatch);
-  const where = [dispatch.vehicleNumber, dispatch.driverName].filter(Boolean).join(" · ");
-  const body = [
-    dispatch.transportId ? `#${dispatch.transportId}` : "",
-    where,
-    plants > 0 ? `${plants} plants` : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const body = dispatchNoticeBody(dispatch);
   const data = {
     dispatchId: String(dispatch._id),
     transportId: String(dispatch.transportId || ""),

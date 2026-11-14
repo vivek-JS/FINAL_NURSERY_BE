@@ -14,6 +14,48 @@ function vehicleLine(d = {}) {
   return [d.vehicleNumber, d.vehicleName, d.driverName].filter(Boolean).join(" · ");
 }
 
+function crateTotal(plant) {
+  const crates = Array.isArray(plant?.crates) ? plant.crates : [];
+  let n = 0;
+  for (const crate of crates) {
+    const direct = Number(crate?.crateCount || 0);
+    if (direct > 0) {
+      n += direct;
+      continue;
+    }
+    for (const detail of crate?.crateDetails || []) {
+      n += Number(detail?.crateCount || 0);
+    }
+  }
+  return n;
+}
+
+/** One line per variety, with the office crate count. */
+export function varietyLines(dispatch) {
+  const plants = Array.isArray(dispatch?.plantsDetails) ? dispatch.plantsDetails : [];
+  const lines = [];
+  for (const plant of plants) {
+    const name = String(plant?.name || "").trim();
+    if (!name) continue;
+    const crates = crateTotal(plant);
+    const qty = Number(plant?.totalPlants || plant?.quantity || 0);
+    const bits = [name];
+    if (crates > 0) bits.push(`${crates} crate${crates === 1 ? "" : "s"}`);
+    if (qty > 0) bits.push(`${qty} plants`);
+    lines.push(bits.join(" · "));
+  }
+  return lines;
+}
+
+export function dispatchNoticeBody(dispatch, { slipPending = false } = {}) {
+  const head = [`#${dispatch?.transportId || ""}`, vehicleLine(dispatch)]
+    .filter((part) => part && part !== "#")
+    .join(" · ");
+  return [head, ...varietyLines(dispatch), slipPending ? "freight slip pending" : ""]
+    .filter(Boolean)
+    .join("\n");
+}
+
 async function tripManagers({ includeSecondary = false } = {}) {
   const roles = includeSecondary
     ? [...DISPATCH_ALERT_ROLES, "SECONDARY"]
@@ -70,10 +112,9 @@ export function notifyDispatchCreated(dispatch, slip) {
     try {
       if (!dispatch?._id) return;
       const tid = dispatch.transportId || "";
-      const where = vehicleLine(dispatch);
       await notifyTripManagers({
         title: "नवीन डिस्पॅच · New dispatch",
-        body: `#${tid}${where ? ` · ${where}` : ""}${slip ? "" : " · freight slip pending"}`,
+        body: dispatchNoticeBody(dispatch, { slipPending: !slip }),
         type: "dispatch",
         data: {
           dispatchId: String(dispatch._id),
