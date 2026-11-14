@@ -7,6 +7,7 @@ import Order from "../models/order.model.js";
 import { applyStockFieldUpdates } from "../utility/slotStockTrail.js";
 import { sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
 import { dispatchBookableFree } from "../utility/sowingBatchExcessStamp.js";
+import { OVERDUE_LOOKBACK_DAYS } from "../utility/capacityBoardMetrics.js";
 import { pushBatchChangeLog } from "../utility/sowingBatchChangeLog.js";
 import { sowingBufferPctByPlantId } from "../utility/plantSowingBuffer.js";
 import {
@@ -599,15 +600,25 @@ function sowingAvailable(batch) {
   return Math.max(linked, free);
 }
 
-/** One sowing on the load screen: a date that still has plants, else the linked date even if minus. */
+function sowingReadyMs(batch) {
+  const ms = dmyMs(batch?.plantReadyDate || batch?.outDate || batch?.sowingDate);
+  return Number.isFinite(ms) && ms !== Number.POSITIVE_INFINITY ? ms : null;
+}
+
+/** Ready more than the board lookback ago. Those dates stay off the load screen. */
+function isOldSowing(batch, cutoffMs) {
+  const ms = sowingReadyMs(batch);
+  if (ms == null) return false;
+  return ms < cutoffMs;
+}
+
+/** Every sowing still in the lookback. Old dates are left off. A minus balance still shows. */
 function pickLoadingSowing(orders, batches) {
   const byId = new Map();
-  const linkedIds = new Set();
   for (const order of orders || []) {
     for (const link of order?.linked || []) {
       const id = String(link?.batchId || "");
       if (!id) continue;
-      linkedIds.add(id);
       const prev = byId.get(id);
       if (!prev || sowingAvailable(link) > sowingAvailable(prev)) byId.set(id, link);
     }
@@ -618,24 +629,22 @@ function pickLoadingSowing(orders, batches) {
     byId.set(id, batch);
   }
   const list = [...byId.values()];
-  if (list.length <= 1) return list;
-  const open = list.filter((b) => sowingAvailable(b) > 0);
-  const pool = open.length ? open : list;
-  const linked = pool.filter((b) => linkedIds.has(String(b.batchId)));
-  const ranked = (linked.length ? linked : pool).slice().sort((a, b) => {
-    const byAvail = sowingAvailable(b) - sowingAvailable(a);
-    if (byAvail) return byAvail;
-    return dmyMs(a.plantReadyDate) - dmyMs(b.plantReadyDate);
+  const cutoff = moment().startOf("day").subtract(OVERDUE_LOOKBACK_DAYS, "days").valueOf();
+  const current = list.filter((b) => !isOldSowing(b, cutoff));
+  const pool = current.length ? current : list;
+  return pool.slice().sort((a, b) => {
+    const byDay = (sowingReadyMs(a) ?? Number.POSITIVE_INFINITY) - (sowingReadyMs(b) ?? Number.POSITIVE_INFINITY);
+    if (byDay) return byDay;
+    return sowingAvailable(b) - sowingAvailable(a);
   });
-  return ranked.slice(0, 1);
 }
 
 function ordersForLoadingSowing(orders, loading) {
-  const id = loading[0] ? String(loading[0].batchId) : "";
-  if (!id) return orders;
+  const ids = new Set((loading || []).map((b) => String(b.batchId || "")).filter(Boolean));
+  if (!ids.size) return orders;
   return (orders || []).map((order) => ({
     ...order,
-    linked: (order.linked || []).filter((link) => String(link.batchId) === id),
+    linked: (order.linked || []).filter((link) => ids.has(String(link.batchId))),
   }));
 }
 
