@@ -1,4 +1,5 @@
 import User from "../models/user.model.js";
+import { sendFcmNotification } from "./fcmPush.js";
 import { persistInboxOnce } from "./notificationInbox.js";
 import { sendCustomNotification } from "./pushNotification.js";
 
@@ -25,7 +26,7 @@ async function tripManagers({ includeSecondary = false } = {}) {
       { canManageTrips: true },
     ],
   })
-    .select("_id expoPushToken name")
+    .select("_id expoPushToken fcmToken name")
     .lean();
 }
 
@@ -40,10 +41,25 @@ async function notifyTripManagers({ title, body, type, data, dedupeKey, includeS
       data,
       dedupeKey,
     });
+    const pushData = { type, ...data, dedupeKey };
+    let sent = false;
+    if (type !== "freight_slip" && user.fcmToken) {
+      try {
+        sent = await sendFcmNotification({ token: user.fcmToken, title, body, data: pushData });
+      } catch (err) {
+        console.error("[dispatchFleetNotify] fcm failed:", err?.message || err);
+      }
+    }
     if (user.expoPushToken) {
-      await sendCustomNotification(user.expoPushToken, title, body, { type, ...data, dedupeKey });
-    } else {
-      console.log("[dispatchFleetNotify] inbox only (no Expo token)", String(user._id), user.name || "");
+      try {
+        await sendCustomNotification(user.expoPushToken, title, body, pushData);
+        sent = true;
+      } catch (err) {
+        console.error("[dispatchFleetNotify] expo failed:", err?.message || err);
+      }
+    }
+    if (!sent) {
+      console.log("[dispatchFleetNotify] inbox only (no phone token)", String(user._id), user.name || "");
     }
   }
 }

@@ -3,6 +3,7 @@ import User from "../models/user.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import AppError from "../utility/appError.js";
 import { persistInboxOnce } from "../utility/notificationInbox.js";
+import { sendFcmNotification } from "../utility/fcmPush.js";
 import { sendCustomNotification } from "../utility/pushNotification.js";
 
 export function jobOf(user) {
@@ -111,12 +112,22 @@ async function notifyAssignee(employee, dispatch) {
     data,
     dedupeKey: `dispatch:${dispatch._id}:assigned:${employee._id}:${Date.now()}`,
   });
+  const pushData = { type: "dispatch_assigned", ...data };
+  if (employee.fcmToken) {
+    try {
+      await sendFcmNotification({
+        token: employee.fcmToken,
+        title,
+        body: body || "Vehicle assigned",
+        data: pushData,
+      });
+    } catch (err) {
+      console.error("[dispatchAssign] fcm failed:", err?.message || err);
+    }
+  }
   if (!employee.expoPushToken) return;
   try {
-    await sendCustomNotification(employee.expoPushToken, title, body || "Vehicle assigned", {
-      type: "dispatch_assigned",
-      ...data,
-    });
+    await sendCustomNotification(employee.expoPushToken, title, body || "Vehicle assigned", pushData);
   } catch (err) {
     console.error("[dispatchAssign] push failed:", err?.message || err);
   }
@@ -138,7 +149,7 @@ export async function assignVehicleDispatch({ dispatchId, userId, actor }) {
     isDisabled: { $ne: true },
     $or: [{ jobTitle: "DISPATCH" }, { role: "DISPATCH" }],
   })
-    .select("name phoneNumber reportsTo expoPushToken")
+    .select("name phoneNumber reportsTo expoPushToken fcmToken")
     .lean();
   if (!employee) throw new AppError("That person is not a dispatch employee", 400);
   if (assignsOwnTeam(actor) && String(employee.reportsTo || "") !== String(actor._id)) {
