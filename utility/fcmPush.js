@@ -1,12 +1,12 @@
 import fs from "fs";
-import admin from "firebase-admin";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getMessaging } from "firebase-admin/messaging";
 
-let ready = false;
 let failed = false;
 
 function messaging() {
   if (failed) return null;
-  if (!ready) {
+  if (!getApps().length) {
     const path = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (!path || !fs.existsSync(path)) {
       failed = true;
@@ -14,10 +14,9 @@ function messaging() {
       return null;
     }
     const serviceAccount = JSON.parse(fs.readFileSync(path, "utf8"));
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-    ready = true;
+    initializeApp({ credential: cert(serviceAccount) });
   }
-  return admin.messaging();
+  return getMessaging();
 }
 
 /** Wakes a closed Android app. Data values must be strings. */
