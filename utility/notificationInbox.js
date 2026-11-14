@@ -1,4 +1,5 @@
 import NotificationInbox from "../models/notificationInbox.model.js";
+import { emitShedNotice } from "../services/shedLive.ws.js";
 
 const DEDUPE_WINDOW_MS = 3 * 60 * 1000;
 
@@ -20,13 +21,22 @@ export async function persistInboxOnce({ userId, title, body, type = "custom", d
         .lean();
       if (existing) return existing;
     }
-    return await NotificationInbox.create({
+    const created = await NotificationInbox.create({
       user: userId,
       title,
       body,
       type,
       data: dedupeKey ? { ...data, dedupeKey } : data,
     });
+    emitShedNotice(userId, {
+      id: String(created._id),
+      title,
+      body,
+      type,
+      data: created.data || {},
+      createdAt: created.createdAt || new Date(),
+    });
+    return created;
   } catch (err) {
     console.error("[notificationInbox] persist failed:", err?.message || err);
     return null;

@@ -2,6 +2,7 @@ import "dotenv/config";
 import mongoose from "mongoose";
 import server from "./app.js";
 import { attachVoiceFeedbackWebSocket } from "./services/voiceFeedback/voiceBridge.ws.js";
+import { attachShedLiveSocket } from "./services/shedLive.ws.js";
 import { warmUpFaceModels } from "./services/faceRecognition.service.js";
 import {
   startWhatsAppClient,
@@ -76,7 +77,9 @@ mongoose
         console.log(`  - /api/v1/inventory/ram-agri-customer-ledger/parties`);
         try {
           attachVoiceFeedbackWebSocket(httpServer);
+          attachShedLiveSocket(httpServer);
           console.log("Voice feedback WebSocket (Exotel / tests): ws + same host path /api/v1/voice-feedback/media");
+          console.log("Shed live notices: ws + same host path /api/v1/shed/live");
         } catch (e) {
           console.error("Voice feedback WebSocket attach failed:", e?.message || e);
         }
