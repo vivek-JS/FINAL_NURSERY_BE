@@ -154,7 +154,9 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
       quantity: q,
       cratePieces,
       crates,
-      sowingAllowed: pid ? Boolean(sowingAllowedByPlant.get(pid)) : false,
+      sowingAllowed: pid
+        ? Boolean(sowingAllowedByPlant.get(pid)) || /banana|keli|केळ/i.test(plantName)
+        : false,
     };
   });
 

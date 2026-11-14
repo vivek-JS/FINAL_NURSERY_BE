@@ -35,10 +35,15 @@ function parseDdMmYyyy(str) {
   return m.isValid() ? m.startOf("day") : null;
 }
 
+function isBananaName(name) {
+  return /banana|keli|केळ/i.test(String(name || ""));
+}
+
 export async function isPlantSowingAllowed(plantId) {
   if (!plantId || !mongoose.isValidObjectId(String(plantId))) return false;
   const plant = await PlantCms.findById(plantId).select("sowingAllowed name").lean();
-  return Boolean(plant?.sowingAllowed);
+  if (!plant) return false;
+  return Boolean(plant.sowingAllowed) || isBananaName(plant.name);
 }
 
 /**

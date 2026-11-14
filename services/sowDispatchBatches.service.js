@@ -258,13 +258,10 @@ export function planSowBatchLoad({ selections, orderLinks, batches }) {
             need -= t;
           }
           if (need > 0) {
-            const booked = B.orders
-              .filter((y) => y.orderId !== orderId && !selectedOrderIds.has(y.orderId))
-              .reduce((s, y) => s + y.plants, 0);
-            return {
-              ok: false,
-              error: `Batch has ${B.free} free + ${booked} booked by other orders; need ${rest}`,
-            };
+            line.warnings.push(
+              `Available is short by ${need}. Load continues and stock can go minus.`
+            );
+            need = 0;
           }
           for (const t of takers) {
             t.ref.plants -= t.plants;
@@ -288,10 +285,9 @@ export function planSowBatchLoad({ selections, orderLinks, batches }) {
       } else {
         const released = Math.min(rest, releasable);
         if (r > released) {
-          return {
-            ok: false,
-            error: `Batch has ${B.free} free plants; the order's own batch can take back only ${released} for other orders`,
-          };
+          line.warnings.push(
+            `Available is short by ${r - released}. Load continues and stock can go minus.`
+          );
         }
         const takers = [];
         let need = r;
@@ -303,13 +299,10 @@ export function planSowBatchLoad({ selections, orderLinks, batches }) {
           need -= t;
         }
         if (need > 0) {
-          const booked = B.orders
-            .filter((y) => y.orderId !== orderId && !selectedOrderIds.has(y.orderId))
-            .reduce((s, y) => s + y.plants, 0);
-          return {
-            ok: false,
-            error: `Batch has ${B.free} free + ${booked} booked by other orders; need ${rest}`,
-          };
+          line.warnings.push(
+            `Available is short by ${need}. Load continues and stock can go minus.`
+          );
+          need = 0;
         }
 
         let releaseLeft = released;
@@ -442,7 +435,7 @@ const ORDER_SELECT =
 export async function loadSowDispatchContext(
   plantId,
   subtypeId,
-  { session, vehicleOrderIds = [], hydrate = false, withFarmer = true } = {}
+  { session, vehicleOrderIds = [], hydrate = false, withFarmer = true, vehicleOnly = false } = {}
 ) {
   const slotDocs = await loadSlotDocs(plantId, subtypeId, session, hydrate);
   const batchIndex = indexSowBatches(slotDocs, subtypeId);
@@ -455,18 +448,22 @@ export async function loadSowDispatchContext(
     .filter((id) => mongoose.isValidObjectId(id))
     .map((id) => new mongoose.Types.ObjectId(id));
 
-  let orderQuery = Order.find({
-    plantName: new mongoose.Types.ObjectId(String(plantId)),
-    plantSubtype: new mongoose.Types.ObjectId(String(subtypeId)),
-    orderStatus: { $nin: CLOSED_ORDER_STATUSES },
-    $or: [
-      { _id: { $in: vehicleOids } },
-      { sowingDoneRequestId: { $in: reqIds } },
-      { "sowingCoverSources.batchId": { $in: batchOids } },
-      { "sowingCoverSources.destBatchId": { $in: batchOids } },
-      { "sowBatchLinks.batchId": { $in: batchOids } },
-    ],
-  })
+  let orderQuery = Order.find(
+    vehicleOnly
+      ? { _id: { $in: vehicleOids } }
+      : {
+          plantName: new mongoose.Types.ObjectId(String(plantId)),
+          plantSubtype: new mongoose.Types.ObjectId(String(subtypeId)),
+          orderStatus: { $nin: CLOSED_ORDER_STATUSES },
+          $or: [
+            { _id: { $in: vehicleOids } },
+            { sowingDoneRequestId: { $in: reqIds } },
+            { "sowingCoverSources.batchId": { $in: batchOids } },
+            { "sowingCoverSources.destBatchId": { $in: batchOids } },
+            { "sowBatchLinks.batchId": { $in: batchOids } },
+          ],
+        }
+  )
     .select(ORDER_SELECT)
     .session(session || null);
   if (withFarmer) orderQuery = orderQuery.populate("farmer", "name village");
@@ -540,6 +537,7 @@ export async function listSowBatchOptionsForDispatch(dispatchId, plantRowIndex =
   const { rowIdx, row, rowOrderIds } = await resolveSowRow(dispatchDoc, plantRowIndex);
   const ctx = await loadSowDispatchContext(row.plantId, row.subTypeId, {
     vehicleOrderIds: rowOrderIds,
+    vehicleOnly: true,
   });
   const remaining = vehicleLineRemainingMap(dispatchDoc, rowOrderIds);
 
@@ -579,6 +577,7 @@ export async function listSowBatchOptionsForDispatch(dispatchId, plantRowIndex =
       dmyMs(a.plantReadyDate) - dmyMs(b.plantReadyDate) ||
       dmyMs(a.sowingDate) - dmyMs(b.sowingDate)
   );
+  const loading = pickLoadingSowing(orders, batches);
 
   return {
     dispatchId: idStr(dispatchDoc._id),
@@ -587,9 +586,57 @@ export async function listSowBatchOptionsForDispatch(dispatchId, plantRowIndex =
     subtypeId: idStr(row.subTypeId),
     plantRowQuantity: Number(row.quantity ?? row.totalPlants ?? 0) || 0,
     rowRemaining: await rowRemaining(dispatchDoc, rowIdx, row),
-    orders,
-    batches,
+    orders: ordersForLoadingSowing(orders, loading),
+    batches: loading,
   };
+}
+
+function sowingAvailable(batch) {
+  const n = Number(batch?.availablePlants);
+  if (Number.isFinite(n) && batch?.availablePlants != null) return n;
+  const linked = Number(batch?.linkedPlants) || 0;
+  const free = Number(batch?.freePlants) || 0;
+  return Math.max(linked, free);
+}
+
+/** One sowing on the load screen: a date that still has plants, else the linked date even if minus. */
+function pickLoadingSowing(orders, batches) {
+  const byId = new Map();
+  const linkedIds = new Set();
+  for (const order of orders || []) {
+    for (const link of order?.linked || []) {
+      const id = String(link?.batchId || "");
+      if (!id) continue;
+      linkedIds.add(id);
+      const prev = byId.get(id);
+      if (!prev || sowingAvailable(link) > sowingAvailable(prev)) byId.set(id, link);
+    }
+  }
+  for (const batch of batches || []) {
+    const id = String(batch?.batchId || "");
+    if (!id || byId.has(id)) continue;
+    byId.set(id, batch);
+  }
+  const list = [...byId.values()];
+  if (list.length <= 1) return list;
+  const open = list.filter((b) => sowingAvailable(b) > 0);
+  const pool = open.length ? open : list;
+  const linked = pool.filter((b) => linkedIds.has(String(b.batchId)));
+  const ranked = (linked.length ? linked : pool).slice().sort((a, b) => {
+    const byAvail = sowingAvailable(b) - sowingAvailable(a);
+    if (byAvail) return byAvail;
+    return dmyMs(a.plantReadyDate) - dmyMs(b.plantReadyDate);
+  });
+  return ranked.slice(0, 1);
+}
+
+function ordersForLoadingSowing(orders, loading) {
+  const id = loading[0] ? String(loading[0].batchId) : "";
+  if (!id) return orders;
+  return (orders || []).map((order) => ({
+    ...order,
+    linked: (order.linked || []).filter((link) => String(link.batchId) === id),
+  }));
 }
 
 export function normalizeSowBatchSelections(raw) {
