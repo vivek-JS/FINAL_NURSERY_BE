@@ -17,8 +17,7 @@ import {
 } from "../utility/istSlotDate.js";
 import { loadShedStockPayload } from "../services/capacityShedStock.service.js";
 import { loadSmartShedPayload } from "../services/smartShedCapacity.service.js";
-import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
-import { bookableExcessBySlot } from "../utility/boardBookableExcess.js";
+import { bookableExcessBySlot, signedBatchFree } from "../utility/boardBookableExcess.js";
 import {
   canBookFromExcess,
   capacityStatus,
@@ -711,32 +710,47 @@ export const getCapacitySlotDetail = async (req, res) => {
       orderStatus: order.orderStatus,
     }));
 
-    const batches = (slot.sowingBatches || []).map((batch) => ({
-      batchId: String(batch._id),
-      slotId: String(slot.slotId),
-      sowingRequestId: batch.sowingRequestId ? String(batch.sowingRequestId) : "",
-      destroyedPlants: num(batch.destroyedPlants),
-      plantsLeft: Math.max(0, num(batch.plantsSowed) - num(batch.destroyedPlants)),
-      destroyLog: (batch.destroyLog || []).map((d) => ({
-        at: d.at || null,
-        plants: num(d.plants),
-        reason: d.reason || "",
-      })),
-      requestNumber: batch.requestNumber || "",
-      sowingDate: batch.sowingDate || "",
-      plantReadyDate: batch.plantReadyDate || "",
-      plantReadyDays: num(batch.plantReadyDays),
-      plantsSowed: num(batch.plantsSowed),
-      packetsUsed: num(batch.packetsUsed),
-      orderCoveredPlants: num(batch.orderCoveredPlants),
-      isIrrelevant: Boolean(batch.isIrrelevant),
-      excessPlants: storedShownExcess(batch, plant?.sowingBuffer),
-      actualPlantsApplied: num(batch.actualPlantsApplied),
-      expectedMortalityApplied: num(batch.expectedMortalityApplied),
-      availablePlantsApplied: num(batch.availablePlantsApplied),
-      shedName: batch.shedName || "",
-      isExcessiveSowing: Boolean(batch.isExcessiveSowing),
-    }));
+    const coverByRequest = await liveCoverByRequestNumber();
+    const seenRequests = new Set();
+    const cmsBuffer = Number(plant?.sowingBuffer) || 0;
+    const batches = (slot.sowingBatches || [])
+      .slice()
+      .sort((a, b) => String(a.sowingDate || "").localeCompare(String(b.sowingDate || "")))
+      .map((batch) => {
+        const requestNumber = batch.requestNumber || "";
+        const ordersOnEntry =
+          requestNumber && coverByRequest.has(requestNumber)
+            ? coverByRequest.get(requestNumber)
+            : num(batch.orderCoveredPlants);
+        const canBook = Math.max(0, signedBatchFree(batch, cmsBuffer, coverByRequest, seenRequests));
+        return {
+          batchId: String(batch._id),
+          slotId: String(slot.slotId),
+          sowingRequestId: batch.sowingRequestId ? String(batch.sowingRequestId) : "",
+          destroyedPlants: num(batch.destroyedPlants),
+          plantsLeft: Math.max(0, num(batch.plantsSowed) - num(batch.destroyedPlants)),
+          destroyLog: (batch.destroyLog || []).map((d) => ({
+            at: d.at || null,
+            plants: num(d.plants),
+            reason: d.reason || "",
+          })),
+          requestNumber,
+          sowingDate: batch.sowingDate || "",
+          plantReadyDate: batch.plantReadyDate || "",
+          plantReadyDays: num(batch.plantReadyDays),
+          plantsSowed: num(batch.plantsSowed),
+          packetsUsed: num(batch.packetsUsed),
+          orderCoveredPlants: ordersOnEntry,
+          ordersOnEntry,
+          isIrrelevant: Boolean(batch.isIrrelevant),
+          excessPlants: canBook,
+          actualPlantsApplied: num(batch.actualPlantsApplied),
+          expectedMortalityApplied: num(batch.expectedMortalityApplied),
+          availablePlantsApplied: num(batch.availablePlantsApplied),
+          shedName: batch.shedName || "",
+          isExcessiveSowing: Boolean(batch.isExcessiveSowing),
+        };
+      });
     const lagwadEntries = batches.filter(
       (batch) =>
         !batch.isIrrelevant &&
