@@ -29,6 +29,15 @@ const sowingEntrySchema = new Schema(
     mortalityMovedToExcess: { type: Number, default: 0, min: 0 },
     excessMovedToMortality: { type: Number, default: 0, min: 0 },
     noMortalityReserve: { type: Boolean, default: false },
+    /** sowing = seed sow. komb = plants that came out. excess = plants still left from a sowing. */
+    entryKind: {
+      type: String,
+      enum: ["sowing", "komb", "excess"],
+      default: "sowing",
+      index: true,
+    },
+    /** Excess entry created from this sowing. Empty on a normal sow and on komb. */
+    sourceEntryId: { type: Schema.Types.ObjectId, ref: "SowingEntry", default: null },
     isIrrelevant: { type: Boolean, default: false },
     linkedOrderIds: [{ type: Schema.Types.ObjectId, ref: "Order" }],
     /** Plants this sowing took from each linked order. The sowing list reads this, not the order array. */

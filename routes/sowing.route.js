@@ -90,6 +90,7 @@ import {
   listDirectSowOrders,
   submitDirectSow,
 } from "../controllers/adminDirectSow.controller.js";
+import { submitKombExcess } from "../controllers/kombExcess.controller.js";
 import {
   getOrderSlotExcess,
   completeOrderFromSlotExcess,
@@ -178,6 +179,7 @@ router.get("/day-summary", getSowingDaySummary); // Sow entries for one day (Wha
 router.get("/analytics/delivery-vs-ready", getDeliveryVsReadyAnalytics); // Delivery vs ready/available chart
 router.get("/admin-direct-sow/orders", listDirectSowOrders); // Office/Super Admin: orders by delivery date
 router.post("/admin-direct-sow", submitDirectSow); // Office/Super Admin: sow entry bypassing packet issue
+router.post("/komb-excess", submitKombExcess); // Shed + office: komb count or leftover plants
 router.get("/order/:orderId/slot-excess", getOrderSlotExcess); // Preview saleable excess on delivery slot
 router.post("/order/:orderId/complete-from-excess", completeOrderFromSlotExcess); // Mark sow done from slot excess
 router.get("/excess-batches", getExcessBatches); // Booking preview: batch excess within delivery ±5d

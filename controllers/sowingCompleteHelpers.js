@@ -274,11 +274,20 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
       : new Date();
   const sowingDateStr = fmtDDMMYYYY(sowedAt);
   const cmsReadyDays = await resolveCmsReadyDays(request.plantId, request.subtypeId);
+  const hasReady = meta.plantReadyDays != null && meta.plantReadyDays !== "";
   const overrideReady = Number(meta.plantReadyDays);
   const readyDays =
-    Number.isFinite(overrideReady) && overrideReady > 0 ? overrideReady : cmsReadyDays;
+    hasReady && Number.isFinite(overrideReady) && overrideReady >= 0
+      ? overrideReady
+      : cmsReadyDays;
   const plantReadyDateStr = fmtDDMMYYYY(addDays(sowedAt, readyDays || 0));
-  const mortality = Math.round((plantsSowed * 10) / 100);
+  const overrideMort = Number(meta.mortalityPct);
+  const mortOverride = Number.isFinite(overrideMort) && overrideMort >= 0;
+  const bufferPct = mortOverride ? overrideMort : 10;
+  const mortality = Math.round((plantsSowed * bufferPct) / 100);
+  const zeroMort = mortOverride && bufferPct === 0;
+  const entryKind =
+    meta.entryKind === "komb" || meta.entryKind === "excess" ? meta.entryKind : "sowing";
   const plant = await PlantCms.findById(request.plantId)
     .select("name subtypes._id subtypes.name")
     .lean();
@@ -310,8 +319,11 @@ export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) 
         sowDay,
         plantReadyDate: plantReadyDateStr,
         plantsSowed,
-        sowingBufferPct: 10,
+        sowingBufferPct: bufferPct,
         bufferPlants: mortality,
+        noMortalityReserve: zeroMort,
+        entryKind,
+        ...(meta.sourceEntryId ? { sourceEntryId: meta.sourceEntryId } : {}),
         isExcessiveSowing: Boolean(meta.isExcessiveSowing ?? request.isExcessiveSowing),
       },
       $setOnInsert: {

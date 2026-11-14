@@ -67,6 +67,8 @@ export function toSowingEntryListItem(doc, orderPlants = null) {
     excessPlants: excess,
     linkedOrderIds: doc?.linkedOrderIds || [],
     isIrrelevant: Boolean(doc?.isIrrelevant),
+    entryKind: doc?.entryKind === "komb" || doc?.entryKind === "excess" ? doc.entryKind : "sowing",
+    sourceEntryId: doc?.sourceEntryId ? String(doc.sourceEntryId) : "",
     affectedSlot: {
       plantReadyDate: ready,
       bufferPlants: buffer,
