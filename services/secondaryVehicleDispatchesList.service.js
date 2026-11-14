@@ -5,6 +5,7 @@ import PlantCms from "../models/plantCms.model.js";
 import User from "../models/user.model.js";
 import { DISPATCH_SHED_ALLOWED_STATUSES } from "./secondaryVehicleLoad.service.js";
 import { sweepCancelledInstantPickups } from "./instantPickupDispatch.service.js";
+import { DISPATCH_LEDGER_CUTOVER } from "../utility/dispatchListQuery.js";
 
 /** Cancelled-pickup cleanup must not hold the list. Once a minute is enough. */
 let sweepStartedAt = 0;
@@ -108,7 +109,11 @@ function buildListFilter({ search, statusFilter, date, from, to, assignedToUserI
     filter.assignedTo = new mongoose.Types.ObjectId(String(assignedToUserId));
   }
   const range = istRange({ date, from, to });
-  if (range) filter.createdAt = range;
+  const createdAt = range ? { ...range } : {};
+  if (!createdAt.$gte || createdAt.$gte < DISPATCH_LEDGER_CUTOVER) {
+    createdAt.$gte = DISPATCH_LEDGER_CUTOVER;
+  }
+  filter.createdAt = createdAt;
   if (statusFilter === "loaded") {
     filter.transportStatus = "LOADED";
   } else if (statusFilter === "pending") {
