@@ -15,6 +15,7 @@ import {
   recordExcessPlantsOnSlot,
   reclaimExcessForCoveredOrders,
   uploadCompleteSowPhotos,
+  findSowBatchForRequest,
   editSowEntryOnSlots,
   companyPacketShare,
   getRemainingCompanyPackets,
@@ -30,6 +31,7 @@ import {
   istTodayNoon,
   toSowYmd,
 } from "./sowingSlotReadyHelpers.js";
+import { editCollectionSowEntry } from "../modules/sowingEntries/editCollectionSowEntry.js";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
 import {
   settleSowPackets,
@@ -800,7 +802,7 @@ export const editSowEntry = async (req, res) => {
 
     const bodyReady = parseNum(req.body.plantReadyDays, NaN);
     const bodyPlants = parseNum(req.body.plantsSowed, NaN);
-    const result = await editSowEntryOnSlots(request, {
+    const editOpts = {
       by: req.user._id,
       sowDate: req.body.sowDate || req.body.sowingDate,
       plantReadyDays:
@@ -808,7 +810,12 @@ export const editSowEntry = async (req, res) => {
       plantReadyDate: req.body.plantReadyDate || req.body.readyDate,
       plantsSowed: Number.isFinite(bodyPlants) && bodyPlants > 0 ? bodyPlants : undefined,
       reason: req.body.reason,
-    });
+    };
+    // New completes live on sowingentries and have no calendar batch.
+    const slotBatches = await findSowBatchForRequest(request._id);
+    const result = slotBatches.length
+      ? await editSowEntryOnSlots(request, editOpts)
+      : await editCollectionSowEntry(request, editOpts);
 
     // Keep original sow-entry event meta in sync so list/detail don't show stale ready/slot.
     const sowEv = [...(request.completionEvents || [])]
