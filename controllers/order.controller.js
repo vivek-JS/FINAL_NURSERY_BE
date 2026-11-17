@@ -500,6 +500,15 @@ async function sendOrderPlacedWhatsAppForOrder(order, { allowResend = false } = 
   if (farmerMsgKey) order.whatsappPlacedMessageKey = String(farmerMsgKey);
   await order.save();
 
+  // Parallel Marathi free-text via linked Baileys (does not replace WATI).
+  void import("../services/farmerOrderMarathiBaileys.service.js")
+    .then(({ sendFarmerOrderMarathiViaBaileys }) =>
+      sendFarmerOrderMarathiViaBaileys("placed", farmerSendTo, orderDetails)
+    )
+    .catch((e) =>
+      console.warn("[Baileys Marathi] placed parallel failed:", e?.message || e)
+    );
+
   return {
     success: true,
     data: farmerResult.data,
@@ -1280,10 +1289,15 @@ const addNewPayment = catchAsync(async (req, res) => {
     });
   }
 
-  const message =
+  const { appendBankStatementMessage } = await import(
+    "../modules/banking/services/paymentStatementMatch.service.js"
+  );
+  const message = appendBankStatementMessage(
     result.walletTransactions?.length > 0
       ? "Payment added successfully and wallet updated"
-      : "Payment added successfully";
+      : "Payment added successfully",
+    result.bankStatement
+  );
 
   return res.status(200).json({
     message,
@@ -1291,6 +1305,7 @@ const addNewPayment = catchAsync(async (req, res) => {
     transaction: result.walletTransactions[0] || undefined,
     walletDebited: result.walletDebited || 0,
     savedPayments: result.savedPayments.map(summarizeSavedPayment).filter(Boolean),
+    bankStatement: result.bankStatement,
   });
 });
 
@@ -1345,10 +1360,15 @@ const addBatchPayments = catchAsync(async (req, res) => {
   }
 
   const count = result.savedPayments.length;
-  const message =
+  const { appendBankStatementMessage } = await import(
+    "../modules/banking/services/paymentStatementMatch.service.js"
+  );
+  const message = appendBankStatementMessage(
     result.walletTransactions?.length > 0
       ? `${count} payment(s) added and wallet updated`
-      : `${count} payment(s) added successfully`;
+      : `${count} payment(s) added successfully`,
+    result.bankStatement
+  );
 
   return res.status(200).json({
     message,
@@ -1357,6 +1377,7 @@ const addBatchPayments = catchAsync(async (req, res) => {
     count,
     walletDebited: result.walletDebited || 0,
     savedPayments: result.savedPayments.map(summarizeSavedPayment).filter(Boolean),
+    bankStatement: result.bankStatement,
   });
 });
 
@@ -2463,6 +2484,9 @@ const getAllPayments = catchAsync(async (req, res, next) => {
     // Payment status filter
     if (paymentStatus) {
       const statusArray = paymentStatus.split(",").map((s) => s.trim());
+      if (statusArray.includes("PENDING") && !statusArray.includes("BANK_VERIFIED")) {
+        statusArray.push("BANK_VERIFIED");
+      }
       pipeline.push({
         $match: {
           "payment.paymentStatus": { $in: statusArray },
@@ -2531,21 +2555,16 @@ const getAllPayments = catchAsync(async (req, res, next) => {
           },
           pendingCount: {
             $sum: {
-              $cond: [{ $eq: ["$payment.paymentStatus", "PENDING"] }, 1, 0],
+              $cond: [
+                { $in: ["$payment.paymentStatus", ["PENDING", "BANK_VERIFIED"]] },
+                1,
+                0,
+              ],
             },
           },
           collectedCount: {
             $sum: {
-              $cond: [
-                {
-                  $in: [
-                    "$payment.paymentStatus",
-                    ["COLLECTED", "BANK_VERIFIED"],
-                  ],
-                },
-                1,
-                0,
-              ],
+              $cond: [{ $eq: ["$payment.paymentStatus", "COLLECTED"] }, 1, 0],
             },
           },
           rejectedCount: {
@@ -4621,7 +4640,8 @@ const handleQRPaymentCallback = catchAsync(async (req, res) => {
       if (!matchRef && !matchAmount) continue;
       if (ref && !matchRef) continue;
       if (amt != null && !matchAmount) continue;
-      p.paymentStatus = "BANK_VERIFIED";
+      p.bankVerificationStatus = "BANK_VERIFIED";
+      p.bankVerificationSource = "STATEMENT_API";
       if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
       await orderDoc.save();
       return true;
@@ -4641,7 +4661,8 @@ const handleQRPaymentCallback = catchAsync(async (req, res) => {
         if (!matchRef && !matchAmount) continue;
         if (ref && !matchRef) continue;
         if (amt != null && !matchAmount) continue;
-        p.paymentStatus = "BANK_VERIFIED";
+        p.bankVerificationStatus = "BANK_VERIFIED";
+        p.bankVerificationSource = "STATEMENT_API";
         if (utr && String(utr).trim()) p.transactionId = String(utr).trim();
         await agriDoc.save();
         updated = true;

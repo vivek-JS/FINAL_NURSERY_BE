@@ -4,6 +4,9 @@ import moment from "moment";
 import {
   computeActualAvailable,
   computePendingSlotSync,
+  effectiveSyncedOnSlot,
+  planDispatchReadyDeduction,
+  planDualStockOutflow,
   pickReadyDateForSlot,
   rollupShedStockForSlots,
 } from "../services/secondaryShedSlotStock.service.js";
@@ -19,6 +22,56 @@ describe("secondaryShedSlotStock — ERP position math", () => {
     assert.strictEqual(computePendingSlotSync(500, 200), 300);
     assert.strictEqual(computePendingSlotSync(100, 100), 0);
     assert.strictEqual(computePendingSlotSync(50, 120), 0);
+  });
+
+  it("effectiveSyncedOnSlot never exceeds shed available", () => {
+    assert.strictEqual(effectiveSyncedOnSlot(16973, 23423), 16973);
+    assert.strictEqual(effectiveSyncedOnSlot(100, 80), 80);
+    assert.strictEqual(effectiveSyncedOnSlot(0, 50), 0);
+  });
+
+  it("planDualStockOutflow always moves avail + synced together", () => {
+    const ok = planDualStockOutflow({
+      availableQuantity: 20000,
+      slotStockSyncedPlants: 20000,
+      quantity: 149,
+    });
+    assert.strictEqual(ok.newAvail, 19851);
+    assert.strictEqual(ok.newSynced, 19851);
+    assert.strictEqual(ok.syncedDec, 149);
+
+    const drifted = planDualStockOutflow({
+      availableQuantity: 16973,
+      slotStockSyncedPlants: 23423,
+      quantity: 100,
+    });
+    assert.strictEqual(drifted.newAvail, 16873);
+    assert.strictEqual(drifted.newSynced, 16873);
+    assert.ok(drifted.syncedDec >= 100);
+  });
+
+  it("planDispatchReadyDeduction burns ready + synced together", () => {
+    const full = planDispatchReadyDeduction({
+      prevReady: 1000,
+      prevSynced: 800,
+      quantity: 149,
+    });
+    assert.strictEqual(full.subtracted, 149);
+    assert.strictEqual(full.readyDec, 149);
+    assert.strictEqual(full.syncedDec, 149);
+    assert.strictEqual(full.readyAfter, 851);
+    assert.strictEqual(full.syncedAfter, 651);
+
+    // Stored ready already 0 but synced still high — still burn synced.
+    const staleReady = planDispatchReadyDeduction({
+      prevReady: 0,
+      prevSynced: 500,
+      quantity: 100,
+    });
+    assert.strictEqual(staleReady.subtracted, 100);
+    assert.strictEqual(staleReady.readyDec, 0);
+    assert.strictEqual(staleReady.syncedDec, 100);
+    assert.strictEqual(staleReady.syncedAfter, 400);
   });
 });
 
@@ -100,6 +153,26 @@ describe("secondaryShedSlotStock — shed rollup", () => {
     assert.strictEqual(a.shedSyncedPlants, 105);
     assert.strictEqual(a.actualReadyPlants, 75);
     assert.strictEqual(a.shedReadyInShed, 80);
+  });
+
+  it("rollup clamps synced to available so ready never exceeds stock", () => {
+    const pastInward = moment().subtract(30, "days").startOf("day").toDate();
+    const pos = [
+      {
+        batchId: { _id: batch1, secondaryPlantReadyDays: 14 },
+        secondaryInward: [
+          {
+            linkedBookingSlotId: slotA,
+            secondaryInwardDate: pastInward,
+            availableQuantity: 16973,
+            slotStockSyncedPlants: 23423,
+          },
+        ],
+      },
+    ];
+    const map = rollupShedStockForSlots(pos, [slotA]);
+    assert.strictEqual(map.get(slotA).actualReadyPlants, 16973);
+    assert.strictEqual(map.get(slotA).shedSyncedPlants, 16973);
   });
 
   it("rollup actualReadyPlants drops when slotStockSyncedPlants decreases (dispatch)", () => {

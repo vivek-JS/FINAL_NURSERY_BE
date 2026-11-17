@@ -41,9 +41,17 @@ const getUsers = async (req, res) => {
     const { jobTitle } = req.query;
     let query = { isDisabled: false };
 
-    // Add jobTitle to query if provided
+    // Add jobTitle to query if provided (one title or comma-separated list)
     if (jobTitle) {
-      query.jobTitle = jobTitle;
+      const titles = String(jobTitle)
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      if (titles.length === 1) {
+        query.jobTitle = titles[0];
+      } else if (titles.length > 1) {
+        query.jobTitle = { $in: titles };
+      }
     }
 
     const users = await User.find(query).select("-password");
@@ -404,8 +412,8 @@ export const verifyToken = async (req, res, next) => {
 export const getSalespeople = async (req, res) => {
   try {
     const salespeople = await User.find(
-      { jobTitle: "SALES" }, // Changed from role to jobTitle
-      { name: 1, email: 1, phoneNumber: 1, jobTitle: 1 } // Added jobTitle and changed phone to phoneNumber
+      { jobTitle: { $in: ["SALES", "DISPATCH_MANAGER"] }, isDisabled: { $ne: true } },
+      { name: 1, email: 1, phoneNumber: 1, jobTitle: 1 }
     ).sort({ name: 1 });
 
     res.status(200).json({

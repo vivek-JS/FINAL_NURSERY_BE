@@ -449,7 +449,11 @@ import iciciPaymentRoute from "./routes/icici.routes.js";
 import paymentReconciliationRoute from "./routes/payment.routes.js";
 import bankingRoute from "./modules/banking/routes/banking.routes.js";
 import iciciCorporateRoute from "./src/routes/icici.routes.js";
-import { optionalVehicleLoadPhotosUpload } from "./middleware/vehicleLoadPhotos.middleware.js";
+import { optionalVehicleLoadPhotosUpload, vehicleLoadPhotosUpload } from "./middleware/vehicleLoadPhotos.middleware.js";
+import {
+  postShootDispatchWhatsApp,
+  postVehicleLoadPhotos,
+} from "./controllers/vehicleLoadShare.controller.js";
 import {
   postAssignVehicleDispatch,
   requireOwnAssignedDispatch,
@@ -542,9 +546,9 @@ server.use("/api/v1/user", userRoute);
 // ============================================
 // PUBLIC ROUTES - Must be BEFORE protected routes to avoid auth interception
 // ============================================
-server.use("/api/v1/public-links", publicFarmerLinkRoute);
+server.use("/api/v1/public-links", publicFarmerLinkRoute); // Public farmer lead links (mixed auth & public)
 server.use("/api/v1/field-leads", fieldLeadRoute);
-server.use("/api/v1/field-attendance", fieldAttendanceRoute); // Public farmer lead links (mixed auth & public)
+server.use("/api/v1/field-attendance", fieldAttendanceRoute);
 server.use("/api/v1/location", locationRoute); // No authentication required for location APIs
 server.use("/api/v1/excel", ExcelRoute); // Excel routes (download endpoint is public, others require auth)
 server.use("/api/v1/whatsapp-order", whatsappOrderBotRoute); // WhatsApp order bot (webhook is public, start requires auth)
@@ -871,6 +875,19 @@ server.post(
   requireOwnAssignedDispatch,
   optionalVehicleLoadPhotosUpload,
   postSecondaryVehicleLoad
+);
+server.post(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/load-photos",
+  authenticateToken,
+  requireOwnAssignedDispatch,
+  vehicleLoadPhotosUpload.array("photos", 10),
+  postVehicleLoadPhotos
+);
+server.post(
+  "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/shoot-dispatch-whatsapp",
+  authenticateToken,
+  requireOwnAssignedDispatch,
+  postShootDispatchWhatsApp
 );
 server.get(
   "/api/v1/laboutward/secondary/vehicle-dispatch/:dispatchId/loaded-lines",

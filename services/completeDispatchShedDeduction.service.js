@@ -17,6 +17,7 @@ import {
 import {
   syncSecondaryInwardSlotStockAdd,
   subtractSecondaryInwardSlotStock,
+  planDualStockOutflow,
 } from "./secondaryShedSlotStock.service.js";
 
 function normalizeStr(v) {
@@ -290,30 +291,6 @@ export async function applyCompleteDispatchShedDeduction({
     deliveryCompleteDeduction: true,
   };
 
-  const newSecondaryInwardStatus =
-    avail - plantsMoving === 0 ? "fully_transferred" : "partially_transferred";
-
-  const updatedDoc = await PlantOutward.findOneAndUpdate(
-    { batchId, "secondaryInward._id": secondaryInwardId },
-    {
-      $push: {
-        secondaryOutward: secondaryOutwardEntry,
-        "secondaryInward.$.transferHistory": transferHistory,
-      },
-      $set: {
-        "secondaryInward.$.transferStatus": newSecondaryInwardStatus,
-        "secondaryInward.$.availableQuantity": avail - plantsMoving,
-      },
-    },
-    { new: true, session, runValidators: true }
-  );
-
-  const outArr = updatedDoc?.secondaryOutward || [];
-  const newSo = outArr[outArr.length - 1];
-  if (!newSo?._id) {
-    throw new AppError("Could not resolve new secondary outward id", 500);
-  }
-
   const secondaryDaysForElig =
     Number(safeMongooseNumber(batchDoc.secondaryPlantReadyDays)) || 0;
   const dispatchElig = computeSecondaryDispatchEligibility(
@@ -323,6 +300,8 @@ export async function applyCompleteDispatchShedDeduction({
   );
 
   let slotSubtract = 0;
+  let loadSourceSlotId = siPlain?.linkedBookingSlotId || null;
+  let syncedBeforeBurn = Math.max(0, Number(siPlain.slotStockSyncedPlants) || 0);
   try {
     const syncResult = await syncSecondaryInwardSlotStockAdd({
       session,
@@ -335,28 +314,79 @@ export async function applyCompleteDispatchShedDeduction({
       readyPositionOnly: true,
       performedBy,
     });
-    const siForSubtract = {
-      ...siPlain,
-      linkedBookingSlotId:
-        syncResult?.slotId || siPlain.linkedBookingSlotId || null,
-      slotStockSyncedPlants:
-        (Number(siPlain.slotStockSyncedPlants) || 0) + (syncResult?.applied ?? 0),
-    };
+    loadSourceSlotId =
+      syncResult?.slotId || siPlain.linkedBookingSlotId || loadSourceSlotId;
+    syncedBeforeBurn += syncResult?.applied ?? 0;
+  } catch (syncErr) {
+    console.error(
+      "[completeDispatchShedDeduction] slot sync FAILED:",
+      syncErr?.message || syncErr
+    );
+    throw syncErr;
+  }
+
+  const dual = planDualStockOutflow({
+    availableQuantity: avail,
+    slotStockSyncedPlants: syncedBeforeBurn,
+    quantity: plantsMoving,
+  });
+  const newSecondaryInwardStatus =
+    dual.newAvail === 0 ? "fully_transferred" : "partially_transferred";
+
+  const updatedDoc = await PlantOutward.findOneAndUpdate(
+    { batchId, "secondaryInward._id": secondaryInwardId },
+    {
+      $push: {
+        secondaryOutward: secondaryOutwardEntry,
+        "secondaryInward.$.transferHistory": transferHistory,
+      },
+      $set: {
+        "secondaryInward.$.transferStatus": newSecondaryInwardStatus,
+        "secondaryInward.$.availableQuantity": dual.newAvail,
+        "secondaryInward.$.slotStockSyncedPlants": dual.newSynced,
+      },
+    },
+    { new: true, session, runValidators: true }
+  );
+
+  const outArr = updatedDoc?.secondaryOutward || [];
+  const newSo = outArr[outArr.length - 1];
+  if (!newSo?._id) {
+    throw new AppError("Could not resolve new secondary outward id", 500);
+  }
+
+  try {
     const subResult = await subtractSecondaryInwardSlotStock({
       session,
       batchId,
       secondaryInwardId,
       batchLean: batchDoc,
-      siPlain: siForSubtract,
+      siPlain: {
+        ...siPlain,
+        linkedBookingSlotId: loadSourceSlotId || null,
+        slotStockSyncedPlants: dual.newSynced,
+        availableQuantity: dual.newAvail,
+      },
       quantity: plantsMoving,
       performedBy,
+      syncedAlreadyApplied: true,
     });
     slotSubtract = subResult?.subtracted ?? 0;
+    if (
+      loadSourceSlotId &&
+      subResult?.skipped &&
+      subResult.skipped !== "no_actual_ready"
+    ) {
+      throw new Error(
+        `Slot ready deduct skipped (${subResult.skipped}) for slot ${loadSourceSlotId}`
+      );
+    }
   } catch (slotErr) {
-    console.warn(
-      "[completeDispatchShedDeduction] slot subtract:",
+    console.error(
+      "[completeDispatchShedDeduction] slot subtract FAILED:",
       slotErr?.message || slotErr
     );
+    throw slotErr;
   }
 
   await recordSecondaryOutwardOnLedger(session, {

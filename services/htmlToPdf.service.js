@@ -37,7 +37,8 @@ export async function htmlToPdfBuffer(html, opts = {}) {
   }
   const page = await browser.newPage();
   try {
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 60000 });
+    // Inline HTML (no remote assets) — networkidle0 waits ~500ms+ for idle and often stalls.
+    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 30000 });
     const pdfOpts = {
       printBackground: true,
       preferCSSPageSize: true,

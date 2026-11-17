@@ -1,7 +1,10 @@
 import { slotDayStartMoment } from "./istSlotDate.js";
 import { canBookFromExcess } from "./capacitySheetMetrics.js";
 
-/** How far back unsold / undispatched plants on past slots still count as overdue. */
+/**
+ * How far back past free / pending folds into Now.
+ * Older past slots (old sowing entries) are excluded. Irrelevant batches are always skipped.
+ */
 export const OVERDUE_LOOKBACK_DAYS = 30;
 
 function num(n) {
@@ -44,24 +47,50 @@ export function dominantSlotDays(slots) {
 }
 
 /**
- * One slot window on the board.
- *   booked  plants on farmer orders delivering in the window
- *   ready   plants sowed for the window: sowed against orders + free sowed excess
- *   net     ready - booked (negative = short, positive = free to sell)
+ * Plants actually sowed for this delivery window.
+ * Orders marked sown on another slot stay in booked, and stay out of ready.
  */
-export function boardSlotCell({ slotId, startDay, endDay, booked, gap, excess, mortality }) {
+export function readyPlants({ booked, gap, excess, sowedElsewhere }) {
   const b = num(booked);
   const g = Math.min(num(gap), b);
   const e = num(excess);
+  const elsewhere = Math.min(Math.max(0, num(sowedElsewhere)), Math.max(0, b - g));
+  return b - g - elsewhere + e;
+}
+
+/**
+ * One slot window on the board.
+ *   booked  plants on farmer orders delivering in the window
+ *   ready   plants sowed for this window + free excess (not sowing done on another date)
+ *   net     free excess minus orders still not sown
+ */
+export function boardSlotCell({
+  slotId,
+  slotIds,
+  startDay,
+  endDay,
+  booked,
+  gap,
+  excess,
+  mortality,
+  readyYmd,
+  sowedElsewhere,
+}) {
+  const b = num(booked);
+  const g = Math.min(num(gap), b);
+  const e = num(excess);
+  const ids = [...new Set([...(slotIds || []), ...(slotId ? [String(slotId)] : [])].map(String).filter(Boolean))];
   return {
-    slotId: slotId ? String(slotId) : null,
+    slotId: ids[0] || (slotId ? String(slotId) : null),
+    slotIds: ids,
     startDay,
     endDay,
     booked: b,
-    ready: b - g + e,
+    ready: readyPlants({ booked: b, gap: g, excess: e, sowedElsewhere }),
     net: canBookFromExcess(e, g),
     gap: g,
     mortality: num(mortality),
+    ...(readyYmd ? { readyYmd } : {}),
   };
 }
 
@@ -69,20 +98,34 @@ export function boardSlotCell({ slotId, startDay, endDay, booked, gap, excess, m
  * Past slot carried into today: only orders still waiting to dispatch count as booked,
  * plus any free sowed excess that was never sold.
  */
-export function overdueSlotCell({ slotId, startDay, endDay, pendingDispatch, gap, excess, mortality }) {
+export function overdueSlotCell({
+  slotId,
+  slotIds,
+  startDay,
+  endDay,
+  pendingDispatch,
+  gap,
+  excess,
+  mortality,
+  readyYmd,
+  sowedElsewhere,
+}) {
   const pending = num(pendingDispatch);
   const g = Math.min(num(gap), pending);
   const e = num(excess);
+  const ids = [...new Set([...(slotIds || []), ...(slotId ? [String(slotId)] : [])].map(String).filter(Boolean))];
   return {
-    slotId: slotId ? String(slotId) : null,
+    slotId: ids[0] || (slotId ? String(slotId) : null),
+    slotIds: ids,
     startDay,
     endDay,
     booked: pending,
-    ready: pending - g + e,
+    ready: readyPlants({ booked: pending, gap: g, excess: e, sowedElsewhere }),
     net: canBookFromExcess(e, g),
     gap: g,
     unsold: e,
     mortality: num(mortality),
+    ...(readyYmd ? { readyYmd } : {}),
   };
 }
 
@@ -116,6 +159,9 @@ const ymd = (m) => m.format("YYYY-MM-DD");
 const ddmmyyyy = (m) => m.format("DD-MM-YYYY");
 
 function cellWithIds(cell) {
+  const slotIds = [
+    ...new Set([...(cell.slotIds || []), ...(cell.slotId ? [cell.slotId] : [])].map(String).filter(Boolean)),
+  ];
   return {
     key: ymd(slotDayStartMoment(cell.startDay)),
     startDay: cell.startDay,
@@ -125,14 +171,48 @@ function cellWithIds(cell) {
     net: num(cell.net),
     gap: num(cell.gap),
     mortality: num(cell.mortality),
-    slotIds: cell.slotId ? [cell.slotId] : [],
+    slotIds,
+    ...(cell.readyYmd ? { readyYmd: cell.readyYmd } : {}),
+  };
+}
+
+/** Past slot with free plants — own date card (not folded into Now). */
+function pastFreeCell(cell) {
+  return {
+    ...cellWithIds(cell),
+    unsold: num(cell.unsold),
+    past: true,
   };
 }
 
 /**
- * Table columns for one variety: `now` (current + overdue) and only the future cells that have plants.
- * groupDays 1 keeps each slot on its own date. groupDays N buckets slots by start day into N-day groups
- * counted from today; the first group (today .. today+N-1) folds into `now`.
+ * Keep overdue booked / short in Now; peel free past excess into date cards.
+ * Returns { pastCells, overdueForNow } where overdueForNow has free net zeroed.
+ */
+export function splitPastFreeExcess(overduePast) {
+  const past = overduePast || [];
+  const pastCells = past
+    .filter((cell) => num(cell.net) > 0)
+    .slice()
+    .sort((a, b) => slotDayStartMoment(a.startDay) - slotDayStartMoment(b.startDay))
+    .map(pastFreeCell);
+  const freeIds = new Set(pastCells.flatMap((cell) => cell.slotIds || []));
+  const overdueForNow = past.map((cell) => {
+    if (!freeIds.has(String(cell.slotId || ""))) return cell;
+    const free = num(cell.net);
+    return {
+      ...cell,
+      ready: Math.max(0, num(cell.ready) - free),
+      net: 0,
+      unsold: 0,
+    };
+  });
+  return { pastCells, overdueForNow };
+}
+
+/**
+ * Table columns for one variety: `now` is today (overdue already merged on `current`).
+ * Future dates stay on their own cards. groupDays N buckets those future days from tomorrow.
  */
 export function boardCells({ current, upcoming, today, groupDays = 1, tableDays = BOARD_TABLE_DAYS }) {
   const group = parseGroupDays(groupDays);
@@ -142,19 +222,22 @@ export function boardCells({ current, upcoming, today, groupDays = 1, tableDays 
     return start && !start.isAfter(last, "day") && hasNumbers(cell);
   });
 
+  const now = {
+    ...current,
+    key: "now",
+    startDay: current.startDay || ddmmyyyy(today),
+    endDay: current.endDay || current.startDay || ddmmyyyy(today),
+  };
+
   if (group === 1) {
-    return { now: { ...current, key: "now" }, cells: future.map(cellWithIds) };
+    return { now, cells: future.map(cellWithIds) };
   }
 
-  const intoNow = [];
   const buckets = new Map();
   for (const cell of future) {
-    const index = Math.floor(slotDayStartMoment(cell.startDay).diff(today, "days") / group);
-    if (index <= 0) {
-      intoNow.push(cell);
-      continue;
-    }
-    const from = today.clone().add(index * group, "days");
+    const diff = slotDayStartMoment(cell.startDay).diff(today, "days");
+    const index = Math.floor(Math.max(0, diff - 1) / group);
+    const from = today.clone().add(1 + index * group, "days");
     const key = ymd(from);
     if (!buckets.has(key)) {
       buckets.set(key, { key, startDay: ddmmyyyy(from), endDay: ddmmyyyy(from.clone().add(group - 1, "days")), list: [] });
@@ -162,14 +245,6 @@ export function boardCells({ current, upcoming, today, groupDays = 1, tableDays 
     buckets.get(key).list.push(cell);
   }
 
-  const now = {
-    ...current,
-    ...addCells([current, ...intoNow]),
-    key: "now",
-    startDay: ddmmyyyy(today),
-    endDay: ddmmyyyy(today.clone().add(group - 1, "days")),
-    slotIds: [...(current.slotIds || []), ...intoNow.map((cell) => cell.slotId).filter(Boolean)],
-  };
   const cells = [...buckets.values()]
     .sort((a, b) => a.key.localeCompare(b.key))
     .map((bucket) => ({
@@ -177,7 +252,11 @@ export function boardCells({ current, upcoming, today, groupDays = 1, tableDays 
       startDay: bucket.startDay,
       endDay: bucket.endDay,
       ...addCells(bucket.list),
-      slotIds: bucket.list.map((cell) => cell.slotId).filter(Boolean),
+      slotIds: [
+        ...new Set(
+          bucket.list.flatMap((cell) => cell.slotIds || (cell.slotId ? [cell.slotId] : [])).map(String).filter(Boolean)
+        ),
+      ],
     }));
   return { now, cells };
 }
@@ -207,14 +286,16 @@ export function buildBoardRow({ slots, today, stock = null, groupDays = 1, table
   }
 
   const overduePast = past.filter(hasNumbers);
+  const { pastCells, overdueForNow } = splitPastFreeExcess(overduePast);
+  const overdueMerged = addCells(overdueForNow);
   const overdue = {
-    ...addCells(overduePast),
-    unsold: overduePast.reduce((acc, cell) => acc + num(cell.unsold), 0),
+    ...overdueMerged,
+    unsold: pastCells.reduce((acc, cell) => acc + num(cell.net), 0),
     slotIds: overduePast.map((cell) => cell.slotId).filter(Boolean),
   };
 
   const own = current || { slotId: null, startDay: null, endDay: null, booked: 0, ready: 0, net: 0, gap: 0 };
-  const merged = addCells([own, overdue]);
+  const merged = addCells([own, overdueMerged]);
   const currentCell = {
     slotId: own.slotId,
     startDay: own.startDay,
@@ -222,16 +303,18 @@ export function buildBoardRow({ slots, today, stock = null, groupDays = 1, table
     ...merged,
     own: { booked: own.booked, ready: own.ready, net: own.net, gap: own.gap },
     overdue,
-    slotIds: [own.slotId, ...overdue.slotIds].filter(Boolean),
+    // Now starts as today's slot. Past free is added on the excess tab; future stays date-wise.
+    slotIds: own.slotId ? [own.slotId] : [],
   };
 
   const { now, cells } = boardCells({ current: currentCell, upcoming, today, groupDays, tableDays });
-  const totals = addCells([now, ...cells]);
+  const totals = addCells([now, ...pastCells, ...cells]);
 
   return {
     slotDays,
     current: currentCell,
     upcoming,
+    pastCells,
     now,
     cells,
     totals,
@@ -328,6 +411,7 @@ function rowForecastCards(row) {
   const cards = [];
   if (row?.now) cards.push(row.now);
   else if (row?.current) cards.push(row.current);
+  for (const cell of row?.pastCells || []) cards.push(cell);
   for (const cell of row?.cells || []) cards.push(cell);
   return cards;
 }

@@ -24,7 +24,9 @@ export function getIciciCorporateConfig() {
     envType,
     isProd,
     baseUrl,
-    apiPrefix: process.env.ICICI_CORPORATE_API_PREFIX || "/api/Corporate/CIB_SV/v1",
+    apiPrefix:
+      process.env.ICICI_CORPORATE_API_PREFIX ||
+      (isProd ? "/api/Corporate/CIB/v1" : "/api/Corporate/CIB_SV/v1"),
     corpId: process.env.ICICI_CORPORATE_ID || "",
     userId: process.env.ICICI_CORPORATE_USER_ID || "",
     aggregatorId: process.env.ICICI_AGGREGATOR_ID || "",
@@ -54,6 +56,9 @@ export function getIciciCorporateConfig() {
       registration: process.env.ICICI_REGISTRATION_PATH || "/Registration",
       registrationStatus:
         process.env.ICICI_REGISTRATION_STATUS_PATH || "/RegistrationStatus",
+      deregistration: process.env.ICICI_DEREGISTRATION_PATH || "/Deregistration",
+      neftIncrementalStatus:
+        process.env.ICICI_NEFT_STATUS_PATH || "/NEFTIncrementalStatus",
       statement: process.env.ICICI_STATEMENT_PATH || "/AccountStatement",
       statementNextPage:
         process.env.ICICI_STATEMENT_PAGINATION_PATH || process.env.ICICI_STATEMENT_PATH || "/AccountStatement",
@@ -61,6 +66,8 @@ export function getIciciCorporateConfig() {
       transactionInquiry:
         process.env.ICICI_TXN_INQUIRY_PATH || "/TransactionInquiry",
       balance: process.env.ICICI_BALANCE_PATH || "/BalanceInquiry",
+      beneAddition: process.env.ICICI_BENE_ADDITION_PATH || "/BeneAddition",
+      beneValidation: process.env.ICICI_BENE_VALIDATION_PATH || "/BeneValidation",
       transaction: process.env.ICICI_TXN_PATH || "/Transaction",
     },
     payout: {
@@ -78,6 +85,10 @@ export function getIciciCorporateConfig() {
       requireBeneficiary: process.env.ICICI_PAYOUT_REQUIRE_BENEFICIARY === "true",
       /** Super admins may approve payouts/payees they created themselves; ICICI net-banking approval still applies. */
       superAdminSelfApprove: process.env.ICICI_PAYOUT_SUPER_ADMIN_SELF_APPROVE !== "false",
+      /** Register a payee at ICICI (/BeneAddition) as soon as it is approved in the ERP. */
+      registerBeneOnApprove: process.env.ICICI_BENE_REGISTER_ON_APPROVE !== "false",
+      /** Validate the payee at ICICI (/BeneValidation) when it is added or on demand. */
+      validateBeneOnCreate: process.env.ICICI_BENE_VALIDATE_ON_CREATE !== "false",
     },
     ipWhitelist: (process.env.ICICI_IP_WHITELIST || "")
       .split(",")

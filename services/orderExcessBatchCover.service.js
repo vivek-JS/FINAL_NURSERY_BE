@@ -11,6 +11,10 @@ import {
   resolveDestinationSlot,
   orderPlantsNeed,
 } from "../controllers/orderSowFromExcess.controller.js";
+import {
+  orderAlreadyCovered,
+  orderCoveredFromSources,
+} from "./orderSowCover.plan.js";
 import { toSowYmd } from "../controllers/sowingSlotReadyHelpers.js";
 import { recordSlotTrail } from "../utility/slotTrailStore.js";
 import { slotReportedExcess, splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
@@ -24,7 +28,8 @@ import {
   getSlotTrailActivityName,
 } from "../constants/slotTrailActions.js";
 
-export const EXCESS_COVER_WINDOW_DAYS = 5;
+/** Days after delivery whose ready dates still count as near. */
+export const EXCESS_COVER_WINDOW_DAYS = 3;
 export const DEFAULT_EXCESS_MAX_WINDOW_DAYS = 15;
 export {
   EXCESS_COVER_PAST_DAYS,
@@ -207,7 +212,7 @@ function applyReleaseToBatch(batch, release) {
 
 /**
  * Free excess in sowing batches of plant+subtype whose ready date is within
- * delivery −pastWindowDays … +windowDays (IST). Default −12 / +window.
+ * delivery −pastWindowDays … +windowDays (IST). Default −12 / +3.
  * Bookable free is the sowing-entry shown excess (CMS buffer, then orders,
  * plus mortality moved to excess). Lagwad mortality reserve is not applied.
  */
@@ -239,7 +244,7 @@ export async function listExcessBatches({
       : Math.max(plantCap, Math.floor(Number(maxWindowDays) || 0));
   const win = Math.min(cap, requested);
   const pastRequested = Math.max(0, Math.floor(Number(pastWindowDays) || 0));
-  // Papaya keeps a symmetric past lookback; others use the requested days, default −12.
+  // Papaya keeps a symmetric past lookback; others default to −12.
   const pastCap =
     plantCap > DEFAULT_EXCESS_MAX_WINDOW_DAYS
       ? Math.max(pastRequested, win)
@@ -839,20 +844,18 @@ export async function coverOrderFromBatches({
     .lean();
   if (!order) throw new ExcessCoverError("ORDER_NOT_FOUND", "Order not found", 404);
 
-  const held = (Array.isArray(order.sowingPartialCover) ? order.sowingPartialCover : []).reduce(
-    (sum, row) => sum + (Number(row?.plants) || 0),
-    0
-  );
+  const alreadyCovered = orderAlreadyCovered(order);
   const extra = additionalNeed != null ? int(additionalNeed) : 0;
   const alreadySowed = Boolean(order.sowingDone);
   if (alreadySowed && extra < 1) {
     throw new ExcessCoverError("ALREADY_SOWED", "Order is already marked sow completed", 409);
   }
+  const orderNeed = orderPlantsNeed(order);
   const need = alreadySowed
     ? extra
     : extra > 0
       ? extra
-      : Math.max(0, orderPlantsNeed(order) - held);
+      : Math.max(0, orderNeed - alreadyCovered);
   if (need <= 0) {
     throw new ExcessCoverError("NOTHING_TO_COVER", "This order has no plants left to cover");
   }
@@ -947,9 +950,50 @@ export async function coverOrderFromBatches({
   }));
   const remark = coverRemark(sources);
   const sourceReqId = toOid(matched[0]?.sowingRequestId);
+  const priorSources = Array.isArray(order.sowingCoverSources) ? order.sowingCoverSources : [];
+  const priorReqIds = new Set(
+    priorSources.map((s) => String(s?.sowingRequestId || "")).filter(Boolean)
+  );
+  // Promote leftover partial holds into sources so we never drop them on done.
+  const fromPartial = (Array.isArray(order.sowingPartialCover) ? order.sowingPartialCover : [])
+    .filter((p) => int(p?.plants) > 0 && !priorReqIds.has(String(p?.requestId || "")))
+    .map((p) => ({
+      sowingRequestId: toOid(p.requestId),
+      requestNumber: "",
+      plants: int(p.plants),
+      reservedOnSource: true,
+      moved: false,
+    }));
+  const mergedSources = [...priorSources, ...fromPartial, ...sources];
+  const coveredAfter = orderCoveredFromSources({ sowingCoverSources: mergedSources });
+  const fullyCovered = coveredAfter >= orderNeed;
+  if (!alreadySowed && !fullyCovered) {
+    await rollback();
+    throw new ExcessCoverError(
+      "INSUFFICIENT_COVER",
+      `Not enough cover to mark sown (have ${coveredAfter}, need ${orderNeed})`,
+      409
+    );
+  }
 
   let marked;
-  if (alreadySowed) {
+  if (alreadySowed && !fullyCovered) {
+    marked = await Order.findOneAndUpdate(
+      { _id: orderOid, sowingDone: true },
+      {
+        $set: { sowingDone: false, leftoverFromIncomplete: true },
+        $push: {
+          sowingCoverSources: { $each: sources },
+          ...(quiet ? {} : { orderRemarks: remark }),
+        },
+      },
+      { new: true }
+    );
+    if (!marked) {
+      await rollback();
+      throw new ExcessCoverError("ORDER_NOT_FOUND", "Order not found for additional cover", 404);
+    }
+  } else if (alreadySowed) {
     marked = await Order.findOneAndUpdate(
       { _id: orderOid, sowingDone: true },
       {
@@ -971,10 +1015,11 @@ export async function coverOrderFromBatches({
         $set: {
           sowingDone: true,
           sowingDoneAt: now,
-          sowingCoverSources: sources,
+          sowingCoverSources: mergedSources,
+          leftoverFromIncomplete: false,
           ...(sourceReqId ? { sowingDoneRequestId: sourceReqId } : {}),
         },
-        $unset: { sowingCoverReversedAt: "" },
+        $unset: { sowingCoverReversedAt: "", sowingPartialCover: "" },
         ...(quiet ? {} : { $push: { orderRemarks: remark } }),
       },
       { new: true }
@@ -1004,6 +1049,79 @@ export async function coverOrderFromBatches({
     action: SLOT_TRAIL_ACTIONS.ORDER_COVERED_FROM_EXCESS,
     at: now,
   });
+
+  // Keep batch stamp / links / flags = sowingCoverSources (single truth).
+  try {
+    const { reconcileBatchCoverTruth } = await import("../utility/reconcileSowingCoverTruth.js");
+    const { syncSowCompletedMetaFromBatch } = await import(
+      "../utility/syncSowCompletedCoverMeta.js"
+    );
+    const { upsertSowingEntryFromBatch } = await import(
+      "../modules/sowingEntries/saveSowingEntry.js"
+    );
+    const db = mongoose.connection.db;
+    for (const pick of matched) {
+      const batchOid = toOid(pick.batchId);
+      if (!batchOid) continue;
+      const doc = await db.collection("plantslots").findOne({
+        "subtypeSlots.slots.sowingBatches._id": batchOid,
+      });
+      if (!doc) continue;
+      let path = null;
+      let batch = null;
+      for (let si = 0; si < (doc.subtypeSlots || []).length; si++) {
+        for (let li = 0; li < (doc.subtypeSlots[si].slots || []).length; li++) {
+          for (let bi = 0; bi < (doc.subtypeSlots[si].slots[li].sowingBatches || []).length; bi++) {
+            const b = doc.subtypeSlots[si].slots[li].sowingBatches[bi];
+            if (String(b._id) === String(batchOid)) {
+              path = { si, li, bi };
+              batch = b;
+            }
+          }
+        }
+      }
+      if (!path || !batch) continue;
+      const requestId = batch.sowingRequestId || pick.sowingRequestId;
+      try {
+        await reconcileBatchCoverTruth(db, {
+          slotDocId: doc._id,
+          path,
+          batch,
+          requestId,
+          requestNumber: batch.requestNumber || pick.requestNumber,
+          sowingBufferPct: batch.sowingBufferPct,
+          apply: true,
+          reason: `Post excess-cover truth · order #${order.orderId}`,
+        });
+      } catch (recErr) {
+        console.error("[excessCover] cover truth reconcile failed:", recErr?.message || recErr);
+      }
+      // Always refresh SOW_COMPLETED meta from the live batch after cover.
+      const freshDoc = await db.collection("plantslots").findOne(
+        { "subtypeSlots.slots.sowingBatches._id": batchOid },
+        { projection: { subtypeSlots: 1 } }
+      );
+      let freshBatch = null;
+      for (const st of freshDoc?.subtypeSlots || []) {
+        for (const sl of st.slots || []) {
+          for (const b of sl.sowingBatches || []) {
+            if (String(b._id) === String(batchOid)) freshBatch = b;
+          }
+        }
+      }
+      if (freshBatch) {
+        await syncSowCompletedMetaFromBatch(db, {
+          requestId,
+          batch: freshBatch,
+          linkedOrderCount: (freshBatch.linkedOrderIds || []).length || null,
+          reason: `excess_cover_order_${order.orderId}`,
+        });
+        if (pick.slotId) await upsertSowingEntryFromBatch(freshBatch, pick.slotId);
+      }
+    }
+  } catch (err) {
+    console.error("[excessCover] cover meta sync failed:", err?.message || err);
+  }
 
   return {
     orderId: order.orderId,
@@ -1160,6 +1278,47 @@ export async function reverseOrderBatchCover({ order, userId, session, quiet = f
     session ? { session } : undefined
   );
 
+  // Refresh SOW_COMPLETED meta after plants return to the batch.
+  try {
+    const { syncSowCompletedMetaFromBatch } = await import(
+      "../utility/syncSowCompletedCoverMeta.js"
+    );
+    const { upsertSowingEntryFromBatch } = await import(
+      "../modules/sowingEntries/saveSowingEntry.js"
+    );
+    const db = mongoose.connection.db;
+    const seen = new Set();
+    for (const s of sources) {
+      const batchOid = toOid(s.batchId);
+      const requestId = toOid(s.sowingRequestId) || toOid(auditRequestId);
+      if (!batchOid || !requestId || seen.has(String(requestId))) continue;
+      seen.add(String(requestId));
+      const doc = await db.collection("plantslots").findOne(
+        { "subtypeSlots.slots.sowingBatches._id": batchOid },
+        session ? { session } : {}
+      );
+      let freshBatch = null;
+      for (const st of doc?.subtypeSlots || []) {
+        for (const sl of st.slots || []) {
+          for (const b of sl.sowingBatches || []) {
+            if (String(b._id) === String(batchOid)) freshBatch = b;
+          }
+        }
+      }
+      if (freshBatch) {
+        await syncSowCompletedMetaFromBatch(db, {
+          requestId,
+          batch: freshBatch,
+          linkedOrderCount: (freshBatch.linkedOrderIds || []).length || null,
+          reason: `excess_cover_reverse_order_${order.orderId}`,
+        });
+        if (s.slotId) await upsertSowingEntryFromBatch(freshBatch, s.slotId, session);
+      }
+    }
+  } catch (err) {
+    console.error("[excessCover] reverse meta sync failed:", err?.message || err);
+  }
+
   if (quiet) return { reversed: true, sources: sources.length, plants: coveredTotal };
 
   await writeCoverTrails({
@@ -1252,6 +1411,7 @@ export async function releaseOrderOwnSow({ order, userId, session, quiet = false
   let left = orderPlantsNeed(order);
   let total = 0;
   const bySlot = new Map();
+  const releasedPicks = [];
 
   for (const r of await findOwnSowBatches(order, session)) {
     if (left <= 0) break;
@@ -1278,6 +1438,7 @@ export async function releaseOrderOwnSow({ order, userId, session, quiet = false
     if (!res.matchedCount) continue;
     left -= release;
     total += release;
+    releasedPicks.push({ batchId: batchOid, slotId: r.slotId });
     const key = String(r.slotId);
     const prev = bySlot.get(key) || { plants: 0, label: slotLabel(r) };
     prev.plants += release;
@@ -1306,6 +1467,19 @@ export async function releaseOrderOwnSow({ order, userId, session, quiet = false
       { $pull: { linkedOrderIds: orderOid } },
       opts
     );
+  }
+
+  // Slot batch is already excess. The sowing entry is what Ram Live and the
+  // entries list read — without this copy, cover stays and excess stays 0.
+  if (releasedPicks.length) {
+    try {
+      const { syncSowingEntriesForPicks } = await import(
+        "../modules/sowingEntries/syncCoveredEntries.js"
+      );
+      await syncSowingEntriesForPicks(releasedPicks, session);
+    } catch (err) {
+      console.error("[excessCover] own-sow entry sync failed:", err?.message || err);
+    }
   }
 
   if (!quiet) {

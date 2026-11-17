@@ -34,17 +34,27 @@ export async function fetchAccountBalance(userId) {
     userId,
   });
 
+  return { ...mapBalanceReply(response, cfg.accountNumber), raw: response };
+}
+
+/** CIB_SV answers with EFFECTIVEBAL (string); RESPONSE "Failure" carries MESSAGE instead. */
+export function mapBalanceReply(response, accountNumber) {
+  const ok = String(response?.RESPONSE || response?.response || "SUCCESS").toUpperCase() === "SUCCESS";
+  if (!ok) {
+    const err = new Error(response?.MESSAGE || response?.message || "ICICI balance enquiry failed");
+    err.code = "ICICI_BALANCE_FAILED";
+    throw err;
+  }
+  const effective =
+    response?.EFFECTIVEBAL ?? response?.availableBalance ?? response?.AVAILABLE_BALANCE ?? response?.balance ?? 0;
+  const amount = Number(String(effective).replace(/,/g, ""));
   return {
-    accountNumber: cfg.accountNumber,
-    availableBalance: Number(
-      response?.availableBalance ?? response?.AVAILABLE_BALANCE ?? response?.balance ?? 0
-    ),
-    ledgerBalance: Number(
-      response?.ledgerBalance ?? response?.LEDGER_BALANCE ?? response?.balance ?? 0
-    ),
-    currency: response?.currency || "INR",
+    accountNumber: response?.ACCOUNTNO || accountNumber,
+    availableBalance: amount,
+    ledgerBalance: Number(response?.ledgerBalance ?? response?.LEDGER_BALANCE ?? amount),
+    currency: response?.CURRENCY || response?.currency || "INR",
+    bankDate: response?.DATE || null,
     asOf: new Date().toISOString(),
-    raw: response,
     source: "BALANCE_API",
   };
 }

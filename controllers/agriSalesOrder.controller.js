@@ -2228,6 +2228,33 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
     .then((m) => m.queueBankCheck({ paymentDate: newPayment.paymentDate }))
     .catch((e) => console.error("[Banking] queue bank check:", e?.message || e));
 
+  const savedForCheck = order.payment[order.payment.length - 1];
+  let bankStatement = null;
+  try {
+    const { checkNewPaymentsAgainstStatement } = await import(
+      "../modules/banking/services/paymentStatementMatch.service.js"
+    );
+    bankStatement = await checkNewPaymentsAgainstStatement(
+      [
+        {
+          source: "agriSales",
+          orderMongoId: String(order._id),
+          paymentId: String(savedForCheck._id),
+          utrNumber: savedForCheck.utrNumber,
+          transactionId: savedForCheck.transactionId,
+          chequeNumber: savedForCheck.chequeNumber,
+          modeOfPayment: savedForCheck.modeOfPayment,
+          isWalletPayment: savedForCheck.isWalletPayment,
+          paidAmount: savedForCheck.paidAmount,
+          paymentDate: savedForCheck.paymentDate,
+        },
+      ],
+      { userId: req.user?._id }
+    );
+  } catch (err) {
+    console.error("[Banking] statement match after agri payment:", err?.message || err);
+  }
+
   // Populate fields
   await order.populate("productId");
   await order.populate("createdBy");
@@ -2235,12 +2262,19 @@ const addPaymentToAgriSalesOrder = catchAsync(async (req, res, next) => {
   await order.populate("acceptedBy");
 
   const saved = order.payment[order.payment.length - 1];
+  const { appendBankStatementMessage } = await import(
+    "../modules/banking/services/paymentStatementMatch.service.js"
+  );
   const response = generateResponse(
     "Success",
-    "Payment added successfully",
+    appendBankStatementMessage("Payment added successfully", bankStatement),
     order,
     undefined,
-    { savedPayment: summarizeSavedPayment(saved), savedPayments: [summarizeSavedPayment(saved)].filter(Boolean) }
+    {
+      savedPayment: summarizeSavedPayment(saved),
+      savedPayments: [summarizeSavedPayment(saved)].filter(Boolean),
+      bankStatement,
+    }
   );
 
   return res.status(200).json(response);
@@ -3004,7 +3038,12 @@ const getPendingPayments = catchAsync(async (req, res, next) => {
     { $unwind: { path: "$payment", includeArrayIndex: "paymentIndex", preserveNullAndEmptyArrays: false } },
     {
       $match: {
-        ...(paymentStatus ? { "payment.paymentStatus": paymentStatus } : {}),
+        ...(paymentStatus
+          ? {
+              "payment.paymentStatus":
+                paymentStatus === "PENDING" ? { $in: ["PENDING", "BANK_VERIFIED"] } : paymentStatus,
+            }
+          : {}),
         ...(Object.keys(dateFilter).length > 0 ? { "payment.paymentDate": dateFilter } : {}),
       },
     },
@@ -3125,7 +3164,12 @@ const getPendingPayments = catchAsync(async (req, res, next) => {
       { $match: query },
       { $unwind: "$payment" },
       {
-        $match: paymentStatus ? { "payment.paymentStatus": paymentStatus } : {},
+        $match: paymentStatus
+          ? {
+              "payment.paymentStatus":
+                paymentStatus === "PENDING" ? { $in: ["PENDING", "BANK_VERIFIED"] } : paymentStatus,
+            }
+          : {},
       },
       { $count: "total" },
     ]),

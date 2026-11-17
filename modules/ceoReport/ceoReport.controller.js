@@ -1,4 +1,5 @@
 import catchAsync from "../../utility/catchAsync.js";
+import { createShortTtlCache } from "../../utility/shortTtlCache.js";
 import { getCeoReportCatalog } from "./services/ceoReportCatalog.service.js";
 import { fetchCeoOrderDeliveryFlow } from "./services/ceoOrderDeliveryFlow.service.js";
 import { fetchCeoOrderDeliveryBreakdown } from "./services/ceoOrderDeliveryBreakdown.service.js";
@@ -11,6 +12,8 @@ import { fetchCeoOperations } from "./services/ceoOperations.service.js";
 import { fetchCeoFleetPerformance } from "./services/ceoFleetPerformance.service.js";
 import { fetchCeoSlotAnalysis } from "./services/ceoSlotAnalysis.service.js";
 import { fetchAdminMisOrders } from "../../services/adminMisOrders.service.js";
+
+const salesPerfCache = createShortTtlCache(30_000);
 
 function respondCeo(res, result) {
   if (result.error) {
@@ -54,7 +57,30 @@ export const getCeoSalesCollectionAnalytics = catchAsync(async (req, res) => {
 });
 
 export const getCeoSalesPerformance = catchAsync(async (req, res) => {
-  const result = await fetchCeoSalesPerformance(req.query);
+  const q = req.query || {};
+  const cacheKey = [
+    q.startDate,
+    q.endDate,
+    q.depth,
+    q.granularity,
+    q.comparePrevious,
+    q.channel,
+    q.salesman,
+    q.plant,
+  ].join("|");
+  const force = String(req.headers["x-cache-bust"] || "") === "1";
+  if (!force && !q.salesman) {
+    const hit = salesPerfCache.get(cacheKey);
+    if (hit) {
+      res.setHeader("X-Cache", "HIT");
+      res.setHeader("Cache-Control", "private, max-age=15");
+      return respondCeo(res, hit);
+    }
+  }
+  const result = await fetchCeoSalesPerformance(q);
+  if (!result.error && !q.salesman) salesPerfCache.set(cacheKey, result);
+  res.setHeader("X-Cache", "MISS");
+  res.setHeader("Cache-Control", "private, max-age=15");
   return respondCeo(res, result);
 });
 

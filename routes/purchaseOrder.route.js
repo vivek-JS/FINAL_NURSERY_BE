@@ -23,6 +23,12 @@ const invoiceUpload = multer({
 router.use(authenticateToken)
 
 router.post(
+  "/read-invoice",
+  invoiceUpload.single("invoice"),
+  purchaseOrderController.readSupplierInvoice
+)
+
+router.post(
   "/",
   invoiceUpload.single("supplierInvoiceFile"),
   purchaseOrderController.createPurchaseOrder

@@ -9,7 +9,8 @@ import {
   createFarmerLead,
   getFarmerLeadsForLink,
   getAllFarmerLeads,
-  getLeadFilterOptions
+  getLeadFilterOptions,
+  getLeadFarmerStats
 } from "../controllers/publicFarmerLink.controller.js";
 import { importContactsForLink } from "../controllers/publicFarmerLinkImport.controller.js";
 
@@ -50,6 +51,13 @@ router.get(
   authenticateToken,
   requireOfficeAdmin,
   getLeadFilterOptions
+);
+
+router.get(
+  "/lead-stats",
+  authenticateToken,
+  requireOfficeAdmin,
+  getLeadFarmerStats
 );
 
 router.get(

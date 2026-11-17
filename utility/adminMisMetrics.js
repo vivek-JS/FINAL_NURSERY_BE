@@ -1,6 +1,7 @@
 import Order from "../models/order.model.js";
 import OrderEvent from "../modules/orderEvents/models/orderEvent.model.js";
 import {
+  COUNTED_PLANTS_EXPR,
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
   istDateStringExpr,
@@ -57,6 +58,9 @@ const PIPELINE_DELIVERY_STATUSES = [
   "PROCESSING",
   "ASSIGNED",
 ];
+
+/** Partial orders count plants still left. Other pipeline statuses count the booked size. */
+const PIPELINE_COUNTED_PLANTS = COUNTED_PLANTS_EXPR;
 
 function metricFromAgg(rows) {
   return {
@@ -616,7 +620,7 @@ export async function aggregateTransitionsByDay(
   return mergeTransitionDayRows(eventRows, historyRows, legacyRows);
 }
 
-/** Delivery in range — any status — by delivery day. */
+/** Delivery in range — open statuses — by delivery day. Partials count remaining plants. */
 export async function aggregateDeliveryInRangeByDay(
   rangeStart,
   rangeEnd,
@@ -644,7 +648,7 @@ export async function aggregateDeliveryInRangeByDay(
           },
         },
         orders: { $sum: 1 },
-        plants: { $sum: "$linePlantTotal" },
+        plants: { $sum: PIPELINE_COUNTED_PLANTS },
       },
     },
   ]);
@@ -681,7 +685,7 @@ export async function aggregatePipelineByDeliveryDay(
           status: "$orderStatus",
         },
         orders: { $sum: 1 },
-        plants: { $sum: "$linePlantTotal" },
+        plants: { $sum: PIPELINE_COUNTED_PLANTS },
         plantsRemaining: {
           $sum: {
             $cond: [
@@ -746,7 +750,7 @@ export async function aggregateDeliveryUnionTotal(
     {
       $group: {
         _id: "$_id",
-        plants: { $first: "$linePlantTotal" },
+        plants: { $first: PIPELINE_COUNTED_PLANTS },
       },
     },
     {
@@ -1101,13 +1105,13 @@ export async function aggregatePipelineByGroup(
       $group: {
         _id: { ...groupIdFields, status: "$orderStatus" },
         orders: { $sum: 1 },
-        plants: { $sum: "$linePlantTotal" },
+        plants: { $sum: PIPELINE_COUNTED_PLANTS },
       },
     },
   ]);
 }
 
-/** Delivery backlog before range (excludes DISPATCHED, COMPLETED) per entity. */
+/** Delivery backlog before range (excludes DISPATCHED, COMPLETED) per entity. Partials count remaining plants. */
 export async function aggregateDeliveryBeforeRangeByGroup(
   rangeStart,
   statusMatch,
@@ -1129,7 +1133,7 @@ export async function aggregateDeliveryBeforeRangeByGroup(
       $group: {
         _id: groupIdFields,
         orders: { $sum: 1 },
-        plants: { $sum: "$linePlantTotal" },
+        plants: { $sum: PIPELINE_COUNTED_PLANTS },
       },
     },
   ]);
@@ -1159,7 +1163,7 @@ export async function aggregateDeliveryInRangeByGroup(
       $group: {
         _id: groupIdFields,
         orders: { $sum: 1 },
-        plants: { $sum: "$linePlantTotal" },
+        plants: { $sum: PIPELINE_COUNTED_PLANTS },
       },
     },
   ]);
@@ -1188,7 +1192,7 @@ export async function aggregateDeliveryUnionByGroup(
     {
       $group: {
         _id: { ...groupIdFields, orderId: "$_id" },
-        plants: { $first: "$linePlantTotal" },
+        plants: { $first: PIPELINE_COUNTED_PLANTS },
       },
     },
     {
@@ -1601,7 +1605,7 @@ export async function fetchEntityPastDueBreakdown(
       $group: {
         _id: { ...groupIdFields, status: "$orderStatus" },
         orders: { $sum: 1 },
-        plants: { $sum: "$linePlantTotal" },
+        plants: { $sum: PIPELINE_COUNTED_PLANTS },
         plantsRemaining: {
           $sum: {
             $cond: [

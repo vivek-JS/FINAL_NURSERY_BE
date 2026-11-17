@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planSowBatchDestroy, sowBatchLeft } from "../services/sowBatchDestroy.service.js";
+import {
+  planSowBatchDestroy,
+  sowBatchLeft,
+  irrelevantPullAfterDestroy,
+} from "../services/sowBatchDestroy.service.js";
 
 const slot = {
   primarySowed: 10000,
@@ -27,6 +31,19 @@ test("planSowBatchDestroy: lowers sowed, survivors and free stock", () => {
   assert.equal(plan.availablePlants, 500);
   assert.equal(plan.excessivePlants, 500);
   assert.deepEqual(plan.takes, [{ batchId: "b1", plants: 1500 }]);
+});
+
+test("planSowBatchDestroy: irrelevant batch does not reduce available stock again", () => {
+  const plan = planSowBatchDestroy({
+    slot,
+    batches: [{ _id: "b1", plantsSowed: 5000, isIrrelevant: true }],
+    quantity: 1500,
+  });
+  assert.equal(plan.primarySowed, 8500);
+  assert.equal(plan.availablePlants, 2000);
+  assert.equal(plan.excessivePlants, 2000);
+  assert.equal(irrelevantPullAfterDestroy(900, 5000, 1500), 630);
+  assert.equal(irrelevantPullAfterDestroy(900, 1500, 1500), 0);
 });
 
 test("planSowBatchDestroy: free stock floors at zero when destroying reserved plants", () => {

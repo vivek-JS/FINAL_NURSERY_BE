@@ -1,8 +1,10 @@
 import mongoose from "mongoose";
 import PlantSlot from "../models/slots.model.js";
+import SowingEntry from "../models/sowingEntry.model.js";
 import AppError from "../utility/appError.js";
 import { applyStockFieldUpdates } from "../utility/slotStockTrail.js";
 import { sowBatchStock, sowQtySlotImpact } from "../utility/lagwadSlotPlantsSplit.js";
+import { excessFieldsForBatch } from "../utility/sowingBatchExcessStamp.js";
 import { dmyToYmd } from "./sowBatchStock.service.js";
 
 const toInt = (v) => Math.max(0, Math.floor(Number(v) || 0));
@@ -32,23 +34,47 @@ export function readyBeforeYmd(dmy, cutoffYmd = WATERMELON_IRRELEVANT_BEFORE) {
 }
 
 /**
+ * Plants still sitting after Out (dispatched). Ready = sowed − mortality buffer.
+ * Prefer entry buffer/out when the slot batch stamp is stale or dispatchLog is empty.
+ */
+export function remainingAfterOut(batch, { outPlants, bufferPlants } = {}) {
+  const sowed = Math.max(0, toInt(batch?.plantsSowed) - toInt(batch?.destroyedPlants));
+  const buffer =
+    bufferPlants != null && bufferPlants !== ""
+      ? toInt(bufferPlants)
+      : batch?.bufferPlants != null && batch.bufferPlants !== ""
+        ? toInt(batch.bufferPlants)
+        : toInt(batch?.expectedMortalityApplied);
+  const out = outPlants != null && outPlants !== "" ? toInt(outPlants) : 0;
+  return Math.max(0, sowed - buffer - out);
+}
+
+/**
  * Plants this batch currently contributes to slot.availablePlants.
  * availablePlantsApplied is that balance after later excess allocations.
+ * Cap by remaining after Out so already-given plants are not pulled again.
  */
-export function batchSaleableStock(batch) {
+export function batchSaleableStock(batch, opts = {}) {
   const applied = batch?.availablePlantsApplied;
-  if (applied != null && applied !== "") return toInt(applied);
-  const live = sowBatchStock({ ...plainBatch(batch), isIrrelevant: false });
-  return sowQtySlotImpact(live.free, { isExcess: true }).availablePlants;
+  let stock =
+    applied != null && applied !== ""
+      ? toInt(applied)
+      : sowQtySlotImpact(sowBatchStock({ ...plainBatch(batch), isIrrelevant: false }).free, {
+          isExcess: true,
+        }).availablePlants;
+  if (opts.outPlants != null || opts.bufferPlants != null) {
+    stock = Math.min(stock, remainingAfterOut(batch, opts));
+  }
+  return stock;
 }
 
 /** Pure mark/unmark of slot available + excessive plants. Does not touch order cover. */
-export function planIrrelevantStockPull({ slot, batch, mark }) {
+export function planIrrelevantStockPull({ slot, batch, mark, outPlants, bufferPlants }) {
   const avail = toInt(slot?.availablePlants);
   const excessive = toInt(slot?.excessiveSowing?.plants);
   if (mark) {
     if (batch?.isIrrelevant) return { error: "Sowing batch is already irrelevant" };
-    const pulled = Math.min(batchSaleableStock(batch), avail);
+    const pulled = Math.min(batchSaleableStock(batch, { outPlants, bufferPlants }), avail);
     return {
       isIrrelevant: true,
       pulled,
@@ -88,7 +114,16 @@ export async function setSowBatchIrrelevant({ slotId, batchId, isIrrelevant, per
   const batch = slot.sowingBatches.id(batchId);
   if (!batch) throw new AppError("Sowing batch not found on this slot", 404);
 
-  const plan = planIrrelevantStockPull({ slot, batch, mark });
+  const entry = await SowingEntry.findOne({ sourceBatchId: batch._id })
+    .select("dispatchedPlants bufferPlants isIrrelevant excessPlants sowingBufferPct plantsSowed")
+    .lean();
+  const plan = planIrrelevantStockPull({
+    slot,
+    batch,
+    mark,
+    outPlants: entry?.dispatchedPlants,
+    bufferPlants: entry?.bufferPlants ?? batch.bufferPlants,
+  });
   if (plan.error) throw new AppError(plan.error, 400);
 
   batch.isIrrelevant = plan.isIrrelevant;
@@ -108,6 +143,17 @@ export async function setSowBatchIrrelevant({ slotId, batchId, isIrrelevant, per
   if (by) slot.setPerformer?.(by);
   await plantSlot.save({ validateBeforeSave: true });
 
+  const entryDoc = await SowingEntry.findOne({ sourceBatchId: batch._id }).lean();
+  if (entryDoc) {
+    const excess = plan.isIrrelevant
+      ? 0
+      : excessFieldsForBatch(entryDoc, entryDoc.sowingBufferPct || 0).shownExcess;
+    await SowingEntry.updateOne(
+      { _id: entryDoc._id },
+      { $set: { isIrrelevant: plan.isIrrelevant, excessPlants: excess } }
+    );
+  }
+
   return {
     slotId: idStr(slotId),
     batchId: idStr(batchId),
@@ -115,5 +161,9 @@ export async function setSowBatchIrrelevant({ slotId, batchId, isIrrelevant, per
     availablePlants: toInt(slot.availablePlants),
     excessivePlants: toInt(slot.excessiveSowing?.plants),
     stockPulled: plan.isIrrelevant ? plan.pulled : plan.restored,
+    remainingAfterOut: remainingAfterOut(batch, {
+      outPlants: entry?.dispatchedPlants,
+      bufferPlants: entry?.bufferPlants ?? batch.bufferPlants,
+    }),
   };
 }

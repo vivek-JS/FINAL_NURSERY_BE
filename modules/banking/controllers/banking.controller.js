@@ -1,8 +1,14 @@
 import catchAsync from "../../../utility/catchAsync.js";
-import { registerWithIcici, getLatestRegistration } from "../services/iciciRegistration.service.js";
+import {
+  registerWithIcici,
+  getLatestRegistration,
+  fetchRegistrationStatus,
+  deregisterFromIcici,
+} from "../services/iciciRegistration.service.js";
 import { fetchAndStoreCorporateStatement } from "../services/iciciCorporateStatement.service.js";
 import { fetchTransactionStatus } from "../services/iciciCorporateStatus.service.js";
 import { fetchAccountBalance } from "../services/iciciBalance.service.js";
+import { isSuperAdmin } from "../services/iciciPayout.service.js";
 import { runEnhancedReconciliation } from "../services/reconciliationEngine.service.js";
 import {
   listOpenSuspense,
@@ -44,6 +50,27 @@ export const postRegister = catchAsync(async (req, res) => {
 export const getRegistration = catchAsync(async (req, res) => {
   const reg = await getLatestRegistration();
   return res.status(200).json({ success: true, data: reg });
+});
+
+/** GET /api/banking/icici/registration/status — Registration Status Inquiry API */
+export const getRegistrationStatus = catchAsync(async (req, res) => {
+  const { raw, ...data } = await fetchRegistrationStatus({ userId: req.user?._id });
+  return res.status(200).json({ success: true, data });
+});
+
+/** POST /api/banking/icici/deregister { confirm: "DEREGISTER" } — super admin only */
+export const postDeregister = catchAsync(async (req, res) => {
+  if (!isSuperAdmin(req.user)) {
+    return res.status(403).json({ success: false, message: "Only a super admin can de-register from ICICI" });
+  }
+  if (req.body?.confirm !== "DEREGISTER") {
+    return res.status(400).json({
+      success: false,
+      message: 'De-registration stops all ICICI payments and statements. Send { "confirm": "DEREGISTER" }.',
+    });
+  }
+  const { raw, ...data } = await deregisterFromIcici({ userId: req.user?._id });
+  return res.status(data.ok ? 200 : 502).json({ success: data.ok, data });
 });
 
 /** POST /api/banking/icici/statement */
@@ -162,7 +189,18 @@ export const postVerifyPayment = catchAsync(async (req, res) => {
 export const getPendingPayments = catchAsync(async (req, res) => {
   const { dateFrom, dateTo, source, limit, skip } = req.query || {};
   const all = await getUnclearedPayments({ dateFrom, dateTo, source: source || "all" });
-  all.sort((a, b) => {
+  const marked = await matchPendingToStatement(all);
+  const { settleExactPending } = await import("../services/settleExactPending.service.js");
+  await settleExactPending(
+    marked.filter((row) => row.statementMatch === "EXACT" && row.paymentStatus === "PENDING"),
+    req.user?._id
+  );
+  const waiting = marked.map((row) =>
+    row.statementMatch === "EXACT" && row.paymentStatus === "PENDING"
+      ? { ...row, bankVerificationStatus: "BANK_VERIFIED" }
+      : row
+  );
+  waiting.sort((a, b) => {
     const tb = new Date(b.paymentDate).getTime();
     const ta = new Date(a.paymentDate).getTime();
     const byDate = (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta);
@@ -170,20 +208,35 @@ export const getPendingPayments = catchAsync(async (req, res) => {
     return String(b.paymentId || "").localeCompare(String(a.paymentId || ""));
   });
 
-  const pageSize = Math.min(Math.max(Number(limit) || 50, 1), 500);
   const offset = Math.max(Number(skip) || 0, 0);
-  const slice = all.slice(offset, offset + pageSize);
-  const data = await matchPendingToStatement(slice);
+  const pageSize = Math.min(Math.max(Number(limit) || 50, 1), 500);
+  const data = waiting.slice(offset, offset + pageSize);
+  const allLength = waiting.length;
 
   return res.status(200).json({
     success: true,
     data,
     count: data.length,
-    total: all.length,
+    total: allLength,
     limit: pageSize,
     skip: offset,
-    hasMore: offset + data.length < all.length,
+    hasMore: offset + data.length < allLength,
   });
+});
+
+/** POST /api/banking/payments/confirm — accountant picked one open statement line */
+export const postConfirmPayment = catchAsync(async (req, res) => {
+  const { source, orderMongoId, paymentId, statementLineId } = req.body || {};
+  const { confirmOpenStatementLine } = await import("../services/paymentConfirm.service.js");
+  const result = await confirmOpenStatementLine({
+    source,
+    orderMongoId,
+    paymentId,
+    statementLineId,
+    userId: req.user?._id,
+  });
+  if (!result.ok) return res.status(400).json({ success: false, message: result.error });
+  return res.status(200).json({ success: true, data: result });
 });
 
 /** GET /api/banking/payments/verified */

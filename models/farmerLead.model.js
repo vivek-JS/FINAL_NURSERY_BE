@@ -21,6 +21,12 @@ const farmerLeadSchema = new Schema(
     talukaCode: { type: String, required: true },
     talukaName: { type: String, required: true },
     villageName: { type: String, required: true },
+    gps: {
+      lat: Number,
+      lng: Number,
+      accuracy: Number,
+      area: { type: String, default: "" },
+    },
     publicLinkId: {
       type: Schema.Types.ObjectId,
       ref: "PublicFarmerLink",

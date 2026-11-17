@@ -41,6 +41,16 @@ router
         .isInt({ min: 1 })
         .withMessage("Secondary plant ready days must be a positive integer")
         .toInt(),
+      check("secondaryR2PlantReadyDays")
+        .optional({ nullable: true, checkFalsy: true })
+        .isInt({ min: 1 })
+        .withMessage("R2 ready days must be a positive integer")
+        .toInt(),
+      check("secondaryR3PlantReadyDays")
+        .optional({ nullable: true, checkFalsy: true })
+        .isInt({ min: 1 })
+        .withMessage("R3 ready days must be a positive integer")
+        .toInt(),
       check("plantCmsId")
         .exists()
         .withMessage("Plant is required")
@@ -81,6 +91,16 @@ router
         .optional()
         .isInt({ min: 1 })
         .withMessage("Secondary plant ready days must be a positive integer")
+        .toInt(),
+      check("secondaryR2PlantReadyDays")
+        .optional({ nullable: true, checkFalsy: true })
+        .isInt({ min: 1 })
+        .withMessage("R2 ready days must be a positive integer")
+        .toInt(),
+      check("secondaryR3PlantReadyDays")
+        .optional({ nullable: true, checkFalsy: true })
+        .isInt({ min: 1 })
+        .withMessage("R3 ready days must be a positive integer")
         .toInt(),
     ],
     checkErrors,

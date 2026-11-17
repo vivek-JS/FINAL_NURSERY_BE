@@ -16,18 +16,8 @@ export async function getUnclearedPayments(options = {}) {
   const { dateFrom, dateTo, source = "all" } = options;
   const list = [];
 
-  const now = new Date();
   if (source === "all" || source === "order") {
-    const query = {
-      "payment.paymentStatus": "PENDING",
-      $or: [
-        { "payment.transactionId": { $exists: true, $ne: "", $type: "string" } },
-        { "payment.chequeNumber": { $exists: true, $ne: "", $type: "string" } },
-        { "payment.qrReferenceId": { $exists: true, $ne: "", $type: "string" } },
-        { "payment.merchantTranId": { $exists: true, $ne: "", $type: "string" } },
-        { "payment.utrNumber": { $exists: true, $ne: "", $type: "string" } },
-      ],
-    };
+    const query = { "payment.paymentStatus": { $in: ["PENDING", "BANK_VERIFIED"] } };
     if (dateFrom || dateTo) {
       query["payment.paymentDate"] = {};
       if (dateFrom) query["payment.paymentDate"].$gte = new Date(dateFrom);
@@ -40,17 +30,9 @@ export async function getUnclearedPayments(options = {}) {
 
     for (const order of orders) {
       for (const p of order.payment || []) {
-        if (p.paymentStatus !== "PENDING") continue;
+        if (p.paymentStatus !== "PENDING" && p.paymentStatus !== "BANK_VERIFIED") continue;
         if (p.isDiscount === true || p.modeOfPayment === "Discount") continue;
-        if (p.bankVerificationStatus && p.bankVerificationStatus !== "PENDING") continue;
-        const hasRef =
-          (p.transactionId && String(p.transactionId).trim()) ||
-          (p.chequeNumber && String(p.chequeNumber).trim()) ||
-          (p.qrReferenceId && String(p.qrReferenceId).trim()) ||
-          (p.merchantTranId && String(p.merchantTranId).trim()) ||
-          (p.utrNumber && String(p.utrNumber).trim());
-        if (!hasRef) continue;
-        if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
+        if (p.bankVerificationStatus === "NOT_REQUIRED") continue;
         if (dateFrom && new Date(p.paymentDate) < new Date(dateFrom)) continue;
         if (dateTo && new Date(p.paymentDate) > new Date(dateTo)) continue;
         list.push({
@@ -59,12 +41,15 @@ export async function getUnclearedPayments(options = {}) {
           orderMongoId: order._id.toString(),
           paymentId: p._id.toString(),
           paidAmount: p.paidAmount,
+          paymentStatus: p.paymentStatus,
           paymentDate: p.paymentDate,
           modeOfPayment: p.modeOfPayment,
           bankName: p.bankName,
           transactionId: p.transactionId,
           utrNumber: p.utrNumber,
           chequeNumber: p.chequeNumber,
+          bankVerificationStatus: p.bankVerificationStatus || "",
+          utrCorrectedOnce: Boolean(p.utrCorrectedOnce),
           qrReferenceId: p.qrReferenceId,
           merchantTranId: p.merchantTranId,
           qrExpiresAt: p.qrExpiresAt,
@@ -78,16 +63,7 @@ export async function getUnclearedPayments(options = {}) {
   }
 
   if (source === "all" || source === "agriSales") {
-    const query = {
-      "payment.paymentStatus": "PENDING",
-      $or: [
-        { "payment.transactionId": { $exists: true, $ne: "", $type: "string" } },
-        { "payment.chequeNumber": { $exists: true, $ne: "", $type: "string" } },
-        { "payment.qrReferenceId": { $exists: true, $ne: "", $type: "string" } },
-        { "payment.merchantTranId": { $exists: true, $ne: "", $type: "string" } },
-        { "payment.utrNumber": { $exists: true, $ne: "", $type: "string" } },
-      ],
-    };
+    const query = { "payment.paymentStatus": { $in: ["PENDING", "BANK_VERIFIED"] } };
     if (dateFrom || dateTo) {
       query["payment.paymentDate"] = {};
       if (dateFrom) query["payment.paymentDate"].$gte = new Date(dateFrom);
@@ -99,16 +75,9 @@ export async function getUnclearedPayments(options = {}) {
 
     for (const order of agriOrders) {
       for (const p of order.payment || []) {
-        if (p.paymentStatus !== "PENDING") continue;
-        if (p.bankVerificationStatus && p.bankVerificationStatus !== "PENDING") continue;
-        const hasRef =
-          (p.transactionId && String(p.transactionId).trim()) ||
-          (p.chequeNumber && String(p.chequeNumber).trim()) ||
-          (p.qrReferenceId && String(p.qrReferenceId).trim()) ||
-          (p.merchantTranId && String(p.merchantTranId).trim()) ||
-          (p.utrNumber && String(p.utrNumber).trim());
-        if (!hasRef) continue;
-        if (p.qrExpiresAt && new Date(p.qrExpiresAt) < now) continue;
+        if (p.paymentStatus !== "PENDING" && p.paymentStatus !== "BANK_VERIFIED") continue;
+        if (p.isDiscount === true || p.modeOfPayment === "Discount") continue;
+        if (p.bankVerificationStatus === "NOT_REQUIRED") continue;
         if (dateFrom && new Date(p.paymentDate) < new Date(dateFrom)) continue;
         if (dateTo && new Date(p.paymentDate) > new Date(dateTo)) continue;
         list.push({
@@ -117,12 +86,15 @@ export async function getUnclearedPayments(options = {}) {
           orderMongoId: order._id.toString(),
           paymentId: p._id.toString(),
           paidAmount: p.paidAmount,
+          paymentStatus: p.paymentStatus,
           paymentDate: p.paymentDate,
           modeOfPayment: p.modeOfPayment,
           bankName: p.bankName,
           transactionId: p.transactionId,
           utrNumber: p.utrNumber,
           chequeNumber: p.chequeNumber,
+          bankVerificationStatus: p.bankVerificationStatus || "",
+          utrCorrectedOnce: Boolean(p.utrCorrectedOnce),
           qrReferenceId: p.qrReferenceId,
           merchantTranId: p.merchantTranId,
           qrExpiresAt: p.qrExpiresAt,
@@ -147,7 +119,12 @@ export async function getPaymentsForApproval(options = {}) {
   const list = [];
 
   if (source === "all" || source === "order") {
-    const query = { "payment.paymentStatus": "BANK_VERIFIED" };
+    const query = {
+      $or: [
+        { "payment.paymentStatus": "BANK_VERIFIED" },
+        { "payment.paymentStatus": "PENDING", "payment.bankVerificationStatus": "BANK_VERIFIED" },
+      ],
+    };
     if (dateFrom || dateTo) {
       query["payment.paymentDate"] = {};
       if (dateFrom) query["payment.paymentDate"].$gte = new Date(dateFrom);
@@ -160,7 +137,8 @@ export async function getPaymentsForApproval(options = {}) {
 
     for (const order of orders) {
       for (const p of order.payment || []) {
-        if (p.paymentStatus !== "BANK_VERIFIED") continue;
+        if (p.paymentStatus !== "BANK_VERIFIED" && p.paymentStatus !== "PENDING") continue;
+        if (p.paymentStatus === "PENDING" && p.bankVerificationStatus !== "BANK_VERIFIED") continue;
         const b = p.bankVerificationStatus;
         if (b === "VERIFY_FAILED" || b === "PENDING") continue;
         if (b && b !== "BANK_VERIFIED" && b !== "NOT_REQUIRED") continue;
@@ -186,7 +164,12 @@ export async function getPaymentsForApproval(options = {}) {
   }
 
   if (source === "all" || source === "agriSales") {
-    const query = { "payment.paymentStatus": "BANK_VERIFIED" };
+    const query = {
+      $or: [
+        { "payment.paymentStatus": "BANK_VERIFIED" },
+        { "payment.paymentStatus": "PENDING", "payment.bankVerificationStatus": "BANK_VERIFIED" },
+      ],
+    };
     if (dateFrom || dateTo) {
       query["payment.paymentDate"] = {};
       if (dateFrom) query["payment.paymentDate"].$gte = new Date(dateFrom);
@@ -199,7 +182,8 @@ export async function getPaymentsForApproval(options = {}) {
     for (const order of agriOrders) {
       for (let i = 0; i < (order.payment || []).length; i++) {
         const p = order.payment[i];
-        if (p.paymentStatus !== "BANK_VERIFIED") continue;
+        if (p.paymentStatus !== "BANK_VERIFIED" && p.paymentStatus !== "PENDING") continue;
+        if (p.paymentStatus === "PENDING" && p.bankVerificationStatus !== "BANK_VERIFIED") continue;
         const b = p.bankVerificationStatus;
         if (b === "VERIFY_FAILED" || b === "PENDING") continue;
         if (b && b !== "BANK_VERIFIED" && b !== "NOT_REQUIRED") continue;

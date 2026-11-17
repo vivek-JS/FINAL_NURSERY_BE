@@ -2,9 +2,9 @@
  * Payee register for payouts, with the same maker-checker rule as payments:
  * one person adds a payee, a different approver activates it.
  *
- * The CIB payment API in our spec is ad hoc ("without any bene registration"),
- * so ICICI keeps no beneficiary list for us. The register gives the same
- * protections in the ERP: account details are checked and approved once, a
+ * Approval also registers the payee at ICICI (Beneficiary Registration API,
+ * see iciciBeneRegistration.service.js) unless ICICI_BENE_REGISTER_ON_APPROVE=false.
+ * The register gives these protections in the ERP: account details are checked and approved once, a
  * duplicate account cannot be added twice, and with
  * ICICI_PAYOUT_REQUIRE_BENEFICIARY=true payouts may only go to approved payees.
  */
@@ -24,6 +24,8 @@ import {
   pushHistory,
   userName,
 } from "./iciciPayout.service.js";
+import { registerBeneficiaryAtBank } from "./iciciBeneRegistration.service.js";
+import { validateBeneficiaryAtIcici } from "./iciciBeneValidation.service.js";
 
 const MOBILE_RE = /^[6-9]\d{9}$/;
 const NICKNAME_MAX = 40;
@@ -135,6 +137,25 @@ export async function createBeneficiary(input, user) {
     makerId: user._id,
     makerName: userName(user),
   });
+  if (cfg.payout.validateBeneOnCreate) {
+    try {
+      const bank = await validateBeneficiaryAtIcici(v, { userId: user._id });
+      doc.bank = {
+        validationState: bank.state,
+        validationMessage: bank.message,
+        validatedAt: new Date(),
+      };
+      if (bank.state === "INVALID_ACCOUNT") {
+        throw new PayoutError(bank.message || "ICICI rejected this account", "VALIDATION", {
+          errors: { accountNumber: bank.message || "Invalid beneficiary account" },
+        });
+      }
+    } catch (err) {
+      if (err instanceof PayoutError) throw err;
+      doc.bank = { validationState: "UNREACHABLE", validationMessage: err.message, validatedAt: new Date() };
+    }
+  }
+
   pushHistory(doc, { action: "CREATED", to: "PENDING_APPROVAL", user });
   try {
     await doc.save();
@@ -173,13 +194,15 @@ export async function approveBeneficiary(id, user, { note } = {}) {
   if (isSelf && !canSelfApprove(user)) {
     throw new PayoutError("You added this payee — another approver must approve it", "SELF_APPROVAL");
   }
-  return decide(id, user, {
+  const approved = await decide(id, user, {
     from: "PENDING_APPROVAL",
     to: "ACTIVE",
     action: "APPROVED",
     note: approvalNote(isSelf, note),
     extra: { checkerId: user._id, checkerName: userName(user), checkedAt: new Date(), selfApproved: isSelf },
   });
+  if (!getIciciCorporateConfig().payout.registerBeneOnApprove) return approved;
+  return (await registerBeneficiaryAtBank(id, user)).payee;
 }
 
 /** Checker: reject a new payee. */

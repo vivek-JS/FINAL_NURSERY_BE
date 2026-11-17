@@ -35,21 +35,6 @@ export function dispatchedPlantsOf(batch) {
   return Math.max(0, net);
 }
 
-/** Mortality still on the batch, and how much was last moved into excess. */
-export function stockMortalityOf(raw, bufferPlants) {
-  const moved = Math.max(0, Math.floor(Number(raw?.mortalityMovedToExcess) || 0));
-  const added = Math.max(0, Math.floor(Number(raw?.excessMovedToMortality) || 0));
-  if (raw?.isIrrelevant) {
-    return { mortality: 0, mortalityMovedToExcess: moved, mortalityReserve: 0 };
-  }
-  if (raw?.noMortalityReserve && moved <= 0) {
-    return { mortality: added, mortalityMovedToExcess: 0, mortalityReserve: added };
-  }
-  const buffer = Math.max(0, Math.floor(Number(bufferPlants) || 0));
-  const mortality = Math.max(0, buffer - moved + added);
-  return { mortality, mortalityMovedToExcess: moved, mortalityReserve: mortality };
-}
-
 function mortalityBufferOf(batch) {
   if (batch?.bufferPlants != null && batch.bufferPlants !== "") {
     return Math.max(0, Math.floor(Number(batch.bufferPlants) || 0));
@@ -120,13 +105,16 @@ export function isReadyNow(plantReadyDate, todayYmd = todayIstYmd()) {
   return Boolean(k) && k <= todayYmd;
 }
 
+/**
+ * Plants still to sow. Cover truth = sowingCoverSources across slots, else partial holds.
+ * Does NOT use order.remainingPlants (that field is dispatch leftover).
+ */
 export function orderRemainingPlants(order) {
   const booked = n(order?.numberOfPlants) + n(order?.additionalPlants);
-  if (order?.sowingDone) return 0;
-  const outstanding =
-    order?.remainingPlants == null ? booked : Math.min(booked, Math.max(0, n(order.remainingPlants)));
+  const fromSources = (order?.sowingCoverSources || []).reduce((s, r) => s + n(r.plants), 0);
+  if (fromSources > 0) return Math.max(0, booked - fromSources);
   const held = (order?.sowingPartialCover || []).reduce((s, r) => s + n(r.plants), 0);
-  return Math.max(0, outstanding - held);
+  return Math.max(0, booked - held);
 }
 
 export function mergeStockChanges(batch) {
@@ -202,27 +190,30 @@ function mapOrderBrief(order, inProgress = false) {
     _id: String(order._id),
     orderId: order.orderId,
     farmerName: order.farmer?.name || order.name || "",
-    sowingDone: Boolean(order.sowingDone),
+    sowingDone: booked > 0 && remainingPlants < 1,
     orderStatus: order.orderStatus || "",
     dispatched: ["DISPATCHED", "DISPATCH_PROCESS", "COMPLETED", "PARTIALLY_COMPLETED"].includes(
       String(order.orderStatus || "").toUpperCase()
     ),
-    inProgress: !order.sowingDone && Boolean(inProgress),
+    inProgress: remainingPlants > 0 && Boolean(inProgress),
     bookedPlants: booked,
-    coveredPlants: order.sowingDone ? booked : held,
+    coveredPlants: Math.max(0, booked - remainingPlants),
     remainingPlants,
   };
 }
 
-/** Order id → request number for an issued or in-progress sowing that is not finished. */
+/**
+ * Order id → request number for an unfinished sowing request that already claims the order.
+ * Includes pending / processing / issued (not only issued-in-progress) so those orders
+ * stay off Not sown and out of new request picks.
+ */
 export async function inProgressRequestByOrderId(orderIds) {
   const ids = [...orderIds].filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
   if (!ids.length) return new Map();
   const oids = ids.map((id) => new mongoose.Types.ObjectId(String(id)));
   const rows = await SowingRequest.find({
     sowingCompleted: { $ne: true },
-    status: { $nin: ["cancelled", "rejected"] },
-    $or: [{ sowingInProgress: true }, { status: "issued" }],
+    status: { $in: ["pending", "processing", "issued"] },
     linkedOrderIds: { $in: oids },
   })
     .select("linkedOrderIds requestNumber")
@@ -275,6 +266,21 @@ function matchesQuery(row, q, orderMap) {
   });
 }
 
+/** Mortality still on the batch, and how much was last moved into excess. */
+export function stockMortalityOf(raw, bufferPlants) {
+  const moved = Math.max(0, Math.floor(Number(raw?.mortalityMovedToExcess) || 0));
+  const added = Math.max(0, Math.floor(Number(raw?.excessMovedToMortality) || 0));
+  if (raw?.isIrrelevant) {
+    return { mortality: 0, mortalityMovedToExcess: moved, mortalityReserve: 0 };
+  }
+  if (raw?.noMortalityReserve && moved <= 0) {
+    return { mortality: added, mortalityMovedToExcess: 0, mortalityReserve: added };
+  }
+  const buffer = Math.max(0, Math.floor(Number(bufferPlants) || 0));
+  const mortality = Math.max(0, buffer - moved + added);
+  return { mortality, mortalityMovedToExcess: moved, mortalityReserve: mortality };
+}
+
 function stockExcessOf(raw, plant) {
   if (raw?.isIrrelevant) return { excess: 0, bufferPlants: 0, bufferPct: 0 };
   if (raw?.shownExcess != null && raw?.sowingBufferPct != null) {
@@ -300,6 +306,7 @@ function toListRow(raw, plant, subtype, orderMap) {
   const remaining = remainingOf(raw, raw.dispatchedNet);
   const linkedIds = [...linkedOrderIdSet(raw)];
   const excess = stockExcessOf(raw, plant);
+  const mortality = stockMortalityOf(raw, excess.bufferPlants);
   return {
     batchId: String(raw._id),
     slotId: String(raw.slotId),
@@ -322,6 +329,10 @@ function toListRow(raw, plant, subtype, orderMap) {
     covered: n(raw.orderCoveredPlants),
     excess: excess.excess,
     bufferPlants: excess.bufferPlants,
+    mortality: mortality.mortality,
+    mortalityMovedToExcess: mortality.mortalityMovedToExcess,
+    mortalityReserve: mortality.mortalityReserve,
+    noMortalityReserve: Boolean(raw.noMortalityReserve),
     sowingBufferPct: excess.bufferPct,
     reservedApplied: n(raw.orderReservedPlantsApplied),
     availableApplied: n(raw.availablePlantsApplied),
@@ -387,6 +398,8 @@ export async function listSowBatchStock(query = {}) {
       orderCoveredPlants: { $ifNull: ["$subtypeSlots.slots.sowingBatches.orderCoveredPlants", 0] },
       excessPlants: { $ifNull: ["$subtypeSlots.slots.sowingBatches.excessPlants", 0] },
       mortalityMovedToExcess: { $ifNull: ["$subtypeSlots.slots.sowingBatches.mortalityMovedToExcess", 0] },
+      excessMovedToMortality: { $ifNull: ["$subtypeSlots.slots.sowingBatches.excessMovedToMortality", 0] },
+      noMortalityReserve: { $ifNull: ["$subtypeSlots.slots.sowingBatches.noMortalityReserve", false] },
       sowingBufferPct: "$subtypeSlots.slots.sowingBatches.sowingBufferPct",
       bufferPlants: "$subtypeSlots.slots.sowingBatches.bufferPlants",
       shownExcess: "$subtypeSlots.slots.sowingBatches.shownExcess",
@@ -497,6 +510,5 @@ export async function getSowBatchStockDetail(batchId) {
     ...toListRow(raw, plant, subtype, orderMap),
     changes,
     remaining,
-    mortality: found.batch.noMortalityReserve ? 0 : n(found.batch.expectedMortalityApplied),
   };
 }

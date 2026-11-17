@@ -66,7 +66,7 @@ import {
   postSecondaryDestroyRemaining,
   postSecondaryInwardDestroy,
 } from "../controllers/secondaryInwardDestroy.controller.js";
-import { optionalVehicleLoadPhotosUpload } from "../middleware/vehicleLoadPhotos.middleware.js";
+import { optionalVehicleLoadPhotosUpload, vehicleLoadPhotosUpload } from "../middleware/vehicleLoadPhotos.middleware.js";
 import {
   getPrimaryBoard,
   postPrimaryReceive,
@@ -74,6 +74,10 @@ import {
   postPrimarySow,
 } from "../controllers/primaryBatchLedger.controller.js";
 import { requirePrimaryJob } from "../utility/primaryShedNotice.js";
+import {
+  postShootDispatchWhatsApp,
+  postVehicleLoadPhotos,
+} from "../controllers/vehicleLoadShare.controller.js";
 
 const router = express.Router();
 
@@ -121,6 +125,7 @@ router.get("/primary/board", requirePrimaryJob, getPrimaryBoard);
 router.post("/primary/receive", requirePrimaryJob, postPrimaryReceive);
 router.post("/primary/sow", requirePrimaryJob, postPrimarySow);
 router.post("/primary/send", requirePrimaryJob, postPrimarySend);
+
 /** Namespaced aliases (same handlers) — primary vs secondary mobile flows */
 router.post("/primary/lab-to-primary-inward/:batchId", labToPrimaryInward);
 router.post("/primary/primary-inward-fifo-preview", primaryInwardFifoPreviewGlobal);
@@ -199,6 +204,17 @@ router.get(
   "/secondary/vehicle-dispatch/:dispatchId/loaded-lines",
   requireOwnAssignedDispatch,
   getSecondaryVehicleLoadedLines
+);
+router.post(
+  "/secondary/vehicle-dispatch/:dispatchId/load-photos",
+  requireOwnAssignedDispatch,
+  vehicleLoadPhotosUpload.array("photos", 10),
+  postVehicleLoadPhotos
+);
+router.post(
+  "/secondary/vehicle-dispatch/:dispatchId/shoot-dispatch-whatsapp",
+  requireOwnAssignedDispatch,
+  postShootDispatchWhatsApp
 );
 router.post(
   "/secondary/vehicle-dispatch/:dispatchId/unload",

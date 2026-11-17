@@ -77,13 +77,6 @@ export function plantsFromThisEntry(order, entry) {
     )
     .reduce((sum, row) => sum + intQty(row?.plants), 0);
   if (held > 0) return held;
-
-  const anySourceForRequest = sources.some((src) => sameRequest(src, entry));
-  if (!anySourceForRequest && requestId && String(order?.sowingDoneRequestId || "") === requestId) {
-    const others = sources.reduce((sum, src) => sum + intQty(src?.plants), 0);
-    const booked = intQty(order?.numberOfPlants) + intQty(order?.additionalPlants);
-    return Math.max(0, booked - others);
-  }
   return 0;
 }
 
@@ -113,8 +106,7 @@ function byDelivery(a, b) {
 
 /**
  * One cover figure for the table and the order drawer.
- * Sources and partial rows win. A done-flag with no row still counts, but the
- * sum cannot pass expected ready — the last order stays partial.
+ * Sources and partial rows only. A done flag with no plant row is not cover.
  */
 export function coverTakenByOrder(entry, orders) {
   const wanted = new Set((entry?.linkedOrderIds || []).map((id) => String(id)));

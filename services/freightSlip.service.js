@@ -5,7 +5,8 @@ import FreightSlip, { FREIGHT_COMPARE_FIELDS } from "../models/freightSlip.model
 import FreightRateCard from "../models/freightRateCard.model.js";
 import Trip from "../models/trip.model.js";
 import { allocateTripNumber } from "../utility/tripNumber.js";
-import { quoteFreight, dominantCrop, round2 } from "../utility/freightQuote.js";
+import { quoteFreight, dominantCrop, round2, extraKmForOrders, EXTRA_KM_PER_ORDER } from "../utility/freightQuote.js";
+import { ensureDriverPayment } from "./driverPayment.service.js";
 
 /**
  * Roles allowed to finalize a freight slip (travel manager).
@@ -19,6 +20,11 @@ export const FREIGHT_FINALIZE_ROLES = [
   "OFFICE_ADMIN",
 ];
 
+export function userCanManageTrips(user) {
+  if (user?.canManageTrips === true) return true;
+  return [user?.role, user?.jobTitle].filter(Boolean).some((r) => FREIGHT_FINALIZE_ROLES.includes(r));
+}
+
 export const TRIP_STATUS = {
   SLIP_PENDING: "SLIP_PENDING",
   VEHICLE_OUT: "VEHICLE_OUT",
@@ -27,6 +33,42 @@ export const TRIP_STATUS = {
 
 const withSession = (q, session) => (session ? q.session(session) : q);
 
+/** IST day+month+yy unpadded: 1 Jan 2026 → 1126. */
+export function dateSlipBase(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "numeric",
+    year: "2-digit",
+  }).formatToParts(date);
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  return `${get("day")}${get("month")}${get("year")}`;
+}
+
+export function istDayStart(date = new Date()) {
+  const ymd = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+  return new Date(`${ymd}T00:00:00+05:30`);
+}
+
+async function allocateSlipNumber(when, session) {
+  const base = dateSlipBase(when);
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rows = await withSession(
+    FreightSlip.find({ slipNumber: new RegExp(`^${escaped}(-\\d+)?$`) }).select("slipNumber"),
+    session
+  ).lean();
+  const used = new Set(rows.map((r) => r.slipNumber));
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(`${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
+}
+
 const toMoney = (v, field) => {
   if (v === null || v === undefined || String(v).trim() === "") return 0;
   const n = Number(v);
@@ -34,18 +76,17 @@ const toMoney = (v, field) => {
   return round2(n);
 };
 
-/** Named bhatta lines. A lone `bhatta` number (older clients) becomes one unnamed line. */
-function normalizeBhattas(input) {
-  if (Array.isArray(input?.bhattas)) {
-    return input.bhattas
-      .map((b) => ({
-        name: String(b?.name || "").trim(),
-        amount: toMoney(b?.amount ?? b?.cost, "Bhatta cost"),
-      }))
-      .filter((b) => b.name || b.amount > 0);
-  }
-  const amount = toMoney(input?.bhatta, "Driver bhatta");
-  return amount > 0 ? [{ name: "", amount }] : [];
+function isLocalMarket(input) {
+  const v = input?.localMarket;
+  return v === true || v === 1 || v === "1" || String(v || "").toLowerCase() === "true";
+}
+
+function plantsFromLoad(loadSummary = []) {
+  return (loadSummary || []).reduce((s, l) => s + (Number(l.plants) || 0), 0);
+}
+
+function orderCountOf(dispatch) {
+  return Array.isArray(dispatch?.orderIds) ? dispatch.orderIds.length : 0;
 }
 
 const userName = (u) => u?.name || [u?.firstName, u?.lastName].filter(Boolean).join(" ") || u?.phoneNumber || "";
@@ -101,9 +142,12 @@ function normalizeVillages(raw) {
 }
 
 /** Recomputes the rate from the CMS rate card; the client can't set ratePerKm or amounts. */
-export async function computeEntry(input, { loadSummary, user, source, session }) {
+export async function computeEntry(input, { loadSummary, orderCount = 0, user, source, session }) {
+  const localMarket = isLocalMarket(input);
   const km = Number(input?.km);
-  if (!Number.isFinite(km) || km <= 0) throw new AppError("Tentative distance (KM) is required", 400);
+  if (!localMarket && (!Number.isFinite(km) || km <= 0)) {
+    throw new AppError("Tentative distance (KM) is required", 400);
+  }
   const rateCardId = input?.rateCardId;
   if (!rateCardId || !mongoose.isValidObjectId(String(rateCardId))) {
     throw new AppError("Select a vehicle rate card", 400);
@@ -115,30 +159,46 @@ export async function computeEntry(input, { loadSummary, user, source, session }
   const crop = String(input?.crop || "").trim() || dom.crop;
   const crates =
     input?.crates != null && String(input.crates).trim() !== "" ? Number(input.crates) : dom.totalCrates;
+  const plants = plantsFromLoad(loadSummary);
+  const extraKm = extraKmForOrders(orderCount, { localMarket });
+  const runKm = Number.isFinite(km) && km > 0 ? round2(km) : 0;
+  const billedKm = localMarket ? runKm : round2(runKm + extraKm);
 
-  const quote = quoteFreight(card, { loadTypeName: input?.loadType, crop, crates, km });
+  const quote = quoteFreight(card, {
+    loadTypeName: input?.loadType,
+    crop,
+    crates,
+    km: billedKm,
+    localMarket,
+    plants,
+  });
   if (!quote.ok) throw new AppError(quote.message, 400);
 
-  const freightAmount = round2(quote.amount ?? km * quote.ratePerKm);
-  const bhattas = normalizeBhattas(input);
-  const bhatta = round2(bhattas.reduce((s, b) => s + b.amount, 0));
+  const freightAmount = round2(quote.amount ?? (localMarket ? 0 : billedKm * (quote.ratePerKm || 0)));
   const otherAmount = toMoney(input?.otherAmount, "Other amount");
 
   return {
-    km: round2(km),
+    km: runKm,
+    extraKm,
+    extraKmPerOrder: EXTRA_KM_PER_ORDER,
+    orderCount: Math.max(0, Math.round(Number(orderCount) || 0)),
+    billedKm,
+    localMarket,
+    plants,
+    ratePerPlant: Number(quote.ratePerPlant) || 0,
     rateCardId: card._id,
     rateCardName: card.name,
-    loadType: quote.loadTypeName || "",
+    loadType: localMarket ? "Local" : quote.loadTypeName || "",
     crop,
     crates: Number.isFinite(crates) ? crates : 0,
-    ratePerKm: quote.ratePerKm,
+    ratePerKm: quote.ratePerKm || 0,
     rateMode: quote.mode,
     rateNote: quote.message || "",
     freightAmount,
-    bhatta,
-    bhattas,
+    bhatta: 0,
+    bhattas: [],
     otherAmount,
-    totalAmount: round2(freightAmount + bhatta + otherAmount),
+    totalAmount: round2(freightAmount + otherAmount),
     remarks: String(input?.remarks || "").trim(),
     source,
     by: user?._id || null,
@@ -149,6 +209,7 @@ export async function computeEntry(input, { loadSummary, user, source, session }
 
 const cmpValue = (field, v) => {
   if (field === "rateCardId") return v ? String(v) : "";
+  if (field === "localMarket") return v === true || v === "true" || v === 1 || v === "1" ? "1" : "0";
   if (field === "remarks" || field === "loadType" || field === "crop") return String(v || "").trim().toLowerCase();
   if (field === "bhattas") {
     const rows = Array.isArray(v) ? v : [];
@@ -183,7 +244,13 @@ export async function saveTentative({ dispatchId, input, user, source = "WEB", s
   const prefill = buildPrefill(dispatch);
   const loadSummary = existing?.loadSummary?.length ? existing.loadSummary : prefill.loadSummary;
   const villages = normalizeVillages(input?.villages) ?? (existing?.villages?.length ? existing.villages : prefill.villages);
-  const entry = await computeEntry(input, { loadSummary, user, source, session });
+  const entry = await computeEntry(input, {
+    loadSummary,
+    orderCount: orderCountOf(dispatch),
+    user,
+    source,
+    session,
+  });
 
   const snapshot = {
     transportId: dispatch.transportId,
@@ -210,8 +277,19 @@ export async function saveTentative({ dispatchId, input, user, source = "WEB", s
     existing.history.push(historyRow);
     slip = await existing.save({ session });
   } else {
+    const when = dispatch.createdAt ? new Date(dispatch.createdAt) : new Date();
+    const slipNumber = await allocateSlipNumber(when, session);
     [slip] = await FreightSlip.create(
-      [{ ...snapshot, dispatchId: dispatch._id, slipNumber: `FS-${dispatch.transportId}`, status: "TENTATIVE", history: [historyRow] }],
+      [
+        {
+          ...snapshot,
+          dispatchId: dispatch._id,
+          slipNumber,
+          slipDate: istDayStart(when),
+          status: "TENTATIVE",
+          history: [historyRow],
+        },
+      ],
       { session }
     );
     await Dispatch.updateOne({ _id: dispatch._id }, { $set: { freightSlipId: slip._id } }, { session });
@@ -269,15 +347,22 @@ export async function finalizeSlip({ dispatchId, input = {}, user, source = "APP
     loadType: pick("loadType"),
     crop: pick("crop"),
     crates: pick("crates"),
-    bhatta: pick("bhatta"),
-    bhattas: Array.isArray(input.bhattas) ? input.bhattas : t.bhattas,
+    localMarket: input.localMarket !== undefined && input.localMarket !== null ? input.localMarket : t.localMarket,
     otherAmount: input.otherAmount !== undefined && input.otherAmount !== null ? input.otherAmount : t.otherAmount,
     remarks: input.remarks !== undefined && input.remarks !== null ? input.remarks : t.remarks,
   };
   // Confirming with no edits keeps the tentative amounts as-is, even if the rate card changed since.
-  const hasEdits = [...FREIGHT_COMPARE_FIELDS, "villages"].some((k) => input[k] !== undefined && input[k] !== null);
+  const hasEdits = [...FREIGHT_COMPARE_FIELDS, "villages", "localMarket"].some(
+    (k) => input[k] !== undefined && input[k] !== null
+  );
   const final = hasEdits
-    ? await computeEntry(merged, { loadSummary: slip.loadSummary, user, source, session })
+    ? await computeEntry(merged, {
+        loadSummary: slip.loadSummary,
+        orderCount: orderCountOf(dispatch),
+        user,
+        source,
+        session,
+      })
     : {
         ...t,
         _id: undefined,
@@ -309,7 +394,9 @@ export async function finalizeSlip({ dispatchId, input = {}, user, source = "APP
   });
   await slip.save({ session });
   await syncTripFromFinal(dispatch, final, user, session);
-  return slip.toObject();
+  const saved = slip.toObject();
+  await ensureDriverPayment({ dispatchId: dispatch._id, dispatch, slip: saved, user, session });
+  return saved;
 }
 
 export function tripStatusOf(slip) {
@@ -322,7 +409,7 @@ export function slipSummary(slip) {
   if (!slip) return null;
   return {
     _id: slip._id,
-    slipNumber: slip.slipNumber,
+    slipNumber: String(slip.slipNumber || "").replace(/^FS-/i, "") || slip.slipNumber,
     status: slip.status,
     tentativeTotal: slip.tentative?.totalAmount ?? null,
     tentativeKm: slip.tentative?.km ?? null,

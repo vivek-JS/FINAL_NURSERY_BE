@@ -2442,9 +2442,6 @@ export const getSowings = async (req, res) => {
 export const getSowingById = async (req, res) => {
   try {
     const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(404).json({ message: "Sowing record not found" });
-    }
 
     const sowing = await Sowing.findById(id)
       .populate("plantId", "name sowingAllowed")
@@ -2751,7 +2748,7 @@ export const getPendingReminders = async (req, res) => {
                   $expr: {
                     $and: [
                       { $eq: ["$bookingSlot", "$$slotId"] },
-                      { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                      { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                       { $ne: ["$sowingDone", true] },
                       {
                         $or: [
@@ -3222,7 +3219,9 @@ export const getSowingAlerts = async (req, res) => {
           pipeline: [
             {
               $match: {
-                orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+                // Need-sow only (ACCEPTED). PENDING never counts as still to sow.
+                orderStatus: { $in: NEED_SOW_ORDER_STATUSES },
+                sowingDone: { $ne: true },
               },
             },
             {
@@ -3235,6 +3234,8 @@ export const getSowingAlerts = async (req, res) => {
             {
               $project: {
                 numberOfPlants: 1,
+                additionalPlants: 1,
+                quotaSource: 1,
               },
             },
           ],
@@ -3277,7 +3278,13 @@ export const getSowingAlerts = async (req, res) => {
                 }
               },
               initialValue: 0,
-              in: { $add: ["$$value", { $ifNull: ["$$this.numberOfPlants", 0] }] },
+              in: {
+                $add: [
+                  "$$value",
+                  { $ifNull: ["$$this.numberOfPlants", 0] },
+                  { $ifNull: ["$$this.additionalPlants", 0] },
+                ],
+              },
             },
           },
           // Use only dynamic ordersBooked (no fallback to stored value)
@@ -3732,7 +3739,8 @@ export const getSowingAlertsByStart = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $nin: ["$orderStatus", ["CANCELLED", "REJECTED"]] },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
+                    { $ne: ["$sowingDone", true] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -3746,6 +3754,7 @@ export const getSowingAlertsByStart = async (req, res) => {
             {
               $project: {
                 numberOfPlants: 1,
+                additionalPlants: 1,
                 quotaSource: 1,
               },
             },
@@ -3789,7 +3798,13 @@ export const getSowingAlertsByStart = async (req, res) => {
                 }
               },
               initialValue: 0,
-              in: { $add: ["$$value", { $ifNull: ["$$this.numberOfPlants", 0] }] },
+              in: {
+                $add: [
+                  "$$value",
+                  { $ifNull: ["$$this.numberOfPlants", 0] },
+                  { $ifNull: ["$$this.additionalPlants", 0] },
+                ],
+              },
             },
           },
           // Use only dynamic ordersBooked (no fallback to stored value)
@@ -4015,13 +4030,22 @@ export const getTodaySowingSummary = async (req, res) => {
     const ordersSummary = await Order.aggregate([
       {
         $match: {
-          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+          // Need-sow only — PENDING never counts as still to sow.
+          orderStatus: { $in: NEED_SOW_ORDER_STATUSES },
+          sowingDone: { $ne: true },
         },
       },
       {
         $group: {
           _id: "$bookingSlot",
-          totalPlants: { $sum: { $ifNull: ["$numberOfPlants", 0] } },
+          totalPlants: {
+            $sum: {
+              $add: [
+                { $ifNull: ["$numberOfPlants", 0] },
+                { $ifNull: ["$additionalPlants", 0] },
+              ],
+            },
+          },
         },
       },
     ]);
@@ -5240,7 +5264,7 @@ export const getPlantReminders = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     { $ne: ["$sowingDone", true] },
                     {
                       $or: [
@@ -5939,7 +5963,7 @@ export const getPlantAlerts = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     { $ne: ["$sowingDone", true] },
                     {
                       $or: [
@@ -6160,7 +6184,7 @@ export const getPlantAlerts = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     { $ne: ["$sowingDone", true] },
                     {
                       $or: [
@@ -6411,7 +6435,7 @@ export const getPlantAvailability = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -6580,7 +6604,7 @@ export const getPlantAvailability = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -6829,7 +6853,7 @@ export const getAllPlantsAvailability = async (req, res) => {
                 $expr: {
                   $and: [
                     { $eq: ["$bookingSlot", "$$slotId"] },
-                    { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                    { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                     {
                       $or: [
                         { $ne: ["$quotaSource", "dealer"] },
@@ -7677,7 +7701,15 @@ export const getSlotOrdersSummary = async (req, res) => {
       {
         $match: {
           bookingSlot: new mongoose.Types.ObjectId(slotId),
-          orderStatus: { $nin: ["CANCELLED", "REJECTED"] },
+          $and: [
+            {
+              $or: [
+                { orderStatus: { $in: NEED_SOW_ORDER_STATUSES } },
+                { sowingDone: true },
+              ],
+            },
+            { orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] } },
+          ],
           $or: [
             { quotaSource: { $ne: "dealer" } },
             { quotaSource: { $exists: false } }
@@ -8214,7 +8246,7 @@ export const getTodaySowingData = async (req, res) => {
                     $expr: {
                       $and: [
                         { $eq: ["$bookingSlot", "$$slotId"] },
-                        { $not: { $in: ["$orderStatus", ["CANCELLED", "REJECTED"]] } },
+                        { $in: ["$orderStatus", NEED_SOW_ORDER_STATUSES] },
                         {
                           $or: [
                             { $ne: ["$quotaSource", "dealer"] },

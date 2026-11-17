@@ -9,27 +9,31 @@ import RaisingSeedIntake from "../models/raisingSeedIntake.model.js";
 import { resolveSowingPlantsPerPacket } from "../utility/sowingPlantsPerPacket.js";
 import { enrichSeedProductsFromRamAgriLinks } from "../services/sowingSeedProductResolve.service.js";
 import {
+  incompleteLeftoverOrders,
   leftoverBookingSlotIdSet,
   leftoverLiveOrders,
 } from "../services/sowingLeftoverDue.service.js";
+import {
+  NEED_SOW_ORDER_STATUSES,
+  NEED_SOW_ORDER_STATUS_SET,
+} from "../constants/sowingGapOrderStatuses.js";
 import {
   buildOrderRequestLookup,
   lookupOrderRequest,
 } from "../services/sowingRequestOrderFlags.js";
 import {
+  orderAlreadyCovered,
+  orderPlantRemaining,
+  orderPlantTotal,
+  sowingStillNeedsMatch,
+} from "../services/orderSowCover.plan.js";
+import {
   bookingSlotIdsStillNeedingSow,
-  stillNeedsSowMatch,
+  dropOrdersGivenWithoutSowing,
+  gapFromUnsownOrders,
 } from "../services/sowingCardsNeedSow.service.js";
 
-const ACTIVE_ORDER_STATUSES = [
-  "PENDING",
-  "PROCESSING",
-  "ACCEPTED",
-  "FARM_READY",
-  "READY_FOR_DISPATCH",
-  "DISPATCH_PROCESS",
-  "PARTIALLY_COMPLETED",
-];
+const ACTIVE_ORDER_STATUSES = NEED_SOW_ORDER_STATUSES;
 
 const MONTH_INDEX = {
   january: 0,
@@ -119,7 +123,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
     );
     const y = now.getFullYear();
     // Current + next year only (overdue in past years rarely needs new packet requests)
-    const years = [y, y + 1];
+    const years = [y - 1, y, y + 1];
 
     const plants = await PlantCms.find({ sowingAllowed: true })
       .select(
@@ -153,8 +157,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
     const plantIds = plants.map((p) => p._id);
     const plantMap = new Map(plants.map((p) => [String(p._id), p]));
 
-    // Slots come from orders still needing sow (not sown, or partial with
-    // plants left), not from the stored totalBookedPlants counter.
+    // Orders still needing sow (not sown, or partial with plants left) pick the
+    // slots. The stored totalBookedPlants counter is not the gate.
     const [baseProducts, pendingRequests, leftoverSlotIds, needSowSlotIds] =
       await Promise.all([
       Product.find({
@@ -174,7 +178,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         )
         .lean(),
       leftoverBookingSlotIdSet({ plantIds }),
-      bookingSlotIdsStillNeedingSow(plantIds, ACTIVE_ORDER_STATUSES),
+      bookingSlotIdsStillNeedingSow(plantIds),
     ]);
 
     const slotIdByKey = new Map(needSowSlotIds.map((id) => [String(id), id]));
@@ -355,10 +359,8 @@ export const getTodaySowingCardsLite = async (req, res) => {
       if (startMs == null) continue;
       const sowByMs = startMs - readyDays * 86400000;
       let daysUntilSow = Math.floor((sowByMs - todayUtc) / 86400000);
-      const leftoverDue = leftoverSlotIds.has(String(slot.slotId));
-      if (leftoverDue) daysUntilSow = Math.min(daysUntilSow, 0);
-      // Include overdue + today + upcoming through +horizon
-      if (daysUntilSow > horizon && !leftoverDue) continue;
+      // Uncovered plants stay on the card. The booking slot date must not hide them.
+      if (daysUntilSow > horizon) daysUntilSow = 0;
       dueCandidates.push({
         ...slot,
         readyDays,
@@ -377,126 +379,43 @@ export const getTodaySowingCardsLite = async (req, res) => {
       .map((s) => s.slotId)
       .filter(Boolean);
 
-    // Live booked per slot (excludes DISPATCHED/COMPLETED/CANCELLED ghosts on totalBookedPlants).
-    // sownOrderPlants is kept so slot primarySowed already used by sowingDone orders
-    // is not subtracted again from the orders that are still unsown.
-    const plantSum = {
-      $add: [
-        { $ifNull: ["$numberOfPlants", 0] },
-        { $ifNull: ["$additionalPlants", 0] },
-      ],
-    };
+    // Live booked per slot = still-unsown order remainders (matches Not sown).
     const liveBookedBySlot = new Map();
     if (candidateSlotIds.length) {
-      const liveRows = await Order.aggregate([
-        {
-          $match: {
-            bookingSlot: { $in: candidateSlotIds },
-            orderStatus: { $in: ACTIVE_ORDER_STATUSES },
+      const liveOrders = await Order.find({
+        bookingSlot: { $in: candidateSlotIds },
+        orderStatus: { $in: ACTIVE_ORDER_STATUSES },
+        dealerOrder: { $ne: true },
+        productMappingId: null,
+        $and: [
+          sowingStillNeedsMatch(),
+          {
             $or: [
               { quotaSource: { $exists: false } },
               { quotaSource: null },
               { quotaSource: { $ne: "dealer" } },
             ],
           },
-        },
-        {
-          $group: {
-            _id: "$bookingSlot",
-            bookedPlants: {
-              $sum: {
-                $cond: [
-                  { $ne: ["$sowingDone", true] },
-                  plantSum,
-                  {
-                    $let: {
-                      vars: {
-                        total: plantSum,
-                        covered: {
-                          $cond: [
-                            { $gt: [{ $sum: "$sowingCoverSources.plants" }, 0] },
-                            { $sum: "$sowingCoverSources.plants" },
-                            { $sum: "$sowingPartialCover.plants" },
-                          ],
-                        },
-                      },
-                      in: {
-                        $cond: [
-                          {
-                            $and: [
-                              { $gt: ["$$covered", 0] },
-                              { $lt: ["$$covered", "$$total"] },
-                            ],
-                          },
-                          { $subtract: ["$$total", "$$covered"] },
-                          0,
-                        ],
-                      },
-                    },
-                  },
-                ],
-              },
-            },
-            sownOrderPlants: {
-              $sum: {
-                $cond: [{ $eq: ["$sowingDone", true] }, plantSum, 0],
-              },
-            },
-            orderCount: {
-              $sum: {
-                $cond: [
-                  {
-                    $gt: [
-                      {
-                        $cond: [
-                          { $ne: ["$sowingDone", true] },
-                          plantSum,
-                          {
-                            $let: {
-                              vars: {
-                                total: plantSum,
-                                covered: {
-                                  $cond: [
-                                    { $gt: [{ $sum: "$sowingCoverSources.plants" }, 0] },
-                                    { $sum: "$sowingCoverSources.plants" },
-                                    { $sum: "$sowingPartialCover.plants" },
-                                  ],
-                                },
-                              },
-                              in: {
-                                $cond: [
-                                  {
-                                    $and: [
-                                      { $gt: ["$$covered", 0] },
-                                      { $lt: ["$$covered", "$$total"] },
-                                    ],
-                                  },
-                                  { $subtract: ["$$total", "$$covered"] },
-                                  0,
-                                ],
-                              },
-                            },
-                          },
-                        ],
-                      },
-                      0,
-                    ],
-                  },
-                  1,
-                  0,
-                ],
-              },
-            },
-          },
-        },
-      ]);
-      liveRows.forEach((r) => {
-        liveBookedBySlot.set(String(r._id), {
-          booked: Number(r.bookedPlants) || 0,
-          sownOrderPlants: Number(r.sownOrderPlants) || 0,
-          orderCount: Number(r.orderCount) || 0,
-        });
-      });
+        ],
+      })
+        .select(
+          "bookingSlot numberOfPlants additionalPlants sowingDone sowingCoverSources sowingPartialCover isSplit parentOrderId instantDispatch orderType statusChanges"
+        )
+        .lean();
+      const sowOrders = await dropOrdersGivenWithoutSowing(Order, liveOrders);
+      for (const order of sowOrders) {
+        const slotKey = String(order.bookingSlot || "");
+        if (!slotKey) continue;
+        const remaining = orderPlantRemaining(order);
+        if (remaining <= 0) continue;
+        const entry = liveBookedBySlot.get(slotKey) || {
+          booked: 0,
+          orderCount: 0,
+        };
+        entry.booked += remaining;
+        entry.orderCount += 1;
+        liveBookedBySlot.set(slotKey, entry);
+      }
     }
 
     const cardMap = new Map();
@@ -504,23 +423,21 @@ export const getTodaySowingCardsLite = async (req, res) => {
     for (const slot of dueCandidates) {
       const live = liveBookedBySlot.get(String(slot.slotId)) || {
         booked: 0,
-        sownOrderPlants: 0,
         orderCount: 0,
       };
+      // Card gap is the unsown order. Slot sow and excess stock do not reduce it.
       const booked = live.booked;
       if (booked <= 0) continue; // drop stale stored-booked ghost slots
 
       const sowed =
         (Number(slot.primarySowed) || 0) + (Number(slot.officeSowed) || 0);
-      const excessSowed = Math.max(0, sowed - (Number(live.sownOrderPlants) || 0));
-      const rawGap = Math.max(0, booked - excessSowed);
+      const rawGap = gapFromUnsownOrders(booked);
       const bufferPct = slot.bufferPct || 0;
       // Match full sowing.controller: buffer on remaining gap, not on total booked
       const plantsToSowWithBuffer =
         rawGap > 0 && bufferPct > 0
           ? Math.round(rawGap * (1 + bufferPct / 100))
           : rawGap;
-      if (plantsToSowWithBuffer <= 0) continue;
 
       const key = `${slot.plantId}-${slot.subtypeId}`;
       if (!cardMap.has(key)) {
@@ -539,6 +456,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
           totalGap: 0,
           totalPlantsToSowWithBuffer: 0,
           totalPlantsToSowRaw: 0,
+          totalOrderRemaining: 0,
           totalBookedPlants: 0,
           dueGap: 0,
           todayGap: 0,
@@ -557,6 +475,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         month: slot.month,
         year: slot.year,
         bookedPlants: booked,
+        orderRemaining: booked,
         sowedPlants: sowed,
         rawGap,
         plantsToSowWithBuffer,
@@ -571,6 +490,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
       card.totalGap += plantsToSowWithBuffer;
       card.totalPlantsToSowWithBuffer += plantsToSowWithBuffer;
       card.totalPlantsToSowRaw += rawGap;
+      card.totalOrderRemaining += booked;
       card.totalBookedPlants += booked;
       if (dus < 0) card.dueGap += plantsToSowWithBuffer;
       else if (dus === 0) card.todayGap += plantsToSowWithBuffer;
@@ -599,7 +519,9 @@ export const getTodaySowingCardsLite = async (req, res) => {
           $match: {
             bookingSlot: { $in: allSlotIds },
             orderStatus: { $in: ACTIVE_ORDER_STATUSES },
-            sowingDone: { $ne: true },
+            dealerOrder: { $ne: true },
+            productMappingId: null,
+            ...sowingStillNeedsMatch(),
           },
         },
         {
@@ -704,9 +626,31 @@ export const getTodaySowingCardsLite = async (req, res) => {
       ]);
     }
 
+    // Orders already claimed by a pending/processing/issued unfinished request
+    // must not appear as "Not sown" on request cards.
+    const claimedByActiveRequest = new Set();
+    pendingRequests.forEach((r) => {
+      for (const id of r.linkedOrderIds || []) claimedByActiveRequest.add(String(id));
+    });
+
     const orderMap = new Map();
     orderAgg.forEach((row) => {
-      orderMap.set(`${row._id.plantId}-${row._id.subtypeId}`, row);
+      const nums = [];
+      const ids = [];
+      const orderNumbers = row.orderNumbers || [];
+      const eligibleIds = row.eligibleOrderIds || [];
+      for (let i = 0; i < orderNumbers.length; i++) {
+        const oid = eligibleIds[i];
+        if (oid && claimedByActiveRequest.has(String(oid))) continue;
+        nums.push(orderNumbers[i]);
+        if (oid) ids.push(oid);
+      }
+      orderMap.set(`${row._id.plantId}-${row._id.subtypeId}`, {
+        ...row,
+        orderNumbers: nums,
+        eligibleOrderIds: ids,
+        orderCount: nums.length,
+      });
     });
 
     const eligibleOrderIds = orderAgg.flatMap(
@@ -743,7 +687,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
 
     const subtypeCards = Array.from(cardMap.values()).map((card) => {
       const key = `${card.plantId}-${card.subtypeId}`;
-      const plants = card.totalPlantsToSowWithBuffer;
+      const plants = Number(card.totalPlantsToSowWithBuffer) || 0;
       const productList = productsByKey.get(key) || [];
       const pendingList = requestMap.get(key) || [];
       const pendingByProduct = new Map(
@@ -873,6 +817,7 @@ export const getTodaySowingCardsLite = async (req, res) => {
         totalGap: card.totalGap,
         totalPlantsToSowWithBuffer: plants,
         totalPlantsToSowRaw: Number(card.totalPlantsToSowRaw) || 0,
+        totalOrderRemaining: Number(card.totalOrderRemaining) || 0,
         totalBookedPlants: card.totalBookedPlants,
         dueGap: Number(card.dueGap) || 0,
         todayGap: Number(card.todayGap) || 0,
@@ -935,9 +880,11 @@ export const getTodaySowingCardsLite = async (req, res) => {
         progressKeys.add(key);
       }
 
-      // Request list: still something to request, or unsown orders left beside an in-progress sow.
-      const stillUnsown = (Number(c.totalPlantsToSowRaw) || 0) > 0;
-      if (hasOpenPacking || (c.sowingInProgress && stillUnsown)) {
+      // Request list: open order remainders (same truth as Not sown), or packets still to buy.
+      const stillUnsown =
+        (Number(c.totalOrderRemaining) || 0) > 0 ||
+        (Number(c.totalPlantsToSowRaw) || 0) > 0;
+      if (stillUnsown || hasOpenPacking) {
         requestCards.push({ ...c, cardKind: "request" });
       } else if (c.requestPending && !c.sowingInProgress) {
         requestCards.push({ ...c, cardKind: "pending" });
@@ -1085,8 +1032,15 @@ export const getOrderWiseSowing = async (req, res) => {
         .filter((s) => mongoose.Types.ObjectId.isValid(s))
         .map((s) => new mongoose.Types.ObjectId(s));
     }
-    const leftoverOrders = await leftoverLiveOrders({ plantId, subtypeId });
-    const leftoverOidSet = new Set(leftoverOrders.map((o) => String(o._id)));
+    const [leftoverOrders, incompleteOrders] = await Promise.all([
+      leftoverLiveOrders({ plantId, subtypeId }),
+      incompleteLeftoverOrders({ plantId, subtypeId }),
+    ]);
+    const leftoverOidSet = new Set([
+      ...leftoverOrders.map((o) => String(o._id)),
+      ...incompleteOrders.map((o) => String(o._id)),
+    ]);
+    // Yesterday: slots of status-matched leftovers stay in the drawer.
     if (slotIdList.length && leftoverOrders.length) {
       const extra = leftoverOrders
         .map((o) => o.bookingSlot)
@@ -1118,21 +1072,22 @@ export const getOrderWiseSowing = async (req, res) => {
     if (orderIdList.length) {
       query._id = { $in: orderIdList };
     } else {
+      query.dealerOrder = { $ne: true };
+      query.productMappingId = null;
+      query.instantDispatch = { $ne: true };
+      // Accepted only. Slot is not the gate — sow-by horizon keeps future orders out.
       query.orderStatus = { $in: ACTIVE_ORDER_STATUSES };
-      Object.assign(query, stillNeedsSowMatch());
-      if (slotIdList.length) {
-        query.bookingSlot = { $in: slotIdList };
-      }
+      query.$and = [sowingStillNeedsMatch()];
     }
 
     const [orders, products, raisings, activeOrderReqs, plantDoc] = await Promise.all([
       Order.find(query)
         .select(
-          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderBookingDate orderStatus sowingDone sowingDoneAt sowingPartialCover deliveryDate"
+          "orderId name farmer bookingSlot numberOfPlants additionalPlants sowingPlan createdAt orderBookingDate orderStatus sowingDone sowingDoneAt sowingPartialCover sowingCoverSources leftoverFromIncomplete deliveryDate isSplit parentOrderId instantDispatch orderType statusChanges"
         )
         .populate("farmer", "name mobileNumber")
         .sort({ deliveryDate: 1, createdAt: 1 })
-        .limit(orderIdList.length ? Math.min(200, orderIdList.length) : 80)
+        .limit(orderIdList.length ? Math.min(500, orderIdList.length) : slotIdList.length ? 500 : 200)
         .lean(),
       Product.find({
         plantId,
@@ -1166,6 +1121,8 @@ export const getOrderWiseSowing = async (req, res) => {
         .lean(),
     ]);
 
+    const sowOrders = await dropOrdersGivenWithoutSowing(Order, orders);
+
     const subtypeReadyDays =
       Number(
         plantDoc?.subtypes?.find((st) => String(st._id) === String(subtypeId))
@@ -1175,7 +1132,7 @@ export const getOrderWiseSowing = async (req, res) => {
     // Slot startDay + plantReadyDays for sow-by calculation
     const bookingSlotIds = [
       ...new Set(
-        orders
+        sowOrders
           .map((o) => o.bookingSlot)
           .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
           .map((id) => String(id))
@@ -1237,14 +1194,10 @@ export const getOrderWiseSowing = async (req, res) => {
     };
     });
 
-    const rows = orders.map((o) => {
-      const booked =
-        (Number(o.numberOfPlants) || 0) + (Number(o.additionalPlants) || 0);
-      const held = (Array.isArray(o.sowingPartialCover) ? o.sowingPartialCover : []).reduce(
-        (s, r) => s + (Number(r.plants) || 0),
-        0
-      );
-      const plants = Math.max(0, booked - held);
+    const rows = sowOrders.map((o) => {
+      const booked = orderPlantTotal(o);
+      const held = orderAlreadyCovered(o);
+      const plants = orderPlantRemaining(o);
       const sp = o.sowingPlan || {};
       const seedSource = sp.seedSource || "COMPANY";
       const intakes = raisingMap.get(String(o._id)) || [];
@@ -1344,14 +1297,22 @@ export const getOrderWiseSowing = async (req, res) => {
         coveredPlants: held,
         bookedPlants: booked,
         leftoverPlants: plants,
-        leftoverFromIncomplete: leftoverOidSet.has(String(o._id)),
-        partiallyCovered: held > 0 && !o.sowingDone,
-        statusLabel: o.sowingDone
-          ? "Sowed"
-          : leftoverOidSet.has(String(o._id)) || held > 0
-            ? "Partial sow"
-            : "Need sow",
-        sowingDone: Boolean(o.sowingDone),
+        leftoverFromIncomplete:
+          Boolean(o.leftoverFromIncomplete) || leftoverOidSet.has(String(o._id)),
+        partiallyCovered: plants > 0 && held > 0,
+        statusLabel:
+          booked > 0 && plants < 1 && held >= booked
+            ? "Sowed"
+            : plants > 0 && held > 0
+              ? "Partial sow"
+              : o.orderStatus === "DISPATCHED"
+                ? "Dispatched"
+                : o.orderStatus === "COMPLETED"
+                  ? "Completed"
+                  : NEED_SOW_ORDER_STATUS_SET.has(o.orderStatus)
+                    ? "Need sow"
+                    : o.orderStatus || "Need sow",
+        sowingDone: booked > 0 && plants < 1 && held >= booked,
         sowingDoneAt: o.sowingDoneAt || null,
         createdAt: o.createdAt,
         orderStatus: o.orderStatus,
@@ -1374,13 +1335,14 @@ export const getOrderWiseSowing = async (req, res) => {
       orderIdList.length > 0
         ? rows
         : rows.filter((r) => {
-            if (leftoverOidSet.has(String(r.orderId))) return true;
-            if (r.daysUntilSow == null) return slotIdList.length > 0;
-            return Number(r.daysUntilSow) <= horizon;
+            if (!(Number(r.leftoverPlants) > 0)) return false;
+            if (r.orderStatus !== "ACCEPTED") return false;
+            // Not covered yet. Slot date does not decide whether it is listed.
+            return true;
           });
 
     const openOrders = horizonFiltered.filter(
-      (r) => !r.alreadyRequested && (Number(r.numberOfPlants) || 0) > 0
+      (r) => (Number(r.leftoverPlants) || Number(r.numberOfPlants) || 0) > 0
     );
 
     return res.json({

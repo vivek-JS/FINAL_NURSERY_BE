@@ -2831,11 +2831,10 @@ const populateSlotsWithOrders = async (slots, bufferContext = {}) => {
         slot.shedSyncedPlants = shed.shedSyncedPlants ?? 0;
         slot.shedAvailableInShed = shed.shedAvailableInShed ?? 0;
         slot.shedRollupReadyPlants = shed.actualReadyPlants ?? 0;
-        slot.actualReadyPlants =
-          Math.max(
-            Number(slot.actualReadyPlants) || 0,
-            shed.actualReadyPlants ?? 0
-          );
+        // Stored actualReadyPlants is source of truth after dispatch subtract.
+        // Do not Math.max with shed rollup — that hid ready deductions when
+        // slotStockSyncedPlants was not lowered on load.
+        slot.actualReadyPlants = Math.max(0, Number(slot.actualReadyPlants) || 0);
         slot.shedReadyInShed = shed.shedReadyInShed ?? 0;
         slot.expectedMortality = Number(slot.expectedMortality) || 0;
         slot.lagwadRemaining = Number(slot.lagwadRemaining) || 0;

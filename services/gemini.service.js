@@ -96,6 +96,82 @@ export async function generateJson(
   return JSON.parse(text);
 }
 
+const SUPPLIER_INVOICE_PROMPT = `You are reading a supplier invoice or delivery bill for an Indian nursery store.
+The bill may be printed or handwritten. Text may be English, Hindi, Marathi, or mixed. Digits may be Western or Devanagari.
+
+Extract:
+invoiceNumber: the vendor bill or invoice number, as printed. Empty string if not visible.
+invoiceDate: the bill date as YYYY-MM-DD. Empty string if not visible.
+supplierName: the seller or shop name. Empty string if not visible.
+lines: every product row you can see. For each row:
+- name: the item name as written, keep the script you see
+- quantity: number of units, Western digits only
+- unit: the unit if written, such as kg, g, ltr, ml, bag, pkt, box, nos. Empty string if not written
+- rate: price for one unit, Western digits only, no currency symbol. 0 if not visible
+- amount: line total if written, Western digits only. 0 if not visible
+
+Rules:
+Return only JSON matching the schema.
+Do not invent rows that are not on the bill.
+Skip totals, tax, freight, and round-off rows.
+If handwriting is messy, still return the best reading of each row that has a name.
+Convert Devanagari digits to 0-9 in numbers and in the invoice number.`;
+
+const SUPPLIER_INVOICE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    invoiceNumber: { type: Type.STRING },
+    invoiceDate: { type: Type.STRING },
+    supplierName: { type: Type.STRING },
+    lines: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          quantity: { type: Type.NUMBER },
+          unit: { type: Type.STRING },
+          rate: { type: Type.NUMBER },
+          amount: { type: Type.NUMBER },
+        },
+      },
+    },
+  },
+};
+
+/**
+ * Reads a printed or handwritten supplier bill into invoice number and line items.
+ * @param {Buffer} buffer
+ * @param {string} mimeType
+ */
+export async function extractSupplierInvoice(buffer, mimeType) {
+  const ai = getGenAiClient();
+  const imagePart = {
+    inlineData: {
+      mimeType: mimeType && mimeType.startsWith("image/") ? mimeType : "image/jpeg",
+      data: buffer.toString("base64"),
+    },
+  };
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [imagePart, SUPPLIER_INVOICE_PROMPT],
+    config: {
+      responseMimeType: "application/json",
+      responseJsonSchema: SUPPLIER_INVOICE_SCHEMA,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+  const text = response.text;
+  if (!text || typeof text !== "string") {
+    throw new Error("Could not read this bill. Try a clearer photo.");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Could not read this bill. Try a clearer photo.");
+  }
+}
+
 export { Type as GeminiType };
 
 /**

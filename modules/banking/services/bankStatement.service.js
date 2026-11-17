@@ -1,6 +1,7 @@
 import BankStatementEntry, { NOT_STATEMENT_VERIFIED } from "../../../models/bankStatementEntry.model.js";
 import { getBankingLogger } from "../utils/logger.js";
 import { safeInsertBankTransactions } from "./duplicateDetection.service.js";
+import { statementLookupKeys } from "./statementClaim.service.js";
 import { parseStatementCsv } from "../utils/statementCsv.js";
 import { normalizeAmount, normalizeUtr } from "../../../services/iciciBankService.js";
 
@@ -100,11 +101,7 @@ export async function listStatementEntries({
 export async function matchPendingToStatement(items) {
   const rows = Array.isArray(items) ? items : [];
   const refs = [
-    ...new Set(
-      rows
-        .map((p) => normalizeUtr(p.utrNumber || p.transactionId || p.chequeNumber || p.ref))
-        .filter((r) => r && r.length >= 4)
-    ),
+    ...new Set(rows.flatMap((p) => statementLookupKeys(p)).filter((r) => r && r.length >= 4)),
   ];
 
   if (!refs.length) {
@@ -112,18 +109,24 @@ export async function matchPendingToStatement(items) {
   }
 
   const lines = await BankStatementEntry.find({
-    ...NOT_STATEMENT_VERIFIED,
-    $or: [{ utr: { $in: refs } }, { referenceNumber: { $in: refs } }],
+    $or: [
+      { utr: { $in: refs } },
+      { referenceNumber: { $in: refs } },
+      { transactionId: { $in: refs } },
+      { chequeNumber: { $in: refs } },
+    ],
   })
-    .select("utr referenceNumber amount txnDate")
+    .select("utr referenceNumber transactionId chequeNumber amount txnDate matchedPaymentId reconciliationStatus")
     .lean()
     .exec();
 
   return rows.map((p) => {
-    const ref = normalizeUtr(p.utrNumber || p.transactionId || p.chequeNumber || p.ref);
-    if (!ref) return { ...p, statementMatch: "NOT_FOUND" };
-    const hits = lines.filter(
-      (l) => normalizeUtr(l.utr) === ref || normalizeUtr(l.referenceNumber) === ref
+    const keys = new Set(statementLookupKeys(p).map((key) => normalizeUtr(key)).filter(Boolean));
+    if (!keys.size) return { ...p, statementMatch: "NOT_FOUND" };
+    const hits = lines.filter((line) =>
+      [line.utr, line.referenceNumber, line.transactionId, line.chequeNumber].some((value) =>
+        keys.has(normalizeUtr(value))
+      )
     );
     if (!hits.length) return { ...p, statementMatch: "NOT_FOUND" };
     const exact = hits.find(
@@ -135,6 +138,8 @@ export async function matchPendingToStatement(items) {
         statementMatch: "EXACT",
         statementAmount: exact.amount,
         statementTxnDate: exact.txnDate,
+        statementLineId: String(exact._id),
+        statementMatchedPaymentId: exact.matchedPaymentId || "",
       };
     }
     return {

@@ -46,7 +46,7 @@ export function displayOrderQty(batch, plantQtyByOrderId = null) {
   return coverQtyForExcess(covered, live, allocated);
 }
 
-/** Numbers for a sowing entry: CMS percent of sowed is mortality, then subtract the orders. */
+/** Numbers for a sowing entry: Excess = sowed − CMS mortality − orders (+ mortality moved). */
 export function displaySowingFigures({
   plantsSowed = 0,
   orderCoveredPlants = 0,
@@ -54,27 +54,38 @@ export function displaySowingFigures({
   bufferPlants = null,
   sowingBufferPct = 0,
   mortalityMovedToExcess = 0,
+  excessMovedToMortality = 0,
   excessAllocated = 0,
   plantsMarkedSellable = 0,
   isIrrelevant = false,
+  noMortalityReserve = false,
 } = {}) {
   if (isIrrelevant) return { bufferPlants: 0, mortality: 0, excess: 0 };
   const sowed = Math.max(0, Math.floor(Number(plantsSowed) || 0));
+  const covered = intQty(orderCoveredPlants);
+  const live = (linkedOrders || []).reduce((sum, order) => sum + intQty(order?.plants), 0);
+  const orders = coverQtyForExcess(covered, live, excessAllocated);
+  const moved = intQty(mortalityMovedToExcess);
+  const fromExcess = intQty(excessMovedToMortality);
+  const marked = intQty(plantsMarkedSellable);
+  if (noMortalityReserve) {
+    return {
+      bufferPlants: 0,
+      mortality: fromExcess,
+      excess: Math.max(0, sowed - orders - fromExcess + marked),
+    };
+  }
   const pctRaw = Number(sowingBufferPct);
   const pct = Number.isFinite(pctRaw) && pctRaw > 0 ? pctRaw : 0;
   const buffer =
     bufferPlants == null
       ? Math.round((sowed * pct) / 100)
       : Math.max(0, Math.round(Number(bufferPlants) || 0));
-  const covered = intQty(orderCoveredPlants);
-  const live = (linkedOrders || []).reduce((sum, order) => sum + intQty(order?.plants), 0);
-  const orders = coverQtyForExcess(covered, live, excessAllocated);
-  const moved = intQty(mortalityMovedToExcess);
-  const marked = intQty(plantsMarkedSellable);
   return {
     bufferPlants: buffer,
-    mortality: Math.max(0, buffer - moved),
-    excess: Math.max(0, sowed - orders) + moved + marked,
+    mortality: Math.max(0, buffer - moved + fromExcess),
+    // moved inside max so unlock already used in cover does not stay bookable
+    excess: Math.max(0, sowed - buffer - orders + moved - fromExcess + marked),
   };
 }
 
@@ -95,9 +106,11 @@ export function paintSowingEntryNumbers(slot, {
     bufferPlants: batch?.bufferPlants,
     sowingBufferPct: batch?.sowingBufferPct ?? bufferPct,
     mortalityMovedToExcess: batch?.mortalityMovedToExcess,
+    excessMovedToMortality: batch?.excessMovedToMortality,
     excessAllocated: excessAllocatedPlants(batch),
     plantsMarkedSellable: batch?.plantsMarkedSellable,
     isIrrelevant: batch?.isIrrelevant,
+    noMortalityReserve: Boolean(batch?.noMortalityReserve),
   });
   // Same number as dispatch "Free" — do not use entry-split linkedOrders for leftover.
   const bookable = showBookableExcess
@@ -107,7 +120,10 @@ export function paintSowingEntryNumbers(slot, {
           orderCoveredPlants: figures.excess > 0 ? Math.max(0, sowed - figures.excess) : 0,
           sowingBufferPct: bufferPct,
           mortalityMovedToExcess: batch?.mortalityMovedToExcess,
+          excessMovedToMortality: batch?.excessMovedToMortality,
+          plantsMarkedSellable: batch?.plantsMarkedSellable,
           isIrrelevant: batch?.isIrrelevant,
+          noMortalityReserve: Boolean(batch?.noMortalityReserve),
         },
         batch?.sowingBufferPct ?? bufferPct
       )
@@ -123,23 +139,42 @@ export function paintSowingEntryNumbers(slot, {
   return figures;
 }
 
-/** Leftover = sowed − orders (+ mortality moved). Buffer is not subtracted again. */
+/** Leftover = sowed − CMS mortality − orders (+ mortality moved). */
 export function excessFieldsForBatch(batch, sowingBufferPct = 0, plantQtyByOrderId = null) {
-  const pct = pctOf(sowingBufferPct);
+  const pct = pctOf(sowingBufferPct) || pctOf(batch?.sowingBufferPct);
   if (!batch || batch.isIrrelevant) {
     return { sowingBufferPct: pct, bufferPlants: 0, shownExcess: 0 };
   }
+  const sowed = intQty(batch.plantsSowed);
+  const orders = displayOrderQty(batch, plantQtyByOrderId);
+  const moved = Math.max(0, Math.floor(Number(batch.mortalityMovedToExcess) || 0));
+  const fromExcess = Math.max(0, Math.floor(Number(batch.excessMovedToMortality) || 0));
+  const marked = Math.max(0, Math.floor(Number(batch.plantsMarkedSellable) || 0));
+  // Ready plants: nothing is held as CMS mortality. Released mortality is already
+  // inside sowed, so it must not be added again.
+  if (batch.noMortalityReserve) {
+    return {
+      sowingBufferPct: 0,
+      bufferPlants: 0,
+      shownExcess: Math.max(0, sowed - orders - fromExcess + marked),
+    };
+  }
   const parts = reportedExcessBreakdown({
-    plantsSowed: batch.plantsSowed,
-    orderCoveredPlants: displayOrderQty(batch, plantQtyByOrderId),
+    plantsSowed: sowed,
+    orderCoveredPlants: orders,
     sowingBufferPct: pct,
   });
-  const moved = Math.max(0, Math.floor(Number(batch.mortalityMovedToExcess) || 0));
-  const marked = Math.max(0, Math.floor(Number(batch.plantsMarkedSellable) || 0));
+  // Full CMS buffer from pct when known. Stamped value only if pct is missing (legacy rows).
+  const stampedBuf =
+    batch.bufferPlants != null && Number.isFinite(Number(batch.bufferPlants))
+      ? Math.max(0, Math.round(Number(batch.bufferPlants)))
+      : null;
+  const bufferPlants = pct > 0 ? parts.bufferPlants : stampedBuf != null ? stampedBuf : parts.bufferPlants;
   return {
     sowingBufferPct: pct,
-    bufferPlants: parts.bufferPlants,
-    shownExcess: parts.excess + moved + marked,
+    bufferPlants,
+    // moved inside max so unlock already used in cover does not stay bookable
+    shownExcess: Math.max(0, sowed - bufferPlants - orders + moved - fromExcess + marked),
   };
 }
 
@@ -149,7 +184,7 @@ export function applyExcessFields(batch, sowingBufferPct = 0, plantQtyByOrderId 
   return batch;
 }
 
-/** Leftover after orders. Buffer is mortality only — not subtracted again. */
+/** Bookable leftover after mortality and orders. */
 export function storedShownExcess(batch, sowingBufferPct = 0) {
   if (!batch || batch.isIrrelevant) return 0;
   return excessFieldsForBatch(batch, batch?.sowingBufferPct ?? sowingBufferPct).shownExcess;

@@ -1,33 +1,11 @@
 import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import { NEED_SOW_ORDER_STATUSES } from "../constants/sowingGapOrderStatuses.js";
+import { sowingStillShortExpr } from "./orderSowCover.plan.js";
 
-/** Sowing not done, or marked done while a partial hold still leaves plants. */
+/** Plants still uncovered. Covers from different requests add; the same request counts once. */
 export function stillNeedsSowMatch() {
-  const plantSum = {
-    $add: [
-      { $ifNull: ["$numberOfPlants", 0] },
-      { $ifNull: ["$additionalPlants", 0] },
-    ],
-  };
-  const covered = {
-    $cond: [
-      { $gt: [{ $sum: "$sowingCoverSources.plants" }, 0] },
-      { $sum: "$sowingCoverSources.plants" },
-      { $sum: "$sowingPartialCover.plants" },
-    ],
-  };
-  return {
-    $or: [
-      { sowingDone: { $ne: true } },
-      {
-        sowingDone: true,
-        $expr: {
-          $and: [{ $gt: [covered, 0] }, { $lt: [covered, plantSum] }],
-        },
-      },
-    ],
-  };
+  return { $expr: sowingStillShortExpr() };
 }
 
 /**
@@ -70,4 +48,54 @@ export async function bookingSlotIdsStillNeedingSow(plantIds, statuses) {
     out.push(new mongoose.Types.ObjectId(key));
   }
   return out;
+}
+
+/**
+ * Plants still to request on a sowing card.
+ * This is the unsown order remainder only. Slot primarySowed and excess stock are not cover.
+ */
+export function gapFromUnsownOrders(orderRemainder) {
+  return Math.max(0, Math.floor(Number(orderRemainder) || 0));
+}
+
+/** Instant sale: plants are handed over now, so this order does not need a sowing. */
+export function isInstantHandOrder(order) {
+  if (order?.instantDispatch === true) return true;
+  const type = String(order?.orderType || "").trim().toLowerCase();
+  if (type === "instant order" || type === "instant") return true;
+  return (Array.isArray(order?.statusChanges) ? order.statusChanges : []).some((row) =>
+    /instant order/i.test(String(row?.reason || ""))
+  );
+}
+
+/**
+ * Drop instant handovers and splits taken off an order that is already sown.
+ * Those plants are given from the existing sow. They must not show as need-sow.
+ */
+export async function dropOrdersGivenWithoutSowing(OrderModel, orders) {
+  const list = Array.isArray(orders) ? orders : [];
+  const parentIds = [
+    ...new Set(
+      list
+        .filter(
+          (order) =>
+            order?.isSplit &&
+            order?.parentOrderId &&
+            mongoose.Types.ObjectId.isValid(String(order.parentOrderId))
+        )
+        .map((order) => String(order.parentOrderId))
+    ),
+  ].map((id) => new mongoose.Types.ObjectId(id));
+  let sownParents = new Set();
+  if (parentIds.length && OrderModel?.find) {
+    const parents = await OrderModel.find({ _id: { $in: parentIds }, sowingDone: true })
+      .select("_id")
+      .lean();
+    sownParents = new Set(parents.map((parent) => String(parent._id)));
+  }
+  return list.filter((order) => {
+    if (isInstantHandOrder(order)) return false;
+    if (order?.isSplit && sownParents.has(String(order.parentOrderId || ""))) return false;
+    return true;
+  });
 }

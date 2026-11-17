@@ -1,6 +1,7 @@
 /**
  * Actual stock from a physical count (docs/BANANA_ACTUAL_DISPATCH.md):
- *   current = stock on the count day + lagwad after that day − actual dispatch after that day
+ *   current = stock on the count day + sellable lagwad after that day − actual dispatch after that day
+ * Sellable lagwad is 90% of each new inward. The 10% mortality is not stock.
  * Actual dispatch = DISPATCHED / COMPLETED orders, each once, only plants that left after the count day.
  */
 export const ACTUAL_DISPATCH_STATUSES = ["DISPATCHED", "COMPLETED"];
@@ -51,11 +52,18 @@ export function currentStock({ opening, lagwadAfter, dispatchAfter }) {
   return n(opening) + n(lagwadAfter) - n(dispatchAfter);
 }
 
+/** Next calendar day for a YYYY-MM-DD key. UTC math so the day does not shift. */
+function nextDay(ymd) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
 /**
  * Day ledger from the count day: opening row, then one row per day with lagwad in / dispatch out
  * and the running balance. `lagwad` = [{ day, qty }], `dispatch` = [{ day, qty, orderId, status }].
+ * `through` (YYYY-MM-DD) keeps quiet days, including today, so the list does not stop on the last movement.
  */
-export function buildStockLedger({ asOn, opening, lagwad, dispatch }) {
+export function buildStockLedger({ asOn, opening, lagwad, dispatch, through }) {
   const days = new Map();
   const at = (day) => {
     if (!days.has(day)) days.set(day, { day, lagwad: 0, dispatch: 0, lagwadCount: 0, orders: [] });
@@ -75,7 +83,20 @@ export function buildStockLedger({ asOn, opening, lagwad, dispatch }) {
   }
   let balance = n(opening);
   const rows = [{ day: asOn, opening: true, lagwad: 0, dispatch: 0, lagwadCount: 0, orders: [], balance }];
-  for (const row of [...days.values()].sort((a, b) => a.day.localeCompare(b.day))) {
+  const sorted = [...days.values()].sort((a, b) => a.day.localeCompare(b.day));
+  const lastMove = sorted.at(-1)?.day || asOn;
+  const end = through && through > lastMove ? through : lastMove;
+  const byDay = new Map(sorted.map((row) => [row.day, row]));
+  if (!through) {
+    for (const row of sorted) {
+      balance += row.lagwad - row.dispatch;
+      row.orders.sort((a, b) => b.qty - a.qty);
+      rows.push({ ...row, opening: false, balance });
+    }
+    return rows;
+  }
+  for (let day = nextDay(asOn); day <= end; day = nextDay(day)) {
+    const row = byDay.get(day) || { day, lagwad: 0, dispatch: 0, lagwadCount: 0, orders: [] };
     balance += row.lagwad - row.dispatch;
     row.orders.sort((a, b) => b.qty - a.qty);
     rows.push({ ...row, opening: false, balance });

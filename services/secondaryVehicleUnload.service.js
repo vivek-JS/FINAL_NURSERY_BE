@@ -46,20 +46,48 @@ export async function collectLoadedOutwardLinesForDispatch(dispatchId, linkedOrd
     ? String(linkedOrderId)
     : null;
 
-  const pos = await PlantOutward.find({
-    "secondaryOutward.linkedDispatchId": oid,
-  })
-    .populate({ path: "batchId", select: "batchNumber" })
-    .select("batchId secondaryInward secondaryOutward")
-    .lean();
+  const pos = await PlantOutward.aggregate([
+    { $match: { "secondaryOutward.linkedDispatchId": oid } },
+    {
+      $project: {
+        batchId: 1,
+        secondaryOutward: {
+          $filter: {
+            input: "$secondaryOutward",
+            as: "so",
+            cond: { $eq: ["$$so.linkedDispatchId", oid] },
+          },
+        },
+        secondaryInward: {
+          $map: {
+            input: { $ifNull: ["$secondaryInward", []] },
+            as: "si",
+            in: {
+              _id: "$$si._id",
+              secondaryInwardDate: "$$si.secondaryInwardDate",
+              linkedBookingSlotId: "$$si.linkedBookingSlotId",
+            },
+          },
+        },
+      },
+    },
+  ]);
+  const batchIds = [
+    ...new Set(pos.map((p) => String(p.batchId || "")).filter((id) => mongoose.isValidObjectId(id))),
+  ];
+  const batchDocs = batchIds.length
+    ? await DispatchBatch.find({ _id: { $in: batchIds } }).select("batchNumber").lean()
+    : [];
+  const batchNumberOf = new Map(
+    batchDocs.map((b) => [String(b._id), b.batchNumber != null ? String(b.batchNumber) : ""])
+  );
 
   const lines = [];
   let totalPlants = 0;
 
   for (const po of pos) {
-    const batchId = po.batchId?._id ?? po.batchId;
-    const batchNumber =
-      po.batchId?.batchNumber != null ? String(po.batchId.batchNumber) : "";
+    const batchId = po.batchId;
+    const batchNumber = batchNumberOf.get(String(batchId)) || "";
     const inwardById = new Map(
       (po.secondaryInward || []).map((si) => [String(si._id), si])
     );
@@ -92,6 +120,8 @@ export async function collectLoadedOutwardLinesForDispatch(dispatchId, linkedOrd
         plants,
         size: so.size,
         cavity: so.cavity,
+        numberOfTrays: so.numberOfTrays,
+        plantRowIndex: so.linkedDispatchPlantRowIndex,
         pollyhouse: so.pollyhouse,
         secondaryInwardDate: srcInward?.secondaryInwardDate ?? null,
         linkedBookingSlotId: srcInward?.linkedBookingSlotId

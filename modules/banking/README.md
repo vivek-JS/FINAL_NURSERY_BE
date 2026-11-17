@@ -135,10 +135,9 @@ the payment without step 3. Payouts are not posted to the ledger yet.
 
 #### Payee register (beneficiaries)
 
-The CIB payment API is ad hoc ("without any bene registration"), and the spec
-has no beneficiary registration or validation API, so ICICI keeps no payee list
-for us. The register (`icici_beneficiaries`, **Payouts → Payees**) does it in the
-ERP with the same two-person rule:
+The register (`icici_beneficiaries`, **Payouts → Payees**) keeps payees in the
+ERP with the same two-person rule, and on approval registers each payee at
+ICICI with the **Beneficiary Registration API** (`POST /BeneAddition`):
 
 - A maker adds a payee: ICICI Bank (IFSC starts `ICIC`, paid ICICI to ICICI) or
   another bank (NEFT/RTGS/IMPS). Name, account and IFSC are checked as ICICI
@@ -149,18 +148,83 @@ ERP with the same two-person rule:
   the request. Disabling a payee blocks approval of its pending payouts.
 - `ICICI_PAYOUT_REQUIRE_BENEFICIARY=true` turns off one-time payees.
 
-| UAT "Beneficiary APIs" row | Covered by |
-|----------------------------|------------|
-| Beneficiary Registration – ICICI | Add payee, ICICI Bank (ERP register) |
-| Beneficiary Registration – Non ICICI | Add payee, another bank (ERP register) |
-| Beneficiary Validation – Success | Format checks + approval → `ACTIVE` |
-| Duplicate / Invalid Beneficiary | `DUPLICATE_BENEFICIARY` (409) / `VALIDATION` (400) |
+#### ICICI Beneficiary Registration (`iciciBeneRegistration.service.js`)
 
-If ICICI enables registered-beneficiary payments, they must supply that API's
-spec; until then mark these UAT rows "No — ad hoc payments" for the bank.
+Packet (every field mandatory; a missing one is answered `8017 Invalid request`):
 
-`GET /beneficiaries?status=&search=`, `POST /beneficiaries`, and
-`POST /beneficiaries/:id/approve | reject | disable`.
+| Field | Value |
+|-------|-------|
+| `CrpId`, `CrpUsr`, `AGGR_ID`, `URN` | `ICICI_CORPORATE_ID`, `ICICI_CORPORATE_USER_ID`, `ICICI_AGGREGATOR_ID`, `ICICI_URN` |
+| `BnfName` | Payee name |
+| `BnfNickName` | Letters/digits of the nickname (or name) + last 4 of the account, max 20 |
+| `BnfAccNo`, `IFSC` | Payee account and IFSC |
+| `PayeeType` | `W` = ICICI Bank, `O` = other bank |
+
+ICICI answers every case with `STATUS: FAILURE`; the ERP reads the message and code:
+
+| ICICI reply (UAT) | `bank.state` on the payee |
+|-------------------|---------------------------|
+| "Fund transfer to the newly added payee will not be allowed immediately…" (ERRORCODE = ICICI's id for the payee) | `REGISTERED`, `coolingPeriod: true`, `beneId` = that code |
+| `995609` "Counterparty already exists with bene ID n" | `ALREADY_EXISTS`, `beneId` = n |
+| `101436` Incorrect IFSC (also wrong IFSC for an ICICI FT payee) | `INVALID_IFSC` |
+| `106803` Invalid login credentials (bad CORPID / USERID) | `INVALID_LOGIN` |
+| `9906` Invalid Corp ID / User ID / Aggregator ID (bad AGGRID / URN) | `NOT_REGISTERED` |
+| `8017` Invalid request | `BAD_REQUEST` |
+| Timeout / network | `UNREACHABLE` |
+
+- Approving a payee (single or bulk, 600 ms apart) calls `/BeneAddition`
+  right after the ERP approval. A bank refusal never undoes the approval; the
+  answer is stored in `bank` and in the history (`BANK_REGISTERED` /
+  `BANK_REGISTRATION_FAILED`).
+- `POST /beneficiaries/:id/register-bank` (approver) retries; a payee already
+  `REGISTERED` / `ALREADY_EXISTS` is not sent again.
+- Off with `ICICI_BENE_REGISTER_ON_APPROVE=false` (ERP-only register).
+  Path: `ICICI_BENE_ADDITION_PATH` (default `/BeneAddition`).
+- UAT test accounts: `000451000301–303 & ICIC0000011`, `010506009999 & CITI0000003`,
+  `020506009999 & UTIB0000400`, `030506009999 & HSBC0400002`.
+
+#### ICICI Beneficiary Validation (`iciciBeneValidation.service.js`)
+
+Packet (identity is **not** merged on top — extras come back `8017`):
+
+| Field | Value |
+|-------|-------|
+| `CORPID`, `USERID`, `AGGRID`, `URN` | Same as other CIB_SV calls |
+| `BENEACCNO` | Payee account (mandatory; the sign-off "Invalid Beneficiary Account No." row) |
+| `IFSC` | Sent when we have it |
+
+| ICICI reply | `bank.validationState` |
+|-------------|------------------------|
+| SUCCESS / "Beneficiary Validated" | `VALIDATED` |
+| `9906` invalid AGGRID / URN | `NOT_REGISTERED` |
+| `106803` invalid CORPID / USERID | `INVALID_LOGIN` |
+| Invalid beneficiary account | `INVALID_ACCOUNT` (create is refused) |
+| `8017` Invalid request | `BAD_REQUEST` |
+
+- Adding a payee calls `/BeneValidation` first (`ICICI_BENE_VALIDATE_ON_CREATE`, default on).
+- `POST /beneficiaries/:id/validate` and `POST /icici/bene-validate` `{ accountNumber, ifsc? }` re-check on demand.
+- Path: `ICICI_BENE_VALIDATION_PATH` (default `/BeneValidation`).
+
+| UAT "Beneficiary Registration" row | Sandbox result |
+|-------------------------------------|----------------|
+| SUCCESS – Beneficiary Registered | CITI and ICICI payees added (bene IDs returned) |
+| FAILURE – 1 Invalid AGGRID | `9906` |
+| FAILURE – 2 / 3 Invalid CORPID / USERID | `106803` |
+| FAILURE – 4 Invalid URN | `9906` |
+| FAILURE – 5 Invalid IFSC | `101436` |
+| FAILURE – 6 Incorrect IFSC for FT | `101436` |
+| Duplicate account | `995609` |
+
+| UAT "Beneficiary Validation" row | Covered by |
+|----------------------------------|------------|
+| SUCCESS – Beneficiary Validated | `/BeneValidation` SUCCESS (stub + ERP); live packet confirmed with ICICI if 8017) |
+| FAILURE – Invalid AGGRID | `9906` |
+| FAILURE – Invalid CORPID / USERID | `106803` |
+| FAILURE – Invalid Beneficiary Account No. | `INVALID_ACCOUNT` (create refused) |
+
+`GET /beneficiaries?status=&search=`, `POST /beneficiaries`,
+`POST /beneficiaries/:id/approve | reject | disable | register-bank | validate`,
+and `POST /icici/bene-validate`.
 
 API (all need accountant or super admin): `GET /payouts/config`,
 `GET /payouts/summary`, `GET /payouts?view=approval|bank|done|all&search=`,
@@ -279,6 +343,12 @@ ICICI_PUBLIC_CERT_PATH=config/certs/public.crt
 ICICI_BANK_PUBLIC_CERT_PATH=config/certs/icici_public.crt
 ICICI_BANKING_CRON_ENABLED=false
 ICICI_TXN_PATH=/Transaction                       # payouts
+ICICI_DEREGISTRATION_PATH=/Deregistration         # confirm the exact path with ICICI
+ICICI_NEFT_STATUS_PATH=/NEFTIncrementalStatus     # confirm the exact path with ICICI
+ICICI_NEFT_TRACK_DAYS=3                           # follow paid NEFTs this many days (poller)
+ICICI_BENE_REGISTER_ON_APPROVE=true               # register approved payees at ICICI (/BeneAddition)
+ICICI_BENE_VALIDATE_ON_CREATE=true                # validate the account at ICICI (/BeneValidation) when added
+ICICI_BENE_VALIDATION_PATH=/BeneValidation
 ICICI_PAYOUT_CHECKER_ROLES=SUPER_ADMIN,SUPERADMIN  # who may approve payouts in the ERP
 ICICI_PAYOUT_POLL_ENABLED=false                   # poll ICICI for payout status
 ICICI_PAYOUT_POLL_CRON=*/15 * * * *
@@ -356,6 +426,18 @@ curl http://localhost:8000/api/banking/icici/balance -H "Authorization: Bearer $
 # Transaction status
 curl "http://localhost:8000/api/banking/icici/status?utr=123456789012&amount=1500" \
   -H "Authorization: Bearer $TOKEN"
+
+# Registration Status Inquiry (Registered / Rejected / Pending for Self Approval / Deregistered)
+curl http://localhost:8000/api/banking/icici/registration/status -H "Authorization: Bearer $TOKEN"
+
+# CIB De-registration (super admin; stops every CIB call until registered again)
+curl -X POST http://localhost:8000/api/banking/icici/deregister \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"confirm":"DEREGISTER"}'
+
+# NEFT Incremental Status by UTR (Posted to RBI → Paid → Credited / Refunded / Reversed)
+curl "http://localhost:8000/api/banking/icici/neft-status?utr=057262551" -H "Authorization: Bearer $TOKEN"
+curl -X POST http://localhost:8000/api/banking/payouts/$ID/neft-status -H "Authorization: Bearer $TOKEN"
 
 # Crypto health (no secrets)
 curl http://localhost:8000/api/banking/crypto/health -H "Authorization: Bearer $TOKEN"

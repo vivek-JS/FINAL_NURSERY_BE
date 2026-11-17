@@ -440,12 +440,38 @@ export async function addPaymentsToOrder(orderId, rawPayments, reqUser, options 
         .catch((e) => console.error("[Banking] queue bank check:", e?.message || e));
     }
 
+    let bankStatement = null;
+    try {
+      const { checkNewPaymentsAgainstStatement } = await import(
+        "../modules/banking/services/paymentStatementMatch.service.js"
+      );
+      bankStatement = await checkNewPaymentsAgainstStatement(
+        savedPayments.map((payment) => ({
+          source: "order",
+          orderMongoId: String(order._id),
+          paymentId: String(payment._id),
+          utrNumber: payment.utrNumber,
+          transactionId: payment.transactionId,
+          chequeNumber: payment.chequeNumber,
+          modeOfPayment: payment.modeOfPayment,
+          isWalletPayment: payment.isWalletPayment,
+          isDiscount: payment.isDiscount,
+          paidAmount: payment.paidAmount,
+          paymentDate: payment.paymentDate,
+        })),
+        { userId: reqUser?._id }
+      );
+    } catch (err) {
+      console.error("[Banking] statement match after payment:", err?.message || err);
+    }
+
     return {
       order,
       savedPayments,
       walletTransactions,
       hasCollected,
       walletDebited: walletDebitTotal,
+      bankStatement,
     };
   } catch (err) {
     await session.abortTransaction();

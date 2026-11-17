@@ -564,9 +564,16 @@ export const cancelSowingRequest = async (req, res) => {
       });
     }
 
+    const { restoreRequestRaisingPackets } = await import('./raisingSeed.controller.js');
+
     if (!request.outwardId) {
-      // No stock was issued yet, just mark as cancelled
+      // Issued without a warehouse outward still drew farmer packets at create.
+      const raisingRestore = await restoreRequestRaisingPackets(request);
       request.status = 'cancelled';
+      request.sowingInProgress = false;
+      request.raisingPacketsReturned =
+        (Number(request.raisingPacketsReturned) || 0) +
+        (Number(raisingRestore?.restored) || 0);
       request.cancelledBy = req.user._id;
       request.cancelledDate = new Date();
       request.cancellationReason = reason || 'Request cancelled before stock issuance';
@@ -719,9 +726,13 @@ export const cancelSowingRequest = async (req, res) => {
     outward.notes = `${outward.notes || ''}\n[CANCELLED] ${reason || 'Sowing request cancelled'}`.trim();
     await outward.save();
 
-    // Step 5: Mark request as cancelled
+    // Step 5: Return farmer (raising) packets, then mark request as cancelled
+    const raisingRestore = await restoreRequestRaisingPackets(request);
     request.status = 'cancelled';
     request.sowingInProgress = false;
+    request.raisingPacketsReturned =
+      (Number(request.raisingPacketsReturned) || 0) +
+      (Number(raisingRestore?.restored) || 0);
     request.cancelledBy = req.user._id;
     request.cancelledDate = new Date();
     request.cancellationReason = reason || 'Sowing request cancelled';
@@ -752,6 +763,7 @@ export const cancelSowingRequest = async (req, res) => {
         batches: revertedBatches,
         slots: revertedSlots,
         totalPacketsReturned: revertedBatches.reduce((sum, b) => sum + b.quantityReturned, 0),
+        raisingPacketsReturned: raisingRestore.restored,
         totalSlotsUpdated: revertedSlots.length,
       },
     });

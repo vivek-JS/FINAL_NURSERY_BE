@@ -77,7 +77,8 @@ export const MIS_DELIVERY_METRICS = {
     label: "Partial",
     status: "PARTIALLY_COMPLETED",
     dateField: "deliveryDate",
-    description: "Current PARTIALLY_COMPLETED with delivery date in range.",
+    description:
+      "Current PARTIALLY_COMPLETED with delivery date in range. Plants are remainingPlants, not the original booking.",
   },
   dispatched: {
     kind: "status_transition",
@@ -122,7 +123,8 @@ export const MIS_DELIVERY_METRICS = {
       "partiallyCompleted",
       "other",
     ],
-    description: "Frontend sum of pre-dispatch buckets (excludes Out and Completed).",
+    description:
+      "Sum of pre-dispatch buckets (excludes Out and Completed). Partial contributes remaining plants only.",
   },
 };
 

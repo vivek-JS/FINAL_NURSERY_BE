@@ -94,7 +94,7 @@ test("buildDispatchDayLines: vehicle and pickup lines with order, batch and shed
   const order = { _id: id(), orderId: 9, farmer: { name: "Ramesh", village: "Wai" } };
   const batch = { _id: id(), batchNumber: "B-77", plantCmsId: id(), plantSubtypeId: id() };
   const outwards = [
-    { soId: "1", dispatchId: vehicle._id, batchId: batch._id, plants: 200, shed: "Shed 12", at: new Date(2) },
+    { soId: "1", dispatchId: vehicle._id, batchId: batch._id, plants: 200, shed: "Shed 12", cavity: 104, at: new Date(2) },
     { soId: "2", dispatchId: pickup._id, orderId: order._id, batchId: batch._id, plants: 50, shed: "Shed 14", at: new Date(1) },
   ];
   const lines = buildDispatchDayLines({
@@ -110,6 +110,8 @@ test("buildDispatchDayLines: vehicle and pickup lines with order, batch and shed
   assert.equal(lines[0].orderCode, "9");
   assert.equal(lines[0].vehicle, "");
   assert.equal(lines[1].vehicle, "Tata · MH12");
+  assert.equal(lines[1].vehicleNumber, "MH12");
+  assert.equal(lines[1].cavity, 104);
   assert.equal(lines[1].batch, "B-77");
   assert.equal(lines[1].shed, "Shed 12");
   assert.equal(lines[1].crop, "Banana");

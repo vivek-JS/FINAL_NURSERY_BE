@@ -220,7 +220,7 @@ router.post("/linked-agri/resend", async (req, res) => {
   });
 });
 
-/** Manual trigger: slot low/high/overbooked scan (SUPER_ADMIN). */
+/** Manual trigger: date-wise FIFO booking capacity digest (SUPER_ADMIN). */
 router.post("/engine/slot-scan", async (req, res) => {
   try {
     const result = await runScheduledAlertEngine();
@@ -255,6 +255,106 @@ router.post("/engine/big-order/:orderId", async (req, res) => {
   try {
     const result = await evaluateOrderAlertsOnCreate(orderId);
     return res.status(200).json({ status: "Success", result });
+  } catch (err) {
+    return res.status(500).json({
+      status: "Fail",
+      message: err?.message || String(err),
+    });
+  }
+});
+
+/** Manual trigger: Day-end full-day English ops summary (9 PM schedule). */
+router.post("/engine/day-end-ops-report", async (req, res) => {
+  try {
+    const { sendDayEndOpsWhatsappAlert, buildDayEndOpsWhatsappSnapshot } =
+      await import("../services/intradayOpsWhatsapp.service.js");
+    const { formatIntradayOpsEnglishMessages } =
+      await import("../utility/intradayOpsEnglishFormat.js");
+    const date = req.body?.date || req.query?.date;
+
+    if (req.query?.preview === "1" || req.body?.preview === true) {
+      const snapshot = await buildDayEndOpsWhatsappSnapshot(date);
+      const messages = formatIntradayOpsEnglishMessages(snapshot);
+      return res.status(200).json({
+        status: "Success",
+        preview: true,
+        dateKey: snapshot.dateKey,
+        from: snapshot.from,
+        to: snapshot.to,
+        messages,
+        snapshot,
+      });
+    }
+
+    const result = await sendDayEndOpsWhatsappAlert(date);
+    if (result.skipped) {
+      return res.status(200).json({
+        status: "Success",
+        skipped: true,
+        message: `Skipped: ${result.reason || "unknown"}`,
+        result,
+      });
+    }
+    const ok = result.sent || (result.delivered || 0) > 0;
+    return res.status(ok ? 200 : 502).json({
+      status: ok ? "Success" : "Fail",
+      message: ok
+        ? `Day-end ops WhatsApp sent (${result.delivered} delivery hits, ${result.chunks} chunk(s)).`
+        : `Not delivered. Reason: ${result.reason || "unknown"}`,
+      result,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      status: "Fail",
+      message: err?.message || String(err),
+    });
+  }
+});
+
+/** Manual trigger: Intraday 2.5h English ops report — booking, dispatch shed/batch, salesperson, payments. */
+router.post("/engine/intraday-ops-report", async (req, res) => {
+  try {
+    const { sendIntradayOpsWhatsappAlert, buildIntradayOpsWhatsappSnapshot } =
+      await import("../services/intradayOpsWhatsapp.service.js");
+    const { formatIntradayOpsEnglishMessages } =
+      await import("../utility/intradayOpsEnglishFormat.js");
+
+    if (req.query?.preview === "1" || req.body?.preview === true) {
+      const snapshot = await buildIntradayOpsWhatsappSnapshot({
+        from: req.body?.from,
+        to: req.body?.to,
+      });
+      const messages = formatIntradayOpsEnglishMessages(snapshot);
+      return res.status(200).json({
+        status: "Success",
+        preview: true,
+        from: snapshot.from,
+        to: snapshot.to,
+        messages,
+        snapshot,
+      });
+    }
+
+    const result = await sendIntradayOpsWhatsappAlert({
+      from: req.body?.from,
+      to: req.body?.to,
+    });
+    if (result.skipped) {
+      return res.status(200).json({
+        status: "Success",
+        skipped: true,
+        message: `Skipped: ${result.reason || "unknown"}`,
+        result,
+      });
+    }
+    const ok = result.sent || (result.delivered || 0) > 0;
+    return res.status(ok ? 200 : 502).json({
+      status: ok ? "Success" : "Fail",
+      message: ok
+        ? `Intraday ops WhatsApp sent (${result.delivered} delivery hits, ${result.chunks} chunk(s)).`
+        : `Not delivered. Reason: ${result.reason || "unknown"}`,
+      result,
+    });
   } catch (err) {
     return res.status(500).json({
       status: "Fail",

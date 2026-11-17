@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planMortalityToExcess } from "../services/sowBatchMortalityRelease.service.js";
+import { planExcessToMortality, planMortalityToExcess } from "../services/sowBatchMortalityRelease.service.js";
 
 test("moves stored mortality into available plants", () => {
   const plan = planMortalityToExcess({
@@ -57,6 +57,36 @@ test("a mongoose batch still has mortality to move", () => {
   assert.equal(plan.error, undefined);
   assert.equal(plan.mort, 368);
   assert.equal(plan.expectedMortality, 12032);
+});
+
+test("excess moves into mortality up to the excess on screen", () => {
+  const batch = {
+    plantsSowed: 1000,
+    orderCoveredPlants: 152,
+    sowingBufferPct: 12,
+    bufferPlants: 120,
+    mortalityMovedToExcess: 0,
+  };
+  const plan = planExcessToMortality({ batch, plants: 100 });
+  assert.equal(plan.qty, 100);
+  assert.equal(plan.undo, 0);
+  assert.equal(plan.added, 100);
+  assert.match(planExcessToMortality({ batch, plants: 900 }).error, /728/);
+  assert.equal(planExcessToMortality({ batch, plants: 0 }).error, "Enter how many plants to move");
+});
+
+test("excess to mortality undoes a previous mortality release first", () => {
+  const plan = planExcessToMortality({
+    batch: {
+      plantsSowed: 1000,
+      orderCoveredPlants: 152,
+      sowingBufferPct: 12,
+      mortalityMovedToExcess: 40,
+    },
+    plants: 100,
+  });
+  assert.equal(plan.undo, 40);
+  assert.equal(plan.added, 60);
 });
 
 test("irrelevant and already-released batches are refused", () => {

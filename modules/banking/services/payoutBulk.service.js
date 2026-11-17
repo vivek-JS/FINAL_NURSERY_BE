@@ -328,7 +328,9 @@ export async function bulkRejectPayouts(ids, user, { reason } = {}) {
 
 export async function bulkApproveBeneficiaries(ids, user, { note } = {}) {
   const list = checkIds(ids, BULK_DECIDE_MAX);
-  return eachItem(list, (id) => approveBeneficiary(id, user, { note }));
+  const cfg = getIciciCorporateConfig();
+  const gapMs = cfg.useStub || !cfg.payout.registerBeneOnApprove ? 0 : BANK_GAP_MS;
+  return eachItem(list, (id) => approveBeneficiary(id, user, { note }), { gapMs });
 }
 
 export async function bulkRejectBeneficiaries(ids, user, { reason } = {}) {

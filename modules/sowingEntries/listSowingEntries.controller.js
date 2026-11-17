@@ -72,10 +72,11 @@ function daySort(field) {
 
 /** Same mortality, ready, cover, and excess the table shows from the stored entry. */
 export function sowingEntrySortFigures() {
+  const netSowed = { $max: [0, { $subtract: [num("$plantsSowed"), num("$destroyedPlants")] }] };
   const buffer = {
     $cond: [
       { $gt: [num("$sowingBufferPct"), 0] },
-      { $round: [{ $multiply: [num("$plantsSowed"), { $divide: [num("$sowingBufferPct"), 100] }] }, 0] },
+      { $round: [{ $multiply: [netSowed, { $divide: [num("$sowingBufferPct"), 100] }] }, 0] },
       num("$bufferPlants"),
     ],
   };
@@ -86,7 +87,7 @@ export function sowingEntrySortFigures() {
       { $max: [0, { $subtract: [buffer, num("$mortalityMovedToExcess")] }] },
     ],
   };
-  const expectedReady = { $max: [0, { $subtract: [num("$plantsSowed"), mortality] }] };
+  const expectedReady = { $max: [0, { $subtract: [netSowed, mortality] }] };
   const remainingSort = { $max: [0, { $subtract: [expectedReady, num("$dispatchedPlants")] }] };
   const coverSort = { $min: [num("$orderCoveredPlants"), expectedReady] };
   const excessSort = {
@@ -94,7 +95,12 @@ export function sowingEntrySortFigures() {
       0,
       {
         $subtract: [
-          { $add: [{ $subtract: [num("$plantsSowed"), buffer] }, num("$mortalityMovedToExcess"), num("$plantsMarkedSellable")] },
+          {
+          $add: [
+            { $subtract: [netSowed, buffer] },
+            { $add: [num("$mortalityMovedToExcess"), num("$plantsMarkedSellable")] },
+          ],
+        },
           { $add: [coverSort, num("$excessMovedToMortality")] },
         ],
       },

@@ -63,6 +63,35 @@ test("sowBatchStock: noMortalityReserve keeps the full sowed count sellable", ()
   assert.deepEqual(slotSowStock(slot), { actualPlants: 28980, expectedMortality: 0, free: 14980 });
 });
 
+test("batch mortalityPct replaces the 10% default reserve", () => {
+  const batch = { plantsSowed: 10000, orderCoveredPlants: 0, mortalityPct: 40 };
+  assert.equal(sowBatchStock(batch).reserve, 4000);
+  assert.equal(sowBatchStock(batch).free, 6000);
+  const other = { plantsSowed: 10000, orderCoveredPlants: 0, mortalityPct: 15 };
+  assert.equal(sowBatchStock(other).reserve, 1500);
+  assert.equal(sowBatchStock(other).free, 8500);
+});
+
+test("irrelevant batch adds no free and does not inflate the slot next to a normal batch", () => {
+  const irrelevant = { plantsSowed: 10000, orderCoveredPlants: 8000, isIrrelevant: true };
+  assert.equal(sowBatchStock(irrelevant).sowed, 10000);
+  assert.equal(sowBatchStock(irrelevant).covered, 8000);
+  assert.equal(sowBatchStock(irrelevant).free, 0);
+  const slot = {
+    primarySowed: 20000,
+    sowingBatches: [
+      { plantsSowed: 10000, orderCoveredPlants: 0 },
+      { plantsSowed: 10000, orderCoveredPlants: 0, isIrrelevant: true },
+    ],
+  };
+  assert.equal(slotSowStock(slot).free, 9000);
+  const metrics = applySowingAllowedSlotMetrics({
+    ...slot,
+    bookedUncoveredPlants: 0,
+  });
+  assert.equal(metrics.excessAvailableForBooking, 10000);
+});
+
 test("slotSowStock / applySowingAllowedSlotMetrics use the batch reserves", () => {
   const slot = {
     primarySowed: 24000,

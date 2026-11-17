@@ -76,7 +76,7 @@ export function toSowingEntryListItem(doc, orderPlants = null) {
     plantReadyDate: ready,
     out: doc?.out || "",
     dispatchedPlants: Math.max(0, Math.floor(Number(doc?.dispatchedPlants) || 0)),
-    remainingPlants: Math.floor(Number(doc?.remainingPlants) || 0),
+    remainingPlants: Math.max(0, Math.floor(Number(doc?.remainingPlants) || 0)),
     destroyedPlants: destroyed,
     plantsTransferredOut: Math.max(0, Math.floor(Number(doc?.plantsTransferredOut) || 0)),
     plantsTransferredIn: Math.max(0, Math.floor(Number(doc?.plantsTransferredIn) || 0)),

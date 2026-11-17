@@ -16,6 +16,7 @@ import {
   parseGroupDays,
 } from "../utility/capacityBoardMetrics.js";
 import { IST_OFFSET } from "../utility/istSlotDate.js";
+import { plantsSowedOnOtherSlot } from "../utility/sowingGapSummaryMetrics.js";
 
 const today = moment("2026-10-16", "YYYY-MM-DD").utcOffset(IST_OFFSET, true).startOf("day");
 
@@ -54,6 +55,55 @@ test("slot cell: ready = sowed against orders + free excess, net = ready - booke
   assert.equal(cell.ready - cell.booked, cell.net);
 });
 
+test("plants sowed on another slot are the delivery orders not linked here", () => {
+  const slot = {
+    slotId: "slot-16",
+    sowingBatches: [{ linkedOrderIds: ["order-local"] }],
+  };
+  const orders = [
+    {
+      _id: "order-other",
+      numberOfPlants: 24000,
+      sowingDone: true,
+      sowingCoverSources: [{ slotId: "slot-13", plants: 24000 }],
+    },
+    {
+      _id: "order-other-2",
+      numberOfPlants: 9000,
+      sowingDone: true,
+      sowingCoverSources: [{ slotId: "slot-15", plants: 9000 }],
+    },
+    {
+      _id: "order-local",
+      numberOfPlants: 5000,
+      sowingDone: true,
+    },
+  ];
+  assert.equal(plantsSowedOnOtherSlot(orders, slot), 33000);
+});
+
+test("ready does not count orders sowed on another slot", () => {
+  const cell = boardSlotCell({
+    slotId: "a",
+    booked: 33000,
+    gap: 0,
+    excess: 0,
+    sowedElsewhere: 33000,
+  });
+  assert.equal(cell.ready, 0);
+  assert.equal(cell.booked, 33000);
+  assert.equal(cell.net, 0);
+  const mixed = boardSlotCell({
+    slotId: "a",
+    booked: 33000,
+    gap: 0,
+    excess: 500,
+    sowedElsewhere: 9000,
+  });
+  assert.equal(mixed.ready, 24500);
+  assert.equal(mixed.net, 500);
+});
+
 test("overdue cell only counts orders still waiting to dispatch", () => {
   const cell = overdueSlotCell({ slotId: "p", pendingDispatch: 5100, gap: 1000, excess: 300 });
   assert.equal(cell.booked, 5100);
@@ -72,7 +122,7 @@ test("board row folds overdue into current and keeps next slots in order", () =>
   const row = buildBoardRow({ slots, today });
   assert.equal(row.slotDays, 7);
   assert.equal(row.current.slotId, "s1");
-  assert.deepEqual(row.current.slotIds, ["s1", "s0"]);
+  assert.deepEqual(row.current.slotIds, ["s1"]);
   assert.equal(row.current.overdue.booked, 600);
   assert.equal(row.current.overdue.ready, 200);
   assert.equal(row.current.booked, 1600);
@@ -81,6 +131,27 @@ test("board row folds overdue into current and keeps next slots in order", () =>
   assert.deepEqual(row.upcoming.map((c) => c.slotId), ["s2", "s3"]);
   assert.equal(row.upcoming[0].net, 1500);
   assert.equal(row.totals.ready, 1100 + 2000 + 150);
+});
+
+test("past free excess is date-wise (pastCells), not dumped into Now", () => {
+  const slots = [
+    { slotId: "old", startDay: "10-10-2026", endDay: "10-10-2026", booked: 0, gap: 0, excess: 5000, pendingDispatch: 0 },
+    { slotId: "older", startDay: "05-10-2026", endDay: "05-10-2026", booked: 100, gap: 0, excess: 2000, pendingDispatch: 0 },
+    daySlot("16", 800),
+    daySlot("20", 300),
+  ];
+  const row = buildBoardRow({ slots, today });
+  assert.equal(row.now.net, 800);
+  assert.deepEqual(row.now.slotIds, ["d16"]);
+  assert.equal(row.current.overdue.unsold, 7000);
+  assert.deepEqual(
+    row.pastCells.map((c) => [c.key, c.net, c.slotIds.join()]),
+    [
+      ["2026-10-05", 2000, "older"],
+      ["2026-10-10", 5000, "old"],
+    ]
+  );
+  assert.equal(row.totals.net, 800 + 7000 + 300);
 });
 
 const daySlot = (day, excess, booked = 0) => ({
@@ -106,7 +177,7 @@ test("day-wise cells skip empty days and stay inside the table window", () => {
   assert.equal(row.totals.ready, 600);
 });
 
-test("3-day groups count from today; the first group folds into now", () => {
+test("3-day groups start tomorrow; now stays today plus overdue only", () => {
   const slots = [
     { slotId: "old", startDay: "14-10-2026", endDay: "14-10-2026", booked: 300, gap: 300, excess: 0, pendingDispatch: 300 },
     daySlot("16", 100),
@@ -118,17 +189,18 @@ test("3-day groups count from today; the first group folds into now", () => {
   ];
   const row = buildBoardRow({ slots, today, groupDays: 3 });
   assert.equal(row.now.startDay, "16-10-2026");
-  assert.equal(row.now.endDay, "18-10-2026");
-  assert.equal(row.now.ready, 100 + 200);
+  assert.equal(row.now.endDay, "16-10-2026");
+  assert.equal(row.now.ready, 100);
   assert.equal(row.now.booked, 300);
   assert.equal(row.now.overdue.booked, 300);
-  assert.deepEqual(row.now.slotIds, ["d16", "old", "d17"]);
+  assert.deepEqual(row.now.slotIds, ["d16"]);
   assert.equal(row.current.ready, 100);
   assert.deepEqual(
     row.cells.map((c) => [c.key, c.startDay, c.endDay, c.ready, c.slotIds.join()]),
     [
-      ["2026-10-19", "19-10-2026", "21-10-2026", 450, "d20,d21"],
-      ["2026-10-25", "25-10-2026", "27-10-2026", 70, "d25"],
+      ["2026-10-17", "17-10-2026", "19-10-2026", 200, "d17"],
+      ["2026-10-20", "20-10-2026", "22-10-2026", 450, "d20,d21"],
+      ["2026-10-23", "23-10-2026", "25-10-2026", 70, "d25"],
     ]
   );
   assert.equal(parseGroupDays("3"), 3);
@@ -148,7 +220,7 @@ test("board row without a slot today still shows overdue as the current cell", (
   });
   assert.equal(row.current.slotId, null);
   assert.equal(row.current.net, -300);
-  assert.deepEqual(row.current.slotIds, ["old"]);
+  assert.deepEqual(row.current.slotIds, []);
   assert.equal(boardRowHasNumbers(row), true);
 });
 

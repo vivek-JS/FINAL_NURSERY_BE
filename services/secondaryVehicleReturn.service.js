@@ -5,7 +5,7 @@ import DispatchBatch from "../models/dispatchBatch.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import AppError from "../utility/appError.js";
 import { collectLoadedOutwardLinesForDispatch } from "./secondaryVehicleUnload.service.js";
-import { restoreSowBatchDispatch } from "./sowDispatchBatches.service.js";
+import { returnSowBatchDispatch } from "./sowBatchReturn.service.js";
 import { syncSecondaryInwardSlotStockAdd } from "./secondaryShedSlotStock.service.js";
 import { recordSecondaryInwardOnLedger } from "./secondaryDispatchAvailability.service.js";
 import { SHED_ACTIVITY_ACTIONS, recordShedActivity } from "./shedActivity.service.js";
@@ -102,6 +102,7 @@ export async function returnPlantsFromVehicle({
     throw new AppError("Invalid vehicle or batch id", 400);
   }
   const shed = String(pollyhouse ?? "").trim();
+  if (!shed) throw new AppError("Choose the shed to return plants into", 400);
   const src = VEHICLE_RETURN_SOURCES.includes(source) ? source : "APP";
   const by = performedBy && mongoose.isValidObjectId(String(performedBy)) ? performedBy : null;
   const reasonStr = String(reason ?? "").trim().slice(0, 500);
@@ -130,7 +131,7 @@ export async function returnPlantsFromVehicle({
     const po = await PlantOutward.findOne({ batchId }).session(session);
     if (!po) throw new AppError("No plant outward found for this batch", 404);
     const batchLean = await DispatchBatch.findById(batchId)
-      .select("batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays secondaryR3PlantReadyDays")
+      .select("batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays secondaryR2PlantReadyDays secondaryR3PlantReadyDays")
       .session(session)
       .lean();
 
@@ -139,12 +140,14 @@ export async function returnPlantsFromVehicle({
     const now = new Date();
 
     if (outward?.sowBucket) {
-      const restoreResult = await restoreSowBatchDispatch({
+      const restoreResult = await returnSowBatchDispatch({
         session,
         outward,
         plants: plan.quantity,
         dispatchId,
         performedBy: by,
+        destShed: shed,
+        reason: reasonStr,
       });
       if (!restoreResult?.restored) {
         throw new AppError("Could not restore sowing-batch stock for this return", 400);
@@ -159,7 +162,7 @@ export async function returnPlantsFromVehicle({
         batchNumber: batchLean?.batchNumber != null ? String(batchLean.batchNumber) : ln.batchNumber || "",
         sourceOutwardId: ln.secondaryOutwardId || null,
         secondaryInwardId: null,
-        pollyhouse: shed || outward.pollyhouse || "",
+        pollyhouse: shed,
         quantity: plan.quantity,
         reason: reasonStr,
         source: src,
@@ -186,7 +189,6 @@ export async function returnPlantsFromVehicle({
       };
     }
 
-    if (!shed) throw new AppError("Choose the shed to return plants into", 400);
     const srcInward = ln.secondaryInwardId ? po.secondaryInward.id(ln.secondaryInwardId) : null;
     const cavity = Math.max(1, toInt(ln.cavity || srcInward?.cavity) || 1);
     const trays = Math.max(1, Math.ceil(plan.quantity / cavity));

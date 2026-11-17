@@ -52,6 +52,26 @@ export function dispatchDetailForOrder(dispatch, orderId) {
   );
 }
 
+function pickupBatchesForInstant(dispatch) {
+  if (!dispatch?.isInstantPickup) return [];
+  const plants = Array.isArray(dispatch.plantsDetails) ? dispatch.plantsDetails : [];
+  const out = [];
+  for (const plant of plants) {
+    const details = Array.isArray(plant?.pickupDetails) ? plant.pickupDetails : [];
+    for (const row of details) {
+      const batchNumber = normalizeStr(row?.batchNumber);
+      if (!batchNumber) continue;
+      out.push({
+        batchNumber,
+        batchId: row?.batchId,
+        pollyhouse: normalizeStr(row?.pollyhouseMatched || row?.shadeName || row?.shade),
+        secondaryInwardId: row?.secondaryInwardId,
+      });
+    }
+  }
+  return out;
+}
+
 function snapshotFromVehicleBatch(entry) {
   if (!entry) return null;
   const batchNumber = normalizeStr(entry.batchNumber);
@@ -76,9 +96,11 @@ export function resolveCompleteDispatchBatch({
   clientPayload = {},
 } = {}) {
   const detail = dispatchDetailForOrder(dispatch, orderId);
-  const loaded = Array.isArray(detail?.shedLoadedBatches)
+  const fromShed = Array.isArray(detail?.shedLoadedBatches)
     ? detail.shedLoadedBatches.filter((b) => normalizeStr(b?.batchNumber))
     : [];
+  // Instant farmer pickup often stores the batch only on plantsDetails.pickupDetails.
+  const loaded = fromShed.length ? fromShed : pickupBatchesForInstant(dispatch);
   const banana = isBananaPlantOrder(order);
 
   const clientBatch = normalizeStr(clientPayload.batchNumber);

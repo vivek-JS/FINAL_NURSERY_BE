@@ -92,3 +92,98 @@ export async function getLatestRegistration() {
     .sort({ registeredAt: -1 })
     .lean();
 }
+
+function field(obj, ...keys) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v != null && v !== "") return String(v).trim();
+  }
+  return "";
+}
+
+/** Normalise a Registration Status / Deregistration reply. */
+export function mapRegistrationReply(raw) {
+  const response = field(raw, "Response", "RESPONSE", "response").toUpperCase();
+  const bankStatus = field(raw, "Status", "STATUS", "status");
+  const code = field(raw, "ResponseCode", "RESPONSECODE", "ErrorCode", "errorCode");
+  const message = field(raw, "Message", "MESSAGE", "message");
+  const s = bankStatus.toUpperCase();
+  const state =
+    response === "FAILURE" && !s
+      ? "FAILURE"
+      : s.startsWith("REGISTERED")
+        ? "REGISTERED"
+        : s.startsWith("DEREGISTER") || s.startsWith("DE-REGISTER")
+          ? "DEREGISTERED"
+          : s.startsWith("PENDING")
+            ? "PENDING_SELF_APPROVAL"
+            : s.startsWith("REJECT")
+              ? "REJECTED"
+              : response === "FAILURE"
+                ? "FAILURE"
+                : s || "UNKNOWN";
+  return { state, bankStatus, response, code, message, raw };
+}
+
+/**
+ * Registration Status Inquiry API — AGGRID, CORPID, USERID, URN (+AGGRNAME).
+ * Status: Registered / Rejected / Pending for Self Approval / Deregistered.
+ */
+async function callOrStub(endpointKey, stubReply, { userId, idempotencyKey } = {}) {
+  const cfg = getIciciCorporateConfig();
+  if (cfg.useStub) return { cfg, raw: stubReply };
+  assertCorporateConfig();
+  const raw = await iciciCorporateRequest({
+    endpointPath: cfg.endpoints[endpointKey],
+    payload: {},
+    idempotencyKey,
+    userId,
+  });
+  return { cfg, raw };
+}
+
+export async function fetchRegistrationStatus({ userId } = {}) {
+  const { raw } = await callOrStub(
+    "registrationStatus",
+    { Status: "Registered", Response: "SUCCESS", ResponseCode: "0" },
+    { userId }
+  );
+
+  const result = mapRegistrationReply(raw);
+  await IciciRegistration.updateMany(
+    { status: "ACTIVE" },
+    {
+      $set: {
+        bankStatus: result.bankStatus || result.state,
+        bankStatusCheckedAt: new Date(),
+        ...(result.state === "DEREGISTERED" ? { status: "REVOKED" } : {}),
+      },
+    }
+  );
+  log().info("ICICI registration status", { state: result.state, code: result.code });
+  return result;
+}
+
+/**
+ * CIB De-registration API — revokes the partner link for this CORPID/USERID/URN.
+ * After this every CIB call fails until the user registers again.
+ */
+export async function deregisterFromIcici({ userId } = {}) {
+  const { raw } = await callOrStub(
+    "deregistration",
+    { Status: "Deregistered", Response: "SUCCESS", ResponseCode: "0" },
+    { userId, idempotencyKey: `dereg-${Date.now()}` }
+  );
+
+  const result = mapRegistrationReply(raw);
+  const ok = result.response === "SUCCESS" || result.state === "DEREGISTERED";
+  if (ok) {
+    const now = new Date();
+    await IciciRegistration.updateMany(
+      { status: "ACTIVE" },
+      { $set: { status: "REVOKED", bankStatus: "Deregistered", bankStatusCheckedAt: now, deregisteredAt: now } }
+    );
+  }
+  log().info("ICICI deregistration", { ok, state: result.state, code: result.code });
+  return { ok, ...result };
+}

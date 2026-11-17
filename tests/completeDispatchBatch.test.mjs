@@ -43,6 +43,59 @@ test("single shedLoadedBatches forces vehicle snapshot (ignores client)", () => 
   assert.equal(snap.source, "vehicle_load");
 });
 
+test("instant pickup uses pickupDetails when shed load is empty", () => {
+  const dispatch = {
+    isInstantPickup: true,
+    plantsDetails: [
+      {
+        pickupDetails: [
+          {
+            batchNumber: "SB-19",
+            batchId: "507f1f77bcf86cd799439011",
+            pollyhouseMatched: "PH-1",
+            secondaryInwardId: "507f1f77bcf86cd799439012",
+            quantity: 9000,
+          },
+        ],
+      },
+    ],
+    orderDispatchDetails: [{ orderId: oid, shedLoadedBatches: [] }],
+  };
+  const snap = resolveCompleteDispatchBatch({
+    dispatch,
+    orderId: oid,
+    clientPayload: {},
+  });
+  assert.equal(snap.batchNumber, "SB-19");
+  assert.equal(snap.pollyhouse, "PH-1");
+  assert.equal(snap.source, "vehicle_load");
+  assert.equal(snap.secondaryInwardId, "507f1f77bcf86cd799439012");
+});
+
+test("instant pickup prefers a shed-loaded batch over pickupDetails", () => {
+  const dispatch = {
+    isInstantPickup: true,
+    plantsDetails: [
+      {
+        pickupDetails: [{ batchNumber: "PICK-1", pollyhouseMatched: "PH-9" }],
+      },
+    ],
+    orderDispatchDetails: [
+      {
+        orderId: oid,
+        shedLoadedBatches: [{ batchNumber: "APP-99", pollyhouse: "PH-2" }],
+      },
+    ],
+  };
+  const snap = resolveCompleteDispatchBatch({
+    dispatch,
+    orderId: oid,
+    clientPayload: { batchNumber: "PICK-1" },
+  });
+  assert.equal(snap.batchNumber, "APP-99");
+  assert.equal(snap.source, "vehicle_load");
+});
+
 test("no vehicle load requires batchNumber", () => {
   const dispatch = { orderDispatchDetails: [{ orderId: oid, shedLoadedBatches: [] }] };
   assert.throws(

@@ -1,6 +1,7 @@
 import catchAsync from "../../../utility/catchAsync.js";
 import {
   PayoutError,
+  isPayoutChecker,
   getPayoutConfig,
   createPayout,
   approvePayout,
@@ -28,6 +29,12 @@ import {
   bulkRejectBeneficiaries,
   bulkRejectPayouts,
 } from "../services/payoutBulk.service.js";
+import { fetchNeftIncrementalStatus, refreshPayoutNeft } from "../services/iciciNeftStatus.service.js";
+import { registerBeneficiaryAtBank } from "../services/iciciBeneRegistration.service.js";
+import {
+  validateBeneficiaryAtBank,
+  validateBeneficiaryAtIcici,
+} from "../services/iciciBeneValidation.service.js";
 
 const HTTP_BY_CODE = {
   VALIDATION: 400,
@@ -111,6 +118,39 @@ export const postCancelPayout = handle(async (req, res) => {
 export const postRefreshPayout = handle(async (req, res) => {
   const result = await refreshPayoutStatus(req.params.id, req.user);
   res.status(200).json({ success: true, data: result.payout, checked: result.checked, warning: result.warning });
+});
+
+/** POST /api/banking/payouts/:id/neft-status — follow a paid NEFT to the beneficiary bank */
+export const postRefreshPayoutNeft = handle(async (req, res) => {
+  const result = await refreshPayoutNeft(req.params.id, req.user);
+  res.status(200).json({ success: true, data: result.payout, ...result, payout: undefined });
+});
+
+/** POST /api/banking/beneficiaries/:id/register-bank — (re)send an approved payee to ICICI */
+export const postRegisterBeneficiaryAtBank = handle(async (req, res) => {
+  if (!isPayoutChecker(req.user)) {
+    throw new PayoutError("Only an approver can register payees at ICICI", "FORBIDDEN");
+  }
+  const result = await registerBeneficiaryAtBank(req.params.id, req.user);
+  res.status(200).json({ success: true, data: result.payee, registered: result.registered, bank: result.payee.bank });
+});
+
+/** POST /api/banking/beneficiaries/:id/validate — Beneficiary Validation API */
+export const postValidateBeneficiaryAtBank = handle(async (req, res) => {
+  const result = await validateBeneficiaryAtBank(req.params.id, req.user);
+  res.status(200).json({ success: true, data: result.payee, validated: result.validated, bank: result.bank });
+});
+
+/** POST /api/banking/icici/bene-validate { accountNumber, ifsc? } */
+export const postBeneValidate = handle(async (req, res) => {
+  const { raw, ...data } = await validateBeneficiaryAtIcici(req.body || {}, { userId: req.user?._id });
+  res.status(200).json({ success: true, data });
+});
+
+/** GET /api/banking/icici/neft-status?utr= */
+export const getNeftStatus = handle(async (req, res) => {
+  const { raw, ...data } = await fetchNeftIncrementalStatus({ utr: req.query?.utr, userId: req.user?._id });
+  res.status(200).json({ success: true, data });
 });
 
 /** POST /api/banking/payouts/:id/resend — checker, only when ICICI never answered */

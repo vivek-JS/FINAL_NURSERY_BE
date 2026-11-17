@@ -18,17 +18,21 @@ const normBatchNumber = (v) => {
   return s || null;
 };
 
-/** R1/R2 lagwad → shorter secondary hardening; R3 → longer (different booking slot). */
+/** R1 uses batch secondary days. R2 and R3 use their own CMS fields (default 40). */
 export const DEFAULT_SECONDARY_R1_READY_DAYS = 30;
+export const DEFAULT_SECONDARY_R2_READY_DAYS = 40;
 export const DEFAULT_SECONDARY_R3_READY_DAYS = 40;
 
 export function secondaryReadyDaysForSize(size, batchLean) {
   const base = Number(batchLean?.secondaryPlantReadyDays) || 0;
   const r1Days = base > 0 ? base : DEFAULT_SECONDARY_R1_READY_DAYS;
+  const r2Explicit = Number(batchLean?.secondaryR2PlantReadyDays) || 0;
+  const r2Days = r2Explicit > 0 ? r2Explicit : DEFAULT_SECONDARY_R2_READY_DAYS;
   const r3Explicit = Number(batchLean?.secondaryR3PlantReadyDays) || 0;
-  const r3Days =
-    r3Explicit > 0 ? r3Explicit : DEFAULT_SECONDARY_R3_READY_DAYS;
-  if (String(size ?? "").toUpperCase() === "R3") return r3Days;
+  const r3Days = r3Explicit > 0 ? r3Explicit : DEFAULT_SECONDARY_R3_READY_DAYS;
+  const key = String(size ?? "").toUpperCase();
+  if (key === "R2") return r2Days;
+  if (key === "R3") return r3Days;
   return r1Days;
 }
 
@@ -62,6 +66,55 @@ export function computeReadyPositionSubtract(syncedPlants, quantity) {
   return {
     subtracted,
     newSynced: Math.max(0, synced - subtracted),
+  };
+}
+
+/**
+ * Pure plan for shed dispatch ready deduct.
+ * Burns slot.actualReadyPlants and SI.slotStockSyncedPlants together so UI
+ * (stored ready / shed rollup) both fall.
+ */
+export function planDispatchReadyDeduction({
+  prevReady = 0,
+  prevSynced = 0,
+  quantity = 0,
+} = {}) {
+  const qty = Math.max(0, Math.floor(Number(quantity) || 0));
+  const ready = Math.max(0, Math.floor(Number(prevReady) || 0));
+  const synced = Math.max(0, Math.floor(Number(prevSynced) || 0));
+  const subtracted = Math.min(qty, Math.max(ready, synced));
+  const readyDec = Math.min(subtracted, ready);
+  const syncedDec = Math.min(subtracted, synced);
+  return {
+    subtracted,
+    readyDec,
+    syncedDec,
+    readyAfter: ready - readyDec,
+    syncedAfter: synced - syncedDec,
+  };
+}
+
+/**
+ * Outflow: always move shed stock + synced together.
+ * newSynced never exceeds newAvail; both drop by the plants leaving.
+ */
+export function planDualStockOutflow({
+  availableQuantity = 0,
+  slotStockSyncedPlants = 0,
+  quantity = 0,
+} = {}) {
+  const avail = Math.max(0, Math.floor(Number(availableQuantity) || 0));
+  const synced = Math.max(0, Math.floor(Number(slotStockSyncedPlants) || 0));
+  const qty = Math.max(0, Math.floor(Number(quantity) || 0));
+  const take = Math.min(qty, avail);
+  const newAvail = avail - take;
+  const newSynced = Math.min(Math.max(0, synced - take), newAvail);
+  return {
+    take,
+    newAvail,
+    newSynced,
+    availDec: take,
+    syncedDec: Math.max(0, synced - newSynced),
   };
 }
 
@@ -159,7 +212,8 @@ export function secondaryInwardCalendarReady(si, batchLean, todayStart) {
   if (si?.readinessBypassAt != null && moment(si.readinessBypassAt).isValid()) {
     return true;
   }
-  const days = secondaryReadyDaysForSize(si?.size, batchLean);
+  const storedDays = Number(si?.readyDays) || 0;
+  const days = storedDays > 0 ? storedDays : secondaryReadyDaysForSize(si?.size, batchLean);
   const inward = si?.secondaryInwardDate
     ? moment(si.secondaryInwardDate).startOf("day")
     : null;
@@ -193,7 +247,7 @@ export function rollupShedStockForSlots(posLean, slotIdStrings) {
       if (!map.has(slotKey)) continue;
       const agg = map.get(slotKey);
       const avail = Math.max(0, Number(si.availableQuantity) || 0);
-      const synced = Math.max(0, Number(si.slotStockSyncedPlants) || 0);
+      const synced = effectiveSyncedOnSlot(avail, si.slotStockSyncedPlants);
       const calendarReady = secondaryInwardCalendarReady(si, batchLean, todayStart);
       agg.shedAvailableInShed += avail;
       agg.shedSyncedPlants += synced;
@@ -220,7 +274,7 @@ export function rollupShedStockForSlots(posLean, slotIdStrings) {
 }
 
 const BATCH_SELECT =
-  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays plantCmsId plantSubtypeId";
+  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays secondaryR2PlantReadyDays secondaryR3PlantReadyDays plantCmsId plantSubtypeId";
 
 function plantSubtypeLabels(batchLean) {
   if (!batchLean) return { plantLabel: "—", subtypeLabel: "—" };
@@ -365,10 +419,18 @@ export function overdueDaysForExpectedReady(expectedMoment, todayStart) {
  * One lagwad inward line as the ERP UI consumes it (drill-down + analysis).
  * Shared by the single-slot breakdown and the multi-slot lagwad analysis.
  */
+/** Synced-on-slot cannot exceed plants still in shed (avail). */
+export function effectiveSyncedOnSlot(availableQuantity, slotStockSyncedPlants) {
+  const avail = Math.max(0, Number(availableQuantity) || 0);
+  const synced = Math.max(0, Number(slotStockSyncedPlants) || 0);
+  return Math.min(avail, synced);
+}
+
 export function buildSecondaryInwardLine(si, po, batchLean, todayStart) {
   const secDays = Number(batchLean?.secondaryPlantReadyDays) || 0;
   const avail = Math.max(0, Number(si.availableQuantity) || 0);
-  const synced = Math.max(0, Number(si.slotStockSyncedPlants) || 0);
+  const syncedRaw = Math.max(0, Number(si.slotStockSyncedPlants) || 0);
+  const synced = effectiveSyncedOnSlot(avail, syncedRaw);
   const totalQuantity = Math.max(0, Number(si.totalQuantity) || 0);
   const inward = si.secondaryInwardDate
     ? moment(si.secondaryInwardDate).startOf("day")
@@ -408,6 +470,8 @@ export function buildSecondaryInwardLine(si, po, batchLean, todayStart) {
     totalQuantity,
     availableQuantity: avail,
     slotStockSyncedPlants: synced,
+    slotStockSyncedPlantsRaw: syncedRaw,
+    syncedOverAvail: Math.max(0, syncedRaw - synced),
     onSlotPlants: synced,
     pendingSlotSync,
     slotSyncStatus,
@@ -618,6 +682,10 @@ export async function getSlotSecondaryShedBreakdown(slotId) {
   summary.actualPlants = actualPlants;
   summary.expectedMortality = Math.max(0, Number(slot.expectedMortality) || 0);
   summary.actualReadyPlantsStored = Math.max(0, Number(slot.actualReadyPlants) || 0);
+  summary.shedSyncedReady = summary.actualReadyPlants;
+  // Headline actual ready = stored slot counter (dispatch subtracts this).
+  // shedSyncedReady is the clamped sum of line sync (min(synced, avail)).
+  summary.actualReadyPlants = summary.actualReadyPlantsStored;
   summary.lagwadRemaining = Math.max(0, Number(slot.lagwadRemaining) || 0);
 
   return {
@@ -691,7 +759,8 @@ export function pickReadyDateForSlot(siPlain, batchLean) {
   const inward = siPlain?.secondaryInwardDate
     ? moment(siPlain.secondaryInwardDate).startOf("day")
     : null;
-  const days = secondaryReadyDaysForSize(siPlain?.size, batchLean);
+  const storedDays = Number(siPlain?.readyDays) || 0;
+  const days = storedDays > 0 ? storedDays : secondaryReadyDaysForSize(siPlain?.size, batchLean);
   if (inward?.isValid()) return inward.clone().add(days, "days");
   return null;
 }
@@ -844,6 +913,9 @@ export async function syncSecondaryInwardSlotStockAdd({
 
 /**
  * Dispatch: subtract actualReadyPlants on slot — actualPlants unchanged.
+ * Also lowers secondaryInward.slotStockSyncedPlants so shed rollup cannot
+ * hide the deduction. Uses atomic $inc so VersionError on full-doc save
+ * cannot leave ready unchanged.
  */
 export async function subtractSecondaryInwardSlotStock({
   session,
@@ -853,6 +925,8 @@ export async function subtractSecondaryInwardSlotStock({
   siPlain,
   quantity,
   performedBy,
+  /** When avail+synced already burned in the same outward $set. */
+  syncedAlreadyApplied = false,
 }) {
   const qty = Math.max(0, Math.floor(Number(quantity) || 0));
   if (qty < 1) return { subtracted: 0 };
@@ -861,40 +935,141 @@ export async function subtractSecondaryInwardSlotStock({
   if (!slotId) {
     return { subtracted: 0, skipped: "no_linked_slot" };
   }
+  if (!mongoose.isValidObjectId(String(slotId))) {
+    return { subtracted: 0, skipped: "invalid_slot", slotId: String(slotId) };
+  }
+  const slotOid = new mongoose.Types.ObjectId(String(slotId));
 
   const loaded = await loadSlotSubdoc(slotId, session);
   if (!loaded) {
     return { subtracted: 0, skipped: "slot_not_found", slotId: String(slotId) };
   }
 
-  const { plantSlot, slot } = loaded;
+  const { slot } = loaded;
   const prevReady = Math.max(0, Number(slot.actualReadyPlants) || 0);
-  const subtracted = Math.min(qty, prevReady);
-  if (subtracted < 1) {
+  const prevSynced = Math.max(0, Number(siPlain?.slotStockSyncedPlants) || 0);
+  const plan = syncedAlreadyApplied
+    ? {
+        // Synced already moved with available — only burn slot ready counter.
+        subtracted: Math.min(qty, prevReady),
+        readyDec: Math.min(qty, prevReady),
+        syncedDec: 0,
+        readyAfter: Math.max(0, prevReady - Math.min(qty, prevReady)),
+        syncedAfter: prevSynced,
+      }
+    : planDispatchReadyDeduction({
+        prevReady,
+        prevSynced,
+        quantity: qty,
+      });
+  if (plan.subtracted < 1 && plan.readyDec < 1 && plan.syncedDec < 1) {
     return { subtracted: 0, skipped: "no_actual_ready", slotId: String(slotId) };
   }
 
+  const { readyDec, syncedDec, readyAfter, syncedAfter } = plan;
   const bn =
     batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
 
-  applyStockFieldUpdates(
-    slot,
-    { actualReadyPlants: prevReady - subtracted },
-    performedBy,
-    `Dispatch · batch ${bn} (−${subtracted} actual ready)`
-  );
-
-  if (performedBy && mongoose.isValidObjectId(String(performedBy))) {
-    slot.setPerformer?.(performedBy);
+  // 1) Atomic ready dec — permanent even if trail path fails.
+  if (readyDec > 0) {
+    const atomic = await PlantSlot.updateOne(
+      { "subtypeSlots.slots._id": slotOid },
+      {
+        $inc: {
+          "subtypeSlots.$[st].slots.$[sl].actualReadyPlants": -readyDec,
+        },
+      },
+      {
+        arrayFilters: [{ "st.slots._id": slotOid }, { "sl._id": slotOid }],
+        session: session || undefined,
+      }
+    );
+    if (!atomic.matchedCount) {
+      throw new Error(`actualReady atomic update matched 0 for slot ${slotId}`);
+    }
+    // Clamp floor at 0 if concurrent updates undershot.
+    await PlantSlot.updateOne(
+      {
+        "subtypeSlots.slots._id": slotOid,
+        "subtypeSlots.slots.actualReadyPlants": { $lt: 0 },
+      },
+      {
+        $set: {
+          "subtypeSlots.$[st].slots.$[sl].actualReadyPlants": 0,
+        },
+      },
+      {
+        arrayFilters: [{ "st.slots._id": slotOid }, { "sl._id": slotOid }],
+        session: session || undefined,
+      }
+    );
+    slot.actualReadyPlants = readyAfter;
   }
 
-  await plantSlot.save({ session: session || undefined, validateBeforeSave: true });
+  // 2) Best-effort trail via in-memory helper + $push only (no full-doc save).
+  try {
+    if (readyDec > 0) {
+      slot.actualReadyPlants = prevReady;
+      applyStockFieldUpdates(
+        slot,
+        { actualReadyPlants: readyAfter },
+        performedBy,
+        `Dispatch · batch ${bn} (−${readyDec} actual ready)`
+      );
+      slot.actualReadyPlants = readyAfter;
+      const trailEntry = Array.isArray(slot.slotTrail) ? slot.slotTrail[0] : null;
+      if (trailEntry) {
+        await PlantSlot.updateOne(
+          { "subtypeSlots.slots._id": slotOid },
+          {
+            $push: {
+              "subtypeSlots.$[st].slots.$[sl].slotTrail": {
+                $each: [trailEntry],
+                $position: 0,
+                $slice: 1000,
+              },
+            },
+          },
+          {
+            arrayFilters: [{ "st.slots._id": slotOid }, { "sl._id": slotOid }],
+            session: session || undefined,
+          }
+        );
+      }
+    }
+  } catch (trailErr) {
+    console.warn(
+      "[subtractSecondaryInwardSlotStock] trail push skipped:",
+      trailErr?.message || trailErr
+    );
+  }
+
+  // 3) Always burn SI synced position with the dispatch qty.
+  if (syncedDec > 0 && secondaryInwardId && batchId) {
+    const siAtomic = await PlantOutward.updateOne(
+      { batchId, "secondaryInward._id": secondaryInwardId },
+      {
+        $set: {
+          "secondaryInward.$.slotStockSyncedPlants": syncedAfter,
+        },
+      },
+      { session: session || undefined }
+    );
+    if (!siAtomic.matchedCount) {
+      throw new Error(
+        `slotStockSyncedPlants update matched 0 for inward ${secondaryInwardId}`
+      );
+    }
+    if (siPlain) siPlain.slotStockSyncedPlants = syncedAfter;
+  }
 
   return {
-    subtracted,
+    subtracted: plan.subtracted,
+    readyDec,
+    syncedDec,
     slotId: String(slotId),
     actualReadyOnly: true,
-    message: `Actual ready −${subtracted} (batch ${bn}); actualPlants unchanged`,
+    message: `Actual ready −${readyDec}, synced −${syncedDec} (batch ${bn}); actualPlants unchanged`,
   };
 }
 
@@ -977,7 +1152,13 @@ export async function restoreSecondaryInwardSlotStock({
 
   const { plantSlot, slot } = loaded;
   const prevReady = Math.max(0, Number(slot.actualReadyPlants) || 0);
+  const prevSynced = Math.max(0, Number(siPlain?.slotStockSyncedPlants) || 0);
+  const avail = Math.max(0, Number(siPlain?.availableQuantity) || 0);
   const restored = qty;
+  const syncedRestore = Math.min(
+    restored,
+    Math.max(0, avail - prevSynced)
+  );
   const bn =
     batchLean?.batchNumber != null ? String(batchLean.batchNumber) : String(batchId);
 
@@ -994,8 +1175,24 @@ export async function restoreSecondaryInwardSlotStock({
 
   await plantSlot.save({ session: session || undefined, validateBeforeSave: true });
 
+  if (syncedRestore > 0 && secondaryInwardId && batchId) {
+    await PlantOutward.updateOne(
+      { batchId, "secondaryInward._id": secondaryInwardId },
+      {
+        $set: {
+          "secondaryInward.$.slotStockSyncedPlants": prevSynced + syncedRestore,
+        },
+      },
+      { session: session || undefined }
+    );
+    if (siPlain) {
+      siPlain.slotStockSyncedPlants = prevSynced + syncedRestore;
+    }
+  }
+
   return {
     restored,
+    syncedRestore,
     slotId: String(slotId),
     actualReadyOnly: true,
     message: `Actual ready +${restored} (batch ${bn}); actualPlants unchanged`,

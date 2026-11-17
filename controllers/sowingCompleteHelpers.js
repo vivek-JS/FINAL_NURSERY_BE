@@ -18,20 +18,51 @@ import {
   sowQtySlotImpact,
   splitLagwadQtyForSlot,
   clampMortalityPct,
+  sowCoverPool,
 } from "../utility/lagwadSlotPlantsSplit.js";
+import { plantMortalityPct } from "../utility/plantSowingBuffer.js";
+import {
+  removeSowingEntryForBatch,
+  upsertSowingEntryForRequest,
+  upsertSowingEntryFromBatch,
+} from "../modules/sowingEntries/saveSowingEntry.js";
+
+/** After cover is written on the slot batch, copy it onto the sowing entry. */
+async function refreshSowingEntriesOnSlot(slotId, sowingRequestId) {
+  try {
+    const rows = await PlantSlot.aggregate([
+      { $match: { "subtypeSlots.slots._id": slotId } },
+      { $unwind: "$subtypeSlots" },
+      { $unwind: "$subtypeSlots.slots" },
+      { $match: { "subtypeSlots.slots._id": slotId } },
+      { $unwind: "$subtypeSlots.slots.sowingBatches" },
+      { $match: { "subtypeSlots.slots.sowingBatches.sowingRequestId": sowingRequestId } },
+      { $project: { batch: "$subtypeSlots.slots.sowingBatches" } },
+    ]);
+    for (const row of rows) {
+      if (row?.batch) await upsertSowingEntryFromBatch(row.batch, slotId);
+    }
+  } catch (err) {
+    console.error("[sowing] entry cover refresh failed:", err?.message || err);
+  }
+}
 
 async function mortalityPctForPlant(plantId) {
   if (!plantId) return 10;
-  const p = await PlantCms.findById(plantId).select("sowingMortality").lean();
+  const p = await PlantCms.findById(plantId).select("sowingMortality sowingBuffer").lean();
+  const fromCms = plantMortalityPct(p);
+  if (fromCms > 0) return fromCms;
   return clampMortalityPct(p?.sowingMortality, 10);
 }
 import { updatePlantSlotCapped } from "../utility/shrinkPlantSlotTrails.js";
 import {
+  planOrderSowCover,
+  fillLastPartialFromBuffer,
   applyIncompleteRequestRelease,
-  orderPlantRemaining,
-  orderPartialHeld,
+  orderPlantTotal,
+  orderCoveredExceptRequest,
 } from "../services/orderSowCover.plan.js";
-import { coverAtTenPercent } from "../utility/coverAtTenPercent.js";
+import { moveLinkedOrdersBookingSlotOnSowEdit } from "../utility/readySlotOrderCover.js";
 
 function hasAppliedSplit(batch) {
   return (
@@ -73,7 +104,7 @@ export function parseNum(v, fallback = 0) {
 }
 
 /** Cover orders with deliveryDate within readyDate ± N days (FIFO full-cover). */
-export const ORDER_COVER_WINDOW_DAYS = 4;
+export const ORDER_COVER_WINDOW_DAYS = 5;
 
 export function deliveryCoverWindow(readyDate, windowDays = ORDER_COVER_WINDOW_DAYS) {
   const win = Math.max(0, Math.floor(Number(windowDays) || 0));
@@ -86,11 +117,43 @@ export function deliveryCoverWindow(readyDate, windowDays = ORDER_COVER_WINDOW_D
   return { dayStart, dayEnd, windowDays: win };
 }
 
+const COMPLETION_EVENT_TYPES = new Set([
+  "SOW_STARTED",
+  "PLANTS_SOWED",
+  "PACKETS_USED",
+  "PACKETS_RETURNED",
+  "PACKETS_ISSUED",
+  "INVENTORY_RESTORED",
+  "ORDERS_MARKED_SOWED",
+  "ORDERS_COVERED",
+  "ORDER_COVER_APPLIED",
+  "ORDER_COVER_REVERSED",
+  "ORDER_LINKED",
+  "COVER_FROM_EXCESS",
+  "LABOUR_RECORDED",
+  "SOW_COMPLETED",
+  "SOW_ENTRY_EDITED",
+  "READY_PLANTS_RECEIVED",
+  "MORTALITY_TO_EXCESS",
+  "BATCH_DESTROYED",
+  "BATCH_IRRELEVANT",
+  "SLOT_MOVED",
+  "PHOTO_ADDED",
+  "NOTE",
+]);
+
 export function pushEvent(request, evt) {
   if (!Array.isArray(request.completionEvents)) request.completionEvents = [];
+  const type = COMPLETION_EVENT_TYPES.has(String(evt?.type || ""))
+    ? evt.type
+    : "NOTE";
   request.completionEvents.push({
     at: new Date(),
     ...evt,
+    type,
+    ...(type === "NOTE" && evt?.type && evt.type !== "NOTE"
+      ? { meta: { ...(evt.meta || {}), originalType: evt.type } }
+      : {}),
   });
 }
 
@@ -209,10 +272,12 @@ export async function recordExcessPlantsOnSlot(
       ],
     }
   );
+  await refreshSowingEntriesOnSlot(sid, rid);
   return { excessPlants: qty, orderCoveredPlants: covered };
 }
 
 async function pushBatchToSlot(slotId, { inc, sowingDateStr, plantReadyDateStr, readyDays, batch }) {
+  if (!batch._id) batch._id = new mongoose.Types.ObjectId();
   const isExcess = Boolean(batch.isExcessiveSowing);
   const appliedAvail = batch.availablePlantsApplied;
   const saleable =
@@ -259,94 +324,140 @@ async function pushBatchToSlot(slotId, { inc, sowingDateStr, plantReadyDateStr, 
       arrayFilters: [{ "st.slots._id": slotId }, { "sl._id": slotId }],
     }
   );
+  await upsertSowingEntryFromBatch(batch, slotId);
+  return { batchId: batch._id, slotId };
+}
+
+function coverSourceDoc({ requestId, requestNumber, plants, sowingDate, plantReadyDate, batchId, slotId }) {
+  const doc = {
+    sowingRequestId: requestId,
+    requestNumber,
+    plants,
+    sowingDate,
+    plantReadyDate,
+  };
+  if (batchId && mongoose.Types.ObjectId.isValid(String(batchId))) {
+    doc.batchId = new mongoose.Types.ObjectId(String(batchId));
+  }
+  if (slotId && mongoose.Types.ObjectId.isValid(String(slotId))) {
+    doc.slotId = new mongoose.Types.ObjectId(String(slotId));
+  }
+  return doc;
+}
+
+async function resolveCoverBatch(request, opts = {}) {
+  if (opts.batchId && mongoose.Types.ObjectId.isValid(String(opts.batchId))) {
+    return { batchId: opts.batchId, slotId: opts.slotId || null };
+  }
+  const entry = await SowingEntry.findOne({ sowingRequestId: request?._id })
+    .select("sourceBatchId")
+    .lean();
+  if (entry?.sourceBatchId) return { batchId: entry.sourceBatchId, slotId: opts.slotId || null };
+  return { batchId: null, slotId: opts.slotId || null };
+}
+
+/** Write the sowing batch onto cover rows that were saved with only the request. */
+export async function stampCoverBatchIds(requestId, batchId, slotId) {
+  if (!requestId || !batchId || !mongoose.Types.ObjectId.isValid(String(batchId))) {
+    return { matched: 0, modified: 0 };
+  }
+  const set = {
+    "sowingCoverSources.$[src].batchId": new mongoose.Types.ObjectId(String(batchId)),
+  };
+  if (slotId && mongoose.Types.ObjectId.isValid(String(slotId))) {
+    set["sowingCoverSources.$[src].slotId"] = new mongoose.Types.ObjectId(String(slotId));
+  }
+  const res = await Order.updateMany(
+    { "sowingCoverSources.sowingRequestId": requestId },
+    { $set: set },
+    { arrayFilters: [{ "src.sowingRequestId": requestId, "src.batchId": null }] }
+  );
+  return { matched: res.matchedCount || 0, modified: res.modifiedCount || 0 };
 }
 
 /**
- * Fast path: lean weight read + atomic $inc/$set/$push/$pull.
- * plantReadyDate = sowDate + plantReadyDays; optionally map to calendar slot by ready date.
+ * Write this sow on sowingentries only.
+ * plantReadyDate = sowDate + plantReadyDays. Calendar slots are left as they are.
  */
 export async function applyPlantsToLinkedSlots(request, plantsSowed, meta = {}) {
   if (plantsSowed <= 0) return { slotsUpdated: 0 };
+
+  const requestNumber = meta.requestNumber || request.requestNumber || "";
+  const shedName = String(meta.shedName || request.shedName || "").trim();
+  const linkedOrderIds = toObjectIds(
+    meta.linkedOrderIds || request.linkedOrderIds || []
+  );
+  const isExcess = Boolean(
+    meta.isExcessiveSowing ?? request.isExcessiveSowing
+  );
 
   const sowedAt =
     meta.sowedAt instanceof Date && !Number.isNaN(meta.sowedAt.getTime())
       ? meta.sowedAt
       : new Date();
   const sowingDateStr = fmtDDMMYYYY(sowedAt);
-  const cmsReadyDays = await resolveCmsReadyDays(request.plantId, request.subtypeId);
-  const hasReady = meta.plantReadyDays != null && meta.plantReadyDays !== "";
+
+  const plantId = request.plantId || meta.plantId;
+  const subtypeId = request.subtypeId || meta.subtypeId;
+  const overrideMort = Number(meta.mortalityPct);
+  const mortalityPct =
+    Number.isFinite(overrideMort) && overrideMort >= 0
+      ? clampMortalityPct(overrideMort, 10)
+      : await mortalityPctForPlant(plantId);
+  const cmsReadyDays = await resolveCmsReadyDays(plantId, subtypeId);
   const overrideReady = Number(meta.plantReadyDays);
-  const readyDays =
-    hasReady && Number.isFinite(overrideReady) && overrideReady >= 0
+  // Explicit 0 = already-ready plants (same-day ready / excess on that date).
+  const readyDaysGlobal =
+    Number.isFinite(overrideReady) && overrideReady >= 0
       ? overrideReady
       : cmsReadyDays;
-  const plantReadyDateStr = fmtDDMMYYYY(addDays(sowedAt, readyDays || 0));
-  const overrideMort = Number(meta.mortalityPct);
-  const mortOverride = Number.isFinite(overrideMort) && overrideMort >= 0;
-  const bufferPct = mortOverride ? overrideMort : 10;
-  const mortality = Math.round((plantsSowed * bufferPct) / 100);
-  const zeroMort = mortOverride && bufferPct === 0;
-  const entryKind =
-    meta.entryKind === "komb" || meta.entryKind === "excess" ? meta.entryKind : "sowing";
-  const plant = await PlantCms.findById(request.plantId)
-    .select("name subtypes._id subtypes.name")
-    .lean();
-  const subtype = (plant?.subtypes || []).find(
-    (row) => String(row._id) === String(request.subtypeId)
-  );
-  const existing = await SowingEntry.findOne({ sowingRequestId: request._id })
-    .select("sourceBatchId dispatchedPlants")
-    .lean();
-  const sourceBatchId = existing?.sourceBatchId || new mongoose.Types.ObjectId();
-  const sowDayMatch = String(sowingDateStr).match(/^(\d{2})-(\d{2})-(\d{4})$/);
-  const sowDay = sowDayMatch ? `${sowDayMatch[3]}-${sowDayMatch[2]}-${sowDayMatch[1]}` : "";
-  const year = sowDay ? Number(sowDay.slice(0, 4)) : null;
+  const plantReadyDateStr = fmtDDMMYYYY(addDays(sowedAt, readyDaysGlobal || 0));
+  const outParsed = meta.out || meta.outDate ? parseLocalDate(meta.out || meta.outDate) : null;
+  const requestedOut = outParsed ? fmtDDMMYYYY(outParsed) : "";
 
-  await SowingEntry.updateOne(
-    { sowingRequestId: request._id },
-    {
-      $set: {
-        sourceBatchId,
-        sowingRequestId: request._id,
-        requestNumber: meta.requestNumber || request.requestNumber || "",
-        plantId: request.plantId,
-        plantName: plant?.name || request.plantName || "",
-        subtypeId: request.subtypeId || null,
-        subtypeName: subtype?.name || request.subtypeName || "",
-        shedName: String(meta.shedName || request.shedName || "").trim(),
-        year: Number.isFinite(year) && year > 2000 ? year : null,
-        sowingDate: sowingDateStr,
-        sowDay,
-        plantReadyDate: plantReadyDateStr,
-        plantsSowed,
-        sowingBufferPct: bufferPct,
-        bufferPlants: mortality,
-        noMortalityReserve: zeroMort,
-        entryKind,
-        ...(meta.sourceEntryId ? { sourceEntryId: meta.sourceEntryId } : {}),
-        isExcessiveSowing: Boolean(meta.isExcessiveSowing ?? request.isExcessiveSowing),
-      },
-      $setOnInsert: {
-        dispatchedPlants: 0,
-        remainingPlants: Math.max(0, plantsSowed - mortality),
-        orderCoveredPlants: 0,
-        excessPlants: Math.max(0, plantsSowed - mortality),
-        linkedOrderIds: [],
-      },
-    },
-    { upsert: true }
-  );
+  const readyDays = readyDaysGlobal || 0;
+  const impact = sowQtySlotImpact(plantsSowed, { isExcess, mortalityPct });
+  const entry = await upsertSowingEntryForRequest(request, {
+    sowingDate: sowingDateStr,
+    plantReadyDate: plantReadyDateStr,
+    out: requestedOut || plantReadyDateStr,
+    plantsSowed,
+    shedName,
+    sowingRequestId: request._id,
+    requestNumber,
+    isExcessiveSowing: isExcess,
+    entryKind:
+      meta.entryKind === "komb" || meta.entryKind === "excess" ? meta.entryKind : "sowing",
+    sourceEntryId: meta.sourceEntryId || null,
+    orderCoveredPlants: isExcess
+      ? 0
+      : Math.min(
+          sowCoverPool(plantsSowed, mortalityPct),
+          Math.max(0, plantsSowed - Math.max(0, Number(meta.excessPlants) || 0))
+        ),
+    excessPlants: isExcess ? plantsSowed : Math.max(0, Number(meta.excessPlants) || 0),
+    ...(Number.isFinite(overrideMort) && overrideMort === 0
+      ? {
+          noMortalityReserve: true,
+          sowingBufferPct: 0,
+          bufferPlants: 0,
+        }
+      : Number.isFinite(overrideMort) && overrideMort > 0
+        ? { sowingBufferPct: clampMortalityPct(overrideMort, 10) }
+        : {}),
+    linkedOrderIds,
+  });
 
   return {
     slotsUpdated: 0,
     sowingDate: sowingDateStr,
-    plantReadyDays: readyDays || 0,
+    plantReadyDays: readyDays,
     plantReadyDate: plantReadyDateStr,
     appliedSlotId: null,
     resolvedByReadyDate: false,
-    actualPlants: Math.max(0, plantsSowed - mortality),
-    expectedMortality: mortality,
-    batchId: sourceBatchId,
+    actualPlants: impact.actualPlants,
+    expectedMortality: impact.expectedMortality,
+    batchId: entry?.sourceBatchId || null,
   };
 }
 
@@ -400,6 +511,7 @@ export async function reverseSowBatchFromSlot(slotId, sowingRequestId, plantsSow
       arrayFilters: [{ "st.slots._id": id }, { "sl._id": id }],
     }
   );
+  if (batch?._id) await removeSowingEntryForBatch(batch._id);
   return { reversed: qty };
 }
 
@@ -472,18 +584,37 @@ export async function editSowEntryOnSlots(request, opts = {}) {
       ? new Date(batches[0].batch.sowedAt)
       : new Date());
 
-  const cmsReady = await resolveCmsReadyDays(request.plantId, request.subtypeId);
-  const toPlantReadyDays = resolveReadyDays(
-    opts.plantReadyDays,
-    fromPlantReadyDays,
-    cmsReady
-  );
-  if (!(toPlantReadyDays > 0)) {
-    throw new Error("plantReadyDays must be > 0");
+  const sowingDateStr = fmtDDMMYYYY(sowedAt);
+  const readyOverride =
+    parseLocalDate(opts.plantReadyDate) || parseLocalDate(opts.readyDate);
+  let toPlantReadyDays;
+  let toReadyDate;
+  if (readyOverride) {
+    toReadyDate = fmtDDMMYYYY(readyOverride);
+    toPlantReadyDays = Math.max(
+      0,
+      Math.round((readyOverride.getTime() - sowedAt.getTime()) / 86400000)
+    );
+  } else if (
+    opts.plantReadyDays != null &&
+    Number.isFinite(Number(opts.plantReadyDays)) &&
+    Number(opts.plantReadyDays) >= 0
+  ) {
+    toPlantReadyDays = Number(opts.plantReadyDays);
+    toReadyDate = fmtDDMMYYYY(addDays(sowedAt, toPlantReadyDays));
+  } else {
+    const cmsReady = await resolveCmsReadyDays(request.plantId, request.subtypeId);
+    toPlantReadyDays = resolveReadyDays(
+      undefined,
+      fromPlantReadyDays,
+      cmsReady
+    );
+    if (!(toPlantReadyDays >= 0) || !Number.isFinite(toPlantReadyDays)) {
+      throw new Error("plantReadyDays is required");
+    }
+    toReadyDate = fmtDDMMYYYY(addDays(sowedAt, toPlantReadyDays));
   }
 
-  const sowingDateStr = fmtDDMMYYYY(sowedAt);
-  const toReadyDate = fmtDDMMYYYY(addDays(sowedAt, toPlantReadyDays));
   const target = await findSlotByPlantReadyDate(
     request.plantId,
     request.subtypeId,
@@ -499,7 +630,9 @@ export async function editSowEntryOnSlots(request, opts = {}) {
     opts.reason ||
     (opts.plantReadyDays != null && Number(opts.plantReadyDays) !== fromPlantReadyDays
       ? "EDIT_READY_DAYS"
-      : "EDIT_SOW_DATE");
+      : readyOverride
+        ? "EDIT_READY_DATE"
+        : "EDIT_SOW_DATE");
 
   // Reverse all old batches for this request
   for (const row of batches) {
@@ -524,27 +657,34 @@ export async function editSowEntryOnSlots(request, opts = {}) {
     reason,
   };
 
-  // Restore reserved vs saleable from previous batch totals
+  const noMort = Boolean(batches[0]?.batch?.noMortalityReserve);
+  const prevMortPct = batches[0]?.batch?.mortalityPct;
+  const mortalityPct = noMort
+    ? 0
+    : prevMortPct != null && Number.isFinite(Number(prevMortPct))
+      ? clampMortalityPct(Number(prevMortPct), 0)
+      : await mortalityPctForPlant(request.plantId);
+
+  // Mortality first, then cover the same orders from the saleable pool.
   let coveredTotal = 0;
   let excessTotal = 0;
-  for (const row of batches) {
-    coveredTotal += Math.max(0, Number(row.batch?.orderCoveredPlants) || 0);
-    excessTotal += Math.max(0, Number(row.batch?.excessPlants) || 0);
+  let orderResult = null;
+  if (request.isExcessiveSowing) {
+    excessTotal = sowCoverPool(plantsTotal, mortalityPct);
+  } else {
+    const orderIds = await orderIdsCoveredByRequest(request);
+    await clearRequestOrderCover(request._id, orderIds);
+    orderResult = await markOrdersSowed(request, {
+      sowedAt,
+      plantsSowed: plantsTotal,
+      plantReadyDays: toPlantReadyDays,
+      sowingBufferPct: mortalityPct,
+      orderIds,
+    });
+    coveredTotal = Math.max(0, Number(orderResult.orderPlantsCovered) || 0);
+    excessTotal = Math.max(0, Number(orderResult.remainingUncovered) || 0);
   }
-  if (Boolean(request.isExcessiveSowing) && excessTotal <= 0 && coveredTotal <= 0) {
-    excessTotal = plantsTotal;
-  } else if (coveredTotal + excessTotal <= 0) {
-    // Unknown split — treat as reserved if linked orders else saleable
-    if ((request.linkedOrderIds || []).length) {
-      coveredTotal = plantsTotal;
-    } else {
-      excessTotal = plantsTotal;
-    }
-  }
-
-  const isExcess =
-    Boolean(request.isExcessiveSowing) && coveredTotal <= 0;
-  const mortalityPct = await mortalityPctForPlant(request.plantId);
+  const isExcess = Boolean(request.isExcessiveSowing) && coveredTotal <= 0;
   const impact = sowQtySlotImpact(plantsTotal, {
     isExcess,
     excessPlants: excessTotal,
@@ -568,7 +708,7 @@ export async function editSowEntryOnSlots(request, opts = {}) {
       impact.orderReservedPlants;
   }
 
-  await pushBatchToSlot(toSlotId, {
+  const pushed = await pushBatchToSlot(toSlotId, {
     inc: editInc,
     sowingDateStr,
     plantReadyDateStr: toReadyDate,
@@ -582,40 +722,57 @@ export async function editSowEntryOnSlots(request, opts = {}) {
       packetsUsed: packetsTotal,
       orderCoveredPlants: coveredTotal,
       excessPlants: excessTotal,
+      sowingBufferPct: mortalityPct,
+      bufferPlants: Math.round((plantsTotal * mortalityPct) / 100),
+      noMortalityReserve: noMort,
       actualPlantsApplied: impact.actualPlants,
       expectedMortalityApplied: impact.expectedMortality,
       availablePlantsApplied: impact.availablePlants,
       orderReservedPlantsApplied: impact.orderReservedPlants,
+      ...(Number.isFinite(Number(prevMortPct)) ? { mortalityPct: Number(prevMortPct) } : {}),
       shedName,
       sowingRequestId: request._id,
       requestNumber: request.requestNumber,
       isExcessiveSowing: Boolean(request.isExcessiveSowing),
       linkedOrderIds: request.linkedOrderIds || [],
+      ...(Array.isArray(orderResult?.orderCovers) ? { orderCovers: orderResult.orderCovers } : {}),
+      ...(batches[0]?.batch?.batchNumber
+        ? { batchNumber: batches[0].batch.batchNumber }
+        : {}),
+      ...(batches[0]?.batch?.readyPlantsReceived === false
+        ? { readyPlantsReceived: false }
+        : batches[0]?.batch?.readyPlantsReceived === true
+          ? { readyPlantsReceived: true }
+          : {}),
       slotHistory: [...oldHistory, histEntry].slice(-50),
     },
   });
+  await stampCoverBatchIds(request._id, pushed?.batchId, toSlotId);
 
-  // Ensure ready slot is on request
+  // Linked slots: drop old ready slot, keep new one (and any other links).
   const linked = new Set((request.linkedSlotIds || []).map((id) => String(id)));
+  if (slotChanged && fromSlotId) linked.delete(String(fromSlotId));
   linked.add(String(toSlotId));
-  request.linkedSlotIds = [...linked].map((id) => new mongoose.Types.ObjectId(id));
+  request.linkedSlotIds = [...linked]
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
   request.sowedQuantity = plantsTotal;
   request.sowingCompletedDate = sowedAt;
 
-  const sowDayMatch = String(sowingDateStr).match(/^(\d{2})-(\d{2})-(\d{4})$/);
-  const sowDay = sowDayMatch ? `${sowDayMatch[3]}-${sowDayMatch[2]}-${sowDayMatch[1]}` : "";
-  await SowingEntry.updateOne(
-    { sowingRequestId: request._id },
-    {
-      $set: {
-        sowingDate: sowingDateStr,
-        sowDay,
-        plantReadyDate: toReadyDate,
-        plantsSowed: plantsTotal,
-        requestNumber: request.requestNumber || "",
-      },
-    }
-  );
+  // Move linked orders (incl. DISPATCHED / COMPLETED) onto the new ready slot + history.
+  let ordersMoved = { moved: 0, plants: 0, orderIds: [] };
+  if (slotChanged) {
+    ordersMoved = await moveLinkedOrdersBookingSlotOnSowEdit({
+      orderIds: request.linkedOrderIds || [],
+      sowingRequestId: request._id,
+      fromSlotId,
+      toSlotId,
+      fromReadyDate,
+      toReadyDate,
+      by: userId,
+      requestNumber: request.requestNumber || "",
+    });
+  }
 
   return {
     slotChanged,
@@ -629,8 +786,54 @@ export async function editSowEntryOnSlots(request, opts = {}) {
     plantsSowed: plantsTotal,
     actualPlants: impact.actualPlants,
     expectedMortality: impact.expectedMortality,
+    orderCoveredPlants: coveredTotal,
+    excessPlants: excessTotal,
+    ordersMarked: orderResult?.marked || 0,
+    partialPlants: orderResult?.partial?.addPlants || 0,
     history: histEntry,
+    ordersMoved,
   };
+}
+
+async function orderIdsCoveredByRequest(request) {
+  const ids = new Set((request?.linkedOrderIds || []).map((id) => String(id)).filter(Boolean));
+  const reqId = request?._id;
+  if (reqId) {
+    const extra = await Order.find({
+      $or: [
+        { sowingDoneRequestId: reqId },
+        { "sowingPartialCover.requestId": reqId },
+        { "sowingCoverSources.sowingRequestId": reqId },
+      ],
+    })
+      .select("_id")
+      .lean();
+    for (const order of extra) ids.add(String(order._id));
+  }
+  return [...ids]
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+}
+
+/** Drop this request's sown / partial marks so edit can cover from the new saleable pool. */
+async function clearRequestOrderCover(requestId, orderIds) {
+  if (!requestId || !orderIds?.length) return;
+  await Order.updateMany(
+    { _id: { $in: orderIds }, sowingDoneRequestId: requestId },
+    {
+      $set: { sowingDone: false, leftoverFromIncomplete: false },
+      $unset: { sowingDoneAt: "", sowingDoneRequestId: "" },
+    }
+  );
+  await Order.updateMany(
+    { _id: { $in: orderIds } },
+    {
+      $pull: {
+        sowingPartialCover: { requestId },
+        sowingCoverSources: { sowingRequestId: requestId },
+      },
+    }
+  );
 }
 
 /**
@@ -695,7 +898,30 @@ export async function settleOutwardAndReturns(
   userId
 ) {
   if (!request.outwardId) {
-    return { used: 0, returned: 0, returnRequestIds: [], events: [] };
+    // Issued without warehouse stock. Keep sow counters; do not create a
+    // return that would add inventory that was never issued.
+    const used = Math.max(0, Number(packetsUsed) || 0);
+    const returned = Math.max(0, Number(packetsToReturn) || 0);
+    const events = [];
+    if (used > 0) {
+      events.push({
+        type: "PACKETS_USED",
+        by: userId,
+        quantity: used,
+        unit: "pkt",
+        message: `${used} packets used (no warehouse issue)`,
+      });
+    }
+    if (returned > 0) {
+      events.push({
+        type: "PACKETS_RETURNED",
+        by: userId,
+        quantity: returned,
+        unit: "pkt",
+        message: `${returned} packets closed without inventory return`,
+      });
+    }
+    return { used, returned, returnRequestIds: [], events };
   }
   const canReturn = companyPacketShare(request) > 0;
 
@@ -812,13 +1038,71 @@ export async function settleOutwardAndReturns(
   return { used: usedTotal, returned: returnedTotal, returnRequestIds, events };
 }
 
+function coverRowsForEntry(rows) {
+  return (rows || [])
+    .map((row) => {
+      const plants = Math.max(0, Math.floor(Number(row?.plants) || 0));
+      const id = String(row?.orderId || "");
+      if (!plants || !mongoose.Types.ObjectId.isValid(id)) return null;
+      return {
+        orderId: new mongoose.Types.ObjectId(id),
+        plants,
+        partial: Boolean(row.partial),
+      };
+    })
+    .filter(Boolean);
+}
+
+/** Cover for this sow lives on sowingentries. One $set, so the order-array conflict cannot happen here. */
+async function writeCoverOnSowingEntry(request, { batchId, orderCovers, linkedOrderIds, orderCoveredPlants }) {
+  if (!request?._id) return;
+  const covers = coverRowsForEntry(orderCovers);
+  const links = (linkedOrderIds || [])
+    .map((id) => String(id || ""))
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  const coveredPlants = Math.max(0, Math.floor(Number(orderCoveredPlants) || 0));
+  const set = {
+    orderCovers: covers,
+    linkedOrderIds: links,
+    orderCoveredPlants: coveredPlants,
+  };
+  const batchFilter =
+    batchId && mongoose.Types.ObjectId.isValid(String(batchId))
+      ? { sourceBatchId: new mongoose.Types.ObjectId(String(batchId)) }
+      : null;
+  if (batchFilter) {
+    const byBatch = await SowingEntry.updateOne(batchFilter, { $set: set });
+    if (byBatch.matchedCount) return;
+  }
+  await SowingEntry.updateOne({ sowingRequestId: request._id }, { $set: set });
+}
+
+/** Message shown on Complete sow. Mongo driver text stays in the server log. */
+export function publicCompleteSowError(error) {
+  const raw = String(error?.message || "").trim();
+  if (/would create a conflict at/i.test(raw)) {
+    return "Could not save this sow. The cover update hit the same field twice. Try Complete sow again.";
+  }
+  if (/E11000|duplicate key/i.test(raw)) {
+    return "Could not save this sow. This sowing entry is already saved. Refresh and try again.";
+  }
+  if (error?.name === "MongoServerError" || error?.name === "MongoError") {
+    return "Could not save this sow. It was not marked complete. Try again.";
+  }
+  if (!raw || raw.length > 180) return "Could not save this sow. It was not marked complete. Try again.";
+  return raw;
+}
+
 /**
  * FIFO-cover linked orders: fully covered orders get sowingDone.
  * Short remainder holds as partial sow on the next leftover order.
+ * Cover pool is saleable only (sowed − CMS%). sowingDone only when
+ * attributed plants ≥ order qty — never mark done from thin air.
  */
 export async function markOrdersSowed(request, opts = {}) {
-  const plantsSowed = Math.max(0, Math.floor(parseNum(opts.plantsSowed, 0)));
-  if (plantsSowed <= 0) {
+  const plantsSowedGross = Math.max(0, Math.floor(parseNum(opts.plantsSowed, 0)));
+  if (plantsSowedGross <= 0) {
     return {
       marked: 0,
       remainingUncovered: 0,
@@ -860,9 +1144,18 @@ export async function markOrdersSowed(request, opts = {}) {
     ),
   ].map((id) => new mongoose.Types.ObjectId(id));
 
+  const bufferPct =
+    opts.sowingBufferPct != null && Number.isFinite(Number(opts.sowingBufferPct))
+      ? Math.max(0, Number(opts.sowingBufferPct))
+      : await mortalityPctForPlant(request.plantId);
+  // Saleable pool only — mortality buffer is not order cover unless explicitly allowed.
+  const coverPool = opts.coverPoolAlreadySaleable
+    ? plantsSowedGross
+    : sowCoverPool(plantsSowedGross, bufferPct);
+
   const empty = {
     marked: 0,
-    remainingUncovered: plantsSowed,
+    remainingUncovered: coverPool,
     markedIds: [],
     batchLinkedIds: [],
     readyDate: readyDateStr,
@@ -879,63 +1172,105 @@ export async function markOrdersSowed(request, opts = {}) {
 
   const orders = await Order.find({
     _id: { $in: orderObjectIds },
-    sowingDone: { $ne: true },
     orderStatus: {
       $nin: ["CANCELLED", "TEMPORARY_CANCELLED", "REJECTED", "DELETED"],
     },
   })
-    .select("_id numberOfPlants additionalPlants deliveryDate createdAt orderId sowingPartialCover")
+    .select(
+      "_id numberOfPlants additionalPlants deliveryDate createdAt orderId sowingPartialCover sowingCoverSources"
+    )
     .sort({ deliveryDate: 1, createdAt: 1, orderId: 1 })
     .lean();
 
-  if (!orders.length) {
-    return {
-      ...empty,
-      remainingUncovered: Math.max(0, plantsSowed - Math.round((plantsSowed * 10) / 100)),
-      mortalityLeft: Math.round((plantsSowed * 10) / 100),
-    };
-  }
+  if (!orders.length) return { ...empty, remainingUncovered: coverPool };
 
-  const needs = orders.map((order) => orderPlantRemaining(order));
-  const cover = coverAtTenPercent(plantsSowed, needs);
-  const full = [];
-  const waiting = [];
-  let partial = null;
-  orders.forEach((order, index) => {
-    const need = needs[index];
-    const got = cover.taken[index] || 0;
-    if (need < 1) return;
-    if (got >= need && got > 0) {
-      full.push({
-        orderId: order._id,
-        plants: got,
-        totalCovered: orderPartialHeld(order) + got,
-      });
-    } else if (got > 0 && !partial) {
-      partial = {
-        orderId: order._id,
-        addPlants: got,
-        remaining: need - got,
-        totalCovered: orderPartialHeld(order) + got,
-      };
-    } else if (got < 1) {
-      waiting.push({ orderId: order._id, remaining: need });
-    }
-  });
-  const plan = {
-    full,
-    partial,
-    waiting,
-    excess: cover.excess,
-    incomplete: Boolean(partial) || waiting.length > 0,
-    orderPlantsCovered: cover.covered,
-    mortalityLeft: cover.mortalityLeft,
-  };
+  let plan = planOrderSowCover({ plantsSowed: coverPool, orders });
+  // Mortality finish is opt-in only — default: never mark done from buffer alone.
+  if (opts.allowMortalityFill) {
+    const mortalityFill =
+      opts.mortalityFill != null
+        ? Math.max(0, Math.floor(Number(opts.mortalityFill) || 0))
+        : Math.max(0, plantsSowedGross - coverPool);
+    plan = fillLastPartialFromBuffer(plan, mortalityFill);
+  }
   const reqId = request._id;
+  const reqNumber = String(request.requestNumber || "");
+  const coverRef = await resolveCoverBatch(request, opts);
+  const orderById = new Map((orders || []).map((o) => [String(o._id), o]));
+  const markedIds = [];
+  const orderCovers = [];
+  let orderPlantsCovered = 0;
 
   for (const f of plan.full) {
+    const raw = orderById.get(String(f.orderId));
+    const addPlants = Math.max(0, Math.floor(Number(f.plants) || 0));
+    const heldHere = (Array.isArray(raw?.sowingPartialCover) ? raw.sowingPartialCover : [])
+      .filter((p) => String(p?.requestId || "") === String(reqId))
+      .reduce((s, p) => s + Math.max(0, Math.floor(Number(p.plants) || 0)), 0);
+    const priorHere = (Array.isArray(raw?.sowingCoverSources) ? raw.sowingCoverSources : [])
+      .filter((s) => String(s?.sowingRequestId || "") === String(reqId))
+      .reduce((s, x) => s + Math.max(0, Math.floor(Number(x.plants) || 0)), 0);
+    // Keep prior attribution from this request when re-stamping after pull.
+    const coveredHere = Math.max(priorHere, heldHere) + addPlants;
+    const others = orderCoveredExceptRequest(raw, reqId);
+    const totalAfter = others + coveredHere;
+    const need = orderPlantTotal(raw);
+    // Done only when this write's cover row (plus other requests) meets the order.
+    // A zero-plant write must not set the flag.
+    const finishesOrder = need > 0 && coveredHere > 0 && totalAfter >= need;
+    if (!finishesOrder) {
+      if (coveredHere > 0) {
+        await Order.updateOne(
+          { _id: f.orderId },
+          {
+            $set: { leftoverFromIncomplete: true, sowingDone: false },
+            $unset: { sowingDoneAt: "", sowingDoneRequestId: "" },
+            $pull: {
+              sowingPartialCover: { requestId: reqId },
+              sowingCoverSources: { sowingRequestId: reqId },
+            },
+          }
+        );
+        await Order.updateOne(
+          { _id: f.orderId },
+          {
+            $push: {
+              sowingPartialCover: {
+                requestId: reqId,
+                plants: coveredHere,
+                at: sowedAt,
+              },
+              sowingCoverSources: coverSourceDoc({
+                requestId: reqId,
+                requestNumber: reqNumber,
+                plants: coveredHere,
+                sowingDate: fmtDDMMYYYY(sowedAt),
+                plantReadyDate: readyDateStr,
+                batchId: coverRef.batchId,
+                slotId: coverRef.slotId,
+              }),
+            },
+          }
+        );
+        orderPlantsCovered += addPlants;
+        orderCovers.push({ orderId: f.orderId, plants: coveredHere, partial: true });
+      }
+      continue;
+    }
     await Order.updateOne(
-      { _id: f.orderId, sowingDone: { $ne: true } },
+      { _id: f.orderId },
+      {
+        $set: { leftoverFromIncomplete: false, sowingDone: false },
+        $unset: { sowingDoneAt: "", sowingDoneRequestId: "" },
+        $pull: {
+          sowingPartialCover: { requestId: reqId },
+          sowingCoverSources: { sowingRequestId: reqId },
+        },
+      }
+    );
+    // Flag and cover row land together. The flag is not set if this push does not run.
+    await Order.updateOne(
+      { _id: f.orderId },
       {
         $set: {
           sowingDone: true,
@@ -943,32 +1278,83 @@ export async function markOrdersSowed(request, opts = {}) {
           sowingDoneRequestId: reqId,
           leftoverFromIncomplete: false,
         },
+        $push: {
+          sowingCoverSources: coverSourceDoc({
+            requestId: reqId,
+            requestNumber: reqNumber,
+            plants: coveredHere,
+            sowingDate: fmtDDMMYYYY(sowedAt),
+            plantReadyDate: readyDateStr,
+            batchId: coverRef.batchId,
+            slotId: coverRef.slotId,
+          }),
+        },
       }
     );
+    markedIds.push(f.orderId);
+    orderPlantsCovered += addPlants;
+    orderCovers.push({ orderId: f.orderId, plants: coveredHere, partial: false });
   }
 
   applyIncompleteRequestRelease(request, plan, { sowedAt });
+  // linkedOrderIds should reflect what we actually marked done + partial
+  if (request) {
+    request.linkedOrderIds = [
+      ...markedIds,
+      ...(plan.partial?.orderId ? [plan.partial.orderId] : []),
+    ];
+  }
 
   if (plan.partial?.orderId && plan.partial.addPlants > 0) {
+    const raw = orderById.get(String(plan.partial.orderId));
+    const addPlants = Math.max(0, Math.floor(Number(plan.partial.addPlants) || 0));
+    const heldHere = (Array.isArray(raw?.sowingPartialCover) ? raw.sowingPartialCover : [])
+      .filter((p) => String(p?.requestId || "") === String(reqId))
+      .reduce((s, p) => s + Math.max(0, Math.floor(Number(p.plants) || 0)), 0);
+    const priorHere = (Array.isArray(raw?.sowingCoverSources) ? raw.sowingCoverSources : [])
+      .filter((s) => String(s?.sowingRequestId || "") === String(reqId))
+      .reduce((s, x) => s + Math.max(0, Math.floor(Number(x.plants) || 0)), 0);
+    // Same restamp as a full cover: pull this request, then push the new total.
+    // $pull and $push on sowingCoverSources in one update is a Mongo path conflict.
+    const coveredHere = Math.max(priorHere, heldHere) + addPlants;
     await Order.updateOne(
-      { _id: plan.partial.orderId, sowingDone: { $ne: true } },
+      { _id: plan.partial.orderId },
       {
         $set: { leftoverFromIncomplete: true, sowingDone: false },
-        $pull: { sowingPartialCover: { requestId: reqId } },
+        $unset: { sowingDoneAt: "", sowingDoneRequestId: "" },
+        $pull: {
+          sowingPartialCover: { requestId: reqId },
+          sowingCoverSources: { sowingRequestId: reqId },
+        },
       }
     );
     await Order.updateOne(
-      { _id: plan.partial.orderId, sowingDone: { $ne: true } },
+      { _id: plan.partial.orderId },
       {
         $push: {
           sowingPartialCover: {
             requestId: reqId,
-            plants: plan.partial.addPlants,
+            plants: coveredHere,
             at: sowedAt,
           },
+          sowingCoverSources: coverSourceDoc({
+            requestId: reqId,
+            requestNumber: reqNumber,
+            plants: coveredHere,
+            sowingDate: fmtDDMMYYYY(sowedAt),
+            plantReadyDate: readyDateStr,
+            batchId: coverRef.batchId,
+            slotId: coverRef.slotId,
+          }),
         },
       }
     );
+    orderPlantsCovered += addPlants;
+    orderCovers.push({
+      orderId: plan.partial.orderId,
+      plants: coveredHere,
+      partial: true,
+    });
   }
 
   const leftoverIds = [
@@ -977,31 +1363,40 @@ export async function markOrdersSowed(request, opts = {}) {
   ].filter(Boolean);
   if (leftoverIds.length) {
     await Order.updateMany(
-      { _id: { $in: leftoverIds }, sowingDone: { $ne: true } },
-      { $set: { leftoverFromIncomplete: true } }
+      { _id: { $in: leftoverIds } },
+      {
+        $set: { leftoverFromIncomplete: true, sowingDone: false },
+        $unset: { sowingDoneAt: "", sowingDoneRequestId: "" },
+      }
     );
   }
 
-  const markedIds = plan.full.map((f) => f.orderId);
   const batchLinkedIds = [
     ...markedIds,
     ...(plan.partial?.orderId ? [plan.partial.orderId] : []),
   ];
 
+  await writeCoverOnSowingEntry(request, {
+    batchId: coverRef.batchId,
+    orderCovers,
+    linkedOrderIds: batchLinkedIds,
+    orderCoveredPlants: orderPlantsCovered,
+  });
+
   return {
     marked: markedIds.length,
-    remainingUncovered: plan.excess,
+    remainingUncovered: Math.max(0, coverPool - orderPlantsCovered),
     markedIds,
     batchLinkedIds,
     readyDate: readyDateStr,
     plantReadyDays: readyDays,
-    coverWindowDays: 0,
+    coverWindowDays: ORDER_COVER_WINDOW_DAYS,
     eligibleCount: orders.length,
-    incomplete: plan.incomplete,
+    incomplete: plan.incomplete || markedIds.length < (plan.full || []).length,
     partial: plan.partial,
     waiting: plan.waiting,
-    orderPlantsCovered: plan.orderPlantsCovered,
-    mortalityLeft: plan.mortalityLeft ?? 0,
+    orderPlantsCovered,
+    orderCovers,
   };
 }
 
@@ -1055,6 +1450,7 @@ export async function reclaimExcessForCoveredOrders(
       ],
     }
   );
+  await refreshSowingEntriesOnSlot(sid, rid);
   return { excessPlants: excessLeft, orderCoveredPlants: covered };
 }
 

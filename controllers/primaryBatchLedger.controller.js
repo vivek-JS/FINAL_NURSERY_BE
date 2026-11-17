@@ -5,6 +5,7 @@ import {
   receiveLabLine,
   sendPlants,
   sowBottles,
+  sowMany,
 } from "../services/primaryBatchLedger.service.js";
 
 export const getPrimaryBoard = catchAsync(async (req, res) => {
@@ -21,12 +22,24 @@ export const postPrimaryReceive = catchAsync(async (req, res) => {
 });
 
 export const postPrimarySow = catchAsync(async (req, res) => {
+  if (Array.isArray(req.body?.batches)) {
+    const data = await sowMany({
+      batches: req.body.batches,
+      laboursLadies: req.body?.laboursLadies,
+      laboursGents: req.body?.laboursGents,
+      sowDate: req.body?.sowDate,
+    });
+    return res.status(200).json(generateResponse("Success", "Lagwad saved", data));
+  }
   const data = await sowBottles({
     batchId: req.body?.batchId,
     bottles: req.body?.bottles,
     expectedPlants: req.body?.expectedPlants,
     sowDate: req.body?.sowDate,
     size: req.body?.size,
+    lines: req.body?.lines,
+    laboursLadies: req.body?.laboursLadies,
+    laboursGents: req.body?.laboursGents,
   });
   res.status(200).json(generateResponse("Success", "Sown", data));
 });

@@ -307,11 +307,19 @@ async function formatPlantSubtypeLabel(order = {}) {
 // Named alert functions
 // ---------------------------------------------------------------------------
 
+/** Regular order WhatsApp (placed / edit / dispatch / payment) — OFF unless explicitly enabled. Big-order stays on. */
+export function isOrderWhatsAppMessagesEnabled() {
+  return process.env.WHATSAPP_ORDER_MESSAGES_ENABLED === "true";
+}
+
 /**
  * 🟢 New Order Placed
  */
 export async function sendOrderPlacedAlert(orderOrId) {
   try {
+    if (!isOrderWhatsAppMessagesEnabled()) {
+      return { delivered: 0, total: 0, results: [], skipped: true, reason: "order_messages_disabled" };
+    }
     const order =
       (await loadOrderForWhatsAppAlert(orderOrId)) ||
       (orderOrId && typeof orderOrId === "object" ? orderOrId : null);
@@ -372,43 +380,29 @@ export async function sendOrderPlacedAlert(orderOrId) {
 
 /**
  * 🔥 Big order — quantity at or above WHATSAPP_ALERT_BIG_ORDER_QTY (default 10,000).
+ * Marathi free text via linked WhatsApp (admins).
  */
-export async function sendBigOrderAlert(order, { qty, threshold } = {}) {
+export async function sendBigOrderAlert(order, { qty, threshold, isUpdate = false } = {}) {
   try {
+    const { formatBigOrderMarathiText } = await import(
+      "../utility/orderConfirmationMarathiText.js"
+    );
     const plants = qty ?? orderPlantQtyFromDoc(order);
     const minQty = threshold ?? parseInt(process.env.WHATSAPP_ALERT_BIG_ORDER_QTY || "10000", 10);
-
-    const farmerName =
-      order?.farmer?.name || order?.orderFor?.name || "—";
-    const salesPersonName = order?.salesPerson?.name || "—";
-    const farmerVillage =
-      order?.farmer?.village || order?.orderFor?.village || "—";
     const plantSubtype = await formatPlantSubtypeLabel(order);
     const orderNo = order?.orderId || order?.publicOrderCode || order?._id || "—";
-    const rate = Number(order?.rate) || 0;
-    const amount =
-      order?.totalAmount != null
-        ? Number(order.totalAmount)
-        : plants && rate
-          ? plants * rate
-          : 0;
-    const deliveryDate = formatWatiDateEnIN(order?.deliveryDate, "—");
 
-    const message = [
-      "🔥 *BIG ORDER ALERT*",
-      `_Quantity ≥ ${minQty.toLocaleString("en-IN")} plants_`,
-      "",
-      `Order No: *${orderNo}*`,
-      `Customer: ${farmerName}`,
-      `Village: ${farmerVillage}`,
-      `Plant: *${plantSubtype}*`,
-      `Plants: *${Number(plants).toLocaleString("en-IN")}*`,
-      `Amount: ₹${Number(amount).toLocaleString("en-IN")}`,
-      `Delivery: ${deliveryDate}`,
-      `Sales: ${salesPersonName}`,
-    ].join("\n");
+    const message = formatBigOrderMarathiText(order, {
+      qty: plants,
+      threshold: minQty,
+      isUpdate: Boolean(isUpdate),
+      plantSubtype,
+    });
 
-    return await alertAdmins(message, `big order #${orderNo} (${plants})`);
+    return await alertAdmins(
+      message,
+      `big order #${orderNo} (${plants})${isUpdate ? " update" : ""}`
+    );
   } catch (err) {
     console.error("[WhatsApp Alert] sendBigOrderAlert error:", err?.message || err);
     return { delivered: 0, total: 0, results: [], error: err?.message || String(err) };
@@ -423,62 +417,43 @@ function orderPlantQtyFromDoc(order = {}) {
   return base + extra;
 }
 
-function formatSlotLine(row) {
-  const window = `${row.startDay}–${row.endDay}`;
-  const month = row.month ? ` (${row.month})` : "";
-  return `• *${row.plantName}* / ${row.subtypeName} — ${window}${month}\n  Avail: *${row.availablePlants}* / ${row.totalPlants} (booked ${row.bookedPlants}, ${row.utilPct ?? 0}% full)`;
-}
-
 /**
- * 📦 Slot availability digest — low, high, overbooked (from alert engine scan).
+ * 📦 Date-wise FIFO booking capacity digest (replaces old slot availability alerts).
+ * @param {{ chunks: string[] }} payload — preformatted WhatsApp chunks
  */
-export async function sendSlotAvailabilityDigest({
-  low = [],
-  high = [],
-  overbooked = [],
-  year,
-  totalScanned = 0,
-}) {
+export async function sendBookingCapacityDigest({ chunks = [] } = {}) {
   try {
-    const lines = [
-      "📦 *Slot availability alerts*",
-      `_Scanned ${totalScanned} active slots · year ${year}_`,
-      "",
-    ];
-
-    if (overbooked.length) {
-      lines.push("⚠️ *Overbooked / critical*");
-      for (const row of overbooked) {
-        lines.push(formatSlotLine(row));
-      }
-      lines.push("");
-    }
-
-    if (low.length) {
-      lines.push("🔴 *Low availability* (almost full)");
-      for (const row of low) {
-        lines.push(formatSlotLine(row));
-      }
-      lines.push("");
-    }
-
-    if (high.length) {
-      lines.push("🟢 *High availability* (open capacity — push sales)");
-      for (const row of high) {
-        lines.push(formatSlotLine(row));
-      }
-      lines.push("");
-    }
-
-    if (lines.length <= 3) {
+    if (!chunks.length) {
       return { delivered: 0, total: 0, results: [], reason: "empty_digest" };
     }
-
-    return await alertAdmins(lines.join("\n").trimEnd(), "slot availability digest");
+    const chunkResults = [];
+    let delivered = 0;
+    let total = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const prefix = chunks.length > 1 ? `[${i + 1}/${chunks.length}]\n` : "";
+      const result = await alertAdmins(
+        prefix + chunks[i],
+        "booking capacity digest"
+      );
+      chunkResults.push(result);
+      delivered += result?.delivered || 0;
+      total = Math.max(total, result?.total || 0);
+    }
+    return {
+      delivered,
+      total,
+      chunks: chunks.length,
+      results: chunkResults,
+    };
   } catch (err) {
-    console.error("[WhatsApp Alert] sendSlotAvailabilityDigest error:", err?.message || err);
+    console.error("[WhatsApp Alert] sendBookingCapacityDigest error:", err?.message || err);
     return { delivered: 0, total: 0, results: [], error: err?.message || String(err) };
   }
+}
+
+/** @deprecated Use sendBookingCapacityDigest — kept as alias for older call sites. */
+export async function sendSlotAvailabilityDigest(payload) {
+  return sendBookingCapacityDigest(payload);
 }
 
 /**
@@ -549,6 +524,9 @@ export function filterEditHistoryForWhatsAppAlert(editHistory = []) {
  */
 export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHistory = [], existingDoc = null) {
   try {
+    if (!isOrderWhatsAppMessagesEnabled()) {
+      return { skipped: true, reason: "order_messages_disabled" };
+    }
     const alertableHistory = filterEditHistoryForWhatsAppAlert(editHistory);
     if (alertableHistory.length === 0) {
       return;
@@ -592,17 +570,17 @@ export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHis
     const orderNo =
       order?.orderId || order?.orderNumber || existingDoc?.orderId || "—";
 
-    const message = [
-      "🟡 *Order Updated*",
-      `Order #: ${orderNo}`,
-      `Farmer: ${farmerName}`,
-      `Village: ${village} | Taluka: ${taluka}`,
-      `Updated By: ${changedBy}`,
-      "Changes:",
-      ...changeLines,
-    ].join("\n");
+    const { formatOrderUpdatedMarathiText } = await import(
+      "../utility/orderConfirmationMarathiText.js"
+    );
+    const message = formatOrderUpdatedMarathiText(
+      order,
+      changedBy,
+      changeLines,
+      existingDoc
+    );
 
-    await alertAdmins(message);
+    await alertAdmins(message, `order update #${orderNo}`);
   } catch (err) {
     console.error("[WhatsApp Alert] sendOrderEditedAlert error:", err?.message || err);
   }
@@ -613,6 +591,9 @@ export async function sendOrderEditedAlert(order, changedBy = "Unknown", editHis
  */
 export async function sendOrderDispatchedAlert(order, changedBy = "Unknown") {
   try {
+    if (!isOrderWhatsAppMessagesEnabled()) {
+      return { skipped: true, reason: "order_messages_disabled" };
+    }
     const orderNo = order?.orderNumber || order?.orderId || order?._id || "—";
     const customer =
       order?.farmer?.name || order?.orderFor?.name || order?.salesPerson?.name || "—";
@@ -663,6 +644,9 @@ function formatWatiFarmerMessageStatus(wati = {}) {
  */
 export async function sendPaymentReceivedAlert(payment) {
   try {
+    if (!isOrderWhatsAppMessagesEnabled()) {
+      return { skipped: true, reason: "order_messages_disabled" };
+    }
     const customer =
       payment?.farmer?.name ||
       payment?.customerName ||

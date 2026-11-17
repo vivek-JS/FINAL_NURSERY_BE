@@ -3,6 +3,7 @@ import PlantSlot from "../models/slots.model.js";
 import AppError from "../utility/appError.js";
 import { applyStockFieldUpdates } from "../utility/slotStockTrail.js";
 import { sowBatchStock } from "../utility/lagwadSlotPlantsSplit.js";
+import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 
 const toInt = (v) => Math.max(0, Math.floor(Number(v) || 0));
 const idStr = (v) => (v == null || v === "" ? "" : String(v));
@@ -36,9 +37,10 @@ export function mortalityMovedPlants(batch) {
 export function mortalityLeftOnBatch(batch) {
   if (!batch || batch.isIrrelevant) return 0;
   const moved = mortalityMovedPlants(batch);
-  if (batch.noMortalityReserve && moved <= 0) return 0;
+  const added = toInt(batch.excessMovedToMortality);
+  if (batch.noMortalityReserve && moved <= 0) return added;
   const reserve = sowBatchStock({ ...plainBatch(batch), isIrrelevant: false, noMortalityReserve: false }).reserve;
-  return Math.max(0, reserve - moved);
+  return Math.max(0, reserve - moved + added);
 }
 
 /** Reported excess plus mortality that was moved into it. */
@@ -51,7 +53,9 @@ export function excessPlusMoved(excess, batch) {
 export function planMortalityToExcess({ slot, batch, plants } = {}) {
   if (batch?.isIrrelevant) return { error: "Irrelevant sowing is not counted" };
   const movedAlready = mortalityMovedPlants(batch);
-  if (batch?.noMortalityReserve && movedAlready <= 0) return { error: "Mortality is already in excess" };
+  if (batch?.noMortalityReserve && movedAlready <= 0 && toInt(batch?.excessMovedToMortality) <= 0) {
+    return { error: "Mortality is already in excess" };
+  }
   const explicit = plants != null && plants !== "";
   const shown = mortalityLeftOnBatch(batch);
   const mort = explicit ? toInt(plants) : mortalityHeldOnBatch(batch);
@@ -141,5 +145,70 @@ export async function releaseBatchMortalityToExcess({ slotId, batchId, plants, p
     availablePlants: toInt(slot.availablePlants),
     expectedMortality: toInt(slot.expectedMortality),
     noMortalityReserve: Boolean(batch.noMortalityReserve),
+  };
+}
+
+/** Move saleable excess back into the mortality hold. Capped at the excess on screen. */
+export function planExcessToMortality({ batch, plants } = {}) {
+  if (batch?.isIrrelevant) return { error: "Irrelevant sowing is not counted" };
+  const excess = storedShownExcess(plainBatch(batch));
+  const qty = toInt(plants);
+  if (qty <= 0) return { error: "Enter how many plants to move" };
+  if (excess <= 0) return { error: "This sowing has no excess to move" };
+  if (qty > excess) return { error: `You can move up to ${excess.toLocaleString("en-IN")}` };
+  const undo = Math.min(qty, mortalityMovedPlants(batch));
+  return { qty, undo, added: qty - undo };
+}
+
+/** POST body: move some of this batch's excess into mortality. */
+export async function moveBatchExcessToMortality({ slotId, batchId, plants, performedBy }) {
+  if (!mongoose.isValidObjectId(String(slotId))) throw new AppError("Invalid slot id", 400);
+  if (!mongoose.isValidObjectId(String(batchId))) throw new AppError("Invalid batch id", 400);
+  const by = performedBy && mongoose.isValidObjectId(String(performedBy)) ? performedBy : undefined;
+
+  const plantSlot = await PlantSlot.findOne({ "subtypeSlots.slots._id": slotId });
+  const slot = findSlot(plantSlot, slotId);
+  if (!slot) throw new AppError("Slot not found", 404);
+  const batch = slot.sowingBatches.id(batchId);
+  if (!batch) throw new AppError("Sowing batch not found on this slot", 404);
+
+  const plan = planExcessToMortality({ batch, plants });
+  if (plan.error) throw new AppError(plan.error, 400);
+
+  batch.mortalityMovedToExcess = Math.max(0, mortalityMovedPlants(batch) - plan.undo);
+  batch.excessMovedToMortality = toInt(batch.excessMovedToMortality) + plan.added;
+  if (mortalityLeftOnBatch(batch) > 0) batch.noMortalityReserve = false;
+  batch.expectedMortalityApplied = mortalityLeftOnBatch(batch);
+  batch.actualPlantsApplied = Math.max(0, toInt(batch.actualPlantsApplied) - plan.qty);
+  batch.availablePlantsApplied = Math.max(0, toInt(batch.availablePlantsApplied) - plan.qty);
+
+  const excessive = toInt(slot?.excessiveSowing?.plants);
+  const takeExcessive = Boolean(batch?.isExcessiveSowing) || toInt(batch?.orderCoveredPlants) <= 0;
+  if (takeExcessive && slot.excessiveSowing) {
+    slot.excessiveSowing.plants = Math.max(0, excessive - plan.qty);
+  }
+
+  const label = batch.requestNumber || "sowing batch";
+  applyStockFieldUpdates(
+    slot,
+    {
+      actualPlants: Math.max(0, toInt(slot.actualPlants) - plan.qty),
+      expectedMortality: toInt(slot.expectedMortality) + plan.qty,
+      availablePlants: Math.max(0, toInt(slot.availablePlants) - plan.qty),
+    },
+    by,
+    `Excess moved to mortality · ${label} · ${plan.qty}`
+  );
+  if (by) slot.setPerformer?.(by);
+  await plantSlot.save({ validateBeforeSave: true });
+
+  return {
+    slotId: idStr(slotId),
+    batchId: idStr(batchId),
+    excessMoved: plan.qty,
+    mortalityLeft: mortalityLeftOnBatch(batch),
+    availablePlants: toInt(slot.availablePlants),
+    expectedMortality: toInt(slot.expectedMortality),
+    excessPlants: storedShownExcess(plainBatch(batch)),
   };
 }

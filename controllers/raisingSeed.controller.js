@@ -818,6 +818,7 @@ export async function restoreRaisingPackets({
     intake.status =
       intake.packetsRemaining >= received ? "received" : "partially_used";
     await intake.save();
+    if (intake.orderId) await syncOrderRaisingIntake(intake.orderId, intake);
     remaining = Number((remaining - returned).toFixed(4));
   }
 
@@ -825,4 +826,22 @@ export async function restoreRaisingPackets({
     restored: Number((Number(packetsToRestore) - remaining).toFixed(4)),
     shortfall: remaining,
   };
+}
+
+/** Farmer packets a cancelled request took but never sowed or returned. */
+export function unsettledRaisingPackets(request) {
+  return Math.max(
+    0,
+    (Number(request?.packetsFromRaising) || 0) -
+      (Number(request?.raisingPacketsUsed) || 0) -
+      (Number(request?.raisingPacketsReturned) || 0)
+  );
+}
+
+/** Give a cancelled request's unsettled farmer packets back to their intakes. */
+export function restoreRequestRaisingPackets(request) {
+  return restoreRaisingPackets({
+    intakeIds: request?.raisingIntakeIds || [],
+    packetsToRestore: unsettledRaisingPackets(request),
+  });
 }

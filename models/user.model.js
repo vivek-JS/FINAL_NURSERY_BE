@@ -58,7 +58,6 @@ const userSchema = new Schema({
       "CASHIER",
       "OFFICE_ADMIN",
       "DISPATCH_MANAGER",
-      "DISPATCH",
       "Manager",
       "HR",
       "PRIMARY",
@@ -79,6 +78,7 @@ const userSchema = new Schema({
     type: Boolean,
     default: false,
   },
+  /** Sales (or any role) who may open Trips, create/finalize freight slips, and get dispatch alerts. */
   /**
    * Dispatch employee → their dispatch manager.
    * Used so a manager can assign vehicles only to people who report to them.
@@ -88,6 +88,10 @@ const userSchema = new Schema({
     ref: "User",
     default: null,
     index: true,
+  },
+  canManageTrips: {
+    type: Boolean,
+    default: false,
   },
   defaultState: {
     type: String,
@@ -195,6 +199,7 @@ const userSchema = new Schema({
   },
 }, { timestamps: true });
 
+// Middleware to handle DealerBooking creation for new dealers
 userSchema.pre("validate", async function validateDispatchReportsTo(next) {
   try {
     if (this.jobTitle !== "DISPATCH") return next();
@@ -216,7 +221,6 @@ userSchema.pre("validate", async function validateDispatchReportsTo(next) {
   }
 });
 
-// Middleware to handle DealerBooking creation for new dealers
 
 const User = model("User", userSchema);
 

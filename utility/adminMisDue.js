@@ -1,5 +1,6 @@
 import Order from "../models/order.model.js";
 import {
+  COUNTED_PLANTS_EXPR,
   LINE_PLANT_TOTAL_ADD_FIELDS,
   orderStatusExcludeMatch,
 } from "./istOrderDateStats.js";
@@ -46,7 +47,7 @@ async function sumDueOrdersPlants(match) {
       $group: {
         _id: null,
         orders: { $sum: 1 },
-        plants: { $sum: "$linePlantTotal" },
+        plants: { $sum: COUNTED_PLANTS_EXPR },
       },
     },
   ]);
@@ -115,7 +116,7 @@ export async function aggregatePastDueDeliveryRows(rangeStart, extraMatch = {}) 
         $group: {
           _id: "$orderStatus",
           orders: { $sum: 1 },
-          plants: { $sum: "$linePlantTotal" },
+          plants: { $sum: COUNTED_PLANTS_EXPR },
           plantsRemaining: {
             $sum: {
               $cond: [

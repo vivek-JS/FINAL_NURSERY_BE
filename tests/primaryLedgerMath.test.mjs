@@ -7,6 +7,7 @@ import {
   mortalityExpectedPlants,
   parseDay,
   plantsNotSent,
+  readyDaysForSize,
   stockBySize,
   takeBottles,
   traySplit,
@@ -33,6 +34,14 @@ describe("primary ledger math", () => {
     assert.equal(mortalityExpectedPlants(10000), 9000);
     assert.equal(plantsNotSent(9000, 4000), 5000);
     assert.equal(plantsNotSent(9000, 9000), 0);
+  });
+
+  it("uses a size's own primary days when the batch has them", () => {
+    const batch = { primaryPlantReadyDays: 21, primaryR2PlantReadyDays: 30, primaryR3PlantReadyDays: 40 };
+    assert.equal(readyDaysForSize(batch, "R1"), 21);
+    assert.equal(readyDaysForSize(batch, "R2"), 30);
+    assert.equal(readyDaysForSize(batch, "R3"), 40);
+    assert.equal(readyDaysForSize({ primaryPlantReadyDays: 21 }, "R2"), 21);
   });
 
   it("adds ready days on the calendar", () => {

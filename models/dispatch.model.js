@@ -367,6 +367,7 @@ const dispatchSchema = new Schema(
         sourceOutwardId: { type: Schema.Types.ObjectId, default: null },
         secondaryInwardId: { type: Schema.Types.ObjectId, default: null },
         pollyhouse: { type: String, trim: true, default: "" },
+        sowBucket: { type: String, trim: true, default: "" },
         quantity: { type: Number, required: true, min: 1 },
         reason: { type: String, trim: true, default: "" },
         source: { type: String, enum: ["APP", "COMPLETE_FORM"], default: "APP" },

@@ -14,7 +14,12 @@ import BankAuditLog from "../models/bankAuditLog.model.js";
 const log = () => getBankingLogger();
 
 /** The only CIB_SV packets the bank's samples carry AGGRNAME in. */
-const WANTS_AGGRNAME = new Set(["/Registration", "/RegistrationStatus", "/Transaction"]);
+const WANTS_AGGRNAME = new Set([
+  "/Registration",
+  "/RegistrationStatus",
+  "/Deregistration",
+  "/Transaction",
+]);
 
 /**
  * Identity fields prefixed to every request body.
@@ -67,16 +72,17 @@ export async function iciciCorporateRequest({
   method = "POST",
   idempotencyKey,
   userId,
+  omitIdentity = false,
 }) {
   const cfg = getIciciCorporateConfig();
   const url = buildUrl(endpointPath);
   const started = Date.now();
 
-  const identity = buildIdentity(endpointPath, cfg);
+  const identity = omitIdentity ? {} : buildIdentity(endpointPath, cfg);
 
   const requestBody = cfg.useStub
     ? payload
-    : encryptPayload({ ...identity, ...payload }, { service: endpointPath });
+    : encryptPayload({ ...identity, ...payload }, { service: "" });
 
   const headers = {
     "Content-Type": "application/json",

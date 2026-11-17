@@ -3,7 +3,13 @@ import { getIciciCorporateConfig } from "../config/iciciCorporate.config.js";
 import { fetchAndStoreCorporateStatement } from "../services/iciciCorporateStatement.service.js";
 import { runEnhancedReconciliation } from "../services/reconciliationEngine.service.js";
 import { pollOpenPayouts } from "../services/iciciPayout.service.js";
+import { trackNeftPayouts } from "../services/iciciNeftStatus.service.js";
 import { fetchStatementIfDue } from "../services/bankAutoCheck.service.js";
+import {
+  statementArchiveMissing,
+  syncDueStatementDays,
+  syncTwoMonthStatement,
+} from "../services/statementDaySync.service.js";
 import { getBankingLogger } from "../utils/logger.js";
 
 const log = () => getBankingLogger();
@@ -12,7 +18,8 @@ const log = () => getBankingLogger();
  * Daily: fetch statement (lookback N days) → run reconciliation engine.
  * Enable with ICICI_BANKING_CRON_ENABLED=true
  *
- * Every 15 min: ask ICICI about payouts that are with the bank.
+ * Every 15 min: ask ICICI about payouts that are with the bank, then follow
+ * paid NEFTs (NEFT Incremental Status) until credited or returned.
  * Enable with ICICI_PAYOUT_POLL_ENABLED=true
  *
  * Hourly: fetch the last 2 days of statement (live bank only, at most every
@@ -35,6 +42,8 @@ export function initBankingCronJobs() {
           if (result.checked || result.recoveredStuck) {
             log().info("Payout poll complete", result);
           }
+          const neft = await trackNeftPayouts();
+          if (neft.checked) log().info("NEFT tracking complete", neft);
         } catch (e) {
           log().error("Payout poll failed", { error: e.message });
         } finally {
@@ -78,6 +87,33 @@ export function initBankingCronJobs() {
     );
     log().info("Suspense sweep initialized", { schedule: cfg.suspenseSweep.schedule });
   }
+
+  let statementSyncing = false;
+  cron.schedule(
+    "5 12 * * *",
+    async () => {
+      if (statementSyncing) return;
+      statementSyncing = true;
+      try {
+        const due = await syncDueStatementDays(null);
+        log().info("Noon statement sync", { from: due.from, to: due.to, inserted: due.stored?.inserted });
+      } catch (e) {
+        log().error("Noon statement sync failed", { error: e.message });
+      } finally {
+        statementSyncing = false;
+      }
+    },
+    { timezone: cfg.cron.timezone || "Asia/Kolkata" }
+  );
+  setTimeout(() => {
+    statementArchiveMissing()
+      .then((missing) => (missing ? syncTwoMonthStatement(null) : null))
+      .then((result) => {
+        if (result) log().info("Two-month statement archive", result);
+      })
+      .catch((e) => log().error("Two-month statement archive failed", { error: e.message }));
+  }, 20000);
+  log().info("Statement day sync initialized", { noon: "5 12 * * *", archive: "last 62 days on startup" });
 
   if (!cfg.cron.enabled) {
     log().info("Banking cron disabled (ICICI_BANKING_CRON_ENABLED != true)");

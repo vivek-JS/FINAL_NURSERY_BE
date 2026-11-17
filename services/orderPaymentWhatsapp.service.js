@@ -257,7 +257,8 @@ function agriCustomerRecipient(order) {
  * @param {{ paidAmount?: number, modeOfPayment?: string }} [paymentInfo]
  */
 export async function tryAutoSendPlantOrderPaymentWhatsApp(orderId, paymentInfo = {}) {
-  if (process.env.WATI_PAYMENT_WHATSAPP_ENABLED === "false") {
+  // Payment WhatsApp (WATI + Baileys + admin payment alert) disabled.
+  if (process.env.WATI_PAYMENT_WHATSAPP_ENABLED !== "true") {
     return { skipped: true, reason: "disabled" };
   }
   try {
@@ -335,7 +336,8 @@ export async function tryAutoSendPlantOrderPaymentWhatsApp(orderId, paymentInfo 
  * @param {{ paidAmount?: number, modeOfPayment?: string }} [paymentInfo]
  */
 export async function tryAutoSendAgriOrderPaymentWhatsApp(orderId, paymentInfo = {}) {
-  if (process.env.WATI_PAYMENT_WHATSAPP_ENABLED === "false") {
+  // Payment WhatsApp disabled unless explicitly re-enabled.
+  if (process.env.WATI_PAYMENT_WHATSAPP_ENABLED !== "true") {
     return { skipped: true, reason: "disabled" };
   }
   try {

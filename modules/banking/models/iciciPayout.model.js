@@ -104,6 +104,15 @@ const iciciPayoutSchema = new Schema(
       lastCheckedAt: { type: Date },
       completedAt: { type: Date },
       checks: { type: Number, default: 0 },
+      /** NEFT Incremental Status API, asked by UTR after the payout reaches SUCCESS. */
+      neft: {
+        state: { type: String },
+        status: { type: String },
+        reason: { type: String },
+        creditDate: { type: String },
+        checkedAt: { type: Date },
+        checks: { type: Number, default: 0 },
+      },
     },
 
     history: { type: [historySchema], default: [] },

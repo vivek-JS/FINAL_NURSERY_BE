@@ -18,6 +18,19 @@ export const LINE_PLANT_TOTAL_ADD_FIELDS = {
   },
 };
 
+/**
+ * Plants still owed. A partial order counts remainingPlants.
+ * Every other status counts the booked size (numberOfPlants + additionalPlants).
+ * Requires linePlantTotal to already be on the document.
+ */
+export const COUNTED_PLANTS_EXPR = {
+  $cond: [
+    { $eq: ["$orderStatus", "PARTIALLY_COMPLETED"] },
+    { $ifNull: ["$remainingPlants", "$linePlantTotal"] },
+    "$linePlantTotal",
+  ],
+};
+
 export function istDayBoundsFromYmd(dateKey) {
   const start = new Date(`${dateKey}T00:00:00+05:30`);
   const end = new Date(`${dateKey}T23:59:59.999+05:30`);

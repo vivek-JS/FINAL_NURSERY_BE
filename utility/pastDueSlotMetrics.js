@@ -6,7 +6,7 @@ import {
 import { getNativeDeliveryCohortOrders } from "./slotDispatchStats.js";
 import { reportedExcess, slotReportedExcess, slotSowStock } from "./lagwadSlotPlantsSplit.js";
 import { storedShownExcess } from "./sowingBatchExcessStamp.js";
-import { SOWING_GAP_PIPELINE_STATUS_SET } from "../constants/sowingGapOrderStatuses.js";
+import { NEED_SOW_ORDER_STATUS_SET } from "../constants/sowingGapOrderStatuses.js";
 
 const DUE_PIPELINE_STATUS_SET = new Set(DUE_DELIVERY_STATUSES);
 
@@ -168,7 +168,8 @@ export function buildSowingFromOtherSlotDetail({ slot, deliveryOrders, orderSowi
 const EXCLUDED_GAP_ORDERS = new Set(["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED", "DISPATCHED", "COMPLETED"]);
 const DISPATCHED_GAP_STATUSES = new Set(["DISPATCHED", "COMPLETED"]);
 
-const REMAINING_GAP_STATUSES = SOWING_GAP_PIPELINE_STATUS_SET;
+/** Uncovered / need-sow rows: ACCEPTED only — PENDING never counts as still to sow. */
+const REMAINING_GAP_STATUSES = NEED_SOW_ORDER_STATUS_SET;
 
 function parseDdMmYyyySortKey(value) {
   if (!value || typeof value !== "string") return 0;
@@ -530,6 +531,7 @@ function summarizeSowingEntries(slot, sowingBufferPct = 0) {
     excessPlants: storedShownExcess(b, sowingBufferPct),
     packetsUsed: Number(b.packetsUsed) || 0,
     isExcessiveSowing: Boolean(b.isExcessiveSowing),
+    isIrrelevant: Boolean(b.isIrrelevant),
   }));
 }
 
@@ -584,8 +586,9 @@ export function sumGrossOrderCoveredPlants(slot) {
  * Sowing-allowed slot display fields (call after resolveSlotBufferFields).
  * Excess is the CMS percent off plants sowed, then minus orders.
  * Mortality on the slot stays in sowedExpectedMortality. Stored availablePlants is not used.
+ * `includeBatch` optionally drops sowings from bookable excess (capacity board skips irrelevant).
  */
-export function applySowingAllowedSlotMetrics(slot, sowingBufferPct = 0) {
+export function applySowingAllowedSlotMetrics(slot, sowingBufferPct = 0, { includeBatch } = {}) {
   if (!slot) return slot;
   const gross = sumGrossOrderCoveredPlants(slot);
   const primarySowed = Math.max(0, Number(slot.primarySowed) || 0);
@@ -596,7 +599,7 @@ export function applySowingAllowedSlotMetrics(slot, sowingBufferPct = 0) {
   const batches = Array.isArray(slot.sowingBatches) ? slot.sowingBatches : [];
   slot.grossOrderCoveredPlants = gross;
   slot.excessAvailableForBooking = batches.length
-    ? slotReportedExcess(batches, pct)
+    ? slotReportedExcess(batches, pct, includeBatch)
     : reportedExcess({ plantsSowed: primarySowed, orderCoveredPlants: gross, sowingBufferPct: pct });
   slot.sowedActualPlants = stock.actualPlants;
   slot.sowedExpectedMortality = stock.expectedMortality;

@@ -29,6 +29,7 @@ const ORDER_LIST_PROJECT = {
   deliveryDate: 1,
   numberOfPlants: 1,
   additionalPlants: 1,
+  remainingPlants: 1,
   plantName: 1,
   plantSubtype: 1,
   farmer: 1,

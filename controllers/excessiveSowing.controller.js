@@ -9,8 +9,9 @@ import mongoose from 'mongoose';
 import { createSowingRequest } from './sowingRequest.controller.js';
 
 /**
- * Excessive sowing = packet request with no orders (same pending → issue → sow flow).
- * sowingDate / plantReadyBy are ignored here; set at sow-complete time in shed ops.
+ * Excessive sowing = no farmer orders, no packet inventory.
+ * Issued immediately (no warehouse stock, no inventory approval) so Enter sow is open.
+ * sowingDate / plantReadyBy are set when sow is completed.
  * POST /api/v1/sowing/excessive/create-request
  */
 export const createExcessiveSowingRequest = async (req, res) => {
@@ -46,6 +47,9 @@ export const createExcessiveSowingRequest = async (req, res) => {
     slotIds: Array.isArray(slotIds) ? slotIds : [],
     notes: notes || 'Excessive sowing (no orders)',
     isExcessiveSowing: true,
+    // Skip pending → inventory issue. Request is sowing in progress for Enter sow.
+    directIssue: true,
+    skipStockIssue: true,
   };
 
   return createSowingRequest(req, res);

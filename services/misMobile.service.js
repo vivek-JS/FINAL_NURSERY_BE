@@ -4,6 +4,7 @@ import { LINE_PLANT_TOTAL_ADD_FIELDS, getIstTodayYmd, istDateStringExpr } from "
 import { parseCentralReportDateRange } from "../utility/centralReportEngine/dateRange.js";
 import { matchDeliveryDateInRange } from "../utility/centralReportEngine/deliveryMatch.js";
 import { PLANT_SUBTYPE_STAGES, fetchAdminDailyMis } from "./adminDailyMis.service.js";
+import { fetchLeadFarmerStats } from "./leadFarmerStats.service.js";
 
 export const MAX_FORECAST_DAYS = 10;
 
@@ -118,14 +119,23 @@ async function fetchForecastRows(dates) {
   ]);
 }
 
+const emptyLeadStats = { totalLeads: 0, newFarmers: 0, repeatFarmers: 0 };
+
 export async function fetchMisMobile({ startDate, endDate, days, today = getIstTodayYmd() } = {}) {
   const dates = forecastDates(today, parseForecastDays(days));
-  const [mis, forecastRows] = await Promise.all([
-    fetchAdminDailyMis(startDate || today, endDate || today),
+  const rangeStart = startDate || today;
+  const rangeEnd = endDate || today;
+  const [mis, forecastRows, leadResult] = await Promise.all([
+    fetchAdminDailyMis(rangeStart, rangeEnd),
     fetchForecastRows(dates),
+    fetchLeadFarmerStats({ startDate: rangeStart, endDate: rangeEnd }).catch((error) => {
+      console.error("[mis-mobile] lead stats", error);
+      return { data: emptyLeadStats };
+    }),
   ]);
   if (mis.error) return mis;
   const { rows, totals } = buildMisMobileRows(mis.data.varietyTable, forecastRows, dates);
+  const leadStats = leadResult?.data || emptyLeadStats;
   return {
     data: {
       today,
@@ -133,6 +143,11 @@ export async function fetchMisMobile({ startDate, endDate, days, today = getIstT
       endDate: mis.data.endDate,
       forecastDates: dates,
       totals: { ...totals, bookedOrders: num(mis.data.varietyTotals?.booking?.orders) },
+      leadStats: {
+        totalLeads: num(leadStats.totalLeads),
+        newFarmers: num(leadStats.newFarmers),
+        repeatFarmers: num(leadStats.repeatFarmers),
+      },
       rows,
     },
   };

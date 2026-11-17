@@ -1,5 +1,6 @@
 import moment from "moment";
 import { IST_OFFSET, deliveryDateToIstMoment } from "./istSlotDate.js";
+import { splitLagwadQtyForSlot } from "./lagwadSlotPlantsSplit.js";
 
 export const DISPATCH_DUE_STATUSES = [
   "ACCEPTED",
@@ -59,6 +60,7 @@ export function bucketWindows(from, to, windowDays) {
       orderCount: 0,
       lineCount: 0,
       oldLagwad: 0,
+      unbatchedAfter: 0,
     });
   }
   return windows;
@@ -95,9 +97,60 @@ export function fillDispatch(windows, orders, { rollPast, today }) {
   return windows;
 }
 
-export function fillLagwad(windows, lines, { rollPast, today }) {
+function coveredPlants(order) {
+  const fromSources = (order?.sowingCoverSources || []).reduce((sum, row) => sum + positive(row?.plants), 0);
+  if (fromSources > 0) return fromSources;
+  return (order?.sowingPartialCover || []).reduce((sum, row) => sum + positive(row?.plants), 0);
+}
+
+/**
+ * Plants still to give that have no sowing batch.
+ * sowingDone covers the order. A partial cover only leaves the uncovered due plants.
+ */
+export function unbatchedDueQty(order) {
+  const due = orderDueQty(order);
+  if (!due || order?.sowingDone) return 0;
+  const booked = positive(order.numberOfPlants) + positive(order.additionalPlants);
+  return Math.min(due, Math.max(0, booked - coveredPlants(order)));
+}
+
+/**
+ * No-batch due plants whose delivery is after the first window.
+ * Dates inside that window, including its last day, are already in its dispatch.
+ */
+export function fillUnbatchedAfter(windows, orders) {
+  if (!windows.length) return windows;
+  const cut = windows[0].to;
+  let extra = 0;
+  for (const order of orders || []) {
+    const qty = unbatchedDueQty(order);
+    if (!qty) continue;
+    const ymd = deliveryDateToIstMoment(order.deliveryDate)?.format(YMD);
+    if (ymd && ymd > cut) extra += qty;
+  }
+  windows[0].unbatchedAfter = extra;
+  return windows;
+}
+
+/**
+ * Plants shown on the dispatch board.
+ * A live notebook count is plants already in hand, so no mortality.
+ * Lagwad planted after that count still drops the 10% mortality.
+ * Crops with no count day keep the 10% on every line.
+ */
+export function lagwadBoardQty(line, liveCountAsOn) {
+  const avail = Math.max(0, Math.floor(Number(line?.availableQuantity) || 0));
+  if (!avail) return 0;
+  const cut = typeof liveCountAsOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(liveCountAsOn) ? liveCountAsOn : null;
+  const inward = line?.inwardDate ? deliveryDateToIstMoment(line.inwardDate)?.format(YMD) : null;
+  if (cut && inward && inward <= cut) return avail;
+  return splitLagwadQtyForSlot(avail).actualPlants;
+}
+
+/** Lagwad on the board. Mortality applies only to planting after a live count day. */
+export function fillLagwad(windows, lines, { rollPast, today, liveCountAsOn = null }) {
   for (const line of lines || []) {
-    const qty = positive(line.availableQuantity);
+    const qty = lagwadBoardQty(line, liveCountAsOn);
     if (!qty) continue;
     const i = assignToWindow(line.expectedReadyDate, windows, { rollPast });
     if (i < 0) continue;

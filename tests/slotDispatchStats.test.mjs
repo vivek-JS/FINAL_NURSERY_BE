@@ -70,7 +70,7 @@ describe("slotDispatchStats — booked native only", () => {
   it("card remaining matches native delivery cohort; rolled tracked separately", () => {
     const orders = [
       { orderStatus: "ACCEPTED", numberOfPlants: 3000, pastDueSlotRollover: true },
-      { orderStatus: "FARM_READY", numberOfPlants: 700, pastDueSlotRollover: false },
+      { orderStatus: "ACCEPTED", numberOfPlants: 700, pastDueSlotRollover: false },
     ];
     const native = orders.filter((o) => !o.pastDueSlotRollover);
     const stats = computeSlotDispatchStatsFromOrders(orders, {
@@ -83,5 +83,34 @@ describe("slotDispatchStats — booked native only", () => {
     assert.strictEqual(stats.remainingRolledIn, 3000);
     assert.strictEqual(stats.remainingNative, 700);
     assert.strictEqual(stats.remainingToDispatch, 700);
+  });
+
+  it("gap uses partial-cover remainder, not the full order qty", () => {
+    const orders = [
+      {
+        orderStatus: "ACCEPTED",
+        numberOfPlants: 18000,
+        sowingDone: false,
+        sowingCoverSources: [{ plants: 11800 }],
+      },
+      {
+        orderStatus: "ACCEPTED",
+        numberOfPlants: 6500,
+        sowingDone: false,
+      },
+      {
+        orderStatus: "ACCEPTED",
+        numberOfPlants: 10000,
+        sowingDone: true,
+        sowingCoverSources: [{ plants: 10000 }],
+      },
+    ];
+    const stats = computeSlotDispatchStatsFromOrders(orders, {
+      bookedOrders: orders,
+      pipelineOrders: orders,
+    });
+    assert.strictEqual(stats.bookedUncoveredPlants, 6200 + 6500);
+    assert.strictEqual(stats.bookedCoveredPlants, 11800 + 10000);
+    assert.strictEqual(stats.totalBookedPlants, 18000 + 6500 + 10000);
   });
 });

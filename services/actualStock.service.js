@@ -12,6 +12,7 @@ import {
   istDayKey,
 } from "../utility/actualStock.js";
 import { IST_OFFSET } from "../utility/istSlotDate.js";
+import { splitLagwadQtyForSlot } from "../utility/lagwadSlotPlantsSplit.js";
 import { createShortTtlCache } from "../utility/shortTtlCache.js";
 import { resolveCropContext } from "./dispatchLagwadSources.js";
 
@@ -28,6 +29,12 @@ const STOCK_COUNTS = [
     lineGroup: (line) => (/^VS/i.test(line.batch) ? "vasai" : "main"),
   },
 ];
+
+/** Count day for a crop that has a live notebook stock, otherwise null. */
+export function physicalCountAsOn(plantName) {
+  const count = STOCK_COUNTS.find((c) => c.plant.test(plantName || ""));
+  return count?.asOn || null;
+}
 
 const cache = createShortTtlCache(60_000);
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
@@ -73,16 +80,21 @@ async function loadLagwadAfter(plantId, subtypeId, after) {
     },
     { $sort: { date: -1 } },
   ]);
-  return rows.map((r) => ({
-    id: String(r.id),
-    date: r.date,
-    day: istDayKey(r.date),
-    shed: r.shed || "",
-    batchNumber: batchNo.get(String(r.batchId)) || "",
-    total: n(r.total),
-    available: Math.min(n(r.available), n(r.total)),
-    readyDate: r.readyDate || null,
-  }));
+  return rows.map((r) => {
+    const gross = n(r.total);
+    // Stock adds the sellable plants only. The 10% mortality on each line stays out.
+    const sellable = splitLagwadQtyForSlot(gross).actualPlants;
+    return {
+      id: String(r.id),
+      date: r.date,
+      day: istDayKey(r.date),
+      shed: r.shed || "",
+      batchNumber: batchNo.get(String(r.batchId)) || "",
+      total: sellable,
+      available: Math.min(n(r.available), gross),
+      readyDate: r.readyDate || null,
+    };
+  });
 }
 
 /** Actual stock for a crop/variety with a physical count, else null. */
@@ -122,6 +134,7 @@ export async function getActualStock({ plantId, subtypeId }) {
     ledger: buildStockLedger({
       asOn: count.asOn,
       opening,
+      through: istDayKey(new Date()),
       lagwad: entries.map((e) => ({ day: e.day, qty: e.total })),
       dispatch,
     }),

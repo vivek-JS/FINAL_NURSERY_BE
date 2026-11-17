@@ -120,7 +120,7 @@ function analystPrompt({ district, question, capacity, board, weather, mandi }) 
     "DATA",
     "board.varieties is the live board, one row per crop – variety (e.g. Papaya – Taiwan):",
     "- stock.inShed / stock.readyNow: plants in our sheds now, and how many of them are ready to dispatch.",
-    "- now: the current slot. It already includes overdue slots from the last board.overdueLookbackDays days.",
+    "- now: the current slot only (ready today-or-earlier free). Past free is on past date cards; not-yet-ready free is on its ready date. Irrelevant / old batches never count.",
     "  ready = plants ready for that slot, booked = plants promised, net = ready − booked (negative = short, positive = free to sell).",
     "  overdueBooked = orders from past slots not dispatched yet (urgent). unsoldFromPast = ready plants left over from past slots.",
     "- next: the next slots in date order with the same ready / booked / net.",

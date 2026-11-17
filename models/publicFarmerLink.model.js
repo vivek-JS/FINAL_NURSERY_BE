@@ -67,6 +67,12 @@ const publicFarmerLinkSchema = new Schema(
     meta: {
       type: Schema.Types.Mixed
     },
+    assignedUserIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User"
+      }
+    ],
     createdBy: {
       type: Schema.Types.ObjectId,
       ref: "User"

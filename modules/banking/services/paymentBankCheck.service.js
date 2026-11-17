@@ -7,7 +7,7 @@
  *
  * Order of attempts:
  *   1. Stored statement lines (same scoring as the batch engine)
- *   2. ICICI Transaction Inquiry, when no line has landed yet
+ *   2. Latest ICICI account statement, then the same match again
  */
 
 import crypto from "crypto";
@@ -21,18 +21,18 @@ import {
   applyMatch,
   qualifiesForAutoVerify,
 } from "./reconciliationEngine.service.js";
-import { routeToSuspense } from "./suspense.service.js";
-import { transitionPaymentStatus } from "./verificationStatusEngine.js";
-import { fetchTransactionStatus } from "./iciciCorporateStatus.service.js";
 import { normalizeAmount, normalizeUtr } from "../../../services/iciciBankService.js";
-import { getIciciCorporateConfig, assertCorporateConfig } from "../config/iciciCorporate.config.js";
+import {
+  findConsumedStatementLine,
+  primaryStatementUtr,
+  statementLookupKeys,
+} from "./statementClaim.service.js";
+import { listOpenMatches } from "./openStatementLines.service.js";
 import { getBankingLogger } from "../utils/logger.js";
 
 const log = () => getBankingLogger();
 
 const AMOUNT_EPS = 0.02;
-/** How far either side of the payment date we look for a statement line. */
-const SEARCH_WINDOW_DAYS = 7;
 
 export const CHECK_RESULT = {
   VERIFIED: "VERIFIED",
@@ -41,6 +41,8 @@ export const CHECK_RESULT = {
   /** A credit was found but not on a UTR, so an accountant must confirm it. */
   NEEDS_REVIEW: "NEEDS_REVIEW",
   NOT_FOUND: "NOT_FOUND",
+  /** Open statement lines exist, but none is an exact UTR. The accountant picks one. */
+  NEEDS_CONFIRMATION: "NEEDS_CONFIRMATION",
 };
 
 /** Plain-English reason a candidate was not good enough to clear by itself. */
@@ -101,66 +103,30 @@ async function loadPayment({ source, orderMongoId, paymentId }) {
 }
 
 function alreadyVerified(pay) {
-  return (
-    pay.bankVerificationStatus === "BANK_VERIFIED" ||
-    pay.paymentStatus === "BANK_VERIFIED" ||
-    pay.paymentStatus === "COLLECTED"
-  );
+  if (pay.bankVerificationStatus === "BANK_VERIFIED" || pay.paymentStatus === "BANK_VERIFIED") return true;
+  if (pay.paymentStatus === "PENDING") return false;
+  return pay.paymentStatus === "COLLECTED";
 }
 
-/** Statement lines worth scoring against this payment. */
+const OPEN_LINES = { reconciliationStatus: { $in: ["UNMATCHED", "SUSPENSE"] } };
+
+/** Open statement lines for this UTR, transaction id or cheque. No date scan. */
 async function candidateEntries(pay) {
-  const centre = new Date(pay.paymentDate || Date.now());
-  const from = new Date(centre);
-  from.setDate(from.getDate() - SEARCH_WINDOW_DAYS);
-  const to = new Date(centre);
-  to.setDate(to.getDate() + SEARCH_WINDOW_DAYS);
-  to.setHours(23, 59, 59, 999);
-
-  const open = {
-    reconciliationStatus: { $in: ["UNMATCHED", "SUSPENSE"] },
+  const keys = statementLookupKeys(pay);
+  if (!keys.length) return [];
+  return BankStatementEntry.find({
     ...NOT_STATEMENT_VERIFIED,
-  };
-
-  const windowed = await BankStatementEntry.find({
-    txnDate: { $gte: from, $lte: to },
-    ...open,
+    ...OPEN_LINES,
+    $or: [
+      { referenceNumber: { $in: keys } },
+      { utr: { $in: keys } },
+      { transactionId: { $in: keys } },
+      { chequeNumber: { $in: keys } },
+    ],
   })
+    .select("utr referenceNumber transactionId chequeNumber amount txnDate narration accountNumber")
     .lean()
     .exec();
-
-  // A UTR, bank transaction id or cheque number identifies one bank line on its own,
-  // so those are looked up whatever the date. Otherwise a payment keyed in with a
-  // different date from the bank's (late entry, wrong day, imported older statement)
-  // is reported as "not in the statement" even though the line is sitting there.
-  const keys = [paymentUtr(pay), pay.transactionId, pay.chequeNumber]
-    .map((v) => (v == null ? "" : String(v).trim()))
-    .filter((v) => v.length >= 6);
-  const byKey = [];
-  if (keys.length) {
-    const normalized = keys.map((k) => normalizeUtr(k)).filter(Boolean);
-    byKey.push(
-      ...(await BankStatementEntry.find({
-        ...open,
-        $or: [
-          { referenceNumber: { $in: [...keys, ...normalized] } },
-          { utr: { $in: [...keys, ...normalized] } },
-          { transactionId: { $in: keys } },
-          { chequeNumber: { $in: keys } },
-        ],
-      })
-        .lean()
-        .exec())
-    );
-  }
-
-  const seen = new Set();
-  return [...windowed, ...byKey].filter((e) => {
-    const id = String(e._id);
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
 }
 
 /**
@@ -168,13 +134,16 @@ async function candidateEntries(pay) {
  * and `scoreMatch` deliberately drops it because amount is a hard gate.
  */
 async function findUtrAmountMismatch(pay) {
-  const utr = normalizeUtr(paymentUtr(pay));
+  const keys = statementLookupKeys(pay);
+  const utr = normalizeUtr(primaryStatementUtr(pay) || paymentUtr(pay));
   if (!utr || utr.length < 6) return null;
 
   const entries = await BankStatementEntry.find({
-    reconciliationStatus: { $in: ["UNMATCHED", "SUSPENSE"] },
     ...NOT_STATEMENT_VERIFIED,
+    ...OPEN_LINES,
+    $or: [{ referenceNumber: { $in: keys } }, { utr: { $in: keys } }],
   })
+    .select("utr referenceNumber amount narration")
     .lean()
     .exec();
 
@@ -187,34 +156,104 @@ async function findUtrAmountMismatch(pay) {
   );
 }
 
-function liveStatusIsSuccess(status) {
-  return ["SUCCESS", "COMPLETED", "SETTLED", "PAID"].includes(
-    String(status || "").toUpperCase()
-  );
-}
-
-/**
- * Whether there is a bank connection to fall back on at all.
- *
- * With no credentials the inquiry throws before it reaches the network, and
- * reporting that as "could not reach ICICI" tells an accountant the bank is
- * down when the truth is that the statement simply holds no such credit.
- */
-function liveLookupAvailable() {
-  try {
-    assertCorporateConfig();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** What an accountant should do next when nothing matched. */
 function notFoundMessage(utr, bankConfigured) {
   const which = utr ? `UTR ${utr}` : "this payment";
   return bankConfigured
     ? `${which} is not in the bank statement yet`
     : `No credit for ${which} in the statement. Import the statement covering this date under Bank Recon → Statement.`;
+}
+
+/** Score the payment using the clean UTR when the saved field also holds a bank id. */
+function paymentForScoring(pay) {
+  const clean = primaryStatementUtr(pay);
+  if (!clean || clean === paymentUtr(pay)) return pay;
+  return { ...pay, utrNumber: clean };
+}
+
+/** Score stored statement lines. Returns a result, or null when nothing matched. */
+async function matchStoredStatement(pay, { userId, runId, paymentId, utr }) {
+  const used = await findConsumedStatementLine(pay);
+  if (used && String(used.matchedPaymentId) !== String(pay.paymentId)) {
+    return {
+      ok: true,
+      result: CHECK_RESULT.NOT_FOUND,
+      message: `UTR ${utr} is already matched to another payment.`,
+      utr,
+      bankAmount: used.amount,
+    };
+  }
+
+  const scoringPay = paymentForScoring(pay);
+  const entries = await candidateEntries(scoringPay);
+  const candidates = [];
+  for (const entry of entries) {
+    const match = scoreMatch(scoringPay, entry);
+    if (match) candidates.push(match);
+  }
+  candidates.sort((a, b) => b.score - a.score);
+
+  if (candidates.length > 1 && candidates[0].score === candidates[1].score) {
+    return askToConfirm(pay, utr, "Several open bank lines match. Pick the one for this payment.");
+  }
+
+  const best = candidates[0];
+  if (qualifiesForAutoVerify(best)) {
+    const applied = await applyMatch(pay, best, runId, userId);
+    if (!applied.ok) {
+      if (String(applied.error || "").includes("already matched")) {
+        return {
+          ok: true,
+          result: CHECK_RESULT.NOT_FOUND,
+          message: `UTR ${utr} is already matched to another payment.`,
+          utr,
+        };
+      }
+      return { ok: false, error: applied.error };
+    }
+    log().info("Payment verified on demand", { paymentId, rule: best.rule, score: best.score });
+    return {
+      ok: true,
+      result: CHECK_RESULT.VERIFIED,
+      message: `UTR ${utr} is in the latest bank statement.`,
+      utr,
+      score: best.score,
+      matchedBy: best.rule,
+      bankAmount: best.entry.amount,
+      narration: best.entry.narration || "",
+    };
+  }
+
+  if (best) {
+    return askToConfirm(
+      pay,
+      utr,
+      `Found a credit but it ${whyNotAutoVerified(best)}. Pick the bank line.`
+    );
+  }
+
+  const mismatch = await findUtrAmountMismatch(scoringPay);
+  if (mismatch) {
+    return askToConfirm(
+      pay,
+      utr,
+      `Bank shows ${mismatch.amount} for this UTR, payment says ${pay.paidAmount}. Pick the line if it is the right one.`
+    );
+  }
+
+  return null;
+}
+
+async function askToConfirm(pay, utr, message) {
+  const lines = await listOpenMatches(pay);
+  if (!lines.length) return null;
+  return {
+    ok: true,
+    result: CHECK_RESULT.NEEDS_CONFIRMATION,
+    message,
+    utr,
+    candidates: lines,
+  };
 }
 
 /**
@@ -228,7 +267,6 @@ export async function checkPaymentAgainstBank({
   orderMongoId,
   paymentId,
   userId = null,
-  allowLiveLookup = true,
 }) {
   if (!["order", "agriSales"].includes(source)) {
     return { ok: false, error: "source must be 'order' or 'agriSales'" };
@@ -255,168 +293,24 @@ export async function checkPaymentAgainstBank({
   }
 
   const runId = crypto.randomUUID();
+  const stored = await matchStoredStatement(pay, { userId, runId, paymentId, utr });
+  if (stored) return stored;
 
-  // 1. Stored statement lines.
-  const entries = await candidateEntries(pay);
-  const candidates = [];
-  for (const e of entries) {
-    const m = scoreMatch(pay, e);
-    if (m) candidates.push(m);
-  }
-  candidates.sort((a, b) => b.score - a.score);
-
-  if (candidates.length > 1 && candidates[0].score === candidates[1].score) {
-    await routeToSuspense({
-      payment: pay,
-      reason: "MULTIPLE_MATCH",
-      candidates: candidates.slice(0, 3),
-      runId,
-    });
+  const lines = await listOpenMatches(pay);
+  if (lines.length) {
     return {
       ok: true,
-      result: CHECK_RESULT.MULTIPLE_MATCH,
-      message: `${candidates.length} bank lines match equally — sent to suspense`,
+      result: CHECK_RESULT.NEEDS_CONFIRMATION,
+      message: "No exact UTR match. These open bank lines share the reference or the amount.",
       utr,
-      score: candidates[0].score,
+      candidates: lines,
     };
-  }
-
-  const best = candidates[0];
-  if (qualifiesForAutoVerify(best)) {
-    const applied = await applyMatch(pay, best, runId, userId);
-    if (!applied.ok) return { ok: false, error: applied.error };
-    log().info("Payment verified on demand", { paymentId, rule: best.rule, score: best.score });
-    return {
-      ok: true,
-      result: CHECK_RESULT.VERIFIED,
-      message: `Matched bank statement (${best.rule})`,
-      utr,
-      score: best.score,
-      matchedBy: best.rule,
-      bankAmount: best.entry.amount,
-      narration: best.entry.narration || "",
-    };
-  }
-
-  if (best) {
-    await routeToSuspense({
-      payment: pay,
-      bankEntry: best.entry,
-      reason: "MANUAL_REVIEW",
-      confidenceScore: best.score,
-      runId,
-    });
-    return {
-      ok: true,
-      result: CHECK_RESULT.NEEDS_REVIEW,
-      message: `Found a credit but it ${whyNotAutoVerified(best)} — sent to suspense for confirmation`,
-      utr,
-      score: best.score,
-      matchedBy: best.rule,
-      bankAmount: best.entry.amount,
-      narration: best.entry.narration || "",
-    };
-  }
-
-  // 2. Same UTR, different amount — suspense rather than a silent miss.
-  const mismatch = await findUtrAmountMismatch(pay);
-  if (mismatch) {
-    await routeToSuspense({
-      payment: pay,
-      bankEntry: mismatch,
-      reason: "AMOUNT_MISMATCH",
-      runId,
-    });
-    return {
-      ok: true,
-      result: CHECK_RESULT.AMOUNT_MISMATCH,
-      message: `Bank shows ${mismatch.amount} for this UTR, payment says ${pay.paidAmount}`,
-      utr,
-      bankAmount: mismatch.amount,
-      narration: mismatch.narration || "",
-    };
-  }
-
-  // 3. Nothing stored yet — ask the bank directly, if there is a bank to ask.
-  const bankConfigured = liveLookupAvailable();
-  if (allowLiveLookup && bankConfigured) {
-    try {
-      const live = await fetchTransactionStatus({
-        utr,
-        merchantTranId: pay.merchantTranId,
-        amount: pay.paidAmount,
-        userId,
-      });
-
-      if (liveStatusIsSuccess(live.status)) {
-        const liveAmount = normalizeAmount(live.amount ?? pay.paidAmount);
-        const sameAmount =
-          Math.abs(liveAmount - normalizeAmount(pay.paidAmount)) < AMOUNT_EPS;
-
-        if (!sameAmount) {
-          await routeToSuspense({ payment: pay, reason: "AMOUNT_MISMATCH", runId });
-          return {
-            ok: true,
-            result: CHECK_RESULT.AMOUNT_MISMATCH,
-            message: `Bank shows ${liveAmount} for this UTR, payment says ${pay.paidAmount}`,
-            utr,
-            bankAmount: liveAmount,
-          };
-        }
-
-        const cfg = getIciciCorporateConfig();
-        const transition = await transitionPaymentStatus({
-          pay,
-          targetStatus: "BANK_VERIFIED",
-          bankEntry: {
-            referenceNumber: live.utr || utr,
-            narration: "Verified via ICICI Transaction Inquiry",
-            amount: liveAmount,
-            txnDate: new Date(live.verifiedAt || Date.now()),
-            accountNumber: cfg.accountNumber,
-            rawResponse: live.raw || live,
-          },
-          matchedBy: "UTR",
-          source: "TXN_STATUS_API",
-        });
-        if (!transition.ok) return { ok: false, error: transition.error };
-
-        log().info("Payment verified via transaction inquiry", { paymentId, utr });
-        return {
-          ok: true,
-          result: CHECK_RESULT.VERIFIED,
-          message: "Verified directly with ICICI (no statement line yet)",
-          utr,
-          matchedBy: "UTR",
-          bankAmount: liveAmount,
-        };
-      }
-    } catch (err) {
-      if (err.code === "ICICI_DECRYPT_KEY_MISMATCH") {
-        return {
-          ok: true,
-          result: CHECK_RESULT.NOT_FOUND,
-          message: notFoundMessage(utr, false),
-          utr,
-        };
-      }
-      // A bank outage must not look like "this UTR does not exist".
-      log().warn("Transaction inquiry failed during payment check", {
-        paymentId,
-        error: err.message,
-      });
-      return {
-        ok: false,
-        error: `Could not reach ICICI: ${err.message}`,
-        code: "ICICI_UNREACHABLE",
-      };
-    }
   }
 
   return {
     ok: true,
     result: CHECK_RESULT.NOT_FOUND,
-    message: notFoundMessage(utr, bankConfigured),
+    message: notFoundMessage(utr, false),
     utr,
   };
 }

@@ -282,6 +282,17 @@ const paymentSchema = new Schema(
     customerName: { type: String, trim: true },
     /** UTR for UPI/NEFT — often same as transactionId; stored explicitly for bank matching. */
     utrNumber: { type: String, trim: true },
+    /** One correction of a wrong UTR, allowed only before a bank check. */
+    utrCorrectedOnce: { type: Boolean, default: false },
+    utrCorrections: [
+      {
+        previousUtr: { type: String, default: "" },
+        previousTransactionId: { type: String, default: "" },
+        nextUtr: { type: String, default: "" },
+        editedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+        editedAt: { type: Date },
+      },
+    ],
     /** ICICI EazyPay QR merchant transaction id */
     merchantTranId: { type: String, trim: true },
     /** ICICI provider transaction id after payment */
@@ -954,6 +965,20 @@ const orderSchema = new Schema(
         plantReadyDate: { type: String, default: "" },
       },
     ],
+    /** Sowings the vehicle actually took plants from. Cover can stay on another sowing. */
+    sowingDispatchFrom: [
+      {
+        at: { type: Date, default: Date.now },
+        dispatchId: { type: Schema.Types.ObjectId, ref: "Dispatch" },
+        batchId: { type: Schema.Types.ObjectId },
+        sowingRequestId: { type: Schema.Types.ObjectId, ref: "SowingRequest" },
+        requestNumber: { type: String, default: "" },
+        plants: { type: Number, default: 0, min: 0 },
+        sowingDate: { type: String, default: "" },
+        plantReadyDate: { type: String, default: "" },
+        shedName: { type: String, default: "" },
+      },
+    ],
     cavity: {
       type: Schema.Types.ObjectId,
       ref: "Tray",
@@ -1032,6 +1057,11 @@ const orderSchema = new Schema(
         startDate: { type: String },
         endDate: { type: String },
       },
+    },
+    /** Plants are handed over now. This order does not need a sowing. */
+    instantDispatch: {
+      type: Boolean,
+      default: false,
     },
     /** How the order was placed (ERP web/app vs WhatsApp bot). */
     orderSource: {

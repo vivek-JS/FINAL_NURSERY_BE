@@ -50,7 +50,6 @@ export async function transitionPaymentStatus({
       if (!subdoc || subdoc.paymentStatus !== "PENDING") {
         return { ok: false, error: "Payment not in PENDING state" };
       }
-      subdoc.paymentStatus = "BANK_VERIFIED";
       subdoc.bankVerificationStatus = "BANK_VERIFIED";
       subdoc.bankVerificationSource = source;
       subdoc.bankVerificationMatchedBy = matchedByEnum;
@@ -82,7 +81,6 @@ export async function transitionPaymentStatus({
       if (!subdoc || subdoc.paymentStatus !== "PENDING") {
         return { ok: false, error: "Payment not in PENDING state" };
       }
-      subdoc.paymentStatus = "BANK_VERIFIED";
       subdoc.bankVerificationStatus = "BANK_VERIFIED";
       subdoc.bankVerificationSource = source;
       subdoc.bankVerificationMatchedBy = matchedByEnum;

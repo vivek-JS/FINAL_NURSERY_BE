@@ -20,10 +20,12 @@ const uploadImages = multer({
 
 // GRN routes
 router.post('/', uploadImages.array('images', 10), grnController.createGRN); // Max 10 images
+router.get('/today', grnController.getTodaySummary);
 router.get('/', grnController.getAllGRNs);
 router.get('/:id', grnController.getGRNById);
 router.put('/:id', uploadImages.array('images', 10), grnController.updateGRN);
 router.post('/:id/approve', grnController.approveGRN);
+router.post('/:id/reject', grnController.rejectGRN);
 router.delete('/:id', grnController.deleteGRN);
 
 export default router;

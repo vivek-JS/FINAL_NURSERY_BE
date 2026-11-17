@@ -32,6 +32,17 @@ async function noteDestroyedOnEntries(batches, takes) {
   }
 }
 
+/** Saleable stock already pulled off the slot; shrink it in proportion to plants destroyed. */
+export function irrelevantPullAfterDestroy(pulled, leftBefore, take) {
+  const stock = toInt(pulled);
+  const left = toInt(leftBefore);
+  const qty = toInt(take);
+  if (stock <= 0 || qty <= 0) return stock;
+  if (left <= qty) return 0;
+  const share = Math.round((qty / left) * stock);
+  return Math.max(0, stock - Math.min(stock, share));
+}
+
 /**
  * Pure plan: take `quantity` from the chosen batches (newest first) and work out what the slot loses.
  * Free stock (availablePlants) goes first; survivors (actualPlants) and sowed counts drop by the full amount.
@@ -52,6 +63,8 @@ export function planSowBatchDestroy({ slot, batches, quantity }) {
     rest -= take;
   }
 
+  const irrelevant = new Set(batches.filter((b) => b.isIrrelevant).map((b) => idStr(b._id)));
+  const stockTake = takes.reduce((s, t) => s + (irrelevant.has(t.batchId) ? 0 : t.plants), 0);
   const available = Number(slot?.availablePlants) || 0;
   return {
     quantity: qty,
@@ -59,8 +72,11 @@ export function planSowBatchDestroy({ slot, batches, quantity }) {
     primarySowed: Math.max(0, toInt(slot?.primarySowed) - qty),
     plantsSowed: Math.max(0, toInt(slot?.plantsSowed) - qty),
     actualPlants: Math.max(0, toInt(slot?.actualPlants) - qty),
-    availablePlants: available > 0 ? Math.max(0, available - qty) : available,
-    excessivePlants: Math.max(0, toInt(slot?.excessiveSowing?.plants) - Math.min(qty, Math.max(0, available))),
+    availablePlants: available > 0 ? Math.max(0, available - stockTake) : available,
+    excessivePlants: Math.max(
+      0,
+      toInt(slot?.excessiveSowing?.plants) - Math.min(stockTake, Math.max(0, available))
+    ),
   };
 }
 
@@ -100,6 +116,13 @@ export async function destroySowBatchPlants({
   const now = new Date();
   for (const t of plan.takes) {
     const b = slot.sowingBatches.id(t.batchId);
+    if (b.isIrrelevant) {
+      b.irrelevantStockPulled = irrelevantPullAfterDestroy(
+        b.irrelevantStockPulled,
+        sowBatchLeft(b),
+        t.plants
+      );
+    }
     b.destroyedPlants = toInt(b.destroyedPlants) + t.plants;
     b.destroyLog = [...(b.destroyLog || []), { at: now, by, plants: t.plants, reason: reasonStr }];
   }

@@ -254,6 +254,7 @@ const allowedParams = [
   // Daily notes list filters; capacity sheet uses from/to, or all=1 for no date range
   "from",
   "to",
+  "till", // GET /sowing/capacity-sheet/safe-zone — orders and sowings up to this day
   "all",
   // Money ledger (GET /inventory/money-ledger/parties*)
   "book",

@@ -2,7 +2,6 @@ import { Schema, model } from "mongoose";
 import moment from "moment"; // Optional: Use moment.js or other libraries for date validation/formatting
 import { SLOT_TRAIL_ACTION_ENUM } from "../constants/slotTrailActions.js";
 import { normalizeSlotTrailInPlantSlot } from "../utility/normalizeSlotTrail.js";
-import { attachSowingExcessMiddleware } from "../utility/sowingBatchExcessMiddleware.js";
 
 // Define a schema for slot trail tracking
 const slotTrailSchema = new Schema({
@@ -440,6 +439,8 @@ const slotSchema = new Schema({
       sowedAt: { type: Date, default: Date.now },
       sowingDate: { type: String }, // DD-MM-YYYY
       plantReadyDate: { type: String }, // DD-MM-YYYY
+      /** Day the plants leave. Suggested as the ready date on the complete form. DD-MM-YYYY. */
+      out: { type: String, default: "" },
       plantReadyDays: { type: Number, default: 0 },
       plantsSowed: { type: Number, default: 0 },
       packetsUsed: { type: Number, default: 0 },
@@ -451,8 +452,25 @@ const slotSchema = new Schema({
       sowingBufferPct: { type: Number },
       /** Round(plantsSowed × sowingBufferPct / 100). */
       bufferPlants: { type: Number },
-      /** plantsSowed − bufferPlants − orders. This is the excess screens read. */
+      /** plantsSowed − orders (+ mortality moved). Buffer is mortality, not subtracted again. */
       shownExcess: { type: Number },
+      /** Cover / excess moves (dispatch pick, leftover release). Newest last. */
+      changeLog: [
+        {
+          at: { type: Date, default: Date.now },
+          by: { type: Schema.Types.ObjectId, ref: "User" },
+          kind: { type: String, trim: true, default: "CHANGE" },
+          plants: { type: Number, default: 0 },
+          coverBefore: { type: Number },
+          coverAfter: { type: Number },
+          excessBefore: { type: Number },
+          excessAfter: { type: Number },
+          orderId: { type: Schema.Types.ObjectId, ref: "Order" },
+          orderCode: { type: String, trim: true, default: "" },
+          dispatchId: { type: Schema.Types.ObjectId, ref: "Dispatch" },
+          reason: { type: String, trim: true, default: "" },
+        },
+      ],
       /** Super admin: batch stays visible but its excess is not bookable or counted. */
       isIrrelevant: { type: Boolean, default: false },
       irrelevantAt: { type: Date },
@@ -463,17 +481,37 @@ const slotSchema = new Schema({
       actualPlantsApplied: { type: Number },
       /** 10% of plantsSowed applied to slot.expectedMortality */
       expectedMortalityApplied: { type: Number },
+      /** Mortality % used for this batch's actual/available split. Missing = 10. */
+      mortalityPct: { type: Number, min: 0, max: 50 },
       /** 90% of excess applied to slot.availablePlants */
       availablePlantsApplied: { type: Number },
       /** 90% of covered applied to slot.orderReservedPlants */
       orderReservedPlantsApplied: { type: Number },
       shedName: { type: String, default: "", trim: true },
+      /** Truck / vendor batch id — set on receive for ready-plants pending rows. */
+      batchNumber: { type: String, default: "", trim: true },
+      /**
+       * Ready-plants pre-order: false until shed marks Received (batch + qty + labour).
+       * Normal sow completions default true so existing rows stay “received”.
+       */
+      readyPlantsReceived: { type: Boolean, default: true },
+      readyPlantsReceivedAt: { type: Date },
+      laboursLadies: { type: Number, default: 0 },
+      laboursGents: { type: Number, default: 0 },
       sowingRequestId: {
         type: Schema.Types.ObjectId,
         ref: "SowingRequest",
       },
       requestNumber: { type: String },
       isExcessiveSowing: { type: Boolean, default: false },
+      /** sowing, komb, or excess. Komb and excess do not take a mortality cut. */
+      entryKind: {
+        type: String,
+        enum: ["sowing", "komb", "excess"],
+        default: "sowing",
+      },
+      /** Sowing entry this excess batch was added from. */
+      sourceEntryId: { type: Schema.Types.ObjectId, ref: "SowingEntry", default: null },
       linkedOrderIds: [
         {
           type: Schema.Types.ObjectId,
@@ -493,6 +531,8 @@ const slotSchema = new Schema({
       noMortalityReserve: { type: Boolean, default: false },
       /** Mortality already moved into excess. The rest of the hold stays mortality. */
       mortalityMovedToExcess: { type: Number, default: 0 },
+      /** Excess later counted as mortality, beyond the CMS hold. */
+      excessMovedToMortality: { type: Number, default: 0 },
       /** Plants of this batch destroyed after sowing (already taken off the slot's sowed / stock). */
       destroyedPlants: { type: Number, default: 0, min: 0 },
       /** Leftover plants sent to a later sowing. */
@@ -528,8 +568,9 @@ const slotSchema = new Schema({
           orderId: { type: Schema.Types.ObjectId, ref: "Order" },
           secondaryOutwardId: { type: Schema.Types.ObjectId },
           plants: { type: Number, default: 0 },
-          /** COVER = order's own plants · SWITCH = picked over its linked batch · FREE = excess · UNLOAD */
-          bucket: { type: String, enum: ["COVER", "SWITCH", "FREE", "UNLOAD"] },
+          /** COVER = order's own plants · SWITCH = picked over its linked batch · FREE = excess · UNLOAD · RETURN */
+          bucket: { type: String, enum: ["COVER", "SWITCH", "FREE", "UNLOAD", "RETURN"] },
+          reason: { type: String, trim: true, default: "" },
         },
       ],
       /** Set on a sow entry moved here to cover an order from another slot's excess. */
@@ -1186,8 +1227,6 @@ plantSlotSchema.pre("validate", function normalizeSlotTrailBeforeValidate(next) 
   normalizeSlotTrailInPlantSlot(this);
   next();
 });
-
-attachSowingExcessMiddleware(plantSlotSchema);
 
 plantSlotSchema.pre("save", async function offloadSlotTrailsBeforeSave() {
   const { archiveEmbeddedTrailsFromDoc } = await import("../utility/slotTrailStore.js");

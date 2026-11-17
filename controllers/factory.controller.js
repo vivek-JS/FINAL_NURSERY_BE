@@ -124,6 +124,7 @@ function isCancelLikeOrderStatus(status) {
 import { createRateChangeRequest } from "./rateChangeRequest.controller.js";
 import {
   EXCESS_COVER_WINDOW_DAYS,
+  EXCESS_COVER_PAST_DAYS,
   ExcessCoverError,
   coverOrderFromBatches,
   normalizePicks,
@@ -1584,19 +1585,10 @@ const createOne = (Model, modelName) =>
         }
 
         const createdOrderId = createdOrderDoc._id;
-        const createdOrderIdStr = String(createdOrderId);
         setTimeout(() => {
           (async () => {
             try {
-              const { sendOrderPlacedAlert } = await import("../services/whatsappAlertService.js");
-              const delivery = await sendOrderPlacedAlert(createdOrderId);
-              if (!delivery?.delivered) {
-                console.warn(
-                  `[WhatsApp Alert] New order ${createdOrderIdStr} alert not delivered:`,
-                  delivery?.reason || delivery?.error || "see results",
-                  delivery?.results || ""
-                );
-              }
+              // Admin "New Order Placed" WhatsApp disabled — keep big-order + farmer WATI only.
               const { evaluateOrderAlertsOnCreate } = await import(
                 "../services/whatsappAlertEngine.service.js"
               );
@@ -2264,7 +2256,11 @@ const updateOne = (Model, modelName, allowedFields) =>
           const tolerance = subtypeChanging
             ? { withinTolerance: false }
             : await ownSowTolerance(existingDoc, newDeliveryForSow, session);
-          if (tolerance.withinTolerance) {
+          const keepOwnSowing =
+            req.body?.keepOwnSowing === true || req.body?.keepOwnSowing === "true";
+          const releaseOwnSowing =
+            req.body?.releaseOwnSowing === true || req.body?.releaseOwnSowing === "true";
+          if ((keepOwnSowing && !releaseOwnSowing) || (tolerance.withinTolerance && !releaseOwnSowing)) {
             console.log(
               `🌱 Order #${existingDoc.orderId} keeps its sowing (ready ${tolerance.readyDate}, ${tolerance.offsetDays}d)`
             );
@@ -3265,27 +3261,38 @@ const updateOne = (Model, modelName, allowedFields) =>
         updatedDoc &&
         Number(updatedDoc.numberOfPlants) !== Number(existingDoc.numberOfPlants)
       ) {
-        const { syncDispatchAfterOrderQtyIncrease } = await import(
-          "../services/syncDispatchAfterOrderQty.service.js"
-        );
-        dispatchQtySync = await syncDispatchAfterOrderQtyIncrease({
-          order: updatedDoc,
-          previousNumberOfPlants: existingDoc.numberOfPlants,
-          nextNumberOfPlants: updatedDoc.numberOfPlants,
-          userId: req.user?._id,
-          session,
-        });
-        if (dispatchQtySync) {
-          const remFresh = await Model.findById(updatedDoc._id)
-            .select("remainingPlants orderStatus vehicleLoaded vehicleLoadedQuantity")
-            .session(session)
-            .lean();
-          if (remFresh) {
-            updatedDoc.remainingPlants = remFresh.remainingPlants;
-            updatedDoc.orderStatus = remFresh.orderStatus;
-            updatedDoc.vehicleLoaded = remFresh.vehicleLoaded;
-            updatedDoc.vehicleLoadedQuantity = remFresh.vehicleLoadedQuantity;
+        try {
+          const { syncDispatchAfterOrderQtyIncrease } = await import(
+            "../services/syncDispatchAfterOrderQty.service.js"
+          );
+          dispatchQtySync = await syncDispatchAfterOrderQtyIncrease({
+            order: updatedDoc,
+            previousNumberOfPlants: existingDoc.numberOfPlants,
+            nextNumberOfPlants: updatedDoc.numberOfPlants,
+            userId: req.user?._id,
+            session,
+          });
+          if (dispatchQtySync) {
+            const remFresh = await Model.findById(updatedDoc._id)
+              .select("remainingPlants orderStatus vehicleLoaded vehicleLoadedQuantity")
+              .session(session)
+              .lean();
+            if (remFresh) {
+              updatedDoc.remainingPlants = remFresh.remainingPlants;
+              updatedDoc.orderStatus = remFresh.orderStatus;
+              updatedDoc.vehicleLoaded = remFresh.vehicleLoaded;
+              updatedDoc.vehicleLoadedQuantity = remFresh.vehicleLoadedQuantity;
+            }
           }
+        } catch (syncErr) {
+          console.error("syncDispatchAfterOrderQtyIncrease failed:", {
+            orderId: String(updatedDoc?._id || id),
+            error: syncErr?.message || syncErr,
+          });
+          throw new AppError(
+            "Order quantity update failed because dispatch load sync failed. Please retry.",
+            500
+          );
         }
       }
 
@@ -3317,6 +3324,9 @@ const updateOne = (Model, modelName, allowedFields) =>
         const rawCoverWindow = Math.floor(
           Number(req.body?.excessCoverWindowDays) || EXCESS_COVER_WINDOW_DAYS
         );
+        const rawCoverPast = Math.floor(
+          Number(req.body?.excessCoverPastWindowDays) || EXCESS_COVER_PAST_DAYS
+        );
         const rawCoverNeed = Math.floor(Number(req.body?.excessCoverNeed) || 0);
         try {
           const cover = await coverOrderFromBatches({
@@ -3324,6 +3334,7 @@ const updateOne = (Model, modelName, allowedFields) =>
             picks: excessCoverPicks,
             userId: req.user?._id,
             windowDays: Math.max(1, rawCoverWindow),
+            pastWindowDays: Math.max(0, rawCoverPast),
             additionalNeed: rawCoverNeed > 0 ? rawCoverNeed : null,
           });
           excessCover = {
@@ -3862,7 +3873,7 @@ const getAll = (Model, modelName) =>
     }
     // GET /order/getOrders: when searching, relax date/slot/location filters so matches aren't
     // over-constrained — but keep tab-scoping params (ready_for_dispatch, status, dispatched)
-    // so mobile dispatch tabs (Queue / Ready / Dispatched / Completed) still filter correctly.
+    // and sales/dealer attribution so "All sales & dealers" still applies with search.
     if (modelName === "Order" && req.query) {
       const searchTrimmed =
         req.query.search != null ? String(req.query.search).trim() : "";
@@ -3877,8 +3888,6 @@ const getAll = (Model, modelName) =>
           "monthName",
           "startDay",
           "endDay",
-          "salesPerson",
-          "dealer",
           "village",
           "district",
           "taluka",
@@ -4490,11 +4499,20 @@ const getAll = (Model, modelName) =>
         }
       }
 
-      // Apply salesPerson filter if present (for admin users)
-      if (salesPerson) {
-        pipeline.push({
-          $match: { salesPerson: new mongoose.Types.ObjectId(salesPerson) },
-        });
+      // Apply salesPerson filter if present (for admin users).
+      // Skip when a DEALER is already scoped by role $or above — an extra salesPerson-only
+      // match would hide orders linked only via order.dealer.
+      if (salesPerson && mongoose.Types.ObjectId.isValid(salesPerson)) {
+        const salesOid = new mongoose.Types.ObjectId(salesPerson);
+        const dealerSelfSalesPerson =
+          req.user?.jobTitle === "DEALER" &&
+          req.user?._id &&
+          String(salesOid) === String(req.user._id);
+        if (!dealerSelfSalesPerson) {
+          pipeline.push({
+            $match: { salesPerson: salesOid },
+          });
+        }
       }
 
       // `orderDealer` — dealer orders where order.dealer is this user (admin MIS).
@@ -4505,9 +4523,9 @@ const getAll = (Model, modelName) =>
             dealer: new mongoose.Types.ObjectId(orderDealer),
           },
         });
-      } else if (dealer) {
-        // `dealer` query param: id from dealer/agency picker — applied as salesperson filter (`salesPerson` only).
-        // DEALER role sending dealer=<self> is skipped — role-based $or (dealer|salesPerson) already applies.
+      } else if (dealer && mongoose.Types.ObjectId.isValid(dealer)) {
+        // Admin / dispatch "dealer" picker: match orders attributed as salesPerson OR dealer.
+        // DEALER role sending dealer=<self> is skipped — role-based $or already applies.
         const dealerOid = new mongoose.Types.ObjectId(dealer);
         const dealerSelfOnly =
           req.user?.jobTitle === "DEALER" &&
@@ -4515,7 +4533,9 @@ const getAll = (Model, modelName) =>
           String(dealerOid) === String(req.user._id);
         if (!dealerSelfOnly) {
           pipeline.push({
-            $match: { salesPerson: dealerOid },
+            $match: {
+              $or: [{ salesPerson: dealerOid }, { dealer: dealerOid }],
+            },
           });
         }
       }
@@ -4683,7 +4703,8 @@ const getAll = (Model, modelName) =>
       }
     }
 
-    // Unsown tab: accepted sowing-plant orders that are not yet sowingDone.
+    // Unsown tab: ACCEPTED sowing-plant orders that are not yet sowingDone.
+    // PENDING never belongs here (not accepted → not need-sow).
     // Lookup stays before pagination so the tab count matches the list.
     if (String(unsown) === "true") {
       pipeline.push(
@@ -4700,6 +4721,7 @@ const getAll = (Model, modelName) =>
         },
         {
           $match: {
+            orderStatus: { $in: ["ACCEPTED", "ASSIGNED"] },
             $expr: { $ne: [{ $ifNull: ["$sowingDone", false] }, true] },
             dealerOrder: { $ne: true },
             "_unsownPlant.sowingAllowed": true,

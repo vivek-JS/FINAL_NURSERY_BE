@@ -141,11 +141,11 @@ describe("scoreMatch — amount is a hard gate", () => {
     assert.ok(m, "0.001 is inside the epsilon and should still match");
   });
 
-  it("leaves the mismatch for checkPaymentAgainstBank to surface as AMOUNT_MISMATCH", () => {
+  it("leaves an amount mismatch for the accountant to confirm", () => {
     const src = readSource("modules/banking/services/paymentBankCheck.service.js");
     assert.match(src, /async function findUtrAmountMismatch/);
-    assert.match(src, /reason: "AMOUNT_MISMATCH"/);
-    assert.equal(CHECK_RESULT.AMOUNT_MISMATCH, "AMOUNT_MISMATCH");
+    assert.match(src, /Bank shows \$\{mismatch\.amount\} for this UTR/);
+    assert.equal(CHECK_RESULT.NEEDS_CONFIRMATION, "NEEDS_CONFIRMATION");
   });
 });
 
@@ -159,13 +159,13 @@ describe("scoreMatch — ambiguity", () => {
     assert.equal(qualifiesForAutoVerify(a), false, "a fuzzy amount-and-date match must not clear");
   });
 
-  it("routes an equal-score tie to MULTIPLE_MATCH rather than guessing", () => {
+  it("asks the accountant to pick when several lines score the same", () => {
     const src = readSource("modules/banking/services/paymentBankCheck.service.js");
     assert.match(
       src,
-      /candidates\[0\]\.score === candidates\[1\]\.score[\s\S]{0,200}reason: "MULTIPLE_MATCH"/
+      /candidates\[0\]\.score === candidates\[1\]\.score[\s\S]{0,240}askToConfirm/
     );
-    assert.equal(CHECK_RESULT.MULTIPLE_MATCH, "MULTIPLE_MATCH");
+    assert.equal(CHECK_RESULT.NEEDS_CONFIRMATION, "NEEDS_CONFIRMATION");
   });
 
   it("drops anything below the fuzzy threshold", () => {
@@ -279,33 +279,27 @@ describe("verifying twice does not post a second entry", () => {
     assert.ok(bailIdx > 0 && cashBookIdx > bailIdx, "the guard must precede the CashBook write");
   });
 
-  it("a bank outage is reported as unreachable, never as NOT_FOUND", () => {
+  it("a miss stays NOT_FOUND and does not call the bank", () => {
     const src = readSource("modules/banking/services/paymentBankCheck.service.js");
-    assert.match(src, /code: "ICICI_UNREACHABLE"/);
     assert.equal(CHECK_RESULT.NOT_FOUND, "NOT_FOUND");
     assert.equal(CHECK_RESULT.VERIFIED, "VERIFIED");
+    assert.doesNotMatch(src, /refreshRecentCorporateStatement/);
+    assert.match(src, /result: CHECK_RESULT\.NOT_FOUND/);
   });
 });
 
-describe("no bank connection is not the same as a bank outage", () => {
+describe("check bank reads only open statement lines", () => {
   const src = () => readSource("modules/banking/services/paymentBankCheck.service.js");
 
-  it("skips the live lookup entirely when ICICI is not configured", () => {
-    // Otherwise the inquiry throws on missing credentials and a plain miss is
-    // reported to the accountant as "Could not reach ICICI".
-    assert.match(src(), /if \(allowLiveLookup && bankConfigured\)/);
-    assert.match(src(), /function liveLookupAvailable\(\)[\s\S]{0,200}assertCorporateConfig\(\)/);
+  it("looks up unreconciled lines by reference and does not scan a date window", () => {
+    assert.match(src(), /OPEN_LINES/);
+    assert.match(src(), /statementLookupKeys\(pay\)/);
+    assert.doesNotMatch(src(), /txnDate: \{ \$gte: from/);
   });
 
   it("tells the accountant to import the statement instead", () => {
     assert.match(src(), /function notFoundMessage\(/);
     assert.match(src(), /Import the statement covering this date/);
-    assert.match(src(), /message: notFoundMessage\(utr, bankConfigured\)/);
-  });
-
-  it("still reports a genuine outage as unreachable", () => {
-    // The configured-but-failing path must keep its own error code.
-    const live = src().slice(src().indexOf("if (allowLiveLookup && bankConfigured)"));
-    assert.match(live, /catch \(err\)[\s\S]{0,400}code: "ICICI_UNREACHABLE"/);
+    assert.match(src(), /message: notFoundMessage\(utr, false\)/);
   });
 });

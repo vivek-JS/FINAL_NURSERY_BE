@@ -2,34 +2,33 @@ import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import Dispatch from "../models/dispatch.model.js";
 import PlantCms from "../models/plantCms.model.js";
+import PlantOutward from "../models/plantOutward.model.js";
 import User from "../models/user.model.js";
-import { DISPATCH_SHED_ALLOWED_STATUSES } from "./secondaryVehicleLoad.service.js";
+import {
+  DISPATCH_SHED_ALLOWED_STATUSES,
+  sumPlantsLoadedOnDispatches,
+} from "./secondaryVehicleLoad.service.js";
+import { SHED_ACTIVITY_ACTIONS } from "./shedActivity.service.js";
 import { sweepCancelledInstantPickups } from "./instantPickupDispatch.service.js";
+import { packQtyFromOrderDispatchRow } from "../utility/packCratesFromOrder.js";
+import { COMPLETED_ORDER_STATUSES, excludeDispatchIds } from "../utility/completedTrip.js";
 import { DISPATCH_LEDGER_CUTOVER } from "../utility/dispatchListQuery.js";
-
-/** Cancelled-pickup cleanup must not hold the list. Once a minute is enough. */
-let sweepStartedAt = 0;
-function sweepPickupsInBackground() {
-  const now = Date.now();
-  if (now - sweepStartedAt < 60_000) return;
-  sweepStartedAt = now;
-  sweepCancelledInstantPickups().catch((e) =>
-    console.error("sweepCancelledInstantPickups:", e?.message || e)
-  );
-}
+import Trip from "../models/trip.model.js";
 
 /** Office qty edit within this window shows "recent" on shed app cards. */
 const OFFICE_EDIT_RECENT_MS = 24 * 60 * 60 * 1000;
 
 function inferCavitySize(crateRow) {
-  const name = String(crateRow?.cavityName || crateRow?.cavity || "").trim();
-  const parsed = parseInt(name, 10);
-  if (parsed > 0) return parsed;
+  // Prefer plants÷crates (true plants/crate). Do NOT parse "8 Cavity" tray
+  // names first — that is cells/tray, not plants/crate (× numberPerCrate).
   const crateCount = Number(crateRow?.crateCount) || 0;
   const plantCount = Number(crateRow?.plantCount) || 0;
   if (crateCount > 0 && plantCount > 0) {
     return Math.max(1, Math.round(plantCount / crateCount));
   }
+  const name = String(crateRow?.cavityName || crateRow?.cavity || "").trim();
+  const parsed = parseInt(name, 10);
+  if (parsed > 0) return parsed;
   return 0;
 }
 
@@ -100,6 +99,59 @@ function istRange({ date, from, to }) {
   return Object.keys(range).length ? range : null;
 }
 
+/** Dispatches the shed should not list: delivered trip, invoice, or all orders completed. */
+async function completedTripDispatchIds() {
+  const open = {
+    isDeleted: { $ne: true },
+    transportStatus: { $in: DISPATCH_SHED_ALLOWED_STATUSES },
+  };
+  const [fromTrips, fromInvoice, fromOrders] = await Promise.all([
+    Trip.distinct("dispatchId", { status: "delivered", dispatchId: { $ne: null } }),
+    Dispatch.distinct("_id", {
+      ...open,
+      completeInvoicePdfUrl: { $type: "string", $gt: "" },
+    }),
+    Dispatch.aggregate([
+      { $match: { ...open, "orderIds.0": { $exists: true } } },
+      {
+        $lookup: {
+          from: "orders",
+          localField: "orderIds",
+          foreignField: "_id",
+          pipeline: [{ $project: { _id: 0, orderStatus: 1 } }],
+          as: "ords",
+        },
+      },
+      {
+        $match: {
+          $expr: {
+            $and: [
+              { $gt: [{ $size: "$ords" }, 0] },
+              {
+                $allElementsTrue: {
+                  $map: {
+                    input: "$ords",
+                    as: "o",
+                    in: { $in: ["$$o.orderStatus", COMPLETED_ORDER_STATUSES] },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+      { $project: { _id: 1 } },
+    ]),
+  ]);
+  const ids = new Set();
+  for (const id of fromTrips) if (id) ids.add(String(id));
+  for (const id of fromInvoice) if (id) ids.add(String(id));
+  for (const row of fromOrders) if (row?._id) ids.add(String(row._id));
+  return [...ids]
+    .filter((id) => mongoose.isValidObjectId(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+}
+
 function buildListFilter({ search, statusFilter, date, from, to, assignedToUserId }) {
   const filter = {
     isDeleted: { $ne: true },
@@ -135,15 +187,19 @@ function buildListFilter({ search, statusFilter, date, from, to, assignedToUserI
 function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, orderLabelById) {
   let totalQty = 0;
   let plantRows = (d.plantsDetails || []).map((p, plantRowIndex) => {
-    const q = Number(p.quantity ?? p.totalPlants ?? 0) || 0;
-    totalQty += q;
+    const orderQty = Number(p.quantity ?? p.totalPlants ?? 0) || 0;
     let cratePieces = 0;
+    let packFromCrates = 0;
     const crates = (p.crates || []).map((c) => {
       const mapped = mapCrateForShedList(c);
       if (!mapped) return null;
       cratePieces += mapped.crateCount;
+      packFromCrates += Number(mapped.plantCount) || 0;
       return mapped;
     }).filter(Boolean);
+    // Prefer pack plantCount from crates (includes free); fall back to order qty.
+    const q = Math.max(orderQty, packFromCrates);
+    totalQty += q;
     const pid = p.plantId ? String(p.plantId) : "";
     const sid = p.subTypeId ? String(p.subTypeId) : "";
     const cms = pid ? plantCmsById.get(pid) : null;
@@ -163,6 +219,7 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
       plantId: p.plantId,
       subTypeId: p.subTypeId,
       quantity: q,
+      orderQuantity: orderQty,
       cratePieces,
       crates,
       sowingAllowed: pid
@@ -171,8 +228,12 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
     };
   });
 
+  // Skip plantsDetailPreview — Flutter uses plantRowsSummary; cuts payload/CPU.
+  const plantsDetailPreview = [];
+
   const loadedInfo = loadedMap.get(String(d._id)) || { total: 0, byOrder: new Map() };
 
+  let odShedLoadedSum = 0;
   const orderDispatchPreview = (d.orderDispatchDetails || []).map((row) => {
     const oid = String(row.orderId || "");
     const label = orderLabelById.get(oid);
@@ -197,16 +258,42 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
       Number(row.shedLoadedQuantity) || 0,
       fromOutward
     );
+    odShedLoadedSum += shedLoadedQuantity;
     const shedLoadedFromSecondary = Boolean(
       row.shedLoadedFromSecondary || fromOutward > 0
     );
+    const plantDoc = label?.plantName;
+    const plantName =
+      String(plantDoc?.name || label?.plantNameSnapshot || "").trim();
+    const subtypeId = label?.plantSubtype ? String(label.plantSubtype) : "";
+    const subtypeFromCms = (plantDoc?.subtypes || []).find(
+      (st) => String(st._id) === subtypeId
+    );
+    const subtypeName = String(
+      subtypeFromCms?.name || label?.plantSubtypeSnapshot || ""
+    ).trim();
+    const freePlantsPerCrate = Math.max(
+      0,
+      Number(plantDoc?.freePlantsPerCrate) || 0
+    );
+    const packQuantity = packQtyFromOrderDispatchRow(row);
+    const freePlantBonus = Math.max(0, packQuantity - dispatchQuantity);
     return {
       orderId: row.orderId,
       orderIdNumeric: label?.orderId ?? null,
       publicOrderCode: label?.publicOrderCode ?? "",
       isPremium: Boolean(label?.farmer?.isPremium),
       farmerName: label?.farmer?.name || "",
+      plantName,
+      subtypeName,
+      plantLabel:
+        plantName && subtypeName
+          ? `${plantName} / ${subtypeName}`
+          : plantName || subtypeName || "",
       dispatchQuantity,
+      packQuantity,
+      freePlantsPerCrate,
+      freePlantBonus,
       originalDispatchQuantity,
       officeQtyDeltaTotal,
       lastOfficeQtyDelta,
@@ -214,35 +301,52 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
       shedLoadedQuantity,
       shedLoadedFromSecondary,
       isFullyLoadedFromShed:
-        dispatchQuantity > 0 && shedLoadedQuantity >= dispatchQuantity,
-      shedLoadedBatches: lastLoadedBatch(row.shedLoadedBatches),
+        packQuantity > 0 && shedLoadedQuantity >= packQuantity,
+      // Batches only needed when opening load sheet; keep ids light for list.
+      shedLoadedBatches: Array.isArray(row.shedLoadedBatches)
+        ? row.shedLoadedBatches.map((b) => ({
+            batchId: b.batchId,
+            batchNumber: b.batchNumber != null ? String(b.batchNumber) : "",
+            plants: Number(b.plants) || 0,
+            secondaryInwardId: b.secondaryInwardId,
+            pollyhouse: b.pollyhouse != null ? String(b.pollyhouse) : "",
+            loadedAt: b.loadedAt || null,
+          }))
+        : [],
       crates,
       cratePiecesOnLine: lineCratePieces,
       plantQtyOnLine: dispatchQuantity,
+      packQtyOnLine: packQuantity,
     };
   });
 
   const odPlantTotal = orderDispatchPreview.reduce((s, r) => s + r.dispatchQuantity, 0);
+  const odPackTotal = orderDispatchPreview.reduce(
+    (s, r) => s + (Number(r.packQuantity) || r.dispatchQuantity || 0),
+    0
+  );
   let odCratePieces = 0;
   for (const line of orderDispatchPreview) {
     odCratePieces += line.cratePiecesOnLine;
   }
 
-  if (plantRows.length === 0 && odPlantTotal > 0) {
+  if (plantRows.length === 0 && odPackTotal > 0) {
     plantRows = [
       {
         name: "Orders on vehicle (collection slip)",
         id: "orderLines",
-        quantity: odPlantTotal,
+        quantity: odPackTotal,
         cratePieces: odCratePieces,
       },
     ];
-    totalQty = odPlantTotal;
+    totalQty = odPackTotal;
   }
 
   const unionCount = unionDispatchOrderObjectIds(d).length;
-  const vehiclePlantQty = totalQty || odPlantTotal;
-  const shedLoadedPlantsTotal = loadedInfo.total || 0;
+  // Load progress vs pack qty (includes free plants); DC still uses dispatchQuantity.
+  const vehiclePlantQty = totalQty || odPackTotal || odPlantTotal;
+  // Prefer denormalized row totals (fast); fall back to outward aggregate.
+  const shedLoadedPlantsTotal = Math.max(loadedInfo.total || 0, odShedLoadedSum);
   const loadProgressPct =
     vehiclePlantQty > 0
       ? Math.min(100, Math.round((shedLoadedPlantsTotal / vehiclePlantQty) * 100))
@@ -288,6 +392,7 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
     lastOfficeEditedAt,
     hasRecentOfficeEdit,
     plantRowsSummary: plantRows,
+    plantsDetailPreview,
     orderDispatchPreview,
     hasPremiumCustomer: orderDispatchPreview.some((r) => r.isPremium),
     orderCount: unionCount || (d.orderIds || []).length,
@@ -306,38 +411,31 @@ function mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, order
  * or the office user from order dispatch history when the vehicle has no shed loads.
  * Returns Map dispatchId → { loadedBy: [{ name, plants, at, office }], lastLoadedAt }.
  */
-function lastLoadedBatch(batches) {
-  if (!Array.isArray(batches) || batches.length < 1) return [];
-  const b = batches[batches.length - 1];
-  return [
-    {
-      batchNumber: b.batchNumber != null ? String(b.batchNumber) : "",
-      plants: Number(b.plants) || 0,
-      pollyhouse: b.pollyhouse != null ? String(b.pollyhouse) : "",
-      loadedAt: b.loadedAt || null,
-    },
-  ];
-}
-
-/** Loaded plants already stamped on the vehicle. The list does not scan stock history. */
-function storedLoadedMap(docs) {
-  const map = new Map();
-  for (const d of docs) {
-    const byOrder = new Map();
-    let total = 0;
-    for (const row of d.orderDispatchDetails || []) {
-      const q = Math.max(0, Number(row.shedLoadedQuantity) || 0);
-      total += q;
-      if (row.orderId) byOrder.set(String(row.orderId), q);
-    }
-    map.set(String(d._id), { total, byOrder });
-  }
-  return map;
-}
-
 async function loadVehicleLoaders(docs, loadedMap) {
   const out = new Map();
   if (!docs.length) return out;
+  const ids = docs.map((d) => d._id);
+
+  const acts = await PlantOutward.aggregate([
+    { $match: { "secondaryOutward.linkedDispatchId": { $in: ids } } },
+    { $project: { log: "$secondaryInward.activityLog" } },
+    { $unwind: "$log" },
+    { $unwind: "$log" },
+    {
+      $match: {
+        "log.action": SHED_ACTIVITY_ACTIONS.SECONDARY_OUTWARD,
+        "log.metadata.linkedDispatchId": { $in: ids },
+      },
+    },
+    {
+      $project: {
+        dispatchId: "$log.metadata.linkedDispatchId",
+        userId: "$log.performedBy",
+        plants: "$log.quantity",
+        at: "$log.performedAt",
+      },
+    },
+  ]);
 
   const officeDocs = docs.filter(
     (d) =>
@@ -365,7 +463,7 @@ async function loadVehicleLoaders(docs, loadedMap) {
 
   const userIds = [
     ...new Set(
-      officeRows
+      [...acts, ...officeRows]
         .map((r) => (r.userId ? String(r.userId) : ""))
         .filter((id) => mongoose.isValidObjectId(id))
     ),
@@ -389,6 +487,7 @@ async function loadVehicleLoaders(docs, loadedMap) {
       out.set(key, bucket);
     }
   };
+  add(acts, false);
   add(officeRows, true);
 
   const result = new Map();
@@ -404,7 +503,7 @@ async function loadVehicleLoaders(docs, loadedMap) {
 /**
  * Paginated vehicle dispatches for secondary shed UI.
  * status: pending | loaded | (empty = all allowed)
- * Loaded totals come from the vehicle itself. Stock history is not scanned.
+ * Batches outward load sums in one query (fast).
  */
 export async function listSecondaryVehicleDispatches({
   page = 1,
@@ -422,7 +521,10 @@ export async function listSecondaryVehicleDispatches({
   const qSearch = String(search || "").trim();
   const statusFilter = String(status || "").trim().toLowerCase();
 
-  sweepPickupsInBackground();
+  // Don't block the list on cleanup — runs in background.
+  void sweepCancelledInstantPickups().catch((e) => {
+    console.error("sweepCancelledInstantPickups:", e?.message || e);
+  });
 
   const filter = buildListFilter({
     search: qSearch,
@@ -440,6 +542,12 @@ export async function listSecondaryVehicleDispatches({
     to,
     assignedToUserId,
   });
+  const completedIds = await completedTripDispatchIds();
+  excludeDispatchIds(filter, completedIds);
+  excludeDispatchIds(countBase, completedIds);
+  const needLoaders = statusFilter === "loaded";
+  // Pending list uses denormalized shedLoadedQuantity on rows — skip heavy outward scan.
+  const needOutwardSums = statusFilter === "loaded" || statusFilter === "";
 
   const [total, docs, pendingTotal, loadedTotal] = await Promise.all([
     Dispatch.countDocuments(filter),
@@ -448,7 +556,7 @@ export async function listSecondaryVehicleDispatches({
       .skip(skip)
       .limit(limitNum)
       .select(
-        "transportId transportStatus isInstantPickup driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds lastOfficeEditedAt createdAt updatedAt assignedTo assignedAt"
+        "transportId transportStatus isInstantPickup driverName driverMobile vehicleName vehicleNumber plantsDetails orderDispatchDetails orderIds lastOfficeEditedAt createdAt updatedAt shedReturnedPlants assignedTo assignedAt"
       )
       .populate("assignedTo", "name")
       .lean(),
@@ -481,16 +589,17 @@ export async function listSecondaryVehicleDispatches({
     (id) => new mongoose.Types.ObjectId(id)
   );
 
-  const loadedMap = storedLoadedMap(docs);
-
-  const [previewOrderLabels, loadersById, cmsRows] = await Promise.all([
+  const [previewOrderLabels, loadedMap, cmsRows] = await Promise.all([
     previewOrderOids.length
       ? Order.find({ _id: { $in: previewOrderOids } })
-          .select("_id orderId publicOrderCode farmer")
+          .select("_id orderId publicOrderCode farmer plantName plantSubtype plantNameSnapshot plantSubtypeSnapshot")
           .populate("farmer", "isPremium name mobileNumber village")
+          .populate("plantName", "name subtypes._id subtypes.name freePlantsPerCrate")
           .lean()
       : Promise.resolve([]),
-    loadVehicleLoaders(docs, loadedMap),
+    needOutwardSums
+      ? sumPlantsLoadedOnDispatches(docs.map((d) => d._id))
+      : Promise.resolve(new Map()),
     plantIdSet.size
       ? PlantCms.find({
           _id: { $in: [...plantIdSet].map((id) => new mongoose.Types.ObjectId(id)) },
@@ -499,6 +608,11 @@ export async function listSecondaryVehicleDispatches({
           .lean()
       : Promise.resolve([]),
   ]);
+
+  // Loaders only on Loaded tab (pending doesn't show "loaded by").
+  const loadersById = needLoaders
+    ? await loadVehicleLoaders(docs, loadedMap)
+    : new Map();
 
   const orderLabelById = new Map(previewOrderLabels.map((o) => [String(o._id), o]));
   const sowingAllowedByPlant = new Map();
@@ -511,6 +625,8 @@ export async function listSecondaryVehicleDispatches({
   const items = docs.map((d) => ({
     ...mapDispatchItem(d, loadedMap, plantCmsById, sowingAllowedByPlant, orderLabelById),
     ...(loadersById.get(String(d._id)) || { loadedBy: [], lastLoadedAt: null }),
+    shedReturnedPlants: Number(d.shedReturnedPlants) || 0,
+    shedReturns: [],
   }));
 
   return {

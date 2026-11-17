@@ -43,22 +43,43 @@ export function buildWatiSendRecipient(recipient, extra = {}) {
  * WATI often returns HTTP 200 with result:false or invalid WhatsApp number.
  * @returns {{ ok: boolean, error?: string|object, localMessageId?: string }}
  */
-export function interpretWatiTemplateResponse(data, httpOk) {
+function watiErrorMessage(data, fallback) {
+  if (data == null) return fallback;
+  if (typeof data === "string" && data.trim()) return data.trim();
+  if (typeof data !== "object") return fallback;
+  const nested =
+    data.info || data.message || data.error || data.errorMessage || data.detail;
+  if (typeof nested === "string" && nested.trim()) return nested.trim();
+  if (nested && typeof nested === "object" && typeof nested.message === "string") {
+    return nested.message.trim() || fallback;
+  }
+  // Empty `{}` from WATI (common on 401) — don't return the object itself
+  if (Object.keys(data).length === 0) return fallback;
+  return fallback;
+}
+
+export function interpretWatiTemplateResponse(data, httpOk, httpStatus) {
   if (!httpOk) {
-    return {
-      ok: false,
-      error: data?.info || data?.message || data?.error || data || "HTTP error",
-    };
+    const statusBit = httpStatus ? `HTTP ${httpStatus}` : "HTTP error";
+    const msg = watiErrorMessage(
+      data,
+      httpStatus === 401
+        ? "WATI unauthorized (401) — API token invalid or revoked; update WATI_TOKEN"
+        : statusBit
+    );
+    return { ok: false, error: { message: msg, httpStatus: httpStatus || null } };
   }
 
   if (!data || typeof data !== "object") {
-    return { ok: false, error: "Empty or invalid WATI response body" };
+    return { ok: false, error: { message: "Empty or invalid WATI response body" } };
   }
 
   if (data.result === false) {
     return {
       ok: false,
-      error: data.info || data.message || data.error || "WATI result:false",
+      error: {
+        message: watiErrorMessage(data, "WATI result:false"),
+      },
     };
   }
 
@@ -85,7 +106,9 @@ export function interpretWatiTemplateResponse(data, httpOk) {
   if (data.validWhatsAppNumber === false) {
     return {
       ok: false,
-      error: data.info || "Not a valid WhatsApp number (WATI)",
+      error: {
+        message: watiErrorMessage(data, "Not a valid WhatsApp number (WATI)"),
+      },
     };
   }
 
@@ -157,7 +180,7 @@ export async function sendWatiTemplateMessage(mobileNumber, templateName, parame
       data = { raw: rawText };
     }
 
-    const verdict = interpretWatiTemplateResponse(data, response.ok);
+    const verdict = interpretWatiTemplateResponse(data, response.ok, response.status);
 
     if (verdict.ok) {
       console.log(
@@ -170,7 +193,10 @@ export async function sendWatiTemplateMessage(mobileNumber, templateName, parame
       };
     }
 
-    console.error(`❌ WATI template NOT delivered to ${phoneNumber} (${templateName}):`, verdict.error);
+    console.error(
+      `❌ WATI template NOT delivered to ${phoneNumber} (${templateName}) HTTP ${response.status}:`,
+      verdict.error
+    );
     console.error(`   WATI raw response:`, JSON.stringify(data).slice(0, 800));
     return { success: false, error: verdict.error, data };
   } catch (error) {

@@ -70,6 +70,25 @@ test("ledger: opening, then daily in/out with running balance ending at current"
   assert.equal(rows.at(-1).balance, currentStock({ opening: 1000, lagwadAfter: 600, dispatchAfter: 370 }));
 });
 
+test("through keeps quiet days up to today, including a day with no movement", () => {
+  const rows = buildStockLedger({
+    asOn: "2026-10-04",
+    opening: 1000,
+    through: "2026-10-07",
+    lagwad: [],
+    dispatch: [{ day: "2026-10-05", qty: 300, orderId: 1, status: "DISPATCHED" }],
+  });
+  assert.deepEqual(
+    rows.map((r) => [r.day, r.dispatch, r.balance]),
+    [
+      ["2026-10-04", 0, 1000],
+      ["2026-10-05", 300, 700],
+      ["2026-10-06", 0, 700],
+      ["2026-10-07", 0, 700],
+    ]
+  );
+});
+
 test("current = opening + lagwad after − dispatch after (banana 4 Oct)", () => {
   assert.equal(currentStock({ opening: 1162094, lagwadAfter: 607724, dispatchAfter: 431832 }), 1337986);
   assert.equal(currentStock({ opening: 76712, lagwadAfter: 0, dispatchAfter: 5604 }), 71108);

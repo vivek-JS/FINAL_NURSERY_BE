@@ -32,6 +32,8 @@ export function calculateDispatchCrates({
     {
       cavity: cavityId ? String(cavityId) : "",
       cavityName: cavityName || "",
+      cavitySize: Number(cavitySize) || 0,
+      numberPerCrate: Number(numberPerCrate) || 1,
       crateCount: pack.crateCount,
       plantCount: pack.plantCount,
       orderPlantCount: pack.orderQty,

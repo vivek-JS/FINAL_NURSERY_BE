@@ -15,6 +15,10 @@ import {
 import { sendDailySummaryAlert } from "../services/whatsappAlertService.js";
 import { sendAdminDailyMisMarathiAlert } from "../services/adminDailyMisWhatsapp.service.js";
 import {
+  sendIntradayOpsWhatsappAlert,
+  sendDayEndOpsWhatsappAlert,
+} from "../services/intradayOpsWhatsapp.service.js";
+import {
   runScheduledAlertEngine,
   runDailyOpsAlertEngine,
 } from "../services/whatsappAlertEngine.service.js";
@@ -91,7 +95,40 @@ export function initAlertCronJobs() {
     { scheduled: true, timezone: tz }
   );
 
-  // Legacy short summary at 8:00 PM IST (optional — set WHATSAPP_LEGACY_DAILY_SUMMARY=true)
+  // Intraday 2.5h ops — OFF by default (set WHATSAPP_INTRADAY_REPORT_ENABLED=true to re-enable)
+  const intradayEnabled = process.env.WHATSAPP_INTRADAY_REPORT_ENABLED === "true";
+  const intradayCrons = (
+    process.env.WHATSAPP_INTRADAY_REPORT_CRON || "0 13 * * *;30 15 * * *;0 18 * * *;0 20 * * *"
+  )
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (intradayEnabled) {
+    for (const expr of intradayCrons) {
+      cron.schedule(
+        expr,
+        async () => {
+          console.log(`[WhatsApp Cron] Running intraday 2.5h ops report (${expr})...`);
+          try {
+            const result = await sendIntradayOpsWhatsappAlert();
+            console.log("[WhatsApp Cron] Intraday ops report done:", {
+              sent: result.sent,
+              delivered: result.delivered,
+              chunks: result.chunks,
+              skipped: result.skipped,
+              reason: result.reason,
+            });
+          } catch (err) {
+            console.error("[WhatsApp Cron] Intraday ops report failed:", err?.message || err);
+          }
+        },
+        { scheduled: true, timezone: tz }
+      );
+    }
+  }
+
+  // Legacy short summary (optional — set WHATSAPP_LEGACY_DAILY_SUMMARY=true)
   if (process.env.WHATSAPP_LEGACY_DAILY_SUMMARY === "true") {
     cron.schedule(
       "30 14 * * *",
@@ -109,44 +146,97 @@ export function initAlertCronJobs() {
     );
   }
 
-  // Ops backlog digest — 8:00 AM IST
+  // Ops backlog digest — OFF by default (set WHATSAPP_ALERT_OPS_ENABLED=true)
+  const opsEnabled = process.env.WHATSAPP_ALERT_OPS_ENABLED === "true";
   const opsCron = process.env.WHATSAPP_ALERT_OPS_CRON || "0 8 * * *";
-  cron.schedule(
-    opsCron,
-    async () => {
-      console.log("[WhatsApp Cron] Running ops alert engine...");
-      try {
-        const result = await runDailyOpsAlertEngine();
-        console.log("[WhatsApp Cron] Ops alert engine done:", result);
-      } catch (err) {
-        console.error("[WhatsApp Cron] Ops alert engine failed:", err?.message || err);
-      }
-    },
-    { scheduled: true, timezone: tz }
-  );
+  if (opsEnabled) {
+    cron.schedule(
+      opsCron,
+      async () => {
+        console.log("[WhatsApp Cron] Running ops alert engine...");
+        try {
+          const result = await runDailyOpsAlertEngine();
+          console.log("[WhatsApp Cron] Ops alert engine done:", result);
+        } catch (err) {
+          console.error("[WhatsApp Cron] Ops alert engine failed:", err?.message || err);
+        }
+      },
+      { scheduled: true, timezone: tz }
+    );
+  }
 
-  // Slot availability scan — default 9 AM, 2 PM, 6 PM IST
+  // Booking capacity (FIFO) — OFF by default (set WHATSAPP_ALERT_BOOKING_CAPACITY_ENABLED=true)
+  const bookingCapEnabled =
+    process.env.WHATSAPP_ALERT_BOOKING_CAPACITY_ENABLED === "true";
   const slotCron = process.env.WHATSAPP_ALERT_SLOT_SCAN_CRON || "0 9,14,18 * * *";
-  cron.schedule(
-    slotCron,
-    async () => {
-      console.log("[WhatsApp Cron] Running slot availability alert scan...");
-      try {
-        const result = await runScheduledAlertEngine();
-        console.log("[WhatsApp Cron] Slot scan done:", result);
-      } catch (err) {
-        console.error("[WhatsApp Cron] Slot scan failed:", err?.message || err);
-      }
-    },
-    { scheduled: true, timezone: tz }
-  );
+  if (bookingCapEnabled) {
+    cron.schedule(
+      slotCron,
+      async () => {
+        console.log("[WhatsApp Cron] Running booking capacity (FIFO) digest...");
+        try {
+          const result = await runScheduledAlertEngine();
+          console.log("[WhatsApp Cron] Booking capacity digest done:", result);
+        } catch (err) {
+          console.error("[WhatsApp Cron] Booking capacity digest failed:", err?.message || err);
+        }
+      },
+      { scheduled: true, timezone: tz }
+    );
+  }
 
   console.log(`✅ [WhatsApp Cron] Admin MIS (Marathi) @ ${misCron} (${tz}).`);
-  if (process.env.WHATSAPP_LEGACY_DAILY_SUMMARY === "true") {
-    console.log("✅ [WhatsApp Cron] Legacy daily summary @ 8:00 PM IST.");
+  // Day-end sales report — 8:00 PM IST (only remaining window report)
+  const dayEndEnabled = process.env.WHATSAPP_DAY_END_REPORT_ENABLED !== "false";
+  const dayEndCron = process.env.WHATSAPP_DAY_END_REPORT_CRON || "0 20 * * *";
+  if (dayEndEnabled) {
+    cron.schedule(
+      dayEndCron,
+      async () => {
+        console.log(`[WhatsApp Cron] Running day-end sales report (${dayEndCron})...`);
+        try {
+          const result = await sendDayEndOpsWhatsappAlert();
+          console.log("[WhatsApp Cron] Day-end sales report done:", {
+            sent: result.sent,
+            delivered: result.delivered,
+            chunks: result.chunks,
+            dateKey: result.dateKey,
+            skipped: result.skipped,
+            reason: result.reason,
+          });
+        } catch (err) {
+          console.error("[WhatsApp Cron] Day-end sales report failed:", err?.message || err);
+        }
+      },
+      { scheduled: true, timezone: tz }
+    );
   }
-  console.log(`✅ [WhatsApp Cron] Ops digest @ ${opsCron} (${tz}).`);
-  console.log(`✅ [WhatsApp Cron] Slot scan @ ${slotCron} (${tz}).`);
+
+  if (intradayEnabled) {
+    console.log(
+      `✅ [WhatsApp Cron] Intraday 2.5h ops @ ${intradayCrons.join(" | ")} (${tz}).`
+    );
+  } else {
+    console.log("[WhatsApp Cron] Intraday 2.5h ops report disabled.");
+  }
+  if (dayEndEnabled) {
+    console.log(`✅ [WhatsApp Cron] Day-end sales report @ ${dayEndCron} (${tz}).`);
+  } else {
+    console.log("[WhatsApp Cron] Day-end sales report disabled.");
+  }
+  if (process.env.WHATSAPP_LEGACY_DAILY_SUMMARY === "true") {
+    console.log("✅ [WhatsApp Cron] Legacy daily summary enabled.");
+  }
+  if (opsEnabled) {
+    console.log(`✅ [WhatsApp Cron] Ops digest @ ${opsCron} (${tz}).`);
+  } else {
+    console.log("[WhatsApp Cron] Ops digest disabled.");
+  }
+  if (bookingCapEnabled) {
+    console.log(`✅ [WhatsApp Cron] Booking capacity @ ${slotCron} (${tz}).`);
+  } else {
+    console.log("[WhatsApp Cron] Booking capacity digest disabled.");
+  }
 
   // Session watchdog — safety net if the linked session stays down (every 5 min). Never opens a QR window.
   const watchdogCron = process.env.WHATSAPP_SESSION_WATCHDOG_CRON || "*/5 * * * *";

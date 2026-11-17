@@ -6,6 +6,10 @@ import {
   SOWING_GAP_PIPELINE_STATUS_SET,
   isSowingGapPipelineOrder as isGapPipelineOrder,
 } from "../constants/sowingGapOrderStatuses.js";
+import {
+  orderAlreadyCovered,
+  orderPlantRemaining,
+} from "../services/orderSowCover.plan.js";
 
 const EMPTY_STATS = {
   totalBookedPlants: 0,
@@ -127,7 +131,10 @@ export function computeSlotDispatchStatsFromOrders(
     if (order?.sowingDone) {
       stats.bookedCoveredPlants += qty;
     } else {
-      stats.bookedUncoveredPlants += qty;
+      // Partial sow: only the still-unsown remainder is gap (cover sources / holds).
+      const covered = orderAlreadyCovered(order);
+      stats.bookedCoveredPlants += covered;
+      stats.bookedUncoveredPlants += orderPlantRemaining(order);
     }
   }
 

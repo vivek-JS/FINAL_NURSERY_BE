@@ -31,7 +31,6 @@ function applyTxnStatusToPayment(p, result) {
     if (result.providerTxnId) {
       p.providerTxnId = String(result.providerTxnId);
     }
-    p.paymentStatus = "BANK_VERIFIED";
     p.bankReconciliationConflict = false;
     return;
   }

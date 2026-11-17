@@ -17,7 +17,7 @@ import {
 } from "../utility/istSlotDate.js";
 import { loadShedStockPayload } from "../services/capacityShedStock.service.js";
 import { loadSmartShedPayload } from "../services/smartShedCapacity.service.js";
-import { bookableExcessBySlot, signedBatchFree } from "../utility/boardBookableExcess.js";
+import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 import {
   canBookFromExcess,
   capacityStatus,
@@ -37,9 +37,18 @@ import {
   shedStockByVariety,
   varietyKey,
 } from "../utility/capacityBoardMetrics.js";
+import { createShortTtlCache } from "../utility/shortTtlCache.js";
+import {
+  capacityBoardIncludeBatch,
+  futureReadyBoardSlots,
+  splitBoardExcessByReady,
+} from "../utility/capacityBoardExcess.js";
+import { excessLinesForVariety } from "../modules/sowingEntries/excessLinesForVariety.js";
+
+const boardCache = createShortTtlCache(45_000);
 
 const ORDER_SELECT =
-  "_id orderId orderStatus numberOfPlants additionalPlants sowingDone deliveryDate quotaSource pastDueSlotRollover pastDueSlotRolloverAt plantName plantSubtype sowingPlan farmer";
+  "_id orderId orderStatus numberOfPlants additionalPlants sowingDone sowingCoverSources sowingPartialCover leftoverFromIncomplete deliveryDate quotaSource pastDueSlotRollover pastDueSlotRolloverAt plantName plantSubtype sowingPlan farmer";
 
 const DELIVERY_ORDER_FILTER = {
   deliveryDate: { $exists: true, $ne: null },
@@ -222,14 +231,18 @@ async function loadSheetContext({ from, to, plantId, subtypeId, unbounded = fals
                         in: {
                           plantsSowed: { $ifNull: ["$$batch.plantsSowed", 0] },
                           destroyedPlants: { $ifNull: ["$$batch.destroyedPlants", 0] },
-                          requestNumber: { $ifNull: ["$$batch.requestNumber", ""] },
                           orderCoveredPlants: { $ifNull: ["$$batch.orderCoveredPlants", 0] },
                           noMortalityReserve: { $ifNull: ["$$batch.noMortalityReserve", false] },
-                          isIrrelevant: { $ifNull: ["$$batch.isIrrelevant", false] },
-                          sowingBufferPct: "$$batch.sowingBufferPct",
-                          mortalityMovedToExcess: { $ifNull: ["$$batch.mortalityMovedToExcess", 0] },
-                          excessMovedToMortality: { $ifNull: ["$$batch.excessMovedToMortality", 0] },
                           isExcessiveSowing: { $ifNull: ["$$batch.isExcessiveSowing", false] },
+                          isIrrelevant: { $ifNull: ["$$batch.isIrrelevant", false] },
+                          plantReadyDate: { $ifNull: ["$$batch.plantReadyDate", ""] },
+                          sowingBufferPct: "$$batch.sowingBufferPct",
+                          mortalityMovedToExcess: {
+                            $ifNull: ["$$batch.mortalityMovedToExcess", 0],
+                          },
+                          excessMovedToMortality: {
+                            $ifNull: ["$$batch.excessMovedToMortality", 0],
+                          },
                           excessAllocations: {
                             $map: {
                               input: { $ifNull: ["$$batch.excessAllocations", []] },
@@ -237,6 +250,7 @@ async function loadSheetContext({ from, to, plantId, subtypeId, unbounded = fals
                               in: { plants: { $ifNull: ["$$a.plants", 0] } },
                             },
                           },
+                          linkedOrderIds: { $ifNull: ["$$batch.linkedOrderIds", []] },
                         },
                       },
                     },
@@ -286,32 +300,6 @@ function sowingBufferByPlant(plants) {
   );
 }
 
-/** Plants already given or still to give, per sowing request. Cancelled orders are not cover. */
-async function liveCoverByRequestNumber() {
-  const rows = await Order.aggregate([
-    {
-      $match: {
-        orderStatus: { $nin: ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"] },
-        "sowingCoverSources.0": { $exists: true },
-      },
-    },
-    { $unwind: "$sowingCoverSources" },
-    {
-      $match: {
-        "sowingCoverSources.plants": { $gt: 0 },
-        "sowingCoverSources.requestNumber": { $type: "string", $ne: "" },
-      },
-    },
-    {
-      $group: {
-        _id: "$sowingCoverSources.requestNumber",
-        plants: { $sum: "$sowingCoverSources.plants" },
-      },
-    },
-  ]);
-  return new Map(rows.map((row) => [row._id, Math.max(0, Math.floor(Number(row.plants) || 0))]));
-}
-
 function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbounded = false }) {
   const inRange = slots.filter((slot) => {
     if (plantId && String(slot.plantId) !== String(plantId)) return false;
@@ -320,7 +308,9 @@ function buildSheet({ plants, slots, orders, from, to, plantId, subtypeId, unbou
     return slotOverlapsRange(slot.slotStartDay, slot.slotEndDay, from, to);
   });
 
-  const metricsBySlot = applySowingGapBoardMetrics(inRange, orders, sowingBufferByPlant(plants));
+  const metricsBySlot = applySowingGapBoardMetrics(inRange, orders, sowingBufferByPlant(plants), {
+    todayYmd: moment().utcOffset(IST_OFFSET).format("YYYY-MM-DD"),
+  });
   const ordersBySubtype = new Map();
   for (const order of orders) {
     const key = `${String(order.plantName)}-${String(order.plantSubtype)}`;
@@ -455,22 +445,24 @@ function groupByVariety(list, plantOf, subtypeOf) {
 /**
  * Variety-wise board: stock in sheds, overdue folded into the current slot, then the next slots.
  * Rows carry their slot length so the UI can split 1-day and 7-day varieties into separate tables.
- * groupDays > 1 buckets the table cells into N-day groups from today (see boardCells).
+ * groupDays > 1 buckets future dates into N-day groups from tomorrow. Now stays today.
  */
 export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFSET), { groupDays = 1 } = {}) {
   const group = parseGroupDays(groupDays);
   const today = now.clone().startOf("day");
+  // Past free → past date cards; not-yet-ready free → ready date; old/irrelevant skipped.
   const from = today.clone().subtract(OVERDUE_LOOKBACK_DAYS, "days");
   const to = today.clone().add(BOARD_FORWARD_DAYS, "days").endOf("day");
+  const todayYmd = today.format("YYYY-MM-DD");
 
-  const [{ plants, slots, orders }, shedPayload, coverByRequest] = await Promise.all([
+  const [{ plants, slots, orders }, shedPayload] = await Promise.all([
     loadSheetContext({ from, to }),
     loadShedStockPayload(),
-    liveCoverByRequestNumber(),
   ]);
 
   const bufferByPlant = sowingBufferByPlant(plants);
-  const metricsBySlot = applySowingGapBoardMetrics(slots, orders, bufferByPlant);
+  const metricsBySlot = applySowingGapBoardMetrics(slots, orders, bufferByPlant, { todayYmd });
+  const includeBatch = capacityBoardIncludeBatch({ todayYmd });
   const slotsByVariety = groupByVariety(slots, (s) => s.plantId, (s) => s.subtypeId);
   const ordersByVariety = groupByVariety(orders, (o) => o.plantName, (o) => o.plantSubtype);
 
@@ -494,26 +486,38 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
   for (const plant of plants) {
     for (const subtype of plant.subtypes || []) {
       const key = varietyKey(String(plant._id), String(subtype._id));
-      const varietySlots = slotsByVariety.get(key) || [];
-      const excessBySlot = bookableExcessBySlot(
-        varietySlots,
-        bufferByPlant.get(String(plant._id)) || 0,
-        coverByRequest
-      );
-      const subtypeSlots = varietySlots.map((slot) => {
+      const bufferPct = bufferByPlant.get(String(plant._id)) || 0;
+      const futureReady = new Map();
+      const futureReadySlots = new Map();
+      const subtypeSlots = (slotsByVariety.get(key) || []).map((slot) => {
         const slotId = String(slot.slotId);
         const metrics = metricsBySlot.get(slotId) || {};
+        const { onSlot, byFutureReady } = splitBoardExcessByReady(
+          slot.sowingBatches,
+          bufferPct,
+          includeBatch,
+          todayYmd
+        );
+        for (const [readyYmd, plantsFree] of byFutureReady) {
+          futureReady.set(readyYmd, (futureReady.get(readyYmd) || 0) + plantsFree);
+          const ids = futureReadySlots.get(readyYmd) || [];
+          if (!ids.includes(slotId)) ids.push(slotId);
+          futureReadySlots.set(readyYmd, ids);
+        }
         return {
           slotId,
           startDay: slot.slotStartDay,
           endDay: slot.slotEndDay,
           booked: num(metrics.totalBookedPlants),
           gap: num(metrics.bookedUncoveredPlants),
-          excess: excessBySlot.get(slotId) || 0,
+          // Only ready-today-or-earlier free stays on the delivery slot (not Nov-ready in Now).
+          excess: onSlot,
           mortality: num(metrics.sowedExpectedMortality),
           pendingDispatch: pendingBySlot.get(slotId) || 0,
+          sowedElsewhere: num(metrics.sowedElsewhere),
         };
       });
+      subtypeSlots.push(...futureReadyBoardSlots(futureReady, futureReadySlots));
       const readyDays = num(subtype.plantReadyDays);
       const row = buildBoardRow({ slots: subtypeSlots, today, stock: stockByVariety.get(key), groupDays: group });
       if (!boardRowHasNumbers(row) && !subtypeSlots.some((slot) => num(slot.gap) > 0)) continue;
@@ -563,11 +567,28 @@ export async function loadCapacityBoardPayload(now = moment().utcOffset(IST_OFFS
  */
 export const getCapacityBoard = async (req, res) => {
   try {
+    const groupKey = String(req.query?.group ?? "1");
+    const force = String(req.headers["x-cache-bust"] || "") === "1";
+    if (!force) {
+      const hit = boardCache.get(groupKey);
+      if (hit) {
+        res.setHeader("X-Cache", "HIT");
+        res.setHeader("Cache-Control", "private, max-age=20");
+        return res.status(200).json({ success: true, ...hit, cached: true });
+      }
+    }
     const payload = await loadCapacityBoardPayload(undefined, { groupDays: req.query?.group });
-    return res.status(200).json({
-      success: true,
+    const body = {
       ...payload,
       generatedAt: moment().utcOffset(IST_OFFSET).toISOString(),
+    };
+    boardCache.set(groupKey, body);
+    res.setHeader("X-Cache", "MISS");
+    res.setHeader("Cache-Control", "private, max-age=20");
+    return res.status(200).json({
+      success: true,
+      ...body,
+      cached: false,
     });
   } catch (error) {
     console.error("getCapacityBoard:", error);
@@ -671,7 +692,8 @@ export const getCapacitySlotDetail = async (req, res) => {
     const metricsBySlot = applySowingGapBoardMetrics(
       [slot],
       deliveryOrders,
-      sowingBufferByPlant([plant])
+      sowingBufferByPlant([plant]),
+      { todayYmd: moment().utcOffset(IST_OFFSET).format("YYYY-MM-DD") }
     );
     const metrics = metricsBySlot.get(String(slot.slotId)) || {};
     const cohort = getNativeDeliveryCohortOrders(
@@ -710,52 +732,44 @@ export const getCapacitySlotDetail = async (req, res) => {
       orderStatus: order.orderStatus,
     }));
 
-    const coverByRequest = await liveCoverByRequestNumber();
-    const seenRequests = new Set();
-    const cmsBuffer = Number(plant?.sowingBuffer) || 0;
-    const batches = (slot.sowingBatches || [])
-      .slice()
-      .sort((a, b) => String(a.sowingDate || "").localeCompare(String(b.sowingDate || "")))
-      .map((batch) => {
-        const requestNumber = batch.requestNumber || "";
-        const ordersOnEntry =
-          requestNumber && coverByRequest.has(requestNumber)
-            ? coverByRequest.get(requestNumber)
-            : num(batch.orderCoveredPlants);
-        const canBook = Math.max(0, signedBatchFree(batch, cmsBuffer, coverByRequest, seenRequests));
-        return {
-          batchId: String(batch._id),
-          slotId: String(slot.slotId),
-          sowingRequestId: batch.sowingRequestId ? String(batch.sowingRequestId) : "",
-          destroyedPlants: num(batch.destroyedPlants),
-          plantsLeft: Math.max(0, num(batch.plantsSowed) - num(batch.destroyedPlants)),
-          destroyLog: (batch.destroyLog || []).map((d) => ({
-            at: d.at || null,
-            plants: num(d.plants),
-            reason: d.reason || "",
-          })),
-          requestNumber,
-          sowingDate: batch.sowingDate || "",
-          plantReadyDate: batch.plantReadyDate || "",
-          plantReadyDays: num(batch.plantReadyDays),
-          plantsSowed: num(batch.plantsSowed),
-          packetsUsed: num(batch.packetsUsed),
-          orderCoveredPlants: ordersOnEntry,
-          ordersOnEntry,
-          isIrrelevant: Boolean(batch.isIrrelevant),
-          excessPlants: canBook,
-          actualPlantsApplied: num(batch.actualPlantsApplied),
-          expectedMortalityApplied: num(batch.expectedMortalityApplied),
-          availablePlantsApplied: num(batch.availablePlantsApplied),
-          shedName: batch.shedName || "",
-          isExcessiveSowing: Boolean(batch.isExcessiveSowing),
-        };
-      });
-    const lagwadEntries = batches.filter(
-      (batch) =>
-        !batch.isIrrelevant &&
-        (batch.excessPlants > 0 || batch.isExcessiveSowing || batch.availablePlantsApplied > 0)
+    const batches = (slot.sowingBatches || []).map((batch) => ({
+      batchId: String(batch._id),
+      slotId: String(slot.slotId),
+      sowingRequestId: batch.sowingRequestId ? String(batch.sowingRequestId) : "",
+      destroyedPlants: num(batch.destroyedPlants),
+      plantsLeft: Math.max(0, num(batch.plantsSowed) - num(batch.destroyedPlants)),
+      destroyLog: (batch.destroyLog || []).map((d) => ({
+        at: d.at || null,
+        plants: num(d.plants),
+        reason: d.reason || "",
+      })),
+      requestNumber: batch.requestNumber || "",
+      sowingDate: batch.sowingDate || "",
+      plantReadyDate: batch.plantReadyDate || "",
+      plantReadyDays: num(batch.plantReadyDays),
+      plantsSowed: num(batch.plantsSowed),
+      packetsUsed: num(batch.packetsUsed),
+      orderCoveredPlants: num(batch.orderCoveredPlants),
+      isIrrelevant: Boolean(batch.isIrrelevant),
+      excessPlants: storedShownExcess(batch, plant?.sowingBuffer),
+      actualPlantsApplied: num(batch.actualPlantsApplied),
+      expectedMortalityApplied: num(batch.expectedMortalityApplied),
+      availablePlantsApplied: num(batch.availablePlantsApplied),
+      shedName: batch.shedName || "",
+      isExcessiveSowing: Boolean(batch.isExcessiveSowing),
+    }));
+    const entryLines = await excessLinesForVariety(
+      slot.plantId,
+      slot.subtypeId,
+      moment().utcOffset(IST_OFFSET).format("YYYY-MM-DD")
     );
+    const lagwadEntries = entryLines.length
+      ? entryLines
+      : batches.filter(
+          (batch) =>
+            !batch.isIrrelevant &&
+            (batch.excessPlants > 0 || batch.isExcessiveSowing || batch.availablePlantsApplied > 0)
+        );
 
     return res.status(200).json({
       success: true,

@@ -141,6 +141,17 @@ const paymentSchema = new Schema({
   qrPayload: { type: String },
   customerName: { type: String, trim: true },
   utrNumber: { type: String, trim: true },
+  /** One correction of a wrong UTR, allowed only before a bank check. */
+  utrCorrectedOnce: { type: Boolean, default: false },
+  utrCorrections: [
+    {
+      previousUtr: { type: String, default: "" },
+      previousTransactionId: { type: String, default: "" },
+      nextUtr: { type: String, default: "" },
+      editedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      editedAt: { type: Date },
+    },
+  ],
   merchantTranId: { type: String, trim: true },
   providerTxnId: { type: String, trim: true },
   bankVerificationStatus: {

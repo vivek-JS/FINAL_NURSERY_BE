@@ -106,11 +106,22 @@ export function buildInstantPickupDispatch(order, { lines, trayById, fallbackTra
   };
 }
 
+async function linkOrderCurrentDispatch(orderId, dispatchId) {
+  if (!orderId || !dispatchId) return;
+  await Order.updateOne(
+    { _id: orderId, $or: [{ currentDispatchId: null }, { currentDispatchId: { $exists: false } }] },
+    { $set: { currentDispatchId: dispatchId } }
+  );
+}
+
 /** Idempotent: one pickup dispatch per instant order. Returns the dispatch (or null when nothing to give). */
 export async function ensureInstantPickupDispatch(order) {
   if (!order?._id) return null;
   const existing = await Dispatch.findOne({ isInstantPickup: true, orderIds: order._id }).lean();
-  if (existing) return existing;
+  if (existing) {
+    await linkOrderCurrentDispatch(order._id, existing._id);
+    return existing;
+  }
 
   const lines = instantOrderPlantLines(order);
   if (!lines.length) return null;
@@ -143,10 +154,14 @@ export async function ensureInstantPickupDispatch(order) {
 
   const doc = buildInstantPickupDispatch(order, { lines, trayById, fallbackTray });
   try {
-    return (await Dispatch.create(doc)).toObject();
+    const created = (await Dispatch.create(doc)).toObject();
+    await linkOrderCurrentDispatch(order._id, created._id);
+    return created;
   } catch (e) {
     if (e?.code === 11000) {
-      return Dispatch.findOne({ transportId: doc.transportId }).lean();
+      const raced = await Dispatch.findOne({ transportId: doc.transportId }).lean();
+      if (raced?._id) await linkOrderCurrentDispatch(order._id, raced._id);
+      return raced;
     }
     throw e;
   }

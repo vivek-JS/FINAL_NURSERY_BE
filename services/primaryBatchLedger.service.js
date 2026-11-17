@@ -9,8 +9,10 @@ import {
   applySend,
   applySow,
   plantsNotSent,
+  readyDaysForSize,
   stockBySize,
   traySplit,
+  normalizeSize,
 } from "../utility/primaryLedgerMath.js";
 import { notifyPrimaryShed, notifySecondaryReceive } from "./primaryShedNotice.service.js";
 
@@ -28,6 +30,8 @@ function presentSow(sow) {
     readyDate: raw.readyDate,
     plantsSent: sent,
     plantsNotSent: plantsNotSent(raw.mortalityExpectedPlants, sent),
+    laboursLadies: Math.floor(Number(raw.laboursLadies) || 0),
+    laboursGents: Math.floor(Number(raw.laboursGents) || 0),
   };
 }
 
@@ -51,6 +55,7 @@ function presentLedger(doc, label = {}) {
     mortalityExpectedPlants: doc.mortalityExpectedPlants || 0,
     plantsSent: doc.plantsSent || 0,
     plantsNotSent: plantsNotSent(doc.mortalityExpectedPlants, doc.plantsSent),
+    readyDaysBySize: label.readyDaysBySize || { R1: 1, R2: 1, R3: 1 },
     sizes: stockBySize(doc.receipts, doc.sows),
     sows,
   };
@@ -60,7 +65,7 @@ async function labelsFor(batchIds) {
   const ids = [...new Set(batchIds.map(String).filter(Boolean))];
   if (!ids.length) return new Map();
   const batches = await DispatchBatch.find({ _id: { $in: ids } })
-    .select("batchNumber primaryPlantReadyDays plantCmsId plantSubtypeId")
+    .select("batchNumber primaryPlantReadyDays primaryR2PlantReadyDays primaryR3PlantReadyDays plantCmsId plantSubtypeId")
     .lean();
   const plantIds = [...new Set(batches.map((b) => b.plantCmsId).filter(Boolean).map(String))];
   const plants = plantIds.length
@@ -76,6 +81,11 @@ async function labelsFor(batchIds) {
       plant: plant?.name || "",
       subtype: subtype?.name || "",
       primaryPlantReadyDays: batch.primaryPlantReadyDays || 0,
+      readyDaysBySize: {
+        R1: readyDaysForSize(batch, "R1"),
+        R2: readyDaysForSize(batch, "R2"),
+        R3: readyDaysForSize(batch, "R3"),
+      },
     });
   }
   return map;
@@ -198,40 +208,111 @@ export async function receiveLabLine({ batchId, labOutwardId }) {
   return presentLedger(ledger, await labelFor(batchId));
 }
 
-export async function sowBottles({ batchId, bottles, expectedPlants, sowDate, size }) {
+function labourCounts(laboursLadies, laboursGents, required) {
+  const ladies = Math.max(0, Math.floor(Number(laboursLadies) || 0));
+  const gents = Math.max(0, Math.floor(Number(laboursGents) || 0));
+  if (required && ladies + gents < 1) throw new AppError("Enter ladies or gents", 400);
+  return { ladies, gents };
+}
+
+function planSow(ledger, batch, jobs, { ladies, gents, sowDate }) {
+  const seen = new Set();
+  let working = {
+    receipts: ledger.receipts.map((row) => (typeof row.toObject === "function" ? row.toObject() : { ...row })),
+    bottlesLeft: ledger.bottlesLeft,
+    bottlesSown: ledger.bottlesSown,
+    expectedPlants: ledger.expectedPlants,
+    mortalityExpectedPlants: ledger.mortalityExpectedPlants,
+  };
+  const created = [];
+  for (const line of jobs) {
+    const sowSize = normalizeSize(line.size);
+    if (seen.has(sowSize)) throw new AppError(`${sowSize} is already on this entry`, 400);
+    seen.add(sowSize);
+    const asked = Math.floor(Number(line.readyDays) || 0);
+    const applied = applySow(working, {
+      bottles: line.bottles,
+      expectedPlants: line.expectedPlants,
+      size: sowSize,
+      sowDate: sowDate || line.sowDate || undefined,
+      readyDays: asked > 0 ? Math.min(365, asked) : readyDaysForSize(batch, sowSize),
+    });
+    if (applied.error) throw new AppError(applied.error, 400);
+    working = applied;
+    created.push({ ...applied.sow, laboursLadies: ladies, laboursGents: gents });
+  }
+  return { working, created };
+}
+
+function writeSow(ledger, planned) {
+  ledger.receipts = planned.working.receipts;
+  ledger.bottlesLeft = planned.working.bottlesLeft;
+  ledger.bottlesSown = planned.working.bottlesSown;
+  ledger.expectedPlants = planned.working.expectedPlants;
+  ledger.mortalityExpectedPlants = planned.working.mortalityExpectedPlants;
+  for (const sow of planned.created) ledger.sows.push(sow);
+}
+
+async function loadSowPair(batchId) {
   assertId(batchId, "Batch");
-  const batch = await DispatchBatch.findById(batchId).select("primaryPlantReadyDays");
+  const batch = await DispatchBatch.findById(batchId).select(
+    "primaryPlantReadyDays primaryR2PlantReadyDays primaryR3PlantReadyDays batchNumber"
+  );
   if (!batch) throw new AppError("Batch not found", 404);
   const ledger = await PrimaryBatchLedger.findOne({ batchId });
-  if (!ledger) throw new AppError("Not enough bottles on hand", 400);
+  if (!ledger) throw new AppError(`Not enough bottles on hand for ${batch.batchNumber || "this batch"}`, 400);
+  return { batch, ledger };
+}
 
-  const applied = applySow(
-    {
-      receipts: ledger.receipts.map((row) => (typeof row.toObject === "function" ? row.toObject() : { ...row })),
-      bottlesLeft: ledger.bottlesLeft,
-      bottlesSown: ledger.bottlesSown,
-      expectedPlants: ledger.expectedPlants,
-      mortalityExpectedPlants: ledger.mortalityExpectedPlants,
-    },
-    {
-      bottles,
-      expectedPlants,
-      size,
-      sowDate: sowDate || undefined,
-      readyDays: batch.primaryPlantReadyDays,
-    }
+export async function sowBottles({
+  batchId,
+  bottles,
+  expectedPlants,
+  sowDate,
+  size,
+  lines,
+  laboursLadies,
+  laboursGents,
+}) {
+  const { batch, ledger } = await loadSowPair(batchId);
+  const usingLines = Array.isArray(lines);
+  const jobs = (usingLines ? lines : [{ size, bottles, expectedPlants }]).filter(
+    (line) => Math.floor(Number(line?.bottles) || 0) > 0
   );
-  if (applied.error) throw new AppError(applied.error, 400);
-
-  ledger.receipts = applied.receipts;
-  ledger.bottlesLeft = applied.bottlesLeft;
-  ledger.bottlesSown = applied.bottlesSown;
-  ledger.expectedPlants = applied.expectedPlants;
-  ledger.mortalityExpectedPlants = applied.mortalityExpectedPlants;
-  ledger.sows.push(applied.sow);
+  if (!jobs.length) throw new AppError("Enter bottles for lagwad", 400);
+  const crew = labourCounts(laboursLadies, laboursGents, usingLines);
+  const planned = planSow(ledger, batch, jobs, { ...crew, sowDate });
+  writeSow(ledger, planned);
   await saveLedger(ledger);
   notifyPrimaryShed("sow").catch(() => {});
   return presentLedger(ledger, await labelFor(batchId));
+}
+
+/** One lagwad save can cover several batches. Nothing is written if any batch fails the check. */
+export async function sowMany({ batches, laboursLadies, laboursGents, sowDate }) {
+  if (!Array.isArray(batches) || batches.length < 1) throw new AppError("Choose a batch", 400);
+  const crew = labourCounts(laboursLadies, laboursGents, true);
+  const seen = new Set();
+  const ready = [];
+  for (const item of batches) {
+    const id = String(item?.batchId || "");
+    if (seen.has(id)) throw new AppError("That batch is already on this lagwad", 400);
+    seen.add(id);
+    const { batch, ledger } = await loadSowPair(id);
+    const jobs = (Array.isArray(item?.lines) ? item.lines : []).filter(
+      (line) => Math.floor(Number(line?.bottles) || 0) > 0
+    );
+    if (!jobs.length) throw new AppError(`Enter bottles for ${batch.batchNumber || "each batch"}`, 400);
+    ready.push({ batchId: id, ledger, planned: planSow(ledger, batch, jobs, { ...crew, sowDate }) });
+  }
+  const saved = [];
+  for (const row of ready) {
+    writeSow(row.ledger, row.planned);
+    await saveLedger(row.ledger);
+    saved.push(await presentLedger(row.ledger, await labelFor(row.batchId)));
+  }
+  notifyPrimaryShed("sow").catch(() => {});
+  return { batches: saved };
 }
 
 export async function sendPlants({ batchId, sowId, plants }) {

@@ -10,6 +10,7 @@ import {
   isReadyNow,
   orderRemainingPlants,
   summarizeStockRows,
+  stockMortalityOf,
 } from "../services/sowBatchStock.service.js";
 import { groupByPlantVarietyDate, plantLetter, rollupDeliveryIntel, ymdInRange } from "../services/sowBatchStock.intel.js";
 
@@ -17,6 +18,23 @@ const OID = {
   o1: "650000000000000000000001",
   o2: "650000000000000000000002",
 };
+
+test("stock mortality is buffer minus last move into excess", () => {
+  assert.deepEqual(
+    stockMortalityOf({ mortalityMovedToExcess: 80, bufferPlants: 200 }, 200),
+    { mortality: 120, mortalityMovedToExcess: 80, mortalityReserve: 120 }
+  );
+  assert.deepEqual(stockMortalityOf({ noMortalityReserve: true }, 200), {
+    mortality: 0,
+    mortalityMovedToExcess: 0,
+    mortalityReserve: 0,
+  });
+  assert.deepEqual(stockMortalityOf({ isIrrelevant: true, mortalityMovedToExcess: 10 }, 50), {
+    mortality: 0,
+    mortalityMovedToExcess: 10,
+    mortalityReserve: 0,
+  });
+});
 
 test("dispatchedNet sums signed dispatchLog plants", () => {
   const batch = {
@@ -87,7 +105,7 @@ test("ready date compare uses DD-MM-YYYY vs IST ymd", () => {
   assert.equal(isReadyNow("", "2026-10-20"), false);
 });
 
-test("order remaining uses partial cover until sowingDone", () => {
+test("order remaining uses partial cover even if the done flag is set", () => {
   const o = {
     numberOfPlants: 20000,
     additionalPlants: 0,
@@ -95,14 +113,50 @@ test("order remaining uses partial cover until sowingDone", () => {
     sowingPartialCover: [{ plants: 2300 }],
   };
   assert.equal(orderRemainingPlants(o), 17700);
-  assert.equal(orderRemainingPlants({ ...o, sowingDone: true }), 0);
-  assert.equal(orderRemainingPlants({ ...o, remainingPlants: 9000 }), 6700);
+  assert.equal(orderRemainingPlants({ ...o, sowingDone: true }), 17700);
+  // remainingPlants is dispatch leftover — ignored for sowing need
+  assert.equal(orderRemainingPlants({ ...o, remainingPlants: 9000 }), 17700);
   assert.equal(
     orderRemainingPlants({ numberOfPlants: 14000, remainingPlants: 9000, sowingDone: false }),
-    9000
+    14000
   );
   assert.equal(
     orderRemainingPlants({ numberOfPlants: 12000, remainingPlants: 0, sowingDone: false }),
+    12000
+  );
+});
+
+test("order remaining prefers sowingCoverSources over partial / remainingPlants", () => {
+  assert.equal(
+    orderRemainingPlants({
+      numberOfPlants: 16000,
+      sowingDone: false,
+      remainingPlants: 16000,
+      sowingPartialCover: [],
+      sowingCoverSources: [{ requestNumber: "SR1", plants: 15020 }],
+    }),
+    980
+  );
+  assert.equal(
+    orderRemainingPlants({
+      numberOfPlants: 14000,
+      sowingDone: false,
+      sowingPartialCover: [{ plants: 5496 }],
+      sowingCoverSources: [{ requestNumber: "SR1", plants: 5496 }],
+    }),
+    8504
+  );
+  // Fully covered across other slots → 0 (even if remField still booked)
+  assert.equal(
+    orderRemainingPlants({
+      numberOfPlants: 20000,
+      remainingPlants: 20000,
+      sowingDone: false,
+      sowingCoverSources: [
+        { requestNumber: "SR_A", plants: 2228 },
+        { requestNumber: "SR_B", plants: 17772 },
+      ],
+    }),
     0
   );
 });

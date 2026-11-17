@@ -7,6 +7,7 @@ import {
   classifySlotRow,
   orderPlantQty,
   getAlertEngineRules,
+  bigOrderThresholdForOrder,
 } from "../services/whatsappAlertEngine.service.js";
 import {
   shouldSkipAlert,
@@ -119,5 +120,22 @@ test("alert dedupe cooldown", () => {
 test("getAlertEngineRules returns numeric thresholds", () => {
   const r = getAlertEngineRules();
   assert.ok(r.bigOrderQty >= 1);
+  assert.ok(r.bigOrderQtyBanana >= 1);
   assert.ok(r.slotLowUtilPct >= 1);
+});
+
+test("big order threshold is 6000 for Banana and 10000 otherwise", () => {
+  const r = { bigOrderQty: 10000, bigOrderQtyBanana: 6000 };
+  assert.equal(
+    bigOrderThresholdForOrder({ plantName: { name: "Banana" } }, r),
+    6000
+  );
+  assert.equal(
+    bigOrderThresholdForOrder({ plantNameSnapshot: "केळी" }, r),
+    6000
+  );
+  assert.equal(
+    bigOrderThresholdForOrder({ plantName: { name: "Watermelon" } }, r),
+    10000
+  );
 });

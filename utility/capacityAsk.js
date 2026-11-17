@@ -115,6 +115,14 @@ export function boardForAnalyst(board, { nextSlots = 4 } = {}) {
             unsoldFromPast: num(overdue.unsold),
           }
         : null;
+      const pastFree = (row.pastCells || [])
+        .filter((cell) => num(cell.net) > 0)
+        .map((cell) => ({
+          slot: slotText(cell),
+          ready: num(cell.ready),
+          booked: num(cell.booked),
+          net: num(cell.net),
+        }));
       return {
         crop: row.plantName,
         variety: row.subtypeName,
@@ -127,6 +135,7 @@ export function boardForAnalyst(board, { nextSlots = 4 } = {}) {
           batches: row.stock?.batches?.length || 0,
         },
         now,
+        pastFree,
         next: (row.upcoming || []).slice(0, nextSlots).map((cell) => ({
           slot: slotText(cell),
           ready: num(cell.ready),
@@ -168,7 +177,8 @@ function varietyLine(row, { withNext = true } = {}) {
   if (!row.sowingRequired) parts.push("no sowing, shed stock only");
   if (row.now && (row.now.ready || row.now.booked)) {
     const overdue = row.now.overdueBooked ? `, incl. ${n(row.now.overdueBooked)} overdue` : "";
-    parts.push(`now ${row.now.slot}: ${n(row.now.ready)} ready, ${n(row.now.booked)} booked, ${netText(row.now.net)}${overdue}`);
+    const pastFree = row.now.unsoldFromPast ? `, ${n(row.now.unsoldFromPast)} past free` : "";
+    parts.push(`now ${row.now.slot}: ${n(row.now.ready)} ready, ${n(row.now.booked)} booked, ${netText(row.now.net)}${overdue}${pastFree}`);
   }
   if (withNext) {
     const next = row.next.filter((cell) => cell.ready || cell.booked).slice(0, 3);

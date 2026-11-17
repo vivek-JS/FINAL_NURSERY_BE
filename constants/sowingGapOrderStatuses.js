@@ -6,6 +6,17 @@ export const NEED_SOW_ORDER_STATUSES = ["ACCEPTED"];
 
 export const NEED_SOW_ORDER_STATUS_SET = new Set(NEED_SOW_ORDER_STATUSES);
 
+/** Sowing Gap Analysis → Not sown tab (pre-dispatch pipeline, not finished dispatch). */
+export const UNSOWN_SOW_BOARD_STATUSES = [
+  "ACCEPTED",
+  "ASSIGNED",
+  "FARM_READY",
+  "READY_FOR_DISPATCH",
+  "DISPATCH_PROCESS",
+];
+
+export const UNSOWN_SOW_BOARD_STATUS_SET = new Set(UNSOWN_SOW_BOARD_STATUSES);
+
 /**
  * Orders counted toward remaining-to-dispatch pipeline (not need-sow).
  * Excludes DISPATCHED, COMPLETED, CANCELLED, TEMPORARY_CANCELLED, REJECTED, etc.

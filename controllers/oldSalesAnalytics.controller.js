@@ -1,8 +1,80 @@
 import { Parser } from "json2csv";
 import OldSalesData from "../models/oldSalesData.model.js";
 import OldSalesChangeLog from "../models/oldSalesChangeLog.model.js";
+import Order from "../models/order.model.js";
+import Farmer from "../models/farmer.model.js";
 import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
+
+/** Cancelled / rejected do not count as “already booked” for export skip. */
+const BOOKING_SKIP_EXCLUDED_STATUSES = ["CANCELLED", "REJECTED", "TEMPORARY_CANCELLED"];
+
+const normalizeMobile10 = (mobile) => {
+  if (mobile == null || mobile === "") return null;
+  const digits = String(mobile).replace(/\D/g, "");
+  if (digits.length >= 10) return digits.slice(-10);
+  return digits.length ? digits : null;
+};
+
+/** Same start/end day bounds as old-sales buildMatch (deliveryDate). */
+const buildDeliveryDateRange = (query) => {
+  if (!query?.startDate && !query?.endDate) return null;
+  const range = {};
+  if (query.startDate) {
+    const start = new Date(query.startDate);
+    if (!Number.isNaN(start.getTime())) {
+      start.setHours(0, 0, 0, 0);
+      range.$gte = start;
+    }
+  }
+  if (query.endDate) {
+    const end = new Date(query.endDate);
+    if (!Number.isNaN(end.getTime())) {
+      end.setHours(23, 59, 59, 999);
+      range.$lte = end;
+    }
+  }
+  return Object.keys(range).length ? range : null;
+};
+
+/**
+ * Mobiles with an ERP Order in the selected month/range whose status is
+ * live, completed, or dispatched (anything except cancelled/rejected).
+ */
+const getBookedMobileSetForRange = async (query) => {
+  const filter = {
+    orderStatus: { $nin: BOOKING_SKIP_EXCLUDED_STATUSES },
+  };
+  const deliveryRange = buildDeliveryDateRange(query);
+  if (deliveryRange) {
+    filter.deliveryDate = deliveryRange;
+  }
+
+  const orders = await Order.find(filter)
+    .select("farmer orderFor.mobileNumber")
+    .lean();
+
+  const farmerIds = [];
+  const mobiles = new Set();
+
+  for (const order of orders) {
+    if (order.farmer) farmerIds.push(order.farmer);
+    const orderForMobile = normalizeMobile10(order.orderFor?.mobileNumber);
+    if (orderForMobile) mobiles.add(orderForMobile);
+  }
+
+  if (farmerIds.length) {
+    const farmers = await Farmer.find({ _id: { $in: farmerIds } })
+      .select("mobileNumber")
+      .lean();
+    for (const farmer of farmers) {
+      const mobile = normalizeMobile10(farmer.mobileNumber);
+      if (mobile) mobiles.add(mobile);
+    }
+  }
+
+  return mobiles;
+};
 
 const parseList = (value) => {
   if (!value) return [];
@@ -1204,14 +1276,23 @@ export const exportOldSalesFarmers = catchAsync(async (req, res) => {
     { $sort: { customerName: 1 } },
   ];
 
-  const records = await OldSalesData.aggregate(pipeline);
-  const rows = records.map((r) => ({
-    name: r.customerName || "",
-    mobileNo: (r._id || "").toString().trim(),
-    village: r.village || "",
-    taluka: r.taluka || "",
-    district: r.district || "",
-  }));
+  const [records, bookedMobiles] = await Promise.all([
+    OldSalesData.aggregate(pipeline),
+    getBookedMobileSetForRange(req.query),
+  ]);
+
+  const rows = records
+    .map((r) => ({
+      name: r.customerName || "",
+      mobileNo: (r._id || "").toString().trim(),
+      village: r.village || "",
+      taluka: r.taluka || "",
+      district: r.district || "",
+    }))
+    .filter((row) => {
+      const key = normalizeMobile10(row.mobileNo);
+      return key && !bookedMobiles.has(key);
+    });
 
   const fields = ["name", "mobileNo", "village", "taluka", "district"];
   const parser = new Parser({ fields });

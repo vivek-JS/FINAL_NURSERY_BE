@@ -22,6 +22,20 @@ function remainingOnLine(si) {
   return si?.transferStatus === "fully_transferred" ? 0 : total;
 }
 
+/**
+ * Current ready for Capacity / slot Actual ready — same number.
+ * When the line is on a booking slot, never count above synced ready
+ * (min(available, slotStockSyncedPlants)). Unlinked lines use full remaining.
+ */
+function readyNowOnLine(si, remaining, ready) {
+  if (!ready || remaining < 1) return 0;
+  const linked = Boolean(si?.linkedBookingSlotId);
+  const syncedRaw = si?.slotStockSyncedPlants;
+  if (!linked && syncedRaw == null) return remaining;
+  const synced = qty(syncedRaw);
+  return Math.min(remaining, synced);
+}
+
 function lineReadiness(si, secondaryDays, today) {
   if (si?.readinessBypassAt) return { ready: true, readyDate: si.readinessBypassAt };
   let readyDate = si?.expectedReadyDate || null;
@@ -117,9 +131,10 @@ export async function loadShedStockPayload() {
       inwardShed.set(idStr(si._id), shed);
       if (isReturn) bucket.returned += sowed;
       else bucket.sowed += sowed;
+      const readyNow = readyNowOnLine(si, remaining, ready);
       bucket.remaining += remaining;
       bucket.destroyed += destroyed;
-      if (ready) bucket.readyRemaining += remaining;
+      bucket.readyRemaining += readyNow;
       bucket.lines.push({
         inwardId: idStr(si._id),
         size: si.size || "",
@@ -129,6 +144,8 @@ export async function loadShedStockPayload() {
         ready,
         sowed,
         remaining,
+        readyNow,
+        synced: qty(si.slotStockSyncedPlants),
         gone: Math.max(0, sowed - remaining),
         destroyed,
         isReturn,

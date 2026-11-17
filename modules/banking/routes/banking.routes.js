@@ -5,6 +5,8 @@ import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import {
   postRegister,
   getRegistration,
+  getRegistrationStatus,
+  postDeregister,
   postStatement,
   getBalance,
   getTxnStatus,
@@ -20,6 +22,7 @@ import {
   getCashInHand,
   getEmployeeCashBookEntries,
   postVerifyPayment,
+  postConfirmPayment,
   getPendingPayments,
   getVerifiedPayments,
   getStatement,
@@ -29,6 +32,7 @@ import {
   getCryptoHealth,
   postCryptoTest,
 } from "../controllers/banking.controller.js";
+import { postCorrectPaymentUtr } from "../controllers/paymentUtrCorrection.controller.js";
 import {
   getPayoutsConfig,
   getPayoutsSummary,
@@ -40,6 +44,11 @@ import {
   postCancelPayout,
   postRefreshPayout,
   postResendPayout,
+  postRefreshPayoutNeft,
+  getNeftStatus,
+  postRegisterBeneficiaryAtBank,
+  postValidateBeneficiaryAtBank,
+  postBeneValidate,
   getBeneficiaries,
   postBeneficiary,
   postApproveBeneficiary,
@@ -62,11 +71,17 @@ router.post("/crypto/test", requirePaymentAccess, postCryptoTest);
 
 router.post("/icici/register", requirePaymentAccess, idempotencyMiddleware, postRegister);
 router.get("/icici/registration", requirePaymentAccess, getRegistration);
+router.get("/icici/registration/status", requirePaymentAccess, getRegistrationStatus);
+router.post("/icici/deregister", requirePaymentAccess, idempotencyMiddleware, postDeregister);
+router.get("/icici/neft-status", requirePaymentAccess, getNeftStatus);
+router.post("/icici/bene-validate", requirePaymentAccess, postBeneValidate);
 router.post("/icici/statement", requirePaymentAccess, idempotencyMiddleware, postStatement);
 router.get("/icici/balance", requirePaymentAccess, getBalance);
 router.get("/icici/status", requirePaymentAccess, getTxnStatus);
 
 router.post("/payments/verify", requirePaymentAccess, idempotencyMiddleware, postVerifyPayment);
+router.post("/payments/confirm", requirePaymentAccess, idempotencyMiddleware, postConfirmPayment);
+router.post("/payments/correct-utr", requirePaymentAccess, postCorrectPaymentUtr);
 router.get("/payments/pending", requirePaymentAccess, getPendingPayments);
 router.get("/payments/verified", requirePaymentAccess, getVerifiedPayments);
 
@@ -103,6 +118,7 @@ router.post("/payouts/:id/reject", requirePaymentAccess, postRejectPayout);
 router.post("/payouts/:id/cancel", requirePaymentAccess, postCancelPayout);
 router.post("/payouts/:id/refresh", requirePaymentAccess, postRefreshPayout);
 router.post("/payouts/:id/resend", requirePaymentAccess, postResendPayout);
+router.post("/payouts/:id/neft-status", requirePaymentAccess, postRefreshPayoutNeft);
 
 // Payee register (maker adds, a different approver activates).
 router.get("/beneficiaries", requirePaymentAccess, getBeneficiaries);
@@ -113,5 +129,7 @@ router.post("/beneficiaries/bulk-reject", requirePaymentAccess, postBulkRejectBe
 router.post("/beneficiaries/:id/approve", requirePaymentAccess, postApproveBeneficiary);
 router.post("/beneficiaries/:id/reject", requirePaymentAccess, postRejectBeneficiary);
 router.post("/beneficiaries/:id/disable", requirePaymentAccess, postDisableBeneficiary);
+router.post("/beneficiaries/:id/register-bank", requirePaymentAccess, postRegisterBeneficiaryAtBank);
+router.post("/beneficiaries/:id/validate", requirePaymentAccess, postValidateBeneficiaryAtBank);
 
 export default router;

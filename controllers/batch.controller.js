@@ -6,6 +6,14 @@ import DispatchBatch from "../models/dispatchBatch.model.js";
 import PlantCms from "../models/plantCms.model.js";
 import PlantOutward from "../models/plantOutward.model.js";
 
+const DEFAULT_R2_READY_DAYS = 40;
+const DEFAULT_R3_READY_DAYS = 40;
+
+function positiveDay(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1 ? n : 0;
+}
+
 async function assertSubtypeBelongsToPlant(plantCmsId, plantSubtypeId) {
   if (!plantCmsId || !plantSubtypeId) return;
   const plant = await PlantCms.findById(plantCmsId).select("subtypes").lean();
@@ -20,6 +28,8 @@ export const createBatch = catchAsync(async (req, res, next) => {
     dateAdded,
     primaryPlantReadyDays,
     secondaryPlantReadyDays,
+    secondaryR2PlantReadyDays,
+    secondaryR3PlantReadyDays,
     plantCmsId,
     plantSubtypeId,
   } = req.body;
@@ -42,6 +52,8 @@ export const createBatch = catchAsync(async (req, res, next) => {
     dateAdded: dateAdded ? new Date(dateAdded) : new Date(),
     primaryPlantReadyDays: Number(primaryPlantReadyDays),
     secondaryPlantReadyDays: Number(secondaryPlantReadyDays),
+    secondaryR2PlantReadyDays: positiveDay(secondaryR2PlantReadyDays) || DEFAULT_R2_READY_DAYS,
+    secondaryR3PlantReadyDays: positiveDay(secondaryR3PlantReadyDays) || DEFAULT_R3_READY_DAYS,
     plantCmsId,
     plantSubtypeId,
   });
@@ -71,7 +83,7 @@ export const createBatch = catchAsync(async (req, res, next) => {
 
 export const getAllBatches = catchAsync(async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 10));
   const search = String(req.query.search || "").trim();
   const q = {};
   if (search) {
@@ -103,6 +115,8 @@ export const updateBatch = catchAsync(async (req, res, next) => {
     dateAdded,
     primaryPlantReadyDays,
     secondaryPlantReadyDays,
+    secondaryR2PlantReadyDays,
+    secondaryR3PlantReadyDays,
     plantReadyDaysChangeReason,
     plantCmsId,
     plantSubtypeId,
@@ -120,6 +134,8 @@ export const updateBatch = catchAsync(async (req, res, next) => {
   if (dateAdded != null) patch.dateAdded = new Date(dateAdded);
   if (primaryPlantReadyDays != null) patch.primaryPlantReadyDays = Number(primaryPlantReadyDays);
   if (secondaryPlantReadyDays != null) patch.secondaryPlantReadyDays = Number(secondaryPlantReadyDays);
+  if (positiveDay(secondaryR2PlantReadyDays)) patch.secondaryR2PlantReadyDays = positiveDay(secondaryR2PlantReadyDays);
+  if (positiveDay(secondaryR3PlantReadyDays)) patch.secondaryR3PlantReadyDays = positiveDay(secondaryR3PlantReadyDays);
 
   const nextPlant = plantCmsId ?? existing.plantCmsId;
   const nextSubtype = plantSubtypeId ?? existing.plantSubtypeId;
@@ -141,29 +157,32 @@ export const updateBatch = catchAsync(async (req, res, next) => {
   const sChanged =
     secondaryPlantReadyDays != null &&
     Number(secondaryPlantReadyDays) !== Number(existing.secondaryPlantReadyDays);
+  const r2Next = positiveDay(secondaryR2PlantReadyDays);
+  const r2Prev = positiveDay(existing.secondaryR2PlantReadyDays);
+  const r3Next = positiveDay(secondaryR3PlantReadyDays);
+  const r3Prev = positiveDay(existing.secondaryR3PlantReadyDays);
+  const r2Changed = r2Next > 0 && r2Next !== r2Prev;
+  const r3Changed = r3Next > 0 && r3Next !== r3Prev;
+  const daysNeedReason =
+    pChanged || sChanged || (r2Changed && r2Prev > 0) || (r3Changed && r3Prev > 0);
 
-  if ((pChanged || sChanged) && !String(plantReadyDaysChangeReason || "").trim()) {
+  if (daysNeedReason && !String(plantReadyDaysChangeReason || "").trim()) {
     return next(new AppError("Reason required when changing plant ready days", 400));
   }
 
-  if ((pChanged || sChanged) && String(plantReadyDaysChangeReason || "").trim()) {
+  if ((pChanged || sChanged || r2Changed || r3Changed) && String(plantReadyDaysChangeReason || "").trim()) {
     const audit = [...(existing.plantReadyDaysAudit || [])];
     const reason = String(plantReadyDaysChangeReason).trim();
-    if (pChanged) {
-      audit.push({
-        field: "primaryPlantReadyDays",
-        oldValue: existing.primaryPlantReadyDays,
-        newValue: Number(primaryPlantReadyDays),
-        reason,
-      });
+    const pushAudit = (field, oldValue, newValue) => {
+      audit.push({ field, oldValue, newValue, reason });
+    };
+    if (pChanged) pushAudit("primaryPlantReadyDays", existing.primaryPlantReadyDays, Number(primaryPlantReadyDays));
+    if (sChanged) pushAudit("secondaryPlantReadyDays", existing.secondaryPlantReadyDays, Number(secondaryPlantReadyDays));
+    if (r2Changed) {
+      pushAudit("secondaryR2PlantReadyDays", existing.secondaryR2PlantReadyDays, positiveDay(secondaryR2PlantReadyDays));
     }
-    if (sChanged) {
-      audit.push({
-        field: "secondaryPlantReadyDays",
-        oldValue: existing.secondaryPlantReadyDays,
-        newValue: Number(secondaryPlantReadyDays),
-        reason,
-      });
+    if (r3Changed) {
+      pushAudit("secondaryR3PlantReadyDays", existing.secondaryR3PlantReadyDays, positiveDay(secondaryR3PlantReadyDays));
     }
     patch.plantReadyDaysAudit = audit;
   }

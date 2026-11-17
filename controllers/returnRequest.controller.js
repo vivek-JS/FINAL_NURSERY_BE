@@ -3,6 +3,13 @@ import Product from "../models/product.model.js";
 import Batch from "../models/batch.model.js";
 import InventoryTransaction from "../models/inventoryTransaction.model.js";
 import mongoose from "mongoose";
+import { canUseStorePhone } from "../utils/purchaseOrderAccess.js";
+
+function canDecideReturn(user) {
+  const role = String(user?.role || '').trim().toUpperCase();
+  if (role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'SUPERADMIN') return true;
+  return canUseStorePhone(user);
+}
 
 // Get all return requests (with filters)
 export const getAllReturnRequests = async (req, res) => {
@@ -85,13 +92,12 @@ export const approveReturnRequest = async (req, res) => {
     const approvedBy = req.user?._id;
     
     // Check user role - only ADMIN, SUPER_ADMIN can approve
-    const userRole = req.user?.role;
-    if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+    if (!canDecideReturn(req.user)) {
       await session.abortTransaction();
       session.endSession();
       return res.status(403).json({
         success: false,
-        message: "Only ADMIN or SUPER_ADMIN can approve return requests"
+        message: "Only store or admin staff can approve return requests"
       });
     }
     
@@ -289,11 +295,10 @@ export const rejectReturnRequest = async (req, res) => {
     const rejectedBy = req.user?._id;
     
     // Check user role - only ADMIN, SUPER_ADMIN can reject
-    const userRole = req.user?.role;
-    if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+    if (!canDecideReturn(req.user)) {
       return res.status(403).json({
         success: false,
-        message: "Only ADMIN or SUPER_ADMIN can reject return requests"
+        message: "Only store or admin staff can reject return requests"
       });
     }
     

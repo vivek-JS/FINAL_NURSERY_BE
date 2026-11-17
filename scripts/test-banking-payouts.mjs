@@ -254,7 +254,9 @@ try {
   const selfBeneOk = await bene.approveBeneficiary(selfBene._id, adminMaker);
   check(
     "super admin can approve a payee they added, marked self-approved",
-    selfBeneOk.status === "ACTIVE" && selfBeneOk.selfApproved === true && /Self-approved/.test(selfBeneOk.history.at(-1).note || "")
+    selfBeneOk.status === "ACTIVE" &&
+      selfBeneOk.selfApproved === true &&
+      /Self-approved/.test(selfBeneOk.history.find((h) => h.action === "APPROVED")?.note || "")
   );
   const selfPay = await svc.createPayout({ beneficiaryId: selfBene._id, txnType: "IFS", amount: "321" }, adminMaker);
   const selfPayOk = await svc.approvePayout(selfPay._id, adminMaker);

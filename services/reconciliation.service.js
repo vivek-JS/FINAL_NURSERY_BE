@@ -237,7 +237,6 @@ export async function runReconciliation(dateFrom, dateTo, source = "all") {
         }
         const subdoc = order.payment.id(pay.paymentId);
         if (!subdoc || subdoc.paymentStatus !== "PENDING") continue;
-        subdoc.paymentStatus = "BANK_VERIFIED";
         subdoc.bankVerificationStatus = "BANK_VERIFIED";
         subdoc.bankVerificationSource = "STATEMENT_API";
         subdoc.bankVerificationMatchedBy = by;
@@ -268,7 +267,6 @@ export async function runReconciliation(dateFrom, dateTo, source = "all") {
         }
         const subdoc = order.payment.id(pay.paymentId);
         if (!subdoc || subdoc.paymentStatus !== "PENDING") continue;
-        subdoc.paymentStatus = "BANK_VERIFIED";
         subdoc.bankVerificationStatus = "BANK_VERIFIED";
         subdoc.bankVerificationSource = "STATEMENT_API";
         subdoc.bankVerificationMatchedBy = by;

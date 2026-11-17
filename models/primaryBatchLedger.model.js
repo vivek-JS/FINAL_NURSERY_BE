@@ -23,6 +23,8 @@ const sowSchema = new Schema(
     mortalityExpectedPlants: { type: Number, required: true, min: 0 },
     readyDate: { type: Date, required: true },
     plantsSent: { type: Number, default: 0, min: 0 },
+    laboursLadies: { type: Number, default: 0, min: 0 },
+    laboursGents: { type: Number, default: 0, min: 0 },
   },
   { _id: true }
 );

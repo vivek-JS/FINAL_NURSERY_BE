@@ -6,6 +6,9 @@ export const FREIGHT_ENTRY_SOURCES = ["WEB", "APP"];
 /** Fields compared between tentative and final to decide `finalUnchanged` / `changedFields`. */
 export const FREIGHT_COMPARE_FIELDS = [
   "km",
+  "billedKm",
+  "extraKm",
+  "localMarket",
   "rateCardId",
   "loadType",
   "crop",
@@ -21,6 +24,14 @@ export const FREIGHT_COMPARE_FIELDS = [
 const entrySchema = new Schema(
   {
     km: { type: Number, required: true, min: 0 },
+    /** Auto 5 km × order count. Not used on local-market plant quotes. */
+    extraKm: { type: Number, default: 0, min: 0 },
+    extraKmPerOrder: { type: Number, default: 5, min: 0 },
+    orderCount: { type: Number, default: 0, min: 0 },
+    billedKm: { type: Number, default: 0, min: 0 },
+    localMarket: { type: Boolean, default: false },
+    plants: { type: Number, default: 0, min: 0 },
+    ratePerPlant: { type: Number, default: 0, min: 0 },
     rateCardId: { type: Schema.Types.ObjectId, ref: "FreightRateCard", default: null },
     rateCardName: { type: String, default: "" },
     loadType: { type: String, default: "" },
@@ -34,10 +45,13 @@ const entrySchema = new Schema(
     bhatta: { type: Number, default: 0, min: 0 },
     bhattas: {
       type: [
-        {
-          name: { type: String, default: "", trim: true },
-          amount: { type: Number, default: 0, min: 0 },
-        },
+        new Schema(
+          {
+            name: { type: String, default: "", trim: true },
+            amount: { type: Number, default: 0, min: 0 },
+          },
+          { _id: false }
+        ),
       ],
       default: [],
     },
@@ -57,6 +71,8 @@ const freightSlipSchema = new Schema(
     dispatchId: { type: Schema.Types.ObjectId, ref: "Dispatch", required: true },
     transportId: { type: String, default: "" },
     slipNumber: { type: String, required: true },
+    /** IST calendar day used to mint slipNumber (1 Jan 2026 → 1126). */
+    slipDate: { type: Date, default: null },
     status: { type: String, enum: FREIGHT_SLIP_STATUSES, default: "TENTATIVE" },
 
     vehicleName: { type: String, default: "" },
@@ -109,6 +125,7 @@ const freightSlipSchema = new Schema(
 );
 
 freightSlipSchema.index({ dispatchId: 1 }, { unique: true });
+freightSlipSchema.index({ slipNumber: 1 }, { unique: true });
 freightSlipSchema.index({ status: 1, createdAt: -1 });
 
 export default model("FreightSlip", freightSlipSchema);

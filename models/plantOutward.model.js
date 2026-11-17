@@ -351,7 +351,12 @@ const secondaryInwardSchema = new Schema({
     type: Date,
     required: true
   },
-  /** Materialized: secondaryInwardDate + batch secondaryPlantReadyDays (server source of truth). */
+  /** Days copied from the batch at save time. Later CMS edits do not move this row. */
+  readyDays: {
+    type: Number,
+    min: 1,
+  },
+  /** Materialized: secondaryInwardDate + ready days locked when the row was saved. */
   expectedReadyDate: {
     type: Date,
     default: null,
@@ -420,6 +425,18 @@ const secondaryInwardSchema = new Schema({
   returnReason: { type: String, trim: true, maxlength: 500, default: "" },
   returnedAt: { type: Date, default: null },
   returnedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+  remarks: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+  /** e.g. READY_PLANTS — imported ready stock from another nursery. */
+  importSource: {
+    type: String,
+    trim: true,
+    maxlength: 40,
+    default: "",
+  },
   activityLog: { type: [activityLogSchema], default: [] },
 });
 

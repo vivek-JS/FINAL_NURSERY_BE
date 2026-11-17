@@ -1117,8 +1117,17 @@ export const completeOrderFromSlotExcess = async (req, res) => {
           sowingDone: true,
           sowingDoneAt: new Date(),
           sowingDoneRequestId: request._id,
+          leftoverFromIncomplete: false,
         },
-        $push: { orderRemarks: remark },
+        $unset: { sowingPartialCover: "" },
+        $push: {
+          orderRemarks: remark,
+          sowingCoverSources: {
+            sowingRequestId: request._id,
+            requestNumber: request.requestNumber || "",
+            plants: need,
+          },
+        },
       },
       { new: true }
     );

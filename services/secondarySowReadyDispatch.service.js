@@ -29,6 +29,7 @@ import {
   scheduleVehicleLoadMoreNotify,
   syncOrderVehicleLoadedFlag,
 } from "./dispatchPostLoadFinalize.service.js";
+import { alignOrderBookingSlotWithHistory } from "../utility/readySlotOrderCover.js";
 
 function parseDdMmYyyy(str) {
   const m = moment(str, ["DD-MM-YYYY", "YYYY-MM-DD"], true);
@@ -361,7 +362,9 @@ export async function ensureSowReadyPlantOutward(plantId, subtypeId, session) {
     batch = created[0];
   }
 
-  let po = await PlantOutward.findOne({ batchId: batch._id }).session(session || null);
+  let po = await PlantOutward.findOne({ batchId: batch._id })
+    .select("_id batchId")
+    .session(session || null);
   if (!po) {
     const created = await PlantOutward.create(
       [
@@ -647,11 +650,14 @@ export async function executeSowReadyVehicleLoad({
       };
 
       plantOutward.secondaryOutward.push(secondaryOutwardEntry);
-      await plantOutward.save({ session });
-      const newSo = plantOutward.secondaryOutward[plantOutward.secondaryOutward.length - 1];
-
+      totalLoaded += plantsMoving;
+      seq += 1;
+      if (item.orderId) {
+        plantsByOrder.set(item.orderId, (plantsByOrder.get(item.orderId) || 0) + plantsMoving);
+      }
       results.push({
-        secondaryOutwardId: String(newSo._id),
+        // _id assigned on save below
+        _pendingIdx: plantOutward.secondaryOutward.length - 1,
         slotId: item.slotId,
         pollyhouse: item.pollyhouse,
         plants: plantsMoving,
@@ -659,11 +665,24 @@ export async function executeSowReadyVehicleLoad({
         stockSource: "SOW_READY",
         numberPerCrate,
       });
-      totalLoaded += plantsMoving;
-      seq += 1;
-      if (item.orderId) {
-        plantsByOrder.set(item.orderId, (plantsByOrder.get(item.orderId) || 0) + plantsMoving);
-      }
+    }
+
+    await plantOutward.save({ session });
+    for (const r of results) {
+      const newSo = plantOutward.secondaryOutward[r._pendingIdx];
+      r.secondaryOutwardId = String(newSo?._id || "");
+      delete r._pendingIdx;
+    }
+
+    // Dominant source slot per order (most plants loaded from that ready slot).
+    const slotPlantsByOrder = new Map();
+    for (const item of loadPlan) {
+      if (!item.orderId || !item.slotId) continue;
+      const oid = String(item.orderId);
+      const sid = String(item.slotId);
+      const m = slotPlantsByOrder.get(oid) || new Map();
+      m.set(sid, (m.get(sid) || 0) + (Number(item.plants) || 0));
+      slotPlantsByOrder.set(oid, m);
     }
 
     const orderLoadedList = [];
@@ -674,6 +693,7 @@ export async function executeSowReadyVehicleLoad({
         dispatchDoc: freshDispatch,
         orderId: oid,
         plantsLoaded,
+        persist: false,
       });
       if (loaded) orderLoadedList.push(loaded);
       const fr = await finalizeOrderOnShedLineLoaded({
@@ -685,6 +705,28 @@ export async function executeSowReadyVehicleLoad({
       });
       if (fr) finalizeResults.push(fr);
       await syncOrderVehicleLoadedFlag({ session, orderId: oid, dispatchDoc: freshDispatch });
+
+      const slotMap = slotPlantsByOrder.get(String(oid));
+      let bestSlot = null;
+      let bestQty = 0;
+      if (slotMap) {
+        for (const [sid, qty] of slotMap) {
+          if (qty > bestQty) {
+            bestQty = qty;
+            bestSlot = sid;
+          }
+        }
+      }
+      if (bestSlot) {
+        await alignOrderBookingSlotWithHistory({
+          orderId: oid,
+          toSlotId: bestSlot,
+          by: performedBy,
+          session,
+          markDispatchedFromAnotherSlot: true,
+          notes: `App/shed dispatch from sow-ready slot · ${bestQty} plants`,
+        });
+      }
     }
     const primaryOrderId =
       resolvedOrderId || (plantsByOrder.size === 1 ? [...plantsByOrder.keys()][0] : null);
@@ -697,7 +739,9 @@ export async function executeSowReadyVehicleLoad({
       session,
       dispatchDoc: freshDispatch,
       plantRowIndex: dispatchPlantRowIdx,
+      persist: false,
     });
+    await freshDispatch.save({ session, validateBeforeSave: true });
 
     await session.commitTransaction();
 

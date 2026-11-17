@@ -9,6 +9,7 @@ import {
   reverseTransfers,
   loadSourceSlotsByIds,
 } from "./orderSowFromExcess.controller.js";
+import { orderPlantRemaining } from "../services/orderSowCover.plan.js";
 import {
   writeTransferAudit,
   writePartialTransferRecord,
@@ -339,13 +340,23 @@ export const allocateSlotToOrders = async (req, res) => {
         continue;
       }
 
-      const need = orderPlantsNeed(order);
+      const orderNeed = orderPlantsNeed(order);
+      const need = orderPlantRemaining(order);
+      if (need < 1) {
+        results.push({
+          orderId: order.orderId,
+          orderMongoId: oid,
+          success: false,
+          message: "Order is already fully covered",
+        });
+        continue;
+      }
       if (plants > need) {
         results.push({
           orderId: order.orderId,
           orderMongoId: oid,
           success: false,
-          message: `Cannot allocate ${plants} — order needs only ${need}`,
+          message: `Cannot allocate ${plants} — order needs only ${need} more (of ${orderNeed})`,
         });
         continue;
       }
@@ -425,6 +436,18 @@ export const allocateSlotToOrders = async (req, res) => {
             destination,
             userId: req.user._id,
           });
+          await Order.updateOne(
+            { _id: order._id, sowingDone: { $ne: true } },
+            {
+              $set: { leftoverFromIncomplete: true, sowingDone: false },
+              $push: {
+                sowingPartialCover: {
+                  plants,
+                  at: new Date(),
+                },
+              },
+            }
+          );
         }
       } catch (auditErr) {
         await reverseTransfers([tr]);
@@ -454,8 +477,16 @@ export const allocateSlotToOrders = async (req, res) => {
               sowingDone: true,
               sowingDoneAt: new Date(),
               sowingDoneRequestId: auditRequest._id,
+              leftoverFromIncomplete: false,
             },
-            $push: { orderRemarks: remark },
+            $push: {
+              orderRemarks: remark,
+              sowingCoverSources: {
+                sowingRequestId: auditRequest._id,
+                requestNumber: auditRequest.requestNumber || "",
+                plants,
+              },
+            },
           },
           { new: true }
         );

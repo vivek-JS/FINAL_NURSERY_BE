@@ -2,35 +2,43 @@
  * WhatsApp alert engine — rule-based automated alerts on the scanned ERP session.
  *
  * Event-driven: big orders on create/update.
- * Scheduled: slot low/high/overbooked scans, operational backlog digest.
+ * Scheduled: date-wise FIFO booking capacity digest, operational backlog digest.
  *
  * Env (see .env.example):
- *   WHATSAPP_ALERT_BIG_ORDER_QTY=10000
- *   WHATSAPP_ALERT_SLOT_LOW_UTIL_PCT=80
- *   WHATSAPP_ALERT_SLOT_LOW_ABS=1000
- *   WHATSAPP_ALERT_SLOT_HIGH_AVAIL_PCT=60
- *   WHATSAPP_ALERT_SLOT_HIGH_ABS=5000
+ *   WHATSAPP_ALERT_BIG_ORDER_QTY=10000          (default for non-Banana)
+ *   WHATSAPP_ALERT_BIG_ORDER_QTY_BANANA=6000    (Banana / केळी)
  *   WHATSAPP_ALERT_SLOT_SCAN_CRON=0 9,14,18 * * *
  *   WHATSAPP_ALERT_OPS_CRON=0 8 * * *
  */
 
 import mongoose from "mongoose";
+import moment from "moment";
 import Order from "../models/order.model.js";
 import {
   sendBigOrderAlert,
-  sendSlotAvailabilityDigest,
+  sendBookingCapacityDigest,
   sendOpsAlertsDigest,
 } from "./whatsappAlertService.js";
-import { fetchAvailabilityOverviewData } from "./whatsappReportAvailability.service.js";
 import { fetchSystemAlertsSnapshot } from "./whatsappReportData.service.js";
 import {
   shouldSkipAlert,
   markAlertSent,
 } from "./whatsappAlertDedupe.service.js";
+import { isBananaPlantName } from "../utility/watiPlantText.js";
+import { loadCapacityBoardPayload } from "../controllers/capacitySheet.controller.js";
+import {
+  buildBookingCapacityVarieties,
+  formatBookingCapacityDigestMessages,
+} from "../utility/bookingCapacityDigestFormat.js";
+import { IST_OFFSET } from "../utility/istSlotDate.js";
 
 export function getAlertEngineRules() {
   return {
     bigOrderQty: parseInt(process.env.WHATSAPP_ALERT_BIG_ORDER_QTY || "10000", 10),
+    bigOrderQtyBanana: parseInt(
+      process.env.WHATSAPP_ALERT_BIG_ORDER_QTY_BANANA || "6000",
+      10
+    ),
     slotLowUtilPct: parseInt(
       process.env.WHATSAPP_ALERT_SLOT_LOW_UTIL_PCT || "80",
       10
@@ -60,6 +68,35 @@ export function orderPlantQty(order = {}) {
   const total = Number(order.totalPlants);
   if (total > 0) return total;
   return base + extra;
+}
+
+/** Plant display name from order (populated PlantCms or snapshot). */
+export function orderPlantNameForAlert(order = {}) {
+  const plant = order.plantName;
+  if (plant && typeof plant === "object") {
+    return String(plant.name || plant.plantName || "").trim();
+  }
+  return String(
+    order.plantNameSnapshot || order.plantName || order.cropName || ""
+  ).trim();
+}
+
+/**
+ * Banana / केळी → 6,000 (env WHATSAPP_ALERT_BIG_ORDER_QTY_BANANA).
+ * Other plants → 10,000 (env WHATSAPP_ALERT_BIG_ORDER_QTY).
+ */
+export function bigOrderThresholdForOrder(order = {}, rules = getAlertEngineRules()) {
+  const plant = orderPlantNameForAlert(order);
+  const subtype = String(
+    order.plantSubtypeSnapshot ||
+      order.plantSubtypeName ||
+      (typeof order.plantSubtype === "string" ? order.plantSubtype : "") ||
+      ""
+  ).trim();
+  if (isBananaPlantName(plant, subtype)) {
+    return Math.max(1, Number(rules.bigOrderQtyBanana) || 6000);
+  }
+  return Math.max(1, Number(rules.bigOrderQty) || 10000);
 }
 
 /** Classify a slot row for alerting. Pure — unit tested. */
@@ -97,10 +134,6 @@ export function classifySlotRow(row, rules = getAlertEngineRules()) {
   return null;
 }
 
-function slotDedupeKey(kind, row) {
-  return `slot-${kind}:${row.slotId || row.plantId}:${row.subtypeId}:${row.startDay}:${row.month}`;
-}
-
 async function loadOrderForEngine(orderOrId) {
   const orderId = orderOrId?._id || orderOrId;
   if (!orderId || !mongoose.isValidObjectId(String(orderId))) return null;
@@ -114,7 +147,7 @@ async function loadOrderForEngine(orderOrId) {
 /**
  * Fire on new order — big quantity threshold.
  */
-export async function evaluateOrderAlertsOnCreate(orderOrId) {
+export async function evaluateOrderAlertsOnCreate(orderOrId, { isUpdate = false } = {}) {
   if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") {
     return { skipped: true, reason: "alerts_disabled" };
   }
@@ -126,21 +159,27 @@ export async function evaluateOrderAlertsOnCreate(orderOrId) {
 
   const rules = getAlertEngineRules();
   const qty = orderPlantQty(order);
-  if (qty < rules.bigOrderQty) {
-    return { skipped: true, reason: "below_threshold", qty };
+  const threshold = bigOrderThresholdForOrder(order, rules);
+  if (qty < threshold) {
+    return { skipped: true, reason: "below_threshold", qty, threshold };
   }
 
   const orderKey = String(order._id || order.orderId || "");
-  const dedupeKey = `big-order:${orderKey}`;
+  // Allow a second alert when qty is edited up (update path); create still dedupes.
+  const dedupeKey = isUpdate ? `big-order-update:${orderKey}:${qty}` : `big-order:${orderKey}`;
   if (shouldSkipAlert(dedupeKey)) {
-    return { skipped: true, reason: "dedupe", qty };
+    return { skipped: true, reason: "dedupe", qty, threshold };
   }
 
-  const delivery = await sendBigOrderAlert(order, { qty, threshold: rules.bigOrderQty });
+  const delivery = await sendBigOrderAlert(order, {
+    qty,
+    threshold,
+    isUpdate: Boolean(isUpdate),
+  });
   if (delivery?.delivered > 0) {
     markAlertSent(dedupeKey);
   }
-  return { sent: true, qty, delivery };
+  return { sent: true, qty, threshold, delivery, isUpdate: Boolean(isUpdate) };
 }
 
 /**
@@ -160,88 +199,48 @@ export async function evaluateOrderAlertsOnUpdate(
   if (!qtyChanged) return { skipped: true, reason: "qty_unchanged" };
 
   const plain = updatedOrder?.toObject?.() ?? updatedOrder;
-  return evaluateOrderAlertsOnCreate(plain);
+  return evaluateOrderAlertsOnCreate(plain, { isUpdate: true });
 }
 
 /**
- * Scan all slots — low / full / overbooked / high availability.
+ * Date-wise FIFO booking capacity (replaces old low/high/overbooked slot alerts).
+ * Uses capacity board ready vs booked, then locks earlier surplus for later shorts.
  */
 export async function runSlotAvailabilityAlertScan() {
   if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") {
     return { skipped: true, reason: "alerts_disabled" };
   }
-
-  const rules = getAlertEngineRules();
-  const { rows, year } = await fetchAvailabilityOverviewData({});
-
-  /** @type {object[]} */
-  const low = [];
-  /** @type {object[]} */
-  const high = [];
-  /** @type {object[]} */
-  const overbooked = [];
-
-  for (const row of rows) {
-    const kind = classifySlotRow(row, rules);
-    if (!kind) continue;
-
-    const item = {
-      ...row,
-      year,
-      utilPct:
-        row.totalPlants > 0
-          ? Math.round((row.bookedPlants / row.totalPlants) * 100)
-          : 0,
-    };
-
-    if (kind === "overbooked" || kind === "full") {
-      if (!shouldSkipAlert(slotDedupeKey("critical", row))) {
-        overbooked.push(item);
-      }
-    } else if (kind === "low") {
-      if (!shouldSkipAlert(slotDedupeKey("low", row))) {
-        low.push(item);
-      }
-    } else if (kind === "high") {
-      if (!shouldSkipAlert(slotDedupeKey("high", row))) {
-        high.push(item);
-      }
-    }
+  if (process.env.WHATSAPP_ALERT_BOOKING_CAPACITY_ENABLED !== "true") {
+    return { skipped: true, reason: "booking_capacity_disabled" };
   }
 
-  low.sort((a, b) => a.availablePlants - b.availablePlants);
-  overbooked.sort((a, b) => a.availablePlants - b.availablePlants);
-  high.sort((a, b) => b.availablePlants - a.availablePlants);
-
-  const max = rules.slotDigestMaxRows;
-  const lowSlice = low.slice(0, max);
-  const highSlice = high.slice(0, max);
-  const overSlice = overbooked.slice(0, max);
-
-  if (!lowSlice.length && !highSlice.length && !overSlice.length) {
-    return { skipped: true, reason: "nothing_new", scanned: rows.length };
-  }
-
-  const delivery = await sendSlotAvailabilityDigest({
-    low: lowSlice,
-    high: highSlice,
-    overbooked: overSlice,
-    year,
-    totalScanned: rows.length,
+  const now = moment().utcOffset(IST_OFFSET);
+  const board = await loadCapacityBoardPayload(now, { groupDays: 1 });
+  const varieties = buildBookingCapacityVarieties(board.rows || [], board.today);
+  const formatted = formatBookingCapacityDigestMessages({
+    varieties,
+    today: board.today,
+    tableDays: board.tableDays || 30,
+    generatedAt: now.toISOString(),
   });
 
-  if (delivery?.delivered > 0) {
-    for (const row of lowSlice) markAlertSent(slotDedupeKey("low", row));
-    for (const row of highSlice) markAlertSent(slotDedupeKey("high", row));
-    for (const row of overSlice) markAlertSent(slotDedupeKey("critical", row));
+  if (formatted.empty || !formatted.chunks.length) {
+    return {
+      skipped: true,
+      reason: "nothing_to_book",
+      scanned: (board.rows || []).length,
+    };
   }
+
+  const delivery = await sendBookingCapacityDigest({ chunks: formatted.chunks });
 
   return {
     sent: true,
-    low: lowSlice.length,
-    high: highSlice.length,
-    overbooked: overSlice.length,
-    scanned: rows.length,
+    kind: "booking_capacity_fifo",
+    varietyCount: formatted.varietyCount,
+    totalCanBook: formatted.totalCanBook,
+    chunks: formatted.chunks.length,
+    scanned: (board.rows || []).length,
     delivery,
   };
 }
@@ -252,6 +251,9 @@ export async function runSlotAvailabilityAlertScan() {
 export async function runOperationalAlertsScan() {
   if (process.env.WHATSAPP_ALERTS_ENABLED !== "true") {
     return { skipped: true, reason: "alerts_disabled" };
+  }
+  if (process.env.WHATSAPP_ALERT_OPS_ENABLED !== "true") {
+    return { skipped: true, reason: "ops_digest_disabled" };
   }
 
   const dedupeKey = `ops-digest:${new Date().toISOString().slice(0, 10)}`;

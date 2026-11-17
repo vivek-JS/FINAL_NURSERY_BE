@@ -298,24 +298,23 @@ async function loadCandidateEntries(from, to, payments) {
 
 async function applyMatch(pay, match, runId, userId) {
   const { entry, score, rule, matchType } = match;
+  const { claimStatementLine, releaseStatementLine } = await import("./statementClaim.service.js");
+
+  const claimed = await claimStatementLine(entry._id, pay.paymentId, userId);
+  if (!claimed) {
+    return { ok: false, error: "This bank line is already matched to another payment" };
+  }
 
   const result = await transitionPaymentStatus({
     pay,
     targetStatus: "BANK_VERIFIED",
     bankEntry: entry,
     matchedBy: rule,
-    source: matchType === "EXACT" ? "STATEMENT_API" : "STATEMENT_API",
+    source: "STATEMENT_API",
   });
 
+  if (!result.ok) await releaseStatementLine(entry._id, pay.paymentId);
   if (!result.ok) return { ok: false, error: result.error };
-
-  await BankStatementEntry.updateOne(
-    { _id: entry._id },
-    {
-      reconciliationStatus: "MATCHED",
-      matchedPaymentId: pay.paymentId,
-    }
-  );
 
   await PaymentReconciliation.findOneAndUpdate(
     { paymentId: pay.paymentId, bankTransactionId: entry._id },

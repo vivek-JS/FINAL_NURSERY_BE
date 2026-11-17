@@ -1,7 +1,8 @@
 import PurchaseOrder from '../models/purchaseOrder.model.js';
 import { uploadImageToLocalStorage } from '../utils/localStorageUtils.js';
 import { scheduleStockInwardAlert } from '../services/stockWhatsappAlert.service.js';
-import { canPurchaseOrderAutoAccept } from '../utils/purchaseOrderAccess.js';
+import { canPurchaseOrderAutoAccept, canUseStorePhone } from '../utils/purchaseOrderAccess.js';
+import { readSupplierInvoiceImage } from '../services/supplierInvoiceRead.service.js';
 
 function parseBodyJson(value, fallback) {
   if (value == null || value === '') return fallback;
@@ -84,6 +85,16 @@ export const createPurchaseOrder = async (req, res) => {
       });
     }
 
+    const storePhone = req.body.storePhone === true || req.body.storePhone === 'true';
+    const storePhoneAllowed = storePhone && canUseStorePhone(req.user);
+    if (storePhoneAllowed) {
+      const fallbackExpiry = new Date();
+      fallbackExpiry.setFullYear(fallbackExpiry.getFullYear() + 2);
+      for (const item of items) {
+        if (!hasValidExpiryDate(item?.expiryDate)) item.expiryDate = fallbackExpiry;
+      }
+    }
+
     const expiryError = validateItemsExpiry(items);
     if (expiryError) {
       return res.status(400).json({
@@ -93,7 +104,7 @@ export const createPurchaseOrder = async (req, res) => {
     }
 
     const wantsAutoGRN = isAutoGRNEnabled(autoGRN);
-    const canAutoAccept = canPurchaseOrderAutoAccept(req.user);
+    const canAutoAccept = canPurchaseOrderAutoAccept(req.user) || storePhoneAllowed;
     if (wantsAutoGRN && !canAutoAccept) {
       return res.status(403).json({
         success: false,
@@ -102,7 +113,7 @@ export const createPurchaseOrder = async (req, res) => {
       });
     }
     const isAutoGRN = wantsAutoGRN && canAutoAccept;
-    const batchError = isAutoGRN ? validateItemsBatch(items) : null;
+    const batchError = isAutoGRN && !storePhoneAllowed ? validateItemsBatch(items) : null;
     if (batchError) {
       return res.status(400).json({
         success: false,
@@ -128,6 +139,15 @@ export const createPurchaseOrder = async (req, res) => {
           message: uploadErr.message || 'Supplier invoice upload failed',
         });
       }
+    }
+    const supplierInvoiceUrl = String(req.body.supplierInvoiceUrl || '').trim();
+    if (!supplierInvoiceFile && supplierInvoiceUrl && storePhoneAllowed) {
+      supplierInvoiceFile = {
+        url: supplierInvoiceUrl,
+        originalName: 'invoice.jpg',
+        mimeType: 'image/jpeg',
+        uploadedAt: new Date(),
+      };
     }
     if (isAutoGRN && !supplierInvoiceFile?.url) {
       return res.status(400).json({
@@ -732,6 +752,14 @@ export const createPurchaseOrder = async (req, res) => {
           grnNumber,
           supplier: purchaseOrder.supplier._id || purchaseOrder.supplier,
           purchaseOrder: purchaseOrder._id,
+          invoiceNumber: purchaseOrder.supplierInvoiceNumber || undefined,
+          attachments: purchaseOrder.supplierInvoiceFile?.url
+            ? [{
+                name: purchaseOrder.supplierInvoiceFile.originalName || 'invoice',
+                url: purchaseOrder.supplierInvoiceFile.url,
+                type: purchaseOrder.supplierInvoiceFile.mimeType || 'image/jpeg',
+              }]
+            : [],
           items: grnItems,
           subtotal,
           gstAmount: purchaseOrder.gstAmount || 0,
@@ -1742,6 +1770,24 @@ export const deletePurchaseOrder = async (req, res) => {
       success: false,
       message: 'Error deleting purchase order',
       error: error.message,
+    });
+  }
+};
+
+export const readSupplierInvoice = async (req, res) => {
+  try {
+    if (!req.file?.buffer) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invoice photo is required',
+      });
+    }
+    const data = await readSupplierInvoiceImage(req.file.buffer, req.file.mimetype);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Could not read this bill',
     });
   }
 };

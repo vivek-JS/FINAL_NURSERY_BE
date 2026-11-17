@@ -76,6 +76,19 @@ import {
   getOrderWiseSowing,
 } from "../controllers/sowingCardsLite.controller.js";
 import { getUnsownSowBoard } from "../controllers/unsownSowBoard.controller.js";
+import { getSowingEntriesCollection } from "../modules/sowingEntries/listSowingEntries.controller.js";
+import { getSowingEntryById } from "../modules/sowingEntries/getSowingEntry.controller.js";
+import { postSowingEntryIrrelevant } from "../modules/sowingEntries/setSowingEntryIrrelevant.controller.js";
+import {
+  getLeftoverSowing,
+  postMarkSellable,
+  postTransferRemaining,
+} from "../modules/sowingEntries/leftoverSowing.controller.js";
+import {
+  getCollectionExcess,
+  getSowingEntriesForOrder,
+} from "../modules/sowingEntries/collectionExcess.controller.js";
+import { getEntriesBoardExcess } from "../modules/sowingEntries/boardExcess.controller.js";
 import {
   optionalCompleteSowUpload,
   completeSowingRequest,
@@ -89,6 +102,8 @@ import { getDeliveryVsReadyAnalytics } from "../controllers/deliveryVsReady.cont
 import {
   listDirectSowOrders,
   submitDirectSow,
+  submitReadyPlantsSow,
+  submitReadyPlantsReceive,
 } from "../controllers/adminDirectSow.controller.js";
 import { submitKombExcess } from "../controllers/kombExcess.controller.js";
 import {
@@ -109,6 +124,7 @@ import {
   getCapacityShedStock,
   getSmartShedCapacity,
 } from "../controllers/capacitySheet.controller.js";
+import { getSafeZone, getSafeZoneOrders, getVirtualCover } from "../controllers/safeZone.controller.js";
 import { askCapacityAnalyst } from "../controllers/capacityAsk.controller.js";
 import {
   getDispatchActualStock,
@@ -118,7 +134,11 @@ import {
 } from "../controllers/dispatchLagwad.controller.js";
 import { askDispatchAnalyst } from "../controllers/dispatchAsk.controller.js";
 import { postDestroySowBatch } from "../controllers/sowBatchDestroy.controller.js";
-import { postReleaseBatchMortality } from "../controllers/sowBatchMortalityRelease.controller.js";
+import { postSowBatchIrrelevant } from "../controllers/sowBatchIrrelevant.controller.js";
+import {
+  postReleaseBatchMortality,
+  postMoveExcessToMortality,
+} from "../controllers/sowBatchMortalityRelease.controller.js";
 import {
   getExcessBatches,
   coverOrderFromExcessBatches,
@@ -128,18 +148,6 @@ import {
   getSowBatchStockById,
   getSowBatchStockIntel,
 } from "../controllers/sowBatchStock.controller.js";
-import { getSowingEntriesCollection } from "../modules/sowingEntries/listSowingEntries.controller.js";
-import {
-  getLeftoverSowing,
-  postMarkSellable,
-  postTransferRemaining,
-} from "../modules/sowingEntries/leftoverSowing.controller.js";
-import { getSowingEntryById } from "../modules/sowingEntries/getSowingEntry.controller.js";
-import {
-  getCollectionExcess,
-  getSowingEntriesForOrder,
-} from "../modules/sowingEntries/collectionExcess.controller.js";
-import { getEntriesBoardExcess } from "../modules/sowingEntries/boardExcess.controller.js";
 
 const router = express.Router();
 
@@ -162,14 +170,19 @@ router.get("/capacity-sheet/slot/:slotId", getCapacitySlotDetail);
 router.get("/capacity-sheet/shed-stock", getCapacityShedStock);
 router.get("/capacity-sheet/smart-shed", getSmartShedCapacity);
 router.get("/capacity-sheet/board", getCapacityBoard);
-router.get("/dispatch-lagwad/actual-stock", getDispatchActualStock);
-router.get("/dispatch-lagwad/crops", getDispatchLagwadCrops);
-router.get("/dispatch-lagwad/slot", getDispatchSlotLines);
-router.get("/dispatch-lagwad", getDispatchLagwadBoard);
-router.post("/dispatch-lagwad/ask", askDispatchAnalyst);
+router.get("/capacity-sheet/virtual-cover", getVirtualCover);
+router.get("/capacity-sheet/safe-zone/orders", getSafeZoneOrders);
+router.get("/capacity-sheet/safe-zone", getSafeZone);
+router.get("/dispatch-lagwad/actual-stock", getDispatchActualStock); // Ram Live: count-day stock + lagwad − actual dispatch
+router.get("/dispatch-lagwad/crops", getDispatchLagwadCrops); // Ram Live: crop/variety picker for dispatch tab
+router.get("/dispatch-lagwad/slot", getDispatchSlotLines); // Ram Live: orders and age-wise lagwad for one can-sell card
+router.get("/dispatch-lagwad", getDispatchLagwadBoard); // Ram Live: dispatch due vs lagwad by day windows
+router.post("/dispatch-lagwad/ask", askDispatchAnalyst); // Ram Live: booking insights; AI text includes the same span before and after
 router.post("/capacity-ask", askCapacityAnalyst);
 router.post("/sow-batch/destroy", postDestroySowBatch); // Destroy sown plants of a slot sowing batch
+router.post("/sow-batch/irrelevant", postSowBatchIrrelevant); // Super admin: exclude batch excess from stock
 router.post("/sow-batch/mortality-to-excess", postReleaseBatchMortality); // Super admin: move mortality hold-back into excess
+router.post("/sow-batch/excess-to-mortality", postMoveExcessToMortality); // Super admin: move excess into mortality
 router.get("/sow-batch-stock", getSowBatchStock); // SowingAllowed batch stock table
 router.get("/sow-batch-stock/intel", getSowBatchStockIntel); // Delivery range vs sowed/excess
 router.get("/sow-batch-stock/:batchId", getSowBatchStockById); // Batch stock-change timeline
@@ -180,11 +193,22 @@ router.get("/today-sowing-cards-lite", getTodaySowingCardsLite); // Lean cards +
 router.get("/order-wise", getOrderWiseSowing); // Order-wise rows for Request Packets drawer
 router.get("/unsown-sow-board", getUnsownSowBoard); // Not-sown and partial orders for the gap page
 router.get("/completions", getSowingCompletions); // Completed sow history (paginated + order search)
+router.get("/entries", getSowingEntriesCollection); // Compare list from sowingentries; does not replace /completions
+router.get("/entries/excess", getCollectionExcess); // Excess window from sowingentries; does not replace /excess-batches
+router.get("/entries/board-excess", getEntriesBoardExcess); // Capacity-tab compare; does not replace /capacity-sheet/board
+router.get("/entries/for-order", getSowingEntriesForOrder); // Entries that list this order
+router.get("/entries/:id", getSowingEntryById); // One entry + orders linked on that document
+router.post("/entries/:id/irrelevant", postSowingEntryIrrelevant); // Super admin: mark this sowing entry old
+router.get("/entries/:id/leftover", getLeftoverSowing); // Remaining, next sowing, and destroy batch
+router.post("/entries/:id/transfer-remaining", postTransferRemaining); // Move leftover onto the next sowing as excess
+router.post("/entries/:id/mark-sellable", postMarkSellable); // Stamp leftover as bookable excess here
 router.get("/day-summary", getSowingDaySummary); // Sow entries for one day (WhatsApp day slip)
 router.get("/analytics/delivery-vs-ready", getDeliveryVsReadyAnalytics); // Delivery vs ready/available chart
 router.get("/admin-direct-sow/orders", listDirectSowOrders); // Office/Super Admin: orders by delivery date
 router.post("/admin-direct-sow", submitDirectSow); // Office/Super Admin: sow entry bypassing packet issue
 router.post("/komb-excess", submitKombExcess); // Shed + office: komb count or leftover plants
+router.post("/ready-plants-sow", submitReadyPlantsSow); // Ready plants → sowing entry (+ pendingReceive)
+router.post("/ready-plants-receive", submitReadyPlantsReceive); // Truck: batch + qty + labour → received
 router.get("/order/:orderId/slot-excess", getOrderSlotExcess); // Preview saleable excess on delivery slot
 router.post("/order/:orderId/complete-from-excess", completeOrderFromSlotExcess); // Mark sow done from slot excess
 router.get("/excess-batches", getExcessBatches); // Booking preview: batch excess within delivery ±5d
@@ -260,15 +284,6 @@ router.post("/whatsapp/reminders", sendSowingRemindersWhatsApp); // Generate and
 // router.get("/sowing-alerts", getSowingAlertsByStart); // DEPRECATED - Use /plant-alerts instead
 // router.get("/sowing-alerts/today", getTodaySowingSummary); // DEPRECATED
 router.get("/slot-ready-days/:slotId", getSlotPlantReadyDays); // Fetch plant ready days for a slot
-// Literal paths stay above /:id. Otherwise "entries" is read as a sowing id.
-router.get("/entries", getSowingEntriesCollection);
-router.get("/entries/excess", getCollectionExcess);
-router.get("/entries/board-excess", getEntriesBoardExcess);
-router.get("/entries/for-order", getSowingEntriesForOrder);
-router.get("/entries/:id/leftover", getLeftoverSowing);
-router.post("/entries/:id/transfer-remaining", postTransferRemaining);
-router.post("/entries/:id/mark-sellable", postMarkSellable);
-router.get("/entries/:id", getSowingEntryById);
 router.get("/:id", getSowingById); // Get single sowing by ID
 router.put("/:id", updateSowing); // Update sowing record
 router.delete("/:id", deleteSowing); // Delete sowing record

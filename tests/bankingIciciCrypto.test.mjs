@@ -191,7 +191,7 @@ test("statement, balance and inquiry calls omit AGGRNAME", () => {
 });
 
 test("registration and payment calls still send AGGRNAME", () => {
-  for (const endpoint of ["/Registration", "/RegistrationStatus", "/Transaction"]) {
+  for (const endpoint of ["/Registration", "/RegistrationStatus", "/Deregistration", "/Transaction"]) {
     assert.equal(buildIdentity(endpoint, CFG).AGGRNAME, "CIBTESTING", `${endpoint} needs AGGRNAME`);
   }
 });

@@ -3,17 +3,16 @@ import PlantCms from "../models/plantCms.model.js";
 import PlantSlot from "../models/slots.model.js";
 import Order from "../models/order.model.js";
 import { leftoverOrderIdSet } from "../services/sowingLeftoverDue.service.js";
-import { inProgressRequestByOrderId, orderRemainingPlants } from "../services/sowBatchStock.service.js";
+import { UNSOWN_SOW_BOARD_STATUSES } from "../constants/sowingGapOrderStatuses.js";
+import { inProgressRequestByOrderId } from "../services/sowBatchStock.service.js";
+import {
+  orderAlreadyCovered,
+  orderPlantRemaining,
+  orderPlantTotal,
+  sowingStillNeedsMatch,
+} from "../services/orderSowCover.plan.js";
 
-const ACTIVE_ORDER_STATUSES = [
-  "PENDING",
-  "PROCESSING",
-  "ACCEPTED",
-  "FARM_READY",
-  "READY_FOR_DISPATCH",
-  "DISPATCH_PROCESS",
-  "PARTIALLY_COMPLETED",
-];
+const ACTIVE_ORDER_STATUSES = UNSOWN_SOW_BOARD_STATUSES;
 
 const ROW_CAP = 2500;
 
@@ -50,11 +49,6 @@ function dmy(ms) {
   return `${dd}-${mm}-${sd.getUTCFullYear()}`;
 }
 
-function heldPlants(order) {
-  const rows = Array.isArray(order.sowingPartialCover) ? order.sowingPartialCover : [];
-  return rows.reduce((sum, row) => sum + (Number(row.plants) || 0), 0);
-}
-
 async function slotMetaById(slotIds) {
   const map = new Map();
   if (!slotIds.length) return map;
@@ -83,8 +77,11 @@ async function slotMetaById(slotIds) {
 }
 
 /**
- * Every accepted order that still needs sowing or is only partly covered.
- * Sorted by sow-by date (most late first). Variety filters are derived on the client.
+ * Accepted orders that still need sowing.
+ * Cover truth = sowingCoverSources across ALL slots/SRs (else partial holds).
+ *   stillNeed > 0 → show (need / partial)
+ *   fully covered on other slots → hide (even if sowingDone flag is wrong)
+ * sowingDone flag is NOT used to hide — sources decide.
  */
 export const getUnsownSowBoard = async (req, res) => {
   try {
@@ -118,12 +115,12 @@ export const getUnsownSowBoard = async (req, res) => {
       Order.find({
         plantName: { $in: plantIds },
         orderStatus: { $in: ACTIVE_ORDER_STATUSES },
-        sowingDone: { $ne: true },
         dealerOrder: { $ne: true },
         productMappingId: null,
+        ...sowingStillNeedsMatch(),
       })
         .select(
-          "orderId name farmer plantName plantSubtype plantNameSnapshot plantSubtypeSnapshot bookingSlot numberOfPlants additionalPlants remainingPlants sowingPartialCover deliveryDate"
+          "orderId name farmer plantName plantSubtype plantNameSnapshot plantSubtypeSnapshot bookingSlot numberOfPlants additionalPlants sowingPartialCover sowingCoverSources leftoverFromIncomplete deliveryDate sowingDone"
         )
         .populate("farmer", "name")
         .limit(ROW_CAP)
@@ -148,13 +145,15 @@ export const getUnsownSowBoard = async (req, res) => {
       const plant = plantById.get(String(order.plantName));
       if (!plant) continue;
       const subtype = plant.subtypes.get(String(order.plantSubtype));
-      const booked = (Number(order.numberOfPlants) || 0) + (Number(order.additionalPlants) || 0);
-      const covered = heldPlants(order);
-      const remaining = orderRemainingPlants(order);
-      const leftover = leftoverIds.has(String(order._id));
+      const booked = orderPlantTotal(order);
+      const covered = orderAlreadyCovered(order);
+      // Sources across slots = truth. Do NOT use dispatch remainingPlants.
+      const remaining = orderPlantRemaining(order);
+      const leftover =
+        leftoverIds.has(String(order._id)) || Boolean(order.leftoverFromIncomplete);
       const requestNumber = progressByOrder.get(String(order._id));
       const inProgress = requestNumber != null;
-      const partial = covered > 0 || leftover;
+      const partial = covered > 0 || leftover || (remaining > 0 && remaining < booked);
       if (!inProgress && !partial && remaining <= 0) continue;
 
       const slot = slots.get(String(order.bookingSlot)) || null;
@@ -208,10 +207,34 @@ export const getUnsownSowBoard = async (req, res) => {
       { need: 0, partial: 0, progress: 0, late: 0 }
     );
 
+    // Full variety/subtype catalog (CMS) so filters list every subtype — not only ones with open rows.
+    const openByKey = new Map();
+    for (const row of rows) {
+      const key = `${row.plantId}|${row.subtypeId}`;
+      openByKey.set(key, (openByKey.get(key) || 0) + 1);
+    }
+    const plantCatalog = plants
+      .map((plant) => ({
+        id: String(plant._id),
+        name: plant.name || "",
+        subtypes: (plant.subtypes || [])
+          .map((subtype) => {
+            const id = String(subtype._id);
+            return {
+              id,
+              name: subtype.name || "",
+              openOrders: openByKey.get(`${String(plant._id)}|${id}`) || 0,
+            };
+          })
+          .sort((a, b) => String(a.name).localeCompare(String(b.name))),
+      }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
     return res.json({
       success: true,
       data: rows,
       counts,
+      plants: plantCatalog,
       truncated: orders.length >= ROW_CAP,
     });
   } catch (error) {

@@ -9,7 +9,7 @@ import { DISPATCH_DUE_STATUSES } from "../utility/dispatchLagwadBuckets.js";
 import { createShortTtlCache } from "../utility/shortTtlCache.js";
 
 const ORDER_SELECT =
-  "-_id orderStatus numberOfPlants additionalPlants remainingPlants deliveryDate quotaSource vehicleLoaded vehicleLoadedQuantity";
+  "-_id orderStatus numberOfPlants additionalPlants remainingPlants deliveryDate quotaSource vehicleLoaded vehicleLoadedQuantity sowingDone sowingCoverSources.plants sowingPartialCover.plants";
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
 const sharedCache = createShortTtlCache(30_000);
 const cropCache = createShortTtlCache(5 * 60_000);
@@ -84,6 +84,7 @@ export function loadOpenLagwadLines() {
     return rows.map((r) => ({
       slotId: String(r.slotId),
       availableQuantity: r.availableQuantity,
+      inwardDate: r.inwardDate || null,
       expectedReadyDate:
         r.expectedReadyDate ||
         (r.inwardDate ? moment(r.inwardDate).add(readyDays.get(String(r.batchId)) || 0, "days").toDate() : null),
@@ -124,6 +125,7 @@ export async function loadSlotLagwadLines(slotIds) {
     const batch = byId.get(String(r.batchId));
     return {
       availableQuantity: r.availableQuantity,
+      inwardDate: r.inwardDate || null,
       expectedReadyDate:
         r.expectedReadyDate ||
         (r.inwardDate ? moment(r.inwardDate).add(Number(batch?.secondaryPlantReadyDays) || 0, "days").toDate() : null),

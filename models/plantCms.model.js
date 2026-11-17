@@ -48,8 +48,14 @@ const plantSchema = new Schema({
   freePlantsPerCrate: { type: Number, default: 0 },
   sowingAllowed: { type: Boolean, default: false }, // Whether sowing is allowed for this plant
   dailyDispatchCapacity: { type: Number, default: 2000 }, // Daily dispatch capacity for this plant
-  sowingBuffer: { type: Number, default: 0 }, // Extra seed % on company packet requests
-  sowingMortality: { type: Number, default: 10 }, // Expected mortality % on complete-sow split
+  /** Extra seed % on company packet requests (often kept in sync with sowingMortality). */
+  sowingBuffer: { type: Number, default: 0 },
+  /**
+   * Expected mortality % for complete-sow + sowing-entry Excess:
+   * Excess = sowed − round(sowed × sowingMortality / 100) − cover.
+   * Copied onto each batch as sowingBufferPct / bufferPlants.
+   */
+  sowingMortality: { type: Number, default: 10 },
 });
 
 // Auto slot generation removed - slots are now managed through dedicated slot management system

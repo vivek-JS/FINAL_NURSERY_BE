@@ -2,7 +2,11 @@ import generateResponse from "../utility/responseFormat.js";
 import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import Dispatch from "../models/dispatch.model.js";
-import { buildDispatchCreatedAtFilter } from "../utility/dispatchListQuery.js";
+import {
+  buildDispatchCreatedAtFilter,
+  CLOSED_TRANSPORT_STATUSES,
+  constrainDispatchIds,
+} from "../utility/dispatchListQuery.js";
 import Order from "../models/order.model.js";
 import Farmer from "../models/farmer.model.js";
 import AgriSalesOrder from "../models/agriSalesOrder.model.js";
@@ -2221,8 +2225,8 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
   }
 });
 
-/** Non-deleted dispatches (field may be absent on older rows). */
-const DISPATCH_NOT_DELETED = { isDeleted: { $ne: true }, isInstantPickup: { $ne: true } };
+/** Non-deleted dispatches (field may be absent on older rows). Includes instant pickups for Complete Orders. */
+const DISPATCH_NOT_DELETED = { isDeleted: { $ne: true } };
 
 /** Match dispatches by vehicle/driver fields or by farmer/order on any linked order. */
 async function resolveDispatchIdsForSearch(searchTrim) {
@@ -2362,11 +2366,24 @@ const getDispatches = catchAsync(async (req, res, next) => {
       String(req.query.paged || "") === "1";
 
     const searchTrim = String(req.query.search || "").trim();
-    const listFilter = { isDeleted: false, isInstantPickup: { $ne: true } };
+    const listFilter = { isDeleted: false };
     const createdAtFilter = buildDispatchCreatedAtFilter(req.query);
     if (createdAtFilter) listFilter.createdAt = createdAtFilter;
+    const excludeCompleted = ["1", "true"].includes(
+      String(req.query.excludeCompleted || "").toLowerCase()
+    );
+    // Dispatch-manager queue (open vehicles). Instant handovers are not a vehicle trip.
+    const excludeInstant =
+      ["1", "true"].includes(String(req.query.excludeInstant || "").toLowerCase()) ||
+      excludeCompleted;
+    const loadingTab = String(req.query.transportStatus || "").toUpperCase() === "PENDING";
     if (req.query.transportStatus) {
       listFilter.transportStatus = String(req.query.transportStatus);
+    } else if (excludeCompleted) {
+      listFilter.transportStatus = { $nin: CLOSED_TRANSPORT_STATUSES };
+    }
+    if (excludeInstant) {
+      listFilter.isInstantPickup = { $ne: true };
     }
     if (searchTrim) {
       const searchIds = await resolveDispatchIdsForSearch(searchTrim);
@@ -2390,10 +2407,20 @@ const getDispatches = catchAsync(async (req, res, next) => {
       listFilter._id = { $in: searchIds };
     }
 
+    // Loading lists stay open work only. A finalized trip can still be PENDING.
+    if (excludeCompleted || loadingTab) {
+      const doneIds = await Trip.distinct("dispatchId", {
+        status: "delivered",
+        dispatchId: { $exists: true, $ne: null },
+      });
+      if (doneIds.length) constrainDispatchIds(listFilter, { $nin: doneIds });
+    }
+
     let pagination = null;
     let idSortHint = null;
-    let matchStage = { isDeleted: false, isInstantPickup: { $ne: true } };
+    let matchStage = { isDeleted: false };
     if (createdAtFilter) matchStage.createdAt = createdAtFilter;
+    if (excludeInstant) matchStage.isInstantPickup = { $ne: true };
 
     if (hasPaging) {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -2520,6 +2547,7 @@ const getDispatches = catchAsync(async (req, res, next) => {
           transportId: { $first: "$transportId" },
           driverName: { $first: "$driverName" },
           vehicleName: { $first: "$vehicleName" },
+          isInstantPickup: { $first: "$isInstantPickup" },
           plantsDetails: { $first: "$plantsDetails" },
           orderDispatchDetails: { $first: "$orderDispatchDetails" },
           returnedPlants: { $first: "$returnedPlants" },
@@ -2907,7 +2935,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
           },
           {
             path: "plantName",
-            select: "name variety type subtypes",
+            select: "name variety type subtypes sowingAllowed",
           },
           {
             path: "cavity",
@@ -2969,6 +2997,7 @@ const getDispatch = catchAsync(async (req, res, next) => {
       driverName: dispatch.driverName,
       vehicleName: dispatch.vehicleName,
       vehicleNumber: dispatch.vehicleNumber || "",
+      isInstantPickup: Boolean(dispatch.isInstantPickup),
       isDeleted: dispatch.isDeleted || false,
       returnedPlants: dispatch.returnedPlants || 0,
       damagedPlants: dispatch.damagedPlants || 0,
@@ -3169,7 +3198,7 @@ async function loadDispatchLeanForPdfGeneration(dispatchObjectId) {
         },
         {
           path: "plantName",
-          select: "name variety type subtypes",
+          select: "name variety type subtypes sowingAllowed",
         },
         {
           path: "cavity",

@@ -5,6 +5,17 @@
 
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 
+/** Extra billed km added for every farmer order on the dispatch. */
+export const EXTRA_KM_PER_ORDER = 5;
+
+export function extraKmForOrders(orderCount, { localMarket = false } = {}) {
+  if (localMarket) return 0;
+  const n = Math.max(0, Math.round(Number(orderCount) || 0));
+  return round2(n * EXTRA_KM_PER_ORDER);
+}
+
+const truthy = (v) => v === true || v === 1 || v === "1" || String(v || "").toLowerCase() === "true";
+
 const norm = (s) => String(s || "").trim().toLowerCase();
 const sameName = (a, b) => norm(a) === norm(b);
 
@@ -81,10 +92,26 @@ export function slabLabel(slab) {
 /**
  * @returns {{ ok: boolean, message: string, mode?: string, ratePerKm?: number, amount?: number|null, slab?: object, inGap?: boolean }}
  */
-export function quoteFreight(card, { loadTypeName, crop, crates, km } = {}) {
+export function quoteFreight(card, { loadTypeName, crop, crates, km, localMarket = false, plants } = {}) {
   if (!card) return { ok: false, message: "Select a vehicle rate card" };
   const kmNum = Number(km);
   const hasKm = Number.isFinite(kmNum) && kmNum > 0;
+
+  if (truthy(localMarket)) {
+    const ratePerPlant = Number(card.localMarketRatePerPlant) || 0;
+    const p = Number(plants);
+    const hasPlants = Number.isFinite(p) && p > 0;
+    return {
+      ok: hasPlants && ratePerPlant >= 0,
+      mode: "LOCAL_MARKET",
+      ratePerPlant,
+      ratePerKm: 0,
+      amount: hasPlants ? round2(p * ratePerPlant) : null,
+      message: hasPlants
+        ? `${p.toLocaleString("en-IN")} plants × ₹${ratePerPlant}/plant`
+        : "Enter number of plants",
+    };
+  }
 
   const shortKm = card.shortTripMaxKm;
   if (shortKm != null && card.shortTripRatePerKm != null && hasKm && kmNum < Number(shortKm)) {

@@ -78,10 +78,11 @@ export function buildDispatchDayLines({ outwards, dispatchById, orderById, batch
         : [...new Set([d.vehicleName, d.vehicleNumber].map((s) => String(s || "").trim()))]
             .filter(Boolean)
             .join(" · "),
+      vehicleNumber: d.isInstantPickup ? "" : String(d.vehicleNumber || "").trim(),
       driverName: d.isInstantPickup ? "" : d.driverName || "",
       isInstantPickup: Boolean(d.isInstantPickup),
       orderId: o.orderId ? idStr(o.orderId) : "",
-      orderCode: order ? String(order.publicOrderCode || order.orderId || "") : "",
+      orderCode: order ? String(order.orderId || order.publicOrderCode || "") : "",
       farmer: order?.farmer?.name || "",
       village: order?.farmer?.village || "",
       crop: names.plant || String(row?.name || "").split("->")[0].trim(),
@@ -90,6 +91,7 @@ export function buildDispatchDayLines({ outwards, dispatchById, orderById, batch
       shed: o.shed || "",
       sowingDate: o.sowingDate || "",
       sowBucket: o.sowBucket || "",
+      cavity: toInt(o.cavity),
       plants,
       at: o.at || null,
     });
@@ -135,6 +137,7 @@ export async function getDispatchDaySummary(day) {
         batchNumber: "$secondaryOutward.orderLinkSnapshot.batchNumber",
         sowingDate: "$secondaryOutward.sowingDate",
         sowBucket: "$secondaryOutward.sowBucket",
+        cavity: "$secondaryOutward.cavity",
         at: "$secondaryOutward.secondaryOutwardDate",
       },
     },

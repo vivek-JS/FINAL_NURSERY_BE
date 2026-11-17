@@ -65,6 +65,7 @@ import {
   createManualFarmerPlantLedgerEntry,
 } from "../controllers/farmerPlantOrderLedger.controller.js";
 import { generateOrderDeliveryChallanPdf } from "../controllers/orderDeliveryChallanPdf.controller.js";
+import { getOutstandingBalances } from "../controllers/orderOutstandingBalances.controller.js";
 import {
   createBulkPayment,
   getBulkPayments,
@@ -175,6 +176,11 @@ router
   )
   .get("/by-status", getOrdersByStatus)
   .get("/payments", getAllPayments)
+  .get(
+    "/outstanding-balances",
+    authorizeRoles(["ACCOUNTANT", "SUPER_ADMIN", "SUPERADMIN", "ADMIN"]),
+    getOutstandingBalances
+  )
   .get("/bulk-payments", getBulkPayments)
   .post("/bulk-payment", requireBulkPaymentCreateAccess, createBulkPayment)
   .patch("/bulk-payment/:id/accept", requirePaymentAccess, acceptBulkPayment)

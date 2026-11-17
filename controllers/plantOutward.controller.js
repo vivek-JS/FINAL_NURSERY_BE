@@ -38,6 +38,7 @@ import {
 import {
   syncSecondaryInwardSlotStockAdd,
   subtractSecondaryInwardSlotStock,
+  planDualStockOutflow,
   resolveBookingSlotIdForSecondaryBatch,
   relocateSecondaryInwardSlotOnBypass,
   enrichSecondaryInwardDetail,
@@ -95,7 +96,7 @@ import { parseVehicleLoadRequestBody } from "../middleware/vehicleLoadPhotos.mid
 import PlantCms from "../models/plantCms.model.js";
 
 const BATCH_SELECT_FIELDS =
-  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays isActive plantCmsId plantSubtypeId";
+  "batchNumber dateAdded primaryPlantReadyDays secondaryPlantReadyDays secondaryR2PlantReadyDays secondaryR3PlantReadyDays isActive plantCmsId plantSubtypeId";
 
 const BATCH_POPULATE = {
   path: "batchId",
@@ -178,6 +179,129 @@ const computeSecondaryDispatchEligibility = (si, secondaryPlantReadyDays, todayS
   };
 };
 
+/** Build one suggestion row from a secondary inward + batch (shared by full scan + by-id). */
+const buildSecondaryInwardSuggestion = (po, si, batchLean, todayStart) => {
+  const avail = safeNonNegativeInt(safeMongooseNumber(si.availableQuantity), 0);
+  if (avail < 1) return null;
+  if ((si.transferStatus ?? "available") === "fully_transferred") return null;
+
+  const labels = plantSubtypeLabelsFromLeanBatch(batchLean);
+  const secDays = Number(safeMongooseNumber(batchLean.secondaryPlantReadyDays)) || 0;
+  const siPlain = typeof si.toObject === "function" ? si.toObject() : si;
+  const elig = computeSecondaryDispatchEligibility(siPlain, secDays, todayStart);
+  const bypassAt = siPlain.readinessBypassAt;
+  let readyMoment = null;
+  if (bypassAt != null && moment(bypassAt).isValid()) {
+    readyMoment = moment(bypassAt).startOf("day");
+  } else if (elig.expectedReadyByCalendar) {
+    readyMoment = moment(elig.expectedReadyByCalendar).startOf("day");
+  } else if (siPlain.secondaryInwardDate) {
+    readyMoment = moment(siPlain.secondaryInwardDate).add(secDays, "days").startOf("day");
+  } else {
+    readyMoment = moment().add(365, "days");
+  }
+
+  const sortReady = readyMoment.valueOf();
+  const sortInward = moment(siPlain.secondaryInwardDate || 0).valueOf();
+
+  let daysUntilReady = null;
+  if (elig.dispatchEligible) {
+    daysUntilReady = 0;
+  } else if (bypassAt != null && moment(bypassAt).isValid()) {
+    daysUntilReady = 0;
+  } else if (elig.expectedReadyByCalendar) {
+    const readyDay = moment(elig.expectedReadyByCalendar).startOf("day");
+    daysUntilReady = Math.max(0, readyDay.diff(todayStart, "days"));
+  } else {
+    const effectiveReady = moment(readyMoment).startOf("day");
+    daysUntilReady = Math.max(0, effectiveReady.diff(todayStart, "days"));
+  }
+
+  const storedExpectedReady = siPlain.expectedReadyDate;
+  const expectedReadyByCalendar =
+    storedExpectedReady && moment(storedExpectedReady).isValid()
+      ? moment(storedExpectedReady).startOf("day").toISOString()
+      : elig.expectedReadyByCalendar;
+
+  return {
+    batchId: po.batchId,
+    batchNumber: batchLean.batchNumber,
+    plantOutwardId: po._id,
+    secondaryInwardId: si._id,
+    availableQuantity: avail,
+    remainingPlants: avail,
+    dispatchEligible: elig.dispatchEligible,
+    expectedReadyByCalendar,
+    expectedReadyDate: storedExpectedReady ?? null,
+    secondaryInwardDate: siPlain.secondaryInwardDate,
+    plantLabel: labels.plantLabel,
+    subtypeLabel: labels.subtypeLabel,
+    size: siPlain.size,
+    cavity: siPlain.cavity,
+    numberOfBottles: siPlain.numberOfBottles,
+    numberOfTrays: siPlain.numberOfTrays,
+    pollyhouse: String(siPlain.pollyhouse || "").trim(),
+    secondaryPlantReadyDays: secDays,
+    daysUntilReady,
+    sortReady,
+    sortInward,
+  };
+};
+
+/**
+ * Fast path for manual vehicle load: only the picked secondaryInwardIds.
+ * Avoids scanning every batch/outward for the plant/subtype.
+ */
+const collectSecondaryInwardSuggestionsByIds = async (secondaryInwardIds) => {
+  const idSet = new Set(
+    (secondaryInwardIds || []).map((id) => String(id || "").trim()).filter(Boolean)
+  );
+  if (!idSet.size) return { suggestions: [], batchDocs: [] };
+
+  const oids = [...idSet]
+    .filter((id) => mongoose.isValidObjectId(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  if (!oids.length) return { suggestions: [], batchDocs: [] };
+
+  const pos = await PlantOutward.find({ "secondaryInward._id": { $in: oids } })
+    .select("batchId secondaryInward")
+    .lean();
+
+  const batchIds = [...new Set(pos.map((p) => String(p.batchId)).filter(Boolean))];
+  const batchDocs =
+    batchIds.length === 0
+      ? []
+      : await DispatchBatch.find({
+          _id: {
+            $in: batchIds
+              .filter((id) => mongoose.isValidObjectId(id))
+              .map((id) => new mongoose.Types.ObjectId(id)),
+          },
+        })
+          .select(BATCH_SELECT_FIELDS)
+          .lean();
+  const batchMap = new Map(batchDocs.map((b) => [String(b._id), b]));
+  const todayStart = moment().startOf("day");
+  const suggestions = [];
+
+  for (const po of pos) {
+    const batchLean = batchMap.get(String(po.batchId));
+    if (!batchLean) continue;
+    for (const si of po.secondaryInward || []) {
+      if (!idSet.has(String(si._id))) continue;
+      const row = buildSecondaryInwardSuggestion(po, si, batchLean, todayStart);
+      if (row) suggestions.push(row);
+    }
+  }
+
+  suggestions.sort((a, b) => {
+    if (a.sortReady !== b.sortReady) return a.sortReady - b.sortReady;
+    return a.sortInward - b.sortInward;
+  });
+  const stripped = suggestions.map(({ sortReady, sortInward, ...rest }) => rest);
+  return { suggestions: stripped, batchDocs };
+};
+
 /**
  * FIFO-sorted secondary inward candidates for plant CMS + subtype (shared by vehicle allocation + farmer dispatch shade picker).
  */
@@ -226,7 +350,9 @@ const collectSecondaryInwardSuggestionsForPlantSubtype = async (plantCmsId, plan
   const pos =
     batchIds.length === 0
       ? []
-      : await PlantOutward.find({ batchId: { $in: batchIds } }).lean();
+      : await PlantOutward.find({ batchId: { $in: batchIds } })
+          .select("batchId secondaryInward")
+          .lean();
 
   const todayStart = moment().startOf("day");
   const suggestions = [];
@@ -234,73 +360,9 @@ const collectSecondaryInwardSuggestionsForPlantSubtype = async (plantCmsId, plan
   for (const po of pos) {
     const batchLean = batchMap.get(String(po.batchId));
     if (!batchLean) continue;
-    const labels = plantSubtypeLabelsFromLeanBatch(batchLean);
-    const secDays = Number(safeMongooseNumber(batchLean.secondaryPlantReadyDays)) || 0;
-
     for (const si of po.secondaryInward || []) {
-      const avail = safeNonNegativeInt(safeMongooseNumber(si.availableQuantity), 0);
-      if (avail < 1) continue;
-      if ((si.transferStatus ?? "available") === "fully_transferred") continue;
-
-      const siPlain = typeof si.toObject === "function" ? si.toObject() : si;
-      const elig = computeSecondaryDispatchEligibility(siPlain, secDays, todayStart);
-      const bypassAt = siPlain.readinessBypassAt;
-      let readyMoment = null;
-      if (bypassAt != null && moment(bypassAt).isValid()) {
-        readyMoment = moment(bypassAt).startOf("day");
-      } else if (elig.expectedReadyByCalendar) {
-        readyMoment = moment(elig.expectedReadyByCalendar).startOf("day");
-      } else if (siPlain.secondaryInwardDate) {
-        readyMoment = moment(siPlain.secondaryInwardDate).add(secDays, "days").startOf("day");
-      } else {
-        readyMoment = moment().add(365, "days");
-      }
-
-      const sortReady = readyMoment.valueOf();
-      const sortInward = moment(siPlain.secondaryInwardDate || 0).valueOf();
-
-      let daysUntilReady = null;
-      if (elig.dispatchEligible) {
-        daysUntilReady = 0;
-      } else if (bypassAt != null && moment(bypassAt).isValid()) {
-        daysUntilReady = 0;
-      } else if (elig.expectedReadyByCalendar) {
-        const readyDay = moment(elig.expectedReadyByCalendar).startOf("day");
-        daysUntilReady = Math.max(0, readyDay.diff(todayStart, "days"));
-      } else {
-        const effectiveReady = moment(readyMoment).startOf("day");
-        daysUntilReady = Math.max(0, effectiveReady.diff(todayStart, "days"));
-      }
-
-      const storedExpectedReady = siPlain.expectedReadyDate;
-      const expectedReadyByCalendar =
-        storedExpectedReady && moment(storedExpectedReady).isValid()
-          ? moment(storedExpectedReady).startOf("day").toISOString()
-          : elig.expectedReadyByCalendar;
-
-      suggestions.push({
-        batchId: po.batchId,
-        batchNumber: batchLean.batchNumber,
-        plantOutwardId: po._id,
-        secondaryInwardId: si._id,
-        availableQuantity: avail,
-        remainingPlants: avail,
-        dispatchEligible: elig.dispatchEligible,
-        expectedReadyByCalendar,
-        expectedReadyDate: storedExpectedReady ?? null,
-        secondaryInwardDate: siPlain.secondaryInwardDate,
-        plantLabel: labels.plantLabel,
-        subtypeLabel: labels.subtypeLabel,
-        size: siPlain.size,
-        cavity: siPlain.cavity,
-        numberOfBottles: siPlain.numberOfBottles,
-        numberOfTrays: siPlain.numberOfTrays,
-        pollyhouse: String(siPlain.pollyhouse || "").trim(),
-        secondaryPlantReadyDays: secDays,
-        daysUntilReady,
-        sortReady,
-        sortInward,
-      });
+      const row = buildSecondaryInwardSuggestion(po, si, batchLean, todayStart);
+      if (row) suggestions.push(row);
     }
   }
 
@@ -4318,6 +4380,15 @@ async function resolveDispatchBatchRef(batchParam, session) {
     .lean();
   if (byNum) return { batch: byNum, batchId: String(byNum._id) };
 
+  // Case-insensitive batch number (Ready plants imports like gh123 / GH123).
+  byNum = await DispatchBatch.findOne({
+    batchNumber: { $regex: `^${raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
+  })
+    .select(BATCH_SELECT_FIELDS)
+    .session(session)
+    .lean();
+  if (byNum) return { batch: byNum, batchId: String(byNum._id) };
+
   const asNum = Number(raw);
   if (Number.isFinite(asNum) && String(asNum) === raw) {
     byNum = await DispatchBatch.findOne({ batchNumber: asNum })
@@ -4328,6 +4399,57 @@ async function resolveDispatchBatchRef(batchParam, session) {
   }
 
   return null;
+}
+
+/**
+ * Create a DispatchBatch (+ PlantOutward shell) for Ready plants import when
+ * batch number is new. Requires plantCmsId + plantSubtypeId.
+ */
+async function createDispatchBatchForReadyImport({
+  batchNumber,
+  plantCmsId,
+  plantSubtypeId,
+  secondaryPlantReadyDays = 3,
+  session,
+}) {
+  const number = String(batchNumber || "").trim();
+  if (!number) throw new AppError("Batch number is required", 400);
+  if (!mongoose.isValidObjectId(String(plantCmsId)) || !mongoose.isValidObjectId(String(plantSubtypeId))) {
+    throw new AppError("plantCmsId and plantSubtypeId are required to create batch", 400);
+  }
+  const plant = await PlantCms.findById(plantCmsId).select("subtypes").session(session).lean();
+  if (!plant) throw new AppError("Plant not found", 400);
+  const subtypeOk = (plant.subtypes || []).some((s) => String(s._id) === String(plantSubtypeId));
+  if (!subtypeOk) throw new AppError("Subtype does not belong to selected plant", 400);
+
+  const readyDays = Math.max(1, Math.min(365, Math.floor(Number(secondaryPlantReadyDays) || 3)));
+  const [doc] = await DispatchBatch.create(
+    [
+      {
+        batchNumber: number,
+        dateAdded: new Date(),
+        primaryPlantReadyDays: 1,
+        secondaryPlantReadyDays: readyDays,
+        plantCmsId,
+        plantSubtypeId,
+      },
+    ],
+    { session }
+  );
+  await PlantOutward.create(
+    [
+      {
+        batchId: doc._id,
+        dateAdded: doc.dateAdded || new Date(),
+      },
+    ],
+    { session }
+  );
+  const lean = await DispatchBatch.findById(doc._id)
+    .select(BATCH_SELECT_FIELDS)
+    .session(session)
+    .lean();
+  return { batch: lean, batchId: String(doc._id), created: true };
 }
 
 /** IST calendar day stored as UTC midnight (same shape the web sends); IST-midnight ISO (…T18:30Z) maps to the next day. */
@@ -4355,6 +4477,11 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
     laboursEngaged: laboursRaw,
     remarks,
     readyDaysBySize,
+    plantCmsId,
+    plantSubtypeId,
+    secondaryPlantReadyDays,
+    createBatchIfMissing,
+    importSource,
   } = req.body ?? {};
   const secondaryInwardDate = secondaryInwardDateRaw
     ? istCalendarDayUtc(secondaryInwardDateRaw)
@@ -4365,8 +4492,18 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
   const gents = safeNonNegativeInt(laboursGents, 0);
   const laboursEngaged =
     ladies + gents > 0 ? ladies + gents : safeNonNegativeInt(laboursRaw, 0);
-  const remarksStr =
-    remarks === undefined || remarks === null ? "" : String(remarks).trim();
+  const importTag =
+    String(importSource || "").trim().toUpperCase() === "READY_PLANTS"
+      ? "READY_PLANTS"
+      : "";
+  const remarksStr = (() => {
+    const base =
+      remarks === undefined || remarks === null ? "" : String(remarks).trim();
+    if (!importTag) return base;
+    if (!base) return `Ready plants import · ${importTag}`;
+    if (base.includes("READY_PLANTS") || /ready plants import/i.test(base)) return base;
+    return `${base} · ${importTag}`;
+  })();
 
   const sizeRows = ["R1", "R2", "R3"]
     .map((size) => ({
@@ -4399,7 +4536,22 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
   session.startTransaction();
 
   try {
-    const resolvedBatch = await resolveDispatchBatchRef(batchParam, session);
+    let resolvedBatch = await resolveDispatchBatchRef(batchParam, session);
+    if (!resolvedBatch && createBatchIfMissing) {
+      const readyFromSizes = ["R1", "R2", "R3"]
+        .map((sz) => safeNonNegativeInt(readyDaysBySize?.[sz], 0))
+        .filter((n) => n > 0);
+      const readyDays =
+        safeNonNegativeInt(secondaryPlantReadyDays, 0) ||
+        (readyFromSizes.length ? Math.max(...readyFromSizes) : 3);
+      resolvedBatch = await createDispatchBatchForReadyImport({
+        batchNumber: String(batchParam || "").trim(),
+        plantCmsId,
+        plantSubtypeId,
+        secondaryPlantReadyDays: readyDays,
+        session,
+      });
+    }
     if (!resolvedBatch) {
       throw new AppError("No dispatch batch found with this batch ID", 404);
     }
@@ -4434,15 +4586,13 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
 
     for (const sr of sizeRows) {
       const sizeDays = Math.min(365, safeNonNegativeInt(readyDaysBySize?.[sr.size], 0));
+      const sizeDaysUsed =
+        sizeDays > 0 ? sizeDays : secondaryReadyDaysForSize(sr.size, batchDocForReady);
       const inwardDay = moment(secondaryInwardDate).startOf("day");
       const rowExpectedReady =
-        sizeDays > 0 && inwardDay.isValid()
-          ? inwardDay.clone().add(sizeDays, "days").toDate()
-          : expectedReadyDateForSecondarySize(
-              secondaryInwardDate,
-              sr.size,
-              batchDocForReady
-            );
+        sizeDaysUsed > 0 && inwardDay.isValid()
+          ? inwardDay.clone().add(sizeDaysUsed, "days").toDate()
+          : null;
       const rowDispatchDate =
         rowExpectedReady ??
         (dateOfDispatch ? moment(dateOfDispatch).toDate() : null);
@@ -4466,6 +4616,8 @@ const secondaryDirectLagwad = catchAsync(async (req, res, next) => {
         transferStatus: "available",
         dateOfDispatch: rowDispatchDate ?? dateOfDispatch,
         remarks: remarksStr || `Direct lagwad · ${sr.size}`,
+        ...(importTag ? { importSource: importTag } : {}),
+        ...(sizeDaysUsed > 0 ? { readyDays: sizeDaysUsed } : {}),
         ...(rowExpectedReady ? { expectedReadyDate: rowExpectedReady } : {}),
       };
 
@@ -4776,39 +4928,14 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
       ...(photoList.length > 0 ? { evidencePhotoUrls: photoList } : {}),
     };
 
-    const newSecondaryInwardStatus =
-      secondaryInward.availableQuantity - calculatedTotalQuantity === 0
-        ? "fully_transferred"
-        : "partially_transferred";
-
-    const updatedDoc = await PlantOutward.findOneAndUpdate(
-      { batchId, "secondaryInward._id": secondaryInwardId },
-      {
-        $push: {
-          secondaryOutward: secondaryOutwardEntry,
-          "secondaryInward.$.transferHistory": transferHistory,
-        },
-        $set: {
-          "secondaryInward.$.transferStatus": newSecondaryInwardStatus,
-          "secondaryInward.$.availableQuantity":
-            secondaryInward.availableQuantity - calculatedTotalQuantity,
-        },
-      },
-      { new: true, session, runValidators: true }
-    );
-
-    const outArr = updatedDoc?.secondaryOutward || [];
-    const newSo = outArr[outArr.length - 1];
-    if (!newSo?._id) {
-      throw new AppError("Could not resolve new secondary outward id for availability ledger", 500);
-    }
-
     const outPerformedBy = req.user?._id || req.user?.id;
     const performedByOid = mongoose.isValidObjectId(String(outPerformedBy))
       ? outPerformedBy
       : undefined;
 
     let syncApplied = 0;
+    let loadSourceSlotId = siPlain?.linkedBookingSlotId || null;
+    let syncedBeforeBurn = Math.max(0, Number(siPlain.slotStockSyncedPlants) || 0);
     try {
       const syncResult = await syncSecondaryInwardSlotStockAdd({
         session,
@@ -4822,24 +4949,79 @@ const secondaryInwardToSecondaryOutward = catchAsync(async (req, res, next) => {
         performedBy: performedByOid,
       });
       syncApplied = syncResult?.applied ?? 0;
-      const siForSubtract = {
-        ...siPlain,
-        linkedBookingSlotId:
-          syncResult?.slotId || siPlain.linkedBookingSlotId || null,
-        slotStockSyncedPlants:
-          (Number(siPlain.slotStockSyncedPlants) || 0) + syncApplied,
-      };
-      await subtractSecondaryInwardSlotStock({
+      loadSourceSlotId =
+        syncResult?.slotId || siPlain.linkedBookingSlotId || loadSourceSlotId;
+      syncedBeforeBurn += syncApplied;
+    } catch (syncErr) {
+      console.error(
+        "[secondaryShedSlotStock] outward sync FAILED:",
+        syncErr?.message || syncErr
+      );
+      throw syncErr;
+    }
+
+    const dual = planDualStockOutflow({
+      availableQuantity: secondaryInward.availableQuantity,
+      slotStockSyncedPlants: syncedBeforeBurn,
+      quantity: calculatedTotalQuantity,
+    });
+    const newSecondaryInwardStatus =
+      dual.newAvail === 0 ? "fully_transferred" : "partially_transferred";
+
+    const updatedDoc = await PlantOutward.findOneAndUpdate(
+      { batchId, "secondaryInward._id": secondaryInwardId },
+      {
+        $push: {
+          secondaryOutward: secondaryOutwardEntry,
+          "secondaryInward.$.transferHistory": transferHistory,
+        },
+        $set: {
+          "secondaryInward.$.transferStatus": newSecondaryInwardStatus,
+          "secondaryInward.$.availableQuantity": dual.newAvail,
+          "secondaryInward.$.slotStockSyncedPlants": dual.newSynced,
+        },
+      },
+      { new: true, session, runValidators: true }
+    );
+
+    const outArr = updatedDoc?.secondaryOutward || [];
+    const newSo = outArr[outArr.length - 1];
+    if (!newSo?._id) {
+      throw new AppError("Could not resolve new secondary outward id for availability ledger", 500);
+    }
+
+    try {
+      const subResult = await subtractSecondaryInwardSlotStock({
         session,
         batchId,
         secondaryInwardId,
         batchLean: batchDoc,
-        siPlain: siForSubtract,
+        siPlain: {
+          ...siPlain,
+          linkedBookingSlotId: loadSourceSlotId || null,
+          slotStockSyncedPlants: dual.newSynced,
+          availableQuantity: dual.newAvail,
+        },
         quantity: calculatedTotalQuantity,
         performedBy: performedByOid,
+        syncedAlreadyApplied: true,
       });
+      if (
+        loadSourceSlotId &&
+        subResult?.skipped &&
+        subResult.skipped !== "no_actual_ready"
+      ) {
+        throw new AppError(
+          `Slot ready deduct skipped (${subResult.skipped}) for slot ${loadSourceSlotId}`,
+          500
+        );
+      }
     } catch (slotErr) {
-      console.warn("[secondaryShedSlotStock] outward sync:", slotErr?.message || slotErr);
+      console.error(
+        "[secondaryShedSlotStock] outward subtract FAILED:",
+        slotErr?.message || slotErr
+      );
+      throw slotErr;
     }
 
     await recordSecondaryOutwardOnLedger(session, {
@@ -6150,18 +6332,28 @@ const postSecondaryVehicleLoad = catchAsync(async (req, res, next) => {
       directShedLoad:
         Boolean(directShedLoad) || source === "SHED_DISPATCH",
       collectSuggestionsFn: collectSecondaryInwardSuggestionsForPlantSubtype,
+      collectSuggestionsByIdsFn: collectSecondaryInwardSuggestionsByIds,
     });
   }
 
-  const photoSave = await appendVehicleLoadPhotos({
-    dispatchId,
-    files: req.files,
-    plantsLoaded: result?.totalLoaded,
-    remarks,
-    performedBy,
-  });
-  if (photoSave.urls.length) {
-    result = { ...result, photoUrls: photoSave.urls };
+  // Photos must not block the load response — upload after 200.
+  const pendingFiles = Array.isArray(req.files) ? req.files : [];
+  if (pendingFiles.length) {
+    const photoDispatchId = dispatchId;
+    const photoPlants = result?.totalLoaded;
+    const photoRemarks = remarks;
+    const photoBy = performedBy;
+    setImmediate(() => {
+      void appendVehicleLoadPhotos({
+        dispatchId: photoDispatchId,
+        files: pendingFiles,
+        plantsLoaded: photoPlants,
+        remarks: photoRemarks,
+        performedBy: photoBy,
+      }).catch((err) =>
+        console.error("[vehicleLoad] deferred photos failed:", err?.message || err)
+      );
+    });
   }
 
   const message = isSowReady
@@ -6214,9 +6406,16 @@ const getSecondaryVehicleLoadedLines = catchAsync(async (req, res, next) => {
   const shedReturns = (doc.shedReturns || []).filter(
     (r) => !linkedOrderId || String(r.orderId || "") === String(linkedOrderId)
   );
+  const plantRows = Array.isArray(doc.plantsDetails) ? doc.plantsDetails : [];
   const lines = rawLines.map((l) => {
     const returnedPlants = sumShedReturns(shedReturns, { sourceOutwardId: l.secondaryOutwardId });
-    return { ...l, returnedPlants, returnablePlants: Math.max(0, l.plants - returnedPlants) };
+    const row = Number.isInteger(l.plantRowIndex) && l.plantRowIndex >= 0 ? plantRows[l.plantRowIndex] : null;
+    return {
+      ...l,
+      returnedPlants,
+      returnablePlants: Math.max(0, l.plants - returnedPlants),
+      plantName: row?.name || "",
+    };
   });
 
   const orderIds = [
@@ -6246,6 +6445,9 @@ const getSecondaryVehicleLoadedLines = catchAsync(async (req, res, next) => {
         publicOrderCode: o.publicOrderCode,
         farmer: o.farmer,
       })),
+      photoUrls: (doc.shedLoadPhotoLog || [])
+        .flatMap((entry) => (entry.photos || []).map((p) => p.url))
+        .filter(Boolean),
     })
   );
 });

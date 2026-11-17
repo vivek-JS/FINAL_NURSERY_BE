@@ -70,6 +70,19 @@ export function normalizeSize(size) {
   return raw || "R1";
 }
 
+/** R1 uses the batch primary days. R2 and R3 use their own days when the batch has them. */
+export function readyDaysForSize(batch, size) {
+  const base = Math.max(1, Math.floor(Number(batch?.primaryPlantReadyDays) || 1));
+  const sowSize = normalizeSize(size);
+  const specific =
+    sowSize === "R2"
+      ? Math.floor(Number(batch?.primaryR2PlantReadyDays) || 0)
+      : sowSize === "R3"
+        ? Math.floor(Number(batch?.primaryR3PlantReadyDays) || 0)
+        : base;
+  return specific > 0 ? specific : base;
+}
+
 /**
  * Sow bottles of one size. Empty size means R1. Does not touch other sizes.
  */

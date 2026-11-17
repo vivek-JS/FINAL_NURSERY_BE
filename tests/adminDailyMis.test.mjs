@@ -13,7 +13,7 @@ import {
   buildBreakdownTableFromMetrics,
   mergeBreakdownWithPastDue,
 } from "../utility/adminMisMetrics.js";
-import { generateIstDateKeys, parseYmdRange } from "../utility/istOrderDateStats.js";
+import { COUNTED_PLANTS_EXPR, generateIstDateKeys, parseYmdRange } from "../utility/istOrderDateStats.js";
 
 test("statusToDeliveryBucket maps known statuses", () => {
   assert.equal(statusToDeliveryBucket("ACCEPTED"), "accepted");
@@ -304,4 +304,14 @@ test("mergeBreakdownWithPastDue attaches per-entity backlog, not global duplicat
   assert.equal(papaya.pastDue.total.plants, 50);
 
   assert.equal(merged.totals.pastDue.total.plants, 350);
+});
+
+test("partial orders count remaining plants, other statuses count the booking", () => {
+  assert.deepEqual(COUNTED_PLANTS_EXPR, {
+    $cond: [
+      { $eq: ["$orderStatus", "PARTIALLY_COMPLETED"] },
+      { $ifNull: ["$remainingPlants", "$linePlantTotal"] },
+      "$linePlantTotal",
+    ],
+  });
 });

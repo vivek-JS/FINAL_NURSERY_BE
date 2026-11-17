@@ -3,9 +3,10 @@ import moment from "moment";
 import Order from "../models/order.model.js";
 import { IST_OFFSET, deliveryDateToIstMoment } from "../utility/istSlotDate.js";
 import { OVERDUE_LOOKBACK_DAYS } from "../utility/capacityBoardMetrics.js";
-import { DISPATCH_DUE_STATUSES, istDay, orderDueQty } from "../utility/dispatchLagwadBuckets.js";
+import { DISPATCH_DUE_STATUSES, istDay, lagwadBoardQty, orderDueQty } from "../utility/dispatchLagwadBuckets.js";
 import { lagwadInSlot, orderInSlot } from "../utility/dispatchSlotWindow.js";
-import { loadSlotIdSet, loadSlotLagwadLines } from "./dispatchLagwadSources.js";
+import { physicalCountAsOn } from "./actualStock.service.js";
+import { loadSlotIdSet, loadSlotLagwadLines, resolveCropContext } from "./dispatchLagwadSources.js";
 
 const YMD = "YYYY-MM-DD";
 const asId = (id) => new mongoose.Types.ObjectId(String(id));
@@ -30,7 +31,11 @@ export async function getDispatchSlotDetail({ plantId, subtypeId, from, to, incl
   const end = istDay(to);
   const lookbackStart = moment(today, YMD).subtract(OVERDUE_LOOKBACK_DAYS, "days").format(YMD);
   const orderStart = includeOverdue ? moment.min(start.clone(), istDay(lookbackStart)) : start.clone();
-  const slotIds = await loadSlotIdSet(plantId, subtypeId, start.year(), end.year());
+  const [slotIds, context] = await Promise.all([
+    loadSlotIdSet(plantId, subtypeId, start.year(), end.year()),
+    resolveCropContext(plantId, subtypeId),
+  ]);
+  const liveCountAsOn = physicalCountAsOn(context.plantName);
 
   const filter = {
     plantName: asId(plantId),
@@ -67,7 +72,7 @@ export async function getDispatchSlotDetail({ plantId, subtypeId, from, to, incl
 
   const lines = [];
   for (const line of lineRows) {
-    const quantity = Math.max(0, Math.floor(Number(line.availableQuantity) || 0));
+    const quantity = lagwadBoardQty(line, liveCountAsOn);
     if (!quantity) continue;
     const readyDate = ymdOf(line.expectedReadyDate);
     if (!lagwadInSlot(readyDate, window)) continue;

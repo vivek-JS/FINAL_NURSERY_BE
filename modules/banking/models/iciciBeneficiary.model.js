@@ -8,8 +8,8 @@ import mongoose, { Schema } from "mongoose";
  *   PENDING_APPROVAL → ACTIVE | REJECTED
  *   ACTIVE → DISABLED
  *
- * The CIB payment API is ad hoc (no bank-side registration), so this register
- * lives in the ERP; bankKind records whether the payee banks with ICICI.
+ * On approval the payee is also registered at ICICI (/BeneAddition); `bank`
+ * holds ICICI's answer. bankKind records whether the payee banks with ICICI.
  */
 export const BENEFICIARY_STATUSES = ["PENDING_APPROVAL", "ACTIVE", "REJECTED", "DISABLED"];
 export const BENEFICIARY_BANK_KINDS = ["ICICI", "NON_ICICI"];
@@ -51,6 +51,23 @@ const iciciBeneficiarySchema = new Schema(
     /** Added and approved by the same super admin. */
     selfApproved: { type: Boolean, default: false },
     rejectReason: { type: String },
+
+    /** ICICI Beneficiary Registration API (/BeneAddition), sent when the payee is approved. */
+    bank: {
+      state: { type: String },
+      beneId: { type: String },
+      nickname: { type: String },
+      code: { type: String },
+      message: { type: String },
+      coolingPeriod: { type: Boolean },
+      registeredAt: { type: Date },
+      checkedAt: { type: Date },
+      attempts: { type: Number, default: 0 },
+      /** ICICI Beneficiary Validation API (/BeneValidation). */
+      validationState: { type: String },
+      validationMessage: { type: String },
+      validatedAt: { type: Date },
+    },
 
     history: { type: [historySchema], default: [] },
   },

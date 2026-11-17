@@ -1,7 +1,8 @@
 import moment from "moment";
 import { IST_OFFSET } from "../utility/istSlotDate.js";
 import { OVERDUE_LOOKBACK_DAYS } from "../utility/capacityBoardMetrics.js";
-import { bucketWindows, fillDispatch, fillLagwad, istDay, summarize } from "../utility/dispatchLagwadBuckets.js";
+import { bucketWindows, fillDispatch, fillLagwad, fillUnbatchedAfter, istDay, summarize } from "../utility/dispatchLagwadBuckets.js";
+import { physicalCountAsOn } from "./actualStock.service.js";
 import { loadDueOrders, loadOpenLagwadLines, loadSlotIdSet, resolveCropContext } from "./dispatchLagwadSources.js";
 
 /**
@@ -35,7 +36,12 @@ export async function getDispatchLagwad({ plantId, subtypeId, from, to, windowDa
   ]);
 
   fillDispatch(windows, orders, { rollPast: roll, today });
-  fillLagwad(windows, allLines.filter((line) => slotIds.has(line.slotId)), { rollPast: roll, today });
+  fillUnbatchedAfter(windows, orders);
+  fillLagwad(windows, allLines.filter((line) => slotIds.has(line.slotId)), {
+    rollPast: roll,
+    today,
+    liveCountAsOn: physicalCountAsOn(context.plantName),
+  });
   const { months, totals } = summarize(windows);
 
   return {

@@ -4,6 +4,8 @@ import catchAsync from "../utility/catchAsync.js";
 import AppError from "../utility/appError.js";
 import generateResponse from "../utility/responseFormat.js";
 import { expandLocationRulesVillages } from "../services/publicLinkLocation.service.js";
+import { saveDailyTargets, upsertFromPublicLink } from "../services/fieldLead.service.js";
+import { fetchLeadFarmerStats } from "../services/leadFarmerStats.service.js";
 
 const normalizeSlug = (value) => {
   if (!value) return "";
@@ -15,7 +17,7 @@ const normalizeSlug = (value) => {
 };
 
 export const createPublicFarmerLink = catchAsync(async (req, res, next) => {
-  const { name, slug, description, locationRules, maxSubmissions, meta, isActive } = req.body;
+  const { name, slug, description, locationRules, maxSubmissions, meta, isActive, assignedUserIds, dailyTarget } = req.body;
 
   if (!name || !Array.isArray(locationRules) || locationRules.length === 0) {
     return next(new AppError("Name and at least one location rule are required", 400));
@@ -38,8 +40,11 @@ export const createPublicFarmerLink = catchAsync(async (req, res, next) => {
     maxSubmissions,
     meta,
     isActive: isActive !== undefined ? Boolean(isActive) : true,
+    assignedUserIds: Array.isArray(assignedUserIds) ? assignedUserIds : [],
     createdBy: req.user?._id
   });
+
+  await saveDailyTargets(link.assignedUserIds, dailyTarget ?? 10);
 
   return res.status(201).json(
     generateResponse("success", "Public farmer link created", {
@@ -73,6 +78,15 @@ export const getPublicFarmerLinks = catchAsync(async (req, res) => {
       links
     })
   );
+});
+
+export const getLeadFarmerStats = catchAsync(async (req, res, next) => {
+  const result = await fetchLeadFarmerStats({
+    startDate: req.query.startDate,
+    endDate: req.query.endDate,
+  });
+  if (result.error) return next(new AppError(result.error, result.statusCode || 400));
+  return res.status(200).json(generateResponse("success", "Lead farmer stats", result.data));
 });
 
 export const getPublicFarmerLinkById = catchAsync(async (req, res, next) => {
@@ -110,6 +124,9 @@ export const updatePublicFarmerLink = catchAsync(async (req, res, next) => {
     updates.locationRules = await expandLocationRulesVillages(updates.locationRules);
   }
 
+  const dailyTarget = updates.dailyTarget;
+  delete updates.dailyTarget;
+
   const link = await PublicFarmerLink.findByIdAndUpdate(
     id,
     updates,
@@ -118,6 +135,10 @@ export const updatePublicFarmerLink = catchAsync(async (req, res, next) => {
 
   if (!link) {
     return next(new AppError("Public farmer link not found", 404));
+  }
+
+  if (Array.isArray(link.assignedUserIds)) {
+    await saveDailyTargets(link.assignedUserIds, dailyTarget);
   }
 
   return res.status(200).json(
@@ -323,7 +344,11 @@ export const createFarmerLead = catchAsync(async (req, res, next) => {
     districtName,
     talukaCode,
     talukaName,
-    villageName
+    villageName,
+    lat,
+    lng,
+    accuracy,
+    area
   } = req.body;
 
   if (!slug || !name || !mobileNumber || !stateCode || !districtCode || !talukaCode || !villageName) {
@@ -370,6 +395,17 @@ export const createFarmerLead = catchAsync(async (req, res, next) => {
     return next(new AppError("Selected location is not allowed for this link", 400));
   }
 
+  const gpsLat = Number(lat);
+  const gpsLng = Number(lng);
+  const gps = Number.isFinite(gpsLat) && Number.isFinite(gpsLng)
+    ? {
+        lat: gpsLat,
+        lng: gpsLng,
+        accuracy: Number.isFinite(Number(accuracy)) ? Number(accuracy) : undefined,
+        area: String(area || "").trim().slice(0, 180),
+      }
+    : undefined;
+
   const lead = await FarmerLead.create({
     name: name.trim(),
     mobileNumber: String(mobileNumber),
@@ -380,8 +416,16 @@ export const createFarmerLead = catchAsync(async (req, res, next) => {
     talukaCode,
     talukaName,
     villageName,
+    ...(gps ? { gps } : {}),
     publicLinkId: link._id,
     sourceSlug: link.slug
+  });
+
+  await upsertFromPublicLink({
+    link,
+    name: name.trim(),
+    mobile: String(mobileNumber),
+    place: { stateCode, stateName, districtCode, districtName, talukaCode, talukaName, villageName }
   });
 
   return res.status(201).json(

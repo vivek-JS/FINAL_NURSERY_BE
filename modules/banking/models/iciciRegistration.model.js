@@ -8,6 +8,10 @@ const iciciRegistrationSchema = new Schema(
     publicCertFingerprint: { type: String, index: true },
     registeredAt: { type: Date, default: Date.now },
     expiresAt: { type: Date },
+    /** Last answer of the Registration Status API: Registered, Rejected, Pending for Self Approval, Deregistered. */
+    bankStatus: { type: String },
+    bankStatusCheckedAt: { type: Date },
+    deregisteredAt: { type: Date },
     response: { type: Schema.Types.Mixed },
   },
   { timestamps: true }
