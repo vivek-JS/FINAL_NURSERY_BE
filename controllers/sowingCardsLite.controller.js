@@ -27,6 +27,7 @@ import {
   orderPlantTotal,
   sowingStillNeedsMatch,
 } from "../services/orderSowCover.plan.js";
+import { coverShortSownOrders } from "../services/shortSownCover.apply.js";
 import {
   bookingSlotIdsStillNeedingSow,
   dropOrdersGivenWithoutSowing,
@@ -1022,6 +1023,14 @@ export const getOrderWiseSowing = async (req, res) => {
         success: false,
         message: "plantId and subtypeId are required",
       });
+    }
+
+    // A sown order with a short cover row stays in this gap. Finish it from
+    // its sowing, then the next sowings, before the list is built.
+    try {
+      await coverShortSownOrders({ plantId, subtypeId });
+    } catch (coverErr) {
+      console.error("coverShortSownOrders:", coverErr?.message || coverErr);
     }
 
     let slotIdList = [];
