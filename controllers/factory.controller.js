@@ -134,6 +134,11 @@ import {
   slotStartDateById,
   validateCoverPicks,
 } from "../services/orderExcessBatchCover.service.js";
+import {
+  coverOrderFromEntries,
+  validateEntryCoverPicks,
+} from "../modules/sowingEntries/coverFromEntries.service.js";
+import { normalizeEntryPicks } from "../modules/sowingEntries/coverFromEntriesMath.js";
 
 const DISPATCH_DAY_KEY_TO_OFFSET = {
   TODAY: 0,
@@ -563,10 +568,23 @@ const createOne = (Model, modelName) =>
       const sowingCoverDecision = String(orderData.sowingCoverDecision || "")
         .trim()
         .toUpperCase();
-      const sowingCoverPicks = normalizePicks(orderData.sowingCoverPicks);
+      const entryCoverPicks = normalizeEntryPicks(orderData.sowingCoverPicks);
+      const slotCoverPicks = normalizePicks(orderData.sowingCoverPicks);
+      const coverUsesEntries = entryCoverPicks.length > 0;
+      const sowingCoverPicks = coverUsesEntries ? entryCoverPicks : slotCoverPicks;
+      const sowingCoverWindowDays = Math.max(
+        1,
+        Math.floor(Number(orderData.sowingCoverWindowDays) || EXCESS_COVER_WINDOW_DAYS)
+      );
+      const sowingCoverPastWindowDays = Math.max(
+        0,
+        Math.floor(Number(orderData.sowingCoverPastWindowDays) || EXCESS_COVER_PAST_DAYS)
+      );
       const sowingCoverOffered = Math.max(0, Math.floor(Number(orderData.sowingCoverOffered) || 0));
       delete orderData.sowingCoverDecision;
       delete orderData.sowingCoverPicks;
+      delete orderData.sowingCoverWindowDays;
+      delete orderData.sowingCoverPastWindowDays;
       delete orderData.sowingCoverOffered;
       delete orderData.sowingCoverSources;
       delete orderData.sowingCoverReversedAt;
@@ -634,13 +652,26 @@ const createOne = (Model, modelName) =>
           });
         }
         try {
-          await validateCoverPicks({
-            plantId: orderData.plantName,
-            subtypeId: orderData.plantSubtype,
-            deliveryDate: orderData.deliveryDate,
-            need: numPlants + (Number(orderData.additionalPlants) || 0),
-            picks: sowingCoverPicks,
-          });
+          const coverNeed = numPlants + (Number(orderData.additionalPlants) || 0);
+          if (coverUsesEntries) {
+            await validateEntryCoverPicks({
+              plantId: orderData.plantName,
+              subtypeId: orderData.plantSubtype,
+              deliveryDate: orderData.deliveryDate,
+              need: coverNeed,
+              picks: entryCoverPicks,
+              windowDays: sowingCoverWindowDays,
+              pastWindowDays: sowingCoverPastWindowDays,
+            });
+          } else {
+            await validateCoverPicks({
+              plantId: orderData.plantName,
+              subtypeId: orderData.plantSubtype,
+              deliveryDate: orderData.deliveryDate,
+              need: coverNeed,
+              picks: sowingCoverPicks,
+            });
+          }
         } catch (coverErr) {
           if (coverErr instanceof ExcessCoverError) {
             return res.status(400).json({
@@ -1478,11 +1509,19 @@ const createOne = (Model, modelName) =>
       let sowingCover = null;
       if (createdOrderDoc && sowingCoverDecision === "COVER") {
         try {
-          const coverResult = await coverOrderFromBatches({
-            order: createdOrderDoc._id,
-            picks: sowingCoverPicks,
-            userId: req.user?._id,
-          });
+          const coverResult = coverUsesEntries
+            ? await coverOrderFromEntries({
+                order: createdOrderDoc._id,
+                picks: entryCoverPicks,
+                userId: req.user?._id,
+                windowDays: sowingCoverWindowDays,
+                pastWindowDays: sowingCoverPastWindowDays,
+              })
+            : await coverOrderFromBatches({
+                order: createdOrderDoc._id,
+                picks: sowingCoverPicks,
+                userId: req.user?._id,
+              });
           sowingCover = {
             ok: true,
             message: coverResult.remark,
@@ -3318,8 +3357,13 @@ const updateOne = (Model, modelName, allowedFields) =>
       }
 
       let excessCover = null;
-      const excessCoverPicks =
-        modelName === "Order" && updatedDoc ? normalizePicks(req.body?.excessCoverPicks) : [];
+      const entryCoverPicks =
+        modelName === "Order" && updatedDoc ? normalizeEntryPicks(req.body?.excessCoverPicks) : [];
+      const excessCoverPicks = entryCoverPicks.length
+        ? entryCoverPicks
+        : modelName === "Order" && updatedDoc
+          ? normalizePicks(req.body?.excessCoverPicks)
+          : [];
       if (excessCoverPicks.length) {
         const rawCoverWindow = Math.floor(
           Number(req.body?.excessCoverWindowDays) || EXCESS_COVER_WINDOW_DAYS
@@ -3329,14 +3373,23 @@ const updateOne = (Model, modelName, allowedFields) =>
         );
         const rawCoverNeed = Math.floor(Number(req.body?.excessCoverNeed) || 0);
         try {
-          const cover = await coverOrderFromBatches({
-            order: updatedDoc._id,
-            picks: excessCoverPicks,
-            userId: req.user?._id,
-            windowDays: Math.max(1, rawCoverWindow),
-            pastWindowDays: Math.max(0, rawCoverPast),
-            additionalNeed: rawCoverNeed > 0 ? rawCoverNeed : null,
-          });
+          const cover = entryCoverPicks.length
+            ? await coverOrderFromEntries({
+                order: updatedDoc._id,
+                picks: entryCoverPicks,
+                userId: req.user?._id,
+                windowDays: Math.max(1, rawCoverWindow),
+                pastWindowDays: Math.max(0, rawCoverPast),
+                additionalNeed: rawCoverNeed > 0 ? rawCoverNeed : null,
+              })
+            : await coverOrderFromBatches({
+                order: updatedDoc._id,
+                picks: excessCoverPicks,
+                userId: req.user?._id,
+                windowDays: Math.max(1, rawCoverWindow),
+                pastWindowDays: Math.max(0, rawCoverPast),
+                additionalNeed: rawCoverNeed > 0 ? rawCoverNeed : null,
+              });
           excessCover = {
             success: true,
             plants: cover.need,

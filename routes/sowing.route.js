@@ -143,6 +143,7 @@ import {
   getExcessBatches,
   coverOrderFromExcessBatches,
 } from "../controllers/orderExcessBatchCover.controller.js";
+import { postCoverFromEntries } from "../modules/sowingEntries/coverFromEntries.controller.js";
 import {
   getSowBatchStock,
   getSowBatchStockById,
@@ -213,6 +214,7 @@ router.get("/order/:orderId/slot-excess", getOrderSlotExcess); // Preview saleab
 router.post("/order/:orderId/complete-from-excess", completeOrderFromSlotExcess); // Mark sow done from slot excess
 router.get("/excess-batches", getExcessBatches); // Booking preview: batch excess within delivery ±5d
 router.post("/order/:orderId/cover-from-batches", coverOrderFromExcessBatches); // Cover order from picked batches
+router.post("/order/:orderId/cover-from-entries", postCoverFromEntries); // Cover order from sowing entries
 router.get("/slot/:slotId/coverable-orders", getSlotCoverableOrders); // Slot-first: pending orders for surplus slot
 router.post("/slot/:slotId/allocate-to-orders", allocateSlotToOrders); // Bulk allocate excess → orders
 router.get("/slot/:slotId/transfer-targets", getSlotTransferTargets); // Slot-to-slot transfer targets

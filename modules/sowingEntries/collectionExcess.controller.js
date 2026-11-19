@@ -1,7 +1,9 @@
 import mongoose from "mongoose";
 import Order from "../../models/order.model.js";
+import PlantCms from "../../models/plantCms.model.js";
 import SowingEntry from "../../models/sowingEntry.model.js";
-import { excessWindowCapForPlant } from "../../services/orderExcessBatchCover.service.js";
+import { deliveryDateToIstMoment } from "../../utility/istSlotDate.js";
+import { excessWindowCapForPlant, ownSowTolerance } from "../../services/orderExcessBatchCover.service.js";
 import { plantsFromThisEntry } from "./linkedOrdersForEntry.js";
 import { toSowingEntryListItem } from "./mapSowingEntry.js";
 import { collectionExcessRows, releasedPlantsForEntry } from "./collectionExcess.js";
@@ -62,7 +64,11 @@ export async function getCollectionExcess(req, res) {
   };
   const [docs, order] = await Promise.all([
     SowingEntry.find(filter).select(ENTRY_FIELDS).lean(),
-    releaseId ? Order.findById(releaseId).select("sowingCoverSources").lean() : null,
+    releaseId
+      ? Order.findById(releaseId)
+          .select("sowingDone sowingDoneRequestId sowingCoverSources sowingCoverReversedAt deliveryDate")
+          .lean()
+      : null,
   ]);
   const releasedById = new Map();
   for (const doc of docs) {
@@ -76,6 +82,12 @@ export async function getCollectionExcess(req, res) {
     releasedById,
   });
   const need = Math.max(0, Math.floor(Number(req.query.need) || 0));
+  const plant = await PlantCms.findById(plantId).select("subtypes._id subtypes.plantReadyDays").lean();
+  const subtype = (plant?.subtypes || []).find((row) => String(row._id) === String(subtypeId));
+  const plantReadyDays = Math.max(0, Math.floor(Number(subtype?.plantReadyDays) || 0));
+  const delivery = deliveryDateToIstMoment(deliveryDate);
+  const readyBy = deliveryDateToIstMoment(new Date())?.add(plantReadyDays, "days");
+  const ownSow = order ? await ownSowTolerance(order, deliveryDate) : null;
   return res.json({
     success: true,
     source: "sowingentries",
@@ -86,6 +98,10 @@ export async function getCollectionExcess(req, res) {
       totalFree: data.totalFree,
       mode: data.totalFree < 1 ? "none" : need > 0 && data.totalFree >= need ? "full" : "partial",
       entries: data.entries,
+      plantReadyDays,
+      newSowingReadyBy: readyBy ? readyBy.format("DD-MM-YYYY") : null,
+      newSowingPossible: Boolean(delivery && readyBy && !delivery.isBefore(readyBy)),
+      ownSow,
     },
   });
 }

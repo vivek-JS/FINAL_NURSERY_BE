@@ -53,6 +53,7 @@ export function collectionExcessRows(docs, { deliveryDate, windowDays, pastWindo
     entries.push({
       entryId: String(doc._id),
       sourceBatchId: doc.sourceBatchId ? String(doc.sourceBatchId) : "",
+      sowingRequestId: doc.sowingRequestId ? String(doc.sowingRequestId) : "",
       requestNumber: doc.requestNumber || "",
       plantName: doc.plantName || "",
       subtypeName: doc.subtypeName || "",
