@@ -70,3 +70,30 @@ test("Own linked sowing is protected from earlier unlinked FIFO orders", () => {
   assert.equal(res.orders.find((o) => o.orderId === "o2").covers[0].requestNumber, "SR-1");
   assert.equal(res.orders.find((o) => o.orderId === "o1").covers[0].requestNumber, "SR-2");
 });
+
+test("Unlinked orders with delivery >= today + plantReadyDays are excluded as canSow", () => {
+  const sowings = [
+    { entryId: "e1", batchId: "b1", requestNumber: "SR-17Nov", sowingDate: "2026-10-30", plantReadyDate: "2026-11-17", remaining: 3360 },
+    { entryId: "e3", batchId: "b3", requestNumber: "SR-21Nov", sowingDate: "2026-11-03", plantReadyDate: "2026-11-21", remaining: 36369 },
+    { entryId: "e4", batchId: "b4", requestNumber: "SR-25Nov", sowingDate: "2026-11-07", plantReadyDate: "2026-11-25", remaining: 20831 },
+  ];
+  const orders = [
+    { orderId: "o4953", orderNumber: 4953, deliveryDate: "2026-12-25", plants: 50000, covers: [] },
+  ];
+  const res = allocateVirtualCover(orders, sowings, { today: "2026-11-25", plantReadyDays: 18 });
+  assert.equal(res.left, 60560);
+  assert.equal(res.orders[0].canSow, true);
+  assert.equal(res.orders[0].short, 50000);
+  assert.equal(res.orders[0].sowBy, "2026-12-07");
+  assert.deepEqual(res.orders[0].covers, []);
+
+  // An unlinked order for 28 Nov (< 13 Dec) is NOT sowable and still deducts from stock
+  const near = allocateVirtualCover(
+    [{ orderId: "o9999", orderNumber: 9999, deliveryDate: "2026-11-28", plants: 50000, covers: [] }],
+    sowings,
+    { today: "2026-11-25", plantReadyDays: 18 }
+  );
+  assert.equal(near.left, 10560);
+  assert.equal(near.orders[0].canSow, false);
+  assert.equal(near.orders[0].short, 0);
+});

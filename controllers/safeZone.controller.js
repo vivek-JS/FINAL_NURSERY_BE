@@ -22,7 +22,7 @@ async function sowingPlants(plantId) {
   const id = oid(plantId);
   if (plantId && !id) return [];
   if (id) query._id = id;
-  return PlantCms.find(query).select("name subtypes._id subtypes.name").lean();
+  return PlantCms.find(query).select("name subtypes._id subtypes.name subtypes.plantReadyDays").lean();
 }
 
 async function batchesById(ids) {
@@ -73,6 +73,7 @@ async function coverLines({ till, plantId, subtypeId }) {
         subtypeId: String(subtype._id),
         plantName: plant.name || "Plant",
         subtypeName: subtype.name || "",
+        plantReadyDays: Math.max(0, Math.floor(Number(subtype.plantReadyDays) || 0)),
       });
     }
   }
@@ -335,13 +336,16 @@ export const getVirtualCover = async (req, res) => {
         orders: [],
       });
     }
+    const today = todayYmd();
     const varieties = [...byVariety.values()]
       .map((row) => {
         const key = `${row.plantId}|${row.subtypeId}`;
+        const plantReadyDays = loaded.names?.get?.(key)?.plantReadyDays || 0;
         const { afterOut, allocated } = computeVirtualForVariety(
           sowings.get(key) || [],
           dispatchedByVariety.get(key) || [],
-          row.orders
+          row.orders,
+          { today, plantReadyDays }
         );
         const plants = allocated.orders.reduce((sum, order) => sum + order.plants, 0);
         return {
@@ -349,6 +353,7 @@ export const getVirtualCover = async (req, res) => {
           subtypeId: row.subtypeId,
           plantName: row.plantName,
           subtypeName: row.subtypeName,
+          plantReadyDays,
           orders: allocated.orders.length,
           plants,
           virtualOut: afterOut.totalOut,
@@ -362,7 +367,7 @@ export const getVirtualCover = async (req, res) => {
     return res.status(200).json({
       success: true,
       till: loaded.range.till,
-      today: todayYmd(),
+      today,
       plants: varieties.reduce((sum, row) => sum + row.plants, 0),
       varieties,
       generatedAt: moment().utcOffset(IST_OFFSET).toISOString(),

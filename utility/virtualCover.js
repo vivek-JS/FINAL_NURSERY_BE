@@ -19,6 +19,13 @@ function dayDistance(aYmd, bYmd) {
   return Math.abs(a - b) / 86400000;
 }
 
+function addDaysYmd(ymd, days) {
+  if (!ymd) return "";
+  const ms = Date.parse(`${ymd}T00:00:00Z`);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms + days * 86400000).toISOString().slice(0, 10);
+}
+
 function sortPool(rows) {
   return rows.sort(
     (a, b) =>
@@ -204,12 +211,34 @@ export function applyVirtualOut(dispatchedOrders, sowings) {
 /**
  * Step 2: Cover open orders from sowings (after Virtual Out).
  * Priority: Fresh -> own sowing -> FIFO -> nearest sowing.
+ * Unlinked orders whose deliveryDate >= today + plantReadyDays can still be sown fresh,
+ * so they are excluded from deducting against existing sowing stock and returned with canSow: true.
  */
-export function allocateVirtualCover(orders, sowings) {
+export function allocateVirtualCover(orders, sowings, options = {}) {
   const pool = sortPool((sowings || []).map(normalizeSowing));
   const queue = sortOrders((orders || []).map(normalizeOrder).filter((o) => o.plants > 0));
+  const today = coverYmd(options.today);
+  const readyDays = intQty(options.plantReadyDays);
+  const sowableFrom = today && readyDays > 0 ? addDaysYmd(today, readyDays) : "";
 
-  const states = deductQueueFromPool(pool, queue, (sowing, order, take) => {
+  const toDeduct = [];
+  const canSowList = [];
+  for (const order of queue) {
+    if (sowableFrom && order.linkedCovers.length === 0 && order.deliveryDate && order.deliveryDate >= sowableFrom) {
+      const { linkedCovers: _ignored, ...cleanOrder } = order;
+      canSowList.push({
+        ...cleanOrder,
+        short: order.plants,
+        covers: [],
+        canSow: true,
+        sowBy: addDaysYmd(order.deliveryDate, -readyDays),
+      });
+    } else {
+      toDeduct.push(order);
+    }
+  }
+
+  const states = deductQueueFromPool(pool, toDeduct, (sowing, order, take) => {
     sowing.virtualCover += take;
     sowing.virtualCoverOrders.push({
       orderId: order.orderId,
@@ -220,10 +249,12 @@ export function allocateVirtualCover(orders, sowings) {
     });
   });
 
-  const covered = states.map(({ order, takes, left }) => {
+  const deducted = states.map(({ order, takes, left }) => {
     const { linkedCovers: _ignored, ...cleanOrder } = order;
-    return { ...cleanOrder, short: left, covers: takes };
+    return { ...cleanOrder, short: left, covers: takes, canSow: false };
   });
+
+  const covered = sortOrders([...deducted, ...canSowList]);
 
   const perSowing = pool.map((row) => ({
     entryId: row.entryId,

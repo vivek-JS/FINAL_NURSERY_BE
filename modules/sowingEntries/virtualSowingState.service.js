@@ -1,7 +1,9 @@
 import mongoose from "mongoose";
+import moment from "moment";
 import Order from "../../models/order.model.js";
+import PlantCms from "../../models/plantCms.model.js";
 import SowingEntry from "../../models/sowingEntry.model.js";
-import { deliveryDateToIstMoment } from "../../utility/istSlotDate.js";
+import { IST_OFFSET, deliveryDateToIstMoment } from "../../utility/istSlotDate.js";
 import { orderCoverSowings, sowingEntryRemaining } from "../../utility/safeZone.js";
 import { allocateVirtualCover, applyVirtualOut, coverYmd } from "../../utility/virtualCover.js";
 
@@ -93,9 +95,9 @@ export async function dispatchedOrdersByVariety(plantIds, subtypeId = null, sinc
 }
 
 /** Run Step 1 (Virtual Out) -> Step 2 (Virtual Cover) for one variety. */
-export function computeVirtualForVariety(sowingRows, dispatchedOrders, openOrders) {
+export function computeVirtualForVariety(sowingRows, dispatchedOrders, openOrders, options = {}) {
   const afterOut = applyVirtualOut(dispatchedOrders || [], sowingRows || []);
-  const allocated = allocateVirtualCover(openOrders || [], afterOut.sowings);
+  const allocated = allocateVirtualCover(openOrders || [], afterOut.sowings, options);
   return { afterOut, allocated };
 }
 
@@ -124,7 +126,7 @@ export async function virtualMetricsForEntries(entries) {
   const subtypeOids = [...subtypeIds].map((id) => new mongoose.Types.ObjectId(id));
   const sinceDate = virtualOutSinceDate();
 
-  const [sowingDocs, openDocs, dispatchedDocs] = await Promise.all([
+  const [sowingDocs, openDocs, dispatchedDocs, plantDocs] = await Promise.all([
     SowingEntry.find({
       plantId: { $in: plantOids },
       subtypeId: { $in: subtypeOids },
@@ -151,7 +153,18 @@ export async function virtualMetricsForEntries(entries) {
       .select(ORDER_SELECT)
       .populate("farmer", "name")
       .lean(),
+    PlantCms.find({ _id: { $in: plantOids } })
+      .select("subtypes._id subtypes.plantReadyDays")
+      .lean(),
   ]);
+
+  const readyDaysByKey = new Map();
+  for (const plant of plantDocs) {
+    for (const st of plant.subtypes || []) {
+      readyDaysByKey.set(`${plant._id}|${st._id}`, intQty(st.plantReadyDays));
+    }
+  }
+  const today = moment().utcOffset(IST_OFFSET).format("YYYY-MM-DD");
 
   const sowingsByKey = new Map();
   for (const doc of sowingDocs) {
@@ -189,7 +202,8 @@ export async function virtualMetricsForEntries(entries) {
     const { allocated } = computeVirtualForVariety(
       sowingsByKey.get(key) || [],
       dispatchedByKey.get(key) || [],
-      openByKey.get(key) || []
+      openByKey.get(key) || [],
+      { today, plantReadyDays: readyDaysByKey.get(key) || 0 }
     );
     for (const row of allocated.perSowing || []) {
       if (!row.entryId) continue;
