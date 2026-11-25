@@ -20,6 +20,7 @@ export function allocateVirtualCover(orders, sowings) {
       sowingDate: coverYmd(row.sowingDate || row.sowDay),
       plantReadyDate: coverYmd(row.plantReadyDate),
       shedName: row.shedName || "",
+      sowingName: String(row.sowingName || "").trim(),
       remaining: intQty(row.remaining),
     }))
     .filter((row) => row.remaining > 0)
@@ -71,6 +72,7 @@ export function allocateVirtualCover(orders, sowings) {
           sowingDate: sowing.sowingDate,
           plantReadyDate: sowing.plantReadyDate,
           shedName: sowing.shedName,
+          ...(sowing.sowingName ? { sowingName: sowing.sowingName } : {}),
           plants: take,
         });
       }
@@ -101,6 +103,7 @@ export function allocateVirtualCover(orders, sowings) {
         sowingDate: row.sowingDate,
         plantReadyDate: row.plantReadyDate,
         shedName: row.shedName,
+        ...(row.sowingName ? { sowingName: row.sowingName } : {}),
         plants: row.remaining,
       })),
   };

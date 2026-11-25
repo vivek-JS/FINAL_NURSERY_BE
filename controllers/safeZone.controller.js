@@ -172,7 +172,7 @@ async function excessByVariety(plantIds, subtypeId, tillYmd) {
 }
 
 const REMAINING_SELECT =
-  "plantId subtypeId requestNumber sowDay sowingDate plantReadyDate shedName plantsSowed destroyedPlants dispatchedPlants bufferPlants sowingBufferPct mortalityMovedToExcess excessMovedToMortality noMortalityReserve isIrrelevant";
+  "plantId subtypeId requestNumber sowDay sowingDate sowingName plantReadyDate shedName plantsSowed destroyedPlants dispatchedPlants bufferPlants sowingBufferPct mortalityMovedToExcess excessMovedToMortality noMortalityReserve isIrrelevant";
 
 function todayYmd() {
   return moment().utcOffset(IST_OFFSET).format("YYYY-MM-DD");
@@ -277,6 +277,7 @@ async function remainingSowingRows(plantIds, subtypeId) {
       sowingDate: coverYmd(doc.sowDay || doc.sowingDate),
       plantReadyDate: coverYmd(doc.plantReadyDate),
       shedName: doc.shedName || "",
+      sowingName: String(doc.sowingName || "").trim(),
       remaining,
     });
     grouped.set(key, rows);

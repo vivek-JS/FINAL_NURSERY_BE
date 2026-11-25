@@ -9,6 +9,8 @@ const sowingEntrySchema = new Schema(
     sourceBatchId: { type: Schema.Types.ObjectId, required: true, unique: true },
     sowingRequestId: { type: Schema.Types.ObjectId, ref: "SowingRequest", index: true },
     requestNumber: { type: String, default: "", trim: true, index: true },
+    /** Shown in the sow-date column instead of the date. June is Old/June. The date stays stored. */
+    sowingName: { type: String, default: "", trim: true },
     plantId: { type: Schema.Types.ObjectId, ref: "PlantCms", required: true, index: true },
     plantName: { type: String, default: "", trim: true },
     subtypeId: { type: Schema.Types.ObjectId, index: true },
