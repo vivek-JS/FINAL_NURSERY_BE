@@ -9,17 +9,19 @@ export function coverYmd(value) {
 
 /**
  * Cover open orders from sowings that still have plants.
- * Oldest delivery first. Each order takes the oldest sowing that is already
- * ready on or before that delivery. Plants still needed after that come from
- * the next oldest sowing, because the order still has to be given.
+ * Pass 1: if an order already has a linked sowing with remaining plants, take from that sowing first.
+ * Pass 2: if that sowing is old/empty or the order has none, take on a FIFO basis — oldest sowing
+ * ready on or before delivery first, then next oldest sowing.
  */
 export function allocateVirtualCover(orders, sowings) {
   const pool = (sowings || [])
     .map((row) => ({
+      batchId: String(row.batchId || row.sourceBatchId || ""),
       requestNumber: row.requestNumber || "",
       sowingDate: coverYmd(row.sowingDate || row.sowDay),
       plantReadyDate: coverYmd(row.plantReadyDate),
       shedName: row.shedName || "",
+      sowingName: String(row.sowingName || "").trim(),
       remaining: intQty(row.remaining),
     }))
     .filter((row) => row.remaining > 0)
@@ -38,6 +40,7 @@ export function allocateVirtualCover(orders, sowings) {
       deliveryDate: coverYmd(row.deliveryDate),
       bookingDate: coverYmd(row.bookingDate),
       plants: intQty(row.plants ?? row.total ?? row.booked),
+      linkedCovers: Array.isArray(row.covers) ? row.covers : [],
     }))
     .filter((row) => row.plants > 0)
     .sort(
@@ -47,8 +50,28 @@ export function allocateVirtualCover(orders, sowings) {
         String(a.orderNumber).localeCompare(String(b.orderNumber), undefined, { numeric: true })
     );
 
-  const takeFrom = (need, allow) => {
-    const takes = [];
+  const pushTake = (takes, sowing, take) => {
+    const existing = takes.find(
+      (item) =>
+        item.requestNumber === sowing.requestNumber &&
+        item.sowingDate === sowing.sowingDate &&
+        item.plantReadyDate === sowing.plantReadyDate
+    );
+    if (existing) {
+      existing.plants += take;
+    } else {
+      takes.push({
+        requestNumber: sowing.requestNumber,
+        sowingDate: sowing.sowingDate,
+        plantReadyDate: sowing.plantReadyDate,
+        shedName: sowing.shedName,
+        ...(sowing.sowingName ? { sowingName: sowing.sowingName } : {}),
+        plants: take,
+      });
+    }
+  };
+
+  const takeFrom = (need, allow, takes) => {
     let left = need;
     for (const sowing of pool) {
       if (left < 1) break;
@@ -57,37 +80,54 @@ export function allocateVirtualCover(orders, sowings) {
       const take = Math.min(left, sowing.remaining);
       sowing.remaining -= take;
       left -= take;
-      const last = takes[takes.length - 1];
-      if (
-        last &&
-        last.requestNumber === sowing.requestNumber &&
-        last.sowingDate === sowing.sowingDate &&
-        last.plantReadyDate === sowing.plantReadyDate
-      ) {
-        last.plants += take;
-      } else {
-        takes.push({
-          requestNumber: sowing.requestNumber,
-          sowingDate: sowing.sowingDate,
-          plantReadyDate: sowing.plantReadyDate,
-          shedName: sowing.shedName,
-          plants: take,
-        });
-      }
+      pushTake(takes, sowing, take);
     }
-    return { takes, left };
+    return left;
   };
 
-  const covered = queue.map((order) => {
-    const readyInTime = takeFrom(
-      order.plants,
-      (sowing) => !sowing.plantReadyDate || !order.deliveryDate || sowing.plantReadyDate <= order.deliveryDate
-    );
-    const spill = readyInTime.left > 0 ? takeFrom(readyInTime.left, () => true) : { takes: [], left: readyInTime.left };
+  // Pass 1: take from each order's own linked sowing(s) if still remaining in pool.
+  const state = queue.map((order) => {
+    const takes = [];
+    let left = order.plants;
+    for (const src of order.linkedCovers) {
+      if (left < 1) break;
+      const srcBatchId = String(src?.batchId || "");
+      const srcReq = String(src?.requestNumber || "");
+      if (!srcBatchId && !srcReq) continue;
+      const match = pool.find(
+        (sowing) =>
+          sowing.remaining > 0 &&
+          ((srcBatchId && sowing.batchId === srcBatchId) || (srcReq && sowing.requestNumber === srcReq))
+      );
+      if (!match) continue;
+      const cap = intQty(src?.plants) || left;
+      const take = Math.min(left, cap, match.remaining);
+      if (take < 1) continue;
+      match.remaining -= take;
+      left -= take;
+      pushTake(takes, match, take);
+    }
+    return { order, takes, left };
+  });
+
+  // Pass 2: cover remaining need on a FIFO basis (ready in time first, then next oldest).
+  const covered = state.map(({ order, takes, left }) => {
+    let rem = left;
+    if (rem > 0) {
+      rem = takeFrom(
+        rem,
+        (sowing) => !sowing.plantReadyDate || !order.deliveryDate || sowing.plantReadyDate <= order.deliveryDate,
+        takes
+      );
+    }
+    if (rem > 0) {
+      rem = takeFrom(rem, () => true, takes);
+    }
+    const { linkedCovers: _ignored, ...cleanOrder } = order;
     return {
-      ...order,
-      short: spill.left,
-      covers: [...readyInTime.takes, ...spill.takes],
+      ...cleanOrder,
+      short: rem,
+      covers: takes,
     };
   });
 
@@ -101,6 +141,7 @@ export function allocateVirtualCover(orders, sowings) {
         sowingDate: row.sowingDate,
         plantReadyDate: row.plantReadyDate,
         shedName: row.shedName,
+        ...(row.sowingName ? { sowingName: row.sowingName } : {}),
         plants: row.remaining,
       })),
   };

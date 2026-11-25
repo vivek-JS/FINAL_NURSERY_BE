@@ -172,7 +172,7 @@ async function excessByVariety(plantIds, subtypeId, tillYmd) {
 }
 
 const REMAINING_SELECT =
-  "plantId subtypeId requestNumber sowDay sowingDate plantReadyDate shedName plantsSowed destroyedPlants dispatchedPlants bufferPlants sowingBufferPct mortalityMovedToExcess excessMovedToMortality noMortalityReserve isIrrelevant";
+  "sourceBatchId plantId subtypeId requestNumber sowDay sowingDate sowingName plantReadyDate shedName plantsSowed destroyedPlants dispatchedPlants bufferPlants sowingBufferPct mortalityMovedToExcess excessMovedToMortality noMortalityReserve isIrrelevant";
 
 function todayYmd() {
   return moment().utcOffset(IST_OFFSET).format("YYYY-MM-DD");
@@ -273,10 +273,12 @@ async function remainingSowingRows(plantIds, subtypeId) {
     const key = `${doc.plantId}|${doc.subtypeId}`;
     const rows = grouped.get(key) || [];
     rows.push({
+      batchId: String(doc.sourceBatchId || ""),
       requestNumber: doc.requestNumber || "",
       sowingDate: coverYmd(doc.sowDay || doc.sowingDate),
       plantReadyDate: coverYmd(doc.plantReadyDate),
       shedName: doc.shedName || "",
+      sowingName: String(doc.sowingName || "").trim(),
       remaining,
     });
     grouped.set(key, rows);
@@ -313,6 +315,7 @@ export const getVirtualCover = async (req, res) => {
         deliveryDate: line.deliveryDate,
         bookingDate: line.bookingDate,
         plants: line.total,
+        covers: line.covers || [],
       });
       byVariety.set(key, bucket);
     }
@@ -345,7 +348,7 @@ export const getVirtualCover = async (req, res) => {
           deliveries: allocated.orders,
         };
       })
-      .filter((row) => row.plants > 0)
+      .filter((row) => row.plants > 0 || row.left > 0)
       .sort((a, b) => b.plants - a.plants || a.plantName.localeCompare(b.plantName) || a.subtypeName.localeCompare(b.subtypeName));
     return res.status(200).json({
       success: true,

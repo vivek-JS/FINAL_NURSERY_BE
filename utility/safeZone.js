@@ -198,6 +198,7 @@ export function orderCoverSowings(order, batchById) {
         const batch = batchById?.get?.(String(source?.batchId || "")) || null;
         if (batch?.isIrrelevant) return null;
         return {
+          batchId: String(source.batchId || ""),
           requestNumber: source.requestNumber || "",
           shedName: source.shedName || "",
           sowingDate: ymdFromDay(source.sowingDate),
