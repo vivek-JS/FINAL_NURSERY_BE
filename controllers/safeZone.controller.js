@@ -272,6 +272,8 @@ async function remainingSowingRows(plantIds, subtypeId) {
   for (const doc of docs) {
     const remaining = sowingEntryRemaining(doc);
     if (remaining < 1) continue;
+    const expectedReady = sowingDayFigures(doc).expectedReady;
+    const dispatchedPlants = Math.max(0, Math.floor(Number(doc.dispatchedPlants) || 0));
     const key = `${doc.plantId}|${doc.subtypeId}`;
     const rows = grouped.get(key) || [];
     rows.push({
@@ -281,6 +283,8 @@ async function remainingSowingRows(plantIds, subtypeId) {
       plantReadyDate: coverYmd(doc.plantReadyDate),
       shedName: doc.shedName || "",
       sowingName: String(doc.sowingName || "").trim(),
+      expectedReady,
+      dispatchedPlants,
       remaining,
     });
     grouped.set(key, rows);
