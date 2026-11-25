@@ -56,7 +56,7 @@ async function candidatesFor(entry) {
   if (entry.subtypeId) filter.subtypeId = entry.subtypeId;
   return SowingEntry.find(filter)
     .select(
-      "requestNumber plantName subtypeName sowingName plantReadyDate sowDay sowingDate plantsSowed bufferPlants sowingBufferPct noMortalityReserve orderCoveredPlants dispatchedPlants destroyedPlants plantsMarkedSellable mortalityMovedToExcess excessMovedToMortality isIrrelevant"
+      "requestNumber plantName subtypeName plantReadyDate sowDay sowingDate plantsSowed bufferPlants sowingBufferPct noMortalityReserve orderCoveredPlants dispatchedPlants destroyedPlants plantsMarkedSellable mortalityMovedToExcess excessMovedToMortality isIrrelevant"
     )
     .lean();
 }
@@ -70,7 +70,6 @@ function publicNext(row) {
     plantName: row.plantName || "",
     subtypeName: row.subtypeName || "",
     plantReadyDate: row.plantReadyDate || "",
-    sowingName: String(row.sowingName || "").trim(),
     sowingDate: row.sowDay || row.sowingDate || "",
     excessPlants: stamped.excessPlants,
     remainingPlants: stamped.remainingPlants,

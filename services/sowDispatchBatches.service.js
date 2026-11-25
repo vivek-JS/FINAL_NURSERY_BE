@@ -495,7 +495,6 @@ function batchView(entry, extra = {}, _bufferPct = 0) {
     batchId: idStr(b._id),
     sowingDate: b.sowingDate || "",
     plantReadyDate: ready,
-    sowingName: String(b.sowingName || "").trim(),
     outDate: b.out || ready,
     slotStartDay: entry.slot.startDay || "",
     shedName: b.shedName || "",
@@ -830,7 +829,6 @@ function viewFromSowingEntry(doc) {
     batchId: idStr(doc?.sourceBatchId),
     sowingDate: doc?.sowingDate || doc?.sowDay || "",
     plantReadyDate: ready,
-    sowingName: String(doc?.sowingName || "").trim(),
     outDate: doc?.out || ready,
     slotStartDay: "",
     shedName: doc?.shedName || "",
@@ -862,7 +860,7 @@ export async function listSowBatchOptionsForDispatch(dispatchId, plantRowIndex =
   const [docs, orderRows] = await Promise.all([
     SowingEntry.find({ plantId: plantOid, subtypeId: subtypeOid, isIrrelevant: { $ne: true } })
       .select(
-        "sourceBatchId sowingRequestId sowingDate sowDay sowingName plantReadyDate out shedName requestNumber plantsSowed orderCoveredPlants bufferPlants sowingBufferPct mortalityMovedToExcess excessMovedToMortality noMortalityReserve dispatchedPlants linkedOrderIds"
+        "sourceBatchId sowingRequestId sowingDate sowDay plantReadyDate out shedName requestNumber plantsSowed orderCoveredPlants bufferPlants sowingBufferPct mortalityMovedToExcess excessMovedToMortality noMortalityReserve dispatchedPlants linkedOrderIds"
       )
       .lean(),
     orderOids.length
