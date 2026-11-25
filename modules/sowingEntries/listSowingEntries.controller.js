@@ -3,6 +3,7 @@ import Order from "../../models/order.model.js";
 import SowingEntry from "../../models/sowingEntry.model.js";
 import { attributedOrderPlants } from "./linkedOrdersForEntry.js";
 import { toSowingEntryListItem } from "./mapSowingEntry.js";
+import { virtualMetricsForEntries } from "./virtualSowingState.service.js";
 
 function oid(value) {
   const text = String(value || "").trim();
@@ -117,7 +118,7 @@ export function sowingEntrySortFigures() {
 }
 
 function listFilter(query) {
-  const filter = {};
+  const filter = { isIrrelevant: { $ne: true } };
   const plantId = oid(query.plantId);
   const subtypeId = oid(query.subtypeId);
   if (plantId) filter.plantId = plantId;
@@ -155,16 +156,23 @@ export async function getSowingEntriesCollection(req, res) {
   const orderIds = [
     ...new Set(rows.flatMap((row) => (row.linkedOrderIds || []).map((id) => String(id)))),
   ].filter((id) => mongoose.Types.ObjectId.isValid(id));
-  const orders = orderIds.length
-    ? await Order.find({ _id: { $in: orderIds.map((id) => new mongoose.Types.ObjectId(id)) } })
-        .select("numberOfPlants additionalPlants sowingDoneRequestId sowingCoverSources sowingPartialCover")
-        .lean()
-    : [];
+  const [orders, virtualByEntry] = await Promise.all([
+    orderIds.length
+      ? Order.find({ _id: { $in: orderIds.map((id) => new mongoose.Types.ObjectId(id)) } })
+          .select("numberOfPlants additionalPlants sowingDoneRequestId sowingCoverSources sowingPartialCover")
+          .lean()
+      : Promise.resolve([]),
+    virtualMetricsForEntries(rows),
+  ]);
   return res.json({
     success: true,
     view: "entries",
     source: "sowingentries",
-    items: rows.map((row) => toSowingEntryListItem(row, attributedOrderPlants(row, orders))),
+    items: rows.map((row) => {
+      const base = toSowingEntryListItem(row, attributedOrderPlants(row, orders));
+      const v = virtualByEntry.get(String(row._id));
+      return v ? { ...base, ...v } : base;
+    }),
     total,
     page,
     limit,
