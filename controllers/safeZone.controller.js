@@ -6,7 +6,8 @@ import Order from "../models/order.model.js";
 import { IST_OFFSET, deliveryDateToIstMoment } from "../utility/istSlotDate.js";
 import SowingEntry from "../models/sowingEntry.model.js";
 import { attachExcess, attachSowingRemaining, buildSafeZone, orderCoverSowings, orderSafeCover, parseSafeZoneTill, readyOnDay, safeZoneDeliveryMatch, safeZoneOrders, sowingDayFigures, sowingEntryRemaining } from "../utility/safeZone.js";
-import { allocateVirtualCover, coverYmd } from "../utility/virtualCover.js";
+import { coverYmd } from "../utility/virtualCover.js";
+import { computeVirtualForVariety, dispatchedOrdersByVariety } from "../modules/sowingEntries/virtualSowingState.service.js";
 import { storedShownExcess } from "../utility/sowingBatchExcessStamp.js";
 
 const ORDER_SELECT =
@@ -297,7 +298,10 @@ export const getVirtualCover = async (req, res) => {
     if (loaded.error) {
       return res.status(loaded.status || 400).json({ success: false, message: loaded.error });
     }
-    const sowings = await remainingSowingRows(loaded.plantIds, req.query.subtypeId);
+    const [sowings, dispatchedByVariety] = await Promise.all([
+      remainingSowingRows(loaded.plantIds, req.query.subtypeId),
+      dispatchedOrdersByVariety(loaded.plantIds, req.query.subtypeId),
+    ]);
     const byVariety = new Map();
     for (const line of loaded.lines) {
       const key = `${line.plantId}|${line.subtypeId}`;
@@ -334,7 +338,11 @@ export const getVirtualCover = async (req, res) => {
     const varieties = [...byVariety.values()]
       .map((row) => {
         const key = `${row.plantId}|${row.subtypeId}`;
-        const allocated = allocateVirtualCover(row.orders, sowings.get(key) || []);
+        const { afterOut, allocated } = computeVirtualForVariety(
+          sowings.get(key) || [],
+          dispatchedByVariety.get(key) || [],
+          row.orders
+        );
         const plants = allocated.orders.reduce((sum, order) => sum + order.plants, 0);
         return {
           plantId: row.plantId,
@@ -343,6 +351,7 @@ export const getVirtualCover = async (req, res) => {
           subtypeName: row.subtypeName,
           orders: allocated.orders.length,
           plants,
+          virtualOut: afterOut.totalOut,
           left: allocated.left,
           balance: allocated.balance,
           deliveries: allocated.orders,
