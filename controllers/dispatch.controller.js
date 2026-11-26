@@ -16,6 +16,7 @@ import mongoose from "mongoose";
 import PlantCms from "../models/plantCms.model.js";
 import Tray from "../models/tray.model.js";
 import { calculateDispatchCrates } from "../services/dispatchTargetBuilder.service.js";
+import { crateTotalsMatchBilledQuantity } from "../utility/packCratesFromOrder.js";
 import Vehicle from "../models/vehicleModel.model.js";
 import VehicleDriver from "../models/vehicleDriver.model.js";
 import Trip from "../models/trip.model.js";
@@ -295,15 +296,14 @@ const validateQuantities = (plantsDetails) => {
       continue;
     }
 
-    // Office / AT_SHED_LOAD dispatch — validate crates (ignore empty/zero pickup stubs)
-    if (plantQty > 0) {
+    // Office dispatch — crate plantCount includes free plants on full crates.
+    // plant.quantity stays the billed order qty.
+    if (plantQty > 0 && !crateTotalsMatchBilledQuantity(plantQty, crates)) {
       const cratePlantTotal = sumCratePlantCount(crates);
-      if (cratePlantTotal !== plantQty) {
-        throw new AppError(
-          `Crate plant total (${cratePlantTotal}) doesn't match plant quantity (${plantQty}) for ${plant.name}`,
-          400
-        );
-      }
+      throw new AppError(
+        `Crate plant total (${cratePlantTotal}) doesn't match plant quantity (${plantQty}) for ${plant.name}`,
+        400
+      );
     }
   }
 };
@@ -2077,7 +2077,7 @@ const addOrderToDispatch = catchAsync(async (req, res, next) => {
     );
 
     const newRemainingPlants = Math.max(0, currentRemaining - qty);
-    const newStatus =
+    let newStatus =
       newRemainingPlants === 0
         ? "DISPATCHED"
         : newRemainingPlants < currentRemaining
